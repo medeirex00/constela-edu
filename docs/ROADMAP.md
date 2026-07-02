@@ -40,13 +40,18 @@ de espaço, números pt-BR, sinônimos de cabeçalho) e nada entra no banco sem
 prévia aprovada; quando as amostras chegarem, ajustar os sinônimos em
 `backend/app/services/importacao.py`.
 
-## Fase 3 — Evolução e histórico
+## ✅ Fase 3 — Evolução e histórico (entregue)
 
 PRD: §67–§78, §67–§71 já têm base pronta (snapshots imutáveis).
 
-- Linha do tempo por aluno, gráficos por período, evolução percentual
-- Ranking de Evolução independente, páginas de turma e de escola
-- Comparador aluno×aluno, aluno×turma, turma×turma
+- Linha do tempo por aluno (gráficos SVG próprios, sem lib externa),
+  variação por período com percentual
+- Ranking de Evolução independente: o motor de cálculo aplicado aos GANHOS
+  do período, com os mesmos pesos configuráveis (nada novo hardcoded)
+- Páginas de turma (médias + ranking interno) e Visão da Escola
+  (comparação entre turmas)
+- Comparador aluno×aluno, aluno×turma, turma×turma (notas médias e
+  indicadores somados para turmas)
 
 ## Fase 4 — Gamificação, relatórios e administração
 

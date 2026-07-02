@@ -13,6 +13,7 @@ from app.routers import (
     auth,
     configuracoes,
     escolas,
+    evolucao,
     importacoes,
     plataformas,
     rankings,
@@ -47,6 +48,7 @@ for router in (
     rankings.router,
     importacoes.router,
     plataformas.router,
+    evolucao.router,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 

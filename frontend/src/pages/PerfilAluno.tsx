@@ -1,4 +1,4 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -78,6 +78,12 @@ export default function PerfilAluno() {
           {detalhes.modo_normalizacao && (
             <Badge>Normalização: {detalhes.modo_normalizacao === "auto" ? "automática" : "manual"}</Badge>
           )}
+          <Link
+            to={`/alunos/${aluno.id}/evolucao`}
+            className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+          >
+            <TrendingUp size={14} /> Ver evolução
+          </Link>
         </div>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           {aluno.turma} · {aluno.ano_escolar}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -35,7 +36,11 @@ export function Turmas() {
             <tbody>
               {turmas.map((turma) => (
                 <tr key={turma.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                  <td className="px-4 py-2.5 font-medium">{turma.nome}</td>
+                  <td className="px-4 py-2.5">
+                    <Link to={`/turmas/${turma.id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                      {turma.nome}
+                    </Link>
+                  </td>
                   <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">{turma.ano_escolar}</td>
                   <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">{turma.ano_letivo}</td>
                 </tr>

@@ -1,8 +1,10 @@
 import {
   ArrowLeftRight,
   BookOpen,
+  Building2,
   Calculator,
   FileText,
+  GitCompareArrows,
   GraduationCap,
   LayoutDashboard,
   LogOut,
@@ -12,6 +14,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sun,
+  TrendingUp,
   Trophy,
   Upload,
   Users,
@@ -25,6 +28,9 @@ import { useApp } from "../context/AppContext";
 const MENU = [
   { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard },
   { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
+  { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
+  { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },
+  { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2 },
   { rotulo: "Alunos", caminho: "/alunos", icone: GraduationCap },
   { rotulo: "Turmas", caminho: "/turmas", icone: Users },
   { rotulo: "Professores", caminho: "/professores", icone: School },
