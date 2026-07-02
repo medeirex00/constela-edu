@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    /* Correções de toque para iOS/Android (PRD §9):
+       - touch-action: manipulation remove qualquer atraso de clique
+       - tap-highlight transparente evita o "flash" cinza no toque */
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  a,
+  select,
+  input,
+  label,
+  [role="tab"] {
+    touch-action: manipulation;
+  }
+  body {
+    @apply antialiased bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-indigo-500 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950 rounded;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900;
+  }
+}

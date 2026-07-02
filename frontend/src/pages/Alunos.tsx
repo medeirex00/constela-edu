@@ -1,0 +1,132 @@
+import { Search } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+
+import { Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import { useApp } from "../context/AppContext";
+import { api } from "../lib/api";
+import type { PaginaAlunos, Turma } from "../lib/types";
+
+export default function Alunos() {
+  const { escolaId } = useApp();
+  const [busca, setBusca] = useState("");
+  const [buscaAplicada, setBuscaAplicada] = useState("");
+  const [turmaId, setTurmaId] = useState<string>("");
+  const [turmas, setTurmas] = useState<Turma[]>([]);
+  const [pagina, setPagina] = useState(1);
+  const [dados, setDados] = useState<PaginaAlunos | null>(null);
+  const [carregando, setCarregando] = useState(true);
+
+  useEffect(() => {
+    if (!escolaId) return;
+    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
+  }, [escolaId]);
+
+  // Busca com pequeno atraso para não consultar a cada tecla (PRD §23)
+  useEffect(() => {
+    const temporizador = setTimeout(() => {
+      setBuscaAplicada(busca);
+      setPagina(1);
+    }, 300);
+    return () => clearTimeout(temporizador);
+  }, [busca]);
+
+  useEffect(() => {
+    if (!escolaId) return;
+    setCarregando(true);
+    const parametros = new URLSearchParams({ pagina: String(pagina), por_pagina: "25" });
+    if (buscaAplicada) parametros.set("busca", buscaAplicada);
+    if (turmaId) parametros.set("turma_id", turmaId);
+    api<PaginaAlunos>(`/escolas/${escolaId}/alunos?${parametros}`)
+      .then(setDados)
+      .catch(() => setDados(null))
+      .finally(() => setCarregando(false));
+  }, [escolaId, buscaAplicada, turmaId, pagina]);
+
+  const totalPaginas = dados ? Math.max(1, Math.ceil(dados.total / dados.por_pagina)) : 1;
+
+  return (
+    <div>
+      <PageHeader titulo="Alunos" descricao="Pesquise, filtre e abra o perfil completo de cada aluno." />
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <label className="relative flex-1 basis-56">
+          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+          <input
+            placeholder="Pesquisar por nome..."
+            className="w-full rounded-lg border border-zinc-300 bg-white py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            value={busca}
+            onChange={(evento) => setBusca(evento.target.value)}
+          />
+        </label>
+        <select
+          aria-label="Filtrar por turma"
+          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          value={turmaId}
+          onChange={(evento) => {
+            setTurmaId(evento.target.value);
+            setPagina(1);
+          }}
+        >
+          <option value="">Todas as turmas</option>
+          {turmas.map((turma) => (
+            <option key={turma.id} value={turma.id}>
+              {turma.nome}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <Card>
+        {carregando ? (
+          <Carregando />
+        ) : !dados || dados.itens.length === 0 ? (
+          <Vazio titulo="Nenhum aluno encontrado" descricao="Ajuste a pesquisa ou os filtros." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  <th className="px-4 py-2 font-medium">Nome</th>
+                  <th className="px-4 py-2 font-medium">Turma</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Série</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Nº chamada</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dados.itens.map((aluno) => (
+                  <tr key={aluno.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                    <td className="px-4 py-2.5">
+                      <Link to={`/alunos/${aluno.id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                        {aluno.nome}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-300">{aluno.turma}</td>
+                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">{aluno.ano_escolar}</td>
+                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">{aluno.numero_chamada ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {dados && dados.total > 0 && (
+        <div className="mt-3 flex items-center justify-between text-sm text-zinc-500 dark:text-zinc-400">
+          <span>
+            {dados.total} aluno{dados.total === 1 ? "" : "s"} · página {dados.pagina} de {totalPaginas}
+          </span>
+          <div className="flex gap-2">
+            <Botao variante="neutro" disabled={pagina <= 1} onClick={() => setPagina(pagina - 1)}>
+              Anterior
+            </Botao>
+            <Botao variante="neutro" disabled={pagina >= totalPaginas} onClick={() => setPagina(pagina + 1)}>
+              Próxima
+            </Botao>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

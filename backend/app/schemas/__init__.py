@@ -1,0 +1,25 @@
+from app.schemas.comum import (
+    AlunoCreate,
+    AlunoOut,
+    AlunoPerfilOut,
+    DashboardOut,
+    DificuldadeSerieOut,
+    DificuldadeUpdate,
+    EscolaCreate,
+    EscolaOut,
+    EscolaUpdate,
+    LoginOut,
+    NivelOut,
+    PesosOut,
+    PesosUpdate,
+    ProfessorCreate,
+    ProfessorOut,
+    RankingItemOut,
+    ReferenciasOut,
+    ReferenciasUpdate,
+    TurmaCreate,
+    TurmaOut,
+    UsuarioOut,
+)
+
+__all__ = [n for n in dir() if not n.startswith("_")]
