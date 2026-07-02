@@ -70,12 +70,17 @@ PRD: §64, §72–§75, §79–§84 (parcial), §86–§103, §18 (usuários/bac
 - Pesquisa global no cabeçalho, notificações derivadas da auditoria,
   simulador de pontuação que nada grava
 
-## Fase 5 — Painel Público
+## ✅ Fase 5 — Painel Público (entregue)
 
 PRD: §104–§128.
 
-- URL pública sem login, modo TV, carrossel de slides configurável,
-  QR codes, perfil público restrito a dados pedagógicos
+- URL pública sem login (`/p/{token}`), token trocável a qualquer momento
+  (o link antigo morre na hora)
+- Modo TV (tela cheia), carrossel configurável (slides, intervalo,
+  tamanho do ranking), dados atualizados automaticamente a cada minuto
+- QR code SVG gerado no servidor (`PUBLIC_BASE_URL` configurável)
+- Perfil público restrito a dados pedagógicos: nome, turma, notas,
+  posição e conquistas — nunca data de nascimento, observações ou contato
 
 ## Fase 6 — Inteligência Pedagógica e Assistente de IA
 

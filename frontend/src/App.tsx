@@ -14,8 +14,11 @@ import { Professores, Turmas } from "./pages/ListasSimples";
 import Livros from "./pages/Livros";
 import Login from "./pages/Login";
 import Matific from "./pages/Matific";
+import PainelPublicoConfig from "./pages/PainelPublicoConfig";
 import PerfilAluno from "./pages/PerfilAluno";
 import RankingEvolucao from "./pages/RankingEvolucao";
+import PainelPublico from "./pages/publico/PainelPublico";
+import PerfilPublico from "./pages/publico/PerfilPublico";
 import RankingGeral from "./pages/RankingGeral";
 import Relatorios from "./pages/Relatorios";
 import Simulador from "./pages/Simulador";
@@ -36,6 +39,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* Painel Público: acessível sem login (PRD §104) */}
+      <Route path="/p/:token" element={<PainelPublico />} />
+      <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
       <Route element={<AreaProtegida />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/ranking" element={<RankingGeral />} />
@@ -55,6 +61,7 @@ export default function App() {
         <Route path="/livros" element={<Livros />} />
         <Route path="/importacoes" element={<Importacoes />} />
         <Route path="/conquistas" element={<Conquistas />} />
+        <Route path="/painel-publico" element={<PainelPublicoConfig />} />
         <Route path="/relatorios" element={<Relatorios />} />
         <Route path="/simulador" element={<Simulador />} />
         <Route path="/usuarios" element={<Usuarios />} />

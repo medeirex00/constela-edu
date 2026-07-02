@@ -33,5 +33,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     ]
 
+    # Endereço público do frontend — usado nos QR codes do Painel Público.
+    PUBLIC_BASE_URL: str = "http://localhost:5173"
+
 
 settings = Settings()
