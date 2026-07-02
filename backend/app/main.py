@@ -8,7 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import Base, engine
-from app.routers import academico, auth, configuracoes, escolas, rankings
+from app.routers import (
+    academico,
+    auth,
+    configuracoes,
+    escolas,
+    importacoes,
+    plataformas,
+    rankings,
+)
 
 # Fase 1: criação direta do schema. Ao migrar para PostgreSQL/produção,
 # substituir por migrações Alembic (estrutura já compatível).
@@ -31,7 +39,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for router in (auth.router, escolas.router, academico.router, configuracoes.router, rankings.router):
+for router in (
+    auth.router,
+    escolas.router,
+    academico.router,
+    configuracoes.router,
+    rankings.router,
+    importacoes.router,
+    plataformas.router,
+):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 
 

@@ -120,3 +120,97 @@ export interface PaginaAlunos {
   por_pagina: number;
   itens: Aluno[];
 }
+
+// --- Fase 2: importações e plataformas ---------------------------------------
+
+export interface Correspondencia {
+  status: "exato" | "provavel" | "nao_encontrado";
+  aluno_id: number | null;
+  aluno_nome: string | null;
+  similaridade: number | null;
+  alternativas: { aluno_id: number; nome: string; similaridade: number }[];
+}
+
+export interface LinhaAnalise {
+  numero: number;
+  nome: string;
+  dados: Record<string, unknown>;
+  erros: string[];
+  avisos: string[];
+  correspondencia: Correspondencia | null;
+}
+
+export interface Analise {
+  plataforma: string;
+  formato: string;
+  tipo: string;
+  arquivo_token: string | null;
+  arquivo_nome: string | null;
+  total_linhas: number;
+  total_erros: number;
+  erros_gerais: string[];
+  linhas: LinhaAnalise[];
+}
+
+export interface ResultadoImportacao {
+  mensagem: string;
+  importacao_id: number;
+  qtd_alunos: number;
+  qtd_erros: number;
+  avisos: string[];
+}
+
+export interface Importacao {
+  id: number;
+  plataforma: string;
+  tipo: string;
+  arquivo_original: string | null;
+  qtd_alunos: number;
+  qtd_erros: number;
+  tempo_ms: number;
+  status: string;
+  created_at: string;
+  usuario_nome: string | null;
+}
+
+export interface MatificAluno {
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  ano_escolar: string | null;
+  atividades: number;
+  estrelas: number;
+  pontuacao_media: number;
+  data_referencia: string | null;
+}
+
+export interface ElefanteAluno {
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  ano_escolar: string | null;
+  livros_unicos: number;
+  tempo_leitura_min: number;
+  questoes_tentativas: number;
+  questoes_acertos: number;
+  livros_por_nivel: Record<string, number>;
+  data_referencia: string | null;
+}
+
+export interface Livro {
+  id: number;
+  titulo: string;
+  autor: string | null;
+  nivel_codigo: string;
+  categoria: string | null;
+  paginas: number | null;
+  pontos: number;
+  leituras: number;
+}
+
+export interface PaginaLivros {
+  total: number;
+  pagina: number;
+  por_pagina: number;
+  itens: Livro[];
+}

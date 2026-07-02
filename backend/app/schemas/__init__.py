@@ -21,5 +21,23 @@ from app.schemas.comum import (
     TurmaOut,
     UsuarioOut,
 )
+from app.schemas.importacao import (
+    AnaliseOut,
+    CorrespondenciaOut,
+    ImportacaoConfirm,
+    ImportacaoOut,
+    ImportacaoResultadoOut,
+    LinhaAnaliseOut,
+    LinhaConfirmacao,
+)
+from app.schemas.plataformas import (
+    ElefanteAlunoOut,
+    ElefanteEdicao,
+    LivroCreate,
+    LivroOut,
+    LivroUpdate,
+    MatificAlunoOut,
+    MatificEdicao,
+)
 
 __all__ = [n for n in dir() if not n.startswith("_")]

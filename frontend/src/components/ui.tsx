@@ -88,3 +88,48 @@ export function Vazio({ titulo, descricao }: { titulo: string; descricao?: strin
 export function rotuloCampo(chave: string, rotulos: Record<string, string>): string {
   return rotulos[chave] ?? chave;
 }
+
+export function Modal({
+  titulo,
+  aberto,
+  aoFechar,
+  children,
+}: {
+  titulo: string;
+  aberto: boolean;
+  aoFechar: () => void;
+  children: ReactNode;
+}) {
+  if (!aberto) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        aria-label="Fechar janela"
+        className="absolute inset-0 bg-zinc-950/50"
+        onClick={aoFechar}
+      />
+      <div className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+        <h2 className="mb-4 text-base font-semibold tracking-tight">{titulo}</h2>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function Campo({
+  rotulo,
+  children,
+}: {
+  rotulo: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block font-medium text-zinc-700 dark:text-zinc-300">{rotulo}</span>
+      {children}
+    </label>
+  );
+}
+
+export const estiloInput =
+  "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";

@@ -5,9 +5,13 @@ import { Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import Alunos from "./pages/Alunos";
 import Dashboard from "./pages/Dashboard";
+import Elefante from "./pages/Elefante";
 import EmBreve from "./pages/EmBreve";
+import Importacoes from "./pages/Importacoes";
 import { Professores, Turmas } from "./pages/ListasSimples";
+import Livros from "./pages/Livros";
 import Login from "./pages/Login";
+import Matific from "./pages/Matific";
 import PerfilAluno from "./pages/PerfilAluno";
 import RankingGeral from "./pages/RankingGeral";
 import Configuracoes from "./pages/configuracoes/Configuracoes";
@@ -33,46 +37,10 @@ export default function App() {
         <Route path="/professores" element={<Professores />} />
         <Route path="/metricas" element={<Metricas />} />
         <Route path="/configuracoes" element={<Configuracoes />} />
-        <Route
-          path="/matific"
-          element={
-            <EmBreve
-              titulo="Matific"
-              fase="Fase 2"
-              descricao="Tela do módulo com importação de relatórios (PDF ou texto colado), edição manual auditada e histórico por aluno."
-            />
-          }
-        />
-        <Route
-          path="/elefante"
-          element={
-            <EmBreve
-              titulo="Elefante Letrado"
-              fase="Fase 2"
-              descricao="Tela do módulo com importação de relatórios, livros por nível, questões e tempo de leitura por aluno."
-            />
-          }
-        />
-        <Route
-          path="/livros"
-          element={
-            <EmBreve
-              titulo="Catálogo de Livros"
-              fase="Fase 2"
-              descricao="Consulta rápida de títulos, autores, níveis e pontuação atual de cada livro."
-            />
-          }
-        />
-        <Route
-          path="/importacoes"
-          element={
-            <EmBreve
-              titulo="Importações"
-              fase="Fase 2"
-              descricao="Envio de PDF ou texto, prévia com validação, confirmação e histórico completo de cada importação."
-            />
-          }
-        />
+        <Route path="/matific" element={<Matific />} />
+        <Route path="/elefante" element={<Elefante />} />
+        <Route path="/livros" element={<Livros />} />
+        <Route path="/importacoes" element={<Importacoes />} />
         <Route
           path="/relatorios"
           element={

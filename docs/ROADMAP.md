@@ -21,20 +21,24 @@ PRD coberto: §1–§14, §17 (parcial), §18 (parcial), §19–§20, §23–§2
   (4 módulos do §58), Configurações
 - Seed da escola JORGE PASSOS + dados de demonstração + 7 testes do motor
 
-## Fase 2 — Importações e módulos das plataformas
+## ✅ Fase 2 — Importações e módulos das plataformas (entregue)
 
 PRD: §15–§16, §35 (validação na importação), §50–§52, §55–§57.
 
 - Upload de PDF e colagem de texto, detecção automática da plataforma
 - Prévia com erros antes de confirmar (§51) e correspondência inteligente de
   nomes com confirmação de duplicatas prováveis (§52)
-- Telas Matific e Elefante Letrado, edição manual auditada
-- Catálogo de Livros com busca e filtros
+- Telas Matific e Elefante Letrado, edição manual auditada (novo snapshot +
+  antes/depois no log — histórico nunca é sobrescrito)
+- Catálogo de Livros com busca, filtros e proteção contra exclusão de
+  livros com leituras registradas
 - Registro completo em `importacoes` + arquivos guardados em `/uploads`
 
-**Pré-requisito bloqueante:** amostras reais dos relatórios exportados da
-Matific e do Elefante Letrado (PDF e/ou texto copiado, pode ser com nomes
-fictícios). Sem elas, qualquer parser seria chute.
+**Ressalva:** os parsers foram construídos SEM amostras reais dos relatórios
+(pré-requisito indisponível). São tolerantes a formatos (tab/`;`/`,`/colunas
+de espaço, números pt-BR, sinônimos de cabeçalho) e nada entra no banco sem
+prévia aprovada; quando as amostras chegarem, ajustar os sinônimos em
+`backend/app/services/importacao.py`.
 
 ## Fase 3 — Evolução e histórico
 
