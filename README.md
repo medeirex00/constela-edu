@@ -4,7 +4,7 @@ Plataforma multi-escolas para acompanhar o desempenho de alunos nas plataformas
 Matific e Elefante Letrado, calcular notas justas e configuráveis, gerar rankings
 e apoiar premiações — conforme o PRD oficial do projeto.
 
-**Estado atual: Fase 3 (evolução e histórico) concluída.**
+**Estado atual: Fase 4 (gamificação, relatórios e administração) concluída.**
 Veja `docs/ROADMAP.md` para o mapa completo das fases e `docs/ARQUITETURA.md`
 para as decisões técnicas.
 

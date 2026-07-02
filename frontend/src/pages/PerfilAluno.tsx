@@ -45,10 +45,28 @@ function TabelaCalculo({ titulo, linhas, notaFinal }: { titulo: string; linhas: 
   );
 }
 
+interface Gamificacao {
+  xp: number;
+  nivel: number;
+  xp_para_proximo: number;
+  sequencia_semanas: number;
+  total_conquistas: number;
+  conquistas: {
+    codigo: string;
+    nome: string;
+    icone: string;
+    descricao: string;
+    limite: number;
+    progresso: number;
+    atingida: boolean;
+  }[];
+}
+
 export default function PerfilAluno() {
   const { id } = useParams();
   const { escolaId } = useApp();
   const [perfil, setPerfil] = useState<Perfil | null>(null);
+  const [gamificacao, setGamificacao] = useState<Gamificacao | null>(null);
   const [carregando, setCarregando] = useState(true);
 
   useEffect(() => {
@@ -58,6 +76,9 @@ export default function PerfilAluno() {
       .then(setPerfil)
       .catch(() => setPerfil(null))
       .finally(() => setCarregando(false));
+    api<Gamificacao>(`/escolas/${escolaId}/gamificacao/alunos/${id}`)
+      .then(setGamificacao)
+      .catch(() => setGamificacao(null));
   }, [escolaId, id]);
 
   if (carregando) return <Carregando />;
@@ -104,6 +125,49 @@ export default function PerfilAluno() {
           <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_geral)}</p>
         </Card>
       </div>
+
+      {gamificacao && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Conquistas
+          </h2>
+          <Card className="p-4">
+            <div className="mb-4 flex flex-wrap items-center gap-4 text-sm">
+              <Badge tom="destaque">Nível {gamificacao.nivel}</Badge>
+              <span className="tabular-nums text-zinc-600 dark:text-zinc-300">
+                {gamificacao.xp.toLocaleString("pt-BR")} XP
+                <span className="text-zinc-400"> · faltam {gamificacao.xp_para_proximo} para o próximo nível</span>
+              </span>
+              {gamificacao.sequencia_semanas > 0 && (
+                <Badge tom="alerta">🔥 {gamificacao.sequencia_semanas} semana{gamificacao.sequencia_semanas > 1 ? "s" : ""} seguidas</Badge>
+              )}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {gamificacao.conquistas.map((conquista) => (
+                <div
+                  key={conquista.codigo}
+                  className={`flex items-start gap-2.5 rounded-lg border p-2.5 ${
+                    conquista.atingida
+                      ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5"
+                      : "border-zinc-200 opacity-60 dark:border-zinc-800"
+                  }`}
+                >
+                  <span className="text-xl leading-none">{conquista.icone}</span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{conquista.nome}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">{conquista.descricao}</p>
+                    {!conquista.atingida && (
+                      <p className="mt-0.5 text-xs tabular-nums text-zinc-400">
+                        {nota(conquista.progresso)} / {conquista.limite}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </section>
+      )}
 
       {/* Transparência total do cálculo (PRD §45, §54) */}
       <section className="space-y-4">

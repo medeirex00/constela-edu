@@ -50,6 +50,35 @@ export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise
   return resposta.json() as Promise<T>;
 }
 
+/** Baixa um arquivo autenticado e dispara o download no navegador. */
+export async function apiDownload(caminho: string): Promise<void> {
+  const token = obterToken();
+  const resposta = await fetch(`${BASE}${caminho}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resposta.ok) {
+    let detalhe = "Não foi possível gerar o arquivo.";
+    try {
+      const corpo = await resposta.json();
+      if (typeof corpo.detail === "string") detalhe = corpo.detail;
+    } catch {
+      /* corpo não-JSON */
+    }
+    throw new ApiError(resposta.status, detalhe);
+  }
+  const disposicao = resposta.headers.get("Content-Disposition") ?? "";
+  const nome = /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? "arquivo";
+  const blob = await resposta.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nome;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** Envio multipart (upload de arquivos) — o navegador define o Content-Type. */
 export async function apiUpload<T>(caminho: string, dados: FormData): Promise<T> {
   const token = obterToken();

@@ -1,10 +1,144 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { Download, UploadCloud } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { Botao, Card, Mensagem, PageHeader } from "../../components/ui";
 import { PesosEditor } from "./Metricas";
 import { useApp } from "../../context/AppContext";
-import { api, ApiError } from "../../lib/api";
+import { api, ApiError, apiDownload, apiUpload } from "../../lib/api";
+
+/** Aparência (PRD §18): cor primária usada nos relatórios e certificados. */
+function Aparencia() {
+  const { escolaId, usuario } = useApp();
+  const ehAdmin = usuario?.is_global || usuario?.cargo === "admin";
+  const [cor, setCor] = useState("#4F46E5");
+  const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+
+  useEffect(() => {
+    if (!escolaId) return;
+    api<{ cor_primaria: string }>(`/escolas/${escolaId}/aparencia`)
+      .then((resposta) => setCor(resposta.cor_primaria))
+      .catch(() => undefined);
+  }, [escolaId]);
+
+  async function salvar() {
+    if (!escolaId) return;
+    setMensagem(null);
+    try {
+      await api(`/escolas/${escolaId}/aparencia`, {
+        method: "PUT",
+        body: JSON.stringify({ cor_primaria: cor, mostrar_fotos: true }),
+      });
+      setMensagem({ tipo: "ok", texto: "Aparência salva. Relatórios e certificados usarão a nova cor." });
+    } catch (excecao) {
+      setMensagem({ tipo: "erro", texto: excecao instanceof Error ? excecao.message : "Falha ao salvar." });
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-3 text-sm">
+          <span className="font-medium">Cor primária da escola</span>
+          <input
+            type="color"
+            aria-label="Cor primária"
+            className="h-9 w-14 cursor-pointer rounded border border-zinc-300 bg-transparent dark:border-zinc-700"
+            value={cor}
+            onChange={(evento) => setCor(evento.target.value.toUpperCase())}
+            disabled={!ehAdmin}
+          />
+          <code className="text-xs text-zinc-500">{cor}</code>
+        </label>
+        {ehAdmin && <Botao onClick={salvar}>Salvar aparência</Botao>}
+      </div>
+      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+        Aplicada no cabeçalho dos relatórios em PDF/Excel e nos certificados.
+      </p>
+      {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
+    </Card>
+  );
+}
+
+/** Backup e restauração por escola (PRD §18). */
+function Backup() {
+  const { escolaId, usuario } = useApp();
+  const ehAdmin = usuario?.is_global || usuario?.cargo === "admin";
+  const arquivoRef = useRef<HTMLInputElement | null>(null);
+  const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  if (!ehAdmin) return null;
+
+  async function baixar() {
+    if (!escolaId) return;
+    setOcupado(true);
+    setMensagem(null);
+    try {
+      await apiDownload(`/escolas/${escolaId}/backup`);
+      setMensagem({ tipo: "ok", texto: "Backup gerado. Guarde o arquivo em local seguro." });
+    } catch (excecao) {
+      setMensagem({ tipo: "erro", texto: excecao instanceof Error ? excecao.message : "Falha no backup." });
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function restaurar(arquivo: File) {
+    if (!escolaId) return;
+    const confirmado = window.confirm(
+      "ATENÇÃO: a restauração SUBSTITUI todos os dados pedagógicos desta escola " +
+      "pelos do arquivo (alunos, turmas, notas, importações, configurações). " +
+      "Usuários e senhas não são alterados. Deseja continuar?",
+    );
+    if (!confirmado) return;
+    setOcupado(true);
+    setMensagem(null);
+    try {
+      const dados = new FormData();
+      dados.append("arquivo", arquivo);
+      const resposta = await apiUpload<{ mensagem: string }>(`/escolas/${escolaId}/restaurar`, dados);
+      setMensagem({ tipo: "ok", texto: resposta.mensagem });
+    } catch (excecao) {
+      setMensagem({ tipo: "erro", texto: excecao instanceof Error ? excecao.message : "Falha na restauração." });
+    } finally {
+      setOcupado(false);
+      if (arquivoRef.current) arquivoRef.current.value = "";
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">
+        O backup é um arquivo JSON com todos os dados pedagógicos desta escola
+        (funciona em SQLite e PostgreSQL). Usuários e senhas ficam de fora, por segurança.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Botao onClick={baixar} disabled={ocupado}>
+          <Download size={15} /> Baixar backup
+        </Botao>
+        <Botao
+          variante="neutro"
+          disabled={ocupado}
+          onClick={() => arquivoRef.current?.click()}
+        >
+          <UploadCloud size={15} /> Restaurar de um arquivo…
+        </Botao>
+        <input
+          ref={arquivoRef}
+          type="file"
+          accept=".json"
+          className="hidden"
+          onChange={(evento) => {
+            const arquivo = evento.target.files?.[0];
+            if (arquivo) restaurar(arquivo);
+          }}
+        />
+      </div>
+      {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
+    </Card>
+  );
+}
 
 export default function Configuracoes() {
   const { escolaAtual, escolaId, recarregarEscolas } = useApp();
@@ -116,13 +250,27 @@ export default function Configuracoes() {
       </section>
 
       <section className="max-w-2xl">
+        <h2 className="mb-3 text-sm font-semibold">Aparência</h2>
+        <Aparencia />
+      </section>
+
+      <section className="max-w-2xl">
+        <h2 className="mb-3 text-sm font-semibold">Backup e restauração</h2>
+        <Backup />
+      </section>
+
+      <section className="max-w-2xl">
         <h2 className="mb-3 text-sm font-semibold">Critérios de avaliação</h2>
         <Card className="p-5 text-sm text-zinc-600 dark:text-zinc-300">
           Pesos por indicador, dificuldade por turma e referências de normalização ficam na tela{" "}
           <Link to="/metricas" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
             Métricas
           </Link>
-          . Usuários, backup e aparência avançada chegam nas próximas fases (veja <code>docs/ROADMAP.md</code>).
+          . Contas de acesso ficam na tela{" "}
+          <Link to="/usuarios" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+            Usuários
+          </Link>
+          .
         </Card>
       </section>
     </div>

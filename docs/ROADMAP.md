@@ -53,14 +53,22 @@ PRD: §67–§78, §67–§71 já têm base pronta (snapshots imutáveis).
 - Comparador aluno×aluno, aluno×turma, turma×turma (notas médias e
   indicadores somados para turmas)
 
-## Fase 4 — Gamificação, relatórios e administração
+## ✅ Fase 4 — Gamificação, relatórios e administração (entregue)
 
 PRD: §64, §72–§75, §79–§84 (parcial), §86–§103, §18 (usuários/backup/aparência),
 §21–§22 (pesquisa global e notificações), §44 (simulador de pontuação).
 
-- Conquistas, medalhas, XP/níveis, sequência, Aluno do Dia/Semana/Mês, mural
-- Exportação PDF/Excel/CSV com identidade visual, certificados
-- CRUD de usuários, backup/restauração, personalização de aparência
+- Conquistas, XP/níveis e sequência DERIVADOS dos snapshots (nada
+  armazenado: correção de dados nunca deixa medalha órfã); regras
+  editáveis via `configuracoes` (namespace gamificacao.*)
+- Aluno do Dia/Semana/Mês (ranking de evolução em 1/7/30 dias) + mural
+- Exportação PDF/Excel/CSV com identidade visual (cor primária
+  configurável), certificados individuais em PDF, cópia em /exports
+- CRUD de usuários com autoproteção (ninguém rebaixa/desativa a si mesmo),
+  backup/restauração JSON por escola com remapeamento de IDs
+  (usuários ficam fora do backup, por segurança), aparência
+- Pesquisa global no cabeçalho, notificações derivadas da auditoria,
+  simulador de pontuação que nada grava
 
 ## Fase 5 — Painel Público
 

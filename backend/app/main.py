@@ -10,13 +10,17 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.routers import (
     academico,
+    admin,
     auth,
     configuracoes,
     escolas,
     evolucao,
+    gamificacao,
     importacoes,
     plataformas,
     rankings,
+    relatorios,
+    sistema,
 )
 
 # Fase 1: criação direta do schema. Ao migrar para PostgreSQL/produção,
@@ -49,6 +53,10 @@ for router in (
     importacoes.router,
     plataformas.router,
     evolucao.router,
+    gamificacao.router,
+    relatorios.router,
+    admin.router,
+    sistema.router,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 

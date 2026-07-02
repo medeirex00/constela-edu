@@ -21,6 +21,7 @@ class UsuarioOut(ORMModel):
     cargo: str
     is_global: bool
     escola_id: int | None
+    status: str = "ativo"
 
 
 class LoginOut(BaseModel):

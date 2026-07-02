@@ -5,9 +5,9 @@ import { Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import Alunos from "./pages/Alunos";
 import Comparador from "./pages/Comparador";
+import Conquistas from "./pages/Conquistas";
 import Dashboard from "./pages/Dashboard";
 import Elefante from "./pages/Elefante";
-import EmBreve from "./pages/EmBreve";
 import EvolucaoAluno from "./pages/EvolucaoAluno";
 import Importacoes from "./pages/Importacoes";
 import { Professores, Turmas } from "./pages/ListasSimples";
@@ -17,7 +17,10 @@ import Matific from "./pages/Matific";
 import PerfilAluno from "./pages/PerfilAluno";
 import RankingEvolucao from "./pages/RankingEvolucao";
 import RankingGeral from "./pages/RankingGeral";
+import Relatorios from "./pages/Relatorios";
+import Simulador from "./pages/Simulador";
 import TurmaDetalhe from "./pages/TurmaDetalhe";
+import Usuarios from "./pages/Usuarios";
 import VisaoEscola from "./pages/VisaoEscola";
 import Configuracoes from "./pages/configuracoes/Configuracoes";
 import Metricas from "./pages/configuracoes/Metricas";
@@ -51,16 +54,10 @@ export default function App() {
         <Route path="/elefante" element={<Elefante />} />
         <Route path="/livros" element={<Livros />} />
         <Route path="/importacoes" element={<Importacoes />} />
-        <Route
-          path="/relatorios"
-          element={
-            <EmBreve
-              titulo="Relatórios"
-              fase="Fase 4"
-              descricao="Exportação em PDF, Excel e CSV com identidade visual da escola."
-            />
-          }
-        />
+        <Route path="/conquistas" element={<Conquistas />} />
+        <Route path="/relatorios" element={<Relatorios />} />
+        <Route path="/simulador" element={<Simulador />} />
+        <Route path="/usuarios" element={<Usuarios />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
