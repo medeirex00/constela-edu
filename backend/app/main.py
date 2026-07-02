@@ -16,6 +16,7 @@ from app.routers import (
     escolas,
     evolucao,
     gamificacao,
+    ia,
     importacoes,
     plataformas,
     publico,
@@ -59,6 +60,7 @@ for router in (
     admin.router,
     sistema.router,
     publico.router,
+    ia.router,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 

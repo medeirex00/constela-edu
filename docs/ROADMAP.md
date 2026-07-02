@@ -82,15 +82,23 @@ PRD: §104–§128.
 - Perfil público restrito a dados pedagógicos: nome, turma, notas,
   posição e conquistas — nunca data de nascimento, observações ou contato
 
-## Fase 6 — Inteligência Pedagógica e Assistente de IA
+## ✅ Fase 6 — Inteligência Pedagógica e Assistente de IA (entregue)
 
 PRD: §129–§172.
 
-- Insights e alertas automáticos, índices de engajamento/evolução/persistência
-- Camada `AI Service` isolada (§154) — o frontend nunca fala direto com o
-  modelo; provedor trocável (Anthropic, OpenAI, local etc.)
-- Assistente Pedagógico em chat, respostas somente sobre dados do banco,
-  com registro de conversas e respeito total às permissões (§169)
+- Insights e alertas automáticos por regras transparentes (sem IA nos
+  números): sem dados, sem atividade há 30 dias, queda de acertos,
+  muito abaixo da média da turma; índices de engajamento (30d),
+  evolução (90d) e persistência (constância semanal + tentativas)
+- Camada `AI Service` isolada (§154) em `backend/app/services/ia/` —
+  o frontend nunca fala direto com o modelo; provedor trocável por
+  configuração: `anthropic` (SDK oficial, padrão claude-opus-4-8),
+  `openai` (httpx) ou `local` (determinístico, sem chave — também é a
+  contingência automática quando o provedor externo falha)
+- Assistente Pedagógico em chat: contexto montado no backend somente com
+  dados da escola do usuário (§169), instruções que proíbem inventar
+  fatos, conversas registradas em `conversas_ia`/`mensagens_ia` e
+  visíveis apenas ao próprio autor
 
 ## Transversal (toda fase)
 

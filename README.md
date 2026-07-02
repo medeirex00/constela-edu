@@ -4,9 +4,14 @@ Plataforma multi-escolas para acompanhar o desempenho de alunos nas plataformas
 Matific e Elefante Letrado, calcular notas justas e configuráveis, gerar rankings
 e apoiar premiações — conforme o PRD oficial do projeto.
 
-**Estado atual: Fase 5 (Painel Público) concluída.**
+**Estado atual: todas as 6 fases do roteiro concluídas.**
 Veja `docs/ROADMAP.md` para o mapa completo das fases e `docs/ARQUITETURA.md`
 para as decisões técnicas.
+
+> O Assistente de IA funciona por padrão no modo `local` (sem chave, respostas
+> determinísticas sobre os dados). Para usar um modelo de verdade, configure
+> `AI_PROVIDER=anthropic` e `AI_API_KEY` no `.env` do backend
+> (veja `backend/.env.example`).
 
 ## Stack
 

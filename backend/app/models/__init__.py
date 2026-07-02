@@ -6,6 +6,7 @@ from app.models.configuracao import (
     ReferenciaNormalizacao,
 )
 from app.models.escola import Escola
+from app.models.ia import ConversaIA, MensagemIA
 from app.models.nota import LogAuditoria, Nota
 from app.models.plataformas import (
     Importacao,
@@ -19,6 +20,8 @@ from app.models.usuario import Usuario
 __all__ = [
     "Aluno",
     "Configuracao",
+    "ConversaIA",
+    "MensagemIA",
     "DificuldadeTurma",
     "Escola",
     "Importacao",

@@ -36,5 +36,13 @@ class Settings(BaseSettings):
     # Endereço público do frontend — usado nos QR codes do Painel Público.
     PUBLIC_BASE_URL: str = "http://localhost:5173"
 
+    # Assistente de IA (PRD §154): provedor trocável, isolado em app/services/ia.
+    # "local" responde com regras determinísticas usando apenas o banco —
+    # funciona sem chave e serve de contingência quando o provedor externo falha.
+    AI_PROVIDER: str = "local"  # local | anthropic | openai
+    AI_API_KEY: str = ""
+    AI_MODEL: str = ""  # vazio = padrão do provedor
+    AI_MAX_TOKENS: int = 1024
+
 
 settings = Settings()

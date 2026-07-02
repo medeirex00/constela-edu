@@ -4,7 +4,9 @@ import Layout from "./components/Layout";
 import { Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import Alunos from "./pages/Alunos";
+import Assistente from "./pages/Assistente";
 import Comparador from "./pages/Comparador";
+import Insights from "./pages/Insights";
 import Conquistas from "./pages/Conquistas";
 import Dashboard from "./pages/Dashboard";
 import Elefante from "./pages/Elefante";
@@ -61,6 +63,8 @@ export default function App() {
         <Route path="/livros" element={<Livros />} />
         <Route path="/importacoes" element={<Importacoes />} />
         <Route path="/conquistas" element={<Conquistas />} />
+        <Route path="/insights" element={<Insights />} />
+        <Route path="/assistente" element={<Assistente />} />
         <Route path="/painel-publico" element={<PainelPublicoConfig />} />
         <Route path="/relatorios" element={<Relatorios />} />
         <Route path="/simulador" element={<Simulador />} />
