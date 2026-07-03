@@ -29,7 +29,7 @@ from app.models import (
 )
 from app.schemas import AnaliseOut, ImportacaoConfirm, ImportacaoOut, ImportacaoResultadoOut
 from app.services import importacao as svc
-from app.services import scoring
+from app.services import push, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
@@ -293,6 +293,16 @@ def confirmar(
                         "alunos": importacao.qtd_alunos, "avisos": avisos})
     db.commit()
     scoring.recalcular_escola(db, escola_id)
+
+    # Avisa os aparelhos da escola (melhor esforço — nunca falha a importação)
+    plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
+    push.notificar_escola(
+        db, escola_id,
+        titulo="Novos dados no SGPE",
+        corpo=f"{importacao.qtd_alunos} alunos atualizados na {plataforma_nome}. "
+              "As notas já foram recalculadas.",
+        dados={"tela": "ranking"},
+    )
 
     return ImportacaoResultadoOut(
         mensagem=f"Importação concluída: {importacao.qtd_alunos} alunos atualizados. "

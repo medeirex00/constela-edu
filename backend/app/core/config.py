@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        # App desktop (Tauri): o WebView usa uma origem própria por plataforma
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
     ]
 
     # Endereço público do frontend — usado nos QR codes do Painel Público.

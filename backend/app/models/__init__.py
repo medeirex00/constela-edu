@@ -5,6 +5,7 @@ from app.models.configuracao import (
     NivelDificuldade,
     ReferenciaNormalizacao,
 )
+from app.models.dispositivo import DispositivoMovel
 from app.models.escola import Escola
 from app.models.ia import ConversaIA, MensagemIA
 from app.models.nota import LogAuditoria, Nota
@@ -21,6 +22,7 @@ __all__ = [
     "Aluno",
     "Configuracao",
     "ConversaIA",
+    "DispositivoMovel",
     "MensagemIA",
     "DificuldadeTurma",
     "Escola",

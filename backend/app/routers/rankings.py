@@ -78,13 +78,11 @@ def recalcular(
     return {"mensagem": f"Notas recalculadas para {total} alunos."}
 
 
-@router.get("/dashboard", response_model=DashboardOut)
-def dashboard(
-    escola_id: int = Depends(escola_autorizada),
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
-):
-    """Indicadores do painel inicial (PRD §19, §48)."""
+def montar_dashboard(db: Session, escola_id: int) -> DashboardOut:
+    """Indicadores do painel inicial (PRD §19, §48).
+
+    Extraído do endpoint para ser reutilizado pela sincronização mobile.
+    """
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
 
@@ -142,3 +140,12 @@ def dashboard(
         media_geral=round(float(media_geral), 2),
         top10=_ranking(db, escola_id, ano, limite=10),
     )
+
+
+@router.get("/dashboard", response_model=DashboardOut)
+def dashboard(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    return montar_dashboard(db, escola_id)
