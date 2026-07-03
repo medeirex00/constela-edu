@@ -8,6 +8,8 @@ export default defineConfig({
     exclude: ["@constela/core"],
   },
   server: {
+    // Exposto na rede local para acesso pelo celular/tablet (docs/CELULAR.md)
+    host: true,
     proxy: {
       // Em desenvolvimento, o frontend fala com a API sem configurar CORS
       "/api": "http://localhost:8000",

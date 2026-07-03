@@ -86,8 +86,9 @@ O web app é responsivo. Com o backend + web rodando (dev: `npm run dev:web`
 com `--host`, ou produção: `docker compose up -d`), basta abrir no navegador
 do celular:
 
-- Desenvolvimento: `http://192.168.15.30:5173`
-  (rode com `npm run dev:web -- --host` para expor na rede)
+- Desenvolvimento: `http://192.168.15.30:5173` — o `npm run dev:web` já
+  expõe na rede (ou simplesmente dê dois cliques em `iniciar-celular.bat`
+  na raiz do projeto, que liga API e site de uma vez)
 - Produção (Docker): `http://SEU-SERVIDOR:8080`
 
 O **Painel Público** (`/p/{token}`) também funciona direto no celular, sem
