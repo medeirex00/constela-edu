@@ -4,24 +4,23 @@ Plataforma multi-escolas para acompanhar o desempenho de alunos nas plataformas
 Matific e Elefante Letrado, calcular notas justas e configuráveis, gerar rankings
 e apoiar premiações — conforme o PRD oficial do projeto.
 
-**Estado atual: todas as 6 fases do roteiro concluídas.**
-Veja `docs/ROADMAP.md` para o mapa completo das fases e `docs/ARQUITETURA.md`
-para as decisões técnicas.
+**Estado atual: 6 fases do roteiro concluídas + arquitetura multiplataforma
+(Web, Desktop e Mobile).** Veja `docs/ROADMAP.md` para o histórico e
+`docs/ARQUITETURA.md` para as decisões técnicas e diagramas.
 
-> O Assistente de IA funciona por padrão no modo `local` (sem chave, respostas
-> determinísticas sobre os dados). Para usar um modelo de verdade, configure
-> `AI_PROVIDER=anthropic` e `AI_API_KEY` no `.env` do backend
-> (veja `backend/.env.example`).
+## Plataformas
 
-## Stack
+| Plataforma | Onde vive | Tecnologia |
+|------------|-----------|-----------|
+| 🌐 Web | `apps/web` | React 18 + TypeScript + Tailwind (Vite) |
+| 💻 Desktop (Windows/macOS/Linux) | `apps/desktop` | Tauri 2 embrulhando o build do web — instalador pequeno, atualização automática, atalhos de teclado |
+| 📱 Mobile (Android/iOS) | `apps/mobile` | Expo / React Native — offline-first, push, scanner de QR |
+| ⚙️ Backend (único, para todos) | `backend` | Python 3.11+ + FastAPI + SQLAlchemy 2 |
+| 📦 Código compartilhado | `packages/core` | `@sgpe/core`: cliente da API, tipos, autenticação e formatação |
 
-| Camada   | Tecnologia |
-|----------|-----------|
-| Frontend | React 18 + TypeScript + Tailwind CSS + React Router (Vite) |
-| Backend  | Python 3.11+ + FastAPI + SQLAlchemy 2.0 |
-| Banco    | SQLite (dev) → PostgreSQL (produção, mesma base de código) |
+Banco: SQLite (desenvolvimento) → PostgreSQL (produção, via Docker) — mesma base de código.
 
-## Como rodar
+## Como rodar (desenvolvimento)
 
 ### 1. Backend
 
@@ -40,65 +39,99 @@ uvicorn app.main:app --reload --port 8000
 
 A documentação interativa da API fica em `http://localhost:8000/docs`.
 
-### 2. Frontend
+### 2. Instalar os workspaces (uma vez, na raiz)
 
 ```bash
-cd frontend
-npm install
-npm run dev
+npm install --legacy-peer-deps
 ```
 
-Abra `http://localhost:5173` e entre com:
-
-```
-E-mail: admin@sgpe.local
-Senha:  admin123          ← troque em produção
-```
-
-O Vite já faz proxy de `/api` para o backend na porta 8000.
-
-### 3. Testes do motor de cálculo
+### 3. Web
 
 ```bash
-cd backend
-python -m pytest tests/ -v
+npm run dev:web        # http://localhost:5173  (proxy /api → backend :8000)
 ```
 
-## O que está funcionando na Fase 1
+Login inicial: `admin@sgpe.local` / `admin123` (troque em produção).
 
-- **Multi-escolas de verdade**: toda tabela pertence a uma escola; o seletor
-  ESCOLA troca todos os dados do sistema (PRD §10, §20).
-- **Autenticação + papéis** (admin, coordenador, professor, visitante), com
-  toda permissão validada no backend (PRD §13).
-- **Motor de cálculo completo e auditável** (PRD Parte 3): normalização 0–100,
-  pesos 100% configuráveis, dificuldade por série, sub-nota de questões,
-  critérios de desempate e recálculo automático a cada alteração.
-- **Perfil do aluno com "Como esta nota foi calculada"** — cada indicador com
-  valor, referência, normalização, peso e contribuição (PRD §45).
-- **Métricas** com exatamente os 4 módulos do PRD §58: Matific, Elefante
-  Letrado, Dificuldade por Turma e Referências de Normalização.
-- **Dashboard, Ranking Geral com filtros, Alunos com busca paginada,
-  Turmas e Professores.**
-- **Modo claro/escuro**, layout responsivo e correção definitiva do problema
-  de toque no iPhone (elementos semânticos + `touch-action: manipulation`).
-- **Logs de auditoria** de login, alterações de pesos, referências,
-  dificuldade e cadastros (PRD §17).
+### 4. Desktop (requer Rust: https://rustup.rs)
 
-## O que ainda não existe (por decisão de fase, não por esquecimento)
+```bash
+npm run dev:desktop    # abre a janela nativa apontando para o dev server
+npm run build:desktop  # gera instaladores (msi/nsis, dmg, appimage/deb)
+```
 
-Importações de PDF/texto, módulos Matific/Elefante dedicados, catálogo de
-livros, evolução/histórico visual, gamificação, painel público, relatórios e
-assistente de IA. Cada um tem fase e pré-requisitos definidos em
-`docs/ROADMAP.md`. **A Fase 2 (importações) precisa de relatórios reais
-exportados das duas plataformas para construir os parsers.**
+Atalhos: `Ctrl+K` pesquisa global, `Alt+1..0` navegação. A atualização
+automática usa o updater do Tauri — gere as chaves com
+`npm run tauri -w @sgpe/desktop signer generate` e preencha
+`apps/desktop/src-tauri/tauri.conf.json`.
+
+### 5. Mobile
+
+```bash
+# Aponte para a API: emulador Android usa 10.0.2.2; aparelho físico, o IP da máquina
+EXPO_PUBLIC_API_URL=http://10.0.2.2:8000/api/v1 npm run dev:mobile
+```
+
+Abra com o app Expo Go (ou `npx expo run:android`). Builds de loja:
+`eas build -p android` / `eas build -p ios` (configure o `projectId` do EAS
+em `apps/mobile/app.json`).
+
+O app funciona offline com o último estado sincronizado e se atualiza
+sozinho ao reconectar. Push chega via Expo (ex.: quando uma importação é
+concluída).
+
+## Produção com Docker (PostgreSQL + API + Web)
+
+```bash
+cp .env.example .env   # defina POSTGRES_PASSWORD e SECRET_KEY
+docker compose up -d
+# Web em http://localhost:8080 — API na mesma origem em /api/v1
+# Primeira vez: docker compose exec backend python scripts/seed.py
+```
+
+Desktop e mobile apontam para essa mesma URL (`VITE_API_URL` /
+`EXPO_PUBLIC_API_URL`).
+
+## Testes
+
+```bash
+cd backend && python -m pytest tests/ -v       # 71 testes (motor, fases 2–6, mobile)
+npm run build:web                              # typecheck + build do web
+npm run typecheck:mobile                       # typecheck do app mobile
+```
+
+CI (GitHub Actions): testes do backend, build do web, typechecks e imagens
+Docker em todo push; instaladores do desktop em tags `v*`
+(`.github/workflows/`).
+
+## O que está funcionando
+
+- **Multi-escolas de verdade** com papéis validados no backend (PRD §10, §13, §20).
+- **Motor de cálculo completo e auditável** (PRD Parte 3) com "Como esta
+  nota foi calculada" no perfil do aluno.
+- **Importações** (PDF/texto) com prévia, correspondência de nomes e
+  histórico; módulos Matific/Elefante; Catálogo de Livros.
+- **Evolução**: linha do tempo, ranking de evolução, comparadores, páginas
+  de turma e escola.
+- **Gamificação** (conquistas/XP/sequência/destaques), **relatórios**
+  (PDF/Excel/CSV + certificados), usuários, backup/restauração, pesquisa
+  global, notificações, simulador.
+- **Painel Público** sem login com modo TV e QR code.
+- **Inteligência Pedagógica** (índices e alertas) e **Assistente de IA**
+  com provedor trocável (`local` por padrão — sem chave; `anthropic`/
+  `openai` via `.env`).
+- **Mobile**: login, dashboard, rankings, perfil do aluno, scanner de QR,
+  push e offline-first. **Desktop**: tudo do web + instalador, atualização
+  automática e atalhos.
 
 ## Estrutura
 
 ```
-backend/    API FastAPI (app/core, app/models, app/routers, app/services)
-frontend/   SPA React + TS + Tailwind
-database/   arquivo SQLite (gerado; fora do versionamento)
-uploads/    arquivos importados (matific/, elefante/, temporarios/)
-exports/    relatórios gerados
-docs/       ROADMAP.md e ARQUITETURA.md
+backend/    API FastAPI (única fonte de regra de negócio, 71 testes)
+apps/       web (React) · desktop (Tauri) · mobile (Expo/RN)
+packages/   core — TypeScript compartilhado entre os três clientes
+database/   SQLite de desenvolvimento (gerado; fora do versionamento)
+uploads/    arquivos importados · exports/  relatórios gerados
+docs/       ARQUITETURA.md (diagramas) e ROADMAP.md
+tools/      utilitários (gerador de ícones do desktop)
 ```

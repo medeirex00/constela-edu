@@ -100,6 +100,24 @@ PRD: §129–§172.
   fatos, conversas registradas em `conversas_ia`/`mensagens_ia` e
   visíveis apenas ao próprio autor
 
+## ✅ Fase 7 — Multiplataforma: Web, Desktop e Mobile (entregue)
+
+Fora do PRD original — evolução de produto solicitada após as 6 fases.
+
+- Monorepo (npm workspaces): `apps/web`, `apps/desktop`, `apps/mobile`,
+  `packages/core` (@sgpe/core: cliente HTTP, tipos, auth e formatação
+  compartilhados pelos três clientes)
+- Backend FastAPI mantido como fonte única de regra de negócio — decisão
+  registrada em `docs/ARQUITETURA.md` (por que não NestJS/Supabase/Flutter)
+- Desktop: Tauri 2 embrulhando o build do web (instaladores msi/nsis,
+  dmg, appimage/deb), atualização automática assinada e atalhos de teclado
+- Mobile: Expo/React Native offline-first (cache persistido + revalidação
+  ao reconectar), push via Expo, scanner de QR do Painel Público
+- Backend: `dispositivos_moveis` + push em eventos, endpoint consolidado
+  `GET /sincronizacao`, CORS para o WebView do Tauri
+- Infra: Docker Compose (PostgreSQL + API + web/nginx), CI no GitHub
+  Actions (testes/builds) e release do desktop em tags `v*`
+
 ## Transversal (toda fase)
 
 Logs de auditoria em toda escrita, mensagens de progresso claras (§47, §65),

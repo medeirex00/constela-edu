@@ -1,0 +1,54 @@
+# SGPE — produção com um comando: docker compose up -d
+#
+# Topologia: PostgreSQL (dados) ← backend (FastAPI) ← web (nginx: SPA + proxy /api)
+# Desktop e Mobile apontam para a MESMA API (http://servidor/api/v1).
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sgpe
+      POSTGRES_USER: sgpe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+    volumes:
+      - dados_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sgpe -d sgpe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://sgpe:${POSTGRES_PASSWORD}@postgres:5432/sgpe
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      UPLOADS_DIR: /dados/uploads
+      EXPORTS_DIR: /dados/exports
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+    volumes:
+      - dados_uploads:/dados/uploads
+      - dados_exports:/dados/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${PORTA_WEB:-8080}:80"
+    depends_on:
+      - backend
+
+volumes:
+  dados_postgres:
+  dados_uploads:
+  dados_exports:

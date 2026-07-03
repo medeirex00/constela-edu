@@ -1,0 +1,55 @@
+# Release do app desktop: dispara em tags v* e compila instaladores para
+# Windows (msi/nsis), macOS (dmg) e Linux (appimage/deb) com o Tauri.
+#
+# Segredos necessários no repositório:
+#   TAURI_SIGNING_PRIVATE_KEY          (npm run tauri -w @sgpe/desktop signer generate)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#   VITE_API_URL                       (URL pública da API, ex.: https://sgpe.escola.br/api/v1)
+name: Desktop Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+          - platform: macos-latest
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Dependências de sistema (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf
+
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+
+      - name: Build e empacotamento (Tauri)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "SGPE Desktop ${{ github.ref_name }}"
+          releaseDraft: true
