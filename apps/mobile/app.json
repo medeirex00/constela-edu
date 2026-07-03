@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "SGPE",
+    "slug": "sgpe",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "sgpe",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "br.com.sgpe.mobile",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "br.com.sgpe.mobile",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "O SGPE usa a câmera apenas para ler QR codes do painel da escola."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "SUBSTITUA-PELO-PROJECT-ID-DO-EAS"
+      }
+    }
+  }
+}
