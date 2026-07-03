@@ -1,18 +1,19 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SGPE",
+  "productName": "Constela Edu",
   "version": "1.0.0",
-  "identifier": "br.com.sgpe.desktop",
+  "identifier": "br.com.constelaedu.desktop",
+  "mainBinaryName": "constela-edu",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../../web/dist",
-    "beforeDevCommand": "npm run dev --workspace @sgpe/web",
-    "beforeBuildCommand": "npm run build --workspace @sgpe/web"
+    "beforeDevCommand": "npm run dev --workspace @constela/web",
+    "beforeBuildCommand": "npm run build --workspace @constela/web"
   },
   "app": {
     "windows": [
       {
-        "title": "SGPE — Gestão e Premiação Escolar",
+        "title": "Constela Edu — Gestão e Premiação Escolar",
         "width": 1360,
         "height": 860,
         "minWidth": 1024,
@@ -39,9 +40,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://SEU-SERVIDOR-DE-RELEASES/sgpe/desktop/{{target}}/{{arch}}/{{current_version}}"
+        "https://SEU-SERVIDOR-DE-RELEASES/constela-edu/desktop/{{target}}/{{arch}}/{{current_version}}"
       ],
-      "pubkey": "SUBSTITUA-PELA-CHAVE-PUBLICA-GERADA-COM: npm run tauri -w @sgpe/desktop signer generate"
+      "pubkey": "SUBSTITUA-PELA-CHAVE-PUBLICA-GERADA-COM: npm run tauri -w @constela/desktop signer generate"
     }
   }
 }

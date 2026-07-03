@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Assistente Pedagógico (PRD §155–§172): chat que responde somente sobre
  * os dados desta escola. O frontend nunca fala com o modelo — apenas com
  * o backend, que monta o contexto e registra a conversa.
@@ -152,7 +152,7 @@ export default function Assistente() {
                   <Bot size={22} />
                 </span>
                 <p className="max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-                  Sou o assistente do SGPE. Respondo apenas com os dados desta escola — rankings,
+                  Sou o assistente do Constela Edu. Respondo apenas com os dados desta escola — rankings,
                   evolução, alertas e turmas.
                 </p>
                 <div className="flex flex-wrap justify-center gap-2">

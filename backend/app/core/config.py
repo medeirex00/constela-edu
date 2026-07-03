@@ -14,7 +14,7 @@ PROJECT_ROOT = BASE_DIR.parent                            # raiz do monorepo
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    APP_NAME: str = "Sistema de Gestão e Premiação Escolar"
+    APP_NAME: str = "Constela Edu — Gestão e Premiação Escolar"
     API_V1_PREFIX: str = "/api/v1"
 
     # SQLite hoje; troque a URL para PostgreSQL sem alterar o restante do código.

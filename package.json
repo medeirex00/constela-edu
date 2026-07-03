@@ -1,19 +1,19 @@
 {
-  "name": "sgpe",
+  "name": "constela-edu",
   "private": true,
   "version": "1.0.0",
-  "description": "SGPE — Sistema de Gestão e Premiação Escolar (monorepo multiplataforma)",
+  "description": "Constela Edu — Gestão e Premiação Escolar (monorepo multiplataforma)",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "npm run dev --workspace @sgpe/web",
-    "build:web": "npm run build --workspace @sgpe/web",
-    "dev:mobile": "npm run start --workspace @sgpe/mobile",
-    "typecheck:mobile": "npm run typecheck --workspace @sgpe/mobile",
-    "dev:desktop": "npm run tauri:dev --workspace @sgpe/desktop",
-    "build:desktop": "npm run tauri:build --workspace @sgpe/desktop"
+    "dev:web": "npm run dev --workspace @constela/web",
+    "build:web": "npm run build --workspace @constela/web",
+    "dev:mobile": "npm run start --workspace @constela/mobile",
+    "typecheck:mobile": "npm run typecheck --workspace @constela/mobile",
+    "dev:desktop": "npm run tauri:dev --workspace @constela/desktop",
+    "build:desktop": "npm run tauri:build --workspace @constela/desktop"
   },
   "allowScripts": {
     "esbuild@0.21.5": true

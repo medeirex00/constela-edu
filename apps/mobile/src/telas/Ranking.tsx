@@ -1,5 +1,5 @@
 /** Ranking Geral e de Evolução, com toque para abrir o perfil do aluno. */
-import { api, nota, type PacoteSincronizacao } from "@sgpe/core";
+import { api, nota, type PacoteSincronizacao } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";

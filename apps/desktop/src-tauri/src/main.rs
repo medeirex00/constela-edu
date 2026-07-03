@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    sgpe_desktop_lib::run()
+    constela_edu_desktop_lib::run()
 }

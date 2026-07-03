@@ -3,9 +3,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
-  // O pacote @sgpe/core é fonte TypeScript no workspace — sem pré-bundle.
+  // O pacote @constela/core é fonte TypeScript no workspace — sem pré-bundle.
   optimizeDeps: {
-    exclude: ["@sgpe/core"],
+    exclude: ["@constela/core"],
   },
   server: {
     proxy: {

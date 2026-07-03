@@ -57,7 +57,7 @@ function Raiz() {
     return () => inscricao.remove();
   }, []);
 
-  if (carregando) return <Carregando texto="Abrindo o SGPE..." />;
+  if (carregando) return <Carregando texto="Abrindo o Constela Edu..." />;
   if (!usuario) return <Entrar />;
   return (
     <NavigationContainer>

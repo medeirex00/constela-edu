@@ -1,0 +1,31 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "desenvolvimento": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "comment-": "Gera um APK instalável direto no aparelho (sem loja)",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://SEU-SERVIDOR:8000/api/v1"
+      }
+    },
+    "producao": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://SEU-DOMINIO/api/v1"
+      }
+    }
+  },
+  "submit": {
+    "producao": {}
+  }
+}

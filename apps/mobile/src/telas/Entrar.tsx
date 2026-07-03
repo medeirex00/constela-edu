@@ -38,9 +38,9 @@ export default function Entrar() {
     >
       <View style={estilos.marca}>
         <View style={estilos.logo}>
-          <Text style={estilos.logoTexto}>S</Text>
+          <Text style={estilos.logoTexto}>C</Text>
         </View>
-        <Text style={estilos.nome}>SGPE</Text>
+        <Text style={estilos.nome}>Constela Edu</Text>
         <TextoSuave>Gestão e Premiação Escolar</TextoSuave>
       </View>
 

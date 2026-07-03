@@ -3,7 +3,7 @@
  * viagem de rede hidrata estatísticas, destaque, alertas e mural. Com o
  * cache persistido, tudo isso reaparece instantaneamente offline.
  */
-import { api, nota, numero, tempoLeitura, type PacoteSincronizacao } from "@sgpe/core";
+import { api, nota, numero, tempoLeitura, type PacoteSincronizacao } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 

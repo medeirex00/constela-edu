@@ -1,8 +1,11 @@
-# SGPE — Sistema de Gestão e Premiação Escolar
+# Constela Edu — Gestão e Premiação Escolar
 
 Plataforma multi-escolas para acompanhar o desempenho de alunos nas plataformas
 Matific e Elefante Letrado, calcular notas justas e configuráveis, gerar rankings
 e apoiar premiações — conforme o PRD oficial do projeto.
+
+> Codinome técnico interno: **SGPE** — nomes de tabelas, chaves locais e
+> comentários antigos podem usar a sigla; a marca do produto é Constela Edu.
 
 **Estado atual: 6 fases do roteiro concluídas + arquitetura multiplataforma
 (Web, Desktop e Mobile).** Veja `docs/ROADMAP.md` para o histórico e
@@ -16,7 +19,7 @@ e apoiar premiações — conforme o PRD oficial do projeto.
 | 💻 Desktop (Windows/macOS/Linux) | `apps/desktop` | Tauri 2 embrulhando o build do web — instalador pequeno, atualização automática, atalhos de teclado |
 | 📱 Mobile (Android/iOS) | `apps/mobile` | Expo / React Native — offline-first, push, scanner de QR |
 | ⚙️ Backend (único, para todos) | `backend` | Python 3.11+ + FastAPI + SQLAlchemy 2 |
-| 📦 Código compartilhado | `packages/core` | `@sgpe/core`: cliente da API, tipos, autenticação e formatação |
+| 📦 Código compartilhado | `packages/core` | `@constela/core`: cliente da API, tipos, autenticação e formatação |
 
 Banco: SQLite (desenvolvimento) → PostgreSQL (produção, via Docker) — mesma base de código.
 
@@ -62,7 +65,7 @@ npm run build:desktop  # gera instaladores (msi/nsis, dmg, appimage/deb)
 
 Atalhos: `Ctrl+K` pesquisa global, `Alt+1..0` navegação. A atualização
 automática usa o updater do Tauri — gere as chaves com
-`npm run tauri -w @sgpe/desktop signer generate` e preencha
+`npm run tauri -w @constela/desktop signer generate` e preencha
 `apps/desktop/src-tauri/tauri.conf.json`.
 
 ### 5. Mobile

@@ -105,7 +105,7 @@ PRD: §129–§172.
 Fora do PRD original — evolução de produto solicitada após as 6 fases.
 
 - Monorepo (npm workspaces): `apps/web`, `apps/desktop`, `apps/mobile`,
-  `packages/core` (@sgpe/core: cliente HTTP, tipos, auth e formatação
+  `packages/core` (@constela/core: cliente HTTP, tipos, auth e formatação
   compartilhados pelos três clientes)
 - Backend FastAPI mantido como fonte única de regra de negócio — decisão
   registrada em `docs/ARQUITETURA.md` (por que não NestJS/Supabase/Flutter)

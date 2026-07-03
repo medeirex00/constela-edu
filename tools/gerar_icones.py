@@ -1,7 +1,7 @@
 """Gera os ícones do app desktop (PNG, ICO e ICNS) sem dependências externas.
 
-Desenha um quadrado índigo (#4F46E5) com um "S" branco em blocos — a marca
-do SGPE — e escreve os formatos que o empacotador do Tauri exige.
+Desenha um quadrado índigo (#4F46E5) com um "C" branco em blocos — a marca
+do Constela Edu — e escreve os formatos que o empacotador do Tauri exige.
 
 Uso:  python tools/gerar_icones.py
 """
@@ -16,15 +16,15 @@ DESTINO = Path(__file__).resolve().parent.parent / "apps" / "desktop" / "src-tau
 INDIGO = (79, 70, 229, 255)
 BRANCO = (255, 255, 255, 255)
 
-# "S" em uma grade 5x7 (1 = pixel aceso)
-LETRA_S = [
-    "01111",
-    "10000",
-    "10000",
+# "C" em uma grade 5x7 (1 = pixel aceso)
+LETRA = [
     "01110",
-    "00001",
-    "00001",
-    "11110",
+    "10001",
+    "10000",
+    "10000",
+    "10000",
+    "10001",
+    "01110",
 ]
 
 
@@ -52,7 +52,7 @@ def desenhar(tamanho: int) -> bytes:
             if origem_x <= x < origem_x + largura_s and origem_y <= y < origem_y + altura_s:
                 coluna = (x - origem_x) // escala
                 linha = (y - origem_y) // escala
-                if LETRA_S[linha][coluna] == "1":
+                if LETRA[linha][coluna] == "1":
                     cor = BRANCO
             pixels += bytes(cor)
     return bytes(pixels)

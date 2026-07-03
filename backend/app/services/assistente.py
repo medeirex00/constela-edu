@@ -29,8 +29,8 @@ from app.services.ia.provedores import LocalProvedor
 
 MAX_MENSAGENS_CONTEXTO = 12  # últimas mensagens da conversa enviadas ao modelo
 
-INSTRUCOES = """Você é o Assistente Pedagógico do SGPE (Sistema de Gestão e
-Premiação Escolar) de uma escola brasileira de ensino fundamental.
+INSTRUCOES = """Você é o Assistente Pedagógico do Constela Edu (sistema de
+gestão e premiação escolar) de uma escola brasileira de ensino fundamental.
 
 REGRAS OBRIGATÓRIAS:
 1. Responda SOMENTE com base nos dados do sistema apresentados abaixo.

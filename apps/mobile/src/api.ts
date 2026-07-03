@@ -1,5 +1,5 @@
 /**
- * Adaptador Mobile do cliente compartilhado (@sgpe/core).
+ * Adaptador Mobile do cliente compartilhado (@constela/core).
  *
  * Decisões de plataforma:
  *   - token no SecureStore (armazenamento cifrado do sistema — nunca em
@@ -9,7 +9,7 @@
  *     emulador Android use http://10.0.2.2:8000, em aparelho físico o IP
  *     da máquina na rede local, em produção a URL pública do servidor.
  */
-import { configurarApi } from "@sgpe/core";
+import { configurarApi } from "@constela/core";
 import * as SecureStore from "expo-secure-store";
 
 const CHAVE_TOKEN = "sgpe_token";
@@ -33,4 +33,4 @@ configurarApi({
   aoExpirarSessao: () => avisarSessaoExpirada(),
 });
 
-export { api, apiUpload, loginRequest, obterToken, guardarToken, limparToken, ApiError } from "@sgpe/core";
+export { api, apiUpload, loginRequest, obterToken, guardarToken, limparToken, ApiError } from "@constela/core";

@@ -1,5 +1,5 @@
 /**
- * Adaptador Web/Desktop do cliente compartilhado (@sgpe/core).
+ * Adaptador Web/Desktop do cliente compartilhado (@constela/core).
  *
  * A lógica HTTP vive no pacote core (compartilhada com o mobile); aqui ficam
  * apenas as decisões de plataforma:
@@ -8,9 +8,9 @@
  *   - base da API: proxy relativo "/api/v1" no web; no desktop (Tauri) não há
  *     proxy, então o build injeta VITE_API_URL apontando para o servidor.
  */
-import { apiBlob, configurarApi } from "@sgpe/core";
+import { apiBlob, configurarApi } from "@constela/core";
 
-export { api, apiUpload, loginRequest, ApiError } from "@sgpe/core";
+export { api, apiUpload, loginRequest, ApiError } from "@constela/core";
 
 const CHAVE_TOKEN = "sgpe_token";
 

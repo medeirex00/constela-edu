@@ -42,7 +42,7 @@ export default function Scanner() {
         <Cartao>
           <Titulo>Scanner de QR Code</Titulo>
           <TextoSuave>
-            O SGPE usa a câmera apenas para ler o QR code do Painel Público da escola.
+            O Constela Edu usa a câmera apenas para ler o QR code do Painel Público da escola.
           </TextoSuave>
           <View style={{ height: espacos.l }} />
           <Botao titulo="Permitir câmera" onPress={() => pedirPermissao()} />

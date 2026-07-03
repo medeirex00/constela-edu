@@ -32,10 +32,10 @@ export default function Login() {
       <div className="card w-full max-w-sm p-6">
         <div className="mb-6 flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            S
+            C
           </span>
           <div className="leading-tight">
-            <p className="font-semibold tracking-tight">SGPE</p>
+            <p className="font-semibold tracking-tight">Constela Edu</p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">Gestão e Premiação Escolar</p>
           </div>
         </div>

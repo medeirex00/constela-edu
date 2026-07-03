@@ -2,7 +2,7 @@
 # Windows (msi/nsis), macOS (dmg) e Linux (appimage/deb) com o Tauri.
 #
 # Segredos necessários no repositório:
-#   TAURI_SIGNING_PRIVATE_KEY          (npm run tauri -w @sgpe/desktop signer generate)
+#   TAURI_SIGNING_PRIVATE_KEY          (npm run tauri -w @constela/desktop signer generate)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #   VITE_API_URL                       (URL pública da API, ex.: https://sgpe.escola.br/api/v1)
 name: Desktop Release
@@ -51,5 +51,5 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: "SGPE Desktop ${{ github.ref_name }}"
+          releaseName: "Constela Edu Desktop ${{ github.ref_name }}"
           releaseDraft: true

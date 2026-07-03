@@ -13,7 +13,7 @@ flowchart LR
         DESK["💻 Desktop\napps/desktop (Tauri 2)\nembrulha o build do web"]
         MOB["📱 Mobile\napps/mobile (Expo/React Native)"]
     end
-    CORE["@sgpe/core\npackages/core (TypeScript)\ncliente HTTP · tipos · auth · formato"]
+    CORE["@constela/core\npackages/core (TypeScript)\ncliente HTTP · tipos · auth · formato"]
     API["Backend FastAPI\nbackend/ (Python)\nJWT · permissões · motor de cálculo\nimportações · gamificação · IA"]
     DB[("PostgreSQL (produção)\nSQLite (desenvolvimento)")]
     EXPO["Expo Push Service\n(FCM + APNs)"]
@@ -33,14 +33,14 @@ flowchart LR
 |---|---|
 | **Manter FastAPI** (não migrar para NestJS) | O backend já é API-first, com 71 testes e o motor de cálculo auditável — o ativo mais valioso do projeto. Reescrever em outra linguagem teria custo e risco altos com ganho funcional zero: “backend único refletido em todas as plataformas” é propriedade do desenho API-first, não da linguagem. |
 | **JWT próprio** (não Supabase) | Autenticação com papéis validados no servidor e trilha de auditoria já existem e são testados. Supabase adicionaria dependência externa e migração de dados sem eliminar o backend (o motor de cálculo continuaria precisando dele). |
-| **React + React Native** (não Flutter) | Reaproveita 100% do frontend web existente e mantém um único ecossistema (TypeScript) com o pacote `@sgpe/core` compartilhado. Flutter exigiria reescrever ~20 telas em Dart, e Flutter Web (canvas) é inferior para um sistema administrativo cheio de tabelas (acessibilidade, seleção de texto, carga inicial). |
+| **React + React Native** (não Flutter) | Reaproveita 100% do frontend web existente e mantém um único ecossistema (TypeScript) com o pacote `@constela/core` compartilhado. Flutter exigiria reescrever ~20 telas em Dart, e Flutter Web (canvas) é inferior para um sistema administrativo cheio de tabelas (acessibilidade, seleção de texto, carga inicial). |
 | **Tauri 2** (não Electron) | O desktop embrulha exatamente o build do `apps/web` (zero telas duplicadas), com binário ~10x menor (WebView do sistema), atualizador embutido e melhor performance. |
 | **PostgreSQL via Docker** | Já suportado pelo SQLAlchemy 2 desde a Fase 1 (tipos portáveis, sem SQL cru). O `docker-compose.yml` oficializa: Postgres + backend + web/nginx em um comando. |
 
 ## O que é compartilhado
 
 ```
-packages/core (@sgpe/core)  ← usado por Web, Desktop e Mobile
+packages/core (@constela/core)  ← usado por Web, Desktop e Mobile
 ├── cliente.ts   cliente HTTP, upload, blobs, login, tratamento de 401
 ├── tipos.ts     contrato TypeScript da API (espelha os schemas Pydantic)
 └── formato.ts   números, notas, datas e tempo em pt-BR
@@ -69,7 +69,7 @@ sgpe/
 │   └── mobile/              Expo / React Native (Android e iOS)
 │       └── src/             telas, navegação, contexto, notificações
 ├── packages/
-│   └── core/                @sgpe/core — TypeScript compartilhado
+│   └── core/                @constela/core — TypeScript compartilhado
 ├── tools/                   utilitários (gerador de ícones)
 ├── docs/                    ARQUITETURA.md e ROADMAP.md
 ├── docker-compose.yml       PostgreSQL + backend + web
@@ -156,7 +156,7 @@ automática de tokens mortos.
 
 Atualização automática do desktop: o app verifica o endpoint de releases
 na inicialização (updater do Tauri, artefatos assinados — gere as chaves
-com `npm run tauri -w @sgpe/desktop signer generate` e configure os
+com `npm run tauri -w @constela/desktop signer generate` e configure os
 segredos do workflow `desktop-release.yml`).
 
 ## Escalabilidade

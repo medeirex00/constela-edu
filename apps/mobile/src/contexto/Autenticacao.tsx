@@ -7,7 +7,7 @@ import {
   obterToken,
   type Escola,
   type Usuario,
-} from "@sgpe/core";
+} from "@constela/core";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   createContext,

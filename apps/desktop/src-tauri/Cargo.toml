@@ -1,12 +1,12 @@
 [package]
-name = "sgpe-desktop"
+name = "constela-edu-desktop"
 version = "1.0.0"
-description = "SGPE Desktop - Gestao e Premiacao Escolar"
-authors = ["SGPE"]
+description = "Constela Edu Desktop - Gestao e Premiacao Escolar"
+authors = ["Constela Edu"]
 edition = "2021"
 
 [lib]
-name = "sgpe_desktop_lib"
+name = "constela_edu_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

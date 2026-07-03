@@ -1,4 +1,4 @@
-//! SGPE Desktop — shell nativo (Tauri 2) do app web.
+//! Constela Edu Desktop — shell nativo (Tauri 2) do app web.
 //!
 //! A atualização automática roda em Rust, na inicialização: verifica o
 //! endpoint de releases, baixa/instala em segundo plano e reinicia o app.
@@ -30,5 +30,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("erro ao iniciar o SGPE Desktop");
+        .expect("erro ao iniciar o Constela Edu Desktop");
 }

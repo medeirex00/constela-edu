@@ -1,5 +1,5 @@
 {
-  "name": "@sgpe/core",
+  "name": "@constela/core",
   "private": true,
   "version": "1.0.0",
   "description": "Lógica compartilhada do SGPE: cliente da API, tipos, autenticação e formatação (Web, Mobile e Desktop)",

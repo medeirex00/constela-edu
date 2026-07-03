@@ -1,5 +1,5 @@
 /** Perfil do aluno: notas, posição e o "como esta nota foi calculada". */
-import { api, nota, type LinhaCalculo, type PerfilAluno as Perfil } from "@sgpe/core";
+import { api, nota, type LinhaCalculo, type PerfilAluno as Perfil } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ScrollView, StyleSheet, Text, View } from "react-native";

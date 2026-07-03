@@ -1,25 +1,25 @@
 {
   "expo": {
-    "name": "SGPE",
-    "slug": "sgpe",
+    "name": "Constela Edu",
+    "slug": "constela-edu",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "sgpe",
+    "scheme": "constelaedu",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "bundleIdentifier": "br.com.sgpe.mobile",
+      "bundleIdentifier": "br.com.constelaedu.mobile",
       "supportsTablet": true
     },
     "android": {
-      "package": "br.com.sgpe.mobile",
+      "package": "br.com.constelaedu.mobile",
       "edgeToEdgeEnabled": true
     },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "O SGPE usa a câmera apenas para ler QR codes do painel da escola."
+          "cameraPermission": "O Constela Edu usa a câmera apenas para ler QR codes do painel da escola."
         }
       ],
       [

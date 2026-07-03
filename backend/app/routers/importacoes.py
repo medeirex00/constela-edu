@@ -298,7 +298,7 @@ def confirmar(
     plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
     push.notificar_escola(
         db, escola_id,
-        titulo="Novos dados no SGPE",
+        titulo="Novos dados no Constela Edu",
         corpo=f"{importacao.qtd_alunos} alunos atualizados na {plataforma_nome}. "
               "As notas já foram recalculadas.",
         dados={"tela": "ranking"},

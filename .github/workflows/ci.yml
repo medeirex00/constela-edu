@@ -35,11 +35,11 @@ jobs:
       - name: Instalar workspaces
         run: npm ci --no-audit --no-fund --legacy-peer-deps
       - name: Typecheck do core
-        run: npm run typecheck --workspace @sgpe/core
+        run: npm run typecheck --workspace @constela/core
       - name: Build do web
-        run: npm run build --workspace @sgpe/web
+        run: npm run build --workspace @constela/web
       - name: Typecheck do mobile
-        run: npm run typecheck --workspace @sgpe/mobile
+        run: npm run typecheck --workspace @constela/mobile
 
   docker:
     name: Imagens Docker (validação)

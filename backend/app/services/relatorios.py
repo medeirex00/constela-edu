@@ -230,7 +230,7 @@ def gerar_certificado(escola_nome: str, cor: str, aluno_nome: str,
         detalhe += f" e a {posicao}ª posição no Ranking Geral"
     pdf.cell(0, 8, detalhe, align="C")
     pdf.set_y(108)
-    pdf.cell(0, 8, f"no Sistema de Gestão e Premiação Escolar - ano letivo de {ano_letivo}.", align="C")
+    pdf.cell(0, 8, f"no Constela Edu - ano letivo de {ano_letivo}.", align="C")
 
     pdf.set_y(150)
     pdf.set_font("helvetica", "", 11)

@@ -1,4 +1,4 @@
-// Configuração do Metro para monorepo: o app enxerga o pacote @sgpe/core
+// Configuração do Metro para monorepo: o app enxerga o pacote @constela/core
 // (fonte TypeScript em packages/core) e os node_modules içados na raiz.
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");

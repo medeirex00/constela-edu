@@ -1,8 +1,8 @@
 {
-  "name": "@sgpe/desktop",
+  "name": "@constela/desktop",
   "private": true,
   "version": "1.0.0",
-  "description": "SGPE Desktop — o app web embrulhado pelo Tauri 2 (Windows, macOS e Linux)",
+  "description": "Constela Edu Desktop — o app web embrulhado pelo Tauri 2 (Windows, macOS e Linux)",
   "scripts": {
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

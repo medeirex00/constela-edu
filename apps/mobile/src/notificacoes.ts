@@ -3,7 +3,7 @@
  * registra no backend. Melhor esforço — sem permissão ou sem projectId do
  * EAS o app segue funcionando normalmente, apenas sem push.
  */
-import { api } from "@sgpe/core";
+import { api } from "@constela/core";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
