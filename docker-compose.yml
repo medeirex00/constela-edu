@@ -48,7 +48,25 @@ services:
     depends_on:
       - backend
 
+  # HTTPS automático — só sobe com: docker compose --profile https up -d
+  # Requer DOMINIO no .env apontando (DNS tipo A) para o IP do servidor.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO:?defina DOMINIO no .env para usar HTTPS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - dados_caddy:/data
+    depends_on:
+      - web
+
 volumes:
   dados_postgres:
   dados_uploads:
   dados_exports:
+  dados_caddy:

@@ -1,0 +1,6 @@
+# HTTPS automático (Let's Encrypt) na frente do site.
+# O domínio vem da variável DOMINIO no .env — ex.: constela.suaescola.com.br
+{$DOMINIO} {
+    encode gzip
+    reverse_proxy web:80
+}
