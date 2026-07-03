@@ -33,6 +33,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
+import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 
 const MENU = [
@@ -114,9 +115,10 @@ function PesquisaGlobal() {
     <div ref={caixa} className="relative hidden min-w-0 flex-1 items-center sm:flex sm:max-w-xs">
       <Search size={14} className="pointer-events-none absolute left-3 text-zinc-400" />
       <input
-        aria-label="Pesquisar em todo o sistema"
+        id="pesquisa-global"
+        aria-label="Pesquisar em todo o sistema (Ctrl+K)"
         className="w-full rounded-lg border border-zinc-300 bg-white py-1.5 pl-8 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-        placeholder="Pesquisar..."
+        placeholder="Pesquisar...  (Ctrl+K)"
         value={termo}
         onChange={(evento) => setTermo(evento.target.value)}
       />
@@ -251,6 +253,7 @@ function Marca() {
 export default function Layout() {
   const { usuario, escolas, escolaId, selecionarEscola, tema, alternarTema, sair } = useApp();
   const [menuAberto, setMenuAberto] = useState(false);
+  useAtalhosGlobais(); // Ctrl+K pesquisa, Alt+1..0 navegação (web e desktop)
 
   return (
     <div className="min-h-screen">

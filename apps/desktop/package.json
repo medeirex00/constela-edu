@@ -1,0 +1,14 @@
+{
+  "name": "@sgpe/desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SGPE Desktop — o app web embrulhado pelo Tauri 2 (Windows, macOS e Linux)",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

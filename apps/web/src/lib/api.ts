@@ -26,8 +26,17 @@ export function limparToken(): void {
   localStorage.removeItem(CHAVE_TOKEN);
 }
 
+// No desktop (Tauri) o app roda em tauri://localhost — não existe proxy /api.
+// Ordem de resolução: VITE_API_URL (build) > padrão local no Tauri > proxy web.
+const rodandoNoTauri =
+  typeof window !== "undefined" &&
+  (window.location.protocol === "tauri:" ||
+    window.location.hostname === "tauri.localhost");
+
 configurarApi({
-  base: (import.meta.env.VITE_API_URL as string | undefined) ?? "/api/v1",
+  base:
+    (import.meta.env.VITE_API_URL as string | undefined) ??
+    (rodandoNoTauri ? "http://localhost:8000/api/v1" : "/api/v1"),
   armazenamento: {
     obter: obterToken,
     guardar: guardarToken,
