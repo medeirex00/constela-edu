@@ -214,3 +214,45 @@ export interface PaginaLivros {
   por_pagina: number;
   itens: Livro[];
 }
+
+// --- Multiplataforma: sincronizacao e notificacoes push ----------------------
+
+export interface ItemEvolucaoResumo {
+  posicao: number;
+  aluno_id: number;
+  nome: string;
+  turma: string;
+  nota_evolucao: number;
+}
+
+export interface AlertaPedagogico {
+  tipo: string;
+  gravidade: "alta" | "media" | "baixa";
+  aluno_id: number;
+  nome: string;
+  turma: string;
+  texto: string;
+}
+
+export interface EventoMural {
+  tipo: string;
+  icone: string;
+  texto: string;
+  data: string;
+}
+
+/** Pacote consolidado devolvido por GET /escolas/{id}/sincronizacao —
+ *  uma unica viagem de rede para o mobile hidratar todas as telas. */
+export interface PacoteSincronizacao {
+  gerado_em: string;
+  dashboard: Dashboard;
+  ranking: RankingItem[];
+  evolucao: ItemEvolucaoResumo[];
+  alertas: AlertaPedagogico[];
+  mural: EventoMural[];
+}
+
+export interface DispositivoRegistrado {
+  id: number;
+  plataforma: string;
+}
