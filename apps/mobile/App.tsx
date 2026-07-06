@@ -1,5 +1,5 @@
 /**
- * SGPE Mobile — offline-first.
+ * Constela Edu Mobile — offline-first.
  *
  * Estratégia offline/sincronização:
  *   - TanStack Query com cache PERSISTIDO no AsyncStorage: as telas abrem

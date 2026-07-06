@@ -2,7 +2,7 @@
   "name": "@constela/core",
   "private": true,
   "version": "1.0.0",
-  "description": "Lógica compartilhada do SGPE: cliente da API, tipos, autenticação e formatação (Web, Mobile e Desktop)",
+  "description": "Lógica compartilhada do Constela Edu: cliente da API, tipos, autenticação e formatação (Web, Mobile e Desktop)",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "sideEffects": false,

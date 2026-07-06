@@ -34,7 +34,7 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="0.1.0",
     description=(
-        "API do Sistema de Gestão e Premiação Escolar. "
+        "API do Constela Edu — gestão e premiação escolar. "
         "Multi-escolas, com motor de cálculo configurável e auditável."
     ),
 )

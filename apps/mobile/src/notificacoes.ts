@@ -30,7 +30,7 @@ export async function registrarParaPush(escolaId: number): Promise<string | null
 
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("default", {
-        name: "SGPE",
+        name: "Constela Edu",
         importance: Notifications.AndroidImportance.DEFAULT,
       });
     }

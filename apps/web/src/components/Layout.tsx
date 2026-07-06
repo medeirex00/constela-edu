@@ -35,6 +35,7 @@ import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
+import { Logo } from "./Logo";
 
 const MENU = [
   { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard },
@@ -239,9 +240,7 @@ function ItensMenu({ aoNavegar }: { aoNavegar?: () => void }) {
 function Marca() {
   return (
     <div className="flex items-center gap-2.5 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">
-        C
-      </span>
+      <Logo tamanho={32} />
       <div className="leading-tight">
         <p className="text-sm font-semibold tracking-tight">Constela Edu</p>
         <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Gestão e Premiação Escolar</p>

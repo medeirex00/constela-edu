@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -37,9 +38,7 @@ export default function Entrar() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={estilos.marca}>
-        <View style={estilos.logo}>
-          <Text style={estilos.logoTexto}>C</Text>
-        </View>
+        <Image source={require("../../assets/icone.png")} style={estilos.logo} />
         <Text style={estilos.nome}>Constela Edu</Text>
         <TextoSuave>Gestão e Premiação Escolar</TextoSuave>
       </View>
@@ -85,12 +84,8 @@ const estilos = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 14,
-    backgroundColor: cores.primaria,
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: espacos.s,
   },
-  logoTexto: { color: "#fff", fontSize: 28, fontWeight: "800" },
   nome: { fontSize: 22, fontWeight: "800", color: cores.texto },
   campo: {
     borderWidth: 1,

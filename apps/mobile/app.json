@@ -7,13 +7,23 @@
     "scheme": "constelaedu",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "icon": "./assets/icone.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F8FAFC"
+    },
     "ios": {
       "bundleIdentifier": "br.com.constelaedu.mobile",
       "supportsTablet": true
     },
     "android": {
       "package": "br.com.constelaedu.mobile",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4F46E5"
+      }
     },
     "plugins": [
       [

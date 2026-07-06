@@ -1,5 +1,5 @@
 /**
- * Cliente HTTP da API do SGPE — compartilhado por Web, Mobile e Desktop.
+ * Cliente HTTP da API do Constela Edu — compartilhado por Web, Mobile e Desktop.
  *
  * Nada aqui depende de navegador: armazenamento de token e reação à sessão
  * expirada são ADAPTADORES injetados por cada plataforma na inicialização

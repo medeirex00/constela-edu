@@ -1,17 +1,29 @@
-"""Gera os ícones do app desktop (PNG, ICO e ICNS) sem dependências externas.
+"""Gera TODOS os ativos de identidade visual do Constela Edu, sem dependências.
 
 Desenha um quadrado índigo (#4F46E5) com um "C" branco em blocos — a marca
-do Constela Edu — e escreve os formatos que o empacotador do Tauri exige.
+provisória — e escreve:
+  * apps/desktop/src-tauri/icons/  → PNG/ICO/ICNS (empacotador do Tauri)
+  * apps/web/public/               → logo.png, favicon.png, apple-touch-icon.png
+  * apps/mobile/assets/            → icone.png, adaptive-icon.png, splash.png
+
+PARA USAR A LOGO OFICIAL: salve-a como `identidade/logo-oficial.png`
+(quadrada, fundo transparente ou sólido, mínimo 1024x1024) e rode este
+script de novo — ele passa a usar a logo em vez do desenho gerado.
 
 Uso:  python tools/gerar_icones.py
 """
 from __future__ import annotations
 
+import shutil
 import struct
 import zlib
 from pathlib import Path
 
-DESTINO = Path(__file__).resolve().parent.parent / "apps" / "desktop" / "src-tauri" / "icons"
+RAIZ = Path(__file__).resolve().parent.parent
+DESTINO = RAIZ / "apps" / "desktop" / "src-tauri" / "icons"
+DESTINO_WEB = RAIZ / "apps" / "web" / "public"
+DESTINO_MOBILE = RAIZ / "apps" / "mobile" / "assets"
+LOGO_OFICIAL = RAIZ / "identidade" / "logo-oficial.png"
 
 INDIGO = (79, 70, 229, 255)
 BRANCO = (255, 255, 255, 255)
@@ -104,16 +116,61 @@ def icns(pngs: dict[int, bytes]) -> bytes:
     return b"icns" + struct.pack(">I", len(blocos) + 8) + blocos
 
 
-def main() -> None:
+def _gerar_desktop(pngs: dict[int, bytes]) -> None:
     DESTINO.mkdir(parents=True, exist_ok=True)
-    pngs = {tamanho: png(tamanho) for tamanho in (32, 128, 256, 512)}
     (DESTINO / "32x32.png").write_bytes(pngs[32])
     (DESTINO / "128x128.png").write_bytes(pngs[128])
     (DESTINO / "128x128@2x.png").write_bytes(pngs[256])
     (DESTINO / "icon.png").write_bytes(pngs[512])
     (DESTINO / "icon.ico").write_bytes(ico({32: pngs[32], 128: pngs[128], 256: pngs[256]}))
     (DESTINO / "icon.icns").write_bytes(icns(pngs))
-    print(f"Ícones gerados em {DESTINO}")
+
+
+def _gerar_web_e_mobile(pngs: dict[int, bytes]) -> None:
+    DESTINO_WEB.mkdir(parents=True, exist_ok=True)
+    DESTINO_MOBILE.mkdir(parents=True, exist_ok=True)
+    if LOGO_OFICIAL.exists():
+        # Logo oficial: browsers e Expo redimensionam sozinhos
+        for destino in (
+            DESTINO_WEB / "logo.png",
+            DESTINO_WEB / "favicon.png",
+            DESTINO_WEB / "apple-touch-icon.png",
+            DESTINO_MOBILE / "icone.png",
+            DESTINO_MOBILE / "adaptive-icon.png",
+            DESTINO_MOBILE / "splash.png",
+        ):
+            shutil.copyfile(LOGO_OFICIAL, destino)
+        print(f"Logo oficial aplicada a partir de {LOGO_OFICIAL}")
+    else:
+        (DESTINO_WEB / "logo.png").write_bytes(pngs[512])
+        (DESTINO_WEB / "favicon.png").write_bytes(pngs[128])
+        (DESTINO_WEB / "apple-touch-icon.png").write_bytes(pngs[256])
+        (DESTINO_MOBILE / "icone.png").write_bytes(pngs[1024])
+        (DESTINO_MOBILE / "adaptive-icon.png").write_bytes(pngs[1024])
+        (DESTINO_MOBILE / "splash.png").write_bytes(pngs[512])
+        print("Logo oficial não encontrada em identidade/logo-oficial.png — "
+              "usando a marca gerada (C índigo).")
+
+
+def main() -> None:
+    pngs = {tamanho: png(tamanho) for tamanho in (32, 128, 256, 512, 1024)}
+    if LOGO_OFICIAL.exists():
+        try:
+            from PIL import Image  # opcional, só para redimensionar a logo oficial
+
+            imagem = Image.open(LOGO_OFICIAL).convert("RGBA")
+            import io
+            for tamanho in pngs:
+                buffer = io.BytesIO()
+                imagem.resize((tamanho, tamanho)).save(buffer, format="PNG")
+                pngs[tamanho] = buffer.getvalue()
+        except ImportError:
+            print("AVISO: instale pillow (pip install pillow) para gerar os "
+                  "ícones do desktop a partir da logo oficial; por enquanto "
+                  "o desktop mantém a marca gerada.")
+    _gerar_desktop(pngs)
+    _gerar_web_e_mobile(pngs)
+    print("Identidade visual atualizada (desktop, web e mobile).")
 
 
 if __name__ == "__main__":

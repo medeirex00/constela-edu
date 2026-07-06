@@ -1,0 +1,3 @@
+﻿Coloque aqui a logo oficial como logo-oficial.png (quadrada, minimo 1024x1024).
+Depois rode:  python tools/gerar_icones.py
+Isso aplica a logo no site (favicon/PWA), no app de celular e no desktop.
