@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.models import Aluno, Escola, Leitura, Livro, Matricula, Nota, Turma
 from app.services import scoring
 
-COR_PRIMARIA_PADRAO = "#4F46E5"  # índigo do tema
+COR_PRIMARIA_PADRAO = "#1B2A4A"  # azul profundo da marca Constela Edu
 
 
 def cor_primaria(db: Session, escola_id: int) -> str:

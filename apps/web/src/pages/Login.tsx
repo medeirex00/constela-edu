@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Navigate } from "react-router-dom";
 
-import { Logo } from "../components/Logo";
+import { LogoHorizontal } from "../components/Logo";
 import { Botao, Carregando, Mensagem } from "../components/ui";
 import { useApp } from "../context/AppContext";
 
@@ -31,12 +31,9 @@ export default function Login() {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="card w-full max-w-sm p-6">
-        <div className="mb-6 flex items-center gap-2.5">
-          <Logo tamanho={36} />
-          <div className="leading-tight">
-            <p className="font-semibold tracking-tight">Constela Edu</p>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">Gestão e Premiação Escolar</p>
-          </div>
+        <div className="mb-6 flex flex-col items-start gap-1.5">
+          <LogoHorizontal altura={44} />
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">Gestão e Premiação Escolar</p>
         </div>
 
         <form onSubmit={enviar} className="space-y-4">

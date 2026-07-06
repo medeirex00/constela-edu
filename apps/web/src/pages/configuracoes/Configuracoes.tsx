@@ -11,7 +11,7 @@ import { api, ApiError, apiDownload, apiUpload } from "../../lib/api";
 function Aparencia() {
   const { escolaId, usuario } = useApp();
   const ehAdmin = usuario?.is_global || usuario?.cargo === "admin";
-  const [cor, setCor] = useState("#4F46E5");
+  const [cor, setCor] = useState("#1B2A4A");
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
 
   useEffect(() => {

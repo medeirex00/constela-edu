@@ -178,7 +178,7 @@ def qr_code(
     qr = segno.make(url, error="m")
     import io
     buffer = io.BytesIO()
-    qr.save(buffer, kind="svg", scale=6, dark="#18181b", border=2)
+    qr.save(buffer, kind="svg", scale=6, dark="#1B2A4A", border=2)
     return Response(
         content=buffer.getvalue(),
         media_type="image/svg+xml",

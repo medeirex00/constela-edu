@@ -1,7 +1,8 @@
 """Gera TODOS os ativos de identidade visual do Constela Edu, sem dependências.
 
-Desenha um quadrado índigo (#4F46E5) com um "C" branco em blocos — a marca
-provisória — e escreve:
+Com a logo oficial em identidade/logo-oficial.png (o caso normal), aplica-a
+em todos os destinos. Sem ela, desenha um provisório (quadrado azul #1B2A4A
+com "C" branco). Escreve:
   * apps/desktop/src-tauri/icons/  → PNG/ICO/ICNS (empacotador do Tauri)
   * apps/web/public/               → logo.png, favicon.png, apple-touch-icon.png
   * apps/mobile/assets/            → icone.png, adaptive-icon.png, splash.png
@@ -25,7 +26,7 @@ DESTINO_WEB = RAIZ / "apps" / "web" / "public"
 DESTINO_MOBILE = RAIZ / "apps" / "mobile" / "assets"
 LOGO_OFICIAL = RAIZ / "identidade" / "logo-oficial.png"
 
-INDIGO = (79, 70, 229, 255)
+INDIGO = (27, 42, 74, 255)  # azul profundo da marca (#1B2A4A)
 BRANCO = (255, 255, 255, 255)
 
 # "C" em uma grade 5x7 (1 = pixel aceso)

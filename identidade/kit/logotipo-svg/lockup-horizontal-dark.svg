@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 140" width="520" height="140">
+  <rect width="520" height="140" fill="#0F1626"/>
+  <g transform="translate(15,15) scale(1.0)">
+    <path d="M 67,20.555 A 34,34 0 1 0 67,79.445" fill="none" stroke="#F7F8FC" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="33" cy="79.445" r="4.2" fill="#F7F8FC"/>
+    <circle cx="16" cy="50" r="4.6" fill="#F7F8FC"/>
+    <circle cx="33" cy="20.555" r="4.2" fill="#F7F8FC"/>
+    <circle cx="50" cy="50" r="12.5" fill="#F5B942"/>
+  </g>
+  <text x="135" y="82" font-family="Poppins, sans-serif" font-weight="700" font-size="46" fill="#F7F8FC">constela</text>
+  <text x="140" y="112" font-family="Poppins, sans-serif" font-weight="500" font-size="22" letter-spacing="3" fill="#F5B942">EDU</text>
+</svg>

@@ -184,7 +184,7 @@ def obter_aparencia(
 ):
     valores = scoring.obter_config(db, escola_id, "aparencia", "valores", {})
     return {
-        "cor_primaria": valores.get("cor_primaria", "#4F46E5"),
+        "cor_primaria": valores.get("cor_primaria", "#1B2A4A"),
         "mostrar_fotos": valores.get("mostrar_fotos", True),
     }
 

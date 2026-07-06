@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#F8FAFC"
+      "backgroundColor": "#F7F8FC"
     },
     "ios": {
       "bundleIdentifier": "br.com.constelaedu.mobile",
@@ -22,7 +22,7 @@
       "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#4F46E5"
+        "backgroundColor": "#1B2A4A"
       }
     },
     "plugins": [
