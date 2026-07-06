@@ -29,7 +29,7 @@ from app.models import (
 )
 from app.schemas import AnaliseOut, ImportacaoConfirm, ImportacaoOut, ImportacaoResultadoOut
 from app.services import importacao as svc
-from app.services import push, scoring
+from app.services import perfis_pdf, push, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
@@ -72,7 +72,9 @@ async def analisar(
         eh_pdf = arquivo_nome.lower().endswith(".pdf") or arquivo.content_type == "application/pdf"
         if eh_pdf:
             try:
-                texto = svc.extrair_texto_pdf(conteudo)
+                # Perfis posicionais (formatos reais) com as 4 estratégias
+                # genéricas de texto como rede de segurança.
+                analise = perfis_pdf.analisar_pdf(conteudo, plataforma)
             except Exception:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                     "Não foi possível ler o PDF. O arquivo está íntegro?")
@@ -85,13 +87,13 @@ async def analisar(
         else:
             texto = conteudo.decode("utf-8", errors="replace")
             tipo = "texto"
+            analise = svc.analisar_texto(texto, plataforma)
     elif texto and texto.strip():
         tipo = "texto"
+        analise = svc.analisar_texto(texto, plataforma)
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
-
-    analise = svc.analisar_texto(texto, plataforma)
     if analise.linhas:
         svc.casar_nomes(db, escola_id, analise.linhas)
 
@@ -196,7 +198,8 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
             if not nivel:
                 avisos.append(f"Livro “{titulo}” é novo e veio sem nível — ignorado.")
                 continue
-            livro = Livro(escola_id=escola_id, titulo=titulo, nivel_codigo=nivel)
+            livro = Livro(escola_id=escola_id, titulo=titulo, nivel_codigo=nivel,
+                          categoria=linha.dados.get("genero") or None)
             db.add(livro)
             db.flush()
         ja_lido = db.execute(
@@ -205,8 +208,16 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
         if ja_lido:
             avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
             continue
+        # Relatórios individuais informam a data real de conclusão do livro
+        quando = data_referencia
+        try:
+            bruto = linha.dados.get("data")
+            if bruto:
+                quando = datetime.fromisoformat(str(bruto))
+        except ValueError:
+            pass
         db.add(Leitura(escola_id=escola_id, aluno_id=aluno.id,
-                       livro_id=livro.id, data=data_referencia))
+                       livro_id=livro.id, data=quando))
     db.flush()
 
     # Snapshot derivado do total de leituras registradas
@@ -219,11 +230,19 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
     for codigo in leituras:
         por_nivel[codigo] = por_nivel.get(codigo, 0) + 1
     anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
+    # O resumo do relatório individual COMPLEMENTA o tempo de leitura de quem
+    # ainda não tem snapshot; nunca rebaixa o valor vindo do relatório da turma.
+    tempo_relatorio = max(
+        (int(l.dados.get("tempo_leitura_min", 0) or 0) for l in linhas), default=0)
     db.add(SnapshotElefante(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
-        livros_unicos=len(leituras),
-        tempo_leitura_min=anterior.tempo_leitura_min if anterior else 0,
+        # O contador da plataforma (relatório da turma) pode ser maior que o
+        # histórico listado — o detalhamento individual nunca rebaixa a conta.
+        livros_unicos=max(len(leituras),
+                          anterior.livros_unicos if anterior else 0),
+        tempo_leitura_min=max(anterior.tempo_leitura_min if anterior else 0,
+                              tempo_relatorio),
         questoes_tentativas=anterior.questoes_tentativas if anterior else 0,
         questoes_acertos=anterior.questoes_acertos if anterior else 0,
         livros_por_nivel=por_nivel,

@@ -41,7 +41,9 @@ class SnapshotMatific(Base):
     data_referencia: Mapped[datetime] = mapped_column(default=agora, index=True)
     atividades: Mapped[int] = mapped_column(default=0)
     estrelas: Mapped[int] = mapped_column(default=0)
-    pontuacao_media: Mapped[float] = mapped_column(default=0.0)  # 0–100
+    # Escala do relatório de origem (Matific atual: 0–5). A nota do aluno é
+    # normalizada pelo maior valor da escola, então a escala não importa.
+    pontuacao_media: Mapped[float] = mapped_column(default=0.0)
 
 
 class SnapshotElefante(Base):

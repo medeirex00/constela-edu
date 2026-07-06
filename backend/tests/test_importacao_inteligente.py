@@ -210,7 +210,8 @@ def test_pdf_real_pela_api(cliente, escola_completa):
     assert resposta.status_code == 200, resposta.text
     corpo = resposta.json()
     assert corpo["plataforma"] == "matific"
-    assert corpo["mensagem_deteccao"] == "Este arquivo pertence ao Matific."
+    # O perfil posicional pode assumir o arquivo e detalhar a mensagem
+    assert corpo["mensagem_deteccao"].startswith("Este arquivo pertence ao Matific")
     assert corpo["total_alunos"] == 2
     ana = next(l for l in corpo["linhas"] if "Ana" in l["nome"])
     assert ana["correspondencia"]["status"] == "exato"

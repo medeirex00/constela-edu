@@ -36,7 +36,7 @@ from difflib import SequenceMatcher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno
+from app.models import Aluno, Matricula, Turma
 
 # --------------------------------------------------------------------------
 # Normalização de texto e números
@@ -572,6 +572,55 @@ def _similaridade(a: str, b: str) -> float:
     return max(direta, tokens)
 
 
+# O Matific abrevia: "ANTONELLA D" = primeiro nome + inicial de um sobrenome
+_RE_ABREVIADO = re.compile(r"^(\w{2,})\s+(\w)\.?$")
+
+
+def _tokens_turma(texto: str) -> set[str]:
+    """Tokens comparáveis de nome de turma: "5º Ano B" ≈ "5 ANO B MANHA"."""
+    plano = normalizar_nome(re.sub(r"[ºª°]", "", texto or ""))
+    return {t for t in plano.split() if t}
+
+
+def _casar_abreviado(alvo: str, indice, turma_relatorio: str | None,
+                     turma_de: dict[int, str]) -> dict | None:
+    """Correspondência para nomes abreviados; nunca devolve "exato" —
+    uma inicial não é prova suficiente para importar sem confirmação."""
+    par = _RE_ABREVIADO.match(alvo)
+    if not par:
+        return None
+    primeiro, inicial = par.groups()
+    candidatos = [
+        aluno for aluno, nome_plano in indice
+        if (tokens := nome_plano.split()) and tokens[0] == primeiro
+        and any(t.startswith(inicial) for t in tokens[1:])
+    ]
+    if not candidatos:
+        return None
+    alternativas = [
+        {"aluno_id": aluno.id, "nome": aluno.nome, "similaridade": 90.0}
+        for aluno in candidatos[:3]
+    ]
+    if len(candidatos) == 1:
+        aluno = candidatos[0]
+        return {"status": "provavel", "aluno_id": aluno.id, "aluno_nome": aluno.nome,
+                "similaridade": 92.0, "alternativas": alternativas}
+    # Mais de um "HELOISA D": a turma citada no relatório desempata
+    if turma_relatorio:
+        alvo_turma = _tokens_turma(turma_relatorio)
+        pontuados = sorted(
+            ((len(alvo_turma & _tokens_turma(turma_de.get(aluno.id, ""))), aluno)
+             for aluno in candidatos),
+            key=lambda item: item[0], reverse=True)
+        pontos, melhor = pontuados[0]
+        empate = len(pontuados) > 1 and pontuados[1][0] == pontos
+        if pontos >= 2 and not empate:
+            return {"status": "provavel", "aluno_id": melhor.id,
+                    "aluno_nome": melhor.nome, "similaridade": 88.0,
+                    "alternativas": alternativas}
+    return {"status": "nao_encontrado", "alternativas": alternativas}
+
+
 def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> None:
     """Preenche `correspondencia` de cada linha comparando com os alunos ativos.
 
@@ -584,11 +633,26 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
     ).scalars().all()
     indice = [(aluno, normalizar_nome(aluno.nome)) for aluno in alunos]
 
+    # Turma atual de cada aluno (matrícula mais recente) — desempata abreviados
+    turma_de: dict[int, str] = {}
+    for aluno_id, nome_turma, ano_escolar in db.execute(
+        select(Matricula.aluno_id, Turma.nome, Turma.ano_escolar)
+        .join(Turma, Matricula.turma_id == Turma.id)
+        .where(Matricula.escola_id == escola_id)
+        .order_by(Matricula.ano_letivo)
+    ).all():
+        turma_de[aluno_id] = f"{nome_turma} {ano_escolar}"
+
     for linha in linhas:
         if not linha.nome:
             linha.correspondencia = {"status": "nao_encontrado", "alternativas": []}
             continue
         alvo = normalizar_nome(linha.nome)
+        abreviada = _casar_abreviado(
+            alvo, indice, linha.dados.get("turma_relatorio"), turma_de)
+        if abreviada is not None:
+            linha.correspondencia = abreviada
+            continue
         pontuadas = sorted(
             ((aluno, _similaridade(alvo, nome_plano)) for aluno, nome_plano in indice),
             key=lambda par: par[1],
