@@ -1,6 +1,28 @@
-/** CRUD de usuários (PRD §18) — somente administradores. */
-import { UserPlus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+/**
+ * Gestão de usuários (PRD §18) — somente administradores.
+ *
+ * Cada usuário tem um menu de ações: Visualizar, Editar, Alterar senha,
+ * Alterar permissões, Desativar/Reativar, Excluir (lógica, preserva o
+ * histórico) e — apenas para administradores globais — Excluir
+ * Permanentemente, com confirmação extra digitando o e-mail.
+ * As regras duras (própria conta, último admin) vivem no backend; a
+ * interface apenas exibe as mensagens e evita oferecer o que será negado.
+ */
+import {
+  Eye,
+  KeyRound,
+  MoreVertical,
+  Pencil,
+  RotateCcw,
+  ShieldCheck,
+  Trash2,
+  TriangleAlert,
+  UserCheck,
+  UserPlus,
+  UserX,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import {
   Badge,
@@ -15,80 +37,222 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { ApiError, api } from "../lib/api";
 import type { Usuario } from "../lib/types";
 
-const CARGOS = ["admin", "coordenador", "professor", "visitante"];
+const CARGOS = [
+  { valor: "admin", rotulo: "Administrador", descricao: "Acesso total: usuários, configurações, importações e exclusões." },
+  { valor: "coordenador", rotulo: "Coordenador", descricao: "Gerencia alunos, turmas, importações e métricas." },
+  { valor: "professor", rotulo: "Professor", descricao: "Consulta rankings, turmas e perfis dos alunos." },
+  { valor: "visitante", rotulo: "Visitante", descricao: "Somente leitura das telas públicas internas." },
+] as const;
 
-interface Formulario {
-  id: number | null;
-  nome: string;
-  email: string;
-  senha: string;
-  cargo: string;
-  status: string;
+function rotuloCargo(valor: string): string {
+  return CARGOS.find((c) => c.valor === valor)?.rotulo ?? valor;
 }
 
-const FORM_VAZIO: Formulario = { id: null, nome: "", email: "", senha: "", cargo: "visitante", status: "ativo" };
-
-interface UsuarioLinha extends Usuario {
-  status?: string;
+function dataLegivel(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
+
+type Acao =
+  | "visualizar"
+  | "editar"
+  | "senha"
+  | "permissoes"
+  | "situacao"
+  | "excluir"
+  | "permanente";
+
+// --- Menu de ações por usuário ----------------------------------------------
+
+function MenuAcoes({
+  usuario,
+  souEu,
+  souGlobal,
+  aoEscolher,
+}: {
+  usuario: Usuario;
+  souEu: boolean;
+  souGlobal: boolean;
+  aoEscolher: (acao: Acao) => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const excluido = usuario.status === "excluido";
+
+  function Item({
+    acao,
+    icone,
+    rotulo,
+    destrutiva = false,
+  }: {
+    acao: Acao;
+    icone: ReactNode;
+    rotulo: string;
+    destrutiva?: boolean;
+  }) {
+    return (
+      <button
+        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
+          destrutiva
+            ? "text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
+            : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        }`}
+        onClick={() => {
+          setAberto(false);
+          aoEscolher(acao);
+        }}
+      >
+        {icone}
+        {rotulo}
+      </button>
+    );
+  }
+
+  return (
+    <div className="relative inline-block">
+      <button
+        aria-label={`Ações do usuário ${usuario.nome}`}
+        className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+        onClick={() => setAberto(!aberto)}
+      >
+        <MoreVertical size={16} />
+      </button>
+      {aberto && (
+        <>
+          <button
+            aria-label="Fechar menu"
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={() => setAberto(false)}
+          />
+          <div className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+            <Item acao="visualizar" icone={<Eye size={15} />} rotulo="Visualizar" />
+            {!excluido && (
+              <>
+                <Item acao="editar" icone={<Pencil size={15} />} rotulo="Editar" />
+                <Item acao="senha" icone={<KeyRound size={15} />} rotulo="Alterar senha" />
+                {!souEu && (
+                  <>
+                    <Item
+                      acao="permissoes"
+                      icone={<ShieldCheck size={15} />}
+                      rotulo="Alterar permissões"
+                    />
+                    <Item
+                      acao="situacao"
+                      icone={usuario.status === "ativo" ? <UserX size={15} /> : <UserCheck size={15} />}
+                      rotulo={usuario.status === "ativo" ? "Desativar" : "Reativar"}
+                    />
+                    <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+                    <Item acao="excluir" icone={<Trash2 size={15} />} rotulo="Excluir Usuário" destrutiva />
+                  </>
+                )}
+              </>
+            )}
+            {excluido && !souEu && (
+              <Item acao="situacao" icone={<RotateCcw size={15} />} rotulo="Restaurar" />
+            )}
+            {souGlobal && !souEu && (
+              <Item
+                acao="permanente"
+                icone={<TriangleAlert size={15} />}
+                rotulo="Excluir Permanentemente"
+                destrutiva
+              />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- Página -------------------------------------------------------------------
 
 export default function Usuarios() {
   const { escolaId, usuario: usuarioLogado } = useApp();
-  const [usuarios, setUsuarios] = useState<UsuarioLinha[] | null>(null);
-  const [formulario, setFormulario] = useState<Formulario | null>(null);
-  const [erro, setErro] = useState("");
+  const [usuarios, setUsuarios] = useState<Usuario[] | null>(null);
+  const [mostrarExcluidos, setMostrarExcluidos] = useState(false);
   const [erroLista, setErroLista] = useState("");
-  const [salvando, setSalvando] = useState(false);
+  const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  const temporizador = useRef<number | null>(null);
+
+  // ação em andamento: qual modal está aberto e para quem
+  const [acao, setAcao] = useState<{ tipo: Acao; alvo: Usuario } | null>(null);
+  const [novo, setNovo] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+  const [erroAcao, setErroAcao] = useState("");
+
+  // campos dos formulários
+  const [nome, setNome] = useState("");
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
+  const [senha2, setSenha2] = useState("");
+  const [cargo, setCargo] = useState("visitante");
+  const [confirmacao, setConfirmacao] = useState("");
+
+  const souGlobal = usuarioLogado?.is_global ?? false;
 
   const carregar = useCallback(() => {
     if (!escolaId) return;
-    api<UsuarioLinha[]>(`/escolas/${escolaId}/usuarios`)
+    const sufixo = mostrarExcluidos ? "?incluir_excluidos=true" : "";
+    api<Usuario[]>(`/escolas/${escolaId}/usuarios${sufixo}`)
       .then(setUsuarios)
       .catch((excecao) => {
         setUsuarios([]);
         setErroLista(excecao instanceof Error ? excecao.message : "Sem acesso.");
       });
-  }, [escolaId]);
+  }, [escolaId, mostrarExcluidos]);
 
   useEffect(carregar, [carregar]);
 
-  async function salvar() {
-    if (!escolaId || !formulario) return;
-    setSalvando(true);
-    setErro("");
+  function avisar(tipo: "ok" | "erro", texto: string) {
+    setMensagem({ tipo, texto });
+    if (temporizador.current) window.clearTimeout(temporizador.current);
+    temporizador.current = window.setTimeout(() => setMensagem(null), 6000);
+  }
+
+  function abrir(tipo: Acao, alvo: Usuario) {
+    setErroAcao("");
+    setSenha("");
+    setSenha2("");
+    setConfirmacao("");
+    setNome(alvo.nome);
+    setEmail(alvo.email);
+    setCargo(alvo.cargo);
+    setAcao({ tipo, alvo });
+  }
+
+  function abrirNovo() {
+    setErroAcao("");
+    setNome("");
+    setEmail("");
+    setSenha("");
+    setSenha2("");
+    setCargo("visitante");
+    setNovo(true);
+  }
+
+  async function executar(caminho: string, opcoes: RequestInit, sucesso: string) {
+    if (!escolaId) return;
+    setOcupado(true);
+    setErroAcao("");
     try {
-      if (formulario.id === null) {
-        await api(`/escolas/${escolaId}/usuarios`, {
-          method: "POST",
-          body: JSON.stringify({
-            nome: formulario.nome.trim(),
-            email: formulario.email.trim(),
-            senha: formulario.senha,
-            cargo: formulario.cargo,
-          }),
-        });
-      } else {
-        await api(`/escolas/${escolaId}/usuarios/${formulario.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            nome: formulario.nome.trim(),
-            cargo: formulario.cargo,
-            status: formulario.status,
-            ...(formulario.senha ? { senha: formulario.senha } : {}),
-          }),
-        });
-      }
-      setFormulario(null);
-      carregar();
+      const resposta = await api<{ mensagem?: string }>(caminho, opcoes);
+      avisar("ok", resposta?.mensagem ?? sucesso);
+      setAcao(null);
+      setNovo(false);
+      carregar();               // a lista atualiza sem recarregar a página
     } catch (excecao) {
-      setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
+      setErroAcao(excecao instanceof ApiError ? excecao.message : "Não foi possível concluir a ação.");
     } finally {
-      setSalvando(false);
+      setOcupado(false);
     }
   }
+
+  const alvo = acao?.alvo ?? null;
+  const base = `/escolas/${escolaId}/usuarios`;
 
   return (
     <div>
@@ -96,11 +260,27 @@ export default function Usuarios() {
         titulo="Usuários"
         descricao="Contas de acesso desta escola. Toda alteração fica no log de auditoria."
         acoes={
-          <Botao onClick={() => { setFormulario(FORM_VAZIO); setErro(""); }}>
+          <Botao onClick={abrirNovo}>
             <UserPlus size={15} /> Novo usuário
           </Botao>
         }
       />
+
+      {mensagem && (
+        <div className="mb-4">
+          <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>
+        </div>
+      )}
+
+      <label className="mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+          checked={mostrarExcluidos}
+          onChange={(e) => setMostrarExcluidos(e.target.checked)}
+        />
+        Mostrar usuários excluídos
+      </label>
 
       <Card>
         {usuarios === null ? (
@@ -113,10 +293,11 @@ export default function Usuarios() {
               <thead>
                 <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
                   <th className="px-4 py-2 font-medium">Nome</th>
-                  <th className="px-4 py-2 font-medium">E-mail</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">E-mail</th>
                   <th className="px-4 py-2 font-medium">Cargo</th>
                   <th className="px-4 py-2 font-medium">Situação</th>
-                  <th className="px-4 py-2" />
+                  <th className="hidden px-4 py-2 font-medium md:table-cell">Último acesso</th>
+                  <th className="px-4 py-2 text-right font-medium">Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -127,31 +308,33 @@ export default function Usuarios() {
                       {usuario.id === usuarioLogado?.id && (
                         <span className="ml-2 text-xs text-zinc-400">(você)</span>
                       )}
+                      {usuario.is_global && (
+                        <span className="ml-2 text-xs text-indigo-500">global</span>
+                      )}
                     </td>
-                    <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">{usuario.email}</td>
-                    <td className="px-4 py-2.5"><Badge tom="destaque">{usuario.cargo}</Badge></td>
+                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">
+                      {usuario.email}
+                    </td>
                     <td className="px-4 py-2.5">
-                      <Badge tom={usuario.status === "ativo" ? "ok" : "neutro"}>
-                        {usuario.status ?? "ativo"}
+                      <Badge tom="destaque">{rotuloCargo(usuario.cargo)}</Badge>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge
+                        tom={usuario.status === "ativo" ? "ok" : usuario.status === "excluido" ? "alerta" : "neutro"}
+                      >
+                        {usuario.status === "excluido" ? "excluído" : usuario.status ?? "ativo"}
                       </Badge>
                     </td>
+                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">
+                      {dataLegivel(usuario.ultimo_acesso)}
+                    </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button
-                        className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                        onClick={() => {
-                          setFormulario({
-                            id: usuario.id,
-                            nome: usuario.nome,
-                            email: usuario.email,
-                            senha: "",
-                            cargo: usuario.cargo,
-                            status: usuario.status ?? "ativo",
-                          });
-                          setErro("");
-                        }}
-                      >
-                        editar
-                      </button>
+                      <MenuAcoes
+                        usuario={usuario}
+                        souEu={usuario.id === usuarioLogado?.id}
+                        souGlobal={souGlobal}
+                        aoEscolher={(tipo) => abrir(tipo, usuario)}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -161,60 +344,257 @@ export default function Usuarios() {
         )}
       </Card>
 
-      <Modal
-        titulo={formulario?.id === null ? "Novo usuário" : "Editar usuário"}
-        aberto={formulario !== null}
-        aoFechar={() => setFormulario(null)}
-      >
-        {formulario && (
-          <div className="space-y-3">
-            <Campo rotulo="Nome">
-              <input className={estiloInput} value={formulario.nome}
-                     onChange={(e) => setFormulario({ ...formulario, nome: e.target.value })} />
-            </Campo>
-            <Campo rotulo="E-mail">
-              <input
-                type="email" className={estiloInput} value={formulario.email}
-                disabled={formulario.id !== null}
-                onChange={(e) => setFormulario({ ...formulario, email: e.target.value })}
-              />
-            </Campo>
-            <div className="grid grid-cols-2 gap-3">
-              <Campo rotulo="Cargo">
-                <select className={estiloInput} value={formulario.cargo}
-                        onChange={(e) => setFormulario({ ...formulario, cargo: e.target.value })}>
-                  {CARGOS.map((cargo) => <option key={cargo} value={cargo}>{cargo}</option>)}
-                </select>
-              </Campo>
-              {formulario.id !== null && (
-                <Campo rotulo="Situação">
-                  <select className={estiloInput} value={formulario.status}
-                          onChange={(e) => setFormulario({ ...formulario, status: e.target.value })}>
-                    <option value="ativo">ativo</option>
-                    <option value="inativo">inativo</option>
-                  </select>
-                </Campo>
-              )}
-            </div>
-            <Campo rotulo={formulario.id === null ? "Senha (mínimo 6 caracteres)" : "Nova senha (deixe vazio para manter)"}>
-              <input type="password" className={estiloInput} value={formulario.senha}
-                     onChange={(e) => setFormulario({ ...formulario, senha: e.target.value })} />
-            </Campo>
-            {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-            <div className="flex justify-end gap-2 pt-1">
-              <Botao variante="neutro" onClick={() => setFormulario(null)} disabled={salvando}>Cancelar</Botao>
-              <Botao
-                onClick={salvar}
-                disabled={
-                  salvando || !formulario.nome.trim() || !formulario.email.trim()
-                  || (formulario.id === null && formulario.senha.length < 6)
-                }
-              >
-                {salvando ? "Salvando..." : "Salvar"}
-              </Botao>
-            </div>
+      {/* --- Novo usuário --- */}
+      <Modal titulo="Novo usuário" aberto={novo} aoFechar={() => setNovo(false)}>
+        <div className="space-y-3">
+          <Campo rotulo="Nome">
+            <input className={estiloInput} value={nome} onChange={(e) => setNome(e.target.value)} autoFocus />
+          </Campo>
+          <Campo rotulo="E-mail">
+            <input type="email" className={estiloInput} value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Campo>
+          <Campo rotulo="Cargo">
+            <select className={estiloInput} value={cargo} onChange={(e) => setCargo(e.target.value)}>
+              {CARGOS.map((c) => <option key={c.valor} value={c.valor}>{c.rotulo}</option>)}
+            </select>
+          </Campo>
+          <Campo rotulo="Senha (mínimo 6 caracteres)">
+            <input type="password" className={estiloInput} value={senha} onChange={(e) => setSenha(e.target.value)} />
+          </Campo>
+          {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
+          <div className="flex justify-end gap-2 pt-1">
+            <Botao variante="neutro" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
+            <Botao
+              disabled={ocupado || nome.trim().length < 2 || !email.includes("@") || senha.length < 6}
+              onClick={() =>
+                executar(base, {
+                  method: "POST",
+                  body: JSON.stringify({ nome: nome.trim(), email: email.trim(), senha, cargo }),
+                }, "Usuário criado.")
+              }
+            >
+              {ocupado ? "Salvando..." : "Criar usuário"}
+            </Botao>
           </div>
+        </div>
+      </Modal>
+
+      {/* --- Visualizar --- */}
+      <Modal titulo="Dados do usuário" aberto={acao?.tipo === "visualizar"} aoFechar={() => setAcao(null)}>
+        {alvo && (
+          <dl className="space-y-2 text-sm">
+            {[
+              ["Nome", alvo.nome],
+              ["E-mail", alvo.email],
+              ["Cargo", rotuloCargo(alvo.cargo)],
+              ["Conta global", alvo.is_global ? "Sim" : "Não"],
+              ["Situação", alvo.status === "excluido" ? "excluído" : alvo.status ?? "ativo"],
+              ["Último acesso", dataLegivel(alvo.ultimo_acesso)],
+              ["Criado em", dataLegivel(alvo.created_at)],
+            ].map(([rotulo, valor]) => (
+              <div key={rotulo as string} className="flex justify-between gap-4 border-b border-zinc-100 pb-2 last:border-0 dark:border-zinc-800/60">
+                <dt className="text-zinc-500 dark:text-zinc-400">{rotulo}</dt>
+                <dd className="text-right font-medium">{valor}</dd>
+              </div>
+            ))}
+          </dl>
         )}
+      </Modal>
+
+      {/* --- Editar (nome) --- */}
+      <Modal titulo={`Editar ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "editar"} aoFechar={() => setAcao(null)}>
+        <div className="space-y-3">
+          <Campo rotulo="Nome">
+            <input className={estiloInput} value={nome} onChange={(e) => setNome(e.target.value)} autoFocus />
+          </Campo>
+          <Campo rotulo="E-mail (identidade da conta — não muda)">
+            <input className={`${estiloInput} opacity-70`} value={email} disabled />
+          </Campo>
+          {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
+          <div className="flex justify-end gap-2 pt-1">
+            <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+            <Botao
+              disabled={ocupado || nome.trim().length < 2}
+              onClick={() =>
+                executar(`${base}/${alvo?.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ nome: nome.trim() }),
+                }, "Usuário atualizado.")
+              }
+            >
+              {ocupado ? "Salvando..." : "Salvar"}
+            </Botao>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Alterar senha --- */}
+      <Modal titulo={`Alterar senha de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "senha"} aoFechar={() => setAcao(null)}>
+        <div className="space-y-3">
+          <Campo rotulo="Nova senha (mínimo 6 caracteres)">
+            <input type="password" className={estiloInput} value={senha} onChange={(e) => setSenha(e.target.value)} autoFocus />
+          </Campo>
+          <Campo rotulo="Repita a nova senha">
+            <input type="password" className={estiloInput} value={senha2} onChange={(e) => setSenha2(e.target.value)} />
+          </Campo>
+          {senha2 && senha !== senha2 && (
+            <p className="text-xs text-red-600 dark:text-red-400">As senhas não coincidem.</p>
+          )}
+          {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
+          <div className="flex justify-end gap-2 pt-1">
+            <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+            <Botao
+              disabled={ocupado || senha.length < 6 || senha !== senha2}
+              onClick={() =>
+                executar(`${base}/${alvo?.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ senha }),
+                }, "Senha redefinida.")
+              }
+            >
+              {ocupado ? "Salvando..." : "Alterar senha"}
+            </Botao>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Alterar permissões --- */}
+      <Modal titulo={`Permissões de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "permissoes"} aoFechar={() => setAcao(null)}>
+        <div className="space-y-2">
+          {CARGOS.map((c) => (
+            <label
+              key={c.valor}
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                cargo === c.valor
+                  ? "border-indigo-400 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+            >
+              <input
+                type="radio"
+                name="cargo"
+                className="mt-0.5 accent-indigo-600"
+                checked={cargo === c.valor}
+                onChange={() => setCargo(c.valor)}
+              />
+              <span className="text-sm">
+                <span className="font-medium">{c.rotulo}</span>
+                <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">{c.descricao}</span>
+              </span>
+            </label>
+          ))}
+          {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
+          <div className="flex justify-end gap-2 pt-1">
+            <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+            <Botao
+              disabled={ocupado || cargo === alvo?.cargo}
+              onClick={() =>
+                executar(`${base}/${alvo?.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ cargo }),
+                }, "Permissões atualizadas.")
+              }
+            >
+              {ocupado ? "Salvando..." : "Salvar permissões"}
+            </Botao>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Desativar / Reativar / Restaurar --- */}
+      <Modal
+        titulo={alvo?.status === "ativo" ? "Desativar usuário" : alvo?.status === "excluido" ? "Restaurar usuário" : "Reativar usuário"}
+        aberto={acao?.tipo === "situacao"}
+        aoFechar={() => setAcao(null)}
+      >
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          {alvo?.status === "ativo" ? (
+            <>Desativar <strong>{alvo?.nome}</strong>? A pessoa perde o acesso imediatamente, mas a conta pode ser reativada a qualquer momento.</>
+          ) : (
+            <>Devolver o acesso de <strong>{alvo?.nome}</strong>? A conta volta à situação “ativo”.</>
+          )}
+        </p>
+        {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+          <Botao
+            disabled={ocupado}
+            onClick={() =>
+              executar(`${base}/${alvo?.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ status: alvo?.status === "ativo" ? "inativo" : "ativo" }),
+              }, alvo?.status === "ativo" ? "Usuário desativado." : "Usuário reativado.")
+            }
+          >
+            {ocupado ? "Aplicando..." : "Confirmar"}
+          </Botao>
+        </div>
+      </Modal>
+
+      {/* --- Excluir (lógica) --- */}
+      <Modal titulo="Excluir usuário" aberto={acao?.tipo === "excluir"} aoFechar={() => setAcao(null)}>
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          Tem certeza de que deseja excluir <strong>{alvo?.nome}</strong>? Essa ação não
+          poderá ser desfeita.
+        </p>
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          O histórico de ações, logs e importações do usuário é preservado — apenas o
+          acesso é encerrado em definitivo.
+        </p>
+        {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+          <Botao
+            className="!bg-red-600 hover:!bg-red-500"
+            disabled={ocupado}
+            onClick={() =>
+              executar(`${base}/${alvo?.id}`, { method: "DELETE" }, "Usuário excluído.")
+            }
+          >
+            <Trash2 size={15} /> {ocupado ? "Excluindo..." : "Sim, excluir"}
+          </Botao>
+        </div>
+      </Modal>
+
+      {/* --- Excluir Permanentemente (admin global) --- */}
+      <Modal titulo="Excluir permanentemente" aberto={acao?.tipo === "permanente"} aoFechar={() => setAcao(null)}>
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+          <p className="flex items-center gap-2 font-medium">
+            <TriangleAlert size={16} /> Ação definitiva e irreversível
+          </p>
+          <p className="mt-1 text-xs">
+            O registro de <strong>{alvo?.nome}</strong> será removido do banco de dados.
+            Importações e logs são preservados, mas ficam sem autoria.
+          </p>
+        </div>
+        <div className="mt-3">
+          <Campo rotulo={`Para confirmar, digite o e-mail do usuário (${alvo?.email})`}>
+            <input
+              className={estiloInput}
+              value={confirmacao}
+              onChange={(e) => setConfirmacao(e.target.value)}
+              placeholder="e-mail exato do usuário"
+              autoFocus
+            />
+          </Campo>
+        </div>
+        {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+          <Botao
+            className="!bg-red-600 hover:!bg-red-500"
+            disabled={ocupado || confirmacao.trim().toLowerCase() !== alvo?.email}
+            onClick={() =>
+              executar(
+                `${base}/${alvo?.id}/permanente?confirmacao=${encodeURIComponent(confirmacao.trim())}`,
+                { method: "DELETE" },
+                "Usuário removido permanentemente.",
+              )
+            }
+          >
+            <TriangleAlert size={15} /> {ocupado ? "Removendo..." : "Excluir permanentemente"}
+          </Botao>
+        </div>
       </Modal>
     </div>
   );

@@ -1,21 +1,42 @@
 """Administração (PRD §18): usuários, backup/restauração e aparência.
 
 Tudo aqui exige papel de administrador. Regras de proteção:
-  * ninguém desativa ou rebaixa a própria conta (evita lockout);
+  * ninguém desativa, rebaixa ou EXCLUI a própria conta (evita lockout);
+  * o último administrador ativo da escola é intocável até existir outro;
+  * excluir é LÓGICO por padrão (status "excluido") — histórico, logs e
+    importações permanecem intactos; a remoção física é exclusiva de
+    administradores globais e exige confirmação extra;
   * usuários nunca entram no backup de dados (restaurar um arquivo antigo
     não pode reverter senhas nem reativar contas desligadas).
 """
 import json
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.core.security import hash_senha
-from app.models import Configuracao, Usuario
+from app.models import (
+    Configuracao,
+    ConversaIA,
+    DispositivoMovel,
+    Importacao,
+    LogAuditoria,
+    MensagemIA,
+    Usuario,
+)
 from app.schemas import UsuarioOut
 from app.services import backup as svc_backup
 from app.services import scoring
@@ -24,6 +45,11 @@ from app.services.audit import registrar
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Administração"])
 
 CARGOS = {"admin", "coordenador", "professor", "visitante"}
+
+MSG_ULTIMO_ADMIN = (
+    "Este é o único administrador ativo da escola. Crie ou reative outro "
+    "administrador antes de desativar, rebaixar ou excluir este."
+)
 
 
 # --- Usuários (PRD §18) -------------------------------------------------------
@@ -42,15 +68,48 @@ class UsuarioUpdate(BaseModel):
     senha: str | None = Field(default=None, min_length=6, max_length=100)
 
 
+def _usuario_alvo(db: Session, escola_id: int, usuario_id: int,
+                  ator: Usuario) -> Usuario:
+    alvo = db.get(Usuario, usuario_id)
+    if alvo is None or alvo.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuário não encontrado.")
+    if alvo.is_global and not ator.is_global:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Somente administradores globais podem gerenciar "
+                            "contas globais.")
+    return alvo
+
+
+def _e_ultimo_admin_ativo(db: Session, escola_id: int, alvo: Usuario) -> bool:
+    """O alvo é o único admin ativo da escola? (proteção contra lockout)
+
+    Contas globais ficam fora da conta: elas administram todas as escolas
+    e não substituem o administrador local da escola.
+    """
+    if alvo.cargo != "admin" or alvo.status != "ativo" or alvo.is_global:
+        return False
+    ativos = db.execute(
+        select(func.count()).select_from(Usuario).where(
+            Usuario.escola_id == escola_id,
+            Usuario.cargo == "admin",
+            Usuario.status == "ativo",
+            Usuario.is_global.is_(False),
+        )
+    ).scalar_one()
+    return ativos <= 1
+
+
 @router.get("/usuarios", response_model=list[UsuarioOut])
 def listar_usuarios(
     escola_id: int = Depends(escola_autorizada),
+    incluir_excluidos: bool = Query(default=False),
     usuario: Usuario = Depends(exigir_papeis("admin")),
     db: Session = Depends(get_db),
 ):
-    return db.execute(
-        select(Usuario).where(Usuario.escola_id == escola_id).order_by(Usuario.nome)
-    ).scalars().all()
+    consulta = select(Usuario).where(Usuario.escola_id == escola_id)
+    if not incluir_excluidos:
+        consulta = consulta.where(Usuario.status != "excluido")
+    return db.execute(consulta.order_by(Usuario.nome)).scalars().all()
 
 
 @router.post("/usuarios", response_model=UsuarioOut, status_code=status.HTTP_201_CREATED)
@@ -87,9 +146,12 @@ def atualizar_usuario(
     usuario: Usuario = Depends(exigir_papeis("admin")),
     db: Session = Depends(get_db),
 ):
-    alvo = db.get(Usuario, usuario_id)
-    if alvo is None or alvo.escola_id != escola_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuário não encontrado.")
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    enviados = dados.model_dump(exclude_unset=True)
+    if alvo.status == "excluido" and enviados != {"status": "ativo"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Usuário excluído — restaure a conta (situação "
+                            "“ativo”) antes de editá-la.")
     if dados.cargo is not None and dados.cargo not in CARGOS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"Cargos válidos: {', '.join(sorted(CARGOS))}.")
@@ -98,6 +160,10 @@ def atualizar_usuario(
     ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Você não pode desativar nem rebaixar a própria conta.")
+    remove_admin = (dados.status == "inativo"
+                    or (dados.cargo is not None and dados.cargo != "admin"))
+    if remove_admin and _e_ultimo_admin_ativo(db, escola_id, alvo):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, MSG_ULTIMO_ADMIN)
 
     alteracoes: dict = {}
     if dados.nome is not None:
@@ -113,11 +179,107 @@ def atualizar_usuario(
         alvo.senha_hash = hash_senha(dados.senha)
         alteracoes["senha"] = "redefinida"
 
-    registrar(db, "usuario.atualizado", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="usuario", entidade_id=alvo.id, detalhes=alteracoes)
+    # Nome da ação no log espelha o que de fato aconteceu (PRD §17)
+    if set(alteracoes) == {"status"}:
+        de, para = alteracoes["status"]["de"], alteracoes["status"]["para"]
+        if para == "inativo":
+            acao = "usuario.desativado"
+        elif de == "excluido":
+            acao = "usuario.restaurado"
+        else:
+            acao = "usuario.reativado"
+    elif set(alteracoes) == {"senha"}:
+        acao = "usuario.senha_redefinida"
+    elif "cargo" in alteracoes and len(alteracoes) == 1:
+        acao = "usuario.permissoes_alteradas"
+    else:
+        acao = "usuario.atualizado"
+    registrar(db, acao, escola_id=escola_id, usuario_id=usuario.id,
+              entidade="usuario", entidade_id=alvo.id,
+              detalhes={**alteracoes, "email": alvo.email})
     db.commit()
     db.refresh(alvo)
     return alvo
+
+
+@router.delete("/usuarios/{usuario_id}", response_model=dict)
+def excluir_usuario(
+    usuario_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Exclusão LÓGICA: a conta é marcada como excluída e perde o acesso,
+    mas histórico, logs, importações e registros vinculados permanecem."""
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    if alvo.id == usuario.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Você não pode excluir a própria conta.")
+    if alvo.status == "excluido":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Este usuário já está excluído.")
+    if _e_ultimo_admin_ativo(db, escola_id, alvo):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, MSG_ULTIMO_ADMIN)
+
+    alvo.status = "excluido"
+    registrar(db, "usuario.excluido", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="usuario", entidade_id=alvo.id,
+              detalhes={"tipo": "exclusao_logica", "email": alvo.email,
+                        "nome": alvo.nome, "cargo": alvo.cargo})
+    db.commit()
+    return {"mensagem": f"Usuário “{alvo.nome}” excluído. O histórico de ações "
+                        "e importações foi preservado."}
+
+
+@router.delete("/usuarios/{usuario_id}/permanente", response_model=dict)
+def excluir_usuario_permanente(
+    usuario_id: int,
+    confirmacao: str = Query(default=""),
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Remoção FÍSICA do usuário — exclusiva de administradores globais.
+
+    Importações e logs de auditoria são preservados (a autoria fica em
+    branco); conversas de IA e dispositivos do usuário são removidos.
+    `confirmacao` deve ser o e-mail exato do alvo — a confirmação extra.
+    """
+    if not usuario.is_global:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "A exclusão permanente é exclusiva de "
+                            "administradores globais.")
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    if alvo.id == usuario.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Você não pode excluir a própria conta.")
+    if confirmacao.lower().strip() != alvo.email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Confirmação incorreta: digite o e-mail do usuário "
+                            "para confirmar a exclusão permanente.")
+    if _e_ultimo_admin_ativo(db, escola_id, alvo):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, MSG_ULTIMO_ADMIN)
+
+    # Preserva a história institucional; apaga somente o que é pessoal
+    db.execute(update(Importacao).where(Importacao.usuario_id == alvo.id)
+               .values(usuario_id=None))
+    db.execute(update(LogAuditoria).where(LogAuditoria.usuario_id == alvo.id)
+               .values(usuario_id=None))
+    conversas = select(ConversaIA.id).where(ConversaIA.usuario_id == alvo.id)
+    db.execute(delete(MensagemIA).where(MensagemIA.conversa_id.in_(conversas)))
+    db.execute(delete(ConversaIA).where(ConversaIA.usuario_id == alvo.id))
+    db.execute(delete(DispositivoMovel).where(DispositivoMovel.usuario_id == alvo.id))
+
+    registro = {"tipo": "exclusao_permanente", "email": alvo.email,
+                "nome": alvo.nome, "cargo": alvo.cargo}
+    nome = alvo.nome
+    db.delete(alvo)
+    registrar(db, "usuario.excluido_permanente", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="usuario", entidade_id=usuario_id,
+              detalhes=registro)
+    db.commit()
+    return {"mensagem": f"Usuário “{nome}” removido permanentemente do banco "
+                        "de dados. Logs e importações foram preservados sem autoria."}
 
 
 # --- Backup e restauração (PRD §18) ------------------------------------------

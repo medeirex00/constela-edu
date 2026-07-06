@@ -22,6 +22,8 @@ class UsuarioOut(ORMModel):
     is_global: bool
     escola_id: int | None
     status: str = "ativo"
+    ultimo_acesso: datetime | None = None
+    created_at: datetime | None = None
 
 
 class LoginOut(BaseModel):

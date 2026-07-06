@@ -5,6 +5,9 @@ export interface Usuario {
   cargo: string;
   is_global: boolean;
   escola_id: number | null;
+  status?: string;
+  ultimo_acesso?: string | null;
+  created_at?: string | null;
 }
 
 export interface Escola {
