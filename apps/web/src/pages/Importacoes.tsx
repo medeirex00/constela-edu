@@ -250,9 +250,22 @@ export default function Importacoes() {
             <span className="text-sm font-medium">Prévia da importação</span>
             <Badge tom="destaque">{analise.plataforma === "matific" ? "Matific" : "Elefante Letrado"}</Badge>
             {analise.formato === "leituras" && <Badge>uma linha por livro</Badge>}
-            <span className="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
-              {analise.total_linhas} linhas · {analise.total_erros} com erro
-            </span>
+            {analise.estrategia === "posicional" && <Badge tom="alerta">colunas por posição — confira</Badge>}
+          </div>
+
+          {/* Resumo da detecção automática (o usuário não precisa informar a plataforma) */}
+          <div className="border-b border-zinc-200 bg-indigo-50/50 px-4 py-3 text-sm dark:border-zinc-800 dark:bg-indigo-500/5">
+            <p className="font-medium text-indigo-800 dark:text-indigo-300">
+              {analise.mensagem_deteccao || "Arquivo analisado."}
+            </p>
+            <p className="mt-0.5 text-zinc-600 dark:text-zinc-300">
+              {analise.total_alunos} aluno{analise.total_alunos === 1 ? "" : "s"} encontrado
+              {analise.total_alunos === 1 ? "" : "s"} · {analise.total_linhas} registro
+              {analise.total_linhas === 1 ? "" : "s"} ·{" "}
+              {analise.total_erros === 0 && analise.total_avisos === 0
+                ? "nenhum problema detectado"
+                : `${analise.total_erros} erro(s), ${analise.total_avisos} aviso(s) — detalhes abaixo`}
+            </p>
           </div>
 
           {analise.erros_gerais.length > 0 && (
@@ -355,12 +368,13 @@ export default function Importacoes() {
           )}
 
           {erro && <div className="p-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-          <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            <span className="mr-auto text-sm font-medium">Deseja importar estes dados?</span>
             <Botao variante="neutro" onClick={() => setAnalise(null)} disabled={ocupado}>
-              Voltar e corrigir
+              Não, voltar
             </Botao>
             <Botao onClick={confirmar} disabled={ocupado || analise.linhas.length === 0}>
-              {ocupado ? "Importando..." : "Confirmar importação"}
+              {ocupado ? "Importando..." : "Sim, importar"}
             </Botao>
           </div>
         </Card>

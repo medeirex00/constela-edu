@@ -1,16 +1,29 @@
-"""Análise de relatórios das plataformas (PRD §15–§16, §50–§52).
+"""Importação inteligente de relatórios (PRD §15–§16, §50–§52).
 
-O fluxo é sempre em duas etapas:
-  1. `analisar` — interpreta o texto (ou PDF) e devolve uma prévia com todos
-     os erros e correspondências de nomes, sem gravar nada (PRD §51).
-  2. `confirmar` (no router) — grava apenas o que o usuário aprovou.
+Objetivo: o usuário baixa o PDF da plataforma e arrasta para o Constela Edu
+— sem editar, converter ou renomear nada. Para isso, o parser não depende
+de um formato fixo: ele é um PIPELINE de estratégias que competem entre si
+e vence a que reconhecer mais alunos.
 
-Nota importante: os formatos aceitos foram definidos SEM amostras reais dos
-relatórios da Matific e do Elefante Letrado (pré-requisito da Fase 2 no
-ROADMAP). Por isso o parser é deliberadamente tolerante — cabeçalho com
-sinônimos, separadores variados (tab, `;`, `,` ou colunas de espaços) e
-números em formato pt-BR — e NADA entra no banco sem prévia aprovada.
-Quando as amostras reais chegarem, basta ajustar os sinônimos de coluna.
+    texto (PDF em modo layout, ou colado)
+        │
+        ├─ detecção da plataforma (pontuação por palavras-chave)
+        │
+        ├─ Estratégia TABELA          cabeçalho + separadores (tab ; , espaços)
+        ├─ Estratégia VERTICAL        cabeçalho em linhas separadas (PDF comum)
+        ├─ Estratégia RÓTULOS         blocos "Campo: valor" por aluno
+        └─ Estratégia POSICIONAL      "Nome Sobrenome 42 85,5 120" sem cabeçalho
+        │
+        └─ melhor resultado → prévia (nada é gravado sem confirmação)
+
+Princípios de robustez (pedido do produto):
+  * colunas casadas por SEMELHANÇA (acentos/caixa/espaços ignorados,
+    sinônimos e distância de edição), nunca por nome exato;
+  * campo que falhar vira AVISO na linha — a importação continua com o
+    que foi reconhecido; erro de verdade só quando a linha não tem nome
+    ou nenhum dado aproveitável;
+  * quando nada é reconhecido, o diagnóstico diz exatamente o que foi
+    detectado e o que faltou (inclusive PDF digitalizado/imagem).
 """
 from __future__ import annotations
 
@@ -49,6 +62,14 @@ def _numero(celula: str) -> float:
     return float(limpo)
 
 
+def _eh_numero(celula: str) -> bool:
+    try:
+        _numero(celula)
+        return True
+    except ValueError:
+        return False
+
+
 def _niveis(celula: str) -> dict[str, int]:
     """Interpreta 'AA:2, D:1' (ou 'AA=2; D=1') como {"AA": 2, "D": 1}."""
     pares = re.findall(r"([A-Za-z]{1,2})\s*[:=]\s*(\d+)", celula)
@@ -58,43 +79,68 @@ def _niveis(celula: str) -> dict[str, int]:
 
 
 # --------------------------------------------------------------------------
-# Detecção de plataforma e formato (PRD §50)
+# Detecção de plataforma (PRD §50) — o usuário não precisa informar
 # --------------------------------------------------------------------------
 
 _PALAVRAS = {
-    "matific": ["matific", "atividade", "estrela", "episodio", "pontuacao media"],
-    "elefante": ["elefante", "letrado", "livro", "leitura", "questo", "nivel"],
+    "matific": ["matific", "atividade", "estrela", "episodio", "pontuacao media",
+                "matematica", "activities", "stars"],
+    "elefante": ["elefante", "letrado", "livro", "leitura", "questo", "nivel",
+                 "titulo", "compreensao", "books", "reading"],
 }
 
+NOMES_PLATAFORMA = {"matific": "Matific", "elefante": "Elefante Letrado"}
 
-def detectar_plataforma(texto: str) -> str | None:
+
+def detectar_plataforma_detalhado(texto: str) -> tuple[str | None, str]:
+    """(plataforma, mensagem amigável) — ex.: “Este arquivo pertence ao Matific.”"""
     plano = normalizar_nome(texto)
     pontos = {p: sum(plano.count(k) for k in ks) for p, ks in _PALAVRAS.items()}
     if pontos["matific"] == pontos["elefante"]:
-        return None
-    return max(pontos, key=pontos.get)  # type: ignore[arg-type]
+        return None, ("Não foi possível identificar a plataforma pelo conteúdo — "
+                      "selecione Matific ou Elefante Letrado.")
+    plataforma = max(pontos, key=pontos.get)  # type: ignore[arg-type]
+    return plataforma, f"Este arquivo pertence ao {NOMES_PLATAFORMA[plataforma]}."
 
 
-# Sinônimos aceitos em cabeçalhos (normalizados, comparação por prefixo)
-_COL_NOME = ["nome do aluno", "nome", "aluno", "estudante"]
+def detectar_plataforma(texto: str) -> str | None:
+    return detectar_plataforma_detalhado(texto)[0]
+
+
+# --------------------------------------------------------------------------
+# Colunas conhecidas e casamento difuso (PRD: não depender de nomes exatos)
+# --------------------------------------------------------------------------
+
+_COL_NOME = ["nome do aluno", "nome", "aluno", "aluno(a)", "aluna", "estudante",
+             "nome completo", "student", "student name", "participante", "crianca"]
 
 COLUNAS_MATIFIC = {
-    "atividades": ["atividades finalizadas", "atividades concluidas", "atividades"],
-    "pontuacao_media": ["pontuacao media", "media de pontuacao", "media", "pontuacao"],
-    "estrelas": ["estrelas"],
+    "atividades": ["atividades finalizadas", "atividades concluidas",
+                   "atividades completas", "atividades", "episodios concluidos",
+                   "episodios", "completed activities", "activities"],
+    "pontuacao_media": ["pontuacao media", "media de pontuacao", "media", "pontuacao",
+                        "nota media", "desempenho", "average score", "score"],
+    "estrelas": ["estrelas", "total de estrelas", "stars"],
 }
 
 COLUNAS_ELEFANTE_RESUMO = {
-    "livros_unicos": ["livros lidos", "livros unicos", "livros concluidos", "livros"],
-    "tempo_leitura_min": ["tempo de leitura", "tempo (min)", "tempo", "minutos"],
-    "questoes_tentativas": ["questoes respondidas", "questoes", "tentativas"],
-    "questoes_acertos": ["acertos", "respostas corretas", "questoes corretas"],
+    "livros_unicos": ["livros lidos", "livros unicos", "livros concluidos",
+                      "livros finalizados", "titulos lidos", "titulos concluidos",
+                      "livros", "books"],
+    "tempo_leitura_min": ["tempo de leitura", "tempo total", "tempo (min)",
+                          "minutos de leitura", "tempo lido", "tempo", "minutos",
+                          "reading time"],
+    "questoes_tentativas": ["questoes respondidas", "questoes feitas", "questoes",
+                            "tentativas", "exercicios", "perguntas respondidas",
+                            "quizzes"],
+    "questoes_acertos": ["acertos", "respostas corretas", "questoes corretas",
+                         "respostas certas", "correct answers"],
     "livros_por_nivel": ["livros por nivel", "niveis", "nivel dos livros"],
 }
 
 # Formato alternativo do Elefante: uma linha por livro concluído
 COLUNAS_ELEFANTE_LEITURAS = {
-    "livro": ["titulo do livro", "titulo", "livro"],
+    "livro": ["titulo do livro", "titulo", "livro", "obra"],
     "nivel": ["nivel do livro", "nivel", "codigo"],
 }
 
@@ -104,6 +150,56 @@ _OBRIGATORIAS = {
     "elefante_leituras": {"livro"},
 }
 
+# Ordem padrão das colunas nos relatórios (usada pelas estratégias sem cabeçalho)
+ORDEM_PADRAO = {
+    "matific": ["atividades", "pontuacao_media", "estrelas"],
+    "elefante": ["livros_unicos", "tempo_leitura_min",
+                 "questoes_tentativas", "questoes_acertos"],
+}
+
+
+def _semelhante(texto: str, sinonimo: str) -> bool:
+    """Casamento difuso: prefixo, contenção de tokens ou distância de edição.
+
+    A contenção de tokens só vale para textos CURTOS — senão um título como
+    “Relatório de desempenho da turma” casaria com o sinônimo “desempenho”.
+    """
+    if not texto:
+        return False
+    if texto.startswith(sinonimo) or sinonimo.startswith(texto):
+        return True
+    tokens_texto = set(texto.split())
+    tokens_sin = set(sinonimo.split())
+    if tokens_sin and tokens_sin <= tokens_texto \
+            and len(tokens_texto) <= len(tokens_sin) + 2:
+        return True
+    return SequenceMatcher(None, texto, sinonimo).ratio() >= 0.82
+
+
+def _casar_coluna(celula: str, colunas: dict[str, list[str]],
+                  ignorar: set[str] | None = None) -> str | None:
+    """Campo cujo sinônimo mais se parece com a célula.
+
+    `ignorar` pula campos já mapeados — assim “Livros por nível” não é
+    engolido por “livros” (livros_unicos) quando este já tem coluna.
+    """
+    plano = normalizar_nome(celula)
+    for campo, sinonimos in colunas.items():
+        if ignorar and campo in ignorar:
+            continue
+        if any(_semelhante(plano, s) for s in sinonimos):
+            return campo
+    return None
+
+
+def _eh_coluna_nome(celula: str) -> bool:
+    plano = normalizar_nome(celula)
+    return any(_semelhante(plano, s) for s in _COL_NOME)
+
+
+# --------------------------------------------------------------------------
+# Estruturas de resultado
+# --------------------------------------------------------------------------
 
 @dataclass
 class LinhaImportacao:
@@ -119,12 +215,66 @@ class LinhaImportacao:
 class Analise:
     plataforma: str
     formato: str  # resumo | leituras
+    estrategia: str = ""
+    mensagem_deteccao: str = ""
     linhas: list[LinhaImportacao] = field(default_factory=list)
     erros_gerais: list[str] = field(default_factory=list)
 
 
+_RODAPES = ("total", "media", "pagina", "page", "gerado em", "relatorio",
+            "turma", "escola", "professor", "periodo", "data:")
+_STOPWORDS_NOME = _RODAPES + ("nome", "aluno", "estudante")
+
+
+def _linha_rodape(linha: str) -> bool:
+    plano = normalizar_nome(linha)
+    return any(plano.startswith(r) for r in _RODAPES)
+
+
+def _parece_nome(texto: str) -> bool:
+    """Heurística de nome de pessoa: ≥2 palavras, essencialmente alfabético."""
+    limpo = texto.strip()
+    if len(limpo) < 5 or any(c.isdigit() for c in limpo):
+        return False
+    palavras = limpo.split()
+    if len(palavras) < 2:
+        return False
+    plano = normalizar_nome(limpo)
+    if any(plano.startswith(s) for s in _STOPWORDS_NOME):
+        return False
+    alfabeticas = sum(1 for c in limpo if c.isalpha() or c in " '-.")
+    return alfabeticas / len(limpo) >= 0.9
+
+
+def _atribuir_campo(item: LinhaImportacao, campo: str, bruto: str) -> None:
+    """Converte e guarda um campo; falha vira AVISO (a linha continua útil)."""
+    try:
+        if campo == "livros_por_nivel":
+            item.dados[campo] = _niveis(bruto)
+        elif campo == "livro":
+            item.dados[campo] = bruto.strip()
+        elif campo == "nivel":
+            item.dados[campo] = bruto.strip().upper()
+        else:
+            valor = _numero(bruto)
+            if valor < 0:
+                raise ValueError("valor negativo")
+            item.dados[campo] = valor
+    except ValueError:
+        item.avisos.append(f"“{campo}” ilegível ({bruto.strip()!r}) — campo ficará ausente.")
+
+
+def _fechar_linha(item: LinhaImportacao) -> LinhaImportacao:
+    """Regra de erro (PRD: não interromper): erro só sem nome ou sem dado algum."""
+    if not item.nome:
+        item.erros.append("Linha sem nome de aluno.")
+    elif not item.dados:
+        item.erros.append("Nenhum dado aproveitável nesta linha.")
+    return item
+
+
 # --------------------------------------------------------------------------
-# Leitura de tabelas em texto livre
+# Estratégia 1 — TABELA: cabeçalho + separador (tab ; , ou colunas de espaço)
 # --------------------------------------------------------------------------
 
 def _dividir(linha: str, separador: str) -> list[str]:
@@ -133,117 +283,252 @@ def _dividir(linha: str, separador: str) -> list[str]:
     return [c.strip() for c in linha.split(separador)]
 
 
-def _detectar_separador(linhas: list[str]) -> str:
+def _separadores_candidatos(linhas: list[str]) -> list[str]:
     corpo = "\n".join(linhas)
+    candidatos = []
     if "\t" in corpo:
-        return "\t"
+        candidatos.append("\t")
     if ";" in corpo:
-        return ";"
+        candidatos.append(";")
     if re.search(r"\S\s{2,}\S", corpo):
-        return "espacos"
-    return ","
+        candidatos.append("espacos")
+    candidatos.append(",")
+    return candidatos
 
 
-def _mapear_cabecalho(celulas: list[str], colunas: dict[str, list[str]]) -> tuple[int | None, dict[str, int]]:
-    """Retorna (índice da coluna de nome, {campo: índice}) para um cabeçalho."""
+def _mapear_cabecalho(celulas: list[str], colunas: dict[str, list[str]]):
     idx_nome = None
     mapa: dict[str, int] = {}
     for indice, celula in enumerate(celulas):
-        plano = normalizar_nome(celula)
-        if idx_nome is None and any(plano.startswith(s) for s in _COL_NOME):
+        if idx_nome is None and _eh_coluna_nome(celula):
             idx_nome = indice
             continue
-        for campo, sinonimos in colunas.items():
-            if campo not in mapa and any(plano.startswith(s) for s in sinonimos):
-                mapa[campo] = indice
-                break
+        campo = _casar_coluna(celula, colunas, ignorar=set(mapa))
+        if campo:
+            mapa[campo] = indice
     return idx_nome, mapa
 
 
-def _escolher_formato(plataforma: str, celulas: list[str]) -> tuple[str, dict[str, int], int | None]:
-    """Tenta os formatos conhecidos da plataforma no cabeçalho dado."""
-    candidatos = (
-        [("resumo", COLUNAS_MATIFIC)]
-        if plataforma == "matific"
-        else [("leituras", COLUNAS_ELEFANTE_LEITURAS), ("resumo", COLUNAS_ELEFANTE_RESUMO)]
-    )
-    melhor = ("", {}, None, -1)
-    for formato, colunas in candidatos:
-        idx_nome, mapa = _mapear_cabecalho(celulas, colunas)
-        chave = "elefante_" + formato if plataforma == "elefante" else "matific"
-        if idx_nome is None or not (_OBRIGATORIAS[chave] & set(mapa)):
+def _formatos_da_plataforma(plataforma: str):
+    # Resumo vem primeiro: em caso de empate (cabeçalhos ambíguos como
+    # “Livros lidos”, que também parece “livro”), o agregado vence — o
+    # formato leituras só ganha quando reconhece MAIS linhas que o resumo.
+    if plataforma == "matific":
+        return [("resumo", COLUNAS_MATIFIC, "matific")]
+    return [("resumo", COLUNAS_ELEFANTE_RESUMO, "elefante_resumo"),
+            ("leituras", COLUNAS_ELEFANTE_LEITURAS, "elefante_leituras")]
+
+
+def _estrategia_tabela(linhas_texto: list[str], plataforma: str) -> Analise | None:
+    melhor: Analise | None = None
+    for separador in _separadores_candidatos(linhas_texto):
+        for formato, colunas, chave in _formatos_da_plataforma(plataforma):
+            resultado = _tabela_com(linhas_texto, plataforma, separador, formato,
+                                    colunas, chave)
+            if resultado and (melhor is None or
+                              _pontuacao(resultado) > _pontuacao(melhor)):
+                melhor = resultado
+    return melhor
+
+
+def _tabela_com(linhas_texto, plataforma, separador, formato, colunas, chave):
+    inicio, idx_nome, mapa = None, None, {}
+    for indice, linha in enumerate(linhas_texto):
+        idx, m = _mapear_cabecalho(_dividir(linha, separador), colunas)
+        if idx is not None and (_OBRIGATORIAS[chave] & set(m)):
+            inicio, idx_nome, mapa = indice + 1, idx, m
+            break
+    if inicio is None:
+        return None
+
+    analise = Analise(plataforma=plataforma, formato=formato, estrategia="tabela")
+    for numero, linha in enumerate(linhas_texto[inicio:], start=inicio + 1):
+        if _linha_rodape(linha):
             continue
-        if len(mapa) > melhor[3]:
-            melhor = (formato, mapa, idx_nome, len(mapa))
-    return melhor[0], melhor[1], melhor[2]
+        celulas = _dividir(linha, separador)
+        if idx_nome >= len(celulas) or not celulas[idx_nome]:
+            continue
+        item = LinhaImportacao(numero=numero, nome=celulas[idx_nome].strip(), dados={})
+        for campo, indice_coluna in mapa.items():
+            if indice_coluna < len(celulas) and celulas[indice_coluna].strip():
+                _atribuir_campo(item, campo, celulas[indice_coluna])
+        analise.linhas.append(_fechar_linha(item))
+    return analise if analise.linhas else None
 
 
-_RODAPES = ("total", "media", "pagina", "gerado em", "relatorio")
+# --------------------------------------------------------------------------
+# Estratégia 2 — VERTICAL: cabeçalho em linhas separadas (extração comum de PDF)
+# --------------------------------------------------------------------------
+
+def _estrategia_vertical(linhas_texto: list[str], plataforma: str) -> Analise | None:
+    colunas = COLUNAS_MATIFIC if plataforma == "matific" else COLUNAS_ELEFANTE_RESUMO
+
+    # Procura um bloco de linhas consecutivas que são nomes de colunas
+    ordem: list[str] = []
+    fim_cabecalho = None
+    for indice, linha in enumerate(linhas_texto):
+        campo = _casar_coluna(linha, colunas, ignorar=set(ordem))
+        eh_nome = _eh_coluna_nome(linha)
+        if campo or eh_nome:
+            if not ordem and not eh_nome and campo is None:
+                continue
+            if campo and campo not in ordem:
+                ordem.append(campo)
+            fim_cabecalho = indice
+        elif ordem and len(ordem) >= 2:
+            break
+        elif ordem:
+            ordem, fim_cabecalho = [], None  # bloco interrompido cedo demais
+    if len(ordem) < 2 or fim_cabecalho is None:
+        return None
+
+    analise = Analise(plataforma=plataforma, formato="resumo",
+                      estrategia="cabecalho_vertical")
+    item: LinhaImportacao | None = None
+    preenchidos = 0
+    for numero, linha in enumerate(linhas_texto[fim_cabecalho + 1:],
+                                   start=fim_cabecalho + 2):
+        linha = linha.strip()
+        if not linha or _linha_rodape(linha):
+            continue
+        if _parece_nome(linha):
+            if item is not None:
+                analise.linhas.append(_fechar_linha(item))
+            item = LinhaImportacao(numero=numero, nome=linha, dados={})
+            preenchidos = 0
+            continue
+        if item is not None and preenchidos < len(ordem):
+            if _eh_numero(linha) or ":" in linha:
+                _atribuir_campo(item, ordem[preenchidos], linha)
+                preenchidos += 1
+    if item is not None:
+        analise.linhas.append(_fechar_linha(item))
+    return analise if analise.linhas else None
+
+
+# --------------------------------------------------------------------------
+# Estratégia 3 — RÓTULOS: blocos "Campo: valor" por aluno
+# --------------------------------------------------------------------------
+
+def _estrategia_rotulos(linhas_texto: list[str], plataforma: str) -> Analise | None:
+    colunas = COLUNAS_MATIFIC if plataforma == "matific" else COLUNAS_ELEFANTE_RESUMO
+    analise = Analise(plataforma=plataforma, formato="resumo", estrategia="rotulos")
+    item: LinhaImportacao | None = None
+
+    for numero, linha in enumerate(linhas_texto, start=1):
+        par = re.match(r"^\s*([^:–-]{2,40})[:–-]\s*(.+)$", linha)
+        if not par:
+            continue
+        chave, valor = par.group(1), par.group(2).strip()
+        if _eh_coluna_nome(chave) and _parece_nome(valor):
+            if item is not None:
+                analise.linhas.append(_fechar_linha(item))
+            item = LinhaImportacao(numero=numero, nome=valor, dados={})
+            continue
+        campo = _casar_coluna(chave, colunas)
+        if campo and item is not None:
+            _atribuir_campo(item, campo, valor)
+    if item is not None:
+        analise.linhas.append(_fechar_linha(item))
+    return analise if len(analise.linhas) >= 1 and any(
+        l.dados for l in analise.linhas) else None
+
+
+# --------------------------------------------------------------------------
+# Estratégia 4 — POSICIONAL: "Nome Sobrenome 42 85,5 120" sem cabeçalho
+# --------------------------------------------------------------------------
+
+_LINHA_POSICIONAL = re.compile(
+    r"^\s*([^\d]{5,}?)\s+((?:[\d.,%]+\s*){1,8})$"
+)
+
+
+def _estrategia_posicional(linhas_texto: list[str], plataforma: str) -> Analise | None:
+    ordem = ORDEM_PADRAO["matific" if plataforma == "matific" else "elefante"]
+    analise = Analise(plataforma=plataforma, formato="resumo", estrategia="posicional")
+
+    for numero, linha in enumerate(linhas_texto, start=1):
+        if _linha_rodape(linha):
+            continue
+        par = _LINHA_POSICIONAL.match(linha)
+        if not par or not _parece_nome(par.group(1)):
+            continue
+        numeros = par.group(2).split()
+        item = LinhaImportacao(numero=numero, nome=par.group(1).strip(), dados={})
+        for campo, bruto in zip(ordem, numeros):
+            _atribuir_campo(item, campo, bruto)
+        if len(numeros) < len(ordem):
+            faltantes = ", ".join(ordem[len(numeros):])
+            item.avisos.append(f"Colunas ausentes na linha: {faltantes}.")
+        if len(numeros) > len(ordem):
+            item.avisos.append(
+                f"{len(numeros) - len(ordem)} coluna(s) extra(s) ignorada(s).")
+        item.avisos.append("Colunas identificadas pela ordem padrão do relatório "
+                           f"({', '.join(ordem[:len(numeros)])}) — confira na prévia.")
+        analise.linhas.append(_fechar_linha(item))
+    return analise if analise.linhas else None
+
+
+# --------------------------------------------------------------------------
+# Pipeline: roda todas as estratégias e escolhe a melhor
+# --------------------------------------------------------------------------
+
+def _pontuacao(analise: Analise) -> int:
+    """Qualidade = linhas com nome e pelo menos um dado reconhecido."""
+    return sum(1 for l in analise.linhas if not l.erros and l.dados)
 
 
 def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:
     """Interpreta um relatório colado/extraído. Nunca grava nada."""
-    plataforma = plataforma or detectar_plataforma(texto)
+    detectada, mensagem = detectar_plataforma_detalhado(texto)
+    plataforma = plataforma or detectada
     if plataforma is None:
-        analise = Analise(plataforma="", formato="")
-        analise.erros_gerais.append(
-            "Não foi possível identificar a plataforma automaticamente. "
-            "Selecione Matific ou Elefante Letrado e tente novamente."
-        )
+        analise = Analise(plataforma="", formato="", mensagem_deteccao=mensagem)
+        analise.erros_gerais.append(mensagem)
         return analise
+    if plataforma == detectada:
+        mensagem_final = mensagem
+    else:
+        mensagem_final = f"Plataforma informada manualmente: {NOMES_PLATAFORMA[plataforma]}."
 
     linhas_texto = [l for l in texto.splitlines() if l.strip()]
-    separador = _detectar_separador(linhas_texto)
 
-    formato, mapa, idx_nome, inicio = "", {}, None, 0
-    for indice, linha in enumerate(linhas_texto):
-        formato, mapa, idx_nome = _escolher_formato(plataforma, _dividir(linha, separador))
-        if formato:
-            inicio = indice + 1
-            break
+    candidatas = [
+        _estrategia_tabela(linhas_texto, plataforma),
+        _estrategia_vertical(linhas_texto, plataforma),
+        _estrategia_rotulos(linhas_texto, plataforma),
+        _estrategia_posicional(linhas_texto, plataforma),
+    ]
+    # Mesmo uma análise onde todas as linhas têm problema é melhor que nada:
+    # a prévia mostra qual aluno/coluna falhou (PRD: não interromper tudo).
+    validas = [c for c in candidatas if c is not None and c.linhas]
 
-    analise = Analise(plataforma=plataforma, formato=formato)
-    if not formato:
-        analise.erros_gerais.append(
-            "Cabeçalho não reconhecido. O relatório precisa ter uma coluna de "
-            "nome do aluno e as colunas de dados da plataforma."
-        )
+    if not validas:
+        analise = Analise(plataforma=plataforma, formato="",
+                          mensagem_deteccao=mensagem_final)
+        analise.erros_gerais.append(_diagnostico(linhas_texto, plataforma))
         return analise
 
-    for numero, linha in enumerate(linhas_texto[inicio:], start=inicio + 1):
-        celulas = _dividir(linha, separador)
-        plano = normalizar_nome(linha)
-        if any(plano.startswith(r) for r in _RODAPES):
-            continue
-        if idx_nome >= len(celulas) or not celulas[idx_nome]:
-            analise.linhas.append(
-                LinhaImportacao(numero=numero, nome="", dados={},
-                                erros=["Linha sem nome de aluno."])
-            )
-            continue
+    melhor = max(validas, key=lambda c: (_pontuacao(c), len(c.linhas)))
+    melhor.mensagem_deteccao = mensagem_final
+    return melhor
 
-        item = LinhaImportacao(numero=numero, nome=celulas[idx_nome], dados={})
-        for campo, indice_coluna in mapa.items():
-            if indice_coluna >= len(celulas) or not celulas[indice_coluna].strip():
-                continue
-            bruto = celulas[indice_coluna]
-            try:
-                if campo == "livros_por_nivel":
-                    item.dados[campo] = _niveis(bruto)
-                elif campo in ("livro", "nivel"):
-                    item.dados[campo] = bruto.strip().upper() if campo == "nivel" else bruto.strip()
-                else:
-                    valor = _numero(bruto)
-                    if valor < 0:
-                        raise ValueError("valor negativo")
-                    item.dados[campo] = valor
-            except ValueError:
-                item.erros.append(f"Valor inválido em “{campo}”: {bruto!r}.")
-        analise.linhas.append(item)
 
-    if not analise.linhas:
-        analise.erros_gerais.append("Nenhuma linha de dados encontrada após o cabeçalho.")
-    return analise
+def _diagnostico(linhas_texto: list[str], plataforma: str) -> str:
+    """Quando nada foi reconhecido, dizer exatamente o que foi tentado."""
+    nomes = sum(1 for l in linhas_texto if _parece_nome(l.strip()))
+    numericas = sum(1 for l in linhas_texto
+                    if any(_eh_numero(t) for t in l.split()))
+    if not linhas_texto:
+        return ("O arquivo não contém texto legível. Se for um PDF digitalizado "
+                "(imagem escaneada), exporte o relatório em versão digital na "
+                "plataforma — a leitura de imagens não é suportada.")
+    return (f"Nenhuma das 4 estratégias reconheceu os dados "
+            f"({NOMES_PLATAFORMA.get(plataforma, plataforma)}; "
+            f"{len(linhas_texto)} linhas, {nomes} parecendo nomes, "
+            f"{numericas} com números). Envie este arquivo para a equipe do "
+            "Constela Edu para adicionarmos o formato — ou cole o texto do "
+            "relatório para tentar de novo.")
 
 
 # --------------------------------------------------------------------------
@@ -251,10 +536,26 @@ def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:
 # --------------------------------------------------------------------------
 
 def extrair_texto_pdf(conteudo: bytes) -> str:
+    """Extrai o texto preservando colunas quando possível.
+
+    O modo `layout` do pypdf mantém o espaçamento entre colunas — a
+    estratégia TABELA volta a funcionar em PDFs que o modo simples
+    embaralharia. Se o layout falhar, cai no modo padrão.
+    """
     from pypdf import PdfReader
 
     leitor = PdfReader(io.BytesIO(conteudo))
-    return "\n".join(pagina.extract_text() or "" for pagina in leitor.pages)
+    paginas: list[str] = []
+    for pagina in leitor.pages:
+        texto = ""
+        try:
+            texto = pagina.extract_text(extraction_mode="layout") or ""
+        except Exception:  # noqa: BLE001 — layout é melhor esforço
+            texto = ""
+        if not texto.strip():
+            texto = pagina.extract_text() or ""
+        paginas.append(texto)
+    return "\n".join(paginas)
 
 
 # --------------------------------------------------------------------------

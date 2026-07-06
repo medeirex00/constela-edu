@@ -95,14 +95,19 @@ async def analisar(
     if analise.linhas:
         svc.casar_nomes(db, escola_id, analise.linhas)
 
+    nomes_unicos = {svc.normalizar_nome(l.nome) for l in analise.linhas if l.nome}
     return AnaliseOut(
         plataforma=analise.plataforma,
         formato=analise.formato,
         tipo=tipo,
         arquivo_token=arquivo_token,
         arquivo_nome=arquivo_nome,
+        estrategia=analise.estrategia,
+        mensagem_deteccao=analise.mensagem_deteccao,
+        total_alunos=len(nomes_unicos),
         total_linhas=len(analise.linhas),
         total_erros=sum(1 for l in analise.linhas if l.erros) + len(analise.erros_gerais),
+        total_avisos=sum(1 for l in analise.linhas if l.avisos),
         erros_gerais=analise.erros_gerais,
         linhas=[
             {

@@ -29,8 +29,12 @@ class AnaliseOut(BaseModel):
     tipo: str  # pdf | texto
     arquivo_token: str | None
     arquivo_nome: str | None
+    estrategia: str = ""            # tabela | cabecalho_vertical | rotulos | posicional
+    mensagem_deteccao: str = ""     # "Este arquivo pertence ao Matific."
+    total_alunos: int = 0           # nomes únicos encontrados
     total_linhas: int
     total_erros: int
+    total_avisos: int = 0
     erros_gerais: list[str]
     linhas: list[LinhaAnaliseOut]
 

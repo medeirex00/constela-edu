@@ -146,8 +146,14 @@ export interface Analise {
   tipo: string;
   arquivo_token: string | null;
   arquivo_nome: string | null;
+  /** Estratégia vencedora: tabela | cabecalho_vertical | rotulos | posicional */
+  estrategia: string;
+  /** Ex.: "Este arquivo pertence ao Matific." */
+  mensagem_deteccao: string;
+  total_alunos: number;
   total_linhas: number;
   total_erros: number;
+  total_avisos: number;
   erros_gerais: string[];
   linhas: LinhaAnalise[];
 }
