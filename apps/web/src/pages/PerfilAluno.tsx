@@ -45,21 +45,54 @@ function TabelaCalculo({ titulo, linhas, notaFinal }: { titulo: string; linhas: 
   );
 }
 
+interface ConquistaAluno {
+  codigo: string;
+  nome: string;
+  icone: string;
+  descricao: string;
+  criterio: string;
+  unidade: string;
+  xp: number;
+  raridade: string;
+  limite: number;
+  progresso: number;
+  pct: number;
+  faltam: number;
+  atingida: boolean;
+}
+
 interface Gamificacao {
   xp: number;
+  xp_conquistas: number;
   nivel: number;
   xp_para_proximo: number;
   sequencia_semanas: number;
   total_conquistas: number;
-  conquistas: {
-    codigo: string;
-    nome: string;
-    icone: string;
-    descricao: string;
-    limite: number;
-    progresso: number;
-    atingida: boolean;
-  }[];
+  conquistas: ConquistaAluno[];
+}
+
+function BarraProgresso({ pct }: { pct: number }) {
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+      <div
+        className="h-full rounded-full bg-indigo-600 transition-all dark:bg-indigo-500"
+        style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
+      />
+    </div>
+  );
+}
+
+function valorCurto(valor: number): string {
+  return Number.isInteger(valor) ? String(valor) : nota(valor);
+}
+
+/** "Faltam apenas 7 livros para desbloquear esta conquista." */
+function textoFaltam(conquista: ConquistaAluno): string {
+  const quanto = valorCurto(conquista.faltam);
+  if (conquista.unidade === "%") {
+    return `Faltam ${quanto} pontos percentuais para desbloquear esta conquista.`;
+  }
+  return `Faltam apenas ${quanto} ${conquista.unidade} para desbloquear esta conquista.`;
 }
 
 export default function PerfilAluno() {
@@ -136,12 +169,57 @@ export default function PerfilAluno() {
               <Badge tom="destaque">Nível {gamificacao.nivel}</Badge>
               <span className="tabular-nums text-zinc-600 dark:text-zinc-300">
                 {gamificacao.xp.toLocaleString("pt-BR")} XP
+                {gamificacao.xp_conquistas > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400"> ({gamificacao.xp_conquistas.toLocaleString("pt-BR")} de conquistas)</span>
+                )}
                 <span className="text-zinc-400"> · faltam {gamificacao.xp_para_proximo} para o próximo nível</span>
               </span>
               {gamificacao.sequencia_semanas > 0 && (
                 <Badge tom="alerta">🔥 {gamificacao.sequencia_semanas} semana{gamificacao.sequencia_semanas > 1 ? "s" : ""} seguidas</Badge>
               )}
+              <Link
+                to="/conquistas/biblioteca"
+                className="ml-auto text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                Ver a Biblioteca de Conquistas →
+              </Link>
             </div>
+
+            {/* Próximas conquistas: as mais perto de desbloquear (§ progresso) */}
+            {(() => {
+              const proximas = gamificacao.conquistas
+                .filter((c) => !c.atingida && c.progresso > 0)
+                .sort((a, b) => b.pct - a.pct)
+                .slice(0, 3);
+              if (proximas.length === 0) return null;
+              return (
+                <div className="mb-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Próximas conquistas
+                  </p>
+                  <div className="grid gap-3 lg:grid-cols-3">
+                    {proximas.map((conquista) => (
+                      <div key={conquista.codigo} className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3 dark:border-indigo-500/20 dark:bg-indigo-500/5">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate text-sm font-semibold">
+                            {conquista.icone} {conquista.nome}
+                          </p>
+                          <span className="shrink-0 text-xs font-semibold tabular-nums text-indigo-700 dark:text-indigo-300">
+                            {Math.round(conquista.pct)}%
+                          </span>
+                        </div>
+                        <p className="mb-1.5 mt-0.5 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                          {valorCurto(conquista.progresso)} de {valorCurto(conquista.limite)} {conquista.unidade}
+                        </p>
+                        <BarraProgresso pct={conquista.pct} />
+                        <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{textoFaltam(conquista)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {gamificacao.conquistas.map((conquista) => (
                 <div
@@ -149,17 +227,27 @@ export default function PerfilAluno() {
                   className={`flex items-start gap-2.5 rounded-lg border p-2.5 ${
                     conquista.atingida
                       ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5"
-                      : "border-zinc-200 opacity-60 dark:border-zinc-800"
+                      : "border-zinc-200 dark:border-zinc-800"
                   }`}
                 >
-                  <span className="text-xl leading-none">{conquista.icone}</span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">{conquista.nome}</p>
+                  <span className={`text-xl leading-none ${conquista.atingida ? "" : "opacity-50"}`}>{conquista.icone}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className={`text-sm font-medium ${conquista.atingida ? "" : "text-zinc-500 dark:text-zinc-400"}`}>
+                        {conquista.nome}
+                      </p>
+                      <span className="shrink-0 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                        +{conquista.xp} XP
+                      </span>
+                    </div>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">{conquista.descricao}</p>
                     {!conquista.atingida && (
-                      <p className="mt-0.5 text-xs tabular-nums text-zinc-400">
-                        {nota(conquista.progresso)} / {conquista.limite}
-                      </p>
+                      <div className="mt-1.5">
+                        <BarraProgresso pct={conquista.pct} />
+                        <p className="mt-1 text-xs tabular-nums text-zinc-400">
+                          {valorCurto(conquista.progresso)} / {valorCurto(conquista.limite)} {conquista.unidade}
+                        </p>
+                      </div>
                     )}
                   </div>
                 </div>

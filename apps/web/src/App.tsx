@@ -5,6 +5,7 @@ import { Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import Alunos from "./pages/Alunos";
 import Assistente from "./pages/Assistente";
+import BibliotecaConquistas from "./pages/BibliotecaConquistas";
 import Comparador from "./pages/Comparador";
 import Insights from "./pages/Insights";
 import Conquistas from "./pages/Conquistas";
@@ -28,6 +29,7 @@ import TurmaDetalhe from "./pages/TurmaDetalhe";
 import Turmas from "./pages/Turmas";
 import Usuarios from "./pages/Usuarios";
 import VisaoEscola from "./pages/VisaoEscola";
+import ConfigConquistas from "./pages/configuracoes/ConfigConquistas";
 import Configuracoes from "./pages/configuracoes/Configuracoes";
 import Metricas from "./pages/configuracoes/Metricas";
 
@@ -59,11 +61,13 @@ export default function App() {
         <Route path="/professores" element={<Professores />} />
         <Route path="/metricas" element={<Metricas />} />
         <Route path="/configuracoes" element={<Configuracoes />} />
+        <Route path="/configuracoes/conquistas" element={<ConfigConquistas />} />
         <Route path="/matific" element={<Matific />} />
         <Route path="/elefante" element={<Elefante />} />
         <Route path="/livros" element={<Livros />} />
         <Route path="/importacoes" element={<Importacoes />} />
         <Route path="/conquistas" element={<Conquistas />} />
+        <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
         <Route path="/insights" element={<Insights />} />
         <Route path="/assistente" element={<Assistente />} />
         <Route path="/painel-publico" element={<PainelPublicoConfig />} />

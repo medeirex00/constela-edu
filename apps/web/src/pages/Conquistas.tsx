@@ -73,6 +73,14 @@ export default function Conquistas() {
       <PageHeader
         titulo="Conquistas e Mural"
         descricao="Destaques, medalhas e XP — tudo derivado dos dados reais e recalculado automaticamente."
+        acoes={
+          <Link
+            to="/conquistas/biblioteca"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
+          >
+            🏅 Biblioteca de Conquistas
+          </Link>
+        }
       />
 
       <div className="grid gap-3 sm:grid-cols-3">

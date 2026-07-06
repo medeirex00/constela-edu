@@ -260,6 +260,21 @@ export default function Configuracoes() {
       </section>
 
       <section className="max-w-2xl">
+        <h2 className="mb-3 text-sm font-semibold">Conquistas</h2>
+        <Card className="p-5 text-sm text-zinc-600 dark:text-zinc-300">
+          Crie e ajuste as medalhas da escola — critérios, XP, raridade, ordem e
+          ativação — na tela{" "}
+          <Link
+            to="/configuracoes/conquistas"
+            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+          >
+            Configurações → Conquistas
+          </Link>
+          . As mudanças valem imediatamente para todos os alunos.
+        </Card>
+      </section>
+
+      <section className="max-w-2xl">
         <h2 className="mb-3 text-sm font-semibold">Critérios de avaliação</h2>
         <Card className="p-5 text-sm text-zinc-600 dark:text-zinc-300">
           Pesos por indicador, dificuldade por turma e referências de normalização ficam na tela{" "}

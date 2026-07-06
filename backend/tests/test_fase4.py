@@ -20,9 +20,9 @@ def _dados_basicos(db, escola_completa):
         SnapshotMatific(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
                         atividades=60, estrelas=250, pontuacao_media=88),
         SnapshotElefante(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
-                         livros_unicos=6, tempo_leitura_min=320,
+                         livros_unicos=12, tempo_leitura_min=650,
                          questoes_tentativas=30, questoes_acertos=27,
-                         livros_por_nivel={"AA": 4, "D": 2}),
+                         livros_por_nivel={"AA": 8, "D": 4}),
         SnapshotMatific(escola_id=escola.id, aluno_id=joao.id, importacao_id=importacao.id,
                         atividades=5, estrelas=12, pontuacao_media=60),
     ])
@@ -38,10 +38,13 @@ def test_xp_e_nivel_derivados_dos_snapshots(db, escola_completa):
     ana = escola_completa["alunos"][0]
 
     resultado = svc_gami.gamificacao_do_aluno(db, escola.id, ana.id)
-    # XP padrão: 60*2 + 250*1 + 6*10 + 27*3 + 320*0.2 = 120+250+60+81+64 = 575
-    assert resultado["xp"] == 575
-    assert resultado["nivel"] == 6  # base 100 XP por nível
-    assert resultado["xp_para_proximo"] == 25
+    # Indicadores: 60*2 + 250*1 + 12*10 + 27*3 + 650*0.2 = 701
+    # Conquistas: primeira(50) + bronze(100) + maratonista(300) + craque(400)
+    #             + primeiro_desafio(50) + matematico_bronze(100) = 1000
+    assert resultado["xp_conquistas"] == 1000
+    assert resultado["xp"] == 1701
+    assert resultado["nivel"] == 18  # base 100 XP por nível
+    assert resultado["xp_para_proximo"] == 99
 
 
 def test_conquistas_com_progresso_e_data(db, escola_completa):
@@ -54,7 +57,7 @@ def test_conquistas_com_progresso_e_data(db, escola_completa):
     assert conquistas["leitor_bronze"]["atingida"] is True
     assert conquistas["leitor_bronze"]["data"] is not None
     assert conquistas["leitor_ouro"]["atingida"] is False
-    assert conquistas["leitor_ouro"]["progresso"] == 6
+    assert conquistas["leitor_ouro"]["progresso"] == 12
     # 90% de acertos com 30 tentativas ≥ mínimo → craque
     assert conquistas["craque_questoes"]["atingida"] is True
     assert conquistas["maratonista"]["atingida"] is True
@@ -255,8 +258,8 @@ def test_simulador_usa_regras_atuais_sem_gravar(cliente, db, escola_completa):
     resposta = cliente.post(
         f"/api/v1/escolas/{escola.id}/simulador",
         json={"ano_escolar": "3º Ano", "atividades": 60, "pontuacao_media": 88,
-              "estrelas": 250, "livros_por_nivel": {"AA": 4, "D": 2},
-              "tempo_leitura_min": 320, "questoes_tentativas": 30,
+              "estrelas": 250, "livros_por_nivel": {"AA": 8, "D": 4},
+              "tempo_leitura_min": 650, "questoes_tentativas": 30,
               "questoes_acertos": 27},
     )
     assert resposta.status_code == 200, resposta.text
