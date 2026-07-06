@@ -13,6 +13,7 @@ from app.schemas import (
     ProfessorOut,
     TurmaCreate,
     TurmaOut,
+    TurmaUpdate,
 )
 from app.services.audit import registrar
 
@@ -145,18 +146,84 @@ def perfil_aluno(
 
 # --- Turmas e Professores ---------------------------------------------------
 
+def _validar_professor(db: Session, escola_id: int, professor_id: int | None) -> None:
+    if professor_id is None:
+        return
+    professor = db.get(Professor, professor_id)
+    if professor is None or professor.escola_id != escola_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Professor inválido para esta escola.")
+
+
+def _validar_nome_unico(db: Session, escola_id: int, nome: str, ano_letivo: int,
+                        ignorar_id: int | None = None) -> None:
+    consulta = select(Turma).where(
+        Turma.escola_id == escola_id,
+        Turma.ano_letivo == ano_letivo,
+        func.lower(Turma.nome) == nome.strip().lower(),
+    )
+    if ignorar_id is not None:
+        consulta = consulta.where(Turma.id != ignorar_id)
+    if db.execute(consulta).scalars().first() is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Já existe a turma “{nome.strip()}” no ano letivo "
+                            f"{ano_letivo}.")
+
+
+def _turma_da_escola(db: Session, escola_id: int, turma_id: int) -> Turma:
+    turma = db.get(Turma, turma_id)
+    if turma is None or turma.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
+    return turma
+
+
+def _turma_out(db: Session, turma: Turma) -> TurmaOut:
+    saida = TurmaOut.model_validate(turma)
+    if turma.professor_id:
+        professor = db.get(Professor, turma.professor_id)
+        saida.professor_nome = professor.nome if professor else None
+    saida.total_alunos = db.execute(
+        select(func.count())
+        .select_from(Matricula)
+        .join(Aluno, Aluno.id == Matricula.aluno_id)
+        .where(Matricula.turma_id == turma.id,
+               Matricula.ano_letivo == turma.ano_letivo,
+               Aluno.status == "ativo")
+    ).scalar_one()
+    return saida
+
+
 @router.get("/turmas", response_model=list[TurmaOut])
 def listar_turmas(
     escola_id: int = Depends(escola_autorizada),
+    todas: bool = Query(default=False),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    """Turmas ativas do ano letivo ativo; `todas=true` inclui arquivadas e
+    outros anos (tela de gestão). Filtros e seletores usam o padrão."""
     ano = _ano_ativo(db, escola_id)
-    return db.execute(
-        select(Turma)
-        .where(Turma.escola_id == escola_id, Turma.ano_letivo == ano)
-        .order_by(Turma.ano_escolar, Turma.nome)
-    ).scalars().all()
+    consulta = (
+        select(Turma, Professor.nome, func.count(Aluno.id))
+        .outerjoin(Professor, Turma.professor_id == Professor.id)
+        .outerjoin(Matricula, (Matricula.turma_id == Turma.id)
+                   & (Matricula.ano_letivo == Turma.ano_letivo))
+        .outerjoin(Aluno, (Aluno.id == Matricula.aluno_id)
+                   & (Aluno.status == "ativo"))
+        .where(Turma.escola_id == escola_id)
+        .group_by(Turma.id, Professor.nome)
+        .order_by(Turma.ano_letivo.desc(), Turma.ano_escolar, Turma.nome)
+    )
+    if not todas:
+        consulta = consulta.where(Turma.ano_letivo == ano,
+                                  Turma.status == "ativa")
+    saida = []
+    for turma, professor_nome, total_alunos in db.execute(consulta).all():
+        item = TurmaOut.model_validate(turma)
+        item.professor_nome = professor_nome
+        item.total_alunos = total_alunos
+        saida.append(item)
+    return saida
 
 
 @router.post("/turmas", response_model=TurmaOut, status_code=status.HTTP_201_CREATED)
@@ -166,13 +233,72 @@ def criar_turma(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    turma = Turma(escola_id=escola_id, **dados.model_dump())
+    _validar_professor(db, escola_id, dados.professor_id)
+    _validar_nome_unico(db, escola_id, dados.nome, dados.ano_letivo)
+    turma = Turma(escola_id=escola_id, **{**dados.model_dump(),
+                                          "nome": dados.nome.strip()})
     db.add(turma)
+    db.flush()
     registrar(db, "turma.criada", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="turma", detalhes={"nome": dados.nome})
+              entidade="turma", entidade_id=turma.id, detalhes={"nome": turma.nome})
     db.commit()
     db.refresh(turma)
-    return turma
+    return _turma_out(db, turma)
+
+
+@router.put("/turmas/{turma_id}", response_model=TurmaOut)
+def atualizar_turma(
+    turma_id: int,
+    dados: TurmaUpdate,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Edição parcial — também cobre Arquivar/Reativar via `status`."""
+    turma = _turma_da_escola(db, escola_id, turma_id)
+    campos = dados.model_dump(exclude_unset=True)
+    if "professor_id" in campos:
+        _validar_professor(db, escola_id, campos["professor_id"])
+    nome = campos.get("nome", turma.nome).strip()
+    ano_letivo = campos.get("ano_letivo", turma.ano_letivo)
+    if "nome" in campos or "ano_letivo" in campos:
+        _validar_nome_unico(db, escola_id, nome, ano_letivo, ignorar_id=turma.id)
+    if "nome" in campos:
+        campos["nome"] = nome
+    for chave, valor in campos.items():
+        setattr(turma, chave, valor)
+    registrar(db, "turma.atualizada", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="turma", entidade_id=turma.id, detalhes=campos)
+    db.commit()
+    db.refresh(turma)
+    return _turma_out(db, turma)
+
+
+@router.delete("/turmas/{turma_id}", response_model=dict)
+def excluir_turma(
+    turma_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Exclusão definitiva — bloqueada enquanto houver alunos vinculados."""
+    turma = _turma_da_escola(db, escola_id, turma_id)
+    vinculados = db.execute(
+        select(func.count()).select_from(Matricula)
+        .where(Matricula.turma_id == turma.id)
+    ).scalar_one()
+    if vinculados:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"A turma “{turma.nome}” possui {vinculados} aluno(s) vinculado(s). "
+            "Mova ou remova os alunos antes de excluir — ou arquive a turma "
+            "para preservar o histórico.")
+    nome = turma.nome
+    db.delete(turma)
+    registrar(db, "turma.excluida", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="turma", entidade_id=turma_id, detalhes={"nome": nome})
+    db.commit()
+    return {"mensagem": f"Turma “{nome}” excluída."}
 
 
 @router.get("/professores", response_model=list[ProfessorOut])

@@ -73,19 +73,44 @@ class ProfessorCreate(BaseModel):
     observacoes: str | None = None
 
 
+PADRAO_TURNO = "^(manha|tarde|noite|integral)$"
+
+
 class TurmaOut(ORMModel):
     id: int
     nome: str
     ano_escolar: str
     ano_letivo: int
     professor_id: int | None
+    turno: str | None = None
+    capacidade_maxima: int | None = None
+    observacoes: str | None = None
+    status: str = "ativa"
+    # Preenchidos na listagem para a tela de gestão
+    professor_nome: str | None = None
+    total_alunos: int = 0
 
 
 class TurmaCreate(BaseModel):
-    nome: str
-    ano_escolar: str
-    ano_letivo: int
+    nome: str = Field(min_length=1, max_length=100)
+    ano_escolar: str = Field(min_length=1, max_length=30)
+    ano_letivo: int = Field(ge=2000, le=2100)
     professor_id: int | None = None
+    turno: str | None = Field(default=None, pattern=PADRAO_TURNO)
+    capacidade_maxima: int | None = Field(default=None, ge=1, le=500)
+    observacoes: str | None = Field(default=None, max_length=2000)
+
+
+class TurmaUpdate(BaseModel):
+    """Atualização parcial — só o que foi enviado é alterado."""
+    nome: str | None = Field(default=None, min_length=1, max_length=100)
+    ano_escolar: str | None = Field(default=None, min_length=1, max_length=30)
+    ano_letivo: int | None = Field(default=None, ge=2000, le=2100)
+    professor_id: int | None = None
+    turno: str | None = Field(default=None, pattern=PADRAO_TURNO)
+    capacidade_maxima: int | None = Field(default=None, ge=1, le=500)
+    observacoes: str | None = Field(default=None, max_length=2000)
+    status: str | None = Field(default=None, pattern="^(ativa|arquivada)$")
 
 
 class AlunoOut(ORMModel):

@@ -19,6 +19,7 @@ from app.schemas.comum import (
     ReferenciasUpdate,
     TurmaCreate,
     TurmaOut,
+    TurmaUpdate,
     UsuarioOut,
 )
 from app.schemas.importacao import (

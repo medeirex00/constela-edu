@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, engine, migrar_colunas_novas
 from app.routers import (
     academico,
     admin,
@@ -28,6 +28,7 @@ from app.routers import (
 
 # Fase 1: criação direta do schema. Ao migrar para PostgreSQL/produção,
 # substituir por migrações Alembic (estrutura já compatível).
+migrar_colunas_novas(engine)   # bancos existentes ganham as colunas novas
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(

@@ -27,6 +27,11 @@ class Turma(Base):
     ano_escolar: Mapped[str] = mapped_column(String(30))     # série, ex.: "4º Ano"
     ano_letivo: Mapped[int] = mapped_column(index=True)
     professor_id: Mapped[int | None] = mapped_column(ForeignKey("professores.id"))
+    turno: Mapped[str | None] = mapped_column(String(20))    # manha|tarde|noite|integral
+    capacidade_maxima: Mapped[int | None] = mapped_column(default=None)
+    observacoes: Mapped[str | None] = mapped_column(String(2000))
+    # "ativa" | "arquivada" — arquivar preserva o histórico sem poluir os filtros
+    status: Mapped[str] = mapped_column(String(20), default="ativa", index=True)
     created_at: Mapped[datetime] = mapped_column(default=agora)
 
     professor: Mapped[Professor | None] = relationship()

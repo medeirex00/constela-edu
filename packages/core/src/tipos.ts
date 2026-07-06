@@ -33,6 +33,23 @@ export interface Turma {
   ano_escolar: string;
   ano_letivo: number;
   professor_id: number | null;
+  turno: string | null;
+  capacidade_maxima: number | null;
+  observacoes: string | null;
+  status: string;
+  professor_nome: string | null;
+  total_alunos: number;
+}
+
+/** Payload de criação/edição de turma (campos opcionais podem ir nulos). */
+export interface TurmaPayload {
+  nome: string;
+  ano_escolar: string;
+  ano_letivo: number;
+  professor_id: number | null;
+  turno: string | null;
+  capacidade_maxima: number | null;
+  observacoes: string | null;
 }
 
 export interface Professor {
