@@ -80,6 +80,40 @@ def _delta_niveis(atual, anterior) -> dict[str, int]:
     return ganhos
 
 
+def _janela(serie: list, inicio: datetime | None, fim: datetime | None,
+            base_no_periodo: bool = False):
+    """(atual, base) para medir o GANHO dentro de [inicio, fim].
+
+    atual = último snapshot com data_referencia <= fim (respeita o fim do
+    período; antes usava-se serie[-1], que podia estar depois do fim).
+    base = último snapshot ANTES do início.
+
+    Quando NÃO há estado anterior ao início:
+      * base_no_periodo=False (padrão): base = None → o ganho vira o total
+        acumulado ("aluno novo evolui a partir do zero"). É o comportamento
+        das telas de evolução/mural.
+      * base_no_periodo=True: base = 1º snapshot DENTRO do período → só o
+        crescimento observado no intervalo conta (o acumulado anterior nunca
+        é atribuído ao período). É o exigido pelas PREMIAÇÕES (justas)."""
+    atual = None
+    for snap in serie:
+        if fim is None or _sem_fuso(snap.data_referencia) <= fim:
+            atual = snap
+    if atual is None:
+        return None, None
+    base = None
+    if inicio is not None:
+        for snap in serie:
+            if _sem_fuso(snap.data_referencia) < inicio:
+                base = snap
+        if base is None and base_no_periodo:
+            dentro = [s for s in serie
+                      if _sem_fuso(s.data_referencia) >= inicio
+                      and (fim is None or _sem_fuso(s.data_referencia) <= fim)]
+            base = dentro[0] if dentro else atual
+    return atual, base
+
+
 # ---------------------------------------------------------------------------
 # Evolução de LEITURA por período (livros/pontos/tempo/nível por bucket) —
 # habilitada pela data+hora real de cada leitura (Fase 1). Diferente da
@@ -221,13 +255,19 @@ class ItemEvolucao:
     posicao: int = 0
 
 
-def ranking_evolucao(db: Session, escola_id: int, dias: int = 30,
-                     turma_id: int | None = None,
-                     ano_escolar: str | None = None) -> list[ItemEvolucao]:
+def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
+                     fim: datetime | None = None, turma_id: int | None = None,
+                     ano_escolar: str | None = None,
+                     dias: int | None = None) -> list[ItemEvolucao]:
+    """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
+    medido pela `_janela`, que ignora o acumulado anterior ao período).
+
+    `dias` é um atalho retrocompatível: sem `inicio`, usa os últimos N dias."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
-    inicio = datetime.now(timezone.utc) - timedelta(days=dias)
+    if inicio is None and dias is not None:
+        inicio = (datetime.now(timezone.utc) - timedelta(days=dias)).replace(tzinfo=None)
 
     consulta = (
         select(Matricula, Turma)
@@ -256,23 +296,21 @@ def ranking_evolucao(db: Session, escola_id: int, dias: int = 30,
     pontos_dif: dict[int, float] = {}
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
-        serie = serie_m.get(aluno_id, [])
-        atual, anterior = (serie[-1] if serie else None), _baseline(serie_m.get(aluno_id, []), inicio)
+        atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim)
         ganhos_m[aluno_id] = SimpleNamespace(
-            atividades=_delta(atual, anterior, "atividades"),
-            estrelas=_delta(atual, anterior, "estrelas"),
-            pontuacao_media=_delta(atual, anterior, "pontuacao_media"),
+            atividades=_delta(atual_m, base_m, "atividades"),
+            estrelas=_delta(atual_m, base_m, "estrelas"),
+            pontuacao_media=_delta(atual_m, base_m, "pontuacao_media"),
         )
-        serie = serie_e.get(aluno_id, [])
-        atual, anterior = (serie[-1] if serie else None), _baseline(serie_e.get(aluno_id, []), inicio)
+        atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim)
         ganhos_e[aluno_id] = SimpleNamespace(
-            livros_unicos=_delta(atual, anterior, "livros_unicos"),
-            tempo_leitura_min=_delta(atual, anterior, "tempo_leitura_min"),
-            questoes_tentativas=_delta(atual, anterior, "questoes_tentativas"),
-            questoes_acertos=_delta(atual, anterior, "questoes_acertos"),
+            livros_unicos=_delta(atual_e, base_e, "livros_unicos"),
+            tempo_leitura_min=_delta(atual_e, base_e, "tempo_leitura_min"),
+            questoes_tentativas=_delta(atual_e, base_e, "questoes_tentativas"),
+            questoes_acertos=_delta(atual_e, base_e, "questoes_acertos"),
         )
         pontos_dif[aluno_id] = scoring._pontos_dificuldade(
-            _delta_niveis(atual, anterior), turma.ano_escolar, mapa_dif
+            _delta_niveis(atual_e, base_e), turma.ano_escolar, mapa_dif
         )
 
     # Referências = maiores ganhos da escola no período (sempre automático)

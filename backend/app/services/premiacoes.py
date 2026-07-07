@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Aluno, Escola, Leitura, Livro, Matricula, SnapshotMatific, Turma
 from app.services import scoring
-from app.services.evolucao import _baseline, _delta, _series_por_aluno, _sem_fuso
+from app.services.evolucao import _delta, _janela, _series_por_aluno
 
 
 def _podio(valores: dict[int, float], alunos: dict[int, dict], limite: int = 5) -> list[dict]:
@@ -77,30 +77,10 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
     series_m = _series_por_aluno(db, escola_id, SnapshotMatific)
     matific: dict[int, float] = {}
     for aid in alunos:
-        serie = series_m.get(aid, [])
-        # Snapshot "atual": o mais recente com data_referencia <= fim.
-        atual = None
-        for snap in serie:
-            if fim is None or _sem_fuso(snap.data_referencia) <= fim:
-                atual = snap
-        if atual is None:
-            matific[aid] = 0.0
-            continue
-        # Linha de base = estado no COMEÇO do período (último snapshot ANTES do
-        # início). Sem estado anterior, usa o 1º snapshot DENTRO do período —
-        # assim só o crescimento observado no intervalo pontua (o acumulado de
-        # meses anteriores nunca é atribuído ao período). Um único snapshot no
-        # período → ganho 0. Sem período (todo o histórico) → o total acumulado.
-        base = None
-        if inicio is not None:
-            for snap in serie:
-                if _sem_fuso(snap.data_referencia) < inicio:
-                    base = snap
-            if base is None:
-                dentro = [s for s in serie
-                          if _sem_fuso(s.data_referencia) >= inicio
-                          and (fim is None or _sem_fuso(s.data_referencia) <= fim)]
-                base = dentro[0] if dentro else atual
+        # Ganho de atividades estritamente DENTRO do período (base_no_periodo:
+        # o acumulado anterior ao intervalo nunca conta como ganho — premiação
+        # justa, diferente da evolução/mural que contam "a partir do zero").
+        atual, base = _janela(series_m.get(aid, []), inicio, fim, base_no_periodo=True)
         matific[aid] = _delta(atual, base, "atividades")
 
     categorias = [

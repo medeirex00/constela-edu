@@ -67,6 +67,7 @@ const GRUPOS: GrupoNav[] = [
     chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [
       { rotulo: "Premiações", caminho: "/premiacoes", icone: Award },
       { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
+      { rotulo: "Ranking de Leitura", caminho: "/ranking-leitura", icone: BookOpen },
       { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
       { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },
     ],

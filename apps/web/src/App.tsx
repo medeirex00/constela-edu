@@ -24,6 +24,7 @@ import RankingEvolucao from "./pages/RankingEvolucao";
 import PainelPublico from "./pages/publico/PainelPublico";
 import PerfilPublico from "./pages/publico/PerfilPublico";
 import RankingGeral from "./pages/RankingGeral";
+import RankingLeitura from "./pages/RankingLeitura";
 import Relatorios from "./pages/Relatorios";
 import Simulador from "./pages/Simulador";
 import TurmaDetalhe from "./pages/TurmaDetalhe";
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/ranking" element={<RankingGeral />} />
         <Route path="/evolucao" element={<RankingEvolucao />} />
+        <Route path="/ranking-leitura" element={<RankingLeitura />} />
         <Route path="/comparador" element={<Comparador />} />
         <Route path="/premiacoes" element={<Premiacoes />} />
         <Route path="/escola" element={<VisaoEscola />} />

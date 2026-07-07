@@ -41,8 +41,17 @@ export default function RankingGeral() {
     <div>
       <PageHeader
         titulo="Ranking Geral"
-        descricao="Combinação das notas Matific e Elefante Letrado, com desempate configurável."
+        descricao="Combinação das notas Matific e Elefante Letrado (acumulado), com desempate configurável."
       />
+
+      <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <span>Para analisar um intervalo específico:</span>
+        <Link to="/ranking-leitura" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Leitura por período</Link>
+        <span>·</span>
+        <Link to="/evolucao" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Evolução</Link>
+        <span>·</span>
+        <Link to="/premiacoes" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Premiações</Link>
+      </div>
 
       <div className="mb-4 flex flex-wrap gap-2">
         <select

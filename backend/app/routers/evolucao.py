@@ -66,13 +66,32 @@ def evolucao_leitura_do_aluno(
 @router.get("/ranking-evolucao")
 def ranking_evolucao(
     dias: int = Query(default=30, ge=1, le=366),
+    periodo: str | None = Query(default=None),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
     turma_id: int | None = Query(default=None),
     ano_escolar: str | None = Query(default=None),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Ranking independente do geral: quem mais cresceu no período (PRD §72)."""
+    """Ranking independente do geral: quem mais cresceu no período (PRD §72).
+    Aceita um preset/intervalo (periodo/inicio/fim) ou os últimos N `dias`."""
+    escola = db.get(Escola, escola_id)
+    ini = None
+    fim_dt = None
+    if periodo or inicio or fim:
+        try:
+            ini, fim_dt, _ = periodos.resolver(
+                periodo or "personalizado", date.today(), escola.ano_letivo_ativo,
+                periodos._parse_data(inicio), periodos._parse_data(fim))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Data inválida (use AAAA-MM-DD).") from exc
+        dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar)
+    else:
+        dados = svc.ranking_evolucao(db, escola_id, turma_id=turma_id,
+                                     ano_escolar=ano_escolar, dias=dias)
     return [
         {
             "posicao": item.posicao,
@@ -83,7 +102,7 @@ def ranking_evolucao(
             "nota_evolucao": item.nota_evolucao,
             "ganhos": item.ganhos,
         }
-        for item in svc.ranking_evolucao(db, escola_id, dias, turma_id, ano_escolar)
+        for item in dados
     ]
 
 

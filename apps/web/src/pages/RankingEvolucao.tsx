@@ -3,7 +3,8 @@ import { TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
+import { Badge, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
 import { nota, numero } from "../lib/formato";
@@ -29,7 +30,7 @@ export default function RankingEvolucao() {
   const { escolaId } = useApp();
   const [itens, setItens] = useState<ItemEvolucao[] | null>(null);
   const [turmas, setTurmas] = useState<Turma[]>([]);
-  const [dias, setDias] = useState(30);
+  const [periodo, setPeriodo] = useState<Periodo>({ preset: "30dias" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
 
@@ -41,13 +42,13 @@ export default function RankingEvolucao() {
   useEffect(() => {
     if (!escolaId) return;
     setItens(null);
-    const parametros = new URLSearchParams({ dias: String(dias) });
+    const parametros = new URLSearchParams(periodoParaQuery(periodo));
     if (turmaId) parametros.set("turma_id", turmaId);
     if (serie) parametros.set("ano_escolar", serie);
     api<ItemEvolucao[]>(`/escolas/${escolaId}/ranking-evolucao?${parametros}`)
       .then(setItens)
       .catch(() => setItens([]));
-  }, [escolaId, dias, turmaId, serie]);
+  }, [escolaId, periodo, turmaId, serie]);
 
   const series = useMemo(
     () => Array.from(new Set(turmas.map((turma) => turma.ano_escolar))).sort(),
@@ -61,21 +62,11 @@ export default function RankingEvolucao() {
         descricao="Quem mais cresceu no período — independente da nota acumulada. Usa os mesmos pesos configuráveis aplicados aos ganhos."
       />
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        <select
-          aria-label="Período"
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-          value={dias}
-          onChange={(evento) => setDias(Number(evento.target.value))}
-        >
-          <option value={7}>Últimos 7 dias</option>
-          <option value={30}>Últimos 30 dias</option>
-          <option value={90}>Últimos 90 dias</option>
-          <option value={365}>Ano inteiro</option>
-        </select>
+      <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
+        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
         <select
           aria-label="Filtrar por turma"
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className={`${estiloInput} w-auto`}
           value={turmaId}
           onChange={(evento) => setTurmaId(evento.target.value)}
         >
@@ -86,7 +77,7 @@ export default function RankingEvolucao() {
         </select>
         <select
           aria-label="Filtrar por série"
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className={`${estiloInput} w-auto`}
           value={serie}
           onChange={(evento) => setSerie(evento.target.value)}
         >
@@ -95,7 +86,7 @@ export default function RankingEvolucao() {
             <option key={valor} value={valor}>{valor}</option>
           ))}
         </select>
-      </div>
+      </Card>
 
       <Card>
         {itens === null ? (

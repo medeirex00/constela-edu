@@ -195,6 +195,21 @@ def test_destaque_matific_conta_so_o_ganho_no_periodo(cliente, escola_completa):
     assert dm[0]["nome"] == ana.nome and dm[0]["valor"] == 30.0
 
 
+def test_ranking_evolucao_respeita_o_periodo(cliente, escola_completa):
+    """O ranking de evolução mede o ganho DENTRO do intervalo: um snapshot
+    depois do fim não infla o ganho (fix do 'atual = serie[-1]')."""
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+    _importar_matific(cliente, escola_id, ana, 100, "2026-06-20T00:00:00")  # base
+    _importar_matific(cliente, escola_id, ana, 130, "2026-07-25T00:00:00")  # dentro
+    _importar_matific(cliente, escola_id, ana, 160, "2026-08-10T00:00:00")  # depois do fim
+
+    r = cliente.get(f"{_base(escola_id)}/ranking-evolucao"
+                    "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
+    ana_item = next(i for i in r if i["aluno_id"] == ana.id)
+    assert ana_item["ganhos"]["atividades"] == 30  # 130−100; agosto (160) fora não conta
+
+
 def test_podio_desempata_por_nome_normalizado():
     """Empate no valor → ordem alfabética ignorando caixa (senão minúsculas
     caem para fora do top-5 e premiam o aluno errado)."""
