@@ -2,6 +2,7 @@ import { ArrowLeft, BookOpen, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
+import HistoricoLeituras from "../components/HistoricoLeituras";
 import { Badge, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
@@ -158,6 +159,7 @@ export default function PerfilAluno() {
   const [perfil, setPerfil] = useState<Perfil | null>(null);
   const [gamificacao, setGamificacao] = useState<Gamificacao | null>(null);
   const [carregando, setCarregando] = useState(true);
+  const [aba, setAba] = useState<"perfil" | "historico">("perfil");
 
   useEffect(() => {
     if (!escolaId || !id) return;
@@ -201,6 +203,30 @@ export default function PerfilAluno() {
         </p>
       </div>
 
+      <div role="tablist" className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        {([["perfil", "Perfil"], ["historico", "Histórico de Leituras"]] as const).map(([chave, rotulo]) => (
+          <button
+            key={chave}
+            role="tab"
+            aria-selected={aba === chave}
+            onClick={() => setAba(chave)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              aba === chave
+                ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
+                : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            {rotulo}
+          </button>
+        ))}
+      </div>
+
+      {aba === "historico" && escolaId && id && (
+        <HistoricoLeituras escolaId={escolaId} alunoId={id} />
+      )}
+
+      {aba === "perfil" && (
+        <>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card className="p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Nota Matific</p>
@@ -348,6 +374,8 @@ export default function PerfilAluno() {
           <Vazio titulo="Ainda não há nota calculada para este aluno" descricao="Importe dados das plataformas para gerar a primeira nota." />
         )}
       </section>
+        </>
+      )}
     </div>
   );
 }

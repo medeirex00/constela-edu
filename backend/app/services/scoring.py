@@ -157,6 +157,20 @@ def _pontos_dificuldade(
     return round(total, 2)
 
 
+def pontos_por_codigo(db: Session, escola_id: int) -> dict[str, float]:
+    """Pontos de dificuldade por CÓDIGO de letra do livro (ex.: {"AA": 1.0,
+    "D": 4.0}). Base para pontuar cada leitura no histórico e no ranking de
+    leitura por período."""
+    mapa: dict[str, float] = {}
+    for nivel in db.execute(
+        select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
+    ).scalars():
+        for codigo in (nivel.codigos or []):
+            if codigo:
+                mapa[codigo.upper()] = float(nivel.pontos_padrao)
+    return mapa
+
+
 def distribuicao_niveis(
     db: Session, escola_id: int, livros_por_nivel: dict, ano_escolar: str = ""
 ) -> dict:

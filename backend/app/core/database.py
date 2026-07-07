@@ -70,6 +70,9 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
     "niveis_dificuldade": {
         "codigo": "VARCHAR(40)",
     },
+    "leituras": {
+        "tempo_leitura_min": "INTEGER",
+    },
 }
 
 
@@ -124,4 +127,7 @@ def _backfill_codigo_niveis(motor) -> None:
 _INDICES_NOVOS = [
     ("ix_snap_matific_escola_aluno_id", "snapshots_matific", "escola_id, aluno_id, id"),
     ("ix_snap_elefante_escola_aluno_id", "snapshots_elefante", "escola_id, aluno_id, id"),
+    # Filtros por período no histórico/rankings de leitura.
+    ("ix_leituras_aluno_data", "leituras", "aluno_id, data"),
+    ("ix_leituras_escola_data", "leituras", "escola_id, data"),
 ]

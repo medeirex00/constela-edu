@@ -99,6 +99,10 @@ class Leitura(Base):
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
     aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
     livro_id: Mapped[int] = mapped_column(ForeignKey("livros.id"), index=True)
-    data: Mapped[datetime] = mapped_column(default=agora)
+    # Data + HORÁRIO reais da conclusão (relatório individual do Elefante traz
+    # ambos). Índice para os filtros por período (rankings/histórico/evolução).
+    data: Mapped[datetime] = mapped_column(default=agora, index=True)
+    # Tempo gasto naquela leitura, em minutos (quando o relatório informa).
+    tempo_leitura_min: Mapped[int | None] = mapped_column(default=None)
 
     livro: Mapped[Livro] = relationship()

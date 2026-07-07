@@ -159,6 +159,37 @@ export interface PaginaAlunos {
   itens: Aluno[];
 }
 
+/** Uma leitura no histórico do aluno (relatório individual do Elefante). */
+export interface LeituraHistorico {
+  id: number;
+  livro: string;
+  nivel: string;
+  categoria: string | null;
+  plataforma: string;
+  data: string; // ISO "AAAA-MM-DDTHH:MM:SS" (ou só a data quando sem horário)
+  tempo_leitura_min: number | null;
+  pontos: number;
+}
+
+/** Resposta do histórico de leituras filtrado por período. */
+export interface HistoricoLeituras {
+  periodo: { chave: string; rotulo: string; inicio: string | null; fim: string | null };
+  resumo: { total_livros: number; pontos: number; tempo_total_min: number };
+  itens: LeituraHistorico[];
+}
+
+/** Item do ranking de leitura por período (livros/pontos/tempo no intervalo). */
+export interface RankingLeituraItem {
+  posicao: number;
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  ano_escolar: string | null;
+  livros: number;
+  pontos: number;
+  tempo_leitura_min: number;
+}
+
 /** Aluno no painel de gestão da turma — com nota, posição e data de cadastro. */
 export interface AlunoGestao {
   id: number;

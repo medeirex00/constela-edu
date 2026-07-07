@@ -326,7 +326,7 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
             avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
             continue
         vistos.add(livro.id)
-        # Relatórios individuais informam a data real de conclusão do livro
+        # Relatórios individuais informam a data e o HORÁRIO reais da conclusão.
         quando = data_referencia
         try:
             bruto = linha.dados.get("data")
@@ -334,8 +334,14 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
                 quando = datetime.fromisoformat(str(bruto))
         except ValueError:
             pass
-        db.add(Leitura(escola_id=escola_id, aluno_id=aluno.id,
-                       livro_id=livro.id, data=quando))
+        # Guarda sempre naive (a data do relatório é naive; o padrão é aware):
+        # os filtros por período comparam datetimes homogêneos.
+        if quando.tzinfo is not None:
+            quando = quando.replace(tzinfo=None)
+        tempo_livro = linha.dados.get("tempo_livro_min")
+        db.add(Leitura(escola_id=escola_id, aluno_id=aluno.id, livro_id=livro.id,
+                       data=quando,
+                       tempo_leitura_min=int(tempo_livro) if tempo_livro is not None else None))
     db.flush()
 
     # Snapshot derivado do total de leituras registradas

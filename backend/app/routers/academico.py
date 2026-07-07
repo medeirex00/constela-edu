@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from app.models import (
     Aluno,
     Escola,
     Leitura,
+    Livro,
     Matricula,
     Nota,
     Professor,
@@ -30,7 +33,7 @@ from app.schemas import (
     TurmaOut,
     TurmaUpdate,
 )
-from app.services import scoring
+from app.services import periodos, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -172,6 +175,78 @@ def perfil_aluno(
         calculada_em=nota.calculada_em if nota else None,
         leitura_niveis=leitura_niveis,
     )
+
+
+# --- Histórico de leituras por período (base das premiações) ----------------
+
+@router.get("/alunos/{aluno_id}/leituras", response_model=dict)
+def historico_leituras(
+    aluno_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    periodo: str = Query(default="tudo"),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+    dia: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Histórico CRONOLÓGICO de leituras do aluno, filtrado por período:
+    um preset ("hoje", "este bimestre"...), um intervalo `inicio`/`fim`
+    (AAAA-MM-DD) ou um único `dia`. Cada leitura traz livro, nível, plataforma,
+    data/hora, tempo e pontos de dificuldade."""
+    aluno = _aluno_da_escola(db, escola_id, aluno_id)
+    ano = _ano_ativo(db, escola_id)
+    try:
+        if dia:
+            d = periodos._parse_data(dia)
+            ini, fim_dt, rotulo = periodos.resolver("personalizado", date.today(), ano, d, d)
+            chave = "dia"
+        else:
+            ini, fim_dt, rotulo = periodos.resolver(
+                periodo, date.today(), ano,
+                periodos._parse_data(inicio), periodos._parse_data(fim))
+            chave = periodo
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Data inválida (use o formato AAAA-MM-DD).") from exc
+
+    consulta = (
+        select(Leitura, Livro)
+        .join(Livro, Leitura.livro_id == Livro.id)
+        .where(Leitura.aluno_id == aluno.id)
+    )
+    if ini is not None:
+        consulta = consulta.where(Leitura.data >= ini)
+    if fim_dt is not None:
+        consulta = consulta.where(Leitura.data <= fim_dt)
+    consulta = consulta.order_by(Leitura.data.desc(), Leitura.id.desc())
+
+    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    itens = []
+    for leitura, livro in db.execute(consulta).all():
+        codigo = (livro.nivel_codigo or "").upper()
+        itens.append({
+            "id": leitura.id,
+            "livro": livro.titulo,
+            "nivel": livro.nivel_codigo,
+            "categoria": livro.categoria,
+            "plataforma": "elefante",
+            "data": leitura.data.isoformat(),
+            "tempo_leitura_min": leitura.tempo_leitura_min,
+            "pontos": round(pontos_map.get(codigo, 0.0), 2),
+        })
+    resumo = {
+        "total_livros": len(itens),
+        "pontos": round(sum(i["pontos"] for i in itens), 2),
+        "tempo_total_min": sum((i["tempo_leitura_min"] or 0) for i in itens),
+    }
+    return {
+        "periodo": {"chave": chave, "rotulo": rotulo,
+                    "inicio": ini.isoformat() if ini else None,
+                    "fim": fim_dt.isoformat() if fim_dt else None},
+        "resumo": resumo,
+        "itens": itens,
+    }
 
 
 # --- Gestão de alunos: editar, arquivar/reativar, transferir, excluir --------

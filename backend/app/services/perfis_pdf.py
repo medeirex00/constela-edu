@@ -121,6 +121,20 @@ def _data_iso(bruto: str) -> str:
     return f"{ano}-{int(mes):02d}-{int(dia):02d}"
 
 
+def _data_hora_iso(par: tuple[str, str | None]) -> str:
+    """Combina "DD/MM/AAAA" com um horário "HH:MM:SS" opcional → ISO datetime.
+    Sem horário, devolve só a data (o import grava à meia-noite). O relatório
+    individual do Elefante traz data e hora empilhadas na coluna "Data/Hora"."""
+    data_str, hora_str = par
+    dia_iso = _data_iso(data_str)  # "AAAA-MM-DD"
+    if hora_str:
+        rel = _RE_RELOGIO.match(hora_str.strip())
+        if rel:
+            h, m, s = (int(g or 0) for g in rel.groups())
+            return f"{dia_iso}T{h:02d}:{m:02d}:{s:02d}"
+    return dia_iso
+
+
 # --------------------------------------------------------------------------
 # Linhas visuais e colunas
 # --------------------------------------------------------------------------
@@ -599,11 +613,14 @@ class PerfilElefanteEstudante:
             genero = registro.texto("genero")
             if genero:
                 item.dados["genero"] = genero.strip(" ,")
-            # A 1ª palavra da coluna Data/Hora é a data; a hora vem abaixo
-            datas = [p.texto for p in registro.campos.get("data", [])
-                     if _RE_DATA.match(p.texto)]
+            # A coluna Data/Hora traz a DATA na 1ª linha e o HORÁRIO na 2ª —
+            # captura os dois para preservar o momento exato da leitura.
+            tokens_data = [p.texto for p in registro.campos.get("data", [])]
+            datas = [t for t in tokens_data if _RE_DATA.match(t)]
+            horas = [t for t in tokens_data if _RE_RELOGIO.match(t)]
             if datas:
-                _atribuir(item, "data", datas[0], _data_iso)
+                _atribuir(item, "data", (datas[0], horas[0] if horas else None),
+                          _data_hora_iso)
             _atribuir(item, "tempo_livro_min", registro.texto("tempo"),
                       duracao_em_minutos)
             analise.linhas.append(_fechar_linha(item))

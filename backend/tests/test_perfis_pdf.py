@@ -202,7 +202,8 @@ def test_perfil_estudante_historico_completo():
     assert livro1.dados["livro"] == "O Pequeno Livro Azul"
     assert livro1.dados["nivel"] == "K"
     assert livro1.dados["genero"] == "Fantasia, Aventura"
-    assert livro1.dados["data"] == "2026-07-01"
+    # Data + HORÁRIO reais da leitura (a hora vem na 2ª linha da coluna Data/Hora)
+    assert livro1.dados["data"] == "2026-07-01T11:38:36"
     assert livro1.dados["tempo_livro_min"] == 6
     # tempo total do resumo vai na 1ª linha para complementar o snapshot
     assert livro1.dados["tempo_leitura_min"] == 330

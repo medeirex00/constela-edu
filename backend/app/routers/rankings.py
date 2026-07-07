@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Query
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,8 @@ from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import (
     Aluno,
     Escola,
+    Leitura,
+    Livro,
     Matricula,
     Nota,
     Professor,
@@ -16,7 +20,7 @@ from app.models import (
     Usuario,
 )
 from app.schemas import DashboardOut, EscolaOut, RankingItemOut
-from app.services import scoring
+from app.services import periodos, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Ranking e Dashboard"])
@@ -63,6 +67,68 @@ def ranking_geral(
     """Ranking Geral com filtros por turma e série (PRD §63)."""
     escola = db.get(Escola, escola_id)
     return _ranking(db, escola_id, escola.ano_letivo_ativo, turma_id, ano_escolar)
+
+
+@router.get("/ranking/leitura", response_model=list[dict])
+def ranking_leitura(
+    escola_id: int = Depends(escola_autorizada),
+    periodo: str = Query(default="tudo"),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+    turma_id: int | None = Query(default=None),
+    ano_escolar: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Ranking de LEITURA por PERÍODO: livros lidos, pontos de dificuldade e
+    tempo somados apenas no intervalo escolhido — base do "melhor leitor da
+    semana/mês/bimestre" e de premiações por maior quantidade/dificuldade."""
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo
+    try:
+        ini, fim_dt, _ = periodos.resolver(
+            periodo, date.today(), ano,
+            periodos._parse_data(inicio), periodos._parse_data(fim))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Data inválida (use AAAA-MM-DD).") from exc
+
+    consulta = (
+        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min,
+               Aluno.nome, Turma.nome, Turma.ano_escolar)
+        .join(Livro, Leitura.livro_id == Livro.id)
+        .join(Aluno, Aluno.id == Leitura.aluno_id)
+        .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
+        .join(Turma, Matricula.turma_id == Turma.id)
+        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
+    )
+    if ini is not None:
+        consulta = consulta.where(Leitura.data >= ini)
+    if fim_dt is not None:
+        consulta = consulta.where(Leitura.data <= fim_dt)
+    if turma_id:
+        consulta = consulta.where(Turma.id == turma_id)
+    if ano_escolar:
+        consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+
+    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    agg: dict[int, dict] = {}
+    for aluno_id, codigo, tempo, nome, turma_nome, serie in db.execute(consulta).all():
+        item = agg.setdefault(aluno_id, {
+            "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
+            "ano_escolar": serie, "livros": 0, "pontos": 0.0, "tempo_leitura_min": 0,
+        })
+        item["livros"] += 1
+        item["pontos"] += pontos_map.get((codigo or "").upper(), 0.0)
+        item["tempo_leitura_min"] += tempo or 0
+
+    itens = sorted(agg.values(),
+                   key=lambda x: (x["pontos"], x["livros"], x["tempo_leitura_min"]),
+                   reverse=True)
+    for posicao, item in enumerate(itens, start=1):
+        item["posicao"] = posicao
+        item["pontos"] = round(item["pontos"], 2)
+    return itens
 
 
 @router.post("/recalcular")
