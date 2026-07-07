@@ -71,6 +71,26 @@ def _limpar_temporarios_orfaos() -> None:
             pass
 
 
+def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
+    """Arquiva o original em /temporarios até a confirmação (§15).
+
+    MELHOR ESFORÇO: se o disco não estiver gravável (ex.: deploy sem volume ou
+    sem permissão), a importação segue normalmente sem o arquivamento — nunca
+    derruba a análise com 500 por causa do armazenamento do original."""
+    token = f"{uuid.uuid4().hex}.{extensao}"
+    destino = settings.UPLOADS_DIR / "temporarios" / token
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_bytes(conteudo)
+        return token
+    except OSError:
+        logger.warning(
+            "Sem acesso de escrita em %s — o arquivo original não será "
+            "arquivado (defina UPLOADS_DIR para um diretório gravável).",
+            destino.parent)
+        return None
+
+
 def _escapar_like(texto: str) -> str:
     """Neutraliza os curingas % e _ para comparação literal em ILIKE."""
     return texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -141,11 +161,7 @@ async def analisar(
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler a planilha. O arquivo está íntegro?") from exc
-            # Guarda o Excel original em /temporarios até a confirmação (§15).
-            arquivo_token = f"{uuid.uuid4().hex}.xlsx"
-            destino = settings.UPLOADS_DIR / "temporarios" / arquivo_token
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            destino.write_bytes(conteudo)
+            arquivo_token = _guardar_temporario(conteudo, "xlsx")
             tipo = "xlsx"
         elif eh_pdf:
             _limpar_temporarios_orfaos()
@@ -162,11 +178,7 @@ async def analisar(
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler o PDF. O arquivo está íntegro?") from exc
-            # Guarda o original em /uploads/temporarios até a confirmação (§15)
-            arquivo_token = f"{uuid.uuid4().hex}.pdf"
-            destino = settings.UPLOADS_DIR / "temporarios" / arquivo_token
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            destino.write_bytes(conteudo)
+            arquivo_token = _guardar_temporario(conteudo, "pdf")
             tipo = "pdf"
         else:
             texto = conteudo.decode("utf-8", errors="replace")

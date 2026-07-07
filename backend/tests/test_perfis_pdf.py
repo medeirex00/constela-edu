@@ -448,6 +448,39 @@ def test_estudante_nome_arquivo_igual_conteudo_nao_avisa():
     assert not any("difere" in e.casefold() for e in analise.erros_gerais)
 
 
+def test_analisar_segue_sem_arquivamento_quando_disco_bloqueado(
+        cliente, db, escola_completa, tmp_path, monkeypatch):
+    """Deploy sem volume gravável (ex.: UPLOADS_DIR apontando para pasta sem
+    permissão): a análise NUNCA responde 500 — segue sem arquivar o original
+    (arquivo_token=None) e a confirmação importa normalmente."""
+    from app.core.config import settings
+
+    trava = tmp_path / "nao_e_diretorio"
+    trava.write_text("x")  # um ARQUIVO no lugar do diretório: escrita impossível
+    monkeypatch.setattr(settings, "UPLOADS_DIR", trava)
+
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+    resposta = cliente.post(
+        f"/api/v1/escolas/{escola_id}/importacoes/analisar",
+        files={"arquivo": ("relatorio.pdf", _pdf_estudante(), "application/pdf")},
+    )
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+    assert corpo["arquivo_token"] is None          # sem arquivamento, sem 500
+    assert corpo["total_linhas"] == 2              # análise completa mesmo assim
+
+    confirmacao = cliente.post(
+        f"/api/v1/escolas/{escola_id}/importacoes/confirmar",
+        json={"plataforma": "elefante", "formato": "leituras", "tipo": "pdf",
+              "arquivo_token": None, "arquivo_nome": "relatorio.pdf",
+              "linhas": [{"nome": l["nome"], "dados": l["dados"], "aluno_id": ana.id}
+                          for l in corpo["linhas"]]},
+    )
+    assert confirmacao.status_code == 200, confirmacao.text
+    assert confirmacao.json()["qtd_alunos"] == 1
+
+
 def test_analisar_pdf_sem_extensao_e_content_type_generico(cliente, escola_completa):
     """PDF sem extensão .pdf e com content-type genérico (ex.: upload mobile)
     ainda é lido pelo perfil — detecção por magic bytes '%PDF-', não jogado no
