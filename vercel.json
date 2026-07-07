@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install --legacy-peer-deps",
+  "buildCommand": "npm run build --workspace @constela/web",
+  "outputDirectory": "apps/web/dist",
+  "framework": null,
+  "rewrites": [
+    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+  ]
+}
