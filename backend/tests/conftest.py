@@ -60,9 +60,11 @@ def escola_completa(db):
         db.add(Configuracao(escola_id=escola.id, namespace=namespace,
                             chave="valores", valor=valores))
     db.add(NivelDificuldade(escola_id=escola.id, nome="Pré-Leitor",
-                            codigos=["AA", "BB"], pontos_padrao=1.0, ordem=0))
+                            codigo="pre_leitor", codigos=["AA", "BB"],
+                            pontos_padrao=1.0, ordem=0))
     db.add(NivelDificuldade(escola_id=escola.id, nome="Nível 2",
-                            codigos=["D", "E"], pontos_padrao=4.0, ordem=1))
+                            codigo="nivel_2", codigos=["D", "E"],
+                            pontos_padrao=4.0, ordem=1))
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
 
     turma = Turma(escola_id=escola.id, nome="3º Ano A", ano_escolar="3º Ano",

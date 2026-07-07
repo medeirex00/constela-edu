@@ -4,7 +4,16 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
-from app.models import Aluno, Escola, Matricula, Nota, Professor, Turma, Usuario
+from app.models import (
+    Aluno,
+    Escola,
+    Matricula,
+    Nota,
+    Professor,
+    SnapshotElefante,
+    Turma,
+    Usuario,
+)
 from app.schemas import (
     AlunoCreate,
     AlunoOut,
@@ -15,6 +24,7 @@ from app.schemas import (
     TurmaOut,
     TurmaUpdate,
 )
+from app.services import scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -130,9 +140,22 @@ def perfil_aluno(
     ).scalar_one_or_none()
 
     saida = AlunoOut.model_validate(aluno)
+    ano_escolar = ""
     if matricula:
         saida.turma = matricula[1].nome
         saida.ano_escolar = matricula[1].ano_escolar
+        ano_escolar = matricula[1].ano_escolar
+
+    # Distribuição de leitura por faixa de dificuldade (gráfico + estatísticas)
+    snap_e = db.execute(
+        select(SnapshotElefante)
+        .where(SnapshotElefante.escola_id == escola_id,
+               SnapshotElefante.aluno_id == aluno_id)
+        .order_by(SnapshotElefante.id.desc()).limit(1)
+    ).scalar_one_or_none()
+    leitura_niveis = scoring.distribuicao_niveis(
+        db, escola_id, snap_e.livros_por_nivel if snap_e else {}, ano_escolar)
+
     return AlunoPerfilOut(
         aluno=saida,
         nota_matific=nota.nota_matific if nota else 0.0,
@@ -141,6 +164,7 @@ def perfil_aluno(
         posicao=nota.posicao if nota else None,
         detalhes=nota.detalhes if nota else {},
         calculada_em=nota.calculada_em if nota else None,
+        leitura_niveis=leitura_niveis,
     )
 
 

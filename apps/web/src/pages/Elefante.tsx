@@ -1,5 +1,5 @@
 /** Módulo Elefante Letrado (PRD §56): leitura, questões e níveis por aluno. */
-import { Pencil } from "lucide-react";
+import { Layers, Pencil } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -17,7 +17,7 @@ import {
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
-import type { ElefanteAluno } from "../lib/types";
+import type { ElefanteAluno, Nivel } from "../lib/types";
 
 function niveisParaTexto(niveis: Record<string, number>): string {
   return Object.entries(niveis)
@@ -34,11 +34,19 @@ function textoParaNiveis(texto: string): Record<string, number> {
   return niveis;
 }
 
+/** Livros de uma faixa a partir da distribuição: valor direto da faixa OU a
+ *  soma dos códigos de letra que pertencem a ela. */
+function contarFaixa(faixa: Nivel, distribuicao: Record<string, number>): number {
+  if (faixa.codigo && distribuicao[faixa.codigo] != null) return distribuicao[faixa.codigo];
+  return (faixa.codigos ?? []).reduce((soma, c) => soma + (distribuicao[c] ?? 0), 0);
+}
+
 export default function Elefante() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
   const [linhas, setLinhas] = useState<ElefanteAluno[] | null>(null);
+  const [niveis, setNiveis] = useState<Nivel[]>([]);
   const [editando, setEditando] = useState<ElefanteAluno | null>(null);
   const [formulario, setFormulario] = useState({
     tempo_leitura_min: 0,
@@ -47,6 +55,10 @@ export default function Elefante() {
     niveis_texto: "",
     motivo: "",
   });
+  // Entrada por faixa (livros por nível de dificuldade)
+  const [faixasDe, setFaixasDe] = useState<ElefanteAluno | null>(null);
+  const [faixasForm, setFaixasForm] = useState<Record<string, number>>({});
+  const [faixasMotivo, setFaixasMotivo] = useState("");
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
 
@@ -56,6 +68,13 @@ export default function Elefante() {
   }, [escolaId]);
 
   useEffect(carregar, [carregar]);
+
+  useEffect(() => {
+    if (!escolaId) return;
+    api<{ niveis: Nivel[] }>(`/escolas/${escolaId}/dificuldade`)
+      .then((r) => setNiveis(r.niveis))
+      .catch(() => setNiveis([]));
+  }, [escolaId]);
 
   function abrirEdicao(linha: ElefanteAluno) {
     setEditando(linha);
@@ -67,6 +86,17 @@ export default function Elefante() {
       motivo: "",
     });
     setErro("");
+  }
+
+  function abrirFaixas(linha: ElefanteAluno) {
+    const inicial: Record<string, number> = {};
+    for (const faixa of niveis) {
+      if (faixa.codigo) inicial[faixa.codigo] = contarFaixa(faixa, linha.livros_por_nivel);
+    }
+    setFaixasForm(inicial);
+    setFaixasMotivo("");
+    setErro("");
+    setFaixasDe(linha);
   }
 
   async function salvar() {
@@ -93,11 +123,31 @@ export default function Elefante() {
     }
   }
 
+  async function salvarFaixas() {
+    if (!escolaId || !faixasDe) return;
+    setSalvando(true);
+    setErro("");
+    try {
+      await api(`/escolas/${escolaId}/elefante/${faixasDe.aluno_id}/niveis`, {
+        method: "PUT",
+        body: JSON.stringify({ faixas: faixasForm, motivo: faixasMotivo || null }),
+      });
+      setFaixasDe(null);
+      carregar();
+    } catch (excecao) {
+      setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  const totalFaixas = Object.values(faixasForm).reduce((s, n) => s + (Number(n) || 0), 0);
+
   return (
     <div>
       <PageHeader
         titulo="Elefante Letrado"
-        descricao="Livros únicos, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
+        descricao="Livros por nível de dificuldade, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
       />
       <Card>
         {linhas === null ? (
@@ -147,14 +197,25 @@ export default function Elefante() {
                       {dataHora(linha.data_referencia)}
                     </td>
                     {podeEditar && (
-                      <td className="px-4 py-2.5 text-right">
-                        <button
-                          aria-label={`Editar dados de ${linha.nome}`}
-                          className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                          onClick={() => abrirEdicao(linha)}
-                        >
-                          <Pencil size={15} />
-                        </button>
+                      <td className="px-4 py-2.5">
+                        <div className="flex justify-end gap-1">
+                          <button
+                            aria-label={`Informar livros por nível de ${linha.nome}`}
+                            title="Livros por nível"
+                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                            onClick={() => abrirFaixas(linha)}
+                          >
+                            <Layers size={15} />
+                          </button>
+                          <button
+                            aria-label={`Editar dados de ${linha.nome}`}
+                            title="Editar tempo e questões"
+                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                            onClick={() => abrirEdicao(linha)}
+                          >
+                            <Pencil size={15} />
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -165,9 +226,64 @@ export default function Elefante() {
         )}
       </Card>
 
+      {/* --- Livros por nível de dificuldade (entrada amigável por faixa) --- */}
+      <Modal
+        titulo={`Livros por nível — ${faixasDe?.nome ?? ""}`}
+        aberto={faixasDe !== null}
+        aoFechar={() => setFaixasDe(null)}
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Informe quantos livros o aluno concluiu em cada nível. O total e os pontos de
+            dificuldade são calculados automaticamente com os pesos configurados em Métricas.
+          </p>
+          {niveis.length === 0 ? (
+            <Mensagem tipo="erro">
+              Nenhum nível de dificuldade configurado. Configure-os em Métricas primeiro.
+            </Mensagem>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {niveis.map((faixa) => (
+                <Campo key={faixa.id} rotulo={`${faixa.nome} (${numero(faixa.pontos_padrao)} pt/livro)`}>
+                  <input
+                    type="number"
+                    min={0}
+                    className={estiloInput}
+                    value={faixa.codigo ? faixasForm[faixa.codigo] ?? 0 : 0}
+                    onChange={(e) =>
+                      faixa.codigo &&
+                      setFaixasForm({ ...faixasForm, [faixa.codigo]: Math.max(0, Number(e.target.value)) })
+                    }
+                  />
+                </Campo>
+              ))}
+            </div>
+          )}
+          <p className="text-sm font-medium">
+            Total: {numero(totalFaixas)} livro{totalFaixas === 1 ? "" : "s"}
+          </p>
+          <Campo rotulo="Motivo (fica no log de auditoria)">
+            <input
+              className={estiloInput}
+              placeholder="Ex.: dados informados pela professora"
+              value={faixasMotivo}
+              onChange={(e) => setFaixasMotivo(e.target.value)}
+            />
+          </Campo>
+          {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
+          <div className="flex justify-end gap-2 pt-1">
+            <Botao variante="neutro" onClick={() => setFaixasDe(null)} disabled={salvando}>Cancelar</Botao>
+            <Botao onClick={salvarFaixas} disabled={salvando || niveis.length === 0}>
+              {salvando ? "Salvando..." : "Salvar e recalcular"}
+            </Botao>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Edição de tempo, questões e níveis por código de letra --- */}
       <Modal titulo={`Editar Elefante Letrado — ${editando?.nome ?? ""}`} aberto={editando !== null} aoFechar={() => setEditando(null)}>
         <div className="space-y-3">
-          <Campo rotulo="Livros por nível (ex.: AA:2, D:1) — os livros únicos são a soma">
+          <Campo rotulo="Livros por código de nível (ex.: AA:2, D:1) — os livros únicos são a soma">
             <input
               className={estiloInput} placeholder="AA:2, D:1"
               value={formulario.niveis_texto}

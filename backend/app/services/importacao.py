@@ -123,6 +123,19 @@ COLUNAS_MATIFIC = {
     "estrelas": ["estrelas", "total de estrelas", "stars"],
 }
 
+# Colunas de FAIXA de dificuldade (formato "livros por nível"): cada coluna é
+# a quantidade de livros concluídos numa faixa. Os valores caem em
+# livros_por_nivel[<slug da faixa>] e alimentam os pontos de dificuldade.
+COLUNAS_FAIXAS = {
+    "faixa:pre_leitor": ["pre leitor", "pre-leitor", "preleitor",
+                         "livros pre leitor", "pre leitores"],
+    "faixa:nivel_1": ["nivel 1", "nivel1", "livros nivel 1", "n1"],
+    "faixa:nivel_2": ["nivel 2", "nivel2", "livros nivel 2", "n2"],
+    "faixa:nivel_3": ["nivel 3", "nivel3", "livros nivel 3", "n3"],
+    "faixa:nivel_4": ["nivel 4", "nivel4", "livros nivel 4", "n4"],
+    "faixa:nivel_5": ["nivel 5", "nivel5", "livros nivel 5", "n5"],
+}
+
 COLUNAS_ELEFANTE_RESUMO = {
     "livros_unicos": ["livros lidos", "livros unicos", "livros concluidos",
                       "livros finalizados", "titulos lidos", "titulos concluidos",
@@ -135,7 +148,8 @@ COLUNAS_ELEFANTE_RESUMO = {
                             "quizzes"],
     "questoes_acertos": ["acertos", "respostas corretas", "questoes corretas",
                          "respostas certas", "correct answers"],
-    "livros_por_nivel": ["livros por nivel", "niveis", "nivel dos livros"],
+    "livros_por_nivel": ["livros por nivel", "nivel dos livros"],
+    **COLUNAS_FAIXAS,
 }
 
 # Formato alternativo do Elefante: uma linha por livro concluído
@@ -158,37 +172,47 @@ ORDEM_PADRAO = {
 }
 
 
-def _semelhante(texto: str, sinonimo: str) -> bool:
-    """Casamento difuso: prefixo, contenção de tokens ou distância de edição.
-
-    A contenção de tokens só vale para textos CURTOS — senão um título como
-    “Relatório de desempenho da turma” casaria com o sinônimo “desempenho”.
-    """
+def _semelhante_forte(texto: str, sinonimo: str) -> bool:
+    """Correspondência SEM distância de edição: prefixo ou contenção de tokens.
+    Usada na 1ª passada para não confundir rótulos parecidos como “Nível 1” e
+    “Nível 2” (que ficam a um caractere de distância)."""
     if not texto:
         return False
     if texto.startswith(sinonimo) or sinonimo.startswith(texto):
         return True
     tokens_texto = set(texto.split())
     tokens_sin = set(sinonimo.split())
-    if tokens_sin and tokens_sin <= tokens_texto \
-            and len(tokens_texto) <= len(tokens_sin) + 2:
+    return bool(tokens_sin and tokens_sin <= tokens_texto
+                and len(tokens_texto) <= len(tokens_sin) + 2)
+
+
+def _semelhante(texto: str, sinonimo: str) -> bool:
+    """Casamento difuso: correspondência forte OU distância de edição.
+
+    A contenção de tokens só vale para textos CURTOS — senão um título como
+    “Relatório de desempenho da turma” casaria com o sinônimo “desempenho”.
+    """
+    if _semelhante_forte(texto, sinonimo):
         return True
-    return SequenceMatcher(None, texto, sinonimo).ratio() >= 0.82
+    return bool(texto) and SequenceMatcher(None, texto, sinonimo).ratio() >= 0.82
 
 
 def _casar_coluna(celula: str, colunas: dict[str, list[str]],
                   ignorar: set[str] | None = None) -> str | None:
     """Campo cujo sinônimo mais se parece com a célula.
 
-    `ignorar` pula campos já mapeados — assim “Livros por nível” não é
-    engolido por “livros” (livros_unicos) quando este já tem coluna.
+    Duas passadas: primeiro correspondência FORTE (exata/prefixo/tokens) em
+    todos os campos — assim “Nível 2” casa com a faixa certa antes que a
+    distância de edição a confunda com “Nível 1”; só depois a passada difusa
+    tolera erros de digitação. `ignorar` pula campos já mapeados.
     """
     plano = normalizar_nome(celula)
-    for campo, sinonimos in colunas.items():
-        if ignorar and campo in ignorar:
-            continue
-        if any(_semelhante(plano, s) for s in sinonimos):
-            return campo
+    for criterio in (_semelhante_forte, _semelhante):
+        for campo, sinonimos in colunas.items():
+            if ignorar and campo in ignorar:
+                continue
+            if any(criterio(plano, s) for s in sinonimos):
+                return campo
     return None
 
 
@@ -249,7 +273,14 @@ def _parece_nome(texto: str) -> bool:
 def _atribuir_campo(item: LinhaImportacao, campo: str, bruto: str) -> None:
     """Converte e guarda um campo; falha vira AVISO (a linha continua útil)."""
     try:
-        if campo == "livros_por_nivel":
+        if campo.startswith("faixa:"):
+            # Coluna de faixa: acumula em livros_por_nivel sob o slug da faixa.
+            slug = campo.split(":", 1)[1]
+            valor = int(_numero(bruto))
+            if valor < 0:
+                raise ValueError("valor negativo")
+            item.dados.setdefault("livros_por_nivel", {})[slug] = valor
+        elif campo == "livros_por_nivel":
             item.dados[campo] = _niveis(bruto)
         elif campo == "livro":
             item.dados[campo] = bruto.strip()
@@ -331,11 +362,20 @@ def _estrategia_tabela(linhas_texto: list[str], plataforma: str) -> Analise | No
     return melhor
 
 
+def _obrigatoria_atendida(chave: str, campos: set[str]) -> bool:
+    """Colunas de faixa (faixa:*) também satisfazem o resumo do Elefante."""
+    if _OBRIGATORIAS[chave] & campos:
+        return True
+    if chave == "elefante_resumo":
+        return any(c.startswith("faixa:") for c in campos)
+    return False
+
+
 def _tabela_com(linhas_texto, plataforma, separador, formato, colunas, chave):
     inicio, idx_nome, mapa = None, None, {}
     for indice, linha in enumerate(linhas_texto):
         idx, m = _mapear_cabecalho(_dividir(linha, separador), colunas)
-        if idx is not None and (_OBRIGATORIAS[chave] & set(m)):
+        if idx is not None and _obrigatoria_atendida(chave, set(m)):
             inicio, idx_nome, mapa = indice + 1, idx, m
             break
     if inicio is None:

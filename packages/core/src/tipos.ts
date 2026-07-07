@@ -94,6 +94,22 @@ export interface LinhaCalculo {
   contribuicao: number;
 }
 
+export interface FaixaLeitura {
+  codigo: string;
+  nome: string;
+  quantidade: number;
+  pontos_por_livro: number;
+  pontos: number;
+  percentual: number;
+}
+
+export interface LeituraNiveis {
+  faixas: FaixaLeitura[];
+  total_livros: number;
+  pontos_dificuldade: number;
+  faixa_predominante: string | null;
+}
+
 export interface PerfilAluno {
   aluno: Aluno;
   nota_matific: number;
@@ -107,6 +123,7 @@ export interface PerfilAluno {
     geral?: { pesos: Record<string, number>; nota: number };
   };
   calculada_em: string | null;
+  leitura_niveis?: LeituraNiveis | null;
 }
 
 export interface Pesos {
@@ -118,6 +135,7 @@ export interface Pesos {
 export interface Nivel {
   id: number;
   nome: string;
+  codigo?: string | null;
   codigos: string[];
   pontos_padrao: number;
   ordem: number;

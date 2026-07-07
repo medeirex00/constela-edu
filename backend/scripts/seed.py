@@ -40,14 +40,15 @@ from app.services import scoring  # noqa: E402
 
 ANO_LETIVO = 2026
 
-# Configuração inicial dos níveis de dificuldade (PRD §38)
+# Configuração inicial dos níveis de dificuldade (PRD §38).
+# (nome, código estável, códigos de letra agrupados, pontos por livro)
 NIVEIS_INICIAIS = [
-    ("Pré-Leitor", ["AA", "BB", "CC", "DD"], 1.0),
-    ("Nível 1", ["A", "B", "C"], 2.0),
-    ("Nível 2", ["D", "E", "F", "G", "H", "I", "J"], 4.0),
-    ("Nível 3", ["K", "L", "M", "N", "O", "P", "Q", "R"], 8.0),
-    ("Nível 4", ["S", "T", "U", "V", "W", "X"], 12.0),
-    ("Nível 5", ["Y", "Z"], 16.0),
+    ("Pré-Leitor", "pre_leitor", ["AA", "BB", "CC", "DD"], 1.0),
+    ("Nível 1", "nivel_1", ["A", "B", "C"], 2.0),
+    ("Nível 2", "nivel_2", ["D", "E", "F", "G", "H", "I", "J"], 4.0),
+    ("Nível 3", "nivel_3", ["K", "L", "M", "N", "O", "P", "Q", "R"], 8.0),
+    ("Nível 4", "nivel_4", ["S", "T", "U", "V", "W", "X"], 12.0),
+    ("Nível 5", "nivel_5", ["Y", "Z"], 16.0),
 ]
 
 DEMO_ALUNOS = [
@@ -114,10 +115,10 @@ def seed_base(db) -> Escola:
         )
     )
 
-    for ordem, (nome, codigos, pontos) in enumerate(NIVEIS_INICIAIS):
+    for ordem, (nome, codigo, codigos, pontos) in enumerate(NIVEIS_INICIAIS):
         db.add(
             NivelDificuldade(
-                escola_id=escola.id, nome=nome, codigos=codigos,
+                escola_id=escola.id, nome=nome, codigo=codigo, codigos=codigos,
                 pontos_padrao=pontos, ordem=ordem,
             )
         )

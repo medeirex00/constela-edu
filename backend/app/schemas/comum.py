@@ -133,6 +133,22 @@ class AlunoCreate(BaseModel):
     observacoes: str | None = None
 
 
+class FaixaLeituraOut(BaseModel):
+    codigo: str
+    nome: str
+    quantidade: int
+    pontos_por_livro: float
+    pontos: float
+    percentual: float
+
+
+class LeituraNiveisOut(BaseModel):
+    faixas: list[FaixaLeituraOut]
+    total_livros: int
+    pontos_dificuldade: float
+    faixa_predominante: str | None = None
+
+
 class AlunoPerfilOut(BaseModel):
     aluno: AlunoOut
     nota_matific: float
@@ -141,6 +157,7 @@ class AlunoPerfilOut(BaseModel):
     posicao: int | None
     detalhes: dict
     calculada_em: datetime | None
+    leitura_niveis: LeituraNiveisOut | None = None
 
 
 # --- Configurações ----------------------------------------------------------
@@ -158,6 +175,7 @@ class PesosUpdate(BaseModel):
 class NivelOut(ORMModel):
     id: int
     nome: str
+    codigo: str | None = None
     codigos: list
     pontos_padrao: float
     ordem: int

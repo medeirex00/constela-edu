@@ -46,6 +46,14 @@ class ElefanteEdicao(BaseModel):
     motivo: str | None = None
 
 
+class NiveisLeituraEdicao(BaseModel):
+    """Informar os livros concluídos por FAIXA de dificuldade (ex.:
+    {"pre_leitor": 8, "nivel_1": 15, ...}). O total e os pontos de dificuldade
+    são derivados; as demais métricas do Elefante são preservadas."""
+    faixas: dict[str, int]
+    motivo: str | None = None
+
+
 class LivroOut(ORMModel):
     id: int
     titulo: str

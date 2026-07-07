@@ -1,12 +1,69 @@
-import { ArrowLeft, TrendingUp } from "lucide-react";
+import { ArrowLeft, BookOpen, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { Badge, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
-import { nota } from "../lib/formato";
-import type { LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
+import { nota, numero } from "../lib/formato";
+import type { LeituraNiveis, LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
+
+/** Gráfico de barras horizontais dos livros concluídos por faixa (PRD §38). */
+function LeituraPorNivel({ dados }: { dados: LeituraNiveis }) {
+  const maxQtd = Math.max(1, ...dados.faixas.map((f) => f.quantidade));
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+        <span className="flex items-center gap-1.5 font-medium">
+          <BookOpen size={15} className="text-indigo-500" /> Leitura por nível de dificuldade
+        </span>
+        <span className="text-zinc-500 dark:text-zinc-400">
+          {numero(dados.total_livros)} livro{dados.total_livros === 1 ? "" : "s"} ·{" "}
+          <span className="font-medium text-indigo-600 dark:text-indigo-400">
+            {numero(dados.pontos_dificuldade)} pontos de dificuldade
+          </span>
+        </span>
+        {dados.faixa_predominante && (
+          <span className="ml-auto">
+            <Badge tom="destaque">Predominante: {dados.faixa_predominante}</Badge>
+          </span>
+        )}
+      </div>
+
+      {dados.total_livros === 0 ? (
+        <p className="py-4 text-center text-sm text-zinc-400">
+          Nenhum livro registrado ainda. Informe os livros por nível na tela Elefante Letrado
+          ou importe um relatório.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {dados.faixas.map((faixa) => (
+            <div key={faixa.codigo} className="flex items-center gap-3 text-sm">
+              <span className="w-24 shrink-0 truncate text-zinc-600 dark:text-zinc-300">{faixa.nome}</span>
+              <div className="flex-1">
+                <div className="h-5 overflow-hidden rounded-md bg-zinc-100 dark:bg-zinc-800">
+                  <div
+                    className="flex h-full items-center justify-end rounded-md bg-indigo-500 px-1.5 text-xs font-medium text-white transition-all dark:bg-indigo-500"
+                    style={{ width: `${Math.max(faixa.quantidade ? 8 : 0, (faixa.quantidade / maxQtd) * 100)}%` }}
+                  >
+                    {faixa.quantidade > 0 ? faixa.quantidade : ""}
+                  </div>
+                </div>
+              </div>
+              <span className="w-28 shrink-0 text-right tabular-nums text-xs text-zinc-500 dark:text-zinc-400">
+                {faixa.percentual}% · {numero(faixa.pontos)} pts
+              </span>
+            </div>
+          ))}
+          <p className="pt-1 text-xs text-zinc-400">
+            Pontos por livro: {dados.faixas.map((f) => `${f.nome} = ${numero(f.pontos_por_livro)}`).join(" · ")}.
+            Configuráveis em Métricas.
+          </p>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function TabelaCalculo({ titulo, linhas, notaFinal }: { titulo: string; linhas: LinhaCalculo[]; notaFinal: number }) {
   return (
@@ -254,6 +311,15 @@ export default function PerfilAluno() {
               ))}
             </div>
           </Card>
+        </section>
+      )}
+
+      {perfil.leitura_niveis && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Leitura por nível
+          </h2>
+          <LeituraPorNivel dados={perfil.leitura_niveis} />
         </section>
       )}
 

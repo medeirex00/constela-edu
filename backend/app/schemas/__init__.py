@@ -39,6 +39,7 @@ from app.schemas.plataformas import (
     LivroUpdate,
     MatificAlunoOut,
     MatificEdicao,
+    NiveisLeituraEdicao,
 )
 
 __all__ = [n for n in dir() if not n.startswith("_")]

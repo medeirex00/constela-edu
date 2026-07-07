@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from datetime import datetime
 
 from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
@@ -5,6 +7,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.models.base import agora
+
+
+def slug_nivel(nome: str) -> str:
+    """Código estável de uma faixa a partir do nome ("Pré-Leitor" -> "pre_leitor",
+    "Nível 3" -> "nivel_3"). Identifica a faixa em livros_por_nivel, na
+    importação e nos relatórios, sem depender dos códigos de letra do livro."""
+    plano = "".join(
+        c for c in unicodedata.normalize("NFD", nome)
+        if unicodedata.category(c) != "Mn"
+    ).casefold()
+    return re.sub(r"[^a-z0-9]+", "_", plano).strip("_") or "nivel"
 
 
 class Configuracao(Base):
@@ -42,6 +55,9 @@ class NivelDificuldade(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
     nome: Mapped[str] = mapped_column(String(60))            # ex.: "Pré-Leitor"
+    # Código estável da faixa (ex.: "pre_leitor"): identifica a faixa quando os
+    # livros são informados/importados diretamente por faixa, sem letras.
+    codigo: Mapped[str | None] = mapped_column(String(40))
     codigos: Mapped[list] = mapped_column(JSON)               # ex.: ["AA","BB","CC","DD"]
     pontos_padrao: Mapped[float] = mapped_column(default=1.0)
     ordem: Mapped[int] = mapped_column(default=0)

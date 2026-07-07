@@ -67,6 +67,9 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
     "usuarios": {
         "token_version": "INTEGER DEFAULT 0 NOT NULL",
     },
+    "niveis_dificuldade": {
+        "codigo": "VARCHAR(40)",
+    },
 }
 
 
@@ -93,6 +96,28 @@ def migrar_colunas_novas(motor=None) -> None:
             if tabela in tabelas:
                 conexao.execute(text(
                     f"CREATE INDEX IF NOT EXISTS {indice} ON {tabela} ({colunas_idx})"))
+
+    _backfill_codigo_niveis(motor)
+
+
+def _backfill_codigo_niveis(motor) -> None:
+    """Preenche o código estável das faixas antigas (deriva do nome)."""
+    from sqlalchemy import inspect, text
+
+    inspetor = inspect(motor)
+    if "niveis_dificuldade" not in inspetor.get_table_names():
+        return
+    from app.models.configuracao import slug_nivel
+
+    with motor.begin() as conexao:
+        linhas = conexao.execute(text(
+            "SELECT id, nome FROM niveis_dificuldade "
+            "WHERE codigo IS NULL OR codigo = ''"
+        )).all()
+        for id_, nome in linhas:
+            conexao.execute(
+                text("UPDATE niveis_dificuldade SET codigo = :c WHERE id = :i"),
+                {"c": slug_nivel(nome or "nivel"), "i": id_})
 
 
 # Índices adicionados a bancos existentes (bancos novos os ganham via create_all).

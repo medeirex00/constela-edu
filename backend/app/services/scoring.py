@@ -109,15 +109,26 @@ def _snapshots_atuais(db: Session, escola_id: int, modelo):
     return {row.aluno_id: row for row in rows}
 
 
+def _chaves_do_nivel(nivel: NivelDificuldade) -> list[str]:
+    """Todas as chaves que representam a faixa em livros_por_nivel: os códigos
+    de letra dos livros E o código estável da faixa (ex.: "pre_leitor"), que é
+    usado quando os livros são informados/importados diretamente por faixa."""
+    from app.models.configuracao import slug_nivel
+
+    chaves = list(nivel.codigos or [])
+    chaves.append(nivel.codigo or slug_nivel(nivel.nome))
+    return chaves
+
+
 def _mapa_dificuldade(db: Session, escola_id: int) -> dict[tuple[str, str], float]:
-    """Mapa (série, código do livro) -> pontos, com fallback no padrão do nível."""
+    """Mapa (série, chave) -> pontos, com fallback no padrão da faixa."""
     niveis = db.execute(
         select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
     ).scalars().all()
     mapa: dict[tuple[str, str], float] = {}
     padrao_por_codigo: dict[str, float] = {}
     for nivel in niveis:
-        for codigo in nivel.codigos:
+        for codigo in _chaves_do_nivel(nivel):
             padrao_por_codigo[codigo] = float(nivel.pontos_padrao)
 
     overrides = db.execute(
@@ -128,7 +139,7 @@ def _mapa_dificuldade(db: Session, escola_id: int) -> dict[tuple[str, str], floa
         nivel = niveis_por_id.get(override.nivel_id)
         if nivel is None:
             continue
-        for codigo in nivel.codigos:
+        for codigo in _chaves_do_nivel(nivel):
             mapa[(override.ano_escolar, codigo)] = float(override.pontos)
 
     mapa["__padrao__"] = padrao_por_codigo  # type: ignore[assignment]
@@ -144,6 +155,64 @@ def _pontos_dificuldade(
         pontos = mapa.get((ano_escolar, codigo), padrao.get(codigo, 0.0))
         total += float(pontos) * int(quantidade)
     return round(total, 2)
+
+
+def distribuicao_niveis(
+    db: Session, escola_id: int, livros_por_nivel: dict, ano_escolar: str = ""
+) -> dict:
+    """Distribuição dos livros de um aluno pelas FAIXAS de dificuldade.
+
+    Para relatórios/gráficos: por faixa devolve quantidade, pontos por livro
+    (respeitando o override da série), pontos ganhos e percentual; além do
+    total de livros, dos pontos de dificuldade e da faixa predominante.
+    Funciona tanto com livros informados por faixa quanto por código de letra.
+    """
+    from app.models.configuracao import slug_nivel
+
+    niveis = db.execute(
+        select(NivelDificuldade)
+        .where(NivelDificuldade.escola_id == escola_id)
+        .order_by(NivelDificuldade.ordem)
+    ).scalars().all()
+    mapa = _mapa_dificuldade(db, escola_id)
+    padrao: dict[str, float] = mapa.get("__padrao__", {})  # type: ignore[assignment]
+    dados = livros_por_nivel or {}
+
+    faixas = []
+    total_livros = 0
+    pontos_total = 0.0
+    for nivel in niveis:
+        slug = nivel.codigo or slug_nivel(nivel.nome)
+        chaves = _chaves_do_nivel(nivel)
+        quantidade = sum(int(dados.get(c, 0) or 0) for c in chaves)
+        pontos_unidade = float(
+            mapa.get((ano_escolar, slug), padrao.get(slug, nivel.pontos_padrao)))
+        pontos = round(quantidade * pontos_unidade, 2)
+        faixas.append({
+            "codigo": slug,
+            "nome": nivel.nome,
+            "quantidade": quantidade,
+            "pontos_por_livro": pontos_unidade,
+            "pontos": pontos,
+            "percentual": 0.0,
+        })
+        total_livros += quantidade
+        pontos_total += pontos
+
+    for faixa in faixas:
+        faixa["percentual"] = (round(faixa["quantidade"] / total_livros * 100, 1)
+                               if total_livros else 0.0)
+
+    com_livros = [f for f in faixas if f["quantidade"] > 0]
+    predominante = max(com_livros, key=lambda f: f["quantidade"])["nome"] \
+        if com_livros else None
+
+    return {
+        "faixas": faixas,
+        "total_livros": total_livros,
+        "pontos_dificuldade": round(pontos_total, 2),
+        "faixa_predominante": predominante,
+    }
 
 
 # ---------------------------------------------------------------------------

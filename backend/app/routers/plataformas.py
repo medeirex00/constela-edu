@@ -31,6 +31,7 @@ from app.schemas import (
     LivroUpdate,
     MatificAlunoOut,
     MatificEdicao,
+    NiveisLeituraEdicao,
 )
 from app.services import scoring
 from app.services.audit import registrar
@@ -202,6 +203,66 @@ def editar_elefante(
                          "livros_por_nivel": anterior.livros_por_nivel if anterior else {}},
                   "para": dados.model_dump(exclude={"motivo"}),
               })
+    db.commit()
+    scoring.recalcular_escola(db, escola_id)
+    db.refresh(snap)
+    return ElefanteAlunoOut(
+        aluno_id=aluno.id, nome=aluno.nome, turma=None, ano_escolar=None,
+        livros_unicos=snap.livros_unicos, tempo_leitura_min=snap.tempo_leitura_min,
+        questoes_tentativas=snap.questoes_tentativas,
+        questoes_acertos=snap.questoes_acertos,
+        livros_por_nivel=snap.livros_por_nivel,
+        data_referencia=snap.data_referencia,
+    )
+
+
+@router.put("/elefante/{aluno_id}/niveis", response_model=ElefanteAlunoOut)
+def informar_niveis_leitura(
+    aluno_id: int,
+    dados: NiveisLeituraEdicao,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Informa os livros concluídos por FAIXA de dificuldade (§38). O total e
+    os pontos de dificuldade são recalculados; tempo e questões do último
+    snapshot são preservados. Só aceita códigos de faixa configurados."""
+    aluno = _aluno_da_escola(db, escola_id, aluno_id)
+    validos = {
+        n.codigo for n in db.execute(
+            select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
+        ).scalars() if n.codigo
+    }
+    por_nivel: dict[str, int] = {}
+    for codigo, quantidade in dados.faixas.items():
+        if codigo not in validos:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Faixa desconhecida: “{codigo}”. Configure as faixas em Métricas.")
+        if int(quantidade) < 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "A quantidade de livros não pode ser negativa.")
+        por_nivel[codigo] = int(quantidade)
+
+    anterior = db.execute(
+        select(SnapshotElefante)
+        .where(SnapshotElefante.aluno_id == aluno_id)
+        .order_by(SnapshotElefante.id.desc()).limit(1)
+    ).scalar_one_or_none()
+
+    importacao = _importacao_manual(db, escola_id, usuario.id, "elefante")
+    snap = SnapshotElefante(
+        escola_id=escola_id, aluno_id=aluno_id, importacao_id=importacao.id,
+        livros_unicos=sum(por_nivel.values()),
+        tempo_leitura_min=anterior.tempo_leitura_min if anterior else 0,
+        questoes_tentativas=anterior.questoes_tentativas if anterior else 0,
+        questoes_acertos=anterior.questoes_acertos if anterior else 0,
+        livros_por_nivel=por_nivel,
+    )
+    db.add(snap)
+    registrar(db, "elefante.niveis_informados", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="aluno", entidade_id=aluno_id,
+              detalhes={"motivo": dados.motivo, "faixas": por_nivel})
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     db.refresh(snap)
