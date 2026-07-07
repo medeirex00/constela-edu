@@ -3,8 +3,9 @@
  * prévia com erros ANTES de gravar e correspondência de nomes com
  * confirmação de duplicatas prováveis.
  */
-import { CheckCircle2, FileUp, History, Sparkles } from "lucide-react";
+import { CheckCircle2, FileUp, History, Sparkles, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   Badge,
@@ -72,6 +73,7 @@ export default function Importacoes() {
   const [analise, setAnalise] = useState<Analise | null>(null);
   const [acoes, setAcoes] = useState<Acao[]>([]);
   const [turmas, setTurmas] = useState<Turma[]>([]);
+  const [turmaEmMassa, setTurmaEmMassa] = useState<number | null>(null);
   const [historico, setHistorico] = useState<Importacao[] | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
@@ -125,7 +127,11 @@ export default function Importacoes() {
           criar_em_turma_id: acao.tipo === "criar" ? acao.turmaId : null,
         }));
       if (linhas.length === 0) {
-        setErro("Nenhuma linha selecionada para importar.");
+        setErro(
+          naoEncontrados.length > 0
+            ? "Os alunos deste relatório ainda não estão cadastrados. Use “Criar todos nesta turma” acima (ou escolha um destino em cada linha) antes de importar."
+            : "Nenhuma linha marcada para importar. Escolha um destino em cada linha.",
+        );
         return;
       }
       const resposta = await api<ResultadoImportacao>(
@@ -160,11 +166,37 @@ export default function Importacoes() {
       atuais.map((acao, i) => {
         if (i !== indice) return acao;
         if (valor === "ignorar") return { tipo: "ignorar" };
-        if (valor === "criar") return { tipo: "criar", turmaId: turmas[0]?.id ?? null };
+        if (valor === "criar") return { tipo: "criar", turmaId: turmaEmMassa ?? turmas[0]?.id ?? null };
         return { tipo: "importar", alunoId: Number(valor) };
       }),
     );
   }
+
+  /** Marca TODOS os alunos não encontrados para serem criados na turma dada. */
+  function criarTodosNaoEncontrados(turmaId: number) {
+    if (!analise) return;
+    setAcoes((atuais) =>
+      atuais.map((acao, i) => {
+        const linha = analise.linhas[i];
+        if (linha.erros.length === 0 && linha.correspondencia?.status === "nao_encontrado") {
+          return { tipo: "criar", turmaId };
+        }
+        return acao;
+      }),
+    );
+  }
+
+  // Estatísticas da prévia para os controles em massa e a contagem final.
+  const linhasValidas = analise ? analise.linhas.filter((l) => l.erros.length === 0) : [];
+  const naoEncontrados = analise
+    ? analise.linhas.filter(
+        (l) => l.erros.length === 0 && l.correspondencia?.status === "nao_encontrado",
+      )
+    : [];
+  const totalSelecionados = analise
+    ? acoes.filter((a, i) => a.tipo !== "ignorar" && analise.linhas[i]?.erros.length === 0).length
+    : 0;
+  const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
 
   const tomCorrespondencia = { exato: "ok", provavel: "alerta", nao_encontrado: "neutro" } as const;
   const rotuloCorrespondencia = {
@@ -276,6 +308,42 @@ export default function Importacoes() {
             </div>
           )}
 
+          {/* Ação em massa: criar de uma vez todos os alunos ainda não cadastrados */}
+          {naoEncontrados.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/20 dark:bg-amber-500/10">
+              <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
+              <span className="text-amber-800 dark:text-amber-200">
+                <strong>{naoEncontrados.length}</strong> aluno(s) deste relatório ainda não
+                estão cadastrados nesta escola.
+              </span>
+              {turmas.length === 0 ? (
+                <span className="text-amber-800 dark:text-amber-200">
+                  Crie uma turma primeiro em{" "}
+                  <Link to="/turmas" className="font-medium underline">Turmas</Link>.
+                </span>
+              ) : (
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <select
+                    aria-label="Turma para os novos alunos"
+                    className="rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-500/30 dark:bg-zinc-900"
+                    value={turmaAlvo ?? ""}
+                    onChange={(e) => setTurmaEmMassa(Number(e.target.value))}
+                  >
+                    {turmas.map((turma) => (
+                      <option key={turma.id} value={turma.id}>{turma.nome}</option>
+                    ))}
+                  </select>
+                  <Botao
+                    variante="primario"
+                    onClick={() => turmaAlvo && criarTodosNaoEncontrados(turmaAlvo)}
+                  >
+                    <UserPlus size={15} /> Criar todos nesta turma
+                  </Botao>
+                </div>
+              )}
+            </div>
+          )}
+
           {analise.linhas.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -369,11 +437,23 @@ export default function Importacoes() {
 
           {erro && <div className="p-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
           <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
-            <span className="mr-auto text-sm font-medium">Deseja importar estes dados?</span>
+            <span className="mr-auto text-sm font-medium">
+              {totalSelecionados > 0
+                ? `${totalSelecionados} de ${linhasValidas.length} aluno(s) serão importados.`
+                : "Deseja importar estes dados?"}
+            </span>
+            {naoEncontrados.length > 0 && totalSelecionados < linhasValidas.length && turmas.length > 0 && (
+              <Botao
+                variante="neutro"
+                onClick={() => turmaAlvo && criarTodosNaoEncontrados(turmaAlvo)}
+              >
+                Criar não encontrados
+              </Botao>
+            )}
             <Botao variante="neutro" onClick={() => setAnalise(null)} disabled={ocupado}>
               Não, voltar
             </Botao>
-            <Botao onClick={confirmar} disabled={ocupado || analise.linhas.length === 0}>
+            <Botao onClick={confirmar} disabled={ocupado || totalSelecionados === 0}>
               {ocupado ? "Importando..." : "Sim, importar"}
             </Botao>
           </div>
