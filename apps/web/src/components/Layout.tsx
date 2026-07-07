@@ -65,6 +65,7 @@ const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDas
 const GRUPOS: GrupoNav[] = [
   {
     chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [
+      { rotulo: "Premiações", caminho: "/premiacoes", icone: Award },
       { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
       { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
       { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },

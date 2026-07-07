@@ -20,7 +20,7 @@ from app.models import (
     Usuario,
 )
 from app.schemas import DashboardOut, EscolaOut, RankingItemOut
-from app.services import periodos, scoring
+from app.services import periodos, premiacoes as svc_premiacoes, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Ranking e Dashboard"])
@@ -129,6 +129,34 @@ def ranking_leitura(
         item["posicao"] = posicao
         item["pontos"] = round(item["pontos"], 2)
     return itens
+
+
+@router.get("/premiacoes", response_model=dict)
+def premiacoes(
+    escola_id: int = Depends(escola_autorizada),
+    periodo: str = Query(default="mes"),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+    turma_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Vencedores de cada categoria de premiação, calculados EXCLUSIVAMENTE com
+    os dados do período escolhido (melhor leitor, mais livros, mais tempo,
+    destaque no Matific)."""
+    escola = db.get(Escola, escola_id)
+    try:
+        ini, fim_dt, rotulo = periodos.resolver(
+            periodo, date.today(), escola.ano_letivo_ativo,
+            periodos._parse_data(inicio), periodos._parse_data(fim))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Data inválida (use AAAA-MM-DD).") from exc
+    dados = svc_premiacoes.premiacoes(db, escola_id, ini, fim_dt, turma_id)
+    dados["periodo"] = {"chave": periodo, "rotulo": rotulo,
+                        "inicio": ini.isoformat() if ini else None,
+                        "fim": fim_dt.isoformat() if fim_dt else None}
+    return dados
 
 
 @router.post("/recalcular")

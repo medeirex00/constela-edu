@@ -19,6 +19,7 @@ import Login from "./pages/Login";
 import Matific from "./pages/Matific";
 import PainelPublicoConfig from "./pages/PainelPublicoConfig";
 import PerfilAluno from "./pages/PerfilAluno";
+import Premiacoes from "./pages/Premiacoes";
 import RankingEvolucao from "./pages/RankingEvolucao";
 import PainelPublico from "./pages/publico/PainelPublico";
 import PerfilPublico from "./pages/publico/PerfilPublico";
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/ranking" element={<RankingGeral />} />
         <Route path="/evolucao" element={<RankingEvolucao />} />
         <Route path="/comparador" element={<Comparador />} />
+        <Route path="/premiacoes" element={<Premiacoes />} />
         <Route path="/escola" element={<VisaoEscola />} />
         <Route path="/alunos" element={<Alunos />} />
         <Route path="/alunos/:id" element={<PerfilAluno />} />

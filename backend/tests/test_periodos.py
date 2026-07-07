@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.models import Leitura
 from app.services import periodos
+from app.services.premiacoes import _podio
 
 
 def _base(escola_id: int) -> str:
@@ -136,3 +137,69 @@ def test_evolucao_leitura_por_mes_e_bimestre(cliente, escola_completa):
     assert len(por_bim["series"]) == 1
     assert por_bim["series"][0]["livros"] == 3
     assert "bim" in por_bim["series"][0]["rotulo"]
+
+
+# --- Premiações por período -------------------------------------------------
+
+def test_premiacoes_usam_so_o_periodo(cliente, escola_completa):
+    escola_id = escola_completa["escola"].id
+    ana, joao, sofia = escola_completa["alunos"]
+    _importar_leitura(cliente, escola_id, ana, "A1", "AA", "2026-07-05T09:00:00", 10)
+    _importar_leitura(cliente, escola_id, ana, "A2", "D", "2026-07-06T09:00:00", 20)
+    _importar_leitura(cliente, escola_id, joao, "J1", "D", "2026-07-07T09:00:00", 40)
+    _importar_leitura(cliente, escola_id, sofia, "S1", "D", "2026-08-01T09:00:00", 99)  # fora
+
+    r = cliente.get(f"{_base(escola_id)}/premiacoes"
+                    "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
+    cats = {c["chave"]: c["podio"] for c in r["categorias"]}
+
+    # Melhor leitor (pontos): Ana AA(1)+D(4)=5 > João D(4)=4; Sofia (agosto) fora.
+    ml = cats["melhor_leitor"]
+    assert ml[0]["nome"] == ana.nome and ml[0]["valor"] == 5.0 and ml[0]["posicao"] == 1
+    assert ml[1]["nome"] == joao.nome and ml[1]["valor"] == 4.0
+    assert all(p["nome"] != sofia.nome for p in ml)  # dados de agosto não contam
+
+    assert cats["mais_livros"][0]["nome"] == ana.nome and cats["mais_livros"][0]["valor"] == 2
+    assert cats["mais_tempo"][0]["nome"] == joao.nome and cats["mais_tempo"][0]["valor"] == 40
+
+
+def _importar_matific(cliente, escola_id, aluno, atividades, data_ref):
+    r = cliente.post(f"{_base(escola_id)}/importacoes/confirmar", json={
+        "plataforma": "matific", "formato": "resumo", "tipo": "texto",
+        "data_referencia": data_ref,
+        "linhas": [{"nome": aluno.nome,
+                    "dados": {"atividades": atividades, "pontuacao_media": 3.0, "estrelas": 10},
+                    "aluno_id": aluno.id}]})
+    assert r.status_code == 200, r.text
+
+
+def test_destaque_matific_conta_so_o_ganho_no_periodo(cliente, escola_completa):
+    """O acumulado histórico do Matific não pode ser atribuído ao período: só o
+    GANHO dentro do intervalo pontua (achado da auditoria adversarial)."""
+    escola_id = escola_completa["escola"].id
+    ana, joao, sofia = escola_completa["alunos"]
+    # Ana: 100 antes de julho, 130 em julho → ganho real = 30.
+    _importar_matific(cliente, escola_id, ana, 100, "2026-06-20T00:00:00")
+    _importar_matific(cliente, escola_id, ana, 130, "2026-07-25T00:00:00")
+    # João: único snapshot EM CIMA do início (2026-07-01 00:00) com 200 acumuladas
+    # de antes → ganho no período deve ser 0 (fronteira vira base).
+    _importar_matific(cliente, escola_id, joao, 200, "2026-07-01T00:00:00")
+    # Sofia: único snapshot no meio de julho com 350 acumuladas (sem baseline) → 0.
+    _importar_matific(cliente, escola_id, sofia, 350, "2026-07-15T00:00:00")
+
+    r = cliente.get(f"{_base(escola_id)}/premiacoes"
+                    "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
+    dm = {c["chave"]: c["podio"] for c in r["categorias"]}["destaque_matific"]
+    # Só Ana pontua (ganho 30); João e Sofia com 0 ficam fora do pódio.
+    assert len(dm) == 1
+    assert dm[0]["nome"] == ana.nome and dm[0]["valor"] == 30.0
+
+
+def test_podio_desempata_por_nome_normalizado():
+    """Empate no valor → ordem alfabética ignorando caixa (senão minúsculas
+    caem para fora do top-5 e premiam o aluno errado)."""
+    alunos = {i: {"nome": nome, "turma": "A"} for i, nome in
+              enumerate(["Ana", "ary", "Bia", "bic", "Caio", "Duda"], start=1)}
+    valores = {i: 4.0 for i in alunos}  # todos empatados
+    podio = _podio(valores, alunos, limite=5)
+    assert [p["nome"] for p in podio] == ["Ana", "ary", "Bia", "bic", "Caio"]

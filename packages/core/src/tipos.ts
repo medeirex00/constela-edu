@@ -190,6 +190,31 @@ export interface RankingLeituraItem {
   tempo_leitura_min: number;
 }
 
+/** Um colocado no pódio de uma premiação. */
+export interface PodioItem {
+  posicao: number;
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  valor: number;
+}
+
+/** Uma categoria de premiação (com o pódio do período). */
+export interface CategoriaPremiacao {
+  chave: string;
+  titulo: string;
+  icone: string;
+  descricao: string;
+  unidade: string;
+  podio: PodioItem[];
+}
+
+/** Premiações da escola calculadas exclusivamente no período escolhido. */
+export interface Premiacoes {
+  periodo: { chave: string; rotulo: string; inicio: string | null; fim: string | null };
+  categorias: CategoriaPremiacao[];
+}
+
 /** Aluno no painel de gestão da turma — com nota, posição e data de cadastro. */
 export interface AlunoGestao {
   id: number;
