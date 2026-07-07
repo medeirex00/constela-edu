@@ -8,7 +8,9 @@ Todos os valores criados aqui (pesos, níveis, critérios) são apenas o
 ponto de partida descrito no PRD — depois do seed, a fonte da verdade é
 o banco, editável pela interface.
 """
+import os
 import random
+import secrets
 import sys
 from pathlib import Path
 
@@ -84,12 +86,15 @@ def seed_base(db) -> Escola:
     db.add(escola)
     db.flush()
 
+    # Senha inicial: aleatória e exibida UMA vez no console (nunca fixa no
+    # código/documentação). Override por ambiente para deploys automatizados.
+    senha_admin = os.environ.get("ADMIN_INITIAL_PASSWORD") or secrets.token_urlsafe(9)
     db.add(
         Usuario(
             escola_id=escola.id,
             nome="Administrador",
-            email="admin@sgpe.local",
-            senha_hash=hash_senha("admin123"),
+            email="admin@constela.local",
+            senha_hash=hash_senha(senha_admin),
             cargo="admin",
             is_global=True,
         )
@@ -120,7 +125,12 @@ def seed_base(db) -> Escola:
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
     db.commit()
     print(f"Escola JORGE PASSOS criada (id={escola.id}).")
-    print("Usuário inicial: admin@sgpe.local / admin123  (troque a senha!)")
+    print("=" * 60)
+    print("  USUÁRIO INICIAL — anote agora (não será exibido de novo):")
+    print(f"    E-mail: admin@constela.local")
+    print(f"    Senha:  {senha_admin}")
+    print("  Troque a senha no primeiro acesso, em Usuários.")
+    print("=" * 60)
     return escola
 
 

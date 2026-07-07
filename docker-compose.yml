@@ -2,10 +2,19 @@
 #
 # Topologia: PostgreSQL (dados) ← backend (FastAPI) ← web (nginx: SPA + proxy /api)
 # Desktop e Mobile apontam para a MESMA API (http://servidor/api/v1).
+
+# Rotação de logs em todos os serviços (evita disco cheio por json-file).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_DB: constela
       POSTGRES_USER: constela
@@ -22,18 +31,28 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
+    logging: *logging
     environment:
+      ENV: producao                # fail-closed: exige SECRET_KEY/DATABASE_URL
       DATABASE_URL: postgresql+psycopg://constela:${POSTGRES_PASSWORD}@postgres:5432/constela
       SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
       UPLOADS_DIR: /dados/uploads
       EXPORTS_DIR: /dados/exports
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      FORWARDED_ALLOW_IPS: "*"     # atrás do nginx: IP real vem do X-Forwarded-For
       AI_PROVIDER: ${AI_PROVIDER:-local}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
     volumes:
       - dados_uploads:/dados/uploads
       - dados_exports:/dados/exports
+    mem_limit: 768m                # teto de RAM (parser de PDF não derruba o host)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,10 +62,46 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
+    logging: *logging
+    # WEB_BIND=127.0.0.1 ao usar o perfil https (o Caddy alcança web:80 pela
+    # rede interna; publicar em 0.0.0.0 exporia HTTP puro contornando o TLS e
+    # o firewall — o Docker abre a porta ANTES do ufw).
     ports:
-      - "${PORTA_WEB:-8080}:80"
+      - "${WEB_BIND:-0.0.0.0}:${PORTA_WEB:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+
+  # Backup automático diário: pg_dump + tar dos uploads, retenção de 14 dias.
+  # Sobe com o perfil "backup": docker compose --profile backup up -d
+  backup:
+    image: postgres:17-alpine
+    profiles: ["backup"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - dados_uploads:/dados/uploads:ro
+      - ./backups:/backups
+    entrypoint: >
+      sh -c 'while true; do
+        ts=$$(date +%Y%m%d_%H%M%S);
+        pg_dump -h postgres -U constela -d constela > /backups/db_$$ts.sql || echo "pg_dump falhou";
+        tar czf /backups/uploads_$$ts.tar.gz -C /dados uploads || echo "tar falhou";
+        find /backups -type f -mtime +14 -delete;
+        echo "backup $$ts concluido";
+        sleep 86400;
+      done'
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # HTTPS automático — só sobe com: docker compose --profile https up -d
   # Requer DOMINIO no .env apontando (DNS tipo A) para o IP do servidor.
@@ -54,6 +109,7 @@ services:
     image: caddy:2-alpine
     profiles: ["https"]
     restart: unless-stopped
+    logging: *logging
     ports:
       - "80:80"
       - "443:443"

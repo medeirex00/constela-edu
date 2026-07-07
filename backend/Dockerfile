@@ -1,4 +1,4 @@
-# SGPE — API (FastAPI)
+# Constela Edu — API (FastAPI)
 FROM python:3.13-slim
 
 # psycopg (PostgreSQL) roda em modo binário — sem toolchain de compilação
@@ -9,11 +9,17 @@ RUN pip install --no-cache-dir -r requirements.txt "psycopg[binary]==3.2.3"
 
 COPY app ./app
 COPY scripts ./scripts
+COPY entrypoint.sh ./entrypoint.sh
 
-# Diretórios de dados montados como volumes no compose
-RUN mkdir -p /dados/uploads /dados/exports /dados/database
+# Usuário sem privilégios (nunca rodar como root em produção). Os volumes de
+# dados são criados e cedidos ao usuário app; HOME evita falhas de cache.
+RUN adduser --system --uid 1001 --home /home/app app \
+    && mkdir -p /dados/uploads /dados/exports /dados/database \
+    && chown -R app:app /dados /app \
+    && chmod +x /app/entrypoint.sh
+ENV PYTHONUNBUFFERED=1 HOME=/home/app
+USER app
 
-ENV PYTHONUNBUFFERED=1
-
+# $PORT permite deploy direto em Railway/Render/Fly; no compose usa 8000.
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+ENTRYPOINT ["/app/entrypoint.sh"]

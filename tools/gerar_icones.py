@@ -127,6 +127,37 @@ def _gerar_desktop(pngs: dict[int, bytes]) -> None:
     (DESTINO / "icon.icns").write_bytes(icns(pngs))
 
 
+def _icones_pwa(pngs: dict[int, bytes]) -> None:
+    """Ícones do PWA: 192, 512 e o maskable (logo a 62% sobre fundo da marca,
+    respeitando a safe zone dos launchers Android)."""
+    try:
+        import io
+
+        from PIL import Image
+    except ImportError:
+        (DESTINO_WEB / "icon-192.png").write_bytes(pngs[128])
+        (DESTINO_WEB / "icon-512.png").write_bytes(pngs[512])
+        (DESTINO_WEB / "icon-maskable-512.png").write_bytes(pngs[512])
+        return
+
+    fonte = Image.open(LOGO_OFICIAL).convert("RGBA") if LOGO_OFICIAL.exists() \
+        else Image.open(io.BytesIO(pngs[512])).convert("RGBA")
+
+    def _salvar(img: "Image.Image", nome: str) -> None:
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        (DESTINO_WEB / nome).write_bytes(buf.getvalue())
+
+    _salvar(fonte.resize((192, 192), Image.LANCZOS), "icon-192.png")
+    _salvar(fonte.resize((512, 512), Image.LANCZOS), "icon-512.png")
+    fundo = Image.new("RGBA", (512, 512), (27, 42, 74, 255))  # #1B2A4A
+    alvo = int(512 * 0.62)
+    pequena = fonte.resize((alvo, alvo), Image.LANCZOS)
+    deslocamento = (512 - alvo) // 2
+    fundo.paste(pequena, (deslocamento, deslocamento), pequena)
+    _salvar(fundo, "icon-maskable-512.png")
+
+
 def _gerar_web_e_mobile(pngs: dict[int, bytes]) -> None:
     DESTINO_WEB.mkdir(parents=True, exist_ok=True)
     DESTINO_MOBILE.mkdir(parents=True, exist_ok=True)
@@ -151,6 +182,7 @@ def _gerar_web_e_mobile(pngs: dict[int, bytes]) -> None:
         (DESTINO_MOBILE / "splash.png").write_bytes(pngs[512])
         print("Logo oficial não encontrada em identidade/logo-oficial.png — "
               "usando a marca gerada (C índigo).")
+    _icones_pwa(pngs)
 
 
 def main() -> None:

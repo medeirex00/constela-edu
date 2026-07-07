@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     Aluno,
@@ -181,6 +181,7 @@ def ranking_evolucao(db: Session, escola_id: int, dias: int = 30,
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
     matriculas = db.execute(consulta).all()
 
     serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
@@ -263,10 +264,16 @@ def ranking_evolucao(db: Session, escola_id: int, dias: int = 30,
 # Agregados de turma e escola (PRD §76–§78)
 # ---------------------------------------------------------------------------
 
-def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int]) -> dict:
-    """Soma/média dos snapshots mais recentes dos alunos indicados."""
-    matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
-    elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int],
+                        matific=None, elefante=None) -> dict:
+    """Soma/média dos snapshots mais recentes dos alunos indicados.
+
+    `matific`/`elefante` pré-carregados evitam varrer a escola inteira a
+    cada turma (resumo_escola já carrega uma vez e repassa)."""
+    if matific is None:
+        matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+    if elefante is None:
+        elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     total = {
         "atividades": 0, "estrelas": 0, "pontuacao_media": 0.0,
         "livros_unicos": 0, "tempo_leitura_min": 0,
@@ -290,7 +297,8 @@ def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int]) -> di
     return total
 
 
-def resumo_turma(db: Session, escola_id: int, turma_id: int) -> dict | None:
+def resumo_turma(db: Session, escola_id: int, turma_id: int,
+                 matific=None, elefante=None) -> dict | None:
     turma = db.get(Turma, turma_id)
     if turma is None or turma.escola_id != escola_id:
         return None
@@ -319,7 +327,7 @@ def resumo_turma(db: Session, escola_id: int, turma_id: int) -> dict | None:
         "media_geral": media_geral,
         "media_matific": media_matific,
         "media_elefante": media_elefante,
-        "indicadores": _indicadores_atuais(db, escola_id, aluno_ids),
+        "indicadores": _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante),
     }
 
 
@@ -331,9 +339,14 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
                             Turma.ano_letivo == escola.ano_letivo_ativo)
         .order_by(Turma.ano_escolar, Turma.nome)
     ).scalars().all()
+    # Carrega os snapshots da escola UMA vez e repassa a cada turma (antes,
+    # cada turma varria a escola inteira duas vezes).
+    matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+    elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     return {
         "escola": {"id": escola.id, "nome": escola.nome},
-        "turmas": [resumo_turma(db, escola_id, turma.id) for turma in turmas],
+        "turmas": [resumo_turma(db, escola_id, turma.id, matific, elefante)
+                   for turma in turmas],
     }
 
 

@@ -4,13 +4,25 @@ Fluxo em duas etapas: `analisar` devolve a prévia (nada é gravado) e
 `confirmar` grava somente as linhas aprovadas pelo usuário, registrando
 tudo em `importacoes` e guardando o arquivo original em /uploads (§15).
 """
+import logging
+import re
 import shutil
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -34,7 +46,31 @@ from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
 
+logger = logging.getLogger("constela.importacao")
+
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
+IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
+_TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.pdf$")
+
+
+def _limpar_temporarios_orfaos() -> None:
+    """Remove PDFs de prévia abandonados (usuário fechou sem confirmar).
+    Chamado a cada nova análise — barato e evita crescimento sem limite."""
+    pasta = settings.UPLOADS_DIR / "temporarios"
+    if not pasta.exists():
+        return
+    limite = time.time() - IDADE_MAXIMA_TEMP_S
+    for arquivo in pasta.glob("*.pdf"):
+        try:
+            if arquivo.stat().st_mtime < limite:
+                arquivo.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _escapar_like(texto: str) -> str:
+    """Neutraliza os curingas % e _ para comparação literal em ILIKE."""
+    return texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo):
@@ -50,6 +86,7 @@ def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo):
 
 @router.post("/analisar", response_model=AnaliseOut)
 async def analisar(
+    request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile | None = File(default=None),
     texto: str | None = Form(default=None),
@@ -61,6 +98,12 @@ async def analisar(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Plataforma desconhecida.")
     plataforma = plataforma or None
 
+    # Rejeita corpos gigantes pelo Content-Length antes de ler o arquivo.
+    declarado = request.headers.get("content-length")
+    if declarado and declarado.isdigit() and int(declarado) > TAMANHO_MAXIMO + 1_000_000:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            "Arquivo acima de 10 MB.")
+
     arquivo_token = None
     arquivo_nome = None
     if arquivo is not None:
@@ -71,13 +114,19 @@ async def analisar(
         arquivo_nome = arquivo.filename or "relatorio"
         eh_pdf = arquivo_nome.lower().endswith(".pdf") or arquivo.content_type == "application/pdf"
         if eh_pdf:
+            _limpar_temporarios_orfaos()
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
                 # genéricas de texto como rede de segurança.
                 analise = perfis_pdf.analisar_pdf(conteudo, plataforma)
-            except Exception:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                    "Não foi possível ler o PDF. O arquivo está íntegro?")
+            except HTTPException:
+                raise  # mensagem útil do parser genérico chega ao usuário
+            except Exception as exc:
+                logger.exception("Falha ao analisar PDF (escola %s, arquivo %r)",
+                                 escola_id, arquivo_nome)
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Não foi possível ler o PDF. O arquivo está íntegro?") from exc
             # Guarda o original em /uploads/temporarios até a confirmação (§15)
             arquivo_token = f"{uuid.uuid4().hex}.pdf"
             destino = settings.UPLOADS_DIR / "temporarios" / arquivo_token
@@ -190,10 +239,15 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
         if not titulo:
             avisos.append(f"Linha {linha.nome}: livro sem título — ignorada.")
             continue
+        # Comparação case-insensitive literal: escapa % e _ do título (senão
+        # um livro chamado "100%" casaria com qualquer outro) e evita
+        # MultipleResultsFound usando o primeiro correspondente.
         livro = db.execute(
-            select(Livro).where(Livro.escola_id == escola_id,
-                                Livro.titulo.ilike(titulo))
-        ).scalar_one_or_none()
+            select(Livro).where(
+                Livro.escola_id == escola_id,
+                Livro.titulo.ilike(_escapar_like(titulo), escape="\\"),
+            ).limit(1)
+        ).scalars().first()
         if livro is None:
             if not nivel:
                 avisos.append(f"Livro “{titulo}” é novo e veio sem nível — ignorado.")
@@ -268,13 +322,32 @@ def confirmar(
     data_referencia = dados.data_referencia or datetime.now(timezone.utc)
     avisos: list[str] = []
 
-    # Move o arquivo original de /temporarios para a pasta definitiva (§15)
+    # Move o arquivo original de /temporarios para a pasta definitiva (§15).
+    # arquivo_token e arquivo_nome vêm do cliente: ambos são saneados contra
+    # path traversal antes de tocar o disco (nunca escapar de UPLOADS_DIR).
     arquivo_final = None
     if dados.arquivo_token:
-        origem = settings.UPLOADS_DIR / "temporarios" / dados.arquivo_token
+        if not _TOKEN_VALIDO.match(dados.arquivo_token):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Token de arquivo inválido.")
+        base_uploads = settings.UPLOADS_DIR.resolve()
+        pasta_temp = (base_uploads / "temporarios").resolve()
+        origem = (pasta_temp / dados.arquivo_token).resolve()
+        # A origem precisa estar contida em /temporarios (bloqueia mover/apagar
+        # arquivo sensível de fora via token forjado).
+        if not origem.is_relative_to(pasta_temp):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Token de arquivo inválido.")
         if origem.exists():
-            nome = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{dados.arquivo_nome or dados.arquivo_token}"
-            destino = settings.UPLOADS_DIR / dados.plataforma / nome
+            # Deriva um nome seguro só do basename do nome enviado.
+            base_nome = Path(dados.arquivo_nome or "").name
+            if not base_nome or not base_nome.lower().endswith(".pdf"):
+                base_nome = dados.arquivo_token
+            nome = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{base_nome}"
+            destino = (base_uploads / dados.plataforma / nome).resolve()
+            if not destino.is_relative_to(base_uploads):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                    "Nome de arquivo inválido.")
             destino.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(origem), str(destino))
             arquivo_final = f"uploads/{dados.plataforma}/{nome}"
@@ -317,6 +390,8 @@ def confirmar(
                         "alunos": importacao.qtd_alunos, "avisos": avisos})
     db.commit()
     scoring.recalcular_escola(db, escola_id)
+    from app.routers.publico import invalidar_cache_painel
+    invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
 
     # Avisa os aparelhos da escola (melhor esforço — nunca falha a importação)
     plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"

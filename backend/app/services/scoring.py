@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     Aluno,
@@ -332,6 +332,7 @@ def _carregar_contexto(db: Session, escola_id: int):
             Matricula.ano_letivo == ano,
             Aluno.status == "ativo",
         )
+        .options(selectinload(Matricula.aluno))  # evita N+1 em matricula.aluno
     ).all()
 
     matific = _snapshots_atuais(db, escola_id, SnapshotMatific)
@@ -417,12 +418,14 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
     )
     resultados.sort(key=lambda r: _chave_ordenacao(r, criterios))
 
+    # Carrega TODAS as notas do ano numa query só (era 1 SELECT por aluno).
+    notas_existentes = {
+        n.aluno_id: n for n in db.execute(
+            select(Nota).where(Nota.escola_id == escola_id, Nota.ano_letivo == ano)
+        ).scalars()
+    }
     for posicao, resultado in enumerate(resultados, start=1):
-        nota_row = db.execute(
-            select(Nota).where(
-                Nota.aluno_id == resultado.aluno.id, Nota.ano_letivo == ano
-            )
-        ).scalar_one_or_none()
+        nota_row = notas_existentes.get(resultado.aluno.id)
         if nota_row is None:
             nota_row = Nota(escola_id=escola_id, aluno_id=resultado.aluno.id, ano_letivo=ano)
             db.add(nota_row)

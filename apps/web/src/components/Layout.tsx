@@ -255,7 +255,7 @@ export default function Layout() {
   return (
     <div className="min-h-screen">
       {/* Sidebar fixa (desktop) */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-zinc-200 bg-white pl-safe dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
         <Marca />
         <ItensMenu />
       </aside>
@@ -268,7 +268,7 @@ export default function Layout() {
             className="absolute inset-0 bg-zinc-950/40"
             onClick={() => setMenuAberto(false)}
           />
-          <aside className="absolute inset-y-0 left-0 flex w-64 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+          <aside className="absolute inset-y-0 left-0 flex w-64 flex-col border-r border-zinc-200 bg-white pl-safe pt-safe dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex items-center justify-between pr-2">
               <Marca />
               <button
@@ -285,7 +285,7 @@ export default function Layout() {
       )}
 
       <div className="lg:pl-60">
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-zinc-200 bg-white/80 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
+        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-zinc-200 bg-white/80 px-4 py-3 pr-safe pt-safe backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
           <button
             aria-label="Abrir menu"
             className="rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800 lg:hidden"

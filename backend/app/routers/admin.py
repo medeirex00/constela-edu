@@ -10,6 +10,7 @@ Tudo aqui exige papel de administrador. Regras de proteção:
     não pode reverter senhas nem reativar contas desligadas).
 """
 import json
+import logging
 
 from fastapi import (
     APIRouter,
@@ -21,13 +22,17 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import DataError, IntegrityError, StatementError
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("constela.admin")
+TAMANHO_MAXIMO_BACKUP = 25 * 1024 * 1024  # 25 MB
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
-from app.core.security import hash_senha
+from app.core.security import hash_senha, validar_forca_senha
 from app.models import (
     Configuracao,
     ConversaIA,
@@ -57,15 +62,32 @@ MSG_ULTIMO_ADMIN = (
 class UsuarioCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     email: EmailStr
-    senha: str = Field(min_length=6, max_length=100)
+    senha: str = Field(min_length=8, max_length=100)
     cargo: str = "visitante"
+
+    @field_validator("senha")
+    @classmethod
+    def _forca(cls, valor: str, info) -> str:
+        erro = validar_forca_senha(valor, info.data.get("email"))
+        if erro:
+            raise ValueError(erro)
+        return valor
 
 
 class UsuarioUpdate(BaseModel):
     nome: str | None = None
     cargo: str | None = None
     status: str | None = Field(default=None, pattern="^(ativo|inativo)$")
-    senha: str | None = Field(default=None, min_length=6, max_length=100)
+    senha: str | None = Field(default=None, min_length=8, max_length=100)
+
+    @field_validator("senha")
+    @classmethod
+    def _forca(cls, valor: str | None) -> str | None:
+        if valor is not None:
+            erro = validar_forca_senha(valor)
+            if erro:
+                raise ValueError(erro)
+        return valor
 
 
 def _usuario_alvo(db: Session, escola_id: int, usuario_id: int,
@@ -177,6 +199,9 @@ def atualizar_usuario(
         alvo.status = dados.status
     if dados.senha is not None:
         alvo.senha_hash = hash_senha(dados.senha)
+        # Invalida todas as sessões abertas do usuário (tokens antigos param
+        # de valer). Protege o caso de conta comprometida.
+        alvo.token_version = (alvo.token_version or 0) + 1
         alteracoes["senha"] = "redefinida"
 
     # Nome da ação no log espelha o que de fato aconteceu (PRD §17)
@@ -311,16 +336,27 @@ async def restaurar_backup(
     db: Session = Depends(get_db),
 ):
     """Substitui TODOS os dados pedagógicos da escola pelos do backup."""
+    conteudo = await arquivo.read()
+    if len(conteudo) > TAMANHO_MAXIMO_BACKUP:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            "Arquivo de backup acima do tamanho máximo (25 MB).")
     try:
-        dados = json.loads((await arquivo.read()).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        dados = json.loads(conteudo.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
+    if not isinstance(dados, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
 
     try:
         contagem = svc_backup.restaurar(db, escola_id, dados)
-    except ValueError as erro:
+    except (ValueError, TypeError) as erro:
         db.rollback()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(erro))
+    except (IntegrityError, DataError, StatementError):
+        db.rollback()
+        logger.exception("Restauração de backup falhou (escola %s)", escola_id)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "O arquivo de backup contém dados inconsistentes ou duplicados.")
 
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"tabelas": contagem})

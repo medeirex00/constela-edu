@@ -11,8 +11,12 @@ Regras inegociáveis:
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("constela.ia")
 
 from app.models import (
     Aluno,
@@ -140,12 +144,15 @@ def perguntar(db: Session, escola_id: int, usuario_id: int,
 
     sistema = INSTRUCOES + montar_contexto(db, escola_id)
 
-    provedor = obter_provedor()
     try:
+        # obter_provedor() pode falhar já na criação (ex.: chave ausente) —
+        # por isso fica dentro do try: o assistente nunca sai do ar.
+        provedor = obter_provedor()
         resposta = provedor.responder(sistema, mensagens)
         provedor_usado = provedor.nome
-    except ErroProvedorIA:
-        # Contingência: o assistente continua funcionando no modo local
+    except ErroProvedorIA as erro:
+        logger.warning("Provedor de IA indisponível; usando modo local: %s",
+                       erro, exc_info=True)
         resposta = LocalProvedor().responder(sistema, mensagens)
         provedor_usado = "local (contingência)"
 

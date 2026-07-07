@@ -27,7 +27,7 @@ publicado na internet em produção).
 
 3. O terminal mostra um **QR code** → escaneie com o Expo Go (Android) ou
    com a câmera (iPhone). O app abre no aparelho.
-4. Entre com `admin@sgpe.local` / `admin123`.
+4. Entre com `admin@constela.local` e a senha que o seed exibiu no console.
 
 Requisitos: celular e computador na **mesma rede Wi-Fi**; se não conectar,
 libere a porta 8000 no Firewall do Windows

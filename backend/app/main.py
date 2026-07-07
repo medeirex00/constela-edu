@@ -3,11 +3,15 @@
 Executar em desenvolvimento:
     uvicorn app.main:app --reload --port 8000
 """
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import Base, engine, migrar_colunas_novas
+from app.core.database import Base, engine, get_db, migrar_colunas_novas
 from app.routers import (
     academico,
     admin,
@@ -26,19 +30,50 @@ from app.routers import (
     sistema,
 )
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("constela")
+
 # Fase 1: criação direta do schema. Ao migrar para PostgreSQL/produção,
 # substituir por migrações Alembic (estrutura já compatível).
-migrar_colunas_novas(engine)   # bancos existentes ganham as colunas novas
+migrar_colunas_novas(engine)   # bancos existentes ganham as colunas/índices novos
 Base.metadata.create_all(bind=engine)
+
+# /docs, /redoc e /openapi.json só quando explicitamente habilitados (dev).
+_docs = "/docs" if settings.DOCS_HABILITADOS else None
+_redoc = "/redoc" if settings.DOCS_HABILITADOS else None
+_openapi = "/openapi.json" if settings.DOCS_HABILITADOS else None
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="0.1.0",
+    version="1.0.0",
     description=(
         "API do Constela Edu — gestão e premiação escolar. "
         "Multi-escolas, com motor de cálculo configurável e auditável."
     ),
+    docs_url=_docs,
+    redoc_url=_redoc,
+    openapi_url=_openapi,
 )
+
+
+# Rede de segurança: qualquer exceção não tratada vira um 500 genérico (sem
+# vazar stack/SQL ao cliente) e é registrada no log. Este middleware é
+# adicionado ANTES do CORS para que a resposta 500 volte com os cabeçalhos
+# CORS corretos (relevante ao app desktop, que é cross-origin).
+@app.middleware("http")
+async def capturar_erros(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:  # noqa: BLE001 — handler de último recurso
+        logger.exception("Erro não tratado em %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Erro interno. Tente novamente em instantes."},
+        )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,4 +105,17 @@ for router in (
 
 @app.get("/api/health", tags=["Sistema"])
 def health():
+    """Liveness + readiness: confirma que o processo responde E que o banco
+    está acessível (usado pelo healthcheck do container)."""
+    db = next(get_db())
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        logger.exception("Healthcheck: banco de dados inacessível")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "degradado", "banco": "inacessivel"},
+        )
+    finally:
+        db.close()
     return {"status": "ok", "app": settings.APP_NAME}

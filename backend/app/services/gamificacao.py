@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     Aluno,
@@ -253,16 +253,10 @@ def sequencia_semanas(serie_m: list, serie_e: list) -> int:
     return sequencia
 
 
-def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
-    pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
-    serie_m = db.execute(
-        select(SnapshotMatific).where(SnapshotMatific.aluno_id == aluno_id)
-        .order_by(SnapshotMatific.id)
-    ).scalars().all()
-    serie_e = db.execute(
-        select(SnapshotElefante).where(SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.id)
-    ).scalars().all()
+def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
+                          pesos_xp: dict, base: float, conquistas_cfg: list) -> dict:
+    """Núcleo do cálculo a partir de séries JÁ carregadas — sem tocar o banco.
+    Permite processar a escola inteira (mural, ranking) sem N+1."""
     snap_m = serie_m[-1] if serie_m else None
     snap_e = serie_e[-1] if serie_e else None
 
@@ -301,6 +295,20 @@ def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
     }
 
 
+def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
+    pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
+    serie_m = db.execute(
+        select(SnapshotMatific).where(SnapshotMatific.aluno_id == aluno_id)
+        .order_by(SnapshotMatific.id)
+    ).scalars().all()
+    serie_e = db.execute(
+        select(SnapshotElefante).where(SnapshotElefante.aluno_id == aluno_id)
+        .order_by(SnapshotElefante.id)
+    ).scalars().all()
+    return _computar_gamificacao(aluno_id, serie_m, serie_e,
+                                 pesos_xp, base, conquistas_cfg)
+
+
 def ranking_xp(db: Session, escola_id: int) -> list[dict]:
     escola = db.get(Escola, escola_id)
     if escola is None:
@@ -316,6 +324,7 @@ def ranking_xp(db: Session, escola_id: int) -> list[dict]:
         .where(Matricula.escola_id == escola_id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
+        .options(selectinload(Matricula.aluno))  # evita N+1 em matricula.aluno
     ).all()
 
     itens = []
@@ -429,22 +438,23 @@ def gerar_codigo(nome: str, existentes: set[str]) -> str:
 # Destaques e mural (PRD §64, §83)
 # ---------------------------------------------------------------------------
 
-def _destaque(db: Session, escola_id: int, dias: int) -> dict | None:
-    itens = evolucao.ranking_evolucao(db, escola_id, dias=dias)
+def _melhor_do_ranking(itens) -> dict | None:
     melhor = itens[0] if itens else None
     if melhor is None or melhor.nota_evolucao <= 0:
         return None
     return {
-        "aluno_id": melhor.aluno_id,
-        "nome": melhor.nome,
-        "turma": melhor.turma,
-        "nota_evolucao": melhor.nota_evolucao,
-        "ganhos": melhor.ganhos,
+        "aluno_id": melhor.aluno_id, "nome": melhor.nome, "turma": melhor.turma,
+        "nota_evolucao": melhor.nota_evolucao, "ganhos": melhor.ganhos,
     }
 
 
 def mural(db: Session, escola_id: int) -> dict:
-    """Mural da escola: destaques do dia/semana/mês + eventos recentes."""
+    """Mural da escola: destaques do dia/semana/mês + eventos recentes.
+
+    Trabalha em LOTE: todos os snapshots da escola são carregados em 2
+    consultas e a gamificação de cada aluno é computada em memória — antes
+    isto disparava ~2 queries por aluno (milhares numa escola grande).
+    """
     eventos: list[dict] = []
 
     importacoes = db.execute(
@@ -462,10 +472,19 @@ def mural(db: Session, escola_id: int) -> dict:
             "data": importacao.created_at,
         })
 
-    # Conquistas recentes (últimos 30 dias) — derivadas, sem tabela própria
+    # Séries de TODOS os alunos em 2 queries + regras uma única vez
+    pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
+    series_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
+    series_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    nomes = dict(db.execute(
+        select(Aluno.id, Aluno.nome).where(Aluno.escola_id == escola_id)
+    ).all())
+
     corte = datetime.now(timezone.utc) - timedelta(days=30)
-    for item in ranking_xp(db, escola_id):
-        detalhe = gamificacao_do_aluno(db, escola_id, item["aluno_id"])
+    for aluno_id in set(series_m) | set(series_e):
+        detalhe = _computar_gamificacao(
+            aluno_id, series_m.get(aluno_id, []), series_e.get(aluno_id, []),
+            pesos_xp, base, conquistas_cfg)
         for conquista in detalhe["conquistas"]:
             data = conquista["data"]
             if data is None:
@@ -475,16 +494,19 @@ def mural(db: Session, escola_id: int) -> dict:
                 eventos.append({
                     "tipo": "conquista",
                     "icone": conquista["icone"],
-                    "texto": f"{item['nome']} desbloqueou “{conquista['nome']}”",
+                    "texto": f"{nomes.get(aluno_id, 'Aluno')} desbloqueou "
+                             f"“{conquista['nome']}”",
                     "data": data,
                 })
 
     eventos.sort(key=lambda evento: str(evento["data"]), reverse=True)
+
+    # ranking_evolucao é caro: computa cada janela uma vez só
     return {
         "destaques": {
-            "dia": _destaque(db, escola_id, 1),
-            "semana": _destaque(db, escola_id, 7),
-            "mes": _destaque(db, escola_id, 30),
+            "dia": _melhor_do_ranking(evolucao.ranking_evolucao(db, escola_id, dias=1)),
+            "semana": _melhor_do_ranking(evolucao.ranking_evolucao(db, escola_id, dias=7)),
+            "mes": _melhor_do_ranking(evolucao.ranking_evolucao(db, escola_id, dias=30)),
         },
         "eventos": eventos[:20],
     }

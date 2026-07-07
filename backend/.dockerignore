@@ -1,0 +1,10 @@
+# Contexto de build do backend. Caminhos relativos à raiz do contexto (backend/).
+.venv
+__pycache__
+**/__pycache__
+database
+*.db
+*.sqlite
+.env
+tests
+.pytest_cache

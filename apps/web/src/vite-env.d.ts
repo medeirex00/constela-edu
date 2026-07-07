@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 interface ImportMetaEnv {
   /** Base absoluta da API (usada nos builds desktop/Tauri; no web fica vazio e o proxy resolve). */

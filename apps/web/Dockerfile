@@ -1,4 +1,4 @@
-# SGPE — Web (build estático servido por nginx, com proxy /api para o backend)
+# Constela Edu — Web (build estático servido por nginx, com proxy /api para o backend)
 FROM node:22-slim AS build
 WORKDIR /repo
 COPY package.json package-lock.json ./
@@ -9,7 +9,7 @@ COPY packages/core/package.json packages/core/
 RUN npm ci --no-audit --no-fund --legacy-peer-deps --ignore-scripts
 COPY packages ./packages
 COPY apps/web ./apps/web
-RUN npm run build --workspace @sgpe/web
+RUN npm run build --workspace @constela/web
 
 FROM nginx:1.27-alpine
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf

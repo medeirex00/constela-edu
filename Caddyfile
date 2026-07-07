@@ -1,6 +1,9 @@
 # HTTPS automático (Let's Encrypt) na frente do site.
 # O domínio vem da variável DOMINIO no .env — ex.: constela.suaescola.com.br
 {$DOMINIO} {
-    encode gzip
+    encode gzip zstd
+    # HSTS: navegadores passam a exigir HTTPS neste domínio (o Caddy não envia
+    # por padrão). Defesa contra downgrade/interceptação.
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
     reverse_proxy web:80
 }

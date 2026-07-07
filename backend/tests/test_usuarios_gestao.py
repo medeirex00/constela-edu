@@ -9,15 +9,18 @@ def _url(escola_id: int, sufixo: str = "") -> str:
     return f"/api/v1/escolas/{escola_id}/usuarios{sufixo}"
 
 
+SENHA_FORTE = "Constela#Forte2026"
+
+
 def _criar_usuario(cliente, escola_id: int, nome: str, email: str,
                    cargo: str = "professor") -> dict:
     resposta = cliente.post(_url(escola_id), json={
-        "nome": nome, "email": email, "senha": "senha123", "cargo": cargo})
+        "nome": nome, "email": email, "senha": SENHA_FORTE, "cargo": cargo})
     assert resposta.status_code == 201, resposta.text
     return resposta.json()
 
 
-def _login(cliente, email: str, senha: str = "senha123") -> dict:
+def _login(cliente, email: str, senha: str = SENHA_FORTE) -> dict:
     resposta = cliente.post("/api/v1/auth/login",
                             data={"username": email, "password": senha})
     assert resposta.status_code == 200, resposta.text
@@ -26,7 +29,7 @@ def _login(cliente, email: str, senha: str = "senha123") -> dict:
 
 def _global(db, escola_id: int) -> Usuario:
     usuario = Usuario(escola_id=escola_id, nome="Global", email="global@rede.com.br",
-                      senha_hash=hash_senha("senha123"), cargo="admin",
+                      senha_hash=hash_senha(SENHA_FORTE), cargo="admin",
                       is_global=True)
     db.add(usuario)
     db.commit()
@@ -79,10 +82,10 @@ def test_soft_delete_preserva_historico_e_bloqueia_acesso(cliente, db, escola_co
     db.refresh(alvo)
     assert alvo.status == "excluido"
 
-    # login bloqueado
+    # login bloqueado mesmo com a senha correta (status excluído barra o acesso)
     login = cliente.post("/api/v1/auth/login",
                          data={"username": "paula@escola.com.br",
-                               "password": "senha123"})
+                               "password": SENHA_FORTE})
     assert login.status_code == 403
 
     # some da lista padrão; aparece com incluir_excluidos

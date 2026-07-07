@@ -1,4 +1,5 @@
 /** Componentes básicos reutilizáveis (PRD §25) — a base visual do sistema. */
+import { useEffect } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -100,6 +101,17 @@ export function Modal({
   aoFechar: () => void;
   children: ReactNode;
 }) {
+  // Trava o scroll do fundo enquanto o modal está aberto (evita "vazar" o
+  // rolar por trás no iOS). O cleanup restaura o estado anterior.
+  useEffect(() => {
+    if (!aberto) return;
+    const anterior = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = anterior;
+    };
+  }, [aberto]);
+
   if (!aberto) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -108,7 +120,9 @@ export function Modal({
         className="absolute inset-0 bg-zinc-950/50"
         onClick={aoFechar}
       />
-      <div className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+      {/* dvh: no iOS Safari a caixa nunca estoura o viewport visível quando a
+          barra de URL aparece/some. overscroll-contain corta o scroll chaining. */}
+      <div className="relative max-h-[90dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
         <h2 className="mb-4 text-base font-semibold tracking-tight">{titulo}</h2>
         {children}
       </div>

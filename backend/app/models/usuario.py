@@ -21,4 +21,7 @@ class Usuario(Base):
     is_global: Mapped[bool] = mapped_column(default=False)
     status: Mapped[str] = mapped_column(String(20), default="ativo")
     ultimo_acesso: Mapped[datetime | None] = mapped_column(default=None)
+    # Incrementado ao redefinir a senha: invalida tokens emitidos antes
+    # (o token carrega a versão vigente na emissão). Sem estado de blacklist.
+    token_version: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=agora)

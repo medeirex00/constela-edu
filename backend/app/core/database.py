@@ -10,10 +10,23 @@ from app.core.config import settings
 
 is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False} if is_sqlite else {},
-)
+if is_sqlite:
+    engine = create_engine(
+        settings.DATABASE_URL,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    # Banco de rede (PostgreSQL em produção): pool dimensionado e verificação
+    # de conexões mortas antes de reusar (pool_pre_ping) evitam erros
+    # intermitentes após timeouts do banco. Total por worker uvicorn =
+    # DB_POOL_SIZE + DB_MAX_OVERFLOW.
+    engine = create_engine(
+        settings.DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_recycle=settings.DB_POOL_RECYCLE,
+    )
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).
@@ -51,6 +64,9 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
         "observacoes": "VARCHAR(2000)",
         "status": "VARCHAR(20) DEFAULT 'ativa' NOT NULL",
     },
+    "usuarios": {
+        "token_version": "INTEGER DEFAULT 0 NOT NULL",
+    },
 }
 
 
@@ -70,3 +86,17 @@ def migrar_colunas_novas(motor=None) -> None:
                 if coluna not in existentes:
                     conexao.execute(
                         text(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {ddl}"))
+        # Índices compostos para "último snapshot por aluno" — CREATE INDEX
+        # IF NOT EXISTS é idempotente em SQLite e PostgreSQL. create_all cobre
+        # bancos novos; isto cobre os já existentes.
+        for indice, tabela, colunas_idx in _INDICES_NOVOS:
+            if tabela in tabelas:
+                conexao.execute(text(
+                    f"CREATE INDEX IF NOT EXISTS {indice} ON {tabela} ({colunas_idx})"))
+
+
+# Índices adicionados a bancos existentes (bancos novos os ganham via create_all).
+_INDICES_NOVOS = [
+    ("ix_snap_matific_escola_aluno_id", "snapshots_matific", "escola_id, aluno_id, id"),
+    ("ix_snap_elefante_escola_aluno_id", "snapshots_elefante", "escola_id, aluno_id, id"),
+]

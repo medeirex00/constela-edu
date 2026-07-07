@@ -83,10 +83,19 @@ POSTGRES_PASSWORD=uma-senha-forte-e-unica
 SECRET_KEY=outra-chave-longa-e-aleatoria-diferente
 DOMINIO=constela.seudominio.com.br
 PUBLIC_BASE_URL=https://constela.seudominio.com.br
+WEB_BIND=127.0.0.1
 AI_PROVIDER=local
 ```
 
 > Para gerar chaves fortes: `openssl rand -hex 32` (rode duas vezes).
+> O sistema **recusa subir em produção** com a `SECRET_KEY` de exemplo — isso
+> é proposital.
+>
+> **`WEB_BIND=127.0.0.1` é importante com HTTPS:** o Docker abre portas
+> publicadas *antes* do `ufw`, então sem essa linha a porta 8080 ficaria
+> acessível em HTTP puro na internet, contornando o firewall e o TLS do
+> Caddy. Com o bind em loopback, só o Caddy (pela rede interna) alcança o
+> site, e todo o tráfego externo passa por HTTPS.
 
 ## Passo 5 — Ligar o sistema
 
@@ -103,13 +112,17 @@ Crie a escola e o usuário inicial (SEM dados de demonstração):
 docker compose exec backend python scripts/seed.py
 ```
 
+> **Anote a senha exibida no console.** O seed gera uma senha aleatória para
+> o administrador inicial e a imprime uma única vez. (Para automatizar, defina
+> `ADMIN_INITIAL_PASSWORD` no ambiente antes de rodar o seed.)
+
 ## Passo 6 — Primeiro acesso e segurança
 
 1. Abra `https://constela.seudominio.com.br` em qualquer aparelho.
-2. Entre com `admin@sgpe.local` / `admin123`.
+2. Entre com `admin@constela.local` e a senha que o seed mostrou no console.
 3. **Imediatamente**: menu **Usuários** → crie o SEU usuário admin com
    e-mail real e senha forte → saia → entre com ele → desative ou
-   redefina a senha do `admin@sgpe.local`.
+   redefina a senha do `admin@constela.local`.
 4. Em **Configurações**, ajuste os dados da escola.
 5. Crie os usuários dos professores/coordenadores em **Usuários** —
    é assim que "qualquer usuário" passa a ter acesso, cada um com seu
@@ -126,16 +139,27 @@ navegador. O Painel Público (`/p/{token}` + QR code) funciona sem login.
 # Atualizar o sistema quando houver novidades no GitHub
 cd constela-edu && git pull && docker compose --profile https up -d --build
 
-# Ver se está tudo de pé
+# Ver se está tudo de pé (a coluna STATUS mostra "healthy")
 docker compose ps
-
-# Backup do banco (além do backup JSON pela interface, em Configurações)
-docker compose exec postgres pg_dump -U constela constela > backup-$(date +%F).sql
 ```
 
-Agende o backup: `crontab -e` e adicione
-`0 3 * * * cd /root/constela-edu && docker compose exec -T postgres pg_dump -U constela constela > /root/backups/constela-$(date +\%F).sql`
-(crie a pasta antes: `mkdir -p /root/backups`).
+### Backup automático (recomendado)
+
+O jeito mais simples é ligar o serviço de backup embutido — ele faz um
+`pg_dump` **e** um arquivo dos uploads todo dia, guardando 14 dias em
+`./backups`:
+
+```bash
+docker compose --profile https --profile backup up -d
+```
+
+Depois, **copie a pasta `backups/` para fora do servidor** com regularidade
+(um `rclone`/`rsync` para Google Drive, S3, Backblaze etc.) — backup no mesmo
+servidor não protege contra perda do servidor.
+
+> O backup JSON pela interface (em **Configurações**) é útil para mover dados
+> de uma escola, mas **não substitui** o `pg_dump`: ele não inclui contas de
+> usuário nem os arquivos enviados.
 
 ---
 

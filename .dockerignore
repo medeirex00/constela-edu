@@ -1,0 +1,20 @@
+# Contexto de build do web (raiz do monorepo). Mantém node_modules, .git,
+# venv, artefatos do desktop (target/ do Rust pode ter GBs) e o banco de fora.
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+apps/desktop/src-tauri/target
+apps/mobile/.expo
+backend/.venv
+backend/__pycache__
+**/__pycache__
+database
+*.db
+*.sqlite
+.env
+**/.env
+backups
+uploads
+exports

@@ -278,10 +278,14 @@ def criar_livro(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
+    _titulo = dados.titulo.strip()
+    _titulo_escapado = _titulo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     existente = db.execute(
-        select(Livro).where(Livro.escola_id == escola_id,
-                            Livro.titulo.ilike(dados.titulo.strip()))
-    ).scalar_one_or_none()
+        select(Livro).where(
+            Livro.escola_id == escola_id,
+            Livro.titulo.ilike(_titulo_escapado, escape="\\"),
+        ).limit(1)
+    ).scalars().first()
     if existente:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Já existe um livro com este título no catálogo.")

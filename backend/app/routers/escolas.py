@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import exigir_papeis, get_usuario_atual
+from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
 from app.models import Escola, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
 from app.services.audit import registrar
@@ -26,9 +26,11 @@ def listar(
 @router.post("", response_model=EscolaOut, status_code=status.HTTP_201_CREATED)
 def criar(
     dados: EscolaCreate,
-    usuario: Usuario = Depends(exigir_papeis("admin")),
+    usuario: Usuario = Depends(exigir_admin_global),
     db: Session = Depends(get_db),
 ):
+    """Criar novas escolas é exclusivo de administradores globais (§136).
+    Um admin local não pode inventar escolas fora do seu domínio."""
     escola = Escola(**dados.model_dump())
     db.add(escola)
     db.flush()

@@ -9,6 +9,7 @@ Duas metades:
     conquistas. Nada de datas de nascimento, observações ou contatos.
 """
 import secrets
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -244,14 +245,39 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     }
 
 
+# Cache em memória do painel público (por escola). O telão faz polling a cada
+# poucos segundos e a recomputação é cara (mural + rankings); um TTL curto
+# absorve os polls sem servir dados velhos. Por worker uvicorn — aceitável,
+# pois os dados mudam poucas vezes por semana.
+TTL_PAINEL_S = 60
+_cache_painel: dict[int, tuple[float, dict]] = {}
+
+
 @publico_router.get("/{token}/painel")
-def painel_publico(token: str, db: Session = Depends(get_db)):
+def painel_publico(token: str, response: Response, db: Session = Depends(get_db)):
     resolvido = _escola_pelo_token(db, token)
     if resolvido is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "Painel não encontrado ou desativado.")
     escola, config = resolvido
-    return _dados_publicos(db, escola, config)
+    agora = time.monotonic()
+    em_cache = _cache_painel.get(escola.id)
+    if em_cache and agora - em_cache[0] < TTL_PAINEL_S:
+        dados = em_cache[1]
+    else:
+        dados = _dados_publicos(db, escola, config)
+        _cache_painel[escola.id] = (agora, dados)
+    # O próprio navegador/proxy também absorve parte dos polls.
+    response.headers["Cache-Control"] = f"public, max-age={TTL_PAINEL_S}"
+    return dados
+
+
+def invalidar_cache_painel(escola_id: int | None = None) -> None:
+    """Chamado após recálculo/importação para o painel refletir logo."""
+    if escola_id is None:
+        _cache_painel.clear()
+    else:
+        _cache_painel.pop(escola_id, None)
 
 
 @publico_router.get("/{token}/alunos/{aluno_id}")

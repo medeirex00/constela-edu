@@ -54,7 +54,9 @@ npm install --legacy-peer-deps
 npm run dev:web        # http://localhost:5173  (proxy /api → backend :8000)
 ```
 
-Login inicial: `admin@sgpe.local` / `admin123` (troque em produção).
+Rode o seed (`python backend/scripts/seed.py`) para criar o usuário inicial
+`admin@constela.local` — a senha é gerada aleatoriamente e exibida no console
+uma única vez. Troque-a no primeiro acesso.
 
 ### 4. Desktop (requer Rust: https://rustup.rs)
 

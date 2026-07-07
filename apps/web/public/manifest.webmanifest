@@ -4,12 +4,14 @@
   "description": "Gestão e premiação escolar: notas configuráveis, rankings, evolução e painel público.",
   "lang": "pt-BR",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#F8FAFC",
-  "theme_color": "#4F46E5",
+  "orientation": "any",
+  "background_color": "#0F1626",
+  "theme_color": "#1B2A4A",
   "icons": [
-    { "src": "/favicon.png", "sizes": "128x128", "type": "image/png" },
-    { "src": "/apple-touch-icon.png", "sizes": "256x256", "type": "image/png" },
-    { "src": "/logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -33,6 +33,9 @@ class SnapshotMatific(Base):
     """
 
     __tablename__ = "snapshots_matific"
+    __table_args__ = (
+        Index("ix_snap_matific_escola_aluno_id", "escola_id", "aluno_id", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
@@ -50,6 +53,9 @@ class SnapshotElefante(Base):
     """Fotografia imutável dos dados do Elefante Letrado (PRD §68)."""
 
     __tablename__ = "snapshots_elefante"
+    __table_args__ = (
+        Index("ix_snap_elefante_escola_aluno_id", "escola_id", "aluno_id", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)

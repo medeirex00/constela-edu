@@ -23,6 +23,34 @@
   :focus-visible {
     @apply outline-none ring-2 ring-indigo-500 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950 rounded;
   }
+
+  /* iOS Safari dá zoom ao focar campos com fonte < 16px. Em telas de toque,
+     força 16px nos campos (o seletor :is(...).text-sm vence a utility .text-sm
+     do Tailwind por especificidade); no desktop o visual text-sm é mantido. */
+  @media (pointer: coarse) {
+    input,
+    select,
+    textarea,
+    :is(input, select, textarea).text-sm {
+      font-size: max(16px, 1em);
+    }
+  }
+}
+
+/* Utilitários de área segura (notch/barra do iPhone em modo standalone). */
+@layer utilities {
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
 }
 
 @layer components {
