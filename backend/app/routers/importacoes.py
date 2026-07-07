@@ -34,6 +34,7 @@ from app.models import (
     Leitura,
     Livro,
     Matricula,
+    NivelDificuldade,
     SnapshotElefante,
     SnapshotMatific,
     Turma,
@@ -155,6 +156,7 @@ async def analisar(
         arquivo_nome=arquivo_nome,
         estrategia=analise.estrategia,
         mensagem_deteccao=analise.mensagem_deteccao,
+        turma_detectada=analise.turma_detectada,
         total_alunos=len(nomes_unicos),
         total_linhas=len(analise.linhas),
         total_erros=sum(1 for l in analise.linhas if l.erros) + len(analise.erros_gerais),
@@ -176,7 +178,8 @@ async def analisar(
 
 # --- Etapa 2: confirmação -----------------------------------------------------
 
-def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str]) -> Aluno | None:
+def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
+                    criados: dict | None = None) -> Aluno | None:
     if linha.aluno_id is not None:
         aluno = db.get(Aluno, linha.aluno_id)
         if aluno is None or aluno.escola_id != escola_id:
@@ -188,11 +191,19 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         if turma is None or turma.escola_id != escola_id:
             avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
             return None
+        # Cria o aluno UMA vez por (nome, turma): no relatório individual há
+        # centenas de linhas (uma por livro) para o mesmo aluno — sem isto,
+        # cada livro criaria um aluno duplicado.
+        chave = (svc.normalizar_nome(linha.nome), turma.id)
+        if criados is not None and chave in criados:
+            return criados[chave]
         aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
                          turma_id=turma.id, ano_letivo=ano))
+        if criados is not None:
+            criados[chave] = aluno
         return aluno
     avisos.append(f"Linha “{linha.nome}”: sem aluno vinculado — ignorada.")
     return None
@@ -233,6 +244,7 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
 
 def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_referencia, avisos):
     """Formato "uma linha por livro concluído": registra leituras únicas (§35)."""
+    vistos: set[int] = set()  # livros já processados NESTE lote (autoflush=False)
     for linha in linhas:
         titulo = str(linha.dados.get("livro", "")).strip()
         nivel = str(linha.dados.get("nivel", "")).strip().upper()
@@ -256,12 +268,20 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
                           categoria=linha.dados.get("genero") or None)
             db.add(livro)
             db.flush()
+        # Releitura no MESMO relatório (livro repetido): o guard de banco não
+        # enxerga leituras pendentes (autoflush=False), então deduplicamos
+        # também em memória — senão a UniqueConstraint derrubaria a importação.
+        if livro.id in vistos:
+            avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
+                          f"{aluno.nome} — contado uma vez (§35).")
+            continue
         ja_lido = db.execute(
             select(Leitura).where(Leitura.aluno_id == aluno.id, Leitura.livro_id == livro.id)
         ).scalar_one_or_none()
         if ja_lido:
             avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
             continue
+        vistos.add(livro.id)
         # Relatórios individuais informam a data real de conclusão do livro
         quando = data_referencia
         try:
@@ -283,6 +303,23 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
     por_nivel: dict[str, int] = {}
     for codigo in leituras:
         por_nivel[codigo] = por_nivel.get(codigo, 0) + 1
+
+    # Avisa se algum nível de letra não está em nenhuma faixa configurada:
+    # esses livros contam no total, mas não geram pontos de dificuldade nem
+    # aparecem no gráfico por nível até a letra ser incluída em Métricas.
+    codigos_faixa = {
+        c.upper()
+        for nivel in db.execute(
+            select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
+        ).scalars()
+        for c in (nivel.codigos or [])
+    }
+    fora = sorted({c for c in por_nivel if c and c.upper() not in codigos_faixa})
+    if fora:
+        avisos.append(
+            f"{aluno.nome}: níveis {', '.join(fora)} não estão em nenhuma faixa "
+            "de dificuldade — os livros contam no total, mas não pontuam por "
+            "dificuldade. Inclua essas letras em Métricas → Dificuldade.")
     anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
     # O resumo do relatório individual COMPLEMENTA o tempo de leitura de quem
     # ainda não tem snapshot; nunca rebaixa o valor vindo do relatório da turma.
@@ -363,8 +400,10 @@ def confirmar(
 
     # Agrupa por aluno resolvido; no formato "leituras" um aluno tem várias linhas
     resolvidos: dict[int, tuple[Aluno, list]] = {}
+    criados: dict[tuple[str, int], Aluno] = {}  # dedup de alunos criados
     for linha in dados.linhas:
-        aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha, avisos)
+        aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
+                                avisos, criados)
         if aluno is None:
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)

@@ -166,7 +166,7 @@ export interface Correspondencia {
   aluno_id: number | null;
   aluno_nome: string | null;
   similaridade: number | null;
-  alternativas: { aluno_id: number; nome: string; similaridade: number }[];
+  alternativas: { aluno_id: number; nome: string; turma?: string; similaridade: number }[];
 }
 
 export interface LinhaAnalise {
@@ -188,6 +188,8 @@ export interface Analise {
   estrategia: string;
   /** Ex.: "Este arquivo pertence ao Matific." */
   mensagem_deteccao: string;
+  /** Turma lida do cabeçalho do PDF (relatórios do Elefante). */
+  turma_detectada: string;
   total_alunos: number;
   total_linhas: number;
   total_erros: number;

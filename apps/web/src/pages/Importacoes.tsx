@@ -1,10 +1,13 @@
 /**
  * Importações (PRD §15–§16, §50–§52): envio de PDF ou texto colado,
- * prévia com erros ANTES de gravar e correspondência de nomes com
- * confirmação de duplicatas prováveis.
+ * prévia com erros ANTES de gravar e correspondência de nomes.
+ *
+ * A prévia é AGRUPADA por aluno: o relatório individual do Elefante (uma
+ * linha por livro) vira UMA entrada ("N livros lidos"). A turma lida do
+ * cabeçalho do PDF é usada para casar/criar o aluno sem intervenção manual.
  */
-import { CheckCircle2, FileUp, History, Sparkles, UserPlus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { BookMarked, CheckCircle2, FileUp, History, Sparkles, UserPlus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -36,8 +39,11 @@ const ROTULOS_DADOS: Record<string, string> = {
   nivel: "Nível",
 };
 
+const OCULTAR_NA_PREVIA = new Set(["turma_relatorio", "livro", "nivel", "genero", "data", "tempo_livro_min"]);
+
 function resumoDados(dados: Record<string, unknown>): string {
   return Object.entries(dados)
+    .filter(([chave]) => !OCULTAR_NA_PREVIA.has(chave))
     .map(([chave, valor]) => {
       const rotulo = ROTULOS_DADOS[chave] ?? chave;
       if (chave === "livros_por_nivel" && valor && typeof valor === "object") {
@@ -51,14 +57,60 @@ function resumoDados(dados: Record<string, unknown>): string {
     .join(" · ");
 }
 
+function normalizar(nome: string): string {
+  return nome
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 type Acao = { tipo: "importar"; alunoId: number } | { tipo: "criar"; turmaId: number | null } | { tipo: "ignorar" };
 
-function acaoInicial(linha: LinhaAnalise): Acao {
-  const c = linha.correspondencia;
-  if (c && c.aluno_id && (c.status === "exato" || c.status === "provavel")) {
-    return { tipo: "importar", alunoId: c.aluno_id };
+interface Grupo {
+  chave: string;
+  nome: string;
+  indices: number[]; // índices das linhas originais deste aluno
+  correspondencia: LinhaAnalise["correspondencia"];
+  resumo: string;
+  totalLivros: number; // > 0 no relatório individual (uma linha por livro)
+  todasComErro: boolean;
+}
+
+/** Agrupa as linhas da análise por aluno (nome normalizado). No relatório
+ *  individual, as centenas de linhas de livros viram um único grupo. */
+function agrupar(analise: Analise): Grupo[] {
+  const mapa = new Map<string, Grupo>();
+  const ordem: string[] = [];
+  analise.linhas.forEach((linha, indice) => {
+    const chave = normalizar(linha.nome) || `#${indice}`;
+    let g = mapa.get(chave);
+    if (!g) {
+      g = {
+        chave,
+        nome: linha.nome,
+        indices: [],
+        correspondencia: linha.correspondencia,
+        resumo: "",
+        totalLivros: 0,
+        todasComErro: true,
+      };
+      mapa.set(chave, g);
+      ordem.push(chave);
+    }
+    g.indices.push(indice);
+    if (linha.erros.length === 0) g.todasComErro = false;
+    if (linha.dados.livro) g.totalLivros += 1;
+  });
+  for (const chave of ordem) {
+    const g = mapa.get(chave)!;
+    const primeira = analise.linhas[g.indices[0]];
+    g.resumo = g.totalLivros > 0
+      ? `${g.totalLivros} livro${g.totalLivros === 1 ? "" : "s"} lido${g.totalLivros === 1 ? "" : "s"}`
+      : resumoDados(primeira.dados) || "—";
   }
-  return { tipo: "ignorar" };
+  return ordem.map((c) => mapa.get(c)!);
 }
 
 export default function Importacoes() {
@@ -71,13 +123,15 @@ export default function Importacoes() {
   const inputArquivo = useRef<HTMLInputElement | null>(null);
 
   const [analise, setAnalise] = useState<Analise | null>(null);
-  const [acoes, setAcoes] = useState<Acao[]>([]);
+  const [acoes, setAcoes] = useState<Acao[]>([]); // uma ação por GRUPO
   const [turmas, setTurmas] = useState<Turma[]>([]);
   const [turmaEmMassa, setTurmaEmMassa] = useState<number | null>(null);
   const [historico, setHistorico] = useState<Importacao[] | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null);
+
+  const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);
 
   const carregarHistorico = useCallback(() => {
     if (!escolaId) return;
@@ -92,6 +146,30 @@ export default function Importacoes() {
     api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
   }, [escolaId, carregarHistorico]);
 
+  // Palavras genéricas que NÃO distinguem uma turma de outra da mesma série.
+  const GENERICOS = new Set(["ano", "serie", "série", "anual", "manha", "manhã", "tarde", "noite", "integral", "turma", "de", "do", "da"]);
+
+  /** Turma cujo nome bate com a lida do PDF (para criar/casar automático).
+   *  Exige que os tokens DISTINTIVOS (a letra da turma, o número da série)
+   *  coincidam e que a correspondência seja ÚNICA — senão "5 Ano B" casaria
+   *  por engano com "5 Ano A". */
+  function turmaDoRelatorio(nomeDetectado: string): number | null {
+    if (!nomeDetectado) return null;
+    const limpar = (s: string) => normalizar(s).replace(/[ºª°]/g, "");
+    const alvo = limpar(nomeDetectado);
+    const exata = turmas.find((t) => limpar(t.nome) === alvo);
+    if (exata) return exata.id;
+
+    const distintivos = alvo.split(" ").filter((t) => t.length > 0 && !GENERICOS.has(t));
+    if (distintivos.length === 0) return null;
+    const candidatas = turmas.filter((t) => {
+      const nome = ` ${limpar(t.nome)} `;
+      // todos os tokens distintivos da turma detectada devem aparecer
+      return distintivos.every((tk) => nome.includes(` ${tk} `) || nome.includes(tk));
+    });
+    return candidatas.length === 1 ? candidatas[0].id : null; // só se for única
+  }
+
   async function analisar() {
     if (!escolaId) return;
     setOcupado(true);
@@ -104,7 +182,23 @@ export default function Importacoes() {
       if (plataforma) dados.append("plataforma", plataforma);
       const resposta = await apiUpload<Analise>(`/escolas/${escolaId}/importacoes/analisar`, dados);
       setAnalise(resposta);
-      setAcoes(resposta.linhas.map(acaoInicial));
+
+      // Ação inicial POR GRUPO, já usando a turma lida do PDF.
+      const turmaId = turmaDoRelatorio(resposta.turma_detectada);
+      setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
+      const gruposIniciais = agrupar(resposta);
+      setAcoes(
+        gruposIniciais.map((g): Acao => {
+          if (g.todasComErro) return { tipo: "ignorar" };
+          const c = g.correspondencia;
+          if (c?.aluno_id && (c.status === "exato" || c.status === "provavel")) {
+            return { tipo: "importar", alunoId: c.aluno_id };
+          }
+          // Aluno novo: cria na turma detectada automaticamente (sem intervenção)
+          if (turmaId) return { tipo: "criar", turmaId };
+          return { tipo: "ignorar" };
+        }),
+      );
     } catch (excecao) {
       setErro(excecao instanceof Error ? excecao.message : "Falha ao analisar o relatório.");
     } finally {
@@ -117,20 +211,25 @@ export default function Importacoes() {
     setOcupado(true);
     setErro("");
     try {
-      const linhas = analise.linhas
-        .map((linha, indice) => ({ linha, acao: acoes[indice] }))
-        .filter(({ linha, acao }) => acao.tipo !== "ignorar" && linha.erros.length === 0)
-        .map(({ linha, acao }) => ({
-          nome: linha.nome,
-          dados: linha.dados,
-          aluno_id: acao.tipo === "importar" ? acao.alunoId : null,
-          criar_em_turma_id: acao.tipo === "criar" ? acao.turmaId : null,
-        }));
+      // Expande cada grupo de volta para as linhas originais do aluno.
+      const linhas = grupos.flatMap((grupo, gi) => {
+        const acao = acoes[gi];
+        if (!acao || acao.tipo === "ignorar") return [];
+        return grupo.indices
+          .map((i) => analise.linhas[i])
+          .filter((linha) => linha.erros.length === 0)
+          .map((linha) => ({
+            nome: linha.nome,
+            dados: linha.dados,
+            aluno_id: acao.tipo === "importar" ? acao.alunoId : null,
+            criar_em_turma_id: acao.tipo === "criar" ? acao.turmaId : null,
+          }));
+      });
       if (linhas.length === 0) {
         setErro(
-          naoEncontrados.length > 0
-            ? "Os alunos deste relatório ainda não estão cadastrados. Use “Criar todos nesta turma” acima (ou escolha um destino em cada linha) antes de importar."
-            : "Nenhuma linha marcada para importar. Escolha um destino em cada linha.",
+          naoEncontrados.length > 0 && turmas.length === 0
+            ? "Os alunos deste relatório ainda não estão cadastrados e não há turmas. Crie uma turma primeiro."
+            : "Nenhum aluno marcado para importar. Escolha um destino para cada aluno.",
         );
         return;
       }
@@ -161,24 +260,22 @@ export default function Importacoes() {
     }
   }
 
-  function definirAcao(indice: number, valor: string) {
+  function definirAcao(gi: number, valor: string) {
     setAcoes((atuais) =>
       atuais.map((acao, i) => {
-        if (i !== indice) return acao;
+        if (i !== gi) return acao;
         if (valor === "ignorar") return { tipo: "ignorar" };
-        if (valor === "criar") return { tipo: "criar", turmaId: turmaEmMassa ?? turmas[0]?.id ?? null };
+        if (valor === "criar") return { tipo: "criar", turmaId: turmaAlvo ?? turmas[0]?.id ?? null };
         return { tipo: "importar", alunoId: Number(valor) };
       }),
     );
   }
 
-  /** Marca TODOS os alunos não encontrados para serem criados na turma dada. */
   function criarTodosNaoEncontrados(turmaId: number) {
-    if (!analise) return;
     setAcoes((atuais) =>
       atuais.map((acao, i) => {
-        const linha = analise.linhas[i];
-        if (linha.erros.length === 0 && linha.correspondencia?.status === "nao_encontrado") {
+        const g = grupos[i];
+        if (g && !g.todasComErro && g.correspondencia?.status === "nao_encontrado") {
           return { tipo: "criar", turmaId };
         }
         return acao;
@@ -186,24 +283,20 @@ export default function Importacoes() {
     );
   }
 
-  // Estatísticas da prévia para os controles em massa e a contagem final.
-  const linhasValidas = analise ? analise.linhas.filter((l) => l.erros.length === 0) : [];
-  const naoEncontrados = analise
-    ? analise.linhas.filter(
-        (l) => l.erros.length === 0 && l.correspondencia?.status === "nao_encontrado",
-      )
-    : [];
-  const totalSelecionados = analise
-    ? acoes.filter((a, i) => a.tipo !== "ignorar" && analise.linhas[i]?.erros.length === 0).length
-    : 0;
-  const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
-
   const tomCorrespondencia = { exato: "ok", provavel: "alerta", nao_encontrado: "neutro" } as const;
   const rotuloCorrespondencia = {
     exato: "Encontrado",
     provavel: "Confirme o aluno",
-    nao_encontrado: "Não encontrado",
+    nao_encontrado: "Aluno novo",
   } as const;
+
+  // Estatísticas (por grupo) para os controles e a contagem final.
+  const gruposValidos = grupos.filter((g) => !g.todasComErro);
+  const naoEncontrados = grupos.filter(
+    (g) => !g.todasComErro && g.correspondencia?.status === "nao_encontrado",
+  );
+  const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
+  const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
 
   return (
     <div>
@@ -281,22 +374,23 @@ export default function Importacoes() {
             <FileUp size={16} className="text-zinc-400" />
             <span className="text-sm font-medium">Prévia da importação</span>
             <Badge tom="destaque">{analise.plataforma === "matific" ? "Matific" : "Elefante Letrado"}</Badge>
-            {analise.formato === "leituras" && <Badge>uma linha por livro</Badge>}
+            {analise.formato === "leituras" && <Badge>relatório individual</Badge>}
             {analise.estrategia === "posicional" && <Badge tom="alerta">colunas por posição — confira</Badge>}
           </div>
 
-          {/* Resumo da detecção automática (o usuário não precisa informar a plataforma) */}
           <div className="border-b border-zinc-200 bg-indigo-50/50 px-4 py-3 text-sm dark:border-zinc-800 dark:bg-indigo-500/5">
             <p className="font-medium text-indigo-800 dark:text-indigo-300">
               {analise.mensagem_deteccao || "Arquivo analisado."}
             </p>
             <p className="mt-0.5 text-zinc-600 dark:text-zinc-300">
-              {analise.total_alunos} aluno{analise.total_alunos === 1 ? "" : "s"} encontrado
-              {analise.total_alunos === 1 ? "" : "s"} · {analise.total_linhas} registro
-              {analise.total_linhas === 1 ? "" : "s"} ·{" "}
+              {gruposValidos.length} aluno{gruposValidos.length === 1 ? "" : "s"} ·{" "}
+              {analise.total_linhas} registro{analise.total_linhas === 1 ? "" : "s"}
+              {analise.turma_detectada && (
+                <> · turma <strong>{analise.turma_detectada}</strong></>
+              )}
               {analise.total_erros === 0 && analise.total_avisos === 0
-                ? "nenhum problema detectado"
-                : `${analise.total_erros} erro(s), ${analise.total_avisos} aviso(s) — detalhes abaixo`}
+                ? " · nenhum problema detectado"
+                : ` · ${analise.total_erros} erro(s), ${analise.total_avisos} aviso(s)`}
             </p>
           </div>
 
@@ -308,13 +402,15 @@ export default function Importacoes() {
             </div>
           )}
 
-          {/* Ação em massa: criar de uma vez todos os alunos ainda não cadastrados */}
+          {/* Ação em massa: criar de uma vez os alunos ainda não cadastrados */}
           {naoEncontrados.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/20 dark:bg-amber-500/10">
               <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
               <span className="text-amber-800 dark:text-amber-200">
-                <strong>{naoEncontrados.length}</strong> aluno(s) deste relatório ainda não
-                estão cadastrados nesta escola.
+                <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
+                {analise.turma_detectada && turmaDoRelatorio(analise.turma_detectada)
+                  ? " — já marcados para criar na turma do relatório."
+                  : "."}
               </span>
               {turmas.length === 0 ? (
                 <span className="text-amber-800 dark:text-amber-200">
@@ -333,10 +429,7 @@ export default function Importacoes() {
                       <option key={turma.id} value={turma.id}>{turma.nome}</option>
                     ))}
                   </select>
-                  <Botao
-                    variante="primario"
-                    onClick={() => turmaAlvo && criarTodosNaoEncontrados(turmaAlvo)}
-                  >
+                  <Botao variante="neutro" onClick={() => turmaAlvo && criarTodosNaoEncontrados(turmaAlvo)}>
                     <UserPlus size={15} /> Criar todos nesta turma
                   </Botao>
                 </div>
@@ -344,30 +437,36 @@ export default function Importacoes() {
             </div>
           )}
 
-          {analise.linhas.length > 0 && (
+          {grupos.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                    <th className="px-4 py-2 font-medium">Nome no relatório</th>
+                    <th className="px-4 py-2 font-medium">Aluno no relatório</th>
                     <th className="px-4 py-2 font-medium">Dados</th>
                     <th className="px-4 py-2 font-medium">Correspondência</th>
                     <th className="px-4 py-2 font-medium">Destino</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {analise.linhas.map((linha, indice) => {
-                    const acao = acoes[indice];
-                    const correspondencia = linha.correspondencia;
+                  {grupos.map((grupo, gi) => {
+                    const acao = acoes[gi] ?? { tipo: "ignorar" as const };
+                    const correspondencia = grupo.correspondencia;
+                    const primeira = analise.linhas[grupo.indices[0]];
                     return (
-                      <tr key={linha.numero} className="border-b border-zinc-100 align-top last:border-0 dark:border-zinc-800/60">
-                        <td className="px-4 py-2.5 font-medium">{linha.nome || <em className="text-zinc-400">sem nome</em>}</td>
+                      <tr key={grupo.chave} className="border-b border-zinc-100 align-top last:border-0 dark:border-zinc-800/60">
+                        <td className="px-4 py-2.5 font-medium">
+                          {grupo.nome || <em className="text-zinc-400">sem nome</em>}
+                        </td>
                         <td className="px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-300">
-                          {resumoDados(linha.dados) || "—"}
-                          {linha.erros.map((mensagem) => (
-                            <p key={mensagem} className="mt-1 text-red-600 dark:text-red-400">{mensagem}</p>
-                          ))}
-                          {linha.avisos.map((mensagem) => (
+                          {grupo.totalLivros > 0 ? (
+                            <span className="inline-flex items-center gap-1">
+                              <BookMarked size={12} /> {grupo.resumo}
+                            </span>
+                          ) : (
+                            grupo.resumo
+                          )}
+                          {primeira.avisos.map((mensagem) => (
                             <p key={mensagem} className="mt-1 text-amber-600 dark:text-amber-400">{mensagem}</p>
                           ))}
                         </td>
@@ -386,39 +485,39 @@ export default function Importacoes() {
                           )}
                         </td>
                         <td className="px-4 py-2.5">
-                          {linha.erros.length > 0 ? (
-                            <span className="text-xs text-zinc-400">linha com erro — não será importada</span>
+                          {grupo.todasComErro ? (
+                            <span className="text-xs text-zinc-400">sem dados válidos — não será importado</span>
                           ) : (
                             <div className="flex flex-col gap-1.5">
                               <select
-                                aria-label={`Destino de ${linha.nome}`}
+                                aria-label={`Destino de ${grupo.nome}`}
                                 className={estiloInput}
-                                value={
-                                  acao.tipo === "ignorar" ? "ignorar" : acao.tipo === "criar" ? "criar" : String(acao.alunoId)
-                                }
-                                onChange={(e) => definirAcao(indice, e.target.value)}
+                                value={acao.tipo === "ignorar" ? "ignorar" : acao.tipo === "criar" ? "criar" : String(acao.alunoId)}
+                                onChange={(e) => definirAcao(gi, e.target.value)}
                               >
                                 {correspondencia?.alternativas.map((alternativa) => (
                                   <option key={alternativa.aluno_id} value={alternativa.aluno_id}>
-                                    {alternativa.nome} ({alternativa.similaridade}%)
+                                    {alternativa.nome}
+                                    {alternativa.turma ? ` — ${alternativa.turma}` : ""} ({alternativa.similaridade}%)
                                   </option>
                                 ))}
                                 <option value="criar">Criar aluno novo…</option>
-                                <option value="ignorar">Ignorar esta linha</option>
+                                <option value="ignorar">Ignorar</option>
                               </select>
                               {acao.tipo === "criar" && (
                                 <select
-                                  aria-label={`Turma para ${linha.nome}`}
+                                  aria-label={`Turma para ${grupo.nome}`}
                                   className={estiloInput}
                                   value={acao.turmaId ?? ""}
                                   onChange={(e) =>
                                     setAcoes((atuais) =>
                                       atuais.map((a, i) =>
-                                        i === indice ? { tipo: "criar", turmaId: Number(e.target.value) } : a,
+                                        i === gi ? { tipo: "criar", turmaId: Number(e.target.value) } : a,
                                       ),
                                     )
                                   }
                                 >
+                                  {turmas.length === 0 && <option value="">Crie uma turma primeiro</option>}
                                   {turmas.map((turma) => (
                                     <option key={turma.id} value={turma.id}>{turma.nome}</option>
                                   ))}
@@ -439,17 +538,9 @@ export default function Importacoes() {
           <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
             <span className="mr-auto text-sm font-medium">
               {totalSelecionados > 0
-                ? `${totalSelecionados} de ${linhasValidas.length} aluno(s) serão importados.`
+                ? `${totalSelecionados} de ${gruposValidos.length} aluno(s) serão importados.`
                 : "Deseja importar estes dados?"}
             </span>
-            {naoEncontrados.length > 0 && totalSelecionados < linhasValidas.length && turmas.length > 0 && (
-              <Botao
-                variante="neutro"
-                onClick={() => turmaAlvo && criarTodosNaoEncontrados(turmaAlvo)}
-              >
-                Criar não encontrados
-              </Botao>
-            )}
             <Botao variante="neutro" onClick={() => setAnalise(null)} disabled={ocupado}>
               Não, voltar
             </Botao>

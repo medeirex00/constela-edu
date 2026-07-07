@@ -391,14 +391,17 @@ class PerfilElefanteTurma:
             inicia_registro=lambda presentes: "nome" in presentes
             and len(presentes) >= 4,
         )
+        turma = _turma_da_capa(paginas)
         analise = Analise(plataforma=self.plataforma, formato=self.formato,
-                          estrategia=self.estrategia,
+                          estrategia=self.estrategia, turma_detectada=turma,
                           mensagem_deteccao="Este arquivo pertence ao Elefante "
                           "Letrado — relatório de performance da turma"
-                          f"{_sufixo_turma(paginas)}.")
+                          + (f" ({turma})" if turma else "") + ".")
         for numero, registro in enumerate(registros, start=1):
             item = LinhaImportacao(numero=numero, nome=registro.texto("nome"),
                                    dados={})
+            if turma:
+                item.dados["turma_relatorio"] = turma
             _atribuir(item, "nivel", registro.texto("nivel"),
                       lambda b: _codigo_nivel(b))
             _atribuir(item, "livros_unicos", registro.texto("livros_unicos"), _inteiro)
@@ -419,7 +422,7 @@ def _codigo_nivel(bruto: str) -> str:
     return codigo
 
 
-def _sufixo_turma(paginas: list[Pagina]) -> str:
+def _turma_da_capa(paginas: list[Pagina]) -> str:
     """Nome da turma na capa: linha logo após a do intervalo de datas."""
     if not paginas:
         return ""
@@ -428,7 +431,7 @@ def _sufixo_turma(paginas: list[Pagina]) -> str:
         if re.search(r"\d{2}/\d{2}/\d{4}", linha.texto) and indice + 1 < len(linhas):
             turma = linhas[indice + 1].texto.strip()
             if 0 < len(turma) <= 60:
-                return f" ({turma})"
+                return turma
     return ""
 
 
@@ -444,6 +447,11 @@ COLUNAS_PERFIL_ESTUDANTE = {
     "data": ["data/hora", "data hora", "data"],
 }
 
+# Rótulos de seção do cabeçalho — nunca são nome do aluno nem turma.
+_ROTULOS_SECAO = ("habitodeleitura", "leiturasconcluidas", "tempodeleitura",
+                  "historicodelivroslidos", "compreensaoleitora",
+                  "livrosescutados", "tempodeescuta")
+
 
 class PerfilElefanteEstudante:
     plataforma = "elefante"
@@ -455,7 +463,8 @@ class PerfilElefanteEstudante:
                 or "historicodelivroslidos" in compacto)
 
     def analisar(self, paginas: list[Pagina]) -> Analise | None:
-        nome_aluno = self._nome_do_estudante(paginas)
+        cabecalho = self._cabecalho(paginas)
+        nome_aluno = cabecalho.get("nome")
         if not nome_aluno:
             return None  # sem o dono do histórico, o genérico decide
 
@@ -469,16 +478,23 @@ class PerfilElefanteEstudante:
         )
 
         resumo = self._resumo(paginas)
+        turma = cabecalho.get("turma", "")
         analise = Analise(
             plataforma=self.plataforma, formato=self.formato,
             estrategia=self.estrategia,
+            turma_detectada=turma,
+            escola_detectada=cabecalho.get("escola", ""),
+            professor_detectado=cabecalho.get("professor", ""),
             mensagem_deteccao="Este arquivo pertence ao Elefante Letrado — "
             f"relatório individual de {nome_aluno}"
+            + (f", turma {turma}" if turma else "")
             + (f" ({resumo['leituras']} leituras concluídas na plataforma)"
                if "leituras" in resumo else "") + ".")
 
         for numero, registro in enumerate(registros, start=1):
             item = LinhaImportacao(numero=numero, nome=nome_aluno, dados={})
+            if turma:
+                item.dados["turma_relatorio"] = turma
             titulo = registro.texto("livro")
             if titulo:
                 item.dados["livro"] = titulo
@@ -501,21 +517,81 @@ class PerfilElefanteEstudante:
             analise.linhas[0].dados["tempo_leitura_min"] = resumo["tempo_leitura_min"]
         return analise
 
-    def _nome_do_estudante(self, paginas: list[Pagina]) -> str | None:
+    def _cabecalho(self, paginas: list[Pagina]) -> dict:
+        """Nome, turma, escola e professor do cabeçalho do relatório individual.
+
+        Layout (posicional): abaixo do título vem o NOME; depois a linha
+        "TURMA - ESCOLA"; e o bloco Professor|Escola|Turma em colunas
+        (Turma alinhada à direita, x0 alto)."""
+        info: dict = {}
         if not paginas:
-            return None
+            return info
         linhas = _linhas_visuais(paginas[0].palavras)
         apos_titulo = False
-        for linha in linhas[:8]:
+        for linha in linhas[:10]:
             texto = linha.texto.strip()
-            if "performancedoestudante" in compactar(texto):
+            compacto = compactar(texto)
+            if "performancedoestudante" in compacto:
                 apos_titulo = True
                 continue
-            if not apos_titulo or re.search(r"\d", texto) or " - " in texto:
+            if not apos_titulo or not texto:
                 continue
-            if len(texto.split()) >= 2 and len(texto) <= 80:
-                return texto
-        return None
+            if re.search(r"\d{2}/\d{2}/\d{4}", texto):
+                continue  # linha do intervalo de datas — ignorar
+            # Rótulos de seção nunca são nome nem turma.
+            if any(r in compacto for r in _ROTULOS_SECAO):
+                continue
+            # NOME do aluno vem PRIMEIRO no layout (topo mais alto) — capturado
+            # antes da regra de turma para não confundir nomes com hífen
+            # ("Ana - Maria") com "TURMA - ESCOLA".
+            if "nome" not in info and not re.search(r"\d", texto) \
+                    and len(texto.split()) >= 2 and len(texto) <= 80:
+                info["nome"] = texto
+                continue
+            # Linha "TURMA - ESCOLA": SÓ depois do nome e SÓ se começar por
+            # dígito (a série). rpartition separa a escola (último segmento),
+            # preservando turmas cujo nome contenha " - ".
+            if "nome" in info and "turma" not in info and " - " in texto \
+                    and re.match(r"^\s*\d", texto):
+                turma, _, escola = texto.rpartition(" - ")
+                if turma.strip() and len(turma) <= 60:
+                    info["turma"] = turma.strip()
+                    if escola.strip():
+                        info["escola"] = escola.strip()
+                continue
+        # Professor: coluna à esquerda do bloco "Professor | Escola | Turma".
+        info["professor"] = self._professor(linhas)
+        # Reforço da turma pela coluna "Turma" (x0 alto) se a linha falhou.
+        if not info.get("turma"):
+            info["turma"] = self._turma_por_coluna(linhas)
+        return info
+
+    def _professor(self, linhas: list[LinhaVisual]) -> str:
+        for indice, linha in enumerate(linhas[:12]):
+            if compactar(linha.texto).startswith("professor"):
+                nomes = []
+                for prox in linhas[indice + 1:indice + 4]:
+                    trecho = " ".join(
+                        p.texto for p in sorted(prox.palavras, key=lambda p: p.x0)
+                        if p.x0 < 200)
+                    if trecho.strip():
+                        nomes.append(trecho.strip())
+                return " ".join(nomes).strip(" ,")[:200]
+        return ""
+
+    def _turma_por_coluna(self, linhas: list[LinhaVisual]) -> str:
+        for indice, linha in enumerate(linhas[:12]):
+            rotulo = next((p for p in linha.palavras
+                           if compactar(p.texto) == "turma"), None)
+            if rotulo is None:
+                continue
+            for prox in linhas[indice + 1:indice + 3]:
+                trecho = " ".join(
+                    p.texto for p in sorted(prox.palavras, key=lambda p: p.x0)
+                    if p.x0 >= rotulo.x0 - 8)
+                if trecho.strip():
+                    return trecho.strip()
+        return ""
 
     def _resumo(self, paginas: list[Pagina]) -> dict:
         """Valores do bloco "Hábito de Leitura" (rótulo em cima, valor embaixo)."""

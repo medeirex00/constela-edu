@@ -87,12 +87,15 @@ def test_perfil_turma_costura_nomes_e_duracoes():
     assert len(analise.linhas) == 2
     maria, joao = analise.linhas
     assert maria.nome == "MARIA CLARA TESTE"
-    assert maria.dados == {"nivel": "Q", "livros_unicos": 120,
-                           "tempo_leitura_min": 750,  # 12h 30min 15s
-                           "questoes_tentativas": 300, "questoes_acertos": 250}
+    assert {k: v for k, v in maria.dados.items() if k != "turma_relatorio"} == {
+        "nivel": "Q", "livros_unicos": 120,
+        "tempo_leitura_min": 750,  # 12h 30min 15s
+        "questoes_tentativas": 300, "questoes_acertos": 250}
+    assert maria.dados["turma_relatorio"] == "9 ANO Z TESTE"
     assert maria.erros == [] and maria.avisos == []
     assert joao.nome == "JOAO"
     assert joao.dados["tempo_leitura_min"] == 300      # 5h — escuta não vaza
+    assert analise.turma_detectada == "9 ANO Z TESTE"
     assert "(9 ANO Z TESTE)" in analise.mensagem_deteccao
 
 

@@ -243,6 +243,11 @@ class Analise:
     mensagem_deteccao: str = ""
     linhas: list[LinhaImportacao] = field(default_factory=list)
     erros_gerais: list[str] = field(default_factory=list)
+    # Turma lida do PDF (relatórios do Elefante trazem no cabeçalho): permite
+    # criar/casar o aluno na turma certa sem o usuário informar.
+    turma_detectada: str = ""
+    escola_detectada: str = ""
+    professor_detectado: str = ""
 
 
 _RODAPES = ("total", "media", "pagina", "page", "gerado em", "relatorio",
@@ -622,6 +627,22 @@ def _tokens_turma(texto: str) -> set[str]:
     return {t for t in plano.split() if t}
 
 
+def _desempatar_por_turma(candidatos: list, turma_relatorio: str | None,
+                          turma_de: dict[int, str]):
+    """Entre homônimos, escolhe o aluno cuja turma bate com a do relatório.
+    Devolve None se não há pista de turma ou se persiste empate (o usuário
+    decide, para nunca pontuar o aluno errado)."""
+    if not turma_relatorio:
+        return None
+    alvo = _tokens_turma(turma_relatorio)
+    pontuados = sorted(
+        ((len(alvo & _tokens_turma(turma_de.get(a.id, ""))), a) for a in candidatos),
+        key=lambda item: item[0], reverse=True)
+    pontos, melhor = pontuados[0]
+    empate = len(pontuados) > 1 and pontuados[1][0] == pontos
+    return melhor if pontos >= 2 and not empate else None
+
+
 def _casar_abreviado(alvo: str, indice, turma_relatorio: str | None,
                      turma_de: dict[int, str]) -> dict | None:
     """Correspondência para nomes abreviados; nunca devolve "exato" —
@@ -670,6 +691,7 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
     """
     alunos = db.execute(
         select(Aluno).where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
+        .order_by(Aluno.id)  # ordem determinística ao desempatar homônimos
     ).scalars().all()
     indice = [(aluno, normalizar_nome(aluno.nome)) for aluno in alunos]
 
@@ -699,16 +721,35 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
             reverse=True,
         )
         alternativas = [
-            {"aluno_id": aluno.id, "nome": aluno.nome, "similaridade": round(nota * 100, 1)}
-            for aluno, nota in pontuadas[:3]
+            {"aluno_id": aluno.id, "nome": aluno.nome,
+             "turma": turma_de.get(aluno.id, ""),
+             "similaridade": round(nota * 100, 1)}
+            for aluno, nota in pontuadas[:5]
             if nota >= LIMIAR_ALTERNATIVA
         ]
-        if pontuadas and normalizar_nome(pontuadas[0][0].nome) == alvo:
-            aluno = pontuadas[0][0]
+        # Homônimos: mais de um aluno com o MESMO nome completo. Não marcar
+        # "exato" às cegas — desempata pela turma do relatório; sem desempate,
+        # exige confirmação manual (§52) para nunca pontuar o aluno errado.
+        exatos = [aluno for aluno, nome_plano in indice if nome_plano == alvo]
+        if len(exatos) == 1:
+            aluno = exatos[0]
             linha.correspondencia = {
                 "status": "exato", "aluno_id": aluno.id, "aluno_nome": aluno.nome,
                 "similaridade": 100.0, "alternativas": alternativas,
             }
+        elif len(exatos) > 1:
+            escolhido = _desempatar_por_turma(
+                exatos, linha.dados.get("turma_relatorio"), turma_de)
+            if escolhido is not None:
+                linha.correspondencia = {
+                    "status": "provavel", "aluno_id": escolhido.id,
+                    "aluno_nome": escolhido.nome, "similaridade": 100.0,
+                    "alternativas": alternativas,
+                }
+            else:
+                # empate sem pista de turma: o usuário decide entre os homônimos
+                linha.correspondencia = {
+                    "status": "nao_encontrado", "alternativas": alternativas}
         elif pontuadas and pontuadas[0][1] >= LIMIAR_PROVAVEL:
             aluno, nota = pontuadas[0]
             linha.correspondencia = {
