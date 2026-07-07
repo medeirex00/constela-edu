@@ -13,7 +13,7 @@ COPY entrypoint.sh ./entrypoint.sh
 
 # Usuário sem privilégios (nunca rodar como root em produção). Os volumes de
 # dados são criados e cedidos ao usuário app; HOME evita falhas de cache.
-RUN adduser --system --uid 1001 --home /home/app app \
+RUN adduser --system --group --uid 1001 --home /home/app app \
     && mkdir -p /dados/uploads /dados/exports /dados/database \
     && chown -R app:app /dados /app \
     && chmod +x /app/entrypoint.sh
