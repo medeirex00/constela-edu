@@ -108,3 +108,31 @@ def test_ranking_leitura_respeita_periodo(cliente, escola_completa):
     assert r[0]["tempo_leitura_min"] == 30
     joao_row = next(x for x in r if x["nome"] == joao.nome)
     assert joao_row["livros"] == 1          # a leitura de agosto não conta em julho
+
+
+# --- Evolução de leitura por semana/mês/bimestre ----------------------------
+
+def test_evolucao_leitura_por_mes_e_bimestre(cliente, escola_completa):
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+    _importar_leitura(cliente, escola_id, ana, "M1", "AA", "2026-07-05T09:00:00", 10)
+    _importar_leitura(cliente, escola_id, ana, "M2", "D", "2026-07-20T09:00:00", 20)
+    _importar_leitura(cliente, escola_id, ana, "M3", "AA", "2026-08-02T09:00:00", 5)
+    base = f"{_base(escola_id)}/alunos/{ana.id}/evolucao-leitura"
+
+    por_mes = cliente.get(base + "?granularidade=mes").json()
+    assert por_mes["granularidade"] == "mes"
+    assert len(por_mes["series"]) == 2  # julho e agosto
+    jul, ago = por_mes["series"]
+    assert jul["rotulo"] == "jul/2026"
+    assert jul["livros"] == 2
+    assert jul["pontos"] == 5.0          # AA(1) + D(4)
+    assert jul["tempo_min"] == 30
+    assert jul["nivel_medio"] == 2.5     # 5 pontos / 2 livros
+    assert ago["rotulo"] == "ago/2026" and ago["livros"] == 1
+
+    # julho e agosto caem no mesmo 4º bimestre → um único balde de 3 livros
+    por_bim = cliente.get(base + "?granularidade=bimestre").json()
+    assert len(por_bim["series"]) == 1
+    assert por_bim["series"][0]["livros"] == 3
+    assert "bim" in por_bim["series"][0]["rotulo"]

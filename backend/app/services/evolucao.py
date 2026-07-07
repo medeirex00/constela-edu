@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     Aluno,
     Escola,
+    Leitura,
+    Livro,
     Matricula,
     Nota,
     SnapshotElefante,
@@ -76,6 +78,66 @@ def _delta_niveis(atual, anterior) -> dict[str, int]:
         if ganho > 0:
             ganhos[codigo] = ganho
     return ganhos
+
+
+# ---------------------------------------------------------------------------
+# Evolução de LEITURA por período (livros/pontos/tempo/nível por bucket) —
+# habilitada pela data+hora real de cada leitura (Fase 1). Diferente da
+# evolução por snapshots, esta agrega as leituras individuais no tempo.
+# ---------------------------------------------------------------------------
+
+_MES_ABREV = {1: "jan", 2: "fev", 3: "mar", 4: "abr", 5: "mai", 6: "jun",
+              7: "jul", 8: "ago", 9: "set", 10: "out", 11: "nov", 12: "dez"}
+
+
+def _bucket_leitura(dt: datetime, granularidade: str) -> tuple[tuple, str]:
+    """(chave ordenável, rótulo) do balde temporal da leitura."""
+    if granularidade == "semana":
+        ano, semana, _ = dt.isocalendar()
+        return (ano, semana), f"Sem {semana:02d}/{ano}"
+    if granularidade == "bimestre":
+        bimestre = (dt.month - 1) // 2 + 1
+        return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+    return (dt.year, dt.month), f"{_MES_ABREV[dt.month]}/{dt.year}"  # mês (padrão)
+
+
+def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
+                     granularidade: str = "mes",
+                     inicio: datetime | None = None,
+                     fim: datetime | None = None) -> dict:
+    """Séries cronológicas por semana/mês/bimestre: livros lidos, pontos de
+    dificuldade, tempo e nível médio (pontos por livro) do período."""
+    consulta = (
+        select(Leitura.data, Livro.nivel_codigo, Leitura.tempo_leitura_min)
+        .join(Livro, Leitura.livro_id == Livro.id)
+        .where(Leitura.aluno_id == aluno_id)
+    )
+    if inicio is not None:
+        consulta = consulta.where(Leitura.data >= inicio)
+    if fim is not None:
+        consulta = consulta.where(Leitura.data <= fim)
+
+    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    baldes: dict[tuple, dict] = {}
+    for data, codigo, tempo in db.execute(consulta.order_by(Leitura.data)).all():
+        chave, rotulo = _bucket_leitura(_sem_fuso(data), granularidade)
+        balde = baldes.setdefault(chave, {"rotulo": rotulo, "livros": 0,
+                                          "pontos": 0.0, "tempo_min": 0})
+        balde["livros"] += 1
+        balde["pontos"] += pontos_map.get((codigo or "").upper(), 0.0)
+        balde["tempo_min"] += tempo or 0
+
+    series = []
+    for chave in sorted(baldes):
+        b = baldes[chave]
+        series.append({
+            "rotulo": b["rotulo"],
+            "livros": b["livros"],
+            "pontos": round(b["pontos"], 2),
+            "tempo_min": b["tempo_min"],
+            "nivel_medio": round(b["pontos"] / b["livros"], 2) if b["livros"] else 0.0,
+        })
+    return {"granularidade": granularidade, "series": series}
 
 
 # ---------------------------------------------------------------------------

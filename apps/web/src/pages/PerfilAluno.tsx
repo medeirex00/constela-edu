@@ -2,6 +2,7 @@ import { ArrowLeft, BookOpen, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
+import EvolucaoAlunoAba from "../components/EvolucaoAlunoAba";
 import HistoricoLeituras from "../components/HistoricoLeituras";
 import { Badge, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -159,7 +160,7 @@ export default function PerfilAluno() {
   const [perfil, setPerfil] = useState<Perfil | null>(null);
   const [gamificacao, setGamificacao] = useState<Gamificacao | null>(null);
   const [carregando, setCarregando] = useState(true);
-  const [aba, setAba] = useState<"perfil" | "historico">("perfil");
+  const [aba, setAba] = useState<"perfil" | "historico" | "evolucao">("perfil");
 
   useEffect(() => {
     if (!escolaId || !id) return;
@@ -204,7 +205,7 @@ export default function PerfilAluno() {
       </div>
 
       <div role="tablist" className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
-        {([["perfil", "Perfil"], ["historico", "Histórico de Leituras"]] as const).map(([chave, rotulo]) => (
+        {([["perfil", "Perfil"], ["historico", "Histórico de Leituras"], ["evolucao", "Evolução"]] as const).map(([chave, rotulo]) => (
           <button
             key={chave}
             role="tab"
@@ -223,6 +224,10 @@ export default function PerfilAluno() {
 
       {aba === "historico" && escolaId && id && (
         <HistoricoLeituras escolaId={escolaId} alunoId={id} />
+      )}
+
+      {aba === "evolucao" && escolaId && id && (
+        <EvolucaoAlunoAba escolaId={escolaId} alunoId={id} />
       )}
 
       {aba === "perfil" && (

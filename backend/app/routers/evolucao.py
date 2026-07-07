@@ -2,13 +2,16 @@
 
 Endpoints somente-leitura: toda a informação vem dos snapshots imutáveis.
 """
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
-from app.models import Aluno, Usuario
+from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
+from app.services import periodos
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
 
@@ -31,6 +34,33 @@ def evolucao_do_aluno(
         "linha_do_tempo": svc.linha_do_tempo(db, escola_id, aluno_id),
         "resumo": svc.resumo_evolucao(db, escola_id, aluno_id, dias),
     }
+
+
+@router.get("/alunos/{aluno_id}/evolucao-leitura")
+def evolucao_leitura_do_aluno(
+    aluno_id: int,
+    granularidade: str = Query(default="mes", pattern="^(semana|mes|bimestre)$"),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
+    semana, mês ou bimestre), respeitando o período escolhido."""
+    aluno = db.get(Aluno, aluno_id)
+    if aluno is None or aluno.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    escola = db.get(Escola, escola_id)
+    try:
+        preset = "personalizado" if (inicio or fim) else "tudo"
+        ini, fim_dt, _ = periodos.resolver(
+            preset, date.today(), escola.ano_letivo_ativo,
+            periodos._parse_data(inicio), periodos._parse_data(fim))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Data inválida (use AAAA-MM-DD).") from exc
+    return svc.evolucao_leitura(db, escola_id, aluno_id, granularidade, ini, fim_dt)
 
 
 @router.get("/ranking-evolucao")
