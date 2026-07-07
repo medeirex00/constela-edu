@@ -379,11 +379,12 @@ class PerfilElefanteTurma:
     formato = "resumo"
     estrategia = "perfil_elefante_turma"
 
-    def detecta(self, compacto: str) -> bool:
+    def detecta(self, compacto: str, nome_arquivo: str = "") -> bool:
         return ("performancedaturma" in compacto
+                or "performancedaturma" in compactar(nome_arquivo)
                 or ("habitodeleitura" in compacto and "nomedoestudante" in compacto))
 
-    def analisar(self, paginas: list[Pagina]) -> Analise:
+    def analisar(self, paginas: list[Pagina], nome_arquivo: str = "") -> Analise:
         registros = _tabela_posicional(
             paginas, COLUNAS_PERFIL_TURMA, com_nome=True,
             aceitar_cabecalho=lambda campos: "nome" in campos
@@ -452,21 +453,72 @@ _ROTULOS_SECAO = ("habitodeleitura", "leiturasconcluidas", "tempodeleitura",
                   "historicodelivroslidos", "compreensaoleitora",
                   "livrosescutados", "tempodeescuta")
 
+# Prefixos de legenda/decoração que NUNCA são nome de aluno (imagens, logos...).
+_PREFIXOS_LIXO = ("imagem", "figura", "foto", "logotipo", "logo", "marca",
+                  "icone", "banner", "grafico", "captura", "screenshot")
+
+# Nome do aluno no NOME DO ARQUIVO — fonte preferencial, pois o Elefante
+# exporta "Relatório de performance do estudante - NOME DO ALUNO.pdf".
+_RE_NOME_ARQUIVO = re.compile(
+    r"(?:performance|desempenho)\s+d[oe]\s+(?:estudante|aluno)\s*[-–—:]\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _parece_nome_pessoa(nome: str) -> bool:
+    """≥2 palavras, essencialmente alfabético e sem cara de legenda/rótulo."""
+    limpo = (nome or "").strip()
+    if len(limpo) < 3 or len(limpo) > 80 or len(limpo.split()) < 2:
+        return False
+    plano = compactar(limpo)
+    if any(plano.startswith(p) for p in _PREFIXOS_LIXO):
+        return False
+    if any(r in plano for r in _ROTULOS_SECAO):
+        return False
+    alfabeticas = sum(1 for c in limpo if c.isalpha() or c in " '-.")
+    return alfabeticas / max(1, len(limpo)) >= 0.85
+
+
+def nome_do_arquivo(nome_arquivo: str) -> str | None:
+    """Extrai o nome do aluno do NOME DO ARQUIVO (tudo após '... estudante -').
+
+    Tolera acentos e variações no rótulo (só casa a partir de 'performance',
+    que não tem acento). Devolve None se o arquivo não segue o padrão."""
+    if not nome_arquivo:
+        return None
+    base = re.sub(r"\.(pdf|txt|csv|tsv)$", "", nome_arquivo.strip(), flags=re.IGNORECASE)
+    casado = _RE_NOME_ARQUIVO.search(base)
+    if not casado:
+        return None
+    nome = re.sub(r"\s+", " ", casado.group(1)).strip(" -–—_")
+    return nome if _parece_nome_pessoa(nome) else None
+
 
 class PerfilElefanteEstudante:
     plataforma = "elefante"
     formato = "leituras"
     estrategia = "perfil_elefante_estudante"
 
-    def detecta(self, compacto: str) -> bool:
+    def detecta(self, compacto: str, nome_arquivo: str = "") -> bool:
+        # O nome do arquivo também identifica o relatório individual — cobre
+        # PDFs cujo conteúdo veio ruim (escaneado/imagem).
         return ("performancedoestudante" in compacto
-                or "historicodelivroslidos" in compacto)
+                or "historicodelivroslidos" in compacto
+                or "performancedoestudante" in compactar(nome_arquivo)
+                or "desempenhodoestudante" in compactar(nome_arquivo))
 
-    def analisar(self, paginas: list[Pagina]) -> Analise | None:
+    def analisar(self, paginas: list[Pagina], nome_arquivo: str = "") -> Analise | None:
         cabecalho = self._cabecalho(paginas)
-        nome_aluno = cabecalho.get("nome")
-        if not nome_aluno:
-            return None  # sem o dono do histórico, o genérico decide
+        # PRIORIDADE 1: nome do arquivo (fonte oficial e confiável do Elefante).
+        # PRIORIDADE 2: conteúdo do PDF. PRIORIDADE 3: seleção manual.
+        nome_arq = nome_do_arquivo(nome_arquivo)
+        nome_conteudo = cabecalho.get("nome")
+        if nome_arq:
+            nome_aluno, origem = nome_arq, "arquivo"
+        elif nome_conteudo:
+            nome_aluno, origem = nome_conteudo, "conteudo"
+        else:
+            nome_aluno, origem = "", "nenhum"
 
         registros = _tabela_posicional(
             paginas, COLUNAS_PERFIL_ESTUDANTE, com_nome=False,
@@ -477,22 +529,32 @@ class PerfilElefanteEstudante:
                 _RE_DATA.match(p.texto) for p in presentes.get("data", [])),
         )
 
+        # Sem nome confiável E sem histórico: deixa o genérico/manual decidir.
+        if not nome_aluno and not registros:
+            return None
+        nome_linha = nome_aluno or "Aluno não identificado"
+
         resumo = self._resumo(paginas)
         turma = cabecalho.get("turma", "")
+        por_metodo = {"arquivo": "pelo nome do arquivo",
+                      "conteudo": "pelo conteúdo do PDF"}.get(origem)
         analise = Analise(
             plataforma=self.plataforma, formato=self.formato,
             estrategia=self.estrategia,
             turma_detectada=turma,
             escola_detectada=cabecalho.get("escola", ""),
             professor_detectado=cabecalho.get("professor", ""),
+            origem_nome=origem,
             mensagem_deteccao="Este arquivo pertence ao Elefante Letrado — "
-            f"relatório individual de {nome_aluno}"
+            + (f"relatório individual de {nome_aluno} (identificado {por_metodo})"
+               if nome_aluno else "relatório individual (aluno não identificado "
+               "automaticamente — selecione manualmente)")
             + (f", turma {turma}" if turma else "")
-            + (f" ({resumo['leituras']} leituras concluídas na plataforma)"
+            + (f" · {resumo['leituras']} leituras concluídas na plataforma"
                if "leituras" in resumo else "") + ".")
 
         for numero, registro in enumerate(registros, start=1):
-            item = LinhaImportacao(numero=numero, nome=nome_aluno, dados={})
+            item = LinhaImportacao(numero=numero, nome=nome_linha, dados={})
             if turma:
                 item.dados["turma_relatorio"] = turma
             titulo = registro.texto("livro")
@@ -543,9 +605,10 @@ class PerfilElefanteEstudante:
                 continue
             # NOME do aluno vem PRIMEIRO no layout (topo mais alto) — capturado
             # antes da regra de turma para não confundir nomes com hífen
-            # ("Ana - Maria") com "TURMA - ESCOLA".
+            # ("Ana - Maria") com "TURMA - ESCOLA". Legendas de imagem
+            # ("Imagem de..."), logos e rótulos são recusados.
             if "nome" not in info and not re.search(r"\d", texto) \
-                    and len(texto.split()) >= 2 and len(texto) <= 80:
+                    and _parece_nome_pessoa(texto):
                 info["nome"] = texto
                 continue
             # Linha "TURMA - ESCOLA": SÓ depois do nome e SÓ se começar por
@@ -656,11 +719,12 @@ class PerfilMatific:
     formato = "resumo"
     estrategia = "perfil_matific"
 
-    def detecta(self, compacto: str) -> bool:
+    def detecta(self, compacto: str, nome_arquivo: str = "") -> bool:
         return ("matific" in compacto
+                or "matific" in compactar(nome_arquivo)
                 or ("atividadesfinalizadas" in compacto and "estrelas" in compacto))
 
-    def analisar(self, paginas: list[Pagina]) -> Analise:
+    def analisar(self, paginas: list[Pagina], nome_arquivo: str = "") -> Analise:
         # O botão lateral "Opinião" é desenhado de lado ("oãinipO") e pousa
         # na MESMA linha visual de registros reais — remove-se por palavra.
         paginas = [
@@ -723,9 +787,13 @@ class PerfilMatific:
 PERFIS = (PerfilElefanteEstudante(), PerfilElefanteTurma(), PerfilMatific())
 
 
-def analisar_pdf(conteudo: bytes, plataforma: str | None = None) -> Analise:
+def analisar_pdf(conteudo: bytes, plataforma: str | None = None,
+                 nome_arquivo: str = "") -> Analise:
     """Analisa um PDF: detecta o perfil real e reconstrói a tabela por
     posição; sem perfil compatível, cai nas estratégias genéricas de texto.
+
+    `nome_arquivo` é a fonte PREFERENCIAL do nome do aluno no relatório
+    individual do Elefante ("... estudante - NOME.pdf").
     """
     from app.services import importacao as generico
 
@@ -734,20 +802,21 @@ def analisar_pdf(conteudo: bytes, plataforma: str | None = None) -> Analise:
     except Exception:  # noqa: BLE001 — pdfplumber é melhor esforço
         paginas = []
 
+    compacto = ""
     if paginas:
         compacto = compactar(" ".join(
             p.texto for pagina in paginas for p in pagina.palavras))
-        for perfil in PERFIS:
-            if plataforma and perfil.plataforma != plataforma:
-                continue
-            if not perfil.detecta(compacto):
-                continue
-            try:
-                analise = perfil.analisar(paginas)
-            except Exception:  # noqa: BLE001 — layout inesperado: usa o genérico
-                analise = None
-            if analise is not None and analise.linhas:
-                return analise
+    for perfil in PERFIS:
+        if plataforma and perfil.plataforma != plataforma:
+            continue
+        if not perfil.detecta(compacto, nome_arquivo):
+            continue
+        try:
+            analise = perfil.analisar(paginas, nome_arquivo)
+        except Exception:  # noqa: BLE001 — layout inesperado: usa o genérico
+            analise = None
+        if analise is not None and analise.linhas:
+            return analise
 
     texto = generico.extrair_texto_pdf(conteudo)
     return generico.analisar_texto(texto, plataforma)

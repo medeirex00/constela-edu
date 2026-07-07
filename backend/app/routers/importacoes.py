@@ -119,7 +119,8 @@ async def analisar(
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
                 # genéricas de texto como rede de segurança.
-                analise = perfis_pdf.analisar_pdf(conteudo, plataforma)
+                analise = perfis_pdf.analisar_pdf(conteudo, plataforma,
+                                                  nome_arquivo=arquivo_nome or "")
             except HTTPException:
                 raise  # mensagem útil do parser genérico chega ao usuário
             except Exception as exc:
@@ -157,6 +158,7 @@ async def analisar(
         estrategia=analise.estrategia,
         mensagem_deteccao=analise.mensagem_deteccao,
         turma_detectada=analise.turma_detectada,
+        origem_nome=analise.origem_nome,
         total_alunos=len(nomes_unicos),
         total_linhas=len(analise.linhas),
         total_erros=sum(1 for l in analise.linhas if l.erros) + len(analise.erros_gerais),

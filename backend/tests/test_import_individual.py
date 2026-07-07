@@ -52,6 +52,38 @@ def _pdf_individual(nome="MARIA CLARA TESTE", turma="9 ANO Z TESTE") -> bytes:
     return bytes(pdf.output())
 
 
+def test_nome_do_arquivo_extrai_e_rejeita_lixo():
+    from app.services.perfis_pdf import nome_do_arquivo
+    assert nome_do_arquivo(
+        "Relatório de performance do estudante - ISABELA LOHANA DE JESUS LAVINSKY.pdf"
+    ) == "ISABELA LOHANA DE JESUS LAVINSKY"
+    # variação (desempenho/aluno) e nome com hífen
+    assert nome_do_arquivo(
+        "relatorio de desempenho do aluno - ANA - MARIA SOUSA.pdf") == "ANA - MARIA SOUSA"
+    # arquivos que NÃO seguem o padrão -> None (nunca vira nome)
+    assert nome_do_arquivo("Imagem de tela.pdf") is None
+    assert nome_do_arquivo("documento.pdf") is None
+    assert nome_do_arquivo("") is None
+
+
+def test_nome_do_arquivo_tem_prioridade_sobre_conteudo():
+    """Mesmo com nome no conteúdo, o nome do ARQUIVO é a fonte primária."""
+    pdf = _pdf_individual(nome="NOME NO CONTEUDO ERRADO")
+    a = perfis_pdf.analisar_pdf(
+        pdf, nome_arquivo="Relatório de performance do estudante - JOANA DA SILVA REAL.pdf")
+    assert a.origem_nome == "arquivo"
+    assert all(l.nome == "JOANA DA SILVA REAL" for l in a.linhas)
+    assert "pelo nome do arquivo" in a.mensagem_deteccao
+
+
+def test_legenda_de_imagem_nao_vira_nome():
+    """'Imagem de...' no conteúdo nunca é aceito como nome do aluno."""
+    from app.services.perfis_pdf import _parece_nome_pessoa
+    assert not _parece_nome_pessoa("Imagem de perfil do aluno")
+    assert not _parece_nome_pessoa("Logotipo Elefante Letrado")
+    assert _parece_nome_pessoa("Veronica Oliveira Marcolino Goes")
+
+
 def test_parser_individual_extrai_turma():
     analise = perfis_pdf.analisar_pdf(_pdf_individual())
     assert analise.estrategia == "perfil_elefante_estudante"

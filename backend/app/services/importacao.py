@@ -248,6 +248,9 @@ class Analise:
     turma_detectada: str = ""
     escola_detectada: str = ""
     professor_detectado: str = ""
+    # Como o nome do aluno foi identificado no relatório individual:
+    # "arquivo" (nome do arquivo — preferencial) | "conteudo" | "nenhum".
+    origem_nome: str = ""
 
 
 _RODAPES = ("total", "media", "pagina", "page", "gerado em", "relatorio",

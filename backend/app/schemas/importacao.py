@@ -32,6 +32,7 @@ class AnaliseOut(BaseModel):
     estrategia: str = ""            # tabela | cabecalho_vertical | rotulos | posicional
     mensagem_deteccao: str = ""     # "Este arquivo pertence ao Matific."
     turma_detectada: str = ""       # turma lida do PDF (cabeçalho do Elefante)
+    origem_nome: str = ""           # arquivo | conteudo | nenhum (como o nome foi achado)
     total_alunos: int = 0           # nomes únicos encontrados
     total_linhas: int
     total_erros: int

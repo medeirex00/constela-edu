@@ -18,7 +18,9 @@ import {
   Sparkles,
   UserCheck,
   UserPlus,
+  XCircle,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -61,6 +63,34 @@ const ROTULOS_DADOS: Record<string, string> = {
 };
 
 const OCULTAR_NA_PREVIA = new Set(["turma_relatorio", "livro", "nivel", "genero", "data", "tempo_livro_min"]);
+
+/** Como o nome do aluno foi identificado (define ícone, cor e texto do card). */
+const METODO_IDENTIFICACAO: Record<
+  string,
+  { Icone: LucideIcon; cor: string; corTexto: string; classe: string; texto: string }
+> = {
+  arquivo: {
+    Icone: CheckCircle2,
+    cor: "text-emerald-600 dark:text-emerald-400",
+    corTexto: "text-emerald-700 dark:text-emerald-300",
+    classe: "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5",
+    texto: "Aluno identificado pelo nome do arquivo",
+  },
+  conteudo: {
+    Icone: AlertTriangle,
+    cor: "text-amber-600 dark:text-amber-400",
+    corTexto: "text-amber-700 dark:text-amber-300",
+    classe: "border-amber-200 bg-amber-50/60 dark:border-amber-500/20 dark:bg-amber-500/5",
+    texto: "Aluno identificado pelo conteúdo do PDF",
+  },
+  nenhum: {
+    Icone: XCircle,
+    cor: "text-red-600 dark:text-red-400",
+    corTexto: "text-red-700 dark:text-red-300",
+    classe: "border-red-200 bg-red-50/60 dark:border-red-500/20 dark:bg-red-500/5",
+    texto: "Não foi possível identificar o aluno automaticamente",
+  },
+};
 
 function resumoDados(dados: Record<string, unknown>): string {
   return Object.entries(dados)
@@ -620,41 +650,40 @@ export default function Importacoes() {
             </div>
           )}
 
-          {/* Relatório individual: identificação do aluno em destaque + trocar */}
+          {/* Relatório individual: identificação do aluno em destaque + trocar.
+              A cor/ícone refletem COMO o nome foi identificado (arquivo é o
+              método preferencial); a linha de vínculo mostra o cadastro. */}
           {analise.formato === "leituras" && grupos.length > 0 && (
             <div className="space-y-3 p-4">
               {grupos.map((grupo, gi) => {
-                const info = descreverVinculo(gi);
-                if (!info) return null;
-                const alta = info.tom === "ok";
+                const vinc = descreverVinculo(gi);
+                if (!vinc) return null;
+                const metodo = METODO_IDENTIFICACAO[analise.origem_nome] ?? METODO_IDENTIFICACAO.conteudo;
                 return (
-                  <div
-                    key={grupo.chave}
-                    className={`rounded-xl border p-4 ${
-                      alta
-                        ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5"
-                        : "border-amber-200 bg-amber-50/60 dark:border-amber-500/20 dark:bg-amber-500/5"
-                    }`}
-                  >
+                  <div key={grupo.chave} className={`rounded-xl border p-4 ${metodo.classe}`}>
                     <div className="flex flex-wrap items-start gap-3">
-                      {alta ? (
-                        <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                      ) : (
-                        <AlertTriangle size={22} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                      )}
+                      <metodo.Icone size={22} className={`mt-0.5 shrink-0 ${metodo.cor}`} />
                       <div className="min-w-0 flex-1">
-                        <p className={`text-xs font-semibold uppercase tracking-wide ${alta ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
-                          {info.titulo}
+                        <p className={`text-xs font-semibold uppercase tracking-wide ${metodo.corTexto}`}>
+                          {metodo.texto}
                         </p>
-                        <p className="mt-0.5 text-lg font-semibold tracking-tight">{info.nome}</p>
-                        <p className="mt-0.5 text-sm text-zinc-600 dark:text-zinc-400">
-                          {[
-                            info.turma && `Turma: ${info.turma}`,
-                            grupo.totalLivros > 0 && `${grupo.totalLivros} livro${grupo.totalLivros === 1 ? "" : "s"}`,
-                            info.detalhe,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
+                        <p className="mt-0.5 text-lg font-semibold tracking-tight">{grupo.nome}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+                          <span
+                            className={
+                              vinc.tom === "ok"
+                                ? "font-medium text-emerald-700 dark:text-emerald-300"
+                                : "font-medium text-amber-700 dark:text-amber-300"
+                            }
+                          >
+                            {vinc.titulo}
+                          </span>
+                          {vinc.nome !== grupo.nome && <span>→ {vinc.nome}</span>}
+                          {vinc.turma && <span>· Turma: {vinc.turma}</span>}
+                          {grupo.totalLivros > 0 && (
+                            <span>· {grupo.totalLivros} livro{grupo.totalLivros === 1 ? "" : "s"}</span>
+                          )}
+                          {vinc.detalhe && <span className="text-zinc-400">· {vinc.detalhe}</span>}
                         </p>
                       </div>
                       <Botao variante="neutro" onClick={() => setEditarGrupo(gi)}>

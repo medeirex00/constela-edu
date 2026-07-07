@@ -190,6 +190,8 @@ export interface Analise {
   mensagem_deteccao: string;
   /** Turma lida do cabeçalho do PDF (relatórios do Elefante). */
   turma_detectada: string;
+  /** Como o nome foi identificado: "arquivo" | "conteudo" | "nenhum" | "". */
+  origem_nome: string;
   total_alunos: number;
   total_linhas: number;
   total_erros: number;
