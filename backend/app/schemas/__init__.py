@@ -1,8 +1,12 @@
 from app.schemas.comum import (
+    AcaoAlunos,
     AlunoCreate,
+    AlunoGestaoOut,
     AlunoOut,
     AlunoPerfilOut,
+    AlunoUpdate,
     DashboardOut,
+    ExclusaoPermanenteAlunos,
     DificuldadeSerieOut,
     DificuldadeUpdate,
     EscolaCreate,

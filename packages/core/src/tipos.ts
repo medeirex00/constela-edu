@@ -159,6 +159,20 @@ export interface PaginaAlunos {
   itens: Aluno[];
 }
 
+/** Aluno no painel de gestão da turma — com nota, posição e data de cadastro. */
+export interface AlunoGestao {
+  id: number;
+  nome: string;
+  foto_url: string | null;
+  numero_chamada: number | null;
+  status: string;
+  turma: string | null;
+  ano_escolar: string | null;
+  created_at: string | null;
+  nota_geral: number | null;
+  posicao: number | null;
+}
+
 // --- Fase 2: importações e plataformas ---------------------------------------
 
 export interface Correspondencia {

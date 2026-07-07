@@ -133,6 +133,42 @@ class AlunoCreate(BaseModel):
     observacoes: str | None = None
 
 
+class AlunoUpdate(BaseModel):
+    """Edição parcial do cadastro do aluno (só os campos enviados mudam)."""
+    nome: str | None = Field(default=None, min_length=2, max_length=200)
+    numero_chamada: int | None = None
+    data_nascimento: date | None = None
+    observacoes: str | None = Field(default=None, max_length=1000)
+
+
+class AlunoGestaoOut(ORMModel):
+    """Aluno com nota e data de cadastro — usado no painel de gestão da turma."""
+    id: int
+    nome: str
+    foto_url: str | None
+    numero_chamada: int | None
+    status: str
+    turma: str | None = None
+    ano_escolar: str | None = None
+    created_at: datetime | None = None
+    nota_geral: float | None = None
+    posicao: int | None = None
+
+
+class AcaoAlunos(BaseModel):
+    """Ação em massa (ou individual) sobre alunos: arquivar, reativar, excluir
+    (lógico) ou transferir de turma."""
+    aluno_ids: list[int] = Field(min_length=1)
+    acao: str = Field(pattern="^(arquivar|reativar|excluir|transferir)$")
+    turma_id: int | None = None  # obrigatório quando acao == "transferir"
+
+
+class ExclusaoPermanenteAlunos(BaseModel):
+    """Exclusão FÍSICA irreversível: exige confirmação textual explícita."""
+    aluno_ids: list[int] = Field(min_length=1)
+    confirmacao: str = ""
+
+
 class FaixaLeituraOut(BaseModel):
     codigo: str
     nome: str
