@@ -51,17 +51,19 @@ logger = logging.getLogger("constela.importacao")
 
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
 IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
-_TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.pdf$")
+_TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.(pdf|xlsx)$")
 
 
 def _limpar_temporarios_orfaos() -> None:
-    """Remove PDFs de prévia abandonados (usuário fechou sem confirmar).
+    """Remove arquivos de prévia abandonados (usuário fechou sem confirmar).
     Chamado a cada nova análise — barato e evita crescimento sem limite."""
+    import itertools
+
     pasta = settings.UPLOADS_DIR / "temporarios"
     if not pasta.exists():
         return
     limite = time.time() - IDADE_MAXIMA_TEMP_S
-    for arquivo in pasta.glob("*.pdf"):
+    for arquivo in itertools.chain(pasta.glob("*.pdf"), pasta.glob("*.xlsx")):
         try:
             if arquivo.stat().st_mtime < limite:
                 arquivo.unlink(missing_ok=True)
@@ -115,7 +117,10 @@ async def analisar(
         arquivo_nome = arquivo.filename or "relatorio"
         nome_lower = arquivo_nome.lower()
         tipo_conteudo = arquivo.content_type or ""
-        eh_pdf = nome_lower.endswith(".pdf") or tipo_conteudo == "application/pdf"
+        # Magic bytes "%PDF-" garantem a detecção mesmo sem extensão/content-type
+        # (ex.: upload mobile com nome "relatorio" e tipo genérico octet-stream).
+        eh_pdf = (nome_lower.endswith(".pdf") or tipo_conteudo == "application/pdf"
+                  or conteudo[:5] == b"%PDF-")
         # Planilha Excel: .xlsx/.xlsm, content-type de spreadsheet, ou um ZIP
         # ("PK") que não seja PDF — o Matific exporta o relatório por turma assim.
         eh_planilha = (not eh_pdf and (
@@ -124,6 +129,7 @@ async def analisar(
             or tipo_conteudo == "application/vnd.ms-excel"
             or conteudo[:2] == b"PK"))
         if eh_planilha:
+            _limpar_temporarios_orfaos()
             try:
                 analise = planilhas.analisar_planilha(
                     conteudo, plataforma, nome_arquivo=arquivo_nome or "")
@@ -135,6 +141,11 @@ async def analisar(
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler a planilha. O arquivo está íntegro?") from exc
+            # Guarda o Excel original em /temporarios até a confirmação (§15).
+            arquivo_token = f"{uuid.uuid4().hex}.xlsx"
+            destino = settings.UPLOADS_DIR / "temporarios" / arquivo_token
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_bytes(conteudo)
             tipo = "xlsx"
         elif eh_pdf:
             _limpar_temporarios_orfaos()
@@ -411,7 +422,7 @@ def confirmar(
         if origem.exists():
             # Deriva um nome seguro só do basename do nome enviado.
             base_nome = Path(dados.arquivo_nome or "").name
-            if not base_nome or not base_nome.lower().endswith(".pdf"):
+            if not base_nome or not base_nome.lower().endswith((".pdf", ".xlsx")):
                 base_nome = dados.arquivo_token
             nome = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{base_nome}"
             destino = (base_uploads / dados.plataforma / nome).resolve()

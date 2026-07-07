@@ -41,6 +41,7 @@ from app.services.importacao import (
     _eh_coluna_nome,
     _fechar_linha,
     _numero,
+    _similaridade,
     normalizar_nome,
 )
 
@@ -268,13 +269,31 @@ def _tabela_posicional(
     orfas: list[LinhaVisual] = []          # fragmento só casa com registros
                                            # da MESMA página
 
+    def _so_coluna_nome(linha: LinhaVisual) -> bool:
+        """Fragmento que cai INTEIRO na coluna 'nome' e não tem dígitos — é um
+        pedaço de nome quebrado (sobrenome numa 3ª linha), não turma/dado."""
+        if colunas is None or not linha.palavras:
+            return False
+        for palavra in linha.palavras:
+            coluna = _coluna_de(colunas, palavra)
+            if coluna is None or coluna.campo != "nome" or any(c.isdigit() for c in palavra.texto):
+                return False
+        return True
+
     def _fechar_orfas() -> None:
-        """Anexa cada fragmento ao registro mais próximo verticalmente."""
+        """Anexa cada fragmento ao registro mais próximo verticalmente.
+
+        O nome do aluno pode quebrar em 3 linhas visuais (o registro nasce na
+        do meio): as pontas ficam a ~1 altura de linha (~16pt), acima do limiar
+        de 12pt usado para a turma fatiada. Fragmentos que caem só na coluna
+        'nome' ganham um limiar maior — sem alcançar a próxima linha de dados
+        (~23pt adiante), então não invadem o registro vizinho."""
         da_pagina = registros[inicio_pagina:]
         for linha in orfas:
             vizinho = min(da_pagina, key=lambda r: abs(r.topo - linha.topo),
                           default=None)
-            if vizinho is not None and abs(vizinho.topo - linha.topo) <= 12.0:
+            limite = 18.0 if _so_coluna_nome(linha) else 12.0
+            if vizinho is not None and abs(vizinho.topo - linha.topo) <= limite:
                 _depositar(vizinho, linha)
         orfas.clear()
 
@@ -471,7 +490,10 @@ def _parece_nome_pessoa(nome: str) -> bool:
     if len(limpo) < 3 or len(limpo) > 80 or len(limpo.split()) < 2:
         return False
     plano = compactar(limpo)
-    if any(plano.startswith(p) for p in _PREFIXOS_LIXO):
+    # Rejeita legenda de imagem/logo pelo PRIMEIRO TOKEN isolado ("Imagem de…",
+    # "Figura 1…") — comparar a string inteira colada descartaria nomes reais
+    # cujo início por acaso coincide com um prefixo ("Marcela", "Figueiredo").
+    if compactar(limpo.split()[0]) in _PREFIXOS_LIXO:
         return False
     if any(r in plano for r in _ROTULOS_SECAO):
         return False
@@ -491,6 +513,9 @@ def nome_do_arquivo(nome_arquivo: str) -> str | None:
     if not casado:
         return None
     nome = re.sub(r"\s+", " ", casado.group(1)).strip(" -–—_")
+    # Remove o sufixo "(1)", "(2)"… que o navegador acrescenta ao baixar cópias
+    # do mesmo relatório — senão o casamento exato de nome falharia.
+    nome = re.sub(r"\s*\(\d+\)\s*$", "", nome).strip()
     return nome if _parece_nome_pessoa(nome) else None
 
 
@@ -552,6 +577,16 @@ class PerfilElefanteEstudante:
             + (f", turma {turma}" if turma else "")
             + (f" · {resumo['leituras']} leituras concluídas na plataforma"
                if "leituras" in resumo else "") + ".")
+
+        # O nome do arquivo tem prioridade, mas se DIVERGIR do nome no conteúdo
+        # do PDF é sinal de arquivo renomeado/trocado — avisa para o usuário
+        # conferir antes de importar (não muda a prioridade, só sinaliza).
+        if origem == "arquivo" and nome_conteudo and _similaridade(
+                normalizar_nome(nome_arq), normalizar_nome(nome_conteudo)) < 0.85:
+            analise.erros_gerais.append(
+                f"Atenção: o nome do arquivo (“{nome_arq}”) difere do nome no "
+                f"conteúdo do PDF (“{nome_conteudo}”). Confirme se o relatório é "
+                "do aluno certo antes de importar.")
 
         for numero, registro in enumerate(registros, start=1):
             item = LinhaImportacao(numero=numero, nome=nome_linha, dados={})
@@ -745,11 +780,14 @@ class PerfilMatific:
         def inicia(presentes: dict[str, list[Palavra]]) -> bool:
             if "nome" not in presentes:
                 return False
-            numericos = sum(
+            # Conta colunas de métrica PREENCHIDAS — número OU traço ("-"/"—").
+            # O aluno inativo pode vir "- - -": ainda é um aluno (nome + Série),
+            # e a linha deve sobreviver com avisos, nunca sumir (§51).
+            preenchidas = sum(
                 1 for campo in ("atividades", "pontuacao_media", "estrelas")
-                if any(re.fullmatch(r"[\d.,]+", p.texto)
+                if any(re.fullmatch(r"[\d.,]+|[-–—]", p.texto)
                        for p in presentes.get(campo, [])))
-            return numericos >= 2
+            return preenchidas >= 2
 
         registros = _tabela_posicional(
             paginas, COLUNAS_PERFIL_MATIFIC, com_nome=True,

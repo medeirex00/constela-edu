@@ -369,3 +369,95 @@ def test_importacao_individual_pela_api(cliente, db, escola_completa):
     assert snapshot.livros_unicos == 2
     assert snapshot.livros_por_nivel == {"K": 1, "CC": 1}
     assert snapshot.tempo_leitura_min == 330  # complementado pelo resumo
+
+
+# ---------------------------------------------------------------------------
+# Robustez (achados da auditoria adversarial dos parsers)
+# ---------------------------------------------------------------------------
+
+def _cabecalho_matific() -> list:
+    return [
+        P("Matific", 40, 30),
+        P("Atividades", 299.9, 100), P("Pontuação", 384.9, 100),
+        P("Série", 51.7, 108), P("Aluno", 84.7, 108), P("Turma", 191.2, 108),
+        P("Estrelas", 459.9, 108),
+        P("Finalizadas", 299.9, 116), P("média", 384.9, 116),
+    ]
+
+
+def test_matific_nome_em_tres_linhas_nao_trunca():
+    """O nome do aluno pode quebrar em 3 linhas visuais (o registro nasce na do
+    meio): as pontas ficam a ~16pt e não podem ser descartadas pelo limiar de
+    proximidade da turma (12pt), senão o nome sai truncado ('MICKAELLYN')."""
+    palavras = _cabecalho_matific() + [
+        P("KEMILLYN", 84.7, 540.0),                                   # ponta de cima
+        P("2", 191.2, 548.0), P("ANO", 199.5, 548.0), P("B", 224.2, 548.0),
+        P("TARDE", 232.5, 548.0),                                     # turma acima
+        P("2", 51.7, 555.7), P("MICKAELLYN", 84.7, 555.7),           # linha de dados
+        P("4", 299.9, 555.7), P("4.50", 384.9, 555.7), P("18", 459.9, 555.7),
+        P("ANUAL", 191.2, 564.0), P("(698)", 225.7, 564.0),          # turma abaixo
+        P("BARBOSA", 84.7, 571.5), P("D", 132.0, 571.5),             # ponta de baixo
+    ]
+    analise = PerfilMatific().analisar([Pagina(numero=1, palavras=palavras)])
+    assert len(analise.linhas) == 1
+    aluno = analise.linhas[0]
+    assert aluno.nome == "KEMILLYN MICKAELLYN BARBOSA D"  # nome completo, não truncado
+    assert aluno.dados["estrelas"] == 18
+    assert aluno.dados["turma_relatorio"] == "2 ANO B TARDE ANUAL"
+
+
+def test_matific_aluno_inativo_com_tracos_sobrevive():
+    """Aluno sem engajamento pode vir '- - -' nas colunas numéricas — ainda é
+    um aluno e a linha não pode sumir (§51)."""
+    palavras = _cabecalho_matific() + [
+        P("3", 191.2, 140), P("ANO", 199.5, 140), P("B", 224.2, 140),
+        P("3", 51.7, 148), P("ANA", 84.7, 148), P("S", 142.5, 148),
+        P("50", 299.9, 148), P("4.10", 384.9, 148), P("200", 459.9, 148),
+        P("ANUAL", 191.2, 156),
+        # aluno inativo: três traços
+        P("3", 191.2, 180), P("ANO", 199.5, 180), P("B", 224.2, 180),
+        P("3", 51.7, 188), P("PEDRO", 84.7, 188),
+        P("-", 299.9, 188), P("-", 384.9, 188), P("-", 459.9, 188),
+        P("ANUAL", 191.2, 196),
+    ]
+    analise = PerfilMatific().analisar([Pagina(numero=1, palavras=palavras)])
+    nomes = [l.nome for l in analise.linhas]
+    assert "PEDRO" in nomes                       # não some da importação
+    pedro = next(l for l in analise.linhas if l.nome == "PEDRO")
+    assert "atividades" not in pedro.dados        # traço ilegível → campo ausente
+    assert pedro.avisos                            # avisou sobre a célula ilegível
+
+
+def test_estudante_avisa_quando_nome_arquivo_diverge_do_conteudo():
+    """Nome do arquivo tem prioridade, mas se DIVERGIR do conteúdo (PDF
+    renomeado/trocado) um aviso é emitido — sem trocar a prioridade."""
+    analise = PerfilElefanteEstudante().analisar(
+        _paginas_estudante(),
+        nome_arquivo="Relatório de performance do estudante - OUTRA PESSOA QUALQUER.pdf")
+    assert analise.origem_nome == "arquivo"
+    assert analise.linhas[0].nome == "OUTRA PESSOA QUALQUER"
+    assert any("difere" in e.casefold() for e in analise.erros_gerais)
+
+
+def test_estudante_nome_arquivo_igual_conteudo_nao_avisa():
+    analise = PerfilElefanteEstudante().analisar(
+        _paginas_estudante(),
+        nome_arquivo="Relatório de performance do estudante - MARIA CLARA TESTE.pdf")
+    assert analise.origem_nome == "arquivo"
+    assert not any("difere" in e.casefold() for e in analise.erros_gerais)
+
+
+def test_analisar_pdf_sem_extensao_e_content_type_generico(cliente, escola_completa):
+    """PDF sem extensão .pdf e com content-type genérico (ex.: upload mobile)
+    ainda é lido pelo perfil — detecção por magic bytes '%PDF-', não jogado no
+    ramo de texto que corromperia o binário."""
+    escola_id = escola_completa["escola"].id
+    resposta = cliente.post(
+        f"/api/v1/escolas/{escola_id}/importacoes/analisar",
+        files={"arquivo": ("relatorio", _pdf_estudante(), "application/octet-stream")},
+    )
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+    assert corpo["plataforma"] == "elefante"
+    assert corpo["tipo"] == "pdf"
+    assert corpo["total_alunos"] == 1
