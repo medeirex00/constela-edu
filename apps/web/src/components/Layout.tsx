@@ -2,10 +2,12 @@ import {
   ArrowLeftRight,
   Award,
   Bell,
+  Blocks,
   BookOpen,
   Bot,
   Building2,
   Calculator,
+  ChevronDown,
   FileText,
   FlaskConical,
   Lightbulb,
@@ -21,6 +23,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Sun,
   TrendingUp,
   Trophy,
@@ -29,8 +32,9 @@ import {
   Users,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
@@ -38,30 +42,100 @@ import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 import { LogoHorizontal } from "./Logo";
 
-const MENU = [
-  { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard },
-  { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
-  { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
-  { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },
-  { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2 },
-  { rotulo: "Alunos", caminho: "/alunos", icone: GraduationCap },
-  { rotulo: "Turmas", caminho: "/turmas", icone: Users },
-  { rotulo: "Professores", caminho: "/professores", icone: School },
-  { rotulo: "Matific", caminho: "/matific", icone: Calculator },
-  { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen },
-  { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen },
-  { rotulo: "Importações", caminho: "/importacoes", icone: Upload },
-  { rotulo: "Conquistas", caminho: "/conquistas", icone: Award },
-  { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
-  { rotulo: "Insights", caminho: "/insights", icone: Lightbulb },
-  { rotulo: "Assistente", caminho: "/assistente", icone: Bot },
-  { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay },
-  { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
-  { rotulo: "Simulador", caminho: "/simulador", icone: FlaskConical },
-  { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal },
-  { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
-  { rotulo: "Configurações", caminho: "/configuracoes", icone: Settings },
+interface ItemNav {
+  rotulo: string;
+  caminho: string;
+  icone: LucideIcon;
+  /** Destaca só no match EXATO (rota pai que tem sub-rotas próprias). */
+  exato?: boolean;
+}
+
+interface GrupoNav {
+  chave: string;
+  rotulo: string;
+  icone: LucideIcon;
+  itens: ItemNav[];
+}
+
+// Dashboard fica fora dos grupos — é a página inicial, sempre à mão.
+const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard, exato: true };
+
+// Menu agrupado (accordion): reduz o excesso de itens visíveis sem esconder
+// nenhuma funcionalidade. Cada grupo abre/fecha; o da rota atual abre sozinho.
+const GRUPOS: GrupoNav[] = [
+  {
+    chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [
+      { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
+      { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
+      { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },
+    ],
+  },
+  {
+    chave: "gestao", rotulo: "Gestão Escolar", icone: Users, itens: [
+      { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2 },
+      { rotulo: "Alunos", caminho: "/alunos", icone: GraduationCap },
+      { rotulo: "Turmas", caminho: "/turmas", icone: Users },
+      { rotulo: "Professores", caminho: "/professores", icone: School },
+    ],
+  },
+  {
+    chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [
+      { rotulo: "Matific", caminho: "/matific", icone: Calculator },
+      { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen },
+      { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen },
+      { rotulo: "Importações", caminho: "/importacoes", icone: Upload },
+    ],
+  },
+  {
+    chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [
+      { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
+      { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
+    ],
+  },
+  {
+    chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [
+      { rotulo: "Insights", caminho: "/insights", icone: Lightbulb },
+      { rotulo: "Assistente", caminho: "/assistente", icone: Bot },
+      { rotulo: "Simulador", caminho: "/simulador", icone: FlaskConical },
+    ],
+  },
+  {
+    chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [
+      { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
+      { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay },
+    ],
+  },
+  {
+    chave: "config", rotulo: "Configurações", icone: Settings, itens: [
+      { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal },
+      { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
+      { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings },
+    ],
+  },
 ];
+
+const CHAVE_MENU = "constela_menu_abertos";
+
+/** Grupo que contém a rota atual (para destacar e abrir automaticamente). */
+function grupoDaRota(pathname: string): string | null {
+  for (const grupo of GRUPOS) {
+    const bate = grupo.itens.some(
+      (it) => pathname === it.caminho || (it.caminho !== "/" && pathname.startsWith(it.caminho + "/")),
+    );
+    if (bate) return grupo.chave;
+  }
+  return null;
+}
+
+function carregarAbertos(): Set<string> {
+  try {
+    const bruto = localStorage.getItem(CHAVE_MENU);
+    if (bruto) return new Set(JSON.parse(bruto) as string[]);
+  } catch {
+    /* localStorage indisponível: começa tudo fechado */
+  }
+  return new Set();
+}
 
 interface ResultadoPesquisa {
   alunos: { id: number; nome: string }[];
@@ -214,27 +288,112 @@ function Notificacoes() {
   );
 }
 
-function ItensMenu({ aoNavegar }: { aoNavegar?: () => void }) {
+/** Um link do menu (item de topo ou subitem de um grupo). */
+function LinkMenu({ item, aoNavegar, subitem }: {
+  item: ItemNav;
+  aoNavegar?: () => void;
+  subitem?: boolean;
+}) {
   return (
-    <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
-      {MENU.map(({ rotulo, caminho, icone: Icone }) => (
-        <NavLink
-          key={caminho}
-          to={caminho}
-          end={caminho === "/"}
-          onClick={aoNavegar}
-          className={({ isActive }) =>
-            `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              isActive
-                ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50"
-                : "text-zinc-600 hover:bg-zinc-100/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
-            }`
-          }
-        >
-          <Icone size={16} strokeWidth={2} />
-          {rotulo}
-        </NavLink>
-      ))}
+    <NavLink
+      to={item.caminho}
+      end={item.exato}
+      onClick={aoNavegar}
+      className={({ isActive }) =>
+        `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+          isActive
+            ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+            : "font-medium text-zinc-600 hover:bg-zinc-100/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
+        }`
+      }
+    >
+      <item.icone size={subitem ? 15 : 16} strokeWidth={2} className="shrink-0" />
+      <span className="truncate">{item.rotulo}</span>
+    </NavLink>
+  );
+}
+
+/** Navegação lateral agrupada em accordion (desktop e celular). */
+function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
+  const { pathname } = useLocation();
+  const ativo = grupoDaRota(pathname);
+  const [abertos, setAbertos] = useState<Set<string>>(() => {
+    const iniciais = carregarAbertos();
+    if (ativo) iniciais.add(ativo); // o grupo da rota atual já nasce aberto
+    return iniciais;
+  });
+
+  // Ao navegar para uma página dentro de um grupo fechado (busca, atalho,
+  // link direto), abre esse grupo para o item ativo ficar visível.
+  useEffect(() => {
+    if (ativo) setAbertos((atuais) => (atuais.has(ativo) ? atuais : new Set(atuais).add(ativo)));
+  }, [ativo]);
+
+  function alternar(chave: string) {
+    setAbertos((atuais) => {
+      const proximos = new Set(atuais);
+      if (proximos.has(chave)) proximos.delete(chave);
+      else proximos.add(chave);
+      try {
+        localStorage.setItem(CHAVE_MENU, JSON.stringify([...proximos]));
+      } catch {
+        /* ignora se localStorage indisponível */
+      }
+      return proximos;
+    });
+  }
+
+  return (
+    <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+      <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
+
+      {GRUPOS.map((grupo) => {
+        const aberto = abertos.has(grupo.chave);
+        const temAtivo = ativo === grupo.chave;
+        return (
+          <div key={grupo.chave}>
+            <button
+              type="button"
+              aria-expanded={aberto}
+              onClick={() => alternar(grupo.chave)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                temAtivo
+                  ? "text-indigo-700 dark:text-indigo-300"
+                  : "text-zinc-600 hover:bg-zinc-100/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
+              }`}
+            >
+              <grupo.icone
+                size={16}
+                strokeWidth={2}
+                className={`shrink-0 ${temAtivo ? "text-indigo-600 dark:text-indigo-400" : ""}`}
+              />
+              <span className="flex-1 text-left">{grupo.rotulo}</span>
+              {temAtivo && !aberto && (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" aria-hidden />
+              )}
+              <ChevronDown
+                size={15}
+                className={`shrink-0 text-zinc-400 transition-transform duration-200 ${aberto ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {/* Animação suave de altura via grid 0fr→1fr (respeita reduce-motion). */}
+            <div
+              className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
+                aberto ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+              }`}
+            >
+              <div className="overflow-hidden">
+                <div className="ml-4 mt-0.5 space-y-0.5 border-l border-zinc-200 pl-3 dark:border-zinc-800">
+                  {grupo.itens.map((item) => (
+                    <LinkMenu key={item.caminho} item={item} aoNavegar={aoNavegar} subitem />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </nav>
   );
 }
@@ -252,12 +411,28 @@ export default function Layout() {
   const [menuAberto, setMenuAberto] = useState(false);
   useAtalhosGlobais(); // Ctrl+K pesquisa, Alt+1..0 navegação (web e desktop)
 
+  // Menu aberto no celular: trava o scroll do fundo e fecha no Esc (evita o
+  // "scroll fantasma" atrás do drawer no Safari do iPhone).
+  useEffect(() => {
+    if (!menuAberto) return;
+    const anterior = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const aoTeclar = (evento: KeyboardEvent) => {
+      if (evento.key === "Escape") setMenuAberto(false);
+    };
+    document.addEventListener("keydown", aoTeclar);
+    return () => {
+      document.body.style.overflow = anterior;
+      document.removeEventListener("keydown", aoTeclar);
+    };
+  }, [menuAberto]);
+
   return (
     <div className="min-h-screen">
       {/* Sidebar fixa (desktop) */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-zinc-200 bg-white pl-safe dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
         <Marca />
-        <ItensMenu />
+        <Navegacao />
       </aside>
 
       {/* Sidebar deslizante (celular/tablet) — botões reais, resposta imediata ao toque (PRD §9) */}
@@ -279,7 +454,7 @@ export default function Layout() {
                 <X size={18} />
               </button>
             </div>
-            <ItensMenu aoNavegar={() => setMenuAberto(false)} />
+            <Navegacao aoNavegar={() => setMenuAberto(false)} />
           </aside>
         </div>
       )}
