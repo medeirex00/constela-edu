@@ -130,6 +130,60 @@ export function Modal({
   );
 }
 
+export function Drawer({
+  titulo,
+  aberto,
+  aoFechar,
+  children,
+}: {
+  titulo: string;
+  aberto: boolean;
+  aoFechar: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!aberto) return;
+    const anterior = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const aoTecla = (evento: KeyboardEvent) => {
+      if (evento.key === "Escape") aoFechar();
+    };
+    window.addEventListener("keydown", aoTecla);
+    return () => {
+      document.body.style.overflow = anterior;
+      window.removeEventListener("keydown", aoTecla);
+    };
+  }, [aberto, aoFechar]);
+
+  if (!aberto) return null;
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        aria-label="Fechar painel"
+        className="absolute inset-0 bg-zinc-950/50"
+        onClick={aoFechar}
+      />
+      <aside
+        role="dialog"
+        aria-label={titulo}
+        className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+      >
+        <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3.5 dark:border-zinc-800">
+          <h2 className="text-base font-semibold tracking-tight">{titulo}</h2>
+          <button
+            aria-label="Fechar"
+            className="rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            onClick={aoFechar}
+          >
+            <span aria-hidden className="block h-4 w-4 leading-none">✕</span>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto overscroll-contain p-5">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
 export function Campo({
   rotulo,
   children,
