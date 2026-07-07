@@ -219,6 +219,75 @@ def test_edicao_manual_matific_preserva_historico(cliente, db, escola_completa):
     assert log.detalhes["para"]["atividades"] == 12
 
 
+# --- Importação em LOTE: confirmar sem recalcular + /recalcular (§43) -----------
+
+def test_confirmar_com_recalcular_false_grava_sem_recalcular(cliente, db, escola_completa):
+    """No lote, cada arquivo confirma com recalcular=false: o snapshot é gravado
+    mas as notas NÃO são recalculadas ainda (isso acontece uma vez ao final)."""
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+    resposta = cliente.post(
+        f"/api/v1/escolas/{escola_id}/importacoes/confirmar",
+        json={
+            "plataforma": "matific", "formato": "resumo", "tipo": "texto",
+            "recalcular": False,
+            "linhas": [{
+                "nome": ana.nome,
+                "dados": {"atividades": 42, "pontuacao_media": 85.5, "estrelas": 120},
+                "aluno_id": ana.id,
+            }],
+        },
+    )
+    assert resposta.status_code == 200, resposta.text
+    # Snapshot foi gravado normalmente...
+    assert db.query(SnapshotMatific).filter_by(aluno_id=ana.id).count() == 1
+    # ...mas a mensagem é a curta e a nota ainda NÃO foi calculada.
+    assert "recalcula" not in resposta.json()["mensagem"].casefold()
+    assert db.query(Nota).filter_by(aluno_id=ana.id).count() == 0
+
+
+def test_recalcular_agora_calcula_notas_da_escola(cliente, db, escola_completa):
+    """Depois de vários /confirmar com recalcular=false (um por arquivo do lote),
+    um único POST /recalcular calcula as notas de toda a escola."""
+    escola_id = escola_completa["escola"].id
+    ana, joao = escola_completa["alunos"][0], escola_completa["alunos"][1]
+
+    for aluno, atividades in [(ana, 42), (joao, 10)]:
+        r = cliente.post(
+            f"/api/v1/escolas/{escola_id}/importacoes/confirmar",
+            json={
+                "plataforma": "matific", "formato": "resumo", "tipo": "texto",
+                "recalcular": False,
+                "linhas": [{
+                    "nome": aluno.nome,
+                    "dados": {"atividades": atividades, "pontuacao_media": 70, "estrelas": 30},
+                    "aluno_id": aluno.id,
+                }],
+            },
+        )
+        assert r.status_code == 200, r.text
+
+    # Nenhuma nota ainda: o lote adiou o recálculo.
+    assert db.query(Nota).count() == 0
+
+    recalculo = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/recalcular")
+    assert recalculo.status_code == 200, recalculo.text
+    assert recalculo.json()["alunos"] >= 2
+
+    # Agora as duas notas existem e quem tem mais atividades pontua mais.
+    nota_ana = db.query(Nota).filter_by(aluno_id=ana.id).one()
+    nota_joao = db.query(Nota).filter_by(aluno_id=joao.id).one()
+    assert nota_ana.nota_matific > nota_joao.nota_matific
+
+
+def test_recalcular_exige_papel_autorizado(cliente, db, escola_completa):
+    """O endpoint de recálculo do lote respeita os papéis (admin/coordenador)."""
+    escola_id = escola_completa["escola"].id
+    resposta = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/recalcular")
+    assert resposta.status_code == 200, resposta.text
+    assert "alunos" in resposta.json()
+
+
 def test_catalogo_de_livros_busca_e_protecao_de_exclusao(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     criado = cliente.post(

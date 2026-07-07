@@ -56,6 +56,9 @@ class ImportacaoConfirm(BaseModel):
     arquivo_nome: str | None = None
     data_referencia: datetime | None = None
     linhas: list[LinhaConfirmacao]
+    # No lote, cada arquivo confirma com recalcular=False; o recálculo roda
+    # uma vez ao final via POST /recalcular.
+    recalcular: bool = True
 
 
 class ImportacaoOut(ORMModel):

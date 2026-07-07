@@ -10,13 +10,11 @@ import {
   AlertTriangle,
   BookMarked,
   CheckCircle2,
-  ChevronRight,
   FileUp,
   History,
+  Layers,
   Pencil,
-  Search,
   Sparkles,
-  UserCheck,
   UserPlus,
   XCircle,
 } from "lucide-react";
@@ -24,13 +22,13 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import SeletorAlunoDrawer from "../components/SeletorAlunoDrawer";
 import {
   Badge,
   Botao,
   Campo,
   Card,
   Carregando,
-  Drawer,
   Mensagem,
   PageHeader,
   Vazio,
@@ -39,15 +37,9 @@ import {
 import { useApp } from "../context/AppContext";
 import { api, apiUpload } from "../lib/api";
 import { dataHora } from "../lib/formato";
-import type {
-  Aluno,
-  Analise,
-  Importacao,
-  LinhaAnalise,
-  PaginaAlunos,
-  ResultadoImportacao,
-  Turma,
-} from "../lib/types";
+import { acharTurmaPorNome, normalizar } from "../lib/nomes";
+import ImportacaoLote from "./ImportacaoLote";
+import type { Aluno, Analise, Importacao, LinhaAnalise, ResultadoImportacao, Turma } from "../lib/types";
 
 const ROTULOS_DADOS: Record<string, string> = {
   atividades: "Atividades",
@@ -108,15 +100,6 @@ function resumoDados(dados: Record<string, unknown>): string {
     .join(" · ");
 }
 
-function normalizar(nome: string): string {
-  return nome
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
 type Acao =
   | { tipo: "importar"; alunoId: number; alunoNome?: string; turmaNome?: string; manual?: boolean }
   | { tipo: "criar"; turmaId: number | null }
@@ -167,146 +150,6 @@ function agrupar(analise: Analise): Grupo[] {
   return ordem.map((c) => mapa.get(c)!);
 }
 
-/** Painel lateral: escolher a turma, achar o aluno (busca + alfabética) e
- *  confirmar o vínculo do relatório individual. */
-function SeletorAlunoDrawer({
-  escolaId,
-  aberto,
-  turmas,
-  turmaInicial,
-  nomePdf,
-  aoFechar,
-  aoConfirmar,
-}: {
-  escolaId: number;
-  aberto: boolean;
-  turmas: Turma[];
-  turmaInicial: number | null;
-  nomePdf: string;
-  aoFechar: () => void;
-  aoConfirmar: (aluno: Aluno, turmaNome: string) => void;
-}) {
-  const [turmaId, setTurmaId] = useState<number | null>(turmaInicial);
-  const [alunos, setAlunos] = useState<Aluno[] | null>(null);
-  const [busca, setBusca] = useState("");
-  const [selecionado, setSelecionado] = useState<Aluno | null>(null);
-
-  useEffect(() => {
-    if (aberto) {
-      setTurmaId(turmaInicial ?? turmas[0]?.id ?? null);
-      setBusca("");
-      setSelecionado(null);
-    }
-  }, [aberto, turmaInicial, turmas]);
-
-  useEffect(() => {
-    if (!aberto || !turmaId) {
-      setAlunos(null);
-      return;
-    }
-    setAlunos(null);
-    api<PaginaAlunos>(`/escolas/${escolaId}/alunos?turma_id=${turmaId}&por_pagina=100`)
-      .then((r) => setAlunos(r.itens))
-      .catch(() => setAlunos([]));
-  }, [aberto, turmaId, escolaId]);
-
-  const turmaNome = turmas.find((t) => t.id === turmaId)?.nome ?? "";
-  const filtrados = (alunos ?? [])
-    .filter((a) => normalizar(a.nome).includes(normalizar(busca)))
-    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
-
-  return (
-    <Drawer titulo="Alterar aluno" aberto={aberto} aoFechar={aoFechar}>
-      {selecionado ? (
-        <div className="space-y-4">
-          <p className="text-sm text-zinc-600 dark:text-zinc-300">
-            Este relatório será vinculado ao aluno:
-          </p>
-          <Card className="p-4">
-            <p className="text-lg font-semibold tracking-tight">{selecionado.nome}</p>
-            <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Turma: {turmaNome}</p>
-          </Card>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            As leituras, a pontuação e todo o histórico do PDF passarão a pertencer a este aluno.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Botao variante="neutro" onClick={() => setSelecionado(null)}>Cancelar</Botao>
-            <Botao onClick={() => aoConfirmar(selecionado, turmaNome)}>
-              <UserCheck size={15} /> Confirmar
-            </Botao>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              Aluno do relatório (PDF)
-            </p>
-            <p className="text-sm font-medium">{nomePdf || "—"}</p>
-          </div>
-
-          <Campo rotulo="1. Selecione a turma">
-            <select
-              className={estiloInput}
-              value={turmaId ?? ""}
-              onChange={(e) => setTurmaId(Number(e.target.value))}
-            >
-              {turmas.length === 0 && <option value="">Nenhuma turma cadastrada</option>}
-              {turmas.map((turma) => (
-                <option key={turma.id} value={turma.id}>{turma.nome}</option>
-              ))}
-            </select>
-          </Campo>
-
-          <div>
-            <p className="mb-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">2. Escolha o aluno</p>
-            <label className="relative block">
-              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-              <input
-                className={`${estiloInput} pl-9`}
-                placeholder="Pesquisar por nome..."
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-              />
-            </label>
-          </div>
-
-          <div className="max-h-[45vh] overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
-            {alunos === null ? (
-              <Carregando />
-            ) : filtrados.length === 0 ? (
-              <p className="py-8 text-center text-sm text-zinc-400">
-                {busca ? "Nenhum aluno encontrado." : "Turma sem alunos."}
-              </p>
-            ) : (
-              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
-                {filtrados.map((aluno) => (
-                  <li key={aluno.id}>
-                    <button
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
-                      onClick={() => setSelecionado(aluno)}
-                    >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
-                        {aluno.foto_url ? (
-                          <img src={aluno.foto_url} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          aluno.nome.slice(0, 1).toUpperCase()
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{aluno.nome}</span>
-                      <ChevronRight size={15} className="shrink-0 text-zinc-300 dark:text-zinc-600" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
-    </Drawer>
-  );
-}
-
 export default function Importacoes() {
   const { escolaId, usuario } = useApp();
   const podeImportar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
@@ -326,6 +169,8 @@ export default function Importacoes() {
   const [erro, setErro] = useState("");
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null);
 
+  const [modo, setModo] = useState<"individual" | "lote">("individual");
+
   const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);
 
   const carregarHistorico = useCallback(() => {
@@ -341,30 +186,6 @@ export default function Importacoes() {
     api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
   }, [escolaId, carregarHistorico]);
 
-  // Palavras genéricas que NÃO distinguem uma turma de outra da mesma série.
-  const GENERICOS = new Set(["ano", "serie", "série", "anual", "manha", "manhã", "tarde", "noite", "integral", "turma", "de", "do", "da"]);
-
-  /** Turma cujo nome bate com a lida do PDF (para criar/casar automático).
-   *  Exige que os tokens DISTINTIVOS (a letra da turma, o número da série)
-   *  coincidam e que a correspondência seja ÚNICA — senão "5 Ano B" casaria
-   *  por engano com "5 Ano A". */
-  function turmaDoRelatorio(nomeDetectado: string): number | null {
-    if (!nomeDetectado) return null;
-    const limpar = (s: string) => normalizar(s).replace(/[ºª°]/g, "");
-    const alvo = limpar(nomeDetectado);
-    const exata = turmas.find((t) => limpar(t.nome) === alvo);
-    if (exata) return exata.id;
-
-    const distintivos = alvo.split(" ").filter((t) => t.length > 0 && !GENERICOS.has(t));
-    if (distintivos.length === 0) return null;
-    const candidatas = turmas.filter((t) => {
-      const nome = ` ${limpar(t.nome)} `;
-      // todos os tokens distintivos da turma detectada devem aparecer
-      return distintivos.every((tk) => nome.includes(` ${tk} `) || nome.includes(tk));
-    });
-    return candidatas.length === 1 ? candidatas[0].id : null; // só se for única
-  }
-
   async function analisar() {
     if (!escolaId) return;
     setOcupado(true);
@@ -379,7 +200,7 @@ export default function Importacoes() {
       setAnalise(resposta);
 
       // Ação inicial POR GRUPO, já usando a turma lida do PDF.
-      const turmaId = turmaDoRelatorio(resposta.turma_detectada);
+      const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
       setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
       const gruposIniciais = agrupar(resposta);
       setAcoes(
@@ -559,7 +380,33 @@ export default function Importacoes() {
         </div>
       )}
 
-      {resultado && (
+      {podeImportar && (
+        <div className="mb-5 inline-flex rounded-xl border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-900">
+          {([
+            { valor: "individual", Icone: FileUp, rotulo: "Um por vez" },
+            { valor: "lote", Icone: Layers, rotulo: "Em lote" },
+          ] as const).map(({ valor, Icone, rotulo }) => (
+            <button
+              key={valor}
+              type="button"
+              onClick={() => setModo(valor)}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                modo === valor
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              }`}
+            >
+              <Icone size={15} /> {rotulo}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {modo === "lote" && podeImportar && escolaId && (
+        <ImportacaoLote escolaId={escolaId} turmas={turmas} aoConcluir={carregarHistorico} />
+      )}
+
+      {modo === "individual" && resultado && (
         <Card className="mb-4 p-4">
           <div className="flex items-start gap-2">
             <CheckCircle2 size={18} className="mt-0.5 text-emerald-600" />
@@ -577,7 +424,7 @@ export default function Importacoes() {
         </Card>
       )}
 
-      {podeImportar && !analise && (
+      {modo === "individual" && podeImportar && !analise && (
         <Card className="mb-6 p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <Campo rotulo="Plataforma">
@@ -616,7 +463,7 @@ export default function Importacoes() {
         </Card>
       )}
 
-      {analise && (
+      {modo === "individual" && analise && (
         <Card className="mb-6">
           <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
             <FileUp size={16} className="text-zinc-400" />
@@ -702,7 +549,7 @@ export default function Importacoes() {
               <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
               <span className="text-amber-800 dark:text-amber-200">
                 <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
-                {analise.turma_detectada && turmaDoRelatorio(analise.turma_detectada)
+                {analise.turma_detectada && acharTurmaPorNome(turmas, analise.turma_detectada)
                   ? " — já marcados para criar na turma do relatório."
                   : "."}
               </span>
@@ -848,7 +695,7 @@ export default function Importacoes() {
               escolaId={escolaId}
               aberto={editarGrupo !== null}
               turmas={turmas}
-              turmaInicial={turmaDoRelatorio(analise.turma_detectada)}
+              turmaInicial={acharTurmaPorNome(turmas, analise.turma_detectada)}
               nomePdf={editarGrupo !== null ? grupos[editarGrupo]?.nome ?? "" : ""}
               aoFechar={() => setEditarGrupo(null)}
               aoConfirmar={vincularAluno}

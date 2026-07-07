@@ -430,28 +430,53 @@ def confirmar(
               detalhes={"plataforma": dados.plataforma, "tipo": dados.tipo,
                         "alunos": importacao.qtd_alunos, "avisos": avisos})
     db.commit()
-    scoring.recalcular_escola(db, escola_id)
-    from app.routers.publico import invalidar_cache_painel
-    invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
 
-    # Avisa os aparelhos da escola (melhor esforço — nunca falha a importação)
-    plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
-    push.notificar_escola(
-        db, escola_id,
-        titulo="Novos dados no Constela Edu",
-        corpo=f"{importacao.qtd_alunos} alunos atualizados na {plataforma_nome}. "
-              "As notas já foram recalculadas.",
-        dados={"tela": "ranking"},
-    )
+    # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
+    # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
+    if dados.recalcular:
+        scoring.recalcular_escola(db, escola_id)
+        from app.routers.publico import invalidar_cache_painel
+        invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
+
+        plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
+        push.notificar_escola(
+            db, escola_id,
+            titulo="Novos dados no Constela Edu",
+            corpo=f"{importacao.qtd_alunos} alunos atualizados na {plataforma_nome}. "
+                  "As notas já foram recalculadas.",
+            dados={"tela": "ranking"},
+        )
+        mensagem = (f"Importação concluída: {importacao.qtd_alunos} alunos atualizados. "
+                    "Notas recalculadas automaticamente.")
+    else:
+        mensagem = f"{importacao.qtd_alunos} aluno(s) importado(s)."
 
     return ImportacaoResultadoOut(
-        mensagem=f"Importação concluída: {importacao.qtd_alunos} alunos atualizados. "
-                 f"Notas recalculadas automaticamente.",
+        mensagem=mensagem,
         importacao_id=importacao.id,
         qtd_alunos=importacao.qtd_alunos,
         qtd_erros=importacao.qtd_erros,
         avisos=avisos,
     )
+
+
+@router.post("/recalcular", response_model=dict)
+def recalcular_agora(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Recalcula notas/rankings da escola uma única vez — usado ao final de
+    uma importação em lote, depois de vários /confirmar com recalcular=false."""
+    from app.routers.publico import invalidar_cache_painel
+
+    n = scoring.recalcular_escola(db, escola_id)
+    invalidar_cache_painel(escola_id)
+    push.notificar_escola(
+        db, escola_id, titulo="Novos dados no Constela Edu",
+        corpo="Importação em lote concluída. As notas já foram recalculadas.",
+        dados={"tela": "ranking"})
+    return {"mensagem": f"Notas recalculadas para {n} aluno(s).", "alunos": n}
 
 
 # --- Histórico (PRD §15) ------------------------------------------------------
