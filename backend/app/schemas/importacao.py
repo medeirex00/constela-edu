@@ -51,7 +51,7 @@ class LinhaConfirmacao(BaseModel):
 class ImportacaoConfirm(BaseModel):
     plataforma: str = Field(pattern="^(matific|elefante)$")
     formato: str = Field(pattern="^(resumo|leituras)$")
-    tipo: str = Field(pattern="^(pdf|texto)$")
+    tipo: str = Field(pattern="^(pdf|texto|xlsx)$")
     arquivo_token: str | None = None
     arquivo_nome: str | None = None
     data_referencia: datetime | None = None

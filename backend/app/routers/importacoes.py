@@ -42,7 +42,7 @@ from app.models import (
 )
 from app.schemas import AnaliseOut, ImportacaoConfirm, ImportacaoOut, ImportacaoResultadoOut
 from app.services import importacao as svc
-from app.services import perfis_pdf, push, scoring
+from app.services import perfis_pdf, planilhas, push, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
@@ -113,8 +113,30 @@ async def analisar(
             raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                                 "Arquivo acima de 10 MB.")
         arquivo_nome = arquivo.filename or "relatorio"
-        eh_pdf = arquivo_nome.lower().endswith(".pdf") or arquivo.content_type == "application/pdf"
-        if eh_pdf:
+        nome_lower = arquivo_nome.lower()
+        tipo_conteudo = arquivo.content_type or ""
+        eh_pdf = nome_lower.endswith(".pdf") or tipo_conteudo == "application/pdf"
+        # Planilha Excel: .xlsx/.xlsm, content-type de spreadsheet, ou um ZIP
+        # ("PK") que não seja PDF — o Matific exporta o relatório por turma assim.
+        eh_planilha = (not eh_pdf and (
+            nome_lower.endswith((".xlsx", ".xlsm", ".xls"))
+            or "spreadsheet" in tipo_conteudo
+            or tipo_conteudo == "application/vnd.ms-excel"
+            or conteudo[:2] == b"PK"))
+        if eh_planilha:
+            try:
+                analise = planilhas.analisar_planilha(
+                    conteudo, plataforma, nome_arquivo=arquivo_nome or "")
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001 — planilha inesperada
+                logger.exception("Falha ao ler planilha (escola %s, arquivo %r)",
+                                 escola_id, arquivo_nome)
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Não foi possível ler a planilha. O arquivo está íntegro?") from exc
+            tipo = "xlsx"
+        elif eh_pdf:
             _limpar_temporarios_orfaos()
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
@@ -212,12 +234,21 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
 
 
 def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia):
+    # Cada relatório do Matific traz um subconjunto das métricas: o PDF de
+    # estrelas tem "estrelas"; o Excel por turma NÃO tem. Preservamos o valor
+    # anterior de cada campo AUSENTE — assim os dois relatórios se COMPLEMENTAM
+    # (nunca zeram um campo que outro relatório já preencheu).
+    anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
+    atividades = (int(dados["atividades"]) if "atividades" in dados
+                  else (anterior.atividades if anterior else 0))
+    estrelas = (int(dados["estrelas"]) if "estrelas" in dados
+                else (anterior.estrelas if anterior else 0))
+    media = (float(dados["pontuacao_media"]) if "pontuacao_media" in dados
+             else (anterior.pontuacao_media if anterior else 0.0))
     db.add(SnapshotMatific(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
-        atividades=int(dados.get("atividades", 0)),
-        estrelas=int(dados.get("estrelas", 0)),
-        pontuacao_media=float(dados.get("pontuacao_media", 0.0)),
+        atividades=atividades, estrelas=estrelas, pontuacao_media=media,
     ))
 
 

@@ -199,7 +199,7 @@ export default function Importacoes() {
       const resposta = await apiUpload<Analise>(`/escolas/${escolaId}/importacoes/analisar`, dados);
       setAnalise(resposta);
 
-      // Ação inicial POR GRUPO, já usando a turma lida do PDF.
+      // Ação inicial POR GRUPO, já usando a turma lida do relatório.
       const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
       setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
       const gruposIniciais = agrupar(resposta);
@@ -210,8 +210,12 @@ export default function Importacoes() {
           if (c?.aluno_id && (c.status === "exato" || c.status === "provavel")) {
             return { tipo: "importar", alunoId: c.aluno_id, alunoNome: c.aluno_nome ?? g.nome };
           }
-          // Aluno novo: cria na turma detectada automaticamente (sem intervenção)
-          if (turmaId) return { tipo: "criar", turmaId };
+          // Aluno novo: cria na turma DO PRÓPRIO ALUNO — o relatório geral do
+          // Matific tem alunos de várias turmas (turma_relatorio por linha);
+          // se essa turma não casar, usa a turma global detectada.
+          const turmaLinha = resposta.linhas[g.indices[0]]?.dados?.turma_relatorio;
+          const turmaDoGrupo = acharTurmaPorNome(turmas, String(turmaLinha ?? "")) ?? turmaId;
+          if (turmaDoGrupo) return { tipo: "criar", turmaId: turmaDoGrupo };
           return { tipo: "ignorar" };
         }),
       );
@@ -434,11 +438,11 @@ export default function Importacoes() {
                 <option value="elefante">Elefante Letrado</option>
               </select>
             </Campo>
-            <Campo rotulo="Arquivo (PDF, TXT ou CSV)">
+            <Campo rotulo="Arquivo (PDF, Excel, TXT ou CSV)">
               <input
                 ref={inputArquivo}
                 type="file"
-                accept=".pdf,.txt,.csv,.tsv"
+                accept=".pdf,.xlsx,.xlsm,.txt,.csv,.tsv"
                 className={`${estiloInput} file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1 file:text-indigo-700 dark:file:bg-indigo-500/10 dark:file:text-indigo-300`}
                 onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
               />
