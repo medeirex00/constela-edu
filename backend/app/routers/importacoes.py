@@ -220,19 +220,64 @@ async def analisar(
 
 # --- Etapa 2: confirmação -----------------------------------------------------
 
+_RE_SERIE_NO_NOME = re.compile(r"^\s*(\d)\s*[ºo°]?\s*(?:ano)?\b", re.IGNORECASE)
+
+
+def _ano_escolar_do_nome(nome: str) -> str:
+    """Deriva a série do nome da turma: "5 ANO B MANHA ANUAL" → "5º Ano"."""
+    par = _RE_SERIE_NO_NOME.match(nome or "")
+    return f"{par.group(1)}º Ano" if par else ""
+
+
+def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
+                     avisos: list[str], turmas_novas: dict) -> Turma | None:
+    """Acha (case-insensitive) ou CRIA a turma com o nome lido do relatório —
+    o primeiro import da escola funciona sem cadastrar turmas antes."""
+    nome = (nome or "").strip()
+    if not nome:
+        return None
+    chave = nome.casefold()
+    if chave in turmas_novas:
+        return turmas_novas[chave]
+    turma = db.execute(
+        select(Turma).where(Turma.escola_id == escola_id,
+                            Turma.ano_letivo == ano,
+                            func.lower(Turma.nome) == chave).limit(1)
+    ).scalars().first()
+    if turma is None:
+        turma = Turma(escola_id=escola_id, nome=nome, ano_letivo=ano,
+                      ano_escolar=_ano_escolar_do_nome(nome) or nome[:20])
+        db.add(turma)
+        db.flush()
+        registrar(db, "turma.criada", escola_id=escola_id, entidade="turma",
+                  entidade_id=turma.id,
+                  detalhes={"nome": nome, "origem": "importacao"})
+        avisos.append(f"Turma “{nome}” criada automaticamente a partir do relatório.")
+    turmas_novas[chave] = turma
+    return turma
+
+
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
-                    criados: dict | None = None) -> Aluno | None:
+                    criados: dict | None = None,
+                    turmas_novas: dict | None = None) -> Aluno | None:
     if linha.aluno_id is not None:
         aluno = db.get(Aluno, linha.aluno_id)
         if aluno is None or aluno.escola_id != escola_id:
             avisos.append(f"Linha “{linha.nome}”: aluno não pertence a esta escola — ignorada.")
             return None
         return aluno
+
+    turma = None
     if linha.criar_em_turma_id is not None:
         turma = db.get(Turma, linha.criar_em_turma_id)
         if turma is None or turma.escola_id != escola_id:
             avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
             return None
+    elif getattr(linha, "criar_em_turma_nome", None):
+        turma = _turma_pelo_nome(db, escola_id, ano, linha.criar_em_turma_nome,
+                                 avisos, turmas_novas if turmas_novas is not None else {})
+
+    if turma is not None:
         # Cria o aluno UMA vez por (nome, turma): no relatório individual há
         # centenas de linhas (uma por livro) para o mesmo aluno — sem isto,
         # cada livro criaria um aluno duplicado.
@@ -475,9 +520,10 @@ def confirmar(
     # Agrupa por aluno resolvido; no formato "leituras" um aluno tem várias linhas
     resolvidos: dict[int, tuple[Aluno, list]] = {}
     criados: dict[tuple[str, int], Aluno] = {}  # dedup de alunos criados
+    turmas_novas: dict = {}                     # turma criada pelo nome: 1x só
     for linha in dados.linhas:
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
-                                avisos, criados)
+                                avisos, criados, turmas_novas)
         if aluno is None:
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)

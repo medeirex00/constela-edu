@@ -6,7 +6,7 @@
  * mesma listagem GET /turmas. Excluir é bloqueado pela API enquanto houver
  * alunos vinculados — arquivar é o caminho que preserva o histórico.
  */
-import { Archive, ArchiveRestore, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, LayoutGrid, Pencil, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -301,12 +301,160 @@ function FormularioTurma({
 
 // --- Página ------------------------------------------------------------------
 
+const ANOS_GRADE = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const LETRAS_GRADE = ["A", "B", "C", "D", "E"];
+
+/** Criação rápida de VÁRIAS turmas: grade Ano × Letra — marque as células e
+ *  tudo é criado de uma vez (turno opcional aplicado a todas). Detalhes como
+ *  capacidade e professor são ajustados depois, turma a turma. */
+function CriarVariasTurmas({ escolaId, anoLetivo, existentes, aberto, aoFechar, aoConcluir }: {
+  escolaId: number;
+  anoLetivo: number;
+  existentes: Set<string>;
+  aberto: boolean;
+  aoFechar: () => void;
+  aoConcluir: (criadas: number, puladas: number) => void;
+}) {
+  const [marcadas, setMarcadas] = useState<Set<string>>(new Set());
+  const [turno, setTurno] = useState("");
+  const [criando, setCriando] = useState(false);
+  const [erro, setErro] = useState("");
+
+  function nomeDe(ano: number, letra: string) {
+    return `${ano}º Ano ${letra}`;
+  }
+  function alternar(ano: number, letra: string) {
+    const chave = `${ano}-${letra}`;
+    setMarcadas((atuais) => {
+      const prox = new Set(atuais);
+      if (prox.has(chave)) prox.delete(chave);
+      else prox.add(chave);
+      return prox;
+    });
+  }
+
+  async function criar() {
+    setCriando(true);
+    setErro("");
+    let criadas = 0;
+    let puladas = 0;
+    for (const chave of marcadas) {
+      const [ano, letra] = chave.split("-");
+      const corpo: TurmaPayload = {
+        nome: nomeDe(Number(ano), letra),
+        ano_escolar: `${ano}º Ano`,
+        ano_letivo: anoLetivo,
+        professor_id: null,
+        turno: turno || null,
+        capacidade_maxima: null,
+        observacoes: null,
+      };
+      try {
+        await api<Turma>(`/escolas/${escolaId}/turmas`, {
+          method: "POST",
+          body: JSON.stringify(corpo),
+        });
+        criadas += 1;
+      } catch (excecao) {
+        // 409 = turma já existe: pula sem interromper as demais.
+        if (excecao instanceof ApiError && excecao.status === 409) puladas += 1;
+        else {
+          setErro(excecao instanceof ApiError ? excecao.message : "Falha ao criar turmas.");
+          setCriando(false);
+          return;
+        }
+      }
+    }
+    setCriando(false);
+    setMarcadas(new Set());
+    aoConcluir(criadas, puladas);
+  }
+
+  if (!aberto) return null;
+  return (
+    <Modal titulo="Criar várias turmas" aberto={aberto} aoFechar={aoFechar}>
+      <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">
+        Marque as turmas que a escola tem — tudo é criado de uma vez no ano
+        letivo {anoLetivo}. Depois ajuste turno, capacidade e professor turma a
+        turma, se precisar.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-center text-sm">
+          <thead>
+            <tr>
+              <th className="px-2 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Ano</th>
+              {LETRAS_GRADE.map((letra) => (
+                <th key={letra} className="px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{letra}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ANOS_GRADE.map((ano) => (
+              <tr key={ano} className="border-t border-zinc-100 dark:border-zinc-800/60">
+                <td className="px-2 py-1.5 text-left font-medium">{ano}º Ano</td>
+                {LETRAS_GRADE.map((letra) => {
+                  const jaExiste = existentes.has(nomeDe(ano, letra).toLowerCase());
+                  const marcada = marcadas.has(`${ano}-${letra}`);
+                  return (
+                    <td key={letra} className="px-1 py-1">
+                      <button
+                        type="button"
+                        disabled={jaExiste}
+                        title={jaExiste ? "Já existe" : nomeDe(ano, letra)}
+                        aria-label={`${nomeDe(ano, letra)}${jaExiste ? " (já existe)" : ""}`}
+                        onClick={() => alternar(ano, letra)}
+                        className={`h-9 w-full rounded-lg border text-sm font-medium transition-colors ${
+                          jaExiste
+                            ? "cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-600"
+                            : marcada
+                              ? "border-indigo-600 bg-indigo-600 text-white"
+                              : "border-zinc-300 text-zinc-600 hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-700 dark:text-zinc-300"
+                        }`}
+                      >
+                        {jaExiste ? "✓" : letra}
+                      </button>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-4">
+        <Campo rotulo="Turno (opcional, aplicado a todas)">
+          <select className={estiloInput} value={turno} onChange={(e) => setTurno(e.target.value)}>
+            <option value="">— sem turno definido —</option>
+            <option value="manha">Manhã</option>
+            <option value="tarde">Tarde</option>
+            <option value="noite">Noite</option>
+            <option value="integral">Integral</option>
+          </select>
+        </Campo>
+      </div>
+
+      {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+      <div className="mt-5 flex items-center justify-end gap-2">
+        <span className="mr-auto text-sm text-zinc-500 dark:text-zinc-400">
+          {marcadas.size} turma{marcadas.size === 1 ? "" : "s"} selecionada{marcadas.size === 1 ? "" : "s"}
+        </span>
+        <Botao variante="neutro" onClick={aoFechar} disabled={criando}>Cancelar</Botao>
+        <Botao onClick={criar} disabled={criando || marcadas.size === 0}>
+          {criando ? "Criando..." : `Criar ${marcadas.size} turma${marcadas.size === 1 ? "" : "s"}`}
+        </Botao>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Turmas() {
   const { escolaId, escolaAtual } = useApp();
   const [turmas, setTurmas] = useState<Turma[] | null>(null);
   const [professores, setProfessores] = useState<Professor[]>([]);
   const [mostrarTodas, setMostrarTodas] = useState(false);
   const [formAberto, setFormAberto] = useState(false);
+  const [variasAberto, setVariasAberto] = useState(false);
   const [emEdicao, setEmEdicao] = useState<Turma | null>(null);
   const [paraExcluir, setParaExcluir] = useState<Turma | null>(null);
   const [erroExclusao, setErroExclusao] = useState<string | null>(null);
@@ -412,11 +560,35 @@ export default function Turmas() {
         titulo="Turmas"
         descricao="Cadastre, edite e organize as turmas da escola."
         acoes={
-          <Botao onClick={abrirNova}>
-            <Plus size={16} /> Adicionar Turma
-          </Botao>
+          <div className="flex flex-wrap gap-2">
+            <Botao variante="neutro" onClick={() => setVariasAberto(true)}>
+              <LayoutGrid size={16} /> Criar várias
+            </Botao>
+            <Botao onClick={abrirNova}>
+              <Plus size={16} /> Adicionar Turma
+            </Botao>
+          </div>
         }
       />
+
+      {escolaId && (
+        <CriarVariasTurmas
+          escolaId={escolaId}
+          anoLetivo={anoAtivo}
+          existentes={new Set((turmas ?? [])
+            .filter((t) => t.ano_letivo === anoAtivo)
+            .map((t) => t.nome.toLowerCase()))}
+          aberto={variasAberto}
+          aoFechar={() => setVariasAberto(false)}
+          aoConcluir={(criadas, puladas) => {
+            setVariasAberto(false);
+            avisar("ok", `${criadas} turma(s) criada(s)` +
+              (puladas > 0 ? ` (${puladas} já existiam e foram puladas).` : ".") +
+              " Ajuste turno, capacidade e professor em cada turma quando quiser.");
+            carregar();
+          }}
+        />
+      )}
 
       {mensagem && (
         <div className="mb-4">

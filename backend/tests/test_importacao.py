@@ -193,6 +193,47 @@ def test_confirmar_pode_criar_aluno_novo(cliente, db, escola_completa):
     assert db.query(SnapshotMatific).filter_by(aluno_id=novo.id).count() == 1
 
 
+def test_confirmar_cria_turma_pelo_nome_do_relatorio(cliente, db, escola_completa):
+    """Primeiro import da escola: a turma lida do PDF ainda não existe — a
+    confirmação a cria UMA vez e matricula todos os alunos novos nela."""
+    from app.models import Matricula, Turma
+    from sqlalchemy import select
+
+    escola_id = escola_completa["escola"].id
+    corpo = {
+        "plataforma": "elefante", "formato": "resumo", "tipo": "pdf",
+        "linhas": [
+            {"nome": "Aluno Novo Um", "dados": {"livros_unicos": 3},
+             "criar_em_turma_nome": "5 ANO B MANHA ANUAL"},
+            {"nome": "Aluno Novo Dois", "dados": {"livros_unicos": 1},
+             "criar_em_turma_nome": "5 ANO B MANHA ANUAL"},
+        ],
+    }
+    r = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/confirmar", json=corpo)
+    assert r.status_code == 200, r.text
+    assert any("criada automaticamente" in a for a in r.json()["avisos"])
+
+    turmas = db.execute(select(Turma).where(
+        Turma.escola_id == escola_id,
+        Turma.nome == "5 ANO B MANHA ANUAL")).scalars().all()
+    assert len(turmas) == 1                       # criada UMA vez, não duas
+    assert turmas[0].ano_escolar == "5º Ano"      # série derivada do nome
+    matriculados = db.execute(select(Matricula).where(
+        Matricula.turma_id == turmas[0].id)).scalars().all()
+    assert len(matriculados) == 2
+
+    # Reimportar com o mesmo nome NÃO duplica a turma (acha a existente).
+    corpo["linhas"] = [{"nome": "Aluno Novo Tres", "dados": {"livros_unicos": 2},
+                        "criar_em_turma_nome": "5 ano b manha anual"}]  # caixa difere
+    r2 = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/confirmar", json=corpo)
+    assert r2.status_code == 200
+    db.expire_all()
+    turmas = db.execute(select(Turma).where(
+        Turma.escola_id == escola_id,
+        Turma.nome.ilike("5 ANO B MANHA ANUAL"))).scalars().all()
+    assert len(turmas) == 1
+
+
 def test_edicao_manual_matific_preserva_historico(cliente, db, escola_completa):
     """Edição manual cria snapshot novo (imutável) e fica no log (PRD §68, §17)."""
     escola_id = escola_completa["escola"].id

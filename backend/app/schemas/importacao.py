@@ -46,6 +46,10 @@ class LinhaConfirmacao(BaseModel):
     dados: dict
     aluno_id: int | None = None
     criar_em_turma_id: int | None = None
+    # Nome de turma AINDA INEXISTENTE (a lida do PDF): a confirmação cria a
+    # turma uma única vez e matricula o aluno nela — primeiro import da escola
+    # funciona sem cadastrar turmas antes.
+    criar_em_turma_nome: str | None = None
 
 
 class ImportacaoConfirm(BaseModel):

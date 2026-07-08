@@ -104,6 +104,9 @@ function resumoDados(dados: Record<string, unknown>): string {
 type Acao =
   | { tipo: "importar"; alunoId: number; alunoNome?: string; turmaNome?: string; manual?: boolean }
   | { tipo: "criar"; turmaId: number | null }
+  // Turma lida do relatório que AINDA NÃO EXISTE: a confirmação a cria e
+  // matricula o aluno nela (primeiro import sem cadastrar turmas antes).
+  | { tipo: "criar_nova" }
   | { tipo: "ignorar" };
 
 interface Grupo {
@@ -164,6 +167,9 @@ export default function Importacoes() {
   const [acoes, setAcoes] = useState<Acao[]>([]); // uma ação por GRUPO
   const [turmas, setTurmas] = useState<Turma[]>([]);
   const [turmaEmMassa, setTurmaEmMassa] = useState<number | null>(null);
+  // Turma detectada no relatório que ainda não existe no cadastro (a
+  // confirmação a cria automaticamente).
+  const [turmaNova, setTurmaNova] = useState("");
   const [editarGrupo, setEditarGrupo] = useState<number | null>(null);
   const [historico, setHistorico] = useState<Importacao[] | null>(null);
   const [ocupado, setOcupado] = useState(false);
@@ -208,6 +214,8 @@ export default function Importacoes() {
       // Ação inicial POR GRUPO, já usando a turma lida do relatório.
       const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
       setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
+      // Turma detectada que NÃO existe no cadastro: será criada na confirmação.
+      setTurmaNova(resposta.turma_detectada && !turmaId ? resposta.turma_detectada : "");
       const gruposIniciais = agrupar(resposta);
       setAcoes(
         gruposIniciais.map((g): Acao => {
@@ -222,6 +230,9 @@ export default function Importacoes() {
           const turmaLinha = resposta.linhas[g.indices[0]]?.dados?.turma_relatorio;
           const turmaDoGrupo = acharTurmaPorNome(turmas, String(turmaLinha ?? "")) ?? turmaId;
           if (turmaDoGrupo) return { tipo: "criar", turmaId: turmaDoGrupo };
+          // A turma citada no relatório ainda não existe: cria automaticamente
+          // na confirmação (turma lida da linha ou do cabeçalho).
+          if (turmaLinha || resposta.turma_detectada) return { tipo: "criar_nova" };
           return { tipo: "ignorar" };
         }),
       );
@@ -249,6 +260,12 @@ export default function Importacoes() {
             dados: linha.dados,
             aluno_id: acao.tipo === "importar" ? acao.alunoId : null,
             criar_em_turma_id: acao.tipo === "criar" ? acao.turmaId : null,
+            // Turma inexistente: manda o NOME (da linha ou do cabeçalho) — o
+            // backend cria a turma uma única vez e matricula o aluno nela.
+            criar_em_turma_nome:
+              acao.tipo === "criar_nova"
+                ? String(linha.dados.turma_relatorio ?? analise.turma_detectada ?? "") || null
+                : null,
           }));
       });
       if (linhas.length === 0) {
@@ -292,19 +309,20 @@ export default function Importacoes() {
         if (i !== gi) return acao;
         if (valor === "ignorar") return { tipo: "ignorar" };
         if (valor === "criar") return { tipo: "criar", turmaId: turmaAlvo ?? turmas[0]?.id ?? null };
+        if (valor === "criar_nova") return { tipo: "criar_nova" };
         return { tipo: "importar", alunoId: Number(valor) };
       }),
     );
   }
 
-  function criarTodosNaoEncontrados(turmaId: number) {
+  /** "Aplicar a todos": todo aluno NOVO (sem vínculo com cadastro) recebe a
+   *  mesma ação — criar na turma escolhida ou na turma do relatório (nova). */
+  function aplicarATodosOsNovos(acao: Acao) {
     setAcoes((atuais) =>
-      atuais.map((acao, i) => {
+      atuais.map((atual, i) => {
         const g = grupos[i];
-        if (g && !g.todasComErro && g.correspondencia?.status === "nao_encontrado") {
-          return { tipo: "criar", turmaId };
-        }
-        return acao;
+        if (g && !g.todasComErro && atual.tipo !== "importar") return acao;
+        return atual;
       }),
     );
   }
@@ -351,6 +369,16 @@ export default function Importacoes() {
         nome: g.nome,
         turma,
         detalhe: "não encontrado no cadastro",
+      };
+    }
+    if (acao.tipo === "criar_nova") {
+      const turmaLinha = analise ? analise.linhas[g.indices[0]]?.dados?.turma_relatorio : "";
+      return {
+        tom: "alerta" as const,
+        titulo: "Aluno novo — a turma do relatório será criada",
+        nome: g.nome,
+        turma: String(turmaLinha ?? "") || turmaNova,
+        detalhe: "turma ainda não cadastrada — criada automaticamente ao importar",
       };
     }
     return {
@@ -555,36 +583,49 @@ export default function Importacoes() {
 
           {/* Ação em massa: criar de uma vez os alunos ainda não cadastrados */}
           {analise.formato !== "leituras" && naoEncontrados.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/20 dark:bg-amber-500/10">
-              <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
-              <span className="text-amber-800 dark:text-amber-200">
-                <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
-                {analise.turma_detectada && acharTurmaPorNome(turmas, analise.turma_detectada)
-                  ? " — já marcados para criar na turma do relatório."
-                  : "."}
-              </span>
-              {turmas.length === 0 ? (
+            <div className="space-y-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/20 dark:bg-amber-500/10">
+              <div className="flex flex-wrap items-center gap-2">
+                <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
                 <span className="text-amber-800 dark:text-amber-200">
-                  Crie uma turma primeiro em{" "}
-                  <Link to="/turmas" className="font-medium underline">Turmas</Link>.
+                  <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
+                  {analise.turma_detectada && acharTurmaPorNome(turmas, analise.turma_detectada)
+                    ? " — já marcados para criar na turma do relatório."
+                    : turmaNova
+                      ? ` — a turma “${turmaNova}” será criada automaticamente ao importar.`
+                      : "."}
                 </span>
-              ) : (
-                <div className="ml-auto flex flex-wrap items-center gap-2">
-                  <select
-                    aria-label="Turma para os novos alunos"
-                    className="rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-500/30 dark:bg-zinc-900"
-                    value={turmaAlvo ?? ""}
-                    onChange={(e) => setTurmaEmMassa(Number(e.target.value))}
-                  >
-                    {turmas.map((turma) => (
-                      <option key={turma.id} value={turma.id}>{turma.nome}</option>
-                    ))}
-                  </select>
-                  <Botao variante="neutro" onClick={() => turmaAlvo && criarTodosNaoEncontrados(turmaAlvo)}>
-                    <UserPlus size={15} /> Criar todos nesta turma
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {turmaNova && (
+                  <Botao variante="neutro" onClick={() => aplicarATodosOsNovos({ tipo: "criar_nova" })}>
+                    <UserPlus size={15} /> Aplicar a todos: turma do relatório (nova)
                   </Botao>
-                </div>
-              )}
+                )}
+                {turmas.length > 0 && (
+                  <>
+                    <select
+                      aria-label="Turma para os novos alunos"
+                      className="rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-500/30 dark:bg-zinc-900"
+                      value={turmaAlvo ?? ""}
+                      onChange={(e) => setTurmaEmMassa(Number(e.target.value))}
+                    >
+                      {turmas.map((turma) => (
+                        <option key={turma.id} value={turma.id}>{turma.nome}</option>
+                      ))}
+                    </select>
+                    <Botao variante="neutro"
+                           onClick={() => turmaAlvo && aplicarATodosOsNovos({ tipo: "criar", turmaId: turmaAlvo })}>
+                      <UserPlus size={15} /> Aplicar a todos
+                    </Botao>
+                  </>
+                )}
+                {turmas.length === 0 && !turmaNova && (
+                  <span className="text-amber-800 dark:text-amber-200">
+                    Crie uma turma primeiro em{" "}
+                    <Link to="/turmas" className="font-medium underline">Turmas</Link>.
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -643,7 +684,12 @@ export default function Importacoes() {
                               <select
                                 aria-label={`Destino de ${grupo.nome}`}
                                 className={estiloInput}
-                                value={acao.tipo === "ignorar" ? "ignorar" : acao.tipo === "criar" ? "criar" : String(acao.alunoId)}
+                                value={
+                                  acao.tipo === "ignorar" ? "ignorar"
+                                  : acao.tipo === "criar" ? "criar"
+                                  : acao.tipo === "criar_nova" ? "criar_nova"
+                                  : String(acao.alunoId)
+                                }
                                 onChange={(e) => definirAcao(gi, e.target.value)}
                               >
                                 {correspondencia?.alternativas.map((alternativa) => (
@@ -652,6 +698,11 @@ export default function Importacoes() {
                                     {alternativa.turma ? ` — ${alternativa.turma}` : ""} ({alternativa.similaridade}%)
                                   </option>
                                 ))}
+                                {(Boolean(primeira.dados.turma_relatorio) || Boolean(turmaNova)) && (
+                                  <option value="criar_nova">
+                                    Criar na turma do relatório ({String(primeira.dados.turma_relatorio ?? turmaNova)})
+                                  </option>
+                                )}
                                 <option value="criar">Criar aluno novo…</option>
                                 <option value="ignorar">Ignorar</option>
                               </select>
