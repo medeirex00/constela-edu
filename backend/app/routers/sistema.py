@@ -9,13 +9,18 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
-from app.models import Aluno, Livro, LogAuditoria, Professor, Turma, Usuario
-from app.services import scoring
+from app.models import Aluno, Escola, Livro, LogAuditoria, Matricula, Professor, Turma, Usuario
+from app.services import permissoes, scoring
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Sistema"])
 
 
 # --- Pesquisa global (PRD §21) --------------------------------------------------
+
+def _escapar_like(termo: str) -> str:
+    """Neutraliza os curingas do LIKE (%, _) e o próprio escape."""
+    return termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 @router.get("/pesquisa")
 def pesquisa_global(
@@ -24,26 +29,57 @@ def pesquisa_global(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    padrao = f"%{q}%"
-    alunos = db.execute(
-        select(Aluno).where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
-                            Aluno.nome.ilike(padrao)).order_by(Aluno.nome).limit(5)
-    ).scalars().all()
-    turmas = db.execute(
-        select(Turma).where(Turma.escola_id == escola_id,
-                            Turma.nome.ilike(padrao)).order_by(Turma.nome).limit(5)
-    ).scalars().all()
-    professores = db.execute(
-        select(Professor).where(Professor.escola_id == escola_id,
-                                Professor.nome.ilike(padrao)).order_by(Professor.nome).limit(5)
-    ).scalars().all()
-    livros = db.execute(
-        select(Livro).where(Livro.escola_id == escola_id,
-                            Livro.titulo.ilike(padrao) | Livro.autor.ilike(padrao))
-        .order_by(Livro.titulo).limit(5)
-    ).scalars().all()
+    """Busca por alunos, turmas, professores e livros — respeitando o papel.
+
+    Professor vê apenas os alunos das turmas designadas a ele; itens de
+    gestão (cadastro de professores, catálogo de livros) só aparecem para
+    quem tem acesso total. Assim o resultado da busca nunca leva ninguém a
+    um dado ou tela que o cargo não poderia abrir."""
+    padrao = f"%{_escapar_like(q.strip())}%"
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo if escola else 0
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    gestor = permitidas is None
+
+    # Alunos com a turma do ano ativo (desambigua homônimos: "3 Isabellas").
+    consulta_alunos = (
+        select(Aluno.id, Aluno.nome, Turma.nome)
+        .outerjoin(Matricula, (Matricula.aluno_id == Aluno.id)
+                   & (Matricula.ano_letivo == ano))
+        .outerjoin(Turma, Turma.id == Matricula.turma_id)
+        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
+               Aluno.nome.ilike(padrao, escape="\\"))
+        .order_by(Aluno.nome).limit(10)
+    )
+    if not gestor:  # professor: só alunos das turmas dele
+        consulta_alunos = consulta_alunos.where(Matricula.turma_id.in_(permitidas))
+    alunos = db.execute(consulta_alunos).all()
+
+    turmas: list = []
+    professores: list = []
+    livros: list = []
+    if gestor:
+        turmas = db.execute(
+            select(Turma).where(Turma.escola_id == escola_id,
+                                Turma.nome.ilike(padrao, escape="\\"))
+            .order_by(Turma.nome).limit(5)
+        ).scalars().all()
+        professores = db.execute(
+            select(Professor).where(Professor.escola_id == escola_id,
+                                    Professor.nome.ilike(padrao, escape="\\"))
+            .order_by(Professor.nome).limit(5)
+        ).scalars().all()
+        livros = db.execute(
+            select(Livro).where(
+                Livro.escola_id == escola_id,
+                Livro.titulo.ilike(padrao, escape="\\")
+                | Livro.autor.ilike(padrao, escape="\\"))
+            .order_by(Livro.titulo).limit(5)
+        ).scalars().all()
+
     return {
-        "alunos": [{"id": a.id, "nome": a.nome} for a in alunos],
+        "alunos": [{"id": aid, "nome": nome, "turma": turma}
+                   for aid, nome, turma in alunos],
         "turmas": [{"id": t.id, "nome": t.nome} for t in turmas],
         "professores": [{"id": p.id, "nome": p.nome} for p in professores],
         "livros": [{"id": l.id, "nome": l.titulo} for l in livros],

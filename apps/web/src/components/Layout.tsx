@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
@@ -41,6 +42,7 @@ import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { api } from "../lib/api";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
+import { normalizar } from "../lib/nomes";
 import { LogoHorizontal } from "./Logo";
 
 interface ItemNav {
@@ -138,6 +140,12 @@ function gruposVisiveis(gestor: boolean, global: boolean): GrupoNav[] {
     .filter((g) => g.itens.length > 0);
 }
 
+/** Todos os itens de menu que o usuário PODE abrir (Dashboard + grupos
+ *  visíveis), achatados — base da busca por páginas. */
+function itensNavVisiveis(gestor: boolean, global: boolean): ItemNav[] {
+  return [DASHBOARD, ...gruposVisiveis(gestor, global).flatMap((g) => g.itens)];
+}
+
 const CHAVE_MENU = "constela_menu_abertos";
 
 /** Grupo que contém a rota atual (para destacar e abrir automaticamente). */
@@ -162,86 +170,181 @@ function carregarAbertos(): Set<string> {
 }
 
 interface ResultadoPesquisa {
-  alunos: { id: number; nome: string }[];
+  alunos: { id: number; nome: string; turma: string | null }[];
   turmas: { id: number; nome: string }[];
   professores: { id: number; nome: string }[];
   livros: { id: number; nome: string }[];
 }
 
-/** Pesquisa global (PRD §21): encontra alunos, turmas, professores e livros. */
+/** Uma opção do resultado: página do menu ou registro (aluno/turma/...). */
+interface Opcao {
+  chave: string;
+  rotulo: string;
+  sub?: string;
+  Icone?: LucideIcon;
+  caminho: string;
+}
+
+/** Pesquisa global (PRD §21): abre PÁGINAS do menu (como clicar na barra
+ *  lateral) e encontra alunos, turmas, professores e livros — sempre dentro
+ *  do que o cargo pode acessar (o menu já é filtrado por papel; o backend
+ *  filtra os alunos pelas turmas do professor). Navegável pelo teclado. */
 function PesquisaGlobal() {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
   const navegar = useNavigate();
   const [termo, setTermo] = useState("");
   const [resultado, setResultado] = useState<ResultadoPesquisa | null>(null);
+  const [aberto, setAberto] = useState(false);
+  const [ativo, setAtivo] = useState(0);
   const caixa = useRef<HTMLDivElement | null>(null);
 
+  const gestor = Boolean(usuario?.is_global) ||
+    ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const global = Boolean(usuario?.is_global);
+
+  const consulta = termo.trim();
+
   useEffect(() => {
-    if (!escolaId || termo.trim().length < 2) {
+    if (!escolaId || consulta.length < 2) {
       setResultado(null);
       return;
     }
     const timer = window.setTimeout(() => {
-      api<ResultadoPesquisa>(`/escolas/${escolaId}/pesquisa?q=${encodeURIComponent(termo.trim())}`)
+      api<ResultadoPesquisa>(`/escolas/${escolaId}/pesquisa?q=${encodeURIComponent(consulta)}`)
         .then(setResultado)
         .catch(() => setResultado(null));
-    }, 250);
+    }, 200);
     return () => window.clearTimeout(timer);
-  }, [escolaId, termo]);
+  }, [escolaId, consulta]);
 
   useEffect(() => {
     function fechar(evento: MouseEvent) {
-      if (caixa.current && !caixa.current.contains(evento.target as Node)) setResultado(null);
+      if (caixa.current && !caixa.current.contains(evento.target as Node)) setAberto(false);
     }
     document.addEventListener("mousedown", fechar);
     return () => document.removeEventListener("mousedown", fechar);
   }, []);
 
+  // Páginas do menu que casam com o texto (só as que o cargo pode abrir).
+  const alvo = normalizar(consulta);
+  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis(gestor, global)
+    .filter((item) => normalizar(item.rotulo).includes(alvo))
+    .slice(0, 6)
+    .map((item) => ({
+      chave: `pag:${item.caminho}`, rotulo: item.rotulo,
+      sub: "Página", Icone: item.icone, caminho: item.caminho,
+    }));
+
+  const registros: { titulo: string; itens: Opcao[] }[] = resultado
+    ? ([
+        {
+          titulo: "Alunos",
+          itens: resultado.alunos.map((a) => ({
+            chave: `alu:${a.id}`, rotulo: a.nome,
+            sub: a.turma ?? "Aluno", Icone: GraduationCap,
+            caminho: `/alunos/${a.id}`,
+          })),
+        },
+        {
+          titulo: "Turmas",
+          itens: resultado.turmas.map((t) => ({
+            chave: `tur:${t.id}`, rotulo: t.nome, sub: "Turma",
+            Icone: Users, caminho: `/turmas/${t.id}`,
+          })),
+        },
+        {
+          titulo: "Professores",
+          itens: resultado.professores.map((p) => ({
+            chave: `prof:${p.id}`, rotulo: p.nome, sub: "Professor",
+            Icone: School, caminho: "/professores",
+          })),
+        },
+        {
+          titulo: "Livros",
+          itens: resultado.livros.map((l) => ({
+            chave: `liv:${l.id}`, rotulo: l.nome, sub: "Livro",
+            Icone: BookOpen, caminho: "/livros",
+          })),
+        },
+      ].filter((s) => s.itens.length > 0))
+    : [];
+
+  const secoes = [
+    ...(paginas.length ? [{ titulo: "Páginas", itens: paginas }] : []),
+    ...registros,
+  ];
+  const planas = secoes.flatMap((s) => s.itens); // ordem para o teclado
+  const mostrar = aberto && consulta.length >= 2;
+
+  useEffect(() => { setAtivo(0); }, [consulta, resultado]);
+
   function abrir(caminho: string) {
     setTermo("");
     setResultado(null);
+    setAberto(false);
     navegar(caminho);
   }
 
-  const grupos = resultado
-    ? ([
-        { titulo: "Alunos", itens: resultado.alunos, caminho: (id: number) => `/alunos/${id}` },
-        { titulo: "Turmas", itens: resultado.turmas, caminho: (id: number) => `/turmas/${id}` },
-        { titulo: "Professores", itens: resultado.professores, caminho: () => "/professores" },
-        { titulo: "Livros", itens: resultado.livros, caminho: () => "/livros" },
-      ].filter((grupo) => grupo.itens.length > 0))
-    : [];
+  function aoTeclar(evento: ReactKeyboardEvent<HTMLInputElement>) {
+    if (evento.key === "Escape") { setAberto(false); return; }
+    if (!planas.length) return;
+    if (evento.key === "ArrowDown") {
+      evento.preventDefault();
+      setAtivo((i) => (i + 1) % planas.length);
+    } else if (evento.key === "ArrowUp") {
+      evento.preventDefault();
+      setAtivo((i) => (i - 1 + planas.length) % planas.length);
+    } else if (evento.key === "Enter") {
+      evento.preventDefault();
+      const alvo = planas[ativo] ?? planas[0];
+      if (alvo) abrir(alvo.caminho);
+    }
+  }
 
   return (
     <div ref={caixa} className="relative hidden min-w-0 flex-1 items-center sm:flex sm:max-w-xs">
       <Search size={14} className="pointer-events-none absolute left-3 text-zinc-400" />
       <input
         id="pesquisa-global"
-        aria-label="Pesquisar em todo o sistema (Ctrl+K)"
+        aria-label="Pesquisar páginas, alunos, turmas... (Ctrl+K)"
+        autoComplete="off"
         className="w-full rounded-lg border border-zinc-300 bg-white py-1.5 pl-8 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900"
         placeholder="Pesquisar...  (Ctrl+K)"
         value={termo}
-        onChange={(evento) => setTermo(evento.target.value)}
+        onChange={(evento) => { setTermo(evento.target.value); setAberto(true); }}
+        onFocus={() => setAberto(true)}
+        onKeyDown={aoTeclar}
       />
-      {resultado && (
-        <div className="absolute left-0 top-full z-40 mt-1 w-full overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-          {grupos.length === 0 ? (
+      {mostrar && (
+        <div className="absolute left-0 top-full z-40 mt-1 max-h-[70vh] w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+          {secoes.length === 0 ? (
             <p className="px-3 py-2 text-sm text-zinc-400">Nada encontrado.</p>
           ) : (
-            grupos.map((grupo) => (
-              <div key={grupo.titulo}>
+            secoes.map((secao) => (
+              <div key={secao.titulo}>
                 <p className="bg-zinc-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:bg-zinc-800/60">
-                  {grupo.titulo}
+                  {secao.titulo}
                 </p>
-                {grupo.itens.map((item) => (
-                  <button
-                    key={item.id}
-                    className="block w-full px-3 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                    onClick={() => abrir(grupo.caminho(item.id))}
-                  >
-                    {item.nome}
-                  </button>
-                ))}
+                {secao.itens.map((item) => {
+                  const indice = planas.findIndex((o) => o.chave === item.chave);
+                  const realcado = indice === ativo;
+                  return (
+                    <button
+                      key={item.chave}
+                      onMouseEnter={() => setAtivo(indice)}
+                      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm ${
+                        realcado ? "bg-indigo-50 dark:bg-indigo-500/10" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      }`}
+                      onClick={() => abrir(item.caminho)}
+                    >
+                      {item.Icone && <item.Icone size={15} className="shrink-0 text-zinc-400" />}
+                      <span className="min-w-0 flex-1 truncate">{item.rotulo}</span>
+                      {item.sub && (
+                        <span className="shrink-0 text-xs text-zinc-400">{item.sub}</span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             ))
           )}

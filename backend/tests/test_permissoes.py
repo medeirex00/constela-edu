@@ -121,6 +121,24 @@ def test_coordenador_tem_acesso_total_a_escola(cenario_professor):
     assert dash["total_alunos"] == 4
 
 
+def test_pesquisa_do_professor_so_traz_alunos_das_turmas_dele(cenario_professor):
+    c = cenario_professor
+    base = f"/api/v1/escolas/{c['escola'].id}"
+    # "Aluno De Outra Turma" está na turma B (fora do alcance do professor).
+    prof = c["professor"].get(f"{base}/pesquisa?q=aluno").json()
+    assert "Aluno De Outra Turma" not in [a["nome"] for a in prof["alunos"]]
+    # Professor não recebe registros de gestão (cadastro/catálogo).
+    assert prof["professores"] == [] and prof["livros"] == []
+
+    # Cada aluno vem com a turma (desambigua homônimos).
+    algum = c["professor"].get(f"{base}/pesquisa?q=an").json()["alunos"]
+    assert algum and all("turma" in a for a in algum)
+
+    # O coordenador (acesso total) enxerga o aluno da outra turma.
+    coord = c["coordenador"].get(f"{base}/pesquisa?q=aluno").json()
+    assert "Aluno De Outra Turma" in [a["nome"] for a in coord["alunos"]]
+
+
 def test_cargo_visitante_nao_pode_ser_criado(db, cenario_professor):
     c = cenario_professor
     base = f"/api/v1/escolas/{c['escola'].id}"
