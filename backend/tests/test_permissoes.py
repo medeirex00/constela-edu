@@ -98,6 +98,11 @@ def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
     assistente = c["professor"].post(f"{base}/assistente",
                                      json={"pergunta": "Como estão meus alunos?"})
     assert assistente.status_code == 403
+    # Fundir alunos é gestão — professor não pode.
+    fundir = c["professor"].post(f"{base}/alunos/fundir", json={
+        "manter_id": c["aluno_da_turma"].id, "remover_id": c["aluno_fora"].id,
+        "confirmacao": "FUNDIR"})
+    assert fundir.status_code == 403
 
 
 def test_professor_dashboard_conta_so_as_turmas_dele(cenario_professor):

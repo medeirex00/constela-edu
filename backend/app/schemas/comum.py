@@ -175,6 +175,15 @@ class ExclusaoPermanenteAlunos(BaseModel):
     confirmacao: str = ""
 
 
+class FusaoAlunos(BaseModel):
+    """Funde dois cadastros do MESMO aluno (duplicados): todos os dados do
+    `remover` passam para o `manter`, e o `remover` é apagado. Confirmação
+    textual ("FUNDIR") por ser irreversível."""
+    manter_id: int
+    remover_id: int
+    confirmacao: str = ""
+
+
 class FaixaLeituraOut(BaseModel):
     codigo: str
     nome: str

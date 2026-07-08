@@ -27,6 +27,7 @@ from app.schemas import (
     AlunoPerfilOut,
     AlunoUpdate,
     ExclusaoPermanenteAlunos,
+    FusaoAlunos,
     ProfessorCreate,
     ProfessorOut,
     TurmaCreate,
@@ -420,6 +421,135 @@ def excluir_alunos_permanente(
     _recalcular_escola(db, escola_id)
     return {"mensagem": f"{len(ids)} aluno(s) excluído(s) permanentemente, com "
                         "todos os dados vinculados.", "afetados": len(ids)}
+
+
+@router.post("/alunos/fundir", response_model=dict)
+def fundir_alunos(
+    dados: FusaoAlunos,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Funde dois cadastros do MESMO aluno (duplicados).
+
+    Junta no `manter` TUDO do `remover` — snapshots Matific e Elefante,
+    leituras, matrículas — e apaga o `remover`. É o caso do aluno cujos
+    dados vieram separados (Matific num cadastro, Elefante noutro).
+
+    Conflitos são resolvidos sem perder nem duplicar:
+      * leitura do mesmo livro nos dois → mantém uma (a releitura nunca
+        pontua duas vezes, §35);
+      * matrícula no mesmo ano nos dois → mantém a do `manter` (a turma
+        dele prevalece);
+      * campos vazios do `manter` (foto, nº de chamada, nascimento,
+        observações) são preenchidos com os do `remover`.
+    Irreversível → exige confirmação textual "FUNDIR". Recalcula ao final."""
+    if dados.confirmacao.strip().upper() != "FUNDIR":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Confirmação inválida. Digite FUNDIR para confirmar.")
+    if dados.manter_id == dados.remover_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Escolha dois alunos diferentes para fundir.")
+    manter = _aluno_da_escola(db, escola_id, dados.manter_id)
+    remover = _aluno_da_escola(db, escola_id, dados.remover_id)
+    # Só funde alunos ATIVOS: manter um arquivado/excluído absorvendo um ativo
+    # faria o aluno sumir de todas as telas (que filtram status "ativo").
+    if manter.status != "ativo" or remover.status != "ativo":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Só é possível fundir alunos ativos. Reative o "
+                            "cadastro arquivado ou excluído antes de fundir.")
+    manter_nome, remover_nome = manter.nome, remover.nome  # antes de apagar
+
+    # Leituras: reatribui as de livros que o `manter` ainda não tem; as
+    # repetidas (mesmo livro) são descartadas para não violar a unicidade.
+    livros_do_manter = set(db.execute(
+        select(Leitura.livro_id).where(Leitura.aluno_id == manter.id)
+    ).scalars().all())
+    leituras_remover = db.execute(
+        select(Leitura).where(Leitura.aluno_id == remover.id)
+    ).scalars().all()
+    leituras_movidas = descartadas = 0
+    for leitura in leituras_remover:
+        if leitura.livro_id in livros_do_manter:
+            db.delete(leitura)
+            descartadas += 1
+        else:
+            leitura.aluno_id = manter.id
+            livros_do_manter.add(leitura.livro_id)
+            leituras_movidas += 1
+
+    # Snapshots das plataformas: reatribuídos INTEGRALMENTE (é aqui que o
+    # Matific de um cadastro se junta ao Elefante do outro).
+    snaps_matific = db.execute(
+        update(SnapshotMatific).where(SnapshotMatific.aluno_id == remover.id)
+        .values(aluno_id=manter.id)
+    ).rowcount
+    snaps_elefante = db.execute(
+        update(SnapshotElefante).where(SnapshotElefante.aluno_id == remover.id)
+        .values(aluno_id=manter.id)
+    ).rowcount
+
+    # Matrículas: move as de anos que o `manter` ainda não tem; nos anos em
+    # que ambos têm, mantém a do `manter` e descarta a do `remover`.
+    anos_do_manter = set(db.execute(
+        select(Matricula.ano_letivo).where(Matricula.aluno_id == manter.id)
+    ).scalars().all())
+    for matricula in db.execute(
+        select(Matricula).where(Matricula.aluno_id == remover.id)
+    ).scalars().all():
+        if matricula.ano_letivo in anos_do_manter:
+            db.delete(matricula)
+        else:
+            matricula.aluno_id = manter.id
+            anos_do_manter.add(matricula.ano_letivo)
+
+    # Notas: mesma lógica das matrículas — migra as de anos que o `manter`
+    # não tem (preserva o histórico) e descarta as de anos em comum. A do ano
+    # ATIVO é reescrita pelo recálculo no fim; as de anos passados NÃO são
+    # recalculadas, por isso precisam ser preservadas por migração.
+    anos_nota_manter = set(db.execute(
+        select(Nota.ano_letivo).where(Nota.aluno_id == manter.id)
+    ).scalars().all())
+    for nota in db.execute(
+        select(Nota).where(Nota.aluno_id == remover.id)
+    ).scalars().all():
+        if nota.ano_letivo in anos_nota_manter:
+            db.delete(nota)
+        else:
+            nota.aluno_id = manter.id
+
+    # Preenche lacunas do `manter` com dados do `remover` (nunca sobrescreve).
+    if not manter.foto_url and remover.foto_url:
+        manter.foto_url = remover.foto_url
+    if manter.numero_chamada is None and remover.numero_chamada is not None:
+        manter.numero_chamada = remover.numero_chamada
+    if manter.data_nascimento is None and remover.data_nascimento is not None:
+        manter.data_nascimento = remover.data_nascimento
+    if not manter.observacoes and remover.observacoes:
+        manter.observacoes = remover.observacoes
+
+    manter_id = manter.id
+    registrar(db, "aluno.fundido", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="aluno", entidade_id=manter_id,
+              detalhes={"mantido": {"id": manter_id, "nome": manter_nome},
+                        "removido": {"id": remover.id, "nome": remover_nome},
+                        "leituras_movidas": leituras_movidas,
+                        "leituras_descartadas": descartadas,
+                        "snapshots_matific": snaps_matific,
+                        "snapshots_elefante": snaps_elefante})
+    db.delete(remover)
+    db.commit()
+
+    _recalcular_escola(db, escola_id)
+    return {
+        "mensagem": f"“{remover_nome}” foi fundido em “{manter_nome}”. "
+                    f"{leituras_movidas} leitura(s) e "
+                    f"{snaps_matific + snaps_elefante} registro(s) de plataforma "
+                    "combinados.",
+        "aluno_id": manter_id,
+        "leituras_movidas": leituras_movidas,
+        "leituras_descartadas": descartadas,
+    }
 
 
 # --- Turmas e Professores ---------------------------------------------------

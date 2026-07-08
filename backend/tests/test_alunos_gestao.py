@@ -188,3 +188,103 @@ def test_listar_alunos_da_turma_busca_e_ordena(cliente, escola_completa):
     busca = cliente.get(f"{_base(escola_id)}/turmas/{turma.id}/alunos?busca=jo%C3%A3o").json()
     assert len(busca) == 1
     assert "João" in busca[0]["nome"]
+
+
+# --- Fundir alunos duplicados -----------------------------------------------
+
+def test_fundir_combina_matific_e_elefante_e_deduplica_leituras(cliente, db, escola_completa):
+    """Caso real: os dados do mesmo aluno vieram em dois cadastros — Matific
+    num, Elefante noutro. Fundir junta tudo num só, sem duplicar leituras."""
+    escola_id = escola_completa["escola"].id
+    manter, remover = escola_completa["alunos"][0], escola_completa["alunos"][1]
+
+    # `manter` tem Matific + a leitura "O Gato e a Lua".
+    _popular_dados(cliente, escola_id, manter)
+    # `remover` tem Elefante: a MESMA "O Gato e a Lua" (duplicada) + uma única.
+    for livro in ("O Gato e a Lua", "O Mapa Secreto"):
+        cliente.post(f"{_base(escola_id)}/importacoes/confirmar", json={
+            "plataforma": "elefante", "formato": "leituras", "tipo": "texto",
+            "linhas": [{"nome": remover.nome,
+                        "dados": {"livro": livro, "nivel": "AA"},
+                        "aluno_id": remover.id}]})
+
+    manter_id, remover_id = manter.id, remover.id  # antes de a fusão apagar
+    resposta = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": manter_id, "remover_id": remover_id, "confirmacao": "FUNDIR"})
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.json()["leituras_movidas"] == 1        # só "O Mapa Secreto"
+    assert resposta.json()["leituras_descartadas"] == 1    # "O Gato e a Lua" repetida
+
+    # O `remover` deixou de existir; o `manter` ficou com tudo.
+    db.expire_all()  # a fusão gravou por outra sessão; recarrega do banco
+    assert db.get(Aluno, remover_id) is None
+    assert db.execute(select(func.count()).select_from(SnapshotMatific)
+                      .where(SnapshotMatific.aluno_id == manter_id)).scalar_one() >= 1
+    assert db.execute(select(func.count()).select_from(SnapshotElefante)
+                      .where(SnapshotElefante.aluno_id == manter_id)).scalar_one() >= 1
+    livros = db.execute(select(func.count()).select_from(Leitura)
+                        .where(Leitura.aluno_id == manter_id)).scalar_one()
+    assert livros == 2                                     # união, sem repetir
+    # Nenhum órfão apontando para o aluno removido.
+    for modelo in (Leitura, SnapshotMatific, SnapshotElefante, Nota, Matricula):
+        sobra = db.execute(select(func.count()).select_from(modelo)
+                           .where(modelo.aluno_id == remover_id)).scalar_one()
+        assert sobra == 0, modelo.__name__
+
+
+def test_fundir_exige_confirmacao_e_alunos_distintos(cliente, db, escola_completa):
+    escola_id = escola_completa["escola"].id
+    a, b = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    # Confirmação errada não funde nada.
+    r1 = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": a.id, "remover_id": b.id, "confirmacao": "sim"})
+    assert r1.status_code == 400
+    assert db.get(Aluno, b.id) is not None
+    # Mesmo aluno dos dois lados é recusado.
+    r2 = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": a.id, "remover_id": a.id, "confirmacao": "FUNDIR"})
+    assert r2.status_code == 400
+
+
+def test_fundir_recusa_aluno_inativo(cliente, db, escola_completa):
+    """Não pode manter um arquivado absorvendo um ativo — o aluno sumiria de
+    todas as telas (que filtram status ativo)."""
+    escola_id = escola_completa["escola"].id
+    manter, remover = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    manter.status = "arquivado"
+    db.commit()
+    r = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": manter.id, "remover_id": remover.id, "confirmacao": "FUNDIR"})
+    assert r.status_code == 400
+    db.expire_all()
+    assert db.get(Aluno, remover.id) is not None       # nada foi apagado
+
+
+def test_fundir_preserva_nota_de_ano_anterior(cliente, db, escola_completa):
+    """Ao migrar a matrícula de um ano anterior, a NOTA daquele ano também
+    precisa migrar — senão o histórico daquele ano some."""
+    from app.models import Nota
+
+    escola_id = escola_completa["escola"].id
+    manter, remover = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    turma_id = escola_completa["turma"].id
+    # `remover` tem matrícula + nota em 2025 (ano anterior); `manter` não.
+    db.add(Matricula(escola_id=escola_id, aluno_id=remover.id,
+                     turma_id=turma_id, ano_letivo=2025))
+    db.add(Nota(escola_id=escola_id, aluno_id=remover.id, ano_letivo=2025,
+                nota_matific=8.0, nota_elefante=7.0, nota_geral=7.5, posicao=1))
+    db.commit()
+    manter_id, remover_id = manter.id, remover.id
+
+    r = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": manter_id, "remover_id": remover_id, "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+
+    db.expire_all()
+    nota_2025 = db.execute(select(Nota).where(
+        Nota.aluno_id == manter_id, Nota.ano_letivo == 2025)).scalar_one_or_none()
+    assert nota_2025 is not None                       # histórico preservado
+    assert nota_2025.nota_geral == 7.5
+    # E sem nota órfã apontando para o removido.
+    assert db.execute(select(func.count()).select_from(Nota)
+                      .where(Nota.aluno_id == remover_id)).scalar_one() == 0
