@@ -38,6 +38,39 @@ def verificar_senha_dummy() -> None:
     pwd_context.dummy_verify()
 
 
+# --- Cópia visível da senha (decisão do dono do produto) ---------------------
+# A autenticação continua 100% pelo hash bcrypt. A cópia cifrada existe SÓ
+# para o recurso "ver senha" da tela de Usuários (admin vê todos; coordenador
+# os professores; professor a própria). Cifra simétrica com chave derivada da
+# SECRET_KEY: quem obtiver apenas o banco NÃO lê as senhas; toda visualização
+# fica no log de auditoria.
+
+def _chave_fernet() -> bytes:
+    import base64
+    import hashlib
+
+    derivada = hashlib.sha256(f"{settings.SECRET_KEY}|senha-visivel".encode()).digest()
+    return base64.urlsafe_b64encode(derivada)
+
+
+def cifrar_senha_visivel(senha: str) -> str:
+    from cryptography.fernet import Fernet
+
+    return Fernet(_chave_fernet()).encrypt(senha.encode("utf-8")).decode("ascii")
+
+
+def decifrar_senha_visivel(token: str | None) -> str | None:
+    """Senha em texto, ou None se não houver cópia / a SECRET_KEY mudou."""
+    if not token:
+        return None
+    try:
+        from cryptography.fernet import Fernet, InvalidToken
+
+        return Fernet(_chave_fernet()).decrypt(token.encode("ascii")).decode("utf-8")
+    except Exception:  # noqa: BLE001 — chave trocada/valor corrompido: sem cópia
+        return None
+
+
 def validar_forca_senha(senha: str, email: str | None = None) -> str | None:
     """Devolve a mensagem de erro se a senha for fraca; None se for aceitável.
     Regra única compartilhada por todos os fluxos de senha (criar/trocar)."""

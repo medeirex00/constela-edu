@@ -120,7 +120,7 @@ function MenuAcoes({
           <>
             <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar" onClick={() => escolher("visualizar")} />
             {!excluido && podeVerSenha && (
-              <ItemMenu icone={<Eye size={15} />} rotulo="Ver senha (gerar nova)" onClick={() => escolher("versenha")} />
+              <ItemMenu icone={<Eye size={15} />} rotulo="Ver senha" onClick={() => escolher("versenha")} />
             )}
             {!excluido && souAdmin && (
               <>
@@ -162,6 +162,116 @@ function MenuAcoes({
   );
 }
 
+// --- Ver senha ------------------------------------------------------------------
+
+/** Mostra a senha ATUAL (guardada cifrada para este fim). Senhas definidas
+ *  antes do recurso não têm cópia: o modal explica e oferece gerar uma nova
+ *  (na própria conta, provando a senha atual). */
+function ModalVerSenha({ alvo, base, souEu, aoFechar }: {
+  alvo: Usuario;
+  base: string;
+  souEu: boolean;
+  aoFechar: () => void;
+}) {
+  const [senha, setSenha] = useState<string | null>(null);
+  const [indisponivel, setIndisponivel] = useState<string | null>(null);
+  const [novaGerada, setNovaGerada] = useState(false);
+  const [senhaAtual, setSenhaAtual] = useState("");
+  const [copiada, setCopiada] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  useEffect(() => {
+    api<{ disponivel: boolean; senha?: string; mensagem?: string }>(
+      `${base}/${alvo.id}/senha`)
+      .then((r) => {
+        if (r.disponivel && r.senha) setSenha(r.senha);
+        else setIndisponivel(r.mensagem ?? "Senha indisponível para exibição.");
+      })
+      .catch((e) => setErro(e instanceof ApiError ? e.message : "Não foi possível consultar."));
+  }, [alvo.id, base]);
+
+  async function gerarNova() {
+    setOcupado(true);
+    setErro("");
+    try {
+      const r = await api<{ senha: string }>(`${base}/${alvo.id}/senha`, {
+        method: "POST",
+        body: JSON.stringify({ senha_atual: senhaAtual || null }),
+      });
+      setSenha(r.senha);
+      setNovaGerada(true);
+      setIndisponivel(null);
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Não foi possível gerar a senha.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Modal titulo={`Senha de ${alvo.nome}`} aberto aoFechar={aoFechar}>
+      {senha !== null ? (
+        <>
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+            {novaGerada
+              ? <>Senha <strong>nova</strong> de <strong>{alvo.nome}</strong> (a anterior deixou de valer):</>
+              : <>Senha atual de <strong>{alvo.nome}</strong>:</>}
+          </p>
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+            <code className="select-all text-lg font-semibold tracking-wide text-emerald-800 dark:text-emerald-200">
+              {senha}
+            </code>
+            <Botao variante="neutro" onClick={() => copiarTexto(senha, () => setCopiada(true))}>
+              {copiada ? "Copiada!" : "Copiar"}
+            </Botao>
+          </div>
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+            Cada visualização fica registrada no log de auditoria.
+          </p>
+          <div className="mt-4 flex justify-end">
+            <Botao onClick={aoFechar}>Fechar</Botao>
+          </div>
+        </>
+      ) : indisponivel !== null ? (
+        <>
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">{indisponivel}</p>
+          {souEu && (
+            <div className="mt-3">
+              <Campo rotulo="Confirme a sua senha atual para gerar uma nova">
+                <input
+                  type="password"
+                  className={estiloInput}
+                  value={senhaAtual}
+                  onChange={(e) => setSenhaAtual(e.target.value)}
+                  autoFocus
+                />
+              </Campo>
+            </div>
+          )}
+          {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+          <div className="mt-4 flex justify-end gap-2">
+            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao disabled={ocupado || (souEu && !senhaAtual)} onClick={gerarNova}>
+              <Eye size={15} /> {ocupado ? "Gerando..." : "Gerar senha nova"}
+            </Botao>
+          </div>
+        </>
+      ) : erro ? (
+        <>
+          <Mensagem tipo="erro">{erro}</Mensagem>
+          <div className="mt-4 flex justify-end">
+            <Botao variante="neutro" onClick={aoFechar}>Fechar</Botao>
+          </div>
+        </>
+      ) : (
+        <Carregando />
+      )}
+    </Modal>
+  );
+}
+
+
 // --- Página -------------------------------------------------------------------
 
 export default function Usuarios() {
@@ -186,8 +296,6 @@ export default function Usuarios() {
   const [senha2, setSenha2] = useState("");
   const [cargo, setCargo] = useState("professor");
   const [confirmacao, setConfirmacao] = useState("");
-  const [senhaGerada, setSenhaGerada] = useState<string | null>(null);
-  const [copiada, setCopiada] = useState(false);
 
   const souGlobal = usuarioLogado?.is_global ?? false;
   const souAdmin = souGlobal || usuarioLogado?.cargo === "admin";
@@ -226,8 +334,6 @@ export default function Usuarios() {
     setEmail(alvo.email);
     setUsername(alvo.username ?? "");
     setCargo(alvo.cargo);
-    setSenhaGerada(null);
-    setCopiada(false);
     setAcao({ tipo, alvo });
   }
 
@@ -467,80 +573,15 @@ export default function Usuarios() {
         </div>
       </Modal>
 
-      {/* --- Ver senha (gera uma nova e mostra UMA vez) --- */}
-      <Modal titulo={`Senha de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "versenha"} aoFechar={() => setAcao(null)}>
-        {senhaGerada === null ? (
-          <>
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">
-              Por proteção, as senhas ficam guardadas de forma <strong>embaralhada e
-              irreversível</strong> — nem o sistema conhece a senha atual de{" "}
-              <strong>{alvo?.nome}</strong>. Para “ver a senha”, o sistema gera uma{" "}
-              <strong>senha nova</strong> e mostra aqui, uma única vez.
-            </p>
-            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-              A senha antiga deixa de funcionar na hora
-              {alvo?.id === usuarioLogado?.id ? " (sua sessão atual continua aberta)" : ""}.
-            </p>
-            {alvo?.id === usuarioLogado?.id && (
-              <div className="mt-3">
-                <Campo rotulo="Confirme a sua senha atual">
-                  <input
-                    type="password"
-                    className={estiloInput}
-                    value={confirmacao}
-                    onChange={(e) => setConfirmacao(e.target.value)}
-                    autoFocus
-                  />
-                </Campo>
-              </div>
-            )}
-            {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
-            <div className="mt-4 flex justify-end gap-2">
-              <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
-              <Botao
-                disabled={ocupado || (alvo?.id === usuarioLogado?.id && !confirmacao)}
-                onClick={async () => {
-                  setOcupado(true);
-                  setErroAcao("");
-                  try {
-                    const resposta = await api<{ senha: string }>(
-                      `${base}/${alvo?.id}/senha`, {
-                        method: "POST",
-                        body: JSON.stringify({ senha_atual: confirmacao || null }),
-                      });
-                    setSenhaGerada(resposta.senha);
-                  } catch (excecao) {
-                    setErroAcao(excecao instanceof ApiError ? excecao.message
-                      : "Não foi possível gerar a senha.");
-                  } finally {
-                    setOcupado(false);
-                  }
-                }}
-              >
-                <Eye size={15} /> {ocupado ? "Gerando..." : "Gerar e mostrar senha"}
-              </Botao>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">
-              Nova senha de <strong>{alvo?.nome}</strong> — anote agora, ela não
-              poderá ser vista de novo:
-            </p>
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-500/20 dark:bg-emerald-500/10">
-              <code className="select-all text-lg font-semibold tracking-wide text-emerald-800 dark:text-emerald-200">
-                {senhaGerada}
-              </code>
-              <Botao variante="neutro" onClick={() => copiarTexto(senhaGerada, () => setCopiada(true))}>
-                {copiada ? "Copiada!" : "Copiar"}
-              </Botao>
-            </div>
-            <div className="mt-4 flex justify-end">
-              <Botao onClick={() => setAcao(null)}>Fechar</Botao>
-            </div>
-          </>
-        )}
-      </Modal>
+      {/* --- Ver senha: mostra a ATUAL; sem cópia disponível, oferece gerar --- */}
+      {acao?.tipo === "versenha" && alvo && (
+        <ModalVerSenha
+          alvo={alvo}
+          base={base}
+          souEu={alvo.id === usuarioLogado?.id}
+          aoFechar={() => setAcao(null)}
+        />
+      )}
 
       {/* --- Alterar senha --- */}
       <Modal titulo={`Alterar senha de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "senha"} aoFechar={() => setAcao(null)}>

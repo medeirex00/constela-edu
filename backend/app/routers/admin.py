@@ -32,7 +32,12 @@ TAMANHO_MAXIMO_BACKUP = 25 * 1024 * 1024  # 25 MB
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
-from app.core.security import hash_senha, validar_forca_senha
+from app.core.security import (
+    cifrar_senha_visivel,
+    decifrar_senha_visivel,
+    hash_senha,
+    validar_forca_senha,
+)
 from app.models import (
     Configuracao,
     ConversaIA,
@@ -202,7 +207,9 @@ def criar_usuario(
 
     novo = Usuario(escola_id=escola_id, nome=dados.nome.strip(), email=email,
                    username=dados.username,
-                   senha_hash=hash_senha(dados.senha), cargo=dados.cargo)
+                   senha_hash=hash_senha(dados.senha),
+                   senha_visivel=cifrar_senha_visivel(dados.senha),
+                   cargo=dados.cargo)
     db.add(novo)
     try:
         db.flush()
@@ -264,6 +271,7 @@ def atualizar_usuario(
         alvo.status = dados.status
     if dados.senha is not None:
         alvo.senha_hash = hash_senha(dados.senha)
+        alvo.senha_visivel = cifrar_senha_visivel(dados.senha)
         # Invalida as sessões abertas do usuário (tokens antigos param de
         # valer) — protege conta comprometida. Na PRÓPRIA conta a sessão
         # continua: trocar a própria senha não pode deslogar o autor na hora.
@@ -341,6 +349,42 @@ class SenhaVisivelIn(BaseModel):
     senha_atual: str | None = None
 
 
+@router.get("/usuarios/{usuario_id}/senha", response_model=dict)
+def ver_senha(
+    usuario_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Mostra a senha ATUAL do usuário, sem trocar nada (matriz por cargo).
+
+    Decisão do dono do produto: uma cópia CIFRADA da senha é guardada a cada
+    definição, exclusivamente para esta tela. Senhas definidas antes do
+    recurso não têm cópia — nesses casos a resposta indica indisponível e a
+    interface oferece gerar uma nova. Toda visualização vai para o log de
+    auditoria (sem a senha)."""
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    if not _pode_ver_senha(usuario, alvo):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Sem permissão para ver a senha deste usuário.")
+    if alvo.status == "excluido":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Usuário excluído — restaure a conta antes.")
+    senha = decifrar_senha_visivel(alvo.senha_visivel)
+    registrar(db, "usuario.senha_visualizada", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="usuario", entidade_id=alvo.id,
+              detalhes={"email": alvo.email,
+                        "disponivel": senha is not None})
+    db.commit()
+    if senha is None:
+        return {"disponivel": False,
+                "mensagem": "Esta senha foi definida antes do recurso de "
+                            "visualização e não pode ser exibida. Gere uma "
+                            "senha nova (ou altere-a) para que fique visível "
+                            "daqui em diante."}
+    return {"disponivel": True, "senha": senha}
+
+
 @router.post("/usuarios/{usuario_id}/senha", response_model=dict)
 def gerar_senha_visivel(
     usuario_id: int,
@@ -371,6 +415,7 @@ def gerar_senha_visivel(
 
     senha = _gerar_senha_legivel()
     alvo.senha_hash = hash_senha(senha)
+    alvo.senha_visivel = cifrar_senha_visivel(senha)
     if alvo.id != usuario.id:
         # Sessões antigas do alvo caem (proteção). Na PRÓPRIA conta a sessão
         # atual continua — senão o clique em "ver senha" derrubaria o usuário.

@@ -163,6 +163,71 @@ def test_limitador_soma_email_e_username_no_mesmo_contador(db, contas):
     assert via_username.status_code == 429
 
 
+def test_ver_senha_atual_sem_trocar_nada(db, contas):
+    """A senha definida via tela fica VISÍVEL (cópia cifrada): o GET mostra a
+    senha atual sem gerar nova — e ela continua funcionando no login."""
+    escola_id = contas["escola"].id
+    admin = _cliente_como("admin@teste.local", "s3nh4")
+    criado = admin.post(f"/api/v1/escolas/{escola_id}/usuarios", json={
+        "nome": "Nova Prof", "email": "nova@escola.com.br",
+        "senha": "MinhaSenha2026", "cargo": "professor"})
+    assert criado.status_code == 201
+    novo_id = criado.json()["id"]
+
+    ver = admin.get(f"/api/v1/escolas/{escola_id}/usuarios/{novo_id}/senha")
+    assert ver.status_code == 200
+    assert ver.json() == {"disponivel": True, "senha": "MinhaSenha2026"}
+
+    # Ver de novo não muda nada: a mesma senha segue valendo no login.
+    login = TestClient(app).post("/api/v1/auth/login",
+                                 data={"username": "nova@escola.com.br",
+                                       "password": "MinhaSenha2026"})
+    assert login.status_code == 200
+
+    # E a cópia no banco NÃO é texto puro.
+    db.expire_all()
+    alvo = db.get(Usuario, novo_id)
+    assert "MinhaSenha2026" not in (alvo.senha_visivel or "")
+
+
+def test_senha_antiga_sem_copia_indica_indisponivel(db, contas):
+    """Contas criadas antes do recurso (sem cópia cifrada) não têm o que
+    exibir: o GET explica e a interface oferece gerar uma nova."""
+    escola_id = contas["escola"].id
+    admin = _cliente_como("admin@teste.local", "s3nh4")
+    ver = admin.get(
+        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}/senha")
+    assert ver.status_code == 200
+    corpo = ver.json()
+    assert corpo["disponivel"] is False
+    assert "senha" not in corpo
+
+    # Depois de trocar a senha (Alterar senha), ela passa a ser visível.
+    troca = admin.patch(
+        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}",
+        json={"senha": "TrocadaAgora26"})
+    assert troca.status_code == 200
+    ver2 = admin.get(
+        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}/senha")
+    assert ver2.json() == {"disponivel": True, "senha": "TrocadaAgora26"}
+
+
+def test_ver_senha_respeita_a_matriz(db, contas):
+    escola_id = contas["escola"].id
+    prof = _cliente_como("carla@teste.local", "s3nh4!!!")
+    outro = prof.get(
+        f"/api/v1/escolas/{escola_id}/usuarios/{contas['bruno'].id}/senha")
+    assert outro.status_code == 403
+    propria = prof.get(
+        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}/senha")
+    assert propria.status_code == 200      # ver a própria: sem fricção
+
+    coord = _cliente_como("coord@teste.local", "s3nh4!!!")
+    assert coord.get(
+        f"/api/v1/escolas/{escola_id}/usuarios/{contas['admin'].id}/senha"
+    ).status_code == 403
+
+
 def test_listagem_respeita_a_matriz(db, contas):
     escola_id = contas["escola"].id
     base = f"/api/v1/escolas/{escola_id}/usuarios"

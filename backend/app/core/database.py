@@ -68,6 +68,8 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
         "token_version": "INTEGER DEFAULT 0 NOT NULL",
         # Nome de usuário do login (estilo @): único, minúsculo, opcional.
         "username": "VARCHAR(30)",
+        # Cópia cifrada da senha para o "ver senha" (Fernet/SECRET_KEY).
+        "senha_visivel": "VARCHAR(500)",
     },
     "niveis_dificuldade": {
         "codigo": "VARCHAR(40)",
