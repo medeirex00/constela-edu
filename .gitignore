@@ -26,3 +26,4 @@ exports/*
 # Ambiente
 .env
 .env.local
+*.tsbuildinfo
