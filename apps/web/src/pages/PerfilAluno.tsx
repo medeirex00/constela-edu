@@ -157,8 +157,12 @@ function textoFaltam(conquista: ConquistaAluno): string {
 
 export default function PerfilAluno() {
   const { id } = useParams();
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
   const navegar = useNavigate();
+  // Professor vê a versão SUPERFICIAL: notas, posição e gamificação — sem
+  // histórico de leituras, evolução detalhada nem ações de gestão.
+  const gestor = Boolean(usuario?.is_global) ||
+    ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const [perfil, setPerfil] = useState<Perfil | null>(null);
   const [gamificacao, setGamificacao] = useState<Gamificacao | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -196,13 +200,15 @@ export default function PerfilAluno() {
           {detalhes.modo_normalizacao && (
             <Badge>Normalização: {detalhes.modo_normalizacao === "auto" ? "automática" : "manual"}</Badge>
           )}
-          <Link
-            to={`/alunos/${aluno.id}/evolucao`}
-            className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-          >
-            <TrendingUp size={14} /> Ver evolução
-          </Link>
-          {escolaId && (
+          {gestor && (
+            <Link
+              to={`/alunos/${aluno.id}/evolucao`}
+              className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              <TrendingUp size={14} /> Ver evolução
+            </Link>
+          )}
+          {gestor && escolaId && (
             <span className="ml-auto">
               {/* Editar dados, trocar turma, arquivar, excluir — direto da ficha */}
               <AcoesAluno
@@ -221,7 +227,10 @@ export default function PerfilAluno() {
       </div>
 
       <div role="tablist" className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
-        {([["perfil", "Perfil"], ["historico", "Histórico de Leituras"], ["evolucao", "Evolução"]] as const).map(([chave, rotulo]) => (
+        {/* Professor: só a aba Perfil (histórico e evolução detalhada são de gestão) */}
+        {([["perfil", "Perfil"], ["historico", "Histórico de Leituras"], ["evolucao", "Evolução"]] as const)
+          .filter(([chave]) => gestor || chave === "perfil")
+          .map(([chave, rotulo]) => (
           <button
             key={chave}
             role="tab"
@@ -238,11 +247,11 @@ export default function PerfilAluno() {
         ))}
       </div>
 
-      {aba === "historico" && escolaId && id && (
+      {gestor && aba === "historico" && escolaId && id && (
         <HistoricoLeituras escolaId={escolaId} alunoId={id} />
       )}
 
-      {aba === "evolucao" && escolaId && id && (
+      {gestor && aba === "evolucao" && escolaId && id && (
         <EvolucaoAlunoAba escolaId={escolaId} alunoId={id} />
       )}
 

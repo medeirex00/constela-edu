@@ -42,9 +42,8 @@ import type { Usuario } from "../lib/types";
 
 const CARGOS = [
   { valor: "admin", rotulo: "Administrador", descricao: "Acesso total: usuários, configurações, importações e exclusões." },
-  { valor: "coordenador", rotulo: "Coordenador", descricao: "Gerencia alunos, turmas, importações e métricas." },
-  { valor: "professor", rotulo: "Professor", descricao: "Consulta rankings, turmas e perfis dos alunos." },
-  { valor: "visitante", rotulo: "Visitante", descricao: "Somente leitura das telas públicas internas." },
+  { valor: "coordenador", rotulo: "Coordenador", descricao: "Acesso a tudo da escola, exceto usuários e configurações de sistema." },
+  { valor: "professor", rotulo: "Professor", descricao: "Vê apenas as turmas designadas a ele, com dados resumidos." },
 ] as const;
 
 function rotuloCargo(valor: string): string {
@@ -189,7 +188,7 @@ export default function Usuarios() {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [senha2, setSenha2] = useState("");
-  const [cargo, setCargo] = useState("visitante");
+  const [cargo, setCargo] = useState("professor");
   const [confirmacao, setConfirmacao] = useState("");
 
   const souGlobal = usuarioLogado?.is_global ?? false;
@@ -230,7 +229,7 @@ export default function Usuarios() {
     setEmail("");
     setSenha("");
     setSenha2("");
-    setCargo("visitante");
+    setCargo("professor");
     setNovo(true);
   }
 

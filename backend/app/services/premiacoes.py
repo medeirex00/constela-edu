@@ -33,7 +33,8 @@ def _podio(valores: dict[int, float], alunos: dict[int, dict], limite: int = 5) 
 
 
 def _alunos_ativos(db: Session, escola_id: int, ano: int,
-                   turma_id: int | None) -> dict[int, dict]:
+                   turma_id: int | None,
+                   turma_ids: list[int] | None = None) -> dict[int, dict]:
     consulta = (
         select(Aluno.id, Aluno.nome, Turma.nome)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
@@ -43,15 +44,18 @@ def _alunos_ativos(db: Session, escola_id: int, ano: int,
     )
     if turma_id:
         consulta = consulta.where(Turma.id == turma_id)
+    if turma_ids is not None:  # professor: só as turmas designadas a ele
+        consulta = consulta.where(Turma.id.in_(turma_ids))
     return {aid: {"nome": nome, "turma": turma}
             for aid, nome, turma in db.execute(consulta).all()}
 
 
 def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
-               fim: datetime | None, turma_id: int | None = None) -> dict:
+               fim: datetime | None, turma_id: int | None = None,
+               turma_ids: list[int] | None = None) -> dict:
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
-    alunos = _alunos_ativos(db, escola_id, ano, turma_id)
+    alunos = _alunos_ativos(db, escola_id, ano, turma_id, turma_ids)
 
     # --- Leitura no período (livros, pontos de dificuldade, tempo) ----------
     pontos_map = scoring.pontos_por_codigo(db, escola_id)

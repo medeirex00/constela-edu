@@ -20,13 +20,14 @@ from app.models import (
     Usuario,
 )
 from app.schemas import DashboardOut, EscolaOut, RankingItemOut
-from app.services import periodos, premiacoes as svc_premiacoes, scoring
+from app.services import periodos, permissoes, premiacoes as svc_premiacoes, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Ranking e Dashboard"])
 
 
-def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None, limite=None):
+def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None,
+             limite=None, turma_ids: list[int] | None = None):
     consulta = (
         select(Nota, Aluno, Turma)
         .join(Aluno, Nota.aluno_id == Aluno.id)
@@ -39,6 +40,8 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    if turma_ids is not None:  # professor: só as turmas dele (posição segue geral)
+        consulta = consulta.where(Turma.id.in_(turma_ids))
     if limite:
         consulta = consulta.limit(limite)
     return [
@@ -64,9 +67,12 @@ def ranking_geral(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Ranking Geral com filtros por turma e série (PRD §63)."""
+    """Ranking Geral com filtros por turma e série (PRD §63). Professor vê a
+    posição GERAL dos alunos dele — mas apenas os alunos das turmas dele."""
     escola = db.get(Escola, escola_id)
-    return _ranking(db, escola_id, escola.ano_letivo_ativo, turma_id, ano_escolar)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    return _ranking(db, escola_id, escola.ano_letivo_ativo, turma_id, ano_escolar,
+                    turma_ids=permitidas)
 
 
 @router.get("/ranking/leitura", response_model=list[dict])
@@ -110,6 +116,9 @@ def ranking_leitura(
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:  # professor: só as turmas dele
+        consulta = consulta.where(Turma.id.in_(permitidas))
 
     pontos_map = scoring.pontos_por_codigo(db, escola_id)
     agg: dict[int, dict] = {}
@@ -152,7 +161,9 @@ def premiacoes(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Data inválida (use AAAA-MM-DD).") from exc
-    dados = svc_premiacoes.premiacoes(db, escola_id, ini, fim_dt, turma_id)
+    dados = svc_premiacoes.premiacoes(
+        db, escola_id, ini, fim_dt, turma_id,
+        turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
     dados["periodo"] = {"chave": periodo, "rotulo": rotulo,
                         "inicio": ini.isoformat() if ini else None,
                         "fim": fim_dt.isoformat() if fim_dt else None}
@@ -172,25 +183,41 @@ def recalcular(
     return {"mensagem": f"Notas recalculadas para {total} alunos."}
 
 
-def montar_dashboard(db: Session, escola_id: int) -> DashboardOut:
+def montar_dashboard(db: Session, escola_id: int,
+                     turma_ids: list[int] | None = None) -> DashboardOut:
     """Indicadores do painel inicial (PRD §19, §48).
 
     Extraído do endpoint para ser reutilizado pela sincronização mobile.
-    """
+    `turma_ids` restringe TODOS os números às turmas informadas (professor vê
+    o dashboard apenas das turmas designadas a ele)."""
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
 
-    total_alunos = db.execute(
+    consulta_alunos = (
         select(func.count(func.distinct(Matricula.aluno_id)))
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.escola_id == escola_id, Matricula.ano_letivo == ano, Aluno.status == "ativo")
-    ).scalar_one()
-    total_turmas = db.execute(
-        select(func.count(Turma.id)).where(Turma.escola_id == escola_id, Turma.ano_letivo == ano)
-    ).scalar_one()
+    )
+    consulta_turmas = select(func.count(Turma.id)).where(
+        Turma.escola_id == escola_id, Turma.ano_letivo == ano)
+    if turma_ids is not None:
+        consulta_alunos = consulta_alunos.where(Matricula.turma_id.in_(turma_ids))
+        consulta_turmas = consulta_turmas.where(Turma.id.in_(turma_ids))
+    total_alunos = db.execute(consulta_alunos).scalar_one()
+    total_turmas = db.execute(consulta_turmas).scalar_one()
     total_professores = db.execute(
         select(func.count(Professor.id)).where(Professor.escola_id == escola_id)
     ).scalar_one()
+
+    # Subconjunto de alunos das turmas permitidas (None = escola inteira)
+    alunos_sub = None
+    if turma_ids is not None:
+        alunos_sub = (
+            select(Matricula.aluno_id)
+            .where(Matricula.escola_id == escola_id,
+                   Matricula.ano_letivo == ano,
+                   Matricula.turma_id.in_(turma_ids))
+        )
 
     # Estado atual = snapshot mais recente de cada aluno
     sub_m = (
@@ -199,10 +226,13 @@ def montar_dashboard(db: Session, escola_id: int) -> DashboardOut:
         .group_by(SnapshotMatific.aluno_id)
         .subquery()
     )
-    total_atividades = db.execute(
+    consulta_atividades = (
         select(func.coalesce(func.sum(SnapshotMatific.atividades), 0))
         .join(sub_m, SnapshotMatific.id == sub_m.c.max_id)
-    ).scalar_one()
+    )
+    if alunos_sub is not None:
+        consulta_atividades = consulta_atividades.where(SnapshotMatific.aluno_id.in_(alunos_sub))
+    total_atividades = db.execute(consulta_atividades).scalar_one()
 
     sub_e = (
         select(SnapshotElefante.aluno_id, func.max(SnapshotElefante.id).label("max_id"))
@@ -210,18 +240,21 @@ def montar_dashboard(db: Session, escola_id: int) -> DashboardOut:
         .group_by(SnapshotElefante.aluno_id)
         .subquery()
     )
-    total_livros, tempo_total = db.execute(
+    consulta_elefante = (
         select(
             func.coalesce(func.sum(SnapshotElefante.livros_unicos), 0),
             func.coalesce(func.sum(SnapshotElefante.tempo_leitura_min), 0),
         ).join(sub_e, SnapshotElefante.id == sub_e.c.max_id)
-    ).one()
+    )
+    if alunos_sub is not None:
+        consulta_elefante = consulta_elefante.where(SnapshotElefante.aluno_id.in_(alunos_sub))
+    total_livros, tempo_total = db.execute(consulta_elefante).one()
 
-    media_geral = db.execute(
-        select(func.coalesce(func.avg(Nota.nota_geral), 0.0)).where(
-            Nota.escola_id == escola_id, Nota.ano_letivo == ano
-        )
-    ).scalar_one()
+    consulta_media = select(func.coalesce(func.avg(Nota.nota_geral), 0.0)).where(
+        Nota.escola_id == escola_id, Nota.ano_letivo == ano)
+    if alunos_sub is not None:
+        consulta_media = consulta_media.where(Nota.aluno_id.in_(alunos_sub))
+    media_geral = db.execute(consulta_media).scalar_one()
 
     return DashboardOut(
         escola=EscolaOut.model_validate(escola),
@@ -232,7 +265,7 @@ def montar_dashboard(db: Session, escola_id: int) -> DashboardOut:
         total_livros=int(total_livros),
         tempo_leitura_min=int(tempo_total),
         media_geral=round(float(media_geral), 2),
-        top10=_ranking(db, escola_id, ano, limite=10),
+        top10=_ranking(db, escola_id, ano, limite=10, turma_ids=turma_ids),
     )
 
 
@@ -242,4 +275,5 @@ def dashboard(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    return montar_dashboard(db, escola_id)
+    return montar_dashboard(
+        db, escola_id, turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))

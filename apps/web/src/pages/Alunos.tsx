@@ -9,7 +9,10 @@ import { api } from "../lib/api";
 import type { PaginaAlunos, Turma } from "../lib/types";
 
 export default function Alunos() {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
+  // Professor não gerencia alunos: sem menu de ações (editar/arquivar/excluir).
+  const gestor = Boolean(usuario?.is_global) ||
+    ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const [busca, setBusca] = useState("");
   const [buscaAplicada, setBuscaAplicada] = useState("");
   const [turmaId, setTurmaId] = useState<string>("");
@@ -94,7 +97,7 @@ export default function Alunos() {
                   <th className="px-4 py-2 font-medium">Turma</th>
                   <th className="hidden px-4 py-2 font-medium sm:table-cell">Série</th>
                   <th className="hidden px-4 py-2 font-medium sm:table-cell">Nº chamada</th>
-                  <th className="w-12 px-4 py-2"></th>
+                  {gestor && <th className="w-12 px-4 py-2"></th>}
                 </tr>
               </thead>
               <tbody>
@@ -108,11 +111,13 @@ export default function Alunos() {
                     <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-300">{aluno.turma}</td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">{aluno.ano_escolar}</td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">{aluno.numero_chamada ?? "—"}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      {escolaId && (
-                        <AcoesAluno aluno={aluno} escolaId={escolaId} aoMudar={carregar} />
-                      )}
-                    </td>
+                    {gestor && (
+                      <td className="px-4 py-2.5 text-right">
+                        {escolaId && (
+                          <AcoesAluno aluno={aluno} escolaId={escolaId} aoMudar={carregar} />
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

@@ -49,6 +49,8 @@ interface ItemNav {
   icone: LucideIcon;
   /** Destaca só no match EXATO (rota pai que tem sub-rotas próprias). */
   exato?: boolean;
+  /** Só para gestão (admin/coordenador) — professor não vê. */
+  gestao?: boolean;
 }
 
 interface GrupoNav {
@@ -63,6 +65,8 @@ const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDas
 
 // Menu agrupado (accordion): reduz o excesso de itens visíveis sem esconder
 // nenhuma funcionalidade. Cada grupo abre/fecha; o da rota atual abre sozinho.
+// Itens com `gestao: true` são exclusivos de admin/coordenador — o professor
+// vê apenas o que toca as turmas dele (o backend também bloqueia tudo isto).
 const GRUPOS: GrupoNav[] = [
   {
     chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [
@@ -70,52 +74,61 @@ const GRUPOS: GrupoNav[] = [
       { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
       { rotulo: "Ranking de Leitura", caminho: "/ranking-leitura", icone: BookOpen },
       { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
-      { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },
+      { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows, gestao: true },
     ],
   },
   {
     chave: "gestao", rotulo: "Gestão Escolar", icone: Users, itens: [
-      { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2 },
+      { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2, gestao: true },
       { rotulo: "Alunos", caminho: "/alunos", icone: GraduationCap },
-      { rotulo: "Turmas", caminho: "/turmas", icone: Users },
-      { rotulo: "Professores", caminho: "/professores", icone: School },
+      { rotulo: "Turmas", caminho: "/turmas", icone: Users, gestao: true },
+      { rotulo: "Professores", caminho: "/professores", icone: School, gestao: true },
     ],
   },
   {
     chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [
-      { rotulo: "Matific", caminho: "/matific", icone: Calculator },
-      { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen },
-      { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen },
-      { rotulo: "Importações", caminho: "/importacoes", icone: Upload },
+      { rotulo: "Matific", caminho: "/matific", icone: Calculator, gestao: true },
+      { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen, gestao: true },
+      { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen, gestao: true },
+      { rotulo: "Importações", caminho: "/importacoes", icone: Upload, gestao: true },
     ],
   },
   {
     chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [
-      { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
+      { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true, gestao: true },
       { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
     ],
   },
   {
     chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [
       { rotulo: "Insights", caminho: "/insights", icone: Lightbulb },
-      { rotulo: "Assistente", caminho: "/assistente", icone: Bot },
-      { rotulo: "Simulador", caminho: "/simulador", icone: FlaskConical },
+      { rotulo: "Assistente", caminho: "/assistente", icone: Bot, gestao: true },
+      { rotulo: "Simulador", caminho: "/simulador", icone: FlaskConical, gestao: true },
     ],
   },
   {
     chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [
       { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
-      { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay },
+      { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay, gestao: true },
     ],
   },
   {
     chave: "config", rotulo: "Configurações", icone: Settings, itens: [
-      { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal },
-      { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
-      { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings },
+      { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal, gestao: true },
+      { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog, gestao: true },
+      { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings, gestao: true },
     ],
   },
 ];
+
+/** Grupos visíveis para o papel do usuário (itens de gestão saem para o
+ *  professor; grupos que ficarem vazios somem). */
+function gruposVisiveis(gestor: boolean): GrupoNav[] {
+  if (gestor) return GRUPOS;
+  return GRUPOS
+    .map((g) => ({ ...g, itens: g.itens.filter((i) => !i.gestao) }))
+    .filter((g) => g.itens.length > 0);
+}
 
 const CHAVE_MENU = "constela_menu_abertos";
 
@@ -319,6 +332,10 @@ function LinkMenu({ item, aoNavegar, subitem }: {
 /** Navegação lateral agrupada em accordion (desktop e celular). */
 function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const { pathname } = useLocation();
+  const { usuario } = useApp();
+  const gestor = Boolean(usuario?.is_global) ||
+    ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const grupos = gruposVisiveis(gestor);
   const ativo = grupoDaRota(pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
     const iniciais = carregarAbertos();
@@ -350,7 +367,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
 
-      {GRUPOS.map((grupo) => {
+      {grupos.map((grupo) => {
         const aberto = abertos.has(grupo.chave);
         const temAtivo = ativo === grupo.chave;
         return (
@@ -401,10 +418,18 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   );
 }
 
-function Marca() {
+function Marca({ aoNavegar }: { aoNavegar?: () => void }) {
   return (
-    <div className="flex items-center gap-2.5 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-      <LogoHorizontal altura={38} />
+    <div className="border-b border-zinc-200 dark:border-zinc-800">
+      {/* Clicar na marca volta para o Dashboard */}
+      <NavLink
+        to="/"
+        onClick={aoNavegar}
+        aria-label="Ir para o Dashboard"
+        className="flex items-center gap-2.5 px-5 py-4 transition-opacity hover:opacity-80"
+      >
+        <LogoHorizontal altura={38} />
+      </NavLink>
     </div>
   );
 }
@@ -475,7 +500,7 @@ export default function Layout() {
           />
           <aside className="absolute inset-y-0 left-0 flex w-64 flex-col border-r border-zinc-200 bg-white pl-safe pt-safe dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex items-center justify-between pr-2">
-              <Marca />
+              <Marca aoNavegar={() => setMenuAberto(false)} />
               <button
                 aria-label="Fechar menu"
                 className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"

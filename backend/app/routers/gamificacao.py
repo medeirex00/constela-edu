@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
-from app.models import Aluno, Configuracao, Usuario
+from app.models import Aluno, Configuracao, Escola, Usuario
 from app.services import gamificacao as svc
+from app.services import permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/gamificacao", tags=["Gamificação"])
@@ -21,7 +22,9 @@ def mural(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Mural da escola: Aluno do Dia/Semana/Mês + eventos recentes (§83)."""
+    """Mural da escola: Aluno do Dia/Semana/Mês + eventos recentes (§83).
+    Vitrine da ESCOLA TODA — professor não acessa (gamificação só dos seus)."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     return svc.mural(db, escola_id)
 
 
@@ -31,8 +34,16 @@ def ranking_xp(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Ranking por XP/nível — motivacional, separado das notas (§81)."""
-    return svc.ranking_xp(db, escola_id)
+    """Ranking por XP/nível — motivacional, separado das notas (§81).
+    Professor recebe apenas os alunos das turmas dele."""
+    itens = svc.ranking_xp(db, escola_id)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:
+        escola = db.get(Escola, escola_id)
+        alunos = permissoes.alunos_permitidos(db, escola_id,
+                                              escola.ano_letivo_ativo, permitidas)
+        itens = permissoes.filtrar_por_aluno(itens, alunos)
+    return itens
 
 
 @router.get("/alunos/{aluno_id}")
@@ -42,10 +53,14 @@ def gamificacao_do_aluno(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """XP, nível, sequência e todas as conquistas (com progresso) do aluno."""
+    """XP, nível, sequência e todas as conquistas (com progresso) do aluno.
+    Professor: apenas alunos das turmas dele."""
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    escola = db.get(Escola, escola_id)
+    permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
+                                      usuario, aluno_id)
     resultado = svc.gamificacao_do_aluno(db, escola_id, aluno_id)
     resultado["nome"] = aluno.nome
     return resultado

@@ -33,7 +33,7 @@ from app.schemas import (
     TurmaOut,
     TurmaUpdate,
 )
-from app.services import periodos, scoring
+from app.services import periodos, permissoes, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -77,6 +77,10 @@ def listar_alunos(
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    # Professor: enxerga apenas os alunos das turmas designadas a ele.
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:
+        consulta = consulta.where(Turma.id.in_(permitidas))
 
     total = db.execute(
         select(func.count()).select_from(consulta.order_by(None).subquery())
@@ -133,11 +137,16 @@ def perfil_aluno(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Perfil com a explicação completa da nota (PRD §45, §54)."""
+    """Perfil com a explicação completa da nota (PRD §45, §54).
+
+    Professor: só alunos das turmas dele, e em versão SUPERFICIAL (posição no
+    ranking geral e pontos — sem o detalhamento do cálculo nem leituras)."""
     ano = _ano_ativo(db, escola_id)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    permissoes.exigir_aluno_permitido(db, escola_id, ano, usuario, aluno_id)
+    superficial = not permissoes.acesso_total(usuario)
 
     matricula = db.execute(
         select(Matricula, Turma)
@@ -171,9 +180,11 @@ def perfil_aluno(
         nota_elefante=nota.nota_elefante if nota else 0.0,
         nota_geral=nota.nota_geral if nota else 0.0,
         posicao=nota.posicao if nota else None,
-        detalhes=nota.detalhes if nota else {},
+        # Professor vê o superficial: notas e posição — sem o passo a passo do
+        # cálculo nem a distribuição de leituras.
+        detalhes=(nota.detalhes if nota else {}) if not superficial else {},
         calculada_em=nota.calculada_em if nota else None,
-        leitura_niveis=leitura_niveis,
+        leitura_niveis=leitura_niveis if not superficial else None,
     )
 
 
@@ -193,7 +204,10 @@ def historico_leituras(
     """Histórico CRONOLÓGICO de leituras do aluno, filtrado por período:
     um preset ("hoje", "este bimestre"...), um intervalo `inicio`/`fim`
     (AAAA-MM-DD) ou um único `dia`. Cada leitura traz livro, nível, plataforma,
-    data/hora, tempo e pontos de dificuldade."""
+    data/hora, tempo e pontos de dificuldade.
+
+    Dado ESPECÍFICO ("quando o aluno leu X livro"): professor não acessa."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     aluno = _aluno_da_escola(db, escola_id, aluno_id)
     ano = _ano_ativo(db, escola_id)
     try:
@@ -481,6 +495,11 @@ def listar_turmas(
     if not todas:
         consulta = consulta.where(Turma.ano_letivo == ano,
                                   Turma.status == "ativa")
+    # Professor: só as turmas designadas a ele (isto também restringe os
+    # filtros de turma em todas as telas).
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:
+        consulta = consulta.where(Turma.id.in_(permitidas))
     saida = []
     for turma, professor_nome, total_alunos in db.execute(consulta).all():
         item = TurmaOut.model_validate(turma)
@@ -517,6 +536,9 @@ def listar_alunos_da_turma(
     cadastro; busca por nome e ordenação. `incluir_inativos` traz também os
     arquivados/excluídos (para restaurar ou apagar de vez)."""
     turma = _turma_da_escola(db, escola_id, turma_id)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None and turma_id not in permitidas:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
     consulta = (
         select(Aluno, Nota)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
@@ -622,7 +644,7 @@ def excluir_turma(
 def listar_professores(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     return db.execute(
         select(Professor).where(Professor.escola_id == escola_id).order_by(Professor.nome)

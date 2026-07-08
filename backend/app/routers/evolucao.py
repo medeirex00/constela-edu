@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
-from app.services import periodos
+from app.services import periodos, permissoes
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
 
@@ -24,7 +24,9 @@ def evolucao_do_aluno(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Linha do tempo completa + variação no período (PRD §67–§71)."""
+    """Linha do tempo completa + variação no período (PRD §67–§71).
+    Dado detalhado: professor não acessa (vê só posição e pontos)."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -47,7 +49,9 @@ def evolucao_leitura_do_aluno(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
-    semana, mês ou bimestre), respeitando o período escolhido."""
+    semana, mês ou bimestre), respeitando o período escolhido.
+    Dado detalhado: professor não acessa."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -88,10 +92,12 @@ def ranking_evolucao(
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Data inválida (use AAAA-MM-DD).") from exc
-        dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar)
+        dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar,
+                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
     else:
         dados = svc.ranking_evolucao(db, escola_id, turma_id=turma_id,
-                                     ano_escolar=ano_escolar, dias=dias)
+                                     ano_escolar=ano_escolar, dias=dias,
+                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
     return [
         {
             "posicao": item.posicao,
@@ -114,6 +120,9 @@ def resumo_turma(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Página da turma: médias, totais e indicadores (PRD §76–§77)."""
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None and turma_id not in permitidas:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
     resumo = svc.resumo_turma(db, escola_id, turma_id)
     if resumo is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
@@ -126,7 +135,8 @@ def resumo_escola(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Página da escola: comparação entre turmas (PRD §78)."""
+    """Página da escola: comparação entre turmas (PRD §78) — gestão apenas."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     return svc.resumo_escola(db, escola_id)
 
 
@@ -140,7 +150,9 @@ def comparar(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Comparador aluno×aluno, aluno×turma e turma×turma (PRD §73–§75)."""
+    """Comparador aluno×aluno, aluno×turma e turma×turma (PRD §73–§75) —
+    dados detalhados: gestão apenas."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     resultado = svc.comparar(db, escola_id, tipo_a, id_a, tipo_b, id_b)
     if resultado is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,

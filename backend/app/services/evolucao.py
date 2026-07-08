@@ -295,7 +295,8 @@ def _leituras_no_periodo(db: Session, escola_id: int,
 def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,
-                     dias: int | None = None) -> list[ItemEvolucao]:
+                     dias: int | None = None,
+                     turma_ids: list[int] | None = None) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
 
@@ -320,6 +321,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    if turma_ids is not None:  # professor: só as turmas designadas a ele
+        consulta = consulta.where(Turma.id.in_(turma_ids))
     consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
     matriculas = db.execute(consulta).all()
 

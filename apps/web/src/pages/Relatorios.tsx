@@ -20,7 +20,14 @@ const FORMATOS = [
 ];
 
 export default function Relatorios() {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
+  // Professor exporta só o superficial (ranking e alunos das turmas dele);
+  // o backend também recusa os demais tipos.
+  const gestor = Boolean(usuario?.is_global) ||
+    ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const relatorios = gestor
+    ? RELATORIOS
+    : RELATORIOS.filter((r) => r.tipo === "ranking" || r.tipo === "alunos");
   const [alunos, setAlunos] = useState<{ id: number; nome: string }[]>([]);
   const [alunoId, setAlunoId] = useState("");
   const [erro, setErro] = useState("");
@@ -55,7 +62,7 @@ export default function Relatorios() {
       {erro && <div className="mb-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {RELATORIOS.map((relatorio) => (
+        {relatorios.map((relatorio) => (
           <Card key={relatorio.tipo} className="flex flex-col p-5">
             <h3 className="text-sm font-semibold">{relatorio.nome}</h3>
             <p className="mt-1 flex-1 text-sm text-zinc-500 dark:text-zinc-400">{relatorio.descricao}</p>

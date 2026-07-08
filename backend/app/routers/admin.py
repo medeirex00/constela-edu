@@ -49,7 +49,9 @@ from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Administração"])
 
-CARGOS = {"admin", "coordenador", "professor", "visitante"}
+# Sem "visitante": quem não é gestão/professor acessa apenas o painel PÚBLICO
+# (link/QR compartilhado pelo admin ou coordenador — ex.: telão da escola).
+CARGOS = {"admin", "coordenador", "professor"}
 
 MSG_ULTIMO_ADMIN = (
     "Este é o único administrador ativo da escola. Crie ou reative outro "
@@ -63,7 +65,7 @@ class UsuarioCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     email: EmailStr
     senha: str = Field(min_length=8, max_length=100)
-    cargo: str = "visitante"
+    cargo: str = "professor"
 
     @field_validator("senha")
     @classmethod

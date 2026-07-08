@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
-from app.models import ConversaIA, MensagemIA, Usuario
-from app.services import assistente, insights
+from app.models import ConversaIA, Escola, MensagemIA, Usuario
+from app.services import assistente, insights, permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Inteligência Pedagógica"])
@@ -22,11 +22,20 @@ def insights_da_escola(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Índices de engajamento/evolução/persistência + alertas automáticos."""
-    return {
+    """Índices de engajamento/evolução/persistência + alertas automáticos.
+    Professor recebe apenas os alunos das turmas dele."""
+    resultado = {
         "indices": insights.indices_da_escola(db, escola_id),
         "alertas": insights.alertas_da_escola(db, escola_id),
     }
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:
+        escola = db.get(Escola, escola_id)
+        alunos = permissoes.alunos_permitidos(db, escola_id,
+                                              escola.ano_letivo_ativo, permitidas)
+        resultado["indices"] = permissoes.filtrar_por_aluno(resultado["indices"], alunos)
+        resultado["alertas"] = permissoes.filtrar_por_aluno(resultado["alertas"], alunos)
+    return resultado
 
 
 # --- Assistente Pedagógico (PRD §155–§172) --------------------------------------
@@ -43,7 +52,9 @@ def perguntar(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Chat com contexto montado no backend — a IA só vê dados desta escola."""
+    """Chat com contexto montado no backend — a IA só vê dados desta escola.
+    O contexto é da ESCOLA TODA, então professor não acessa."""
+    permissoes.negar_restrito(db, escola_id, usuario)
     try:
         resultado = assistente.perguntar(
             db, escola_id, usuario.id, dados.pergunta, dados.conversa_id

@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Matricula, Nota, Turma, Usuario
+from app.services import permissoes
 from app.services import relatorios as svc
 from app.services.audit import registrar
 
@@ -52,6 +53,23 @@ def exportar_relatorio(
     escola = db.get(Escola, escola_id)
     titulo, fonte = svc.FONTES[tipo]
     cabecalho, linhas = fonte(db, escola_id)
+
+    # Professor: só o relatório SUPERFICIAL (ranking) e apenas das turmas dele.
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:
+        if tipo not in ("ranking", "alunos"):
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "Seu perfil exporta apenas o ranking e a lista "
+                                "de alunos das suas turmas.")
+        nomes_turmas = {t.nome for t in db.execute(
+            select(Turma).where(Turma.id.in_(permitidas))).scalars()}
+        try:
+            idx_turma = next(i for i, c in enumerate(cabecalho)
+                             if c.strip().lower().startswith("turma"))
+        except StopIteration:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "Relatório indisponível para o seu perfil.")
+        linhas = [l for l in linhas if str(l[idx_turma]) in nomes_turmas]
     cor = svc.cor_primaria(db, escola_id)
 
     if formato == "csv":
@@ -85,11 +103,13 @@ def certificado(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Certificado individual em PDF (PRD §99)."""
+    """Certificado individual em PDF (PRD §99). Professor: só dos seus alunos."""
     escola = db.get(Escola, escola_id)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
+                                      usuario, aluno_id)
 
     matricula = db.execute(
         select(Matricula, Turma)
