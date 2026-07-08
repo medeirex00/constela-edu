@@ -37,6 +37,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
+import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { api } from "../lib/api";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
@@ -408,6 +409,33 @@ function Marca() {
   );
 }
 
+/** Indicador flutuante da importação em lote: mostra o progresso em qualquer
+ *  tela e leva de volta a Importações — o processamento roda no contexto. */
+function IndicadorImportacao() {
+  const { fase, progresso, emAndamento } = useImportacaoLote();
+  const { pathname } = useLocation();
+  if (pathname === "/importacoes") return null;
+  if (!emAndamento && fase !== "conferencia") return null;
+
+  const rotulo = emAndamento
+    ? `${fase === "analisando" ? "Analisando" : "Importando"} ${progresso.atual} de ${progresso.total}...`
+    : "Importação aguardando conferência";
+
+  return (
+    <NavLink
+      to="/importacoes"
+      className="fixed bottom-4 right-4 z-50 flex items-center gap-2.5 rounded-full border border-indigo-200 bg-white px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-lg transition-colors hover:bg-indigo-50 dark:border-indigo-500/30 dark:bg-zinc-900 dark:text-indigo-300 dark:hover:bg-zinc-800"
+    >
+      {emAndamento ? (
+        <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-600" />
+      ) : (
+        <Upload size={14} className="shrink-0" />
+      )}
+      {rotulo}
+    </NavLink>
+  );
+}
+
 export default function Layout() {
   const { usuario, escolas, escolaId, selecionarEscola, tema, alternarTema, sair } = useApp();
   const [menuAberto, setMenuAberto] = useState(false);
@@ -519,6 +547,8 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      <IndicadorImportacao />
     </div>
   );
 }

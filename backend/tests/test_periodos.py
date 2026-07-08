@@ -210,6 +210,39 @@ def test_ranking_evolucao_respeita_o_periodo(cliente, escola_completa):
     assert ana_item["ganhos"]["atividades"] == 30  # 130−100; agosto (160) fora não conta
 
 
+def test_ranking_evolucao_usa_datas_reais_das_leituras(cliente, escola_completa):
+    """CRUCIAL: importar HOJE um relatório que cobre meses NÃO atribui tudo a
+    hoje. Para quem tem leituras individuais, o ganho do período conta apenas
+    os livros cuja DATA REAL cai no intervalo (o delta de snapshot diria 3)."""
+    escola_id = escola_completa["escola"].id
+    ana, joao, _ = escola_completa["alunos"]
+    # Importadas AGORA (snapshot de hoje), mas com datas reais espalhadas:
+    _importar_leitura(cliente, escola_id, ana, "R1", "D", "2026-07-05T09:00:00", 30)
+    _importar_leitura(cliente, escola_id, ana, "R2", "D", "2026-07-06T09:00:00", 20)
+    _importar_leitura(cliente, escola_id, ana, "R3", "D", "2026-06-01T09:00:00", 40)  # fora
+
+    r = cliente.get(f"{_base(escola_id)}/ranking-evolucao"
+                    "?periodo=personalizado&inicio=2026-07-04&fim=2026-07-07").json()
+    ana_item = next(i for i in r if i["aluno_id"] == ana.id)
+    assert ana_item["ganhos"]["livros"] == 2                # só as do intervalo
+    assert ana_item["ganhos"]["tempo_leitura_min"] == 50    # 30 + 20 (não 90)
+
+    # Aluno SEM leituras individuais (só relatório-resumo da turma): mantém o
+    # comportamento por delta de snapshot ("evolui a partir do zero").
+    resp = cliente.post(f"{_base(escola_id)}/importacoes/confirmar", json={
+        "plataforma": "elefante", "formato": "resumo", "tipo": "texto",
+        "data_referencia": "2026-07-05T12:00:00",  # snapshot dentro da janela
+        "linhas": [{"nome": joao.nome,
+                    "dados": {"livros_unicos": 5, "tempo_leitura_min": 100,
+                              "questoes_tentativas": 10, "questoes_acertos": 8},
+                    "aluno_id": joao.id}]})
+    assert resp.status_code == 200
+    r2 = cliente.get(f"{_base(escola_id)}/ranking-evolucao"
+                     "?periodo=personalizado&inicio=2026-07-04&fim=2026-07-07").json()
+    joao_item = next(i for i in r2 if i["aluno_id"] == joao.id)
+    assert joao_item["ganhos"]["livros"] == 5               # fallback por snapshot
+
+
 def test_podio_desempata_por_nome_normalizado():
     """Empate no valor → ordem alfabética ignorando caixa (senão minúsculas
     caem para fora do top-5 e premiam o aluno errado)."""

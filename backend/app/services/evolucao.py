@@ -255,6 +255,43 @@ class ItemEvolucao:
     posicao: int = 0
 
 
+def _leituras_no_periodo(db: Session, escola_id: int,
+                         inicio: datetime | None,
+                         fim: datetime | None) -> tuple[set[int], dict[int, dict]]:
+    """Leituras REAIS dentro do período, agregadas por aluno.
+
+    Devolve (alunos_com_leituras, dados_no_periodo):
+      * alunos_com_leituras — quem tem QUALQUER leitura individual registrada
+        (para esses, a verdade do período vem das datas reais de cada livro);
+      * dados_no_periodo — {aluno_id: {livros, tempo_min, por_nivel}} contando
+        somente as leituras cuja DATA cai no intervalo. Um PDF importado hoje
+        cobrindo meses não atribui tudo a hoje: cada livro conta no dia em que
+        foi realmente lido."""
+    alunos_com_leituras: set[int] = set(db.execute(
+        select(Leitura.aluno_id).where(Leitura.escola_id == escola_id).distinct()
+    ).scalars().all())
+
+    consulta = (
+        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min)
+        .join(Livro, Leitura.livro_id == Livro.id)
+        .where(Leitura.escola_id == escola_id)
+    )
+    if inicio is not None:
+        consulta = consulta.where(Leitura.data >= inicio)
+    if fim is not None:
+        consulta = consulta.where(Leitura.data <= fim)
+
+    dados: dict[int, dict] = {}
+    for aluno_id, codigo, tempo in db.execute(consulta).all():
+        item = dados.setdefault(aluno_id, {"livros": 0, "tempo_min": 0, "por_nivel": {}})
+        item["livros"] += 1
+        item["tempo_min"] += tempo or 0
+        chave = (codigo or "").upper()
+        if chave:
+            item["por_nivel"][chave] = item["por_nivel"].get(chave, 0) + 1
+    return alunos_com_leituras, dados
+
+
 def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,
@@ -289,6 +326,9 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
     serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
     mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    # Leituras com data REAL: para quem tem relatório individual importado, o
+    # ganho de leitura do período vem do que foi DE FATO lido no intervalo.
+    com_leituras, leituras_periodo = _leituras_no_periodo(db, escola_id, inicio, fim)
 
     # Ganhos por aluno no período (snapshots sintéticos alimentam o motor)
     ganhos_m: dict[int, SimpleNamespace] = {}
@@ -303,14 +343,29 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             pontuacao_media=_delta(atual_m, base_m, "pontuacao_media"),
         )
         atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim)
+        # Questões só existem agregadas (snapshot); leitura tem data real.
+        questoes_t = _delta(atual_e, base_e, "questoes_tentativas")
+        questoes_a = _delta(atual_e, base_e, "questoes_acertos")
+        if aluno_id in com_leituras:
+            # Fonte exata: as leituras individuais datadas dentro do período.
+            reais = leituras_periodo.get(aluno_id, {"livros": 0, "tempo_min": 0,
+                                                    "por_nivel": {}})
+            livros = float(reais["livros"])
+            tempo = float(reais["tempo_min"])
+            niveis_ganho = reais["por_nivel"]
+        else:
+            # Aluno acompanhado só pelo relatório da turma: delta de snapshot.
+            livros = _delta(atual_e, base_e, "livros_unicos")
+            tempo = _delta(atual_e, base_e, "tempo_leitura_min")
+            niveis_ganho = _delta_niveis(atual_e, base_e)
         ganhos_e[aluno_id] = SimpleNamespace(
-            livros_unicos=_delta(atual_e, base_e, "livros_unicos"),
-            tempo_leitura_min=_delta(atual_e, base_e, "tempo_leitura_min"),
-            questoes_tentativas=_delta(atual_e, base_e, "questoes_tentativas"),
-            questoes_acertos=_delta(atual_e, base_e, "questoes_acertos"),
+            livros_unicos=livros,
+            tempo_leitura_min=tempo,
+            questoes_tentativas=questoes_t,
+            questoes_acertos=questoes_a,
         )
         pontos_dif[aluno_id] = scoring._pontos_dificuldade(
-            _delta_niveis(atual_e, base_e), turma.ano_escolar, mapa_dif
+            niveis_ganho, turma.ano_escolar, mapa_dif
         )
 
     # Referências = maiores ganhos da escola no período (sempre automático)

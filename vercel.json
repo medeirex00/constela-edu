@@ -5,6 +5,6 @@
   "outputDirectory": "apps/web/dist",
   "framework": null,
   "rewrites": [
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+    { "source": "/((?!assets/|api/).*)", "destination": "/index.html" }
   ]
 }

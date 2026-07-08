@@ -1,22 +1,10 @@
 /**
- * Importação em LOTE de relatórios individuais (Elefante Letrado).
+ * Importação em LOTE — visão da tela.
  *
- * O usuário arrasta/seleciona dezenas ou centenas de PDFs (um por aluno) e o
- * sistema processa cada um de forma INDEPENDENTE — o erro em um arquivo nunca
- * interrompe os demais. Fluxo em quatro etapas:
- *
- *   1. Seleção    — arrastar/escolher os PDFs (acumula, remove individual).
- *   2. Análise    — cada PDF vai ao /analisar; barra "Analisando X de N".
- *                   O aluno é identificado pelo NOME DO ARQUIVO (prioridade),
- *                   depois pelo conteúdo; a turma vem do cabeçalho.
- *   3. Conferência— um cartão por arquivo (✅/⚠️/❌) com aluno e turma. Botão
- *                   "Corrigir" abre o painel lateral (turma → aluno). "Ignorar"
- *                   pula o arquivo.
- *   4. Importação — só os arquivos válidos vão ao /confirmar (recalcular=false);
- *                   barra "Processando X de N"; UM /recalcular ao final.
- *
- * Ao fim, um relatório: enviados, importados, corrigidos, ignorados, erros e
- * tempo total.
+ * Todo o estado e o processamento vivem no ImportacaoLoteContext (global):
+ * a análise/importação continuam rodando se o usuário navegar para outras
+ * telas, e um indicador flutuante (Layout) mostra o progresso. Esta página
+ * apenas exibe o estado atual e dispara as ações.
  */
 import {
   AlertTriangle,
@@ -34,38 +22,18 @@ import {
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 
 import SeletorAlunoDrawer from "../components/SeletorAlunoDrawer";
 import { Badge, Botao, Card } from "../components/ui";
-import { api, apiUpload } from "../lib/api";
+import { useApp } from "../context/AppContext";
+import {
+  importavel,
+  useImportacaoLote,
+  type ItemLote,
+  type StatusItem,
+} from "../context/ImportacaoLoteContext";
 import { acharTurmaPorNome } from "../lib/nomes";
-import type { Aluno, Analise, Turma } from "../lib/types";
-
-type Fase = "selecao" | "analisando" | "conferencia" | "importando" | "relatorio";
-type StatusItem = "ok" | "alerta" | "pendente" | "erro";
-
-type AcaoItem =
-  | { tipo: "importar"; alunoId: number }
-  | { tipo: "criar"; turmaId: number }
-  | { tipo: "corrigir" };
-
-interface ItemLote {
-  id: string;
-  nome: string; // nome do arquivo
-  arquivo: File;
-  analise: Analise | null;
-  status: StatusItem;
-  origem: string; // arquivo | conteudo | nenhum
-  alunoNome: string;
-  turmaNome: string;
-  totalLivros: number;
-  acao: AcaoItem;
-  detalhe: string;
-  corrigido: boolean;
-  ignorado: boolean;
-  resultado?: "importado" | "erro" | "ignorado" | "pendente";
-}
 
 const VISUAL: Record<StatusItem, { Icone: LucideIcon; cor: string; chip: string; rotulo: string }> = {
   ok: {
@@ -94,64 +62,6 @@ const VISUAL: Record<StatusItem, { Icone: LucideIcon; cor: string; chip: string;
   },
 };
 
-/** true quando o arquivo tem um destino resolvido e será enviado ao confirmar. */
-function importavel(item: ItemLote): boolean {
-  return !item.ignorado && (item.acao.tipo === "importar" || item.acao.tipo === "criar");
-}
-
-/** Lê a análise de um PDF e decide status + ação, sem intervenção do usuário. */
-function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Turma[]): ItemLote {
-  const base = { id: `${indice}-${arquivo.name}`, nome: arquivo.name, arquivo, analise, corrigido: false, ignorado: false };
-  const linhasValidas = analise.linhas.filter((l) => l.erros.length === 0);
-  const nome = analise.linhas.find((l) => l.nome)?.nome ?? "";
-  const origem = analise.origem_nome || "nenhum";
-  const corresp = analise.linhas.find((l) => l.correspondencia)?.correspondencia ?? null;
-  const totalLivros = analise.linhas.filter((l) => l.dados?.livro).length;
-  const turmaId = acharTurmaPorNome(turmas, analise.turma_detectada);
-  const turmaNome = turmas.find((t) => t.id === turmaId)?.nome ?? analise.turma_detectada ?? "";
-
-  // ❌ Não deu para identificar o aluno (nem pelo arquivo, nem pelo conteúdo).
-  if (!nome || origem === "nenhum") {
-    return {
-      ...base, status: "erro", origem, alunoNome: nome, turmaNome, totalLivros,
-      acao: { tipo: "corrigir" },
-      detalhe: "Não foi possível identificar o aluno pelo nome do arquivo nem pelo conteúdo.",
-    };
-  }
-  // ❌ Arquivo sem dados de leitura aproveitáveis.
-  if (linhasValidas.length === 0) {
-    return {
-      ...base, status: "erro", origem, alunoNome: nome, turmaNome, totalLivros,
-      acao: { tipo: "corrigir" },
-      detalhe: "Nenhum registro de leitura válido neste arquivo.",
-    };
-  }
-  // ✅/⚠️ Casou com um aluno já cadastrado.
-  if (corresp?.aluno_id && (corresp.status === "exato" || corresp.status === "provavel")) {
-    const baixa = corresp.status === "provavel";
-    return {
-      ...base, status: baixa ? "alerta" : "ok", origem, totalLivros,
-      alunoNome: corresp.aluno_nome ?? nome, turmaNome,
-      acao: { tipo: "importar", alunoId: corresp.aluno_id },
-      detalhe: baixa ? `Correspondência provável (${corresp.similaridade ?? "?"}%). Confira o aluno.` : "",
-    };
-  }
-  // ✅ Não estava cadastrado, mas a turma do relatório é conhecida: cria automático.
-  if (turmaId) {
-    return {
-      ...base, status: "ok", origem, alunoNome: nome, turmaNome, totalLivros,
-      acao: { tipo: "criar", turmaId },
-      detalhe: "Aluno novo — será criado nesta turma.",
-    };
-  }
-  // ⚠️ Nome lido, mas sem cadastro e sem turma para criar: precisa de correção.
-  return {
-    ...base, status: "pendente", origem, alunoNome: nome, turmaNome: "", totalLivros,
-    acao: { tipo: "corrigir" },
-    detalhe: "Aluno não encontrado. Escolha a turma e o aluno em “Corrigir”.",
-  };
-}
-
 function BarraProgresso({ atual, total, rotulo }: { atual: number; total: number; rotulo: string }) {
   const pct = total > 0 ? Math.round((atual / total) * 100) : 0;
   return (
@@ -170,46 +80,23 @@ function BarraProgresso({ atual, total, rotulo }: { atual: number; total: number
   );
 }
 
-export default function ImportacaoLote({
-  escolaId,
-  turmas,
-  aoConcluir,
-}: {
-  escolaId: number;
-  turmas: Turma[];
-  aoConcluir?: () => void;
-}) {
-  const [fase, setFase] = useState<Fase>("selecao");
-  const [arquivos, setArquivos] = useState<File[]>([]);
-  const [itens, setItens] = useState<ItemLote[]>([]);
-  const [progresso, setProgresso] = useState({ atual: 0, total: 0 });
+export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void }) {
+  const { escolaId } = useApp();
+  const {
+    fase, arquivos, itens, progresso, tempoMs, turmas,
+    adicionar, removerArquivo, limparArquivos, analisarTodos, importarTodos,
+    alternarIgnorar, vincular, recomecar,
+  } = useImportacaoLote();
+
   const [editando, setEditando] = useState<string | null>(null);
   const [arrastando, setArrastando] = useState(false);
-  const [tempoMs, setTempoMs] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // --- Seleção de arquivos ---------------------------------------------------
-  function adicionar(novos: FileList | File[]) {
-    const pdfs = Array.from(novos).filter(
-      (f) => f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf",
-    );
-    setArquivos((atuais) => {
-      const chaves = new Set(atuais.map((f) => `${f.name}:${f.size}`));
-      const mesclados = [...atuais];
-      for (const f of pdfs) {
-        const chave = `${f.name}:${f.size}`;
-        if (!chaves.has(chave)) {
-          chaves.add(chave);
-          mesclados.push(f);
-        }
-      }
-      return mesclados;
-    });
-  }
-
-  function removerArquivo(indice: number) {
-    setArquivos((atuais) => atuais.filter((_, i) => i !== indice));
-  }
+  // Ao concluir (relatório final), atualiza o histórico da página-mãe.
+  useEffect(() => {
+    if (fase === "relatorio") aoConcluir?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fase]);
 
   function onDrop(e: DragEvent) {
     e.preventDefault();
@@ -217,127 +104,6 @@ export default function ImportacaoLote({
     if (e.dataTransfer.files?.length) adicionar(e.dataTransfer.files);
   }
 
-  // --- Etapa 2: análise (uma requisição por arquivo, com progresso real) -----
-  async function analisarTodos() {
-    if (arquivos.length === 0) return;
-    setFase("analisando");
-    setItens([]);
-    const total = arquivos.length;
-    const acumulados: ItemLote[] = [];
-    for (let i = 0; i < total; i++) {
-      const arquivo = arquivos[i];
-      setProgresso({ atual: i, total });
-      let item: ItemLote;
-      try {
-        const dados = new FormData();
-        dados.append("arquivo", arquivo);
-        const analise = await apiUpload<Analise>(`/escolas/${escolaId}/importacoes/analisar`, dados);
-        item = montarItem(arquivo, i, analise, turmas);
-      } catch (e) {
-        item = {
-          id: `${i}-${arquivo.name}`, nome: arquivo.name, arquivo, analise: null,
-          status: "erro", origem: "nenhum", alunoNome: "", turmaNome: "", totalLivros: 0,
-          acao: { tipo: "corrigir" }, corrigido: false, ignorado: false,
-          detalhe: e instanceof Error ? e.message : "Falha ao ler o PDF.",
-        };
-      }
-      acumulados.push(item);
-      setItens([...acumulados]); // conferência vai se preenchendo ao vivo
-    }
-    setProgresso({ atual: total, total });
-    setFase("conferencia");
-  }
-
-  // --- Conferência: ações por arquivo ----------------------------------------
-  function alternarIgnorar(id: string) {
-    setItens((atuais) =>
-      atuais.map((it) => (it.id === id ? { ...it, ignorado: !it.ignorado } : it)),
-    );
-  }
-
-  function vincular(aluno: Aluno, turmaNome: string) {
-    if (!editando) return;
-    setItens((atuais) =>
-      atuais.map((it) =>
-        it.id === editando
-          ? {
-              ...it, status: "ok", alunoNome: aluno.nome, turmaNome,
-              acao: { tipo: "importar", alunoId: aluno.id },
-              corrigido: true, ignorado: false,
-              detalhe: "Aluno definido manualmente.",
-            }
-          : it,
-      ),
-    );
-    setEditando(null);
-  }
-
-  // --- Etapa 4: importação (só válidos) + recálculo único ---------------------
-  async function importarTodos() {
-    const alvo = itens.filter(importavel);
-    if (alvo.length === 0) return;
-    setFase("importando");
-    const inicio = Date.now();
-    const total = alvo.length;
-    const mapa = new Map(itens.map((it) => [it.id, { ...it }] as [string, ItemLote]));
-    let feitos = 0;
-    for (const it of alvo) {
-      setProgresso({ atual: feitos, total });
-      try {
-        const linhas = it
-          .analise!.linhas.filter((l) => l.erros.length === 0)
-          .map((l) => ({
-            nome: l.nome,
-            dados: l.dados,
-            aluno_id: it.acao.tipo === "importar" ? it.acao.alunoId : null,
-            criar_em_turma_id: it.acao.tipo === "criar" ? it.acao.turmaId : null,
-          }));
-        await api(`/escolas/${escolaId}/importacoes/confirmar`, {
-          method: "POST",
-          body: JSON.stringify({
-            plataforma: it.analise!.plataforma,
-            formato: it.analise!.formato,
-            tipo: it.analise!.tipo,
-            arquivo_token: it.analise!.arquivo_token,
-            arquivo_nome: it.analise!.arquivo_nome,
-            linhas,
-            recalcular: false,
-          }),
-        });
-        mapa.get(it.id)!.resultado = "importado";
-      } catch {
-        mapa.get(it.id)!.resultado = "erro";
-      }
-      feitos += 1;
-      setProgresso({ atual: feitos, total });
-      setItens([...mapa.values()]);
-    }
-    // Marca os que ficaram de fora (ignorados / ainda pendentes de correção).
-    for (const it of mapa.values()) {
-      if (it.resultado) continue;
-      it.resultado = it.ignorado ? "ignorado" : "pendente";
-    }
-    // Um único recálculo ao final (evita dezenas de recálculos na turma toda).
-    try {
-      await api(`/escolas/${escolaId}/importacoes/recalcular`, { method: "POST" });
-    } catch {
-      /* dados já gravados; o recálculo pode ser refeito na próxima importação */
-    }
-    setTempoMs(Date.now() - inicio);
-    setItens([...mapa.values()]);
-    setFase("relatorio");
-    aoConcluir?.();
-  }
-
-  function recomecar() {
-    setArquivos([]);
-    setItens([]);
-    setProgresso({ atual: 0, total: 0 });
-    setTempoMs(0);
-    setFase("selecao");
-  }
-
-  // --- Estatísticas para os controles ----------------------------------------
   const prontos = useMemo(() => itens.filter(importavel), [itens]);
   const precisam = itens.filter((it) => !it.ignorado && !importavel(it));
   const ignorados = itens.filter((it) => it.ignorado);
@@ -345,7 +111,6 @@ export default function ImportacaoLote({
   const turmaInicialDrawer =
     itemEmEdicao?.analise ? acharTurmaPorNome(turmas, itemEmEdicao.analise.turma_detectada) : null;
 
-  // ---------------------------------------------------------------------------
   return (
     <div className="mb-6 space-y-4">
       {fase === "selecao" && (
@@ -367,6 +132,7 @@ export default function ImportacaoLote({
             <p className="mt-3 text-base font-medium">Arraste os relatórios em PDF aqui</p>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
               Selecione todos os relatórios individuais de uma turma de uma só vez — dezenas ou centenas.
+              Você pode navegar pelo sistema enquanto a importação acontece.
             </p>
             <input
               ref={inputRef}
@@ -393,7 +159,7 @@ export default function ImportacaoLote({
                 </p>
                 <button
                   className="text-xs font-medium text-zinc-500 hover:text-red-600 dark:text-zinc-400"
-                  onClick={() => setArquivos([])}
+                  onClick={limparArquivos}
                 >
                   Limpar tudo
                 </button>
@@ -436,7 +202,8 @@ export default function ImportacaoLote({
             rotulo={`Analisando ${progresso.atual} de ${progresso.total} arquivos...`}
           />
           <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-            Cada relatório é lido de forma independente. Isso pode levar alguns segundos por arquivo.
+            Pode continuar usando o sistema — a análise segue em segundo plano e o
+            indicador no canto da tela mostra o andamento.
           </p>
         </Card>
       )}
@@ -556,15 +323,20 @@ export default function ImportacaoLote({
         <RelatorioFinal itens={itens} tempoMs={tempoMs} aoRecomecar={recomecar} />
       )}
 
-      <SeletorAlunoDrawer
-        escolaId={escolaId}
-        aberto={editando !== null}
-        turmas={turmas}
-        turmaInicial={turmaInicialDrawer}
-        nomePdf={itemEmEdicao ? `${itemEmEdicao.nome}${itemEmEdicao.alunoNome ? ` — ${itemEmEdicao.alunoNome}` : ""}` : ""}
-        aoFechar={() => setEditando(null)}
-        aoConfirmar={vincular}
-      />
+      {escolaId && (
+        <SeletorAlunoDrawer
+          escolaId={escolaId}
+          aberto={editando !== null}
+          turmas={turmas}
+          turmaInicial={turmaInicialDrawer}
+          nomePdf={itemEmEdicao ? `${itemEmEdicao.nome}${itemEmEdicao.alunoNome ? ` — ${itemEmEdicao.alunoNome}` : ""}` : ""}
+          aoFechar={() => setEditando(null)}
+          aoConfirmar={(aluno, turmaNome) => {
+            if (editando) vincular(editando, aluno, turmaNome);
+            setEditando(null);
+          }}
+        />
+      )}
     </div>
   );
 }

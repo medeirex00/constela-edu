@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import { Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
+import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
 import Alunos from "./pages/Alunos";
 import Assistente from "./pages/Assistente";
 import BibliotecaConquistas from "./pages/BibliotecaConquistas";
@@ -39,7 +40,13 @@ function AreaProtegida() {
   const { usuario, carregando } = useApp();
   if (carregando) return <Carregando texto="Abrindo o sistema..." />;
   if (!usuario) return <Navigate to="/login" replace />;
-  return <Layout />;
+  // Provider acima do Layout/rotas: a importação em lote segue rodando
+  // enquanto o usuário navega (indicador flutuante no Layout).
+  return (
+    <ImportacaoLoteProvider>
+      <Layout />
+    </ImportacaoLoteProvider>
+  );
 }
 
 export default function App() {

@@ -7,6 +7,7 @@ import { Expand, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
+import { api } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
 interface ItemRanking {
@@ -108,9 +109,10 @@ export default function PainelPublico() {
 
   const carregar = useCallback(async () => {
     try {
-      const resposta = await fetch(`/api/v1/publico/${token}/painel`);
-      if (!resposta.ok) throw new Error();
-      setDados(await resposta.json());
+      // Cliente compartilhado: usa a base configurada (VITE_API_URL) — um
+      // fetch relativo funcionaria só em dev (proxy do Vite); na Vercel o
+      // rewrite do SPA devolveria HTML no lugar do JSON e o painel quebrava.
+      setDados(await api<DadosPainel>(`/publico/${token}/painel`));
       setErro(false);
     } catch {
       setErro(true);

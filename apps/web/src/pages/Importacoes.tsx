@@ -35,6 +35,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { api, apiUpload } from "../lib/api";
 import { dataHora } from "../lib/formato";
 import { acharTurmaPorNome, normalizar } from "../lib/nomes";
@@ -169,7 +170,12 @@ export default function Importacoes() {
   const [erro, setErro] = useState("");
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null);
 
-  const [modo, setModo] = useState<"individual" | "lote">("individual");
+  // Com um lote em andamento (análise/conferência/importação rodando no
+  // contexto global), a página já abre no modo "Em lote" para mostrá-lo.
+  const { fase: faseLote } = useImportacaoLote();
+  const [modo, setModo] = useState<"individual" | "lote">(
+    faseLote !== "selecao" ? "lote" : "individual",
+  );
 
   const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);
 
@@ -407,7 +413,7 @@ export default function Importacoes() {
       )}
 
       {modo === "lote" && podeImportar && escolaId && (
-        <ImportacaoLote escolaId={escolaId} turmas={turmas} aoConcluir={carregarHistorico} />
+        <ImportacaoLote aoConcluir={carregarHistorico} />
       )}
 
       {modo === "individual" && resultado && (

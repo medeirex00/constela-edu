@@ -2,6 +2,7 @@
 
 Cada exportação também deixa uma cópia em /exports e um registro no log.
 """
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -16,6 +17,19 @@ from app.services import relatorios as svc
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Relatórios"])
+
+logger = logging.getLogger("constela.relatorios")
+
+
+def _arquivar_copia(nome_arquivo: str, conteudo: bytes) -> None:
+    """Cópia local em /exports — MELHOR ESFORÇO: se o disco não for gravável,
+    o download segue normal (o arquivo vai na resposta); só a cópia é pulada."""
+    try:
+        settings.EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        (settings.EXPORTS_DIR / nome_arquivo).write_bytes(conteudo)
+    except OSError:
+        logger.warning("Sem acesso de escrita em %s — relatório enviado, cópia "
+                       "local não arquivada.", settings.EXPORTS_DIR)
 
 FORMATOS = {
     "csv": ("text/csv; charset=utf-8", "csv"),
@@ -51,10 +65,7 @@ def exportar_relatorio(
     momento = datetime.now(timezone.utc)
     nome_arquivo = f"{tipo}_{momento:%Y%m%d_%H%M%S}.{extensao}"
 
-    # Cópia local em /exports (PRD: relatórios gerados ficam disponíveis)
-    destino = settings.EXPORTS_DIR
-    destino.mkdir(parents=True, exist_ok=True)
-    (destino / nome_arquivo).write_bytes(conteudo)
+    _arquivar_copia(nome_arquivo, conteudo)
 
     registrar(db, "relatorio.exportado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"tipo": tipo, "formato": formato, "linhas": len(linhas)})

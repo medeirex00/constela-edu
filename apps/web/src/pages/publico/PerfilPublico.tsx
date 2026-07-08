@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
+import { api } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
 interface PerfilPublicoDados {
@@ -24,11 +25,9 @@ export default function PerfilPublico() {
   const [erro, setErro] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/v1/publico/${token}/alunos/${id}`)
-      .then((resposta) => {
-        if (!resposta.ok) throw new Error();
-        return resposta.json();
-      })
+    // Cliente compartilhado (base VITE_API_URL): fetch relativo só funciona
+    // em dev — na Vercel devolveria o HTML do SPA no lugar do JSON.
+    api<PerfilPublicoDados>(`/publico/${token}/alunos/${id}`)
       .then(setPerfil)
       .catch(() => setErro(true));
   }, [token, id]);

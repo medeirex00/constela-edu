@@ -1,19 +1,45 @@
+/**
+ * Ranking Geral. "Todo o histórico" mostra a nota acumulada (tabela Nota);
+ * qualquer outro período mostra a CLASSIFICAÇÃO DO PERÍODO — calculada apenas
+ * com o que foi feito dentro do intervalo (leituras com data real + ganhos do
+ * Matific), usando os mesmos pesos configuráveis.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
+import { Badge, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
-import { nota } from "../lib/formato";
+import { nota, numero } from "../lib/formato";
 import type { RankingItem, Turma } from "../lib/types";
+
+interface ItemPeriodo {
+  posicao: number;
+  aluno_id: number;
+  nome: string;
+  turma: string;
+  nota_evolucao: number;
+  ganhos: {
+    atividades: number;
+    estrelas: number;
+    livros: number;
+    tempo_leitura_min: number;
+    acertos: number;
+  };
+}
 
 export default function RankingGeral() {
   const { escolaId } = useApp();
   const [itens, setItens] = useState<RankingItem[]>([]);
+  const [itensPeriodo, setItensPeriodo] = useState<ItemPeriodo[] | null>(null);
   const [turmas, setTurmas] = useState<Turma[]>([]);
+  const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
   const [carregando, setCarregando] = useState(true);
+
+  const porPeriodo = periodo.preset !== "tudo";
 
   useEffect(() => {
     if (!escolaId) return;
@@ -26,11 +52,22 @@ export default function RankingGeral() {
     const parametros = new URLSearchParams();
     if (turmaId) parametros.set("turma_id", turmaId);
     if (serie) parametros.set("ano_escolar", serie);
-    api<RankingItem[]>(`/escolas/${escolaId}/ranking?${parametros}`)
-      .then(setItens)
-      .catch(() => setItens([]))
-      .finally(() => setCarregando(false));
-  }, [escolaId, turmaId, serie]);
+
+    if (porPeriodo) {
+      // Classificação do período: só o que foi feito dentro do intervalo.
+      const query = new URLSearchParams(periodoParaQuery(periodo));
+      parametros.forEach((v, k) => query.set(k, v));
+      api<ItemPeriodo[]>(`/escolas/${escolaId}/ranking-evolucao?${query}`)
+        .then(setItensPeriodo)
+        .catch(() => setItensPeriodo([]))
+        .finally(() => setCarregando(false));
+    } else {
+      api<RankingItem[]>(`/escolas/${escolaId}/ranking?${parametros}`)
+        .then(setItens)
+        .catch(() => setItens([]))
+        .finally(() => setCarregando(false));
+    }
+  }, [escolaId, turmaId, serie, periodo, porPeriodo]);
 
   const series = useMemo(
     () => Array.from(new Set(turmas.map((turma) => turma.ano_escolar))).sort(),
@@ -41,50 +78,94 @@ export default function RankingGeral() {
     <div>
       <PageHeader
         titulo="Ranking Geral"
-        descricao="Combinação das notas Matific e Elefante Letrado (acumulado), com desempate configurável."
+        descricao="Todo o histórico mostra a nota acumulada; escolha um período para classificar apenas pelo que foi feito no intervalo."
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
-        <span>Para analisar um intervalo específico:</span>
-        <Link to="/ranking-leitura" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Leitura por período</Link>
+        <span>Veja também:</span>
+        <Link to="/ranking-leitura" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Leitura</Link>
         <span>·</span>
         <Link to="/evolucao" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Evolução</Link>
         <span>·</span>
         <Link to="/premiacoes" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Premiações</Link>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
+        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
         <select
           aria-label="Filtrar por turma"
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className={`${estiloInput} w-auto`}
           value={turmaId}
           onChange={(evento) => setTurmaId(evento.target.value)}
         >
           <option value="">Todas as turmas</option>
           {turmas.map((turma) => (
-            <option key={turma.id} value={turma.id}>
-              {turma.nome}
-            </option>
+            <option key={turma.id} value={turma.id}>{turma.nome}</option>
           ))}
         </select>
         <select
           aria-label="Filtrar por série"
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className={`${estiloInput} w-auto`}
           value={serie}
           onChange={(evento) => setSerie(evento.target.value)}
         >
           <option value="">Todas as séries</option>
           {series.map((valor) => (
-            <option key={valor} value={valor}>
-              {valor}
-            </option>
+            <option key={valor} value={valor}>{valor}</option>
           ))}
         </select>
-      </div>
+        {porPeriodo && (
+          <Badge tom="destaque">calculado só com o período selecionado</Badge>
+        )}
+      </Card>
 
       <Card>
         {carregando ? (
           <Carregando />
+        ) : porPeriodo ? (
+          !itensPeriodo || itensPeriodo.length === 0 ? (
+            <Vazio titulo="Sem atividades no período" descricao="Ajuste o período ou importe novos relatórios." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm tabular-nums">
+                <thead>
+                  <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                    <th className="px-4 py-2 font-medium">#</th>
+                    <th className="px-4 py-2 font-medium">Aluno</th>
+                    <th className="hidden px-4 py-2 font-medium md:table-cell">Turma</th>
+                    <th className="px-4 py-2 font-medium">Feito no período</th>
+                    <th className="px-4 py-2 text-right font-medium">Nota do período</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itensPeriodo.map((item) => (
+                    <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                      <td className="px-4 py-2.5">
+                        {item.posicao <= 3 ? <Badge tom="destaque">{item.posicao}º</Badge> : `${item.posicao}º`}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <Link to={`/alunos/${item.aluno_id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                          {item.nome}
+                        </Link>
+                      </td>
+                      <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{item.turma}</td>
+                      <td className="px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-300">
+                        {[
+                          item.ganhos.livros > 0 && `${numero(item.ganhos.livros)} livro(s)`,
+                          item.ganhos.atividades > 0 && `${numero(item.ganhos.atividades)} atividade(s)`,
+                          item.ganhos.estrelas > 0 && `${numero(item.ganhos.estrelas)} estrela(s)`,
+                          item.ganhos.acertos > 0 && `${numero(item.ganhos.acertos)} acerto(s)`,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "sem atividades"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-semibold">{nota(item.nota_evolucao)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : itens.length === 0 ? (
           <Vazio titulo="Nenhuma nota calculada ainda" descricao="Importe dados das plataformas para gerar o ranking." />
         ) : (

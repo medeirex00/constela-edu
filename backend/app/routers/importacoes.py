@@ -91,11 +91,6 @@ def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
         return None
 
 
-def _escapar_like(texto: str) -> str:
-    """Neutraliza os curingas % e _ para comparação literal em ILIKE."""
-    return texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo):
     return db.execute(
         select(modelo)
@@ -299,23 +294,35 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
 
 
 def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_referencia, avisos):
-    """Formato "uma linha por livro concluído": registra leituras únicas (§35)."""
-    vistos: set[int] = set()  # livros já processados NESTE lote (autoflush=False)
+    """Formato "uma linha por livro concluído": registra leituras únicas (§35).
+
+    Todo o trabalho de banco é feito EM LOTE: uma consulta para o catálogo,
+    uma para as leituras existentes e um único flush no final. A versão
+    anterior consultava livro-a-livro (~600 idas ao banco por arquivo), o que
+    num Postgres de rede (Supabase) transformava cada relatório em minutos.
+    """
+    # Catálogo da escola indexado por título case-insensitive — equivale ao
+    # antigo ILIKE literal (primeiro correspondente vence em caso de duplicata).
+    catalogo: dict[str, Livro] = {}
+    for livro in db.execute(
+        select(Livro).where(Livro.escola_id == escola_id).order_by(Livro.id)
+    ).scalars():
+        catalogo.setdefault(livro.titulo.strip().casefold(), livro)
+
+    ja_lidos: set[int] = set(db.execute(
+        select(Leitura.livro_id).where(Leitura.aluno_id == aluno.id)
+    ).scalars().all())
+
+    vistos: set[str] = set()  # títulos já processados NESTE lote
+    novas: list[Leitura] = []
     for linha in linhas:
         titulo = str(linha.dados.get("livro", "")).strip()
         nivel = str(linha.dados.get("nivel", "")).strip().upper()
         if not titulo:
             avisos.append(f"Linha {linha.nome}: livro sem título — ignorada.")
             continue
-        # Comparação case-insensitive literal: escapa % e _ do título (senão
-        # um livro chamado "100%" casaria com qualquer outro) e evita
-        # MultipleResultsFound usando o primeiro correspondente.
-        livro = db.execute(
-            select(Livro).where(
-                Livro.escola_id == escola_id,
-                Livro.titulo.ilike(_escapar_like(titulo), escape="\\"),
-            ).limit(1)
-        ).scalars().first()
+        chave = titulo.casefold()
+        livro = catalogo.get(chave)
         if livro is None:
             if not nivel:
                 avisos.append(f"Livro “{titulo}” é novo e veio sem nível — ignorado.")
@@ -323,21 +330,17 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
             livro = Livro(escola_id=escola_id, titulo=titulo, nivel_codigo=nivel,
                           categoria=linha.dados.get("genero") or None)
             db.add(livro)
-            db.flush()
-        # Releitura no MESMO relatório (livro repetido): o guard de banco não
-        # enxerga leituras pendentes (autoflush=False), então deduplicamos
-        # também em memória — senão a UniqueConstraint derrubaria a importação.
-        if livro.id in vistos:
+            catalogo[chave] = livro  # dedup dentro do lote sem flush por livro
+        # Releitura no MESMO relatório (livro repetido): dedup em memória —
+        # senão a UniqueConstraint derrubaria a importação (autoflush=False).
+        if chave in vistos:
             avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
                           f"{aluno.nome} — contado uma vez (§35).")
             continue
-        ja_lido = db.execute(
-            select(Leitura).where(Leitura.aluno_id == aluno.id, Leitura.livro_id == livro.id)
-        ).scalar_one_or_none()
-        if ja_lido:
+        if livro.id is not None and livro.id in ja_lidos:
             avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
             continue
-        vistos.add(livro.id)
+        vistos.add(chave)
         # Relatórios individuais informam a data e o HORÁRIO reais da conclusão.
         quando = data_referencia
         try:
@@ -351,10 +354,19 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
         if quando.tzinfo is not None:
             quando = quando.replace(tzinfo=None)
         tempo_livro = linha.dados.get("tempo_livro_min")
-        db.add(Leitura(escola_id=escola_id, aluno_id=aluno.id, livro_id=livro.id,
-                       data=quando,
-                       tempo_leitura_min=int(tempo_livro) if tempo_livro is not None else None))
+        novas.append((livro, quando,
+                      int(tempo_livro) if tempo_livro is not None else None))
+
+    # Persiste PRIMEIRO os livros novos (ganham id) e então grava todas as
+    # leituras num único INSERT executemany — uma ida ao banco, não N.
     db.flush()
+    if novas:
+        from sqlalchemy import insert
+        db.execute(insert(Leitura), [
+            {"escola_id": escola_id, "aluno_id": aluno.id, "livro_id": livro.id,
+             "data": quando, "tempo_leitura_min": tempo}
+            for livro, quando, tempo in novas
+        ])
 
     # Snapshot derivado do total de leituras registradas
     leituras = db.execute(
