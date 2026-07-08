@@ -1,7 +1,8 @@
 import { Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import AcoesAluno from "../components/AcoesAluno";
 import { Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
@@ -31,7 +32,7 @@ export default function Alunos() {
     return () => clearTimeout(temporizador);
   }, [busca]);
 
-  useEffect(() => {
+  const carregar = useCallback(() => {
     if (!escolaId) return;
     setCarregando(true);
     const parametros = new URLSearchParams({ pagina: String(pagina), por_pagina: "25" });
@@ -42,6 +43,8 @@ export default function Alunos() {
       .catch(() => setDados(null))
       .finally(() => setCarregando(false));
   }, [escolaId, buscaAplicada, turmaId, pagina]);
+
+  useEffect(carregar, [carregar]);
 
   const totalPaginas = dados ? Math.max(1, Math.ceil(dados.total / dados.por_pagina)) : 1;
 
@@ -91,6 +94,7 @@ export default function Alunos() {
                   <th className="px-4 py-2 font-medium">Turma</th>
                   <th className="hidden px-4 py-2 font-medium sm:table-cell">Série</th>
                   <th className="hidden px-4 py-2 font-medium sm:table-cell">Nº chamada</th>
+                  <th className="w-12 px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
@@ -104,6 +108,11 @@ export default function Alunos() {
                     <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-300">{aluno.turma}</td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">{aluno.ano_escolar}</td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">{aluno.numero_chamada ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      {escolaId && (
+                        <AcoesAluno aluno={aluno} escolaId={escolaId} aoMudar={carregar} />
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

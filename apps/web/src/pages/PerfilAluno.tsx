@@ -1,7 +1,8 @@
 import { ArrowLeft, BookOpen, TrendingUp } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
+import AcoesAluno from "../components/AcoesAluno";
 import EvolucaoAlunoAba from "../components/EvolucaoAlunoAba";
 import HistoricoLeituras from "../components/HistoricoLeituras";
 import { Badge, Card, Carregando, Vazio } from "../components/ui";
@@ -157,12 +158,13 @@ function textoFaltam(conquista: ConquistaAluno): string {
 export default function PerfilAluno() {
   const { id } = useParams();
   const { escolaId } = useApp();
+  const navegar = useNavigate();
   const [perfil, setPerfil] = useState<Perfil | null>(null);
   const [gamificacao, setGamificacao] = useState<Gamificacao | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [aba, setAba] = useState<"perfil" | "historico" | "evolucao">("perfil");
 
-  useEffect(() => {
+  const carregar = useCallback(() => {
     if (!escolaId || !id) return;
     setCarregando(true);
     api<Perfil>(`/escolas/${escolaId}/alunos/${id}/perfil`)
@@ -173,6 +175,8 @@ export default function PerfilAluno() {
       .then(setGamificacao)
       .catch(() => setGamificacao(null));
   }, [escolaId, id]);
+
+  useEffect(carregar, [carregar]);
 
   if (carregando) return <Carregando />;
   if (!perfil) return <Vazio titulo="Aluno não encontrado" />;
@@ -198,6 +202,18 @@ export default function PerfilAluno() {
           >
             <TrendingUp size={14} /> Ver evolução
           </Link>
+          {escolaId && (
+            <span className="ml-auto">
+              {/* Editar dados, trocar turma, arquivar, excluir — direto da ficha */}
+              <AcoesAluno
+                aluno={aluno}
+                escolaId={escolaId}
+                aoMudar={carregar}
+                aoExcluir={() => navegar("/alunos")}
+                mostrarVisualizar={false}
+              />
+            </span>
+          )}
         </div>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           {aluno.turma} · {aluno.ano_escolar}

@@ -123,6 +123,9 @@ class AlunoOut(ORMModel):
     status: str
     turma: str | None = None
     ano_escolar: str | None = None
+    # Para o modal "Editar aluno" pré-preencher todos os campos do cadastro.
+    data_nascimento: date | None = None
+    observacoes: str | None = None
 
 
 class AlunoCreate(BaseModel):

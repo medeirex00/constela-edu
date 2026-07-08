@@ -28,6 +28,8 @@ export interface Aluno {
   status: string;
   turma: string | null;
   ano_escolar: string | null;
+  data_nascimento?: string | null;
+  observacoes?: string | null;
 }
 
 export interface Turma {
