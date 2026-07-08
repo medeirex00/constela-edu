@@ -42,10 +42,15 @@ def _sem_fuso(momento: datetime) -> datetime:
 
 
 def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
-    """Todos os snapshots da escola agrupados por aluno, em ordem cronológica."""
+    """Todos os snapshots da escola agrupados por aluno, em ordem cronológica.
+
+    Ordem por data_referencia (id desempata): o import por período do Matific
+    pode gravar um mês ANTIGO depois (backfill) — por id, a série ficaria fora
+    de ordem e _janela/_baseline elegeriam o passado como "atual"."""
     series: dict[int, list] = {}
     for snap in db.execute(
-        select(modelo).where(modelo.escola_id == escola_id).order_by(modelo.id)
+        select(modelo).where(modelo.escola_id == escola_id)
+        .order_by(modelo.data_referencia, modelo.id)
     ).scalars():
         series.setdefault(snap.aluno_id, []).append(snap)
     return series
@@ -182,12 +187,12 @@ def linha_do_tempo(db: Session, escola_id: int, aluno_id: int) -> dict:
     matific = db.execute(
         select(SnapshotMatific)
         .where(SnapshotMatific.escola_id == escola_id, SnapshotMatific.aluno_id == aluno_id)
-        .order_by(SnapshotMatific.id)
+        .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
     ).scalars().all()
     elefante = db.execute(
         select(SnapshotElefante)
         .where(SnapshotElefante.escola_id == escola_id, SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.id)
+        .order_by(SnapshotElefante.data_referencia, SnapshotElefante.id)
     ).scalars().all()
     return {
         "matific": [
@@ -221,7 +226,7 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int) -> di
             snap for snap in db.execute(
                 select(modelo)
                 .where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
-                .order_by(modelo.id)
+                .order_by(modelo.data_referencia, modelo.id)
             ).scalars()
         ]
         atual = serie[-1] if serie else None

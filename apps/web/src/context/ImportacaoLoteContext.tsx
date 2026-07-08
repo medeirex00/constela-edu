@@ -214,6 +214,9 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
             tipo: it.analise!.tipo,
             arquivo_token: it.analise!.arquivo_token,
             arquivo_nome: it.analise!.arquivo_nome,
+            // "Intervalo de datas" do relatório (Matific): data os dados no período
+            periodo_inicio: it.analise!.periodo_inicio || null,
+            periodo_fim: it.analise!.periodo_fim || null,
             linhas,
             recalcular: false,
           }),

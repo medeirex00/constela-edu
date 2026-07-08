@@ -765,6 +765,44 @@ COLUNAS_PERFIL_MATIFIC = {
 
 _RE_RODAPE_MATIFIC = re.compile(r"https?://|www\.|matific\.com", re.IGNORECASE)
 
+# "Intervalo de datas 2026-03-01-2026-04-01" (leaderboard mensal/semanal).
+# Tolerante: "datas"/"dados", datas ISO ou brasileiras, separador -, – ou "a".
+_RE_INTERVALO_MATIFIC = re.compile(
+    r"intervalo\s*de\s*(?:dat[ao]s?|dados)\s*:?\s*"
+    r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})"
+    r"\s*(?:[-–—]|ate|até|a)\s*"
+    r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _intervalo_matific(paginas: list[Pagina]) -> tuple[str, str]:
+    """("AAAA-MM-DD", "AAAA-MM-DD") do "Intervalo de datas" da capa, ou ("", "").
+
+    Intervalo degenerado (início >= fim) é descartado: a importação seguiria
+    para um 400 sem saída na confirmação — melhor cair no fluxo acumulado."""
+    if not paginas:
+        return "", ""
+    for linha in _linhas_visuais(paginas[0].palavras)[:12]:
+        casado = _RE_INTERVALO_MATIFIC.search(linha.texto)
+        if not casado:
+            continue
+        try:
+            inicio, fim = (
+                bruto if re.fullmatch(r"\d{4}-\d{2}-\d{2}", bruto) else _data_iso(bruto)
+                for bruto in casado.groups()
+            )
+            if inicio < fim:
+                return inicio, fim
+        except ValueError:
+            pass
+    return "", ""
+
+
+def _data_br(iso: str) -> str:
+    ano, mes, dia = iso.split("-")
+    return f"{dia}/{mes}/{ano}"
+
 
 class PerfilMatific:
     plataforma = "matific"
@@ -795,8 +833,6 @@ class PerfilMatific:
             return re.search(r"\d{2}/\d{2}/\d{4},", texto) is not None
 
         def inicia(presentes: dict[str, list[Palavra]]) -> bool:
-            if "nome" not in presentes:
-                return False
             # Conta colunas de métrica PREENCHIDAS — número OU traço ("-"/"—").
             # O aluno inativo pode vir "- - -": ainda é um aluno (nome + Série),
             # e a linha deve sobreviver com avisos, nunca sumir (§51).
@@ -804,7 +840,13 @@ class PerfilMatific:
                 1 for campo in ("atividades", "pontuacao_media", "estrelas")
                 if any(re.fullmatch(r"[\d.,]+|[-–—]", p.texto)
                        for p in presentes.get(campo, [])))
-            return preenchidas >= 2
+            if "nome" in presentes:
+                return preenchidas >= 2
+            # Nome comprido quebra INTEIRO nas linhas vizinhas ("CHRISTOPHER"
+            # acima, "D" abaixo) e a linha do registro fica só com números:
+            # série + as 3 métricas bastam — o nome chega pela costura de
+            # órfãs. Sem isto o aluno sumia do relatório.
+            return preenchidas >= 3 and "serie" in presentes
 
         registros = _tabela_posicional(
             paginas, COLUNAS_PERFIL_MATIFIC, com_nome=True,
@@ -814,10 +856,18 @@ class PerfilMatific:
             ignorar_linha=ignorar,
             anexo_por_proximidade=True,  # a turma vem fatiada acima E abaixo
         )
+        # O "Intervalo de datas" da capa define A QUE PERÍODO os números
+        # pertencem: a confirmação soma ao acumulado e data o snapshot no fim
+        # do intervalo — rankings e premiações do mês certo, mesmo importando
+        # o relatório semanas depois.
+        inicio, fim = _intervalo_matific(paginas)
         analise = Analise(plataforma=self.plataforma, formato=self.formato,
                           estrategia=self.estrategia,
+                          periodo_inicio=inicio, periodo_fim=fim,
                           mensagem_deteccao="Este arquivo pertence ao Matific — "
-                          "classificação de estrelas dos estudantes.")
+                          "classificação de estrelas dos estudantes"
+                          + (f", com dados do período de {_data_br(inicio)} a "
+                             f"{_data_br(fim)}" if inicio else "") + ".")
         for numero, registro in enumerate(registros, start=1):
             item = LinhaImportacao(numero=numero, nome=registro.texto("nome"),
                                    dados={})

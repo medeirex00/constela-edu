@@ -251,6 +251,12 @@ class Analise:
     # Como o nome do aluno foi identificado no relatório individual:
     # "arquivo" (nome do arquivo — preferencial) | "conteudo" | "nenhum".
     origem_nome: str = ""
+    # "Intervalo de datas" impresso no relatório (leaderboard do Matific):
+    # datas ISO "AAAA-MM-DD". Quando presentes, os valores do relatório são
+    # o que os alunos fizeram DENTRO desse intervalo — a confirmação soma ao
+    # acumulado e data o snapshot no fim do intervalo.
+    periodo_inicio: str = ""
+    periodo_fim: str = ""
 
 
 _RODAPES = ("total", "media", "pagina", "page", "gerado em", "relatorio",

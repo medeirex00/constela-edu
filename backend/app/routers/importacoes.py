@@ -9,7 +9,7 @@ import re
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as hora_zero, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -92,10 +92,13 @@ def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
 
 
 def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo):
+    # Ordena por data_referencia (id desempata): importar um relatório de um
+    # período ANTIGO (backfill mensal do Matific) não pode virar o "estado
+    # atual" só por ter id maior.
     return db.execute(
         select(modelo)
         .where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
-        .order_by(modelo.id.desc())
+        .order_by(modelo.data_referencia.desc(), modelo.id.desc())
         .limit(1)
     ).scalar_one_or_none()
 
@@ -199,6 +202,8 @@ async def analisar(
         mensagem_deteccao=analise.mensagem_deteccao,
         turma_detectada=analise.turma_detectada,
         origem_nome=analise.origem_nome,
+        periodo_inicio=analise.periodo_inicio,
+        periodo_fim=analise.periodo_fim,
         total_alunos=len(nomes_unicos),
         total_linhas=len(analise.linhas),
         total_erros=sum(1 for l in analise.linhas if l.erros) + len(analise.erros_gerais),
@@ -313,6 +318,100 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia):
         data_referencia=data_referencia,
         atividades=atividades, estrelas=estrelas, pontuacao_media=media,
     ))
+
+
+def _sem_fuso(momento):
+    return momento.replace(tzinfo=None) if momento.tzinfo else momento
+
+
+def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
+                              inicio, fim, serie, contadores):
+    """Relatório Matific POR PERÍODO ("Intervalo de datas" no leaderboard).
+
+    Os números do relatório são o que o aluno fez DENTRO do intervalo — nada
+    de substituir o acumulado. Regras:
+      * base = último snapshot ANTERIOR ao início do intervalo;
+      * candidato = base + valores do relatório (média PONDERADA por
+        atividades);
+      * PISO anti-regressão: o novo snapshot nunca fica abaixo do maior
+        acumulado já registrado ATÉ o fim do intervalo — um relatório
+        acumulado antigo datado dentro do período (a migração do fluxo
+        antigo para o mensal) jamais derruba o estado atual;
+      * sem base: nasce um snapshot-base na véspera do início valendo
+        exatamente (novo − ganhos) — premiações e evolução do período
+        enxergam o ganho do relatório, nunca zero nem o acumulado de
+        outra época;
+      * o snapshot é datado no fim do intervalo, LIMITADO a agora — um
+        período em andamento não gera data futura que esconderia edições
+        manuais feitas depois.
+    Reimportar o mesmo período recalcula sobre a mesma base — não soma
+    dobrado. Backfill fora de ordem entre períodos: o mês entra no
+    histórico; reimporte os meses seguintes (em ordem) para o acumulado
+    incorporá-lo.
+    """
+    base = None
+    ultimo_ate_fim = None
+    ja_no_periodo = False
+    posteriores = False
+    for snap in serie:
+        ref = _sem_fuso(snap.data_referencia)
+        if ref < inicio:
+            base = snap
+        elif ref <= fim:
+            ja_no_periodo = True
+        if ref <= fim:
+            ultimo_ate_fim = snap
+        else:
+            posteriores = True
+
+    ativ_rel = int(dados.get("atividades", 0) or 0)
+    estrelas_rel = int(dados.get("estrelas", 0) or 0)
+    media_rel = float(dados.get("pontuacao_media", 0) or 0.0)
+
+    base_ativ = base.atividades if base else 0
+    base_estrelas = base.estrelas if base else 0
+    base_media = base.pontuacao_media if base else 0.0
+    cand_ativ = base_ativ + ativ_rel
+    cand_estrelas = base_estrelas + estrelas_rel
+    cand_media = (round((base_media * base_ativ + media_rel * ativ_rel)
+                        / cand_ativ, 4) if cand_ativ else 0.0)
+
+    # Piso: acumulado já registrado até o fim do intervalo (idempotente para
+    # reimportação — o snapshot anterior do próprio período vale base+ganhos).
+    piso_ativ = ultimo_ate_fim.atividades if ultimo_ate_fim else 0
+    piso_estrelas = ultimo_ate_fim.estrelas if ultimo_ate_fim else 0
+    novo_ativ = max(cand_ativ, piso_ativ)
+    novo_estrelas = max(cand_estrelas, piso_estrelas)
+    if piso_ativ > cand_ativ:
+        novo_media = ultimo_ate_fim.pontuacao_media
+        contadores["preservados"] += 1
+    else:
+        novo_media = cand_media
+
+    if base is None:
+        # Snapshot-base na véspera do início valendo (novo − ganhos): o delta
+        # do período é exatamente o ganho do relatório, e um acumulado antigo
+        # que caiu dentro do intervalo não é atribuído a este período.
+        base_ativ_virtual = max(0, novo_ativ - ativ_rel)
+        db.add(SnapshotMatific(
+            escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
+            data_referencia=inicio - timedelta(seconds=1),
+            atividades=base_ativ_virtual,
+            estrelas=max(0, novo_estrelas - estrelas_rel),
+            pontuacao_media=(ultimo_ate_fim.pontuacao_media
+                             if ultimo_ate_fim and base_ativ_virtual else 0.0),
+        ))
+
+    db.add(SnapshotMatific(
+        escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
+        data_referencia=fim,
+        atividades=novo_ativ, estrelas=novo_estrelas,
+        pontuacao_media=novo_media,
+    ))
+    if ja_no_periodo:
+        contadores["reimportados"] += 1
+    if posteriores:
+        contadores["historico"] += 1
 
 
 def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia):
@@ -478,6 +577,27 @@ def confirmar(
     data_referencia = dados.data_referencia or datetime.now(timezone.utc)
     avisos: list[str] = []
 
+    # Intervalo do relatório (Matific "Intervalo de datas"): o fim impresso é
+    # o limite EXCLUSIVO do leaderboard — o snapshot é datado na véspera
+    # (23:59:59), caindo dentro do mês/semana a que os dados pertencem.
+    periodo_inicio = periodo_fim = None
+    if (dados.plataforma == "matific"
+            and dados.periodo_inicio is not None and dados.periodo_fim is not None):
+        periodo_inicio = dados.periodo_inicio.replace(tzinfo=None)
+        periodo_fim = dados.periodo_fim.replace(tzinfo=None)
+        if periodo_fim.time() == hora_zero(0, 0):
+            periodo_fim -= timedelta(seconds=1)
+        # Período EM ANDAMENTO (relatório do mês corrente): o snapshot é
+        # datado agora, nunca no futuro — uma data futura ficaria acima de
+        # qualquer edição manual feita depois, escondendo-a dos rankings.
+        agora_ref = datetime.now(timezone.utc).replace(tzinfo=None)
+        if periodo_fim > agora_ref:
+            periodo_fim = agora_ref
+        if periodo_fim <= periodo_inicio:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Intervalo de datas do relatório inválido.")
+        data_referencia = periodo_fim
+
     # Move o arquivo original de /temporarios para a pasta definitiva (§15).
     # arquivo_token e arquivo_nome vêm do cliente: ambos são saneados contra
     # path traversal antes de tocar o disco (nunca escapar de UPLOADS_DIR).
@@ -528,8 +648,26 @@ def confirmar(
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)
 
+    # Import por período: as séries de snapshots dos alunos envolvidos vêm
+    # numa ÚNICA consulta (212 alunos = 1 ida ao banco, não 212).
+    series: dict[int, list] = {}
+    contadores = {"reimportados": 0, "historico": 0, "preservados": 0}
+    if periodo_inicio is not None and resolvidos:
+        for snap in db.execute(
+            select(SnapshotMatific)
+            .where(SnapshotMatific.escola_id == escola_id,
+                   SnapshotMatific.aluno_id.in_(list(resolvidos)))
+            .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
+        ).scalars():
+            series.setdefault(snap.aluno_id, []).append(snap)
+
     for aluno, linhas_aluno in resolvidos.values():
-        if dados.plataforma == "matific":
+        if dados.plataforma == "matific" and periodo_inicio is not None:
+            _importar_matific_periodo(db, escola_id, importacao, aluno,
+                                      linhas_aluno[-1].dados,
+                                      periodo_inicio, periodo_fim,
+                                      series.get(aluno.id, []), contadores)
+        elif dados.plataforma == "matific":
             _importar_matific(db, escola_id, importacao, aluno,
                               linhas_aluno[-1].dados, data_referencia)
         elif dados.formato == "leituras":
@@ -538,6 +676,23 @@ def confirmar(
         else:
             _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                       linhas_aluno[-1].dados, data_referencia)
+
+    if contadores["reimportados"]:
+        avisos.append(
+            f"{contadores['reimportados']} aluno(s) já tinham dados datados "
+            "dentro deste intervalo — os valores do período foram "
+            "recalculados sem somar duas vezes.")
+    if contadores["preservados"]:
+        avisos.append(
+            f"{contadores['preservados']} aluno(s) tinham um total acumulado "
+            "MAIOR que a soma dos períodos importados — o total atual foi "
+            "preservado (a diferença fica atribuída a antes dos períodos).")
+    if contadores["historico"]:
+        avisos.append(
+            f"{contadores['historico']} aluno(s) já têm dados mais recentes "
+            "que este intervalo — o mês entrou no histórico (evolução e "
+            "premiações). Para o TOTAL acumulado incorporá-lo, reimporte os "
+            "meses seguintes em ordem.")
 
     importacao.qtd_alunos = len(resolvidos)
     importacao.qtd_erros = len(dados.linhas) - sum(len(l) for _, l in resolvidos.values())

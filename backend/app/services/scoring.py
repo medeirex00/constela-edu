@@ -96,17 +96,33 @@ def obter_pesos_brutos(db: Session, escola_id: int, namespace: str) -> dict[str,
 # ---------------------------------------------------------------------------
 
 def _snapshots_atuais(db: Session, escola_id: int, modelo):
-    """Último snapshot de cada aluno para a plataforma indicada."""
-    sub = (
-        select(modelo.aluno_id, func.max(modelo.id).label("max_id"))
+    """Último snapshot de cada aluno para a plataforma indicada.
+
+    "Último" pela DATA DE REFERÊNCIA (id desempata), não pelo id: importar um
+    relatório de um período antigo (backfill mensal do Matific) registra o
+    histórico sem rebaixar o estado atual dos rankings. A seleção acontece no
+    banco (window function) — snapshots são imutáveis e só crescem; varrer
+    todos como objetos ORM a cada recálculo não escala."""
+    ids = ids_snapshots_atuais(modelo, escola_id)
+    rows = db.execute(select(modelo).where(modelo.id.in_(ids))).scalars().all()
+    return {row.aluno_id: row for row in rows}
+
+
+def ids_snapshots_atuais(modelo, escola_id: int):
+    """Subquery com o id do snapshot mais recente (data_referencia, id) de
+    cada aluno da escola."""
+    numerado = (
+        select(
+            modelo.id.label("snap_id"),
+            func.row_number().over(
+                partition_by=modelo.aluno_id,
+                order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
+            ).label("posicao"),
+        )
         .where(modelo.escola_id == escola_id)
-        .group_by(modelo.aluno_id)
         .subquery()
     )
-    rows = db.execute(
-        select(modelo).join(sub, modelo.id == sub.c.max_id)
-    ).scalars().all()
-    return {row.aluno_id: row for row in rows}
+    return select(numerado.c.snap_id).where(numerado.c.posicao == 1).scalar_subquery()
 
 
 def _chaves_do_nivel(nivel: NivelDificuldade) -> list[str]:

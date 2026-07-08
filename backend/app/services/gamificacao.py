@@ -297,13 +297,15 @@ def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
 
 def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
     pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
+    # Ordem cronológica por data_referencia (id desempata): o backfill mensal
+    # do Matific insere períodos antigos com id maior.
     serie_m = db.execute(
         select(SnapshotMatific).where(SnapshotMatific.aluno_id == aluno_id)
-        .order_by(SnapshotMatific.id)
+        .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
     ).scalars().all()
     serie_e = db.execute(
         select(SnapshotElefante).where(SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.id)
+        .order_by(SnapshotElefante.data_referencia, SnapshotElefante.id)
     ).scalars().all()
     return _computar_gamificacao(aluno_id, serie_m, serie_e,
                                  pesos_xp, base, conquistas_cfg)

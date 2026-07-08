@@ -33,6 +33,10 @@ class AnaliseOut(BaseModel):
     mensagem_deteccao: str = ""     # "Este arquivo pertence ao Matific."
     turma_detectada: str = ""       # turma lida do PDF (cabeçalho do Elefante)
     origem_nome: str = ""           # arquivo | conteudo | nenhum (como o nome foi achado)
+    # "Intervalo de datas" impresso no relatório (Matific): datas ISO. O
+    # frontend devolve estes valores no /confirmar para datar os dados.
+    periodo_inicio: str = ""
+    periodo_fim: str = ""
     total_alunos: int = 0           # nomes únicos encontrados
     total_linhas: int
     total_erros: int
@@ -59,6 +63,11 @@ class ImportacaoConfirm(BaseModel):
     arquivo_token: str | None = None
     arquivo_nome: str | None = None
     data_referencia: datetime | None = None
+    # Intervalo do relatório (Matific "Intervalo de datas"): quando presente,
+    # os valores das linhas são SOMADOS ao acumulado anterior ao início e o
+    # snapshot é datado dentro do intervalo (rankings por período corretos).
+    periodo_inicio: datetime | None = None
+    periodo_fim: datetime | None = None
     linhas: list[LinhaConfirmacao]
     # No lote, cada arquivo confirma com recalcular=False; o recálculo roda
     # uma vez ao final via POST /recalcular.

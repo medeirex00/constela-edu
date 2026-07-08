@@ -40,23 +40,21 @@ router = APIRouter(prefix="/escolas/{escola_id}", tags=["Plataformas"])
 
 
 def _linhas_modulo(db: Session, escola_id: int, modelo):
-    """Alunos ativos do ano letivo com o snapshot mais recente da plataforma."""
+    """Alunos ativos do ano letivo com o snapshot mais recente da plataforma.
+
+    "Mais recente" pela data_referencia (id desempata): um relatório de
+    período antigo importado depois (backfill mensal do Matific) não pode
+    virar o estado atual do módulo."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
-    sub = (
-        select(modelo.aluno_id, func.max(modelo.id).label("max_id"))
-        .where(modelo.escola_id == escola_id)
-        .group_by(modelo.aluno_id)
-        .subquery()
-    )
+    ids = scoring.ids_snapshots_atuais(modelo, escola_id)
     return db.execute(
         select(Aluno, Turma, modelo)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
               & (Matricula.ano_letivo == escola.ano_letivo_ativo))
         .join(Turma, Matricula.turma_id == Turma.id)
-        .outerjoin(sub, sub.c.aluno_id == Aluno.id)
-        .outerjoin(modelo, modelo.id == sub.c.max_id)
+        .outerjoin(modelo, (modelo.aluno_id == Aluno.id) & modelo.id.in_(ids))
         .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
         .order_by(Aluno.nome)
     ).all()
@@ -110,7 +108,8 @@ def editar_matific(
     anterior = db.execute(
         select(SnapshotMatific)
         .where(SnapshotMatific.aluno_id == aluno_id)
-        .order_by(SnapshotMatific.id.desc()).limit(1)
+        .order_by(SnapshotMatific.data_referencia.desc(),
+                  SnapshotMatific.id.desc()).limit(1)
     ).scalar_one_or_none()
 
     importacao = _importacao_manual(db, escola_id, usuario.id, "matific")
@@ -177,7 +176,8 @@ def editar_elefante(
     anterior = db.execute(
         select(SnapshotElefante)
         .where(SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.id.desc()).limit(1)
+        .order_by(SnapshotElefante.data_referencia.desc(),
+                  SnapshotElefante.id.desc()).limit(1)
     ).scalar_one_or_none()
 
     por_nivel = {c.upper(): int(q) for c, q in dados.livros_por_nivel.items()}
@@ -247,7 +247,8 @@ def informar_niveis_leitura(
     anterior = db.execute(
         select(SnapshotElefante)
         .where(SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.id.desc()).limit(1)
+        .order_by(SnapshotElefante.data_referencia.desc(),
+                  SnapshotElefante.id.desc()).limit(1)
     ).scalar_one_or_none()
 
     importacao = _importacao_manual(db, escola_id, usuario.id, "elefante")

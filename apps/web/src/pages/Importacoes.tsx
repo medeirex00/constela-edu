@@ -119,18 +119,28 @@ interface Grupo {
   todasComErro: boolean;
 }
 
-/** Agrupa as linhas da análise por aluno (nome normalizado). No relatório
- *  individual, as centenas de linhas de livros viram um único grupo. */
+/** Agrupa as linhas da análise por aluno (nome + turma do relatório). No
+ *  relatório individual, as centenas de linhas de livros viram um único
+ *  grupo. A turma entra na chave porque o leaderboard do Matific abrevia os
+ *  nomes ("MARIA J") e alunos DIFERENTES de turmas diferentes colidem — num
+ *  grupo só, o mês de um deles seria descartado em silêncio. */
 function agrupar(analise: Analise): Grupo[] {
   const mapa = new Map<string, Grupo>();
   const ordem: string[] = [];
   analise.linhas.forEach((linha, indice) => {
-    const chave = normalizar(linha.nome) || `#${indice}`;
+    const turma = String(linha.dados.turma_relatorio ?? "");
+    const chave = `${normalizar(linha.nome) || `#${indice}`}|${normalizar(turma)}`;
     let g = mapa.get(chave);
     if (!g) {
+      // Homônimos em turmas diferentes: o nome exibido ganha a turma para o
+      // usuário saber qual é qual na conferência.
+      const repetido = analise.linhas.some(
+        (outra) => normalizar(outra.nome) === normalizar(linha.nome)
+          && String(outra.dados.turma_relatorio ?? "") !== turma,
+      );
       g = {
         chave,
-        nome: linha.nome,
+        nome: repetido && turma ? `${linha.nome} (${turma})` : linha.nome,
         indices: [],
         correspondencia: linha.correspondencia,
         resumo: "",
@@ -286,6 +296,10 @@ export default function Importacoes() {
             tipo: analise.tipo,
             arquivo_token: analise.arquivo_token,
             arquivo_nome: analise.arquivo_nome,
+            // "Intervalo de datas" do relatório: o backend soma os valores ao
+            // acumulado e data o snapshot dentro do período.
+            periodo_inicio: analise.periodo_inicio || null,
+            periodo_fim: analise.periodo_fim || null,
             linhas,
           }),
         },

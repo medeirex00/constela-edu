@@ -264,6 +264,9 @@ export interface Analise {
   turma_detectada: string;
   /** Como o nome foi identificado: "arquivo" | "conteudo" | "nenhum" | "". */
   origem_nome: string;
+  /** "Intervalo de datas" do relatório (Matific), ISO "AAAA-MM-DD" ou "". */
+  periodo_inicio?: string;
+  periodo_fim?: string;
   total_alunos: number;
   total_linhas: number;
   total_erros: number;
