@@ -12,6 +12,7 @@ python-multipart==0.0.20
 pypdf==6.0.0
 pdfplumber==0.11.10
 openpyxl==3.1.5
+xlrd==2.0.1
 fpdf2==2.8.2
 segno==1.6.6
 anthropic==0.116.0

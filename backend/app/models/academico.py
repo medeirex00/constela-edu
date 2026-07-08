@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -48,6 +48,10 @@ class Aluno(Base):
     numero_chamada: Mapped[int | None] = mapped_column(default=None)
     status: Mapped[str] = mapped_column(String(20), default="ativo")
     observacoes: Mapped[str | None] = mapped_column(String(1000))
+    # Ficha cadastral livre (JSON): dados da planilha de matrículas da escola
+    # que não têm coluna própria — RA, RM, responsável, endereço, telefone,
+    # RG, CPF, SUS, sexo, raça/cor, bolsa família, etc.
+    ficha: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(default=agora)
 
 

@@ -11,6 +11,59 @@ import { api } from "../lib/api";
 import { nota, numero } from "../lib/formato";
 import type { LeituraNiveis, LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
 
+// Rótulos e ORDEM de exibição da ficha cadastral (planilha de matrículas).
+// Só aparecem os campos que a planilha da escola realmente preencheu.
+const ROTULOS_FICHA: Record<string, string> = {
+  rm: "RM",
+  ra: "RA",
+  responsavel_completo: "Responsável (nome completo)",
+  responsavel: "Responsável",
+  telefone: "Telefone",
+  endereco: "Endereço",
+  bairro: "Bairro",
+  matricula: "Matrícula",
+  transferencia: "Transferência",
+  remanejamento: "Remanejamento",
+  rg: "RG",
+  cpf: "CPF",
+  sus: "SUS",
+  sexo: "Sexo",
+  raca_cor: "Raça/Cor",
+  bolsa_familia: "Bolsa Família",
+};
+
+/** Dados cadastrais do aluno vindos da planilha de matrículas (só gestor). */
+function FichaCadastral({ ficha }: { ficha: Record<string, string> }) {
+  const itens: Array<readonly [string, string]> = [];
+  for (const chave of Object.keys(ROTULOS_FICHA)) {
+    if (ficha[chave]) itens.push([ROTULOS_FICHA[chave], ficha[chave]] as const);
+  }
+  // Colunas extras da planilha que ainda não têm rótulo próprio.
+  for (const [chave, valor] of Object.entries(ficha)) {
+    if (!(chave in ROTULOS_FICHA) && valor) {
+      itens.push([chave.replace(/_/g, " "), String(valor)] as const);
+    }
+  }
+  if (itens.length === 0) return null;
+  return (
+    <section>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        Ficha cadastral
+      </h2>
+      <Card className="p-4">
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+          {itens.map(([rotulo, valor]) => (
+            <div key={rotulo} className="min-w-0">
+              <dt className="text-xs uppercase tracking-wide text-zinc-400">{rotulo}</dt>
+              <dd className="mt-0.5 break-words text-sm text-zinc-800 dark:text-zinc-100">{valor}</dd>
+            </div>
+          ))}
+        </dl>
+      </Card>
+    </section>
+  );
+}
+
 /** Gráfico de barras horizontais dos livros concluídos por faixa (PRD §38). */
 function LeituraPorNivel({ dados }: { dados: LeituraNiveis }) {
   const maxQtd = Math.max(1, ...dados.faixas.map((f) => f.quantidade));
@@ -271,6 +324,10 @@ export default function PerfilAluno() {
           <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_geral)}</p>
         </Card>
       </div>
+
+      {perfil.ficha && Object.keys(perfil.ficha).length > 0 && (
+        <FichaCadastral ficha={perfil.ficha} />
+      )}
 
       {gamificacao && (
         <section>

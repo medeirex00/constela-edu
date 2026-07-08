@@ -186,6 +186,7 @@ def perfil_aluno(
         detalhes=(nota.detalhes if nota else {}) if not superficial else {},
         calculada_em=nota.calculada_em if nota else None,
         leitura_niveis=leitura_niveis if not superficial else None,
+        ficha=(aluno.ficha or {}) if not superficial else {},
     )
 
 

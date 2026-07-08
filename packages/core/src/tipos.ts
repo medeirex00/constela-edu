@@ -128,6 +128,8 @@ export interface PerfilAluno {
   };
   calculada_em: string | null;
   leitura_niveis?: LeituraNiveis | null;
+  // Ficha cadastral da planilha de matrículas — só chega preenchida ao gestor.
+  ficha?: Record<string, string>;
 }
 
 export interface Pesos {

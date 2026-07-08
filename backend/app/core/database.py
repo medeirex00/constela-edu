@@ -71,6 +71,10 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
         # Cópia cifrada da senha para o "ver senha" (Fernet/SECRET_KEY).
         "senha_visivel": "VARCHAR(500)",
     },
+    "alunos": {
+        # Ficha cadastral (JSON) vinda da planilha de matrículas da escola.
+        "ficha": "JSON",
+    },
     "niveis_dificuldade": {
         "codigo": "VARCHAR(40)",
     },

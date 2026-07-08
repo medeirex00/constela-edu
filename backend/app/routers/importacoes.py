@@ -9,7 +9,7 @@ import re
 import shutil
 import time
 import uuid
-from datetime import datetime, time as hora_zero, timedelta, timezone
+from datetime import date, datetime, time as hora_zero, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -24,12 +24,14 @@ from fastapi import (
 )
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import (
     Aluno,
+    Escola,
     Importacao,
     Leitura,
     Livro,
@@ -40,9 +42,17 @@ from app.models import (
     Turma,
     Usuario,
 )
-from app.schemas import AnaliseOut, ImportacaoConfirm, ImportacaoOut, ImportacaoResultadoOut
+from app.schemas import (
+    AnaliseOut,
+    ImportacaoConfirm,
+    ImportacaoOut,
+    ImportacaoResultadoOut,
+    MatriculasAnaliseOut,
+    MatriculasResultadoOut,
+    MatriculaTurmaOut,
+)
 from app.services import importacao as svc
-from app.services import perfis_pdf, planilhas, push, scoring
+from app.services import lista_piloto, perfis_pdf, planilhas, push, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
@@ -750,6 +760,342 @@ def recalcular_agora(
         corpo="Importação em lote concluída. As notas já foram recalculadas.",
         dados={"tela": "ranking"})
     return {"mensagem": f"Notas recalculadas para {n} aluno(s).", "alunos": n}
+
+
+# --- Planilha de matrículas da escola ("Lista Piloto") -----------------------
+
+async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tuple[bytes, str]:
+    declarado = request.headers.get("content-length")
+    if declarado and declarado.isdigit() and int(declarado) > TAMANHO_MAXIMO + 1_000_000:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo acima de 10 MB.")
+    conteudo = await arquivo.read()
+    if len(conteudo) > TAMANHO_MAXIMO:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo acima de 10 MB.")
+    nome = arquivo.filename or "matriculas"
+    ehxls = conteudo[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2 (.xls)
+    ehzip = conteudo[:2] == b"PK"                                # .xlsx (zip)
+    if not (ehxls or ehzip or nome.lower().endswith((".xls", ".xlsx", ".xlsm"))):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Envie a planilha de matrículas em Excel (.xls ou .xlsx).")
+    return conteudo, nome
+
+
+def _norm(texto: str) -> str:
+    return svc.normalizar_nome(texto or "")
+
+
+def _chave_turma(nome: str) -> str:
+    """Chave de turma insensível a ordinal/acento/caixa: "5º Ano B" == "5 ANO B".
+    normalizar_nome NÃO remove º, então turmas bifurcariam sem isto."""
+    return _norm(re.sub(r"[ºª°]", "", nome or ""))
+
+
+# Tokens que aparecem em QUALQUER turma e não discriminam uma da outra — ficam
+# de fora do overlap, senão "1º Ano A" e "4º Ano A" pareceriam a mesma sala
+# (partilham "ano" e a letra é o que importa, não a palavra).
+_STOP_TURMA = {"ano", "anos", "manha", "tarde", "noite", "integral", "anual",
+               "matutino", "vespertino", "noturno", "turma", "sala"}
+
+
+def _overlap_turma(a: set[str], b: set[str]) -> int:
+    """Tokens de turma em comum, ignorando palavras ubíquas — para "1º Ano A"
+    casar com "1 ANO A MANHÃ" (série+letra) mas NÃO com "4º Ano A"."""
+    return len((a & b) - _STOP_TURMA)
+
+
+def _nomes_compativeis(a: str, b: str) -> bool:
+    """Dois nomes podem ser a MESMA pessoa? Usado como veto ao casar por RA:
+    se o RA colide mas os nomes são claramente de pessoas diferentes (ex.: RA
+    placeholder), não casa. Conservador: na dúvida, considera compatível."""
+    if _norm(a) == _norm(b):
+        return True
+    ta, tb = svc.tokens_nome(a), svc.tokens_nome(b)
+    if not ta or not tb:
+        return True
+    if ta[0] != tb[0]:
+        return False
+    if svc.casa_abreviado_posicional(ta, tb) or svc.casa_abreviado_posicional(tb, ta):
+        return True
+    return svc._similaridade(_norm(a), _norm(b)) >= 0.6
+
+
+@router.post("/matriculas/analisar", response_model=MatriculasAnaliseOut)
+async def analisar_matriculas(
+    request: Request,
+    escola_id: int = Depends(escola_autorizada),
+    arquivo: UploadFile = File(...),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Prévia da planilha de matrículas: turmas e alunos detectados, com quais
+    turmas já existem — nada é gravado."""
+    conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
+    analise = await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+    escola = db.get(Escola, escola_id)
+    if escola is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    ano = escola.ano_letivo_ativo
+    existentes = {
+        _chave_turma(t.nome) for t in db.execute(
+            select(Turma).where(Turma.escola_id == escola_id, Turma.ano_letivo == ano)
+        ).scalars()
+    }
+    turmas = [
+        MatriculaTurmaOut(
+            nome=t.nome, ano_escolar=t.ano_escolar, turno=t.turno,
+            professor=t.professor, sed=t.sed, total_alunos=len(t.alunos),
+            ja_existe=_chave_turma(t.nome) in existentes,
+            exemplos=[a.nome for a in t.alunos[:4]],
+        )
+        for t in analise.turmas
+    ]
+    # Alunos DISTINTOS (o que será realmente cadastrado): o mesmo aluno pode
+    # aparecer em duas turmas; conta uma vez (por RA válido, senão nome+turma).
+    identidades: set = set()
+    for t in analise.turmas:
+        for a in t.alunos:
+            ra = lista_piloto.ra_util(a.ficha.get("ra"))
+            identidades.add(ra or (_norm(a.nome), _chave_turma(t.nome)))
+    return MatriculasAnaliseOut(
+        escola_detectada=analise.escola_detectada, ano_letivo=analise.ano_letivo,
+        total_turmas=len(turmas), total_alunos=len(identidades),
+        total_registros=analise.total_alunos,
+        turmas=turmas, avisos=analise.avisos,
+    )
+
+
+@router.post("/matriculas/confirmar", response_model=MatriculasResultadoOut)
+async def confirmar_matriculas(
+    request: Request,
+    escola_id: int = Depends(escola_autorizada),
+    arquivo: UploadFile = File(...),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Cria as turmas que faltam e matricula os alunos (ano letivo ativo),
+    gravando nº de chamada, nascimento e a ficha cadastral. Reimportar
+    atualiza os existentes (casa por RA, senão por nome + turma) — não
+    duplica."""
+    conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
+    analise = await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+    if not analise.turmas:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Nenhuma turma reconhecida na planilha.")
+    escola = db.get(Escola, escola_id)
+    if escola is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    ano = escola.ano_letivo_ativo
+    avisos = list(analise.avisos)
+
+    def _nasc(parsed) -> date | None:
+        if not parsed.data_nascimento:
+            return None
+        try:
+            return date.fromisoformat(parsed.data_nascimento)
+        except ValueError:
+            return None
+
+    # ---- Pré-carga do estado da escola (poucas consultas, tudo em memória) ----
+    # order_by garante escolha determinística de por_ra quando há RA repetido.
+    alunos_todos = db.execute(
+        select(Aluno).where(Aluno.escola_id == escola_id)
+        .order_by(Aluno.id)).scalars().all()
+    alunos_por_id = {a.id: a for a in alunos_todos}
+    ativos = [a for a in alunos_todos if a.status != "excluido"]
+    # RA casa até com excluído (reativa em vez de duplicar); nome/abreviado, não.
+    por_ra: dict[str, Aluno] = {}
+    for a in alunos_todos:
+        ra = lista_piloto.ra_util((a.ficha or {}).get("ra"))
+        if ra:
+            por_ra.setdefault(ra, a)
+    matricula_ano: dict[int, Matricula] = {
+        m.aluno_id: m for m in db.execute(
+            select(Matricula).where(Matricula.escola_id == escola_id,
+                                    Matricula.ano_letivo == ano)).scalars()
+    }
+    por_nome_turma: dict[tuple[str, int], Aluno] = {}
+    for m in matricula_ano.values():
+        alvo = alunos_por_id.get(m.aluno_id)
+        if alvo is not None and alvo.status != "excluido":
+            por_nome_turma[(_norm(alvo.nome), m.turma_id)] = alvo
+
+    # Turmas de cada aluno, de QUALQUER ano — o cadastro de upload pode estar num
+    # ano detectado do relatório, não no ativo. Guardamos UMA lista de tokens POR
+    # turma (não a união): unir tokens de turmas diferentes fabricaria overlap
+    # (série de uma + letra de outra) com uma sala em que o aluno nunca esteve.
+    turma_tokens_de: dict[int, list[set[str]]] = {}
+    for aid, tnome in db.execute(
+        select(Matricula.aluno_id, Turma.nome)
+        .join(Turma, Matricula.turma_id == Turma.id)
+        .where(Matricula.escola_id == escola_id)).all():
+        turma_tokens_de.setdefault(aid, []).append(svc.tokens_turma(tnome))
+
+    # Só cadastros com dados de upload (Matific/Elefante) entram no POOL de
+    # candidatos a receber o nome completo — é o escopo do recurso.
+    com_upload: set[int] = set()
+    for tabela in (SnapshotMatific, SnapshotElefante, Leitura):
+        for (aid,) in db.execute(
+            select(tabela.aluno_id).where(tabela.escola_id == escola_id).distinct()):
+            com_upload.add(aid)
+    pool_por_primeiro: dict[str, list[Aluno]] = {}
+    for a in ativos:
+        if a.id in com_upload and not lista_piloto.ra_util((a.ficha or {}).get("ra")):
+            toks = svc.tokens_nome(a.nome)
+            if len(toks) >= 2:
+                pool_por_primeiro.setdefault(toks[0], []).append(a)
+
+    # ---- Turmas: cria as que faltam (chave insensível a º/acento/caixa) ----
+    turmas_por_nome: dict[str, Turma] = {}
+    for t in db.execute(select(Turma).where(Turma.escola_id == escola_id,
+                                             Turma.ano_letivo == ano)).scalars():
+        turmas_por_nome.setdefault(_chave_turma(t.nome), t)
+    turmas_criadas = 0
+    resolvidas: list[Turma] = []
+    for t in analise.turmas:
+        chave = _chave_turma(t.nome)
+        turma = turmas_por_nome.get(chave)
+        if turma is None:
+            turma = Turma(escola_id=escola_id, nome=t.nome, ano_escolar=t.ano_escolar,
+                          ano_letivo=ano, turno=t.turno,
+                          observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None))
+            db.add(turma)
+            db.flush()
+            turmas_por_nome[chave] = turma
+            turmas_criadas += 1
+        resolvidas.append(turma)
+
+    linhas = [(resolvidas[i], parsed)
+              for i, t in enumerate(analise.turmas) for parsed in t.alunos]
+
+    # ---- FASE 1: casamento ABREVIADO POSICIONAL (em memória, antes de gravar) --
+    # Só para linhas que NÃO casam por RA nem por nome-completo-exato na turma.
+    def _casaria_forte(turma, parsed) -> bool:
+        ra = lista_piloto.ra_util(parsed.ficha.get("ra"))
+        if ra and ra in por_ra and _nomes_compativeis(parsed.nome, por_ra[ra].nome):
+            return True
+        return (_norm(parsed.nome), turma.id) in por_nome_turma
+
+    cand_por_idx: dict[int, list[Aluno]] = {}
+    linhas_por_antigo: dict[int, list[int]] = {}
+    for idx, (turma, parsed) in enumerate(linhas):
+        if _casaria_forte(turma, parsed):
+            continue
+        f = svc.tokens_nome(parsed.nome)
+        if len(f) < 2:
+            continue
+        turma_toks = svc.tokens_turma(turma.nome)
+        nasc = _nasc(parsed)
+        for antigo in pool_por_primeiro.get(f[0], []):
+            if not svc.casa_abreviado_posicional(svc.tokens_nome(antigo.nome), f):
+                continue
+            # Precisa bater com ALGUMA turma real do aluno (série+letra), não com
+            # a união de turmas de anos diferentes.
+            if not any(_overlap_turma(turma_toks, ts) >= 2
+                       for ts in turma_tokens_de.get(antigo.id, [])):
+                continue  # turma diverge → não é o mesmo aluno
+            if nasc and antigo.data_nascimento and nasc != antigo.data_nascimento:
+                continue  # veto por nascimento divergente
+            cand_por_idx.setdefault(idx, []).append(antigo)
+            linhas_por_antigo.setdefault(antigo.id, []).append(idx)
+
+    casar_abrev: dict[int, Aluno] = {}
+    for idx, cands in cand_por_idx.items():
+        # Unicidade bipartida: só casa 1:1 quando a linha tem UM candidato E esse
+        # candidato não abrevia nenhuma outra linha do lote. Ambíguo → cria novo.
+        if len(cands) == 1 and len(linhas_por_antigo[cands[0].id]) == 1:
+            casar_abrev[idx] = cands[0]
+        else:
+            turma, parsed = linhas[idx]
+            nomes = ", ".join(sorted({c.nome for c in cands}))
+            avisos.append(
+                f"“{parsed.nome}” pode ser o mesmo aluno de: {nomes} (cadastro(s) "
+                "de importação anterior). Criado como novo — confira em Alunos e "
+                "use “Fundir alunos” se for a mesma pessoa.")
+
+    # ---- FASE 2: gravação na ordem do arquivo (preserva 1ª ocorrência) ----
+    alunos_criados = alunos_atualizados = alunos_vinculados = 0
+    ja_alocado: set[int] = set()
+    for idx, (turma, parsed) in enumerate(linhas):
+        ra = lista_piloto.ra_util(parsed.ficha.get("ra"))
+        existente = por_ra.get(ra) if ra else None
+        if existente is not None and not _nomes_compativeis(parsed.nome, existente.nome):
+            existente = None  # RA colide mas nome é de outra pessoa (placeholder)
+        if existente is None:
+            existente = por_nome_turma.get((_norm(parsed.nome), turma.id))
+        if existente is None:
+            existente = casar_abrev.get(idx)  # abreviado posicional inequívoco
+        nasc = _nasc(parsed)
+
+        if existente is None:
+            aluno = Aluno(escola_id=escola_id, nome=parsed.nome, status="ativo",
+                          numero_chamada=parsed.numero_chamada,
+                          data_nascimento=nasc, ficha=dict(parsed.ficha))
+            db.add(aluno)
+            db.flush()
+            db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
+                             turma_id=turma.id, ano_letivo=ano))
+            alunos_criados += 1
+            if ra:
+                por_ra[ra] = aluno
+            por_nome_turma[(_norm(aluno.nome), turma.id)] = aluno
+            matricula_ano[aluno.id] = None
+            ja_alocado.add(aluno.id)
+        else:
+            nome_antigo = existente.nome
+            # O Excel é a fonte da verdade da identidade: nome completo vence.
+            existente.nome = parsed.nome
+            if nasc and existente.data_nascimento is None:
+                existente.data_nascimento = nasc
+            if parsed.ficha:
+                existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
+            if existente.status != "ativo":
+                existente.status = "ativo"  # consta na lista atual → reativa
+            # nº de chamada e matrícula pertencem à 1ª turma em que aparece.
+            if existente.id not in ja_alocado:
+                if parsed.numero_chamada is not None:
+                    existente.numero_chamada = parsed.numero_chamada
+                mat = matricula_ano.get(existente.id)
+                if mat is None and existente.id not in matricula_ano:
+                    db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
+                                     turma_id=turma.id, ano_letivo=ano))
+                    matricula_ano[existente.id] = None
+                elif mat is not None and mat.turma_id != turma.id:
+                    mat.turma_id = turma.id   # a planilha é a fonte da verdade
+                ja_alocado.add(existente.id)
+                if ra:
+                    por_ra.setdefault(ra, existente)
+                por_nome_turma[(_norm(existente.nome), turma.id)] = existente
+                # Auditoria: todo vínculo que TROCA a identidade fica rastreável.
+                if _norm(nome_antigo) != _norm(parsed.nome):
+                    alunos_vinculados += 1
+                    registrar(db, "aluno.identidade_vinculada", escola_id=escola_id,
+                              usuario_id=usuario.id, entidade="aluno",
+                              entidade_id=existente.id,
+                              detalhes={"nome_antigo": nome_antigo,
+                                        "nome_novo": parsed.nome, "ra": ra or None,
+                                        "origem": "importacao_matriculas"})
+                # Conta o aluno DISTINTO uma vez (não a cada turma em que aparece).
+                alunos_atualizados += 1
+
+    registrar(db, "matriculas.importadas", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="escola", entidade_id=escola_id,
+              detalhes={"turmas_criadas": turmas_criadas,
+                        "alunos_criados": alunos_criados,
+                        "alunos_atualizados": alunos_atualizados,
+                        "alunos_vinculados": alunos_vinculados})
+    db.commit()
+
+    scoring.recalcular_escola(db, escola_id)
+    from app.routers.publico import invalidar_cache_painel
+    invalidar_cache_painel(escola_id)
+    extra = (f" {alunos_vinculados} cadastro(s) de importação anterior recebeu(ram) "
+             "o nome completo.") if alunos_vinculados else ""
+    return MatriculasResultadoOut(
+        mensagem=(f"{turmas_criadas} turma(s) criada(s), {alunos_criados} aluno(s) "
+                  f"cadastrado(s) e {alunos_atualizados} atualizado(s)." + extra),
+        turmas_criadas=turmas_criadas, alunos_criados=alunos_criados,
+        alunos_atualizados=alunos_atualizados, avisos=avisos,
+    )
 
 
 # --- Histórico (PRD §15) ------------------------------------------------------

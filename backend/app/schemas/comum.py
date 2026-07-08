@@ -209,6 +209,8 @@ class AlunoPerfilOut(BaseModel):
     detalhes: dict
     calculada_em: datetime | None
     leitura_niveis: LeituraNiveisOut | None = None
+    # Ficha cadastral (planilha de matrículas): {} para professor (superficial).
+    ficha: dict = {}
 
 
 # --- Configurações ----------------------------------------------------------

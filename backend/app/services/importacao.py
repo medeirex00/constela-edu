@@ -636,6 +636,43 @@ def _tokens_turma(texto: str) -> set[str]:
     return {t for t in plano.split() if t}
 
 
+# Expostos para o casamento da Lista Piloto (import de matrículas).
+def tokens_turma(texto: str) -> set[str]:
+    return _tokens_turma(texto)
+
+
+def tokens_nome(nome: str) -> list[str]:
+    return [t for t in normalizar_nome(nome or "").split() if t]
+
+
+def casa_abreviado_posicional(antigo: list[str], completo: list[str]) -> bool:
+    """`antigo` (nome abreviado de upload, ex.: ["agatha","v"]) é uma abreviação
+    POSICIONAL de `completo` (nome do Excel, ex.: ["agatha","vitoria","moura",
+    "da","silva"])?
+
+    A abreviação do Matific/Elefante é posicional no 2º+ token — "AGATHA V" =
+    Agatha + inicial do 2º nome (Vitoria), NÃO "Agatha ... da Silva". Por isso:
+      • primeiro nome idêntico;
+      • cada token intermediário cheio deve casar EXATO por posição;
+      • uma inicial (1 letra) só é aceita como ÚLTIMO token de `antigo`, casando
+        o começo do token de mesma posição em `completo`;
+      • `completo` precisa ser mais informativo (mais tokens, ou o último token
+        de `antigo` é inicial) — nomes idênticos vão pelo caminho nome-exato.
+    Nunca usa subsequência (evita casar "ELOA S" com "ELOA ... SILVA")."""
+    if len(antigo) < 2 or len(antigo) > len(completo):
+        return False
+    if antigo[0] != completo[0]:
+        return False
+    for i in range(1, len(antigo)):
+        tok = antigo[i]
+        if len(tok) == 1:                     # inicial: só no fim, casa prefixo
+            if i != len(antigo) - 1 or not completo[i].startswith(tok):
+                return False
+        elif tok != completo[i]:              # token cheio: idêntico por posição
+            return False
+    return len(completo) > len(antigo) or len(antigo[-1]) == 1
+
+
 def _desempatar_por_turma(candidatos: list, turma_relatorio: str | None,
                           turma_de: dict[int, str]):
     """Entre homônimos, escolhe o aluno cuja turma bate com a do relatório.

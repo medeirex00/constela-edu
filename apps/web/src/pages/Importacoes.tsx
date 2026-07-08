@@ -16,12 +16,14 @@ import {
   Pencil,
   Sparkles,
   UserPlus,
+  Users,
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import ImportacaoMatriculas from "./ImportacaoMatriculas";
 import SeletorAlunoDrawer from "../components/SeletorAlunoDrawer";
 import {
   Badge,
@@ -189,7 +191,7 @@ export default function Importacoes() {
   // Com um lote em andamento (análise/conferência/importação rodando no
   // contexto global), a página já abre no modo "Em lote" para mostrá-lo.
   const { fase: faseLote } = useImportacaoLote();
-  const [modo, setModo] = useState<"individual" | "lote">(
+  const [modo, setModo] = useState<"individual" | "lote" | "matriculas">(
     faseLote !== "selecao" ? "lote" : "individual",
   );
 
@@ -437,6 +439,7 @@ export default function Importacoes() {
           {([
             { valor: "individual", Icone: FileUp, rotulo: "Um por vez" },
             { valor: "lote", Icone: Layers, rotulo: "Em lote" },
+            { valor: "matriculas", Icone: Users, rotulo: "Matrículas da escola" },
           ] as const).map(({ valor, Icone, rotulo }) => (
             <button
               key={valor}
@@ -456,6 +459,10 @@ export default function Importacoes() {
 
       {modo === "lote" && podeImportar && escolaId && (
         <ImportacaoLote aoConcluir={carregarHistorico} />
+      )}
+
+      {modo === "matriculas" && podeImportar && escolaId && (
+        <ImportacaoMatriculas escolaId={escolaId} aoConcluir={carregarHistorico} />
       )}
 
       {modo === "individual" && resultado && (

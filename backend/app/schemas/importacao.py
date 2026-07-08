@@ -93,3 +93,34 @@ class ImportacaoResultadoOut(BaseModel):
     qtd_alunos: int
     qtd_erros: int
     avisos: list[str] = []
+
+
+# --- Importação da planilha de matrículas da escola ("Lista Piloto") --------
+
+class MatriculaTurmaOut(BaseModel):
+    nome: str
+    ano_escolar: str
+    turno: str | None = None
+    professor: str = ""
+    sed: str = ""
+    total_alunos: int
+    ja_existe: bool = False          # a turma já está cadastrada?
+    exemplos: list[str] = []         # primeiros nomes, para conferência
+
+
+class MatriculasAnaliseOut(BaseModel):
+    escola_detectada: str = ""
+    ano_letivo: int | None = None
+    total_turmas: int
+    total_alunos: int                 # alunos DISTINTOS (o que será cadastrado)
+    total_registros: int = 0          # linhas na planilha (pode repetir aluno)
+    turmas: list[MatriculaTurmaOut]
+    avisos: list[str] = []
+
+
+class MatriculasResultadoOut(BaseModel):
+    mensagem: str
+    turmas_criadas: int
+    alunos_criados: int
+    alunos_atualizados: int
+    avisos: list[str] = []
