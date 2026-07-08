@@ -57,7 +57,9 @@ class EscolaUpdate(BaseModel):
     estado: str | None = Field(default=None, max_length=2)
     logotipo_url: str | None = None
     ano_letivo_ativo: int | None = None
-    status: str | None = None
+    # Um status fora do vocabulário faria a escola sumir de TODAS as listas
+    # (o GET filtra por igualdade exata) sem caminho de volta pela interface.
+    status: str | None = Field(default=None, pattern="^(ativa|inativa)$")
 
 
 # --- Acadêmico --------------------------------------------------------------

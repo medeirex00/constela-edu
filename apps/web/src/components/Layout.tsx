@@ -51,6 +51,8 @@ interface ItemNav {
   exato?: boolean;
   /** Só para gestão (admin/coordenador) — professor não vê. */
   gestao?: boolean;
+  /** Só para o administrador GLOBAL (gerencia todas as escolas). */
+  global?: boolean;
 }
 
 interface GrupoNav {
@@ -73,6 +75,7 @@ const GRUPOS: GrupoNav[] = [
       { rotulo: "Premiações", caminho: "/premiacoes", icone: Award },
       { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
       { rotulo: "Ranking de Leitura", caminho: "/ranking-leitura", icone: BookOpen },
+      { rotulo: "Ranking de Matemática", caminho: "/ranking-matematica", icone: Calculator },
       { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
       { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows, gestao: true },
     ],
@@ -116,17 +119,20 @@ const GRUPOS: GrupoNav[] = [
     chave: "config", rotulo: "Configurações", icone: Settings, itens: [
       { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal, gestao: true },
       { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog, gestao: true },
+      { rotulo: "Escolas", caminho: "/escolas", icone: Building2, gestao: true, global: true },
       { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings, gestao: true },
     ],
   },
 ];
 
 /** Grupos visíveis para o papel do usuário (itens de gestão saem para o
- *  professor; grupos que ficarem vazios somem). */
-function gruposVisiveis(gestor: boolean): GrupoNav[] {
-  if (gestor) return GRUPOS;
+ *  professor; itens globais só para o admin global; grupos vazios somem). */
+function gruposVisiveis(gestor: boolean, global: boolean): GrupoNav[] {
   return GRUPOS
-    .map((g) => ({ ...g, itens: g.itens.filter((i) => !i.gestao) }))
+    .map((g) => ({
+      ...g,
+      itens: g.itens.filter((i) => (gestor || !i.gestao) && (global || !i.global)),
+    }))
     .filter((g) => g.itens.length > 0);
 }
 
@@ -335,7 +341,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const { usuario } = useApp();
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const grupos = gruposVisiveis(gestor);
+  const grupos = gruposVisiveis(gestor, Boolean(usuario?.is_global));
   const ativo = grupoDaRota(pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
     const iniciais = carregarAbertos();

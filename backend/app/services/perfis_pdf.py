@@ -33,6 +33,7 @@ import io
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from app.services.importacao import (
     Analise,
@@ -775,28 +776,88 @@ _RE_INTERVALO_MATIFIC = re.compile(
     re.IGNORECASE,
 )
 
+# O campo também aceita PRESETS em vez de datas explícitas. Os semanais são
+# resolvidos pela data de impressão do rodapé; os demais viram TOTAL acumulado
+# (com aviso — para rankings por período, o certo é "Personalizar intervalo").
+_RE_INTERVALO_PRESET = re.compile(
+    r"intervalo\s*de\s*(?:dat[ao]s?|dados)\s*:?\s*([^\d\s][^\n]{2,60}?)\s*$",
+    re.IGNORECASE,
+)
+_RE_DATA_IMPRESSAO = re.compile(r"([0-3]?\d)/([01]?\d)/(\d{4}),")
 
-def _intervalo_matific(paginas: list[Pagina]) -> tuple[str, str]:
-    """("AAAA-MM-DD", "AAAA-MM-DD") do "Intervalo de datas" da capa, ou ("", "").
 
-    Intervalo degenerado (início >= fim) é descartado: a importação seguiria
-    para um 400 sem saída na confirmação — melhor cair no fluxo acumulado."""
+def _data_impressao(paginas: list[Pagina]):
+    """Data em que o PDF foi impresso (rodapé "08/07/2026, 01:13 Matific")."""
+    from datetime import date as _date
+    for pagina in paginas:
+        for linha in _linhas_visuais(pagina.palavras):
+            casado = _RE_DATA_IMPRESSAO.search(linha.texto)
+            if casado:
+                dia, mes, ano = (int(g) for g in casado.groups())
+                try:
+                    return _date(ano, mes, dia)
+                except ValueError:
+                    continue
+    return None
+
+
+def _intervalo_matific(paginas: list[Pagina]) -> tuple[str, str, str]:
+    """("AAAA-MM-DD", "AAAA-MM-DD", observação) do "Intervalo de datas".
+
+    * Datas explícitas → o intervalo impresso (degenerado é descartado: a
+      confirmação responderia 400 sem saída — melhor cair no acumulado).
+    * "Esta semana"/"Última semana" → resolvidos pela data de impressão do
+      rodapé (semana de segunda a domingo).
+    * "Ano acadêmico ..."/"Olimpíadas ..." → sem período: os valores são
+      tratados como TOTAL acumulado, com observação orientando o usuário.
+    """
     if not paginas:
-        return "", ""
+        return "", "", ""
     for linha in _linhas_visuais(paginas[0].palavras)[:12]:
         casado = _RE_INTERVALO_MATIFIC.search(linha.texto)
-        if not casado:
+        if casado:
+            try:
+                inicio, fim = (
+                    bruto if re.fullmatch(r"\d{4}-\d{2}-\d{2}", bruto)
+                    else _data_iso(bruto)
+                    for bruto in casado.groups()
+                )
+                if inicio < fim:
+                    return inicio, fim, ""
+            except ValueError:
+                pass
+            # Datas presentes mas ilegíveis/degeneradas: NUNCA em silêncio —
+            # sem período, a confirmação SUBSTITUI o acumulado.
+            return "", "", ("O intervalo de datas do relatório não pôde ser "
+                            "lido — os valores serão tratados como TOTAL "
+                            "acumulado. Para rankings por semana/mês, exporte "
+                            "com “Personalizar intervalo”.")
+        preset = _RE_INTERVALO_PRESET.search(linha.texto.strip())
+        if not preset:
             continue
-        try:
-            inicio, fim = (
-                bruto if re.fullmatch(r"\d{4}-\d{2}-\d{2}", bruto) else _data_iso(bruto)
-                for bruto in casado.groups()
-            )
-            if inicio < fim:
-                return inicio, fim
-        except ValueError:
-            pass
-    return "", ""
+        rotulo = preset.group(1).strip(" .:-–—")
+        plano = compactar(rotulo)
+        if plano in ("estasemana", "ultimasemana"):
+            impressao = _data_impressao(paginas)
+            if impressao is None:
+                return "", "", (f"O intervalo de datas está como “{rotulo}”, mas "
+                                "não encontrei a data de impressão no rodapé — os "
+                                "valores serão tratados como total acumulado.")
+            # A semana do Matific começa no DOMINGO (help.br.matific.com:
+            # "Esta semana cobre do último domingo até hoje").
+            domingo = impressao - timedelta(days=(impressao.weekday() + 1) % 7)
+            if plano == "ultimasemana":
+                inicio_d, fim_d = domingo - timedelta(days=7), domingo
+            else:
+                inicio_d, fim_d = domingo, impressao + timedelta(days=1)
+            return (inicio_d.isoformat(), fim_d.isoformat(),
+                    f"“{rotulo}” resolvido pela data de impressão do relatório.")
+        if plano:
+            return "", "", (f"O intervalo de datas está como “{rotulo}” — os "
+                            "valores serão tratados como TOTAL acumulado. Para "
+                            "rankings por semana/mês, exporte o relatório com "
+                            "“Personalizar intervalo”.")
+    return "", "", ""
 
 
 def _data_br(iso: str) -> str:
@@ -860,14 +921,15 @@ class PerfilMatific:
         # pertencem: a confirmação soma ao acumulado e data o snapshot no fim
         # do intervalo — rankings e premiações do mês certo, mesmo importando
         # o relatório semanas depois.
-        inicio, fim = _intervalo_matific(paginas)
+        inicio, fim, observacao = _intervalo_matific(paginas)
         analise = Analise(plataforma=self.plataforma, formato=self.formato,
                           estrategia=self.estrategia,
                           periodo_inicio=inicio, periodo_fim=fim,
                           mensagem_deteccao="Este arquivo pertence ao Matific — "
                           "classificação de estrelas dos estudantes"
                           + (f", com dados do período de {_data_br(inicio)} a "
-                             f"{_data_br(fim)}" if inicio else "") + ".")
+                             f"{_data_br(fim)}" if inicio else "")
+                          + "." + (f" {observacao}" if observacao else ""))
         for numero, registro in enumerate(registros, start=1):
             item = LinhaImportacao(numero=numero, nome=registro.texto("nome"),
                                    dados={})

@@ -192,6 +192,18 @@ export interface RankingLeituraItem {
   tempo_leitura_min: number;
 }
 
+/** Ranking de Matemática por período (estrelas/atividades do Matific). */
+export interface RankingMatematicaItem {
+  posicao: number;
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  ano_escolar: string | null;
+  estrelas: number;
+  atividades: number;
+  pontuacao_media: number;
+}
+
 /** Um colocado no pódio de uma premiação. */
 export interface PodioItem {
   posicao: number;

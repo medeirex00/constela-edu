@@ -26,7 +26,9 @@ import PainelPublico from "./pages/publico/PainelPublico";
 import PerfilPublico from "./pages/publico/PerfilPublico";
 import RankingGeral from "./pages/RankingGeral";
 import RankingLeitura from "./pages/RankingLeitura";
+import RankingMatematica from "./pages/RankingMatematica";
 import Relatorios from "./pages/Relatorios";
+import Escolas from "./pages/Escolas";
 import Simulador from "./pages/Simulador";
 import TurmaDetalhe from "./pages/TurmaDetalhe";
 import Turmas from "./pages/Turmas";
@@ -61,6 +63,7 @@ export default function App() {
         <Route path="/ranking" element={<RankingGeral />} />
         <Route path="/evolucao" element={<RankingEvolucao />} />
         <Route path="/ranking-leitura" element={<RankingLeitura />} />
+        <Route path="/ranking-matematica" element={<RankingMatematica />} />
         <Route path="/comparador" element={<Comparador />} />
         <Route path="/premiacoes" element={<Premiacoes />} />
         <Route path="/escola" element={<VisaoEscola />} />
@@ -85,6 +88,7 @@ export default function App() {
         <Route path="/relatorios" element={<Relatorios />} />
         <Route path="/simulador" element={<Simulador />} />
         <Route path="/usuarios" element={<Usuarios />} />
+        <Route path="/escolas" element={<Escolas />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

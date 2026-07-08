@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -13,11 +13,16 @@ router = APIRouter(prefix="/escolas", tags=["Escolas"])
 
 @router.get("", response_model=list[EscolaOut])
 def listar(
+    incluir_inativas: bool = Query(default=False),
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
-    """Seletor ESCOLA da página inicial (PRD §10, §20)."""
-    consulta = select(Escola).where(Escola.status == "ativa").order_by(Escola.nome)
+    """Seletor ESCOLA da página inicial (PRD §10, §20). O admin GLOBAL pode
+    pedir também as inativas (tela Escolas) — sem isso, uma escola inativada
+    sumiria de todas as listas sem caminho de volta."""
+    consulta = select(Escola).order_by(Escola.nome)
+    if not (incluir_inativas and usuario.is_global):
+        consulta = consulta.where(Escola.status == "ativa")
     if not usuario.is_global:
         consulta = consulta.where(Escola.id == usuario.escola_id)
     return db.execute(consulta).scalars().all()
@@ -31,7 +36,16 @@ def criar(
 ):
     """Criar novas escolas é exclusivo de administradores globais (§136).
     Um admin local não pode inventar escolas fora do seu domínio."""
-    escola = Escola(**dados.model_dump())
+    nome = dados.nome.strip()
+    # Nome repetido criaria um segundo "inquilino" indistinguível no seletor
+    # de escolas — recusa aqui (um clique duplo/reenvio nunca duplica a rede).
+    repetida = db.execute(
+        select(Escola).where(func.lower(Escola.nome) == nome.lower())
+    ).scalar_one_or_none()
+    if repetida is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Já existe uma escola chamada “{repetida.nome}”.")
+    escola = Escola(**{**dados.model_dump(), "nome": nome})
     db.add(escola)
     db.flush()
     registrar(db, "escola.criada", escola_id=escola.id, usuario_id=usuario.id,

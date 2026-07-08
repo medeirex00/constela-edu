@@ -110,6 +110,135 @@ def test_parser_sem_intervalo_segue_normal():
     assert analise.periodo_fim == ""
 
 
+def _com_intervalo(rotulo: str, com_rodape: bool = True) -> list[Pagina]:
+    """Fixture com o campo "Intervalo de datas" preenchido por um PRESET."""
+    paginas = _paginas_leaderboard()
+    paginas[0].palavras = [
+        p for p in paginas[0].palavras
+        if p.texto not in ("Intervalo", "de", "datas", "2026-03-01-2026-04-01")
+    ]
+    extras = [Palavra("Intervalo", 40, 40, 40), ]
+    # monta "Intervalo de datas <rotulo>" palavra a palavra
+    extras = []
+    x = 40.0
+    for token in ["Intervalo", "de", "datas"] + rotulo.split():
+        extras.append(P(token, x, 40))
+        x += 55
+    if com_rodape:
+        extras += [P("08/07/2026,", 40, 700), P("01:13", 110, 700), P("Matific", 150, 700)]
+    paginas[0].palavras += extras
+    return paginas
+
+
+def test_preset_ultima_semana_resolvido_pela_data_de_impressao():
+    """"Última semana" vira um período real, ancorado na data de impressão do
+    rodapé. A semana do Matific começa no DOMINGO (help.br.matific.com):
+    impressão em 08/07/2026 (quarta) → última semana = 28/06 a 05/07."""
+    analise = PerfilMatific().analisar(_com_intervalo("Última semana"))
+    assert analise.periodo_inicio == "2026-06-28"
+    assert analise.periodo_fim == "2026-07-05"
+    assert "resolvido pela data de impressão" in analise.mensagem_deteccao
+
+
+def test_preset_esta_semana_vai_do_domingo_ao_dia_da_impressao():
+    analise = PerfilMatific().analisar(_com_intervalo("Esta semana"))
+    assert analise.periodo_inicio == "2026-07-05"     # domingo desta semana
+    assert analise.periodo_fim == "2026-07-09"        # impressão (08/07) + 1
+
+
+def test_intervalo_ilegivel_avisa_que_vira_acumulado():
+    """Datas presentes mas degeneradas (início == fim) nunca degradam em
+    SILÊNCIO — sem período a confirmação SUBSTITUI o acumulado."""
+    paginas = _paginas_leaderboard()
+    for p in paginas[0].palavras:
+        if p.texto == "2026-03-01-2026-04-01":
+            paginas[0].palavras[paginas[0].palavras.index(p)] = (
+                P("2026-03-01-2026-03-01", p.x0, p.topo))
+            break
+    analise = PerfilMatific().analisar(paginas)
+    assert analise.periodo_inicio == ""
+    assert "TOTAL acumulado" in analise.mensagem_deteccao
+
+
+def test_preset_ano_academico_vira_acumulado_com_aviso():
+    """"Ano acadêmico atual" (e "Olimpíadas...") não tem datas: os valores são
+    tratados como TOTAL acumulado e a prévia orienta a usar o intervalo
+    personalizado para rankings por período."""
+    analise = PerfilMatific().analisar(_com_intervalo("Ano acadêmico atual"))
+    assert analise.periodo_inicio == ""
+    assert "TOTAL acumulado" in analise.mensagem_deteccao
+    assert "Personalizar intervalo" in analise.mensagem_deteccao
+
+    olimpiadas = PerfilMatific().analisar(_com_intervalo("Olimpíadas Matific 2026"))
+    assert olimpiadas.periodo_inicio == ""
+    assert "TOTAL acumulado" in olimpiadas.mensagem_deteccao
+
+
+def test_criar_escola_recusa_nome_repetido(db):
+    """POST /escolas duplicado criaria um segundo "inquilino" indistinguível
+    no seletor — recusa com 409 (clique duplo no botão da rede nunca dobra)."""
+    from fastapi.testclient import TestClient
+
+    from app.core.security import hash_senha
+    from app.main import app
+    from app.models import Usuario
+
+    db.add(Usuario(escola_id=None, nome="Root", email="root@teste.local",
+                   senha_hash=hash_senha("s3nh4root"), cargo="admin",
+                   is_global=True))
+    db.commit()
+    cliente = TestClient(app)
+    resposta = cliente.post("/api/v1/auth/login",
+                            data={"username": "root@teste.local",
+                                  "password": "s3nh4root"})
+    cliente.headers["Authorization"] = f"Bearer {resposta.json()['access_token']}"
+
+    primeira = cliente.post("/api/v1/escolas", json={"nome": "DEBORA PILON"})
+    assert primeira.status_code == 201
+    repetida = cliente.post("/api/v1/escolas", json={"nome": "Debora Pilon"})
+    assert repetida.status_code == 409
+
+
+# --- Ranking de Matemática -----------------------------------------------------
+
+def test_ranking_matematica_por_periodo(cliente, db, escola_completa):
+    """Estrelas/atividades APENAS do período — o espelho do Ranking de
+    Leitura para os melhores da matemática."""
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+    joao = escola_completa["alunos"][1]
+
+    def importar(aluno, inicio, fim, ativ, estrelas):
+        corpo = {
+            "plataforma": "matific", "formato": "resumo", "tipo": "pdf",
+            "periodo_inicio": inicio, "periodo_fim": fim,
+            "linhas": [{"nome": aluno.nome, "aluno_id": aluno.id,
+                        "dados": {"atividades": ativ, "pontuacao_media": 4.0,
+                                  "estrelas": estrelas}}],
+        }
+        r = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/confirmar", json=corpo)
+        assert r.status_code == 200, r.text
+
+    importar(ana, "2026-03-01", "2026-04-01", 50, 200)
+    importar(ana, "2026-04-01", "2026-05-01", 30, 90)
+    importar(joao, "2026-04-01", "2026-05-01", 40, 150)
+
+    marco = cliente.get(f"/api/v1/escolas/{escola_id}/ranking/matematica"
+                        "?periodo=personalizado&inicio=2026-03-01&fim=2026-03-31").json()
+    assert [i["nome"] for i in marco] == [ana.nome]      # só a Ana jogou em março
+    assert marco[0]["estrelas"] == 200
+
+    abril = cliente.get(f"/api/v1/escolas/{escola_id}/ranking/matematica"
+                        "?periodo=personalizado&inicio=2026-04-01&fim=2026-04-30").json()
+    assert [i["nome"] for i in abril] == [joao.nome, ana.nome]  # João 150 > Ana 90
+    assert (abril[0]["estrelas"], abril[1]["estrelas"]) == (150, 90)
+
+    tudo = cliente.get(f"/api/v1/escolas/{escola_id}/ranking/matematica?periodo=tudo").json()
+    assert tudo[0]["nome"] == ana.nome                   # 290 acumuladas
+    assert tudo[0]["estrelas"] == 290
+    assert tudo[0]["posicao"] == 1
+
+
 # --- Importação por período ---------------------------------------------------
 
 def test_primeira_importacao_cria_base_zero_e_data_no_fim_do_periodo(

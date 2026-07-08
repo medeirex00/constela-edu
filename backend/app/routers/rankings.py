@@ -132,11 +132,93 @@ def ranking_leitura(
         item["tempo_leitura_min"] += tempo or 0
 
     itens = sorted(agg.values(),
-                   key=lambda x: (x["pontos"], x["livros"], x["tempo_leitura_min"]),
-                   reverse=True)
+                   key=lambda x: (-x["pontos"], -x["livros"],
+                                  -x["tempo_leitura_min"], x["nome"].casefold()))
     for posicao, item in enumerate(itens, start=1):
         item["posicao"] = posicao
         item["pontos"] = round(item["pontos"], 2)
+    return itens
+
+
+@router.get("/ranking/matematica", response_model=list[dict])
+def ranking_matematica(
+    escola_id: int = Depends(escola_autorizada),
+    periodo: str = Query(default="tudo"),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+    turma_id: int | None = Query(default=None),
+    ano_escolar: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Ranking de MATEMÁTICA por PERÍODO: estrelas e atividades do Matific
+    conquistadas apenas no intervalo escolhido — o espelho do Ranking de
+    Leitura para os melhores da matemática. Como o Matific não tem eventos
+    individuais datados, o ganho vem dos snapshots (os imports mensais com
+    "Intervalo de datas" criam exatamente um ponto por período)."""
+    from app.services.evolucao import _delta, _janela, _series_por_aluno
+
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo
+    try:
+        ini, fim_dt, _ = periodos.resolver(
+            periodo, date.today(), ano,
+            periodos._parse_data(inicio), periodos._parse_data(fim))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Data inválida (use AAAA-MM-DD).") from exc
+
+    consulta = (
+        select(Aluno.id, Aluno.nome, Turma.nome, Turma.ano_escolar)
+        .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
+        .join(Turma, Matricula.turma_id == Turma.id)
+        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
+    )
+    if turma_id:
+        consulta = consulta.where(Turma.id == turma_id)
+    if ano_escolar:
+        consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:  # professor: só as turmas dele
+        consulta = consulta.where(Turma.id.in_(permitidas))
+
+    series = _series_por_aluno(db, escola_id, SnapshotMatific)
+    itens: list[dict] = []
+    for aluno_id, nome, turma_nome, serie_escolar in db.execute(consulta).all():
+        serie = series.get(aluno_id)
+        if not serie:
+            continue
+        # base_no_periodo=True: o acumulado anterior ao período nunca é
+        # atribuído a ele — mesma regra justa das premiações.
+        atual, base = _janela(serie, ini, fim_dt, base_no_periodo=True)
+        if atual is None:
+            continue
+        estrelas = _delta(atual, base, "estrelas")
+        atividades = _delta(atual, base, "atividades")
+        if estrelas == 0 and atividades == 0:
+            continue  # sem atividade no período: fora do pódio do período
+        # Média DO PERÍODO, derivada dos snapshots (o import acumula a média
+        # ponderada por atividades): a acumulada de outra época não pode
+        # aparecer num ranking que promete só o intervalo escolhido.
+        media_periodo = 0.0
+        if atividades > 0:
+            base_ativ = base.atividades if base else 0
+            base_media = base.pontuacao_media if base else 0.0
+            bruta = ((atual.pontuacao_media or 0.0) * atual.atividades
+                     - base_media * base_ativ) / atividades
+            media_periodo = round(max(0.0, min(5.0, bruta)), 2)
+        itens.append({
+            "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
+            "ano_escolar": serie_escolar,
+            "estrelas": int(estrelas), "atividades": int(atividades),
+            "pontuacao_media": media_periodo,
+        })
+
+    # Desempate determinístico por nome — a convenção das premiações (_podio).
+    itens.sort(key=lambda x: (-x["estrelas"], -x["atividades"],
+                              -x["pontuacao_media"], x["nome"].casefold()))
+    for posicao, item in enumerate(itens, start=1):
+        item["posicao"] = posicao
     return itens
 
 
