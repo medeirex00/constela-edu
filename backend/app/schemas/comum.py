@@ -18,6 +18,7 @@ class UsuarioOut(ORMModel):
     id: int
     nome: str
     email: str
+    username: str | None = None
     cargo: str
     is_global: bool
     escola_id: int | None

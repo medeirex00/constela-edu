@@ -66,6 +66,8 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
     },
     "usuarios": {
         "token_version": "INTEGER DEFAULT 0 NOT NULL",
+        # Nome de usuário do login (estilo @): único, minúsculo, opcional.
+        "username": "VARCHAR(30)",
     },
     "niveis_dificuldade": {
         "codigo": "VARCHAR(40)",
@@ -99,6 +101,12 @@ def migrar_colunas_novas(motor=None) -> None:
             if tabela in tabelas:
                 conexao.execute(text(
                     f"CREATE INDEX IF NOT EXISTS {indice} ON {tabela} ({colunas_idx})"))
+        # Unicidade do nome de usuário do login (NULLs não conflitam em
+        # SQLite nem PostgreSQL). create_all cobre bancos novos.
+        if "usuarios" in tabelas:
+            conexao.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_usuarios_username "
+                "ON usuarios (username)"))
 
     _backfill_codigo_niveis(motor)
 

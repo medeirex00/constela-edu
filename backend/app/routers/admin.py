@@ -61,9 +61,28 @@ MSG_ULTIMO_ADMIN = (
 
 # --- Usuários (PRD §18) -------------------------------------------------------
 
+# Nome de usuário do login (estilo @ do Instagram): minúsculas, números,
+# ponto e sublinhado — único na rede toda.
+_RE_USERNAME = r"^[a-z0-9._]{3,30}$"
+
+
+def _normalizar_username(valor: str | None) -> str | None:
+    if valor is None:
+        return None
+    limpo = valor.strip().lstrip("@").lower()
+    if not limpo:
+        return None
+    import re
+    if not re.fullmatch(_RE_USERNAME, limpo):
+        raise ValueError("Nome de usuário inválido: use de 3 a 30 caracteres "
+                         "entre letras minúsculas, números, ponto e “_”.")
+    return limpo
+
+
 class UsuarioCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     email: EmailStr
+    username: str | None = None
     senha: str = Field(min_length=8, max_length=100)
     cargo: str = "professor"
 
@@ -75,9 +94,15 @@ class UsuarioCreate(BaseModel):
             raise ValueError(erro)
         return valor
 
+    @field_validator("username")
+    @classmethod
+    def _username(cls, valor: str | None) -> str | None:
+        return _normalizar_username(valor)
+
 
 class UsuarioUpdate(BaseModel):
     nome: str | None = None
+    username: str | None = None
     cargo: str | None = None
     status: str | None = Field(default=None, pattern="^(ativo|inativo)$")
     senha: str | None = Field(default=None, min_length=8, max_length=100)
@@ -90,6 +115,18 @@ class UsuarioUpdate(BaseModel):
             if erro:
                 raise ValueError(erro)
         return valor
+
+    @field_validator("username")
+    @classmethod
+    def _username(cls, valor: str | None) -> str | None:
+        return _normalizar_username(valor)
+
+
+def _username_em_uso(db: Session, username: str, exceto_id: int | None = None) -> bool:
+    consulta = select(Usuario).where(Usuario.username == username)
+    if exceto_id is not None:
+        consulta = consulta.where(Usuario.id != exceto_id)
+    return db.execute(consulta).scalar_one_or_none() is not None
 
 
 def _usuario_alvo(db: Session, escola_id: int, usuario_id: int,
@@ -127,12 +164,22 @@ def _e_ultimo_admin_ativo(db: Session, escola_id: int, alvo: Usuario) -> bool:
 def listar_usuarios(
     escola_id: int = Depends(escola_autorizada),
     incluir_excluidos: bool = Query(default=False),
-    usuario: Usuario = Depends(exigir_papeis("admin")),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
+    """Admin vê todos; coordenador vê a si e aos professores (para gerar as
+    senhas deles); professor vê apenas a própria conta. A GESTÃO (criar,
+    editar, excluir) continua exclusiva do admin."""
     consulta = select(Usuario).where(Usuario.escola_id == escola_id)
-    if not incluir_excluidos:
+    e_admin = usuario.is_global or usuario.cargo == "admin"
+    if not (e_admin and incluir_excluidos):
         consulta = consulta.where(Usuario.status != "excluido")
+    if not e_admin:
+        if usuario.cargo == "coordenador":
+            consulta = consulta.where(
+                (Usuario.id == usuario.id) | (Usuario.cargo == "professor"))
+        else:
+            consulta = consulta.where(Usuario.id == usuario.id)
     return db.execute(consulta.order_by(Usuario.nome)).scalars().all()
 
 
@@ -149,15 +196,25 @@ def criar_usuario(
     email = dados.email.lower().strip()
     if db.execute(select(Usuario).where(Usuario.email == email)).scalar_one_or_none():
         raise HTTPException(status.HTTP_409_CONFLICT, "Já existe um usuário com este e-mail.")
+    if dados.username and _username_em_uso(db, dados.username):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"O nome de usuário “@{dados.username}” já está em uso.")
 
     novo = Usuario(escola_id=escola_id, nome=dados.nome.strip(), email=email,
+                   username=dados.username,
                    senha_hash=hash_senha(dados.senha), cargo=dados.cargo)
     db.add(novo)
-    db.flush()
-    registrar(db, "usuario.criado", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="usuario", entidade_id=novo.id,
-              detalhes={"email": email, "cargo": dados.cargo})
-    db.commit()
+    try:
+        db.flush()
+        registrar(db, "usuario.criado", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="usuario", entidade_id=novo.id,
+                  detalhes={"email": email, "cargo": dados.cargo})
+        db.commit()
+    except IntegrityError:
+        # Corrida com outra gravação simultânea: o índice único decide.
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "E-mail ou nome de usuário já está em uso.")
     db.refresh(novo)
     return novo
 
@@ -190,9 +247,15 @@ def atualizar_usuario(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, MSG_ULTIMO_ADMIN)
 
     alteracoes: dict = {}
-    if dados.nome is not None:
+    if dados.nome is not None and dados.nome.strip() != alvo.nome:
         alvo.nome = dados.nome.strip()
         alteracoes["nome"] = alvo.nome
+    if "username" in enviados and dados.username != alvo.username:
+        if dados.username and _username_em_uso(db, dados.username, exceto_id=alvo.id):
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"O nome de usuário “@{dados.username}” já está em uso.")
+        alteracoes["username"] = {"de": alvo.username, "para": dados.username}
+        alvo.username = dados.username
     if dados.cargo is not None:
         alteracoes["cargo"] = {"de": alvo.cargo, "para": dados.cargo}
         alvo.cargo = dados.cargo
@@ -201,9 +264,11 @@ def atualizar_usuario(
         alvo.status = dados.status
     if dados.senha is not None:
         alvo.senha_hash = hash_senha(dados.senha)
-        # Invalida todas as sessões abertas do usuário (tokens antigos param
-        # de valer). Protege o caso de conta comprometida.
-        alvo.token_version = (alvo.token_version or 0) + 1
+        # Invalida as sessões abertas do usuário (tokens antigos param de
+        # valer) — protege conta comprometida. Na PRÓPRIA conta a sessão
+        # continua: trocar a própria senha não pode deslogar o autor na hora.
+        if alvo.id != usuario.id:
+            alvo.token_version = (alvo.token_version or 0) + 1
         alteracoes["senha"] = "redefinida"
 
     # Nome da ação no log espelha o que de fato aconteceu (PRD §17)
@@ -224,9 +289,99 @@ def atualizar_usuario(
     registrar(db, acao, escola_id=escola_id, usuario_id=usuario.id,
               entidade="usuario", entidade_id=alvo.id,
               detalhes={**alteracoes, "email": alvo.email})
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Corrida com outra gravação simultânea: o índice único decide.
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "E-mail ou nome de usuário já está em uso.")
     db.refresh(alvo)
     return alvo
+
+
+# Palavras curtas e sem acento para senhas LEGÍVEIS (faladas por telefone
+# sem confusão). TRÊS palavras distintas + 2 dígitos: 40×39×38×90 ≈ 5,3
+# milhões de variações (~22 bits) — com o limitador de tentativas por conta
+# no login, força bruta remota fica impraticável.
+_PALAVRAS_SENHA = (
+    "azul", "bosque", "brisa", "canoa", "cedro", "coral", "delta", "duna",
+    "farol", "figo", "flor", "fogo", "gaita", "girassol", "ilha", "jade",
+    "lago", "lima", "lousa", "lua", "mar", "menta", "monte", "neve",
+    "ninho", "nuvem", "onda", "ouro", "pinho", "prata", "rio", "rocha",
+    "sol", "trigo", "uva", "vale", "vento", "verde", "vila", "zebra",
+)
+
+
+def _gerar_senha_legivel() -> str:
+    import secrets
+
+    palavras: list[str] = []
+    restantes = list(_PALAVRAS_SENHA)
+    for _ in range(3):
+        escolhida = secrets.choice(restantes)
+        palavras.append(escolhida)
+        restantes.remove(escolhida)
+    return f"{'-'.join(palavras)}-{secrets.randbelow(90) + 10}"
+
+
+def _pode_ver_senha(ator: Usuario, alvo: Usuario) -> bool:
+    """Matriz de acesso: admin vê a de todos (da escola); coordenador a
+    própria e as dos professores; professor apenas a própria."""
+    if ator.id == alvo.id:
+        return True
+    if ator.is_global or ator.cargo == "admin":
+        return True
+    return ator.cargo == "coordenador" and alvo.cargo == "professor"
+
+
+class SenhaVisivelIn(BaseModel):
+    # Exigida quando o alvo é a PRÓPRIA conta: um token roubado não pode
+    # transformar a sessão em credencial permanente sem provar a senha atual.
+    senha_atual: str | None = None
+
+
+@router.post("/usuarios/{usuario_id}/senha", response_model=dict)
+def gerar_senha_visivel(
+    usuario_id: int,
+    dados: SenhaVisivelIn | None = None,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Gera uma senha nova LEGÍVEL e a devolve UMA única vez.
+
+    As senhas atuais não são armazenadas em texto — só o embaralhado
+    irreversível (proteção padrão: nem o sistema conhece a senha). "Ver a
+    senha" significa, portanto, gerar uma nova e mostrá-la na hora."""
+    from app.core.security import verificar_senha
+
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    if not _pode_ver_senha(usuario, alvo):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Sem permissão para ver a senha deste usuário.")
+    if alvo.status == "excluido":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Usuário excluído — restaure a conta antes.")
+    if alvo.id == usuario.id:
+        senha_atual = (dados.senha_atual if dados else None) or ""
+        if not verificar_senha(senha_atual, alvo.senha_hash):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Informe a sua senha atual para gerar uma nova.")
+
+    senha = _gerar_senha_legivel()
+    alvo.senha_hash = hash_senha(senha)
+    if alvo.id != usuario.id:
+        # Sessões antigas do alvo caem (proteção). Na PRÓPRIA conta a sessão
+        # atual continua — senão o clique em "ver senha" derrubaria o usuário.
+        alvo.token_version = (alvo.token_version or 0) + 1
+    registrar(db, "usuario.senha_gerada", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="usuario", entidade_id=alvo.id,
+              detalhes={"email": alvo.email})  # a senha NUNCA vai para o log
+    db.commit()
+    return {"senha": senha,
+            "mensagem": "Senha nova gerada. Anote agora — ela não poderá ser "
+                        "vista depois."}
 
 
 @router.delete("/usuarios/{usuario_id}", response_model=dict)

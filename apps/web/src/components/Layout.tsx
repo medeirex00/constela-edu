@@ -118,7 +118,9 @@ const GRUPOS: GrupoNav[] = [
   {
     chave: "config", rotulo: "Configurações", icone: Settings, itens: [
       { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal, gestao: true },
-      { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog, gestao: true },
+      // Sem `gestao`: o professor também entra — vê SÓ a própria conta, para
+      // gerar/ver a própria senha (matriz aplicada no backend).
+      { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
       { rotulo: "Escolas", caminho: "/escolas", icone: Building2, gestao: true, global: true },
       { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings, gestao: true },
     ],

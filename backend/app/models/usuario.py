@@ -14,6 +14,10 @@ class Usuario(Base):
     escola_id: Mapped[int | None] = mapped_column(ForeignKey("escolas.id"), index=True)
     nome: Mapped[str] = mapped_column(String(200))
     email: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    # Nome de usuário opcional (estilo @ do Instagram): único na rede toda,
+    # sempre minúsculo — o login aceita e-mail OU nome de usuário.
+    username: Mapped[str | None] = mapped_column(String(30), unique=True,
+                                                 index=True, default=None)
     senha_hash: Mapped[str] = mapped_column(String(200))
     # admin | coordenador | professor (sem "visitante": público vê só o painel)
     cargo: Mapped[str] = mapped_column(String(30), default="professor")

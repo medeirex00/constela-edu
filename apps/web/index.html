@@ -16,8 +16,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Constela Edu" />
     <title>Constela Edu — Gestão e Premiação Escolar</title>
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- ?v=2 força o navegador a buscar o ícone de novo: durante o período em
+         que a Vercel servia HTML no lugar do PNG, os navegadores guardaram a
+         resposta quebrada no cache de favicon (que ignora o Ctrl+F5). -->
+    <link rel="icon" type="image/png" href="/favicon.png?v=2" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
     <link rel="manifest" href="/manifest.webmanifest" />
   </head>
   <body>

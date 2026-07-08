@@ -54,10 +54,35 @@ function dataLegivel(iso: string | null | undefined): string {
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
+/** Copia com fallback: em http na rede local (celular) o clipboard moderno
+ *  não existe — sem o fallback o botão falharia em silêncio e o usuário
+ *  fecharia o modal achando que copiou uma senha de uso único. */
+function copiarTexto(texto: string, aoCopiar: () => void) {
+  const legado = () => {
+    const area = document.createElement("textarea");
+    area.value = texto;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      if (document.execCommand("copy")) aoCopiar();
+    } finally {
+      document.body.removeChild(area);
+    }
+  };
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(texto).then(aoCopiar).catch(legado);
+  } else {
+    legado();
+  }
+}
+
 type Acao =
   | "visualizar"
   | "editar"
   | "senha"
+  | "versenha"
   | "permissoes"
   | "situacao"
   | "excluir"
@@ -69,11 +94,17 @@ function MenuAcoes({
   usuario,
   souEu,
   souGlobal,
+  souAdmin,
+  podeVerSenha,
   aoEscolher,
 }: {
   usuario: Usuario;
   souEu: boolean;
   souGlobal: boolean;
+  /** Ações de GESTÃO (editar, permissões, excluir) — só admin. */
+  souAdmin: boolean;
+  /** Matriz: admin→todos; coordenador→ele e professores; professor→só ele. */
+  podeVerSenha: boolean;
   aoEscolher: (acao: Acao) => void;
 }) {
   const excluido = usuario.status === "excluido";
@@ -88,7 +119,10 @@ function MenuAcoes({
         return (
           <>
             <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar" onClick={() => escolher("visualizar")} />
-            {!excluido && (
+            {!excluido && podeVerSenha && (
+              <ItemMenu icone={<Eye size={15} />} rotulo="Ver senha (gerar nova)" onClick={() => escolher("versenha")} />
+            )}
+            {!excluido && souAdmin && (
               <>
                 <ItemMenu icone={<Pencil size={15} />} rotulo="Editar" onClick={() => escolher("editar")} />
                 <ItemMenu icone={<KeyRound size={15} />} rotulo="Alterar senha" onClick={() => escolher("senha")} />
@@ -110,7 +144,7 @@ function MenuAcoes({
                 )}
               </>
             )}
-            {excluido && !souEu && (
+            {excluido && !souEu && souAdmin && (
               <ItemMenu icone={<RotateCcw size={15} />} rotulo="Restaurar" onClick={() => escolher("situacao")} />
             )}
             {souGlobal && !souEu && (
@@ -147,12 +181,22 @@ export default function Usuarios() {
   // campos dos formulários
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [senha, setSenha] = useState("");
   const [senha2, setSenha2] = useState("");
   const [cargo, setCargo] = useState("professor");
   const [confirmacao, setConfirmacao] = useState("");
+  const [senhaGerada, setSenhaGerada] = useState<string | null>(null);
+  const [copiada, setCopiada] = useState(false);
 
   const souGlobal = usuarioLogado?.is_global ?? false;
+  const souAdmin = souGlobal || usuarioLogado?.cargo === "admin";
+  const souCoordenador = usuarioLogado?.cargo === "coordenador";
+  // Matriz do "ver senha": admin→todos; coordenador→ele e professores;
+  // professor→apenas ele. O backend aplica a mesma regra.
+  const podeVerSenha = (alvo: Usuario) =>
+    souAdmin || alvo.id === usuarioLogado?.id ||
+    (souCoordenador && alvo.cargo === "professor");
 
   const carregar = useCallback(() => {
     if (!escolaId) return;
@@ -180,7 +224,10 @@ export default function Usuarios() {
     setConfirmacao("");
     setNome(alvo.nome);
     setEmail(alvo.email);
+    setUsername(alvo.username ?? "");
     setCargo(alvo.cargo);
+    setSenhaGerada(null);
+    setCopiada(false);
     setAcao({ tipo, alvo });
   }
 
@@ -188,6 +235,7 @@ export default function Usuarios() {
     setErroAcao("");
     setNome("");
     setEmail("");
+    setUsername("");
     setSenha("");
     setSenha2("");
     setCargo("professor");
@@ -220,9 +268,11 @@ export default function Usuarios() {
         titulo="Usuários"
         descricao="Contas de acesso desta escola. Toda alteração fica no log de auditoria."
         acoes={
-          <Botao onClick={abrirNovo}>
-            <UserPlus size={15} /> Novo usuário
-          </Botao>
+          souAdmin ? (
+            <Botao onClick={abrirNovo}>
+              <UserPlus size={15} /> Novo usuário
+            </Botao>
+          ) : undefined
         }
       />
 
@@ -232,15 +282,17 @@ export default function Usuarios() {
         </div>
       )}
 
-      <label className="mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
-          checked={mostrarExcluidos}
-          onChange={(e) => setMostrarExcluidos(e.target.checked)}
-        />
-        Mostrar usuários excluídos
-      </label>
+      {souAdmin && (
+        <label className="mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+            checked={mostrarExcluidos}
+            onChange={(e) => setMostrarExcluidos(e.target.checked)}
+          />
+          Mostrar usuários excluídos
+        </label>
+      )}
 
       <Card>
         {usuarios === null ? (
@@ -271,6 +323,9 @@ export default function Usuarios() {
                       {usuario.is_global && (
                         <span className="ml-2 text-xs text-indigo-500">global</span>
                       )}
+                      {usuario.username && (
+                        <span className="block text-xs font-normal text-zinc-400">@{usuario.username}</span>
+                      )}
                     </td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">
                       {usuario.email}
@@ -293,6 +348,8 @@ export default function Usuarios() {
                         usuario={usuario}
                         souEu={usuario.id === usuarioLogado?.id}
                         souGlobal={souGlobal}
+                        souAdmin={souAdmin}
+                        podeVerSenha={podeVerSenha(usuario)}
                         aoEscolher={(tipo) => abrir(tipo, usuario)}
                       />
                     </td>
@@ -313,6 +370,14 @@ export default function Usuarios() {
           <Campo rotulo="E-mail">
             <input type="email" className={estiloInput} value={email} onChange={(e) => setEmail(e.target.value)} />
           </Campo>
+          <Campo rotulo="Nome de usuário (opcional — para entrar sem digitar o e-mail)">
+            <input
+              className={estiloInput}
+              placeholder="ex.: maria.souza"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </Campo>
           <Campo rotulo="Cargo">
             <select className={estiloInput} value={cargo} onChange={(e) => setCargo(e.target.value)}>
               {CARGOS.map((c) => <option key={c.valor} value={c.valor}>{c.rotulo}</option>)}
@@ -329,7 +394,10 @@ export default function Usuarios() {
               onClick={() =>
                 executar(base, {
                   method: "POST",
-                  body: JSON.stringify({ nome: nome.trim(), email: email.trim(), senha, cargo }),
+                  body: JSON.stringify({
+                    nome: nome.trim(), email: email.trim(),
+                    username: username.trim() || null, senha, cargo,
+                  }),
                 }, "Usuário criado.")
               }
             >
@@ -361,7 +429,7 @@ export default function Usuarios() {
         )}
       </Modal>
 
-      {/* --- Editar (nome) --- */}
+      {/* --- Editar (nome e nome de usuário) --- */}
       <Modal titulo={`Editar ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "editar"} aoFechar={() => setAcao(null)}>
         <div className="space-y-3">
           <Campo rotulo="Nome">
@@ -369,6 +437,14 @@ export default function Usuarios() {
           </Campo>
           <Campo rotulo="E-mail (identidade da conta — não muda)">
             <input className={`${estiloInput} opacity-70`} value={email} disabled />
+          </Campo>
+          <Campo rotulo="Nome de usuário (para entrar sem digitar o e-mail)">
+            <input
+              className={estiloInput}
+              placeholder="ex.: maria.souza"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
           </Campo>
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">
@@ -378,7 +454,10 @@ export default function Usuarios() {
               onClick={() =>
                 executar(`${base}/${alvo?.id}`, {
                   method: "PATCH",
-                  body: JSON.stringify({ nome: nome.trim() }),
+                  body: JSON.stringify({
+                    nome: nome.trim(),
+                    username: username.trim() || null,
+                  }),
                 }, "Usuário atualizado.")
               }
             >
@@ -386,6 +465,81 @@ export default function Usuarios() {
             </Botao>
           </div>
         </div>
+      </Modal>
+
+      {/* --- Ver senha (gera uma nova e mostra UMA vez) --- */}
+      <Modal titulo={`Senha de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "versenha"} aoFechar={() => setAcao(null)}>
+        {senhaGerada === null ? (
+          <>
+            <p className="text-sm text-zinc-600 dark:text-zinc-300">
+              Por proteção, as senhas ficam guardadas de forma <strong>embaralhada e
+              irreversível</strong> — nem o sistema conhece a senha atual de{" "}
+              <strong>{alvo?.nome}</strong>. Para “ver a senha”, o sistema gera uma{" "}
+              <strong>senha nova</strong> e mostra aqui, uma única vez.
+            </p>
+            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+              A senha antiga deixa de funcionar na hora
+              {alvo?.id === usuarioLogado?.id ? " (sua sessão atual continua aberta)" : ""}.
+            </p>
+            {alvo?.id === usuarioLogado?.id && (
+              <div className="mt-3">
+                <Campo rotulo="Confirme a sua senha atual">
+                  <input
+                    type="password"
+                    className={estiloInput}
+                    value={confirmacao}
+                    onChange={(e) => setConfirmacao(e.target.value)}
+                    autoFocus
+                  />
+                </Campo>
+              </div>
+            )}
+            {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
+            <div className="mt-4 flex justify-end gap-2">
+              <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+              <Botao
+                disabled={ocupado || (alvo?.id === usuarioLogado?.id && !confirmacao)}
+                onClick={async () => {
+                  setOcupado(true);
+                  setErroAcao("");
+                  try {
+                    const resposta = await api<{ senha: string }>(
+                      `${base}/${alvo?.id}/senha`, {
+                        method: "POST",
+                        body: JSON.stringify({ senha_atual: confirmacao || null }),
+                      });
+                    setSenhaGerada(resposta.senha);
+                  } catch (excecao) {
+                    setErroAcao(excecao instanceof ApiError ? excecao.message
+                      : "Não foi possível gerar a senha.");
+                  } finally {
+                    setOcupado(false);
+                  }
+                }}
+              >
+                <Eye size={15} /> {ocupado ? "Gerando..." : "Gerar e mostrar senha"}
+              </Botao>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-zinc-600 dark:text-zinc-300">
+              Nova senha de <strong>{alvo?.nome}</strong> — anote agora, ela não
+              poderá ser vista de novo:
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-500/20 dark:bg-emerald-500/10">
+              <code className="select-all text-lg font-semibold tracking-wide text-emerald-800 dark:text-emerald-200">
+                {senhaGerada}
+              </code>
+              <Botao variante="neutro" onClick={() => copiarTexto(senhaGerada, () => setCopiada(true))}>
+                {copiada ? "Copiada!" : "Copiar"}
+              </Botao>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Botao onClick={() => setAcao(null)}>Fechar</Botao>
+            </div>
+          </>
+        )}
       </Modal>
 
       {/* --- Alterar senha --- */}

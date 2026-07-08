@@ -2,6 +2,8 @@ export interface Usuario {
   id: number;
   nome: string;
   email: string;
+  /** Nome de usuário do login (estilo @), único na rede — opcional. */
+  username?: string | null;
   cargo: string;
   is_global: boolean;
   escola_id: number | null;

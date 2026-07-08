@@ -52,7 +52,8 @@ def test_login_falho_e_auditado(cliente, db, escola_completa):
         .order_by(LogAuditoria.id.desc())
     ).scalars().first()
     assert log is not None
-    assert log.detalhes["motivo"] == "email_inexistente"
+    # "conta_inexistente": o login aceita e-mail OU nome de usuário.
+    assert log.detalhes["motivo"] == "conta_inexistente"
 
 
 # --- Invalidação de sessão ao trocar senha -----------------------------------

@@ -22,13 +22,27 @@ def login(
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    email = form.username.lower().strip()
+    # Aceita e-mail OU nome de usuário (com ou sem o "@" na frente).
+    entrada = form.username.lower().strip().lstrip("@")
     ip = ip_do_cliente(request)
-    chave = f"{email}|{ip}"
+
+    usuario = db.execute(
+        select(Usuario).where(Usuario.email == entrada)
+    ).scalar_one_or_none()
+    if usuario is None:
+        usuario = db.execute(
+            select(Usuario).where(Usuario.username == entrada)
+        ).scalar_one_or_none()
+
+    # O limitador conta pela CONTA (e-mail canônico): tentar pelo e-mail e
+    # pelo @username soma no MESMO contador — dois identificadores não podem
+    # dobrar o orçamento de força bruta contra a mesma vítima.
+    identidade = usuario.email if usuario is not None else entrada
+    chave = f"{identidade}|{ip}"
 
     if limitador_login.bloqueado(chave):
         espera = limitador_login.segundos_restantes(chave)
-        registrar(db, "login.bloqueado", detalhes={"email": email, "ip": ip})
+        registrar(db, "login.bloqueado", detalhes={"email": identidade, "ip": ip})
         db.commit()
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -36,29 +50,27 @@ def login(
             "tente novamente.",
         )
 
-    usuario = db.execute(
-        select(Usuario).where(Usuario.email == email)
-    ).scalar_one_or_none()
-
     if usuario is None:
-        # Equaliza o tempo de resposta para não revelar se o e-mail existe.
+        # Equaliza o tempo de resposta para não revelar se a conta existe.
         verificar_senha_dummy()
         limitador_login.registrar_falha(chave)
         registrar(db, "login.falhou",
-                  detalhes={"email": email, "ip": ip, "motivo": "email_inexistente"})
+                  detalhes={"email": entrada, "ip": ip, "motivo": "conta_inexistente"})
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "E-mail ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "E-mail/usuário ou senha incorretos.")
 
     if not verificar_senha(form.password, usuario.senha_hash):
         limitador_login.registrar_falha(chave)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": email, "ip": ip, "motivo": "senha_incorreta"})
+                  detalhes={"email": identidade, "ip": ip, "motivo": "senha_incorreta"})
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "E-mail ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "E-mail/usuário ou senha incorretos.")
 
     if usuario.status != "ativo":
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": email, "ip": ip, "motivo": "conta_desativada"})
+                  detalhes={"email": identidade, "ip": ip, "motivo": "conta_desativada"})
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuário desativado.")
 
