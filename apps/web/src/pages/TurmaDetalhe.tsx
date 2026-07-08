@@ -16,7 +16,6 @@ import {
   Calculator,
   Clock,
   Eye,
-  MoreVertical,
   Pencil,
   RotateCcw,
   Search,
@@ -26,9 +25,9 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import MenuSuspenso, { ItemMenu } from "../components/MenuSuspenso";
 import {
   Badge,
   Botao,
@@ -79,55 +78,29 @@ function MenuAcoes({ aluno, aoEscolher }: {
   aluno: AlunoGestao;
   aoEscolher: (acao: string) => void;
 }) {
-  const [aberto, setAberto] = useState(false);
   const inativo = aluno.status !== "ativo";
 
-  function Item({ acao, icone, rotulo, destrutiva = false }: {
-    acao: string; icone: ReactNode; rotulo: string; destrutiva?: boolean;
-  }) {
-    return (
-      <button
-        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
-          destrutiva
-            ? "text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
-            : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-        }`}
-        onClick={() => { setAberto(false); aoEscolher(acao); }}
-      >
-        {icone}
-        {rotulo}
-      </button>
-    );
-  }
-
   return (
-    <div className="relative inline-block text-left">
-      <button
-        aria-label={`Ações de ${aluno.nome}`}
-        className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-        onClick={() => setAberto((a) => !a)}
-      >
-        <MoreVertical size={16} />
-      </button>
-      {aberto && (
-        <>
-          <button aria-label="Fechar menu" className="fixed inset-0 z-10 cursor-default" onClick={() => setAberto(false)} />
-          <div className="absolute right-0 z-20 mt-1 w-52 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-            <Item acao="visualizar" icone={<Eye size={15} />} rotulo="Visualizar" />
-            <Item acao="editar" icone={<Pencil size={15} />} rotulo="Editar" />
-            <Item acao="transferir" icone={<ArrowRightLeft size={15} />} rotulo="Transferir de turma" />
+    <MenuSuspenso ariaLabel={`Ações de ${aluno.nome}`} largura="w-52">
+      {(fechar) => {
+        const escolher = (acao: string) => () => { fechar(); aoEscolher(acao); };
+        return (
+          <>
+            <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar" onClick={escolher("visualizar")} />
+            <ItemMenu icone={<Pencil size={15} />} rotulo="Editar" onClick={escolher("editar")} />
+            <ItemMenu icone={<ArrowRightLeft size={15} />} rotulo="Transferir de turma" onClick={escolher("transferir")} />
             {inativo ? (
-              <Item acao="reativar" icone={<RotateCcw size={15} />} rotulo="Reativar" />
+              <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar" onClick={escolher("reativar")} />
             ) : (
-              <Item acao="arquivar" icone={<Archive size={15} />} rotulo="Arquivar" />
+              <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar" onClick={escolher("arquivar")} />
             )}
             <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
-            <Item acao="excluir" icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva />
-            <Item acao="permanente" icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva />
-          </div>
-        </>
-      )}
-    </div>
+            <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva onClick={escolher("excluir")} />
+            <ItemMenu icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva onClick={escolher("permanente")} />
+          </>
+        );
+      }}
+    </MenuSuspenso>
   );
 }
 

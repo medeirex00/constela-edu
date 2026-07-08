@@ -8,17 +8,17 @@
 import {
   Archive,
   Eye,
-  MoreVertical,
   Pencil,
   RotateCcw,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api, ApiError } from "../lib/api";
 import type { Aluno, Turma } from "../lib/types";
+import MenuSuspenso, { ItemMenu } from "./MenuSuspenso";
 import { Botao, Campo, Mensagem, Modal, estiloInput } from "./ui";
 
 type Janela = "editar" | "excluir" | "permanente" | null;
@@ -33,7 +33,6 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
   mostrarVisualizar?: boolean;
 }) {
   const navegar = useNavigate();
-  const [aberto, setAberto] = useState(false);
   const [janela, setJanela] = useState<Janela>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
@@ -75,60 +74,35 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
     }
   }
 
-  function Item({ icone, rotulo, destrutiva = false, onClick }: {
-    icone: ReactNode; rotulo: string; destrutiva?: boolean; onClick: () => void;
-  }) {
-    return (
-      <button
-        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
-          destrutiva
-            ? "text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
-            : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-        }`}
-        onClick={() => { setAberto(false); onClick(); }}
-      >
-        {icone}
-        {rotulo}
-      </button>
-    );
-  }
-
   return (
     <>
-      <div className="relative inline-block text-left">
-        <button
-          aria-label={`Ações de ${aluno.nome}`}
-          className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-          onClick={() => setAberto((a) => !a)}
-        >
-          <MoreVertical size={16} />
-        </button>
-        {aberto && (
-          <>
-            <button aria-label="Fechar menu" className="fixed inset-0 z-10 cursor-default" onClick={() => setAberto(false)} />
-            <div className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+      <MenuSuspenso ariaLabel={`Ações de ${aluno.nome}`}>
+        {(fechar) => {
+          const escolher = (agir: () => void) => () => { fechar(); agir(); };
+          return (
+            <>
               {mostrarVisualizar && (
-                <Item icone={<Eye size={15} />} rotulo="Visualizar"
-                      onClick={() => navegar(`/alunos/${aluno.id}`)} />
+                <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar"
+                          onClick={escolher(() => navegar(`/alunos/${aluno.id}`))} />
               )}
-              <Item icone={<Pencil size={15} />} rotulo="Editar dados"
-                    onClick={() => setJanela("editar")} />
+              <ItemMenu icone={<Pencil size={15} />} rotulo="Editar dados"
+                        onClick={escolher(() => setJanela("editar"))} />
               {inativo ? (
-                <Item icone={<RotateCcw size={15} />} rotulo="Reativar"
-                      onClick={() => acaoStatus("reativar")} />
+                <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar"
+                          onClick={escolher(() => acaoStatus("reativar"))} />
               ) : (
-                <Item icone={<Archive size={15} />} rotulo="Arquivar"
-                      onClick={() => acaoStatus("arquivar")} />
+                <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar"
+                          onClick={escolher(() => acaoStatus("arquivar"))} />
               )}
               <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
-              <Item icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva
-                    onClick={() => setJanela("excluir")} />
-              <Item icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva
-                    onClick={() => setJanela("permanente")} />
-            </div>
-          </>
-        )}
-      </div>
+              <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva
+                        onClick={escolher(() => setJanela("excluir"))} />
+              <ItemMenu icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva
+                        onClick={escolher(() => setJanela("permanente"))} />
+            </>
+          );
+        }}
+      </MenuSuspenso>
 
       {janela === "editar" && (
         <ModalEditarAluno

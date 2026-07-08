@@ -449,7 +449,7 @@ function IndicadorImportacao() {
   return (
     <NavLink
       to="/importacoes"
-      className="fixed bottom-4 right-4 z-50 flex items-center gap-2.5 rounded-full border border-indigo-200 bg-white px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-lg transition-colors hover:bg-indigo-50 dark:border-indigo-500/30 dark:bg-zinc-900 dark:text-indigo-300 dark:hover:bg-zinc-800"
+      className="fixed bottom-4 right-4 z-20 flex items-center gap-2.5 rounded-full border border-indigo-200 bg-white px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-lg transition-colors hover:bg-indigo-50 dark:border-indigo-500/30 dark:bg-zinc-900 dark:text-indigo-300 dark:hover:bg-zinc-800"
     >
       {emAndamento ? (
         <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-600" />

@@ -11,7 +11,6 @@
 import {
   Eye,
   KeyRound,
-  MoreVertical,
   Pencil,
   RotateCcw,
   ShieldCheck,
@@ -22,8 +21,8 @@ import {
   UserX,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 
+import MenuSuspenso, { ItemMenu } from "../components/MenuSuspenso";
 import {
   Badge,
   Botao,
@@ -77,93 +76,55 @@ function MenuAcoes({
   souGlobal: boolean;
   aoEscolher: (acao: Acao) => void;
 }) {
-  const [aberto, setAberto] = useState(false);
   const excluido = usuario.status === "excluido";
 
-  function Item({
-    acao,
-    icone,
-    rotulo,
-    destrutiva = false,
-  }: {
-    acao: Acao;
-    icone: ReactNode;
-    rotulo: string;
-    destrutiva?: boolean;
-  }) {
-    return (
-      <button
-        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
-          destrutiva
-            ? "text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
-            : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-        }`}
-        onClick={() => {
-          setAberto(false);
-          aoEscolher(acao);
-        }}
-      >
-        {icone}
-        {rotulo}
-      </button>
-    );
-  }
-
   return (
-    <div className="relative inline-block">
-      <button
-        aria-label={`Ações do usuário ${usuario.nome}`}
-        className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-        onClick={() => setAberto(!aberto)}
-      >
-        <MoreVertical size={16} />
-      </button>
-      {aberto && (
-        <>
-          <button
-            aria-label="Fechar menu"
-            className="fixed inset-0 z-10 cursor-default"
-            onClick={() => setAberto(false)}
-          />
-          <div className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-            <Item acao="visualizar" icone={<Eye size={15} />} rotulo="Visualizar" />
+    <MenuSuspenso ariaLabel={`Ações do usuário ${usuario.nome}`}>
+      {(fechar) => {
+        const escolher = (acao: Acao) => {
+          fechar();
+          aoEscolher(acao);
+        };
+        return (
+          <>
+            <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar" onClick={() => escolher("visualizar")} />
             {!excluido && (
               <>
-                <Item acao="editar" icone={<Pencil size={15} />} rotulo="Editar" />
-                <Item acao="senha" icone={<KeyRound size={15} />} rotulo="Alterar senha" />
+                <ItemMenu icone={<Pencil size={15} />} rotulo="Editar" onClick={() => escolher("editar")} />
+                <ItemMenu icone={<KeyRound size={15} />} rotulo="Alterar senha" onClick={() => escolher("senha")} />
                 {!souEu && (
                   <>
-                    <Item
-                      acao="permissoes"
+                    <ItemMenu
                       icone={<ShieldCheck size={15} />}
                       rotulo="Alterar permissões"
+                      onClick={() => escolher("permissoes")}
                     />
-                    <Item
-                      acao="situacao"
+                    <ItemMenu
                       icone={usuario.status === "ativo" ? <UserX size={15} /> : <UserCheck size={15} />}
                       rotulo={usuario.status === "ativo" ? "Desativar" : "Reativar"}
+                      onClick={() => escolher("situacao")}
                     />
                     <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
-                    <Item acao="excluir" icone={<Trash2 size={15} />} rotulo="Excluir Usuário" destrutiva />
+                    <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir Usuário" destrutiva onClick={() => escolher("excluir")} />
                   </>
                 )}
               </>
             )}
             {excluido && !souEu && (
-              <Item acao="situacao" icone={<RotateCcw size={15} />} rotulo="Restaurar" />
+              <ItemMenu icone={<RotateCcw size={15} />} rotulo="Restaurar" onClick={() => escolher("situacao")} />
             )}
             {souGlobal && !souEu && (
-              <Item
-                acao="permanente"
+              <ItemMenu
                 icone={<TriangleAlert size={15} />}
                 rotulo="Excluir Permanentemente"
                 destrutiva
+                onClick={() => escolher("permanente")}
               />
             )}
-          </div>
-        </>
-      )}
-    </div>
+          </>
+        );
+      }}
+    </MenuSuspenso>
   );
 }
 
