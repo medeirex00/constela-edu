@@ -11,6 +11,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { trocarPreferencias } from "@constela/quest-core";
 
 import { configurarAudio, narrar, tocar } from "../audio/audio";
+import { Boneco } from "../boneco/Boneco";
+import { propsBoneco } from "../boneco/avatar";
 import { Carreira } from "../carreira/Carreira";
 import { Cosmo } from "../cosmo/Cosmo";
 import { Skate } from "../cosmo/Skate";
@@ -27,6 +29,13 @@ type Aba = "jogar" | "vestiario" | "carreira";
 const ESTRELA_SKATE = 5;
 
 const SAUDACOES = ["Bom dia", "Boa tarde", "Boa noite"];
+const FALAS_TOQUE = [
+  "Que bom te ver por aqui!",
+  "Pronto para explorar o universo?",
+  "Escolha um planeta pra gente viajar!",
+  "Já tentou tocar nas estrelas do céu?",
+  "Você está ficando cada vez mais estiloso!",
+];
 function saudacaoPorHora(): string {
   const h = new Date().getHours();
   if (h < 6) return "Jogando de madrugada, astronauta?";
@@ -48,7 +57,6 @@ export function Lobby() {
   const botaoAvatarRef = useRef<HTMLButtonElement>(null);
   const gavetaRef = useRef<HTMLElement>(null);
 
-  const cor = (perfil?.avatar.cor as string) ?? "#FF4D9D";
   const skateEquipado = perfil?.avatar.veiculo === "skate";
 
   const falar = useCallback((texto: string, dur = 4500) => {
@@ -205,19 +213,20 @@ export function Lobby() {
         <>
           <main className="palco">
             <div className="palco-interno">
-              {fala && <div className="cosmo-fala">{fala}</div>}
               <div className="podio" />
               {skateEquipado && (
                 <div className="skate-lobby"><Skate entrando={entradaSkate} /></div>
               )}
               <div className={`cosmo-monta${skateEquipado && !entradaSkate ? " no-skate" : ""}${pulando ? " pulando" : ""}`}>
-                <Cosmo
-                  altura="min(56vh, 540px)"
-                  cor={cor}
-                  rosto={perfil.avatar.rosto}
-                  chapeu={perfil.avatar.chapeu}
-                  fisica
-                />
+                <Boneco altura="min(58vh, 560px)" {...propsBoneco(perfil.avatar)} fisica />
+              </div>
+              {/* Cosmo virou o mascote-companheiro: fica ao lado e fala */}
+              <div className="companheiro">
+                {fala && <div className="cosmo-fala">{fala}</div>}
+                <Cosmo altura="150px" cor="#7C6FF0"
+                       aoClicar={() => falar(
+                         FALAS_TOQUE[Math.floor(Math.random() * FALAS_TOQUE.length)])}
+                       fisica />
               </div>
             </div>
           </main>
@@ -275,8 +284,7 @@ export function Lobby() {
                 onClick={() => { setGaveta(false); botaoAvatarRef.current?.focus(); }}
                 aria-label="Fechar">✕</button>
         <div className="quem-sou">
-          <Cosmo altura="72px" vivo={false} cor={cor}
-                 rosto={perfil.avatar.rosto} chapeu={perfil.avatar.chapeu} />
+          <Boneco altura="80px" vivo={false} {...propsBoneco(perfil.avatar)} />
           <div>
             <b>{perfil.nome}</b>
             <span>✨ {perfil.apelido} · Nível {perfil.nivel}</span>
@@ -301,8 +309,7 @@ export function Lobby() {
       {despedida && (
         <div className="despedida" role="dialog" aria-modal="true">
           <div className="painel despedida-painel">
-            <Cosmo altura="160px" vivo={false} cor={cor}
-                   rosto={perfil.avatar.rosto} chapeu={perfil.avatar.chapeu} />
+            <Boneco altura="170px" vivo={false} {...propsBoneco(perfil.avatar)} />
             <h2>Você quer mesmo ir embora?</h2>
             <button className="botao3d verde" autoFocus
                     onClick={() => { tocar("clique"); setDespedida(false); }}>

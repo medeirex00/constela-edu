@@ -110,20 +110,34 @@
   border-radius: 50%;
   background: radial-gradient(ellipse at center, rgba(255, 255, 255, .5) 0%, transparent 70%);
 }
-.palco .cosmo-fala {
+/* Companheiro Cosmo (mascote que fala) ao lado do avatar */
+.companheiro {
   position: absolute;
-  bottom: calc(100% + 4px);
-  left: 58%;
+  right: -158px;
+  bottom: 8px;
   z-index: 6;
-  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+.companheiro .cosmo-fala {
+  max-width: 240px;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 17px;
-  padding: 14px 18px;
-  border-radius: 20px 20px 20px 4px;
+  font-size: 16px;
+  padding: 13px 16px;
+  border-radius: 20px 20px 4px 20px;
   box-shadow: 0 8px 0 rgba(0, 0, 0, .18);
+}
+@media (max-width: 1120px) {
+  .companheiro { right: auto; left: 50%; transform: translateX(140px); }
+}
+@media (max-width: 760px) {
+  .companheiro { display: none; }
 }
 
 /* Astronauta montado no skate: pula na entrada, fica levantado com o skate */

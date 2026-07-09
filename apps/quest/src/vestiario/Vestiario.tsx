@@ -1,8 +1,8 @@
 /**
- * Vestiário mágico — ambiente espacial (nebulosas, planetas, constelações,
- * partículas, meteoros), o astronauta no centro sobre uma plataforma
- * flutuante, e um armário de categorias grandes. Itens especiais têm
- * animação de invocação (o Skate Voador tem a sequência cinematográfica).
+ * Vestiário mágico — ambiente espacial, o boneco humanoide numa plataforma
+ * flutuante, e o armário com as categorias do mockup: Pele, Cabelo,
+ * Camiseta, Calça, Tênis, Acessórios, Pets e Itens Especiais. Itens
+ * especiais têm invocação (o Skate Voador tem a sequência cinematográfica).
  */
 import { useEffect, useState } from "react";
 
@@ -10,53 +10,69 @@ import { ApiError } from "@constela/core";
 import { escolherNome, trocarAvatar } from "@constela/quest-core";
 import type { Avatar } from "@constela/quest-core";
 
-import { Cosmo } from "../cosmo/Cosmo";
-import { InvocacaoSkate } from "../cosmo/InvocacaoSkate";
+import { Boneco } from "../boneco/Boneco";
+import { propsBoneco } from "../boneco/avatar";
+import { CABELO_COR } from "../boneco/cabelos";
 import { Skate } from "../cosmo/Skate";
+import { InvocacaoSkate } from "../cosmo/InvocacaoSkate";
 import { narrar, tocar } from "../audio/audio";
 import { useSessao } from "../estado/sessao";
 import { AmbienteEspacial } from "../lobby/AmbienteEspacial";
 import "./vestiario.css";
 
-type Slot = "cor" | "rosto" | "chapeu" | "costas" | "mao" | "pet" | "veiculo";
+type Item = { slot: string; valor: string };
 
-const ABAS: { slot: Slot; nome: string; icone: string }[] = [
-  { slot: "cor", nome: "Cores", icone: "🎨" },
-  { slot: "rosto", nome: "Rostos", icone: "😀" },
-  { slot: "chapeu", nome: "Chapéus", icone: "🎩" },
-  { slot: "costas", nome: "Mochila & Asas", icone: "🎒" },
-  { slot: "mao", nome: "Acessórios", icone: "✨" },
-  { slot: "pet", nome: "Pets", icone: "🐾" },
-  { slot: "veiculo", nome: "Itens Especiais", icone: "🛹" },
+interface Aba {
+  id: string;
+  nome: string;
+  icone: string;
+  cores?: string[];       // categoria de cor (renderiza amostra)
+  slot?: string;          // categoria de preset de um slot
+  valores?: string[];
+  itens?: Item[];         // categoria multi-slot (itens especiais)
+}
+
+const PELES = ["#F6C8A0", "#E8B07E", "#C98A56", "#9C6B3F", "#6E4A2C"];
+const CAMISETAS = ["#FF5470", "#FFC93C", "#2EE6A8", "#4EA8FF", "#A78BFA", "#FF8E3C", "#231D4E"];
+const CALCAS = ["#3A2E66", "#4EA8FF", "#2EC77A", "#E8384F", "#5A5480"];
+const TENIS = ["#FF5470", "#4EA8FF", "#2EE6A8", "#FFC93C", "#F2EFFF"];
+const CABELOS = ["curto_castanho", "espetado_azul", "espetado_preto", "longo_loiro",
+  "cacheado_preto", "chanel_rosa", "moicano_vermelho", "careca"];
+const CHAPEUS = ["nenhum", "oculos", "bone", "coroa", "fone"];
+const PETS = ["nenhum", "gatinho", "dino", "estrelinha"];
+
+const ABAS: Aba[] = [
+  { id: "pele", nome: "Pele", icone: "🖐️", slot: "pele", cores: PELES },
+  { id: "cabelo", nome: "Cabelo", icone: "💇", slot: "cabelo", valores: CABELOS },
+  { id: "camiseta", nome: "Camiseta", icone: "👕", slot: "camiseta", cores: CAMISETAS },
+  { id: "calca", nome: "Calça", icone: "👖", slot: "calca", cores: CALCAS },
+  { id: "tenis", nome: "Tênis", icone: "👟", slot: "tenis", cores: TENIS },
+  { id: "acessorio", nome: "Acessórios", icone: "🕶️", slot: "chapeu", valores: CHAPEUS },
+  { id: "pet", nome: "Pets", icone: "🐾", slot: "pet", valores: PETS },
+  { id: "especiais", nome: "Itens Especiais", icone: "✨", itens: [
+    { slot: "costas", valor: "mochila" }, { slot: "costas", valor: "asas" },
+    { slot: "mao", valor: "varinha" }, { slot: "veiculo", valor: "skate" },
+  ] },
 ];
 
-const OPCOES: Record<Slot, string[]> = {
-  cor: ["#FF4D9D", "#FFC93C", "#2EE6A8", "#4EA8FF", "#A78BFA", "#FF8E3C"],
-  rosto: ["sorriso", "sorrisao", "fofo", "surpreso", "oculos", "heroi"],
-  chapeu: ["nenhum", "coroa", "cartola", "laco", "fone", "cowboy"],
-  costas: ["nenhum", "mochila", "asas"],
-  mao: ["nenhum", "varinha"],
-  pet: ["nenhum", "gatinho", "dino", "estrelinha"],
-  veiculo: ["nenhum", "skate"],
-};
-
 const ROTULOS: Record<string, string> = {
-  sorriso: "Sorriso", sorrisao: "Risada", fofo: "Fofo", surpreso: "Uau!",
-  oculos: "Óculos", heroi: "Herói", nenhum: "Nenhum", coroa: "Coroa",
-  cartola: "Cartola", laco: "Laço", fone: "Fone", cowboy: "Cowboy",
-  mochila: "Mochila", asas: "Asas de Luz", varinha: "Varinha Estelar",
+  curto_castanho: "Curtinho", espetado_azul: "Espetado", espetado_preto: "Punk",
+  longo_loiro: "Longo", cacheado_preto: "Cacheado", chanel_rosa: "Chanel",
+  moicano_vermelho: "Moicano", careca: "Careca",
+  nenhum: "Nenhum", oculos: "Óculos", bone: "Boné", coroa: "Coroa", fone: "Fone",
   gatinho: "Gatinho", dino: "Dino", estrelinha: "Estrelinha",
-  skate: "Skate Voador",
+  mochila: "Mochila", asas: "Asas de Luz", varinha: "Varinha", skate: "Skate Voador",
 };
 
-const PADRAO: Record<Slot, string> = {
-  cor: "#FF4D9D", rosto: "sorriso", chapeu: "nenhum", costas: "nenhum",
-  mao: "nenhum", pet: "nenhum", veiculo: "nenhum",
+const PADRAO: Record<string, string> = {
+  pele: "#F6C8A0", cabelo: "curto_castanho", camiseta: "#4EA8FF",
+  calca: "#3A2E66", tenis: "#FF5470", chapeu: "nenhum",
+  costas: "nenhum", mao: "nenhum", pet: "nenhum", veiculo: "nenhum",
 };
 
 export function Vestiario() {
   const { perfil, atualizarPerfil } = useSessao();
-  const [aba, setAba] = useState<Slot>("cor");
+  const [abaId, setAbaId] = useState("cabelo");
   const [apelido, setApelido] = useState(perfil?.nome ?? "");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
@@ -68,24 +84,29 @@ export function Vestiario() {
 
   if (!perfil) return null;
   const avatar = perfil.avatar as Avatar;
-  const equipado = (slot: Slot) => (avatar[slot] as string) ?? PADRAO[slot];
+  const aba = ABAS.find((a) => a.id === abaId)!;
+  const eq = (slot: string) => (avatar[slot] as string) ?? PADRAO[slot];
 
-  async function equipar(slot: Slot, valor: string) {
-    if (equipado(slot) === valor) return;
+  async function definir(slot: string, valor: string) {
     tocar("sucesso");
-    try {
-      atualizarPerfil(await trocarAvatar({ [slot]: valor }));
-    } catch {
-      return;
-    }
-    // Itens especiais ganham invocação
+    try { atualizarPerfil(await trocarAvatar({ [slot]: valor })); }
+    catch { return; }
     if (slot === "veiculo" && valor === "skate") {
-      setInvocandoSkate(true);
-      narrar("Skate voador!");
+      setInvocandoSkate(true); narrar("Skate voador!");
     } else if (valor !== "nenhum" && (slot === "costas" || slot === "mao")) {
       setMaterializando(true);
       window.setTimeout(() => setMaterializando(false), 800);
     }
+  }
+
+  function equipar(slot: string, valor: string) {
+    if (eq(slot) === valor) return;
+    void definir(slot, valor);
+  }
+
+  // Itens especiais: clicar alterna equipar/desequipar
+  function alternarEspecial(slot: string, valor: string) {
+    void definir(slot, eq(slot) === valor ? "nenhum" : valor);
   }
 
   async function salvarApelido() {
@@ -94,8 +115,7 @@ export function Vestiario() {
     setSalvando(true); setErro("");
     try {
       atualizarPerfil(await escolherNome(novo));
-      tocar("sucesso");
-      narrar(`Agora você é ${novo}!`);
+      tocar("sucesso"); narrar(`Agora você é ${novo}!`);
     } catch (e) {
       setErro(e instanceof ApiError || e instanceof Error ? e.message : "Não deu.");
       tocar("erro");
@@ -103,30 +123,30 @@ export function Vestiario() {
   }
 
   const mostrarSkate = avatar.veiculo === "skate" && !invocandoSkate;
+  const base = propsBoneco(avatar);
+
+  function miniBoneco(over: Partial<Avatar>) {
+    return <span className="item-mini"><Boneco altura="76px" vivo={false} {...base} {...over} /></span>;
+  }
 
   return (
     <section className="view vestiario">
       <AmbienteEspacial />
 
       <div className="vestiario-grade">
-        {/* Categorias (esquerda) */}
         <nav className="categorias" aria-label="Categorias do vestiário">
           {ABAS.map((a) => (
-            <button key={a.slot}
-                    className={`categoria${aba === a.slot ? " ativa" : ""}`}
-                    onClick={() => { tocar("clique"); setAba(a.slot); }}>
+            <button key={a.id} className={`categoria${abaId === a.id ? " ativa" : ""}`}
+                    onClick={() => { tocar("clique"); setAbaId(a.id); }}>
               <span className="cat-icone" aria-hidden>{a.icone}</span>
               <span className="cat-nome">{a.nome}</span>
             </button>
           ))}
         </nav>
 
-        {/* Personagem na plataforma (centro) */}
         <div className="vitrine">
-          <div className={`boneco${materializando ? " materializando" : ""}${pulando ? " pulando" : ""}${mostrarSkate ? " montado" : ""}`}>
-            <Cosmo altura="min(50vh, 440px)" cor={avatar.cor} rosto={avatar.rosto}
-                   chapeu={avatar.chapeu} costas={avatar.costas} mao={avatar.mao}
-                   pet={avatar.pet} fisica />
+          <div className={`boneco-caixa${materializando ? " materializando" : ""}${pulando ? " pulando" : ""}${mostrarSkate ? " montado" : ""}`}>
+            <Boneco altura="min(50vh, 440px)" {...base} fisica />
             {mostrarSkate && <div className="vitrine-skate"><Skate /></div>}
           </div>
           <div className="plataforma">
@@ -135,7 +155,6 @@ export function Vestiario() {
           </div>
         </div>
 
-        {/* Itens (direita) */}
         <div className="itens-painel">
           <label className="apelido-editor">
             <span>Meu apelido</span>
@@ -152,31 +171,41 @@ export function Vestiario() {
             {erro && <em className="apelido-erro">{erro}</em>}
           </label>
 
-          <h2 className="itens-titulo">{ABAS.find((a) => a.slot === aba)?.nome}</h2>
+          <h2 className="itens-titulo">{aba.nome}</h2>
           <div className="itens-grade">
-            {OPCOES[aba].map((valor) => {
-              const sel = equipado(aba) === valor;
+            {aba.cores && aba.cores.map((cor) => (
+              <button key={cor} className={`item${eq(aba.slot!) === cor ? " equipado" : ""}`}
+                      onClick={() => equipar(aba.slot!, cor)} aria-label="Cor">
+                <span className="item-cor" style={{ background: cor }} />
+                {eq(aba.slot!) === cor && <span className="selo">✓</span>}
+              </button>
+            ))}
+
+            {aba.valores && aba.valores.map((valor) => {
+              const sel = eq(aba.slot!) === valor;
               return (
                 <button key={valor} className={`item${sel ? " equipado" : ""}`}
-                        onClick={() => equipar(aba, valor)}
-                        aria-label={aba === "cor" ? "Cor" : ROTULOS[valor] ?? valor}>
-                  {aba === "cor" ? (
-                    <span className="item-cor" style={{ background: valor }} />
-                  ) : aba === "veiculo" && valor === "skate" ? (
-                    <span className="item-mini"><Skate /></span>
-                  ) : valor === "nenhum" ? (
-                    <span className="item-emoji">🚫</span>
-                  ) : (
-                    <span className="item-mini">
-                      <Cosmo altura="72px" vivo={false} cor={avatar.cor}
-                             rosto={aba === "rosto" ? valor : avatar.rosto}
-                             chapeu={aba === "chapeu" ? valor : avatar.chapeu}
-                             costas={aba === "costas" ? valor : avatar.costas}
-                             mao={aba === "mao" ? valor : avatar.mao}
-                             pet={aba === "pet" ? valor : avatar.pet} />
-                    </span>
-                  )}
-                  {aba !== "cor" && <b>{ROTULOS[valor] ?? valor}</b>}
+                        onClick={() => equipar(aba.slot!, valor)}
+                        aria-label={ROTULOS[valor] ?? valor}>
+                  {valor === "nenhum" ? <span className="item-emoji">🚫</span>
+                    : aba.slot === "cabelo"
+                      ? <span className="item-swatch" style={{ background: CABELO_COR[valor] }}>{ROTULOS[valor]}</span>
+                      : miniBoneco({ [aba.slot!]: valor })}
+                  {aba.slot !== "cabelo" && <b>{ROTULOS[valor] ?? valor}</b>}
+                  {sel && <span className="selo">✓</span>}
+                </button>
+              );
+            })}
+
+            {aba.itens && aba.itens.map((it) => {
+              const sel = eq(it.slot) === it.valor;
+              return (
+                <button key={it.slot + it.valor} className={`item${sel ? " equipado" : ""}`}
+                        onClick={() => alternarEspecial(it.slot, it.valor)}
+                        aria-label={ROTULOS[it.valor] ?? it.valor}>
+                  {it.slot === "veiculo" ? <span className="item-mini"><Skate /></span>
+                    : miniBoneco({ [it.slot]: it.valor })}
+                  <b>{ROTULOS[it.valor] ?? it.valor}</b>
                   {sel && <span className="selo">✓</span>}
                 </button>
               );

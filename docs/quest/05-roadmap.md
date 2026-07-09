@@ -22,6 +22,16 @@ assets; leitura de QR pela câmera DENTRO do app fica para quando houver
 tablets de teste (o QR do cartão já funciona via câmera nativa do aparelho,
 que abre a URL).
 
+**Revisão 4 — avatar humanoide (09/07/2026):** decisão do dono — o
+personagem do jogador virou um HUMANOIDE (bonequinho estilo Roblox/mockup)
+com camadas trocáveis: pele, cabelo (8 estilos+cores), camiseta, calça,
+tênis, acessórios (óculos/boné/coroa/fone), asas/mochila, varinha, pet e
+skate. O Cosmo passou a ser o MASCOTE-COMPANHEIRO que fica ao lado e fala.
+Vestiário com as categorias do mockup (Pele, Cabelo, Camiseta, Calça,
+Tênis, Acessórios, Pets, Itens Especiais). Cerimônia da 1ª vez: nome +
+montar o personagem (cabelo + camiseta). Componente `Boneco` com física de
+cutucada e rosto vivo. Substitui o Cosmo como avatar em todas as telas.
+
 **Revisão 3 — universo vivo (09/07/2026):** cada matéria virou um PLANETA
 imersivo (Numéria, Palavras, Biozênia, Terra Nova, Chronos, Oxford,
 Colorium, Movi, Raízes) com corpo de planeta, atmosfera/iluminação própria,

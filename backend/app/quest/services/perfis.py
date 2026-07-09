@@ -22,8 +22,19 @@ COR_PADRAO = CORES_TRAJE[0]
 # Vestiário (estilo Roblox): slots cosméticos. O desenho de cada item vive no
 # frontend (SVG do Cosmo); aqui fica a whitelist — o cliente nunca inventa
 # item. Na fase Q0 tudo é gratuito; o desbloqueio por XP entra na Q2.
-ROSTOS = ("sorriso", "sorrisao", "fofo", "surpreso", "oculos", "heroi")
-CHAPEUS = ("nenhum", "coroa", "cartola", "laco", "fone", "cowboy")
+# Avatar HUMANOIDE (estilo Roblox/mockup): o jogador veste um bonequinho.
+# Tons de pele
+PELES = ("#F6C8A0", "#E8B07E", "#C98A56", "#9C6B3F", "#6E4A2C")
+# Cabelo: estilo + cor embutidos no preset (para casar com as categorias do
+# mockup, sem uma aba separada de cor)
+CABELOS = ("espetado_azul", "espetado_preto", "curto_castanho", "longo_loiro",
+           "cacheado_preto", "chanel_rosa", "moicano_vermelho", "careca")
+# Roupas — a forma é fixa por peça, muda a cor
+CAMISETAS = ("#FF5470", "#FFC93C", "#2EE6A8", "#4EA8FF", "#A78BFA", "#FF8E3C", "#231D4E")
+CALCAS = ("#3A2E66", "#4EA8FF", "#2EC77A", "#E8384F", "#5A5480")
+TENIS = ("#FF5470", "#4EA8FF", "#2EE6A8", "#FFC93C", "#F2EFFF")
+# Acessórios de cabeça/rosto
+CHAPEUS = ("nenhum", "oculos", "bone", "coroa", "fone")
 # Itens especiais (costas): mochila espacial e asas de luz
 COSTAS = ("nenhum", "mochila", "asas")
 # Item de mão (acessório)
@@ -33,17 +44,24 @@ PETS = ("nenhum", "gatinho", "dino", "estrelinha")
 VEICULOS = ("nenhum", "skate")
 
 APARENCIA = {
-    "cor": CORES_TRAJE,
-    "rosto": ROSTOS,
+    "pele": PELES,
+    "cabelo": CABELOS,
+    "camiseta": CAMISETAS,
+    "calca": CALCAS,
+    "tenis": TENIS,
     "chapeu": CHAPEUS,
     "costas": COSTAS,
     "mao": MAO,
     "pet": PETS,
     "veiculo": VEICULOS,
+    # mantido por compatibilidade com perfis antigos (não usado no humanoide)
+    "cor": CORES_TRAJE,
 }
-AVATAR_PADRAO = {"cor": COR_PADRAO, "rosto": "sorriso", "chapeu": "nenhum",
-                 "costas": "nenhum", "mao": "nenhum", "pet": "nenhum",
-                 "veiculo": "nenhum"}
+AVATAR_PADRAO = {
+    "pele": PELES[0], "cabelo": "curto_castanho", "camiseta": "#4EA8FF",
+    "calca": "#3A2E66", "tenis": "#FF5470", "chapeu": "nenhum",
+    "costas": "nenhum", "mao": "nenhum", "pet": "nenhum", "veiculo": "nenhum",
+}
 
 # Apelido = "SUBSTANTIVO ADJETIVO" de listas seguras e positivas.
 _SUBSTANTIVOS = (

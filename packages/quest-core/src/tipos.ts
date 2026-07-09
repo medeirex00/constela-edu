@@ -11,20 +11,28 @@ export interface Quem {
 }
 
 export interface Avatar {
-  cor?: string;
-  rosto?: string;
+  pele?: string;
+  cabelo?: string;
+  camiseta?: string;
+  calca?: string;
+  tenis?: string;
   chapeu?: string;
   costas?: string;
   mao?: string;
   pet?: string;
   veiculo?: string;
+  /** legado (Cosmo astronauta) — não usado no avatar humanoide. */
+  cor?: string;
   [slot: string]: unknown;
 }
 
 /** Catálogo do vestiário: opções válidas por slot (whitelist do backend). */
 export interface Aparencia {
-  cor: string[];
-  rosto: string[];
+  pele: string[];
+  cabelo: string[];
+  camiseta: string[];
+  calca: string[];
+  tenis: string[];
   chapeu: string[];
   costas: string[];
   mao: string[];

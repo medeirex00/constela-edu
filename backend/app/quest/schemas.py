@@ -66,13 +66,17 @@ class SessaoOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class AvatarIn(BaseModel):
-    cor: str | None = None
-    rosto: str | None = None
+    pele: str | None = None
+    cabelo: str | None = None
+    camiseta: str | None = None
+    calca: str | None = None
+    tenis: str | None = None
     chapeu: str | None = None
     costas: str | None = None
     mao: str | None = None
     pet: str | None = None
     veiculo: str | None = None
+    cor: str | None = None
 
 
 class NomeIn(BaseModel):

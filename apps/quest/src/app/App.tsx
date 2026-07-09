@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { Ceu } from "../lobby/Ceu";
+import { Boneco } from "../boneco/Boneco";
+import { propsBoneco } from "../boneco/avatar";
 import { Cerimonia } from "../cerimonia/Cerimonia";
 import { Cosmo } from "../cosmo/Cosmo";
 import { Entrada } from "../entrada/Entrada";
@@ -24,10 +26,7 @@ function ConfirmarIdentidade() {
   return (
     <div className="confirmar">
       <div className="painel confirmar-painel">
-        <Cosmo altura="150px" vivo={false}
-               cor={(perfil.avatar.cor as string) ?? "#FF4D9D"}
-               rosto={perfil.avatar.rosto as string}
-               chapeu={perfil.avatar.chapeu as string} />
+        <Boneco altura="160px" vivo={false} {...propsBoneco(perfil.avatar)} />
         <span className="nome">É você, {perfil.nome}?</span>
         <button className="botao3d verde" autoFocus
                 onClick={() => { tocar("clique"); confirmarIdentidade(); }}>
