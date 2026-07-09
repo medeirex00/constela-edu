@@ -12,6 +12,9 @@ def _ativar_painel(cliente, escola_id: int) -> str:
     assert resposta.status_code == 200, resposta.text
     url = resposta.json()["url"]
     assert url is not None
+    # Regressão: sem PUBLIC_BASE_URL no ambiente, o link deve apontar para o
+    # site publicado — nunca para "localhost", que não abre em outro aparelho.
+    assert "localhost" not in url
     return url.rsplit("/", 1)[-1]  # token
 
 

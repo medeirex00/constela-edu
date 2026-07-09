@@ -148,6 +148,40 @@ def _hex_para_rgb(cor: str) -> tuple[int, int, int]:
     return int(cor[0:2], 16), int(cor[2:4], 16), int(cor[4:6], 16)
 
 
+def _latin1(texto) -> str:
+    """As fontes nativas do PDF só suportam latin-1: os acentos do português
+    passam intactos; qualquer outro caractere vira '?' em vez de derrubar o
+    relatório inteiro com erro 500."""
+    return str(texto).encode("latin-1", "replace").decode("latin-1")
+
+
+def _couber(pdf, texto, largura: float) -> str:
+    """Corta o texto para caber na LARGURA REAL da célula (não em nº fixo de
+    letras), terminando com '...' (o '…' não existe em latin-1)."""
+    texto = _latin1(texto)
+    if pdf.get_string_width(texto) <= largura - 2:
+        return texto
+    while texto and pdf.get_string_width(texto + "...") > largura - 2:
+        texto = texto[:-1]
+    return texto + "..."
+
+
+def _larguras_colunas(pdf, cabecalho: list[str], linhas: list[list],
+                      total: float) -> list[float]:
+    """Largura proporcional ao conteúdo de cada coluna (com piso), para a
+    coluna de nomes — hoje com nomes COMPLETOS da lista de matrículas — não
+    ficar espremida como as colunas numéricas."""
+    pesos = []
+    for i, nome in enumerate(cabecalho):
+        maior = pdf.get_string_width(str(nome)) + 4
+        for linha in linhas[:300]:
+            if i < len(linha):
+                maior = max(maior, pdf.get_string_width(_latin1(linha[i])) + 4)
+        pesos.append(min(maior, total * 0.45))  # nenhuma coluna domina a página
+    fator = total / sum(pesos)
+    return [p * fator for p in pesos]
+
+
 def gerar_pdf(titulo: str, escola_nome: str, cor: str,
               cabecalho: list[str], linhas: list[list]) -> bytes:
     from fpdf import FPDF
@@ -162,30 +196,27 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("helvetica", "B", 14)
     pdf.set_xy(10, 6)
-    pdf.cell(0, 6, escola_nome)
+    pdf.cell(0, 6, _latin1(escola_nome))
     pdf.set_font("helvetica", "", 10)
     pdf.set_xy(10, 13)
     agora = datetime.now(timezone.utc).strftime("%d/%m/%Y")
-    pdf.cell(0, 5, f"{titulo} - gerado em {agora}")
+    pdf.cell(0, 5, _latin1(f"{titulo} - gerado em {agora}"))
 
     pdf.set_y(28)
     pdf.set_text_color(30, 30, 30)
-    largura_total = 190
-    largura = largura_total / len(cabecalho)
+    pdf.set_font("helvetica", "", 9)
+    larguras = _larguras_colunas(pdf, cabecalho, linhas, total=190)
 
     pdf.set_font("helvetica", "B", 9)
     pdf.set_fill_color(238, 238, 238)
-    for nome in cabecalho:
-        pdf.cell(largura, 7, str(nome), border=1, fill=True)
+    for nome, largura in zip(cabecalho, larguras):
+        pdf.cell(largura, 7, _couber(pdf, nome, largura), border=1, fill=True)
     pdf.ln()
 
     pdf.set_font("helvetica", "", 9)
     for linha in linhas:
-        for valor in linha:
-            texto = str(valor)
-            if len(texto) > 28:
-                texto = texto[:27] + "…"
-            pdf.cell(largura, 6.5, texto, border=1)
+        for valor, largura in zip(linha, larguras):
+            pdf.cell(largura, 6.5, _couber(pdf, valor, largura), border=1)
         pdf.ln()
 
     return bytes(pdf.output())
@@ -215,17 +246,23 @@ def gerar_certificado(escola_nome: str, cor: str, aluno_nome: str,
     pdf.set_text_color(60, 60, 60)
     pdf.set_font("helvetica", "", 13)
     pdf.set_y(62)
-    pdf.cell(0, 8, f"A escola {escola_nome} certifica que", align="C")
+    pdf.cell(0, 8, _latin1(f"A escola {escola_nome} certifica que"), align="C")
 
     pdf.set_text_color(20, 20, 20)
     pdf.set_font("helvetica", "B", 26)
     pdf.set_y(78)
-    pdf.cell(0, 14, aluno_nome, align="C")
+    # Nomes completos (lista de matrículas) podem ser longos: reduz a fonte
+    # até caber na moldura, em vez de vazar pela borda.
+    nome_cert = _latin1(aluno_nome)
+    while pdf.get_string_width(nome_cert) > 250 and pdf.font_size_pt > 14:
+        pdf.set_font_size(pdf.font_size_pt - 2)
+    pdf.cell(0, 14, nome_cert, align="C")
 
     pdf.set_text_color(60, 60, 60)
     pdf.set_font("helvetica", "", 13)
     pdf.set_y(98)
-    detalhe = f"da turma {turma}, alcançou a nota geral {nota_geral:.1f}".replace(".", ",")
+    detalhe = _latin1(
+        f"da turma {turma}, alcançou a nota geral {nota_geral:.1f}".replace(".", ","))
     if posicao:
         detalhe += f" e a {posicao}ª posição no Ranking Geral"
     pdf.cell(0, 8, detalhe, align="C")

@@ -123,6 +123,26 @@ def test_certificado_pdf(cliente, db, escola_completa):
     assert resposta.content[:5] == b"%PDF-"
 
 
+def test_pdf_com_nome_longo_nao_quebra(cliente, db, escola_completa):
+    """Regressão: nomes COMPLETOS (lista de matrículas) passam de 28 letras;
+    o corte antigo acrescentava "…", que não existe em latin-1 e derrubava o
+    PDF (e o certificado) com erro 500."""
+    _dados_basicos(db, escola_completa)
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    ana.nome = "AGATHA VITORYA LOURENÇO PEREIRA DOS SANTOS DE OLIVEIRA"
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    pdf = cliente.get(f"/api/v1/escolas/{escola.id}/relatorios/ranking",
+                      params={"formato": "pdf"})
+    assert pdf.status_code == 200, pdf.text
+    assert pdf.content[:5] == b"%PDF-"
+    cert = cliente.get(f"/api/v1/escolas/{escola.id}/certificados/{ana.id}")
+    assert cert.status_code == 200, cert.text
+    assert cert.content[:5] == b"%PDF-"
+
+
 # --- Usuários -------------------------------------------------------------------
 
 def test_crud_usuarios_com_protecoes(cliente, db, escola_completa):

@@ -86,8 +86,12 @@ class Settings(BaseSettings):
         "https://tauri.localhost",
     ]
 
-    # Endereço público do frontend — usado nos QR codes do Painel Público.
-    PUBLIC_BASE_URL: str = "http://localhost:5173"
+    # Endereço público do frontend — usado no link e no QR code do Painel
+    # Público. O padrão é o domínio de PRODUÇÃO: um deploy sem esta variável
+    # (ex.: Railway) geraria links "localhost" que não abrem em nenhum outro
+    # aparelho. Para desenvolvimento local, defina no .env:
+    # PUBLIC_BASE_URL=http://localhost:5173
+    PUBLIC_BASE_URL: str = "https://www.constelaedu.com"
 
     # Assistente de IA (PRD §154): provedor trocável, isolado em app/services/ia.
     # "local" responde com regras determinísticas usando apenas o banco —
