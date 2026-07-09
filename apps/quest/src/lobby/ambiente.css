@@ -1,0 +1,81 @@
+/* Ambiente espacial mágico (vestiário e afins): nebulosas, planetas à
+   deriva, partículas e meteoros. Fica atrás do conteúdo. */
+
+.espaco {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(60vw 60vw at 78% 12%, rgba(124, 111, 240, .55), transparent 60%),
+    radial-gradient(70vw 70vw at 8% 88%, rgba(255, 84, 112, .35), transparent 60%),
+    linear-gradient(180deg, #241E4E 0%, #12103A 100%);
+}
+[data-theme="light"] .espaco {
+  background:
+    radial-gradient(60vw 60vw at 78% 12%, rgba(180, 140, 255, .6), transparent 60%),
+    radial-gradient(70vw 70vw at 8% 88%, rgba(94, 193, 255, .5), transparent 60%),
+    linear-gradient(180deg, #5EC1FF 0%, #B48CFF 100%);
+}
+.espaco-nebula {
+  position: absolute; inset: 0;
+  background: radial-gradient(30vw 30vw at 30% 30%, rgba(255, 255, 255, .1), transparent 60%);
+  animation: espaco-respira 12s ease-in-out infinite alternate;
+}
+@keyframes espaco-respira { from { opacity: .5; } to { opacity: .85; } }
+
+.espaco-planeta { position: absolute; height: auto; overflow: visible;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, .3)); }
+.espaco-planeta.p-a { width: 200px; top: 6%; right: 5%; animation: planeta-vaga 16s ease-in-out infinite alternate; }
+.espaco-planeta.p-b { width: 130px; bottom: 8%; left: 6%; animation: planeta-vaga 20s ease-in-out infinite alternate; }
+.espaco-planeta.p-c { width: 92px; top: 52%; right: 10%; animation: planeta-vaga 14s ease-in-out infinite alternate; }
+@keyframes planeta-vaga { from { transform: translateY(0); } to { transform: translateY(22px); } }
+
+.espaco-poeira { position: absolute; inset: 0; }
+.poeira {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .85);
+  box-shadow: 0 0 6px rgba(255, 255, 255, .6);
+  opacity: 0;
+  animation-name: poeira-sobe;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes poeira-sobe {
+  0% { transform: translateY(0); opacity: 0; }
+  12% { opacity: .9; }
+  88% { opacity: .9; }
+  100% { transform: translateY(-80vh); opacity: 0; }
+}
+
+.meteoro {
+  position: absolute;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 8px 2px rgba(255, 255, 255, .8);
+}
+.meteoro::after {
+  content: "";
+  position: absolute;
+  right: 3px; top: 1px;
+  width: 120px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .8));
+  transform-origin: right center;
+  transform: rotate(18deg);
+}
+.meteoro.m1 { top: 18%; left: 70%; animation: meteoro-cruza 7s linear infinite; }
+.meteoro.m2 { top: 40%; left: 90%; animation: meteoro-cruza 9s linear infinite 4s; }
+@keyframes meteoro-cruza {
+  0% { transform: translate(0, 0); opacity: 0; }
+  6% { opacity: 1; }
+  22% { opacity: 1; }
+  30%, 100% { transform: translate(-46vw, 34vh); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .espaco-nebula, .espaco-planeta, .poeira, .meteoro { animation: none !important; }
+  .poeira { opacity: .5; }
+  .meteoro { opacity: 0; }
+}

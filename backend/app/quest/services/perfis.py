@@ -24,16 +24,26 @@ COR_PADRAO = CORES_TRAJE[0]
 # item. Na fase Q0 tudo é gratuito; o desbloqueio por XP entra na Q2.
 ROSTOS = ("sorriso", "sorrisao", "fofo", "surpreso", "oculos", "heroi")
 CHAPEUS = ("nenhum", "coroa", "cartola", "laco", "fone", "cowboy")
+# Itens especiais (costas): mochila espacial e asas de luz
+COSTAS = ("nenhum", "mochila", "asas")
+# Item de mão (acessório)
+MAO = ("nenhum", "varinha")
+PETS = ("nenhum", "gatinho", "dino", "estrelinha")
+# Meios de locomoção (com animação de invocação própria)
 VEICULOS = ("nenhum", "skate")
 
 APARENCIA = {
     "cor": CORES_TRAJE,
     "rosto": ROSTOS,
     "chapeu": CHAPEUS,
+    "costas": COSTAS,
+    "mao": MAO,
+    "pet": PETS,
     "veiculo": VEICULOS,
 }
-AVATAR_PADRAO = {"cor": COR_PADRAO, "rosto": "sorriso",
-                 "chapeu": "nenhum", "veiculo": "nenhum"}
+AVATAR_PADRAO = {"cor": COR_PADRAO, "rosto": "sorriso", "chapeu": "nenhum",
+                 "costas": "nenhum", "mao": "nenhum", "pet": "nenhum",
+                 "veiculo": "nenhum"}
 
 # Apelido = "SUBSTANTIVO ADJETIVO" de listas seguras e positivas.
 _SUBSTANTIVOS = (

@@ -69,6 +69,9 @@ class AvatarIn(BaseModel):
     cor: str | None = None
     rosto: str | None = None
     chapeu: str | None = None
+    costas: str | None = None
+    mao: str | None = None
+    pet: str | None = None
     veiculo: str | None = None
 
 

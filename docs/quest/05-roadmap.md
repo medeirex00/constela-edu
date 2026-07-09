@@ -22,6 +22,20 @@ assets; leitura de QR pela câmera DENTRO do app fica para quando houver
 tablets de teste (o QR do cartão já funciona via câmera nativa do aparelho,
 que abre a URL).
 
+**Revisão 3 — universo vivo (09/07/2026):** cada matéria virou um PLANETA
+imersivo (Numéria, Palavras, Biozênia, Terra Nova, Chronos, Oxford,
+Colorium, Movi, Raízes) com corpo de planeta, atmosfera/iluminação própria,
+primeiro-plano temático (arte SVG dos 9 gerada por um time de agentes),
+partículas e constelações VIVAS que se desenham, brilham e reaparecem. O
+vestiário virou um ambiente espacial mágico (nebulosas, planetas à deriva,
+meteoros, plataforma flutuante com anel giratório), com categorias grandes
+(Cores/Rostos/Chapéus/Mochila&Asas/Acessórios/Pets/Itens Especiais) e novos
+slots no avatar (costas: mochila/asas · mao: varinha · pet). O Skate Voador
+ganhou invocação cinematográfica: a constelação brilha, desenha a silhueta,
+o skate materializa, voa com rastro até os pés e o Cosmo pula em cima. Nota:
+o avatar segue sendo o Cosmo astronauta (mascote), não um humanoide com
+cabelo/roupa — decisão em aberto (ver README).
+
 **Revisão 2 — lobby completo e customização (09/07/2026):** abas Jogar/
 Vestiário/Carreira; trilho de matérias que troca o fundo para a cena
 temática da disciplina e mostra as missões do dia + "Jogar agora";

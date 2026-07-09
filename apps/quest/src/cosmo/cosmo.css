@@ -60,6 +60,41 @@
   60% { fill: #FF5470; r: 15; }
 }
 
+/* Asas de luz: batem devagar */
+.cosmo-asas .asa { transform-box: fill-box; }
+.cosmo-asas .asa.esq { transform-origin: 100% 60%; animation: asa-bate 3.2s ease-in-out infinite; }
+.cosmo-asas .asa.dir { transform-origin: 0% 60%; animation: asa-bate 3.2s ease-in-out infinite; }
+@keyframes asa-bate {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(8deg); }
+}
+.cosmo-asas .asa.dir { animation-name: asa-bate-dir; }
+@keyframes asa-bate-dir {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-8deg); }
+}
+
+/* Varinha: brilho pulsante */
+.varinha-brilho { transform-box: fill-box; transform-origin: center;
+  animation: varinha-pulsa 1.8s ease-in-out infinite; }
+@keyframes varinha-pulsa {
+  0%, 100% { opacity: .18; transform: scale(.85); }
+  50% { opacity: .4; transform: scale(1.15); }
+}
+
+/* Pets */
+.cosmo-pet.flutua { transform-box: fill-box; animation: pet-flutua 3s ease-in-out infinite; }
+@keyframes pet-flutua {
+  0%, 100% { transform: translate(360px, 380px); }
+  50% { transform: translate(360px, 360px); }
+}
+.pet-rabo { transform-box: fill-box; transform-origin: 0% 100%;
+  animation: pet-rabo 1.6s ease-in-out infinite alternate; }
+@keyframes pet-rabo {
+  from { transform: rotate(-8deg); }
+  to { transform: rotate(10deg); }
+}
+
 /* Piscada */
 .cosmo-olho { transform-box: fill-box; transform-origin: center; }
 .cosmo-olho.piscando { animation: cosmo-piscar .18s ease-in-out; }

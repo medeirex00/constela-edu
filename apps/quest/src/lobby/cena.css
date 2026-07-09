@@ -1,40 +1,122 @@
-/* Cenário temático de fundo + classes de animação das cenas (protótipo v7). */
+/* Cenário temático do planeta + classes de animação das cenas. */
 
-.cena {
-  position: fixed;
+.cena { position: fixed; inset: 0; z-index: -2; pointer-events: none; }
+
+.cena-tema { position: fixed; inset: 0; opacity: 1; transition: opacity .3s ease; }
+.cena-tema.esvanecendo { opacity: 0; }
+
+/* Atmosfera: nebulosas de luz que dão iluminação própria ao planeta */
+.cena-atmosfera {
+  position: absolute;
   inset: 0;
-  z-index: -2;
-  pointer-events: none;
-  opacity: 1;
-  transition: opacity .3s ease;
+  background:
+    radial-gradient(38vw 38vw at 78% 22%, var(--neb1) 0%, transparent 60%),
+    radial-gradient(46vw 46vw at 12% 82%, var(--neb2) 0%, transparent 62%);
+  opacity: .55;
+  mix-blend-mode: screen;
+  animation: atmosfera-respira 12s ease-in-out infinite alternate;
 }
-.cena.esvanecendo { opacity: 0; }
-.cena svg { width: 100%; height: 100%; }
+@keyframes atmosfera-respira {
+  from { opacity: .42; }
+  to { opacity: .62; }
+}
 
-.cena .sk { fill: none; stroke: var(--scene-ink); stroke-linecap: round; stroke-linejoin: round; }
-.cena .fl { fill: var(--scene-ink); }
-.cena text { font-family: var(--font-display); font-weight: 800; fill: var(--scene-ink); }
-
-.cena .f1 { animation: cena-float 8s ease-in-out infinite alternate; }
-.cena .f2 { animation: cena-float 11s ease-in-out infinite alternate; animation-delay: -4s; }
-.cena .f3 { animation: cena-float 9s ease-in-out infinite alternate; animation-delay: -7s; }
-@keyframes cena-float {
+/* Corpo do planeta — canto superior direito, flutuando */
+.cena-planeta {
+  position: absolute;
+  top: 4vh; right: 3vw;
+  width: min(34vw, 420px);
+  height: auto;
+  overflow: visible;
+  animation: planeta-flutua 12s ease-in-out infinite alternate;
+}
+@keyframes planeta-flutua {
   from { transform: translateY(0); }
-  to { transform: translateY(-24px); }
+  to { transform: translateY(26px); }
 }
+.planeta-halo { transform-box: fill-box; transform-origin: center;
+  animation: planeta-halo 6s ease-in-out infinite alternate; }
+@keyframes planeta-halo { from { opacity: .1; } to { opacity: .26; } }
+.planeta-lua { transform-box: view-box; transform-origin: 210px 210px;
+  animation: planeta-orbita 18s linear infinite; }
+@keyframes planeta-orbita { to { transform: rotate(360deg); } }
 
-.cena .spin { animation: cena-spin 40s linear infinite; transform-origin: center; transform-box: fill-box; }
-.cena .spin-r { animation: cena-spin 55s linear infinite reverse; transform-origin: center; transform-box: fill-box; }
+/* Primeiro-plano temático (SVG dos agentes) */
+.cena-foreground { position: absolute; inset: 0; width: 100%; height: 100%; }
+.cena-foreground .sk { fill: none; stroke: var(--scene-ink); stroke-linecap: round; stroke-linejoin: round; }
+.cena-foreground .fl { fill: var(--scene-ink); }
+.cena-foreground text { font-family: var(--font-display); font-weight: 800; fill: var(--scene-ink); }
+
+.cena-foreground .f1 { animation: cena-float 8s ease-in-out infinite alternate; }
+.cena-foreground .f2 { animation: cena-float 11s ease-in-out infinite alternate; animation-delay: -4s; }
+.cena-foreground .f3 { animation: cena-float 9s ease-in-out infinite alternate; animation-delay: -7s; }
+@keyframes cena-float { from { transform: translateY(0); } to { transform: translateY(-24px); } }
+
+.cena-foreground .spin { animation: cena-spin 42s linear infinite; transform-origin: center; transform-box: fill-box; }
+.cena-foreground .spin-r { animation: cena-spin 56s linear infinite reverse; transform-origin: center; transform-box: fill-box; }
 @keyframes cena-spin { to { transform: rotate(360deg); } }
 
-.cena .rise { animation: cena-rise 14s linear infinite; }
+.cena-foreground .rise { animation: cena-rise 14s linear infinite; }
 @keyframes cena-rise {
   from { transform: translateY(0); opacity: .7; }
   to { transform: translateY(-70vh); opacity: 0; }
 }
 
+.cena-foreground .pisca { animation: cena-pisca 2.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes cena-pisca { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* Partículas temáticas */
+.particulas { position: absolute; inset: 0; overflow: hidden; }
+.particula {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-weight: 800;
+  opacity: 0;
+  animation-name: particula-sobe;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+.particula.p-bolha, .particula.p-faisca, .particula.p-tinta { border-radius: 50%; }
+.particula.p-folha { border-radius: 50% 0 50% 0; }
+@keyframes particula-sobe {
+  0% { transform: translateY(0) rotate(0); opacity: 0; }
+  12% { opacity: .85; }
+  88% { opacity: .85; }
+  100% { transform: translateY(-88vh) rotate(120deg); opacity: 0; }
+}
+
+/* Constelações vivas de ambiente: desenham, brilham, somem e reaparecem */
+.constelacoes-vivas { position: absolute; inset: 0; z-index: 0; }
+.constelacoes-vivas .cv-linha {
+  stroke: var(--star-ink);
+  stroke-width: 1.6;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: cv-desenha 14s ease-in-out infinite;
+}
+@keyframes cv-desenha {
+  0% { stroke-dashoffset: 1; opacity: 0; }
+  14% { stroke-dashoffset: 0; opacity: .9; }
+  80% { stroke-dashoffset: 0; opacity: .9; }
+  100% { stroke-dashoffset: 1; opacity: 0; }
+}
+.constelacoes-vivas .cv-estrela {
+  fill: var(--star-ink);
+  animation: cv-pisca 3.4s ease-in-out infinite;
+}
+@keyframes cv-pisca { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .cena .f1, .cena .f2, .cena .f3, .cena .spin, .cena .spin-r, .cena .rise {
+  .cena-atmosfera, .cena-planeta, .planeta-halo, .planeta-lua,
+  .cena-foreground .f1, .cena-foreground .f2, .cena-foreground .f3,
+  .cena-foreground .spin, .cena-foreground .spin-r, .cena-foreground .rise,
+  .cena-foreground .pisca, .particula,
+  .constelacoes-vivas .cv-linha, .constelacoes-vivas .cv-estrela {
     animation: none !important;
   }
+  .constelacoes-vivas .cv-linha { stroke-dashoffset: 0; opacity: .7; }
+  .particula { opacity: .6; }
 }

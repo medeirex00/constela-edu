@@ -1,108 +1,149 @@
-/* Vestiário estilo Roblox: vitrine do Cosmo + armário com abas. */
+/* Vestiário mágico: ambiente espacial + plataforma flutuante + armário. */
 
 .view {
   position: fixed;
   inset: 0;
   z-index: 20;
-  padding: 92px 20px 24px;
-  overflow-y: auto;
+  padding: 88px 18px 20px;
+  overflow: hidden;
 }
+.vestiario { overflow: hidden; }
 
-.palco-vestiario {
-  max-width: 1000px;
+.vestiario-grade {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  max-width: 1200px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(260px, 42%) 1fr;
-  gap: 22px;
-  align-items: start;
+  grid-template-columns: 132px minmax(0, 1fr) minmax(300px, 420px);
+  gap: 18px;
+  align-items: stretch;
 }
 
-.cosmo-vitrine {
-  position: sticky;
-  top: 92px;
-  display: grid;
-  place-items: center;
-  background: var(--paper-90);
+/* Categorias (coluna esquerda) */
+.categorias {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.categoria {
+  border: none;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .12);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  cursor: pointer;
+  padding: 12px 6px;
+  min-height: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12px;
+  text-align: center;
+  border: 2px solid rgba(255, 255, 255, .18);
+  transition: transform .12s, background .2s;
+}
+.categoria:hover { transform: translateX(4px); }
+.categoria.ativa {
+  background: var(--sun);
+  color: #3A2C00;
+  border-color: #fff;
+  box-shadow: 0 5px 0 var(--sun-deep);
+}
+.cat-icone { font-size: 28px; }
+
+/* Vitrine central: personagem na plataforma flutuante */
+.vitrine {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.boneco { position: relative; display: grid; place-items: center; z-index: 2; }
+.boneco.materializando { animation: materializa .8s ease; }
+@keyframes materializa {
+  0% { transform: scale(.9); filter: brightness(2.4); }
+  40% { filter: brightness(1.6); }
+  100% { transform: scale(1); filter: none; }
+}
+.boneco.pulando { animation: boneco-pula .8s ease; }
+@keyframes boneco-pula {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-90px) rotate(-4deg); }
+  70% { transform: translateY(-34px); }
+  100% { transform: translateY(-34px); }
+}
+.boneco.montado { transform: translateY(-22px); }
+.vitrine-skate {
+  position: absolute;
+  left: 50%;
+  bottom: -1%;
+  width: 72%;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+.plataforma {
+  position: absolute;
+  bottom: 4%;
+  width: min(42vw, 360px);
+  height: 90px;
+  z-index: 0;
+}
+.plataforma-anel {
+  position: absolute;
+  inset: 20px 0 auto;
+  height: 60px;
+  border-radius: 50%;
+  border: 5px solid rgba(126, 197, 255, .8);
+  box-shadow: 0 0 30px rgba(126, 197, 255, .6), inset 0 0 24px rgba(126, 197, 255, .5);
+  animation: plataforma-gira 8s linear infinite;
+}
+.plataforma-luz {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(126, 197, 255, .55), transparent 70%);
+  animation: plataforma-pulsa 3s ease-in-out infinite alternate;
+}
+@keyframes plataforma-gira { to { transform: rotate(360deg); } }
+@keyframes plataforma-pulsa { from { opacity: .5; } to { opacity: .9; } }
+
+/* Painel de itens (direita) */
+.itens-painel {
+  background: rgba(20, 16, 48, .55);
+  backdrop-filter: blur(8px);
+  border: 2px solid rgba(255, 255, 255, .16);
   border-radius: var(--radius-lg);
   padding: 18px;
-  box-shadow: 0 12px 0 rgba(0, 0, 0, .18);
-  min-height: 46vh;
+  overflow-y: auto;
+  color: #fff;
 }
-.skate-vitrine {
-  width: 60%;
-  margin-top: -8%;
-}
-
-.armario {
-  background: var(--paper-90);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  box-shadow: 0 12px 0 rgba(0, 0, 0, .18);
-}
-
-.apelido-editor { display: block; margin-bottom: 18px; }
-.apelido-editor > span {
-  display: block;
+.itens-titulo {
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 14px;
+  font-size: 20px;
   text-transform: uppercase;
   letter-spacing: .5px;
-  color: var(--ink-soft);
-  margin-bottom: 6px;
+  margin: 4px 0 14px;
 }
-.apelido-linha { display: flex; gap: 10px; }
-.apelido-linha input {
-  flex: 1;
-  min-width: 0;
-  min-height: var(--alvo-minimo);
-  border: 3px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 20px;
-  padding: 0 14px;
-}
-.apelido-linha .botao3d { font-size: 15px; padding: 12px 18px; }
-.apelido-erro { color: var(--coral); font-weight: 800; font-size: 13px; }
-
-.armario-abas { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-.armario-aba {
-  border: none;
-  border-radius: 999px;
-  padding: 10px 16px;
-  min-height: 44px;
-  cursor: pointer;
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 14px;
-  background: var(--paper);
-  color: var(--ink-soft);
-  border: 2px solid var(--line);
-  transition: transform .12s;
-}
-.armario-aba.ativa {
-  background: var(--violet);
-  color: #fff;
-  border-color: transparent;
-  box-shadow: 0 4px 0 rgba(0, 0, 0, .22);
-}
-.armario-aba:active { transform: translateY(2px); }
-
-.armario-grade {
+.itens-grade {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 10px;
 }
 .item {
   position: relative;
-  border: 3px solid var(--line);
+  border: 3px solid rgba(255, 255, 255, .18);
   border-radius: var(--radius-md);
-  background: var(--paper);
+  background: rgba(255, 255, 255, .1);
   cursor: pointer;
-  min-height: 108px;
+  min-height: 104px;
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -112,30 +153,58 @@
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 12px;
-  color: var(--ink);
+  color: #fff;
   transition: transform .12s;
 }
 .item:hover { transform: translateY(-4px); }
-.item:active { transform: translateY(1px); }
-.item.equipado { border-color: var(--violet); box-shadow: 0 5px 0 rgba(124, 111, 240, .4); }
-.item-cor { width: 56px; height: 56px; border-radius: 16px; box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .15); }
+.item.equipado { border-color: var(--sun); box-shadow: 0 0 0 3px rgba(255, 201, 60, .4); }
+.item-cor { width: 54px; height: 54px; border-radius: 16px; box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .15); }
 .item-mini { display: grid; place-items: center; height: 72px; }
-.item-mini .skate { width: 84px; }
-.item-emoji { font-size: 44px; }
+.item-mini .skate { width: 80px; }
+.item-emoji { font-size: 40px; }
 .item .selo {
-  position: absolute;
-  top: -8px; right: -8px;
-  width: 26px; height: 26px;
-  border-radius: 50%;
-  background: var(--violet);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  font-size: 14px;
-  box-shadow: 0 3px 0 rgba(0, 0, 0, .25);
+  position: absolute; top: -8px; right: -8px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--sun); color: #3A2C00;
+  display: grid; place-items: center; font-size: 14px;
+  box-shadow: 0 3px 0 var(--sun-deep);
 }
 
-@media (max-width: 760px) {
-  .palco-vestiario { grid-template-columns: 1fr; }
-  .cosmo-vitrine { position: static; min-height: 34vh; }
+/* Editor de apelido */
+.apelido-editor { display: block; margin-bottom: 16px; }
+.apelido-editor > span {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: rgba(255, 255, 255, .7);
+  margin-bottom: 6px;
+}
+.apelido-linha { display: flex; gap: 8px; }
+.apelido-linha input {
+  flex: 1; min-width: 0; min-height: var(--alvo-minimo);
+  border: 3px solid rgba(255, 255, 255, .2);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 18px;
+  padding: 0 12px;
+}
+.apelido-linha .botao3d { font-size: 14px; padding: 12px 16px; }
+.apelido-erro { color: #FFD1DA; font-weight: 800; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .view { padding: 84px 12px 16px; overflow-y: auto; }
+  .vestiario-grade {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    height: auto;
+  }
+  .categorias { flex-direction: row; overflow-x: auto; }
+  .categoria { flex: 0 0 88px; }
+  .vitrine { min-height: 40vh; }
 }

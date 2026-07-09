@@ -13,13 +13,19 @@ import { useCallback, useEffect, useRef } from "react";
 
 import "./cosmo.css";
 import { tocar } from "../audio/audio";
-import { Rosto } from "./Rosto";
 import { Chapeu } from "./Chapeu";
+import { Costas } from "./Costas";
+import { Mao } from "./Mao";
+import { Pet } from "./Pet";
+import { Rosto } from "./Rosto";
 
 interface CosmoProps {
   cor?: string;
   rosto?: string;
   chapeu?: string;
+  costas?: string;
+  mao?: string;
+  pet?: string;
   /** Olhos seguem o ponteiro + agenda de piscar/acenar (padrão: sim). */
   vivo?: boolean;
   /** Tocar no corpo dá cócegas com física de mola (só no lobby). */
@@ -30,6 +36,7 @@ interface CosmoProps {
 
 export function Cosmo({
   cor, rosto = "sorriso", chapeu = "nenhum",
+  costas = "nenhum", mao = "nenhum", pet = "nenhum",
   vivo = true, fisica = false, altura = "60vh", aoClicar,
 }: CosmoProps) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -214,6 +221,8 @@ export function Cosmo({
     >
       <g transform="translate(55 0)">
         <g className="cosmo-fisica" ref={molaRef}>
+          {/* itens de costas (asas/mochila): atrás de todo o corpo */}
+          <Costas slug={costas} />
           {/* pernas ficam paradas: o gingado é do tronco */}
           <rect className="pele" x="126" y="428" width="70" height="118" rx="34" />
           <rect className="pele" x="224" y="428" width="70" height="118" rx="34" />
@@ -228,6 +237,8 @@ export function Cosmo({
                     transform="rotate(26 342 278)" />
               <circle className="pele" cx="394" cy="120" r="34" />
               <circle cx="394" cy="120" r="34" fill="rgba(255,255,255,.22)" />
+              {/* item de mão (varinha) na mão erguida */}
+              <Mao slug={mao} />
             </g>
             <rect className="pele" x="86" y="112" width="248" height="352" rx="124" />
             <path d="M120 160 Q108 260 128 350" stroke="rgba(255,255,255,.4)"
@@ -250,6 +261,8 @@ export function Cosmo({
             <circle cx="210" cy="34" r="46" fill="transparent"
                     onPointerDown={aoTocarAntena} aria-hidden />
           </g>
+          {/* pet ao lado do astronauta */}
+          <Pet slug={pet} />
         </g>
       </g>
     </svg>

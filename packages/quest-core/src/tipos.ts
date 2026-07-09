@@ -14,6 +14,9 @@ export interface Avatar {
   cor?: string;
   rosto?: string;
   chapeu?: string;
+  costas?: string;
+  mao?: string;
+  pet?: string;
   veiculo?: string;
   [slot: string]: unknown;
 }
@@ -23,6 +26,9 @@ export interface Aparencia {
   cor: string[];
   rosto: string[];
   chapeu: string[];
+  costas: string[];
+  mao: string[];
+  pet: string[];
   veiculo: string[];
 }
 
