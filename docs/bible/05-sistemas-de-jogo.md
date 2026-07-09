@@ -25,7 +25,7 @@ nem as telas (Seção [07](07-ux-fluxos-navegacao.md)).
 Os sistemas de jogo transformam o **conteúdo BNCC** (Seção [06](06-pedagogico-bncc.md)) em **jogo** dentro
 do universo (Seção [03](03-universo.md)), jogado pelo avatar (Seção [04](04-personagens-avatar.md)). No
 ecossistema **Hub → Edu → Quest**, o Edu fornece a identidade e a série; os sistemas produzem o progresso
-que o professor acompanha (Seção [08](08-professor-familia.md), sem ver Moedas/loja). **Estado atual (Q0):**
+que o professor acompanha (Seção [10](10-professor-familia.md), sem ver Moedas/loja). **Estado atual (Q0):**
 o núcleo jogável **não existe** — "Jogar agora" é só um aviso; nenhuma tentativa é submetida, nenhum
 XP/Estrela/Moeda é calculado. O **esquema de dados** existe (`quest_missoes`, `quest_desafios`,
 `quest_progresso`, `quest_tentativas`, `quest_habilidades`) mas sem endpoints. Este capítulo especifica o
@@ -159,7 +159,8 @@ gentil**; **reacender** restaura **25% dos dias** perdidos. **Marcos** em **3/7/
 recompensa. É sempre a favor da criança — nunca cobrança.
 
 **j) Missões diárias (decidido).** Ao entrar: **presente de login** (trilha de 7 dias) + **3 Missões
-diárias** sorteadas + **2 semanais**. A **rotação/curadoria** das diárias e eventos = Seção [19](19-liveops.md).
+diárias** sorteadas (com **viés pedagógico** para as habilidades mais fracas = Seção [06](06-pedagogico-bncc.md))
++ **2 semanais**. A **rotação/curadoria** das diárias e eventos = Seção [19](19-liveops.md).
 
 **k) Conquistas / Achievements (decidido).** Um sistema de conquistas **independente da progressão**:
 marcos cumulativos disparam uma conquista (ex.: **100 Missões**, **Chama por 30 dias**, **uma Jornada com
@@ -206,7 +207,7 @@ Modelo: `quest_conquistas`.
 - **Telemetria** → Seção [17](17-telemetria-metricas.md).
 - **Temporadas, passe, rotação da loja, curadoria de diárias/eventos/conquistas, regras e janelas de eventos, config numérica por escola** → Seção [19](19-liveops.md).
 - **Rankings e modos sociais** → Seção [09](09-social.md).
-Este capítulo **alimenta:** o progresso que o professor/família acompanham (Seção [08](08-professor-familia.md)).
+Este capítulo **alimenta:** o progresso que o professor/família acompanham (Seção [10](10-professor-familia.md)).
 
 ### 12. Casos extremos (Edge Cases)
 - **Virada de dia/semana (decidido):** o "dia" (Chama, diárias, teto) usa o **fuso da escola** (padrão
@@ -290,7 +291,7 @@ mechanics**, **Bosses**, **adaptive difficulty**, **Cosmo's Flame** (streak), **
 Game systems turn **BNCC content** (Section [06](06-pedagogico-bncc.md)) into **play** inside the universe
 (Section [03](03-universo.md)), played by the avatar (Section [04](04-personagens-avatar.md)). In the **Hub
 → Edu → Quest** ecosystem, Edu supplies identity and grade; the systems produce the progress the teacher
-follows (Section [08](08-professor-familia.md), without seeing Coins/store). **Current state (Q0):** the
+follows (Section [10](10-professor-familia.md), without seeing Coins/store). **Current state (Q0):** the
 playable core **doesn't exist** — "Play now" is only a notice; no attempt is submitted, no XP/star/coin is
 computed. The **data schema** exists (`quest_missoes`, `quest_desafios`, `quest_progresso`,
 `quest_tentativas`, `quest_habilidades`) but with no endpoints. This chapter specifies the system to build (Q1+).
@@ -420,8 +421,9 @@ isn't enough); each active day is **+1**. **Automatic weekly shield:** forgives 
 Flame with a gentle message**; **rekindle** restores **25% of the lost days**. **Milestones** at
 **3/7/14/30/60/100** days give rewards. Always in the child's favor — never a demand.
 
-**j) Daily Missions (decided).** On entry: **login gift** (7-day track) + **3 daily Missions** drawn + **2
-weeklies**. The dailies' **rotation/curation** and events = Section [19](19-liveops.md).
+**j) Daily Missions (decided).** On entry: **login gift** (7-day track) + **3 daily Missions** drawn (with a
+**pedagogical bias** toward the weakest skills = Section [06](06-pedagogico-bncc.md)) + **2 weeklies**. The
+dailies' **rotation/curation** and events = Section [19](19-liveops.md).
 
 **k) Achievements (decided).** An achievement system **independent of progression**: cumulative milestones
 fire an achievement (e.g. **100 Missions**, **30-day Flame**, **a Journey at 3★**, **100% of a Planet**).
@@ -468,7 +470,7 @@ seasonal/curated achievements = Section [19](19-liveops.md)); the screen = Secti
 - **Telemetry** → Section [17](17-telemetria-metricas.md).
 - **Seasons, pass, store rotation, dailies/events/achievements curation, event rules and windows, per-school numeric config** → Section [19](19-liveops.md).
 - **Rankings and social modes** → Section [09](09-social.md).
-This chapter **feeds:** the progress the teacher/family follow (Section [08](08-professor-familia.md)).
+This chapter **feeds:** the progress the teacher/family follow (Section [10](10-professor-familia.md)).
 
 ### 12. Edge cases
 - **Day/week rollover (decided):** the "day" (Flame, dailies, cap) uses the **school's timezone** (default
