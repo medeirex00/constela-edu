@@ -80,7 +80,7 @@ equipar item especial toca a invocação. Acessibilidade = Seção [13](13-acess
   (expansível — §13). O **gatilho/UI** (ex.: roda de emotes) é da Seção [07](07-ux-fluxos-navegacao.md).
 - **Pets:** companheiros cosméticos (gatinho/dino/estrelinha/robô). Sistema mais profundo = §13.
 - **Economia:** os itens são cosméticos e se **ganham jogando**, sem compras reais (Princípio 7).
-  Preços, moedas, desbloqueio, loja e passe = Seção [05](05-sistemas-de-jogo.md). Aqui ficam os **itens**.
+  Preços, moedas, desbloqueio e inventário = Seção [05](05-sistemas-de-jogo.md); loja rotativa e passe/temporada = Seção [19](19-liveops.md). Aqui ficam os **itens**.
 
 ### 9. Regras de negócio
 - **Whitelist estrita:** todo slot/valor é validado contra `APARENCIA` no servidor; o cliente nunca
@@ -174,7 +174,7 @@ técnico**, não a esta Bible.
 ### 11. Dependências com outros módulos
 Registro das decisões que **não** são deste capítulo:
 - **Renderização/motor 3D + piso de device** → Seção [11](11-arquitetura.md).
-- **Economia** (preços, moedas, desbloqueio, inventário, loja, passe) → Seção [05](05-sistemas-de-jogo.md).
+- **Economia** (preços, moedas, desbloqueio, inventário) → Seção [05](05-sistemas-de-jogo.md); **loja rotativa/passe/temporada** → Seção [19](19-liveops.md).
 - **Telas, layout, navegação e rótulos infantis** (inclui gatilho de emotes) → Seção [07](07-ux-fluxos-navegacao.md)/[02](02-vocabulario.md).
 - **Telemetria** (eventos de avatar/equipar/emote) → Seção [17](17-telemetria-metricas.md).
 - **Produção de arte** (textura/atlas, naming/versão de asset, modelo-base) → Seção [15](15-arte-audio-assets.md).
@@ -296,7 +296,7 @@ equipping a special item plays the invocation. Accessibility = Section [13](13-a
   (expandable — §13). The **trigger/UI** (e.g. emote wheel) is Section [07](07-ux-fluxos-navegacao.md)'s.
 - **Pets:** cosmetic companions (cat/dino/star/robot). Deeper system = §13.
 - **Economy:** items are cosmetic and **earned by playing**, no real purchases (Principle 7). Prices,
-  coins, unlock, store and pass = Section [05](05-sistemas-de-jogo.md). Here live the **items**.
+  coins, unlock and inventory = Section [05](05-sistemas-de-jogo.md); store rotation and pass/season = Section [19](19-liveops.md). Here live the **items**.
 
 ### 9. Business rules
 - **Strict whitelist:** every slot/value validated against `APARENCIA` on the server; the client never
@@ -389,7 +389,7 @@ planning**, not to this Bible.
 ### 11. Dependencies on other modules
 Record of decisions that are **not** this chapter's:
 - **Rendering / 3D engine + device floor** → Section [11](11-arquitetura.md).
-- **Economy** (prices, coins, unlock, inventory, store, pass) → Section [05](05-sistemas-de-jogo.md).
+- **Economy** (prices, coins, unlock, inventory) → Section [05](05-sistemas-de-jogo.md); **store rotation/pass/season** → Section [19](19-liveops.md).
 - **Screens, layout, navigation and child labels** (incl. emote trigger) → Section [07](07-ux-fluxos-navegacao.md)/[02](02-vocabulario.md).
 - **Telemetry** (avatar/equip/emote events) → Section [17](17-telemetria-metricas.md).
 - **Art production** (texture/atlas, asset naming/versioning, base model) → Section [15](15-arte-audio-assets.md).

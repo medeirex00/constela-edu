@@ -18,8 +18,9 @@ voltado à criança. Mudar um termo exige ADR.
 | `jornada` | **Jornada** | trilha dentro de um planeta |
 | `missao` | **Missão** | unidade jogável |
 | `desafio` | **Desafio** | uma questão/interação dentro da missão |
+| `missao` (tipo `chefao`) | **Chefão** | Missão final e especial de uma Jornada (regras na [Seção 05](05-sistemas-de-jogo.md)) |
 | `progresso` | **Constelação** | o progresso vira estrelas que formam constelações |
-| `sequencia_dias` (streak) | **Chama do Cosmo** | dias seguidos jogando (detalhe na [Seção 03](03-universo.md)) |
+| `sequencia_dias` (streak) | **Chama do Cosmo** | dias jogando; fantasia na [Seção 03](03-universo.md), regras na [Seção 05](05-sistemas-de-jogo.md) |
 | `sala` | **Estudar com um amigo** / **Corrida** | o objeto `sala` em si nunca é nomeado; a criança só vê esses botões |
 | `tentativa` | *(invisível)* | nunca aparece para a criança |
 | `perfil` | **Meu astronauta** | guarda-chuva conceitual; hoje aparece nas telas **Vestiário** e **Carreira** (o rótulo "Meu astronauta" ainda é a confirmar) |
@@ -88,8 +89,9 @@ any child-facing text. Changing a term requires an ADR.
 | `jornada` | **Journey** | a track within a planet |
 | `missao` | **Mission** | a playable unit |
 | `desafio` | **Challenge** | a question/interaction inside a mission |
+| `missao` (type `chefao`) | **Boss** | a Journey's final, special Mission (rules in [Section 05](05-sistemas-de-jogo.md)) |
 | `progresso` | **Constellation** | progress becomes stars forming constellations |
-| `sequencia_dias` (streak) | **Cosmo's Flame** | consecutive days playing (detail in [Section 03](03-universo.md)) |
+| `sequencia_dias` (streak) | **Cosmo's Flame** | days playing; fantasy in [Section 03](03-universo.md), rules in [Section 05](05-sistemas-de-jogo.md) |
 | `sala` | **Study with a friend** / **Race** | the `sala` object is never named; the child only sees these buttons |
 | `tentativa` | *(invisible)* | never shown to the child |
 | `perfil` | **My astronaut** | conceptual umbrella; today it appears as the **Vestiário** and **Carreira** screens (the "My astronaut" label is still to confirm) |
