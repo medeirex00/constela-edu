@@ -22,6 +22,10 @@ bem planejado, escalável e preparado para produção, usado por milhares de esc
 
 **Regra de ouro:** nada é implementado a partir de uma seção que não esteja `🟢 APROVADO`.
 
+**Padrão de capítulo:** todo capítulo segue as **16 partes obrigatórias** do
+[`_TEMPLATE-capitulo.md`](_TEMPLATE-capitulo.md) ([ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md)) —
+documentando a *intenção*, não só a funcionalidade.
+
 **Legenda de status:** `⬛ não iniciado` · `🔴 rascunho` · `🟡 em revisão` · `🟢 aprovado`.
 
 **Convenção bilíngue:** cada documento tem o **pt-BR como língua canônica** e o **inglês
@@ -43,7 +47,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | 00 | Visão & Norte / Vision & North Star | `00-visao-e-norte.md` | 🟢 |
 | 01 | Princípios Imutáveis / Immutable Principles | `01-principios-imutaveis.md` | 🟢 |
 | 02 | Vocabulário Canônico / Canonical Vocabulary | `02-vocabulario.md` | 🟢 |
-| 03 | O Universo & a Fantasia / The Universe & Fantasy | `03-universo.md` | ⬛ |
+| 03 | O Universo & a Fantasia / The Universe & Fantasy | `03-universo.md` | 🟢 |
 | 04 | Personagens & Avatar / Characters & Avatar | `04-personagens-avatar.md` | ⬛ |
 | 05 | Sistemas de Jogo / Game Systems | `05-sistemas-de-jogo.md` | ⬛ |
 | 06 | Design Pedagógico & BNCC / Learning Design | `06-pedagogico-bncc.md` | ⬛ |
@@ -79,6 +83,7 @@ IV — Técnico & Segurança (11–14) · V — Produção & Operação (15–21
 - [`specs/`](specs/) — especificações de funcionalidades (Portão 1). *Feature specs (Gate 1).*
 - [`decisoes/`](decisoes/) — ADRs, o histórico de decisões datadas. *Architecture/Design Decision Records.*
 - [`_estado-atual/`](_estado-atual/) — auditoria de referência do que existe hoje (interno, pt-BR). *Reference audit of the current state.*
+- [`biblia-sensorial/`](biblia-sensorial/) — **Bíblia Sensorial do Universo**: direção artística, narrativa e emocional dos 9 mundos + o Cosmo (ligada às Seções 03 e 15). *Sensory Bible of the universe.*
 
 ---
 
@@ -94,6 +99,10 @@ production-ready commercial product used by thousands of schools.
 3. **Faithful implementation** → **Review** (bugs, performance, UX, accessibility, responsiveness, scalability, code organization) → **Bible update**.
 
 **Golden rule:** nothing is implemented from a section that is not `🟢 APPROVED`.
+
+**Chapter standard:** every chapter follows the **16 mandatory parts** in
+[`_TEMPLATE-capitulo.md`](_TEMPLATE-capitulo.md) ([ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md)) —
+documenting *intent*, not just the feature.
 
 **Status legend:** `⬛ not started` · `🔴 draft` · `🟡 in review` · `🟢 approved`.
 
