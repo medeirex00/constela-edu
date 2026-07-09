@@ -1,12 +1,146 @@
-import { Search } from "lucide-react";
+import { Search, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import AcoesAluno from "../components/AcoesAluno";
-import { Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import { Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { api } from "../lib/api";
 import type { PaginaAlunos, Turma } from "../lib/types";
+
+/** Modal "Adicionar aluno": cadastro completo — dados básicos + ficha
+ *  cadastral (RA, responsável, contato, endereço), como na Lista Piloto. */
+function ModalNovoAluno({ aberto, turmas, aoFechar, aoCriar }: {
+  aberto: boolean;
+  turmas: Turma[];
+  aoFechar: () => void;
+  aoCriar: () => void;
+}) {
+  const { escolaId } = useApp();
+  const [nome, setNome] = useState("");
+  const [turmaId, setTurmaId] = useState<string>("");
+  const [numero, setNumero] = useState("");
+  const [nascimento, setNascimento] = useState("");
+  const [ficha, setFicha] = useState<Record<string, string>>({});
+  const [observacoes, setObservacoes] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+
+  const CAMPOS_FICHA: Array<[string, string]> = [
+    ["ra", "RA"],
+    ["rm", "RM"],
+    ["responsavel", "Responsável"],
+    ["telefone", "Telefone"],
+    ["endereco", "Endereço"],
+    ["bairro", "Bairro"],
+  ];
+
+  function limpar() {
+    setNome(""); setTurmaId(""); setNumero(""); setNascimento("");
+    setFicha({}); setObservacoes(""); setAviso(null);
+  }
+
+  async function salvar(continuar: boolean) {
+    if (!escolaId || !nome.trim() || !turmaId) return;
+    setOcupado(true);
+    setAviso(null);
+    try {
+      await api(`/escolas/${escolaId}/alunos`, {
+        method: "POST",
+        body: JSON.stringify({
+          nome: nome.trim(),
+          turma_id: Number(turmaId),
+          numero_chamada: numero ? Number(numero) : null,
+          data_nascimento: nascimento || null,
+          observacoes: observacoes.trim() || null,
+          ficha: Object.fromEntries(
+            Object.entries(ficha).filter(([, v]) => v.trim())),
+        }),
+      });
+      aoCriar();
+      if (continuar) {
+        const turmaMantida = turmaId;
+        limpar();
+        setTurmaId(turmaMantida);
+        setAviso({ tipo: "ok", texto: `${nome.trim()} adicionado(a)! Cadastre o próximo.` });
+      } else {
+        limpar();
+        aoFechar();
+      }
+    } catch (excecao) {
+      setAviso({
+        tipo: "erro",
+        texto: excecao instanceof Error ? excecao.message : "Não foi possível salvar.",
+      });
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Modal titulo="Adicionar aluno" aberto={aberto}
+           aoFechar={() => { limpar(); aoFechar(); }}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); salvar(false); }}>
+        <Campo rotulo="Nome completo">
+          <input className={estiloInput} value={nome} required minLength={2}
+                 onChange={(e) => setNome(e.target.value)} disabled={ocupado} />
+        </Campo>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Campo rotulo="Turma">
+            <select className={estiloInput} value={turmaId} required
+                    onChange={(e) => setTurmaId(e.target.value)} disabled={ocupado}>
+              <option value="">—</option>
+              {turmas.map((t) => (
+                <option key={t.id} value={t.id}>{t.nome}</option>
+              ))}
+            </select>
+          </Campo>
+          <Campo rotulo="Nº chamada">
+            <input type="number" min={1} className={estiloInput} value={numero}
+                   onChange={(e) => setNumero(e.target.value)} disabled={ocupado} />
+          </Campo>
+          <Campo rotulo="Nascimento">
+            <input type="date" className={estiloInput} value={nascimento}
+                   onChange={(e) => setNascimento(e.target.value)} disabled={ocupado} />
+          </Campo>
+        </div>
+
+        <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+          Ficha cadastral (opcional)
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {CAMPOS_FICHA.map(([chave, rotulo]) => (
+            <Campo key={chave} rotulo={rotulo}>
+              <input className={estiloInput} value={ficha[chave] ?? ""}
+                     onChange={(e) => setFicha({ ...ficha, [chave]: e.target.value })}
+                     disabled={ocupado} />
+            </Campo>
+          ))}
+        </div>
+        <Campo rotulo="Observações">
+          <textarea className={estiloInput} rows={2} value={observacoes}
+                    onChange={(e) => setObservacoes(e.target.value)} disabled={ocupado} />
+        </Campo>
+
+        {aviso && <Mensagem tipo={aviso.tipo}>{aviso.texto}</Mensagem>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Botao type="button" variante="neutro" disabled={ocupado}
+                 onClick={() => { limpar(); aoFechar(); }}>
+            Cancelar
+          </Botao>
+          <Botao type="button" variante="neutro"
+                 disabled={ocupado || !nome.trim() || !turmaId}
+                 onClick={() => salvar(true)}>
+            Salvar e adicionar outro
+          </Botao>
+          <Botao type="submit" disabled={ocupado || !nome.trim() || !turmaId}>
+            {ocupado ? "Salvando..." : "Salvar"}
+          </Botao>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 
 export default function Alunos() {
   const { escolaId, usuario } = useApp();
@@ -20,6 +154,7 @@ export default function Alunos() {
   const [pagina, setPagina] = useState(1);
   const [dados, setDados] = useState<PaginaAlunos | null>(null);
   const [carregando, setCarregando] = useState(true);
+  const [modalNovo, setModalNovo] = useState(false);
 
   useEffect(() => {
     if (!escolaId) return;
@@ -53,7 +188,15 @@ export default function Alunos() {
 
   return (
     <div>
-      <PageHeader titulo="Alunos" descricao="Pesquise, filtre e abra o perfil completo de cada aluno." />
+      <PageHeader
+        titulo="Alunos"
+        descricao="Pesquise, filtre e abra o perfil completo de cada aluno."
+        acoes={gestor ? (
+          <Botao onClick={() => setModalNovo(true)}>
+            <UserPlus size={15} /> Adicionar aluno
+          </Botao>
+        ) : undefined}
+      />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <label className="relative flex-1 basis-56">
@@ -141,6 +284,13 @@ export default function Alunos() {
           </div>
         </div>
       )}
+
+      <ModalNovoAluno
+        aberto={modalNovo}
+        turmas={turmas}
+        aoFechar={() => setModalNovo(false)}
+        aoCriar={carregar}
+      />
     </div>
   );
 }

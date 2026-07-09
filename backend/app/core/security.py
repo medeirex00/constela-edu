@@ -38,6 +38,31 @@ def verificar_senha_dummy() -> None:
     pwd_context.dummy_verify()
 
 
+# Palavras curtas e sem acento para senhas LEGÍVEIS (faladas por telefone
+# sem confusão). TRÊS palavras distintas + 2 dígitos: 40×39×38×90 ≈ 5,3
+# milhões de variações (~22 bits) — com o limitador de tentativas por conta
+# no login, força bruta remota fica impraticável.
+_PALAVRAS_SENHA = (
+    "azul", "bosque", "brisa", "canoa", "cedro", "coral", "delta", "duna",
+    "farol", "figo", "flor", "fogo", "gaita", "girassol", "ilha", "jade",
+    "lago", "lima", "lousa", "lua", "mar", "menta", "monte", "neve",
+    "ninho", "nuvem", "onda", "ouro", "pinho", "prata", "rio", "rocha",
+    "sol", "trigo", "uva", "vale", "vento", "verde", "vila", "zebra",
+)
+
+
+def gerar_senha_legivel() -> str:
+    import secrets
+
+    palavras: list[str] = []
+    restantes = list(_PALAVRAS_SENHA)
+    for _ in range(3):
+        escolhida = secrets.choice(restantes)
+        palavras.append(escolhida)
+        restantes.remove(escolhida)
+    return f"{'-'.join(palavras)}-{secrets.randbelow(90) + 10}"
+
+
 # --- Cópia visível da senha (decisão do dono do produto) ---------------------
 # A autenticação continua 100% pelo hash bcrypt. A cópia cifrada existe SÓ
 # para o recurso "ver senha" da tela de Usuários (admin vê todos; coordenador

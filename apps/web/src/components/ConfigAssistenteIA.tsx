@@ -25,6 +25,8 @@ const PROVEDORES = [
 export default function ConfigAssistenteIA() {
   const { escolaId } = useApp();
   const [config, setConfig] = useState<ConfigIA | null>(null);
+  const [falhaCarga, setFalhaCarga] = useState(false);
+  const [tentativa, setTentativa] = useState(0);
   const [provedor, setProvedor] = useState("local");
   const [apiKey, setApiKey] = useState("");
   const [modelo, setModelo] = useState("");
@@ -33,16 +35,25 @@ export default function ConfigAssistenteIA() {
 
   useEffect(() => {
     if (!escolaId) return;
+    let ativo = true; // ignora resposta atrasada após trocar de escola
     setConfig(null);
+    setFalhaCarga(false);
     setAviso(null);
+    setApiKey("");
     api<ConfigIA>(`/escolas/${escolaId}/assistente/config`)
       .then((c) => {
+        if (!ativo) return;
         setConfig(c);
         setProvedor(c.provedor);
         setModelo(c.modelo);
       })
-      .catch(() => setConfig(null));
-  }, [escolaId]);
+      .catch(() => {
+        if (ativo) setFalhaCarga(true);
+      });
+    return () => {
+      ativo = false;
+    };
+  }, [escolaId, tentativa]);
 
   async function salvar() {
     if (!escolaId) return;
@@ -94,7 +105,21 @@ export default function ConfigAssistenteIA() {
     }
   }
 
-  if (!config) return null; // sem permissão de admin (ou carregando)
+  if (falhaCarga) {
+    return (
+      <Card className="space-y-3 p-5">
+        <Mensagem tipo="erro">
+          Não foi possível carregar a configuração do assistente.
+        </Mensagem>
+        <Botao variante="neutro" onClick={() => setTentativa((t) => t + 1)}>
+          Tentar de novo
+        </Botao>
+      </Card>
+    );
+  }
+  if (!config) return null; // carregando
+
+  const trocouProvedor = provedor !== config.provedor;
 
   return (
     <Card className="space-y-4 p-5">
@@ -138,20 +163,25 @@ export default function ConfigAssistenteIA() {
         <label className="block text-sm">
           <span className="mb-1 flex items-center gap-2 font-medium">
             Chave de API
-            {config.chave_definida ? (
+            {config.chave_definida && !trocouProvedor ? (
               <span className="inline-flex items-center gap-1 text-xs font-normal text-emerald-600 dark:text-emerald-400">
                 <CheckCircle2 size={13} /> chave já configurada
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-xs font-normal text-amber-600 dark:text-amber-400">
-                <XCircle size={13} /> nenhuma chave salva
+                <XCircle size={13} />
+                {trocouProvedor
+                  ? "novo provedor: informe a chave dele"
+                  : "nenhuma chave salva"}
               </span>
             )}
           </span>
           <input
             type="password"
             className={estiloInput}
-            placeholder={config.chave_definida ? "deixe em branco para manter a atual" : "cole aqui a chave de API"}
+            placeholder={config.chave_definida && !trocouProvedor
+              ? "deixe em branco para manter a atual"
+              : "cole aqui a chave de API"}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             disabled={ocupado}
@@ -159,6 +189,7 @@ export default function ConfigAssistenteIA() {
           />
           <span className="mt-1 block text-xs text-zinc-400">
             Para o Claude, crie a chave em console.anthropic.com → API Keys.
+            {trocouProvedor && " Por segurança, a chave do provedor anterior não é reaproveitada."}
           </span>
         </label>
       )}

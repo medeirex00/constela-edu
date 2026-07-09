@@ -17,6 +17,7 @@ from app.schemas.comum import (
     NivelOut,
     PesosOut,
     PesosUpdate,
+    ProfessorCompletoIn,
     ProfessorCreate,
     ProfessorOut,
     RankingItemOut,

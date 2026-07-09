@@ -308,29 +308,9 @@ def atualizar_usuario(
     return alvo
 
 
-# Palavras curtas e sem acento para senhas LEGÍVEIS (faladas por telefone
-# sem confusão). TRÊS palavras distintas + 2 dígitos: 40×39×38×90 ≈ 5,3
-# milhões de variações (~22 bits) — com o limitador de tentativas por conta
-# no login, força bruta remota fica impraticável.
-_PALAVRAS_SENHA = (
-    "azul", "bosque", "brisa", "canoa", "cedro", "coral", "delta", "duna",
-    "farol", "figo", "flor", "fogo", "gaita", "girassol", "ilha", "jade",
-    "lago", "lima", "lousa", "lua", "mar", "menta", "monte", "neve",
-    "ninho", "nuvem", "onda", "ouro", "pinho", "prata", "rio", "rocha",
-    "sol", "trigo", "uva", "vale", "vento", "verde", "vila", "zebra",
-)
-
-
-def _gerar_senha_legivel() -> str:
-    import secrets
-
-    palavras: list[str] = []
-    restantes = list(_PALAVRAS_SENHA)
-    for _ in range(3):
-        escolhida = secrets.choice(restantes)
-        palavras.append(escolhida)
-        restantes.remove(escolhida)
-    return f"{'-'.join(palavras)}-{secrets.randbelow(90) + 10}"
+# O gerador de senhas legíveis mudou para app/core/security.py (reuso no
+# cadastro de professor com acesso).
+from app.core.security import gerar_senha_legivel as _gerar_senha_legivel  # noqa: E402
 
 
 def _pode_ver_senha(ator: Usuario, alvo: Usuario) -> bool:

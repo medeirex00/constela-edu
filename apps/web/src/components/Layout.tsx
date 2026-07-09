@@ -19,6 +19,8 @@ import {
   Menu,
   MonitorPlay,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   School,
   Search,
   Settings,
@@ -572,9 +574,30 @@ function IndicadorImportacao() {
   );
 }
 
+const CHAVE_RECOLHIDO = "constela_menu_recolhido";
+
 export default function Layout() {
   const { usuario, escolas, escolaId, selecionarEscola, tema, alternarTema, sair } = useApp();
   const [menuAberto, setMenuAberto] = useState(false);
+  // Barra lateral recolhida (desktop): o conteúdo ocupa a tela toda. A escolha
+  // fica salva no navegador para valer nas próximas visitas.
+  const [recolhido, setRecolhido] = useState(() => {
+    try {
+      return localStorage.getItem(CHAVE_RECOLHIDO) === "1";
+    } catch {
+      return false;
+    }
+  });
+  function alternarRecolhido() {
+    setRecolhido((atual) => {
+      try {
+        localStorage.setItem(CHAVE_RECOLHIDO, atual ? "0" : "1");
+      } catch {
+        /* localStorage indisponível: só não persiste */
+      }
+      return !atual;
+    });
+  }
   useAtalhosGlobais(); // Ctrl+K pesquisa, Alt+1..0 navegação (web e desktop)
 
   // Menu aberto no celular: trava o scroll do fundo e fecha no Esc (evita o
@@ -595,9 +618,23 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen">
-      {/* Sidebar fixa (desktop) */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-zinc-200 bg-white pl-safe dark:border-zinc-800 dark:bg-zinc-900 lg:flex">
-        <Marca />
+      {/* Sidebar fixa (desktop) — recolhível para dar a tela toda ao conteúdo */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-zinc-200 bg-white pl-safe dark:border-zinc-800 dark:bg-zinc-900 ${
+          recolhido ? "" : "lg:flex"
+        }`}
+      >
+        <div className="flex items-center justify-between pr-2">
+          <Marca />
+          <button
+            aria-label="Recolher menu"
+            title="Recolher menu"
+            className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+            onClick={alternarRecolhido}
+          >
+            <PanelLeftClose size={17} />
+          </button>
+        </div>
         <Navegacao />
       </aside>
 
@@ -625,7 +662,7 @@ export default function Layout() {
         </div>
       )}
 
-      <div className="lg:pl-60">
+      <div className={recolhido ? "" : "lg:pl-60"}>
         <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-zinc-200 bg-white/80 px-4 py-3 pr-safe pt-safe backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
           <button
             aria-label="Abrir menu"
@@ -634,6 +671,16 @@ export default function Layout() {
           >
             <Menu size={18} />
           </button>
+          {recolhido && (
+            <button
+              aria-label="Mostrar menu"
+              title="Mostrar menu"
+              className="hidden rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800 lg:block"
+              onClick={alternarRecolhido}
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          )}
 
           <PesquisaGlobal />
 

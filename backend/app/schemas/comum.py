@@ -78,6 +78,16 @@ class ProfessorCreate(BaseModel):
     observacoes: str | None = None
 
 
+class ProfessorCompletoIn(BaseModel):
+    """Cadastro completo: professor + turma sob responsabilidade + conta de
+    acesso (cargo professor) com senha gerada. O e-mail é obrigatório porque
+    é ele que liga a conta às turmas do professor (acesso restrito)."""
+    nome: str = Field(min_length=2, max_length=200)
+    email: EmailStr
+    turma_id: int | None = None
+    criar_acesso: bool = True
+
+
 PADRAO_TURNO = "^(manha|tarde|noite|integral)$"
 
 
@@ -137,6 +147,9 @@ class AlunoCreate(BaseModel):
     numero_chamada: int | None = None
     data_nascimento: date | None = None
     observacoes: str | None = None
+    # Ficha cadastral (RA, responsável, telefone, endereço...): mesmas chaves
+    # da planilha de matrículas; o backend guarda só as chaves conhecidas.
+    ficha: dict[str, str] = {}
 
 
 class AlunoUpdate(BaseModel):

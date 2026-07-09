@@ -221,6 +221,18 @@ def test_local_melhores_do_matific_ordena_pela_nota_certa():
     assert "evolução" not in resposta
 
 
+def test_local_nao_sequestra_evolucao_nem_alertas():
+    """Regressão: "melhor evolução"/"top que mais evoluíram" vão para a seção
+    de EVOLUCAO — não para o pódio de nota geral."""
+    for pergunta in ("qual aluno teve a melhor evolucao este mes?",
+                     "top 3 alunos que mais evoluiram",
+                     "quais os melhores alunos em evolucao?"):
+        resposta = LocalProvedor().responder(_CTX_TOP, [{
+            "papel": "usuario", "conteudo": pergunta}])
+        assert "Fulano Errado" in resposta, pergunta   # seção EVOLUCAO
+        assert "nota geral" not in resposta.lower() or "evolução" in resposta
+
+
 def test_local_melhor_aluno_geral_e_top_elefante():
     um = LocalProvedor().responder(_CTX_TOP, [{
         "papel": "usuario", "conteudo": "qual o melhor aluno da escola?"}])
@@ -284,6 +296,24 @@ def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(cliente, db, esco
                                              "modelo": "claude-opus-4-8"})
     assert r2.json()["chave_definida"] is True
     assert cliente.get(f"{base}/status").json()["provedor"] == "anthropic"
+
+
+def test_trocar_provedor_descarta_chave_do_anterior(cliente, db, escola_completa):
+    """A chave de um fornecedor NUNCA é reaproveitada em outro: trocar de
+    provedor sem informar chave nova é recusado."""
+    escola_id = escola_completa["escola"].id
+    base = f"/api/v1/escolas/{escola_id}/assistente/config"
+    assert cliente.put(base, json={"provedor": "anthropic",
+                                   "api_key": "sk-ant-abc"}).status_code == 200
+    # Trocar para OpenAI mantendo a chave antiga: recusado (e a antiga cai).
+    r = cliente.put(base, json={"provedor": "openai"})
+    assert r.status_code == 400
+    # Chave só de espaços também não vale.
+    assert cliente.put(base, json={"provedor": "openai",
+                                   "api_key": "   "}).status_code == 400
+    # Com a chave do novo provedor, funciona.
+    r2 = cliente.put(base, json={"provedor": "openai", "api_key": "sk-openai-x"})
+    assert r2.status_code == 200 and r2.json()["chave_definida"] is True
 
 
 def test_config_assistente_exige_admin(cliente, db, escola_completa):

@@ -40,6 +40,11 @@ logger = logging.getLogger("constela")
 # substituir por migrações Alembic (estrutura já compatível).
 migrar_colunas_novas(engine)   # bancos existentes ganham as colunas/índices novos
 Base.metadata.create_all(bind=engine)
+# Em banco NOVO a tabela usuarios só existe após o create_all — repete a
+# correção de dados para valer já no primeiro início.
+from app.core.database import _promover_admin_global  # noqa: E402
+
+_promover_admin_global(engine)
 
 # /docs, /redoc e /openapi.json só quando explicitamente habilitados (dev).
 _docs = "/docs" if settings.DOCS_HABILITADOS else None

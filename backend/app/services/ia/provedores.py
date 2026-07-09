@@ -166,13 +166,22 @@ class LocalProvedor(ProvedorIA):
 
     # Linha da seção ALUNOS: "- NOME: turma T, 3º lugar, geral 8.5, Matific 7.0,
     # Elefante 9.0" — montada em assistente.montar_contexto.
+    # A turma ancora em "º lugar" (não na primeira vírgula) para nomes de turma
+    # com vírgula ("4º Ano, Integral") não saírem truncados.
     _RE_ALUNO = re.compile(
-        r"^- (?P<nome>.+?): turma (?P<turma>.+?), .*?geral (?P<geral>\d+(?:[.,]\d+)?)"
+        r"^- (?P<nome>.+?): turma (?P<turma>.+?), \S+º lugar, .*?"
+        r"geral (?P<geral>\d+(?:[.,]\d+)?)"
         r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?)"
         r", Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
 
     @classmethod
     def _top_n(cls, pergunta: str, secao_alunos: str) -> str | None:
+        # Evolução/alertas têm seções próprias: "melhor evolução", "top 3 que
+        # mais evoluíram" ou "alunos em risco" NÃO são pódio de nota — deixa a
+        # pergunta seguir para EVOLUCAO/ALERTAS em vez de responder errado.
+        if re.search(r"evolu|cresc|progresso|melhorou|melhoraram|melhorando|"
+                     r"alerta|risco|atencao|preocup", pergunta):
+            return None
         if not re.search(r"\b(top|melhor(es)?|primeir[oa]s?)\b", pergunta):
             return None
         if not re.search(r"\b(alun[oa]s?|matific|elefante|matematica|leitura|"
@@ -227,12 +236,18 @@ class LocalProvedor(ProvedorIA):
 def obter_provedor(provedor: str | None = None, api_key: str | None = None,
                    modelo: str | None = None) -> ProvedorIA:
     """Fábrica: escolhe o provedor pela configuração da ESCOLA (parâmetros,
-    salvos pela interface) ou, sem eles, pelas variáveis de ambiente."""
-    provedor = (provedor or settings.AI_PROVIDER).strip().lower()
-    api_key = api_key or settings.AI_API_KEY
-    modelo = modelo or settings.AI_MODEL or None
+    salvos pela interface) ou, sem eles, pelas variáveis de ambiente.
+
+    Os valores do ambiente só entram quando NENHUM provedor foi passado: uma
+    escola com provedor próprio nunca "herda" a chave/modelo do ambiente
+    (misturaria credenciais — inclusive de fornecedores diferentes)."""
+    if provedor is None:
+        provedor = settings.AI_PROVIDER
+        api_key = api_key or settings.AI_API_KEY
+        modelo = modelo or settings.AI_MODEL or None
+    provedor = provedor.strip().lower()
     if provedor == "anthropic":
-        return AnthropicProvedor(api_key, modelo)
+        return AnthropicProvedor(api_key or "", modelo)
     if provedor == "openai":
-        return OpenAIProvedor(api_key, modelo)
+        return OpenAIProvedor(api_key or "", modelo)
     return LocalProvedor()

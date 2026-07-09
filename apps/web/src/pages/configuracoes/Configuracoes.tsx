@@ -142,7 +142,8 @@ function Backup() {
 }
 
 export default function Configuracoes() {
-  const { escolaAtual, escolaId, recarregarEscolas } = useApp();
+  const { escolaAtual, escolaId, recarregarEscolas, usuario } = useApp();
+  const ehAdminIA = Boolean(usuario?.is_global) || usuario?.cargo === "admin";
   const [nome, setNome] = useState("");
   const [cidade, setCidade] = useState("");
   const [estado, setEstado] = useState("");
@@ -255,10 +256,12 @@ export default function Configuracoes() {
         <Aparencia />
       </section>
 
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Assistente de IA</h2>
-        <ConfigAssistenteIA />
-      </section>
+      {ehAdminIA && (
+        <section className="max-w-2xl">
+          <h2 className="mb-3 text-sm font-semibold">Assistente de IA</h2>
+          <ConfigAssistenteIA />
+        </section>
+      )}
 
       <section className="max-w-2xl">
         <h2 className="mb-3 text-sm font-semibold">Backup e restauração</h2>

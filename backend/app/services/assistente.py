@@ -45,11 +45,21 @@ def _config_row(db: Session, escola_id: int) -> Configuracao | None:
 
 
 def config_assistente(db: Session, escola_id: int) -> dict:
-    """Configuração do assistente salva pela interface (sem expor a chave)."""
+    """Configuração do assistente salva pela interface (sem expor a chave).
+    Escola sem configuração própria espelha o AMBIENTE — o que o status mostra
+    é o que de fato responde."""
+    from app.core.config import settings
+
     row = _config_row(db, escola_id)
     valores = dict(row.valor or {}) if row else {}
+    if not valores.get("provedor"):
+        return {
+            "provedor": settings.AI_PROVIDER.strip().lower() or "local",
+            "modelo": settings.AI_MODEL or "",
+            "chave_definida": bool(settings.AI_API_KEY),
+        }
     return {
-        "provedor": valores.get("provedor") or "local",
+        "provedor": valores["provedor"],
         "modelo": valores.get("modelo") or "",
         "chave_definida": bool(valores.get("api_key_cifrada")),
     }
@@ -58,21 +68,35 @@ def config_assistente(db: Session, escola_id: int) -> dict:
 def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
                              api_key: str | None, modelo: str | None) -> dict:
     """Grava provedor/modelo e a chave de API CIFRADA (Fernet na SECRET_KEY).
-    `api_key` vazio/None mantém a chave já salva; a chave nunca é devolvida."""
+    `api_key` vazio mantém a chave já salva DO MESMO provedor; ao trocar de
+    provedor a chave antiga é descartada (a chave de um fornecedor nunca pode
+    ser enviada a outro). Levanta ValueError quando falta a chave.
+    NÃO faz commit — quem chama registra a auditoria e commita junto."""
     row = _config_row(db, escola_id)
     valores = dict(row.valor or {}) if row else {}
+    api_key = (api_key or "").strip()
+    provedor_anterior = valores.get("provedor") or "local"
+    if provedor != provedor_anterior and not api_key:
+        valores.pop("api_key_cifrada", None)
+    if provedor != "local" and not api_key and not valores.get("api_key_cifrada"):
+        raise ValueError("Informe a chave de API do provedor escolhido.")
+
     valores["provedor"] = provedor
     valores["modelo"] = (modelo or "").strip()
     if api_key:
-        valores["api_key_cifrada"] = cifrar_senha_visivel(api_key.strip())
+        valores["api_key_cifrada"] = cifrar_senha_visivel(api_key)
     if row is None:
         row = Configuracao(escola_id=escola_id, namespace="assistente",
                            chave="valores", valor=valores)
         db.add(row)
     else:
         row.valor = valores
-    db.commit()
-    return config_assistente(db, escola_id)
+    db.flush()
+    return {
+        "provedor": provedor,
+        "modelo": valores["modelo"],
+        "chave_definida": bool(valores.get("api_key_cifrada")),
+    }
 
 
 def _provedor_da_escola(db: Session, escola_id: int):

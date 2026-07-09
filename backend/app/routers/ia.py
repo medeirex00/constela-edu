@@ -150,15 +150,14 @@ def salvar_config_assistente(
 ):
     """Salva o provedor de IA da escola. A chave é gravada CIFRADA e nunca é
     devolvida — só o indicador de que existe."""
-    config = assistente.config_assistente(db, escola_id)
-    if dados.provedor != "local" and not dados.api_key and not config["chave_definida"]:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "Informe a chave de API do provedor escolhido.")
-    resultado = assistente.salvar_config_assistente(
-        db, escola_id, dados.provedor, dados.api_key, dados.modelo)
+    try:
+        resultado = assistente.salvar_config_assistente(
+            db, escola_id, dados.provedor, dados.api_key, dados.modelo)
+    except ValueError as erro:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(erro))
     registrar(db, "assistente.configurado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"provedor": dados.provedor,
-                        "chave_alterada": bool(dados.api_key)})
+                        "chave_alterada": bool((dados.api_key or "").strip())})
     db.commit()
     return resultado
 

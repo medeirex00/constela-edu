@@ -28,6 +28,7 @@ from app.schemas import (
     AlunoUpdate,
     ExclusaoPermanenteAlunos,
     FusaoAlunos,
+    ProfessorCompletoIn,
     ProfessorCreate,
     ProfessorOut,
     TurmaCreate,
@@ -111,12 +112,20 @@ def criar_aluno(
     if turma is None or turma.escola_id != escola_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
 
+    # Ficha cadastral: só as chaves conhecidas (mesmas da Lista Piloto) e
+    # valores curtos — nada de dados arbitrários no JSON.
+    from app.services.lista_piloto import ROTULOS_FICHA
+    ficha = {chave: str(valor).strip()[:300]
+             for chave, valor in (dados.ficha or {}).items()
+             if chave in ROTULOS_FICHA and str(valor).strip()}
+
     aluno = Aluno(
         escola_id=escola_id,
         nome=dados.nome.strip(),
         numero_chamada=dados.numero_chamada,
         data_nascimento=dados.data_nascimento,
         observacoes=dados.observacoes,
+        ficha=ficha,
     )
     db.add(aluno)
     db.flush()
@@ -796,3 +805,61 @@ def criar_professor(
     db.commit()
     db.refresh(professor)
     return professor
+
+
+@router.post("/professores/completo", status_code=status.HTTP_201_CREATED)
+def criar_professor_completo(
+    dados: ProfessorCompletoIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Cadastro completo do professor em um passo: o registro na equipe, a
+    turma sob responsabilidade e a CONTA DE ACESSO (cargo professor) com senha
+    legível gerada — devolvida uma vez aqui e disponível depois no "Ver senha".
+    O e-mail liga a conta às turmas dele (é assim que o acesso restrito do
+    professor descobre quais turmas mostrar)."""
+    from app.core.security import cifrar_senha_visivel, gerar_senha_legivel, hash_senha
+
+    email = dados.email.strip().lower()
+    turma = None
+    if dados.turma_id is not None:
+        turma = db.get(Turma, dados.turma_id)
+        if turma is None or turma.escola_id != escola_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Turma inválida para esta escola.")
+
+    acesso = None
+    if dados.criar_acesso:
+        ja_existe = db.execute(
+            select(Usuario).where(func.lower(Usuario.email) == email)
+        ).scalar_one_or_none()
+        if ja_existe is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Já existe uma conta com este e-mail — use outro ou desligue "
+                "a criação do acesso.")
+        senha = gerar_senha_legivel()
+        db.add(Usuario(escola_id=escola_id, nome=dados.nome.strip(), email=email,
+                       senha_hash=hash_senha(senha),
+                       senha_visivel=cifrar_senha_visivel(senha),
+                       cargo="professor"))
+        acesso = {"email": email, "senha": senha}
+
+    professor = Professor(escola_id=escola_id, nome=dados.nome.strip(), email=email)
+    db.add(professor)
+    db.flush()
+    if turma is not None:
+        turma.professor_id = professor.id
+
+    registrar(db, "professor.criado", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="professor", entidade_id=professor.id,
+              detalhes={"nome": professor.nome, "turma": turma.nome if turma else None,
+                        "acesso_criado": dados.criar_acesso})
+    db.commit()
+    db.refresh(professor)
+    return {
+        "professor": ProfessorOut.model_validate(professor),
+        "turma": turma.nome if turma else None,
+        "acesso": acesso,
+    }
