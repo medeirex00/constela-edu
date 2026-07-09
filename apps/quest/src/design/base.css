@@ -1,0 +1,121 @@
+/* Estilos base + componentes do design system (Botao3D, chips, painéis).
+   Regra de acessibilidade 6–11 anos: alvos >= 48px, foco visível sempre,
+   prefers-reduced-motion respeitado (docs/quest/03). */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  overflow: hidden;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button { font-family: inherit; }
+
+/* ---------- Botão 3D (o botão do jogo) ---------- */
+.botao3d {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 19px;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: #fff;
+  background: var(--cor-botao, var(--violet));
+  border: none;
+  border-radius: 16px;
+  padding: 14px 26px;
+  min-height: var(--alvo-minimo);
+  cursor: pointer;
+  box-shadow: 0 6px 0 rgba(0, 0, 0, .28);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.botao3d:hover { transform: translateY(-2px); }
+.botao3d:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0, 0, 0, .28); }
+.botao3d:focus-visible { outline: 4px solid #fff; outline-offset: 3px; }
+.botao3d:disabled { opacity: .55; cursor: default; transform: none; }
+.botao3d.sol { background: var(--sun); color: #3A2C00; box-shadow: 0 6px 0 var(--sun-deep); }
+.botao3d.coral { background: var(--coral); box-shadow: 0 6px 0 var(--coral-deep); }
+.botao3d.fantasma {
+  background: transparent;
+  color: var(--ink);
+  border: 2.5px solid var(--line);
+  box-shadow: none;
+}
+
+/* ---------- Chip do HUD ---------- */
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--hud);
+  color: var(--hud-ink);
+  border-radius: 14px;
+  padding: 10px 16px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .3);
+}
+
+/* ---------- Painel (cartão de conteúdo) ---------- */
+.painel {
+  background: var(--paper-90);
+  border-radius: var(--radius-lg);
+  padding: 26px;
+  box-shadow: 0 12px 0 rgba(0, 0, 0, .22);
+}
+
+/* ---------- Toast ---------- */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--hud);
+  color: #fff;
+  font-weight: 800;
+  font-size: 15px;
+  padding: 13px 22px;
+  border-radius: 16px;
+  z-index: 70;
+  opacity: 0;
+  pointer-events: none;
+  transition: .3s;
+  box-shadow: 0 7px 0 rgba(0, 0, 0, .3);
+  font-family: var(--font-display);
+}
+#toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- Céu (fundo vivo, compartilhado por todas as telas) ---------- */
+.ceu {
+  position: fixed;
+  inset: 0;
+  z-index: -4;
+  background: linear-gradient(180deg, var(--sky-a) 0%, var(--sky-b) 100%);
+  transition: background .8s ease;
+}
+.constelacao { position: fixed; inset: 0; z-index: -3; pointer-events: none; }
+.constelacao line { stroke: var(--star-ink); stroke-width: 1.6; }
+.constelacao circle { fill: var(--star-ink); }
+[data-theme="dark"] .constelacao circle {
+  animation: cintilar 3s ease-in-out infinite alternate;
+}
+.constelacao circle:nth-child(odd) { animation-delay: 1.2s; }
+@keyframes cintilar { from { opacity: .35; } to { opacity: 1; } }
+
+.neblina {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: 34vh;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--ground) 78%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

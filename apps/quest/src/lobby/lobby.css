@@ -1,0 +1,281 @@
+/* Lobby — HUD, palco do Cosmo, trilho de planetas (teaser) e gaveta. */
+
+.hud {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+}
+.hud .marca {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 22px;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+.hud .marca .lua {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: radial-gradient(circle at 62% 38%, transparent 46%, var(--sun) 47%);
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .25));
+}
+.hud .marca small {
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--coral);
+  padding: 3px 9px;
+  border-radius: 999px;
+  transform: rotate(-4deg);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, .25);
+  letter-spacing: 1px;
+}
+.hud-direita { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+.botao-avatar {
+  width: 50px; height: 50px;
+  border-radius: 16px;
+  border: 3px solid rgba(255, 255, 255, .85);
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--violet), var(--coral));
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .3);
+  transition: transform .12s ease;
+  position: relative;
+}
+.botao-avatar:hover { transform: scale(1.07) rotate(-3deg); }
+.botao-avatar::after {
+  content: "";
+  position: absolute;
+  right: -4px; bottom: -4px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--green);
+  border: 3px solid #fff;
+}
+.botao-avatar:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* Palco */
+.palco {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 210px;
+}
+.palco-interno { position: relative; display: grid; place-items: end center; }
+.podio {
+  position: absolute;
+  bottom: -14px;
+  width: min(46vw, 420px);
+  height: 80px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(255, 255, 255, .5) 0%, transparent 70%);
+}
+.podio::before {
+  content: "";
+  position: absolute;
+  inset: 14px 48px;
+  border-radius: 50%;
+  border: 4px dashed rgba(255, 255, 255, .65);
+}
+.palco .cosmo-fala {
+  bottom: calc(100% + 4px);
+  left: 58%;
+  z-index: 6;
+}
+
+/* Trilho de planetas (teaser da Fase Q1) */
+.planetas-area {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 35;
+  padding: 8px 0 22px;
+}
+.planetas-titulo {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 19px;
+  margin: 0 32px 12px;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+  text-transform: uppercase;
+  letter-spacing: .6px;
+}
+.planetas {
+  display: flex;
+  gap: 18px;
+  overflow-x: auto;
+  padding: 12px 32px 20px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 34px,
+      #000 calc(100% - 34px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 34px,
+      #000 calc(100% - 34px), transparent 100%);
+}
+.planetas::-webkit-scrollbar { display: none; }
+.planeta {
+  scroll-snap-align: center;
+  flex: 0 0 220px;
+  height: 150px;
+  border: none;
+  border-radius: 28px;
+  cursor: pointer;
+  position: relative;
+  background: linear-gradient(150deg, var(--c1), var(--c2));
+  color: #fff;
+  text-align: left;
+  padding: 18px;
+  overflow: hidden;
+  font-family: var(--font-display);
+  box-shadow: 0 9px 0 rgba(0, 0, 0, .3);
+  transition: transform .15s ease;
+}
+.planeta::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, rgba(255, 255, 255, .3) 0%, transparent 40%);
+}
+.planeta:hover { transform: translateY(-9px) rotate(-1.2deg); }
+.planeta:active { transform: translateY(2px); }
+.planeta:focus-visible { outline: 4px solid #fff; outline-offset: 3px; }
+.planeta .icone { font-size: 38px; line-height: 1; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .25)); }
+.planeta .nome {
+  display: block;
+  font-weight: 800;
+  font-size: 21px;
+  margin-top: 10px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, .25);
+}
+.planeta .emblema {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12.5px;
+  font-weight: 800;
+  background: rgba(0, 0, 0, .28);
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+.planeta .fundo-icone {
+  position: absolute;
+  right: -18px; bottom: -22px;
+  font-size: 110px;
+  opacity: .25;
+  transform: rotate(-14deg);
+}
+
+/* Gaveta */
+.escurecedor {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 7, 30, .5);
+  z-index: 50;
+  opacity: 0;
+  pointer-events: none;
+  transition: .3s;
+}
+.escurecedor.aberta { opacity: 1; pointer-events: auto; }
+.gaveta {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: min(340px, 92vw);
+  z-index: 60;
+  background: var(--paper);
+  padding: 26px;
+  transform: translateX(105%);
+  transition: transform .32s ease;
+  border-radius: 28px 0 0 28px;
+  box-shadow: -12px 0 34px rgba(0, 0, 0, .3);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.gaveta.aberta { transform: translateX(0); }
+.gaveta .quem-sou {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--line);
+}
+.gaveta .quem-sou b { font-family: var(--font-display); font-size: 18px; display: block; }
+.gaveta .quem-sou span { font-size: 12px; color: var(--ink-soft); font-weight: 800; }
+.gaveta h3 {
+  font-family: var(--font-display);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--ink-soft);
+}
+.gaveta .fechar {
+  position: absolute;
+  top: 16px; right: 16px;
+  border: none;
+  background: var(--line);
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 900;
+  color: var(--ink);
+}
+
+.amostras { display: flex; gap: 12px; flex-wrap: wrap; }
+.amostra {
+  width: 48px; height: 48px;
+  border-radius: 16px;
+  cursor: pointer;
+  border: 4px solid var(--paper);
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .22);
+  transition: transform .12s;
+}
+.amostra:hover { transform: scale(1.12) rotate(-4deg); }
+.amostra.escolhida { outline: 4px solid var(--violet); outline-offset: 2px; }
+.amostra:focus-visible { outline: 4px solid var(--violet); outline-offset: 2px; }
+
+.opcao {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: transparent;
+  border: 2.5px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  min-height: var(--alvo-minimo);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15.5px;
+  color: var(--ink);
+  transition: transform .12s;
+}
+.opcao:hover { transform: translateX(-5px); }
+.opcao .icone-opcao { font-size: 21px; }
+.opcao small { margin-left: auto; color: var(--ink-soft); font-weight: 800; }
+.opcao.perigo {
+  color: #fff;
+  background: var(--coral);
+  border-color: transparent;
+  box-shadow: 0 5px 0 var(--coral-deep);
+  margin-top: auto;
+}
+
+@media (max-width: 820px) {
+  .hud .marca span { display: none; }
+  .palco { padding-bottom: 190px; }
+  .planeta { flex: 0 0 190px; height: 140px; }
+}

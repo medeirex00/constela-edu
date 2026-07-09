@@ -10,6 +10,8 @@
   "scripts": {
     "dev:web": "npm run dev --workspace @constela/web",
     "build:web": "npm run build --workspace @constela/web",
+    "dev:quest": "npm run dev --workspace @constela/quest",
+    "build:quest": "npm run build --workspace @constela/quest",
     "dev:mobile": "npm run start --workspace @constela/mobile",
     "typecheck:mobile": "npm run typecheck --workspace @constela/mobile",
     "dev:desktop": "npm run tauri:dev --workspace @constela/desktop",

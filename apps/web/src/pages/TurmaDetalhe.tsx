@@ -17,6 +17,7 @@ import {
   Clock,
   Eye,
   Pencil,
+  Rocket,
   RotateCcw,
   Search,
   Trash2,
@@ -24,6 +25,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { baixarCartoesDaTurma } from "@constela/quest-core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -205,6 +207,29 @@ export default function TurmaDetalhe() {
       { aluno_ids: ids, acao: tipo, turma_id: turmaId ?? null }, rotulos[tipo]);
   }
 
+  /** Constela Quest: gera as credenciais da turma e baixa o PDF dos cartões
+   * de acesso (QR + código + PIN de figuras) para imprimir e recortar. */
+  async function baixarCartoesQuest() {
+    if (!escolaId || !id) return;
+    setOcupado(true);
+    try {
+      const { blob, nomeArquivo } = await baixarCartoesDaTurma(escolaId, Number(id));
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = nomeArquivo;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      avisar("ok", "Cartões do Quest gerados! Imprima, recorte e entregue aos alunos.");
+    } catch (e) {
+      avisar("erro", e instanceof ApiError ? e.message : "Não foi possível gerar os cartões.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   function aoEscolherNoMenu(aluno: AlunoGestao, escolha: string) {
     if (escolha === "visualizar") return navegar(`/alunos/${aluno.id}`);
     if (escolha === "editar") return setAcao({ tipo: "editar", alvo: aluno });
@@ -243,6 +268,15 @@ export default function TurmaDetalhe() {
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold tracking-tight">{resumo.turma.nome}</h1>
           <Badge tom="destaque">{resumo.turma.ano_escolar}</Badge>
+          <Botao
+            variante="neutro"
+            className="ml-auto"
+            onClick={baixarCartoesQuest}
+            disabled={ocupado}
+            title="Gera o PDF com QR, código e senha de figuras de cada aluno"
+          >
+            <Rocket size={15} /> Cartões do Quest
+          </Botao>
         </div>
       </div>
 

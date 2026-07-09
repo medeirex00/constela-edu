@@ -12,6 +12,9 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import Base, engine, get_db, migrar_colunas_novas
+from app.quest.routers import auth as quest_auth
+from app.quest.routers import perfil as quest_perfil
+from app.quest.routers import professor as quest_professor
 from app.routers import (
     academico,
     admin,
@@ -104,6 +107,9 @@ for router in (
     publico.router,
     ia.router,
     mobile.router,
+    quest_auth.router,
+    quest_perfil.router,
+    quest_professor.router,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 

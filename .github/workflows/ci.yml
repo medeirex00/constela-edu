@@ -36,8 +36,12 @@ jobs:
         run: npm ci --no-audit --no-fund --legacy-peer-deps
       - name: Typecheck do core
         run: npm run typecheck --workspace @constela/core
+      - name: Typecheck do quest-core
+        run: npm run typecheck --workspace @constela/quest-core
       - name: Build do web
         run: npm run build --workspace @constela/web
+      - name: Build do quest
+        run: npm run build --workspace @constela/quest
       - name: Typecheck do mobile
         run: npm run typecheck --workspace @constela/mobile
 

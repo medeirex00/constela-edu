@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@constela/core": "*",
+    "@constela/quest-core": "*",
     "@fontsource/inter": "^5.1.0",
     "@fontsource/poppins": "^5.1.0",
     "lucide-react": "^0.469.0",

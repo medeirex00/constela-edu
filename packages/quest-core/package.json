@@ -1,0 +1,18 @@
+{
+  "name": "@constela/quest-core",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Contrato TypeScript da API do Constela Quest: tipos e chamadas (app dos alunos e telas de professor no Edu)",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@constela/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

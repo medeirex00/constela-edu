@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     # PUBLIC_BASE_URL=http://localhost:5173
     PUBLIC_BASE_URL: str = "https://www.constelaedu.com"
 
+    # --- Constela Quest (plataforma dos alunos) ---------------------------
+    # Endereço público do app dos alunos — vai dentro do QR dos cartões de
+    # acesso. Em desenvolvimento: QUEST_BASE_URL=http://localhost:5174
+    QUEST_BASE_URL: str = "https://quest.constelaedu.com"
+    # Sessão longa (criança não redigita credencial toda aula); revogável a
+    # qualquer momento regenerando o cartão (token_version).
+    QUEST_SESSAO_DIAS: int = 30
+
     # Assistente de IA (PRD §154): provedor trocável, isolado em app/services/ia.
     # "local" responde com regras determinísticas usando apenas o banco —
     # funciona sem chave e serve de contingência quando o provedor externo falha.

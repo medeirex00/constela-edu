@@ -1,0 +1,182 @@
+/* Tela de entrada — desenhada para uma criança de 6 anos usar sozinha:
+   um passo por tela, alvos gigantes, áudio em tudo, erro sempre gentil. */
+
+.entrada {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 460px) minmax(0, 1fr);
+  align-items: center;
+  padding: 24px;
+}
+
+.entrada .cosmo-canto {
+  justify-self: end;
+  align-self: end;
+  padding-right: 8px;
+}
+
+.entrada-painel {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  text-align: center;
+}
+
+.entrada-painel h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.entrada-painel p.dica {
+  color: var(--ink-soft);
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.entrada-marca {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 26px;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  margin-bottom: 4px;
+}
+.entrada-marca .lua {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 62% 38%, transparent 46%, var(--sun) 47%);
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .25));
+}
+.entrada-marca small {
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--coral);
+  padding: 3px 10px;
+  border-radius: 999px;
+  transform: rotate(-4deg);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, .25);
+  letter-spacing: 1px;
+}
+
+/* Código: caixa grande, letras gigantes, auto-maiúsculas */
+.campo-codigo {
+  width: 100%;
+  min-height: 64px;
+  border: 3px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 30px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+}
+.campo-codigo:focus-visible { outline: 4px solid var(--violet); outline-offset: 2px; }
+
+/* "É você?" */
+.quem-cartao {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.quem-cartao .nome {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 30px;
+}
+.quem-cartao .apelido { color: var(--ink-soft); font-weight: 800; }
+.quem-botoes { display: flex; gap: 12px; justify-content: center; }
+
+/* PIN de figuras */
+.pin-vagas {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+.pin-vaga {
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+  border: 3px dashed var(--line);
+  background: var(--paper);
+  display: grid;
+  place-items: center;
+  font-size: 30px;
+}
+.pin-vaga.cheia { border-style: solid; border-color: var(--violet); }
+
+.pin-grade {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.pin-figura {
+  min-height: 84px;
+  border: none;
+  border-radius: 18px;
+  background: var(--paper);
+  box-shadow: 0 6px 0 rgba(0, 0, 0, .18);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--ink-soft);
+  transition: transform .12s ease;
+}
+.pin-figura .desenho { font-size: 34px; line-height: 1; }
+.pin-figura:hover { transform: translateY(-4px); }
+.pin-figura:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0, 0, 0, .18); }
+.pin-figura:focus-visible { outline: 4px solid var(--violet); outline-offset: 2px; }
+.pin-figura:disabled { opacity: .35; cursor: default; transform: none; }
+
+.entrada-erro {
+  background: var(--paper);
+  border-radius: var(--radius-md);
+  color: var(--coral);
+  font-weight: 800;
+  padding: 12px;
+  animation: treme .4s ease;
+}
+@keyframes treme {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-8px); }
+  50% { transform: translateX(8px); }
+  75% { transform: translateX(-4px); }
+}
+
+.botao-voltar {
+  align-self: center;
+  background: none;
+  border: none;
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, .3);
+  min-height: var(--alvo-minimo);
+}
+
+@media (max-width: 760px) {
+  .entrada { grid-template-columns: 1fr; }
+  .entrada .cosmo-canto { display: none; }
+  .entrada-painel { grid-column: 1; }
+}

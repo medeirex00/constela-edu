@@ -1,0 +1,19 @@
+{
+  "name": "Constela Quest",
+  "short_name": "Quest",
+  "description": "Explore planetas, cumpra missões e monte sua constelação!",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#5EC1FF",
+  "theme_color": "#5EC1FF",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -26,6 +26,10 @@ def get_usuario_atual(
     payload = decodificar_token(token)
     if payload is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sessão inválida ou expirada.")
+    # Tokens com papel (ex.: "aluno" do Quest) NUNCA valem aqui: o `sub` deles
+    # aponta para outra tabela — aceitá-los permitiria colisão de ids.
+    if payload.get("papel"):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sessão inválida ou expirada.")
     usuario = db.get(Usuario, int(payload["sub"]))
     if usuario is None or usuario.status != "ativo":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuário inativo ou inexistente.")

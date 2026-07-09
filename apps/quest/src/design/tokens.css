@@ -1,0 +1,54 @@
+/* ============================================================
+   CONSTELA QUEST — tokens de design
+   Fonte da verdade visual, extraída do protótipo constela-play-v7
+   (docs/quest/01-arquitetura.md). Tema claro/escuro por data-theme.
+   ============================================================ */
+:root {
+  --font-display: 'Baloo 2', ui-rounded, 'Nunito', 'Segoe UI', sans-serif;
+  --font-body: 'Nunito', ui-rounded, 'Segoe UI', sans-serif;
+
+  --ink: #231D4E;
+  --ink-soft: #5A5480;
+  --paper: #FFFFFF;
+  --paper-90: rgba(255, 255, 255, .94);
+  --line: rgba(35, 29, 78, .12);
+
+  --hud: rgba(23, 18, 55, .82);
+  --hud-ink: #FFFFFF;
+
+  --sun: #FFC93C;
+  --sun-deep: #E0A414;
+  --coral: #FF5470;
+  --coral-deep: #C43A54;
+  --violet: #7C6FF0;
+  --green: #3ED66E;
+
+  --radius-lg: 24px;
+  --radius-md: 16px;
+
+  --sky-a: #5EC1FF;
+  --sky-b: #B48CFF;
+  --scene-ink: rgba(255, 255, 255, .8);
+  --star-ink: rgba(255, 255, 255, .55);
+  --ground: rgba(255, 255, 255, .3);
+
+  /* Cor do traje do astronauta (equipada no perfil) */
+  --skin: #FF4D9D;
+
+  /* Toque infantil: nenhum alvo interativo menor que isto */
+  --alvo-minimo: 48px;
+}
+
+[data-theme="dark"] {
+  --ink: #F2EFFF;
+  --ink-soft: #B9B3DE;
+  --paper: #241E4E;
+  --paper-90: rgba(36, 30, 78, .94);
+  --line: rgba(242, 239, 255, .14);
+  --hud: rgba(12, 9, 34, .85);
+  --sky-a: #141235;
+  --sky-b: #2E2066;
+  --scene-ink: rgba(255, 255, 255, .55);
+  --star-ink: rgba(255, 255, 255, .4);
+  --ground: rgba(10, 7, 30, .5);
+}
