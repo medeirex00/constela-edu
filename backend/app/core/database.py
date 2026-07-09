@@ -115,6 +115,25 @@ def migrar_colunas_novas(motor=None) -> None:
                 "ON usuarios (username)"))
 
     _backfill_codigo_niveis(motor)
+    _promover_admin_global(motor)
+
+
+# Conta do DONO do sistema: acesso global (todas as escolas). Correção de dados
+# no startup porque não há acesso administrativo direto ao banco de produção;
+# idempotente — só escreve quando ainda não é global.
+_EMAIL_ADMIN_GLOBAL = "edumedeiros1405@gmail.com"
+
+
+def _promover_admin_global(motor) -> None:
+    from sqlalchemy import inspect, text
+
+    if "usuarios" not in inspect(motor).get_table_names():
+        return
+    with motor.begin() as conexao:
+        conexao.execute(
+            text("UPDATE usuarios SET is_global = :sim "
+                 "WHERE lower(email) = :email AND is_global = :nao"),
+            {"sim": True, "nao": False, "email": _EMAIL_ADMIN_GLOBAL})
 
 
 def _backfill_codigo_niveis(motor) -> None:

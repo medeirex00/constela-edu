@@ -24,6 +24,7 @@ interface Mensagem {
 }
 
 const SUGESTOES = [
+  "Quem são os 3 melhores do Matific?",
   "Quem mais evoluiu este mês?",
   "Quais alunos precisam de atenção?",
   "Como estão as turmas?",

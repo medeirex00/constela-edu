@@ -34,6 +34,9 @@ class AnthropicProvedor(ProvedorIA):
             resposta = cliente.messages.create(
                 model=self._modelo,
                 max_tokens=settings.AI_MAX_TOKENS,
+                # O contexto da escola (~milhares de tokens) repete a cada
+                # pergunta da conversa: o cache reduz custo/latência.
+                cache_control={"type": "ephemeral"},
                 system=sistema,
                 messages=[
                     {
@@ -128,6 +131,12 @@ class LocalProvedor(ProvedorIA):
             return (f"Sobre {aluno['nome']} (dados do sistema):\n{aluno['linha']}\n\n"
                     "Posso detalhar evolução, alertas ou conquistas se você perguntar.")
 
+        # "Os 3 melhores do Matific", "top 5 no Elefante", "melhor aluno da
+        # escola": monta o pódio certo, na métrica certa, com o N pedido.
+        podio = self._top_n(pergunta, secoes.get("ALUNOS", ""))
+        if podio:
+            return podio
+
         for palavras, chave in self._SECOES:
             if any(p in pergunta for p in palavras) and secoes.get(chave):
                 return (f"{secoes[chave].strip()}\n\n"
@@ -155,6 +164,54 @@ class LocalProvedor(ProvedorIA):
                 secoes[atual] += linha + "\n"
         return secoes
 
+    # Linha da seção ALUNOS: "- NOME: turma T, 3º lugar, geral 8.5, Matific 7.0,
+    # Elefante 9.0" — montada em assistente.montar_contexto.
+    _RE_ALUNO = re.compile(
+        r"^- (?P<nome>.+?): turma (?P<turma>.+?), .*?geral (?P<geral>\d+(?:[.,]\d+)?)"
+        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?)"
+        r", Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
+
+    @classmethod
+    def _top_n(cls, pergunta: str, secao_alunos: str) -> str | None:
+        if not re.search(r"\b(top|melhor(es)?|primeir[oa]s?)\b", pergunta):
+            return None
+        if not re.search(r"\b(alun[oa]s?|matific|elefante|matematica|leitura|"
+                         r"portugues|letrado|nota|escola|geral)\b", pergunta):
+            return None
+
+        if re.search(r"\b(matific|matematica)\b", pergunta):
+            metrica, rotulo = "matific", "no Matific"
+        elif re.search(r"\b(elefante|leitura|portugues|letrado)\b", pergunta):
+            metrica, rotulo = "elefante", "no Elefante Letrado"
+        else:
+            metrica, rotulo = "geral", "da escola (nota geral)"
+
+        achado = re.search(r"\b(\d+)\b", pergunta)
+        n = int(achado.group(1)) if achado else (
+            1 if re.search(r"\bmelhor\b", pergunta) else 5)
+        n = max(1, min(n, 25))
+
+        alunos = []
+        for linha in secao_alunos.splitlines():
+            par = cls._RE_ALUNO.match(linha.strip())
+            if not par or par.group(metrica) is None:
+                continue
+            alunos.append((float(par.group(metrica).replace(",", ".")),
+                           par.group("nome"), par.group("turma"), par))
+        if not alunos:
+            return None
+
+        alunos.sort(key=lambda a: a[0], reverse=True)
+        linhas = [
+            f"{i}º: {nome} ({turma}) — nota {valor:.1f}"
+            + (f" (geral {par.group('geral')})" if metrica != "geral" else "")
+            for i, (valor, nome, turma, par) in enumerate(alunos[:n], start=1)
+        ]
+        titulo = (f"O melhor aluno {rotulo}" if n == 1
+                  else f"Os {min(n, len(alunos))} melhores alunos {rotulo}")
+        return (f"{titulo}, pelos dados do sistema:\n" + "\n".join(linhas)
+                + "\n\n(Resposta gerada no modo local, somente com dados do sistema.)")
+
     @staticmethod
     def _aluno_citado(pergunta: str, secao_alunos: str) -> dict | None:
         for linha in secao_alunos.splitlines():
@@ -167,12 +224,15 @@ class LocalProvedor(ProvedorIA):
         return None
 
 
-def obter_provedor() -> ProvedorIA:
-    """Fábrica: escolhe o provedor pela configuração (PRD §154)."""
-    provedor = settings.AI_PROVIDER.strip().lower()
-    modelo = settings.AI_MODEL or None
+def obter_provedor(provedor: str | None = None, api_key: str | None = None,
+                   modelo: str | None = None) -> ProvedorIA:
+    """Fábrica: escolhe o provedor pela configuração da ESCOLA (parâmetros,
+    salvos pela interface) ou, sem eles, pelas variáveis de ambiente."""
+    provedor = (provedor or settings.AI_PROVIDER).strip().lower()
+    api_key = api_key or settings.AI_API_KEY
+    modelo = modelo or settings.AI_MODEL or None
     if provedor == "anthropic":
-        return AnthropicProvedor(settings.AI_API_KEY, modelo)
+        return AnthropicProvedor(api_key, modelo)
     if provedor == "openai":
-        return OpenAIProvedor(settings.AI_API_KEY, modelo)
+        return OpenAIProvedor(api_key, modelo)
     return LocalProvedor()

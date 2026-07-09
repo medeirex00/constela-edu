@@ -18,8 +18,10 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("constela.ia")
 
+from app.core.security import cifrar_senha_visivel, decifrar_senha_visivel
 from app.models import (
     Aluno,
+    Configuracao,
     ConversaIA,
     Escola,
     Matricula,
@@ -30,6 +32,60 @@ from app.models import (
 from app.services import evolucao, insights
 from app.services.ia import ErroProvedorIA, obter_provedor
 from app.services.ia.provedores import LocalProvedor
+
+PROVEDORES_VALIDOS = ("local", "anthropic", "openai")
+
+
+def _config_row(db: Session, escola_id: int) -> Configuracao | None:
+    return db.execute(
+        select(Configuracao).where(Configuracao.escola_id == escola_id,
+                                   Configuracao.namespace == "assistente",
+                                   Configuracao.chave == "valores")
+    ).scalar_one_or_none()
+
+
+def config_assistente(db: Session, escola_id: int) -> dict:
+    """Configuração do assistente salva pela interface (sem expor a chave)."""
+    row = _config_row(db, escola_id)
+    valores = dict(row.valor or {}) if row else {}
+    return {
+        "provedor": valores.get("provedor") or "local",
+        "modelo": valores.get("modelo") or "",
+        "chave_definida": bool(valores.get("api_key_cifrada")),
+    }
+
+
+def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
+                             api_key: str | None, modelo: str | None) -> dict:
+    """Grava provedor/modelo e a chave de API CIFRADA (Fernet na SECRET_KEY).
+    `api_key` vazio/None mantém a chave já salva; a chave nunca é devolvida."""
+    row = _config_row(db, escola_id)
+    valores = dict(row.valor or {}) if row else {}
+    valores["provedor"] = provedor
+    valores["modelo"] = (modelo or "").strip()
+    if api_key:
+        valores["api_key_cifrada"] = cifrar_senha_visivel(api_key.strip())
+    if row is None:
+        row = Configuracao(escola_id=escola_id, namespace="assistente",
+                           chave="valores", valor=valores)
+        db.add(row)
+    else:
+        row.valor = valores
+    db.commit()
+    return config_assistente(db, escola_id)
+
+
+def _provedor_da_escola(db: Session, escola_id: int):
+    """Provedor conforme a configuração da escola; sem ela, o do ambiente."""
+    row = _config_row(db, escola_id)
+    valores = dict(row.valor or {}) if row else {}
+    if not valores.get("provedor"):
+        return obter_provedor()
+    return obter_provedor(
+        provedor=valores["provedor"],
+        api_key=decifrar_senha_visivel(valores.get("api_key_cifrada")),
+        modelo=valores.get("modelo") or None,
+    )
 
 MAX_MENSAGENS_CONTEXTO = 12  # últimas mensagens da conversa enviadas ao modelo
 
@@ -70,8 +126,19 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         f"Matific {nota.nota_matific:.1f}, Elefante {nota.nota_elefante:.1f}"
         for nota, aluno, turma in ranking[:15]
     ]
+    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante".
+    def podio(metrica) -> list[str]:
+        ordenado = sorted(ranking, key=lambda r: metrica(r[0]), reverse=True)
+        return [
+            f"- {i}º: {aluno.nome} ({turma.nome}) — nota {metrica(nota):.1f}"
+            for i, (nota, aluno, turma) in enumerate(ordenado[:10], start=1)
+        ]
+    linhas_matific = podio(lambda n: n.nota_matific)
+    linhas_elefante = podio(lambda n: n.nota_elefante)
     linhas_alunos = [
-        f"- {aluno.nome}: turma {turma.nome}, {nota.posicao}º lugar, nota geral {nota.nota_geral:.1f}"
+        f"- {aluno.nome}: turma {turma.nome}, {nota.posicao}º lugar, "
+        f"geral {nota.nota_geral:.1f}, Matific {nota.nota_matific:.1f}, "
+        f"Elefante {nota.nota_elefante:.1f}"
         for nota, aluno, turma in ranking
     ]
 
@@ -111,6 +178,8 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             f"- Alertas ativos: {len(alertas)}",
         ], "- Sem dados."),
         secao("RANKING", linhas_ranking, "- Nenhuma nota calculada ainda."),
+        secao("RANKING_MATIFIC", linhas_matific, "- Nenhuma nota calculada ainda."),
+        secao("RANKING_ELEFANTE", linhas_elefante, "- Nenhuma nota calculada ainda."),
         secao("EVOLUCAO", linhas_evolucao, "- Sem dados de evolução no período."),
         secao("INDICES", linhas_indices, "- Sem índices calculados."),
         secao("ALERTAS", linhas_alertas, "- Nenhum alerta no momento."),
@@ -145,9 +214,9 @@ def perguntar(db: Session, escola_id: int, usuario_id: int,
     sistema = INSTRUCOES + montar_contexto(db, escola_id)
 
     try:
-        # obter_provedor() pode falhar já na criação (ex.: chave ausente) —
-        # por isso fica dentro do try: o assistente nunca sai do ar.
-        provedor = obter_provedor()
+        # A criação pode falhar (ex.: chave ausente/errada) — por isso fica
+        # dentro do try: o assistente nunca sai do ar.
+        provedor = _provedor_da_escola(db, escola_id)
         resposta = provedor.responder(sistema, mensagens)
         provedor_usado = provedor.nome
     except ErroProvedorIA as erro:

@@ -2,6 +2,7 @@ import { Download, UploadCloud } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
+import ConfigAssistenteIA from "../../components/ConfigAssistenteIA";
 import { Botao, Card, Mensagem, PageHeader } from "../../components/ui";
 import { PesosEditor } from "./Metricas";
 import { useApp } from "../../context/AppContext";
@@ -252,6 +253,11 @@ export default function Configuracoes() {
       <section className="max-w-2xl">
         <h2 className="mb-3 text-sm font-semibold">Aparência</h2>
         <Aparencia />
+      </section>
+
+      <section className="max-w-2xl">
+        <h2 className="mb-3 text-sm font-semibold">Assistente de IA</h2>
+        <ConfigAssistenteIA />
       </section>
 
       <section className="max-w-2xl">

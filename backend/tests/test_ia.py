@@ -194,3 +194,152 @@ def test_insights_pela_api(cliente, db, escola_completa):
     assert "indices" in corpo and "alertas" in corpo
     # Sem snapshots, os três alunos aparecem como sem_dados
     assert sum(1 for a in corpo["alertas"] if a["tipo"] == "sem_dados") == 3
+
+
+# --- Modo local inteligente: "os N melhores do X" -----------------------------------
+
+_CTX_TOP = assistente.INSTRUCOES + (
+    "### RESUMO\n- Escola: TESTE\n\n"
+    "### EVOLUCAO\n- 1º: Fulano Errado (1º Ano A) — evolução 90.0\n\n"
+    "### ALUNOS\n"
+    "- Ana Beatriz Souza: turma 3º Ano A, 1º lugar, geral 92.0, Matific 70.0, Elefante 95.0\n"
+    "- João Pedro Barbosa: turma 3º Ano A, 2º lugar, geral 80.0, Matific 88.0, Elefante 60.0\n"
+    "- Sofia Almeida Duarte: turma 3º Ano B, 3º lugar, geral 75.0, Matific 80.0, Elefante 71.0\n"
+    "- Carlos Lima Neto: turma 3º Ano B, 4º lugar, geral 60.0, Matific 40.0, Elefante 78.0\n"
+)
+
+
+def test_local_melhores_do_matific_ordena_pela_nota_certa():
+    resposta = LocalProvedor().responder(_CTX_TOP, [{
+        "papel": "usuario",
+        "conteudo": "quem sao os 3 melhores alunos do matific na escola?"}])
+    # Ordenado pela NOTA MATIFIC (João 88 > Sofia 80 > Ana 70), exatamente 3.
+    assert resposta.index("João Pedro Barbosa") < resposta.index("Sofia Almeida Duarte")
+    assert resposta.index("Sofia Almeida Duarte") < resposta.index("Ana Beatriz Souza")
+    assert "Carlos Lima Neto" not in resposta
+    assert "Fulano Errado" not in resposta          # não despeja a seção de evolução
+    assert "evolução" not in resposta
+
+
+def test_local_melhor_aluno_geral_e_top_elefante():
+    um = LocalProvedor().responder(_CTX_TOP, [{
+        "papel": "usuario", "conteudo": "qual o melhor aluno da escola?"}])
+    assert "Ana Beatriz Souza" in um and "João Pedro Barbosa" not in um
+
+    ele = LocalProvedor().responder(_CTX_TOP, [{
+        "papel": "usuario", "conteudo": "top 2 do elefante letrado"}])
+    assert "Ana Beatriz Souza" in ele and "Carlos Lima Neto" in ele
+    assert "João Pedro Barbosa" not in ele
+
+    # "quem mais melhorou" continua indo para a seção de EVOLUCAO.
+    evo = LocalProvedor().responder(_CTX_TOP, [{
+        "papel": "usuario", "conteudo": "quem mais evoluiu este mês?"}])
+    assert "Fulano Errado" in evo
+
+
+def test_contexto_tem_rankings_por_plataforma(db, escola_completa):
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    _snapshot(db, escola.id, ana.id, atividades=50, estrelas=150, pontuacao_media=85)
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    contexto = assistente.montar_contexto(db, escola.id)
+    assert "### RANKING_MATIFIC" in contexto
+    assert "### RANKING_ELEFANTE" in contexto
+    assert "Matific" in contexto.split("### ALUNOS")[1]
+
+
+# --- Configuração do assistente pela interface --------------------------------------
+
+def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(cliente, db, escola_completa):
+    escola_id = escola_completa["escola"].id
+    base = f"/api/v1/escolas/{escola_id}/assistente"
+
+    padrao = cliente.get(f"{base}/config").json()
+    assert padrao == {"provedor": "local", "modelo": "", "chave_definida": False}
+
+    # Provedor externo sem chave: recusa com orientação.
+    sem_chave = cliente.put(f"{base}/config", json={"provedor": "anthropic"})
+    assert sem_chave.status_code == 400
+
+    r = cliente.put(f"{base}/config", json={
+        "provedor": "anthropic", "api_key": "sk-ant-teste-123", "modelo": ""})
+    assert r.status_code == 200, r.text
+    corpo = r.json()
+    assert corpo["provedor"] == "anthropic" and corpo["chave_definida"] is True
+    assert "sk-ant" not in r.text                    # a chave nunca volta
+
+    # No banco, só a versão CIFRADA.
+    from app.models import Configuracao
+    from sqlalchemy import select
+    row = db.execute(select(Configuracao).where(
+        Configuracao.escola_id == escola_id,
+        Configuracao.namespace == "assistente")).scalar_one()
+    assert "sk-ant-teste-123" not in str(row.valor)
+    from app.core.security import decifrar_senha_visivel
+    assert decifrar_senha_visivel(row.valor["api_key_cifrada"]) == "sk-ant-teste-123"
+
+    # Salvar de novo SEM informar chave mantém a atual.
+    r2 = cliente.put(f"{base}/config", json={"provedor": "anthropic",
+                                             "modelo": "claude-opus-4-8"})
+    assert r2.json()["chave_definida"] is True
+    assert cliente.get(f"{base}/status").json()["provedor"] == "anthropic"
+
+
+def test_config_assistente_exige_admin(cliente, db, escola_completa):
+    from app.core.security import hash_senha
+    from app.models import Usuario
+    escola = escola_completa["escola"]
+    db.add(Usuario(escola_id=escola.id, nome="Prof", email="prof@t.local",
+                   senha_hash=hash_senha("s3nh4abc"), cargo="professor"))
+    db.commit()
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c2 = TestClient(app)
+    token = c2.post("/api/v1/auth/login",
+                    data={"username": "prof@t.local", "password": "s3nh4abc"}).json()
+    c2.headers["Authorization"] = f"Bearer {token['access_token']}"
+    assert c2.get(f"/api/v1/escolas/{escola.id}/assistente/config").status_code == 403
+
+
+def test_provedor_externo_falhando_cai_no_local(cliente, db, escola_completa, monkeypatch):
+    """Com chave inválida/sem rede, o assistente NUNCA sai do ar: responde local."""
+    from app.services.ia import provedores
+    from app.services.ia.base import ErroProvedorIA as Erro
+
+    escola_id = escola_completa["escola"].id
+    cliente.put(f"/api/v1/escolas/{escola_id}/assistente/config",
+                json={"provedor": "anthropic", "api_key": "chave-invalida"})
+
+    def explode(self, sistema, mensagens):
+        raise Erro("chave recusada")
+    monkeypatch.setattr(provedores.AnthropicProvedor, "responder", explode)
+
+    r = cliente.post(f"/api/v1/escolas/{escola_id}/assistente",
+                     json={"pergunta": "como está a escola?"})
+    assert r.status_code == 200, r.text
+    assert "local" in r.json()["provedor"]
+
+
+# --- Correção de dados: conta do dono vira global -----------------------------------
+
+def test_promover_admin_global_idempotente(db, escola_completa):
+    from app.core.database import _promover_admin_global
+    from app.core.security import hash_senha
+    from app.models import Usuario
+
+    escola = escola_completa["escola"]
+    dono = Usuario(escola_id=escola.id, nome="Dono",
+                   email="EduMedeiros1405@gmail.com",   # caixa diferente de propósito
+                   senha_hash=hash_senha("s3nh4abc"), cargo="admin")
+    db.add(dono)
+    db.commit()
+    assert dono.is_global is False
+
+    motor = db.get_bind()
+    _promover_admin_global(motor)
+    db.expire_all()
+    assert db.get(Usuario, dono.id).is_global is True
+    _promover_admin_global(motor)                      # 2ª vez: sem efeito colateral
+    db.expire_all()
+    assert db.get(Usuario, dono.id).is_global is True

@@ -4,9 +4,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, get_usuario_atual
+from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import ConversaIA, Escola, MensagemIA, Usuario
 from app.services import assistente, insights, permissoes
 from app.services.audit import registrar
@@ -116,7 +115,69 @@ def mensagens_da_conversa(
 @router.get("/assistente/status")
 def status_do_assistente(
     escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Qual provedor está configurado (sem expor chaves)."""
-    return {"provedor": settings.AI_PROVIDER, "modelo": settings.AI_MODEL or "padrão"}
+    config = assistente.config_assistente(db, escola_id)
+    return {"provedor": config["provedor"], "modelo": config["modelo"] or "padrão"}
+
+
+# --- Configuração do assistente (admin) — chave de API pela interface ---------
+
+class ConfigAssistenteIn(BaseModel):
+    provedor: str = Field(pattern="^(local|anthropic|openai)$")
+    # Vazio/ausente mantém a chave já salva (a chave nunca volta ao navegador).
+    api_key: str | None = Field(default=None, max_length=300)
+    modelo: str | None = Field(default=None, max_length=100)
+
+
+@router.get("/assistente/config")
+def obter_config_assistente(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+):
+    return assistente.config_assistente(db, escola_id)
+
+
+@router.put("/assistente/config")
+def salvar_config_assistente(
+    dados: ConfigAssistenteIn,
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+):
+    """Salva o provedor de IA da escola. A chave é gravada CIFRADA e nunca é
+    devolvida — só o indicador de que existe."""
+    config = assistente.config_assistente(db, escola_id)
+    if dados.provedor != "local" and not dados.api_key and not config["chave_definida"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Informe a chave de API do provedor escolhido.")
+    resultado = assistente.salvar_config_assistente(
+        db, escola_id, dados.provedor, dados.api_key, dados.modelo)
+    registrar(db, "assistente.configurado", escola_id=escola_id, usuario_id=usuario.id,
+              detalhes={"provedor": dados.provedor,
+                        "chave_alterada": bool(dados.api_key)})
+    db.commit()
+    return resultado
+
+
+@router.post("/assistente/config/testar")
+def testar_config_assistente(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+):
+    """Faz UMA chamada mínima ao provedor configurado para validar a chave."""
+    from app.services.ia import ErroProvedorIA
+
+    try:
+        provedor = assistente._provedor_da_escola(db, escola_id)
+        resposta = provedor.responder(
+            "Você é um verificador de configuração. Responda apenas: OK",
+            [{"papel": "usuario", "conteudo": "Está funcionando?"}])
+        return {"ok": True, "provedor": provedor.nome,
+                "resposta": (resposta or "")[:120]}
+    except ErroProvedorIA as erro:
+        return {"ok": False, "erro": str(erro)[:300]}
