@@ -1,19 +1,19 @@
-"""Login infantil: credenciais faláveis, PIN de figuras e sessão do aluno.
+"""Login infantil: código falável e sessão do aluno.
 
-Criança de 6 anos não tem e-mail nem decora senha (docs/quest/04). O cartão
-de acesso impresso carrega três coisas:
+Decisão de produto (09/07/2026): SEM senha/PIN — o código É a credencial,
+como no Elefante Letrado. Só letras e números (nada de hífen ou símbolo):
 
-    SOL-1234            código curto e falável (digitável em teclado grande)
-    🦊 🌙 ⭐ 🍎          PIN: 4 figuras em ordem
-    [QR]                token de alta entropia — 1 leitura = entrou
+    SOL1234             código curto e falável (digitável em teclado grande)
+    [QR]                mesma credencial em forma de figura — 1 leitura = entrou
 
-O JWT do aluno carrega papel="aluno" e NUNCA é aceito pelas rotas do Edu
-(get_usuario_atual rejeita tokens com papel) — e vice-versa.
+A defesa contra abuso é o limitador de tentativas (por código+IP) e o fato
+de o papel "aluno" só alcançar o próprio perfil de jogo. O JWT do aluno
+carrega papel="aluno" e NUNCA é aceito pelas rotas do Edu — e vice-versa.
 """
 from __future__ import annotations
 
-import hmac
 import secrets
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 from jose import jwt
@@ -25,42 +25,21 @@ from app.models import Aluno, Matricula, Turma
 from app.quest.models import QuestCredencialAluno
 from app.quest.services import perfis
 
-# ---------------------------------------------------------------------------
-# Catálogos do cartão
-# ---------------------------------------------------------------------------
-
-# Figuras do PIN: nomes que criança de 6 anos reconhece de ouvido, emojis
-# consistentes entre plataformas e visualmente inconfundíveis entre si.
-FIGURAS_PIN: list[dict] = [
-    {"slug": "sol", "nome": "Sol", "emoji": "☀️"},
-    {"slug": "lua", "nome": "Lua", "emoji": "🌙"},
-    {"slug": "estrela", "nome": "Estrela", "emoji": "⭐"},
-    {"slug": "foguete", "nome": "Foguete", "emoji": "🚀"},
-    {"slug": "raposa", "nome": "Raposa", "emoji": "🦊"},
-    {"slug": "gato", "nome": "Gato", "emoji": "🐱"},
-    {"slug": "peixe", "nome": "Peixe", "emoji": "🐟"},
-    {"slug": "borboleta", "nome": "Borboleta", "emoji": "🦋"},
-    {"slug": "maca", "nome": "Maçã", "emoji": "🍎"},
-    {"slug": "bola", "nome": "Bola", "emoji": "⚽"},
-    {"slug": "arvore", "nome": "Árvore", "emoji": "🌳"},
-    {"slug": "arcoiris", "nome": "Arco-íris", "emoji": "🌈"},
-]
-_SLUGS_FIGURAS = {f["slug"] for f in FIGURAS_PIN}
-
-# Palavras do código de login: curtas, sem acento, faláveis por telefone e
-# fáceis de digitar num teclado infantil. Tema: céu/natureza (universo Constela).
+# Palavras do código: curtas, faláveis por telefone e SEM acento na grafia
+# correta (a criança que escreve certo nunca pode ser punida — nada de CEU,
+# VENUS ou TROVAO, que se escrevem com acento no português da escola).
 _PALAVRAS_CODIGO = (
-    "SOL", "LUA", "CEU", "MAR", "RIO", "FLOR", "NUVEM", "TERRA",
-    "MARTE", "VENUS", "COMETA", "ORION", "NOVA", "AURORA", "VEGA",
-    "LUZ", "RAIO", "TROVAO", "VENTO", "BRISA", "ONDA", "ILHA",
-    "PINGO", "FAROL", "PONTE", "TRILHA", "BOSQUE", "CAMPO",
+    "SOL", "LUA", "MAR", "RIO", "FLOR", "NUVEM", "TERRA", "MARTE",
+    "COMETA", "NOVA", "AURORA", "VEGA", "LUZ", "RAIO", "VENTO", "BRISA",
+    "ONDA", "ILHA", "FAROL", "PONTE", "TRILHA", "BOSQUE", "CAMPO", "PINGO",
+    "ESTRELA", "FOGUETE", "PLANETA", "SATURNO",
 )
 
 
 def gerar_codigo_login(db: Session) -> str:
-    """PALAVRA-NNNN único na rede toda (o aluno pode falar por telefone)."""
+    """PALAVRA+NNNN (ex.: SOL1234) único na rede toda — só letras e números."""
     for _ in range(200):
-        codigo = (f"{secrets.choice(_PALAVRAS_CODIGO)}-"
+        codigo = (f"{secrets.choice(_PALAVRAS_CODIGO)}"
                   f"{secrets.randbelow(9000) + 1000}")
         existe = db.execute(
             select(QuestCredencialAluno.id)
@@ -71,38 +50,18 @@ def gerar_codigo_login(db: Session) -> str:
     raise RuntimeError("Não foi possível gerar um código de login único.")
 
 
-def gerar_pin() -> list[str]:
-    """4 figuras distintas, em ordem (a ordem faz parte do segredo)."""
-    figuras = [f["slug"] for f in FIGURAS_PIN]
-    pin: list[str] = []
-    for _ in range(4):
-        escolhida = secrets.choice(figuras)
-        pin.append(escolhida)
-        figuras.remove(escolhida)
-    return pin
-
-
 def gerar_qr_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-def pin_confere(credencial: QuestCredencialAluno, pin: list[str]) -> bool:
-    """Comparação em tempo constante da sequência de figuras."""
-    if not isinstance(pin, list) or len(pin) != 4:
-        return False
-    dado = ",".join(str(p).strip().lower() for p in pin)
-    esperado = ",".join(credencial.pin_figuras or [])
-    return hmac.compare_digest(dado.encode(), esperado.encode())
-
-
 def normalizar_codigo(codigo: str) -> str:
-    """Tolerante ao que uma criança digita: espaços, minúsculas, sem hífen."""
-    limpo = "".join(c for c in codigo.upper().strip() if c.isalnum())
-    # Reinsere o hífen entre letras e números ("SOL1234" → "SOL-1234")
-    for i, ch in enumerate(limpo):
-        if ch.isdigit():
-            return f"{limpo[:i]}-{limpo[i:]}"
-    return limpo
+    """Tolerante ao que uma criança digita: minúsculas, espaços, hífens,
+    acentos ("sól 12 34" → "SOL1234"). Só sobram letras A–Z e dígitos."""
+    sem_acento = unicodedata.normalize("NFD", codigo or "")
+    sem_acento = "".join(c for c in sem_acento
+                         if unicodedata.category(c) != "Mn")
+    return "".join(c for c in sem_acento.upper()
+                   if c.isascii() and c.isalnum())
 
 
 # ---------------------------------------------------------------------------
@@ -121,45 +80,43 @@ def alunos_da_turma(db: Session, escola_id: int, turma: Turma) -> list[Aluno]:
     return list(linhas)
 
 
+def garantir_credencial_aluno(
+    db: Session, escola_id: int, aluno: Aluno, regenerar: bool = False,
+) -> dict:
+    """Garante credencial + perfil de UM aluno.
+
+    - Aluno novo: ganha código, QR e perfil.
+    - `regenerar`: mantém o CÓDIGO (a criança decora), troca o QR e
+      incrementa token_version (cartão perdido → sessões antigas caem).
+    """
+    credencial = db.execute(
+        select(QuestCredencialAluno)
+        .where(QuestCredencialAluno.aluno_id == aluno.id)
+    ).scalar_one_or_none()
+
+    if credencial is None:
+        credencial = QuestCredencialAluno(
+            escola_id=escola_id,
+            aluno_id=aluno.id,
+            codigo_login=gerar_codigo_login(db),
+            qr_token=gerar_qr_token(),
+        )
+        db.add(credencial)
+    elif regenerar:
+        credencial.qr_token = gerar_qr_token()
+        credencial.token_version = (credencial.token_version or 0) + 1
+
+    perfil = perfis.obter_ou_criar_perfil(db, aluno)
+    db.flush()
+    return {"aluno": aluno, "credencial": credencial, "perfil": perfil}
+
+
 def garantir_credenciais_turma(
     db: Session, escola_id: int, turma: Turma, regenerar: bool = False,
 ) -> list[dict]:
-    """Garante credencial + perfil para cada aluno ativo da turma.
-
-    - Aluno novo: ganha código, PIN, QR e perfil.
-    - `regenerar`: mantém o CÓDIGO (a criança decora), troca PIN + QR e
-      incrementa token_version (cartão perdido → sessões antigas caem).
-    Devolve os dados prontos para o PDF dos cartões.
-    """
-    resultado: list[dict] = []
-    for aluno in alunos_da_turma(db, escola_id, turma):
-        credencial = db.execute(
-            select(QuestCredencialAluno)
-            .where(QuestCredencialAluno.aluno_id == aluno.id)
-        ).scalar_one_or_none()
-
-        if credencial is None:
-            credencial = QuestCredencialAluno(
-                escola_id=escola_id,
-                aluno_id=aluno.id,
-                codigo_login=gerar_codigo_login(db),
-                pin_figuras=gerar_pin(),
-                qr_token=gerar_qr_token(),
-            )
-            db.add(credencial)
-        elif regenerar:
-            credencial.pin_figuras = gerar_pin()
-            credencial.qr_token = gerar_qr_token()
-            credencial.token_version = (credencial.token_version or 0) + 1
-
-        perfil = perfis.obter_ou_criar_perfil(db, aluno)
-        db.flush()
-        resultado.append({
-            "aluno": aluno,
-            "credencial": credencial,
-            "perfil": perfil,
-        })
-    return resultado
+    """Credencial + perfil para cada aluno ativo da turma (dados do PDF)."""
+    return [garantir_credencial_aluno(db, escola_id, aluno, regenerar)
+            for aluno in alunos_da_turma(db, escola_id, turma)]
 
 
 # ---------------------------------------------------------------------------

@@ -1,15 +1,71 @@
 /**
- * Áudio base da Fase Q0: efeitos curtos sintetizados com WebAudio — zero
- * assets para baixar, funciona offline. Música e narração gravada entram
- * nas próximas fases (docs/quest/05); a API já separa efeito × música.
+ * Áudio do Quest — efeitos sintetizados (WebAudio, zero assets, funciona
+ * offline) e narração pt-BR à prova de tablet de escola:
  *
- * Instrução de 1º/2º ano ainda usa a Web Speech API (narrar) como ponte até
- * os áudios gravados — melhor uma voz sintética que uma criança sem leitura.
+ *  - a voz é escolhida EXPLICITAMENTE entre as vozes pt-* do aparelho
+ *    (getVoices carrega assíncrono no Android — ouvimos voiceschanged);
+ *  - navegador exige gesto do usuário para tocar som: o primeiro
+ *    pointerdown destrava o AudioContext e solta a narração pendente
+ *    (cobre o fluxo por QR, que chega ao lobby sem nenhum toque);
+ *  - sem voz pt disponível, `narracaoDisponivel()` devolve false e a
+ *    interface mostra o texto no balão do Cosmo (nunca falha em silêncio).
+ *
+ * Áudios gravados (OGG) entram na Q1 para as frases fixas; a Web Speech
+ * fica de fallback para texto dinâmico (docs/quest/05).
  */
 
 let contexto: AudioContext | null = null;
 let efeitosAtivos = true;
 let narracaoAtiva = true;
+let vozPt: SpeechSynthesisVoice | null = null;
+let vozesProntas = false;
+let narracaoPendente: string | null = null;
+let desbloqueado = false;
+
+// ---------------------------------------------------------------------------
+// Inicialização (vozes + gesto de desbloqueio)
+// ---------------------------------------------------------------------------
+
+function escolherVoz() {
+  if (typeof speechSynthesis === "undefined") return;
+  const vozes = speechSynthesis.getVoices();
+  if (!vozes.length) return;
+  vozesProntas = true;
+  // Preferência: pt-BR local > pt-BR qualquer > pt-* qualquer
+  vozPt =
+    vozes.find((v) => v.lang.replace("_", "-") === "pt-BR" && v.localService) ??
+    vozes.find((v) => v.lang.replace("_", "-") === "pt-BR") ??
+    vozes.find((v) => v.lang.toLowerCase().startsWith("pt")) ??
+    null;
+}
+
+function aoPrimeiroGesto() {
+  desbloqueado = true;
+  void ctx()?.resume();
+  if (narracaoPendente) {
+    const texto = narracaoPendente;
+    narracaoPendente = null;
+    narrar(texto);
+  }
+  window.removeEventListener("pointerdown", aoPrimeiroGesto);
+  window.removeEventListener("keydown", aoPrimeiroGesto);
+}
+
+export function iniciarAudio() {
+  if (typeof speechSynthesis !== "undefined") {
+    escolherVoz();
+    speechSynthesis.addEventListener?.("voiceschanged", escolherVoz);
+  }
+  window.addEventListener("pointerdown", aoPrimeiroGesto, { passive: true });
+  window.addEventListener("keydown", aoPrimeiroGesto);
+}
+
+/** false = este aparelho não tem voz em português (a UI mostra o texto). */
+export function narracaoDisponivel(): boolean {
+  if (typeof speechSynthesis === "undefined") return false;
+  if (!vozesProntas) escolherVoz();
+  return vozPt !== null;
+}
 
 function ctx(): AudioContext | null {
   if (typeof AudioContext === "undefined") return null;
@@ -22,6 +78,10 @@ export function configurarAudio(opcoes: { som?: boolean; narracao?: boolean }) {
   if (opcoes.som !== undefined) efeitosAtivos = opcoes.som;
   if (opcoes.narracao !== undefined) narracaoAtiva = opcoes.narracao;
 }
+
+// ---------------------------------------------------------------------------
+// Efeitos (sintetizados — gentis, nunca punitivos)
+// ---------------------------------------------------------------------------
 
 function nota(
   frequencia: number,
@@ -45,14 +105,23 @@ function nota(
   osc.stop(t + duracao + 0.05);
 }
 
-export type Efeito = "clique" | "sucesso" | "erro" | "fanfarra";
+/** Nota solta (usada pelo céu tocável — escala pentatônica). */
+export function tocarNota(frequencia: number, volume = 0.1) {
+  if (!efeitosAtivos) return;
+  nota(frequencia, 0, 0.5, "triangle", volume);
+}
 
-/** Efeitos gentis — "erro" nunca soa punitivo (docs/quest/03). */
+export type Efeito = "clique" | "sucesso" | "erro" | "fanfarra" | "bip";
+
 export function tocar(efeito: Efeito) {
   if (!efeitosAtivos) return;
   switch (efeito) {
     case "clique":
       nota(660, 0, 0.08, "triangle", 0.08);
+      break;
+    case "bip":
+      nota(1180, 0, 0.09, "square", 0.05);
+      nota(1560, 0.09, 0.12, "square", 0.05);
       break;
     case "sucesso":
       nota(523.25, 0, 0.12, "triangle");
@@ -73,13 +142,37 @@ export function tocar(efeito: Efeito) {
   }
 }
 
-/** Narra um texto em pt-BR (instruções para quem ainda não lê). */
+// ---------------------------------------------------------------------------
+// Narração pt-BR
+// ---------------------------------------------------------------------------
+
+function limparParaFala(texto: string): string {
+  // Emojis e símbolos viram silêncio, não "cara sorridente"
+  return texto
+    .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Narra em pt-BR. Antes do primeiro gesto do usuário, guarda a última
+ * frase e a solta quando a criança tocar na tela. */
 export function narrar(texto: string) {
-  if (!narracaoAtiva || typeof speechSynthesis === "undefined") return;
+  if (!narracaoAtiva || !narracaoDisponivel()) return;
+  const fala = limparParaFala(texto);
+  if (!fala) return;
+  if (!desbloqueado) {
+    narracaoPendente = fala;
+    return;
+  }
   speechSynthesis.cancel();
-  const fala = new SpeechSynthesisUtterance(texto);
-  fala.lang = "pt-BR";
-  fala.rate = 0.95;
-  fala.pitch = 1.15;
-  speechSynthesis.speak(fala);
+  // O cancel() imediato seguido de speak() engasga em alguns Android —
+  // um respiro de 60ms resolve.
+  window.setTimeout(() => {
+    const declaracao = new SpeechSynthesisUtterance(fala);
+    declaracao.lang = "pt-BR";
+    if (vozPt) declaracao.voice = vozPt;
+    declaracao.rate = 0.95;
+    declaracao.pitch = 1.15;
+    speechSynthesis.speak(declaracao);
+  }, 60);
 }

@@ -4,7 +4,7 @@
 
 | Papel | Autentica por | Vive em | Acessa |
 |---|---|---|---|
-| **Aluno** | Cartão de acesso: QR ou código curto (`SOL-1234`) + PIN de 4 figuras | `quest_credenciais_aluno` (JWT `papel=aluno`) | Só o Quest (rotas `/quest/*` não administrativas) |
+| **Aluno** | Cartão de acesso: QR ou código curto (`SOL1234`, só letras e números — SEM senha, como no Elefante Letrado) | `quest_credenciais_aluno` (JWT `papel=aluno`) | Só o Quest (rotas `/quest/*` não administrativas) |
 | **Responsável** | E-mail + senha | `usuarios` (cargo `responsavel`) | Portal da Família (`/quest/familia/*`) — leitura |
 | **Professor** | Login Edu existente | `usuarios` | Edu + telas de professor do Quest (`/quest/professor/*`) |
 | **Coordenador/Admin** | Login Edu existente | `usuarios` | Tudo da escola: ativação de recursos, controles sociais |
@@ -12,17 +12,27 @@
 
 ### Login do aluno (o problema mais subestimado do projeto)
 
-Criança de 6 anos não tem e-mail nem decora senha. O fluxo:
+Criança de 6 anos não tem e-mail nem decora senha. Decisão de produto
+(09/07/2026): **sem senha/PIN — o código impresso É a credencial**, como no
+Elefante Letrado; ele pode ficar exposto. A defesa contra abuso é o
+limitador por (código, IP) — dimensionado para 30 tablets atrás do NAT da
+escola — e o escopo mínimo do papel aluno. O fluxo:
 
-1. Professor abre a turma no Edu → "Gerar cartões de acesso do Quest" →
-   PDF com um cartão por aluno (QR + código falável + as 4 figuras do PIN).
-   Reusa o gerador de PDF/QR existente (`fpdf2` + `segno`).
-2. Na escola (tablet compartilhado): aluno aponta o QR **ou** digita o
-   código curto → a tela mostra o avatar e o apelido dele ("É você?") →
-   confirma tocando suas 4 figuras.
-3. Em casa: mesmo cartão; o responsável ajuda na primeira vez; refresh
-   token de 30 dias no aparelho — depois é 1 toque.
-4. Cartão perdido: professor regenera (`qr_token` novo revoga o antigo).
+1. Professor abre a turma no Edu → "Cartões do Quest" → PDF com um cartão
+   por aluno (QR + código só letras/números) + página final "só do
+   professor" (tabela nome → código e roteiro da 1ª aula).
+2. Na escola (tablet compartilhado): a entrada abre com **"Quem vai
+   jogar?"** (astronautas que já entraram no aparelho — 1 toque) ou a
+   criança digita o código e confirma **"Sou eu!"**.
+3. **Primeira vez**: cerimônia de boas-vindas — a criança escolhe COMO
+   quer ser chamada (nome/apelido digitado, só letras, 2–20) e a cor do
+   traje; o Quest passa a chamá-la por esse nome em toda fala.
+4. Ao reabrir o app com sessão guardada, SEMPRE aparece "É você, {nome}?" —
+   a criança do turno seguinte nunca herda a conta da anterior.
+5. Cartão perdido: regeneração **individual** por aluno (não derruba a
+   turma); o código nunca muda (a criança decora), só o QR.
+6. Aluno transferido/arquivado recebe mensagem própria ("cartão
+   descansando") — nunca "código errado", que a faria se culpar.
 
 ## Sincronização Quest → Edu
 

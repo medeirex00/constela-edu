@@ -5,30 +5,23 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
-# Autenticação infantil
+# Autenticação infantil (sem senha — o código é a credencial)
 # ---------------------------------------------------------------------------
-
-class FiguraOut(BaseModel):
-    slug: str
-    nome: str
-    emoji: str
-
 
 class QuemIn(BaseModel):
     codigo: str = Field(min_length=3, max_length=30)
 
 
 class QuemOut(BaseModel):
-    """Confirmação "É você?" antes do PIN — o mínimo para a criança se
-    reconhecer, nada que sirva para enumerar dados."""
-    primeiro_nome: str
+    """Confirmação "É você?" antes de entrar — o mínimo para a criança se
+    reconhecer."""
+    nome: str
     apelido: str
     avatar: dict
 
 
 class EntrarIn(BaseModel):
     codigo: str = Field(min_length=3, max_length=30)
-    pin: list[str] = Field(min_length=4, max_length=4)
 
 
 class EntrarQrIn(BaseModel):
@@ -48,13 +41,23 @@ class PerfilOut(BaseModel):
     sequencia_dias: int
     avatar: dict
     preferencias: dict
-    # Vem do cadastro (alunos.nome) — usado só na própria tela da criança
-    primeiro_nome: str = ""
+    # Como a criança pediu para ser chamada ("" = ainda não escolheu —
+    # dispara a cerimônia da primeira vez no app). No banco é NULL até a
+    # cerimônia; a API sempre devolve string.
+    nome_exibicao: str | None = ""
+    # Nome usado nas falas: nome_exibicao ou o primeiro nome do cadastro
+    nome: str = ""
+    # Dias desde o último login (alimenta a saudação com memória do Cosmo)
+    dias_sem_jogar: int = 0
+    # Código do próprio cartão — alimenta o "Quem vai jogar?" do aparelho
+    codigo_login: str = ""
 
 
 class SessaoOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    # Primeiro login da credencial — o app abre a cerimônia de boas-vindas
+    primeira_vez: bool = False
     perfil: PerfilOut
 
 
@@ -64,6 +67,10 @@ class SessaoOut(BaseModel):
 
 class AvatarIn(BaseModel):
     cor: str | None = None
+
+
+class NomeIn(BaseModel):
+    nome: str = Field(min_length=2, max_length=20)
 
 
 class PreferenciasIn(BaseModel):
@@ -80,6 +87,7 @@ class PreferenciasIn(BaseModel):
 class AcessoAlunoOut(BaseModel):
     aluno_id: int
     nome: str
+    nome_exibicao: str | None = None
     apelido: str | None = None
     codigo_login: str | None = None
     ultimo_acesso: datetime | None = None

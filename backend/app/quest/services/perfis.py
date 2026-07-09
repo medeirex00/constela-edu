@@ -95,6 +95,28 @@ def obter_ou_criar_perfil(db: Session, aluno: Aluno) -> QuestPerfil:
 PREFERENCIAS_PERMITIDAS = {"som", "musica", "narracao", "reduzir_animacoes"}
 
 
+def validar_nome_exibicao(nome: str) -> str:
+    """Nome que a criança escolheu na cerimônia ("como você quer ser
+    chamado?"). Único texto livre do papel aluno: curto, só letras e
+    espaços, sem dígitos/símbolos/emojis — e Título Bonito na saída."""
+    limpo = " ".join((nome or "").split())
+    if not (2 <= len(limpo) <= 20):
+        raise ValueError("O nome precisa ter entre 2 e 20 letras.")
+    if not all(c.isalpha() or c == " " for c in limpo):
+        raise ValueError("Use só letras, sem números ou símbolos.")
+    return limpo.title()
+
+
+def primeiro_nome_cadastro(nome_civil: str) -> str:
+    return (nome_civil or "").strip().split(" ")[0].title()
+
+
+def nome_para_falas(perfil: QuestPerfil, aluno_nome: str) -> str:
+    """Nome usado em toda a interface: o escolhido pela criança, ou o
+    primeiro nome do cadastro enquanto ela não escolher."""
+    return (perfil.nome_exibicao or "").strip() or primeiro_nome_cadastro(aluno_nome)
+
+
 def atualizar_avatar(perfil: QuestPerfil, mudancas: dict) -> None:
     """Só aceita slots conhecidos com valores do catálogo. Na fase Q0 o
     único slot equipável é a cor do traje."""

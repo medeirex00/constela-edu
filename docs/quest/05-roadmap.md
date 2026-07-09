@@ -18,9 +18,23 @@ entrada em 3 passos, lobby com Cosmo vivo, cor do traje persistida,
 gaveta com preferências), botão "Cartões do Quest" na turma do Edu, CI.
 **Ressalvas:** efeitos sonoros são sintetizados (WebAudio) e a narração usa
 a Web Speech API — trilha musical e áudios gravados entram quando houver
-assets; ícones PNG do manifest PWA pendentes (hoje SVG); leitura de QR pela
-câmera DENTRO do app fica para quando houver tablets de teste (o QR do
-cartão já funciona via câmera nativa do aparelho, que abre a URL).
+assets; leitura de QR pela câmera DENTRO do app fica para quando houver
+tablets de teste (o QR do cartão já funciona via câmera nativa do aparelho,
+que abre a URL).
+
+**Revisão pós-análise (09/07/2026, mesma data):** decisões do dono do
+produto aplicadas — login SEM senha/PIN (o código `SOL1234`, só letras e
+números, é a credencial, como no Elefante Letrado) e cerimônia da primeira
+vez em que a criança escolhe COMO quer ser chamada (nome_exibicao) e a cor
+do traje. Também entregues: "Quem vai jogar?" (astronautas do aparelho),
+"É você?" no boot (tablet compartilhado), sessão resiliente a queda de
+Wi-Fi (cache local, só 401/403 desloga), narração pt-BR com voz explícita
++ botão "ouvir de novo" em todo passo, limitador por (código, IP) que não
+pune a turma atrás do NAT, mensagem própria para aluno inativo, cartão
+individual por aluno, página "só do professor" no PDF, zonas de toque do
+Cosmo, céu tocável (constelação do dia), chips zerados escondidos,
+despedida com confirmação, contraste/foco/gaveta acessíveis, ícones PNG
+do PWA e fontes só latin (precache 1,4MB → 319KB).
 
 - `apps/quest` criado no monorepo (Vite + React + TS + PWA), CI incluída
 - Design system: tokens e componentes extraídos do `constela-play-v7.html`

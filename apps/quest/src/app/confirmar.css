@@ -1,0 +1,24 @@
+/* "É você?" no boot — tablet compartilhado nunca herda a sessão anterior. */
+.confirmar {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.confirmar-painel {
+  width: min(380px, 92vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.confirmar-painel .nome {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 28px;
+}
+.confirmar-painel .botao3d { width: 100%; }
+.confirmar-painel .botao3d.verde { font-size: 22px; padding: 16px; }
+.confirmar-painel .botao3d.fantasma { font-size: 14px; padding: 10px; }

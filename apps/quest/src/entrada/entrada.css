@@ -5,9 +5,10 @@
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 460px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 480px) minmax(0, 1fr);
   align-items: center;
   padding: 24px;
+  overflow-y: auto;
 }
 
 .entrada .cosmo-canto {
@@ -20,18 +21,24 @@
   grid-column: 2;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   text-align: center;
 }
 
-.entrada-painel h1 {
+.entrada-passo {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.entrada-passo h1 {
   font-family: var(--font-display);
   font-size: 26px;
   text-transform: uppercase;
   letter-spacing: .5px;
 }
 
-.entrada-painel p.dica {
+.entrada-passo p.dica {
   color: var(--ink-soft);
   font-weight: 800;
   font-size: 15px;
@@ -68,6 +75,42 @@
   letter-spacing: 1px;
 }
 
+/* "Quem vai jogar?" — astronautas conhecidos do aparelho */
+.astronautas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 12px;
+  max-height: 42vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+.astronauta {
+  border: none;
+  border-radius: 18px;
+  background: var(--paper);
+  box-shadow: 0 6px 0 rgba(0, 0, 0, .18);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px;
+  min-height: 130px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--ink);
+  transition: transform .12s ease;
+}
+.astronauta:hover { transform: translateY(-4px); }
+.astronauta:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0, 0, 0, .18); }
+.astronauta b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Código: caixa grande, letras gigantes, auto-maiúsculas */
 .campo-codigo {
   width: 100%;
@@ -83,9 +126,8 @@
   text-transform: uppercase;
   letter-spacing: 3px;
 }
-.campo-codigo:focus-visible { outline: 4px solid var(--violet); outline-offset: 2px; }
 
-/* "É você?" */
+/* "É você?" — o SIM é verde, gigante e óbvio; o NÃO é discreto */
 .quem-cartao {
   display: flex;
   flex-direction: column;
@@ -98,54 +140,18 @@
   font-size: 30px;
 }
 .quem-cartao .apelido { color: var(--ink-soft); font-weight: 800; }
-.quem-botoes { display: flex; gap: 12px; justify-content: center; }
-
-/* PIN de figuras */
-.pin-vagas {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-}
-.pin-vaga {
-  width: 58px;
-  height: 58px;
-  border-radius: 16px;
-  border: 3px dashed var(--line);
-  background: var(--paper);
-  display: grid;
-  place-items: center;
-  font-size: 30px;
-}
-.pin-vaga.cheia { border-style: solid; border-color: var(--violet); }
-
-.pin-grade {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-.pin-figura {
-  min-height: 84px;
-  border: none;
-  border-radius: 18px;
-  background: var(--paper);
-  box-shadow: 0 6px 0 rgba(0, 0, 0, .18);
-  cursor: pointer;
+.quem-botoes {
   display: flex;
   flex-direction: column;
+  gap: 10px;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 12px;
-  color: var(--ink-soft);
-  transition: transform .12s ease;
 }
-.pin-figura .desenho { font-size: 34px; line-height: 1; }
-.pin-figura:hover { transform: translateY(-4px); }
-.pin-figura:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0, 0, 0, .18); }
-.pin-figura:focus-visible { outline: 4px solid var(--violet); outline-offset: 2px; }
-.pin-figura:disabled { opacity: .35; cursor: default; transform: none; }
+.quem-botoes .sou-eu {
+  font-size: 24px;
+  padding: 18px 48px;
+  width: 100%;
+}
+.quem-botoes .nao-sou-eu { font-size: 14px; padding: 10px 20px; }
 
 .entrada-erro {
   background: var(--paper);
@@ -162,21 +168,32 @@
   75% { transform: translateX(-4px); }
 }
 
-.botao-voltar {
-  align-self: center;
-  background: none;
+/* Rodapé: ouvir de novo + voltar — pills com fundo escuro (contraste AA
+   sobre o céu claro; texto branco solto reprovava em ~2:1) */
+.entrada-rodape {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.botao-ouvir {
+  background: var(--hud);
+  color: var(--hud-ink);
   border: none;
-  color: #fff;
+  border-radius: 999px;
+  padding: 12px 20px;
+  min-height: var(--alvo-minimo);
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 15px;
   cursor: pointer;
-  text-shadow: 0 2px 6px rgba(0, 0, 0, .3);
-  min-height: var(--alvo-minimo);
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .3);
+  transition: transform .12s ease;
 }
+.botao-ouvir:hover { transform: translateY(-2px); }
+.botao-ouvir:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(0, 0, 0, .3); }
 
 @media (max-width: 760px) {
   .entrada { grid-template-columns: 1fr; }
-  .entrada .cosmo-canto { display: none; }
   .entrada-painel { grid-column: 1; }
 }

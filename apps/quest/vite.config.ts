@@ -11,7 +11,9 @@ export default defineConfig({
       // Mesma política do Edu: precache SÓ do app shell. Nada de /api no
       // Cache Storage — tablets de escola são compartilhados entre alunos.
       workbox: {
-        globPatterns: ["**/*.{js,css,html,svg,png,woff,woff2}"],
+        // Sem "woff": qualquer WebView capaz de rodar o app entende woff2 —
+        // precachear os dois duplicaria o peso de fontes nos tablets.
+        globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api/],
         cleanupOutdatedCaches: true,

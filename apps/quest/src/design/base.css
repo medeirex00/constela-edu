@@ -16,6 +16,14 @@ body {
 
 button { font-family: inherit; }
 
+/* Anel de foco em dois tons: visível sobre painel branco E sobre o céu
+   (um anel branco puro sumia dentro dos painéis claros). */
+:focus-visible {
+  outline: 4px solid var(--violet);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 8px rgba(255, 255, 255, .85);
+}
+
 /* ---------- Botão 3D (o botão do jogo) ---------- */
 .botao3d {
   font-family: var(--font-display);
@@ -35,9 +43,9 @@ button { font-family: inherit; }
 }
 .botao3d:hover { transform: translateY(-2px); }
 .botao3d:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0, 0, 0, .28); }
-.botao3d:focus-visible { outline: 4px solid #fff; outline-offset: 3px; }
 .botao3d:disabled { opacity: .55; cursor: default; transform: none; }
 .botao3d.sol { background: var(--sun); color: #3A2C00; box-shadow: 0 6px 0 var(--sun-deep); }
+.botao3d.verde { background: var(--green); color: #05391B; box-shadow: 0 6px 0 #1FA85B; }
 .botao3d.coral { background: var(--coral); box-shadow: 0 6px 0 var(--coral-deep); }
 .botao3d.fantasma {
   background: transparent;
@@ -69,6 +77,19 @@ button { font-family: inherit; }
   box-shadow: 0 12px 0 rgba(0, 0, 0, .22);
 }
 
+/* ---------- Amostra de cor (vestiário/cerimônia) ---------- */
+.amostra {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  cursor: pointer;
+  border: 4px solid var(--paper);
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .22);
+  transition: transform .12s;
+}
+.amostra:hover { transform: scale(1.12) rotate(-4deg); }
+.amostra.escolhida { outline: 4px solid var(--violet); outline-offset: 2px; }
+
 /* ---------- Toast ---------- */
 #toast {
   position: fixed;
@@ -99,13 +120,34 @@ button { font-family: inherit; }
   transition: background .8s ease;
 }
 .constelacao { position: fixed; inset: 0; z-index: -3; pointer-events: none; }
-.constelacao line { stroke: var(--star-ink); stroke-width: 1.6; }
-.constelacao circle { fill: var(--star-ink); }
+.constelacao line { stroke: var(--star-ink); stroke-width: 1.6; transition: stroke .4s; }
+.constelacao circle { fill: var(--star-ink); transition: fill .3s, r .3s; }
 [data-theme="dark"] .constelacao circle {
   animation: cintilar 3s ease-in-out infinite alternate;
 }
 .constelacao circle:nth-child(odd) { animation-delay: 1.2s; }
 @keyframes cintilar { from { opacity: .35; } to { opacity: 1; } }
+
+/* Céu tocável (lobby): estrelas viram brinquedo musical do dia */
+.constelacao.tocavel { z-index: 1; }
+.constelacao.tocavel circle { pointer-events: auto; cursor: pointer; }
+.constelacao circle.acesa {
+  fill: var(--sun);
+  animation: estrela-acende .5s ease;
+}
+.constelacao line.acesa { stroke: var(--sun); stroke-width: 2.4; }
+.constelacao.completa line.acesa {
+  animation: linha-brilha 1.6s ease-in-out infinite alternate;
+}
+@keyframes estrela-acende {
+  0% { opacity: .4; }
+  50% { opacity: 1; }
+  100% { opacity: 1; }
+}
+@keyframes linha-brilha {
+  from { opacity: .55; }
+  to { opacity: 1; }
+}
 
 .neblina {
   position: fixed;

@@ -1,106 +1,117 @@
 /**
- * Entrada do astronauta — 3 passos, um por tela (docs/quest/04):
+ * Entrada do astronauta — sem senha (o código é a credencial):
  *
- *   1. código do cartão ("SOL-1234", tolerante a como a criança digita)
- *   2. "É você?" — mostra nome/apelido/avatar antes de pedir o segredo
- *   3. PIN: tocar as 4 figuras na ordem do cartão
+ *   0. "Quem vai jogar?" — astronautas que já entraram neste aparelho
+ *      (tablet compartilhado: um toque e pronto)
+ *   1. código do cartão (só letras e números, ex.: SOL1234)
+ *   2. "É você?" — botão verde gigante confirma; o cinza volta
  *
- * Erro nunca culpa: mensagem gentil + narração, e o Cosmo continua sorrindo.
+ * Cada passo é NARRADO em pt-BR e tem o botão "Ouvir de novo" — criança de
+ * 6 anos não lê instrução. Erro nunca culpa: mensagem gentil + narração.
  */
 import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@constela/core";
-import { entrar, obterFiguras, quemE } from "@constela/quest-core";
-import type { Figura, Quem, SessaoQuest } from "@constela/quest-core";
+import { entrar, quemE } from "@constela/quest-core";
+import type { AstronautaConhecido, Quem, SessaoQuest } from "@constela/quest-core";
 
 import { narrar, tocar } from "../audio/audio";
 import { Cosmo } from "../cosmo/Cosmo";
+import { useSessao } from "../estado/sessao";
 import "./entrada.css";
 
-type Passo = "codigo" | "quem" | "pin";
+type Passo = "quem-joga" | "codigo" | "quem";
+
+const NARRACOES: Record<Passo, string> = {
+  "quem-joga": "Quem vai jogar? Toque no seu astronauta!",
+  codigo: "Digite o código do seu cartão, aquele com as letras e os números grandes. Depois toque em continuar.",
+  quem: "Se for você, toque no botão verde!",
+};
 
 interface EntradaProps {
   aoEntrar(sessao: SessaoQuest): void;
 }
 
 export function Entrada({ aoEntrar }: EntradaProps) {
-  const [passo, setPasso] = useState<Passo>("codigo");
+  const { astronautas } = useSessao();
+  const [passo, setPasso] = useState<Passo>(
+    astronautas.length > 0 ? "quem-joga" : "codigo",
+  );
   const [codigo, setCodigo] = useState("");
   const [quem, setQuem] = useState<Quem | null>(null);
-  const [figuras, setFiguras] = useState<Figura[]>([]);
-  const [pin, setPin] = useState<string[]>([]);
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const campoCodigo = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    obterFiguras().then(setFiguras).catch(() => setFiguras([]));
-  }, []);
+  const telaLarga = useRef(
+    window.matchMedia("(min-width: 761px)").matches,
+  ).current;
 
   useEffect(() => {
     if (passo === "codigo") campoCodigo.current?.focus();
-    if (passo === "pin") narrar("Agora toque nas suas quatro figuras secretas, na ordem do cartão.");
+    if (passo === "quem" && quem) {
+      narrar(`Encontrei! É você, ${quem.nome}? ${NARRACOES.quem}`);
+    } else {
+      narrar(NARRACOES[passo]);
+    }
+    // Narra só na troca de passo
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passo]);
 
-  const falhar = (mensagem: string) => {
+  const falhar = (excecao: unknown, padrao: string) => {
+    const mensagem = excecao instanceof ApiError || excecao instanceof Error
+      ? excecao.message : padrao;
     setErro(mensagem);
     tocar("erro");
     narrar(mensagem);
   };
 
-  const confirmarCodigo = async () => {
-    if (!codigo.trim() || ocupado) return;
+  const confirmarCodigo = async (digitado?: string) => {
+    const alvo = (digitado ?? codigo).trim();
+    if (!alvo || ocupado) return;
     setOcupado(true);
     setErro("");
     try {
-      const resposta = await quemE(codigo);
+      const resposta = await quemE(alvo);
+      setCodigo(alvo);
       setQuem(resposta);
       setPasso("quem");
       tocar("clique");
-      narrar(`Encontrei! É você, ${resposta.primeiro_nome}?`);
     } catch (excecao) {
-      falhar(excecao instanceof ApiError ? excecao.message
-        : "Não consegui procurar agora. Tente de novo!");
+      falhar(excecao, "Não consegui procurar agora. Tente de novo!");
     } finally {
       setOcupado(false);
     }
   };
 
-  const tocarFigura = async (slug: string) => {
-    if (ocupado || pin.includes(slug)) return;
-    tocar("clique");
-    const novo = [...pin, slug];
-    setPin(novo);
-    if (novo.length < 4) return;
-
+  const entrarAgora = async (codigoEscolhido?: string) => {
+    if (ocupado) return;
     setOcupado(true);
     setErro("");
     try {
-      const sessao = await entrar(codigo, novo);
+      const sessao = await entrar(codigoEscolhido ?? codigo);
       tocar("fanfarra");
-      narrar(`Bem-vindo a bordo, ${sessao.perfil.primeiro_nome}!`);
       aoEntrar(sessao);
     } catch (excecao) {
-      setPin([]);
-      falhar(excecao instanceof ApiError ? excecao.message
-        : "As figuras não bateram. Tente de novo!");
+      falhar(excecao, "Não consegui entrar agora. Tente de novo!");
+      if (codigoEscolhido) setPasso("codigo");
     } finally {
       setOcupado(false);
     }
   };
 
   const voltarAoInicio = () => {
-    setPasso("codigo");
+    setPasso(astronautas.length > 0 ? "quem-joga" : "codigo");
     setQuem(null);
-    setPin([]);
     setErro("");
   };
 
   return (
     <div className="entrada">
-      <div className="cosmo-canto">
-        <Cosmo altura="52vh" />
-      </div>
+      {telaLarga && (
+        <div className="cosmo-canto">
+          <Cosmo altura="52vh" />
+        </div>
+      )}
 
       <div className="entrada-painel">
         <div className="entrada-marca" aria-hidden>
@@ -109,25 +120,53 @@ export function Entrada({ aoEntrar }: EntradaProps) {
           <small>QUEST</small>
         </div>
 
+        {passo === "quem-joga" && (
+          <div className="painel entrada-passo">
+            <h1>👋 Quem vai jogar?</h1>
+            <p className="dica">Toque no seu astronauta</p>
+            {erro && <div className="entrada-erro" role="alert">{erro}</div>}
+            <div className="astronautas" role="list">
+              {astronautas.map((astronauta: AstronautaConhecido) => (
+                <button
+                  key={astronauta.codigo}
+                  className="astronauta"
+                  disabled={ocupado}
+                  onClick={() => { tocar("clique"); void entrarAgora(astronauta.codigo); }}
+                >
+                  <Cosmo altura="84px" vivo={false} cor={astronauta.cor} />
+                  <b>{astronauta.nome}</b>
+                </button>
+              ))}
+            </div>
+            <button className="botao3d fantasma"
+                    onClick={() => { tocar("clique"); setPasso("codigo"); }}>
+              ✨ Sou novo aqui
+            </button>
+          </div>
+        )}
+
         {passo === "codigo" && (
-          <div className="painel entrada-painel" style={{ gap: 14 }}>
+          <div className="painel entrada-passo">
             <h1>🚀 Vamos entrar!</h1>
             <p className="dica">Digite o código do seu cartão de astronauta</p>
             <input
               ref={campoCodigo}
               className="campo-codigo"
-              placeholder="SOL-1234"
+              placeholder="SOL1234"
               value={codigo}
               maxLength={12}
               autoCapitalize="characters"
               autoComplete="off"
               spellCheck={false}
-              onChange={(evento) => setCodigo(evento.target.value.toUpperCase())}
+              inputMode="text"
+              onChange={(evento) => setCodigo(
+                evento.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+              )}
               onKeyDown={(evento) => evento.key === "Enter" && confirmarCodigo()}
-              aria-label="Código do cartão"
+              aria-label="Código do cartão (letras e números)"
             />
             {erro && <div className="entrada-erro" role="alert">{erro}</div>}
-            <button className="botao3d sol" onClick={confirmarCodigo}
+            <button className="botao3d sol" onClick={() => confirmarCodigo()}
                     disabled={ocupado || !codigo.trim()}>
               Continuar
             </button>
@@ -135,68 +174,43 @@ export function Entrada({ aoEntrar }: EntradaProps) {
         )}
 
         {passo === "quem" && quem && (
-          <div className="painel entrada-painel" style={{ gap: 14 }}>
+          <div className="painel entrada-passo">
             <div className="quem-cartao">
-              <Cosmo altura="140px" vivo={false} cor={quem.avatar.cor} />
-              <span className="nome">É você, {quem.primeiro_nome}?</span>
+              <Cosmo altura="140px" vivo={false} cor={quem.avatar.cor as string} />
+              <span className="nome">É você, {quem.nome}?</span>
               <span className="apelido">✨ {quem.apelido}</span>
             </div>
-            <div className="quem-botoes">
-              <button className="botao3d fantasma" onClick={voltarAoInicio}>
-                Não sou eu
-              </button>
-              <button className="botao3d" autoFocus
-                      onClick={() => { tocar("clique"); setPasso("pin"); }}>
-                Sou eu!
-              </button>
-            </div>
-          </div>
-        )}
-
-        {passo === "pin" && (
-          <div className="painel entrada-painel" style={{ gap: 14 }}>
-            <h1>🔒 Suas figuras secretas</h1>
-            <p className="dica">Toque nas 4 figuras, na ordem do seu cartão</p>
-            <div className="pin-vagas" aria-label="Figuras escolhidas">
-              {[0, 1, 2, 3].map((posicao) => {
-                const slug = pin[posicao];
-                const figura = figuras.find((f) => f.slug === slug);
-                return (
-                  <div key={posicao}
-                       className={`pin-vaga${slug ? " cheia" : ""}`}>
-                    {figura?.emoji ?? ""}
-                  </div>
-                );
-              })}
-            </div>
             {erro && <div className="entrada-erro" role="alert">{erro}</div>}
-            <div className="pin-grade">
-              {figuras.map((figura) => (
-                <button
-                  key={figura.slug}
-                  className="pin-figura"
-                  disabled={ocupado || pin.includes(figura.slug)}
-                  onClick={() => tocarFigura(figura.slug)}
-                  aria-label={figura.nome}
-                >
-                  <span className="desenho" aria-hidden>{figura.emoji}</span>
-                  {figura.nome}
-                </button>
-              ))}
+            <div className="quem-botoes">
+              <button className="botao3d verde sou-eu" autoFocus
+                      disabled={ocupado}
+                      onClick={() => { tocar("clique"); void entrarAgora(); }}>
+                ✅ Sou eu!
+              </button>
+              <button className="botao3d fantasma nao-sou-eu"
+                      onClick={() => { tocar("clique"); voltarAoInicio(); }}>
+                ↩ Não sou eu
+              </button>
             </div>
-            <button className="botao3d fantasma"
-                    onClick={() => { setPin([]); setErro(""); }}
-                    disabled={ocupado || pin.length === 0}>
-              🧽 Apagar e recomeçar
-            </button>
           </div>
         )}
 
-        {passo !== "codigo" && (
-          <button className="botao-voltar" onClick={voltarAoInicio}>
-            ← Voltar ao começo
+        <div className="entrada-rodape">
+          <button
+            className="botao-ouvir"
+            onClick={() => narrar(passo === "quem" && quem
+              ? `É você, ${quem.nome}? ${NARRACOES.quem}`
+              : NARRACOES[passo])}
+            aria-label="Ouvir a instrução de novo"
+          >
+            🔊 Ouvir de novo
           </button>
-        )}
+          {passo !== "quem-joga" && (astronautas.length > 0 || passo === "quem") && (
+            <button className="botao-ouvir" onClick={voltarAoInicio}>
+              ← Voltar ao começo
+            </button>
+          )}
+        </div>
       </div>
 
       <div />

@@ -70,15 +70,15 @@ erDiagram
 | id | PK | |
 | escola_id | FK, index | |
 | aluno_id | FK alunos, unique | |
-| codigo_login | str(20), unique | curto e falável: `SOL-1234` — impresso no cartão de acesso |
-| pin_figuras_hash | str(200) | PIN de 4 figuras (🦊🌙⭐🍎) hasheado como senha |
+| codigo_login | str(20), unique | curto, falável e SÓ letras+números: `SOL1234` — impresso no cartão; **é a credencial** (sem senha/PIN, decisão de produto como no Elefante Letrado) |
 | qr_token | str(64), unique | login por QR nos tablets; **trocável** (revoga cartões antigos) |
 | token_version | int | mesma mecânica de invalidação do Edu |
 | ultimo_acesso | datetime | |
 
-O professor gera/imprime os cartões de acesso pelo Edu. Sessão do aluno:
-JWT papel `aluno` de 12h + refresh de 30 dias vinculado ao aparelho —
-criança não redigita credencial toda aula.
+O professor gera/imprime os cartões pelo Edu (por turma ou individual).
+Sessão do aluno: JWT papel `aluno` de 30 dias no aparelho — mas o boot
+SEMPRE confirma "É você?" (tablet compartilhado). Defesa contra abuso:
+limitador de tentativas por (código, IP).
 
 ### Responsáveis — reuso de `usuarios`
 

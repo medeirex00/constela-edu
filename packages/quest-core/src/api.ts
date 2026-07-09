@@ -7,23 +7,39 @@ import { api, ApiError, baseDaApi, obterToken } from "@constela/core";
 
 import type {
   AcessoAluno,
-  Figura,
   PerfilQuest,
   Preferencias,
   Quem,
   SessaoQuest,
 } from "./tipos";
 
+/** Erro de rede (fetch rejeitou: sem conexão/DNS) — diferente de resposta
+ * HTTP de erro. Permite ao app distinguir "Wi-Fi caiu" de "código errado". */
+export class ErroDeRede extends Error {
+  constructor() {
+    super("Sem conexão. Verifique a internet e tente de novo!");
+  }
+}
+
+export function ehErroDeAutenticacao(erro: unknown): boolean {
+  return erro instanceof ApiError && (erro.status === 401 || erro.status === 403);
+}
+
 // ---------------------------------------------------------------------------
 // Entrada da criança (rotas públicas — sem token)
 // ---------------------------------------------------------------------------
 
 async function publica<T>(caminho: string, corpo: unknown): Promise<T> {
-  const resposta = await fetch(`${baseDaApi()}${caminho}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(corpo),
-  });
+  let resposta: Response;
+  try {
+    resposta = await fetch(`${baseDaApi()}${caminho}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(corpo),
+    });
+  } catch {
+    throw new ErroDeRede();
+  }
   if (!resposta.ok) {
     let detalhe = "Algo deu errado. Tente de novo!";
     try {
@@ -37,18 +53,14 @@ async function publica<T>(caminho: string, corpo: unknown): Promise<T> {
   return resposta.json() as Promise<T>;
 }
 
-export function obterFiguras(): Promise<Figura[]> {
-  return api<Figura[]>("/quest/auth/figuras");
-}
-
 /** Etapa 1 do login: "É você?" */
 export function quemE(codigo: string): Promise<Quem> {
   return publica<Quem>("/quest/auth/quem", { codigo });
 }
 
-/** Etapa 2: código + as 4 figuras do PIN, em ordem. */
-export function entrar(codigo: string, pin: string[]): Promise<SessaoQuest> {
-  return publica<SessaoQuest>("/quest/auth/entrar", { codigo, pin });
+/** Etapa 2: entrar — o código é a credencial (sem senha). */
+export function entrar(codigo: string): Promise<SessaoQuest> {
+  return publica<SessaoQuest>("/quest/auth/entrar", { codigo });
 }
 
 /** Login por QR (o token vem na URL do cartão). */
@@ -66,6 +78,14 @@ export function meuPerfil(): Promise<PerfilQuest> {
 
 export function coresDoTraje(): Promise<string[]> {
   return api<string[]>("/quest/perfil/cores");
+}
+
+/** Cerimônia da primeira vez: como a criança quer ser chamada. */
+export function escolherNome(nome: string): Promise<PerfilQuest> {
+  return api<PerfilQuest>("/quest/perfil/nome", {
+    method: "PATCH",
+    body: JSON.stringify({ nome }),
+  });
 }
 
 export function trocarCorDoTraje(cor: string): Promise<PerfilQuest> {
@@ -97,27 +117,42 @@ export function acessosDaTurma(
   );
 }
 
-/** Gera as credenciais da turma e baixa o PDF dos cartões (POST: é uma
- * escrita — o apiBlob do core cobre apenas GET). */
-export async function baixarCartoesDaTurma(
+async function baixarPdf(caminho: string, nomePadrao: string) {
+  const token = await obterToken();
+  const resposta = await fetch(`${baseDaApi()}${caminho}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resposta.ok) {
+    throw new ApiError(resposta.status, "Não foi possível gerar o PDF.");
+  }
+  const disposicao = resposta.headers.get("Content-Disposition") ?? "";
+  const nomeArquivo =
+    /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? nomePadrao;
+  return { blob: await resposta.blob(), nomeArquivo };
+}
+
+/** Gera as credenciais da turma e baixa o PDF dos cartões (+ página do
+ * professor com a tabela nome → código). */
+export function baixarCartoesDaTurma(
   escolaId: number,
   turmaId: number,
   regenerar = false,
 ): Promise<{ blob: Blob; nomeArquivo: string }> {
-  const token = await obterToken();
-  const resposta = await fetch(
-    `${baseDaApi()}/escolas/${escolaId}/quest/turmas/${turmaId}/cartoes` +
-      `?regenerar=${regenerar}`,
-    {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    },
+  return baixarPdf(
+    `/escolas/${escolaId}/quest/turmas/${turmaId}/cartoes?regenerar=${regenerar}`,
+    "cartoes-quest.pdf",
   );
-  if (!resposta.ok) {
-    throw new ApiError(resposta.status, "Não foi possível gerar os cartões.");
-  }
-  const disposicao = resposta.headers.get("Content-Disposition") ?? "";
-  const nomeArquivo =
-    /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? "cartoes-quest.pdf";
-  return { blob: await resposta.blob(), nomeArquivo };
+}
+
+/** Cartão de UM aluno (perdeu o cartão → não derruba a turma inteira). */
+export function baixarCartaoDoAluno(
+  escolaId: number,
+  alunoId: number,
+  regenerar = false,
+): Promise<{ blob: Blob; nomeArquivo: string }> {
+  return baixarPdf(
+    `/escolas/${escolaId}/quest/alunos/${alunoId}/cartao?regenerar=${regenerar}`,
+    "cartao-quest.pdf",
+  );
 }

@@ -81,6 +81,10 @@ _COLUNAS_NOVAS: dict[str, dict[str, str]] = {
     "leituras": {
         "tempo_leitura_min": "INTEGER",
     },
+    "quest_perfis": {
+        # Como a criança pediu para ser chamada (cerimônia da primeira vez)
+        "nome_exibicao": "VARCHAR(40)",
+    },
 }
 
 

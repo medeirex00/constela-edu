@@ -1,14 +1,19 @@
 /**
  * Cosmo — o mascote vivo (portado do protótipo constela-play-v7).
  *
- * Comportamentos: olhos seguem o ponteiro (suave, com limite), piscadas em
- * intervalos naturais (às vezes dupla), tchau de vez em quando e pulo de
- * alegria sob demanda. Tudo desligado com prefers-reduced-motion.
+ * Comportamentos: olhos seguem o ponteiro, piscadas naturais, tchau de vez
+ * em quando, pulo de alegria — e ZONAS DE TOQUE com reações próprias
+ * (antena acende e bipa, barriga faz cócegas, olhos piscam), porque
+ * descobrir segredos no mascote é metade do vínculo.
+ *
+ * Econômico de propósito (tablet fraco de escola): o loop de olhos SÓ roda
+ * enquanto há movimento a fazer (dorme convergido — em touch isso é ~99%
+ * do tempo) e não há filtro CSS sobre elementos animados.
  */
 import { useCallback, useEffect, useRef } from "react";
 
 import "./cosmo.css";
-import { tocar } from "../audio/audio";
+import { narrar, tocar } from "../audio/audio";
 
 interface CosmoProps {
   /** Cor do traje; sem valor usa a var --skin global (cor equipada). */
@@ -19,11 +24,20 @@ interface CosmoProps {
   aoClicar?: () => void;
 }
 
+const FALAS_COCEGAS = [
+  "Ha ha! Que cócegas!",
+  "Ai ai ai, para, que eu rio!",
+  "Hi hi hi! Você me pegou!",
+];
+
 export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const alvoOlhar = useRef({ x: 0, y: 0 });
   const olhar = useRef({ x: 0, y: 0 });
   const ultimoPonteiro = useRef(0);
+  const quadro = useRef(0);
+  const rodando = useRef(false);
+  const pupilas = useRef<SVGCircleElement[]>([]);
 
   const acenar = useCallback(() => {
     const braco = svgRef.current?.querySelector(".cosmo-bracoR");
@@ -43,10 +57,44 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
     window.setTimeout(() => svg.classList.remove("feliz"), 700);
   }, []);
 
+  const piscar = useCallback(() => {
+    svgRef.current?.querySelectorAll(".cosmo-olho").forEach((olho) => {
+      olho.classList.remove("piscando");
+      void (olho as SVGGElement).getBoundingClientRect();
+      olho.classList.add("piscando");
+    });
+  }, []);
+
   useEffect(() => {
     if (!vivo) return;
     const reduzido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduzido) return;
+
+    pupilas.current = Array.from(
+      svgRef.current?.querySelectorAll<SVGCircleElement>(".cosmo-pupila") ?? [],
+    );
+
+    // Loop dos olhos: acorda com eventos, dorme quando converge
+    const animarOlhos = () => {
+      const dx = alvoOlhar.current.x - olhar.current.x;
+      const dy = alvoOlhar.current.y - olhar.current.y;
+      if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+        rodando.current = false;
+        return;
+      }
+      olhar.current.x += dx * 0.14;
+      olhar.current.y += dy * 0.14;
+      for (const pupila of pupilas.current) {
+        pupila.style.transform =
+          `translate(${olhar.current.x.toFixed(2)}px, ${olhar.current.y.toFixed(2)}px)`;
+      }
+      quadro.current = requestAnimationFrame(animarOlhos);
+    };
+    const acordar = () => {
+      if (rodando.current) return;
+      rodando.current = true;
+      quadro.current = requestAnimationFrame(animarOlhos);
+    };
 
     const aoMover = (evento: PointerEvent) => {
       const nx = (evento.clientX / window.innerWidth - 0.5) * 2;
@@ -56,6 +104,7 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
         y: Math.max(-1, Math.min(1, ny)) * 5.5,
       };
       ultimoPonteiro.current = performance.now();
+      acordar();
     };
     window.addEventListener("pointermove", aoMover, { passive: true });
     window.addEventListener("pointerdown", aoMover, { passive: true });
@@ -67,31 +116,11 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
           x: (Math.random() * 2 - 1) * 6,
           y: (Math.random() * 2 - 1) * 4,
         };
+        acordar();
       }
     }, 2600);
 
-    let quadro = 0;
-    const animarOlhos = () => {
-      olhar.current.x += (alvoOlhar.current.x - olhar.current.x) * 0.14;
-      olhar.current.y += (alvoOlhar.current.y - olhar.current.y) * 0.14;
-      svgRef.current
-        ?.querySelectorAll<SVGCircleElement>(".cosmo-pupila")
-        .forEach((pupila) => {
-          pupila.style.transform =
-            `translate(${olhar.current.x.toFixed(2)}px, ${olhar.current.y.toFixed(2)}px)`;
-        });
-      quadro = requestAnimationFrame(animarOlhos);
-    };
-    quadro = requestAnimationFrame(animarOlhos);
-
     // Piscadas naturais (às vezes dupla)
-    const piscar = () => {
-      svgRef.current?.querySelectorAll(".cosmo-olho").forEach((olho) => {
-        olho.classList.remove("piscando");
-        void (olho as SVGGElement).getBoundingClientRect();
-        olho.classList.add("piscando");
-      });
-    };
     let temporizadorPiscar = 0;
     const agendarPiscar = () => {
       temporizadorPiscar = window.setTimeout(() => {
@@ -116,13 +145,48 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
       window.removeEventListener("pointermove", aoMover);
       window.removeEventListener("pointerdown", aoMover);
       window.clearInterval(olharCurioso);
-      cancelAnimationFrame(quadro);
+      cancelAnimationFrame(quadro.current);
+      rodando.current = false;
       window.clearTimeout(temporizadorPiscar);
       window.clearTimeout(temporizadorTchau);
     };
-  }, [vivo, acenar]);
+  }, [vivo, acenar, piscar]);
 
-  const clicar = () => {
+  // --- Zonas de toque (segredinhos do mascote) ---------------------------
+
+  const tocarAntena = (evento: React.PointerEvent) => {
+    evento.stopPropagation();
+    tocar("bip");
+    const luz = svgRef.current?.querySelector(".cosmo-antena-luz");
+    if (luz) {
+      luz.classList.remove("acesa");
+      void (luz as SVGCircleElement).getBoundingClientRect();
+      luz.classList.add("acesa");
+    }
+  };
+
+  const tocarBarriga = (evento: React.PointerEvent) => {
+    evento.stopPropagation();
+    if (!vivo) return;
+    const svg = svgRef.current;
+    if (svg) {
+      svg.classList.remove("cocegas");
+      void svg.getBoundingClientRect();
+      svg.classList.add("cocegas");
+      window.setTimeout(() => svg.classList.remove("cocegas"), 650);
+    }
+    tocar("sucesso");
+    narrar(FALAS_COCEGAS[Math.floor(Math.random() * FALAS_COCEGAS.length)]);
+  };
+
+  const tocarOlhos = (evento: React.PointerEvent) => {
+    evento.stopPropagation();
+    piscar();
+    window.setTimeout(piscar, 240);
+    tocar("clique");
+  };
+
+  const clicarCorpo = () => {
     pular();
     acenar();
     tocar("clique");
@@ -137,7 +201,7 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
       style={{ height: altura, width: "auto", cursor: "pointer", ...(cor ? ({ ["--skin"]: cor } as React.CSSProperties) : {}) }}
       aria-label="Cosmo, seu companheiro de aventuras"
       role="img"
-      onClick={clicar}
+      onClick={clicarCorpo}
     >
       <g transform="translate(55 0)">
         {/* pernas ficam paradas: o gingado é do tronco */}
@@ -145,6 +209,9 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
         <rect className="pele" x="224" y="428" width="70" height="118" rx="34" />
         <ellipse cx="161" cy="540" rx="35" ry="14" fill="rgba(0,0,0,.14)" />
         <ellipse cx="259" cy="540" rx="35" ry="14" fill="rgba(0,0,0,.14)" />
+        {/* sombra do corpo desenhada (substitui o drop-shadow CSS, que
+            re-rasterizava o SVG inteiro a cada quadro de animação) */}
+        <ellipse cx="210" cy="552" rx="120" ry="16" fill="rgba(0,0,0,.16)" />
         <g className="cosmo-tronco">
           <rect className="pele" x="46" y="252" width="62" height="164" rx="31"
                 transform="rotate(16 77 334)" />
@@ -159,7 +226,7 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
                 strokeWidth="16" strokeLinecap="round" fill="none" />
           <line x1="210" y1="96" x2="210" y2="42" stroke="rgba(0,0,0,.25)"
                 strokeWidth="8" strokeLinecap="round" />
-          <circle cx="210" cy="34" r="13" fill="#FFC93C" />
+          <circle className="cosmo-antena-luz" cx="210" cy="34" r="13" fill="#FFC93C" />
           <circle cx="210" cy="34" r="22" fill="#FFC93C" opacity=".25" />
           <ellipse cx="210" cy="216" rx="100" ry="84" fill="#221C46" />
           <ellipse cx="210" cy="216" rx="100" ry="84" fill="none"
@@ -178,6 +245,14 @@ export function Cosmo({ cor, vivo = true, altura = "60vh", aoClicar }: CosmoProp
                 strokeWidth="10" strokeLinecap="round" fill="none" />
           <text x="210" y="342" textAnchor="middle" fontSize="34"
                 fill="rgba(255,255,255,.85)">★</text>
+
+          {/* Zonas de toque invisíveis (alvos generosos para dedo pequeno) */}
+          <circle cx="210" cy="34" r="44" fill="transparent"
+                  onPointerDown={tocarAntena} aria-hidden />
+          <ellipse cx="210" cy="206" rx="90" ry="46" fill="transparent"
+                   onPointerDown={tocarOlhos} aria-hidden />
+          <ellipse cx="210" cy="350" rx="95" ry="80" fill="transparent"
+                   onPointerDown={tocarBarriga} aria-hidden />
         </g>
       </g>
     </svg>

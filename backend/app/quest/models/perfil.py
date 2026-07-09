@@ -21,6 +21,9 @@ class QuestPerfil(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
     aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), unique=True)
+    # Como a criança pediu para ser chamada (cerimônia da primeira vez);
+    # vazio = usa o primeiro nome do cadastro
+    nome_exibicao: Mapped[str | None] = mapped_column(String(40), default=None)
     # Nome de exibição fora da própria turma (LGPD: nome real só entre colegas)
     apelido: Mapped[str] = mapped_column(String(60))
     codigo_amigo: Mapped[str] = mapped_column(String(16), unique=True, index=True)
@@ -48,12 +51,10 @@ class QuestPerfil(Base):
 class QuestCredencialAluno(Base):
     """Login infantil — separado do estado de jogo.
 
-    O cartão de acesso impresso carrega o QR, o código falável e as 4 figuras
-    do PIN. As figuras ficam em claro (como o token do Painel Público e a
-    senha visível do Edu — decisão do produto): elas JÁ estão impressas no
-    cartão e precisam ser reimprimíveis pelo professor; a comparação usa
-    tempo constante. A segurança real contra força bruta é o limitador de
-    tentativas + o QR token de alta entropia.
+    Decisão de produto: SEM senha/PIN, como no Elefante Letrado — o código
+    impresso no cartão É a credencial e pode ficar exposto. A defesa contra
+    abuso é o limitador de tentativas por (código, IP) e o escopo mínimo do
+    papel "aluno" (só o próprio jogo).
     """
 
     __tablename__ = "quest_credenciais_aluno"
@@ -61,10 +62,8 @@ class QuestCredencialAluno(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
     aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), unique=True)
-    # Curto e falável ("SOL-1234") — único na rede toda
+    # Curto, falável e só letras+números ("SOL1234") — único na rede toda
     codigo_login: Mapped[str] = mapped_column(String(20), unique=True, index=True)
-    # 4 figuras em ordem (slugs do catálogo FIGURAS_PIN)
-    pin_figuras: Mapped[list] = mapped_column(JSON, default=list)
     # Login por QR nos tablets; trocável (regenerar cartão mata o antigo)
     qr_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     # Incrementado ao regenerar o cartão: derruba sessões antigas (como no Edu)

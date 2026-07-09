@@ -1,17 +1,20 @@
 """Cartões de acesso do Quest — PDF para o professor imprimir e recortar.
 
-Cada cartão carrega tudo o que a criança precisa para entrar: QR (1 leitura
-= entrou), código falável e a sequência de 4 figuras do PIN. Layout A4 em
-grade 2×4 (8 cartões por página), com linhas de corte tracejadas.
+Cada cartão carrega o que a criança precisa para entrar: QR (1 leitura =
+entrou) e o código falável — SEM senha (decisão de produto, como no
+Elefante Letrado). Layout A4 em grade 2×4 com linhas de corte, mais uma
+página final "só do professor": tabela nome → código da turma inteira e o
+roteiro da primeira aula (cartão perdido deixa de ser suporte).
 
-Mesmas restrições do resto dos PDFs do projeto (services/relatorios.py):
-fontes nativas latin-1 — por isso as figuras aparecem pelo NOME (a criança
-casa o nome com a figura na tela, que mostra o desenho).
+Mesmas restrições dos demais PDFs do projeto (services/relatorios.py):
+fontes nativas latin-1.
 """
 from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
+
+from app.core.config import settings
 
 _LARGURA_CARTAO = 92.0
 _ALTURA_CARTAO = 64.0
@@ -48,11 +51,16 @@ def _qr_png(url: str) -> io.BytesIO:
     return buffer
 
 
+def _endereco_app() -> str:
+    return settings.QUEST_BASE_URL.replace("https://", "").replace(
+        "http://", "").rstrip("/")
+
+
 def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
                      turma_nome: str, cor: str, cartao: dict) -> None:
     r, g, b = _hex_para_rgb(cor)
 
-    # Moldura de corte (tracejada) + cartão
+    # Moldura de corte (tracejada)
     pdf.set_draw_color(180, 180, 180)
     pdf.set_line_width(0.2)
     with pdf.local_context():
@@ -71,14 +79,14 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
     pdf.cell(0, 3, _latin1(f"{escola_nome} - {turma_nome}"))
 
     # QR à direita
-    lado_qr = 24.0
+    lado_qr = 26.0
     pdf.image(_qr_png(cartao["qr_url"]),
               x=x + _LARGURA_CARTAO - lado_qr - 3.5,
               y=y + 12, w=lado_qr, h=lado_qr)
     pdf.set_text_color(120, 120, 120)
     pdf.set_font("helvetica", "", 6)
     pdf.set_xy(x + _LARGURA_CARTAO - lado_qr - 3.5, y + 12 + lado_qr + 0.5)
-    pdf.cell(lado_qr, 3, "aponte a camera", align="C")
+    pdf.cell(lado_qr, 3, "aponte a camera")
 
     largura_texto = _LARGURA_CARTAO - lado_qr - 11
 
@@ -91,30 +99,24 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
     pdf.set_xy(x + 3.5, y + 12.5)
     pdf.cell(largura_texto, 5, nome)
 
-    # Código falável, bem grande
-    pdf.set_font("helvetica", "", 7.5)
+    # Código falável, o herói do cartão — bem grande
+    pdf.set_font("helvetica", "", 8)
     pdf.set_text_color(110, 110, 110)
-    pdf.set_xy(x + 3.5, y + 20)
-    pdf.cell(largura_texto, 4, "Meu codigo:")
-    pdf.set_font("courier", "B", 17)
+    pdf.set_xy(x + 3.5, y + 22)
+    pdf.cell(largura_texto, 4, "Meu codigo magico:")
+    pdf.set_font("courier", "B", 21)
     pdf.set_text_color(r, g, b)
-    pdf.set_xy(x + 3.5, y + 24.5)
-    pdf.cell(largura_texto, 8, _latin1(cartao["codigo"]))
+    pdf.set_xy(x + 3.5, y + 27)
+    codigo = _latin1(cartao["codigo"])
+    while pdf.get_string_width(codigo) > largura_texto and pdf.font_size_pt > 12:
+        pdf.set_font_size(pdf.font_size_pt - 1)
+    pdf.cell(largura_texto, 10, codigo)
 
-    # PIN: as 4 figuras em ordem (nomes numerados; a tela mostra os desenhos)
-    pdf.set_font("helvetica", "", 7.5)
-    pdf.set_text_color(110, 110, 110)
-    pdf.set_xy(x + 3.5, y + 36)
-    pdf.cell(largura_texto, 4, "Minha senha secreta (toque nesta ordem):")
-    pdf.set_text_color(30, 30, 30)
-    pdf.set_font("helvetica", "B", 9.5)
-    pdf.set_xy(x + 3.5, y + 41)
-    figuras = "  ".join(
-        f"{i}. {_latin1(figura['nome'])}"
-        for i, figura in enumerate(cartao["pin"], start=1))
-    while pdf.get_string_width(figuras) > _LARGURA_CARTAO - 8 and pdf.font_size_pt > 6:
-        pdf.set_font_size(pdf.font_size_pt - 0.5)
-    pdf.cell(_LARGURA_CARTAO - 8, 5, figuras)
+    # Onde jogar (para a família, em casa)
+    pdf.set_font("helvetica", "B", 8)
+    pdf.set_text_color(60, 60, 60)
+    pdf.set_xy(x + 3.5, y + 42)
+    pdf.cell(largura_texto, 4, _latin1(f"Jogue em casa: {_endereco_app()}"))
 
     # Rodapé
     pdf.set_font("helvetica", "I", 6.5)
@@ -127,9 +129,62 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
              "Guarde este cartao como um tesouro!")
 
 
+def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
+                      cartoes: list[dict]) -> None:
+    """Página final — cola de consulta rápida (não pendurar no mural)."""
+    r, g, b = _hex_para_rgb(cor)
+    pdf.add_page()
+    pdf.set_fill_color(r, g, b)
+    pdf.rect(0, 0, 210, 20, style="F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("helvetica", "B", 13)
+    pdf.set_xy(10, 5)
+    pdf.cell(0, 6, _latin1("SO DO PROFESSOR - nao pendurar no mural"))
+    pdf.set_font("helvetica", "", 9)
+    pdf.set_xy(10, 12)
+    pdf.cell(0, 5, _latin1(f"{escola_nome} - {turma_nome} - códigos de acesso"))
+
+    # Tabela nome → código
+    pdf.set_y(26)
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_font("helvetica", "B", 9)
+    pdf.set_fill_color(238, 238, 238)
+    pdf.cell(120, 7, "Aluno", border=1, fill=True)
+    pdf.cell(50, 7, _latin1("Código"), border=1, fill=True)
+    pdf.ln()
+    pdf.set_font("helvetica", "", 9)
+    for cartao in cartoes:
+        nome = _latin1(cartao["nome"])
+        while pdf.get_string_width(nome) > 116 and len(nome) > 4:
+            nome = nome[:-4] + "..."
+        pdf.cell(120, 6.5, nome, border=1)
+        pdf.set_font("courier", "B", 10)
+        pdf.cell(50, 6.5, _latin1(cartao["codigo"]), border=1)
+        pdf.set_font("helvetica", "", 9)
+        pdf.ln()
+
+    # Roteiro da primeira aula
+    pdf.ln(4)
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(0, 6, "Primeira aula em 3 passos")
+    pdf.ln(7)
+    pdf.set_font("helvetica", "", 9)
+    passos = [
+        f"1. Abra {_endereco_app()} nos tablets (ou aponte a camera para o QR do cartao).",
+        "2. Cada crianca digita o proprio codigo e confirma 'Sou eu!'. Na primeira vez,",
+        "   ela escolhe como quer ser chamada e a cor do traje do astronauta.",
+        "3. Cartao perdido? Consulte o codigo nesta folha - ele nao muda. So gere cartoes",
+        "   com 'regenerar' se um QR cair em maos erradas (isso troca o QR de todos).",
+    ]
+    for linha in passos:
+        pdf.cell(0, 5.5, _latin1(linha))
+        pdf.ln()
+
+
 def gerar_cartoes_pdf(escola_nome: str, cor: str, turma_nome: str,
-                      cartoes: list[dict]) -> bytes:
-    """`cartoes`: [{nome, apelido, codigo, pin: [{nome}…], qr_url}, …]"""
+                      cartoes: list[dict],
+                      com_pagina_professor: bool = True) -> bytes:
+    """`cartoes`: [{nome, apelido, codigo, qr_url}, …]"""
     from fpdf import FPDF
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
@@ -159,5 +214,7 @@ def gerar_cartoes_pdf(escola_nome: str, cor: str, turma_nome: str,
         pdf.set_text_color(90, 90, 90)
         pdf.set_xy(20, 30)
         pdf.cell(0, 8, "Nenhum aluno ativo nesta turma.")
+    elif com_pagina_professor:
+        _pagina_professor(pdf, escola_nome, turma_nome, cor, cartoes)
 
     return bytes(pdf.output())

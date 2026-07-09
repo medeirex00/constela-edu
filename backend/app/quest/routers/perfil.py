@@ -1,4 +1,6 @@
 """Perfil do astronauta: leitura e as poucas escritas permitidas ao aluno."""
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -13,7 +15,14 @@ router = APIRouter(prefix="/quest/perfil", tags=["Quest — Perfil"])
 
 def _montar(ctx: ContextoAluno) -> schemas.PerfilOut:
     saida = schemas.PerfilOut.model_validate(ctx.perfil)
-    saida.primeiro_nome = (ctx.aluno.nome or "").strip().split(" ")[0].title()
+    saida.nome_exibicao = (ctx.perfil.nome_exibicao or "").strip()
+    saida.nome = svc.nome_para_falas(ctx.perfil, ctx.aluno.nome)
+    saida.codigo_login = ctx.credencial.codigo_login
+    ultimo = ctx.credencial.ultimo_acesso
+    if ultimo is not None:
+        delta = datetime.now(timezone.utc) - ultimo.replace(
+            tzinfo=ultimo.tzinfo or timezone.utc)
+        saida.dias_sem_jogar = max(0, delta.days)
     return saida
 
 
@@ -26,6 +35,24 @@ def meu_perfil(ctx: ContextoAluno = Depends(get_aluno_atual)):
 def cores_disponiveis():
     """Catálogo de cores do traje (fase Q0: único slot equipável)."""
     return list(svc.CORES_TRAJE)
+
+
+@router.patch("/nome", response_model=schemas.PerfilOut)
+def escolher_nome(dados: schemas.NomeIn,
+                  ctx: ContextoAluno = Depends(get_aluno_atual),
+                  db: Session = Depends(get_db)):
+    """Cerimônia da primeira vez: como a criança quer ser chamada."""
+    try:
+        ctx.perfil.nome_exibicao = svc.validar_nome_exibicao(dados.nome)
+    except ValueError as erro:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(erro))
+    db.add(ctx.perfil)
+    registrar(db, "quest.nome_escolhido", escola_id=ctx.escola_id,
+              entidade="aluno", entidade_id=ctx.aluno.id,
+              detalhes={"nome": ctx.perfil.nome_exibicao})
+    db.commit()
+    db.refresh(ctx.perfil)
+    return _montar(ctx)
 
 
 @router.patch("/avatar", response_model=schemas.PerfilOut)

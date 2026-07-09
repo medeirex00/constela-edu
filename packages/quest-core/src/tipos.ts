@@ -3,15 +3,9 @@
  * O vocabulário interno segue docs/quest/README.md (a criança vê outro).
  */
 
-export interface Figura {
-  slug: string;
-  nome: string;
-  emoji: string;
-}
-
 /** Resposta do "É você?" — o mínimo para a criança se reconhecer. */
 export interface Quem {
-  primeiro_nome: string;
+  nome: string;
   apelido: string;
   avatar: Avatar;
 }
@@ -39,12 +33,21 @@ export interface PerfilQuest {
   sequencia_dias: number;
   avatar: Avatar;
   preferencias: Preferencias;
-  primeiro_nome: string;
+  /** Como a criança pediu para ser chamada ("" = cerimônia pendente). */
+  nome_exibicao: string;
+  /** Nome usado nas falas (nome_exibicao ou primeiro nome do cadastro). */
+  nome: string;
+  /** Dias desde o último login — alimenta a saudação com memória. */
+  dias_sem_jogar: number;
+  /** Código do próprio cartão — alimenta o "Quem vai jogar?" do aparelho. */
+  codigo_login: string;
 }
 
 export interface SessaoQuest {
   access_token: string;
   token_type: string;
+  /** Primeiro login da credencial — o app abre a cerimônia de boas-vindas. */
+  primeira_vez: boolean;
   perfil: PerfilQuest;
 }
 
@@ -52,8 +55,16 @@ export interface SessaoQuest {
 export interface AcessoAluno {
   aluno_id: number;
   nome: string;
+  nome_exibicao: string | null;
   apelido: string | null;
   codigo_login: string | null;
   ultimo_acesso: string | null;
   tem_credencial: boolean;
+}
+
+/** Astronauta que já entrou neste aparelho ("Quem vai jogar?"). */
+export interface AstronautaConhecido {
+  codigo: string;
+  nome: string;
+  cor: string;
 }
