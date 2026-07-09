@@ -58,6 +58,62 @@
   justify-content: center;
   flex-wrap: wrap;
 }
+.cerimonia-carrossel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: min(560px, 96vw);
+}
+.carrossel-palco { flex: 1; min-width: 0; }
+.seta {
+  flex: none;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--hud);
+  color: #fff;
+  font-size: 32px;
+  font-weight: 900;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .3);
+}
+.seta:active { transform: translateY(2px); }
+.nome-base {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 20px;
+  color: var(--violet);
+}
+.pontos { display: flex; gap: 8px; justify-content: center; }
+.ponto { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.ponto.on { background: var(--violet); }
+
+.cerimonia-painel.largo { width: min(960px, 96vw); }
+.bases-grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.base-card {
+  border: 3px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  cursor: pointer;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12.5px;
+  color: var(--ink);
+  transition: transform .12s;
+}
+.base-card:hover { transform: translateY(-5px); }
+.base-card.sel { border-color: var(--violet); box-shadow: 0 0 0 3px rgba(124, 111, 240, .4); }
+
 .cerimonia-cabelos {
   display: flex;
   gap: 12px;

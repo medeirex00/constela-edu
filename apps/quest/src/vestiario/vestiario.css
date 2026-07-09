@@ -80,16 +80,25 @@
   70% { transform: translateY(-34px); }
   100% { transform: translateY(-34px); }
 }
-.item-swatch {
-  width: 66px; height: 66px;
-  border-radius: 16px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-size: 11px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, .5);
-  box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .18);
+/* Linha de cores acima da grade de estilos (Blusa/Calça) */
+.cores-linha {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, .14);
 }
+.cor-bola {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, .3);
+  cursor: pointer;
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .2);
+  transition: transform .12s;
+}
+.cor-bola:hover { transform: scale(1.12); }
+.cor-bola.sel { border-color: var(--sun); box-shadow: 0 0 0 3px rgba(255, 201, 60, .5); }
 .boneco-caixa.montado { transform: translateY(-22px); }
 .vitrine-skate {
   position: absolute;
@@ -172,6 +181,12 @@
 .item-mini { display: grid; place-items: center; height: 72px; }
 .item-mini .skate { width: 80px; }
 .item-emoji { font-size: 40px; }
+.chip-dot {
+  width: 52px; height: 52px;
+  border-radius: 16px;
+  box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .2);
+}
+.vitrine-3d { width: 100%; }
 .item .selo {
   position: absolute; top: -8px; right: -8px;
   width: 26px; height: 26px; border-radius: 50%;

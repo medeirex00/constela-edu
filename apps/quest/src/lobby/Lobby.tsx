@@ -11,11 +11,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { trocarPreferencias } from "@constela/quest-core";
 
 import { configurarAudio, narrar, tocar } from "../audio/audio";
-import { Boneco } from "../boneco/Boneco";
-import { propsBoneco } from "../boneco/avatar";
 import { Carreira } from "../carreira/Carreira";
 import { Cosmo } from "../cosmo/Cosmo";
-import { Skate } from "../cosmo/Skate";
+import { Palco3D } from "../personagem/Palco3D";
 import { useSessao } from "../estado/sessao";
 import { Vestiario } from "../vestiario/Vestiario";
 import { Cena } from "./Cena";
@@ -24,9 +22,6 @@ import { MATERIAS, MATERIA_POR_SLUG } from "./materias";
 import "./lobby.css";
 
 type Aba = "jogar" | "vestiario" | "carreira";
-
-// Estrela da constelação de onde o skate decola (índice em ESTRELAS do Ceu)
-const ESTRELA_SKATE = 5;
 
 const SAUDACOES = ["Bom dia", "Boa tarde", "Boa noite"];
 const FALAS_TOQUE = [
@@ -48,16 +43,12 @@ export function Lobby() {
   const [materia, setMateria] = useState<string | null>(null);
   const [gaveta, setGaveta] = useState(false);
   const [despedida, setDespedida] = useState(false);
-  const [entradaSkate, setEntradaSkate] = useState(false);
-  const [pulando, setPulando] = useState(false);
   const [fala, setFala] = useState("");
   const [toast, setToast] = useState("");
   const tToast = useRef(0);
   const tFala = useRef(0);
   const botaoAvatarRef = useRef<HTMLButtonElement>(null);
   const gavetaRef = useRef<HTMLElement>(null);
-
-  const skateEquipado = perfil?.avatar.veiculo === "skate";
 
   const falar = useCallback((texto: string, dur = 4500) => {
     window.clearTimeout(tFala.current);
@@ -106,16 +97,6 @@ export function Lobby() {
       raiz.style.removeProperty("--sky-b");
     };
   }, [aba, materia]);
-
-  // Entrada do skate: a constelação brilha, o skate voa e o Cosmo pula em cima
-  useEffect(() => {
-    if (!skateEquipado) { setEntradaSkate(false); return; }
-    setEntradaSkate(true);
-    const t1 = window.setTimeout(() => setPulando(true), 1350);
-    const t2 = window.setTimeout(() => setPulando(false), 2050);
-    const t3 = window.setTimeout(() => setEntradaSkate(false), 2750);
-    return () => [t1, t2, t3].forEach(window.clearTimeout);
-  }, [skateEquipado]);
 
   // Gaveta acessível
   useEffect(() => {
@@ -175,7 +156,6 @@ export function Lobby() {
     <>
       <Ceu
         tocavel={aba === "jogar" && !materia}
-        estrelaDestaque={entradaSkate ? ESTRELA_SKATE : null}
         aoCompletar={() => { tocar("fanfarra"); falar("UAU! Você acendeu o céu inteiro! ✨"); }}
       />
       <Cena slug={aba === "jogar" && materia ? materia : "lobby"} />
@@ -214,12 +194,7 @@ export function Lobby() {
           <main className="palco">
             <div className="palco-interno">
               <div className="podio" />
-              {skateEquipado && (
-                <div className="skate-lobby"><Skate entrando={entradaSkate} /></div>
-              )}
-              <div className={`cosmo-monta${skateEquipado && !entradaSkate ? " no-skate" : ""}${pulando ? " pulando" : ""}`}>
-                <Boneco altura="min(58vh, 560px)" {...propsBoneco(perfil.avatar)} fisica />
-              </div>
+              <Palco3D avatar={perfil.avatar} interativo altura="min(62vh, 600px)" className="lobby-3d" />
               {/* Cosmo virou o mascote-companheiro: fica ao lado e fala */}
               <div className="companheiro">
                 {fala && <div className="cosmo-fala">{fala}</div>}
@@ -284,7 +259,7 @@ export function Lobby() {
                 onClick={() => { setGaveta(false); botaoAvatarRef.current?.focus(); }}
                 aria-label="Fechar">✕</button>
         <div className="quem-sou">
-          <Boneco altura="80px" vivo={false} {...propsBoneco(perfil.avatar)} />
+          <div className="quem-av" aria-hidden>🧑‍🚀</div>
           <div>
             <b>{perfil.nome}</b>
             <span>✨ {perfil.apelido} · Nível {perfil.nivel}</span>
@@ -309,7 +284,7 @@ export function Lobby() {
       {despedida && (
         <div className="despedida" role="dialog" aria-modal="true">
           <div className="painel despedida-painel">
-            <Boneco altura="170px" vivo={false} {...propsBoneco(perfil.avatar)} />
+            <Palco3D avatar={perfil.avatar} altura="180px" />
             <h2>Você quer mesmo ir embora?</h2>
             <button className="botao3d verde" autoFocus
                     onClick={() => { tocar("clique"); setDespedida(false); }}>

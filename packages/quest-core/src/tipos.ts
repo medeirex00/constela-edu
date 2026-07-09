@@ -13,11 +13,15 @@ export interface Quem {
 export interface Avatar {
   pele?: string;
   cabelo?: string;
+  cor_cabelo?: string;
+  top?: string;
   camiseta?: string;
+  baixo?: string;
   calca?: string;
   tenis?: string;
   chapeu?: string;
   costas?: string;
+  aura?: string;
   mao?: string;
   pet?: string;
   veiculo?: string;
@@ -26,18 +30,9 @@ export interface Avatar {
   [slot: string]: unknown;
 }
 
-/** Catálogo do vestiário: opções válidas por slot (whitelist do backend). */
-export interface Aparencia {
-  pele: string[];
-  cabelo: string[];
-  camiseta: string[];
-  calca: string[];
-  tenis: string[];
-  chapeu: string[];
-  costas: string[];
-  mao: string[];
-  pet: string[];
-  veiculo: string[];
+/** Um personagem-base (preset gratuito) — dobra como Partial<Avatar>. */
+export interface PersonagemBase extends Partial<Avatar> {
+  nome: string;
 }
 
 export interface Preferencias {

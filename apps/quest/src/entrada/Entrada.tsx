@@ -14,9 +14,8 @@ import { entrar, quemE } from "@constela/quest-core";
 import type { Quem, SessaoQuest } from "@constela/quest-core";
 
 import { narrar, tocar } from "../audio/audio";
-import { Boneco } from "../boneco/Boneco";
-import { propsBoneco } from "../boneco/avatar";
 import { Cosmo } from "../cosmo/Cosmo";
+import { Palco3D } from "../personagem/Palco3D";
 import "./entrada.css";
 
 type Passo = "codigo" | "quem";
@@ -130,7 +129,7 @@ export function Entrada({ aoEntrar }: EntradaProps) {
         {passo === "quem" && quem && (
           <div className="painel entrada-passo">
             <div className="quem-cartao">
-              <Boneco altura="160px" vivo={false} {...propsBoneco(quem.avatar)} />
+              <Palco3D avatar={quem.avatar} altura="180px" />
               <span className="nome">É você, {quem.nome}?</span>
               <span className="apelido">✨ {quem.apelido}</span>
             </div>

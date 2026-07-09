@@ -22,45 +22,82 @@ COR_PADRAO = CORES_TRAJE[0]
 # Vestiário (estilo Roblox): slots cosméticos. O desenho de cada item vive no
 # frontend (SVG do Cosmo); aqui fica a whitelist — o cliente nunca inventa
 # item. Na fase Q0 tudo é gratuito; o desbloqueio por XP entra na Q2.
-# Avatar HUMANOIDE (estilo Roblox/mockup): o jogador veste um bonequinho.
-# Tons de pele
-PELES = ("#F6C8A0", "#E8B07E", "#C98A56", "#9C6B3F", "#6E4A2C")
-# Cabelo: estilo + cor embutidos no preset (para casar com as categorias do
-# mockup, sem uma aba separada de cor)
-CABELOS = ("espetado_azul", "espetado_preto", "curto_castanho", "longo_loiro",
-           "cacheado_preto", "chanel_rosa", "moicano_vermelho", "careca")
-# Roupas — a forma é fixa por peça, muda a cor
-CAMISETAS = ("#FF5470", "#FFC93C", "#2EE6A8", "#4EA8FF", "#A78BFA", "#FF8E3C", "#231D4E")
-CALCAS = ("#3A2E66", "#4EA8FF", "#2EC77A", "#E8384F", "#5A5480")
-TENIS = ("#FF5470", "#4EA8FF", "#2EE6A8", "#FFC93C", "#F2EFFF")
+# Avatar HUMANOIDE (estilo Roblox/Stumble Guys): customização profunda.
+PELES = ("#F6C8A0", "#E8B07E", "#C98A56", "#9C6B3F", "#8D5524", "#6E4A2C",
+         "#4A3020")
+CABELOS = ("espetado", "longo", "afro", "coques", "afro_puff", "liso",
+           "moicano", "careca")
+COR_CABELO = ("#2B2B2B", "#6B3F1D", "#C9302C", "#F4C430", "#3D7BFF",
+              "#E24AA0", "#7A3DF0")
+# Blusa: estilo (top) + cor (camiseta)
+TOPS = ("camiseta", "moletom", "jaqueta", "jardineira")
+CAMISETAS = ("#FF5470", "#FFC93C", "#2EE6A8", "#4EA8FF", "#A78BFA", "#7A3DF0",
+             "#FF8E3C", "#231D4E")
+# Parte de baixo: estilo (baixo) + cor (calca)
+BAIXOS = ("calca", "shorts")
+CALCAS = ("#3A2E66", "#4EA8FF", "#2EC77A", "#E8384F", "#5A5480", "#FFC93C",
+          "#231D4E", "#F2EFFF")
+TENIS = ("#FF5470", "#4EA8FF", "#2EE6A8", "#FFC93C", "#F2EFFF", "#231D4E")
 # Acessórios de cabeça/rosto
-CHAPEUS = ("nenhum", "oculos", "bone", "coroa", "fone")
-# Itens especiais (costas): mochila espacial e asas de luz
-COSTAS = ("nenhum", "mochila", "asas")
-# Item de mão (acessório)
+CHAPEUS = ("nenhum", "oculos", "bone", "coroa", "fone", "catfone", "capacete")
+# Itens de costas
+COSTAS = ("nenhum", "mochila", "asas", "jetpack")
+# Efeitos (aura/halo/rastro em volta do personagem)
+AURAS = ("nenhum", "estelar", "halo", "rastro")
 MAO = ("nenhum", "varinha")
-PETS = ("nenhum", "gatinho", "dino", "estrelinha")
-# Meios de locomoção (com animação de invocação própria)
-VEICULOS = ("nenhum", "skate")
+PETS = ("nenhum", "gatinho", "dino", "estrelinha", "robo")
+VEICULOS = ("nenhum", "skate", "patins")
 
 APARENCIA = {
     "pele": PELES,
     "cabelo": CABELOS,
+    "cor_cabelo": COR_CABELO,
+    "top": TOPS,
     "camiseta": CAMISETAS,
+    "baixo": BAIXOS,
     "calca": CALCAS,
     "tenis": TENIS,
     "chapeu": CHAPEUS,
     "costas": COSTAS,
+    "aura": AURAS,
     "mao": MAO,
     "pet": PETS,
     "veiculo": VEICULOS,
-    # mantido por compatibilidade com perfis antigos (não usado no humanoide)
-    "cor": CORES_TRAJE,
+    "cor": CORES_TRAJE,  # legado (Cosmo)
 }
 AVATAR_PADRAO = {
-    "pele": PELES[0], "cabelo": "curto_castanho", "camiseta": "#4EA8FF",
-    "calca": "#3A2E66", "tenis": "#FF5470", "chapeu": "nenhum",
-    "costas": "nenhum", "mao": "nenhum", "pet": "nenhum", "veiculo": "nenhum",
+    "pele": PELES[0], "cabelo": "espetado", "cor_cabelo": "#6B3F1D",
+    "top": "camiseta", "camiseta": "#4EA8FF", "baixo": "calca", "calca": "#3A2E66",
+    "tenis": "#FF5470", "chapeu": "nenhum", "costas": "nenhum", "aura": "nenhum",
+    "mao": "nenhum", "pet": "nenhum", "veiculo": "nenhum",
+}
+
+# Os 6 personagens-base (gratuitos) — ponto de partida; tudo personalizável.
+PERSONAGENS_BASE = {
+    "aventureiro": {"nome": "Aventureiro Estelar", "pele": "#E8B07E",
+                    "cabelo": "espetado", "cor_cabelo": "#3D7BFF", "top": "camiseta",
+                    "camiseta": "#231D4E", "baixo": "shorts", "calca": "#3A2E66",
+                    "tenis": "#4EA8FF"},
+    "exploradora": {"nome": "Exploradora Galáctica", "pele": "#F6C8A0",
+                    "cabelo": "longo", "cor_cabelo": "#7A3DF0", "top": "moletom",
+                    "camiseta": "#7A3DF0", "baixo": "calca", "calca": "#3A2E66",
+                    "tenis": "#F2EFFF", "chapeu": "catfone"},
+    "piloto": {"nome": "Piloto Cósmico", "pele": "#8D5524",
+               "cabelo": "afro", "cor_cabelo": "#2B2B2B", "top": "jaqueta",
+               "camiseta": "#2EE6A8", "baixo": "shorts", "calca": "#231D4E",
+               "tenis": "#2EE6A8"},
+    "sonhadora": {"nome": "Sonhadora Estelar", "pele": "#F6C8A0",
+                  "cabelo": "coques", "cor_cabelo": "#E24AA0", "top": "jaqueta",
+                  "camiseta": "#FF5470", "baixo": "calca", "calca": "#4EA8FF",
+                  "tenis": "#FF5470"},
+    "descobridor": {"nome": "Descobridor de Mundos", "pele": "#C98A56",
+                    "cabelo": "liso", "cor_cabelo": "#6B3F1D", "top": "jaqueta",
+                    "camiseta": "#4EA8FF", "baixo": "calca", "calca": "#3A2E66",
+                    "tenis": "#F2EFFF", "chapeu": "bone"},
+    "guardia": {"nome": "Guardiã das Constelações", "pele": "#6E4A2C",
+                "cabelo": "afro_puff", "cor_cabelo": "#2B2B2B", "top": "jardineira",
+                "camiseta": "#FFC93C", "baixo": "shorts", "calca": "#FFC93C",
+                "tenis": "#FFC93C", "chapeu": "oculos"},
 }
 
 # Apelido = "SUBSTANTIVO ADJETIVO" de listas seguras e positivas.

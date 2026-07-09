@@ -7,9 +7,9 @@ import { api, ApiError, baseDaApi, obterToken } from "@constela/core";
 
 import type {
   AcessoAluno,
-  Aparencia,
   Avatar,
   PerfilQuest,
+  PersonagemBase,
   Preferencias,
   Quem,
   SessaoQuest,
@@ -83,8 +83,13 @@ export function coresDoTraje(): Promise<string[]> {
 }
 
 /** Catálogo do vestiário: opções válidas por slot. */
-export function catalogoAparencia(): Promise<Aparencia> {
-  return api<Aparencia>("/quest/perfil/aparencia");
+export function catalogoAparencia(): Promise<Record<string, string[]>> {
+  return api<Record<string, string[]>>("/quest/perfil/aparencia");
+}
+
+/** Os 6 personagens-base (presets gratuitos). */
+export function personagensBase(): Promise<Record<string, PersonagemBase>> {
+  return api<Record<string, PersonagemBase>>("/quest/perfil/personagens");
 }
 
 /** Equipa um ou mais slots do avatar (cor, rosto, chapéu, veículo). */

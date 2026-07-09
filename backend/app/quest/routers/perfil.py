@@ -39,9 +39,15 @@ def cores_disponiveis():
 
 @router.get("/aparencia")
 def catalogo_aparencia():
-    """Catálogo do vestiário: opções válidas por slot (cor/rosto/chapeu/
-    veiculo). O desenho de cada item é do frontend; aqui vai a whitelist."""
+    """Catálogo do vestiário: opções válidas por slot. O desenho de cada
+    item é do frontend; aqui vai a whitelist."""
     return {slot: list(valores) for slot, valores in svc.APARENCIA.items()}
+
+
+@router.get("/personagens")
+def personagens_base():
+    """Os 6 personagens-base (gratuitos) — ponto de partida da 1ª vez."""
+    return svc.PERSONAGENS_BASE
 
 
 @router.patch("/nome", response_model=schemas.PerfilOut)

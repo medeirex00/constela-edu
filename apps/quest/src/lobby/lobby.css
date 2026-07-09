@@ -102,6 +102,7 @@
   place-items: end center;
   pointer-events: auto;
 }
+.lobby-3d { width: min(72vw, 660px); }
 .podio {
   position: absolute;
   bottom: -14px;
@@ -350,6 +351,11 @@
   gap: 12px;
   padding-bottom: 16px;
   border-bottom: 2px solid var(--line);
+}
+.gaveta .quem-av {
+  width: 54px; height: 54px; border-radius: 16px; flex: none;
+  display: grid; place-items: center; font-size: 28px;
+  background: linear-gradient(135deg, var(--violet), var(--coral));
 }
 .gaveta .quem-sou b { font-family: var(--font-display); font-size: 18px; display: block; }
 .gaveta .quem-sou span { font-size: 12px; color: var(--ink-soft); font-weight: 800; }
