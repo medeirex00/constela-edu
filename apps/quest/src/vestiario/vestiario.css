@@ -1,0 +1,141 @@
+/* Vestiário estilo Roblox: vitrine do Cosmo + armário com abas. */
+
+.view {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  padding: 92px 20px 24px;
+  overflow-y: auto;
+}
+
+.palco-vestiario {
+  max-width: 1000px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(260px, 42%) 1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+.cosmo-vitrine {
+  position: sticky;
+  top: 92px;
+  display: grid;
+  place-items: center;
+  background: var(--paper-90);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: 0 12px 0 rgba(0, 0, 0, .18);
+  min-height: 46vh;
+}
+.skate-vitrine {
+  width: 60%;
+  margin-top: -8%;
+}
+
+.armario {
+  background: var(--paper-90);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: 0 12px 0 rgba(0, 0, 0, .18);
+}
+
+.apelido-editor { display: block; margin-bottom: 18px; }
+.apelido-editor > span {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+.apelido-linha { display: flex; gap: 10px; }
+.apelido-linha input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--alvo-minimo);
+  border: 3px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 20px;
+  padding: 0 14px;
+}
+.apelido-linha .botao3d { font-size: 15px; padding: 12px 18px; }
+.apelido-erro { color: var(--coral); font-weight: 800; font-size: 13px; }
+
+.armario-abas { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.armario-aba {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 16px;
+  min-height: 44px;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 14px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  border: 2px solid var(--line);
+  transition: transform .12s;
+}
+.armario-aba.ativa {
+  background: var(--violet);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .22);
+}
+.armario-aba:active { transform: translateY(2px); }
+
+.armario-grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 12px;
+}
+.item {
+  position: relative;
+  border: 3px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  cursor: pointer;
+  min-height: 108px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--ink);
+  transition: transform .12s;
+}
+.item:hover { transform: translateY(-4px); }
+.item:active { transform: translateY(1px); }
+.item.equipado { border-color: var(--violet); box-shadow: 0 5px 0 rgba(124, 111, 240, .4); }
+.item-cor { width: 56px; height: 56px; border-radius: 16px; box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .15); }
+.item-mini { display: grid; place-items: center; height: 72px; }
+.item-mini .skate { width: 84px; }
+.item-emoji { font-size: 44px; }
+.item .selo {
+  position: absolute;
+  top: -8px; right: -8px;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--violet);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, .25);
+}
+
+@media (max-width: 760px) {
+  .palco-vestiario { grid-template-columns: 1fr; }
+  .cosmo-vitrine { position: static; min-height: 34vh; }
+}

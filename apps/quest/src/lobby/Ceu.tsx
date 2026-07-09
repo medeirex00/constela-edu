@@ -6,11 +6,9 @@
  * Cosmo). Reseta a cada dia — um micro-ritual de 20 segundos que ensaia o
  * conceito central do produto (a Constelação de progresso).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { tocarNota } from "../audio/audio";
-
-const CHAVE_CEU = "quest_ceu";
 
 // Estrelas da constelação (as 8 ligadas por linhas) + soltas (decorativas)
 // Nenhuma estrela dentro da coluna central (~35–65%): ali vive o Cosmo,
@@ -36,35 +34,20 @@ const LINHAS = [[0, 1], [1, 2], [2, 3], [4, 5], [5, 6], [5, 7]];
 // Escala pentatônica: qualquer ordem de toques soa bem
 const NOTAS = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51];
 
-function hoje(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function lerAcesas(): number[] {
-  try {
-    const bruto = JSON.parse(localStorage.getItem(CHAVE_CEU) ?? "null");
-    return bruto && bruto.dia === hoje() ? bruto.acesas : [];
-  } catch {
-    return [];
-  }
-}
-
 interface CeuProps {
   /** Estrelas respondem ao toque (só no lobby). */
   tocavel?: boolean;
-  /** Chamado quando a criança acende a constelação inteira do dia. */
+  /** Chamado quando a criança acende a constelação inteira. */
   aoCompletar?: () => void;
+  /** Índice da estrela de onde o skate decola (brilha antes da entrada). */
+  estrelaDestaque?: number | null;
 }
 
-export function Ceu({ tocavel = false, aoCompletar }: CeuProps) {
-  const [acesas, setAcesas] = useState<number[]>(tocavel ? lerAcesas : []);
+export function Ceu({ tocavel = false, aoCompletar, estrelaDestaque = null }: CeuProps) {
+  // Estado só em memória: começa vazio a cada login — nenhuma conta herda a
+  // constelação da anterior (decisão de produto).
+  const [acesas, setAcesas] = useState<number[]>([]);
   const completa = acesas.length === ESTRELAS.length;
-
-  useEffect(() => {
-    if (!tocavel) return;
-    localStorage.setItem(CHAVE_CEU,
-      JSON.stringify({ dia: hoje(), acesas }));
-  }, [acesas, tocavel]);
 
   const acender = useCallback((indice: number) => {
     if (acesas.includes(indice)) {
@@ -96,15 +79,21 @@ export function Ceu({ tocavel = false, aoCompletar }: CeuProps) {
             className={acesas.includes(a) && acesas.includes(b) ? "acesa" : ""}
           />
         ))}
-        {ESTRELAS.map((estrela, indice) => (
-          <circle
-            key={indice}
-            cx={estrela.x} cy={estrela.y}
-            r={acesas.includes(indice) ? estrela.r + 2 : estrela.r}
-            className={acesas.includes(indice) ? "acesa" : ""}
-            onPointerDown={tocavel ? () => acender(indice) : undefined}
-          />
-        ))}
+        {ESTRELAS.map((estrela, indice) => {
+          const classes = [
+            acesas.includes(indice) ? "acesa" : "",
+            indice === estrelaDestaque ? "brilhando" : "",
+          ].filter(Boolean).join(" ");
+          return (
+            <circle
+              key={indice}
+              cx={estrela.x} cy={estrela.y}
+              r={acesas.includes(indice) ? estrela.r + 2 : estrela.r}
+              className={classes}
+              onPointerDown={tocavel ? () => acender(indice) : undefined}
+            />
+          );
+        })}
         {SOLTAS.map((estrela, indice) => (
           <circle key={`s${indice}`} cx={estrela.x} cy={estrela.y} r={estrela.r} />
         ))}

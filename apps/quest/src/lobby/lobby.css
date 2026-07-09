@@ -1,4 +1,5 @@
-/* Lobby — HUD, palco do Cosmo, trilho de planetas (teaser) e gaveta. */
+/* Lobby — HUD com abas, palco do Cosmo (+skate), trilho de matérias,
+   painel de missões, vestiário/carreira, gaveta e despedida. */
 
 .hud {
   position: fixed;
@@ -6,35 +7,59 @@
   z-index: 40;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 24px;
+  gap: 14px;
+  padding: 14px 20px;
+  flex-wrap: wrap;
 }
 .hud .marca {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 22px;
+  font-size: 20px;
   color: #fff;
   text-shadow: 0 2px 8px rgba(0, 0, 0, .25);
 }
 .hud .marca .lua {
-  width: 36px; height: 36px; border-radius: 50%;
+  width: 34px; height: 34px; border-radius: 50%;
   background: radial-gradient(circle at 62% 38%, transparent 46%, var(--sun) 47%);
   filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .25));
 }
 .hud .marca small {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   color: #fff;
   background: var(--coral);
-  padding: 3px 9px;
+  padding: 3px 8px;
   border-radius: 999px;
   transform: rotate(-4deg);
   box-shadow: 0 3px 0 rgba(0, 0, 0, .25);
   letter-spacing: 1px;
 }
+
+/* Abas Jogar / Vestiário / Carreira */
+.nav { display: flex; gap: 8px; }
+.tab {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  padding: 11px 18px;
+  min-height: 44px;
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  background: var(--hud);
+  color: #fff;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .3);
+  transition: transform .12s ease;
+}
+.tab:hover { transform: translateY(-2px); }
+.tab:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0, 0, 0, .3); }
+.tab.ativa { background: var(--sun); color: #3A2C00; box-shadow: 0 5px 0 var(--sun-deep); }
+
 .hud-direita { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 .botao-avatar {
@@ -60,16 +85,15 @@
   background: var(--green);
   border: 3px solid #fff;
 }
-.botao-avatar:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
-/* Palco — não captura toques fora do Cosmo (o céu tocável fica atrás) */
+/* Palco (não captura toques fora do Cosmo/skate) */
 .palco {
   position: fixed;
   inset: 0;
   z-index: 5;
   display: grid;
   place-items: end center;
-  padding-bottom: 210px;
+  padding-bottom: 208px;
   pointer-events: none;
 }
 .palco-interno {
@@ -86,59 +110,149 @@
   border-radius: 50%;
   background: radial-gradient(ellipse at center, rgba(255, 255, 255, .5) 0%, transparent 70%);
 }
-.podio::before {
-  content: "";
-  position: absolute;
-  inset: 14px 48px;
-  border-radius: 50%;
-  border: 4px dashed rgba(255, 255, 255, .65);
-}
 .palco .cosmo-fala {
+  position: absolute;
   bottom: calc(100% + 4px);
   left: 58%;
   z-index: 6;
-}
-
-/* Trilho de planetas (teaser da Fase Q1) */
-.planetas-area {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 35;
-  padding: 8px 0 22px;
-}
-/* Pill com fundo --hud: branco solto sobre o céu claro dava ~2:1 de
-   contraste (reprova WCAG); sobre o hud dá ~13:1 */
-.planetas-titulo {
-  display: inline-block;
+  max-width: 300px;
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 17px;
-  margin: 0 32px 10px;
-  padding: 8px 18px;
+  padding: 14px 18px;
+  border-radius: 20px 20px 20px 4px;
+  box-shadow: 0 8px 0 rgba(0, 0, 0, .18);
+}
+
+/* Astronauta montado no skate: pula na entrada, fica levantado com o skate */
+.cosmo-monta { position: relative; z-index: 2; }
+.cosmo-monta.no-skate { transform: translateY(-34px); }
+.cosmo-monta.pulando { animation: cosmo-jump .7s ease; }
+@keyframes cosmo-jump {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-90px) rotate(-4deg); }
+  70% { transform: translateY(-34px); }
+  100% { transform: translateY(-34px); }
+}
+.skate-lobby {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(42vw, 360px);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Painel de missões da matéria (aparece à esquerda ao escolher) */
+.missoes {
+  position: fixed;
+  left: 24px;
+  top: 46%;
+  transform: translateY(-50%) translateX(-24px);
+  width: min(340px, 86vw);
+  z-index: 30;
+  background: var(--paper-90);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: 0 12px 0 rgba(0, 0, 0, .22);
+  opacity: 0;
+  pointer-events: none;
+  transition: .3s ease;
+  border-top: 10px solid var(--m-cor, var(--sun));
+}
+.missoes.aberto { opacity: 1; pointer-events: auto; transform: translateY(-50%) translateX(0); }
+.missoes h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.missoes .sub { color: var(--ink-soft); font-size: 13px; font-weight: 800; margin: 2px 0 14px; }
+.missao {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--paper);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.missao .anel {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  flex: none;
+  border: 4px solid var(--m-cor, var(--sun));
+}
+.missao .info { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 800; }
+.missao .xp {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 13px;
+  color: #3A2C00;
+  background: var(--sun);
   border-radius: 999px;
+  padding: 5px 11px;
+  flex: none;
+  box-shadow: 0 3px 0 var(--sun-deep);
+}
+.btn-jogar {
+  width: 100%;
+  margin-top: 6px;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 19px;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: #fff;
+  background: var(--m-cor, var(--sun));
+  border-radius: 16px;
+  padding: 14px;
+  min-height: var(--alvo-minimo);
+  box-shadow: 0 6px 0 rgba(0, 0, 0, .28);
+  transition: transform .12s;
+}
+.btn-jogar:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0, 0, 0, .28); }
+
+/* Trilho de matérias */
+.materias-area { position: fixed; left: 0; right: 0; bottom: 0; z-index: 35; padding: 8px 0 20px; }
+.materias-dica {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 17px;
+  margin: 0 28px 10px;
+  padding: 8px 16px;
+  display: inline-block;
   background: var(--hud);
   color: var(--hud-ink);
+  border-radius: 999px;
   box-shadow: 0 4px 0 rgba(0, 0, 0, .3);
   text-transform: uppercase;
-  letter-spacing: .6px;
+  letter-spacing: .5px;
 }
-.planetas {
+.materias {
   display: flex;
-  gap: 18px;
+  gap: 16px;
   overflow-x: auto;
-  padding: 12px 32px 20px;
+  padding: 14px 28px 18px;
   scroll-snap-type: x proximity;
   scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 34px,
-      #000 calc(100% - 34px), transparent 100%);
-  mask-image: linear-gradient(90deg, transparent 0, #000 34px,
-      #000 calc(100% - 34px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 30px, #000 calc(100% - 30px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 30px, #000 calc(100% - 30px), transparent 100%);
 }
-.planetas::-webkit-scrollbar { display: none; }
-.planeta {
+.materias::-webkit-scrollbar { display: none; }
+.materia-card {
   scroll-snap-align: center;
-  flex: 0 0 220px;
-  height: 150px;
+  flex: 0 0 210px;
+  height: 148px;
   border: none;
   border-radius: 28px;
   cursor: pointer;
@@ -152,17 +266,17 @@
   box-shadow: 0 9px 0 rgba(0, 0, 0, .3);
   transition: transform .15s ease;
 }
-.planeta::before {
+.materia-card::before {
   content: "";
   position: absolute;
   inset: 0;
   background: linear-gradient(115deg, rgba(255, 255, 255, .3) 0%, transparent 40%);
 }
-.planeta:hover { transform: translateY(-9px) rotate(-1.2deg); }
-.planeta:active { transform: translateY(2px); }
-.planeta:focus-visible { outline: 4px solid #fff; outline-offset: 3px; }
-.planeta .icone { font-size: 38px; line-height: 1; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .25)); }
-.planeta .nome {
+.materia-card:hover { transform: translateY(-9px) rotate(-1.2deg); }
+.materia-card:active { transform: translateY(2px); }
+.materia-card.selecionada { outline: 4px solid #fff; outline-offset: 3px; transform: translateY(-9px); }
+.materia-card .icone { font-size: 38px; line-height: 1; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .25)); }
+.materia-card .nome {
   display: block;
   font-weight: 800;
   font-size: 21px;
@@ -171,23 +285,16 @@
   letter-spacing: .4px;
   text-shadow: 0 2px 0 rgba(0, 0, 0, .25);
 }
-.planeta .emblema {
+.materia-card .conta {
   display: inline-block;
   margin-top: 8px;
   font-size: 12.5px;
   font-weight: 800;
-  background: rgba(0, 0, 0, .55);
+  background: rgba(0, 0, 0, .28);
   padding: 5px 12px;
   border-radius: 999px;
 }
-.planeta.balancando { animation: planeta-balanca .55s ease; }
-@keyframes planeta-balanca {
-  0%, 100% { transform: rotate(0); }
-  25% { transform: rotate(-3deg) translateY(-4px); }
-  50% { transform: rotate(3deg); }
-  75% { transform: rotate(-1.5deg); }
-}
-.planeta .fundo-icone {
+.materia-card .fundo-icone {
   position: absolute;
   right: -18px; bottom: -22px;
   font-size: 110px;
@@ -195,7 +302,7 @@
   transform: rotate(-14deg);
 }
 
-/* Gaveta */
+/* Gaveta da conta */
 .escurecedor {
   position: fixed;
   inset: 0;
@@ -251,9 +358,6 @@
   font-weight: 900;
   color: var(--ink);
 }
-
-.amostras { display: flex; gap: 12px; flex-wrap: wrap; }
-
 .opcao {
   display: flex;
   align-items: center;
@@ -274,12 +378,9 @@
 .opcao:hover { transform: translateX(-5px); }
 .opcao .icone-opcao { font-size: 21px; }
 .opcao small { margin-left: auto; color: var(--ink-soft); font-weight: 800; }
-/* "Trocar de astronauta": neutro de propósito — num tablet compartilhado
-   ele precisa existir, mas não pode ser o item mais chamativo da gaveta
-   (cor vibrante atrai o dedo explorador da criança). */
 .opcao.trocar { margin-top: auto; }
 
-/* Despedida do Cosmo (confirmação de saída) */
+/* Despedida do Cosmo */
 .despedida {
   position: fixed;
   inset: 0;
@@ -297,14 +398,35 @@
   gap: 12px;
   text-align: center;
 }
-.despedida-painel h2 {
-  font-family: var(--font-display);
-  font-size: 22px;
-}
+.despedida-painel h2 { font-family: var(--font-display); font-size: 22px; }
 .despedida-painel .botao3d { width: 100%; }
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 240px;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--hud);
+  color: #fff;
+  font-weight: 800;
+  font-size: 15px;
+  padding: 13px 22px;
+  border-radius: 16px;
+  z-index: 70;
+  opacity: 0;
+  pointer-events: none;
+  transition: .3s;
+  box-shadow: 0 7px 0 rgba(0, 0, 0, .3);
+  font-family: var(--font-display);
+}
+#toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 @media (max-width: 820px) {
   .hud .marca span { display: none; }
-  .palco { padding-bottom: 190px; }
-  .planeta { flex: 0 0 190px; height: 140px; }
+  .tab { padding: 10px 12px; font-size: 13px; }
+  .palco { padding-bottom: 188px; }
+  .missoes { left: 12px; right: 12px; width: auto; top: auto; bottom: 214px;
+    transform: translateY(12px); }
+  .missoes.aberto { transform: translateY(0); }
+  .materia-card { flex: 0 0 180px; height: 138px; }
 }

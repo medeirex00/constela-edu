@@ -22,6 +22,17 @@ assets; leitura de QR pela câmera DENTRO do app fica para quando houver
 tablets de teste (o QR do cartão já funciona via câmera nativa do aparelho,
 que abre a URL).
 
+**Revisão 2 — lobby completo e customização (09/07/2026):** abas Jogar/
+Vestiário/Carreira; trilho de matérias que troca o fundo para a cena
+temática da disciplina e mostra as missões do dia + "Jogar agora";
+vestiário estilo Roblox (cor/rosto/chapéu/veículo + editar apelido);
+carreira com conquistas/estatísticas/histórico; personagem com física de
+mola no toque (sem falas); 1º meio de locomoção (skate voador com jatos,
+entrada saindo da constelação); e a conta deixou de ficar salva no
+aparelho (token só em memória — sai/recarrega → login pelo código;
+constelação e estado não vazam entre contas). Avatar ganhou slots
+rosto/chapeu/veiculo no backend (whitelist).
+
 **Revisão pós-análise (09/07/2026, mesma data):** decisões do dono do
 produto aplicadas — login SEM senha/PIN (o código `SOL1234`, só letras e
 números, é a credencial, como no Elefante Letrado) e cerimônia da primeira

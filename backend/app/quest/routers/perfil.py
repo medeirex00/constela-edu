@@ -33,8 +33,15 @@ def meu_perfil(ctx: ContextoAluno = Depends(get_aluno_atual)):
 
 @router.get("/cores", response_model=list[str])
 def cores_disponiveis():
-    """Catálogo de cores do traje (fase Q0: único slot equipável)."""
+    """Catálogo de cores do traje (atalho usado pela cerimônia)."""
     return list(svc.CORES_TRAJE)
+
+
+@router.get("/aparencia")
+def catalogo_aparencia():
+    """Catálogo do vestiário: opções válidas por slot (cor/rosto/chapeu/
+    veiculo). O desenho de cada item é do frontend; aqui vai a whitelist."""
+    return {slot: list(valores) for slot, valores in svc.APARENCIA.items()}
 
 
 @router.patch("/nome", response_model=schemas.PerfilOut)

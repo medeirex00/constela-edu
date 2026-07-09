@@ -1,29 +1,25 @@
 /**
- * Entrada do astronauta — sem senha (o código é a credencial):
+ * Entrada do astronauta — sem senha (o código é a credencial) e SEM salvar a
+ * conta no aparelho (decisão de produto): cada entrada começa pelo código.
  *
- *   0. "Quem vai jogar?" — astronautas que já entraram neste aparelho
- *      (tablet compartilhado: um toque e pronto)
  *   1. código do cartão (só letras e números, ex.: SOL1234)
  *   2. "É você?" — botão verde gigante confirma; o cinza volta
  *
- * Cada passo é NARRADO em pt-BR e tem o botão "Ouvir de novo" — criança de
- * 6 anos não lê instrução. Erro nunca culpa: mensagem gentil + narração.
+ * Cada passo é NARRADO em pt-BR e tem o botão "Ouvir de novo".
  */
 import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@constela/core";
 import { entrar, quemE } from "@constela/quest-core";
-import type { AstronautaConhecido, Quem, SessaoQuest } from "@constela/quest-core";
+import type { Quem, SessaoQuest } from "@constela/quest-core";
 
 import { narrar, tocar } from "../audio/audio";
 import { Cosmo } from "../cosmo/Cosmo";
-import { useSessao } from "../estado/sessao";
 import "./entrada.css";
 
-type Passo = "quem-joga" | "codigo" | "quem";
+type Passo = "codigo" | "quem";
 
 const NARRACOES: Record<Passo, string> = {
-  "quem-joga": "Quem vai jogar? Toque no seu astronauta!",
   codigo: "Digite o código do seu cartão, aquele com as letras e os números grandes. Depois toque em continuar.",
   quem: "Se for você, toque no botão verde!",
 };
@@ -33,27 +29,19 @@ interface EntradaProps {
 }
 
 export function Entrada({ aoEntrar }: EntradaProps) {
-  const { astronautas } = useSessao();
-  const [passo, setPasso] = useState<Passo>(
-    astronautas.length > 0 ? "quem-joga" : "codigo",
-  );
+  const [passo, setPasso] = useState<Passo>("codigo");
   const [codigo, setCodigo] = useState("");
   const [quem, setQuem] = useState<Quem | null>(null);
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const campoCodigo = useRef<HTMLInputElement>(null);
-  const telaLarga = useRef(
-    window.matchMedia("(min-width: 761px)").matches,
-  ).current;
+  const telaLarga = useRef(window.matchMedia("(min-width: 761px)").matches).current;
 
   useEffect(() => {
     if (passo === "codigo") campoCodigo.current?.focus();
-    if (passo === "quem" && quem) {
-      narrar(`Encontrei! É você, ${quem.nome}? ${NARRACOES.quem}`);
-    } else {
-      narrar(NARRACOES[passo]);
-    }
-    // Narra só na troca de passo
+    narrar(passo === "quem" && quem
+      ? `Encontrei! É você, ${quem.nome}? ${NARRACOES.quem}`
+      : NARRACOES[passo]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passo]);
 
@@ -65,14 +53,13 @@ export function Entrada({ aoEntrar }: EntradaProps) {
     narrar(mensagem);
   };
 
-  const confirmarCodigo = async (digitado?: string) => {
-    const alvo = (digitado ?? codigo).trim();
+  const confirmarCodigo = async () => {
+    const alvo = codigo.trim();
     if (!alvo || ocupado) return;
     setOcupado(true);
     setErro("");
     try {
       const resposta = await quemE(alvo);
-      setCodigo(alvo);
       setQuem(resposta);
       setPasso("quem");
       tocar("clique");
@@ -83,34 +70,27 @@ export function Entrada({ aoEntrar }: EntradaProps) {
     }
   };
 
-  const entrarAgora = async (codigoEscolhido?: string) => {
+  const entrarAgora = async () => {
     if (ocupado) return;
     setOcupado(true);
     setErro("");
     try {
-      const sessao = await entrar(codigoEscolhido ?? codigo);
+      const sessao = await entrar(codigo);
       tocar("fanfarra");
       aoEntrar(sessao);
     } catch (excecao) {
       falhar(excecao, "Não consegui entrar agora. Tente de novo!");
-      if (codigoEscolhido) setPasso("codigo");
     } finally {
       setOcupado(false);
     }
   };
 
-  const voltarAoInicio = () => {
-    setPasso(astronautas.length > 0 ? "quem-joga" : "codigo");
-    setQuem(null);
-    setErro("");
-  };
+  const voltar = () => { setPasso("codigo"); setQuem(null); setErro(""); };
 
   return (
     <div className="entrada">
       {telaLarga && (
-        <div className="cosmo-canto">
-          <Cosmo altura="52vh" />
-        </div>
+        <div className="cosmo-canto"><Cosmo altura="52vh" fisica /></div>
       )}
 
       <div className="entrada-painel">
@@ -119,31 +99,6 @@ export function Entrada({ aoEntrar }: EntradaProps) {
           <span>constela</span>
           <small>QUEST</small>
         </div>
-
-        {passo === "quem-joga" && (
-          <div className="painel entrada-passo">
-            <h1>👋 Quem vai jogar?</h1>
-            <p className="dica">Toque no seu astronauta</p>
-            {erro && <div className="entrada-erro" role="alert">{erro}</div>}
-            <div className="astronautas" role="list">
-              {astronautas.map((astronauta: AstronautaConhecido) => (
-                <button
-                  key={astronauta.codigo}
-                  className="astronauta"
-                  disabled={ocupado}
-                  onClick={() => { tocar("clique"); void entrarAgora(astronauta.codigo); }}
-                >
-                  <Cosmo altura="84px" vivo={false} cor={astronauta.cor} />
-                  <b>{astronauta.nome}</b>
-                </button>
-              ))}
-            </div>
-            <button className="botao3d fantasma"
-                    onClick={() => { tocar("clique"); setPasso("codigo"); }}>
-              ✨ Sou novo aqui
-            </button>
-          </div>
-        )}
 
         {passo === "codigo" && (
           <div className="painel entrada-passo">
@@ -158,15 +113,12 @@ export function Entrada({ aoEntrar }: EntradaProps) {
               autoCapitalize="characters"
               autoComplete="off"
               spellCheck={false}
-              inputMode="text"
-              onChange={(evento) => setCodigo(
-                evento.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
-              )}
-              onKeyDown={(evento) => evento.key === "Enter" && confirmarCodigo()}
+              onChange={(e) => setCodigo(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+              onKeyDown={(e) => e.key === "Enter" && confirmarCodigo()}
               aria-label="Código do cartão (letras e números)"
             />
             {erro && <div className="entrada-erro" role="alert">{erro}</div>}
-            <button className="botao3d sol" onClick={() => confirmarCodigo()}
+            <button className="botao3d sol" onClick={confirmarCodigo}
                     disabled={ocupado || !codigo.trim()}>
               Continuar
             </button>
@@ -176,19 +128,20 @@ export function Entrada({ aoEntrar }: EntradaProps) {
         {passo === "quem" && quem && (
           <div className="painel entrada-passo">
             <div className="quem-cartao">
-              <Cosmo altura="140px" vivo={false} cor={quem.avatar.cor as string} />
+              <Cosmo altura="150px" vivo={false} cor={quem.avatar.cor as string}
+                     rosto={quem.avatar.rosto as string}
+                     chapeu={quem.avatar.chapeu as string} />
               <span className="nome">É você, {quem.nome}?</span>
               <span className="apelido">✨ {quem.apelido}</span>
             </div>
             {erro && <div className="entrada-erro" role="alert">{erro}</div>}
             <div className="quem-botoes">
-              <button className="botao3d verde sou-eu" autoFocus
-                      disabled={ocupado}
+              <button className="botao3d verde sou-eu" autoFocus disabled={ocupado}
                       onClick={() => { tocar("clique"); void entrarAgora(); }}>
                 ✅ Sou eu!
               </button>
               <button className="botao3d fantasma nao-sou-eu"
-                      onClick={() => { tocar("clique"); voltarAoInicio(); }}>
+                      onClick={() => { tocar("clique"); voltar(); }}>
                 ↩ Não sou eu
               </button>
             </div>
@@ -196,19 +149,14 @@ export function Entrada({ aoEntrar }: EntradaProps) {
         )}
 
         <div className="entrada-rodape">
-          <button
-            className="botao-ouvir"
-            onClick={() => narrar(passo === "quem" && quem
-              ? `É você, ${quem.nome}? ${NARRACOES.quem}`
-              : NARRACOES[passo])}
-            aria-label="Ouvir a instrução de novo"
-          >
+          <button className="botao-ouvir"
+                  onClick={() => narrar(passo === "quem" && quem
+                    ? `É você, ${quem.nome}? ${NARRACOES.quem}` : NARRACOES[passo])}
+                  aria-label="Ouvir a instrução de novo">
             🔊 Ouvir de novo
           </button>
-          {passo !== "quem-joga" && (astronautas.length > 0 || passo === "quem") && (
-            <button className="botao-ouvir" onClick={voltarAoInicio}>
-              ← Voltar ao começo
-            </button>
+          {passo === "quem" && (
+            <button className="botao-ouvir" onClick={voltar}>← Voltar ao começo</button>
           )}
         </div>
       </div>

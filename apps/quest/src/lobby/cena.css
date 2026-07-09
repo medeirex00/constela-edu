@@ -1,0 +1,40 @@
+/* Cenário temático de fundo + classes de animação das cenas (protótipo v7). */
+
+.cena {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity .3s ease;
+}
+.cena.esvanecendo { opacity: 0; }
+.cena svg { width: 100%; height: 100%; }
+
+.cena .sk { fill: none; stroke: var(--scene-ink); stroke-linecap: round; stroke-linejoin: round; }
+.cena .fl { fill: var(--scene-ink); }
+.cena text { font-family: var(--font-display); font-weight: 800; fill: var(--scene-ink); }
+
+.cena .f1 { animation: cena-float 8s ease-in-out infinite alternate; }
+.cena .f2 { animation: cena-float 11s ease-in-out infinite alternate; animation-delay: -4s; }
+.cena .f3 { animation: cena-float 9s ease-in-out infinite alternate; animation-delay: -7s; }
+@keyframes cena-float {
+  from { transform: translateY(0); }
+  to { transform: translateY(-24px); }
+}
+
+.cena .spin { animation: cena-spin 40s linear infinite; transform-origin: center; transform-box: fill-box; }
+.cena .spin-r { animation: cena-spin 55s linear infinite reverse; transform-origin: center; transform-box: fill-box; }
+@keyframes cena-spin { to { transform: rotate(360deg); } }
+
+.cena .rise { animation: cena-rise 14s linear infinite; }
+@keyframes cena-rise {
+  from { transform: translateY(0); opacity: .7; }
+  to { transform: translateY(-70vh); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cena .f1, .cena .f2, .cena .f3, .cena .spin, .cena .spin-r, .cena .rise {
+    animation: none !important;
+  }
+}

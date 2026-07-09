@@ -19,6 +19,22 @@ from app.quest.models import QuestPerfil
 CORES_TRAJE = ("#FF4D9D", "#FFC93C", "#2EE6A8", "#4EA8FF", "#A78BFA", "#FF8E3C")
 COR_PADRAO = CORES_TRAJE[0]
 
+# Vestiário (estilo Roblox): slots cosméticos. O desenho de cada item vive no
+# frontend (SVG do Cosmo); aqui fica a whitelist — o cliente nunca inventa
+# item. Na fase Q0 tudo é gratuito; o desbloqueio por XP entra na Q2.
+ROSTOS = ("sorriso", "sorrisao", "fofo", "surpreso", "oculos", "heroi")
+CHAPEUS = ("nenhum", "coroa", "cartola", "laco", "fone", "cowboy")
+VEICULOS = ("nenhum", "skate")
+
+APARENCIA = {
+    "cor": CORES_TRAJE,
+    "rosto": ROSTOS,
+    "chapeu": CHAPEUS,
+    "veiculo": VEICULOS,
+}
+AVATAR_PADRAO = {"cor": COR_PADRAO, "rosto": "sorriso",
+                 "chapeu": "nenhum", "veiculo": "nenhum"}
+
 # Apelido = "SUBSTANTIVO ADJETIVO" de listas seguras e positivas.
 _SUBSTANTIVOS = (
     "Estrela", "Cometa", "Foguete", "Planeta", "Aurora", "Satelite",
@@ -82,7 +98,7 @@ def obter_ou_criar_perfil(db: Session, aluno: Aluno) -> QuestPerfil:
         aluno_id=aluno.id,
         apelido=gerar_apelido(db, aluno.escola_id),
         codigo_amigo=gerar_codigo_amigo(db),
-        avatar={"cor": COR_PADRAO},
+        avatar=dict(AVATAR_PADRAO),
         preferencias={"som": True, "musica": True, "narracao": True,
                       "reduzir_animacoes": False},
     )
@@ -118,14 +134,15 @@ def nome_para_falas(perfil: QuestPerfil, aluno_nome: str) -> str:
 
 
 def atualizar_avatar(perfil: QuestPerfil, mudancas: dict) -> None:
-    """Só aceita slots conhecidos com valores do catálogo. Na fase Q0 o
-    único slot equipável é a cor do traje."""
+    """Só aceita slots conhecidos (cor/rosto/chapeu/veiculo) com valores do
+    catálogo — o cliente nunca envia um item fora da whitelist."""
     avatar = dict(perfil.avatar or {})
-    if "cor" in mudancas:
-        cor = str(mudancas["cor"])
-        if cor not in CORES_TRAJE:
-            raise ValueError("Cor de traje desconhecida.")
-        avatar["cor"] = cor
+    for slot, permitidos in APARENCIA.items():
+        if slot in mudancas:
+            escolha = str(mudancas[slot])
+            if escolha not in permitidos:
+                raise ValueError(f"Opção desconhecida para {slot}.")
+            avatar[slot] = escolha
     perfil.avatar = avatar
 
 

@@ -144,6 +144,15 @@ button { font-family: inherit; }
   50% { opacity: 1; }
   100% { opacity: 1; }
 }
+/* Estrela de onde o skate decola: brilha forte antes da entrada */
+.constelacao circle.brilhando {
+  fill: var(--sun);
+  animation: estrela-brilha 1s ease-in-out;
+}
+@keyframes estrela-brilha {
+  0%, 100% { opacity: .5; }
+  40% { opacity: 1; r: 14; }
+}
 @keyframes linha-brilha {
   from { opacity: .55; }
   to { opacity: 1; }

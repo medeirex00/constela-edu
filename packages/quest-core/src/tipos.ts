@@ -12,7 +12,18 @@ export interface Quem {
 
 export interface Avatar {
   cor?: string;
+  rosto?: string;
+  chapeu?: string;
+  veiculo?: string;
   [slot: string]: unknown;
+}
+
+/** Catálogo do vestiário: opções válidas por slot (whitelist do backend). */
+export interface Aparencia {
+  cor: string[];
+  rosto: string[];
+  chapeu: string[];
+  veiculo: string[];
 }
 
 export interface Preferencias {

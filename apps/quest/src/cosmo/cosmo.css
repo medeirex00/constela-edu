@@ -25,6 +25,11 @@
 
 .cosmo .pele { fill: var(--skin, #FF4D9D); transition: fill .3s; }
 
+/* Wrapper da física de mola (cutucada): a JS escreve rotate+scale aqui,
+   com origem no centro-base para o corpo "afundar" e balançar de cócegas.
+   Fica separado dos grupos com animação CSS (float/sway/wave). */
+.cosmo-fisica { transform-box: fill-box; transform-origin: 50% 94%; }
+
 /* Gingado: o tronco balança, as pernas ficam */
 .cosmo-tronco {
   transform-box: fill-box;
@@ -45,15 +50,6 @@
   36% { transform: rotate(5deg); }
   54% { transform: rotate(-12deg); }
   72% { transform: rotate(4deg); }
-}
-
-/* Cócegas na barriga */
-.cosmo.cocegas { animation: cosmo-cocegas .6s ease; }
-@keyframes cosmo-cocegas {
-  0%, 100% { transform: scale(1, 1); }
-  25% { transform: scale(1.06, .94) rotate(-2deg); }
-  50% { transform: scale(.95, 1.05) rotate(2deg); }
-  75% { transform: scale(1.04, .96) rotate(-1deg); }
 }
 
 /* Luz da antena (zona de toque) */

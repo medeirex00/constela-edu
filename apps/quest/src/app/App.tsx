@@ -25,7 +25,9 @@ function ConfirmarIdentidade() {
     <div className="confirmar">
       <div className="painel confirmar-painel">
         <Cosmo altura="150px" vivo={false}
-               cor={(perfil.avatar.cor as string) ?? "#FF4D9D"} />
+               cor={(perfil.avatar.cor as string) ?? "#FF4D9D"}
+               rosto={perfil.avatar.rosto as string}
+               chapeu={perfil.avatar.chapeu as string} />
         <span className="nome">É você, {perfil.nome}?</span>
         <button className="botao3d verde" autoFocus
                 onClick={() => { tocar("clique"); confirmarIdentidade(); }}>

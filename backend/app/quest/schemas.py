@@ -67,6 +67,9 @@ class SessaoOut(BaseModel):
 
 class AvatarIn(BaseModel):
     cor: str | None = None
+    rosto: str | None = None
+    chapeu: str | None = None
+    veiculo: str | None = None
 
 
 class NomeIn(BaseModel):

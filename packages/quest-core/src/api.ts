@@ -7,6 +7,8 @@ import { api, ApiError, baseDaApi, obterToken } from "@constela/core";
 
 import type {
   AcessoAluno,
+  Aparencia,
+  Avatar,
   PerfilQuest,
   Preferencias,
   Quem,
@@ -78,6 +80,21 @@ export function meuPerfil(): Promise<PerfilQuest> {
 
 export function coresDoTraje(): Promise<string[]> {
   return api<string[]>("/quest/perfil/cores");
+}
+
+/** Catálogo do vestiário: opções válidas por slot. */
+export function catalogoAparencia(): Promise<Aparencia> {
+  return api<Aparencia>("/quest/perfil/aparencia");
+}
+
+/** Equipa um ou mais slots do avatar (cor, rosto, chapéu, veículo). */
+export function trocarAvatar(
+  mudancas: Partial<Pick<Avatar, "cor" | "rosto" | "chapeu" | "veiculo">>,
+): Promise<PerfilQuest> {
+  return api<PerfilQuest>("/quest/perfil/avatar", {
+    method: "PATCH",
+    body: JSON.stringify(mudancas),
+  });
 }
 
 /** Cerimônia da primeira vez: como a criança quer ser chamada. */

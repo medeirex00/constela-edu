@@ -1,0 +1,80 @@
+/* Carreira: estatísticas, conquistas e histórico. */
+
+.carreira-wrap {
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.carreira .painel h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 14px;
+}
+.carreira .painel h2 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.carreira .painel h2 small { color: var(--ink-soft); font-size: 14px; }
+
+.stats-linha {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+}
+.stat {
+  background: var(--paper);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  text-align: center;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .12);
+}
+.stat b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 30px;
+  color: var(--violet);
+}
+.stat span { font-size: 12.5px; font-weight: 800; color: var(--ink-soft); }
+
+.conquistas-grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.conquista {
+  background: var(--paper);
+  border-radius: var(--radius-md);
+  padding: 16px 12px;
+  text-align: center;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, .12);
+  border-top: 8px solid var(--sun);
+}
+.conquista.bloqueada { border-top-color: var(--line); opacity: .6; }
+.conquista-icone { font-size: 40px; display: block; }
+.conquista b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 14px;
+  margin: 6px 0 2px;
+}
+.conquista-desc { font-size: 12px; color: var(--ink-soft); font-weight: 700; }
+
+.historico-vazio {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--ink-soft);
+}
+.historico-vazio span { font-size: 52px; display: block; margin-bottom: 8px; }
+.historico-vazio b { font-family: var(--font-display); font-size: 18px; color: var(--ink); }
+.historico-vazio p { font-size: 14px; font-weight: 700; max-width: 460px; margin: 8px auto 0; }

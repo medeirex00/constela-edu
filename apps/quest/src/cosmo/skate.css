@@ -1,0 +1,50 @@
+/* Skate voador — idle flutuando + entrada saindo da constelação. */
+
+.skate {
+  width: min(40vw, 380px);
+  height: auto;
+  overflow: visible;
+  animation: skate-flutua 2.6s ease-in-out infinite;
+}
+@keyframes skate-flutua {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-10px) rotate(1deg); }
+}
+
+/* Jatos: chamas piscando */
+.skate .chama {
+  transform-box: fill-box;
+  transform-origin: right center;
+  animation: chama-pisca .18s ease-in-out infinite alternate;
+}
+.skate .skate-jato.dir .chama { transform-origin: left center; }
+.skate .chama-int {
+  transform-box: fill-box;
+  transform-origin: right center;
+  animation: chama-pisca .12s ease-in-out infinite alternate;
+}
+.skate .skate-jato.dir .chama-int { transform-origin: left center; }
+@keyframes chama-pisca {
+  from { transform: scaleX(.7); opacity: .8; }
+  to { transform: scaleX(1.15); opacity: 1; }
+}
+
+/* Entrada: voa da constelação (canto superior direito) até o resting.
+   O deslocamento inicial casa com a estrela em destaque no Ceu. */
+.skate.entrando {
+  animation: skate-entrada 1.1s cubic-bezier(.22, 1, .36, 1) .85s both,
+             skate-flutua 2.6s ease-in-out 1.95s infinite;
+}
+@keyframes skate-entrada {
+  0% { transform: translate(30vw, -46vh) scale(.12) rotate(38deg); opacity: 0; }
+  12% { opacity: 1; }
+  55% { transform: translate(7vw, -7vh) scale(1.08) rotate(-9deg); opacity: 1; }
+  100% { transform: translate(0, 0) scale(1) rotate(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skate, .skate.entrando, .skate .chama, .skate .chama-int {
+    animation: none !important;
+  }
+  .skate.entrando { opacity: 1; }
+}
