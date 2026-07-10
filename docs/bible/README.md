@@ -55,7 +55,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | 08 | Onboarding & FTUE do Aluno / Student Onboarding | `08-onboarding-ftue.md` | 🟢 |
 | 09 | Social & Comunidade Segura / Safe Social | `09-social.md` | 🟢 |
 | 10 | Professor & Família / Teacher & Family | `10-professor-familia.md` | 🟢 |
-| 11 | Arquitetura Técnica / Technical Architecture | `11-arquitetura.md` | ⬛ |
+| 11 | Arquitetura Técnica / Technical Architecture | `11-arquitetura.md` | 🟢 |
 | 12 | Segurança, Privacidade & LGPD / Security & Privacy | `12-seguranca-privacidade.md` | ⬛ |
 | 13 | Acessibilidade & Bem-estar / Accessibility & Well-being | `13-acessibilidade.md` | ⬛ |
 | 14 | Infra, Deploy, Backup & DR (SRE/DevOps) / Infrastructure | `14-infra-deploy-dr.md` | ⬛ |
