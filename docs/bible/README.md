@@ -52,7 +52,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | 05 | Sistemas de Jogo / Game Systems | `05-sistemas-de-jogo.md` | 🟢 |
 | 06 | Design Pedagógico & BNCC / Learning Design | `06-pedagogico-bncc.md` | 🟢 |
 | 07 | UX, Fluxos & Navegação / UX, Flows & Navigation | `07-ux-fluxos-navegacao.md` | 🟢 |
-| 08 | Onboarding & FTUE do Aluno / Student Onboarding | `08-onboarding-ftue.md` | ⬛ |
+| 08 | Onboarding & FTUE do Aluno / Student Onboarding | `08-onboarding-ftue.md` | 🟢 |
 | 09 | Social & Comunidade Segura / Safe Social | `09-social.md` | ⬛ |
 | 10 | Professor & Família / Teacher & Family | `10-professor-familia.md` | ⬛ |
 | 11 | Arquitetura Técnica / Technical Architecture | `11-arquitetura.md` | ⬛ |
