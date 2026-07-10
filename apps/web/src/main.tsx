@@ -13,6 +13,7 @@ import "@fontsource/poppins/500.css";
 import "@fontsource/poppins/700.css";
 
 import App from "./App";
+import { LimiteErro } from "./components/LimiteErro";
 import { AppProvider } from "./context/AppContext";
 import "./index.css";
 
@@ -22,10 +23,12 @@ registerSW({ immediate: true });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter>
-      <AppProvider>
-        <App />
-      </AppProvider>
-    </BrowserRouter>
+    <LimiteErro>
+      <BrowserRouter>
+        <AppProvider>
+          <App />
+        </AppProvider>
+      </BrowserRouter>
+    </LimiteErro>
   </StrictMode>,
 );

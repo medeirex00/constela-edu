@@ -253,6 +253,9 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
 # pois os dados mudam poucas vezes por semana.
 TTL_PAINEL_S = 60
 _cache_painel: dict[int, tuple[float, dict]] = {}
+# Ids exibidos no painel (por escola). Cacheados para o perfil público NÃO
+# recomputar a evolução da escola inteira a cada abertura de aluno (mesmo TTL).
+_cache_visiveis: dict[int, tuple[float, set[int]]] = {}
 
 
 @publico_router.get("/{token}/painel")
@@ -278,8 +281,10 @@ def invalidar_cache_painel(escola_id: int | None = None) -> None:
     """Chamado após recálculo/importação para o painel refletir logo."""
     if escola_id is None:
         _cache_painel.clear()
+        _cache_visiveis.clear()
     else:
         _cache_painel.pop(escola_id, None)
+        _cache_visiveis.pop(escola_id, None)
 
 
 def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
@@ -287,7 +292,14 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
 
     O perfil público só abre para quem já aparece no telão. Sem isto, o token
     público (impresso no QR do telão) permitiria varrer aluno_id=1,2,3… e coletar
-    nome+notas de TODA a escola — IDOR/enumeração de PII de crianças."""
+    nome+notas de TODA a escola — IDOR/enumeração de PII de crianças.
+
+    Resultado cacheado por TTL_PAINEL_S: sem cache, cada abertura de perfil
+    recomputaria a evolução da escola inteira (consulta cara, sem login)."""
+    agora = time.monotonic()
+    em_cache = _cache_visiveis.get(escola.id)
+    if em_cache and agora - em_cache[0] < TTL_PAINEL_S:
+        return em_cache[1]
     limite = int(config.get("max_posicoes", 10))
     ids = set(db.execute(
         select(Aluno.id)
@@ -303,6 +315,7 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     # A evolução também é exibida (slide próprio) — seus alunos podem ser abertos.
     for item in svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]:
         ids.add(item.aluno_id)
+    _cache_visiveis[escola.id] = (agora, ids)
     return ids
 
 

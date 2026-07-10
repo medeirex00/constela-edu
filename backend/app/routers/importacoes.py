@@ -182,7 +182,10 @@ async def analisar(
         if eh_planilha:
             _limpar_temporarios_orfaos()
             try:
-                analise = planilhas.analisar_planilha(
+                # Parsing CPU-bound (openpyxl) fora do event loop — não trava os
+                # demais requests durante a leitura da planilha.
+                analise = await run_in_threadpool(
+                    planilhas.analisar_planilha,
                     conteudo, plataforma, nome_arquivo=arquivo_nome or "")
             except ValueError as exc:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -199,8 +202,10 @@ async def analisar(
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
                 # genéricas de texto como rede de segurança.
-                analise = perfis_pdf.analisar_pdf(conteudo, plataforma,
-                                                  nome_arquivo=arquivo_nome or "")
+                # Parsing CPU-bound (pdfplumber/pypdf) fora do event loop.
+                analise = await run_in_threadpool(
+                    perfis_pdf.analisar_pdf, conteudo, plataforma,
+                    nome_arquivo=arquivo_nome or "")
             except HTTPException:
                 raise  # mensagem útil do parser genérico chega ao usuário
             except Exception as exc:
@@ -214,10 +219,10 @@ async def analisar(
         else:
             texto = conteudo.decode("utf-8", errors="replace")
             tipo = "texto"
-            analise = svc.analisar_texto(texto, plataforma)
+            analise = await run_in_threadpool(svc.analisar_texto, texto, plataforma)
     elif texto and texto.strip():
         tipo = "texto"
-        analise = svc.analisar_texto(texto, plataforma)
+        analise = await run_in_threadpool(svc.analisar_texto, texto, plataforma)
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")

@@ -262,10 +262,13 @@ def _mapa_pseudonimos(db: Session, escola_id: int) -> dict[str, str]:
 
 def _pseudonimizar(texto: str, mapa: dict[str, str]) -> str:
     """Troca cada nome real pelo token. Nome mais longo primeiro (não trocar
-    "João" dentro de "João Pedro") e fronteira de palavra — casamento exato,
-    sem aproximação."""
+    "João" dentro de "João Pedro"), fronteira de palavra e SEM diferenciar
+    maiúsculas/minúsculas (re.IGNORECASE) — o nome digitado pela pessoa em caixa
+    diferente ("joão pereira") também é trocado antes de ir ao provedor externo.
+    """
     for nome in sorted(mapa, key=len, reverse=True):
-        texto = re.sub(rf"\b{re.escape(nome)}\b", mapa[nome], texto)
+        texto = re.sub(rf"\b{re.escape(nome)}\b", mapa[nome], texto,
+                       flags=re.IGNORECASE)
     return texto
 
 

@@ -447,6 +447,36 @@ def test_b1_aluno_arquivado_nao_entra_no_contexto_nem_vaza_para_ia(
     assert re.search(r"Aluno \d+", capturado["sistema"])   # ativos pseudonimizados
 
 
+def test_medio1_pseudonimizacao_ignora_caixa(db, escola_completa, monkeypatch):
+    """Médio-1 (LGPD): o nome digitado em caixa diferente (minúsculas) também é
+    tokenizado antes de ir ao provedor externo — não vaza."""
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    _snapshot(db, escola.id, ana.id, dias_atras=1,
+              atividades=30, estrelas=80, pontuacao_media=75)
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    from app.services.ia.base import ProvedorIA
+    capturado = {}
+
+    class FakeExterno(ProvedorIA):
+        nome = "openai"
+
+        def responder(self, sistema, mensagens):
+            capturado["mensagens"] = mensagens
+            return "ok"
+
+    monkeypatch.setattr(assistente, "_provedor_da_escola",
+                        lambda db, escola_id: FakeExterno())
+    # Pergunta com o nome do aluno em MINÚSCULAS (caixa diferente do banco).
+    assistente.perguntar(db, escola.id, escola_completa["admin"].id,
+                         f"como está {ana.nome.lower()}?")
+    ultima = capturado["mensagens"][-1]["conteudo"]
+    assert ana.nome.lower() not in ultima          # nome em minúsculas não vazou
+    assert re.search(r"Aluno \d+", ultima)          # foi trocado por token
+
+
 # --- Correção de dados: conta do dono vira global -----------------------------------
 
 def test_promover_admin_global_idempotente(db, escola_completa):

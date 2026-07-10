@@ -128,6 +128,37 @@ def test_b2_perfil_publico_bloqueia_enumeracao_fora_do_painel(cliente, db, escol
         f"/api/v1/publico/{token}/alunos/{next(iter(visiveis))}").status_code == 200
 
 
+def test_medio7_perfil_publico_usa_cache_de_visiveis(cliente, db, escola_completa,
+                                                     monkeypatch):
+    """Médio-7 (perf): abrir perfis públicos não recomputa a evolução da escola
+    a cada request — os ids visíveis ficam em cache por TTL (como o painel)."""
+    _com_notas(db, escola_completa)
+    escola_id = escola_completa["escola"].id
+    r = cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
+                    json={"ativo": True, "slides": ["ranking"],
+                          "intervalo_s": 8, "max_posicoes": 5})
+    token = r.json()["url"].rsplit("/", 1)[-1]
+    alvo = escola_completa["alunos"][0].id
+
+    from app.routers import publico
+    chamadas = {"n": 0}
+    original = publico.svc_evolucao.ranking_evolucao
+
+    def espiao(*a, **k):
+        chamadas["n"] += 1
+        return original(*a, **k)
+
+    monkeypatch.setattr(publico.svc_evolucao, "ranking_evolucao", espiao)
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)
+    # Duas aberturas de perfil dentro do TTL → a evolução é computada só 1x.
+    assert anon.get(f"/api/v1/publico/{token}/alunos/{alvo}").status_code == 200
+    assert anon.get(f"/api/v1/publico/{token}/alunos/{alvo}").status_code == 200
+    assert chamadas["n"] == 1
+
+
 def test_max_posicoes_limita_o_ranking(cliente, db, escola_completa):
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id

@@ -35,6 +35,7 @@ def _reset_estado_global():
                 quest_auth.limitador_codigo_conta):
         lim._eventos.clear()
     publico._cache_painel.clear()
+    publico._cache_visiveis.clear()
     yield
 
 
