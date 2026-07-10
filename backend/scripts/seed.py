@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select  # noqa: E402
 
-from app.core.database import Base, SessionLocal, engine  # noqa: E402
+from app.core.database import SessionLocal, engine  # noqa: E402
+from app.core.migracoes import aplicar_migracoes  # noqa: E402
 from app.core.security import hash_senha  # noqa: E402
 from app.models import (  # noqa: E402
     Aluno,
@@ -214,7 +215,7 @@ def seed_demo(db, escola: Escola) -> None:
 
 
 def main() -> None:
-    Base.metadata.create_all(bind=engine)
+    aplicar_migracoes(engine)   # cria o schema (banco novo) já versionado no Alembic
     db = SessionLocal()
     try:
         escola = seed_base(db)

@@ -1,14 +1,17 @@
-"""Migração de partida: colunas/índices novos + criação do schema.
+"""Migração de partida do container: Alembic + ajustes de dados.
 
-Executado UMA vez pelo entrypoint do container, antes dos workers subirem —
-evita que os N workers do uvicorn corram entre si aplicando DDL.
+Executado UMA vez pelo entrypoint, antes dos workers subirem — evita que os N
+workers do uvicorn corram entre si aplicando DDL. Leva o banco à última
+revisão (criando o schema em bancos novos, preservando os dados nos
+existentes) e aplica as correções de dados idempotentes.
 """
-from app.core.database import Base, engine, migrar_colunas_novas
+from app.core.database import engine, garantir_dados_base
+from app.core.migracoes import aplicar_migracoes
 
 
 def main() -> None:
-    migrar_colunas_novas(engine)
-    Base.metadata.create_all(bind=engine)
+    aplicar_migracoes(engine)
+    garantir_dados_base(engine)
     print("Migração concluída.")
 
 

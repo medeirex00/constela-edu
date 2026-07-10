@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import Base, engine, get_db, migrar_colunas_novas
+from app.core.database import engine, garantir_dados_base, get_db
 from app.quest.routers import auth as quest_auth
 from app.quest.routers import perfil as quest_perfil
 from app.quest.routers import professor as quest_professor
@@ -39,15 +39,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("constela")
 
-# Fase 1: criação direta do schema. Ao migrar para PostgreSQL/produção,
-# substituir por migrações Alembic (estrutura já compatível).
-migrar_colunas_novas(engine)   # bancos existentes ganham as colunas/índices novos
-Base.metadata.create_all(bind=engine)
-# Em banco NOVO a tabela usuarios só existe após o create_all — repete a
-# correção de dados para valer já no primeiro início.
-from app.core.database import _promover_admin_global  # noqa: E402
+# Schema via Alembic. Em produção, o entrypoint do container roda
+# `scripts.migrate` UMA vez antes dos workers — repetir por worker aqui
+# provocaria corrida de DDL. Em desenvolvimento (uvicorn --reload, sem
+# entrypoint) aplicamos as migrações no startup para manter o banco em dia.
+if not settings.em_producao:
+    from app.core.migracoes import aplicar_migracoes  # noqa: E402
 
-_promover_admin_global(engine)
+    aplicar_migracoes(engine)
+
+# Correções de DADOS idempotentes (baratas e seguras de repetir por worker).
+garantir_dados_base(engine)
 
 # /docs, /redoc e /openapi.json só quando explicitamente habilitados (dev).
 _docs = "/docs" if settings.DOCS_HABILITADOS else None

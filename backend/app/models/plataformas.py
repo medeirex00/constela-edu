@@ -93,6 +93,9 @@ class Leitura(Base):
     __tablename__ = "leituras"
     __table_args__ = (
         UniqueConstraint("aluno_id", "livro_id", name="uq_leitura_unica"),
+        # Filtros por período no histórico/rankings de leitura (aluno e escola).
+        Index("ix_leituras_aluno_data", "aluno_id", "data"),
+        Index("ix_leituras_escola_data", "escola_id", "data"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

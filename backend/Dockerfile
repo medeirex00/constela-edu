@@ -9,6 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt "psycopg[binary]==3.2.3"
 
 COPY app ./app
 COPY scripts ./scripts
+# Infraestrutura de migrações: o entrypoint roda `alembic upgrade` no boot.
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 COPY entrypoint.sh ./entrypoint.sh
 
 # Usuário sem privilégios (nunca rodar como root em produção). Os volumes de

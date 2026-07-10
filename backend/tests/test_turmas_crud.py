@@ -1,7 +1,4 @@
 """Gestão de turmas: criar, editar, arquivar e excluir (com trava)."""
-from sqlalchemy import create_engine, inspect, text
-
-from app.core.database import migrar_colunas_novas
 
 
 def _url(escola_id: int) -> str:
@@ -143,25 +140,3 @@ def test_turma_nova_recebe_alunos(cliente, escola_completa):
     assert aluno.status_code == 201, aluno.text
     lista = cliente.get(_url(escola.id)).json()
     assert next(t for t in lista if t["id"] == turma["id"])["total_alunos"] == 1
-
-
-def test_migracao_adiciona_colunas_em_banco_antigo():
-    """Banco de instalação anterior (sem as colunas novas) é atualizado."""
-    motor = create_engine("sqlite://")
-    with motor.begin() as conexao:
-        conexao.execute(text(
-            "CREATE TABLE turmas (id INTEGER PRIMARY KEY, escola_id INTEGER, "
-            "nome VARCHAR(100), ano_escolar VARCHAR(30), ano_letivo INTEGER, "
-            "professor_id INTEGER, created_at TIMESTAMP)"))
-        conexao.execute(text(
-            "INSERT INTO turmas (escola_id, nome, ano_escolar, ano_letivo) "
-            "VALUES (1, '4º Ano B', '4º Ano', 2026)"))
-
-    migrar_colunas_novas(motor)
-    migrar_colunas_novas(motor)  # idempotente
-
-    colunas = {c["name"] for c in inspect(motor).get_columns("turmas")}
-    assert {"turno", "capacidade_maxima", "observacoes", "status"} <= colunas
-    with motor.connect() as conexao:
-        status = conexao.execute(text("SELECT status FROM turmas")).scalar_one()
-    assert status == "ativa"    # linhas antigas nascem ativas
