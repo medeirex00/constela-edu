@@ -9,6 +9,8 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
+import { enviarOuEnfileirar } from "./filaOffline";
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -40,12 +42,11 @@ export async function registrarParaPush(escolaId: number): Promise<string | null
       projectId ? { projectId } : undefined,
     );
 
-    await api(`/escolas/${escolaId}/dispositivos`, {
-      method: "POST",
-      body: JSON.stringify({
-        token_push: token,
-        plataforma: Platform.OS === "ios" ? "ios" : "android",
-      }),
+    // Registro do aparelho via fila offline: se a conexão cair entre obter o
+    // token e avisar o backend, o POST é reenviado sozinho na reconexão.
+    await enviarOuEnfileirar(`/escolas/${escolaId}/dispositivos`, "POST", {
+      token_push: token,
+      plataforma: Platform.OS === "ios" ? "ios" : "android",
     });
     return token;
   } catch {

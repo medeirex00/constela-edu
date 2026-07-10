@@ -1,4 +1,6 @@
-/** Sessão do app: login, escola ativa, registro de push e logout. */
+/** Sessão do app: login, escola ativa, registro de push e logout — com boot
+ *  offline (restaura a última sessão salva cifrada e NÃO desloga quando está
+ *  apenas sem rede; só desloga em token inválido/expirado). */
 import {
   api,
   guardarToken,
@@ -8,7 +10,6 @@ import {
   type Escola,
   type Usuario,
 } from "@constela/core";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   createContext,
   useCallback,
@@ -19,6 +20,9 @@ import {
 } from "react";
 
 import { aoExpirarSessao } from "../api";
+import { esquecerChave } from "../armazenamento/cifra";
+import { lerSessao, limparSessao, salvarSessao, type SessaoSalva } from "../armazenamento/sessao";
+import { clienteQuery, persistidor } from "../cliente-query";
 import { registrarParaPush, removerRegistroPush } from "../notificacoes";
 
 interface ContextoAutenticacao {
@@ -32,7 +36,6 @@ interface ContextoAutenticacao {
 }
 
 const Contexto = createContext<ContextoAutenticacao | null>(null);
-const CHAVE_ESCOLA = "sgpe_escola";
 
 export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<Usuario | null>(null);
@@ -41,59 +44,84 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   const [carregando, setCarregando] = useState(true);
   const [tokenPush, setTokenPush] = useState<string | null>(null);
 
-  const carregarSessao = useCallback(async () => {
+  // Toda mudança de sessão é persistida CIFRADA — é o que permite o boot offline.
+  useEffect(() => {
+    if (usuario) void salvarSessao({ usuario, escolas, escolaId });
+  }, [usuario, escolas, escolaId]);
+
+  const aplicarSessao = useCallback((s: SessaoSalva) => {
+    setUsuario(s.usuario);
+    setEscolas(s.escolas);
+    setEscolaId(s.escolaId);
+  }, []);
+
+  // Refresh a partir da REDE. Mantém a escola atual se ainda válida.
+  const atualizarSessao = useCallback(async (preferidaId: number | null) => {
     const [eu, lista] = await Promise.all([
       api<Usuario>("/auth/me"),
       api<Escola[]>("/escolas"),
     ]);
+    const valido = preferidaId !== null && lista.some((escola) => escola.id === preferidaId);
+    const escolhido = valido ? preferidaId : lista[0]?.id ?? null;
     setUsuario(eu);
     setEscolas(lista);
-    const salvo = Number(await AsyncStorage.getItem(CHAVE_ESCOLA));
-    const valido = lista.some((escola) => escola.id === salvo);
-    const escolhido = valido ? salvo : lista[0]?.id ?? null;
     setEscolaId(escolhido);
-    if (escolhido !== null) {
-      await AsyncStorage.setItem(CHAVE_ESCOLA, String(escolhido));
-      registrarParaPush(escolhido).then(setTokenPush);
-    }
+    if (escolhido !== null) registrarParaPush(escolhido).then(setTokenPush);
+  }, []);
+
+  // Encerra a sessão LOCAL: estado, sessão salva, cache das telas e chave de
+  // cifra (rotacionada para o cache antigo virar ilegível num aparelho partilhado).
+  const encerrarLocal = useCallback(async () => {
+    setUsuario(null);
+    setEscolas([]);
+    setEscolaId(null);
+    setTokenPush(null);
+    clienteQuery.clear();
+    await Promise.allSettled([limparSessao(), persistidor.removeClient()]);
+    await esquecerChave();
   }, []);
 
   useEffect(() => {
+    // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato.
     aoExpirarSessao(() => {
-      setUsuario(null);
-      setEscolaId(null);
+      void limparToken();
+      void encerrarLocal();
     });
+
     (async () => {
       try {
-        if (await obterToken()) await carregarSessao();
+        if (!(await obterToken())) return; // sem token → tela de login
+        const salva = await lerSessao();
+        if (salva) aplicarSessao(salva); // abre offline na hora, com o cache
+        // Refresh da rede. Se falhar por ESTAR OFFLINE, seguimos com o cache
+        // (o catch não desloga); só o 401 (acima) encerra a sessão.
+        await atualizarSessao(salva?.escolaId ?? null);
       } catch {
-        await limparToken();
+        // Falha de rede: mantém a sessão salva (se houver). Sem sessão salva e
+        // sem rede, o usuário fica na tela de login e conecta quando puder.
       } finally {
         setCarregando(false);
       }
     })();
-  }, [carregarSessao]);
+  }, [aplicarSessao, atualizarSessao, encerrarLocal]);
 
   const entrar = useCallback(
     async (email: string, senha: string) => {
       const resposta = await loginRequest(email, senha);
       await guardarToken(resposta.access_token);
-      await carregarSessao();
+      await atualizarSessao(null);
     },
-    [carregarSessao],
+    [atualizarSessao],
   );
 
   const sair = useCallback(async () => {
     if (escolaId !== null) await removerRegistroPush(escolaId, tokenPush);
     await limparToken();
-    setUsuario(null);
-    setEscolaId(null);
-    setTokenPush(null);
-  }, [escolaId, tokenPush]);
+    await encerrarLocal();
+  }, [escolaId, tokenPush, encerrarLocal]);
 
   const selecionarEscola = useCallback((id: number) => {
-    setEscolaId(id);
-    AsyncStorage.setItem(CHAVE_ESCOLA, String(id));
+    setEscolaId(id); // o efeito de persistência salva a sessão com a nova escola
   }, []);
 
   return (
