@@ -114,5 +114,14 @@ class Settings(BaseSettings):
     AI_MODEL: str = ""  # vazio = padrão do provedor
     AI_MAX_TOKENS: int = 1024
 
+    # --- Observabilidade (logs estruturados, métricas, Sentry) ------------
+    LOG_JSON: bool = True           # logs em JSON (uma linha por evento)
+    LOG_LEVEL: str = "INFO"
+    APP_VERSION: str = "1.0.0"      # release: vai nos logs, no /health e no Sentry
+    METRICS_ENABLED: bool = True    # expõe /metrics (formato Prometheus)
+    SENTRY_DSN: str = ""            # vazio = Sentry desligado
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0   # 0..1 — amostragem do tracing
+    SENTRY_ENVIRONMENT: str = ""    # vazio = usa o ENV
+
 
 settings = Settings()

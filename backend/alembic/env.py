@@ -26,8 +26,13 @@ import app.quest.models  # noqa: E402,F401  Constela Quest (10 tabelas)
 config = context.config
 
 # Formatação das mensagens do próprio Alembic (definida no alembic.ini).
+# disable_existing_loggers=False é ESSENCIAL: o padrão (True) desativaria todos
+# os loggers já criados — inclusive os nossos ("constela", "constela.http") —
+# fazendo o log de acesso estruturado sumir sempre que as migrações rodam no
+# mesmo processo da API (dev com --reload e testes importam app.main, que aplica
+# as migrações no import).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # A URL é SEMPRE a da aplicação — não a do .ini.
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

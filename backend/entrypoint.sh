@@ -12,4 +12,7 @@ exec uvicorn app.main:app \
     --port "${PORT:-8000}" \
     --workers "${WEB_CONCURRENCY:-2}" \
     --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-*}" \
-    --proxy-headers
+    --proxy-headers \
+    --no-access-log
+# --no-access-log: o log de acesso (estruturado, com request_id/escola/rota) é
+# emitido pelo ObservabilidadeMiddleware; evita a linha duplicada do uvicorn.
