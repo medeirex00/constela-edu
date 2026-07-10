@@ -37,7 +37,10 @@ export default function RankingGeral() {
 
   const porPeriodo = periodo.preset !== "tudo";
 
-  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  // Cache curto: a lista de turmas do dropdown de filtro muda raramente e é
+  // invalidada em Turmas.tsx ao criar/editar/excluir (limparCacheApi).
+  const { dados: turmas } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
   // Filtros comuns às duas classificações.
   const parametros = new URLSearchParams();

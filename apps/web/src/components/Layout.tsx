@@ -35,7 +35,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -46,6 +46,7 @@ import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
 import { LogoHorizontal } from "./Logo";
+import { Carregando } from "./ui";
 
 interface ItemNav {
   rotulo: string;
@@ -720,7 +721,12 @@ export default function Layout() {
         </header>
 
         <main className="mx-auto max-w-6xl px-4 py-6 lg:px-8 lg:py-8">
-          <Outlet />
+          {/* Suspense em volta do Outlet: ao navegar para uma página ainda não
+              baixada (code-splitting), o menu/shell permanece e só o conteúdo
+              mostra o fallback. */}
+          <Suspense fallback={<Carregando texto="Abrindo..." />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
 

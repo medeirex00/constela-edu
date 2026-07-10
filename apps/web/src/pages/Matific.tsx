@@ -1,6 +1,6 @@
 /** Módulo Matific (PRD §55): dados atuais por aluno com edição manual auditada. */
 import { Pencil } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -20,6 +20,95 @@ import { api } from "../lib/api";
 import { dataHora, nota, numero } from "../lib/formato";
 import type { MatificAluno } from "../lib/types";
 
+/**
+ * Modal de edição isolado: o estado do formulário vive AQUI, não no componente
+ * da tabela. Assim, digitar re-renderiza só o modal — e não a tabela inteira
+ * (não paginada) de alunos por baixo dele. Fica montado o tempo todo; quando
+ * `linha` é null o Modal não aparece, e o efeito re-semeia os campos a cada
+ * abertura.
+ */
+function ModalEditarMatific({
+  linha,
+  escolaId,
+  aoFechar,
+  aoSalvo,
+}: {
+  linha: MatificAluno | null;
+  escolaId: number | null;
+  aoFechar: () => void;
+  aoSalvo: () => void;
+}) {
+  const [form, setForm] = useState({ atividades: 0, estrelas: 0, pontuacao_media: 0, motivo: "" });
+  const [erro, setErro] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    if (linha) {
+      setForm({
+        atividades: linha.atividades,
+        estrelas: linha.estrelas,
+        pontuacao_media: linha.pontuacao_media,
+        motivo: "",
+      });
+      setErro("");
+    }
+  }, [linha]);
+
+  async function salvar() {
+    if (!escolaId || !linha) return;
+    setSalvando(true);
+    setErro("");
+    try {
+      await api(`/escolas/${escolaId}/matific/${linha.aluno_id}`, {
+        method: "PUT",
+        body: JSON.stringify({ ...form, motivo: form.motivo || null }),
+      });
+      aoSalvo();
+    } catch (excecao) {
+      setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <Modal titulo={`Editar Matific — ${linha?.nome ?? ""}`} aberto={linha !== null} aoFechar={aoFechar}>
+      <div className="space-y-3">
+        <Campo rotulo="Atividades finalizadas">
+          <input
+            type="number" min={0} className={estiloInput} value={form.atividades}
+            onChange={(e) => setForm({ ...form, atividades: Number(e.target.value) })}
+          />
+        </Campo>
+        <Campo rotulo="Estrelas">
+          <input
+            type="number" min={0} className={estiloInput} value={form.estrelas}
+            onChange={(e) => setForm({ ...form, estrelas: Number(e.target.value) })}
+          />
+        </Campo>
+        <Campo rotulo="Pontuação média (0–100)">
+          <input
+            type="number" min={0} max={100} step="0.1" className={estiloInput} value={form.pontuacao_media}
+            onChange={(e) => setForm({ ...form, pontuacao_media: Number(e.target.value) })}
+          />
+        </Campo>
+        <Campo rotulo="Motivo da edição (fica no log de auditoria)">
+          <input
+            className={estiloInput} placeholder="Ex.: correção de erro do relatório"
+            value={form.motivo}
+            onChange={(e) => setForm({ ...form, motivo: e.target.value })}
+          />
+        </Campo>
+        {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
+        <div className="flex justify-end gap-2 pt-1">
+          <Botao variante="neutro" onClick={aoFechar} disabled={salvando}>Cancelar</Botao>
+          <Botao onClick={salvar} disabled={salvando}>{salvando ? "Salvando..." : "Salvar e recalcular"}</Botao>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Matific() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
@@ -31,38 +120,6 @@ export default function Matific() {
     recarregar,
   } = useApi<MatificAluno[]>(escolaId ? `/escolas/${escolaId}/matific` : null);
   const [editando, setEditando] = useState<MatificAluno | null>(null);
-  const [formulario, setFormulario] = useState({ atividades: 0, estrelas: 0, pontuacao_media: 0, motivo: "" });
-  const [erro, setErro] = useState("");
-  const [salvando, setSalvando] = useState(false);
-
-  function abrirEdicao(linha: MatificAluno) {
-    setEditando(linha);
-    setFormulario({
-      atividades: linha.atividades,
-      estrelas: linha.estrelas,
-      pontuacao_media: linha.pontuacao_media,
-      motivo: "",
-    });
-    setErro("");
-  }
-
-  async function salvar() {
-    if (!escolaId || !editando) return;
-    setSalvando(true);
-    setErro("");
-    try {
-      await api(`/escolas/${escolaId}/matific/${editando.aluno_id}`, {
-        method: "PUT",
-        body: JSON.stringify({ ...formulario, motivo: formulario.motivo || null }),
-      });
-      setEditando(null);
-      recarregar();
-    } catch (excecao) {
-      setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
-    } finally {
-      setSalvando(false);
-    }
-  }
 
   return (
     <div>
@@ -111,7 +168,7 @@ export default function Matific() {
                         <button
                           aria-label={`Editar dados de ${linha.nome}`}
                           className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                          onClick={() => abrirEdicao(linha)}
+                          onClick={() => setEditando(linha)}
                         >
                           <Pencil size={15} />
                         </button>
@@ -125,40 +182,15 @@ export default function Matific() {
         )}
       </Card>
 
-      <Modal titulo={`Editar Matific — ${editando?.nome ?? ""}`} aberto={editando !== null} aoFechar={() => setEditando(null)}>
-        <div className="space-y-3">
-          <Campo rotulo="Atividades finalizadas">
-            <input
-              type="number" min={0} className={estiloInput} value={formulario.atividades}
-              onChange={(e) => setFormulario({ ...formulario, atividades: Number(e.target.value) })}
-            />
-          </Campo>
-          <Campo rotulo="Estrelas">
-            <input
-              type="number" min={0} className={estiloInput} value={formulario.estrelas}
-              onChange={(e) => setFormulario({ ...formulario, estrelas: Number(e.target.value) })}
-            />
-          </Campo>
-          <Campo rotulo="Pontuação média (0–100)">
-            <input
-              type="number" min={0} max={100} step="0.1" className={estiloInput} value={formulario.pontuacao_media}
-              onChange={(e) => setFormulario({ ...formulario, pontuacao_media: Number(e.target.value) })}
-            />
-          </Campo>
-          <Campo rotulo="Motivo da edição (fica no log de auditoria)">
-            <input
-              className={estiloInput} placeholder="Ex.: correção de erro do relatório"
-              value={formulario.motivo}
-              onChange={(e) => setFormulario({ ...formulario, motivo: e.target.value })}
-            />
-          </Campo>
-          {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setEditando(null)} disabled={salvando}>Cancelar</Botao>
-            <Botao onClick={salvar} disabled={salvando}>{salvando ? "Salvando..." : "Salvar e recalcular"}</Botao>
-          </div>
-        </div>
-      </Modal>
+      <ModalEditarMatific
+        linha={editando}
+        escolaId={escolaId}
+        aoFechar={() => setEditando(null)}
+        aoSalvo={() => {
+          setEditando(null);
+          recarregar();
+        }}
+      />
     </div>
   );
 }

@@ -33,7 +33,8 @@ export default function RankingEvolucao() {
   const [serie, setSerie] = useState("");
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
-  const { dados: turmasDados } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  const { dados: turmasDados } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
   const turmas = turmasDados ?? [];
 
   const parametros = new URLSearchParams(periodoParaQuery(periodo));

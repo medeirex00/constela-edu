@@ -1,43 +1,51 @@
+import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import Layout from "./components/Layout";
 import { Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
-import Alunos from "./pages/Alunos";
-import Assistente from "./pages/Assistente";
-import BibliotecaConquistas from "./pages/BibliotecaConquistas";
-import Comparador from "./pages/Comparador";
-import Insights from "./pages/Insights";
-import Conquistas from "./pages/Conquistas";
-import Dashboard from "./pages/Dashboard";
-import Elefante from "./pages/Elefante";
-import EvolucaoAluno from "./pages/EvolucaoAluno";
-import Importacoes from "./pages/Importacoes";
-import { Professores } from "./pages/ListasSimples";
-import Livros from "./pages/Livros";
-import Login from "./pages/Login";
-import Matific from "./pages/Matific";
-import PainelPublicoConfig from "./pages/PainelPublicoConfig";
-import PerfilAluno from "./pages/PerfilAluno";
-import Premiacoes from "./pages/Premiacoes";
-import RedefinirSenha from "./pages/RedefinirSenha";
-import RankingEvolucao from "./pages/RankingEvolucao";
-import PainelPublico from "./pages/publico/PainelPublico";
-import PerfilPublico from "./pages/publico/PerfilPublico";
-import RankingGeral from "./pages/RankingGeral";
-import RankingLeitura from "./pages/RankingLeitura";
-import RankingMatematica from "./pages/RankingMatematica";
-import Relatorios from "./pages/Relatorios";
-import Escolas from "./pages/Escolas";
-import Simulador from "./pages/Simulador";
-import TurmaDetalhe from "./pages/TurmaDetalhe";
-import Turmas from "./pages/Turmas";
-import Usuarios from "./pages/Usuarios";
-import VisaoEscola from "./pages/VisaoEscola";
-import ConfigConquistas from "./pages/configuracoes/ConfigConquistas";
-import Configuracoes from "./pages/configuracoes/Configuracoes";
-import Metricas from "./pages/configuracoes/Metricas";
+
+// Code-splitting por rota: cada página vira um chunk próprio, carregado sob
+// demanda. Assim as rotas públicas (/p/:token) e o /login não baixam o app
+// administrativo inteiro, e cada navegação traz só o chunk da página.
+// Layout, AppContext e lib ficam no chunk principal (o "shell").
+const Alunos = lazy(() => import("./pages/Alunos"));
+const Assistente = lazy(() => import("./pages/Assistente"));
+const BibliotecaConquistas = lazy(() => import("./pages/BibliotecaConquistas"));
+const Comparador = lazy(() => import("./pages/Comparador"));
+const Insights = lazy(() => import("./pages/Insights"));
+const Conquistas = lazy(() => import("./pages/Conquistas"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Elefante = lazy(() => import("./pages/Elefante"));
+const EvolucaoAluno = lazy(() => import("./pages/EvolucaoAluno"));
+const Importacoes = lazy(() => import("./pages/Importacoes"));
+// Export nomeado -> adapta para o default que o lazy() espera.
+const Professores = lazy(() =>
+  import("./pages/ListasSimples").then((m) => ({ default: m.Professores })));
+const Livros = lazy(() => import("./pages/Livros"));
+const Login = lazy(() => import("./pages/Login"));
+const Matific = lazy(() => import("./pages/Matific"));
+const PainelPublicoConfig = lazy(() => import("./pages/PainelPublicoConfig"));
+const PerfilAluno = lazy(() => import("./pages/PerfilAluno"));
+const Premiacoes = lazy(() => import("./pages/Premiacoes"));
+const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
+const RankingEvolucao = lazy(() => import("./pages/RankingEvolucao"));
+const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
+const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
+const RankingGeral = lazy(() => import("./pages/RankingGeral"));
+const RankingLeitura = lazy(() => import("./pages/RankingLeitura"));
+const RankingMatematica = lazy(() => import("./pages/RankingMatematica"));
+const Relatorios = lazy(() => import("./pages/Relatorios"));
+const Escolas = lazy(() => import("./pages/Escolas"));
+const Simulador = lazy(() => import("./pages/Simulador"));
+const TurmaDetalhe = lazy(() => import("./pages/TurmaDetalhe"));
+const Turmas = lazy(() => import("./pages/Turmas"));
+const Usuarios = lazy(() => import("./pages/Usuarios"));
+const VisaoEscola = lazy(() => import("./pages/VisaoEscola"));
+const ConfigConquistas = lazy(() => import("./pages/configuracoes/ConfigConquistas"));
+const Configuracoes = lazy(() => import("./pages/configuracoes/Configuracoes"));
+const Metricas = lazy(() => import("./pages/configuracoes/Metricas"));
 
 function AreaProtegida() {
   const { usuario, carregando } = useApp();
@@ -54,46 +62,51 @@ function AreaProtegida() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      {/* Redefinição de senha por link: acessível sem login */}
-      <Route path="/redefinir-senha" element={<RedefinirSenha />} />
-      {/* Painel Público: acessível sem login (PRD §104) */}
-      <Route path="/p/:token" element={<PainelPublico />} />
-      <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
-      <Route element={<AreaProtegida />}>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/ranking" element={<RankingGeral />} />
-        <Route path="/evolucao" element={<RankingEvolucao />} />
-        <Route path="/ranking-leitura" element={<RankingLeitura />} />
-        <Route path="/ranking-matematica" element={<RankingMatematica />} />
-        <Route path="/comparador" element={<Comparador />} />
-        <Route path="/premiacoes" element={<Premiacoes />} />
-        <Route path="/escola" element={<VisaoEscola />} />
-        <Route path="/alunos" element={<Alunos />} />
-        <Route path="/alunos/:id" element={<PerfilAluno />} />
-        <Route path="/alunos/:id/evolucao" element={<EvolucaoAluno />} />
-        <Route path="/turmas" element={<Turmas />} />
-        <Route path="/turmas/:id" element={<TurmaDetalhe />} />
-        <Route path="/professores" element={<Professores />} />
-        <Route path="/metricas" element={<Metricas />} />
-        <Route path="/configuracoes" element={<Configuracoes />} />
-        <Route path="/configuracoes/conquistas" element={<ConfigConquistas />} />
-        <Route path="/matific" element={<Matific />} />
-        <Route path="/elefante" element={<Elefante />} />
-        <Route path="/livros" element={<Livros />} />
-        <Route path="/importacoes" element={<Importacoes />} />
-        <Route path="/conquistas" element={<Conquistas />} />
-        <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
-        <Route path="/insights" element={<Insights />} />
-        <Route path="/assistente" element={<Assistente />} />
-        <Route path="/painel-publico" element={<PainelPublicoConfig />} />
-        <Route path="/relatorios" element={<Relatorios />} />
-        <Route path="/simulador" element={<Simulador />} />
-        <Route path="/usuarios" element={<Usuarios />} />
-        <Route path="/escolas" element={<Escolas />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+    // Um único limite de Suspense cobre o carregamento dos chunks de rota.
+    // O Layout tem o seu próprio Suspense em volta do <Outlet/>, então a
+    // troca de página autenticada mantém o shell (menu) na tela.
+    <Suspense fallback={<Carregando texto="Carregando..." />}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        {/* Redefinição de senha por link: acessível sem login */}
+        <Route path="/redefinir-senha" element={<RedefinirSenha />} />
+        {/* Painel Público: acessível sem login (PRD §104) */}
+        <Route path="/p/:token" element={<PainelPublico />} />
+        <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
+        <Route element={<AreaProtegida />}>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/ranking" element={<RankingGeral />} />
+          <Route path="/evolucao" element={<RankingEvolucao />} />
+          <Route path="/ranking-leitura" element={<RankingLeitura />} />
+          <Route path="/ranking-matematica" element={<RankingMatematica />} />
+          <Route path="/comparador" element={<Comparador />} />
+          <Route path="/premiacoes" element={<Premiacoes />} />
+          <Route path="/escola" element={<VisaoEscola />} />
+          <Route path="/alunos" element={<Alunos />} />
+          <Route path="/alunos/:id" element={<PerfilAluno />} />
+          <Route path="/alunos/:id/evolucao" element={<EvolucaoAluno />} />
+          <Route path="/turmas" element={<Turmas />} />
+          <Route path="/turmas/:id" element={<TurmaDetalhe />} />
+          <Route path="/professores" element={<Professores />} />
+          <Route path="/metricas" element={<Metricas />} />
+          <Route path="/configuracoes" element={<Configuracoes />} />
+          <Route path="/configuracoes/conquistas" element={<ConfigConquistas />} />
+          <Route path="/matific" element={<Matific />} />
+          <Route path="/elefante" element={<Elefante />} />
+          <Route path="/livros" element={<Livros />} />
+          <Route path="/importacoes" element={<Importacoes />} />
+          <Route path="/conquistas" element={<Conquistas />} />
+          <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
+          <Route path="/insights" element={<Insights />} />
+          <Route path="/assistente" element={<Assistente />} />
+          <Route path="/painel-publico" element={<PainelPublicoConfig />} />
+          <Route path="/relatorios" element={<Relatorios />} />
+          <Route path="/simulador" element={<Simulador />} />
+          <Route path="/usuarios" element={<Usuarios />} />
+          <Route path="/escolas" element={<Escolas />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </Suspense>
   );
 }

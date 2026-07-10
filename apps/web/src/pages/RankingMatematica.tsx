@@ -19,8 +19,10 @@ export default function RankingMatematica() {
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
 
-  // Turmas para o filtro (ocioso enquanto não houver escola).
-  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  // Turmas para o filtro (ocioso enquanto não houver escola). Cache curto:
+  // muda raramente e é invalidado ao editar turmas.
+  const { dados: turmas } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
   // Ranking do período: a URL muda com período/turma, então o hook rebusca sozinho.
   const q = periodoParaQuery(periodo);

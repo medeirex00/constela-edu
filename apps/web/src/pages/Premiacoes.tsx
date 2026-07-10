@@ -87,7 +87,8 @@ export default function Premiacoes() {
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
 
-  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  const { dados: turmas } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
   const q = periodoParaQuery(periodo);
   const filtroTurma = turmaId ? `&turma_id=${turmaId}` : "";

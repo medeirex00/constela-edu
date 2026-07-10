@@ -24,6 +24,28 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ["@constela/core"],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Separa as dependências estáveis (react, router) num chunk "vendor"
+        // de cache longo: elas quase nunca mudam, então um deploy que altera
+        // uma tela não força o usuário a rebaixar o runtime inteiro. Combinado
+        // com o code-splitting por rota (React.lazy), só o chunk da página
+        // alterada muda entre deploys.
+        manualChunks(id) {
+          if (
+            id.includes("node_modules/react") ||
+            id.includes("node_modules/react-dom") ||
+            id.includes("node_modules/react-router") ||
+            id.includes("node_modules/scheduler")
+          ) {
+            return "vendor";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     // Exposto na rede local para acesso pelo celular/tablet (docs/CELULAR.md)
     host: true,

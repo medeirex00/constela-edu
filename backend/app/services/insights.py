@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     Aluno,
@@ -52,10 +52,13 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
     }
 
     escola = db.get(Escola, escola_id)
+    # selectinload(Matricula.aluno): o laço lê matricula.aluno.nome; sem isto,
+    # cada aluno dispararia um SELECT lazy (N+1). Carrega todos em 1 consulta.
     matriculas = db.execute(
         select(Matricula, Turma)
         .join(Turma, Matricula.turma_id == Turma.id)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
+        .options(selectinload(Matricula.aluno))
         .where(Matricula.escola_id == escola_id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
@@ -101,10 +104,14 @@ def alertas_da_escola(db: Session, escola_id: int) -> list[dict]:
     agora = datetime.now(timezone.utc)
     corte_atividade = agora - timedelta(days=DIAS_SEM_ATIVIDADE)
 
+    # selectinload(Matricula.aluno): idem indices_da_escola — o laço lê
+    # matricula.aluno.nome; evita N+1. Rota também usada pela sincronização
+    # mobile e pelo contexto do Assistente.
     matriculas = db.execute(
         select(Matricula, Turma)
         .join(Turma, Matricula.turma_id == Turma.id)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
+        .options(selectinload(Matricula.aluno))
         .where(Matricula.escola_id == escola_id,
                Matricula.ano_letivo == ano,
                Aluno.status == "ativo")

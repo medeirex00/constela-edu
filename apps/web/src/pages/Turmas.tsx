@@ -23,7 +23,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { useApi } from "../hooks/useApi";
+import { limparCacheApi, useApi } from "../hooks/useApi";
 import { ApiError, api } from "../lib/api";
 import type { Professor, Turma, TurmaPayload } from "../lib/types";
 
@@ -456,12 +456,20 @@ export default function Turmas() {
     dados: turmas,
     erro: erroTurmas,
     carregando: carregandoTurmas,
-    recarregar: recarregarTurmas,
+    recarregar: recarregarLista,
   } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas?todas=true` : null);
   // Professores para o seletor do formulário.
   const { dados: professores } = useApi<Professor[]>(
     escolaId ? `/escolas/${escolaId}/professores` : null,
   );
+
+  // Recarrega a lista E invalida o cache de /turmas usado pelos dropdowns de
+  // filtro (rankings, premiações). Assim uma turma criada/editada/arquivada
+  // aqui aparece imediatamente naquelas telas.
+  function recarregarTurmas() {
+    limparCacheApi(`/escolas/${escolaId}/turmas`);
+    recarregarLista();
+  }
   const [mostrarTodas, setMostrarTodas] = useState(false);
   const [formAberto, setFormAberto] = useState(false);
   const [variasAberto, setVariasAberto] = useState(false);

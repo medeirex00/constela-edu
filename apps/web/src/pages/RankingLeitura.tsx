@@ -10,6 +10,7 @@ import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/Se
 import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useJanela } from "../hooks/useJanela";
 import { numero, tempoLeitura } from "../lib/formato";
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
@@ -18,7 +19,8 @@ export default function RankingLeitura() {
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
 
-  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  const { dados: turmas } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
   // Recalcula a URL quando período/turma mudam; o hook rebusca sozinho.
   const q = periodoParaQuery(periodo);
@@ -30,6 +32,8 @@ export default function RankingLeitura() {
   } = useApi<RankingLeituraItem[]>(
     escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}${filtro}` : null,
   );
+  // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
+  const { visiveis, restantes, mostrarMais } = useJanela(itens ?? []);
 
   return (
     <div>
@@ -60,6 +64,7 @@ export default function RankingLeitura() {
           <Vazio titulo="Nenhuma leitura no período"
                  descricao="Ajuste o período ou importe os relatórios individuais do Elefante Letrado." />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full text-sm tabular-nums">
               <thead>
@@ -73,7 +78,7 @@ export default function RankingLeitura() {
                 </tr>
               </thead>
               <tbody>
-                {(itens ?? []).map((item) => (
+                {visiveis.map((item) => (
                   <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">{item.posicao}º</td>
                     <td className="px-4 py-2.5">
@@ -90,6 +95,17 @@ export default function RankingLeitura() {
               </tbody>
             </table>
           </div>
+          {restantes > 0 && (
+            <div className="border-t border-zinc-100 p-3 text-center dark:border-zinc-800/60">
+              <button
+                onClick={mostrarMais}
+                className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                Mostrar mais {numero(restantes)} aluno(s)
+              </button>
+            </div>
+          )}
+          </>
         )}
       </Card>
     </div>

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -20,6 +20,12 @@ class Nota(Base):
     __tablename__ = "notas"
     __table_args__ = (
         UniqueConstraint("aluno_id", "ano_letivo", name="uq_nota_aluno_ano"),
+        # Caminho de leitura MAIS quente do sistema: ranking, top10 do
+        # dashboard, painel público, média e exportação filtram sempre por
+        # (escola_id, ano_letivo) e ordenam por posicao. O índice de coluna
+        # única ix_notas_escola_id não distingue ano nem evita a ordenação;
+        # este composto cobre o WHERE e o ORDER BY de uma vez.
+        Index("ix_notas_escola_ano_posicao", "escola_id", "ano_letivo", "posicao"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

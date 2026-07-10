@@ -114,6 +114,28 @@ def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo):
     ).scalar_one_or_none()
 
 
+# Sentinela: "não pré-carregado — consulte o snapshot você mesmo".
+_SEM_PRECARGA = object()
+
+
+def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo) -> dict:
+    """Último snapshot (por data_referencia, id) de CADA aluno, numa ÚNICA
+    consulta. Equivale a chamar _snapshot_atual por aluno, sem o N+1: ordena
+    ascendente e o último visto por aluno é o mais recente. Como a sessão usa
+    autoflush=False, é semanticamente idêntico ao SELECT por aluno."""
+    ids = list(aluno_ids)
+    if not ids:
+        return {}
+    mapa: dict = {}
+    for snap in db.execute(
+        select(modelo)
+        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids))
+        .order_by(modelo.data_referencia.asc(), modelo.id.asc())
+    ).scalars():
+        mapa[snap.aluno_id] = snap
+    return mapa
+
+
 # --- Etapa 1: prévia (PRD §51) ------------------------------------------------
 
 @router.post("/analisar", response_model=AnaliseOut)
@@ -312,12 +334,15 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     return None
 
 
-def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia):
+def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
+                      anterior=_SEM_PRECARGA):
     # Cada relatório do Matific traz um subconjunto das métricas: o PDF de
     # estrelas tem "estrelas"; o Excel por turma NÃO tem. Preservamos o valor
     # anterior de cada campo AUSENTE — assim os dois relatórios se COMPLEMENTAM
     # (nunca zeram um campo que outro relatório já preencheu).
-    anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
+    # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1).
+    if anterior is _SEM_PRECARGA:
+        anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
     atividades = (int(dados["atividades"]) if "atividades" in dados
                   else (anterior.atividades if anterior else 0))
     estrelas = (int(dados["estrelas"]) if "estrelas" in dados
@@ -425,8 +450,11 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
         contadores["historico"] += 1
 
 
-def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia):
-    anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
+def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia,
+                              anterior=_SEM_PRECARGA):
+    # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1).
+    if anterior is _SEM_PRECARGA:
+        anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
     por_nivel = dados.get("livros_por_nivel")
     if por_nivel is None:
         # Relatório sem a coluna de níveis: preserva a distribuição conhecida
@@ -672,6 +700,17 @@ def confirmar(
         ).scalars():
             series.setdefault(snap.aluno_id, []).append(snap)
 
+    # Snapshot ANTERIOR de cada aluno numa ÚNICA consulta (o caminho por período
+    # já fazia isso com `series`; aqui cobrimos o comum matific/elefante-resumo,
+    # que antes chamava _snapshot_atual 1x por aluno = N+1). None em `.get` já é
+    # o valor certo (aluno sem snapshot anterior).
+    anteriores: dict = {}
+    if resolvidos:
+        if dados.plataforma == "matific" and periodo_inicio is None:
+            anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotMatific)
+        elif dados.plataforma != "matific" and dados.formato != "leituras":
+            anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotElefante)
+
     for aluno, linhas_aluno in resolvidos.values():
         if dados.plataforma == "matific" and periodo_inicio is not None:
             _importar_matific_periodo(db, escola_id, importacao, aluno,
@@ -680,13 +719,15 @@ def confirmar(
                                       series.get(aluno.id, []), contadores)
         elif dados.plataforma == "matific":
             _importar_matific(db, escola_id, importacao, aluno,
-                              linhas_aluno[-1].dados, data_referencia)
+                              linhas_aluno[-1].dados, data_referencia,
+                              anterior=anteriores.get(aluno.id))
         elif dados.formato == "leituras":
             _importar_elefante_leituras(db, escola_id, importacao, aluno,
                                         linhas_aluno, data_referencia, avisos)
         else:
             _importar_elefante_resumo(db, escola_id, importacao, aluno,
-                                      linhas_aluno[-1].dados, data_referencia)
+                                      linhas_aluno[-1].dados, data_referencia,
+                                      anterior=anteriores.get(aluno.id))
 
     if contadores["reimportados"]:
         avisos.append(
