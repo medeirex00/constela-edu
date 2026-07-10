@@ -120,7 +120,7 @@ quem alimenta a tela; a 07 decide a **tela**, não os dados):
 | 14 | Loja & Inventário | **Loja** (rótulo = [02](02-vocabulario.md)) | vitrine cosmética; compra só com Moedas ganhas | [19](19-liveops.md)+[05](05-sistemas-de-jogo.md) | do Vestiário |
 | 15 | Constelação | **Constelação** | progresso **eu×eu-de-ontem** + álbum de colecionáveis; nunca ranking | [05](05-sistemas-de-jogo.md)/[03](03-universo.md) | da Carreira/céu |
 | 16 | Missões diárias | **Missões diárias** | presente de login, as diárias do dia (quantidade = Seção [05](05-sistemas-de-jogo.md)), Chama do Cosmo | [05](05-sistemas-de-jogo.md) | do Jogar/HUD |
-| 17 | Social | **Estudar com um amigo** · **Corrida** | amigos da escola, convites, modos ao vivo | [09](09-social.md) | logado + rede + `social_ativo` |
+| 17 | Social | **Estudar com um amigo** · **Corrida** | amigos da turma, convites, modos ao vivo | [09](09-social.md) | logado + rede + `social_ativo` |
 | 18 | Telas de sistema | *(gaveta)* | preferências permitidas (som/música/reduzir-animações), sair, ajuda | 07/[13](13-acessibilidade.md) | sempre |
 
 **Ação primária única (uma por tela):** Tela-casa = **escolher um Planeta**; Vestiário = **trocar uma
@@ -439,7 +439,7 @@ the screen; 07 decides the **screen**, not the data):
 | 14 | Store & Inventory | **Store** (label = [02](02-vocabulario.md)) | cosmetic showcase; buy only with earned Coins | [19](19-liveops.md)+[05](05-sistemas-de-jogo.md) | from Wardrobe |
 | 15 | Constellation | **Constellation** | **me×yesterday-me** progress + collectible album; never a ranking | [05](05-sistemas-de-jogo.md)/[03](03-universo.md) | from Career/sky |
 | 16 | Daily Missions | **Daily Missions** | login gift, the day's dailies (count = Section [05](05-sistemas-de-jogo.md)), Cosmo's Flame | [05](05-sistemas-de-jogo.md) | from Play/HUD |
-| 17 | Social | **Study with a friend** · **Race** | school friends, invites, live modes | [09](09-social.md) | logged in + network + `social_ativo` |
+| 17 | Social | **Study with a friend** · **Race** | class friends, invites, live modes | [09](09-social.md) | logged in + network + `social_ativo` |
 | 18 | System screens | *(drawer)* | allowed preferences (sound/music/reduce-motion), exit, help | 07/[13](13-acessibilidade.md) | always |
 
 **Single primary action (one per screen):** Home = **pick a Planet**; Wardrobe = **swap a piece**; Career =
