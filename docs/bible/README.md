@@ -73,7 +73,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | B | Contratos de API & Dados / API & Data Contracts | `apendice-B-api-dados.md` | 🟢 |
 | C | Registro de Decisões (ADR) / Decision Log | [`decisoes/`](decisoes/) | 🟢 |
 | D | Catálogo de Eventos de Telemetria / Telemetry Event Catalog | `apendice-D-eventos-telemetria.md` | 🟢 |
-| E | Wireframes/Mockups de Referência / Reference Wireframes | `apendice-E-wireframes.md` | ⬛ |
+| E | Wireframes/Mockups de Referência / Reference Wireframes | `apendice-E-wireframes.md` | 🟢 |
 | F | Checklists Consolidados (DoD) / Consolidated Checklists | `apendice-F-checklists-dod.md` | ⬛ |
 
 **Partes:** I — Produto & Visão (00–02) · II — O Jogo: Design & UX (03–08) · III — Comunidade (09–10) ·
