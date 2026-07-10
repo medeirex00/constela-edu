@@ -1,4 +1,5 @@
 """Testes da Fase 6 — insights, alertas, camada de IA e assistente."""
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -349,6 +350,62 @@ def test_provedor_externo_falhando_cai_no_local(cliente, db, escola_completa, mo
                      json={"pergunta": "como está a escola?"})
     assert r.status_code == 200, r.text
     assert "local" in r.json()["provedor"]
+
+
+def test_a3_provedor_externo_nao_recebe_nome_real_e_reidentifica(
+        db, escola_completa, monkeypatch):
+    """A3/LGPD: com provedor externo, NENHUM nome real de aluno sai da
+    infraestrutura — contexto e pergunta vão pseudonimizados ("Aluno NNN") e a
+    resposta é reidentificada no backend antes de chegar ao professor."""
+    escola = escola_completa["escola"]
+    ana, joao, sofia = escola_completa["alunos"]
+    # Ana com dados (fica no topo do ranking); João e Sofia sem dados (viram
+    # nomes em alertas "sem_dados"). Assim os 3 nomes aparecem no contexto.
+    _snapshot(db, escola.id, ana.id, dias_atras=1,
+              atividades=50, estrelas=150, pontuacao_media=85)
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    nomes = [ana.nome, joao.nome, sofia.nome]
+
+    from app.services.ia.base import ProvedorIA
+    capturado = {}
+
+    class FakeExterno(ProvedorIA):
+        nome = "openai"
+
+        def responder(self, sistema, mensagens):
+            capturado["sistema"] = sistema
+            capturado["mensagens"] = mensagens
+            # Ecoa um token do contexto — para provar a reidentificação.
+            token = re.search(r"Aluno \d+", sistema).group(0)
+            return f"O destaque do ranking é {token}."
+
+    monkeypatch.setattr(assistente, "_provedor_da_escola",
+                        lambda db, escola_id: FakeExterno())
+
+    resultado = assistente.perguntar(db, escola.id, escola_completa["admin"].id,
+                                     f"como está {ana.nome}?")
+
+    # 1) Nada de nome real no que SAIU para o provedor (contexto + conversa).
+    enviado = capturado["sistema"] + " ".join(
+        m["conteudo"] for m in capturado["mensagens"])
+    for nome in nomes:
+        assert nome not in enviado, f"vazou nome real: {nome}"
+    # 2) A pergunta com nome completo foi tokenizada (o nome digitado não vazou).
+    ultima = capturado["mensagens"][-1]["conteudo"]
+    assert ana.nome not in ultima
+    assert re.search(r"Aluno \d+", ultima)
+    # 3) A resposta entregue ao usuário foi reidentificada para um nome real.
+    assert any(nome in resultado["resposta"] for nome in nomes)
+    assert resultado["provedor"] == "openai"
+    # 4) O texto reidentificado é o que fica gravado (para o professor reler).
+    from sqlalchemy import select
+
+    from app.models import MensagemIA
+    gravadas = db.execute(
+        select(MensagemIA).where(MensagemIA.conversa_id == resultado["conversa_id"])
+    ).scalars().all()
+    assert any(any(nome in m.conteudo for nome in nomes) for m in gravadas)
 
 
 # --- Correção de dados: conta do dono vira global -----------------------------------

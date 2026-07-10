@@ -7,7 +7,10 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage"
   },
   "dependencies": {
     "@constela/core": "*",
@@ -38,6 +41,8 @@
     "@babel/core": "^7.25.0",
     "@types/crypto-js": "^4.2.2",
     "@types/react": "~18.3.12",
-    "typescript": "^5.7.2"
+    "@vitest/coverage-v8": "^3.2.7",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
   }
 }

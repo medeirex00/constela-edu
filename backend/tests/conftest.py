@@ -1,7 +1,7 @@
 """Infra compartilhada dos testes: banco em memória e API autenticada."""
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -45,6 +45,19 @@ def db():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,  # todas as sessões enxergam o mesmo banco em memória
     )
+
+    @event.listens_for(engine, "connect")
+    def _fk_on(dbapi_conn, _rec):
+        # Integridade referencial LIGADA como em produção (Postgres) e no engine
+        # da aplicação (database.py). Sem isto, a suíte inteira rodaria com a
+        # checagem DESLIGADA (default do SQLite) e deixaria passar violações de
+        # FK que o banco de produção rejeitaria.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
+    # create_all é o atalho RÁPIDO; test_alembic garante que o schema que ele
+    # monta é idêntico ao das migrações Alembic (o de produção).
     Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
     sessao = TestSession()

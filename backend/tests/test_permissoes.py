@@ -115,6 +115,50 @@ def test_professor_dashboard_conta_so_as_turmas_dele(cenario_professor):
     assert "Aluno De Outra Turma" not in nomes_top
 
 
+def test_a2_sincronizacao_mobile_respeita_turmas_do_professor(cenario_professor, db):
+    """A2: o pacote de sincronização mobile aplica o MESMO escopo por papel da
+    web. Professor só recebe dados das turmas dele (ranking/dashboard/alertas);
+    o mural (vitrine da escola inteira) não vai para o professor."""
+    from app.models import Importacao, SnapshotMatific
+    from app.services import scoring
+    c = cenario_professor
+    base = f"/api/v1/escolas/{c['escola'].id}"
+    fora = c["aluno_fora"]
+
+    # Só os alunos da turma A ganham dados; o aluno de fora fica SEM dados e vira
+    # um alerta "sem_dados" — sonda que deve SUMIR para o professor e APARECER
+    # para o coordenador (prova que o filtro remove algo real, não por vazio).
+    importacao = Importacao(escola_id=c["escola"].id, plataforma="matific", tipo="seed")
+    db.add(importacao)
+    db.flush()
+    demais = db.query(Aluno).filter(Aluno.escola_id == c["escola"].id,
+                                    Aluno.id != fora.id).all()
+    for i, aluno in enumerate(demais):
+        db.add(SnapshotMatific(escola_id=c["escola"].id, aluno_id=aluno.id,
+                               importacao_id=importacao.id,
+                               atividades=10 * (i + 1), estrelas=20, pontuacao_media=70))
+    db.commit()
+    scoring.recalcular_escola(db, c["escola"].id)
+
+    prof = c["professor"].get(f"{base}/sincronizacao")
+    assert prof.status_code == 200, prof.text
+    prof = prof.json()
+    # Ranking e dashboard: escopados à turma A (3 alunos), sem o aluno de fora.
+    assert fora.nome not in [i["nome"] for i in prof["ranking"]]
+    assert prof["dashboard"]["total_alunos"] == 3
+    assert prof["dashboard"]["total_turmas"] == 1
+    # Alertas: o aluno de fora (sem_dados) não vaza para o professor.
+    assert all(a["aluno_id"] != fora.id for a in prof["alertas"])
+    # Mural é vitrine da escola inteira — bloqueado para o professor (como no web).
+    assert prof["mural"] == []
+
+    # Coordenador (acesso total) recebe a escola inteira — inclusive o alerta do
+    # aluno de fora, confirmando que o filtro do professor removeu algo real.
+    coord = c["coordenador"].get(f"{base}/sincronizacao").json()
+    assert coord["dashboard"]["total_alunos"] == 4
+    assert any(a["aluno_id"] == fora.id for a in coord["alertas"])
+
+
 def test_coordenador_tem_acesso_total_a_escola(cenario_professor):
     c = cenario_professor
     base = f"/api/v1/escolas/{c['escola'].id}"
@@ -124,6 +168,32 @@ def test_coordenador_tem_acesso_total_a_escola(cenario_professor):
     assert alunos["total"] == 4                          # escola inteira
     dash = c["coordenador"].get(f"{base}/dashboard").json()
     assert dash["total_alunos"] == 4
+
+
+def test_a4_quest_professor_so_acessa_turmas_dele(cenario_professor):
+    """A4: as rotas Quest do professor expõem/regeneram o CÓDIGO de login das
+    crianças (credencial de acesso). Elas respeitam as turmas do professor: ele
+    não lista nem regenera credencial de turma/aluno de outro professor."""
+    c = cenario_professor
+    base = f"/api/v1/escolas/{c['escola'].id}/quest"
+    ta, tb = c["turma_a"].id, c["turma_b"].id
+
+    # Turma dele: enxerga os acessos e gera cartões normalmente.
+    assert c["professor"].get(f"{base}/turmas/{ta}/acessos").status_code == 200
+    assert c["professor"].post(f"{base}/turmas/{ta}/cartoes").status_code == 200
+
+    # Turma de outro professor: 404 (não lista códigos, não gera, não regenera).
+    assert c["professor"].get(f"{base}/turmas/{tb}/acessos").status_code == 404
+    assert c["professor"].post(f"{base}/turmas/{tb}/cartoes").status_code == 404
+    assert c["professor"].post(
+        f"{base}/turmas/{tb}/cartoes?regenerar=true").status_code == 404
+    assert c["professor"].post(
+        f"{base}/alunos/{c['aluno_fora'].id}/cartao").status_code == 404
+
+    # Coordenador (acesso total) alcança qualquer turma/aluno da escola.
+    assert c["coordenador"].get(f"{base}/turmas/{tb}/acessos").status_code == 200
+    assert c["coordenador"].post(
+        f"{base}/alunos/{c['aluno_fora'].id}/cartao").status_code == 200
 
 
 def test_pesquisa_do_professor_so_traz_alunos_das_turmas_dele(cenario_professor):

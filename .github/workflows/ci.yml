@@ -74,6 +74,66 @@ jobs:
           flags: backend
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  migracoes-postgres:
+    name: Migrações Alembic (PostgreSQL real)
+    runs-on: ubuntu-latest
+    # Exercita o caminho REAL de produção: o entrypoint do container aplica as
+    # migrações num PostgreSQL de verdade. O ramo `postgresql` da 0003 (DROP/ADD
+    # CONSTRAINT nativo) nunca roda nos testes (SQLite) — aqui ele é exercido,
+    # pegando incompatibilidades de dialeto ANTES do deploy.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: constela
+          POSTGRES_PASSWORD: constela
+          POSTGRES_DB: constela_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U constela"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Mesmo driver de produção (psycopg 3). No postgresql:// puro o SQLAlchemy
+      # 2.0 tentaria o psycopg2 (ausente) — daí o sufixo +psycopg.
+      DATABASE_URL: postgresql+psycopg://constela:constela@localhost:5432/constela_ci
+      ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Instalar dependências (+ driver do Postgres, como no Dockerfile)
+        run: pip install -r backend/requirements.txt "psycopg[binary]==3.2.3"
+      - name: Aplicar migrações no PostgreSQL (entrypoint real do container)
+        working-directory: backend
+        run: python -m scripts.migrate
+      - name: Rodar de novo — idempotência no PostgreSQL
+        working-directory: backend
+        run: python -m scripts.migrate
+      - name: Conferir schema no head e tabelas-chave presentes
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from alembic.script import ScriptDirectory
+          from sqlalchemy import inspect, text
+          from app.core.database import engine
+          from app.core.migracoes import _config
+          head = ScriptDirectory.from_config(_config()).get_current_head()
+          with engine.connect() as c:
+              versao = c.execute(text("SELECT version_num FROM alembic_version")).scalar()
+          assert versao == head, f"versao {versao} != head {head}"
+          tabelas = set(inspect(engine).get_table_names())
+          faltando = {"usuarios", "alunos", "notas", "quest_missoes",
+                      "quest_tentativas"} - tabelas
+          assert not faltando, f"tabelas faltando no Postgres: {faltando}"
+          print(f"OK -- PostgreSQL no head {head} com {len(tabelas)} tabelas")
+          PY
+
   test-web:
     name: Testes web (Vitest + cobertura)
     runs-on: ubuntu-latest
@@ -101,6 +161,20 @@ jobs:
           directory: apps/web/coverage
           flags: web
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  test-mobile:
+    name: Testes mobile (Vitest — cifra, fila offline, retry)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+      - name: "Vitest (lógica pura: cifra AES, fila offline, política de retry)"
+        run: npm run test --workspace @constela/mobile
 
   build:
     name: Build (web + quest)

@@ -77,6 +77,17 @@ def exigir_aluno_permitido(db: Session, escola_id: int, ano: int,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
 
 
+def exigir_turma_permitida(db: Session, escola_id: int, usuario: Usuario,
+                           turma_id: int) -> None:
+    """404 quando o professor tenta abrir turma fora das dele (404 e não 403
+    para não revelar a existência da turma — igual a exigir_aluno_permitido)."""
+    ids = turmas_permitidas(db, escola_id, usuario)
+    if ids is None:
+        return
+    if turma_id not in ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
+
+
 def filtrar_por_aluno(itens: list[dict], permitidos: set[int]) -> list[dict]:
     """Mantém apenas itens cujo aluno_id é permitido (listas de rankings,
     insights, gamificação...)."""

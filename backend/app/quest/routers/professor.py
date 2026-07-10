@@ -16,6 +16,7 @@ from app.quest import schemas
 from app.quest.models import QuestCredencialAluno, QuestPerfil
 from app.quest.services import cartoes_pdf
 from app.quest.services import credenciais as svc
+from app.services import permissoes
 from app.services import relatorios as svc_relatorios
 from app.services.audit import registrar
 
@@ -63,6 +64,9 @@ def acessos_da_turma(turma_id: int,
                      db: Session = Depends(get_db)):
     """Situação de acesso de cada aluno — alimenta a tela do Edu."""
     turma = _turma_da_escola(db, escola_id, turma_id)
+    # Professor restrito só vê as turmas dele — o código de login (credencial do
+    # aluno na Quest) não pode vazar para turmas de outros professores.
+    permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
     saida: list[schemas.AcessoAlunoOut] = []
     for aluno in svc.alunos_da_turma(db, escola_id, turma):
         credencial = db.execute(
@@ -97,6 +101,9 @@ def gerar_cartoes(turma_id: int,
     sessões antigas — use apenas se cartões caírem em mãos erradas.
     """
     turma = _turma_da_escola(db, escola_id, turma_id)
+    # Professor restrito não gera nem regenera credenciais de turma alheia
+    # (regenerar troca o QR de todos e derruba as sessões — antes do efeito).
+    permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
     dados = svc.garantir_credenciais_turma(db, escola_id, turma,
                                            regenerar=regenerar)
     escola = db.get(Escola, escola_id)
@@ -127,10 +134,14 @@ def gerar_cartao_individual(aluno_id: int,
     if aluno.status != "ativo":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Aluno inativo não recebe cartão.")
+    escola = db.get(Escola, escola_id)
+    # Professor restrito só gera cartão de aluno das turmas dele (antes de criar
+    # ou regenerar a credencial).
+    permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
+                                      usuario, aluno_id)
 
     item = svc.garantir_credencial_aluno(db, escola_id, aluno,
                                          regenerar=regenerar)
-    escola = db.get(Escola, escola_id)
     pdf = cartoes_pdf.gerar_cartoes_pdf(
         escola_nome=escola.nome if escola else "Escola",
         cor=svc_relatorios.cor_primaria(db, escola_id),

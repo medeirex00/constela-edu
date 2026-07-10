@@ -115,6 +115,51 @@ def test_banco_pre_alembic_e_carimbado_sem_perder_dados(fazer_engine):
         assert c.execute(text("SELECT nome FROM escolas")).scalar_one() == "Escola Piloto"
 
 
+def _schema(engine):
+    """Fotografia comparável do schema: tabelas, colunas (nome→tipo base), FKs
+    (coluna→ON DELETE) e índices (nomes)."""
+    insp = inspect(engine)
+    out = {}
+    for tabela in insp.get_table_names():
+        if tabela == "alembic_version":
+            continue
+        cols = {c["name"]: str(c["type"]).upper().split("(")[0]
+                for c in insp.get_columns(tabela)}
+        fks = {}
+        for fk in insp.get_foreign_keys(tabela):
+            for col in fk["constrained_columns"]:
+                fks[col] = (fk.get("options") or {}).get("ondelete")
+        idx = {i["name"] for i in insp.get_indexes(tabela)}
+        out[tabela] = {"cols": cols, "fks": fks, "idx": idx}
+    return out
+
+
+def test_schema_do_create_all_bate_com_o_das_migracoes(fazer_engine):
+    """Fidelidade de produção: o schema que o conftest monta rápido (create_all)
+    é IDÊNTICO ao que as migrações Alembic produzem (o schema de produção).
+
+    É o que autoriza a suíte a usar create_all como atalho — este teste trava a
+    deriva: um modelo novo sem migração (ou uma migração sem o modelo) quebra
+    aqui, em vez de só estourar em produção."""
+    from sqlalchemy import create_engine as _criar
+    from sqlalchemy.pool import StaticPool
+
+    e_create = _criar("sqlite://", connect_args={"check_same_thread": False},
+                      poolclass=StaticPool)
+    Base.metadata.create_all(e_create)
+    e_migr = fazer_engine("paridade.db")
+    aplicar_migracoes(e_migr)
+
+    atual, producao = _schema(e_create), _schema(e_migr)
+    e_create.dispose()
+
+    assert set(atual) == set(producao)
+    for tabela in atual:
+        assert atual[tabela]["cols"] == producao[tabela]["cols"], f"colunas: {tabela}"
+        assert atual[tabela]["fks"] == producao[tabela]["fks"], f"FKs: {tabela}"
+        assert atual[tabela]["idx"] == producao[tabela]["idx"], f"índices: {tabela}"
+
+
 def test_ondelete_aplicado_pela_migracao(fazer_engine):
     """A migração 0003 aplica os ON DELETE no banco (não só o create_all)."""
     engine = fazer_engine("ondelete.db")

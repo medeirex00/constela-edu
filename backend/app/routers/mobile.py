@@ -19,7 +19,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import DispositivoMovel, Escola, Usuario
 from app.routers.rankings import _ranking, montar_dashboard
-from app.services import evolucao, gamificacao, insights
+from app.services import evolucao, gamificacao, insights, permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Mobile"])
@@ -92,13 +92,31 @@ def sincronizar(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Pacote consolidado para o app hidratar todas as telas de uma vez."""
+    """Pacote consolidado para o app hidratar todas as telas de uma vez.
+
+    Mesmo escopo por papel da web: admin/coordenador enxergam a escola inteira;
+    professor recebe SOMENTE as turmas dele (`turmas_permitidas`). Sem isso, o
+    sync vazaria nomes e notas de toda a escola para um professor restrito.
+    """
     escola = db.get(Escola, escola_id)
-    mural = gamificacao.mural(db, escola_id)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+
+    alertas = insights.alertas_da_escola(db, escola_id)
+    if permitidas is None:
+        # Acesso total (admin/coordenador): mural da vitrine da escola inteira.
+        eventos_mural = gamificacao.mural(db, escola_id)["eventos"]
+    else:
+        # Professor restrito: sem mural (é vitrine da escola inteira, como no
+        # web, que o bloqueia com negar_restrito) e alertas só das turmas dele.
+        eventos_mural = []
+        alunos = permissoes.alunos_permitidos(db, escola_id,
+                                              escola.ano_letivo_ativo, permitidas)
+        alertas = permissoes.filtrar_por_aluno(alertas, alunos)
+
     return {
         "gerado_em": datetime.now(timezone.utc).isoformat(),
-        "dashboard": montar_dashboard(db, escola_id),
-        "ranking": _ranking(db, escola_id, escola.ano_letivo_ativo),
+        "dashboard": montar_dashboard(db, escola_id, turma_ids=permitidas),
+        "ranking": _ranking(db, escola_id, escola.ano_letivo_ativo, turma_ids=permitidas),
         "evolucao": [
             {
                 "posicao": item.posicao,
@@ -107,8 +125,9 @@ def sincronizar(
                 "turma": item.turma,
                 "nota_evolucao": item.nota_evolucao,
             }
-            for item in evolucao.ranking_evolucao(db, escola_id, dias=30)[:20]
+            for item in evolucao.ranking_evolucao(
+                db, escola_id, dias=30, turma_ids=permitidas)[:20]
         ],
-        "alertas": insights.alertas_da_escola(db, escola_id),
-        "mural": mural["eventos"],
+        "alertas": alertas,
+        "mural": eventos_mural,
     }

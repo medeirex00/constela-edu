@@ -8,10 +8,26 @@ Regras inegociáveis:
   * Toda conversa fica registrada em `conversas_ia`/`mensagens_ia`.
   * Se o provedor externo falhar, o provedor local responde — o assistente
     nunca sai do ar por causa de terceiros.
+
+Provedor externo e LGPD (dados de crianças — decisão documentada):
+  * O provedor PADRÃO é `local`: determinístico, sem rede, sem chave. Por
+    padrão NENHUM dado de aluno sai da infraestrutura.
+  * Um provedor externo (Anthropic/OpenAI) só é usado quando a escola o
+    configura explicitamente com uma chave própria (opt-in por escola).
+  * Minimização de dados: mesmo nesse opt-in, NOMES REAIS de alunos NUNCA são
+    enviados ao provedor externo. O contexto e a conversa são pseudonimizados
+    (nome -> "Aluno NNN") antes de sair; a resposta é reidentificada aqui, no
+    backend. O provedor externo vê apenas rótulos, turmas e notas.
+  * A pseudonimização usa casamento EXATO de nome (fronteira de palavra), sem
+    heurística de NER. Limitação conhecida e aceita: se o usuário digitar
+    apenas um fragmento do nome na pergunta (ex.: só o primeiro nome), esse
+    fragmento não é trocado por token — some da cobertura. É o mesmo requisito
+    do modo local (que também casa pelo nome como aparece no contexto).
 """
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -212,6 +228,49 @@ def montar_contexto(db: Session, escola_id: int) -> str:
     ])
 
 
+# --- Pseudonimização para provedores externos (LGPD) --------------------------
+
+# Provedores que enviam o contexto para fora da infraestrutura. Só para eles a
+# pseudonimização é aplicada; o `local` roda no próprio backend com nomes reais.
+_PROVEDORES_EXTERNOS = ("anthropic", "openai")
+
+_NOTA_PSEUDONIMO = (
+    "\n\nIMPORTANTE: cada aluno aparece por um identificador fixo "
+    '(ex.: "Aluno 007"). Refira-se aos alunos EXATAMENTE por esse identificador, '
+    "sem alterá-lo, traduzi-lo ou inventar nomes."
+)
+
+
+def _mapa_pseudonimos(db: Session, escola_id: int) -> dict[str, str]:
+    """{nome_real: "Aluno NNN"} para TODOS os alunos ativos da escola.
+
+    Ordem estável (por nome) e largura fixa com zeros à esquerda: nenhum token é
+    prefixo de outro, então a reidentificação por substituição direta é exata."""
+    nomes = db.execute(
+        select(Aluno.nome).where(Aluno.escola_id == escola_id,
+                                 Aluno.status == "ativo").order_by(Aluno.nome)
+    ).scalars().all()
+    largura = max(2, len(str(len(nomes))))
+    return {nome: f"Aluno {i:0{largura}d}" for i, nome in enumerate(nomes, start=1)}
+
+
+def _pseudonimizar(texto: str, mapa: dict[str, str]) -> str:
+    """Troca cada nome real pelo token. Nome mais longo primeiro (não trocar
+    "João" dentro de "João Pedro") e fronteira de palavra — casamento exato,
+    sem aproximação."""
+    for nome in sorted(mapa, key=len, reverse=True):
+        texto = re.sub(rf"\b{re.escape(nome)}\b", mapa[nome], texto)
+    return texto
+
+
+def _reidentificar(texto: str, mapa: dict[str, str]) -> str:
+    """Volta token -> nome real na resposta. Tokens têm largura fixa (nenhum é
+    prefixo de outro), então a substituição direta é segura."""
+    for nome, token in mapa.items():
+        texto = texto.replace(token, nome)
+    return texto
+
+
 def perguntar(db: Session, escola_id: int, usuario_id: int,
               pergunta: str, conversa_id: int | None = None) -> dict:
     """Fluxo completo: contexto → provedor → registro da conversa."""
@@ -241,7 +300,18 @@ def perguntar(db: Session, escola_id: int, usuario_id: int,
         # A criação pode falhar (ex.: chave ausente/errada) — por isso fica
         # dentro do try: o assistente nunca sai do ar.
         provedor = _provedor_da_escola(db, escola_id)
-        resposta = provedor.responder(sistema, mensagens)
+        if provedor.nome in _PROVEDORES_EXTERNOS:
+            # LGPD: nomes reais de crianças NUNCA saem para provedor externo.
+            # Pseudonimiza contexto + conversa; reidentifica a resposta aqui.
+            mapa = _mapa_pseudonimos(db, escola_id)
+            sistema_env = _pseudonimizar(sistema, mapa) + _NOTA_PSEUDONIMO
+            mensagens_env = [
+                {"papel": m["papel"], "conteudo": _pseudonimizar(m["conteudo"], mapa)}
+                for m in mensagens
+            ]
+            resposta = _reidentificar(provedor.responder(sistema_env, mensagens_env), mapa)
+        else:
+            resposta = provedor.responder(sistema, mensagens)
         provedor_usado = provedor.nome
     except ErroProvedorIA as erro:
         logger.warning("Provedor de IA indisponível; usando modo local: %s",

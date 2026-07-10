@@ -237,16 +237,30 @@ def test_fundir_preserva_perfil_e_telemetria_do_quest(cliente, db, escola_comple
     `manter`. Sem isso, o ON DELETE CASCADE apagaria tudo ao deletar o remover."""
     from datetime import datetime, timezone
 
-    from app.quest.models import QuestPerfil, QuestTentativa
+    from app.quest.models import (
+        QuestJornada, QuestMissao, QuestMundo, QuestPerfil, QuestTentativa,
+    )
 
     escola_id = escola_completa["escola"].id
     manter, remover = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    # Missão real do catálogo (mundo→jornada→missão): a tentativa referencia uma
+    # missão que EXISTE — como em produção, onde a integridade de FK está ligada.
+    mundo = QuestMundo(slug="mat", nome="Planeta Matemática")
+    db.add(mundo)
+    db.flush()
+    jornada = QuestJornada(mundo_id=mundo.id, nome="Trilha 1", ano_escolar="3º Ano")
+    db.add(jornada)
+    db.flush()
+    missao = QuestMissao(jornada_id=jornada.id, nome="Missão 1")
+    db.add(missao)
+    db.flush()
     # `remover` tem perfil Quest com uma tentativa; `manter` não tem perfil.
     perfil = QuestPerfil(escola_id=escola_id, aluno_id=remover.id,
                          apelido="Astro", codigo_amigo="AST123")
     db.add(perfil)
     db.flush()
-    db.add(QuestTentativa(escola_id=escola_id, perfil_id=perfil.id, missao_id=1,
+    db.add(QuestTentativa(escola_id=escola_id, perfil_id=perfil.id,
+                          missao_id=missao.id,
                           iniciada_em=datetime.now(timezone.utc)))
     db.commit()
     perfil_id, manter_id, remover_id = perfil.id, manter.id, remover.id
