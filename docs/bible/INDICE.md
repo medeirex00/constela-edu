@@ -75,9 +75,9 @@
 | 00.8 | Por que existe (a promessa) | Transformar o estudo em algo que a criança escolhe fazer; sucesso é a criança querer voltar, não usar por obrigação. |
 | 00.9 | A pergunta-guia (o norte) | Fixa o teste de toda decisão: 'Uma criança entraria no Constela Quest mesmo sem ser obrigada?' — se 'não', a decisão está errada. |
 | 00.10 | Os 4 pilares | Autonomia, Progresso visível (a Constelação), Vínculo (Cosmo/mundo) e Surpresa — os sustentáculos do 'sim' à pergunta-guia. |
-| 00.11 | ⚠️ O norte como métrica ('a criança volta amanhã?') | Régua afetiva de retenção usada como corte de fase no doc 05; alvos quantitativos (D1/D7/D30) e relação com aprendizado ficam a calibrar na Seção 14. |
+| 00.11 | ⚠️ O norte como métrica ('a criança volta amanhã?') | Régua afetiva de retenção usada como corte de fase no doc 05; alvos quantitativos (D1/D7/D30) e relação com aprendizado ficam a calibrar na Seção 17. |
 | 00.12 | O que o Constela Quest NÃO é | Delimita antipadrões: não é sistema escolar gamificado, catálogo de exercícios, não compete no esforço mínimo, sem compras/punição/dark patterns. |
-| 00.13 | ⚠️ Ambição de qualidade e a tensão em aberto | Registra a direção do dono por assets profissionais/3D em conflito com a arquitetura DOM/SVG-first; alcance e piso de desempenho a decidir (Seções 04/09/12). |
+| 00.13 | ⚠️ Ambição de qualidade e a tensão em aberto | Registra a direção do dono por assets profissionais/3D em conflito com a arquitetura DOM/SVG-first; alcance e piso de desempenho a decidir (Seções 04/11/15). |
 | 00.14 | ⚠️ Pendências desta seção (do QA) | Lista o que falta calibrar: métrica-norte quantificável + guardrails, critérios de sucesso/'definição de lançamento' e posicionamento vs. incumbentes. |
 | 00.15 | Espelho bilíngue PT-BR / EN | Convenção estrutural: seção duplicada em português (canônico) e inglês (equipe internacional); ambas devem ser mantidas em paridade. |
 
@@ -189,7 +189,7 @@
 | 03.27 | Tom & atmosfera do universo | Define a paleta emocional (mágica, acolhedora, encantada, sem 'cara de dever de casa'), ancorada na estética do protótipo constela-play-v7. |
 | 03.28 | Guardrails narrativos do universo | O que é sempre verdade na ficção: sem violência/morte, erro sempre acolhido, sem competição tóxica, sem jargão adulto — coerência com os Princípios Imutáveis. |
 | 03.29 | ⚠️ Escopo de conteúdo no lançamento | Decidir entre 1 planeta profundo (ex.: Matemática) e 9 planetas rasos — define a densidade de conteúdo/arte a produzir primeiro. |
-| 03.30 | Âncoras de arte & referências cruzadas | Aponta o formato do tema JSON (SUBJECTS/SCENES do protótipo) e remete a Seção 04 (personagens/avatar) e Seção 12 (arte, áudio, assets). |
+| 03.30 | Âncoras de arte & referências cruzadas | Aponta o formato do tema JSON (SUBJECTS/SCENES do protótipo) e remete a Seção 04 (personagens/avatar) e Seção 15 (arte, áudio, assets). |
 
 **Perguntas ao dono:**
 - Oficializar os nomes próprios dos 9 planetas, em especial Oxford e Terra Nova (hoje só placeholders no código), e confirmar a regra de não-tradução?
@@ -557,7 +557,7 @@
 | 10.21 | Evolução por matéria (linguagem simples) | Define como o domínio pedagógico é traduzido para a família sem códigos BNCC nem termos técnicos. |
 | 10.22 | Conquistas e nível (gancho de conversa) | Define exibir conquistas e nível para a família puxar conversa com o filho ('me conta dessa medalha!'), sem expor economia. |
 | 10.23 | ⚠️ Certificados em PDF | Define gatilhos e modelo dos certificados reusando o gerador de PDF do Edu. |
-| 10.24 | Controle: desligar o social do filho | Especifica o toggle da família sobre `quest_perfis.social_ativo` e sua interação com os controles de escola/turma (ver 7.31/7.32). |
+| 10.24 | Controle: desligar o social do filho | Especifica o toggle da família sobre `quest_perfis.social_ativo` e sua interação com os controles de escola/turma (ver 9.31/9.32). |
 | 10.25 | ⚠️ Controle: horário permitido | Define a janela de horário (ex.: não jogar após 21h) e se o bloqueio é efetivo no servidor ou apenas informativo. |
 | 10.26 | ⚠️ Controle: bem-estar (teto diário e pausa) | Define teto diário de XP e a pausa do Cosmo (40 min, configurável) e quem os configura entre escola e família. |
 | 10.27 | ⚠️ Notificações push (resumo semanal) | Especifica o push de resumo para a família via outbox, com opt-in e frequência, garantindo que FOMO/push nunca vai para a criança. |
@@ -639,7 +639,7 @@
 | 11.42 | Outbox como base de extração (produtor imutável) | Fixa que o produtor de eventos não muda quando o outbox migrar de polling para fila real na extração. |
 | 11.43 | Observabilidade e auditoria (reuso de logs_auditoria) | Define que toda escrita relevante passa pela auditoria existente e o mínimo de logs/métricas operacionais. |
 | 11.44 | Ambientes, migrações e paridade dev/prod | Fixa SQLite em dev e PostgreSQL em prod com SQLAlchemy 2 e a estratégia de migrações aditivas. |
-| 11.45 | Rate-limit distribuído (memória → Redis) | Aponta o gap arquitetural atual (rate-limit em memória, não distribuído) e o alvo com réplicas; detalhe de política vai à Seção 10. |
+| 11.45 | Rate-limit distribuído (memória → Redis) | Aponta o gap arquitetural atual (rate-limit em memória, não distribuído) e o alvo com réplicas; detalhe de política vai à Seção 12. |
 | 11.46 | Definition of Done técnico e testes de contrato | Define os testes de contrato (mecânica, API tentativa, WS, sync offline) que fecham a implementação de cada peça. |
 | 11.47 | ⚠️ DECISÃO: renderização DOM/SVG-first vs Three.js no núcleo | Reconciliar o doc 01 (DOM/SVG/CSS-first, 'PixiJS não Three.js') com o código que já usa Three.js no avatar, definindo o alcance oficial. |
 | 11.48 | ⚠️ DECISÃO: piso de desempenho e device-alvo mínimo | Definir device-alvo mínimo explícito e o orçamento de carregamento/memória/FPS ao qual toda arte e mecânica se subordina. |
@@ -746,7 +746,7 @@
 | 13.26 | ⚠️ Definição do controle de horário permitido | Especifica se a janela de uso é faixa livre configurada pela família ou faixas fixas — pendente do dono. |
 | 13.27 | Sem vidas, sem espera forçada, sem compra | Fixa a ausência de mecânicas de energia/vidas ou paywall que forcem espera ou pagamento. |
 | 13.28 | Ranking saudável (eu×eu e turma que zera) | Define que a criança só vê a própria constelação e a turma da semana, sem lanterna nem ranking individual exposto. |
-| 13.29 | ⚠️ Acessibilidade x device-alvo (degradação graciosa) | Define como animações e efeitos degradam em hardware fraco, ligando-se ao piso de desempenho da Seção 09. |
+| 13.29 | ⚠️ Acessibilidade x device-alvo (degradação graciosa) | Define como animações e efeitos degradam em hardware fraco, ligando-se ao piso de desempenho da Seção 11. |
 | 13.30 | Playtest com não-leitores e testes de acessibilidade | Define o método de validação (playtest com crianças reais, verificação de alvos/contraste/áudio) como parte do Done. |
 | 13.31 | Checklist de conformidade por tela (gate de revisão) | Fornece o checklist obrigatório (áudio, 48px, uma ação, ícone+cor+áudio, reduced-motion, daltônico) que toda tela passa antes de publicar. |
 
@@ -755,7 +755,7 @@
 - O escopo de acessibilidade inclui suporte a leitor de tela e navegação por teclado além do público-alvo infantil? Em que fase?
 - Confirmar os valores-padrão do teto diário de XP (celebração) e do lembrete de pausa do Cosmo (sugerido 40 min)?
 - O controle de 'horário permitido' da família é faixa livre definida por eles ou faixas fixas pré-definidas?
-- Em hardware abaixo do device-alvo mínimo, a redução de animações deve ser ativada automaticamente (ligado ao piso de desempenho da Seção 09)?
+- Em hardware abaixo do device-alvo mínimo, a redução de animações deve ser ativada automaticamente (ligado ao piso de desempenho da Seção 11)?
 
 ---
 
@@ -865,7 +865,7 @@
 | 15.34 | Armazenamento, CDN e entrega | Define storage/CDN (Cloudflare R2 ou equivalente), cache HTTP com ETag e assets fora do backend. |
 | 15.35 | ⚠️ Orçamento de performance (por device-alvo) | Fixa limites concretos de tamanho de download inicial, memória, texturas e draw calls por device-alvo mínimo. |
 | 15.36 | Estratégia de carregamento e streaming | Define lazy-load do 3D, precache do shell, cache da jornada atual e degradação graciosa em wifi fraco. |
-| 15.37 | Arte segura para localização | Proíbe texto embutido em imagem/áudio não externalizado, garantindo troca de idioma sem re-render de arte (liga à Seção 13). |
+| 15.37 | Arte segura para localização | Proíbe texto embutido em imagem/áudio não externalizado, garantindo troca de idioma sem re-render de arte (liga à Seção 16). |
 | 15.38 | ⚠️ Ferramentas e autoria (quem produz os assets) | Define ferramentas e responsáveis pela produção de GLBs, camadas trocáveis, ilustrações e áudios gravados. |
 | 15.39 | Governança e fluxo de aprovação de assets | Estabelece o caminho asset novo → revisão → publicação e quem aprova a consistência com o design system. |
 | 15.40 | Checklist de 'pronto' de arte (Definition of Done) | Lista os critérios de aceite de um asset: performance, acessibilidade, naming, versão e consistência de estilo. |
@@ -877,7 +877,7 @@
 - A narração definitiva será áudio gravado em lote (TTS de qualidade) substituindo a Web Speech API? Quem grava e quando entra?
 - As trilhas musicais e ilustrações por planeta são produzidas por fornecedor, por agentes de IA, ou mistos? Quem faz a curadoria de consistência?
 - Qual é o device-alvo mínimo explícito (modelo/RAM/GPU de tablet e Chromebook da escola) para calibrar o orçamento de performance e o teto de 3D?
-- Qual o orçamento máximo de download inicial e de memória aceitável no device-alvo (para fechar os limites de 12.35)?
+- Qual o orçamento máximo de download inicial e de memória aceitável no device-alvo (para fechar os limites de 15.35)?
 - O Cosmo customizável (rosto/chapéu/costas/mão/pet já renderizáveis mas órfãos de UI) entra no escopo de arte ou é aposentado?
 
 ---
@@ -901,7 +901,7 @@
 | 16.12 | Convenções de ano/série escolar | Padroniza '1º Ano'…'5º Ano' (convenção de turmas.ano_escolar) e sua eventual tradução/adaptação de currículo. |
 | 16.13 | BNCC e códigos independentes de idioma | Mantém códigos de habilidade (ex.: EF02MA05) como identificadores estáveis, não localizáveis. |
 | 16.14 | Expansão de texto e resiliência de layout | Exige layouts que absorvam crescimento/encolhimento de texto entre idiomas sem quebrar alvos ≥48px. |
-| 16.15 | Fontes e cobertura de glifos por locale | Concilia idiomas futuros com a restrição de subset de fonte para caber no orçamento de precache (Seção 12). |
+| 16.15 | Fontes e cobertura de glifos por locale | Concilia idiomas futuros com a restrição de subset de fonte para caber no orçamento de precache (Seção 15). |
 | 16.16 | ⚠️ Prontidão para RTL e alfabetos não-latinos | Registra o nível de preparo para direção RTL e scripts não-latinos, sem implementar antes de decidido. |
 | 16.17 | ⚠️ Localização do conteúdo pedagógico (catálogo) | Define como enunciados, dicas, explicações e mídia de desafios são traduzidos e alinhados a currículo local. |
 | 16.18 | Seleção de locale e fallback | Especifica como o locale é escolhido (escola/aluno/aparelho) e a cadeia de fallback até pt-BR. |
@@ -991,7 +991,7 @@
 | 18.17 | ⚠️ Protocolo de playtest com crianças | Define método, consentimento, faixa etária, roteiro e coleta de observação com 6–11 anos. |
 | 18.18 | Teste de corredor na escola-piloto | Formaliza o teste na escola-piloto como critério de pronto de fase (login sem ajuda foi o de Q0). |
 | 18.19 | Métricas de usabilidade do playtest | Define o que se mede no playtest (tempo até jogar, travas, pedido de 'jogar de novo'). |
-| 18.20 | QA de localização | Valida strings externalizadas, ausência de palavra proibida e sincronia texto↔áudio por locale (liga à Seção 13). |
+| 18.20 | QA de localização | Valida strings externalizadas, ausência de palavra proibida e sincronia texto↔áudio por locale (liga à Seção 16). |
 | 18.21 | Testes de segurança | Cobre rate-limit por (código, IP), isolamento de JWT aluno vs Edu e escopo mínimo do papel aluno. |
 | 18.22 | Testes de conformidade LGPD/privacidade | Verifica coleta mínima, opt-in social, retenção configurável e anonimização na saída. |
 | 18.23 | Suíte de regressão | Define o conjunto que trava as 16+2 invariantes imutáveis contra regressão em cada mudança. |
@@ -1185,16 +1185,16 @@
 | 22.5 | ⚠️ Precificação e moeda | Faixa de preço, unidade (ex.: R$/aluno/ano) e moeda de cobrança — decisão exclusiva do dono. |
 | 22.6 | ⚠️ Trial, piloto e freemium por escola | Regras do período gratuito/piloto: duração, limites de uso e o que fica travado antes da conversão. |
 | 22.7 | ⚠️ Ciclo de faturamento e cobrança | Periodicidade (anual/mensal), quem emite nota (rede vs. escola) e integração com o financeiro do Edu — a confirmar pelo dono. |
-| 22.8 | Gating de recursos por licença (mecanismo técnico) | Como a licença ativa/desativa recursos via `configuracoes` namespace `quest.*` por escola — o mecanismo é dev; o mapa recurso↔plano vem de 17.4. |
+| 22.8 | Gating de recursos por licença (mecanismo técnico) | Como a licença ativa/desativa recursos via `configuracoes` namespace `quest.*` por escola — o mecanismo é dev; o mapa recurso↔plano vem de 22.4. |
 | 22.9 | Passe de temporada: gratuidade imutável | Fixa que o passe é 100% gratuito, trilha única de recompensas por jogar, sem trilha paga paralela. |
 | 22.10 | ⚠️ Passe de temporada: formato definitivo | Número de níveis, duração (6–8 semanas), curva de XP do passe e recompensas — formato ainda a confirmar pelo dono. |
 | 22.11 | ⚠️ Plataformas-alvo e fase de entrada | Define se, além de web/PWA instalável, haverá apps nativos (iOS/Android) e/ou desktop, e em qual fase (Q?). |
 | 22.12 | ⚠️ Distribuição e entrega | Decide entre PWA instalável sem loja (padrão atual) vs. publicação em Play Store / App Store / Chromebook, com implicações de política de loja. |
 | 22.13 | Firewall economia-do-jogo × dinheiro real | Garante por design que moedas/estrelas/XP jamais convertem em dinheiro, compra ou reembolso — regra técnica implementável e auditável. |
 | 22.14 | Estrutura de custos (COGS) | Mapeia os custos que sustentam o preço-piso: CDN/assets, TTS/áudio gravado, chamadas de IA (Q6), infra Railway/Redis, storage de telemetria. |
-| 22.15 | Onboarding comercial e contratação da escola | Fluxo de provisioning da escola licenciada e o termo de consentimento LGPD dos responsáveis (remete às Seções 08 e 10). |
+| 22.15 | Onboarding comercial e contratação da escola | Fluxo de provisioning da escola licenciada e o termo de consentimento LGPD dos responsáveis (remete às Seções 10 e 12). |
 | 22.16 | Controle de uso e antipirataria por licença | Como se contam escolas/alunos ativos e se impõe o limite da licença (o gatilho >30 escolas do doc 01 também vive aqui). |
-| 22.17 | ⚠️ Métricas de negócio | Indicadores comerciais (ativação de escola, churn de escola, LTV, alunos ativos por licença) — definição de metas remete à Seção 14. |
+| 22.17 | ⚠️ Métricas de negócio | Indicadores comerciais (ativação de escola, churn de escola, LTV, alunos ativos por licença) — definição de metas remete à Seção 17. |
 | 22.18 | ⚠️ Roadmap de monetização por fase | Em que fase a cobrança real entra (hoje é piloto gratuito) e o que precede a comercialização. |
 | 22.19 | Conformidade: publicidade e terceiros | Reafirma ausência de anúncios e de SDK de rastreamento de terceiros na experiência da criança (Princípio 18). |
 
@@ -1235,7 +1235,7 @@
 | 23.16 | ⚠️ Reconciliação de desvios já ocorridos em Q0 | Consolidar ou reverter os desvios do plano (Three.js e avatar humanoide 3D no núcleo, contra o doc DOM/SVG-first) — pendência que trava o fechamento de Q0. |
 | 23.17 | ⚠️ Definição de lançamento comercial | Qual fase habilita cobrança e marketing e o que compõe o 'produto lançável' — critério ainda não definido (também sinalizado na Seção 00). |
 | 23.18 | ⚠️ Marcos e datas-alvo por fase | Se o roadmap é dirigido por data ou só por critério de pronto; e, havendo datas, quais são — a definir pelo dono. |
-| 23.19 | ⚠️ Métricas de saída (gate quantitativo) por fase | Além da régua afetiva, quais números liberam a passagem de fase (ex.: sessões fora do horário de aula em Q2) — metas remetem à Seção 14. |
+| 23.19 | ⚠️ Métricas de saída (gate quantitativo) por fase | Além da régua afetiva, quais números liberam a passagem de fase (ex.: sessões fora do horário de aula em Q2) — metas remetem à Seção 17. |
 | 23.20 | Backlog pós-Q6 e itens adiados | O que fica fora das 7 fases: clubes/torneios (se a demanda confirmar) e a integração futura com o software próprio de matérias+questões do dono. |
 
 **Perguntas ao dono:**
@@ -1365,7 +1365,7 @@
 | C.3 | Template canônico de ADR | Campos obrigatórios: número, status, data, decisor, contexto, decisão, consequências, ADRs relacionados — bilíngue (pt-BR canônico + inglês). |
 | C.4 | Estados e transições de um ADR | Proposto → Aceito / Rejeitado → Substituído / Depreciado, e quem promove cada transição. |
 | C.5 | Numeração e nomenclatura | Padrão `ADR-NNNN-slug.md` e regra de alocação sequencial do número. |
-| C.6 | Fluxo: de decisão em aberto a ADR aprovado | Como uma pendência do registro central (Seção 19.18) vira proposta de ADR, é decidida pelo dono e registrada. |
+| C.6 | Fluxo: de decisão em aberto a ADR aprovado | Como uma pendência do registro central (Seção 24.18) vira proposta de ADR, é decidida pelo dono e registrada. |
 | C.7 | Rastreabilidade ADR ↔ Princípios ↔ Seções ↔ Specs | Como um ADR aponta os princípios que altera, as seções que atualiza e as specs que autoriza. |
 | C.8 | Convenção de reversão e supersessão | Como um novo ADR referencia e substitui o anterior, mantendo o histórico legível. |
 | C.9 | Governança do índice e espelho bilíngue | Quando atualizar a tabela e como manter o espelho pt-BR/inglês sem divergência. |
@@ -1385,7 +1385,7 @@
 | C.23 | ⚠️ ADR candidato — Portal da Família / vínculo responsável | Quando a API /familia entra e quem autoriza o vínculo responsável↔aluno. |
 | C.24 | ⚠️ ADR candidato — Preferências `musica` e `reduzir_animacoes` | Decide se essas preferências ganham função/UI ou saem do modelo de dados. |
 | C.25 | ⚠️ ADR candidato — Device-alvo mínimo e orçamento de desempenho | Fixa o hardware-alvo mínimo (tablet/Chromebook modesto) e os números concretos de carregamento/memória (Princípio 17). |
-| C.26 | ⚠️ ADR candidato — Métrica-norte quantificável | Transforma 'volta amanhã?' em metas (D1/D7/D30) e guardrails de aprendizado e saúde de uso (Seção 00/14). |
+| C.26 | ⚠️ ADR candidato — Métrica-norte quantificável | Transforma 'volta amanhã?' em metas (D1/D7/D30) e guardrails de aprendizado e saúde de uso (Seção 00/17). |
 
 **Perguntas ao dono:**
 - Quais dos ADRs candidatos (C.12–C.26) você quer decidir primeiro para desbloquear o desenvolvimento?
@@ -1396,12 +1396,12 @@
 ---
 
 ## D · Apêndice D — Catálogo de Eventos de Telemetria
-**Objetivo:** Ser a referência autoritativa e versionada de cada evento de telemetria (nome, gatilho, campos, tipos, privacidade), no mesmo espírito do Apêndice B, para que o dev instrumente o cliente e valide no ingest sem inferir formato. Complementa a Seção 14 (que define norte/KPIs/guardrails) fornecendo o dicionário técnico executável, mais convenções de versionamento/deprecação, validação de esquema e deduplicação de eventos offline tardios.
+**Objetivo:** Ser a referência autoritativa e versionada de cada evento de telemetria (nome, gatilho, campos, tipos, privacidade), no mesmo espírito do Apêndice B, para que o dev instrumente o cliente e valide no ingest sem inferir formato. Complementa a Seção 17 (que define norte/KPIs/guardrails) fornecendo o dicionário técnico executável, mais convenções de versionamento/deprecação, validação de esquema e deduplicação de eventos offline tardios.
 
 | # | Subseção | Propósito |
 |---|----------|-----------|
 | D.1 | Convenções gerais do catálogo de eventos | Fixa base do pipeline (telemetria própria, sem SDK de terceiros), datas UTC ISO-8601, transporte, formato JSON e a regra de que nenhum evento carrega PII direta da criança. |
-| D.2 | Como ler este catálogo | Delimita o papel do apêndice (executa, não redefine) e sua relação com a Seção 14 (KPIs/norte) e o Apêndice B (tabelas/rotas que originam eventos derivados). |
+| D.2 | Como ler este catálogo | Delimita o papel do apêndice (executa, não redefine) e sua relação com a Seção 17 (KPIs/norte) e o Apêndice B (tabelas/rotas que originam eventos derivados). |
 | D.3 | Template canônico de ficha de evento | Define o formato repetível de cada verbete de evento: nome, versão, quando dispara, origem, campos (nome/tipo/obrigatoriedade), classe de privacidade, KPI-alvo e seção-fonte. |
 | D.4 | Envelope comum do evento | Especifica os campos presentes em TODO evento (event_name, event_version, event_id, occurred_at, received_at, perfil_id, escola_id, sessao_id, origem, app_version, locale). |
 | D.5 | Convenção de nomenclatura de eventos | Fixa o padrão de nomes (substantivo.verbo em snake_case, alinhado ao vocabulário interno e nunca ao infantil) e a granularidade esperada por evento. |
@@ -1416,7 +1416,7 @@
 | D.14 | Deduplicação de eventos | Define event_id idempotente e a janela/estratégia de dedup para que reenvio de rede ou sync duplicado não conte duas vezes o mesmo fato. |
 | D.15 | Eventos offline tardios (late-arrival) | Trata o evento gerado offline e sincronizado horas depois: preservar occurred_at original, marcar received_at, dedup por event_id e não distorcer coortes diárias. |
 | D.16 | Ordenação e relógio (occurred_at vs received_at) | Define a distinção entre horário do fato e horário de recepção, tolerância a clock skew do tablet e qual timestamp cada KPI usa. |
-| D.17 | Origem e caminho de entrega do evento | Enumera as origens (web, pwa-offline, derivado-servidor), a fila IndexedDB append-only no cliente e o sync ao reconectar (liga às Seções 5.46 e 14.24). |
+| D.17 | Origem e caminho de entrega do evento | Enumera as origens (web, pwa-offline, derivado-servidor), a fila IndexedDB append-only no cliente e o sync ao reconectar (liga às Seções 5.46 e 17.24). |
 | D.18 | Família de eventos — Sessão e acesso | Cataloga boot/confirmação de identidade, login por código/QR (sucesso/falha), início e fim de sessão, com seus payloads versionados. |
 | D.19 | Família de eventos — Núcleo jogável (tentativa e resposta) | Cataloga tentativa_iniciada, desafio_respondido (mecânica, dificuldade, BNCC, acerto), tentativa_finalizada, com o gabarito conferido no servidor. |
 | D.20 | Família de eventos — Progressão e economia | Cataloga missao_concluida (estrelas), nivel_subido, moedas_creditadas/gastas (eco do ledger) e estrela_conquistada, sem qualquer dinheiro real. |
@@ -1424,22 +1424,22 @@
 | D.22 | Família de eventos — Avatar, vestiário e loja | Cataloga avatar_alterado (slot), vestiario_aberto, item_comprado e invocação de itens especiais, refletindo o contrato de avatar. |
 | D.23 | Família de eventos — Social e multiplayer | Cataloga amizade_solicitada/respondida, sala criada/entrada, partida iniciada/finalizada e mensagem_rapida_enviada (só slug de catálogo, nunca texto). |
 | D.24 | Família de eventos — Navegação, UX e áudio | Cataloga planeta_aberto, aba_trocada (Jogar/Vestiário/Carreira) e narracao_reproduzida ('ouvir de novo'), sinais de usabilidade sem PII. |
-| D.25 | Família de eventos — Guardrails de saúde e anti-abuso | Cataloga teto_diario_atingido (celebração), sessao_longa (gatilho de pausa do Cosmo) e sinais anti-farm/abuso de login (liga às Seções 14.4/14.27). |
+| D.25 | Família de eventos — Guardrails de saúde e anti-abuso | Cataloga teto_diario_atingido (celebração), sessao_longa (gatilho de pausa do Cosmo) e sinais anti-farm/abuso de login (liga às Seções 17.4/17.27). |
 | D.26 | Família de eventos — Erros de cliente, crash e diagnóstico | Cataloga erro_cliente e crash com contexto técnico mínimo (tela, versão, classe de device) para observabilidade, sem capturar conteúdo pessoal. |
 | D.27 | Eventos derivados no servidor | Define eventos/agregações originados de quest_tentativas (imutável) e quest_outbox, independentes do cliente para não perder dados quando o app não emite. |
-| D.28 | Matriz evento × KPI × seção | Cruza cada evento com o KPI que alimenta (Seção 14.5–14.9) e a seção-fonte, garantindo que todo evento tem finalidade e todo KPI tem instrumentação. |
-| D.29 | Volume, cardinalidade e amostragem por evento | Estima frequência de cada evento e define se/como amostrar eventos de alto volume sem perder fidelidade dos KPIs-núcleo (liga à Seção 14.25). |
+| D.28 | Matriz evento × KPI × seção | Cruza cada evento com o KPI que alimenta (Seção 17.5–17.9) e a seção-fonte, garantindo que todo evento tem finalidade e todo KPI tem instrumentação. |
+| D.29 | Volume, cardinalidade e amostragem por evento | Estima frequência de cada evento e define se/como amostrar eventos de alto volume sem perder fidelidade dos KPIs-núcleo (liga à Seção 17.25). |
 | D.30 | Estados de erro/vazio/offline no envio | Especifica comportamento quando não há rede, buffer local cheio, envio falho ou payload rejeitado — sempre sem interromper o jogo da criança. |
 | D.31 | Observabilidade do pipeline de ingest | Define métricas de saúde do próprio pipeline (taxa de rejeição de esquema, taxa de dedup, atraso de sync, eventos em dead-letter) e seus alertas. |
 | D.32 | i18n e locale nos eventos | Define locale como propriedade padrão do envelope e a regra de que nenhum evento transporta texto traduzível ou copy da UI (liga à Seção 16 i18n). |
 | D.33 | Testes e fixtures do catálogo | Define fixtures de payload por evento, testes de contrato cliente↔ingest e a checagem em CI de que todo evento emitido casa com seu esquema versionado. |
 | D.34 | ⚠️ Retenção e anonimização por classe de evento | Define por quanto tempo cada classe de evento é guardada e o gatilho de anonimização na saída do aluno — padrão sugerido a confirmar pelo dono. |
 | D.35 | ⚠️ Evento de atribuição de experimento (A/B) | Especifica o evento que registra a variante de um experimento, condicionado à autorização de A/B com crianças ainda pendente do dono. |
-| D.36 | Governança e mudança do catálogo | Regra de que novo evento ou campo entra via spec/ADR, sincroniza com a Seção 14 e é registrado em changelog, sem evento órfão ou não documentado. |
+| D.36 | Governança e mudança do catálogo | Regra de que novo evento ou campo entra via spec/ADR, sincroniza com a Seção 17 e é registrado em changelog, sem evento órfão ou não documentado. |
 
 **Perguntas ao dono:**
-- Confirmar o prazo de retenção por classe de evento (padrão sugerido 24 meses) e o gatilho exato de anonimização quando o aluno sai da escola (liga à Seção 14.21).
-- É permitido emitir eventos de atribuição de experimento (A/B) com público infantil? Sob quais limites éticos e de consentimento (liga à Seção 14.28)?
+- Confirmar o prazo de retenção por classe de evento (padrão sugerido 24 meses) e o gatilho exato de anonimização quando o aluno sai da escola (liga à Seção 17.21).
+- É permitido emitir eventos de atribuição de experimento (A/B) com público infantil? Sob quais limites éticos e de consentimento (liga à Seção 17.28)?
 - Qual o destino operacional dos eventos rejeitados no ingest (dead-letter): descartar, quarentenar para revisão, e quem revisa?
 - Podemos coletar app_version e uma classe de device (não o modelo exato) por evento para diagnóstico, sem ferir a minimização (Princípio 3/18)?
 - Amostragem de eventos de alto volume é autorizada, ou todo evento-núcleo deve ser 100% coletado para não perder fidelidade dos KPIs?
@@ -1451,7 +1451,7 @@
 
 | # | Subseção | Propósito |
 |---|----------|-----------|
-| E.1 | Como usar este apêndice | Define o mockup como referência normativa de layout, estado e cópia (não pixel-final de arte) e sua precedência frente ao código, remetendo arte fina à Seção 12. |
+| E.1 | Como usar este apêndice | Define o mockup como referência normativa de layout, estado e cópia (não pixel-final de arte) e sua precedência frente ao código, remetendo arte fina à Seção 15. |
 | E.2 | Status e fontes | Metadados do apêndice e ancoragem no protótipo constela-play-v7 e no que já está em produção (Q0), separando o vigente do legado. |
 | E.3 | Relação com o protótipo constela-play-v7 | Fixa o que se herda do protótipo (estética, SUBJECTS/SCENES, tema JSON) e onde o protótipo diverge do código atual, evitando ler o protótipo como estado real. |
 | E.4 | Convenções de leitura de um mockup | Define anotações padrão (hotspots, legendas de estado, marcação de vocabulário infantil, notas de áudio) e como o dev lê fluxo e interação a partir da tela. |
@@ -1459,7 +1459,7 @@
 | E.6 | Catálogo de estados canônicos | Fixa o conjunto que TODA tela deve cobrir (vazio, carregando/skeleton, erro de rede, offline, sucesso, sem licença/recurso desligado) como requisito de completude. |
 | E.7 | Mapa de telas e navegação global | Fluxograma tela→tela do produto (acesso → casa → planeta → missão → recompensa → social/adulto), a espinha de navegação sem router. |
 | E.8 | Grid de responsividade e breakpoints | Define os pontos de quebra de referência (tablet retrato/paisagem, Chromebook, telefone) e o alvo mínimo em que o layout deve funcionar. |
-| E.9 | Tokens visuais referenciados | Remete os tokens de cor/tipografia à Seção 12 e a identidade por planeta à Seção 03, sem redefini-los, para os mockups não fixarem valores próprios. |
+| E.9 | Tokens visuais referenciados | Remete os tokens de cor/tipografia à Seção 15 e a identidade por planeta à Seção 03, sem redefini-los, para os mockups não fixarem valores próprios. |
 | E.10 | Tela — Boot / 'É você, {nome}?' | Confirmação de identidade no tablet compartilhado (Princípio 4), com estado de troca de perfil e nenhuma conta salva. |
 | E.11 | Tela — Entrar por código | Fluxo de 2 etapas quem→entrar com código curto falável, incluindo erro de código inválido e estado de rate-limit. |
 | E.12 | Tela — Entrar por QR | Alternativa por QR na câmera nativa, com fallback para código quando não houver câmera/permissão. |
@@ -1485,14 +1485,14 @@
 | E.32 | Telas — Professor no Edu | Panorama da turma, mapa BNCC, erros comuns, trajetória do aluno e alertas, sem ruído lúdico nem exposição individual à criança. |
 | E.33 | ⚠️ Telas — Portal da Família | Resumo do filho e controles (social/horário) para o responsável; entrada e autorização do vínculo ainda a confirmar. |
 | E.34 | Galeria consolidada de estados de erro/vazio/offline | Reúne as variações de estado por tela num só lugar para verificação de cobertura, evitando telas sem estado tratado. |
-| E.35 | Telas de sistema | Sem licença, recurso desligado por kill-switch/flag e manutenção — o que a criança vê quando um recurso está indisponível (liga à Seção 16). |
+| E.35 | Telas de sistema | Sem licença, recurso desligado por kill-switch/flag e manutenção — o que a criança vê quando um recurso está indisponível (liga à Seção 19). |
 | E.36 | Diálogos do Cosmo em contexto | Mapeia cada fala do Cosmo à tela onde aparece (recepção/torcida/dica/consolo/festa/descanso), remetendo ao guia da Seção 02.11. |
 | E.37 | Acessibilidade nos mockups | Anota nas telas os alvos ≥48px, ordem de foco, modo daltônico, reduced-motion e o áudio obrigatório de cada instrução (liga à Seção 13). |
 | E.38 | Anotação de telemetria nos mockups | Marca em cada tela/ação qual evento é disparado, amarrando os mockups ao Apêndice D e garantindo instrumentação por design. |
 | E.39 | Anotação de i18n nos mockups | Marca strings externalizadas, expansão de texto entre idiomas e a paridade com o espelho EN (liga à Seção 16). |
 | E.40 | Convenção de sincronização mockup ↔ implementação | Define a fonte de verdade de layout, quando o mockup precede o código e como detectar/registrar drift entre a tela desenhada e a construída. |
 | E.41 | ⚠️ Ferramenta e formato dos mockups | Define em qual ferramenta e formato os mockups são produzidos e versionados; escolha ainda pendente do dono. |
-| E.42 | Versionamento e nomenclatura dos arquivos | Padrão de nomes, numeração e versão dos arquivos de mockup, alinhado à convenção de arquivos da Bible (Seção 19.14). |
+| E.42 | Versionamento e nomenclatura dos arquivos | Padrão de nomes, numeração e versão dos arquivos de mockup, alinhado à convenção de arquivos da Bible (Seção 24.14). |
 | E.43 | Governança do mockup (Portão 1) | Define quando um mockup vira normativo, quem aprova e como ele entra no fluxo de spec como referência de tela aprovada. |
 | E.44 | ⚠️ Pendências: divergências mockup × código atual | Registra os conflitos vigentes (avatar 3D vs Cosmo 2D, catálogo cosmético hardcoded no cliente) que os mockups não podem canonizar até decisão do dono. |
 
@@ -1506,7 +1506,7 @@
 ---
 
 ## F · Apêndice F — Checklists Consolidados (Definition of Done)
-**Objetivo:** Reunir num só lugar, como listas de verificação acionáveis, os critérios de pronto espalhados pela Bible — DoD por tela/feature, o gate de revisão de QA da Seção 19.16, e as conformidades de LGPD/segurança, acessibilidade, performance no device-alvo e i18n. Serve para que toda entrega seja verificada de forma objetiva e repetível no Portão 3, sem recriar critérios.
+**Objetivo:** Reunir num só lugar, como listas de verificação acionáveis, os critérios de pronto espalhados pela Bible — DoD por tela/feature, o gate de revisão de QA da Seção 24.16, e as conformidades de LGPD/segurança, acessibilidade, performance no device-alvo e i18n. Serve para que toda entrega seja verificada de forma objetiva e repetível no Portão 3, sem recriar critérios.
 
 | # | Subseção | Propósito |
 |---|----------|-----------|
@@ -1517,7 +1517,7 @@
 | F.5 | Definition of Done — por mecânica de jogo | Critérios de pronto de uma mecânica: contrato MecanicaProps, gabarito conferido no servidor, schema de conteúdo válido e acessibilidade. |
 | F.6 | Definition of Done — por endpoint/contrato de API | Critérios de pronto de uma rota: papéis checados, isolamento por escola_id, erros padronizados, ETag/versão e gabarito nunca no cliente (remete ao Apêndice B). |
 | F.7 | Definition of Done — por conteúdo pedagógico | Critérios de pronto de uma missão/desafio: código BNCC, áudio de enunciado, dica, explicação, revisão humana e versão publicada. |
-| F.8 | Gate de revisão de QA (Portão 3) — visão consolidada | Reúne os sete eixos da Seção 19.16 (bugs, performance, UX, acessibilidade, responsividade, escalabilidade, organização) num único gate acionável. |
+| F.8 | Gate de revisão de QA (Portão 3) — visão consolidada | Reúne os sete eixos da Seção 24.16 (bugs, performance, UX, acessibilidade, responsividade, escalabilidade, organização) num único gate acionável. |
 | F.9 | Checklist — Bugs e correção | Verifica severidade classificada, ausência de regressão e peso extra a itens que afetam a criança não-leitora. |
 | F.10 | ⚠️ Checklist — Performance no device-alvo | Verifica orçamento de carga/memória e fluidez no hardware mínimo; os números concretos dependem da definição do device-alvo pelo dono. |
 | F.11 | Checklist — UX e fluxo | Verifica 1 ação primária por tela, convite (não ordem), erro sempre acolhido e ausência de dark patterns. |
@@ -1525,7 +1525,7 @@
 | F.13 | Checklist — Responsividade | Verifica os breakpoints-alvo, retrato/paisagem e ausência de overflow horizontal nas telas. |
 | F.14 | Checklist — Escalabilidade | Verifica comportamento no pico de aula (metade das turmas às 7h30), índices por escola_id, rate-limit e gatilhos de Redis/réplicas. |
 | F.15 | Checklist — Organização e qualidade de código | Verifica padrões do monorepo, tipos vindos de @constela/quest-core e ausência de regra numérica hardcoded. |
-| F.16 | Checklist — Conformidade LGPD | Verifica coleta mínima, opt-in social, retenção configurável, anonimização na saída e ausência de foto/localização/texto livre (Seção 10). |
+| F.16 | Checklist — Conformidade LGPD | Verifica coleta mínima, opt-in social, retenção configurável, anonimização na saída e ausência de foto/localização/texto livre (Seção 12). |
 | F.17 | Checklist — Segurança | Verifica login código-só com rate-limit por (código, IP), JWT aluno rejeitado no Edu e vice-versa, escopo mínimo do papel, gabarito fora do cliente e ledger imutável. |
 | F.18 | Checklist — i18n/localização | Verifica strings externalizadas, ausência de palavra proibida, sincronia texto↔áudio por locale e paridade com o espelho EN (Seção 16). |
 | F.19 | Checklist — Telemetria e observabilidade | Verifica que cada ação instrumentada emite o evento correto do Apêndice D, com envelope válido, dedup offline e KPI mensurável. |
@@ -1534,7 +1534,7 @@
 | F.22 | Checklist — Social seguro | Verifica amizade só na mesma escola, ausência de texto livre, derrota que nunca pune, anti-spam e controles de presença/bloqueio. |
 | F.23 | Checklist — Economia auditável | Verifica ledger imutável, saldo recomputável, erro que nunca subtrai moedas/estrelas e a ausência total de dinheiro real. |
 | F.24 | Checklist — Vocabulário e cópia infantil | Verifica o mapa interno→criança, a ausência de palavras proibidas na UI e o tom de voz do Cosmo (Seção 02). |
-| F.25 | Checklist — Conformidade com os Princípios Imutáveis | Verifica a suíte de regressão que trava as 16+2 invariantes imutáveis contra qualquer mudança (Seção 01 e 15.23). |
+| F.25 | Checklist — Conformidade com os Princípios Imutáveis | Verifica a suíte de regressão que trava as 16+2 invariantes imutáveis contra qualquer mudança (Seção 01 e 18.23). |
 | F.26 | ⚠️ Portão de release por fase | Consolida a Definition of Done de fase e a régua 'a criança usa e quer voltar'; os limiares numéricos de saída dependem do dono. |
 | F.27 | ⚠️ Checklist — Playtest com crianças | Verifica método, consentimento, roteiro e coleta com 6–11 anos; protocolo e caráter bloqueante ainda a confirmar pelo dono. |
 | F.28 | Matriz checklist × seção-fonte | Cruza cada item de checklist com a seção que o governa, garantindo rastreabilidade e nenhum critério órfão. |
@@ -1546,7 +1546,7 @@
 - Qual o device-alvo mínimo (modelos de tablet/Chromebook) e os números concretos de orçamento de carga/memória que tornam o checklist de performance verificável (Princípio 17)?
 - Quais são os limiares numéricos do portão de release por fase (cobertura de testes, resultado de playtest, métricas mínimas) além da régua afetiva 'a criança volta amanhã'?
 - O protocolo e o consentimento de playtest com crianças são item bloqueante do DoD antes de liberar uma fase em produção?
-- Adotamos automação dos checklists em CI (lint de vocabulário proibido, testes de acessibilidade, contrato de eventos) como gate de merge obrigatório (liga à Seção 19.19)?
+- Adotamos automação dos checklists em CI (lint de vocabulário proibido, testes de acessibilidade, contrato de eventos) como gate de merge obrigatório (liga à Seção 24.19)?
 
 ---
 
@@ -1555,8 +1555,8 @@
 Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um, no dono canônico de cada.
 
 ### 00 · Visão & Norte
-- ⚠️ **O norte como métrica ('a criança volta amanhã?')** — Régua afetiva de retenção usada como corte de fase no doc 05; alvos quantitativos (D1/D7/D30) e relação com aprendizado ficam a calibrar na Seção 14.
-- ⚠️ **Ambição de qualidade e a tensão em aberto** — Registra a direção do dono por assets profissionais/3D em conflito com a arquitetura DOM/SVG-first; alcance e piso de desempenho a decidir (Seções 04/09/12).
+- ⚠️ **O norte como métrica ('a criança volta amanhã?')** — Régua afetiva de retenção usada como corte de fase no doc 05; alvos quantitativos (D1/D7/D30) e relação com aprendizado ficam a calibrar na Seção 17.
+- ⚠️ **Ambição de qualidade e a tensão em aberto** — Registra a direção do dono por assets profissionais/3D em conflito com a arquitetura DOM/SVG-first; alcance e piso de desempenho a decidir (Seções 04/11/15).
 - ⚠️ **Pendências desta seção (do QA)** — Lista o que falta calibrar: métrica-norte quantificável + guardrails, critérios de sucesso/'definição de lançamento' e posicionamento vs. incumbentes.
 - ❓ Qual a métrica-norte quantificável (alvos D1/D7/D30) e seus guardrails, e como ela se relaciona formalmente com aprendizado e saúde de uso?
 - ❓ Qual é a 'definição de lançamento' e os critérios objetivos de sucesso do produto?
@@ -1750,12 +1750,12 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 - ⚠️ **Teto diário de XP como celebração, não bloqueio** — Fixa que o teto diário comemora e não trava; o valor-padrão vem da regra de progressão e precisa de confirmação.
 - ⚠️ **Lembrete de pausa do Cosmo** — Define o lembrete de pausa (sugerido 40 min, configurável); o default precisa de confirmação do dono.
 - ⚠️ **Definição do controle de horário permitido** — Especifica se a janela de uso é faixa livre configurada pela família ou faixas fixas — pendente do dono.
-- ⚠️ **Acessibilidade x device-alvo (degradação graciosa)** — Define como animações e efeitos degradam em hardware fraco, ligando-se ao piso de desempenho da Seção 09.
+- ⚠️ **Acessibilidade x device-alvo (degradação graciosa)** — Define como animações e efeitos degradam em hardware fraco, ligando-se ao piso de desempenho da Seção 11.
 - ❓ As preferências 'musica' e 'reduzir_animacoes' do perfil ganham UI e função própria, ou saem do modelo?
 - ❓ O escopo de acessibilidade inclui suporte a leitor de tela e navegação por teclado além do público-alvo infantil? Em que fase?
 - ❓ Confirmar os valores-padrão do teto diário de XP (celebração) e do lembrete de pausa do Cosmo (sugerido 40 min)?
 - ❓ O controle de 'horário permitido' da família é faixa livre definida por eles ou faixas fixas pré-definidas?
-- ❓ Em hardware abaixo do device-alvo mínimo, a redução de animações deve ser ativada automaticamente (ligado ao piso de desempenho da Seção 09)?
+- ❓ Em hardware abaixo do device-alvo mínimo, a redução de animações deve ser ativada automaticamente (ligado ao piso de desempenho da Seção 11)?
 
 ### 14 · Infraestrutura, Deploy, Backup & Disaster Recovery (SRE/DevOps)
 - ⚠️ **Matriz de ambientes (dev / staging / prod)** — Define cada ambiente, seus limites de acesso, dados que pode conter e para que serve, incluindo o CI.
@@ -1793,7 +1793,7 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 - ❓ A narração definitiva será áudio gravado em lote (TTS de qualidade) substituindo a Web Speech API? Quem grava e quando entra?
 - ❓ As trilhas musicais e ilustrações por planeta são produzidas por fornecedor, por agentes de IA, ou mistos? Quem faz a curadoria de consistência?
 - ❓ Qual é o device-alvo mínimo explícito (modelo/RAM/GPU de tablet e Chromebook da escola) para calibrar o orçamento de performance e o teto de 3D?
-- ❓ Qual o orçamento máximo de download inicial e de memória aceitável no device-alvo (para fechar os limites de 12.35)?
+- ❓ Qual o orçamento máximo de download inicial e de memória aceitável no device-alvo (para fechar os limites de 15.35)?
 - ❓ O Cosmo customizável (rosto/chapéu/costas/mão/pet já renderizáveis mas órfãos de UI) entra no escopo de arte ou é aposentado?
 
 ### 16 · Localização & i18n
@@ -1887,7 +1887,7 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 - ⚠️ **Passe de temporada: formato definitivo** — Número de níveis, duração (6–8 semanas), curva de XP do passe e recompensas — formato ainda a confirmar pelo dono.
 - ⚠️ **Plataformas-alvo e fase de entrada** — Define se, além de web/PWA instalável, haverá apps nativos (iOS/Android) e/ou desktop, e em qual fase (Q?).
 - ⚠️ **Distribuição e entrega** — Decide entre PWA instalável sem loja (padrão atual) vs. publicação em Play Store / App Store / Chromebook, com implicações de política de loja.
-- ⚠️ **Métricas de negócio** — Indicadores comerciais (ativação de escola, churn de escola, LTV, alunos ativos por licença) — definição de metas remete à Seção 14.
+- ⚠️ **Métricas de negócio** — Indicadores comerciais (ativação de escola, churn de escola, LTV, alunos ativos por licença) — definição de metas remete à Seção 17.
 - ⚠️ **Roadmap de monetização por fase** — Em que fase a cobrança real entra (hoje é piloto gratuito) e o que precede a comercialização.
 - ❓ Qual é a unidade de licenciamento: escola inteira, rede/mantenedora, por aluno ativo ou por turma?
 - ❓ Haverá planos/tiers de licença? Se sim, quais recursos (social, IA, relatórios) ficam em cada plano?
@@ -1906,7 +1906,7 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 - ⚠️ **Reconciliação de desvios já ocorridos em Q0** — Consolidar ou reverter os desvios do plano (Three.js e avatar humanoide 3D no núcleo, contra o doc DOM/SVG-first) — pendência que trava o fechamento de Q0.
 - ⚠️ **Definição de lançamento comercial** — Qual fase habilita cobrança e marketing e o que compõe o 'produto lançável' — critério ainda não definido (também sinalizado na Seção 00).
 - ⚠️ **Marcos e datas-alvo por fase** — Se o roadmap é dirigido por data ou só por critério de pronto; e, havendo datas, quais são — a definir pelo dono.
-- ⚠️ **Métricas de saída (gate quantitativo) por fase** — Além da régua afetiva, quais números liberam a passagem de fase (ex.: sessões fora do horário de aula em Q2) — metas remetem à Seção 14.
+- ⚠️ **Métricas de saída (gate quantitativo) por fase** — Além da régua afetiva, quais números liberam a passagem de fase (ex.: sessões fora do horário de aula em Q2) — metas remetem à Seção 17.
 - ❓ Escopo de conteúdo do Q1: 1 planeta profundo (Matemática) para os 5 anos, ou vários planetas rasos?
 - ❓ Confirmar Ed. Física e ERER apenas na Q5, com curadoria pedagógica própria?
 - ❓ Qual é a 'definição de lançamento comercial': qual fase habilita cobrança e marketing?
@@ -1955,7 +1955,7 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 - ⚠️ **ADR candidato — Portal da Família / vínculo responsável** — Quando a API /familia entra e quem autoriza o vínculo responsável↔aluno.
 - ⚠️ **ADR candidato — Preferências `musica` e `reduzir_animacoes`** — Decide se essas preferências ganham função/UI ou saem do modelo de dados.
 - ⚠️ **ADR candidato — Device-alvo mínimo e orçamento de desempenho** — Fixa o hardware-alvo mínimo (tablet/Chromebook modesto) e os números concretos de carregamento/memória (Princípio 17).
-- ⚠️ **ADR candidato — Métrica-norte quantificável** — Transforma 'volta amanhã?' em metas (D1/D7/D30) e guardrails de aprendizado e saúde de uso (Seção 00/14).
+- ⚠️ **ADR candidato — Métrica-norte quantificável** — Transforma 'volta amanhã?' em metas (D1/D7/D30) e guardrails de aprendizado e saúde de uso (Seção 00/17).
 - ❓ Quais dos ADRs candidatos (C.12–C.26) você quer decidir primeiro para desbloquear o desenvolvimento?
 - ❓ Avatar definitivo e Three.js no núcleo são a decisão mais urgente (dois sistemas coexistem hoje) — quer resolvê-los juntos num único ADR ou separados?
 - ❓ Confirma elevar a monetização (passe grátis + zero compras) a ADR imutável agora?
@@ -1964,8 +1964,8 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 ### D · Apêndice D — Catálogo de Eventos de Telemetria
 - ⚠️ **Retenção e anonimização por classe de evento** — Define por quanto tempo cada classe de evento é guardada e o gatilho de anonimização na saída do aluno — padrão sugerido a confirmar pelo dono.
 - ⚠️ **Evento de atribuição de experimento (A/B)** — Especifica o evento que registra a variante de um experimento, condicionado à autorização de A/B com crianças ainda pendente do dono.
-- ❓ Confirmar o prazo de retenção por classe de evento (padrão sugerido 24 meses) e o gatilho exato de anonimização quando o aluno sai da escola (liga à Seção 14.21).
-- ❓ É permitido emitir eventos de atribuição de experimento (A/B) com público infantil? Sob quais limites éticos e de consentimento (liga à Seção 14.28)?
+- ❓ Confirmar o prazo de retenção por classe de evento (padrão sugerido 24 meses) e o gatilho exato de anonimização quando o aluno sai da escola (liga à Seção 17.21).
+- ❓ É permitido emitir eventos de atribuição de experimento (A/B) com público infantil? Sob quais limites éticos e de consentimento (liga à Seção 17.28)?
 - ❓ Qual o destino operacional dos eventos rejeitados no ingest (dead-letter): descartar, quarentenar para revisão, e quem revisa?
 - ❓ Podemos coletar app_version e uma classe de device (não o modelo exato) por evento para diagnóstico, sem ferir a minimização (Princípio 3/18)?
 - ❓ Amostragem de eventos de alto volume é autorizada, ou todo evento-núcleo deve ser 100% coletado para não perder fidelidade dos KPIs?
@@ -1989,7 +1989,7 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 - ❓ Qual o device-alvo mínimo (modelos de tablet/Chromebook) e os números concretos de orçamento de carga/memória que tornam o checklist de performance verificável (Princípio 17)?
 - ❓ Quais são os limiares numéricos do portão de release por fase (cobertura de testes, resultado de playtest, métricas mínimas) além da régua afetiva 'a criança volta amanhã'?
 - ❓ O protocolo e o consentimento de playtest com crianças são item bloqueante do DoD antes de liberar uma fase em produção?
-- ❓ Adotamos automação dos checklists em CI (lint de vocabulário proibido, testes de acessibilidade, contrato de eventos) como gate de merge obrigatório (liga à Seção 19.19)?
+- ❓ Adotamos automação dos checklists em CI (lint de vocabulário proibido, testes de acessibilidade, contrato de eventos) como gate de merge obrigatório (liga à Seção 24.19)?
 
 ---
 
@@ -2008,43 +2008,43 @@ Tudo marcado ⚠️ ou levantado como pergunta, reunido para resolvermos um a um
 | 05 — Sistemas de Jogo | Estado inicial/vazio do jogador novo | Não há especificação do primeiro estado: constelação zerada, nível 1, zero estrelas, sem diárias geradas, sem colecionáveis. O core loop e a tela de progresso precisam do comportamento de 'dia zero' explícito. |
 | 04 — Personagens & Avatar | Avatar padrão pré-cerimônia e falha de carregamento de asset | 4.19 define a cerimônia e 4.24 o fallback 2D de performance, mas falta o estado do avatar antes de qualquer escolha (default determinístico) e o comportamento de erro quando o GLB/camada falha ao baixar (placeholder, retry, degradação) — caminho comum em wifi de escola. |
 | 06 — Design Pedagógico & BNCC | Aluno fora de faixa, turma multisseriada e ano indefinido | 5.16/3.24 travam a progressão pela matrícula (turmas.ano_escolar), mas não cobrem turma multisseriada (comum no Brasil rural), aluno adiantado/defasado, ou matrícula sem ano definido. Sem isso o gating de jornadas quebra para uma parcela real de alunos. |
-| 08 — Professor & Família | Estados vazios dos painéis e professor multi-turma/multi-escola | 8.5–8.9 assumem dados existentes; falta o estado vazio (turma recém-criada sem telemetria, aluno que nunca jogou) e o caso de professor com várias turmas/escolas ou docência compartilhada, que afeta seleção de escopo e agregação. |
-| 08 — Professor & Família | Troca de professor titular e transferência de turma | 8.33 cobre saída do aluno, mas não a rotatividade do adulto: substituição do professor, transferência de turma entre docentes, e o que acontece com atribuições/Missão da Turma e histórico de acesso nesse handover. |
-| 09 — Arquitetura Técnica | Backup, restauração e disaster recovery | Nenhuma subseção trata backup do Postgres, RPO/RTO, teste de restore ou recuperação de desastre — inaceitável para base com dados de crianças. 9.44 só cobre migrações/paridade dev-prod. |
-| 09 — Arquitetura Técnica | Deploy, rollback de código e migrações zero-downtime | 16 cobre config-sobre-deploy, mas falta a engenharia de release do próprio código: estratégia de deploy, rollback de versão, migração de esquema sem downtime durante o pico de aula, e compatibilidade de esquema durante o rollout. |
-| 09 — Arquitetura Técnica | Gestão de segredos e rotação da chave JWT | 10.9 trata token_version por aluno, mas não há tratamento da chave de assinatura do JWT (armazenamento, rotação, revogação em massa) nem gestão de segredos (DB, Redis, CDN) — pré-requisito de segurança. |
-| 09 — Arquitetura Técnica | Concorrência e entrega do outbox (idempotência do consumidor) | 9.17/9.42 definem o outbox como produtor imutável, mas não a semântica de entrega (at-least-once vs exactly-once), locking do processador, deduplicação no consumidor de push/mural e retry/dead-letter para eventos que falham. |
-| 10 — Segurança, Privacidade & LGPD | Espaço do código de login e defesa contra enumeração | 10.3–10.5 fixam a credencial e o rate-limit, mas não a entropia/tamanho do espaço de códigos nem defesa contra enumeração sistemática (colisão, adivinhação dentro da mesma escola). Sem dimensionar o espaço, o rate-limit isolado não garante segurança. |
-| 10 — Segurança, Privacidade & LGPD | Segurança e criptografia de backups | Dados de crianças em backup precisam de criptografia em repouso, controle de acesso e retenção/descarte dos próprios backups — tema ausente e não coberto por 10.22–10.28 (que tratam dados vivos). |
-| 07 — Social & Comunidade Segura | Workflow de moderação e amizade órfã | 7.8 cria bloqueio/denúncia mas não define a fila de moderação, quem trata, SLA e destino do alerta; e falta o comportamento da amizade quando o amigo é transferido/arquivado (vínculo órfão, presença, salas). |
-| 16 — Live-ops & Config Remota | Observabilidade operacional (SLO/SLI, alertas, on-call, manutenção) | 9.43 promete observabilidade mínima e 16.24 um runbook, mas falta SLO/SLI, monitoramento de uptime, alertas operacionais, escala de plantão e comunicação de janela de manutenção às escolas — necessário para operar em produção. |
-| 15 — QA & Estratégia de Testes | Testes de migração/upgrade de banco e de restore de backup | 15 cobre unidade a E2E e carga, mas não valida o caminho de migração de esquema entre versões nem a recuperação a partir de backup — os dois riscos operacionais de maior impacto ficam sem cobertura. |
-| 15 — QA & Estratégia de Testes | Testes de concorrência/race na economia | 15.6 prova invariantes do ledger em cenário sequencial, mas não há teste de corrida (compras/creditos simultâneos, reenvio offline concorrente) que é onde a economia auditável realmente falha. |
+| 10 — Professor & Família | Estados vazios dos painéis e professor multi-turma/multi-escola | 10.5–10.9 assumem dados existentes; falta o estado vazio (turma recém-criada sem telemetria, aluno que nunca jogou) e o caso de professor com várias turmas/escolas ou docência compartilhada, que afeta seleção de escopo e agregação. |
+| 10 — Professor & Família | Troca de professor titular e transferência de turma | 10.33 cobre saída do aluno, mas não a rotatividade do adulto: substituição do professor, transferência de turma entre docentes, e o que acontece com atribuições/Missão da Turma e histórico de acesso nesse handover. |
+| 11 — Arquitetura Técnica | Backup, restauração e disaster recovery | Nenhuma subseção trata backup do Postgres, RPO/RTO, teste de restore ou recuperação de desastre — inaceitável para base com dados de crianças. 11.44 só cobre migrações/paridade dev-prod. |
+| 11 — Arquitetura Técnica | Deploy, rollback de código e migrações zero-downtime | 19 cobre config-sobre-deploy, mas falta a engenharia de release do próprio código: estratégia de deploy, rollback de versão, migração de esquema sem downtime durante o pico de aula, e compatibilidade de esquema durante o rollout. |
+| 11 — Arquitetura Técnica | Gestão de segredos e rotação da chave JWT | 12.9 trata token_version por aluno, mas não há tratamento da chave de assinatura do JWT (armazenamento, rotação, revogação em massa) nem gestão de segredos (DB, Redis, CDN) — pré-requisito de segurança. |
+| 11 — Arquitetura Técnica | Concorrência e entrega do outbox (idempotência do consumidor) | 11.17/11.42 definem o outbox como produtor imutável, mas não a semântica de entrega (at-least-once vs exactly-once), locking do processador, deduplicação no consumidor de push/mural e retry/dead-letter para eventos que falham. |
+| 12 — Segurança, Privacidade & LGPD | Espaço do código de login e defesa contra enumeração | 12.3–12.5 fixam a credencial e o rate-limit, mas não a entropia/tamanho do espaço de códigos nem defesa contra enumeração sistemática (colisão, adivinhação dentro da mesma escola). Sem dimensionar o espaço, o rate-limit isolado não garante segurança. |
+| 12 — Segurança, Privacidade & LGPD | Segurança e criptografia de backups | Dados de crianças em backup precisam de criptografia em repouso, controle de acesso e retenção/descarte dos próprios backups — tema ausente e não coberto por 12.22–12.28 (que tratam dados vivos). |
+| 09 — Social & Comunidade Segura | Workflow de moderação e amizade órfã | 9.8 cria bloqueio/denúncia mas não define a fila de moderação, quem trata, SLA e destino do alerta; e falta o comportamento da amizade quando o amigo é transferido/arquivado (vínculo órfão, presença, salas). |
+| 19 — Live-ops & Config Remota | Observabilidade operacional (SLO/SLI, alertas, on-call, manutenção) | 11.43 promete observabilidade mínima e 19.24 um runbook, mas falta SLO/SLI, monitoramento de uptime, alertas operacionais, escala de plantão e comunicação de janela de manutenção às escolas — necessário para operar em produção. |
+| 18 — QA & Estratégia de Testes | Testes de migração/upgrade de banco e de restore de backup | 18 cobre unidade a E2E e carga, mas não valida o caminho de migração de esquema entre versões nem a recuperação a partir de backup — os dois riscos operacionais de maior impacto ficam sem cobertura. |
+| 18 — QA & Estratégia de Testes | Testes de concorrência/race na economia | 18.6 prova invariantes do ledger em cenário sequencial, mas não há teste de corrida (compras/creditos simultâneos, reenvio offline concorrente) que é onde a economia auditável realmente falha. |
 | B — Contratos de API & Modelo de Dados | Contrato de leitura de config quest.* e health/status | B.23 descreve o esquema de configurações mas não há endpoint para o cliente buscar as regras numéricas por escola, nem endpoint de health/status/versão para operação e PWA — ambos necessários para implementar. |
 | B — Contratos de API & Modelo de Dados | Chaves de idempotência nas rotas de escrita | B.4 (finalizar tentativa) e B.6 (comprar) não especificam header/campo de idempotência nem o comportamento de reenvio, deixando ambíguo o retry seguro do cliente offline. |
-| 14 — Telemetria, Métricas & Analytics | Qualidade de dados e deduplicação de eventos offline tardios | 14.24 menciona flag de origem, mas falta a política de validação de esquema no ingest, descarte de evento malformado e deduplicação/ordenação de eventos que chegam muito atrasados após reconexão. |
+| 17 — Telemetria, Métricas & Analytics | Qualidade de dados e deduplicação de eventos offline tardios | 17.24 menciona flag de origem, mas falta a política de validação de esquema no ingest, descarte de evento malformado e deduplicação/ordenação de eventos que chegam muito atrasados após reconexão. |
 | 02 — Vocabulário Canônico | Vocabulário de erro, vazio e offline para a criança | 2.10/2.11 dão o tom e falas de acerto/erro pedagógico, mas não há guia canônico do que a criança vê/ouve em falha de rede, tela vazia, item indisponível ou app offline — texto/áudio que o dev vai precisar para todos os estados de erro. |
-| 12 — Direção de Arte, Áudio & Pipeline | Catálogo canônico de estados de UI (vazio/carregando/erro/offline) | 12.17 lista componentes com estados, mas não há um catálogo transversal padronizando o visual+áudio de cada estado (vazio, carregando, erro, offline, sem permissão) reutilizável por todas as telas. |
+| 15 — Direção de Arte, Áudio & Pipeline | Catálogo canônico de estados de UI (vazio/carregando/erro/offline) | 15.17 lista componentes com estados, mas não há um catálogo transversal padronizando o visual+áudio de cada estado (vazio, carregando, erro, offline, sem permissão) reutilizável por todas as telas. |
 | 03 — O Universo & a Fantasia | Comportamento quando a escola não oferece uma matéria/planeta | Assume-se 9 planetas, mas não há regra para quando a escola/currículo não contempla uma matéria: o planeta some, aparece bloqueado, ou vira 'em breve'? Afeta a montagem da tela-casa e o gating. |
-| 11 — Acessibilidade & Bem-estar | Degradação quando o áudio obrigatório não pode tocar | 11.3 exige áudio em toda instrução, mas falta o comportamento quando o áudio não está disponível (dispositivo no mudo, autoplay bloqueado pelo navegador, sem alto-falante) — caso real que precisa de fallback visual/gesto para não travar o não-leitor. |
+| 13 — Acessibilidade & Bem-estar | Degradação quando o áudio obrigatório não pode tocar | 13.3 exige áudio em toda instrução, mas falta o comportamento quando o áudio não está disponível (dispositivo no mudo, autoplay bloqueado pelo navegador, sem alto-falante) — caso real que precisa de fallback visual/gesto para não travar o não-leitor. |
 
 ### Temas transversais mapeados a um dono canônico (17)
 
-- **Escopo de conteúdo no lançamento (1 planeta profundo vs 9 rasos)** → Decisão de produto: mora como ADR candidato em C.16 e como fase em 18.13. As demais (3.29/5.47/6.19) devem apenas referenciar, não redecidir.
-- **Renderização DOM/SVG-first vs Three.js no núcleo** → Decisão técnica arbitrada por ADR em C.13; a especificação técnica canônica vive em 9.47. 04/12/18 devem só apontar o ADR.
-- **Avatar do jogador: humanoide 3D vs Cosmo 2D** → Canônico na Seção 04 (4.2) por ser dona do avatar; ADR em C.12. 03 e 12 referenciam.
-- **Retenção de telemetria (24 meses) e anonimização na saída** → Política canônica na Seção 10 (LGPD); ADR em C.19. 14.21 e 1.5 apenas remetem para não divergir de prazo.
-- **Passe de temporada gratuito e seu formato** → Mecânica em 05, gratuidade imutável como princípio em 17.9/ADR C.20, operação/config em 16.9. Formato exato decidido uma vez (17.10) e referenciado.
-- **Social: default (opt-in) e alcance turma vs escola** → Regra de produto canônica na Seção 07 (7.4/7.5), teto legal em 10.16, ADR em C.18; 16.7 é só o mecanismo de config.
-- **Rótulo infantil da tela-casa (o 'lobby')** → Pertence ao Vocabulário (2.4) como decisão única; 03, 12 e o glossário A.13 apenas remetem.
-- **Device-alvo mínimo e orçamento de desempenho** → Número canônico fixado em 9.48 (arquitetura) via ADR C.25; 4.24/12.35/15.16 consomem esse piso, não o redefinem.
-- **Interface de autoria/publicação do catálogo pedagógico** → Decisão de produto em 6.16 + ADR C.17; contrato de escrita em B.27; 16.15 é a operação de publicação. Consolidar para uma fonte.
-- **Rate-limit distribuído (memória → Redis)** → O gap arquitetural e o alvo distribuído vivem em 9.45; 10.6 deve apenas referenciar como controle de segurança, sem duplicar o desenho.
-- **Preferências 'musica' e 'reduzir_animacoes' órfãs** → Destino canônico na Seção 11 (11.15, acessibilidade) com ADR C.24; a menção em 04 é só levantamento.
-- **Motor de corrida único e as 3 skins (divergência bichinhos/espacial/trilha vs simples)** → Motor/mecânica canônica em 05/09; skins como arte em 12.22; a divergência de nomenclatura deve ser resolvida em um só lugar (7.16) e propagada.
-- **Métrica-norte quantificável e guardrails** → Definição operacional e alvos na Seção 14; 0.11 mantém só a régua afetiva; ADR C.26 fixa os números.
-- **Ed. Física (Movi) e ERER (Raízes): entrada na Q5 e curadoria humana** → Design e curadoria pedagógica em 06 (6.27/6.28), fase em 18.14/ADR C.22, gate de QA em 15.27; 03 só descreve identidade.
-- **Controles sociais opt-in em três níveis e precedência** → Regra de precedência determinística canônica em 7.32; 8.24 (toggle família), 10.24 (base legal) e 16.7 (config) referenciam essa regra única.
-- **Autoridade do gabarito no servidor** → Princípio em 1.15, contrato técnico canônico em 9.20; 05/10/15/B são aplicações e testes que citam 9.20 sem redefinir.
-- **Login código-só e limpeza dos resíduos de 'PIN de figuras'** → Modelo de ameaça e contrato em 10.2/B.1; princípio em 1.3; a limpeza autorizada via ADR C.15. Uma fonte para o formato do código.
+- **Escopo de conteúdo no lançamento (1 planeta profundo vs 9 rasos)** → Decisão de produto: mora como ADR candidato em C.16 e como fase em 23.13. As demais (3.29/5.47/6.19) devem apenas referenciar, não redecidir.
+- **Renderização DOM/SVG-first vs Three.js no núcleo** → Decisão técnica arbitrada por ADR em C.13; a especificação técnica canônica vive em 11.47. 04/15/23 devem só apontar o ADR.
+- **Avatar do jogador: humanoide 3D vs Cosmo 2D** → Canônico na Seção 04 (4.2) por ser dona do avatar; ADR em C.12. 03 e 15 referenciam.
+- **Retenção de telemetria (24 meses) e anonimização na saída** → Política canônica na Seção 12 (LGPD); ADR em C.19. 17.21 e 1.5 apenas remetem para não divergir de prazo.
+- **Passe de temporada gratuito e seu formato** → Mecânica em 05, gratuidade imutável como princípio em 22.9/ADR C.20, operação/config em 19.9. Formato exato decidido uma vez (22.10) e referenciado.
+- **Social: default (opt-in) e alcance turma vs escola** → Regra de produto canônica na Seção 09 (9.4/9.5), teto legal em 12.16, ADR em C.18; 19.7 é só o mecanismo de config.
+- **Rótulo infantil da tela-casa (o 'lobby')** → Pertence ao Vocabulário (2.4) como decisão única; 03, 15 e o glossário A.13 apenas remetem.
+- **Device-alvo mínimo e orçamento de desempenho** → Número canônico fixado em 11.48 (arquitetura) via ADR C.25; 4.24/15.35/18.16 consomem esse piso, não o redefinem.
+- **Interface de autoria/publicação do catálogo pedagógico** → Decisão de produto em 6.16 + ADR C.17; contrato de escrita em B.27; 19.15 é a operação de publicação. Consolidar para uma fonte.
+- **Rate-limit distribuído (memória → Redis)** → O gap arquitetural e o alvo distribuído vivem em 11.45; 12.6 deve apenas referenciar como controle de segurança, sem duplicar o desenho.
+- **Preferências 'musica' e 'reduzir_animacoes' órfãs** → Destino canônico na Seção 13 (13.15, acessibilidade) com ADR C.24; a menção em 04 é só levantamento.
+- **Motor de corrida único e as 3 skins (divergência bichinhos/espacial/trilha vs simples)** → Motor/mecânica canônica em 05/11; skins como arte em 15.22; a divergência de nomenclatura deve ser resolvida em um só lugar (9.16) e propagada.
+- **Métrica-norte quantificável e guardrails** → Definição operacional e alvos na Seção 17; 0.11 mantém só a régua afetiva; ADR C.26 fixa os números.
+- **Ed. Física (Movi) e ERER (Raízes): entrada na Q5 e curadoria humana** → Design e curadoria pedagógica em 06 (6.27/6.28), fase em 23.14/ADR C.22, gate de QA em 18.27; 03 só descreve identidade.
+- **Controles sociais opt-in em três níveis e precedência** → Regra de precedência determinística canônica em 9.32; 10.24 (toggle família), 12.24 (base legal) e 19.7 (config) referenciam essa regra única.
+- **Autoridade do gabarito no servidor** → Princípio em 1.15, contrato técnico canônico em 11.20; 05/12/18/B são aplicações e testes que citam 11.20 sem redefinir.
+- **Login código-só e limpeza dos resíduos de 'PIN de figuras'** → Modelo de ameaça e contrato em 12.2/B.1; princípio em 1.3; a limpeza autorizada via ADR C.15. Uma fonte para o formato do código.
 
