@@ -232,6 +232,38 @@ def test_fundir_combina_matific_e_elefante_e_deduplica_leituras(cliente, db, esc
         assert sobra == 0, modelo.__name__
 
 
+def test_fundir_preserva_perfil_e_telemetria_do_quest(cliente, db, escola_completa):
+    """A fusão leva o lado Quest (perfil + telemetria) do `remover` para o
+    `manter`. Sem isso, o ON DELETE CASCADE apagaria tudo ao deletar o remover."""
+    from datetime import datetime, timezone
+
+    from app.quest.models import QuestPerfil, QuestTentativa
+
+    escola_id = escola_completa["escola"].id
+    manter, remover = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    # `remover` tem perfil Quest com uma tentativa; `manter` não tem perfil.
+    perfil = QuestPerfil(escola_id=escola_id, aluno_id=remover.id,
+                         apelido="Astro", codigo_amigo="AST123")
+    db.add(perfil)
+    db.flush()
+    db.add(QuestTentativa(escola_id=escola_id, perfil_id=perfil.id, missao_id=1,
+                          iniciada_em=datetime.now(timezone.utc)))
+    db.commit()
+    perfil_id, manter_id, remover_id = perfil.id, manter.id, remover.id
+
+    r = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": manter_id, "remover_id": remover_id, "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+    assert r.json()["quest_perfil_movido"] == 1
+
+    db.expire_all()
+    # O perfil foi REATRIBUÍDO ao `manter` (não apagado), com a telemetria intacta.
+    p = db.get(QuestPerfil, perfil_id)
+    assert p is not None and p.aluno_id == manter_id
+    assert db.execute(select(func.count()).select_from(QuestTentativa)
+                      .where(QuestTentativa.perfil_id == perfil_id)).scalar_one() == 1
+
+
 def test_fundir_exige_confirmacao_e_alunos_distintos(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     a, b = escola_completa["alunos"][0], escola_completa["alunos"][1]

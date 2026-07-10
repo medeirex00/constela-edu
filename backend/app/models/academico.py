@@ -26,7 +26,8 @@ class Turma(Base):
     nome: Mapped[str] = mapped_column(String(100))          # ex.: "4º Ano B"
     ano_escolar: Mapped[str] = mapped_column(String(30))     # série, ex.: "4º Ano"
     ano_letivo: Mapped[int] = mapped_column(index=True)
-    professor_id: Mapped[int | None] = mapped_column(ForeignKey("professores.id"))
+    professor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("professores.id", ondelete="SET NULL"))
     turno: Mapped[str | None] = mapped_column(String(20))    # manha|tarde|noite|integral
     capacidade_maxima: Mapped[int | None] = mapped_column(default=None)
     observacoes: Mapped[str | None] = mapped_column(String(2000))
@@ -69,7 +70,8 @@ class Matricula(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     turma_id: Mapped[int] = mapped_column(ForeignKey("turmas.id"), index=True)
     ano_letivo: Mapped[int] = mapped_column(index=True)
     created_at: Mapped[datetime] = mapped_column(default=agora)

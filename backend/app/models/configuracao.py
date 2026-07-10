@@ -78,7 +78,8 @@ class DificuldadeTurma(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
     ano_escolar: Mapped[str] = mapped_column(String(30), index=True)  # ex.: "1º Ano"
-    nivel_id: Mapped[int] = mapped_column(ForeignKey("niveis_dificuldade.id"))
+    nivel_id: Mapped[int] = mapped_column(
+        ForeignKey("niveis_dificuldade.id", ondelete="CASCADE"))
     pontos: Mapped[float] = mapped_column(default=0.0)
     updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
 

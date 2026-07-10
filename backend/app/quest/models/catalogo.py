@@ -34,7 +34,8 @@ class QuestJornada(Base):
     __tablename__ = "quest_jornadas"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    mundo_id: Mapped[int] = mapped_column(ForeignKey("quest_mundos.id"), index=True)
+    mundo_id: Mapped[int] = mapped_column(
+        ForeignKey("quest_mundos.id", ondelete="CASCADE"), index=True)
     nome: Mapped[str] = mapped_column(String(120))
     descricao: Mapped[str | None] = mapped_column(String(500))
     # Mesma convenção de turmas.ano_escolar: "1º Ano" … "5º Ano"
@@ -54,7 +55,8 @@ class QuestMissao(Base):
     __tablename__ = "quest_missoes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    jornada_id: Mapped[int] = mapped_column(ForeignKey("quest_jornadas.id"), index=True)
+    jornada_id: Mapped[int] = mapped_column(
+        ForeignKey("quest_jornadas.id", ondelete="CASCADE"), index=True)
     ordem: Mapped[int] = mapped_column(default=0)
     nome: Mapped[str] = mapped_column(String(120))
     tipo: Mapped[str] = mapped_column(String(20), default="normal")  # normal|chefao|evento
@@ -77,7 +79,8 @@ class QuestDesafio(Base):
     __tablename__ = "quest_desafios"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    missao_id: Mapped[int] = mapped_column(ForeignKey("quest_missoes.id"), index=True)
+    missao_id: Mapped[int] = mapped_column(
+        ForeignKey("quest_missoes.id", ondelete="CASCADE"), index=True)
     ordem: Mapped[int] = mapped_column(default=0)
     # Registry de mecânicas do frontend: quiz|arrastar|ligar|memoria|…
     mecanica: Mapped[str] = mapped_column(String(30))

@@ -20,7 +20,8 @@ class QuestPerfil(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), unique=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), unique=True)
     # Como a criança pediu para ser chamada (cerimônia da primeira vez);
     # vazio = usa o primeiro nome do cadastro
     nome_exibicao: Mapped[str | None] = mapped_column(String(40), default=None)
@@ -61,7 +62,8 @@ class QuestCredencialAluno(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), unique=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), unique=True)
     # Curto, falável e só letras+números ("SOL1234") — único na rede toda
     codigo_login: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     # Login por QR nos tablets; trocável (regenerar cartão mata o antigo)
@@ -88,8 +90,11 @@ class ResponsavelAluno(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    usuario_id: Mapped[int] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="CASCADE"), index=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     parentesco: Mapped[str | None] = mapped_column(String(40))
-    autorizado_por: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"))
+    autorizado_por: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(default=agora)

@@ -113,3 +113,26 @@ def test_banco_pre_alembic_e_carimbado_sem_perder_dados(fazer_engine):
     assert "senha_visivel" not in cols_apos
     with engine.connect() as c:
         assert c.execute(text("SELECT nome FROM escolas")).scalar_one() == "Escola Piloto"
+
+
+def test_ondelete_aplicado_pela_migracao(fazer_engine):
+    """A migração 0003 aplica os ON DELETE no banco (não só o create_all)."""
+    engine = fazer_engine("ondelete.db")
+    aplicar_migracoes(engine)
+    insp = inspect(engine)
+
+    def od(tabela: str, coluna: str):
+        for fk in insp.get_foreign_keys(tabela):
+            if coluna in fk["constrained_columns"]:
+                return (fk.get("options") or {}).get("ondelete")
+        return "SEM_FK"
+
+    assert od("leituras", "aluno_id") == "CASCADE"
+    assert od("tokens_reset_senha", "usuario_id") == "CASCADE"
+    assert od("tokens_reset_senha", "criado_por") == "SET NULL"
+    assert od("turmas", "professor_id") == "SET NULL"
+    assert od("logs_auditoria", "usuario_id") == "SET NULL"
+    # RESTRICT preservado (sem ON DELETE): tenant, matrícula/turma, snapshot
+    assert od("leituras", "escola_id") is None
+    assert od("matriculas", "turma_id") is None
+    assert od("snapshots_matific", "importacao_id") is None

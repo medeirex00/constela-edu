@@ -24,7 +24,8 @@ class Nota(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     ano_letivo: Mapped[int] = mapped_column(index=True)
     nota_matific: Mapped[float] = mapped_column(default=0.0)
     nota_elefante: Mapped[float] = mapped_column(default=0.0)
@@ -43,7 +44,8 @@ class LogAuditoria(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int | None] = mapped_column(ForeignKey("escolas.id"), index=True)
-    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"))
+    usuario_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"))
     acao: Mapped[str] = mapped_column(String(80), index=True)
     entidade: Mapped[str | None] = mapped_column(String(80))
     entidade_id: Mapped[int | None] = mapped_column(default=None)

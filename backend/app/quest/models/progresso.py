@@ -2,7 +2,9 @@
 
 `quest_tentativas` segue a filosofia dos snapshots do Edu: imutável, nunca
 sobrescrita — é a fonte do painel do professor, do portal da família e dos
-agregados de habilidade (que são caches recalculáveis).
+agregados de habilidade (que são caches recalculáveis). "Nunca apagada" vale
+para a operação normal; na EXCLUSÃO do aluno a telemetria some junto (o perfil
+é filho do aluno via ON DELETE CASCADE), por LGPD — igual aos snapshots do Edu.
 """
 from datetime import datetime
 
@@ -22,7 +24,8 @@ class QuestProgresso(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    perfil_id: Mapped[int] = mapped_column(ForeignKey("quest_perfis.id"), index=True)
+    perfil_id: Mapped[int] = mapped_column(
+        ForeignKey("quest_perfis.id", ondelete="CASCADE"), index=True)
     missao_id: Mapped[int] = mapped_column(ForeignKey("quest_missoes.id"), index=True)
     estrelas: Mapped[int] = mapped_column(default=0)      # 0–3, vale a melhor
     melhor_pct: Mapped[float] = mapped_column(default=0.0)
@@ -42,7 +45,8 @@ class QuestTentativa(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    perfil_id: Mapped[int] = mapped_column(ForeignKey("quest_perfis.id"), index=True)
+    perfil_id: Mapped[int] = mapped_column(
+        ForeignKey("quest_perfis.id", ondelete="CASCADE"), index=True)
     missao_id: Mapped[int] = mapped_column(ForeignKey("quest_missoes.id"), index=True)
     missao_versao: Mapped[int] = mapped_column(default=1)
     modo: Mapped[str] = mapped_column(String(20), default="solo")  # solo|coop|corrida|x1
@@ -70,7 +74,8 @@ class QuestHabilidade(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    perfil_id: Mapped[int] = mapped_column(ForeignKey("quest_perfis.id"), index=True)
+    perfil_id: Mapped[int] = mapped_column(
+        ForeignKey("quest_perfis.id", ondelete="CASCADE"), index=True)
     bncc_codigo: Mapped[str] = mapped_column(String(12), index=True)
     tentativas: Mapped[int] = mapped_column(default=0)
     acertos: Mapped[int] = mapped_column(default=0)

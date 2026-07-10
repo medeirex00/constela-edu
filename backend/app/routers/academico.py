@@ -414,7 +414,9 @@ def excluir_alunos_permanente(
     ids = [a.id for a in alunos]
     nomes = {a.id: a.nome for a in alunos}
 
-    # Apaga os filhos ANTES do aluno (nenhuma FK tem cascade automático).
+    # Apaga os filhos Edu explicitamente (mantém a ordem do recálculo/log);
+    # os demais filhos (Quest, responsáveis) somem por ON DELETE CASCADE
+    # (migração 0003) quando o aluno é deletado.
     db.execute(delete(Leitura).where(Leitura.aluno_id.in_(ids)))
     db.execute(delete(SnapshotMatific).where(SnapshotMatific.aluno_id.in_(ids)))
     db.execute(delete(SnapshotElefante).where(SnapshotElefante.aluno_id.in_(ids)))
@@ -443,7 +445,8 @@ def fundir_alunos(
     """Funde dois cadastros do MESMO aluno (duplicados).
 
     Junta no `manter` TUDO do `remover` — snapshots Matific e Elefante,
-    leituras, matrículas — e apaga o `remover`. É o caso do aluno cujos
+    leituras, matrículas, notas e também o lado Quest (perfil + telemetria,
+    credencial e responsáveis) — e apaga o `remover`. É o caso do aluno cujos
     dados vieram separados (Matific num cadastro, Elefante noutro).
 
     Conflitos são resolvidos sem perder nem duplicar:
@@ -451,6 +454,9 @@ def fundir_alunos(
         pontua duas vezes, §35);
       * matrícula no mesmo ano nos dois → mantém a do `manter` (a turma
         dele prevalece);
+      * perfil/credencial Quest é único por aluno → migra (com toda a
+        telemetria) se o `manter` não tiver; se ambos tiverem, prevalece o do
+        `manter` e o do `remover` é descartado (contado no log);
       * campos vazios do `manter` (foto, nº de chamada, nascimento,
         observações) são preenchidos com os do `remover`.
     Irreversível → exige confirmação textual "FUNDIR". Recalcula ao final."""
@@ -528,6 +534,61 @@ def fundir_alunos(
         else:
             nota.aluno_id = manter.id
 
+    # Lado Quest: reatribui o que é do aluno para o `manter`. Sem isto, o
+    # `db.delete(remover)` cascatearia (ON DELETE CASCADE, migração 0003) e
+    # apagaria em SILÊNCIO o perfil, a telemetria (tentativas/progresso), a
+    # credencial e os vínculos de responsáveis do `remover`.
+    from app.quest.models import (  # noqa: E402
+        QuestCredencialAluno,
+        QuestPerfil,
+        ResponsavelAluno,
+    )
+
+    quest_perfil_movido = quest_perfil_descartado = 0
+    # Perfil é único por aluno; migrar o registro leva junto TODA a telemetria
+    # (progresso/habilidades/tentativas apontam para perfil_id, que não muda).
+    manter_tem_perfil = db.execute(
+        select(QuestPerfil.id).where(QuestPerfil.aluno_id == manter.id)
+    ).scalar_one_or_none() is not None
+    for perfil in db.execute(
+        select(QuestPerfil).where(QuestPerfil.aluno_id == remover.id)
+    ).scalars().all():
+        if manter_tem_perfil:
+            db.delete(perfil)                 # descarte contado (não silencioso)
+            quest_perfil_descartado += 1
+        else:
+            perfil.aluno_id = manter.id
+            manter_tem_perfil = True
+            quest_perfil_movido += 1
+
+    manter_tem_cred = db.execute(
+        select(QuestCredencialAluno.id)
+        .where(QuestCredencialAluno.aluno_id == manter.id)
+    ).scalar_one_or_none() is not None
+    for cred in db.execute(
+        select(QuestCredencialAluno).where(QuestCredencialAluno.aluno_id == remover.id)
+    ).scalars().all():
+        if manter_tem_cred:
+            db.delete(cred)
+        else:
+            cred.aluno_id = manter.id
+            manter_tem_cred = True
+
+    # Responsáveis: unicidade (usuario_id, aluno_id) — migra o que o `manter`
+    # ainda não tem com aquele responsável; os repetidos são descartados.
+    resp_do_manter = set(db.execute(
+        select(ResponsavelAluno.usuario_id)
+        .where(ResponsavelAluno.aluno_id == manter.id)
+    ).scalars().all())
+    for vinculo in db.execute(
+        select(ResponsavelAluno).where(ResponsavelAluno.aluno_id == remover.id)
+    ).scalars().all():
+        if vinculo.usuario_id in resp_do_manter:
+            db.delete(vinculo)
+        else:
+            vinculo.aluno_id = manter.id
+            resp_do_manter.add(vinculo.usuario_id)
+
     # Preenche lacunas do `manter` com dados do `remover` (nunca sobrescreve).
     if not manter.foto_url and remover.foto_url:
         manter.foto_url = remover.foto_url
@@ -546,7 +607,12 @@ def fundir_alunos(
                         "leituras_movidas": leituras_movidas,
                         "leituras_descartadas": descartadas,
                         "snapshots_matific": snaps_matific,
-                        "snapshots_elefante": snaps_elefante})
+                        "snapshots_elefante": snaps_elefante,
+                        "quest_perfil_movido": quest_perfil_movido,
+                        "quest_perfil_descartado": quest_perfil_descartado})
+    # Garante que as reatribuições (UPDATE aluno_id) sejam gravadas ANTES do
+    # DELETE do `remover` — assim o cascade não pega nada que foi movido.
+    db.flush()
     db.delete(remover)
     db.commit()
 
@@ -559,6 +625,8 @@ def fundir_alunos(
         "aluno_id": manter_id,
         "leituras_movidas": leituras_movidas,
         "leituras_descartadas": descartadas,
+        "quest_perfil_movido": quest_perfil_movido,
+        "quest_perfil_descartado": quest_perfil_descartado,
     }
 
 

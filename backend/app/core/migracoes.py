@@ -42,13 +42,30 @@ def aplicar_migracoes(engine: Engine) -> None:
     """Leva o banco até a última revisão, preservando dados existentes."""
     tabelas = set(inspect(engine).get_table_names())
     pre_alembic = _TABELA_ANCORA in tabelas and "alembic_version" not in tabelas
+    sqlite = engine.dialect.name == "sqlite"
 
     cfg = _config()
-    # Uma única transação compartilhada entre os comandos (padrão recomendado
-    # pelo Alembic para uso programático): stamp e upgrade veem o MESMO banco,
-    # inclusive o SQLite em memória, e tudo confirma ou reverte junto.
-    with engine.begin() as conexao:
-        cfg.attributes["connection"] = conexao
-        if pre_alembic:
-            command.stamp(cfg, _REVISAO_BASE)
-        command.upgrade(cfg, "head")
+    # Conexão única compartilhada entre os comandos (padrão recomendado pelo
+    # Alembic para uso programático): stamp e upgrade veem o MESMO banco.
+    with engine.connect() as conexao:
+        if sqlite:
+            # PRAGMA foreign_keys só muda FORA de transação; desligamos ANTES
+            # de qualquer BEGIN. Migrações que recriam tabelas em lote (SQLite
+            # não altera constraint no lugar) fariam DROP TABLE de tabelas
+            # referenciadas — com a checagem ligada, isso falharia.
+            conexao.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        try:
+            cfg.attributes["connection"] = conexao
+            if pre_alembic:
+                command.stamp(cfg, _REVISAO_BASE)
+            command.upgrade(cfg, "head")
+            conexao.commit()
+        except Exception:
+            # Nunca devolver ao pool uma conexão com a checagem desligada:
+            # descarta a conexão física (o próximo checkout religa via evento).
+            if sqlite:
+                conexao.invalidate()
+            raise
+        else:
+            if sqlite:
+                conexao.exec_driver_sql("PRAGMA foreign_keys=ON")

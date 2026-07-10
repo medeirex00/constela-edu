@@ -19,7 +19,8 @@ class TokenResetSenha(Base):
     __tablename__ = "tokens_reset_senha"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    usuario_id: Mapped[int] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="CASCADE"), index=True)
     # SHA-256 hex do token (64 chars). Único: dois tokens jamais colidem.
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expira_em: Mapped[datetime] = mapped_column()
@@ -27,5 +28,5 @@ class TokenResetSenha(Base):
     usado_em: Mapped[datetime | None] = mapped_column(default=None)
     # Quem gerou o link (admin/coordenador). Nulo em autoatendimento futuro.
     criado_por: Mapped[int | None] = mapped_column(
-        ForeignKey("usuarios.id"), default=None)
+        ForeignKey("usuarios.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)

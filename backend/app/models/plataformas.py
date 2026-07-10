@@ -14,7 +14,8 @@ class Importacao(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"))
+    usuario_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"))
     plataforma: Mapped[str] = mapped_column(String(30))   # matific | elefante
     tipo: Mapped[str] = mapped_column(String(20))          # pdf | texto | seed
     arquivo_original: Mapped[str | None] = mapped_column(String(500))
@@ -39,7 +40,7 @@ class SnapshotMatific(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     importacao_id: Mapped[int] = mapped_column(ForeignKey("importacoes.id"), index=True)
     data_referencia: Mapped[datetime] = mapped_column(default=agora, index=True)
     atividades: Mapped[int] = mapped_column(default=0)
@@ -59,7 +60,7 @@ class SnapshotElefante(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     importacao_id: Mapped[int] = mapped_column(ForeignKey("importacoes.id"), index=True)
     data_referencia: Mapped[datetime] = mapped_column(default=agora, index=True)
     livros_unicos: Mapped[int] = mapped_column(default=0)
@@ -100,7 +101,7 @@ class Leitura(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     livro_id: Mapped[int] = mapped_column(ForeignKey("livros.id"), index=True)
     # Data + HORÁRIO reais da conclusão (relatório individual do Elefante traz
     # ambos). Índice para os filtros por período (rankings/histórico/evolução).

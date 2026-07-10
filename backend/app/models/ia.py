@@ -18,7 +18,8 @@ class ConversaIA(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    usuario_id: Mapped[int] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="CASCADE"), index=True)
     titulo: Mapped[str] = mapped_column(String(200), default="Nova conversa")
     provedor: Mapped[str] = mapped_column(String(30), default="local")
     created_at: Mapped[datetime] = mapped_column(default=agora)
@@ -28,7 +29,8 @@ class MensagemIA(Base):
     __tablename__ = "mensagens_ia"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    conversa_id: Mapped[int] = mapped_column(ForeignKey("conversas_ia.id"), index=True)
+    conversa_id: Mapped[int] = mapped_column(
+        ForeignKey("conversas_ia.id", ondelete="CASCADE"), index=True)
     papel: Mapped[str] = mapped_column(String(20))  # usuario | assistente
     conteudo: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=agora)

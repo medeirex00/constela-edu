@@ -19,7 +19,8 @@ class DispositivoMovel(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
-    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), index=True)
+    usuario_id: Mapped[int] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="CASCADE"), index=True)
     token_push: Mapped[str] = mapped_column(String(200), unique=True, index=True)
     plataforma: Mapped[str] = mapped_column(String(20))  # android | ios
     created_at: Mapped[datetime] = mapped_column(default=agora)
