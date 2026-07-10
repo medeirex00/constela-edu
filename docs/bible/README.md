@@ -72,7 +72,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | A | Glossário / Glossary | `apendice-A-glossario.md` | 🟢 |
 | B | Contratos de API & Dados / API & Data Contracts | `apendice-B-api-dados.md` | 🟢 |
 | C | Registro de Decisões (ADR) / Decision Log | [`decisoes/`](decisoes/) | 🟢 |
-| D | Catálogo de Eventos de Telemetria / Telemetry Event Catalog | `apendice-D-eventos-telemetria.md` | ⬛ |
+| D | Catálogo de Eventos de Telemetria / Telemetry Event Catalog | `apendice-D-eventos-telemetria.md` | 🟢 |
 | E | Wireframes/Mockups de Referência / Reference Wireframes | `apendice-E-wireframes.md` | ⬛ |
 | F | Checklists Consolidados (DoD) / Consolidated Checklists | `apendice-F-checklists-dod.md` | ⬛ |
 
