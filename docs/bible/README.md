@@ -58,7 +58,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | 11 | Arquitetura Técnica / Technical Architecture | `11-arquitetura.md` | 🟢 |
 | 12 | Segurança, Privacidade & LGPD / Security & Privacy | `12-seguranca-privacidade.md` | 🟢 |
 | 13 | Acessibilidade & Bem-estar / Accessibility & Well-being | `13-acessibilidade.md` | 🟢 |
-| 14 | Infra, Deploy, Backup & DR (SRE/DevOps) / Infrastructure | `14-infra-deploy-dr.md` | ⬛ |
+| 14 | Infra, Deploy, Backup & DR (SRE/DevOps) / Infrastructure | `14-infra-deploy-dr.md` | 🟢 |
 | 15 | Direção de Arte, Áudio & Pipeline de Assets / Art & Asset Pipeline | `15-arte-audio-assets.md` | ⬛ |
 | 16 | Localização & i18n / Localization | `16-localizacao-i18n.md` | ⬛ |
 | 17 | Telemetria, Métricas & Analytics / Analytics | `17-telemetria-metricas.md` | ⬛ |
