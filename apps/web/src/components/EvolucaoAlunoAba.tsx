@@ -7,13 +7,13 @@
  * dos snapshots).
  */
 import { TrendingUp } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { GraficoLinha } from "./Grafico";
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "./SeletorPeriodo";
 import { Card, Carregando, Vazio } from "./ui";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 
 interface BaldeEvolucao {
   rotulo: string;
@@ -53,21 +53,12 @@ export default function EvolucaoAlunoAba({ escolaId, alunoId }: {
 }) {
   const [gran, setGran] = useState<string>("mes");
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
-  const [dados, setDados] = useState<EvolucaoLeitura | null>(null);
-  const [carregando, setCarregando] = useState(true);
 
-  const carregar = useCallback(() => {
-    setCarregando(true);
-    const q = periodoParaQuery(periodo);
-    api<EvolucaoLeitura>(
-      `/escolas/${escolaId}/alunos/${alunoId}/evolucao-leitura?granularidade=${gran}${q ? `&${q}` : ""}`,
-    )
-      .then(setDados)
-      .catch(() => setDados(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId, alunoId, gran, periodo]);
-
-  useEffect(carregar, [carregar]);
+  // A URL muda com granularidade/período; o useApi refaz a busca sozinho.
+  const q = periodoParaQuery(periodo);
+  const { dados, erro, carregando } = useApi<EvolucaoLeitura>(
+    `/escolas/${escolaId}/alunos/${alunoId}/evolucao-leitura?granularidade=${gran}${q ? `&${q}` : ""}`,
+  );
 
   const series = dados?.series ?? [];
 
@@ -101,6 +92,10 @@ export default function EvolucaoAlunoAba({ escolaId, alunoId }: {
 
       {carregando ? (
         <Carregando />
+      ) : erro ? (
+        <Card>
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+        </Card>
       ) : series.length === 0 ? (
         <Card>
           <Vazio titulo="Sem leituras para montar a evolução"

@@ -4,7 +4,7 @@
 import { ChevronRight, Search, UserCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { normalizar } from "../lib/nomes";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
 import { Botao, Campo, Card, Carregando, Drawer, estiloInput } from "./ui";
@@ -27,7 +27,6 @@ export default function SeletorAlunoDrawer({
   aoConfirmar: (aluno: Aluno, turmaNome: string) => void;
 }) {
   const [turmaId, setTurmaId] = useState<number | null>(turmaInicial);
-  const [alunos, setAlunos] = useState<Aluno[] | null>(null);
   const [busca, setBusca] = useState("");
   const [selecionado, setSelecionado] = useState<Aluno | null>(null);
 
@@ -39,19 +38,13 @@ export default function SeletorAlunoDrawer({
     }
   }, [aberto, turmaInicial, turmas]);
 
-  useEffect(() => {
-    if (!aberto || !turmaId) {
-      setAlunos(null);
-      return;
-    }
-    setAlunos(null);
-    api<PaginaAlunos>(`/escolas/${escolaId}/alunos?turma_id=${turmaId}&por_pagina=100`)
-      .then((r) => setAlunos(r.itens))
-      .catch(() => setAlunos([]));
-  }, [aberto, turmaId, escolaId]);
+  // Alunos da turma escolhida — só busca com o painel aberto e uma turma definida.
+  const { dados: pagina, erro, carregando } = useApi<PaginaAlunos>(
+    aberto && turmaId ? `/escolas/${escolaId}/alunos?turma_id=${turmaId}&por_pagina=100` : null,
+  );
 
   const turmaNome = turmas.find((t) => t.id === turmaId)?.nome ?? "";
-  const filtrados = (alunos ?? [])
+  const filtrados = (pagina?.itens ?? [])
     .filter((a) => normalizar(a.nome).includes(normalizar(busca)))
     .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 
@@ -110,8 +103,12 @@ export default function SeletorAlunoDrawer({
           </div>
 
           <div className="max-h-[45vh] overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
-            {alunos === null ? (
+            {carregando ? (
               <Carregando />
+            ) : erro ? (
+              <p className="py-8 text-center text-sm text-rose-500 dark:text-rose-400">
+                {erro.message}
+              </p>
             ) : filtrados.length === 0 ? (
               <p className="py-8 text-center text-sm text-zinc-400">
                 {busca ? "Nenhum aluno encontrado." : "Turma sem alunos."}

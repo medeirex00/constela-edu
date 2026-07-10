@@ -1,9 +1,10 @@
 /** Configuração do Painel Público (PRD §104–§128) — admin/coordenador. */
 import { Copy, ExternalLink, QrCode, RefreshCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Botao, Campo, Card, Carregando, Mensagem, PageHeader, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api, apiDownload } from "../lib/api";
 
 interface ConfigPainel {
@@ -24,15 +25,16 @@ const SLIDES = [
 export default function PainelPublicoConfig() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  // Estado local editável: semeado pela busca e depois alterado nos campos e mutações.
   const [config, setConfig] = useState<ConfigPainel | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    setConfig(null);
-    api<ConfigPainel>(`/escolas/${escolaId}/painel-publico`).then(setConfig).catch(() => setConfig(null));
-  }, [escolaId]);
+  // Leitura única da configuração; o hook cuida de cancelamento, timeout e retry.
+  const { erro, carregando } = useApi<ConfigPainel>(
+    escolaId ? `/escolas/${escolaId}/painel-publico` : null,
+    { aoSucesso: setConfig },
+  );
 
   async function salvar(novaConfig: ConfigPainel) {
     if (!escolaId) return;
@@ -71,7 +73,21 @@ export default function PainelPublicoConfig() {
     }
   }
 
-  if (!config) return <Carregando />;
+  if (!config) {
+    // Em vez de engolir o erro, mostramos um estado de erro discreto.
+    if (!carregando && erro) {
+      return (
+        <div>
+          <PageHeader
+            titulo="Painel Público"
+            descricao="Um endereço sem login para o telão da escola e para as famílias. Só dados pedagógicos são exibidos."
+          />
+          <Mensagem tipo="erro">{erro.message}</Mensagem>
+        </div>
+      );
+    }
+    return <Carregando />;
+  }
 
   return (
     <div>

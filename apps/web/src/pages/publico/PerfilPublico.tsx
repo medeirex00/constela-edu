@@ -1,9 +1,8 @@
 /** Perfil público do aluno (PRD §120): somente dados pedagógicos, sem login. */
 import { ArrowLeft } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { api } from "../../lib/api";
+import { useApi } from "../../hooks/useApi";
 import { nota } from "../../lib/formato";
 
 interface PerfilPublicoDados {
@@ -21,21 +20,16 @@ interface PerfilPublicoDados {
 
 export default function PerfilPublico() {
   const { token = "", id } = useParams();
-  const [perfil, setPerfil] = useState<PerfilPublicoDados | null>(null);
-  const [erro, setErro] = useState(false);
+  // Cliente compartilhado (base VITE_API_URL): fetch relativo só funciona
+  // em dev — na Vercel devolveria o HTML do SPA no lugar do JSON.
+  const { dados: perfil, erro, carregando } = useApi<PerfilPublicoDados>(
+    `/publico/${token}/alunos/${id}`,
+  );
 
-  useEffect(() => {
-    // Cliente compartilhado (base VITE_API_URL): fetch relativo só funciona
-    // em dev — na Vercel devolveria o HTML do SPA no lugar do JSON.
-    api<PerfilPublicoDados>(`/publico/${token}/alunos/${id}`)
-      .then(setPerfil)
-      .catch(() => setErro(true));
-  }, [token, id]);
-
-  if (erro) {
+  if (!carregando && erro) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-300">
-        <p className="text-xl">Perfil não disponível.</p>
+        <p className="text-xl">{erro.message}</p>
       </div>
     );
   }

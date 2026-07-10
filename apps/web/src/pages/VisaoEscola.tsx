@@ -1,10 +1,9 @@
 /** Visão da escola (PRD §78): comparação entre todas as turmas. */
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 
 interface ResumoTurma {
@@ -23,14 +22,14 @@ interface ResumoEscola {
 
 export default function VisaoEscola() {
   const { escolaId } = useApp();
-  const [resumo, setResumo] = useState<ResumoEscola | null>(null);
+  const { dados: resumo, erro, carregando } = useApi<ResumoEscola>(
+    escolaId ? `/escolas/${escolaId}/resumo-escola` : null,
+  );
 
-  useEffect(() => {
-    if (!escolaId) return;
-    setResumo(null);
-    api<ResumoEscola>(`/escolas/${escolaId}/resumo-escola`).then(setResumo).catch(() => setResumo(null));
-  }, [escolaId]);
-
+  // Em vez de engolir a falha, mostra um estado de erro discreto.
+  if (!carregando && erro) {
+    return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
+  }
   if (!resumo) return <Carregando />;
 
   const maiorMedia = Math.max(...resumo.turmas.map((turma) => turma.media_geral), 0);

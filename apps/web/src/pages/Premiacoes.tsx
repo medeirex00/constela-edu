@@ -6,13 +6,13 @@
  * a base para premiar semanal, mensal, bimestral ou em datas personalizadas.
  */
 import { Award, Trophy } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
 import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { numero, tempoLeitura } from "../lib/formato";
 import type { CategoriaPremiacao, Premiacoes as PremiacoesT, Turma } from "../lib/types";
 
@@ -86,27 +86,14 @@ export default function Premiacoes() {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
-  const [turmas, setTurmas] = useState<Turma[]>([]);
-  const [dados, setDados] = useState<PremiacoesT | null>(null);
-  const [carregando, setCarregando] = useState(true);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
+  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    setCarregando(true);
-    const q = periodoParaQuery(periodo);
-    const filtroTurma = turmaId ? `&turma_id=${turmaId}` : "";
-    api<PremiacoesT>(`/escolas/${escolaId}/premiacoes?${q}${filtroTurma}`)
-      .then(setDados)
-      .catch(() => setDados(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId, periodo, turmaId]);
-
-  useEffect(carregar, [carregar]);
+  const q = periodoParaQuery(periodo);
+  const filtroTurma = turmaId ? `&turma_id=${turmaId}` : "";
+  const { dados, erro, carregando } = useApi<PremiacoesT>(
+    escolaId ? `/escolas/${escolaId}/premiacoes?${q}${filtroTurma}` : null,
+  );
 
   return (
     <div>
@@ -124,7 +111,7 @@ export default function Premiacoes() {
           onChange={(e) => setTurmaId(e.target.value)}
         >
           <option value="">Todas as turmas</option>
-          {turmas.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+          {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
         </select>
         {dados && (
           <span className="ml-auto inline-flex items-center gap-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300">
@@ -135,6 +122,8 @@ export default function Premiacoes() {
 
       {carregando ? (
         <Carregando />
+      ) : erro ? (
+        <Vazio titulo="Não foi possível carregar as premiações" descricao={erro.message} />
       ) : !dados ? (
         <Vazio titulo="Não foi possível carregar as premiações" />
       ) : (

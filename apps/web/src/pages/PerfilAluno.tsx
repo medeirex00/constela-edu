@@ -1,5 +1,5 @@
 import { ArrowLeft, BookOpen, TrendingUp } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import AcoesAluno from "../components/AcoesAluno";
@@ -7,7 +7,7 @@ import EvolucaoAlunoAba from "../components/EvolucaoAlunoAba";
 import HistoricoLeituras from "../components/HistoricoLeituras";
 import { Badge, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
 import type { LeituraNiveis, LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
 
@@ -216,26 +216,30 @@ export default function PerfilAluno() {
   // histórico de leituras, evolução detalhada nem ações de gestão.
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const [perfil, setPerfil] = useState<Perfil | null>(null);
-  const [gamificacao, setGamificacao] = useState<Gamificacao | null>(null);
-  const [carregando, setCarregando] = useState(true);
   const [aba, setAba] = useState<"perfil" | "historico" | "evolucao">("perfil");
 
-  const carregar = useCallback(() => {
-    if (!escolaId || !id) return;
-    setCarregando(true);
-    api<Perfil>(`/escolas/${escolaId}/alunos/${id}/perfil`)
-      .then(setPerfil)
-      .catch(() => setPerfil(null))
-      .finally(() => setCarregando(false));
-    api<Gamificacao>(`/escolas/${escolaId}/gamificacao/alunos/${id}`)
-      .then(setGamificacao)
-      .catch(() => setGamificacao(null));
-  }, [escolaId, id]);
+  // Leitura via hook único: cuida de cancelamento, timeout e retry. Fica
+  // ocioso (null) enquanto escolaId/id não existirem.
+  const podeBuscar = Boolean(escolaId && id);
+  const {
+    dados: perfil,
+    erro: erroPerfil,
+    carregando,
+    recarregar: recarregarPerfil,
+  } = useApi<Perfil>(podeBuscar ? `/escolas/${escolaId}/alunos/${id}/perfil` : null);
+  const { dados: gamificacao, recarregar: recarregarGamificacao } = useApi<Gamificacao>(
+    podeBuscar ? `/escolas/${escolaId}/gamificacao/alunos/${id}` : null,
+  );
 
-  useEffect(carregar, [carregar]);
+  // Refaz as duas buscas após uma ação de gestão (editar, trocar turma…).
+  const recarregar = () => {
+    recarregarPerfil();
+    recarregarGamificacao();
+  };
 
   if (carregando) return <Carregando />;
+  // Não engole o erro: mostra estado discreto em vez de "Aluno não encontrado".
+  if (erroPerfil) return <Vazio titulo="Não foi possível carregar" descricao={erroPerfil.message} />;
   if (!perfil) return <Vazio titulo="Aluno não encontrado" />;
 
   const { aluno, detalhes } = perfil;
@@ -267,7 +271,7 @@ export default function PerfilAluno() {
               <AcoesAluno
                 aluno={aluno}
                 escolaId={escolaId}
-                aoMudar={carregar}
+                aoMudar={recarregar}
                 aoExcluir={() => navegar("/alunos")}
                 mostrarVisualizar={false}
               />

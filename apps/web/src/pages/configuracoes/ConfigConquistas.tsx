@@ -6,7 +6,7 @@
  * todos os alunos: XP, mural, biblioteca, perfil e painel público.
  */
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -21,6 +21,7 @@ import {
   estiloInput,
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
+import { useApi } from "../../hooks/useApi";
 import { ApiError, api } from "../../lib/api";
 import { BadgeRaridade, NOME_PLATAFORMA } from "../BibliotecaConquistas";
 
@@ -60,23 +61,23 @@ const NOVA: Definicao = {
 
 export default function ConfigConquistas() {
   const { escolaId } = useApp();
-  const [dados, setDados] = useState<Definicoes | null>(null);
   const [lista, setLista] = useState<Definicao[]>([]);
   const [alterado, setAlterado] = useState(false);
   const [emEdicao, setEmEdicao] = useState<{ indice: number | null; item: Definicao } | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Definicoes>(`/escolas/${escolaId}/gamificacao/conquistas/definicoes`)
-      .then((resposta) => {
-        setDados(resposta);
+  // Leitura única das definições — o hook cuida de cancelamento, timeout e retry.
+  const { dados, erro } = useApi<Definicoes>(
+    escolaId ? `/escolas/${escolaId}/gamificacao/conquistas/definicoes` : null,
+    {
+      // Semeia a lista editável a cada busca bem-sucedida.
+      aoSucesso: (resposta) => {
         setLista(resposta.conquistas);
-      })
-      .catch((excecao) =>
-        setMensagem({ tipo: "erro", texto: excecao instanceof Error ? excecao.message : "Sem acesso." }));
-  }, [escolaId]);
+        setAlterado(false);
+      },
+    },
+  );
 
   function alterar(nova: Definicao[]) {
     setLista(nova);
@@ -159,7 +160,9 @@ export default function ConfigConquistas() {
       )}
 
       <Card>
-        {dados === null ? (
+        {erro ? (
+          <Mensagem tipo="erro">{erro.message}</Mensagem>
+        ) : dados === null ? (
           <Carregando />
         ) : (
           <div className="overflow-x-auto">

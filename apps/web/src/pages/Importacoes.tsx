@@ -20,7 +20,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import ImportacaoMatriculas from "./ImportacaoMatriculas";
@@ -38,6 +38,7 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
+import { useApi } from "../hooks/useApi";
 import { api, apiUpload } from "../lib/api";
 import { dataHora } from "../lib/formato";
 import { acharTurmaPorNome, normalizar } from "../lib/nomes";
@@ -177,13 +178,11 @@ export default function Importacoes() {
 
   const [analise, setAnalise] = useState<Analise | null>(null);
   const [acoes, setAcoes] = useState<Acao[]>([]); // uma ação por GRUPO
-  const [turmas, setTurmas] = useState<Turma[]>([]);
   const [turmaEmMassa, setTurmaEmMassa] = useState<number | null>(null);
   // Turma detectada no relatório que ainda não existe no cadastro (a
   // confirmação a cria automaticamente).
   const [turmaNova, setTurmaNova] = useState("");
   const [editarGrupo, setEditarGrupo] = useState<number | null>(null);
-  const [historico, setHistorico] = useState<Importacao[] | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null);
@@ -197,18 +196,17 @@ export default function Importacoes() {
 
   const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);
 
-  const carregarHistorico = useCallback(() => {
-    if (!escolaId) return;
-    api<Importacao[]>(`/escolas/${escolaId}/importacoes`)
-      .then(setHistorico)
-      .catch(() => setHistorico([]));
-  }, [escolaId]);
-
-  useEffect(() => {
-    carregarHistorico();
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId, carregarHistorico]);
+  // Leitura via arquitetura única (useApi): sem escola ainda, a fonte é `null`
+  // (ocioso). O hook cuida de cancelamento, timeout e retry. O histórico expõe
+  // o erro (exibido no card) em vez de engoli-lo; `recarregar` refaz a busca
+  // após uma importação. As turmas alimentam seletores, então caem em [] vazio.
+  const {
+    dados: historico,
+    erro: erroHistorico,
+    recarregar: recarregarHistorico,
+  } = useApi<Importacao[]>(escolaId ? `/escolas/${escolaId}/importacoes` : null);
+  const { dados: turmasApi } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  const turmas = turmasApi ?? [];
 
   async function analisar() {
     if (!escolaId) return;
@@ -311,7 +309,7 @@ export default function Importacoes() {
       setTexto("");
       setArquivo(null);
       if (inputArquivo.current) inputArquivo.current.value = "";
-      carregarHistorico();
+      recarregarHistorico();
     } catch (excecao) {
       setErro(excecao instanceof Error ? excecao.message : "Falha ao confirmar a importação.");
     } finally {
@@ -458,11 +456,11 @@ export default function Importacoes() {
       )}
 
       {modo === "lote" && podeImportar && escolaId && (
-        <ImportacaoLote aoConcluir={carregarHistorico} />
+        <ImportacaoLote aoConcluir={recarregarHistorico} />
       )}
 
       {modo === "matriculas" && podeImportar && escolaId && (
-        <ImportacaoMatriculas escolaId={escolaId} aoConcluir={carregarHistorico} />
+        <ImportacaoMatriculas escolaId={escolaId} aoConcluir={recarregarHistorico} />
       )}
 
       {modo === "individual" && resultado && (
@@ -788,7 +786,9 @@ export default function Importacoes() {
 
       <PageHeader titulo="Histórico" descricao="Toda importação fica registrada com autor, quantidade e tempo (PRD §15)." />
       <Card>
-        {historico === null ? (
+        {erroHistorico ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erroHistorico.message} />
+        ) : historico === null ? (
           <Carregando />
         ) : historico.length === 0 ? (
           <Vazio titulo="Nenhuma importação ainda" descricao="O histórico aparecerá aqui após a primeira importação." />

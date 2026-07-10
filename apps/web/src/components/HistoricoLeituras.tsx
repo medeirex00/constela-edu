@@ -6,9 +6,9 @@
  * vêm do relatório individual do Elefante Letrado.
  */
 import { BookMarked, Clock, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { numero, tempoLeitura } from "../lib/formato";
 import type { HistoricoLeituras as Historico } from "../lib/types";
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "./SeletorPeriodo";
@@ -26,19 +26,10 @@ export default function HistoricoLeituras({ escolaId, alunoId }: {
   alunoId: number | string;
 }) {
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
-  const [dados, setDados] = useState<Historico | null>(null);
-  const [carregando, setCarregando] = useState(true);
-
-  const carregar = useCallback(() => {
-    setCarregando(true);
-    const q = periodoParaQuery(periodo);
-    api<Historico>(`/escolas/${escolaId}/alunos/${alunoId}/leituras?${q}`)
-      .then(setDados)
-      .catch(() => setDados(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId, alunoId, periodo]);
-
-  useEffect(carregar, [carregar]);
+  const q = periodoParaQuery(periodo);
+  const { dados, erro, carregando } = useApi<Historico>(
+    `/escolas/${escolaId}/alunos/${alunoId}/leituras?${q}`,
+  );
 
   return (
     <div className="space-y-4">
@@ -60,6 +51,8 @@ export default function HistoricoLeituras({ escolaId, alunoId }: {
       <Card>
         {carregando ? (
           <Carregando />
+        ) : erro ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
         ) : !dados || dados.itens.length === 0 ? (
           <Vazio titulo="Nenhuma leitura no período"
                  descricao="Ajuste o período ou importe o relatório individual do Elefante Letrado." />

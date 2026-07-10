@@ -1,8 +1,9 @@
 import { Copy, School, UserPlus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Badge, Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import type { Professor, Turma } from "../lib/types";
 
@@ -148,24 +149,21 @@ export function Professores() {
   const { escolaId, usuario } = useApp();
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const [professores, setProfessores] = useState<Professor[] | null>(null);
-  const [turmas, setTurmas] = useState<Turma[]>([]);
+  const { dados: professores, erro, carregando, recarregar: recarregarProfessores } =
+    useApi<Professor[]>(escolaId ? `/escolas/${escolaId}/professores` : null);
+  const { dados: turmas, recarregar: recarregarTurmas } =
+    useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const [modalAberto, setModalAberto] = useState(false);
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    api<Professor[]>(`/escolas/${escolaId}/professores`).then(setProfessores).catch(() => setProfessores([]));
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
-
-  useEffect(() => {
-    setProfessores(null);
-    carregar();
-  }, [carregar]);
+  // Refaz as duas buscas após criar um professor (que vincula turma).
+  function carregar() {
+    recarregarProfessores();
+    recarregarTurmas();
+  }
 
   // Turmas de cada professor (Turma.professor_id → nomes), para a coluna.
   const turmasDe = (professorId: number) =>
-    turmas.filter((t) => t.professor_id === professorId).map((t) => t.nome);
+    (turmas ?? []).filter((t) => t.professor_id === professorId).map((t) => t.nome);
 
   return (
     <div>
@@ -179,9 +177,11 @@ export function Professores() {
         ) : undefined}
       />
       <Card>
-        {professores === null ? (
+        {carregando ? (
           <Carregando />
-        ) : professores.length === 0 ? (
+        ) : erro ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+        ) : (professores ?? []).length === 0 ? (
           <Vazio titulo="Nenhum professor cadastrado"
                  descricao="Use “Adicionar professor” para cadastrar o primeiro." />
         ) : (
@@ -194,7 +194,7 @@ export function Professores() {
               </tr>
             </thead>
             <tbody>
-              {professores.map((professor) => (
+              {(professores ?? []).map((professor) => (
                 <tr key={professor.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                   <td className="px-4 py-2.5 font-medium">
                     <span className="inline-flex items-center gap-2">
@@ -221,7 +221,7 @@ export function Professores() {
 
       <ModalNovoProfessor
         aberto={modalAberto}
-        turmas={turmas}
+        turmas={turmas ?? []}
         aoFechar={() => setModalAberto(false)}
         aoCriar={carregar}
       />

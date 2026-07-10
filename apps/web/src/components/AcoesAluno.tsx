@@ -18,6 +18,7 @@ import {
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
 import MenuSuspenso, { ItemMenu } from "./MenuSuspenso";
@@ -176,22 +177,19 @@ export function ModalEditarAluno({ aluno, escolaId, aoFechar, aoSalvo }: {
   const [chamada, setChamada] = useState(aluno.numero_chamada?.toString() ?? "");
   const [nascimento, setNascimento] = useState(aluno.data_nascimento ?? "");
   const [observacoes, setObservacoes] = useState(aluno.observacoes ?? "");
-  const [turmas, setTurmas] = useState<Turma[]>([]);
+  const { dados: turmas, erro: erroTurmas } = useApi<Turma[]>(`/escolas/${escolaId}/turmas`);
   const [turmaId, setTurmaId] = useState<number | "">("");
   const [turmaOriginal, setTurmaOriginal] = useState<number | "">("");
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
 
+  // Quando as turmas chegam, pré-seleciona a turma atual do aluno.
   useEffect(() => {
-    api<Turma[]>(`/escolas/${escolaId}/turmas`)
-      .then((lista) => {
-        setTurmas(lista);
-        const atual = lista.find((t) => t.nome === aluno.turma)?.id ?? "";
-        setTurmaId(atual);
-        setTurmaOriginal(atual);
-      })
-      .catch(() => setTurmas([]));
-  }, [escolaId, aluno.turma]);
+    if (!turmas) return;
+    const atual = turmas.find((t) => t.nome === aluno.turma)?.id ?? "";
+    setTurmaId(atual);
+    setTurmaOriginal(atual);
+  }, [turmas, aluno.turma]);
 
   async function salvar() {
     setOcupado(true);
@@ -241,9 +239,13 @@ export function ModalEditarAluno({ aluno, escolaId, aoFechar, aoSalvo }: {
           <select className={estiloInput} value={turmaId}
                   onChange={(e) => setTurmaId(e.target.value ? Number(e.target.value) : "")}>
             <option value="">— sem turma —</option>
-            {turmas.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+            {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
           </select>
         </Campo>
+        {/* Não engole o erro: avisa se as turmas não puderam ser carregadas. */}
+        {erroTurmas && (
+          <Mensagem tipo="erro">Não foi possível carregar as turmas: {erroTurmas.message}</Mensagem>
+        )}
         <Campo rotulo="Observações">
           <textarea className={`${estiloInput} min-h-[70px]`} value={observacoes}
                     onChange={(e) => setObservacoes(e.target.value)} />
@@ -271,22 +273,27 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
   aoConcluir: (removeuAtual: boolean) => void;
 }) {
   const [busca, setBusca] = useState("");
-  const [resultados, setResultados] = useState<Aluno[]>([]);
+  const [buscaAtrasada, setBuscaAtrasada] = useState("");
   const [outro, setOutro] = useState<Aluno | null>(null);
   const [manterAtual, setManterAtual] = useState(true); // qual fica como principal
   const [confirmacao, setConfirmacao] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
 
+  // Atrasa (debounce) a busca para não consultar a API a cada tecla.
   useEffect(() => {
-    if (outro || busca.trim().length < 2) { setResultados([]); return; }
-    const t = window.setTimeout(() => {
-      api<PaginaAlunos>(`/escolas/${escolaId}/alunos?busca=${encodeURIComponent(busca.trim())}&por_pagina=8`)
-        .then((p) => setResultados(p.itens.filter((a) => a.id !== aluno.id)))
-        .catch(() => setResultados([]));
-    }, 250);
+    const t = window.setTimeout(() => setBuscaAtrasada(busca.trim()), 250);
     return () => window.clearTimeout(t);
-  }, [busca, outro, escolaId, aluno.id]);
+  }, [busca]);
+
+  // Só busca com termo válido e enquanto nenhum cadastro foi escolhido.
+  const buscaAtiva = !outro && buscaAtrasada.length >= 2;
+  const { dados: pagina, erro: erroBusca, carregando: carregandoBusca } = useApi<PaginaAlunos>(
+    buscaAtiva
+      ? `/escolas/${escolaId}/alunos?busca=${encodeURIComponent(buscaAtrasada)}&por_pagina=8`
+      : null,
+  );
+  const resultados = buscaAtiva ? (pagina?.itens ?? []).filter((a) => a.id !== aluno.id) : [];
 
   const principal = manterAtual ? aluno : outro;
   const absorvido = manterAtual ? outro : aluno;
@@ -338,7 +345,7 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
                 <li key={a.id}>
                   <button
                     className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                    onClick={() => { setOutro(a); setResultados([]); }}
+                    onClick={() => setOutro(a)}
                   >
                     <span className="font-medium">{a.nome}</span>
                     <span className="text-xs text-zinc-400">{a.turma ?? "sem turma"}</span>
@@ -347,7 +354,11 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
               ))}
             </ul>
           )}
-          {busca.trim().length >= 2 && resultados.length === 0 && (
+          {/* Não engole o erro: mostra a falha da busca em vez de "nada encontrado". */}
+          {erroBusca && (
+            <div className="mt-2"><Mensagem tipo="erro">Não foi possível buscar: {erroBusca.message}</Mensagem></div>
+          )}
+          {buscaAtiva && !carregandoBusca && !erroBusca && resultados.length === 0 && (
             <p className="mt-2 text-xs text-zinc-400">Nenhum outro aluno encontrado.</p>
           )}
         </div>

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge, Botao, Card, Carregando, Mensagem, PageHeader } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
+import { useApi } from "../../hooks/useApi";
 import { api, ApiError } from "../../lib/api";
 import { nota } from "../../lib/formato";
 import type { Dificuldade, Pesos, Referencias } from "../../lib/types";
@@ -20,19 +21,23 @@ export function PesosEditor({
   descricao?: string;
 }) {
   const { escolaId } = useApp();
+  const { dados, erro, carregando } = useApi<Pesos>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/pesos/${namespace}` : null,
+  );
   const [valores, setValores] = useState<Record<string, number> | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
 
+  // Semeia o formulário editável a partir dos pesos carregados.
   useEffect(() => {
-    if (!escolaId) return;
-    setValores(null);
-    setMensagem(null);
-    api<Pesos>(`/escolas/${escolaId}/configuracoes/pesos/${namespace}`)
-      .then((dados) => setValores(dados.valores))
-      .catch(() => setValores(null));
-  }, [escolaId, namespace]);
+    if (dados) {
+      setValores(dados.valores);
+      setMensagem(null);
+    }
+  }, [dados]);
 
+  if (carregando) return <Carregando />;
+  if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
   if (!valores) return <Carregando />;
 
   const soma = Math.round(Object.values(valores).reduce((total, valor) => total + valor, 0) * 100) / 100;
@@ -114,27 +119,24 @@ export function PesosEditor({
  * ----------------------------------------------------------------------- */
 function DificuldadePorTurma() {
   const { escolaId } = useApp();
-  const [dados, setDados] = useState<Dificuldade | null>(null);
+  const { dados, erro, carregando } = useApi<Dificuldade>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
+  );
   const [pontos, setPontos] = useState<Record<string, Record<number, number>>>({});
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    setDados(null);
+  // Semeia a tabela editável de pontos a partir da configuração carregada.
+  useEffect(() => {
+    if (!dados) return;
+    const inicial: Record<string, Record<number, number>> = {};
+    for (const serie of dados.series) inicial[serie.ano_escolar] = { ...serie.pontos };
+    setPontos(inicial);
     setMensagem(null);
-    api<Dificuldade>(`/escolas/${escolaId}/configuracoes/dificuldade`)
-      .then((resposta) => {
-        setDados(resposta);
-        const inicial: Record<string, Record<number, number>> = {};
-        for (const serie of resposta.series) inicial[serie.ano_escolar] = { ...serie.pontos };
-        setPontos(inicial);
-      })
-      .catch(() => setDados(null));
-  }, [escolaId]);
+  }, [dados]);
 
-  useEffect(carregar, [carregar]);
-
+  if (carregando) return <Carregando />;
+  if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
   if (!dados) return <Carregando />;
   if (dados.series.length === 0) {
     return (
@@ -240,29 +242,31 @@ const ROTULOS_REFERENCIAS: Record<string, string> = {
 
 function ReferenciasNormalizacao() {
   const { escolaId } = useApp();
+  const { dados: dadosApi, erro, carregando } = useApi<Referencias>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/referencias` : null,
+  );
+  // `dados` é semeado da busca e também atualizado após salvar (retorno do PUT).
   const [dados, setDados] = useState<Referencias | null>(null);
   const [modo, setModo] = useState<"auto" | "manual">("auto");
   const [manuais, setManuais] = useState<Record<string, number>>({});
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
 
+  // Semeia o formulário editável a partir das referências carregadas.
   useEffect(() => {
-    if (!escolaId) return;
-    setDados(null);
+    if (!dadosApi) return;
+    setDados(dadosApi);
+    setModo(dadosApi.modo);
+    const iniciais: Record<string, number> = {};
+    for (const chave of Object.keys(ROTULOS_REFERENCIAS)) {
+      iniciais[chave] = dadosApi.valores_manuais[chave] ?? dadosApi.valores_em_uso[chave] ?? 0;
+    }
+    setManuais(iniciais);
     setMensagem(null);
-    api<Referencias>(`/escolas/${escolaId}/configuracoes/referencias`)
-      .then((resposta) => {
-        setDados(resposta);
-        setModo(resposta.modo);
-        const iniciais: Record<string, number> = {};
-        for (const chave of Object.keys(ROTULOS_REFERENCIAS)) {
-          iniciais[chave] = resposta.valores_manuais[chave] ?? resposta.valores_em_uso[chave] ?? 0;
-        }
-        setManuais(iniciais);
-      })
-      .catch(() => setDados(null));
-  }, [escolaId]);
+  }, [dadosApi]);
 
+  if (carregando) return <Carregando />;
+  if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
   if (!dados) return <Carregando />;
 
   async function salvar() {

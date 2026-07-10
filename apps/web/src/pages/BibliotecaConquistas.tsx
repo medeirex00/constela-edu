@@ -6,12 +6,12 @@
  * modal de detalhes com critérios claros de desbloqueio.
  */
 import { ArrowLeft, Medal, Sparkles, Trophy } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Badge, Card, Carregando, Modal, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { numero } from "../lib/formato";
 
 export interface ConquistaCatalogo {
@@ -101,22 +101,14 @@ const ORDENACOES = [
 
 export default function BibliotecaConquistas() {
   const { escolaId } = useApp();
-  const [dados, setDados] = useState<Biblioteca | null>(null);
-  const [carregando, setCarregando] = useState(true);
+  const { dados, erro, carregando } = useApi<Biblioteca>(
+    escolaId ? `/escolas/${escolaId}/gamificacao/biblioteca` : null,
+  );
   const [plataforma, setPlataforma] = useState("");
   const [categoria, setCategoria] = useState("");
   const [raridade, setRaridade] = useState("");
   const [ordenacao, setOrdenacao] = useState("padrao");
   const [detalhe, setDetalhe] = useState<ConquistaCatalogo | null>(null);
-
-  useEffect(() => {
-    if (!escolaId) return;
-    setCarregando(true);
-    api<Biblioteca>(`/escolas/${escolaId}/gamificacao/biblioteca`)
-      .then(setDados)
-      .catch(() => setDados(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId]);
 
   const visiveis = useMemo(() => {
     if (!dados) return [];
@@ -260,6 +252,8 @@ export default function BibliotecaConquistas() {
       {/* --- Catálogo --- */}
       {carregando ? (
         <Carregando />
+      ) : erro ? (
+        <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
       ) : visiveis.length === 0 ? (
         <Vazio titulo="Nenhuma conquista com esses filtros" descricao="Ajuste os filtros acima." />
       ) : (

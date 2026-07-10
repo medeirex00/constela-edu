@@ -4,13 +4,13 @@
  * Leitura para os melhores da matemática.
  */
 import { Calculator } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
 import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { numero } from "../lib/formato";
 import type { RankingMatematicaItem, Turma } from "../lib/types";
 
@@ -18,25 +18,16 @@ export default function RankingMatematica() {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
-  const [turmas, setTurmas] = useState<Turma[]>([]);
-  const [itens, setItens] = useState<RankingMatematicaItem[] | null>(null);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
+  // Turmas para o filtro (ocioso enquanto não houver escola).
+  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    setItens(null);
-    const q = periodoParaQuery(periodo);
-    const filtro = turmaId ? `&turma_id=${turmaId}` : "";
-    api<RankingMatematicaItem[]>(`/escolas/${escolaId}/ranking/matematica?${q}${filtro}`)
-      .then(setItens)
-      .catch(() => setItens([]));
-  }, [escolaId, periodo, turmaId]);
-
-  useEffect(carregar, [carregar]);
+  // Ranking do período: a URL muda com período/turma, então o hook rebusca sozinho.
+  const q = periodoParaQuery(periodo);
+  const filtro = turmaId ? `&turma_id=${turmaId}` : "";
+  const { dados: itens, erro, carregando } = useApi<RankingMatematicaItem[]>(
+    escolaId ? `/escolas/${escolaId}/ranking/matematica?${q}${filtro}` : null,
+  );
 
   return (
     <div>
@@ -54,14 +45,16 @@ export default function RankingMatematica() {
           onChange={(e) => setTurmaId(e.target.value)}
         >
           <option value="">Todas as turmas</option>
-          {turmas.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+          {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
         </select>
       </Card>
 
       <Card>
-        {itens === null ? (
+        {carregando ? (
           <Carregando />
-        ) : itens.length === 0 ? (
+        ) : erro ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+        ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Nenhuma atividade de matemática no período"
                  descricao="Ajuste o período ou importe o relatório do Matific com o intervalo de datas." />
         ) : (
@@ -78,7 +71,7 @@ export default function RankingMatematica() {
                 </tr>
               </thead>
               <tbody>
-                {itens.map((item) => (
+                {(itens ?? []).map((item) => (
                   <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">{item.posicao}º</td>
                     <td className="px-4 py-2.5">

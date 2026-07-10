@@ -1,12 +1,12 @@
 /** Linha do tempo e evolução do aluno (PRD §67–§71). */
 import { ArrowDown, ArrowLeft, ArrowUp, Minus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { GraficoLinha } from "../components/Grafico";
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota } from "../lib/formato";
 
 interface PontoLinha {
@@ -58,19 +58,12 @@ export default function EvolucaoAluno() {
   const { id } = useParams();
   const { escolaId } = useApp();
   const [dias, setDias] = useState(30);
-  const [dadosEvolucao, setDadosEvolucao] = useState<EvolucaoResposta | null>(null);
-  const [carregando, setCarregando] = useState(true);
-
-  useEffect(() => {
-    if (!escolaId || !id) return;
-    setCarregando(true);
-    api<EvolucaoResposta>(`/escolas/${escolaId}/alunos/${id}/evolucao?dias=${dias}`)
-      .then(setDadosEvolucao)
-      .catch(() => setDadosEvolucao(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId, id, dias]);
+  const { dados: dadosEvolucao, erro, carregando } = useApi<EvolucaoResposta>(
+    escolaId && id ? `/escolas/${escolaId}/alunos/${id}/evolucao?dias=${dias}` : null,
+  );
 
   if (carregando) return <Carregando />;
+  if (erro) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
   if (!dadosEvolucao) return <Vazio titulo="Aluno não encontrado" />;
 
   const { linha_do_tempo: linha, resumo } = dadosEvolucao;

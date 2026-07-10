@@ -4,10 +4,11 @@
  * o backend, que monta o contexto e registra a conversa.
  */
 import { Bot, MessageSquarePlus, Send } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Badge, Botao, Card, Carregando, PageHeader, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { dataHora } from "../lib/formato";
 
@@ -32,30 +33,28 @@ const SUGESTOES = [
 
 export default function Assistente() {
   const { escolaId } = useApp();
-  const [conversas, setConversas] = useState<Conversa[]>([]);
   const [conversaId, setConversaId] = useState<number | null>(null);
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [pergunta, setPergunta] = useState("");
   const [aguardando, setAguardando] = useState(false);
-  const [provedor, setProvedor] = useState("");
   const fimRef = useRef<HTMLDivElement | null>(null);
 
-  const carregarConversas = useCallback(() => {
-    if (!escolaId) return;
-    api<Conversa[]>(`/escolas/${escolaId}/assistente/conversas`)
-      .then(setConversas)
-      .catch(() => setConversas([]));
-  }, [escolaId]);
+  // Leitura pela arquitetura única: só busca quando há escola (senão, ocioso).
+  const {
+    dados: conversas,
+    erro: erroConversas,
+    recarregar: recarregarConversas,
+  } = useApi<Conversa[]>(escolaId ? `/escolas/${escolaId}/assistente/conversas` : null);
+  const { dados: status } = useApi<{ provedor: string }>(
+    escolaId ? `/escolas/${escolaId}/assistente/status` : null,
+  );
+  const provedor = status?.provedor ?? "";
 
+  // Ao trocar de escola, fecha a conversa aberta (pertence à escola anterior).
   useEffect(() => {
-    carregarConversas();
     setConversaId(null);
     setMensagens([]);
-    if (!escolaId) return;
-    api<{ provedor: string }>(`/escolas/${escolaId}/assistente/status`)
-      .then((s) => setProvedor(s.provedor))
-      .catch(() => setProvedor(""));
-  }, [escolaId, carregarConversas]);
+  }, [escolaId]);
 
   useEffect(() => {
     fimRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -88,7 +87,7 @@ export default function Assistente() {
       );
       setConversaId(resposta.conversa_id);
       setMensagens((atuais) => [...atuais, { papel: "assistente", conteudo: resposta.resposta }]);
-      carregarConversas();
+      recarregarConversas();
     } catch (excecao) {
       setMensagens((atuais) => [
         ...atuais,
@@ -124,11 +123,13 @@ export default function Assistente() {
               <MessageSquarePlus size={15} /> Nova conversa
             </Botao>
           </div>
-          {conversas.length === 0 ? (
+          {erroConversas ? (
+            <p className="p-3 text-xs text-red-600 dark:text-red-400">{erroConversas.message}</p>
+          ) : (conversas ?? []).length === 0 ? (
             <p className="p-3 text-xs text-zinc-400">Suas conversas aparecerão aqui.</p>
           ) : (
             <ul>
-              {conversas.map((conversa) => (
+              {(conversas ?? []).map((conversa) => (
                 <li key={conversa.id}>
                   <button
                     className={`w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/60 ${

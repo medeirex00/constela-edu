@@ -1,10 +1,11 @@
 /** Comparador aluno×aluno, aluno×turma e turma×turma (PRD §73–§75). */
 import { GitCompareArrows } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { BarraDupla } from "../components/Grafico";
 import { Botao, Campo, Card, Carregando, Mensagem, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { nota, tempoLeitura } from "../lib/formato";
 import type { PaginaAlunos, Turma } from "../lib/types";
@@ -77,8 +78,16 @@ const INDICADORES: { chave: string; rotulo: string; formato?: (valor: number) =>
 
 export default function Comparador() {
   const { escolaId } = useApp();
-  const [alunos, setAlunos] = useState<OpcaoAluno[]>([]);
-  const [turmas, setTurmas] = useState<Turma[]>([]);
+  // Opções dos seletores: buscas de leitura (ociosas sem escola) via useApi.
+  const { dados: turmas, erro: erroTurmas } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null,
+  );
+  const { dados: paginaAlunos, erro: erroAlunos } = useApi<PaginaAlunos>(
+    escolaId ? `/escolas/${escolaId}/alunos?por_pagina=100` : null,
+  );
+  // Reduz a página de alunos às opções (id + nome) que os seletores consomem.
+  const alunos: OpcaoAluno[] = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
+  const erroOpcoes = erroTurmas ?? erroAlunos;
   const [tipoA, setTipoA] = useState("aluno");
   const [idA, setIdA] = useState("");
   const [tipoB, setTipoB] = useState("turma");
@@ -86,14 +95,6 @@ export default function Comparador() {
   const [comparacao, setComparacao] = useState<Comparacao | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState("");
-
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-    api<PaginaAlunos>(`/escolas/${escolaId}/alunos?por_pagina=100`)
-      .then((pagina) => setAlunos(pagina.itens.map((aluno) => ({ id: aluno.id, nome: aluno.nome }))))
-      .catch(() => setAlunos([]));
-  }, [escolaId]);
 
   async function comparar() {
     if (!escolaId || !idA || !idB) return;
@@ -119,12 +120,13 @@ export default function Comparador() {
 
       <Card className="mb-6 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <SeletorLado rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} alunos={alunos} turmas={turmas} />
-          <SeletorLado rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} alunos={alunos} turmas={turmas} />
+          <SeletorLado rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} alunos={alunos} turmas={turmas ?? []} />
+          <SeletorLado rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} alunos={alunos} turmas={turmas ?? []} />
           <Botao onClick={comparar} disabled={carregando || !idA || !idB} className="shrink-0">
             <GitCompareArrows size={15} /> Comparar
           </Botao>
         </div>
+        {erroOpcoes && <div className="mt-3"><Mensagem tipo="erro">Não foi possível carregar as opções: {erroOpcoes.message}</Mensagem></div>}
         {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
       </Card>
 

@@ -1,6 +1,6 @@
 /** Catálogo de Livros (PRD §57): busca, filtros e manutenção do acervo. */
 import { BookPlus, Pencil, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Badge,
@@ -15,6 +15,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { nota, numero } from "../lib/formato";
 import type { Livro, Nivel, PaginaLivros } from "../lib/types";
@@ -34,33 +35,29 @@ export default function Livros() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
-  const [pagina, setPagina] = useState<PaginaLivros | null>(null);
   const [busca, setBusca] = useState("");
   const [nivel, setNivel] = useState("");
-  const [codigos, setCodigos] = useState<string[]>([]);
   const [numeroPagina, setNumeroPagina] = useState(1);
   const [formulario, setFormulario] = useState<FormularioLivro | null>(null);
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<{ niveis: Nivel[] }>(`/escolas/${escolaId}/configuracoes/dificuldade`)
-      .then((resposta) => setCodigos(resposta.niveis.flatMap((n) => n.codigos)))
-      .catch(() => setCodigos([]));
-  }, [escolaId]);
+  // Códigos de nível para o filtro e o formulário (derivados da configuração de dificuldade).
+  const { dados: dificuldade } = useApi<{ niveis: Nivel[] }>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
+  );
+  const codigos = dificuldade?.niveis.flatMap((n) => n.codigos) ?? [];
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    const parametros = new URLSearchParams({ pagina: String(numeroPagina) });
-    if (busca) parametros.set("busca", busca);
-    if (nivel) parametros.set("nivel", nivel);
-    api<PaginaLivros>(`/escolas/${escolaId}/livros?${parametros}`)
-      .then(setPagina)
-      .catch(() => setPagina({ total: 0, pagina: 1, por_pagina: 25, itens: [] }));
-  }, [escolaId, busca, nivel, numeroPagina]);
-
-  useEffect(carregar, [carregar]);
+  // Página atual do catálogo — refeita quando busca/nível/página mudam.
+  const parametros = new URLSearchParams({ pagina: String(numeroPagina) });
+  if (busca) parametros.set("busca", busca);
+  if (nivel) parametros.set("nivel", nivel);
+  const {
+    dados: pagina,
+    erro: erroLivros,
+    carregando,
+    recarregar: carregar,
+  } = useApi<PaginaLivros>(escolaId ? `/escolas/${escolaId}/livros?${parametros}` : null);
 
   async function salvar() {
     if (!escolaId || !formulario) return;
@@ -137,9 +134,11 @@ export default function Livros() {
       </div>
 
       <Card>
-        {pagina === null ? (
+        {carregando && pagina === null ? (
           <Carregando />
-        ) : pagina.itens.length === 0 ? (
+        ) : !carregando && erroLivros ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erroLivros.message} />
+        ) : pagina === null || pagina.itens.length === 0 ? (
           <Vazio titulo="Nenhum livro encontrado" descricao="Ajuste a busca ou cadastre o primeiro livro do acervo." />
         ) : (
           <div className="overflow-x-auto">

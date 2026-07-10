@@ -1,10 +1,11 @@
 import { Search, UserPlus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import AcoesAluno from "../components/AcoesAluno";
 import { Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import type { PaginaAlunos, Turma } from "../lib/types";
 
@@ -150,16 +151,14 @@ export default function Alunos() {
   const [busca, setBusca] = useState("");
   const [buscaAplicada, setBuscaAplicada] = useState("");
   const [turmaId, setTurmaId] = useState<string>("");
-  const [turmas, setTurmas] = useState<Turma[]>([]);
   const [pagina, setPagina] = useState(1);
-  const [dados, setDados] = useState<PaginaAlunos | null>(null);
-  const [carregando, setCarregando] = useState(true);
   const [modalNovo, setModalNovo] = useState(false);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
+  // Turmas para o filtro e o modal de cadastro (array sempre pronto para render).
+  const { dados: turmasDados } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null,
+  );
+  const turmas = turmasDados ?? [];
 
   // Busca com pequeno atraso para não consultar a cada tecla (PRD §23)
   useEffect(() => {
@@ -170,19 +169,13 @@ export default function Alunos() {
     return () => clearTimeout(temporizador);
   }, [busca]);
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    setCarregando(true);
-    const parametros = new URLSearchParams({ pagina: String(pagina), por_pagina: "25" });
-    if (buscaAplicada) parametros.set("busca", buscaAplicada);
-    if (turmaId) parametros.set("turma_id", turmaId);
-    api<PaginaAlunos>(`/escolas/${escolaId}/alunos?${parametros}`)
-      .then(setDados)
-      .catch(() => setDados(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId, buscaAplicada, turmaId, pagina]);
-
-  useEffect(carregar, [carregar]);
+  // Lista paginada: a URL muda com página/busca/turma e o hook rebusca sozinho.
+  const parametros = new URLSearchParams({ pagina: String(pagina), por_pagina: "25" });
+  if (buscaAplicada) parametros.set("busca", buscaAplicada);
+  if (turmaId) parametros.set("turma_id", turmaId);
+  const { dados, erro, carregando, recarregar } = useApi<PaginaAlunos>(
+    escolaId ? `/escolas/${escolaId}/alunos?${parametros}` : null,
+  );
 
   const totalPaginas = dados ? Math.max(1, Math.ceil(dados.total / dados.por_pagina)) : 1;
 
@@ -229,6 +222,8 @@ export default function Alunos() {
       <Card>
         {carregando ? (
           <Carregando />
+        ) : erro ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
         ) : !dados || dados.itens.length === 0 ? (
           <Vazio titulo="Nenhum aluno encontrado" descricao="Ajuste a pesquisa ou os filtros." />
         ) : (
@@ -257,7 +252,7 @@ export default function Alunos() {
                     {gestor && (
                       <td className="px-4 py-2.5 text-right">
                         {escolaId && (
-                          <AcoesAluno aluno={aluno} escolaId={escolaId} aoMudar={carregar} />
+                          <AcoesAluno aluno={aluno} escolaId={escolaId} aoMudar={recarregar} />
                         )}
                       </td>
                     )}
@@ -289,7 +284,7 @@ export default function Alunos() {
         aberto={modalNovo}
         turmas={turmas}
         aoFechar={() => setModalNovo(false)}
-        aoCriar={carregar}
+        aoCriar={recarregar}
       />
     </div>
   );

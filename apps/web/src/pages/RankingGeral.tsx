@@ -4,13 +4,13 @@
  * com o que foi feito dentro do intervalo (leituras com data real + ganhos do
  * Matific), usando os mesmos pesos configuráveis.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
 import { Badge, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
 import type { RankingItem, Turma } from "../lib/types";
 
@@ -31,46 +31,43 @@ interface ItemPeriodo {
 
 export default function RankingGeral() {
   const { escolaId } = useApp();
-  const [itens, setItens] = useState<RankingItem[]>([]);
-  const [itensPeriodo, setItensPeriodo] = useState<ItemPeriodo[] | null>(null);
-  const [turmas, setTurmas] = useState<Turma[]>([]);
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
-  const [carregando, setCarregando] = useState(true);
 
   const porPeriodo = periodo.preset !== "tudo";
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
+  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    setCarregando(true);
-    const parametros = new URLSearchParams();
-    if (turmaId) parametros.set("turma_id", turmaId);
-    if (serie) parametros.set("ano_escolar", serie);
+  // Filtros comuns às duas classificações.
+  const parametros = new URLSearchParams();
+  if (turmaId) parametros.set("turma_id", turmaId);
+  if (serie) parametros.set("ano_escolar", serie);
 
-    if (porPeriodo) {
-      // Classificação do período: só o que foi feito dentro do intervalo.
-      const query = new URLSearchParams(periodoParaQuery(periodo));
-      parametros.forEach((v, k) => query.set(k, v));
-      api<ItemPeriodo[]>(`/escolas/${escolaId}/ranking-evolucao?${query}`)
-        .then(setItensPeriodo)
-        .catch(() => setItensPeriodo([]))
-        .finally(() => setCarregando(false));
-    } else {
-      api<RankingItem[]>(`/escolas/${escolaId}/ranking?${parametros}`)
-        .then(setItens)
-        .catch(() => setItens([]))
-        .finally(() => setCarregando(false));
-    }
-  }, [escolaId, turmaId, serie, periodo, porPeriodo]);
+  // Classificação do período: só o que foi feito dentro do intervalo.
+  const queryPeriodo = new URLSearchParams(periodoParaQuery(periodo));
+  parametros.forEach((v, k) => queryPeriodo.set(k, v));
+
+  const {
+    dados: itensPeriodo,
+    erro: erroPeriodo,
+    carregando: carregandoPeriodo,
+  } = useApi<ItemPeriodo[]>(
+    escolaId && porPeriodo ? `/escolas/${escolaId}/ranking-evolucao?${queryPeriodo}` : null,
+  );
+
+  const {
+    dados: itens,
+    erro: erroGeral,
+    carregando: carregandoGeral,
+  } = useApi<RankingItem[]>(
+    escolaId && !porPeriodo ? `/escolas/${escolaId}/ranking?${parametros}` : null,
+  );
+
+  const carregando = porPeriodo ? carregandoPeriodo : carregandoGeral;
 
   const series = useMemo(
-    () => Array.from(new Set(turmas.map((turma) => turma.ano_escolar))).sort(),
+    () => Array.from(new Set((turmas ?? []).map((turma) => turma.ano_escolar))).sort(),
     [turmas],
   );
 
@@ -99,7 +96,7 @@ export default function RankingGeral() {
           onChange={(evento) => setTurmaId(evento.target.value)}
         >
           <option value="">Todas as turmas</option>
-          {turmas.map((turma) => (
+          {(turmas ?? []).map((turma) => (
             <option key={turma.id} value={turma.id}>{turma.nome}</option>
           ))}
         </select>
@@ -123,7 +120,9 @@ export default function RankingGeral() {
         {carregando ? (
           <Carregando />
         ) : porPeriodo ? (
-          !itensPeriodo || itensPeriodo.length === 0 ? (
+          erroPeriodo ? (
+            <Vazio titulo="Não foi possível carregar" descricao={erroPeriodo.message} />
+          ) : !itensPeriodo || itensPeriodo.length === 0 ? (
             <Vazio titulo="Sem atividades no período" descricao="Ajuste o período ou importe novos relatórios." />
           ) : (
             <div className="overflow-x-auto">
@@ -166,7 +165,9 @@ export default function RankingGeral() {
               </table>
             </div>
           )
-        ) : itens.length === 0 ? (
+        ) : erroGeral ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erroGeral.message} />
+        ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Nenhuma nota calculada ainda" descricao="Importe dados das plataformas para gerar o ranking." />
         ) : (
           <div className="overflow-x-auto">
@@ -182,7 +183,7 @@ export default function RankingGeral() {
                 </tr>
               </thead>
               <tbody>
-                {itens.map((item) => (
+                {(itens ?? []).map((item) => (
                   <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">
                       {item.posicao <= 3 ? <Badge tom="destaque">{item.posicao}º</Badge> : `${item.posicao}º`}

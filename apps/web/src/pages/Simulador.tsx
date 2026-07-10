@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { Botao, Campo, Card, Carregando, Mensagem, PageHeader, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { nota } from "../lib/formato";
 import type { LinhaCalculo, Turma } from "../lib/types";
@@ -18,7 +19,8 @@ interface Resultado {
 
 export default function Simulador() {
   const { escolaId } = useApp();
-  const [turmas, setTurmas] = useState<Turma[]>([]);
+  // Turmas da escola (para popular a lista de séries) via hook padrão.
+  const { dados: turmas, erro: erroTurmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const [formulario, setFormulario] = useState({
     ano_escolar: "",
     atividades: 20,
@@ -33,15 +35,13 @@ export default function Simulador() {
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
+  // Ao carregar as turmas, define a série padrão do formulário.
   useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then((lista) => {
-      setTurmas(lista);
-      setFormulario((atual) => ({ ...atual, ano_escolar: atual.ano_escolar || lista[0]?.ano_escolar || "" }));
-    }).catch(() => setTurmas([]));
-  }, [escolaId]);
+    if (!turmas) return;
+    setFormulario((atual) => ({ ...atual, ano_escolar: atual.ano_escolar || turmas[0]?.ano_escolar || "" }));
+  }, [turmas]);
 
-  const series = Array.from(new Set(turmas.map((turma) => turma.ano_escolar))).sort();
+  const series = Array.from(new Set((turmas ?? []).map((turma) => turma.ano_escolar))).sort();
 
   async function simular() {
     if (!escolaId || !formulario.ano_escolar) return;
@@ -115,6 +115,9 @@ export default function Simulador() {
             {numeroCampo("Questões (tentativas)", "questoes_tentativas")}
             {numeroCampo("Acertos", "questoes_acertos")}
           </div>
+          {erroTurmas && (
+            <div className="mt-3"><Mensagem tipo="erro">{erroTurmas.message}</Mensagem></div>
+          )}
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
           <div className="mt-4">
             <Botao onClick={simular} disabled={ocupado || !formulario.ano_escolar}>

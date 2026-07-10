@@ -1,6 +1,6 @@
 /** Módulo Elefante Letrado (PRD §56): leitura, questões e níveis por aluno. */
 import { Layers, Pencil } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -15,6 +15,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
 import type { ElefanteAluno, Nivel } from "../lib/types";
@@ -45,8 +46,17 @@ export default function Elefante() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
-  const [linhas, setLinhas] = useState<ElefanteAluno[] | null>(null);
-  const [niveis, setNiveis] = useState<Nivel[]>([]);
+  const {
+    dados: linhas,
+    erro: erroLinhas,
+    carregando,
+    recarregar: recarregarLinhas,
+  } = useApi<ElefanteAluno[]>(escolaId ? `/escolas/${escolaId}/elefante` : null);
+  const { dados: dadosDificuldade, erro: erroNiveis } = useApi<{ niveis: Nivel[] }>(
+    escolaId ? `/escolas/${escolaId}/dificuldade` : null,
+  );
+  const niveis = dadosDificuldade?.niveis ?? [];
+
   const [editando, setEditando] = useState<ElefanteAluno | null>(null);
   const [formulario, setFormulario] = useState({
     tempo_leitura_min: 0,
@@ -61,20 +71,6 @@ export default function Elefante() {
   const [faixasMotivo, setFaixasMotivo] = useState("");
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
-
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    api<ElefanteAluno[]>(`/escolas/${escolaId}/elefante`).then(setLinhas).catch(() => setLinhas([]));
-  }, [escolaId]);
-
-  useEffect(carregar, [carregar]);
-
-  useEffect(() => {
-    if (!escolaId) return;
-    api<{ niveis: Nivel[] }>(`/escolas/${escolaId}/dificuldade`)
-      .then((r) => setNiveis(r.niveis))
-      .catch(() => setNiveis([]));
-  }, [escolaId]);
 
   function abrirEdicao(linha: ElefanteAluno) {
     setEditando(linha);
@@ -115,7 +111,7 @@ export default function Elefante() {
         }),
       });
       setEditando(null);
-      carregar();
+      recarregarLinhas();
     } catch (excecao) {
       setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
     } finally {
@@ -133,7 +129,7 @@ export default function Elefante() {
         body: JSON.stringify({ faixas: faixasForm, motivo: faixasMotivo || null }),
       });
       setFaixasDe(null);
-      carregar();
+      recarregarLinhas();
     } catch (excecao) {
       setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
     } finally {
@@ -150,9 +146,11 @@ export default function Elefante() {
         descricao="Livros por nível de dificuldade, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
       />
       <Card>
-        {linhas === null ? (
+        {carregando ? (
           <Carregando />
-        ) : linhas.length === 0 ? (
+        ) : erroLinhas ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erroLinhas.message} />
+        ) : (linhas ?? []).length === 0 ? (
           <Vazio titulo="Nenhum aluno ativo" descricao="Cadastre alunos ou importe um relatório do Elefante Letrado." />
         ) : (
           <div className="overflow-x-auto">
@@ -171,7 +169,7 @@ export default function Elefante() {
                 </tr>
               </thead>
               <tbody>
-                {linhas.map((linha) => (
+                {(linhas ?? []).map((linha) => (
                   <tr key={linha.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">
                       <Link to={`/alunos/${linha.aluno_id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
@@ -237,7 +235,9 @@ export default function Elefante() {
             Informe quantos livros o aluno concluiu em cada nível. O total e os pontos de
             dificuldade são calculados automaticamente com os pesos configurados em Métricas.
           </p>
-          {niveis.length === 0 ? (
+          {erroNiveis ? (
+            <Mensagem tipo="erro">{erroNiveis.message}</Mensagem>
+          ) : niveis.length === 0 ? (
             <Mensagem tipo="erro">
               Nenhum nível de dificuldade configurado. Configure-os em Métricas primeiro.
             </Mensagem>

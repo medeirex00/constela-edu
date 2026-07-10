@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 
 import { Botao, Card, Mensagem, estiloInput } from "./ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 
 interface ConfigIA {
@@ -24,43 +25,37 @@ const PROVEDORES = [
 
 export default function ConfigAssistenteIA() {
   const { escolaId } = useApp();
-  const [config, setConfig] = useState<ConfigIA | null>(null);
-  const [falhaCarga, setFalhaCarga] = useState(false);
-  const [tentativa, setTentativa] = useState(0);
+  const {
+    dados: config,
+    erro,
+    carregando,
+    recarregar,
+  } = useApi<ConfigIA>(escolaId ? `/escolas/${escolaId}/assistente/config` : null);
   const [provedor, setProvedor] = useState("local");
   const [apiKey, setApiKey] = useState("");
   const [modelo, setModelo] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
 
+  // Semeia os campos editáveis quando a configuração é carregada.
   useEffect(() => {
-    if (!escolaId) return;
-    let ativo = true; // ignora resposta atrasada após trocar de escola
-    setConfig(null);
-    setFalhaCarga(false);
+    if (!config) return;
+    setProvedor(config.provedor);
+    setModelo(config.modelo);
+  }, [config]);
+
+  // Ao trocar de escola, limpa a chave digitada e qualquer aviso pendente.
+  useEffect(() => {
     setAviso(null);
     setApiKey("");
-    api<ConfigIA>(`/escolas/${escolaId}/assistente/config`)
-      .then((c) => {
-        if (!ativo) return;
-        setConfig(c);
-        setProvedor(c.provedor);
-        setModelo(c.modelo);
-      })
-      .catch(() => {
-        if (ativo) setFalhaCarga(true);
-      });
-    return () => {
-      ativo = false;
-    };
-  }, [escolaId, tentativa]);
+  }, [escolaId]);
 
   async function salvar() {
     if (!escolaId) return;
     setOcupado(true);
     setAviso(null);
     try {
-      const salvo = await api<ConfigIA>(`/escolas/${escolaId}/assistente/config`, {
+      await api<ConfigIA>(`/escolas/${escolaId}/assistente/config`, {
         method: "PUT",
         body: JSON.stringify({
           provedor,
@@ -68,7 +63,7 @@ export default function ConfigAssistenteIA() {
           modelo: modelo.trim() || null,
         }),
       });
-      setConfig(salvo);
+      recarregar();
       setApiKey("");
       setAviso({ tipo: "ok", texto: "Configuração salva." });
     } catch (excecao) {
@@ -105,13 +100,13 @@ export default function ConfigAssistenteIA() {
     }
   }
 
-  if (falhaCarga) {
+  if (!carregando && erro) {
     return (
       <Card className="space-y-3 p-5">
         <Mensagem tipo="erro">
-          Não foi possível carregar a configuração do assistente.
+          Não foi possível carregar a configuração do assistente: {erro.message}
         </Mensagem>
-        <Botao variante="neutro" onClick={() => setTentativa((t) => t + 1)}>
+        <Botao variante="neutro" onClick={recarregar}>
           Tentar de novo
         </Botao>
       </Card>

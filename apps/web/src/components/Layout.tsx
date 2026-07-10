@@ -41,7 +41,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
@@ -195,7 +195,6 @@ function PesquisaGlobal() {
   const { escolaId, usuario } = useApp();
   const navegar = useNavigate();
   const [termo, setTermo] = useState("");
-  const [resultado, setResultado] = useState<ResultadoPesquisa | null>(null);
   const [aberto, setAberto] = useState(false);
   const [ativo, setAtivo] = useState(0);
   const caixa = useRef<HTMLDivElement | null>(null);
@@ -206,18 +205,16 @@ function PesquisaGlobal() {
 
   const consulta = termo.trim();
 
+  // Atrasa (debounce) a busca para não consultar a API a cada tecla.
+  const [consultaAtrasada, setConsultaAtrasada] = useState("");
   useEffect(() => {
-    if (!escolaId || consulta.length < 2) {
-      setResultado(null);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      api<ResultadoPesquisa>(`/escolas/${escolaId}/pesquisa?q=${encodeURIComponent(consulta)}`)
-        .then(setResultado)
-        .catch(() => setResultado(null));
-    }, 200);
-    return () => window.clearTimeout(timer);
-  }, [escolaId, consulta]);
+    const t = window.setTimeout(() => setConsultaAtrasada(consulta), 200);
+    return () => window.clearTimeout(t);
+  }, [consulta]);
+  const { dados: resultado } = useApi<ResultadoPesquisa>(
+    escolaId && consultaAtrasada.length >= 2
+      ? `/escolas/${escolaId}/pesquisa?q=${encodeURIComponent(consultaAtrasada)}`
+      : null);
 
   useEffect(() => {
     function fechar(evento: MouseEvent) {
@@ -282,7 +279,6 @@ function PesquisaGlobal() {
 
   function abrir(caminho: string) {
     setTermo("");
-    setResultado(null);
     setAberto(false);
     navegar(caminho);
   }
@@ -367,13 +363,10 @@ interface Notificacao {
 function Notificacoes() {
   const { escolaId } = useApp();
   const [aberto, setAberto] = useState(false);
-  const [itens, setItens] = useState<Notificacao[]>([]);
+  const { dados } = useApi<Notificacao[]>(
+    aberto && escolaId ? `/escolas/${escolaId}/notificacoes` : null);
+  const itens = dados ?? [];
   const caixa = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!aberto || !escolaId) return;
-    api<Notificacao[]>(`/escolas/${escolaId}/notificacoes`).then(setItens).catch(() => setItens([]));
-  }, [aberto, escolaId]);
 
   useEffect(() => {
     function fechar(evento: MouseEvent) {

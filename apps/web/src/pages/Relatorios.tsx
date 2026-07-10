@@ -1,10 +1,11 @@
 /** Relatórios (PRD §86–§103): exportação CSV/Excel/PDF e certificados. */
 import { Award, FileDown, FileSpreadsheet, FileText } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Botao, Campo, Card, Mensagem, PageHeader, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api, apiDownload } from "../lib/api";
+import { useApi } from "../hooks/useApi";
+import { apiDownload } from "../lib/api";
 import type { PaginaAlunos } from "../lib/types";
 
 const RELATORIOS = [
@@ -28,17 +29,14 @@ export default function Relatorios() {
   const relatorios = gestor
     ? RELATORIOS
     : RELATORIOS.filter((r) => r.tipo === "ranking" || r.tipo === "alunos");
-  const [alunos, setAlunos] = useState<{ id: number; nome: string }[]>([]);
+  // Lista de alunos para o seletor de certificados (leitura via useApi).
+  const { dados: paginaAlunos, erro: erroAlunos } = useApi<PaginaAlunos>(
+    escolaId ? `/escolas/${escolaId}/alunos?por_pagina=100` : null,
+  );
+  const alunos = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
   const [alunoId, setAlunoId] = useState("");
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState("");
-
-  useEffect(() => {
-    if (!escolaId) return;
-    api<PaginaAlunos>(`/escolas/${escolaId}/alunos?por_pagina=100`)
-      .then((pagina) => setAlunos(pagina.itens.map((aluno) => ({ id: aluno.id, nome: aluno.nome }))))
-      .catch(() => setAlunos([]));
-  }, [escolaId]);
 
   async function baixar(caminho: string, chave: string) {
     if (!escolaId) return;
@@ -92,6 +90,9 @@ export default function Relatorios() {
           <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
             Certificado individual em PDF com nome, turma, nota geral e posição no ranking (PRD §99).
           </p>
+          {erroAlunos && (
+            <div className="mb-4"><Mensagem tipo="erro">Não foi possível carregar os alunos: {erroAlunos.message}</Mensagem></div>
+          )}
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-[240px] flex-1">
               <Campo rotulo="Aluno">

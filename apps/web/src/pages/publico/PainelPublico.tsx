@@ -4,10 +4,10 @@
  * automática dos dados e modo tela cheia.
  */
 import { Expand, Pause, Play } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { api } from "../../lib/api";
+import { useApi } from "../../hooks/useApi";
 import { nota } from "../../lib/formato";
 
 interface ItemRanking {
@@ -101,29 +101,22 @@ function CartaoDestaquePublico({ titulo, destaque }: { titulo: string; destaque:
 
 export default function PainelPublico() {
   const { token = "" } = useParams();
-  const [dados, setDados] = useState<DadosPainel | null>(null);
-  const [erro, setErro] = useState(false);
+  // Cliente compartilhado: usa a base configurada (VITE_API_URL) — um fetch
+  // relativo funcionaria só em dev (proxy do Vite); na Vercel o rewrite do SPA
+  // devolveria HTML no lugar do JSON e o painel quebrava.
+  const { dados, erro, recarregar } = useApi<DadosPainel>(
+    token ? `/publico/${token}/painel` : null,
+  );
   const [slideAtivo, setSlideAtivo] = useState(0);
   const [pausado, setPausado] = useState(false);
   const raiz = useRef<HTMLDivElement | null>(null);
 
-  const carregar = useCallback(async () => {
-    try {
-      // Cliente compartilhado: usa a base configurada (VITE_API_URL) — um
-      // fetch relativo funcionaria só em dev (proxy do Vite); na Vercel o
-      // rewrite do SPA devolveria HTML no lugar do JSON e o painel quebrava.
-      setDados(await api<DadosPainel>(`/publico/${token}/painel`));
-      setErro(false);
-    } catch {
-      setErro(true);
-    }
-  }, [token]);
-
   useEffect(() => {
-    carregar();
-    const atualizador = window.setInterval(carregar, 60_000); // dados sempre frescos
+    // Dados sempre frescos no telão: recarrega a cada 60s (o hook cuida do
+    // cancelamento e do timeout de cada busca).
+    const atualizador = window.setInterval(recarregar, 60_000);
     return () => window.clearInterval(atualizador);
-  }, [carregar]);
+  }, [recarregar]);
 
   useEffect(() => {
     if (!dados || pausado || dados.slides.length <= 1) return;

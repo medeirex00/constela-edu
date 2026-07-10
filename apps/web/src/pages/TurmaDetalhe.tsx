@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { baixarCartoesDaTurma } from "@constela/quest-core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import MenuSuspenso, { ItemMenu } from "../components/MenuSuspenso";
@@ -43,6 +43,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
 import type { AlunoGestao, Turma } from "../lib/types";
@@ -123,12 +124,8 @@ export default function TurmaDetalhe() {
   const { escolaId } = useApp();
   const navegar = useNavigate();
 
-  const [resumo, setResumo] = useState<ResumoTurma | null>(null);
-  const [alunos, setAlunos] = useState<AlunoGestao[] | null>(null);
-  const [turmas, setTurmas] = useState<Turma[]>([]);
-  const [erroTurma, setErroTurma] = useState(false);
-
   const [busca, setBusca] = useState("");
+  const [buscaAplicada, setBuscaAplicada] = useState("");
   const [ordenar, setOrdenar] = useState("nome");
   const [incluirInativos, setIncluirInativos] = useState(false);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
@@ -139,32 +136,28 @@ export default function TurmaDetalhe() {
 
   const base = `/escolas/${escolaId}/turmas/${id}`;
 
-  const carregarResumo = useCallback(() => {
-    if (!escolaId || !id) return;
-    api<ResumoTurma>(`${base}/resumo`).then(setResumo).catch(() => setErroTurma(true));
-  }, [escolaId, id, base]);
+  // Resumo da turma: contagens, médias e indicadores.
+  const { dados: resumo, erro: erroTurma, recarregar: recarregarResumo } =
+    useApi<ResumoTurma>(escolaId && id ? `${base}/resumo` : null);
 
-  const carregarAlunos = useCallback(() => {
-    if (!escolaId || !id) return;
-    const params = new URLSearchParams({ ordenar });
-    if (busca.trim()) params.set("busca", busca.trim());
-    if (incluirInativos) params.set("incluir_inativos", "true");
-    api<AlunoGestao[]>(`${base}/alunos?${params}`)
-      .then(setAlunos)
-      .catch(() => setAlunos([]));
-  }, [escolaId, id, base, ordenar, busca, incluirInativos]);
+  // Turmas para o modal de transferência (array sempre pronto para render).
+  const { dados: turmasDados } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null,
+  );
+  const turmas = turmasDados ?? [];
 
-  useEffect(() => { carregarResumo(); }, [carregarResumo]);
+  // Busca com debounce; ordenação/filtro entram na URL na hora.
   useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
-
-  // Busca com debounce; ordenação/filtro recarregam na hora.
-  useEffect(() => {
-    const t = window.setTimeout(carregarAlunos, busca ? 300 : 0);
+    const t = window.setTimeout(() => setBuscaAplicada(busca), busca ? 300 : 0);
     return () => window.clearTimeout(t);
-  }, [carregarAlunos, busca]);
+  }, [busca]);
+
+  // Lista de alunos: a URL muda com busca/ordenação/filtro e o hook rebusca sozinho.
+  const params = new URLSearchParams({ ordenar });
+  if (buscaAplicada.trim()) params.set("busca", buscaAplicada.trim());
+  if (incluirInativos) params.set("incluir_inativos", "true");
+  const { dados: alunos, erro: erroAlunos, recarregar: recarregarAlunos } =
+    useApi<AlunoGestao[]>(escolaId && id ? `${base}/alunos?${params}` : null);
 
   function avisar(tipo: "ok" | "erro", texto: string) {
     setAviso({ tipo, texto });
@@ -173,8 +166,8 @@ export default function TurmaDetalhe() {
 
   /** Recarrega tudo (lista + contagens + ranking) sem recarregar a página. */
   function recarregar() {
-    carregarAlunos();
-    carregarResumo();
+    recarregarAlunos();
+    recarregarResumo();
     setSelecionados(new Set());
   }
 
@@ -256,7 +249,7 @@ export default function TurmaDetalhe() {
     });
   }
 
-  if (erroTurma) return <Vazio titulo="Turma não encontrada" />;
+  if (erroTurma) return <Vazio titulo="Turma não encontrada" descricao={erroTurma.message} />;
   if (!resumo) return <Carregando />;
 
   return (
@@ -341,7 +334,9 @@ export default function TurmaDetalhe() {
           </div>
         )}
 
-        {alunos === null ? (
+        {erroAlunos ? (
+          <Vazio titulo="Não foi possível carregar os alunos" descricao={erroAlunos.message} />
+        ) : alunos === null ? (
           <Carregando />
         ) : lista.length === 0 ? (
           <Vazio titulo={busca ? "Nenhum aluno encontrado" : "Turma sem alunos"}

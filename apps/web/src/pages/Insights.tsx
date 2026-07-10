@@ -1,11 +1,10 @@
 /** Inteligência Pedagógica (PRD §129–§153): índices e alertas automáticos. */
 import { AlertTriangle, Lightbulb } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota } from "../lib/formato";
 
 interface IndiceAluno {
@@ -45,16 +44,14 @@ function BarraIndice({ valor }: { valor: number }) {
 
 export default function Insights() {
   const { escolaId } = useApp();
-  const [dadosInsights, setDadosInsights] = useState<InsightsResposta | null>(null);
+  const { dados: dadosInsights, erro, carregando } = useApi<InsightsResposta>(
+    escolaId ? `/escolas/${escolaId}/insights` : null,
+  );
 
-  useEffect(() => {
-    if (!escolaId) return;
-    setDadosInsights(null);
-    api<InsightsResposta>(`/escolas/${escolaId}/insights`)
-      .then(setDadosInsights)
-      .catch(() => setDadosInsights({ indices: [], alertas: [] }));
-  }, [escolaId]);
-
+  // Estado de erro discreto — antes o erro era engolido com arrays vazios.
+  if (!carregando && erro) {
+    return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
+  }
   if (!dadosInsights) return <Carregando />;
 
   return (

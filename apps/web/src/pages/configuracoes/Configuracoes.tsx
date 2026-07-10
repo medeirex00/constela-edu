@@ -6,6 +6,7 @@ import ConfigAssistenteIA from "../../components/ConfigAssistenteIA";
 import { Botao, Card, Mensagem, PageHeader } from "../../components/ui";
 import { PesosEditor } from "./Metricas";
 import { useApp } from "../../context/AppContext";
+import { useApi } from "../../hooks/useApi";
 import { api, ApiError, apiDownload, apiUpload } from "../../lib/api";
 
 /** Aparência (PRD §18): cor primária usada nos relatórios e certificados. */
@@ -14,13 +15,14 @@ function Aparencia() {
   const ehAdmin = usuario?.is_global || usuario?.cargo === "admin";
   const [cor, setCor] = useState("#1B2A4A");
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  // A cor é estado editável (color picker + PUT); buscamos a salva e semeamos o input.
+  const { dados: aparencia, erro: erroAparencia } = useApi<{ cor_primaria: string }>(
+    escolaId ? `/escolas/${escolaId}/aparencia` : null,
+  );
 
   useEffect(() => {
-    if (!escolaId) return;
-    api<{ cor_primaria: string }>(`/escolas/${escolaId}/aparencia`)
-      .then((resposta) => setCor(resposta.cor_primaria))
-      .catch(() => undefined);
-  }, [escolaId]);
+    if (aparencia) setCor(aparencia.cor_primaria);
+  }, [aparencia]);
 
   async function salvar() {
     if (!escolaId) return;
@@ -56,6 +58,11 @@ function Aparencia() {
       <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
         Aplicada no cabeçalho dos relatórios em PDF/Excel e nos certificados.
       </p>
+      {erroAparencia && (
+        <div className="mt-3">
+          <Mensagem tipo="erro">Não foi possível carregar a cor salva: {erroAparencia.message}</Mensagem>
+        </div>
+      )}
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
     </Card>
   );

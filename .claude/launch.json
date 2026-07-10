@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--workspace", "@constela/quest"],
       "port": 5174
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace", "apps/web", "--", "--port", "5175", "--strictPort"],
+      "port": 5175
     }
   ]
 }

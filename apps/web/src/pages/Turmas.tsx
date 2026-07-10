@@ -7,7 +7,7 @@
  * alunos vinculados — arquivar é o caminho que preserva o histórico.
  */
 import { Archive, ArchiveRestore, LayoutGrid, Pencil, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -23,6 +23,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { ApiError, api } from "../lib/api";
 import type { Professor, Turma, TurmaPayload } from "../lib/types";
 
@@ -450,8 +451,17 @@ function CriarVariasTurmas({ escolaId, anoLetivo, existentes, aberto, aoFechar, 
 
 export default function Turmas() {
   const { escolaId, escolaAtual } = useApp();
-  const [turmas, setTurmas] = useState<Turma[] | null>(null);
-  const [professores, setProfessores] = useState<Professor[]>([]);
+  // Listagem de turmas (todas — o filtro visível é aplicado depois, no cliente).
+  const {
+    dados: turmas,
+    erro: erroTurmas,
+    carregando: carregandoTurmas,
+    recarregar: recarregarTurmas,
+  } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas?todas=true` : null);
+  // Professores para o seletor do formulário.
+  const { dados: professores } = useApi<Professor[]>(
+    escolaId ? `/escolas/${escolaId}/professores` : null,
+  );
   const [mostrarTodas, setMostrarTodas] = useState(false);
   const [formAberto, setFormAberto] = useState(false);
   const [variasAberto, setVariasAberto] = useState(false);
@@ -463,25 +473,6 @@ export default function Turmas() {
   const temporizador = useRef<number | null>(null);
 
   const anoAtivo = escolaAtual?.ano_letivo_ativo ?? new Date().getFullYear();
-
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas?todas=true`)
-      .then(setTurmas)
-      .catch(() => setTurmas([]));
-  }, [escolaId]);
-
-  useEffect(() => {
-    setTurmas(null);
-    carregar();
-  }, [carregar]);
-
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Professor[]>(`/escolas/${escolaId}/professores`)
-      .then(setProfessores)
-      .catch(() => setProfessores([]));
-  }, [escolaId]);
 
   function avisar(tipo: "ok" | "erro", texto: string) {
     setMensagem({ tipo, texto });
@@ -510,7 +501,7 @@ export default function Turmas() {
     avisar("ok", emEdicao
       ? `Turma “${salva.nome}” atualizada com sucesso.`
       : `Turma “${salva.nome}” criada com sucesso. Ela já está disponível em filtros, importações, rankings e relatórios.`);
-    carregar();
+    recarregarTurmas();
   }
 
   async function alternarArquivo(turma: Turma) {
@@ -525,7 +516,7 @@ export default function Turmas() {
       avisar("ok", novoStatus === "arquivada"
         ? `Turma “${turma.nome}” arquivada — ela sai dos filtros, mas o histórico é preservado.`
         : `Turma “${turma.nome}” reativada.`);
-      carregar();
+      recarregarTurmas();
     } catch (erro) {
       avisar("erro", erro instanceof ApiError ? erro.message : "Não foi possível alterar a turma.");
     }
@@ -541,7 +532,7 @@ export default function Turmas() {
       });
       avisar("ok", `Turma “${paraExcluir.nome}” excluída.`);
       setParaExcluir(null);
-      carregar();
+      recarregarTurmas();
     } catch (erro) {
       setErroExclusao(
         erro instanceof ApiError ? erro.message : "Não foi possível excluir a turma.",
@@ -585,7 +576,7 @@ export default function Turmas() {
             avisar("ok", `${criadas} turma(s) criada(s)` +
               (puladas > 0 ? ` (${puladas} já existiam e foram puladas).` : ".") +
               " Ajuste turno, capacidade e professor em cada turma quando quiser.");
-            carregar();
+            recarregarTurmas();
           }}
         />
       )}
@@ -607,8 +598,10 @@ export default function Turmas() {
       </label>
 
       <Card>
-        {turmas === null ? (
+        {carregandoTurmas ? (
           <Carregando />
+        ) : erroTurmas ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erroTurmas.message} />
         ) : visiveis.length === 0 ? (
           <Vazio
             titulo="Nenhuma turma cadastrada"
@@ -714,7 +707,7 @@ export default function Turmas() {
         turma={emEdicao}
         escolaNome={escolaAtual?.nome ?? ""}
         anoPadrao={anoAtivo}
-        professores={professores}
+        professores={professores ?? []}
         aoFechar={() => setFormAberto(false)}
         aoSalvo={aoSalvo}
       />

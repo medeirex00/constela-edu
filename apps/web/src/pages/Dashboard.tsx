@@ -7,28 +7,18 @@ import {
   Star,
   Users,
 } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Badge, Card, Carregando, StatCard, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 import type { Dashboard as DadosDashboard } from "../lib/types";
 
 export default function Dashboard() {
   const { escolaId, escolas, selecionarEscola } = useApp();
-  const [dados, setDados] = useState<DadosDashboard | null>(null);
-  const [carregando, setCarregando] = useState(true);
-
-  useEffect(() => {
-    if (!escolaId) return;
-    setCarregando(true);
-    api<DadosDashboard>(`/escolas/${escolaId}/dashboard`)
-      .then(setDados)
-      .catch(() => setDados(null))
-      .finally(() => setCarregando(false));
-  }, [escolaId]);
+  const { dados, erro, carregando } = useApi<DadosDashboard>(
+    escolaId ? `/escolas/${escolaId}/dashboard` : null);
 
   return (
     <div className="space-y-6">
@@ -57,6 +47,10 @@ export default function Dashboard() {
       </Card>
 
       {carregando && <Carregando texto="Atualizando indicadores..." />}
+
+      {!carregando && erro && (
+        <Vazio titulo="Não foi possível carregar os indicadores" descricao={erro.message} />
+      )}
 
       {!carregando && dados && (
         <>

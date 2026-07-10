@@ -1,11 +1,10 @@
 /** Gamificação (PRD §64, §79–§84): mural, destaques e ranking de XP. */
 import { Flame, Medal, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { dataHora, nota, numero } from "../lib/formato";
 
 interface Destaque {
@@ -57,16 +56,16 @@ function CartaoDestaque({ titulo, destaque }: { titulo: string; destaque: Destaq
 
 export default function Conquistas() {
   const { escolaId } = useApp();
-  const [mural, setMural] = useState<Mural | null>(null);
-  const [rankingXp, setRankingXp] = useState<ItemXp[] | null>(null);
-
-  useEffect(() => {
-    if (!escolaId) return;
-    setMural(null);
-    setRankingXp(null);
-    api<Mural>(`/escolas/${escolaId}/gamificacao/mural`).then(setMural).catch(() => setMural(null));
-    api<ItemXp[]>(`/escolas/${escolaId}/gamificacao/ranking-xp`).then(setRankingXp).catch(() => setRankingXp([]));
-  }, [escolaId]);
+  const {
+    dados: mural,
+    erro: erroMural,
+    carregando: carregandoMural,
+  } = useApi<Mural>(escolaId ? `/escolas/${escolaId}/gamificacao/mural` : null);
+  const {
+    dados: rankingXp,
+    erro: erroRanking,
+    carregando: carregandoRanking,
+  } = useApi<ItemXp[]>(escolaId ? `/escolas/${escolaId}/gamificacao/ranking-xp` : null);
 
   return (
     <div className="space-y-6">
@@ -95,9 +94,11 @@ export default function Conquistas() {
             <Sparkles size={15} className="text-indigo-500" />
             <h3 className="text-sm font-semibold">Mural da escola</h3>
           </div>
-          {mural === null ? (
+          {carregandoMural ? (
             <Carregando />
-          ) : mural.eventos.length === 0 ? (
+          ) : erroMural ? (
+            <Vazio titulo="Não foi possível carregar" descricao={erroMural.message} />
+          ) : !mural || mural.eventos.length === 0 ? (
             <Vazio titulo="Nada por aqui ainda" descricao="Importe dados para movimentar o mural." />
           ) : (
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
@@ -119,9 +120,11 @@ export default function Conquistas() {
             <Flame size={15} className="text-amber-500" />
             <h3 className="text-sm font-semibold">Ranking de XP</h3>
           </div>
-          {rankingXp === null ? (
+          {carregandoRanking ? (
             <Carregando />
-          ) : rankingXp.length === 0 ? (
+          ) : erroRanking ? (
+            <Vazio titulo="Não foi possível carregar" descricao={erroRanking.message} />
+          ) : (rankingXp ?? []).length === 0 ? (
             <Vazio titulo="Nenhum aluno com XP" />
           ) : (
             <div className="overflow-x-auto">
@@ -138,7 +141,7 @@ export default function Conquistas() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rankingXp.map((item) => (
+                  {(rankingXp ?? []).map((item) => (
                     <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                       <td className="px-4 py-2.5">
                         {item.posicao <= 3 ? <Badge tom="alerta">{item.posicao}º</Badge> : `${item.posicao}º`}

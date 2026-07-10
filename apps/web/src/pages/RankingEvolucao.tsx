@@ -1,12 +1,12 @@
 /** Ranking de Evolução (PRD §72) — independente do Ranking Geral. */
 import { TrendingUp } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
 import { Badge, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
 import type { Turma } from "../lib/types";
 
@@ -28,27 +28,20 @@ interface ItemEvolucao {
 
 export default function RankingEvolucao() {
   const { escolaId } = useApp();
-  const [itens, setItens] = useState<ItemEvolucao[] | null>(null);
-  const [turmas, setTurmas] = useState<Turma[]>([]);
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "30dias" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
+  // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
+  const { dados: turmasDados } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  const turmas = turmasDados ?? [];
 
-  useEffect(() => {
-    if (!escolaId) return;
-    setItens(null);
-    const parametros = new URLSearchParams(periodoParaQuery(periodo));
-    if (turmaId) parametros.set("turma_id", turmaId);
-    if (serie) parametros.set("ano_escolar", serie);
-    api<ItemEvolucao[]>(`/escolas/${escolaId}/ranking-evolucao?${parametros}`)
-      .then(setItens)
-      .catch(() => setItens([]));
-  }, [escolaId, periodo, turmaId, serie]);
+  const parametros = new URLSearchParams(periodoParaQuery(periodo));
+  if (turmaId) parametros.set("turma_id", turmaId);
+  if (serie) parametros.set("ano_escolar", serie);
+  const { dados: itens, erro, carregando } = useApi<ItemEvolucao[]>(
+    escolaId ? `/escolas/${escolaId}/ranking-evolucao?${parametros}` : null,
+  );
 
   const series = useMemo(
     () => Array.from(new Set(turmas.map((turma) => turma.ano_escolar))).sort(),
@@ -89,9 +82,11 @@ export default function RankingEvolucao() {
       </Card>
 
       <Card>
-        {itens === null ? (
+        {carregando ? (
           <Carregando />
-        ) : itens.length === 0 ? (
+        ) : erro ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+        ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Sem dados no período" descricao="Importe novos relatórios para medir a evolução." />
         ) : (
           <div className="overflow-x-auto">
@@ -108,7 +103,7 @@ export default function RankingEvolucao() {
                 </tr>
               </thead>
               <tbody>
-                {itens.map((item) => (
+                {(itens ?? []).map((item) => (
                   <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">
                       {item.posicao <= 3 ? <Badge tom="ok">{item.posicao}º</Badge> : `${item.posicao}º`}

@@ -5,7 +5,7 @@
  * é só renomear os que não agradarem.
  */
 import { Building2, Pencil, Power, School } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Badge,
@@ -20,6 +20,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { ApiError, api } from "../lib/api";
 import { normalizar } from "../lib/nomes";
 import type { Escola } from "../lib/types";
@@ -59,8 +60,14 @@ const REDE_CARAGUA: { nome: string; completo: string }[] = [
 
 export default function Escolas() {
   const { usuario, recarregarEscolas } = useApp();
-  const [escolas, setEscolas] = useState<Escola[] | null>(null);
-  const [erroLista, setErroLista] = useState(false);
+  // Inclui as inativas: sem isso, uma escola desativada sumiria da tela
+  // sem caminho de volta.
+  const {
+    dados: escolas,
+    erro: erroLista,
+    carregando,
+    recarregar: carregar,
+  } = useApi<Escola[]>("/escolas?incluir_inativas=true");
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -68,15 +75,6 @@ export default function Escolas() {
   const [nome, setNome] = useState("");
   const [renomear, setRenomear] = useState<Escola | null>(null);
   const [confirmarRede, setConfirmarRede] = useState(false);
-
-  const carregar = useCallback(() => {
-    // Inclui as inativas: sem isso, uma escola desativada sumiria da tela
-    // sem caminho de volta.
-    api<Escola[]>("/escolas?incluir_inativas=true")
-      .then((lista) => { setEscolas(lista); setErroLista(false); })
-      .catch(() => { setEscolas([]); setErroLista(true); });
-  }, []);
-  useEffect(carregar, [carregar]);
 
   if (!usuario?.is_global) {
     return <Vazio titulo="Somente o administrador global"
@@ -206,12 +204,12 @@ export default function Escolas() {
       )}
 
       <Card>
-        {escolas === null ? (
+        {carregando ? (
           <Carregando />
         ) : erroLista ? (
           <Vazio titulo="Não foi possível carregar as escolas"
-                 descricao="Verifique a conexão e recarregue a página." />
-        ) : escolas.length === 0 ? (
+                 descricao={erroLista.message} />
+        ) : !escolas || escolas.length === 0 ? (
           <Vazio titulo="Nenhuma escola" descricao="Crie a primeira escola da rede." />
         ) : (
           <div className="overflow-x-auto">

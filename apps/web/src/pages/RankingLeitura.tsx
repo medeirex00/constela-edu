@@ -3,13 +3,13 @@
  * apenas no intervalo escolhido (base do "melhor leitor da semana/mês").
  */
 import { BookMarked } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
 import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { api } from "../lib/api";
+import { useApi } from "../hooks/useApi";
 import { numero, tempoLeitura } from "../lib/formato";
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
@@ -17,25 +17,19 @@ export default function RankingLeitura() {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
-  const [turmas, setTurmas] = useState<Turma[]>([]);
-  const [itens, setItens] = useState<RankingLeituraItem[] | null>(null);
 
-  useEffect(() => {
-    if (!escolaId) return;
-    api<Turma[]>(`/escolas/${escolaId}/turmas`).then(setTurmas).catch(() => setTurmas([]));
-  }, [escolaId]);
+  const { dados: turmas } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
 
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    setItens(null);
-    const q = periodoParaQuery(periodo);
-    const filtro = turmaId ? `&turma_id=${turmaId}` : "";
-    api<RankingLeituraItem[]>(`/escolas/${escolaId}/ranking/leitura?${q}${filtro}`)
-      .then(setItens)
-      .catch(() => setItens([]));
-  }, [escolaId, periodo, turmaId]);
-
-  useEffect(carregar, [carregar]);
+  // Recalcula a URL quando período/turma mudam; o hook rebusca sozinho.
+  const q = periodoParaQuery(periodo);
+  const filtro = turmaId ? `&turma_id=${turmaId}` : "";
+  const {
+    dados: itens,
+    erro,
+    carregando,
+  } = useApi<RankingLeituraItem[]>(
+    escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}${filtro}` : null,
+  );
 
   return (
     <div>
@@ -53,14 +47,16 @@ export default function RankingLeitura() {
           onChange={(e) => setTurmaId(e.target.value)}
         >
           <option value="">Todas as turmas</option>
-          {turmas.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+          {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
         </select>
       </Card>
 
       <Card>
-        {itens === null ? (
+        {carregando ? (
           <Carregando />
-        ) : itens.length === 0 ? (
+        ) : erro ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+        ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Nenhuma leitura no período"
                  descricao="Ajuste o período ou importe os relatórios individuais do Elefante Letrado." />
         ) : (
@@ -77,7 +73,7 @@ export default function RankingLeitura() {
                 </tr>
               </thead>
               <tbody>
-                {itens.map((item) => (
+                {(itens ?? []).map((item) => (
                   <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">{item.posicao}º</td>
                     <td className="px-4 py-2.5">

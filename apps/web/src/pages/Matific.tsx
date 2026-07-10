@@ -1,6 +1,6 @@
 /** Módulo Matific (PRD §55): dados atuais por aluno com edição manual auditada. */
 import { Pencil } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -15,6 +15,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { dataHora, nota, numero } from "../lib/formato";
 import type { MatificAluno } from "../lib/types";
@@ -23,18 +24,16 @@ export default function Matific() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
-  const [linhas, setLinhas] = useState<MatificAluno[] | null>(null);
+  const {
+    dados: linhas,
+    erro: erroLinhas,
+    carregando,
+    recarregar,
+  } = useApi<MatificAluno[]>(escolaId ? `/escolas/${escolaId}/matific` : null);
   const [editando, setEditando] = useState<MatificAluno | null>(null);
   const [formulario, setFormulario] = useState({ atividades: 0, estrelas: 0, pontuacao_media: 0, motivo: "" });
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
-
-  const carregar = useCallback(() => {
-    if (!escolaId) return;
-    api<MatificAluno[]>(`/escolas/${escolaId}/matific`).then(setLinhas).catch(() => setLinhas([]));
-  }, [escolaId]);
-
-  useEffect(carregar, [carregar]);
 
   function abrirEdicao(linha: MatificAluno) {
     setEditando(linha);
@@ -57,7 +56,7 @@ export default function Matific() {
         body: JSON.stringify({ ...formulario, motivo: formulario.motivo || null }),
       });
       setEditando(null);
-      carregar();
+      recarregar();
     } catch (excecao) {
       setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
     } finally {
@@ -72,9 +71,11 @@ export default function Matific() {
         descricao="Estado atual de cada aluno na plataforma. Edições manuais geram novo registro e ficam no log de auditoria."
       />
       <Card>
-        {linhas === null ? (
+        {carregando ? (
           <Carregando />
-        ) : linhas.length === 0 ? (
+        ) : erroLinhas ? (
+          <Vazio titulo="Não foi possível carregar" descricao={erroLinhas.message} />
+        ) : (linhas ?? []).length === 0 ? (
           <Vazio titulo="Nenhum aluno ativo" descricao="Cadastre alunos ou importe um relatório da Matific." />
         ) : (
           <div className="overflow-x-auto">
@@ -91,7 +92,7 @@ export default function Matific() {
                 </tr>
               </thead>
               <tbody>
-                {linhas.map((linha) => (
+                {(linhas ?? []).map((linha) => (
                   <tr key={linha.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">
                       <Link to={`/alunos/${linha.aluno_id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">

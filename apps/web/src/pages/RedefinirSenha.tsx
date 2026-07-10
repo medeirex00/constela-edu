@@ -5,11 +5,12 @@
  * deixa a pessoa escolher uma nova senha e a define. O token é de uso único e
  * expira; a senha original nunca é recuperada, apenas substituída.
  */
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { LogoHorizontal } from "../components/Logo";
 import { Botao, Carregando, Mensagem } from "../components/ui";
+import { useApi } from "../hooks/useApi";
 import { ApiError, api } from "../lib/api";
 
 type Estado =
@@ -24,23 +25,24 @@ const inputCls =
 export default function RedefinirSenha() {
   const [params] = useSearchParams();
   const token = params.get("token") ?? "";
-  const [estado, setEstado] = useState<Estado>({ fase: "verificando" });
   const [senha, setSenha] = useState("");
   const [senha2, setSenha2] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [concluido, setConcluido] = useState(false);
 
-  useEffect(() => {
-    if (!token) {
-      setEstado({ fase: "invalido" });
-      return;
-    }
-    api<{ valido: boolean; nome?: string }>(
-      `/auth/redefinir-senha/${encodeURIComponent(token)}`)
-      .then((r) =>
-        setEstado(r.valido ? { fase: "formulario", nome: r.nome ?? "" } : { fase: "invalido" }))
-      .catch(() => setEstado({ fase: "invalido" }));
-  }, [token]);
+  // Confere o link no servidor (uso único, expira). Falha transitória de rede é
+  // reavaliada pelo retry do hook; token inválido/expirado cai em "invalido".
+  const { dados: validacao, carregando } = useApi<{ valido: boolean; nome?: string }>(
+    token ? `/auth/redefinir-senha/${encodeURIComponent(token)}` : null);
+
+  const estado: Estado = concluido
+    ? { fase: "concluido" }
+    : carregando
+      ? { fase: "verificando" }
+      : validacao?.valido
+        ? { fase: "formulario", nome: validacao.nome ?? "" }
+        : { fase: "invalido" };
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
@@ -55,7 +57,7 @@ export default function RedefinirSenha() {
         method: "POST",
         body: JSON.stringify({ token, nova_senha: senha }),
       });
-      setEstado({ fase: "concluido" });
+      setConcluido(true);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : "Não foi possível redefinir a senha.");
     } finally {
