@@ -100,8 +100,29 @@ def _backfill_codigo_niveis(motor=None) -> None:
                 {"c": slug_nivel(nome or "nivel"), "i": id_})
 
 
+def _purgar_retencao_ia(motor=None) -> None:
+    """Retenção LGPD das conversas do assistente no boot (garantia MÍNIMA; para
+    cadência regular, agende `python -m scripts.purgar_ia`). Nunca derruba o
+    boot: uma falha de purga é registrada e a aplicação segue."""
+    from sqlalchemy import inspect
+    from sqlalchemy.orm import Session
+
+    motor = motor or engine
+    if "conversas_ia" not in inspect(motor).get_table_names():
+        return
+    try:
+        from app.services.assistente import purgar_conversas_ia_expiradas
+        with Session(motor) as db:
+            purgar_conversas_ia_expiradas(db)
+    except Exception:  # noqa: BLE001 — purga de retenção nunca bloqueia o boot
+        import logging
+        logging.getLogger("constela").warning(
+            "Purga de retenção de IA falhou no boot", exc_info=True)
+
+
 def garantir_dados_base(motor=None) -> None:
     """Ajustes de dados idempotentes aplicados após as migrações de schema."""
     motor = motor or engine
     _backfill_codigo_niveis(motor)
     _promover_admin_global(motor)
+    _purgar_retencao_ia(motor)

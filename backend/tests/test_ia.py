@@ -499,3 +499,47 @@ def test_promover_admin_global_idempotente(db, escola_completa):
     _promover_admin_global(motor)                      # 2ª vez: sem efeito colateral
     db.expire_all()
     assert db.get(Usuario, dono.id).is_global is True
+
+
+# --- Retenção LGPD das conversas do assistente --------------------------------
+
+def test_retencao_purga_conversas_com_mais_de_90_dias(db, escola_completa):
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from app.models import ConversaIA, MensagemIA
+    escola, admin = escola_completa["escola"], escola_completa["admin"]
+    ref = datetime.now(timezone.utc)
+    velha = ConversaIA(escola_id=escola.id, usuario_id=admin.id, titulo="Velha",
+                       created_at=ref - timedelta(days=91))
+    nova = ConversaIA(escola_id=escola.id, usuario_id=admin.id, titulo="Nova",
+                      created_at=ref - timedelta(days=10))
+    db.add_all([velha, nova])
+    db.flush()
+    db.add_all([
+        MensagemIA(conversa_id=velha.id, papel="usuario", conteudo="oi"),
+        MensagemIA(conversa_id=nova.id, papel="usuario", conteudo="oi"),
+    ])
+    db.commit()
+    velha_id, nova_id = velha.id, nova.id
+
+    assert assistente.purgar_conversas_ia_expiradas(db) == 1
+    vivas = set(db.execute(select(ConversaIA.id)).scalars())
+    assert velha_id not in vivas and nova_id in vivas
+    # Cascata (0003): a mensagem da conversa velha também sumiu; sobra a da nova.
+    assert db.execute(select(func.count()).select_from(MensagemIA)).scalar() == 1
+    # Idempotente: rodar de novo não apaga mais nada.
+    assert assistente.purgar_conversas_ia_expiradas(db) == 0
+
+
+def test_retencao_respeita_dias_configurado(db, escola_completa):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import ConversaIA
+    escola, admin = escola_completa["escola"], escola_completa["admin"]
+    db.add(ConversaIA(escola_id=escola.id, usuario_id=admin.id, titulo="X",
+                      created_at=datetime.now(timezone.utc) - timedelta(days=40)))
+    db.commit()
+    assert assistente.purgar_conversas_ia_expiradas(db, dias=90) == 0   # < 90 dias
+    assert assistente.purgar_conversas_ia_expiradas(db, dias=30) == 1   # > 30 dias

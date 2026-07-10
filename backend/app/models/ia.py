@@ -22,7 +22,8 @@ class ConversaIA(Base):
         ForeignKey("usuarios.id", ondelete="CASCADE"), index=True)
     titulo: Mapped[str] = mapped_column(String(200), default="Nova conversa")
     provedor: Mapped[str] = mapped_column(String(30), default="local")
-    created_at: Mapped[datetime] = mapped_column(default=agora)
+    # Indexado: a purga de retenção (LGPD) filtra por created_at (migração 0005).
+    created_at: Mapped[datetime] = mapped_column(default=agora, index=True)
 
 
 class MensagemIA(Base):

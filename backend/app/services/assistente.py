@@ -29,7 +29,9 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import select
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("constela.ia")
@@ -339,3 +341,24 @@ def perguntar(db: Session, escola_id: int, usuario_id: int,
         "provedor": provedor_usado,
         "resposta": resposta,
     }
+
+
+def purgar_conversas_ia_expiradas(db: Session, dias: int | None = None) -> int:
+    """Retenção LGPD (direito ao esquecimento / minimização): apaga conversas do
+    assistente com created_at mais antigo que `dias` (padrão
+    settings.IA_RETENCAO_DIAS). A cascata (migração 0003) remove as mensagens
+    junto. Idempotente. Devolve o nº de conversas apagadas."""
+    from app.core.config import settings
+    dias = settings.IA_RETENCAO_DIAS if dias is None else dias
+    # created_at é gravado em UTC mas a coluna DateTime (sem tz) devolve NAIVE do
+    # banco (SQLite/Postgres); usa corte NAIVE em UTC para casar a comparação.
+    # synchronize_session=False: DELETE puro em SQL (a cascata 0003 apaga as
+    # mensagens), sem avaliar a condição contra objetos em memória.
+    corte = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=dias)
+    resultado = db.execute(
+        delete(ConversaIA)
+        .where(ConversaIA.created_at < corte)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return resultado.rowcount or 0

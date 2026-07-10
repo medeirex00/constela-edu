@@ -428,6 +428,25 @@ def excluir_alunos_permanente(
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
                   detalhes={"nome": nomes[aid], "tipo": "exclusao_permanente"})
     db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
+
+    # Direito ao esquecimento (LGPD): remove conversas do assistente que citem o
+    # nome COMPLETO de algum aluno excluído (escopo da escola; a cascata da 0003
+    # apaga as mensagens). Dados da IA são derivados — a fonte oficial já sumiu.
+    from app.models import ConversaIA, MensagemIA
+    ids_conversas: set[int] = set()
+    for nome in {nomes[aid] for aid in ids if nomes[aid] and nomes[aid].strip()}:
+        ids_conversas.update(db.execute(
+            select(ConversaIA.id)
+            .join(MensagemIA, MensagemIA.conversa_id == ConversaIA.id)
+            .where(ConversaIA.escola_id == escola_id,
+                   MensagemIA.conteudo.icontains(nome, autoescape=True))
+        ).scalars())
+    if ids_conversas:
+        db.execute(delete(ConversaIA).where(ConversaIA.id.in_(ids_conversas)))
+        registrar(db, "ia.conversas_esquecimento", escola_id=escola_id,
+                  usuario_id=usuario.id,
+                  detalhes={"conversas_removidas": len(ids_conversas),
+                            "motivo": "exclusao_permanente_aluno"})
     db.commit()
 
     _recalcular_escola(db, escola_id)

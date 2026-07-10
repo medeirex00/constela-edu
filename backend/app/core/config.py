@@ -120,6 +120,10 @@ class Settings(BaseSettings):
     AI_API_KEY: str = ""
     AI_MODEL: str = ""  # vazio = padrão do provedor
     AI_MAX_TOKENS: int = 1024
+    # LGPD (retenção/minimização): conversas do assistente são apagadas depois
+    # de IA_RETENCAO_DIAS a partir de created_at. São dados derivados; a fonte
+    # oficial (notas/snapshots) é a autoritativa.
+    IA_RETENCAO_DIAS: int = 90
 
     # --- Observabilidade (logs estruturados, métricas, Sentry) ------------
     LOG_JSON: bool = True           # logs em JSON (uma linha por evento)

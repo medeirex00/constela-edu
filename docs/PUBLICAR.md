@@ -193,6 +193,25 @@ armazenamento do limitador por um **contador compartilhado** entre instâncias
 mantida pequena de propósito justamente para permitir essa troca sem tocar no
 restante do sistema.
 
+### Retenção das conversas do Assistente de IA (LGPD)
+
+As conversas do Assistente são **dados derivados** (a fonte oficial são as notas
+e importações) e por isso têm **retenção automática**: conversas com mais de
+**90 dias** (a partir da criação) são apagadas. Isso já roda **no boot** do
+container como garantia mínima; para uma cadência regular, agende o comando de
+purga **uma vez por dia**:
+
+```bash
+# dentro do container (self-host / compose)
+docker compose exec backend python -m scripts.purgar_ia
+```
+
+No Railway, crie um **Cron Job** (ou uma segunda "service" agendada) executando
+`python -m scripts.purgar_ia`. O prazo é configurável pela variável
+`IA_RETENCAO_DIAS` (padrão `90`). Além disso, ao **excluir permanentemente um
+aluno**, as conversas do assistente que citam o nome completo dele são removidas
+na mesma operação (direito ao esquecimento).
+
 ---
 
 ## Extras opcionais (depois que o site estiver no ar)

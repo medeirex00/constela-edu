@@ -334,3 +334,68 @@ def test_fundir_preserva_nota_de_ano_anterior(cliente, db, escola_completa):
     # E sem nota órfã apontando para o removido.
     assert db.execute(select(func.count()).select_from(Nota)
                       .where(Nota.aluno_id == remover_id)).scalar_one() == 0
+
+
+def test_esquecimento_apaga_conversa_ia_que_cita_o_aluno(cliente, db, escola_completa):
+    """LGPD (direito ao esquecimento): excluir aluno permanentemente apaga as
+    conversas do assistente que citam o nome COMPLETO dele; conversa que cita
+    OUTRO aluno permanece."""
+    from app.models import ConversaIA, MensagemIA
+    escola, admin = escola_completa["escola"], escola_completa["admin"]
+    alvo, outro = escola_completa["alunos"][0], escola_completa["alunos"][1]
+
+    cita = ConversaIA(escola_id=escola.id, usuario_id=admin.id, titulo="cita")
+    naocita = ConversaIA(escola_id=escola.id, usuario_id=admin.id, titulo="nao")
+    db.add_all([cita, naocita])
+    db.flush()
+    db.add_all([
+        MensagemIA(conversa_id=cita.id, papel="assistente",
+                   conteudo=f"O {alvo.nome} foi bem no Matific."),
+        MensagemIA(conversa_id=naocita.id, papel="assistente",
+                   conteudo=f"O {outro.nome} foi bem no Elefante."),
+    ])
+    db.commit()
+    cita_id, naocita_id = cita.id, naocita.id
+
+    r = cliente.post(f"{_base(escola.id)}/alunos/excluir-permanente",
+                     json={"aluno_ids": [alvo.id], "confirmacao": "EXCLUIR"})
+    assert r.status_code == 200, r.text
+    vivas = set(db.execute(select(ConversaIA.id)).scalars())
+    assert cita_id not in vivas        # esquecida (citava o excluído)
+    assert naocita_id in vivas          # preservada (cita outro aluno)
+
+
+def test_esquecimento_e_case_insensitive_e_restrito_a_escola(cliente, db, escola_completa):
+    """A correspondência do nome ignora caixa; e o esquecimento não toca conversa
+    de OUTRA escola (mesmo com nome homônimo)."""
+    from app.core.security import hash_senha
+    from app.models import ConversaIA, Escola, MensagemIA, Usuario
+    escola, admin = escola_completa["escola"], escola_completa["admin"]
+    alvo = escola_completa["alunos"][0]
+
+    outra = Escola(nome="OUTRA", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    admin_b = Usuario(escola_id=outra.id, nome="AdminB", email="b@e.local",
+                      senha_hash=hash_senha("s3nh4"), cargo="admin")
+    db.add(admin_b)
+    db.flush()
+    minusc = ConversaIA(escola_id=escola.id, usuario_id=admin.id, titulo="min")
+    homonimo = ConversaIA(escola_id=outra.id, usuario_id=admin_b.id, titulo="B")
+    db.add_all([minusc, homonimo])
+    db.flush()
+    db.add_all([
+        MensagemIA(conversa_id=minusc.id, papel="usuario",
+                   conteudo=f"como esta {alvo.nome.lower()}?"),   # minúsculas
+        MensagemIA(conversa_id=homonimo.id, papel="assistente",
+                   conteudo=f"O {alvo.nome} da outra escola."),
+    ])
+    db.commit()
+    minusc_id, homonimo_id = minusc.id, homonimo.id
+
+    r = cliente.post(f"{_base(escola.id)}/alunos/excluir-permanente",
+                     json={"aluno_ids": [alvo.id], "confirmacao": "EXCLUIR"})
+    assert r.status_code == 200, r.text
+    vivas = set(db.execute(select(ConversaIA.id)).scalars())
+    assert minusc_id not in vivas       # caixa diferente também é apagada
+    assert homonimo_id in vivas          # outra escola: intocada
