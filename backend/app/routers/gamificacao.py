@@ -75,7 +75,13 @@ def biblioteca(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Catálogo completo de conquistas (inclusive inativas e nunca
-    desbloqueadas) + desbloqueios por conquista + painel de estatísticas."""
+    desbloqueadas) + desbloqueios por conquista + painel de estatísticas.
+
+    Escopo INTENCIONAL (decisão de produto): é uma VITRINE de conquistas visível
+    a todos os papéis, inclusive professor. Devolve SOMENTE dados AGREGADOS da
+    escola (contagens/percentuais) — sem aluno_id, nome ou dado individual. Por
+    isso não aplica turmas_permitidas: não há PII de aluno a isolar. Auditorias
+    não devem tratar este escopo escola-inteira como vazamento."""
     return svc.biblioteca(db, escola_id)
 
 
