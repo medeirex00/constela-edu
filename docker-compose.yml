@@ -90,13 +90,29 @@ services:
     volumes:
       - dados_uploads:/dados/uploads:ro
       - ./backups:/backups
+    # Backup seguro: grava em .part e só renomeia no SUCESSO (nunca deixa arquivo
+    # vazio parecendo válido); a PODA de antigos só roda se o backup da vez deu
+    # certo — uma falha JAMAIS apaga as cópias boas; falhas gritam no log.
     entrypoint: >
       sh -c 'while true; do
-        ts=$$(date +%Y%m%d_%H%M%S);
-        pg_dump -h postgres -U constela -d constela > /backups/db_$$ts.sql || echo "pg_dump falhou";
-        tar czf /backups/uploads_$$ts.tar.gz -C /dados uploads || echo "tar falhou";
-        find /backups -type f -mtime +14 -delete;
-        echo "backup $$ts concluido";
+        ts=$$(date +%Y%m%d_%H%M%S); ok=1;
+        if pg_dump -h postgres -U constela -d constela > /backups/db_$$ts.sql.part 2>>/backups/backup.log; then
+          mv /backups/db_$$ts.sql.part /backups/db_$$ts.sql;
+        else
+          ok=0; rm -f /backups/db_$$ts.sql.part; echo "$$ts ERRO: pg_dump falhou" | tee -a /backups/backup.log;
+        fi;
+        if tar czf /backups/uploads_$$ts.tar.gz.part -C /dados uploads 2>>/backups/backup.log; then
+          mv /backups/uploads_$$ts.tar.gz.part /backups/uploads_$$ts.tar.gz;
+        else
+          ok=0; rm -f /backups/uploads_$$ts.tar.gz.part; echo "$$ts ERRO: tar falhou" | tee -a /backups/backup.log;
+        fi;
+        if [ $$ok -eq 1 ]; then
+          find /backups -name "db_*.sql" -type f -mtime +14 -delete;
+          find /backups -name "uploads_*.tar.gz" -type f -mtime +14 -delete;
+          echo "$$ts backup OK";
+        else
+          echo "$$ts backup FALHOU - poda adiada, copias antigas preservadas" | tee -a /backups/backup.log;
+        fi;
         sleep 86400;
       done'
     depends_on:

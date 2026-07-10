@@ -282,6 +282,30 @@ def invalidar_cache_painel(escola_id: int | None = None) -> None:
         _cache_painel.pop(escola_id, None)
 
 
+def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
+    """Ids dos alunos REALMENTE exibidos no painel (ranking + evolução, top-N).
+
+    O perfil público só abre para quem já aparece no telão. Sem isto, o token
+    público (impresso no QR do telão) permitiria varrer aluno_id=1,2,3… e coletar
+    nome+notas de TODA a escola — IDOR/enumeração de PII de crianças."""
+    limite = int(config.get("max_posicoes", 10))
+    ids = set(db.execute(
+        select(Aluno.id)
+        .join(Nota, Nota.aluno_id == Aluno.id)
+        .join(Matricula, (Matricula.aluno_id == Aluno.id)
+              & (Matricula.ano_letivo == escola.ano_letivo_ativo))
+        .where(Nota.escola_id == escola.id,
+               Nota.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
+        .order_by(Nota.posicao)
+        .limit(limite)
+    ).scalars())
+    # A evolução também é exibida (slide próprio) — seus alunos podem ser abertos.
+    for item in svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]:
+        ids.add(item.aluno_id)
+    return ids
+
+
 @publico_router.get("/{token}/alunos/{aluno_id}")
 def perfil_publico(token: str, aluno_id: int, db: Session = Depends(get_db)):
     """Perfil público restrito a dados pedagógicos (PRD §120)."""
@@ -289,9 +313,11 @@ def perfil_publico(token: str, aluno_id: int, db: Session = Depends(get_db)):
     if resolvido is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "Painel não encontrado ou desativado.")
-    escola, _ = resolvido
+    escola, config = resolvido
     aluno = db.get(Aluno, aluno_id)
-    if aluno is None or aluno.escola_id != escola.id or aluno.status != "ativo":
+    # Só alunos exibidos no painel: bloqueia enumeração por aluno_id sequencial.
+    if (aluno is None or aluno.escola_id != escola.id or aluno.status != "ativo"
+            or aluno_id not in _ids_visiveis(db, escola, config)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
 
     matricula = db.execute(

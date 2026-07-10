@@ -102,6 +102,10 @@ def quem(dados: schemas.QuemIn, request: Request, db: Session = Depends(get_db))
         limitador_ip.registrar_falha(ip)
 
     credencial = _checar_credencial(svc.buscar_por_codigo(db, codigo), falhou)
+    # Anti-enumeração: revelar um nome conta contra o teto POR IP (limitador_ip).
+    # Colher nomes em massa de um mesmo IP é barrado; a criança que confirma o
+    # próprio código 1-2x não chega perto do teto.
+    limitador_ip.registrar_falha(ip)
     perfil = svc_perfis.obter_ou_criar_perfil(db, credencial.aluno)
     db.commit()
     return schemas.QuemOut(

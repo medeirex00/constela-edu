@@ -160,3 +160,42 @@ def test_confirmar_recusa_token_malicioso(cliente, escola_completa):
                               "dados": {"atividades": 1}, "aluno_id": None}]})
         # token inválido é recusado antes de qualquer acesso a disco
         assert resposta.status_code == 400, (token, resposta.text)
+
+
+# --- B4: limitador não cresce sem limite (anti-DoS de memória) ----------------
+
+def test_b4_limitador_de_tentativas_e_limitado_em_memoria(monkeypatch):
+    """B4: chaves atacante-controladas (usernames/códigos aleatórios) não fazem
+    o dicionário do limitador crescer sem limite (exaustão de memória)."""
+    from app.core import rate_limit
+    monkeypatch.setattr(rate_limit, "_MAX_CHAVES", 100)
+    lim = rate_limit.LimitadorTentativas(max_tentativas=5, janela_s=900)
+    for i in range(2000):
+        lim.registrar_falha(f"chave-aleatoria-{i}")
+    assert len(lim._eventos) <= 100    # teto respeitado, sem crescimento ilimitado
+
+
+# --- B6: /metrics protegido ---------------------------------------------------
+
+def test_b6_metrics_exige_token_quando_configurado(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    monkeypatch.setattr(config_mod.settings, "METRICS_TOKEN", "s3gr3d0-metrics")
+    c = TestClient(app)
+    assert c.get("/metrics").status_code == 401                        # sem header
+    assert c.get("/metrics",
+                 headers={"Authorization": "Bearer errado"}).status_code == 401
+    assert c.get("/metrics",
+                 headers={"Authorization": "Bearer s3gr3d0-metrics"}).status_code == 200
+
+
+def test_b6_metrics_fail_closed_em_producao_sem_token(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    monkeypatch.setattr(config_mod.settings, "METRICS_TOKEN", "")
+    monkeypatch.setattr(config_mod.settings, "ENV", "producao")
+    c = TestClient(app)
+    # Produção sem token: /metrics não expõe telemetria (fail-closed).
+    assert c.get("/metrics").status_code == 404

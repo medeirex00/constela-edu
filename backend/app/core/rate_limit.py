@@ -2,15 +2,29 @@
 
 Janela deslizante simples por chave (ex.: e-mail+IP). É a segunda linha de
 defesa: em produção o nginx aplica limit_req por IP na frente (apps/web/
-nginx.conf). Com múltiplos workers uvicorn o contador é por processo, o que
-é aceitável — o objetivo é frear ataques online de dicionário, não ser um
-contador distribuído exato.
+nginx.conf).
+
+LIMITAÇÃO DE ESCALA (conhecida e aceita): o contador é POR PROCESSO. Com N
+workers/réplicas o orçamento efetivo por chave é multiplicado por N e o estado
+não é compartilhado entre instâncias. É aceitável para frear dicionário online
+num deploy pequeno; para ESCALA HORIZONTAL (várias réplicas atrás do
+balanceador) troque por um backend compartilhado (ex.: Redis INCR+EXPIRE) — a
+interface pública (bloqueado/registrar_falha/limpar) foi mantida pequena de
+propósito para essa substituição. Decisão de infraestrutura: pende de aprovação.
+
+Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expiradas
++ despejo das mais antigas, para que tentativas com chaves atacante-controladas
+(usernames/códigos aleatórios) não cresçam sem limite e esgotem a RAM (DoS).
 """
 from __future__ import annotations
 
 import threading
 import time
 from collections import deque
+
+# Teto de chaves vivas por limitador: barra exaustão de memória por chaves
+# atacante-controladas. ~centenas de KB no pior caso; muito acima do uso legítimo.
+_MAX_CHAVES = 100_000
 
 
 class LimitadorTentativas:
@@ -22,6 +36,20 @@ class LimitadorTentativas:
 
     def _agora(self) -> float:
         return time.monotonic()
+
+    def _evacuar(self, agora: float) -> None:
+        """Sob _lock: descarta chaves expiradas; se ainda no teto, despeja as de
+        atividade mais antiga (teto rígido anti-OOM). Só dispara sob flood de
+        chaves distintas — o uso legítimo tem pouquíssimas chaves vivas."""
+        expiradas = [k for k, f in self._eventos.items()
+                     if not f or agora - f[-1] > self.janela_s]
+        for k in expiradas:
+            del self._eventos[k]
+        if len(self._eventos) >= _MAX_CHAVES:
+            ordenadas = sorted(self._eventos.items(),
+                               key=lambda kv: kv[1][-1] if kv[1] else 0.0)
+            for k, _ in ordenadas[: max(1, _MAX_CHAVES // 10)]:
+                self._eventos.pop(k, None)
 
     def bloqueado(self, chave: str) -> bool:
         """True se a chave já estourou o limite dentro da janela."""
@@ -40,6 +68,8 @@ class LimitadorTentativas:
     def registrar_falha(self, chave: str) -> None:
         agora = self._agora()
         with self._lock:
+            if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
+                self._evacuar(agora)
             fila = self._eventos.setdefault(chave, deque())
             while fila and agora - fila[0] > self.janela_s:
                 fila.popleft()

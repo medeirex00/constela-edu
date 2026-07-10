@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     APP_VERSION: str = "1.0.0"      # release: vai nos logs, no /health e no Sentry
     METRICS_ENABLED: bool = True    # expõe /metrics (formato Prometheus)
+    # Protege /metrics: se definido, o scrape exige Authorization: Bearer <token>.
+    # Vazio + produção = /metrics recusa (fail-closed), pois métricas operacionais
+    # não podem ficar públicas. Vazio + dev = aberto (conveniência local).
+    METRICS_TOKEN: str = ""
     SENTRY_DSN: str = ""            # vazio = Sentry desligado
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0   # 0..1 — amostragem do tracing
     SENTRY_ENVIRONMENT: str = ""    # vazio = usa o ENV

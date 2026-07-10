@@ -157,7 +157,11 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         .join(Aluno, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
         .join(Turma, Matricula.turma_id == Turma.id)
-        .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano)
+        # Aluno.status: aluno arquivado/inativo NUNCA entra no contexto da IA —
+        # sua Nota órfã (arquivar não a apaga) não pode reintroduzir o nome dele,
+        # inclusive na ida ao provedor externo. Mesmo filtro do ranking/painel.
+        .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
+               Aluno.status == "ativo")
         .order_by(Nota.posicao)
     ).all()
 
@@ -242,15 +246,17 @@ _NOTA_PSEUDONIMO = (
 
 
 def _mapa_pseudonimos(db: Session, escola_id: int) -> dict[str, str]:
-    """{nome_real: "Aluno NNN"} para TODOS os alunos ativos da escola.
+    """{nome_real: "Aluno NNN"} para TODOS os alunos da escola (QUALQUER status).
 
+    Rede de segurança: o mapa cobre até arquivados/inativos de propósito — se
+    algum nome escapar por qualquer seção do contexto, ele ainda é trocado por
+    token antes de sair para o provedor externo (nunca vaza nome real).
     Ordem estável (por nome) e largura fixa com zeros à esquerda: nenhum token é
     prefixo de outro, então a reidentificação por substituição direta é exata."""
     nomes = db.execute(
-        select(Aluno.nome).where(Aluno.escola_id == escola_id,
-                                 Aluno.status == "ativo").order_by(Aluno.nome)
+        select(Aluno.nome).where(Aluno.escola_id == escola_id).order_by(Aluno.nome)
     ).scalars().all()
-    largura = max(2, len(str(len(nomes))))
+    largura = max(2, len(str(len(nomes) or 1)))
     return {nome: f"Aluno {i:0{largura}d}" for i, nome in enumerate(nomes, start=1)}
 
 

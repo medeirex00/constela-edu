@@ -4,9 +4,10 @@ Executar em desenvolvimento:
     uvicorn app.main:app --reload --port 8000
 """
 import logging
+import secrets
 import time
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -159,10 +160,22 @@ def health():
 
 
 @app.get("/metrics", tags=["Sistema"], include_in_schema=False)
-def metricas():
-    """Métricas no formato Prometheus. RESTRINJA na rede (scrape interno) — não
-    deve ficar exposto publicamente."""
+def metricas(request: Request):
+    """Métricas Prometheus. Protegido: com METRICS_TOKEN definido, exige
+    Authorization: Bearer <token>. Em produção sem token, recusa (fail-closed) —
+    telemetria operacional nunca fica pública. Em dev sem token, fica aberto."""
     if not settings.METRICS_ENABLED or not obs.metricas_ativas():
         return Response("metrics desativado\n", media_type="text/plain")
+    token = settings.METRICS_TOKEN.strip()
+    if token:
+        cabecalho = request.headers.get("authorization") or ""
+        enviado = cabecalho[7:].strip() if cabecalho[:7].lower() == "bearer " else ""
+        if not (enviado and secrets.compare_digest(enviado, token)):
+            return Response("nao autorizado\n", status_code=status.HTTP_401_UNAUTHORIZED,
+                            media_type="text/plain")
+    elif settings.em_producao:
+        # Sem token configurado em produção: não expõe (esconde o endpoint).
+        return Response("nao encontrado\n", status_code=status.HTTP_404_NOT_FOUND,
+                        media_type="text/plain")
     corpo, tipo = obs.render_metricas()
     return Response(corpo, media_type=tipo)

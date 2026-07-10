@@ -239,6 +239,25 @@ def test_regenerar_troca_qr_e_derruba_sessoes(cliente, db, escola_completa):
 # Fronteira entre os mundos de token
 # ---------------------------------------------------------------------------
 
+def test_b3_quem_conta_revelacao_contra_o_teto_por_ip(cliente, db, escola_completa,
+                                                      monkeypatch):
+    """B3: revelar um nome no /quem conta contra o teto POR IP — colher nomes em
+    massa do mesmo IP é bloqueado (429), mesmo acertando códigos válidos."""
+    escola = escola_completa["escola"]
+    _gerar_cartoes(cliente, escola.id, escola_completa["turma"].id)
+    cred = _credencial_de(db, escola_completa["alunos"][0].id)
+
+    # Teto baixo só para o teste (o real é 300/5min, inviável de exercitar aqui).
+    monkeypatch.setattr(quest_auth_router.limitador_ip, "max_tentativas", 3)
+
+    anon = TestClient(app)  # todas as requisições do TestClient saem do mesmo IP
+    url = "/api/v1/quest/auth/quem"
+    for _ in range(3):
+        assert anon.post(url, json={"codigo": cred.codigo_login}).status_code == 200
+    # 4ª revelação do MESMO IP: barrada — a colheita de nomes trava.
+    assert anon.post(url, json={"codigo": cred.codigo_login}).status_code == 429
+
+
 def test_token_de_aluno_nao_entra_no_edu_e_vice_versa(cliente, db,
                                                       escola_completa):
     escola = escola_completa["escola"]

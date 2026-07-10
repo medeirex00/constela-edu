@@ -408,6 +408,45 @@ def test_a3_provedor_externo_nao_recebe_nome_real_e_reidentifica(
     assert any(any(nome in m.conteudo for nome in nomes) for m in gravadas)
 
 
+def test_b1_aluno_arquivado_nao_entra_no_contexto_nem_vaza_para_ia(
+        db, escola_completa, monkeypatch):
+    """B1: aluno arquivado (com Nota órfã, pois arquivar não a apaga) NÃO aparece
+    no contexto do assistente e, com provedor externo, seu nome NUNCA sai."""
+    escola = escola_completa["escola"]
+    ana, joao, sofia = escola_completa["alunos"]
+    for aluno in (ana, joao, sofia):
+        _snapshot(db, escola.id, aluno.id, dias_atras=1,
+                  atividades=30, estrelas=80, pontuacao_media=75)
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    # Arquiva a Ana SEM recalcular: a Nota órfã dela permanece no banco.
+    ana.status = "arquivado"
+    db.commit()
+
+    contexto = assistente.montar_contexto(db, escola.id)
+    assert ana.nome not in contexto            # arquivada some do contexto da IA
+    assert joao.nome in contexto               # ativos permanecem
+
+    from app.services.ia.base import ProvedorIA
+    capturado = {}
+
+    class FakeExterno(ProvedorIA):
+        nome = "openai"
+
+        def responder(self, sistema, mensagens):
+            capturado["sistema"] = sistema
+            return "ok"
+
+    monkeypatch.setattr(assistente, "_provedor_da_escola",
+                        lambda db, escola_id: FakeExterno())
+    assistente.perguntar(db, escola.id, escola_completa["admin"].id,
+                         "como está o ranking?")
+    # Nada de nome real no que saiu (arquivada nem aparece; ativos vão tokenizados).
+    for nome in (ana.nome, joao.nome, sofia.nome):
+        assert nome not in capturado["sistema"], f"vazou {nome}"
+    assert re.search(r"Aluno \d+", capturado["sistema"])   # ativos pseudonimizados
+
+
 # --- Correção de dados: conta do dono vira global -----------------------------------
 
 def test_promover_admin_global_idempotente(db, escola_completa):

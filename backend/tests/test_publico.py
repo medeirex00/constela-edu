@@ -92,6 +92,42 @@ def test_a1_aluno_arquivado_some_de_todas_as_superficies(cliente, db, escola_com
     assert nome_alvo not in export.text
 
 
+def test_b2_perfil_publico_bloqueia_enumeracao_fora_do_painel(cliente, db, escola_completa):
+    """B2/IDOR: o perfil público só abre para alunos EXIBIDOS no painel. Um
+    atacante anônimo com o token (público, do QR) não pode varrer aluno_id
+    sequencial e coletar nome+notas de quem está fora do top-N."""
+    from app.models import Aluno, Matricula
+    _com_notas(db, escola_completa)
+    escola_id = escola_completa["escola"].id
+    # 4º aluno ATIVO e matriculado, porém SEM nota → nunca aparece no painel.
+    fora_aluno = Aluno(escola_id=escola_id, nome="Invisivel No Painel")
+    db.add(fora_aluno)
+    db.flush()
+    db.add(Matricula(escola_id=escola_id, aluno_id=fora_aluno.id,
+                     turma_id=escola_completa["turma"].id, ano_letivo=2026))
+    db.commit()
+    fora_id = fora_aluno.id
+
+    r = cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
+                    json={"ativo": True, "slides": ["ranking", "evolucao"],
+                          "intervalo_s": 8, "max_posicoes": 3})
+    token = r.json()["url"].rsplit("/", 1)[-1]
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)  # sem Authorization — o "atacante"
+    painel = anon.get(f"/api/v1/publico/{token}/painel").json()
+    visiveis = ({i["aluno_id"] for i in painel["ranking"]}
+                | {i["aluno_id"] for i in painel["evolucao"]})
+    assert visiveis and fora_id not in visiveis   # o sem-nota não é exibido
+
+    # Aluno fora do painel: enumeração barrada (404), mesmo ativo e existente.
+    assert anon.get(f"/api/v1/publico/{token}/alunos/{fora_id}").status_code == 404
+    # Aluno exibido no painel: perfil abre normalmente (200) — feature preservada.
+    assert anon.get(
+        f"/api/v1/publico/{token}/alunos/{next(iter(visiveis))}").status_code == 200
+
+
 def test_max_posicoes_limita_o_ranking(cliente, db, escola_completa):
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id
