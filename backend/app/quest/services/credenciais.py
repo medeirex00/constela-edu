@@ -12,6 +12,7 @@ carrega papel="aluno" e NUNCA é aceito pelas rotas do Edu — e vice-versa.
 """
 from __future__ import annotations
 
+import re
 import secrets
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -25,22 +26,53 @@ from app.models import Aluno, Matricula, Turma
 from app.quest.models import QuestCredencialAluno
 from app.quest.services import perfis
 
-# Palavras do código: curtas, faláveis por telefone e SEM acento na grafia
+# Palavras do código: curtas (3–8 letras), faláveis e SEM acento na grafia
 # correta (a criança que escreve certo nunca pode ser punida — nada de CEU,
-# VENUS ou TROVAO, que se escrevem com acento no português da escola).
+# VENUS ou TROVAO, que se escrevem com acento). Lista ampliada (~147 termos) para
+# elevar a entropia do código (ver gerar_codigo_login). Limite de 8 letras
+# garante que DUAS palavras + 3 dígitos caibam em codigo_login (String(20)).
 _PALAVRAS_CODIGO = (
-    "SOL", "LUA", "MAR", "RIO", "FLOR", "NUVEM", "TERRA", "MARTE",
-    "COMETA", "NOVA", "AURORA", "VEGA", "LUZ", "RAIO", "VENTO", "BRISA",
-    "ONDA", "ILHA", "FAROL", "PONTE", "TRILHA", "BOSQUE", "CAMPO", "PINGO",
-    "ESTRELA", "FOGUETE", "PLANETA", "SATURNO",
+    # Céu e espaço
+    "SOL", "LUA", "MARTE", "COMETA", "PLANETA", "ESTRELA", "FOGUETE", "NOVA",
+    "AURORA", "VEGA", "NEBULOSA", "ASTRO", "ECLIPSE", "SATURNO", "NETUNO",
+    "URANO", "LUZ", "RAIO", "METEORO", "COSMOS",
+    # Natureza e geografia
+    "MAR", "RIO", "FLOR", "NUVEM", "TERRA", "VENTO", "BRISA", "ONDA", "ILHA",
+    "FAROL", "PONTE", "TRILHA", "BOSQUE", "CAMPO", "PINGO", "CHUVA", "NEVE",
+    "GELO", "FOGO", "PEDRA", "AREIA", "DUNA", "MONTE", "VALE", "LAGO", "FONTE",
+    "RAIZ", "FOLHA", "GALHO", "TRONCO", "SEMENTE", "BROTO", "JARDIM", "POMAR",
+    "MATA", "SELVA", "DESERTO", "RIACHO", "SERRA", "PRAIA", "NEBLINA", "ORVALHO",
+    "CRISTAL", "GRUTA", "CAVERNA",
+    # Animais
+    "GATO", "LOBO", "RAPOSA", "URSO", "TIGRE", "ZEBRA", "GIRAFA", "MACACO",
+    "COELHO", "GOLFINHO", "BALEIA", "PEIXE", "POLVO", "CAVALO", "POTRO", "TOURO",
+    "VACA", "OVELHA", "CABRA", "PORCO", "GALO", "PATO", "GANSO", "PERU", "POMBO",
+    "CORUJA", "TUCANO", "ARARA", "PAPAGAIO", "ABELHA", "FORMIGA", "GRILO",
+    "VAGALUME", "MINHOCA", "CARACOL", "ARANHA", "SAPO", "LAGARTO", "COBRA",
+    "VEADO", "TATU", "LONTRA", "CASTOR", "MORCEGO", "ESQUILO", "PANDA", "CAMELO",
+    "RENA", "ALCE", "FOCA", "PINGUIM", "GAIVOTA", "PARDAL", "JOANINHA",
+    # Objetos e figuras
+    "BOLA", "PIPA", "LIVRO", "CANETA", "PINCEL", "TINTA", "TAMBOR", "FLAUTA",
+    "SINO", "CHAVE", "TORRE", "CASTELO", "BARCO", "VELA", "REMO", "TREM",
+    "TRILHO", "RODA", "MOTOR", "FADA", "DUENDE", "MAGO", "ANJO", "CORAL",
+    "PRATA", "OURO", "JADE", "BAMBU",
 )
+
+# Conjunto para o formatador de exibição reconhecer as palavras (split rápido).
+_CONJ_PALAVRAS = frozenset(_PALAVRAS_CODIGO)
 
 
 def gerar_codigo_login(db: Session) -> str:
-    """PALAVRA+NNNN (ex.: SOL1234) único na rede toda — só letras e números."""
+    """PALAVRA+PALAVRA+NNN, único na rede toda (ex.: LUAFAROL731; no cartão sai
+    como LUA-FAROL-731). Só letras/dígitos; duas palavras DISTINTAS + 3 dígitos
+    por CSPRNG (secrets). Espaço ~147×146×900 ≈ 19M (≈2^24), ~70× o formato
+    antigo. A unicidade é garantida pela coluna (unique) + esta verificação."""
     for _ in range(200):
-        codigo = (f"{secrets.choice(_PALAVRAS_CODIGO)}"
-                  f"{secrets.randbelow(9000) + 1000}")
+        w1 = secrets.choice(_PALAVRAS_CODIGO)
+        w2 = secrets.choice(_PALAVRAS_CODIGO)
+        while w2 == w1:                       # duas palavras distintas (legível)
+            w2 = secrets.choice(_PALAVRAS_CODIGO)
+        codigo = f"{w1}{w2}{secrets.randbelow(900) + 100}"   # NNN: 100–999
         existe = db.execute(
             select(QuestCredencialAluno.id)
             .where(QuestCredencialAluno.codigo_login == codigo)
@@ -48,6 +80,22 @@ def gerar_codigo_login(db: Session) -> str:
         if existe is None:
             return codigo
     raise RuntimeError("Não foi possível gerar um código de login único.")
+
+
+def formatar_codigo_exibicao(codigo: str) -> str:
+    """Para o CARTÃO da criança: PALAVRA-PALAVRA-NNN (LUAFAROL731 → LUA-FAROL-731).
+
+    Código antigo (PALAVRA+NNNN) ou qualquer valor não reconhecido é devolvido
+    como está — nunca quebra a impressão nem os cartões já emitidos. O valor
+    ARMAZENADO/consultado continua sendo o normalizado (sem hífen)."""
+    norm = normalizar_codigo(codigo)
+    casa = re.fullmatch(r"([A-Z]+)(\d{3})", norm)
+    if casa:
+        letras, digitos = casa.group(1), casa.group(2)
+        for i in range(3, len(letras) - 2):   # palavras têm ≥3 letras
+            if letras[:i] in _CONJ_PALAVRAS and letras[i:] in _CONJ_PALAVRAS:
+                return f"{letras[:i]}-{letras[i:]}-{digitos}"
+    return norm
 
 
 def gerar_qr_token() -> str:
@@ -82,12 +130,18 @@ def alunos_da_turma(db: Session, escola_id: int, turma: Turma) -> list[Aluno]:
 
 def garantir_credencial_aluno(
     db: Session, escola_id: int, aluno: Aluno, regenerar: bool = False,
+    rotacionar_codigo: bool = False,
 ) -> dict:
     """Garante credencial + perfil de UM aluno.
 
     - Aluno novo: ganha código, QR e perfil.
     - `regenerar`: mantém o CÓDIGO (a criança decora), troca o QR e
       incrementa token_version (cartão perdido → sessões antigas caem).
+    - `rotacionar_codigo`: troca também o CÓDIGO (novo + QR + token_version).
+      Uso deliberado: virada de ano letivo, suspeita de vazamento ou ação
+      manual autorizada pela escola. NÃO há expiração automática durante o ano
+      (a criança não perde acesso sozinha). `rotacionar_codigo` tem precedência
+      sobre `regenerar`.
     """
     credencial = db.execute(
         select(QuestCredencialAluno)
@@ -102,6 +156,10 @@ def garantir_credencial_aluno(
             qr_token=gerar_qr_token(),
         )
         db.add(credencial)
+    elif rotacionar_codigo:
+        credencial.codigo_login = gerar_codigo_login(db)
+        credencial.qr_token = gerar_qr_token()
+        credencial.token_version = (credencial.token_version or 0) + 1
     elif regenerar:
         credencial.qr_token = gerar_qr_token()
         credencial.token_version = (credencial.token_version or 0) + 1
@@ -113,9 +171,11 @@ def garantir_credencial_aluno(
 
 def garantir_credenciais_turma(
     db: Session, escola_id: int, turma: Turma, regenerar: bool = False,
+    rotacionar_codigo: bool = False,
 ) -> list[dict]:
     """Credencial + perfil para cada aluno ativo da turma (dados do PDF)."""
-    return [garantir_credencial_aluno(db, escola_id, aluno, regenerar)
+    return [garantir_credencial_aluno(db, escola_id, aluno, regenerar,
+                                      rotacionar_codigo)
             for aluno in alunos_da_turma(db, escola_id, turma)]
 
 

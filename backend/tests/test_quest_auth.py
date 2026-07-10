@@ -5,6 +5,8 @@ Letrado), só letras e números. Cobre: cartões, login por código e QR,
 limitador por (código, IP), aluno inativo, nome de exibição da cerimônia
 e o isolamento entre tokens do Edu e do Quest.
 """
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -333,3 +335,80 @@ def test_apelidos_e_codigos_unicos(cliente, db, escola_completa):
     codigos = db.execute(select(QuestCredencialAluno.codigo_login)).scalars().all()
     assert len(set(codigos)) == 3
     assert all(c.isalnum() for c in codigos)
+
+
+# ---------------------------------------------------------------------------
+# B3 — código de maior entropia (2 palavras + 3 dígitos) + rotação
+# ---------------------------------------------------------------------------
+
+def test_b3_lista_de_palavras_segura_para_o_formato():
+    """Palavras curtas (3–8 letras), só A–Z, únicas — e duas palavras + 3
+    dígitos cabem em codigo_login (String(20))."""
+    palavras = svc_credenciais._PALAVRAS_CODIGO
+    assert len(palavras) == len(set(palavras))          # sem repetição
+    assert len(palavras) >= 100                          # entropia suficiente
+    assert all(p.isascii() and p.isalpha() and p.isupper() for p in palavras)
+    assert all(3 <= len(p) <= 8 for p in palavras)
+    assert 2 * max(len(p) for p in palavras) + 3 <= 20   # cabe na coluna
+
+
+def test_b3_gera_codigo_duas_palavras_distintas_tres_digitos(db, escola_completa):
+    codigo = svc_credenciais.gerar_codigo_login(db)
+    assert codigo.isalnum() and codigo.isupper() and len(codigo) <= 20
+    casa = re.fullmatch(r"([A-Z]+)(\d{3})", codigo)
+    assert casa, codigo
+    letras = casa.group(1)
+    conj = svc_credenciais._CONJ_PALAVRAS
+    partes = [(letras[:i], letras[i:]) for i in range(3, len(letras) - 2)
+              if letras[:i] in conj and letras[i:] in conj]
+    assert partes, codigo                                # parte alfabética = 2 palavras
+    w1, w2 = partes[0]
+    assert w1 != w2                                       # distintas (legibilidade)
+
+
+def test_b3_formatar_codigo_exibicao():
+    fmt = svc_credenciais.formatar_codigo_exibicao
+    assert fmt("LUAFAROL731") == "LUA-FAROL-731"          # novo: hifenizado no cartão
+    assert fmt("lua farol 731") == "LUA-FAROL-731"        # tolera a digitação
+    assert fmt("SOL1234") == "SOL1234"                    # antigo (PALAVRA+NNNN): igual
+    assert fmt("XYZ123") == "XYZ123"                      # desconhecido: devolve como está
+
+
+def test_b3_codigo_antigo_continua_valido(cliente, db, escola_completa):
+    """Migração gradual: um código no formato ANTIGO (SOL1234) continua logando —
+    nada é invalidado; a normalização resolve os dois formatos."""
+    escola = escola_completa["escola"]
+    _gerar_cartoes(cliente, escola.id, escola_completa["turma"].id)
+    cred = _credencial_de(db, escola_completa["alunos"][0].id)
+    cred.codigo_login = "SOL1234"                          # simula cadastro legado
+    db.commit()
+
+    assert _entrar("SOL1234").status_code == 200
+    assert _entrar("sol-12-34").status_code == 200         # normalização tolerante
+
+
+def test_b3_rotacionar_codigo_troca_codigo_qr_e_derruba_sessao(cliente, db,
+                                                               escola_completa):
+    """Rotação opcional (virada de ano / vazamento): troca o CÓDIGO + o QR e
+    derruba as sessões — diferente do regenerar, que mantém o código."""
+    escola = escola_completa["escola"]
+    turma = escola_completa["turma"]
+    aluno = escola_completa["alunos"][0]
+    _gerar_cartoes(cliente, escola.id, turma.id)
+    antes = _credencial_de(db, aluno.id)
+    codigo_antigo, qr_antigo = antes.codigo_login, antes.qr_token
+    token_sessao = _entrar(codigo_antigo).json()["access_token"]
+
+    r = cliente.post(f"/api/v1/escolas/{escola.id}/quest/turmas/{turma.id}/cartoes"
+                     "?rotacionar_codigo=true")
+    assert r.status_code == 200, r.text
+    depois = _credencial_de(db, aluno.id)
+    assert depois.codigo_login != codigo_antigo            # CÓDIGO trocado
+    assert depois.qr_token != qr_antigo                    # QR também trocado
+
+    # Sessão antiga derrubada; código antigo não entra mais; novo entra.
+    perfil = TestClient(app).get(
+        "/api/v1/quest/perfil", headers={"Authorization": f"Bearer {token_sessao}"})
+    assert perfil.status_code == 401
+    assert _entrar(codigo_antigo).status_code == 401
+    assert _entrar(depois.codigo_login).status_code == 200
