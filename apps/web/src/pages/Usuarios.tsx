@@ -1,7 +1,7 @@
 /**
  * Gestão de usuários (PRD §18) — somente administradores.
  *
- * Cada usuário tem um menu de ações: Visualizar, Editar, Alterar senha,
+ * Cada usuário tem um menu de ações: Visualizar, Editar, Redefinir senha,
  * Alterar permissões, Desativar/Reativar, Excluir (lógica, preserva o
  * histórico) e — apenas para administradores globais — Excluir
  * Permanentemente, com confirmação extra digitando o e-mail.
@@ -81,8 +81,7 @@ function copiarTexto(texto: string, aoCopiar: () => void) {
 type Acao =
   | "visualizar"
   | "editar"
-  | "senha"
-  | "versenha"
+  | "redefinir"
   | "permissoes"
   | "situacao"
   | "excluir"
@@ -95,7 +94,7 @@ function MenuAcoes({
   souEu,
   souGlobal,
   souAdmin,
-  podeVerSenha,
+  podeRedefinir,
   aoEscolher,
 }: {
   usuario: Usuario;
@@ -103,8 +102,9 @@ function MenuAcoes({
   souGlobal: boolean;
   /** Ações de GESTÃO (editar, permissões, excluir) — só admin. */
   souAdmin: boolean;
-  /** Matriz: admin→todos; coordenador→ele e professores; professor→só ele. */
-  podeVerSenha: boolean;
+  /** Matriz da redefinição de senha: admin→todos; coordenador→ele e
+   *  professores; professor→só ele. */
+  podeRedefinir: boolean;
   aoEscolher: (acao: Acao) => void;
 }) {
   const excluido = usuario.status === "excluido";
@@ -119,13 +119,12 @@ function MenuAcoes({
         return (
           <>
             <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar" onClick={() => escolher("visualizar")} />
-            {!excluido && podeVerSenha && (
-              <ItemMenu icone={<Eye size={15} />} rotulo="Ver senha" onClick={() => escolher("versenha")} />
+            {!excluido && podeRedefinir && (
+              <ItemMenu icone={<KeyRound size={15} />} rotulo="Redefinir senha" onClick={() => escolher("redefinir")} />
             )}
             {!excluido && souAdmin && (
               <>
                 <ItemMenu icone={<Pencil size={15} />} rotulo="Editar" onClick={() => escolher("editar")} />
-                <ItemMenu icone={<KeyRound size={15} />} rotulo="Alterar senha" onClick={() => escolher("senha")} />
                 {!souEu && (
                   <>
                     <ItemMenu
@@ -162,110 +161,73 @@ function MenuAcoes({
   );
 }
 
-// --- Ver senha ------------------------------------------------------------------
+// --- Redefinir senha ----------------------------------------------------------
 
-/** Mostra a senha ATUAL (guardada cifrada para este fim). Senhas definidas
- *  antes do recurso não têm cópia: o modal explica e oferece gerar uma nova
- *  (na própria conta, provando a senha atual). */
-function ModalVerSenha({ alvo, base, souEu, aoFechar }: {
+/** Gera um LINK de redefinição (uso único, com validade) e o mostra UMA vez
+ *  para o gestor entregar ao usuário. Nenhuma senha é exibida ou recuperada:
+ *  a própria pessoa escolhe a nova senha ao abrir o link. */
+function ModalRedefinirSenha({ alvo, base, aoFechar }: {
   alvo: Usuario;
   base: string;
-  souEu: boolean;
   aoFechar: () => void;
 }) {
-  const [senha, setSenha] = useState<string | null>(null);
-  const [indisponivel, setIndisponivel] = useState<string | null>(null);
-  const [novaGerada, setNovaGerada] = useState(false);
-  const [senhaAtual, setSenhaAtual] = useState("");
-  const [copiada, setCopiada] = useState(false);
+  const [dados, setDados] = useState<{ link: string; validade_min: number } | null>(null);
+  const [copiado, setCopiado] = useState(false);
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
-  useEffect(() => {
-    api<{ disponivel: boolean; senha?: string; mensagem?: string }>(
-      `${base}/${alvo.id}/senha`)
-      .then((r) => {
-        if (r.disponivel && r.senha) setSenha(r.senha);
-        else setIndisponivel(r.mensagem ?? "Senha indisponível para exibição.");
-      })
-      .catch((e) => setErro(e instanceof ApiError ? e.message : "Não foi possível consultar."));
-  }, [alvo.id, base]);
-
-  async function gerarNova() {
+  async function gerar() {
     setOcupado(true);
     setErro("");
     try {
-      const r = await api<{ senha: string }>(`${base}/${alvo.id}/senha`, {
-        method: "POST",
-        body: JSON.stringify({ senha_atual: senhaAtual || null }),
-      });
-      setSenha(r.senha);
-      setNovaGerada(true);
-      setIndisponivel(null);
+      const r = await api<{ link: string; validade_min: number }>(
+        `${base}/${alvo.id}/redefinir-senha`, { method: "POST" });
+      setDados(r);
     } catch (e) {
-      setErro(e instanceof ApiError ? e.message : "Não foi possível gerar a senha.");
+      setErro(e instanceof ApiError ? e.message : "Não foi possível gerar o link.");
     } finally {
       setOcupado(false);
     }
   }
 
   return (
-    <Modal titulo={`Senha de ${alvo.nome}`} aberto aoFechar={aoFechar}>
-      {senha !== null ? (
+    <Modal titulo={`Redefinir senha de ${alvo.nome}`} aberto aoFechar={aoFechar}>
+      {dados === null ? (
         <>
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
-            {novaGerada
-              ? <>Senha <strong>nova</strong> de <strong>{alvo.nome}</strong> (a anterior deixou de valer):</>
-              : <>Senha atual de <strong>{alvo.nome}</strong>:</>}
+            Vamos gerar um <strong>link seguro</strong> para <strong>{alvo.nome}</strong> criar
+            uma senha nova. Ninguém — nem o sistema — vê a senha: só a própria pessoa a
+            define. O link vale <strong>uma única vez</strong> e expira.
           </p>
-          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-500/20 dark:bg-emerald-500/10">
-            <code className="select-all text-lg font-semibold tracking-wide text-emerald-800 dark:text-emerald-200">
-              {senha}
+          {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+          <div className="mt-4 flex justify-end gap-2">
+            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao disabled={ocupado} onClick={gerar}>
+              <KeyRound size={15} /> {ocupado ? "Gerando..." : "Gerar link de redefinição"}
+            </Botao>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+            Entregue este link a <strong>{alvo.nome}</strong> (WhatsApp, e-mail ou pessoalmente).
+            Vale <strong>uma única vez</strong> e expira em {dados.validade_min} minutos.
+          </p>
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 dark:border-indigo-500/20 dark:bg-indigo-500/10">
+            <code className="select-all break-all text-xs font-medium text-indigo-800 dark:text-indigo-200">
+              {dados.link}
             </code>
-            <Botao variante="neutro" onClick={() => copiarTexto(senha, () => setCopiada(true))}>
-              {copiada ? "Copiada!" : "Copiar"}
+            <Botao variante="neutro" onClick={() => copiarTexto(dados.link, () => setCopiado(true))}>
+              {copiado ? "Copiado!" : "Copiar"}
             </Botao>
           </div>
           <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            Cada visualização fica registrada no log de auditoria.
+            Gerar um novo link invalida este. A ação fica no log de auditoria (sem a senha).
           </p>
           <div className="mt-4 flex justify-end">
             <Botao onClick={aoFechar}>Fechar</Botao>
           </div>
         </>
-      ) : indisponivel !== null ? (
-        <>
-          <p className="text-sm text-zinc-600 dark:text-zinc-300">{indisponivel}</p>
-          {souEu && (
-            <div className="mt-3">
-              <Campo rotulo="Confirme a sua senha atual para gerar uma nova">
-                <input
-                  type="password"
-                  className={estiloInput}
-                  value={senhaAtual}
-                  onChange={(e) => setSenhaAtual(e.target.value)}
-                  autoFocus
-                />
-              </Campo>
-            </div>
-          )}
-          {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-          <div className="mt-4 flex justify-end gap-2">
-            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
-            <Botao disabled={ocupado || (souEu && !senhaAtual)} onClick={gerarNova}>
-              <Eye size={15} /> {ocupado ? "Gerando..." : "Gerar senha nova"}
-            </Botao>
-          </div>
-        </>
-      ) : erro ? (
-        <>
-          <Mensagem tipo="erro">{erro}</Mensagem>
-          <div className="mt-4 flex justify-end">
-            <Botao variante="neutro" onClick={aoFechar}>Fechar</Botao>
-          </div>
-        </>
-      ) : (
-        <Carregando />
       )}
     </Modal>
   );
@@ -293,16 +255,15 @@ export default function Usuarios() {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [senha, setSenha] = useState("");
-  const [senha2, setSenha2] = useState("");
   const [cargo, setCargo] = useState("professor");
   const [confirmacao, setConfirmacao] = useState("");
 
   const souGlobal = usuarioLogado?.is_global ?? false;
   const souAdmin = souGlobal || usuarioLogado?.cargo === "admin";
   const souCoordenador = usuarioLogado?.cargo === "coordenador";
-  // Matriz do "ver senha": admin→todos; coordenador→ele e professores;
-  // professor→apenas ele. O backend aplica a mesma regra.
-  const podeVerSenha = (alvo: Usuario) =>
+  // Matriz da redefinição de senha: admin→todos; coordenador→ele e
+  // professores; professor→apenas ele. O backend aplica a mesma regra.
+  const podeRedefinir = (alvo: Usuario) =>
     souAdmin || alvo.id === usuarioLogado?.id ||
     (souCoordenador && alvo.cargo === "professor");
 
@@ -328,7 +289,6 @@ export default function Usuarios() {
   function abrir(tipo: Acao, alvo: Usuario) {
     setErroAcao("");
     setSenha("");
-    setSenha2("");
     setConfirmacao("");
     setNome(alvo.nome);
     setEmail(alvo.email);
@@ -343,7 +303,6 @@ export default function Usuarios() {
     setEmail("");
     setUsername("");
     setSenha("");
-    setSenha2("");
     setCargo("professor");
     setNovo(true);
   }
@@ -455,7 +414,7 @@ export default function Usuarios() {
                         souEu={usuario.id === usuarioLogado?.id}
                         souGlobal={souGlobal}
                         souAdmin={souAdmin}
-                        podeVerSenha={podeVerSenha(usuario)}
+                        podeRedefinir={podeRedefinir(usuario)}
                         aoEscolher={(tipo) => abrir(tipo, usuario)}
                       />
                     </td>
@@ -489,14 +448,14 @@ export default function Usuarios() {
               {CARGOS.map((c) => <option key={c.valor} value={c.valor}>{c.rotulo}</option>)}
             </select>
           </Campo>
-          <Campo rotulo="Senha (mínimo 6 caracteres)">
+          <Campo rotulo="Senha (mínimo 8 caracteres)">
             <input type="password" className={estiloInput} value={senha} onChange={(e) => setSenha(e.target.value)} />
           </Campo>
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">
             <Botao variante="neutro" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
             <Botao
-              disabled={ocupado || nome.trim().length < 2 || !email.includes("@") || senha.length < 6}
+              disabled={ocupado || nome.trim().length < 2 || !email.includes("@") || senha.length < 8}
               onClick={() =>
                 executar(base, {
                   method: "POST",
@@ -573,45 +532,10 @@ export default function Usuarios() {
         </div>
       </Modal>
 
-      {/* --- Ver senha: mostra a ATUAL; sem cópia disponível, oferece gerar --- */}
-      {acao?.tipo === "versenha" && alvo && (
-        <ModalVerSenha
-          alvo={alvo}
-          base={base}
-          souEu={alvo.id === usuarioLogado?.id}
-          aoFechar={() => setAcao(null)}
-        />
+      {/* --- Redefinir senha: gera um link de uso único --- */}
+      {acao?.tipo === "redefinir" && alvo && (
+        <ModalRedefinirSenha alvo={alvo} base={base} aoFechar={() => setAcao(null)} />
       )}
-
-      {/* --- Alterar senha --- */}
-      <Modal titulo={`Alterar senha de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "senha"} aoFechar={() => setAcao(null)}>
-        <div className="space-y-3">
-          <Campo rotulo="Nova senha (mínimo 6 caracteres)">
-            <input type="password" className={estiloInput} value={senha} onChange={(e) => setSenha(e.target.value)} autoFocus />
-          </Campo>
-          <Campo rotulo="Repita a nova senha">
-            <input type="password" className={estiloInput} value={senha2} onChange={(e) => setSenha2(e.target.value)} />
-          </Campo>
-          {senha2 && senha !== senha2 && (
-            <p className="text-xs text-red-600 dark:text-red-400">As senhas não coincidem.</p>
-          )}
-          {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
-            <Botao
-              disabled={ocupado || senha.length < 6 || senha !== senha2}
-              onClick={() =>
-                executar(`${base}/${alvo?.id}`, {
-                  method: "PATCH",
-                  body: JSON.stringify({ senha }),
-                }, "Senha redefinida.")
-              }
-            >
-              {ocupado ? "Salvando..." : "Alterar senha"}
-            </Botao>
-          </div>
-        </div>
-      </Modal>
 
       {/* --- Alterar permissões --- */}
       <Modal titulo={`Permissões de ${alvo?.nome ?? ""}`} aberto={acao?.tipo === "permissoes"} aoFechar={() => setAcao(null)}>

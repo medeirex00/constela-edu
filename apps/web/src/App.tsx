@@ -21,6 +21,7 @@ import Matific from "./pages/Matific";
 import PainelPublicoConfig from "./pages/PainelPublicoConfig";
 import PerfilAluno from "./pages/PerfilAluno";
 import Premiacoes from "./pages/Premiacoes";
+import RedefinirSenha from "./pages/RedefinirSenha";
 import RankingEvolucao from "./pages/RankingEvolucao";
 import PainelPublico from "./pages/publico/PainelPublico";
 import PerfilPublico from "./pages/publico/PerfilPublico";
@@ -55,6 +56,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* Redefinição de senha por link: acessível sem login */}
+      <Route path="/redefinir-senha" element={<RedefinirSenha />} />
       {/* Painel Público: acessível sem login (PRD §104) */}
       <Route path="/p/:token" element={<PainelPublico />} />
       <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />

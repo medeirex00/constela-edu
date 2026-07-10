@@ -15,7 +15,8 @@ interface AcessoCriado {
 
 /** Modal "Adicionar professor": cria o professor, vincula a turma sob a sua
  *  responsabilidade e (opcional) cria a conta de acesso com senha gerada —
- *  mostrada UMA vez aqui e depois disponível em Usuários → Ver senha. */
+ *  mostrada UMA vez aqui (não fica salva; se for perdida, use Usuários →
+ *  Redefinir senha para gerar um novo link de acesso). */
 function ModalNovoProfessor({ aberto, turmas, aoFechar, aoCriar }: {
   aberto: boolean;
   turmas: Turma[];
@@ -70,8 +71,9 @@ function ModalNovoProfessor({ aberto, turmas, aoFechar, aoCriar }: {
       {acesso ? (
         <div className="space-y-4">
           <Mensagem tipo="ok">
-            Professor cadastrado! Anote e entregue o acesso abaixo — a senha
-            também fica disponível em Usuários → Ver senha.
+            Professor cadastrado! Anote e entregue o acesso abaixo. Por
+            segurança a senha não fica salva e não poderá ser vista de novo —
+            se for perdida, use Usuários → Redefinir senha para gerar um novo link.
           </Mensagem>
           <div className="space-y-2 rounded-lg bg-zinc-100 p-4 text-sm dark:bg-zinc-800">
             <p><span className="text-zinc-500">E-mail:</span> <strong>{acesso.email}</strong></p>

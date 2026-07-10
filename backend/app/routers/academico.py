@@ -816,10 +816,10 @@ def criar_professor_completo(
 ):
     """Cadastro completo do professor em um passo: o registro na equipe, a
     turma sob responsabilidade e a CONTA DE ACESSO (cargo professor) com senha
-    legível gerada — devolvida uma vez aqui e disponível depois no "Ver senha".
-    O e-mail liga a conta às turmas dele (é assim que o acesso restrito do
-    professor descobre quais turmas mostrar)."""
-    from app.core.security import cifrar_senha_visivel, gerar_senha_legivel, hash_senha
+    legível gerada — devolvida uma ÚNICA vez aqui (não é armazenada; se for
+    perdida, use a redefinição de senha por token). O e-mail liga a conta às
+    turmas dele (é assim que o acesso restrito descobre quais turmas mostrar)."""
+    from app.core.security import gerar_senha_legivel, hash_senha
 
     email = dados.email.strip().lower()
     turma = None
@@ -842,8 +842,9 @@ def criar_professor_completo(
         senha = gerar_senha_legivel()
         db.add(Usuario(escola_id=escola_id, nome=dados.nome.strip(), email=email,
                        senha_hash=hash_senha(senha),
-                       senha_visivel=cifrar_senha_visivel(senha),
                        cargo="professor"))
+        # Senha legível devolvida UMA vez ao criar o acesso — nunca é
+        # armazenada em texto; se for perdida, use "Redefinir senha".
         acesso = {"email": email, "senha": senha}
 
     professor = Professor(escola_id=escola_id, nome=dados.nome.strip(), email=email)

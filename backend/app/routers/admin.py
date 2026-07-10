@@ -11,6 +11,7 @@ Tudo aqui exige papel de administrador. Regras de proteção:
 """
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import (
     APIRouter,
@@ -30,12 +31,13 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("constela.admin")
 TAMANHO_MAXIMO_BACKUP = 25 * 1024 * 1024  # 25 MB
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.core.security import (
-    cifrar_senha_visivel,
-    decifrar_senha_visivel,
+    gerar_token_reset,
     hash_senha,
+    hash_token,
     validar_forca_senha,
 )
 from app.models import (
@@ -45,6 +47,7 @@ from app.models import (
     Importacao,
     LogAuditoria,
     MensagemIA,
+    TokenResetSenha,
     Usuario,
 )
 from app.schemas import UsuarioOut
@@ -208,7 +211,6 @@ def criar_usuario(
     novo = Usuario(escola_id=escola_id, nome=dados.nome.strip(), email=email,
                    username=dados.username,
                    senha_hash=hash_senha(dados.senha),
-                   senha_visivel=cifrar_senha_visivel(dados.senha),
                    cargo=dados.cargo)
     db.add(novo)
     try:
@@ -271,7 +273,6 @@ def atualizar_usuario(
         alvo.status = dados.status
     if dados.senha is not None:
         alvo.senha_hash = hash_senha(dados.senha)
-        alvo.senha_visivel = cifrar_senha_visivel(dados.senha)
         # Invalida as sessões abertas do usuário (tokens antigos param de
         # valer) — protege conta comprometida. Na PRÓPRIA conta a sessão
         # continua: trocar a própria senha não pode deslogar o autor na hora.
@@ -308,14 +309,10 @@ def atualizar_usuario(
     return alvo
 
 
-# O gerador de senhas legíveis mudou para app/core/security.py (reuso no
-# cadastro de professor com acesso).
-from app.core.security import gerar_senha_legivel as _gerar_senha_legivel  # noqa: E402
-
-
-def _pode_ver_senha(ator: Usuario, alvo: Usuario) -> bool:
-    """Matriz de acesso: admin vê a de todos (da escola); coordenador a
-    própria e as dos professores; professor apenas a própria."""
+def _pode_redefinir_senha(ator: Usuario, alvo: Usuario) -> bool:
+    """Quem pode gerar um link de redefinição para `alvo`: admin, para todos da
+    escola; coordenador, para si e para professores; professor, só para si. O
+    link NÃO revela senha — apenas deixa o dono da conta escolher uma nova."""
     if ator.id == alvo.id:
         return True
     if ator.is_global or ator.cargo == "admin":
@@ -323,90 +320,52 @@ def _pode_ver_senha(ator: Usuario, alvo: Usuario) -> bool:
     return ator.cargo == "coordenador" and alvo.cargo == "professor"
 
 
-class SenhaVisivelIn(BaseModel):
-    # Exigida quando o alvo é a PRÓPRIA conta: um token roubado não pode
-    # transformar a sessão em credencial permanente sem provar a senha atual.
-    senha_atual: str | None = None
-
-
-@router.get("/usuarios/{usuario_id}/senha", response_model=dict)
-def ver_senha(
+@router.post("/usuarios/{usuario_id}/redefinir-senha", response_model=dict)
+def redefinir_senha(
     usuario_id: int,
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
-    """Mostra a senha ATUAL do usuário, sem trocar nada (matriz por cargo).
-
-    Decisão do dono do produto: uma cópia CIFRADA da senha é guardada a cada
-    definição, exclusivamente para esta tela. Senhas definidas antes do
-    recurso não têm cópia — nesses casos a resposta indica indisponível e a
-    interface oferece gerar uma nova. Toda visualização vai para o log de
-    auditoria (sem a senha)."""
+    """Gera um LINK de redefinição de senha (uso único, com validade) e o
+    devolve UMA vez para ser entregue ao usuário. Nenhuma senha é exibida nem
+    armazenada em texto — o próprio usuário escolhe a nova senha ao abrir o
+    link. Links anteriores ainda não usados são invalidados."""
     alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
-    if not _pode_ver_senha(usuario, alvo):
+    if not _pode_redefinir_senha(usuario, alvo):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "Sem permissão para ver a senha deste usuário.")
+                            "Sem permissão para redefinir a senha deste usuário.")
     if alvo.status == "excluido":
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Usuário excluído — restaure a conta antes.")
-    senha = decifrar_senha_visivel(alvo.senha_visivel)
-    registrar(db, "usuario.senha_visualizada", escola_id=escola_id,
+
+    agora = datetime.now(timezone.utc)
+    # Invalida links pendentes do mesmo usuário: só o mais novo vale.
+    db.execute(
+        update(TokenResetSenha)
+        .where(TokenResetSenha.usuario_id == alvo.id,
+               TokenResetSenha.usado_em.is_(None))
+        .values(usado_em=agora))
+
+    token = gerar_token_reset()
+    expira = agora + timedelta(minutes=settings.RESET_SENHA_EXPIRA_MIN)
+    db.add(TokenResetSenha(usuario_id=alvo.id, token_hash=hash_token(token),
+                           expira_em=expira, criado_por=usuario.id))
+    registrar(db, "usuario.reset_solicitado", escola_id=escola_id,
               usuario_id=usuario.id, entidade="usuario", entidade_id=alvo.id,
-              detalhes={"email": alvo.email,
-                        "disponivel": senha is not None})
+              detalhes={"email": alvo.email})  # o token NUNCA vai para o log
     db.commit()
-    if senha is None:
-        return {"disponivel": False,
-                "mensagem": "Esta senha foi definida antes do recurso de "
-                            "visualização e não pode ser exibida. Gere uma "
-                            "senha nova (ou altere-a) para que fique visível "
-                            "daqui em diante."}
-    return {"disponivel": True, "senha": senha}
 
-
-@router.post("/usuarios/{usuario_id}/senha", response_model=dict)
-def gerar_senha_visivel(
-    usuario_id: int,
-    dados: SenhaVisivelIn | None = None,
-    escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(get_usuario_atual),
-    db: Session = Depends(get_db),
-):
-    """Gera uma senha nova LEGÍVEL e a devolve UMA única vez.
-
-    As senhas atuais não são armazenadas em texto — só o embaralhado
-    irreversível (proteção padrão: nem o sistema conhece a senha). "Ver a
-    senha" significa, portanto, gerar uma nova e mostrá-la na hora."""
-    from app.core.security import verificar_senha
-
-    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
-    if not _pode_ver_senha(usuario, alvo):
-        raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "Sem permissão para ver a senha deste usuário.")
-    if alvo.status == "excluido":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "Usuário excluído — restaure a conta antes.")
-    if alvo.id == usuario.id:
-        senha_atual = (dados.senha_atual if dados else None) or ""
-        if not verificar_senha(senha_atual, alvo.senha_hash):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "Informe a sua senha atual para gerar uma nova.")
-
-    senha = _gerar_senha_legivel()
-    alvo.senha_hash = hash_senha(senha)
-    alvo.senha_visivel = cifrar_senha_visivel(senha)
-    if alvo.id != usuario.id:
-        # Sessões antigas do alvo caem (proteção). Na PRÓPRIA conta a sessão
-        # atual continua — senão o clique em "ver senha" derrubaria o usuário.
-        alvo.token_version = (alvo.token_version or 0) + 1
-    registrar(db, "usuario.senha_gerada", escola_id=escola_id,
-              usuario_id=usuario.id, entidade="usuario", entidade_id=alvo.id,
-              detalhes={"email": alvo.email})  # a senha NUNCA vai para o log
-    db.commit()
-    return {"senha": senha,
-            "mensagem": "Senha nova gerada. Anote agora — ela não poderá ser "
-                        "vista depois."}
+    link = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/redefinir-senha?token={token}"
+    return {
+        "link": link,
+        "token": token,
+        "expira_em": expira.isoformat(),
+        "validade_min": settings.RESET_SENHA_EXPIRA_MIN,
+        "mensagem": "Link de redefinição gerado. Entregue-o ao usuário — vale "
+                    "uma única vez e expira em "
+                    f"{settings.RESET_SENHA_EXPIRA_MIN} minutos.",
+    }
 
 
 @router.delete("/usuarios/{usuario_id}", response_model=dict)

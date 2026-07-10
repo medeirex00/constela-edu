@@ -3,7 +3,7 @@ e aluno com ficha cadastral."""
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.core.security import decifrar_senha_visivel, hash_senha
+from app.core.security import hash_senha
 from app.main import app
 from app.models import Aluno, Professor, Turma, Usuario
 
@@ -25,11 +25,12 @@ def test_professor_completo_cria_acesso_turma_e_login(cliente, db, escola_comple
     assert len(senha) >= 10
 
     db.expire_all()
-    # Conta criada com cargo professor e cópia de senha para o "ver senha".
+    # Conta criada com cargo professor. A senha legível volta UMA vez na
+    # resposta (acima) e NÃO é guardada em texto no banco — só o hash.
     conta = db.execute(select(Usuario).where(
         Usuario.email == "paula@escola.com.br")).scalar_one()
     assert conta.cargo == "professor" and conta.escola_id == escola.id
-    assert decifrar_senha_visivel(conta.senha_visivel) == senha
+    assert not hasattr(conta, "senha_visivel")
     # Turma vinculada ao professor (é o elo do acesso restrito).
     professor = db.execute(select(Professor).where(
         Professor.escola_id == escola.id,

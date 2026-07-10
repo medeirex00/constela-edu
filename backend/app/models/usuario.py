@@ -18,12 +18,10 @@ class Usuario(Base):
     # sempre minúsculo — o login aceita e-mail OU nome de usuário.
     username: Mapped[str | None] = mapped_column(String(30), unique=True,
                                                  index=True, default=None)
+    # Hash bcrypt irreversível — única forma de guardar a senha. Para dar
+    # acesso a quem esqueceu a senha, use a redefinição por token (não há
+    # cópia recuperável da senha em lugar nenhum).
     senha_hash: Mapped[str] = mapped_column(String(200))
-    # Cópia CIFRADA da senha (Fernet, chave derivada da SECRET_KEY) — só para
-    # o "ver senha" da tela de Usuários (matriz por cargo, com auditoria).
-    # A autenticação usa exclusivamente o senha_hash. Senhas definidas antes
-    # do recurso não têm cópia (ficam visíveis após a primeira troca).
-    senha_visivel: Mapped[str | None] = mapped_column(String(500), default=None)
     # admin | coordenador | professor (sem "visitante": público vê só o painel)
     cargo: Mapped[str] = mapped_column(String(30), default="professor")
     # Administrador global: gerencia todas as escolas (PRD §136)

@@ -2,14 +2,22 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_usuario_atual
 from app.core.rate_limit import ip_do_cliente, limitador_login
-from app.core.security import criar_token, verificar_senha, verificar_senha_dummy
-from app.models import Usuario
+from app.core.security import (
+    criar_token,
+    hash_senha,
+    hash_token,
+    validar_forca_senha,
+    verificar_senha,
+    verificar_senha_dummy,
+)
+from app.models import TokenResetSenha, Usuario
 from app.schemas import LoginOut, UsuarioOut
 from app.services.audit import registrar
 
@@ -88,3 +96,78 @@ def login(
 @router.get("/me", response_model=UsuarioOut)
 def me(usuario: Usuario = Depends(get_usuario_atual)):
     return usuario
+
+
+# --- Redefinição de senha por token (público: a pessoa não consegue entrar) ---
+
+def _expirado(momento: datetime) -> bool:
+    """Compara com o instante atual tolerando datas ingênuas do banco (o SQLite
+    não guarda fuso — trata como UTC)."""
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=timezone.utc)
+    return momento < datetime.now(timezone.utc)
+
+
+def _token_valido(db: Session, token_bruto: str | None) -> TokenResetSenha | None:
+    """Registro do token se existir, não tiver sido usado e não estiver expirado."""
+    if not token_bruto:
+        return None
+    registro = db.execute(
+        select(TokenResetSenha).where(
+            TokenResetSenha.token_hash == hash_token(token_bruto))
+    ).scalar_one_or_none()
+    if (registro is None or registro.usado_em is not None
+            or _expirado(registro.expira_em)):
+        return None
+    return registro
+
+
+class RedefinirSenhaIn(BaseModel):
+    token: str = Field(min_length=8, max_length=200)
+    nova_senha: str = Field(min_length=8, max_length=100)
+
+    @field_validator("nova_senha")
+    @classmethod
+    def _forca(cls, valor: str) -> str:
+        erro = validar_forca_senha(valor)
+        if erro:
+            raise ValueError(erro)
+        return valor
+
+
+@router.get("/redefinir-senha/{token}", response_model=dict)
+def validar_link_reset(token: str, db: Session = Depends(get_db)):
+    """Diz à tela se o link ainda vale (para mostrar o formulário ou avisar que
+    expirou). Não revela nada além do primeiro nome, para a saudação."""
+    registro = _token_valido(db, token)
+    if registro is None:
+        return {"valido": False}
+    alvo = db.get(Usuario, registro.usuario_id)
+    if alvo is None or alvo.status == "excluido":
+        return {"valido": False}
+    return {"valido": True, "nome": alvo.nome}
+
+
+@router.post("/redefinir-senha", response_model=dict)
+def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
+    """Define a nova senha a partir do token do link. O token é de USO ÚNICO
+    (some assim que a senha é trocada) e todas as sessões antigas caem — a
+    senha original nunca é recuperada, apenas substituída."""
+    registro = _token_valido(db, dados.token)
+    if registro is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Link inválido ou expirado. Peça um novo ao "
+                            "administrador da escola.")
+    alvo = db.get(Usuario, registro.usuario_id)
+    if alvo is None or alvo.status == "excluido":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Conta indisponível. Fale com o administrador.")
+
+    alvo.senha_hash = hash_senha(dados.nova_senha)
+    registro.usado_em = datetime.now(timezone.utc)   # uso único
+    alvo.token_version = (alvo.token_version or 0) + 1  # derruba sessões antigas
+    registrar(db, "usuario.senha_redefinida_por_token", escola_id=alvo.escola_id,
+              usuario_id=alvo.id, entidade="usuario", entidade_id=alvo.id,
+              detalhes={"email": alvo.email})
+    db.commit()
+    return {"mensagem": "Senha redefinida. Você já pode entrar com a nova senha."}

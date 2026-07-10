@@ -63,37 +63,61 @@ def gerar_senha_legivel() -> str:
     return f"{'-'.join(palavras)}-{secrets.randbelow(90) + 10}"
 
 
-# --- Cópia visível da senha (decisão do dono do produto) ---------------------
-# A autenticação continua 100% pelo hash bcrypt. A cópia cifrada existe SÓ
-# para o recurso "ver senha" da tela de Usuários (admin vê todos; coordenador
-# os professores; professor a própria). Cifra simétrica com chave derivada da
-# SECRET_KEY: quem obtiver apenas o banco NÃO lê as senhas; toda visualização
-# fica no log de auditoria.
+# --- Segredos simétricos do app (Fernet na SECRET_KEY) -----------------------
+# Para valores que PRECISAM ser recuperados em texto para uso posterior — hoje,
+# só a chave de API do assistente de IA. Quem obtém apenas o banco NÃO lê o
+# segredo (a chave de cifra vem da SECRET_KEY, que fica fora do banco).
+#
+# NUNCA usar isto para SENHAS de login: senha é hash irreversível (bcrypt). Para
+# devolver acesso a quem esqueceu a senha existe a redefinição por token
+# (gerar_token_reset / hash_token) — a senha original jamais é recuperável.
 
 def _chave_fernet() -> bytes:
     import base64
     import hashlib
 
+    # A string de derivação é mantida ("senha-visivel") por COMPATIBILIDADE:
+    # segredos já cifrados em produção (ex.: chave de API do assistente)
+    # continuam legíveis após esta refatoração.
     derivada = hashlib.sha256(f"{settings.SECRET_KEY}|senha-visivel".encode()).digest()
     return base64.urlsafe_b64encode(derivada)
 
 
-def cifrar_senha_visivel(senha: str) -> str:
+def cifrar_segredo(valor: str) -> str:
     from cryptography.fernet import Fernet
 
-    return Fernet(_chave_fernet()).encrypt(senha.encode("utf-8")).decode("ascii")
+    return Fernet(_chave_fernet()).encrypt(valor.encode("utf-8")).decode("ascii")
 
 
-def decifrar_senha_visivel(token: str | None) -> str | None:
-    """Senha em texto, ou None se não houver cópia / a SECRET_KEY mudou."""
+def decifrar_segredo(token: str | None) -> str | None:
+    """Valor em texto, ou None se não houver cópia / a SECRET_KEY mudou."""
     if not token:
         return None
     try:
-        from cryptography.fernet import Fernet, InvalidToken
+        from cryptography.fernet import Fernet
 
         return Fernet(_chave_fernet()).decrypt(token.encode("ascii")).decode("utf-8")
     except Exception:  # noqa: BLE001 — chave trocada/valor corrompido: sem cópia
         return None
+
+
+# --- Redefinição de senha por token (fluxo profissional) ---------------------
+# A senha do login é sempre hash irreversível. Quem esquece a senha recebe um
+# token de USO ÚNICO e com VALIDADE; o banco guarda apenas o HASH do token
+# (SHA-256), nunca o token em si — vazar o banco não permite redefinir senhas.
+
+def gerar_token_reset() -> str:
+    """Token opaco de alta entropia (256 bits) que vai no link de redefinição."""
+    import secrets
+
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """Hash determinístico para guardar/consultar o token (SHA-256 em hex)."""
+    import hashlib
+
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def validar_forca_senha(senha: str, email: str | None = None) -> str | None:

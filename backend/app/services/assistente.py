@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("constela.ia")
 
-from app.core.security import cifrar_senha_visivel, decifrar_senha_visivel
+from app.core.security import cifrar_segredo, decifrar_segredo
 from app.models import (
     Aluno,
     Configuracao,
@@ -84,7 +84,7 @@ def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
     valores["provedor"] = provedor
     valores["modelo"] = (modelo or "").strip()
     if api_key:
-        valores["api_key_cifrada"] = cifrar_senha_visivel(api_key)
+        valores["api_key_cifrada"] = cifrar_segredo(api_key)
     if row is None:
         row = Configuracao(escola_id=escola_id, namespace="assistente",
                            chave="valores", valor=valores)
@@ -107,7 +107,7 @@ def _provedor_da_escola(db: Session, escola_id: int):
         return obter_provedor()
     return obter_provedor(
         provedor=valores["provedor"],
-        api_key=decifrar_senha_visivel(valores.get("api_key_cifrada")),
+        api_key=decifrar_segredo(valores.get("api_key_cifrada")),
         modelo=valores.get("modelo") or None,
     )
 

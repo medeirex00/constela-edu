@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # jornada escolar
 
+    # Validade do link de redefinição de senha (uso único). Curto por
+    # segurança: tempo suficiente para o usuário abrir o link e escolher a
+    # senha, sem deixar um link válido perdido por horas.
+    RESET_SENHA_EXPIRA_MIN: int = 60
+
     # Documentação interativa (/docs, /redoc, /openapi.json). Desligada por
     # padrão: só liga com DOCS_HABILITADOS=true no ambiente de desenvolvimento.
     DOCS_HABILITADOS: bool = False

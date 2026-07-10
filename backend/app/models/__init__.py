@@ -16,6 +16,7 @@ from app.models.plataformas import (
     SnapshotElefante,
     SnapshotMatific,
 )
+from app.models.token_reset import TokenResetSenha
 from app.models.usuario import Usuario
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "ReferenciaNormalizacao",
     "SnapshotElefante",
     "SnapshotMatific",
+    "TokenResetSenha",
     "Turma",
     "Usuario",
 ]

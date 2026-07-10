@@ -288,8 +288,8 @@ def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(cliente, db, esco
         Configuracao.escola_id == escola_id,
         Configuracao.namespace == "assistente")).scalar_one()
     assert "sk-ant-teste-123" not in str(row.valor)
-    from app.core.security import decifrar_senha_visivel
-    assert decifrar_senha_visivel(row.valor["api_key_cifrada"]) == "sk-ant-teste-123"
+    from app.core.security import decifrar_segredo
+    assert decifrar_segredo(row.valor["api_key_cifrada"]) == "sk-ant-teste-123"
 
     # Salvar de novo SEM informar chave mantém a atual.
     r2 = cliente.put(f"{base}/config", json={"provedor": "anthropic",

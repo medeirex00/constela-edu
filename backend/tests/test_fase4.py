@@ -189,8 +189,8 @@ def test_usuario_comum_nao_gerencia_usuarios(cliente, db, escola_completa):
     login = outro.post("/api/v1/auth/login",
                        data={"username": "prof@teste.local", "password": "s3nh4"})
     outro.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
-    # A LISTAGEM devolve ao professor somente a própria conta (base do
-    # "ver senha"); a GESTÃO (criar/editar/excluir) segue exclusiva do admin.
+    # A LISTAGEM devolve ao professor somente a própria conta; a GESTÃO
+    # (criar/editar/excluir) segue exclusiva do admin.
     resposta = outro.get(f"/api/v1/escolas/{escola.id}/usuarios")
     assert resposta.status_code == 200
     assert [u["email"] for u in resposta.json()] == ["prof@teste.local"]

@@ -1,16 +1,17 @@
-"""Nome de usuário no login (estilo @) e "ver senha" com matriz de permissões.
+"""Nome de usuário no login (estilo @) e matriz de listagem de usuários.
 
 * Login aceita e-mail OU username (com ou sem "@" na frente); username é
   único na rede toda e sempre minúsculo.
-* "Ver senha" = gerar uma senha nova legível e mostrá-la UMA vez (as senhas
-  são guardadas embaralhadas — irrecuperáveis por design). Matriz:
-  admin → todos; coordenador → a própria e as de professores; professor →
-  apenas a própria.
+* A LISTAGEM respeita a matriz por cargo: admin vê todos; coordenador a si e
+  aos professores; professor apenas a própria conta.
+
+A redefinição de senha por token (que substituiu o antigo "ver senha") tem
+seus próprios testes em test_reset_senha.py.
 """
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.security import hash_senha, verificar_senha
+from app.core.security import hash_senha
 from app.main import app
 from app.models import Usuario
 
@@ -86,55 +87,7 @@ def test_username_repetido_e_invalido_sao_recusados(db, contas):
     assert ok.json()["username"] == "bruno.s"
 
 
-# --- Ver senha (matriz) ---------------------------------------------------------
-
-def _gerar(cliente, escola_id, alvo_id, senha_atual=None):
-    return cliente.post(f"/api/v1/escolas/{escola_id}/usuarios/{alvo_id}/senha",
-                        json={"senha_atual": senha_atual})
-
-
-def test_admin_ve_senha_de_todos_e_a_senha_funciona(db, contas):
-    escola_id = contas["escola"].id
-    admin = _cliente_como("admin@teste.local", "s3nh4")
-    resposta = _gerar(admin, escola_id, contas["carla"].id)
-    assert resposta.status_code == 200, resposta.text
-    senha = resposta.json()["senha"]
-    assert len(senha) >= 8
-
-    db.expire_all()
-    assert verificar_senha(senha, contas["carla"].senha_hash)
-    login = TestClient(app).post("/api/v1/auth/login",
-                                 data={"username": "carla", "password": senha})
-    assert login.status_code == 200
-
-
-def test_coordenador_ve_professor_e_a_propria_mas_nao_admin(db, contas):
-    escola_id = contas["escola"].id
-    coord = _cliente_como("coord@teste.local", "s3nh4!!!")
-    assert _gerar(coord, escola_id, contas["carla"].id).status_code == 200
-    assert _gerar(coord, escola_id, contas["coordenador"].id,
-                  senha_atual="s3nh4!!!").status_code == 200
-    assert _gerar(coord, escola_id, contas["admin"].id).status_code == 403
-
-
-def test_professor_so_ve_a_propria_senha_e_nao_e_deslogado(db, contas):
-    escola_id = contas["escola"].id
-    prof = _cliente_como("carla@teste.local", "s3nh4!!!")
-    assert _gerar(prof, escola_id, contas["bruno"].id).status_code == 403
-    assert _gerar(prof, escola_id, contas["coordenador"].id).status_code == 403
-
-    # Na PRÓPRIA conta é preciso provar a senha atual: um token roubado não
-    # pode virar credencial permanente.
-    sem_prova = _gerar(prof, escola_id, contas["carla"].id)
-    assert sem_prova.status_code == 400
-    errada = _gerar(prof, escola_id, contas["carla"].id, senha_atual="errada")
-    assert errada.status_code == 400
-
-    propria = _gerar(prof, escola_id, contas["carla"].id, senha_atual="s3nh4!!!")
-    assert propria.status_code == 200
-    # A sessão atual continua valendo (gerar a própria senha não desloga).
-    assert prof.get("/api/v1/auth/me").status_code == 200
-
+# --- Limitador de tentativas ---------------------------------------------------
 
 def test_limitador_soma_email_e_username_no_mesmo_contador(db, contas):
     """Tentar pelo e-mail e depois pelo @username não pode dobrar o orçamento
@@ -163,70 +116,7 @@ def test_limitador_soma_email_e_username_no_mesmo_contador(db, contas):
     assert via_username.status_code == 429
 
 
-def test_ver_senha_atual_sem_trocar_nada(db, contas):
-    """A senha definida via tela fica VISÍVEL (cópia cifrada): o GET mostra a
-    senha atual sem gerar nova — e ela continua funcionando no login."""
-    escola_id = contas["escola"].id
-    admin = _cliente_como("admin@teste.local", "s3nh4")
-    criado = admin.post(f"/api/v1/escolas/{escola_id}/usuarios", json={
-        "nome": "Nova Prof", "email": "nova@escola.com.br",
-        "senha": "MinhaSenha2026", "cargo": "professor"})
-    assert criado.status_code == 201
-    novo_id = criado.json()["id"]
-
-    ver = admin.get(f"/api/v1/escolas/{escola_id}/usuarios/{novo_id}/senha")
-    assert ver.status_code == 200
-    assert ver.json() == {"disponivel": True, "senha": "MinhaSenha2026"}
-
-    # Ver de novo não muda nada: a mesma senha segue valendo no login.
-    login = TestClient(app).post("/api/v1/auth/login",
-                                 data={"username": "nova@escola.com.br",
-                                       "password": "MinhaSenha2026"})
-    assert login.status_code == 200
-
-    # E a cópia no banco NÃO é texto puro.
-    db.expire_all()
-    alvo = db.get(Usuario, novo_id)
-    assert "MinhaSenha2026" not in (alvo.senha_visivel or "")
-
-
-def test_senha_antiga_sem_copia_indica_indisponivel(db, contas):
-    """Contas criadas antes do recurso (sem cópia cifrada) não têm o que
-    exibir: o GET explica e a interface oferece gerar uma nova."""
-    escola_id = contas["escola"].id
-    admin = _cliente_como("admin@teste.local", "s3nh4")
-    ver = admin.get(
-        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}/senha")
-    assert ver.status_code == 200
-    corpo = ver.json()
-    assert corpo["disponivel"] is False
-    assert "senha" not in corpo
-
-    # Depois de trocar a senha (Alterar senha), ela passa a ser visível.
-    troca = admin.patch(
-        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}",
-        json={"senha": "TrocadaAgora26"})
-    assert troca.status_code == 200
-    ver2 = admin.get(
-        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}/senha")
-    assert ver2.json() == {"disponivel": True, "senha": "TrocadaAgora26"}
-
-
-def test_ver_senha_respeita_a_matriz(db, contas):
-    escola_id = contas["escola"].id
-    prof = _cliente_como("carla@teste.local", "s3nh4!!!")
-    outro = prof.get(
-        f"/api/v1/escolas/{escola_id}/usuarios/{contas['bruno'].id}/senha")
-    assert outro.status_code == 403
-    propria = prof.get(
-        f"/api/v1/escolas/{escola_id}/usuarios/{contas['carla'].id}/senha")
-    assert propria.status_code == 200      # ver a própria: sem fricção
-
-    coord = _cliente_como("coord@teste.local", "s3nh4!!!")
-    assert coord.get(
-        f"/api/v1/escolas/{escola_id}/usuarios/{contas['admin'].id}/senha"
-    ).status_code == 403
-
+# --- Listagem respeita a matriz por cargo -------------------------------------
 
 def test_listagem_respeita_a_matriz(db, contas):
     escola_id = contas["escola"].id
