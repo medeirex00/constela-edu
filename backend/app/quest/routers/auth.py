@@ -26,6 +26,10 @@ limitador_codigo = LimitadorTentativas(max_tentativas=8, janela_s=300)
 # Teto largo por IP só contra enumeração em massa — dimensionado para o
 # pior caso legítimo: uma sala inteira errando o código algumas vezes.
 limitador_ip = LimitadorTentativas(max_tentativas=300, janela_s=300)
+# Por CÓDIGO (sem IP): freia adivinhação de UM código específico mesmo com o
+# atacante trocando de IP. Seguro: acertar o código já dá acesso (é a
+# credencial), então travá-lo não é pior que o modelo de produto atual.
+limitador_codigo_conta = LimitadorTentativas(max_tentativas=20, janela_s=900)
 
 ERRO_CODIGO = "Não encontrei esse código. Confira o cartão e tente de novo!"
 ERRO_INATIVO = ("Seu cartão está descansando! Peça um cartão novo "
@@ -80,7 +84,8 @@ def _sessao(db: Session, credencial: QuestCredencialAluno, request: Request,
 def _limites(request: Request, chave_conta: str) -> tuple[str, str]:
     ip = ip_do_cliente(request)
     chave = f"{chave_conta}|{ip}"
-    if limitador_ip.bloqueado(ip) or limitador_codigo.bloqueado(chave):
+    if (limitador_ip.bloqueado(ip) or limitador_codigo.bloqueado(chave)
+            or limitador_codigo_conta.bloqueado(chave_conta)):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_MUITAS)
     return ip, chave
 
@@ -93,6 +98,7 @@ def quem(dados: schemas.QuemIn, request: Request, db: Session = Depends(get_db))
 
     def falhou():
         limitador_codigo.registrar_falha(chave)
+        limitador_codigo_conta.registrar_falha(codigo)
         limitador_ip.registrar_falha(ip)
 
     credencial = _checar_credencial(svc.buscar_por_codigo(db, codigo), falhou)
@@ -114,6 +120,7 @@ def entrar(dados: schemas.EntrarIn, request: Request,
 
     def falhou():
         limitador_codigo.registrar_falha(chave)
+        limitador_codigo_conta.registrar_falha(codigo)
         limitador_ip.registrar_falha(ip)
         registrar(db, "quest.login_falhou",
                   detalhes={"codigo": codigo, "ip": ip})
@@ -121,6 +128,7 @@ def entrar(dados: schemas.EntrarIn, request: Request,
 
     credencial = _checar_credencial(svc.buscar_por_codigo(db, codigo), falhou)
     limitador_codigo.limpar(chave)
+    limitador_codigo_conta.limpar(codigo)
     return _sessao(db, credencial, request, via="codigo")
 
 
@@ -131,6 +139,7 @@ def entrar_qr(dados: schemas.EntrarQrIn, request: Request,
 
     def falhou():
         limitador_codigo.registrar_falha(chave)
+        limitador_codigo_conta.registrar_falha(dados.qr_token[:16])
         limitador_ip.registrar_falha(ip)
 
     credencial = svc.buscar_por_qr(db, dados.qr_token)

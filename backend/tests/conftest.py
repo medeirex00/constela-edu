@@ -21,6 +21,23 @@ from app.models import (
 from app.services import scoring
 
 
+@pytest.fixture(autouse=True)
+def _reset_estado_global():
+    """Zera estado global em memória (singletons por processo) antes de cada
+    teste — limitadores de tentativa e o cache do painel público, cujo escopo
+    por escola_id (=1 nos testes) vazaria entre testes."""
+    from app.core import rate_limit
+    from app.quest.routers import auth as quest_auth
+    from app.routers import publico
+
+    for lim in (rate_limit.limitador_login, rate_limit.limitador_conta,
+                quest_auth.limitador_codigo, quest_auth.limitador_ip,
+                quest_auth.limitador_codigo_conta):
+        lim._eventos.clear()
+    publico._cache_painel.clear()
+    yield
+
+
 @pytest.fixture()
 def db():
     engine = create_engine(

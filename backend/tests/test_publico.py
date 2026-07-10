@@ -56,6 +56,42 @@ def test_painel_publico_sem_login(cliente, db, escola_completa):
         "posicao", "aluno_id", "nome", "turma", "nota_geral"}
 
 
+def test_a1_aluno_arquivado_some_de_todas_as_superficies(cliente, db, escola_completa):
+    """A1: aluno arquivado/inativo NÃO aparece no painel público, no Ranking
+    Geral, no dashboard nem na exportação — mesmo com a Nota ÓRFÃ ainda no banco
+    (arquivar não apaga a Nota; a defesa é o filtro Aluno.status na leitura)."""
+    _com_notas(db, escola_completa)
+    escola_id = escola_completa["escola"].id
+    alvo = escola_completa["alunos"][0]   # tem Nota calculada no recálculo
+
+    # Arquiva SEM recalcular: a Nota órfã do alvo permanece no banco.
+    alvo.status = "arquivado"
+    db.commit()
+    nome_alvo = alvo.nome
+
+    # 1) Painel público (sem login) — a superfície LGPD mais crítica.
+    token = _ativar_painel(cliente, escola_id)
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anonimo = TestClient(app)
+    ranking_pub = anonimo.get(f"/api/v1/publico/{token}/painel").json()["ranking"]
+    assert all(item["aluno_id"] != alvo.id for item in ranking_pub)
+    assert nome_alvo not in [i["nome"] for i in ranking_pub]
+
+    # 2) Ranking Geral (autenticado)
+    ranking = cliente.get(f"/api/v1/escolas/{escola_id}/ranking").json()
+    assert all(item["aluno_id"] != alvo.id for item in ranking)
+
+    # 3) Dashboard (top10)
+    dash = cliente.get(f"/api/v1/escolas/{escola_id}/dashboard").json()
+    assert all(item["aluno_id"] != alvo.id for item in dash["top10"])
+
+    # 4) Exportação do ranking (CSV)
+    export = cliente.get(f"/api/v1/escolas/{escola_id}/relatorios/ranking?formato=csv")
+    assert export.status_code == 200
+    assert nome_alvo not in export.text
+
+
 def test_max_posicoes_limita_o_ranking(cliente, db, escola_completa):
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id

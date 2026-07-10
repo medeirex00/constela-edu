@@ -39,7 +39,9 @@ def linhas_ranking(db: Session, escola_id: int) -> tuple[list[str], list[list]]:
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
               & (Matricula.ano_letivo == escola.ano_letivo_ativo))
         .join(Turma, Matricula.turma_id == Turma.id)
-        .where(Nota.escola_id == escola_id, Nota.ano_letivo == escola.ano_letivo_ativo)
+        # Aluno.status: relatório exportado não inclui alunos arquivados/excluídos.
+        .where(Nota.escola_id == escola_id, Nota.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
         .order_by(Nota.posicao)
     ).all()
     cabecalho = ["Posição", "Aluno", "Turma", "Série", "Nota Matific",

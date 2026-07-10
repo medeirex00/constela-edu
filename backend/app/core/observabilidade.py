@@ -175,7 +175,6 @@ def capturar_excecao(erro: BaseException) -> None:
 
 # --- Extração de contexto da requisição --------------------------------------
 _RE_ESCOLA = re.compile(r"/escolas/(\d+)")
-_RE_ID_NUM = re.compile(r"/\d+(?=/|$)")
 
 
 def _escola_id_do_caminho(caminho: str) -> int | None:
@@ -199,13 +198,14 @@ def _usuario_id_do_token(headers: dict[bytes, bytes]) -> int | None:
 
 
 def _rota_de(scope: dict) -> str:
-    """Template da rota (baixa cardinalidade p/ métricas): usa a rota casada do
-    Starlette; se não houver (404), colapsa ids numéricos do caminho."""
+    """Template da rota para as MÉTRICAS (baixa cardinalidade): usa a rota
+    casada do Starlette. SEM rota casada (404/caminho inexistente), devolve um
+    rótulo FIXO "<no_match>" — nunca o caminho bruto. Usar o path cru como label
+    permitiria a um anônimo criar séries temporais infinitas (GET /aaa, /bbb…),
+    estourando a memória do prometheus_client (DoS por cardinalidade)."""
     rota = scope.get("route")
     caminho = getattr(rota, "path", None)
-    if caminho:
-        return caminho
-    return _RE_ID_NUM.sub("/{id}", scope.get("path", "?"))
+    return caminho if caminho else "<no_match>"
 
 
 # Rotas de infra não geram log de acesso (evita ruído nos scrapes/probes).

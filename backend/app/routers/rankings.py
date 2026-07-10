@@ -33,7 +33,10 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
         .join(Aluno, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
         .join(Turma, Matricula.turma_id == Turma.id)
-        .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano)
+        # Aluno.status: nunca exibir aluno arquivado/excluído no ranking (a Nota
+        # órfã dele não é apagada no recálculo — filtra-se na leitura).
+        .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
+               Aluno.status == "ativo")
         .order_by(Nota.posicao)
     )
     if turma_id:
@@ -332,8 +335,13 @@ def montar_dashboard(db: Session, escola_id: int,
         consulta_elefante = consulta_elefante.where(SnapshotElefante.aluno_id.in_(alunos_sub))
     total_livros, tempo_total = db.execute(consulta_elefante).one()
 
-    consulta_media = select(func.coalesce(func.avg(Nota.nota_geral), 0.0)).where(
-        Nota.escola_id == escola_id, Nota.ano_letivo == ano)
+    # Média só dos alunos ATIVOS (JOIN em Aluno): Notas órfãs de arquivados não
+    # distorcem a média geral da escola.
+    consulta_media = (
+        select(func.coalesce(func.avg(Nota.nota_geral), 0.0))
+        .join(Aluno, Nota.aluno_id == Aluno.id)
+        .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
+               Aluno.status == "ativo"))
     if alunos_sub is not None:
         consulta_media = consulta_media.where(Nota.aluno_id.in_(alunos_sub))
     media_geral = db.execute(consulta_media).scalar_one()

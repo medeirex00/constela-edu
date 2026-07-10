@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_usuario_atual
-from app.core.rate_limit import ip_do_cliente, limitador_login
+from app.core.rate_limit import ip_do_cliente, limitador_conta, limitador_login
 from app.core.security import (
     criar_token,
     hash_senha,
@@ -48,8 +48,11 @@ def login(
     identidade = usuario.email if usuario is not None else entrada
     chave = f"{identidade}|{ip}"
 
-    if limitador_login.bloqueado(chave):
-        espera = limitador_login.segundos_restantes(chave)
+    # Duas camadas: por (conta, IP) — freio fino — e por CONTA (sem IP) —
+    # freio contra força-bruta distribuída (vários IPs) contra a mesma conta.
+    if limitador_login.bloqueado(chave) or limitador_conta.bloqueado(identidade):
+        espera = max(limitador_login.segundos_restantes(chave),
+                     limitador_conta.segundos_restantes(identidade))
         registrar(db, "login.bloqueado", detalhes={"email": identidade, "ip": ip})
         db.commit()
         raise HTTPException(
@@ -62,6 +65,7 @@ def login(
         # Equaliza o tempo de resposta para não revelar se a conta existe.
         verificar_senha_dummy()
         limitador_login.registrar_falha(chave)
+        limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou",
                   detalhes={"email": entrada, "ip": ip, "motivo": "conta_inexistente"})
         db.commit()
@@ -70,6 +74,7 @@ def login(
 
     if not verificar_senha(form.password, usuario.senha_hash):
         limitador_login.registrar_falha(chave)
+        limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
                   detalhes={"email": identidade, "ip": ip, "motivo": "senha_incorreta"})
         db.commit()
@@ -83,6 +88,7 @@ def login(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuário desativado.")
 
     limitador_login.limpar(chave)
+    limitador_conta.limpar(identidade)
     usuario.ultimo_acesso = datetime.now(timezone.utc)
     registrar(db, "login", escola_id=usuario.escola_id, usuario_id=usuario.id)
     db.commit()

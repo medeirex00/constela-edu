@@ -60,13 +60,35 @@ class LimitadorTentativas:
 
 
 def ip_do_cliente(request) -> str:
-    """IP real do cliente considerando o proxy (nginx injeta X-Forwarded-For)."""
+    """IP real do cliente, RESISTENTE a spoofing de X-Forwarded-For.
+
+    Cada proxy APPENDA no fim do XFF o IP que enxergou; o cliente só consegue
+    forjar valores à ESQUERDA (antes do 1º proxy). Portanto o IP real é a Nª
+    entrada A PARTIR DA DIREITA, onde N = settings.TRUSTED_PROXY_HOPS (nº de
+    proxies confiáveis à frente). Nunca usamos o valor mais à esquerda (o bug
+    anterior), que é totalmente controlável pelo atacante.
+
+    Se o XFF tiver MENOS entradas que os hops confiáveis (cabeçalho ausente ou
+    encurtado — típico de acesso direto, sem proxy), caímos para o peer TCP
+    direto (request.client.host), que não é falsificável.
+    """
+    from app.core.config import settings  # import tardio: evita ciclo na carga
+
+    hops = settings.TRUSTED_PROXY_HOPS
     encaminhado = request.headers.get("x-forwarded-for")
-    if encaminhado:
-        return encaminhado.split(",")[0].strip()
+    if hops > 0 and encaminhado:
+        partes = [p.strip() for p in encaminhado.split(",") if p.strip()]
+        if len(partes) >= hops:
+            return partes[-hops]
     return request.client.host if request.client else "desconhecido"
 
 
 # 8 falhas por 5 min por (e-mail, IP): trava dicionário online sem punir
 # um usuário que erra a senha uma ou duas vezes.
 limitador_login = LimitadorTentativas(max_tentativas=8, janela_s=300)
+# Segunda camada, POR CONTA (só e-mail/usuário, sem IP): freia força-bruta
+# distribuída contra UMA conta mesmo que o atacante rode vários IPs. Teto mais
+# largo e janela curta para não travar um usuário que só errou algumas vezes.
+# (Trade-off conhecido: 20 falhas em 15 min bloqueiam a conta por 15 min —
+# possível lockout intencional de uma conta-alvo, limitado no tempo.)
+limitador_conta = LimitadorTentativas(max_tentativas=20, janela_s=900)

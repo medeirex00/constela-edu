@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # senha, sem deixar um link válido perdido por horas.
     RESET_SENHA_EXPIRA_MIN: int = 60
 
+    # Rate limiting — nº de proxies CONFIÁVEIS à frente do backend que APPENDam
+    # o X-Forwarded-For (nginx do compose = 1; edge do Railway = 1). O IP real
+    # do cliente é a Nª entrada A PARTIR DA DIREITA do XFF; as entradas à
+    # esquerda podem ser forjadas pelo cliente e são ignoradas (anti-spoofing).
+    # 0 = não confiar no XFF (usar só o IP do peer TCP direto).
+    TRUSTED_PROXY_HOPS: int = 1
+
     # Documentação interativa (/docs, /redoc, /openapi.json). Desligada por
     # padrão: só liga com DOCS_HABILITADOS=true no ambiente de desenvolvimento.
     DOCS_HABILITADOS: bool = False

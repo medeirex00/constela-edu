@@ -44,6 +44,36 @@ def test_login_bloqueia_forca_bruta(cliente, escola_completa):
     assert codigos[8] == 429             # a 9ª é bloqueada
 
 
+def test_xff_forjado_nao_burla_o_limitador(cliente, escola_completa):
+    """XFF forjado à ESQUERDA não cria buckets novos: com TRUSTED_PROXY_HOPS=1,
+    o IP usado é o que o proxy APPENDA no fim (203.0.113.9). Variar o valor da
+    esquerda (spoof) não zera o contador — a força-bruta ainda trava na 9ª."""
+    dados = {"username": "admin@teste.local", "password": "errada"}
+    codigos = [
+        cliente.post("/api/v1/auth/login", data=dados,
+                     headers={"X-Forwarded-For": f"9.9.9.{i}, 203.0.113.9"}).status_code
+        for i in range(9)
+    ]
+    assert codigos[:8] == [401] * 8
+    assert codigos[8] == 429   # o XFF variável NÃO burlou o limitador
+
+
+def test_limitador_por_conta_bloqueia_mesmo_com_ips_diferentes(cliente, escola_completa):
+    """20 falhas na MESMA conta, cada uma de um IP REAL diferente (rightmost),
+    disparam o limitador POR CONTA (independente de IP) — defesa contra
+    força-bruta distribuída que o limitador por (conta, IP) sozinho não pega."""
+    dados = {"username": "admin@teste.local", "password": "errada"}
+    codigos = [
+        cliente.post("/api/v1/auth/login", data=dados,
+                     headers={"X-Forwarded-For": f"203.0.113.{i}"}).status_code
+        for i in range(22)
+    ]
+    # Cada IP é único -> o limitador por (conta,IP) nunca acumula (não trava).
+    assert codigos[:20] == [401] * 20
+    # ... mas o limitador POR CONTA acumula e bloqueia a partir da 21ª.
+    assert codigos[20] == 429 and codigos[21] == 429
+
+
 def test_login_falho_e_auditado(cliente, db, escola_completa):
     cliente.post("/api/v1/auth/login",
                  data={"username": "ninguem@escola.com.br", "password": "x"})

@@ -42,6 +42,32 @@ def test_metrics_no_formato_prometheus():
     assert r.headers["content-type"].startswith("text/plain")
 
 
+# --- Cardinalidade de métricas (rota não casada / 404) -----------------------
+
+def test_rota_nao_casada_vira_no_match():
+    """404 / caminho inexistente NUNCA vira label bruto (explosão de
+    cardinalidade no Prometheus): sempre o rótulo fixo "<no_match>"."""
+    assert obs._rota_de({"path": "/aaa"}) == "<no_match>"
+    assert obs._rota_de({"path": "/bbb/123/xyz"}) == "<no_match>"
+    assert obs._rota_de({}) == "<no_match>"
+
+    class _Rota:
+        path = "/escolas/{escola_id}/dashboard"
+
+    assert obs._rota_de({"route": _Rota()}) == "/escolas/{escola_id}/dashboard"
+
+
+def test_metricas_de_404_nao_usam_o_caminho_bruto():
+    """Dois caminhos inexistentes DISTINTOS geram a MESMA série "<no_match>" —
+    não uma por caminho. Limita a cardinalidade (defesa contra DoS de memória)."""
+    cliente.get("/rota-que-nao-existe-aaa")
+    cliente.get("/rota-que-nao-existe-bbb")
+    corpo = obs.render_metricas()[0].decode()
+    assert 'rota="<no_match>"' in corpo
+    assert "rota-que-nao-existe-aaa" not in corpo
+    assert "rota-que-nao-existe-bbb" not in corpo
+
+
 # --- Request id / Correlation id ---------------------------------------------
 
 def test_request_id_no_header_e_unico_por_requisicao():

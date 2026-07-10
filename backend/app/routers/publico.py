@@ -201,7 +201,10 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
               & (Matricula.ano_letivo == escola.ano_letivo_ativo))
         .join(Turma, Matricula.turma_id == Turma.id)
-        .where(Nota.escola_id == escola.id, Nota.ano_letivo == escola.ano_letivo_ativo)
+        # Aluno.status: painel PÚBLICO (sem login) nunca pode listar criança
+        # arquivada/excluída — a Nota órfã dela não some no recálculo.
+        .where(Nota.escola_id == escola.id, Nota.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
         .order_by(Nota.posicao)
         .limit(limite)
     ).all()
