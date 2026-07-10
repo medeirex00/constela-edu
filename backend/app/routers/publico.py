@@ -23,7 +23,6 @@ from app.models import Aluno, Configuracao, Escola, Matricula, Nota, Turma, Usua
 from app.services import evolucao as svc_evolucao
 from app.services import gamificacao as svc_gami
 from app.services import relatorios as svc_relatorios
-from app.services import scoring
 from app.services.audit import registrar
 
 router = APIRouter(tags=["Painel Público"])

@@ -129,7 +129,7 @@ def seed_base(db) -> Escola:
     print(f"Escola JORGE PASSOS criada (id={escola.id}).")
     print("=" * 60)
     print("  USUÁRIO INICIAL — anote agora (não será exibido de novo):")
-    print(f"    E-mail: admin@constela.local")
+    print("    E-mail: admin@constela.local")
     print(f"    Senha:  {senha_admin}")
     print("  Troque a senha no primeiro acesso, em Usuários.")
     print("=" * 60)

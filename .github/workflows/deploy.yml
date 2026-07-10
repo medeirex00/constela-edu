@@ -1,0 +1,87 @@
+# Entrega contínua (CD): staging automático, produção com aprovação manual.
+#
+# ATIVAÇÃO (fica DESLIGADO até você habilitar, para não falhar sem os segredos):
+#   1. Configure os segredos em Settings → Secrets and variables → Actions:
+#        RAILWAY_TOKEN, RAILWAY_SERVICE_STAGING, RAILWAY_SERVICE_PROD
+#        (e, se for deployar o front por aqui em vez do git da Vercel:
+#         VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID).
+#   2. Crie os Environments "staging" e "producao" (Settings → Environments).
+#        No "producao", marque "Required reviewers" — isso cria o PORTÃO DE
+#        APROVAÇÃO MANUAL: o deploy de produção PAUSA até alguém aprovar.
+#   3. Crie a variável de repositório DEPLOY_ENABLED = true.
+#
+# Fluxo:
+#   - push na main            → deploy de STAGING (automático)
+#   - release publicada       → deploy de PRODUÇÃO (após aprovação do reviewer)
+#   - "Run workflow" (manual) → escolhe o ambiente
+#
+# Observação: o frontend na Vercel já pode fazer deploy automático pelo git
+# (integração da Vercel). Nesse caso, mantenha só o deploy do backend aqui e
+# remova os passos da Vercel — evita deploy duplicado.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        description: Ambiente de destino
+        type: choice
+        options: [staging, producao]
+        default: staging
+
+permissions:
+  contents: read
+
+jobs:
+  staging:
+    name: Deploy — staging
+    if: >-
+      ${{ vars.DEPLOY_ENABLED == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' && inputs.ambiente == 'staging')) }}
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy do backend (Railway — staging)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: npx -y @railway/cli up --service "${{ secrets.RAILWAY_SERVICE_STAGING }}" --detach
+      # Front na Vercel (opcional — remova se a Vercel já faz deploy pelo git):
+      - name: Deploy do web (Vercel — preview/staging)
+        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx -y vercel deploy --yes --token "$VERCEL_TOKEN"
+
+  producao:
+    name: Deploy — produção (aprovação manual)
+    if: >-
+      ${{ vars.DEPLOY_ENABLED == 'true' &&
+          (github.event_name == 'release' ||
+           (github.event_name == 'workflow_dispatch' && inputs.ambiente == 'producao')) }}
+    runs-on: ubuntu-latest
+    # O Environment "producao" com Required reviewers PAUSA aqui até aprovação.
+    environment:
+      name: producao
+      url: https://www.constelaedu.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy do backend (Railway — produção)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: npx -y @railway/cli up --service "${{ secrets.RAILWAY_SERVICE_PROD }}" --detach
+      - name: Deploy do web (Vercel — produção)
+        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx -y vercel deploy --prod --yes --token "$VERCEL_TOKEN"

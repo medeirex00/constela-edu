@@ -9,8 +9,8 @@ email-validator==2.2.0
 passlib==1.7.4
 bcrypt==4.0.1
 python-jose[cryptography]==3.4.0
-python-multipart==0.0.20
-pypdf==6.0.0
+python-multipart==0.0.31
+pypdf==6.13.3
 pdfplumber==0.11.10
 openpyxl==3.1.5
 xlrd==2.0.1
@@ -20,4 +20,5 @@ anthropic==0.116.0
 sentry-sdk[fastapi]==2.20.0
 prometheus-client==0.21.1
 pytest==8.3.4
+pytest-cov==6.0.0
 httpx==0.28.1

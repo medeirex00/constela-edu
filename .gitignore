@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
 
 # Node / monorepo
 node_modules/

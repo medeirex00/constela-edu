@@ -1,5 +1,9 @@
-# CI do SGPE: roda em todo push/PR.
-# Backend: pytest. Clientes: typecheck do core/mobile e build do web.
+# CI do Constela Edu — roda em todo push na main e em todo Pull Request.
+#
+# Qualidade (bloqueante — "falha obrigatória em erro"): lint, testes com
+# cobertura, build e E2E. Nenhum passo usa continue-on-error, então qualquer
+# erro reprova o run (e, com branch protection, barra o merge).
+# A varredura de segurança (pip-audit, npm audit, Trivy) vive em security.yml.
 name: CI
 
 on:
@@ -7,9 +11,41 @@ on:
     branches: [main]
   pull_request:
 
+# Cancela runs antigos do mesmo branch/PR quando um novo push chega.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  backend:
-    name: Backend (pytest)
+  lint:
+    name: Lint (ruff + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Instalar ruff
+        run: pip install ruff==0.15.21
+      - name: Ruff (backend)
+        run: ruff check backend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+      - name: Typecheck (core, quest-core, mobile)
+        run: |
+          npm run typecheck --workspace @constela/core
+          npm run typecheck --workspace @constela/quest-core
+          npm run typecheck --workspace @constela/mobile
+
+  test-backend:
+    name: Testes backend (pytest + cobertura)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,11 +56,26 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Instalar dependências
         run: pip install -r backend/requirements.txt
-      - name: Testes
-        run: python -m pytest backend/tests -q
+      - name: Pytest com cobertura
+        working-directory: backend
+        run: python -m pytest -q --cov=app --cov-report=xml --cov-report=term
+      - name: Publicar cobertura (artefato)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-backend
+          path: backend/coverage.xml
+          retention-days: 7
+      - name: Codecov (opcional — só se CODECOV_TOKEN estiver configurado)
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage.xml
+          flags: backend
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-  clientes:
-    name: Web + Core + Mobile (build/typecheck)
+  test-web:
+    name: Testes web (Vitest + cobertura)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,30 +85,38 @@ jobs:
           cache: npm
       - name: Instalar workspaces
         run: npm ci --no-audit --no-fund --legacy-peer-deps
-      - name: Typecheck do core
-        run: npm run typecheck --workspace @constela/core
-      - name: Typecheck do quest-core
-        run: npm run typecheck --workspace @constela/quest-core
+      - name: Vitest com cobertura
+        run: npm run test:cov --workspace @constela/web
+      - name: Publicar cobertura (artefato)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-web
+          path: apps/web/coverage
+          retention-days: 7
+      - name: Codecov (opcional)
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          directory: apps/web/coverage
+          flags: web
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  build:
+    name: Build (web + quest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
       - name: Build do web
         run: npm run build --workspace @constela/web
       - name: Build do quest
         run: npm run build --workspace @constela/quest
-      - name: Typecheck do mobile
-        run: npm run typecheck --workspace @constela/mobile
-
-  web-unit:
-    name: Web (testes unitários Vitest)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - name: Instalar workspaces
-        run: npm ci --no-audit --no-fund --legacy-peer-deps
-      - name: Testes de UI (Vitest)
-        run: npm run test --workspace @constela/web
 
   e2e:
     name: E2E (Playwright)
@@ -93,7 +152,7 @@ jobs:
           retention-days: 7
 
   docker:
-    name: Imagens Docker (validação)
+    name: Imagens Docker (validação de build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

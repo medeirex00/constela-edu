@@ -17,7 +17,6 @@ from app.models import (
     Escola,
     Importacao,
     Matricula,
-    Nota,
     SnapshotElefante,
     SnapshotMatific,
     Turma,

@@ -1,0 +1,124 @@
+# Varredura de segurança de dependências e imagens.
+#
+# Roda em PR, em push na main e TODA segunda-feira (schedule) — o agendamento
+# pega CVEs divulgados DEPOIS do último commit, mesmo sem ninguém abrir PR.
+#
+# Política ("falha obrigatória em erro", com bom senso operacional):
+#   - pip-audit: reprova em QUALQUER vulnerabilidade das dependências Python,
+#     exceto uma allowlist explícita e justificada (frameworks que fixam a
+#     versão, ou CVEs sem correção publicada). Cada item da allowlist está
+#     comentado abaixo — o Dependabot abre PR quando surgir correção.
+#   - npm audit: reprova em CRITICAL (o nível que exige ação imediata) e apenas
+#     REPORTA high/moderate — que hoje vivem só na árvore do Expo (app mobile) e
+#     dependem de um upgrade coordenado de SDK, conduzido pelo Dependabot.
+#   - Trivy: escaneia o código e as imagens Docker; reprova em CRITICAL com
+#     correção disponível (--ignore-unfixed) e envia o SARIF para a aba Security.
+name: Segurança
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # segunda-feira 06:00 UTC
+
+permissions:
+  contents: read
+  security-events: write # para o upload do SARIF do Trivy
+
+jobs:
+  pip-audit:
+    name: pip-audit (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Instalar pip-audit
+        run: pip install pip-audit==2.10.1
+      - name: Auditar backend/requirements.txt
+        # Allowlist (risco aceito e documentado; sem correção aplicável hoje):
+        #   starlette — fixado pelo FastAPI 0.116 (<0.48); upgrade é do FastAPI.
+        #   pytest    — só em teste, nunca vai para a imagem de runtime.
+        #   pyasn1    — transitivo (python-jose→rsa); baixo risco no nosso uso.
+        #   ecdsa     — sem correção publicada; usamos JWT HS256 (não ECDSA).
+        run: |
+          pip-audit -r backend/requirements.txt \
+            --ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-249 \
+            --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-1942 \
+            --ignore-vuln CVE-2026-48818 --ignore-vuln CVE-2026-48817 \
+            --ignore-vuln PYSEC-2026-1845 --ignore-vuln CVE-2026-30922 \
+            --ignore-vuln PYSEC-2026-1325
+
+  npm-audit:
+    name: npm audit (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+      - name: Reprova em CRITICAL (produção)
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Relatório de high/moderate (informativo — Dependabot conduz)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+  trivy:
+    name: Trivy (código + imagens Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 1) Código/dependências no repositório.
+      - name: Trivy — filesystem
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      # 2) Imagens Docker (mesma base que vai a produção).
+      - name: Build das imagens
+        run: |
+          docker build -t sgpe-backend ./backend
+          docker build -t sgpe-web -f apps/web/Dockerfile .
+      - name: Trivy — imagem do backend
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: sgpe-backend
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Trivy — imagem do web
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: sgpe-web
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      # 3) Relatório completo (HIGH+) para a aba Security, sem bloquear.
+      - name: Trivy — SARIF (código, HIGH+)
+        if: ${{ !cancelled() }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy.sarif
+      - name: Enviar SARIF para a aba Security
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif

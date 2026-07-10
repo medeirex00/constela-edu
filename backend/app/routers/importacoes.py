@@ -10,7 +10,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time as hora_zero, timedelta, timezone
+from datetime import datetime, time as hora_zero, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (

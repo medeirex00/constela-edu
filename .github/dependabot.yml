@@ -1,0 +1,37 @@
+# Dependabot: abre PRs de atualização de dependências (com changelog e link do
+# CVE quando for correção de segurança). Cada PR roda o CI/segurança inteiros,
+# então só entra o que passa nos gates.
+version: 2
+updates:
+  # Backend Python
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels: ["dependencias", "backend"]
+    groups:
+      # Agrupa patch/minor num PR só (menos ruído); major vem separado.
+      backend-menores:
+        update-types: ["minor", "patch"]
+
+  # Monorepo Node (web, quest, mobile, desktop, packages — todos os workspaces)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels: ["dependencias", "frontend"]
+    groups:
+      node-menores:
+        update-types: ["minor", "patch"]
+
+  # As próprias GitHub Actions (pinar/atualizar as versões usadas nos workflows)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: ["dependencias", "ci"]
