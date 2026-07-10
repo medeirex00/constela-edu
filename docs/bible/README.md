@@ -74,7 +74,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | C | Registro de Decisões (ADR) / Decision Log | [`decisoes/`](decisoes/) | 🟢 |
 | D | Catálogo de Eventos de Telemetria / Telemetry Event Catalog | `apendice-D-eventos-telemetria.md` | 🟢 |
 | E | Wireframes/Mockups de Referência / Reference Wireframes | `apendice-E-wireframes.md` | 🟢 |
-| F | Checklists Consolidados (DoD) / Consolidated Checklists | `apendice-F-checklists-dod.md` | ⬛ |
+| F | Checklists Consolidados (DoD) / Consolidated Checklists | `apendice-F-checklists-dod.md` | 🟢 |
 
 **Partes:** I — Produto & Visão (00–02) · II — O Jogo: Design & UX (03–08) · III — Comunidade (09–10) ·
 IV — Técnico & Segurança (11–14) · V — Produção & Operação (15–21) · VI — Negócio & Governança (22–24) · Apêndices (A–F).
