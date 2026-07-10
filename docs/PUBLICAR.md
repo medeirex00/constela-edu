@@ -161,6 +161,38 @@ servidor não protege contra perda do servidor.
 > de uma escola, mas **não substitui** o `pg_dump`: ele não inclui contas de
 > usuário nem os arquivos enviados.
 
+### Escala horizontal e limite de tentativas (quando o Redis passa a ser necessário)
+
+O limitador de tentativas de login — a trava contra força-bruta de senhas de
+adultos e de códigos das crianças — guarda os contadores **em memória, por
+processo**. Isso é adequado (e é o recomendado) para o cenário deste guia:
+
+* **uma única instância** do backend (um servidor), com um ou poucos *workers*.
+  Os contadores são consistentes o bastante para frear ataques online de
+  dicionário, e o uso de memória é **limitado** — há teto rígido de chaves, então
+  tentativas com usuários/códigos aleatórios não esgotam a RAM (não há vetor de
+  DoS por memória).
+
+**O momento em que isso deixa de bastar — e o Redis passa a ser necessário:**
+
+* Quando você rodar **mais de uma instância/réplica do backend** atrás de um
+  balanceador de carga (escala **horizontal**). Cada réplica passa a ter o seu
+  próprio contador, e eles **não se enxergam**: o orçamento efetivo de tentativas
+  por conta fica multiplicado pelo número de réplicas, enfraquecendo a trava na
+  mesma proporção.
+* Ou quando os logs de auditoria mostrarem um ataque de **força-bruta
+  distribuído** real (muitos IPs contra uma mesma conta) que o limite atual não
+  esteja contendo.
+
+Enquanto o sistema roda em **uma instância** (crescendo **verticalmente** — mais
+CPU/RAM no mesmo servidor, que atende milhares de alunos de escola sem problema),
+**nada precisa mudar**. Ao migrar para **várias réplicas**, troque o
+armazenamento do limitador por um **contador compartilhado** entre instâncias
+(ex.: Redis com `INCR`+`EXPIRE`). A interface do limitador em
+`backend/app/core/rate_limit.py` (`bloqueado` / `registrar_falha` / `limpar`) foi
+mantida pequena de propósito justamente para permitir essa troca sem tocar no
+restante do sistema.
+
 ---
 
 ## Extras opcionais (depois que o site estiver no ar)
