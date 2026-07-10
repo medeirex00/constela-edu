@@ -65,7 +65,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | 18 | QA & Estratégia de Testes / QA & Testing | `18-qa-testes.md` | 🟢 |
 | 19 | Live-ops & Configuração Remota / Live-ops | `19-liveops.md` | 🟢 |
 | 20 | Migração de Dados & Importação / Data Migration & Import | `20-migracao-importacao.md` | 🟢 |
-| 21 | Suporte & Operação de Escola / Support & School Ops | `21-suporte-operacao.md` | ⬛ |
+| 21 | Suporte & Operação de Escola / Support & School Ops | `21-suporte-operacao.md` | 🟢 |
 | 22 | Monetização & Modelo de Negócio / Business Model | `22-monetizacao.md` | ⬛ |
 | 23 | Roadmap & Fases (Q0–Q6) / Roadmap & Phases | `23-roadmap.md` | ⬛ |
 | 24 | Governança da Bible / Bible Governance | `24-governanca.md` | ⬛ |
