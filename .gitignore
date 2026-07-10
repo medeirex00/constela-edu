@@ -16,6 +16,14 @@ packages/*/dist/
 coverage/
 apps/*/coverage/
 
+# E2E (Playwright): estado de sessão, relatórios, artefatos e banco de teste
+apps/web/e2e/.auth/
+apps/web/playwright-report/
+apps/web/test-results/
+apps/web/blob-report/
+backend/e2e.db
+backend/e2e.db-*
+
 # Tauri (Rust)
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
