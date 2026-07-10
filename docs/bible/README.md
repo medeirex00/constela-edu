@@ -63,7 +63,7 @@ física). O HTML serve só como interface; personagens nunca são desenhados com
 | 16 | Localização & i18n / Localization | `16-localizacao-i18n.md` | 🟢 |
 | 17 | Telemetria, Métricas & Analytics / Analytics | `17-telemetria-metricas.md` | 🟢 |
 | 18 | QA & Estratégia de Testes / QA & Testing | `18-qa-testes.md` | ⬛ |
-| 19 | Live-ops & Configuração Remota / Live-ops | `19-liveops.md` | ⬛ |
+| 19 | Live-ops & Configuração Remota / Live-ops | `19-liveops.md` | 🟢 |
 | 20 | Migração de Dados & Importação / Data Migration & Import | `20-migracao-importacao.md` | ⬛ |
 | 21 | Suporte & Operação de Escola / Support & School Ops | `21-suporte-operacao.md` | ⬛ |
 | 22 | Monetização & Modelo de Negócio / Business Model | `22-monetizacao.md` | ⬛ |
