@@ -77,11 +77,21 @@ export function Carregando({ texto = "Carregando..." }: { texto?: string }) {
   );
 }
 
-export function Vazio({ titulo, descricao }: { titulo: string; descricao?: string }) {
+export function Vazio({
+  titulo,
+  descricao,
+  acao,
+}: {
+  titulo: string;
+  descricao?: string;
+  /** Ação opcional (ex.: botão "Tentar de novo" em estados de erro). */
+  acao?: ReactNode;
+}) {
   return (
     <div className="py-16 text-center">
       <p className="text-sm font-medium">{titulo}</p>
       {descricao && <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{descricao}</p>}
+      {acao && <div className="mt-4 flex justify-center">{acao}</div>}
     </div>
   );
 }

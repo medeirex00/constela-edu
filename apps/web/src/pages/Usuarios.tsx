@@ -269,6 +269,7 @@ export default function Usuarios() {
 
   const carregar = useCallback(() => {
     if (!escolaId) return;
+    setErroLista("");   // limpa o erro anterior: sucesso não deve manter o aviso
     const sufixo = mostrarExcluidos ? "?incluir_excluidos=true" : "";
     api<Usuario[]>(`/escolas/${escolaId}/usuarios${sufixo}`)
       .then(setUsuarios)
@@ -363,7 +364,8 @@ export default function Usuarios() {
         {usuarios === null ? (
           <Carregando />
         ) : usuarios.length === 0 ? (
-          <Vazio titulo="Sem acesso ou nenhum usuário" descricao={erroLista} />
+          <Vazio titulo="Sem acesso ou nenhum usuário" descricao={erroLista}
+                 acao={erroLista ? <Botao variante="neutro" onClick={carregar}>Tentar de novo</Botao> : undefined} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

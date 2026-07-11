@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
-import { Badge, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { Badge, Botao, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
@@ -55,6 +55,7 @@ export default function RankingGeral() {
     dados: itensPeriodo,
     erro: erroPeriodo,
     carregando: carregandoPeriodo,
+    recarregar: recarregarPeriodo,
   } = useApi<ItemPeriodo[]>(
     escolaId && porPeriodo ? `/escolas/${escolaId}/ranking-evolucao?${queryPeriodo}` : null,
   );
@@ -63,6 +64,7 @@ export default function RankingGeral() {
     dados: itens,
     erro: erroGeral,
     carregando: carregandoGeral,
+    recarregar: recarregarGeral,
   } = useApi<RankingItem[]>(
     escolaId && !porPeriodo ? `/escolas/${escolaId}/ranking?${parametros}` : null,
   );
@@ -124,7 +126,8 @@ export default function RankingGeral() {
           <Carregando />
         ) : porPeriodo ? (
           erroPeriodo ? (
-            <Vazio titulo="Não foi possível carregar" descricao={erroPeriodo.message} />
+            <Vazio titulo="Não foi possível carregar" descricao={erroPeriodo.message}
+                   acao={<Botao variante="neutro" onClick={recarregarPeriodo}>Tentar de novo</Botao>} />
           ) : !itensPeriodo || itensPeriodo.length === 0 ? (
             <Vazio titulo="Sem atividades no período" descricao="Ajuste o período ou importe novos relatórios." />
           ) : (
@@ -169,7 +172,8 @@ export default function RankingGeral() {
             </div>
           )
         ) : erroGeral ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erroGeral.message} />
+          <Vazio titulo="Não foi possível carregar" descricao={erroGeral.message}
+                 acao={<Botao variante="neutro" onClick={recarregarGeral}>Tentar de novo</Botao>} />
         ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Nenhuma nota calculada ainda" descricao="Importe dados das plataformas para gerar o ranking." />
         ) : (
