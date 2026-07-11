@@ -87,6 +87,39 @@ def test_mural_traz_destaques_e_eventos(cliente, db, escola_completa):
     assert any(evento["tipo"] == "conquista" for evento in corpo["eventos"])
 
 
+def test_mural_reusa_series_sem_recarregar_por_janela(db, escola_completa):
+    """M4: o mural carrega os snapshots UMA vez e injeta as séries nas 3 janelas
+    do ranking (dia/semana/mês). Antes, cada janela relia snapshots_matific e
+    snapshots_elefante (~4 varreduras de cada por request). Prova a redução por
+    contagem de SELECTs e confirma que o RESULTADO não mudou."""
+    from sqlalchemy import event
+
+    _dados_basicos(db, escola_completa)
+    escola = escola_completa["escola"]
+
+    engine = db.get_bind()
+    contagem = {"matific": 0, "elefante": 0}
+
+    def _contar(_conn, _cursor, stmt, _params, _ctx, _muitos):
+        alvo = stmt.lower()
+        if "from snapshots_matific" in alvo:
+            contagem["matific"] += 1
+        if "from snapshots_elefante" in alvo:
+            contagem["elefante"] += 1
+
+    event.listen(engine, "before_cursor_execute", _contar)
+    try:
+        resultado = svc_gami.mural(db, escola.id)
+    finally:
+        event.remove(engine, "before_cursor_execute", _contar)
+
+    # Resultado intacto: Ana segue como destaque do mês.
+    assert resultado["destaques"]["mes"]["nome"] == "Ana Beatriz Souza"
+    # Cada tabela de snapshot é varrida ~1x (não ~4x). Margem folgada: <= 2.
+    assert contagem["matific"] <= 2, contagem
+    assert contagem["elefante"] <= 2, contagem
+
+
 # --- Relatórios -----------------------------------------------------------------
 
 def test_exportar_csv_xlsx_pdf(cliente, db, escola_completa):

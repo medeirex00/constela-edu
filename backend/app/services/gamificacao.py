@@ -473,10 +473,13 @@ def mural(db: Session, escola_id: int) -> dict:
             "data": importacao.created_at,
         })
 
-    # Séries de TODOS os alunos em 2 queries + regras uma única vez
+    # Séries de TODOS os alunos em 2 queries + regras uma única vez. As mesmas
+    # séries + o mapa de dificuldade alimentam as 3 janelas do ranking abaixo
+    # (dia/semana/mês), evitando que cada janela reexecute essas varreduras.
     pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
     series_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
     series_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
     nomes = dict(db.execute(
         select(Aluno.id, Aluno.nome).where(Aluno.escola_id == escola_id)
     ).all())
@@ -502,12 +505,18 @@ def mural(db: Session, escola_id: int) -> dict:
 
     eventos.sort(key=lambda evento: str(evento["data"]), reverse=True)
 
-    # ranking_evolucao é caro: computa cada janela uma vez só
+    # ranking_evolucao é caro: cada janela reusa as séries + mapa de dificuldade
+    # já carregados (só a leitura por período varia entre as janelas).
+    def _destaque(dias: int):
+        return _melhor_do_ranking(evolucao.ranking_evolucao(
+            db, escola_id, dias=dias,
+            serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif))
+
     return {
         "destaques": {
-            "dia": _melhor_do_ranking(evolucao.ranking_evolucao(db, escola_id, dias=1)),
-            "semana": _melhor_do_ranking(evolucao.ranking_evolucao(db, escola_id, dias=7)),
-            "mes": _melhor_do_ranking(evolucao.ranking_evolucao(db, escola_id, dias=30)),
+            "dia": _destaque(1),
+            "semana": _destaque(7),
+            "mes": _destaque(30),
         },
         "eventos": eventos[:20],
     }

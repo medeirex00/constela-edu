@@ -301,11 +301,21 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,
                      dias: int | None = None,
-                     turma_ids: list[int] | None = None) -> list[ItemEvolucao]:
+                     turma_ids: list[int] | None = None,
+                     serie_m: dict[int, list] | None = None,
+                     serie_e: dict[int, list] | None = None,
+                     mapa_dif: dict[tuple[str, str], float] | None = None,
+                     ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
 
-    `dias` é um atalho retrocompatível: sem `inicio`, usa os últimos N dias."""
+    `dias` é um atalho retrocompatível: sem `inicio`, usa os últimos N dias.
+
+    `serie_m`/`serie_e`/`mapa_dif` são as varreduras CARAS e INDEPENDENTES da
+    janela; um chamador que precise de VÁRIAS janelas (o mural: dia/semana/mês)
+    pode carregá-las UMA vez e injetá-las aqui, em vez de o serviço relê-las a
+    cada chamada. Só `_leituras_no_periodo` continua por janela (depende do
+    intervalo)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -331,9 +341,13 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
     matriculas = db.execute(consulta).all()
 
-    serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
-    serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
-    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    # Varreduras independentes da janela: reusa as injetadas (mural) ou carrega.
+    if serie_m is None:
+        serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
+    if serie_e is None:
+        serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
+    if mapa_dif is None:
+        mapa_dif = scoring._mapa_dificuldade(db, escola_id)
     # Leituras com data REAL: para quem tem relatório individual importado, o
     # ganho de leitura do período vem do que foi DE FATO lido no intervalo.
     com_leituras, leituras_periodo = _leituras_no_periodo(db, escola_id, inicio, fim)
