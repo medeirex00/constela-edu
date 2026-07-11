@@ -5,6 +5,18 @@ sobrescrita — é a fonte do painel do professor, do portal da família e dos
 agregados de habilidade (que são caches recalculáveis). "Nunca apagada" vale
 para a operação normal; na EXCLUSÃO do aluno a telemetria some junto (o perfil
 é filho do aluno via ON DELETE CASCADE), por LGPD — igual aos snapshots do Edu.
+
+ISOLAMENTO (§11, Princípio 15): `quest_progresso` e `quest_habilidades` NÃO
+carregam `escola_id` — a escola é derivada por `perfil_id`→`quest_perfis`
+(tenancy transitiva, Estratégia B, sem coluna denormalizada). Todo reader
+desses dois agregados DEVE partir de `app.quest.services.agregados`, que embute
+o JOIN obrigatório + o filtro por escola; consultar por `perfil_id` "solto" é
+proibido — e a regra é **catraca**: `test_leitura_dos_agregados_so_pelo_helper`
+(em `test_quest_isolamento`) reprova o build se algum `select`/`query` sobre
+esses modelos aparecer fora de `agregados.py` (barra o bypass acidental pelo
+nome direto; uma evasão deliberada por alias/import qualificado escaparia — não
+é o alvo). `quest_tentativas` já tem `escola_id` próprio e pode ser filtrada
+direto.
 """
 from datetime import datetime
 
