@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useApi } from "../../hooks/useApi";
+import { ApiError } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
 interface ItemRanking {
@@ -127,10 +128,23 @@ export default function PainelPublico() {
     return () => window.clearInterval(timer);
   }, [dados, pausado]);
 
-  if (erro) {
+  // O erro só derruba o telão quando NUNCA houve dados: token inválido/painel
+  // desativado é 404. Uma falha transitória (rede caiu, servidor reiniciando)
+  // NÃO apaga o último quadro bom — o ciclo de 60s recupera sozinho.
+  if (erro && !dados) {
+    // Transitório = mesma definição do useApi (rede/timeout/sobrecarga/5xx): o
+    // cold-start numa rede lenta mostra "Reconectando", não "não encontrado".
+    const transitorio =
+      !(erro instanceof ApiError) ||
+      erro.status === 0 || erro.status === 408 || erro.status === 429 ||
+      erro.status >= 500;
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-300">
-        <p className="text-xl">Painel não encontrado ou desativado.</p>
+        <p className="text-xl">
+          {transitorio
+            ? "Reconectando ao painel..."
+            : "Painel não encontrado ou desativado."}
+        </p>
       </div>
     );
   }
