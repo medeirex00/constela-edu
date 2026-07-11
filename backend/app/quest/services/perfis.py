@@ -9,6 +9,7 @@ from __future__ import annotations
 import secrets
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Aluno
@@ -152,24 +153,45 @@ def gerar_codigo_amigo(db: Session) -> str:
     raise RuntimeError("Não foi possível gerar um código de amigo único.")
 
 
+def _inserir_perfil_novo(db: Session, aluno: Aluno) -> QuestPerfil:
+    """Cria o perfil com RETRY em colisão (TOCTOU) — mesmo padrão de
+    _inserir_credencial_nova. Sob concorrência, dois pedidos podem inserir o
+    MESMO aluno_id (unique) ou sortear o MESMO codigo_amigo (unique); o savepoint
+    isola a falha do INSERT sem abortar a transação. Colisão de aluno_id →
+    devolve o perfil já criado pela outra transação; colisão só de codigo_amigo →
+    a próxima volta sorteia outro código."""
+    for _ in range(5):
+        try:
+            with db.begin_nested():
+                perfil = QuestPerfil(
+                    escola_id=aluno.escola_id,
+                    aluno_id=aluno.id,
+                    apelido=gerar_apelido(db, aluno.escola_id),
+                    codigo_amigo=gerar_codigo_amigo(db),
+                    avatar=dict(AVATAR_PADRAO),
+                    preferencias={"som": True, "musica": True, "narracao": True,
+                                  "reduzir_animacoes": False},
+                )
+                db.add(perfil)
+                db.flush()
+            return perfil
+        except IntegrityError:
+            existente = db.execute(
+                select(QuestPerfil).where(QuestPerfil.aluno_id == aluno.id)
+            ).scalar_one_or_none()
+            if existente is not None:
+                return existente        # corrida em aluno_id: usa o existente
+            # colisão só de codigo_amigo: a próxima volta sorteia outro
+    raise RuntimeError("Não foi possível criar o perfil único do aluno.")
+
+
 def obter_ou_criar_perfil(db: Session, aluno: Aluno) -> QuestPerfil:
     perfil = db.execute(
         select(QuestPerfil).where(QuestPerfil.aluno_id == aluno.id)
     ).scalar_one_or_none()
     if perfil is not None:
         return perfil
-    perfil = QuestPerfil(
-        escola_id=aluno.escola_id,
-        aluno_id=aluno.id,
-        apelido=gerar_apelido(db, aluno.escola_id),
-        codigo_amigo=gerar_codigo_amigo(db),
-        avatar=dict(AVATAR_PADRAO),
-        preferencias={"som": True, "musica": True, "narracao": True,
-                      "reduzir_animacoes": False},
-    )
-    db.add(perfil)
-    db.flush()
-    return perfil
+    return _inserir_perfil_novo(db, aluno)
 
 
 # Chaves de preferências que o aluno pode alterar (whitelist estrita).
