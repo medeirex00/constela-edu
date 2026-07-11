@@ -24,11 +24,12 @@ from fastapi import (
     status,
 )
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis
 from app.models import (
     Aluno,
@@ -288,6 +289,32 @@ def _ano_escolar_do_nome(nome: str) -> str:
     return f"{par.group(1)}º Ano" if par else ""
 
 
+def _inserir_turma(db: Session, escola_id: int, ano: int, nome: str,
+                   ano_escolar: str, *, turno: str | None = None,
+                   observacoes: str | None = None) -> tuple[Turma, bool]:
+    """Cria a turma isolando a colisão do índice único uq_turma_escola_ano_nome
+    num savepoint: se uma importação concorrente já criou a MESMA turma (mesmo
+    escola+ano+nome), devolve a existente em vez de estourar 500 — mesmo padrão
+    de _inserir_credencial_nova. Retorna (turma, criada_agora)."""
+    try:
+        with db.begin_nested():
+            turma = Turma(escola_id=escola_id, nome=nome, ano_letivo=ano,
+                          ano_escolar=ano_escolar, turno=turno,
+                          observacoes=observacoes)
+            db.add(turma)
+            db.flush()
+        return turma, True
+    except IntegrityError:
+        existente = db.execute(
+            select(Turma).where(Turma.escola_id == escola_id,
+                                Turma.ano_letivo == ano,
+                                Turma.nome == nome).limit(1)
+        ).scalars().first()
+        if existente is None:  # colisão que não é a nossa: repropaga
+            raise
+        return existente, False
+
+
 def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
                      avisos: list[str], turmas_novas: dict) -> Turma | None:
     """Acha (case-insensitive) ou CRIA a turma com o nome lido do relatório —
@@ -304,16 +331,34 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
                             func.lower(Turma.nome) == chave).limit(1)
     ).scalars().first()
     if turma is None:
-        turma = Turma(escola_id=escola_id, nome=nome, ano_letivo=ano,
-                      ano_escolar=_ano_escolar_do_nome(nome) or nome[:20])
-        db.add(turma)
-        db.flush()
-        registrar(db, "turma.criada", escola_id=escola_id, entidade="turma",
-                  entidade_id=turma.id,
-                  detalhes={"nome": nome, "origem": "importacao"})
-        avisos.append(f"Turma “{nome}” criada automaticamente a partir do relatório.")
+        turma, criada = _inserir_turma(
+            db, escola_id, ano, nome, _ano_escolar_do_nome(nome) or nome[:20])
+        if criada:
+            registrar(db, "turma.criada", escola_id=escola_id, entidade="turma",
+                      entidade_id=turma.id,
+                      detalhes={"nome": nome, "origem": "importacao"})
+            avisos.append(
+                f"Turma “{nome}” criada automaticamente a partir do relatório.")
     turmas_novas[chave] = turma
     return turma
+
+
+def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
+                              turma_id: int, nome: str) -> Aluno | None:
+    """Aluno já matriculado nesta turma/ano cujo nome normalizado casa. Torna o
+    /confirmar idempotente sob a trava por escola: um reenvio sobreposto do MESMO
+    relatório (double-click, retry de proxy/mobile) reaproveita em vez de recriar
+    — alunos não têm unique constraint (dois homônimos reais são legítimos), então
+    a defesa é este re-casamento contra o banco (mesma filosofia do /matriculas)."""
+    alvo = svc.normalizar_nome(nome)
+    for aluno in db.execute(
+        select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
+        .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
+               Matricula.ano_letivo == ano)
+    ).scalars():
+        if svc.normalizar_nome(aluno.nome) == alvo:
+            return aluno
+    return None
 
 
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
@@ -343,6 +388,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         chave = (svc.normalizar_nome(linha.nome), turma.id)
         if criados is not None and chave in criados:
             return criados[chave]
+        # Reaproveita quem já está na turma (idempotência sob a trava por escola).
+        existente = _aluno_existente_na_turma(db, escola_id, ano, turma.id, linha.nome)
+        if existente is not None:
+            if criados is not None:
+                criados[chave] = existente
+            return existente
         aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
         db.add(aluno)
         db.flush()
@@ -634,6 +685,13 @@ def confirmar(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     if not dados.linhas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nenhuma linha para importar.")
+
+    # Serializa importações concorrentes desta escola. A trava (Postgres; no-op
+    # em SQLite) garante que o 2º envio sobreposto leia o que o 1º commitou;
+    # combinada com o re-casamento contra o banco — turma via índice único +
+    # _inserir_turma, aluno via _aluno_existente_na_turma — um double-click/retry
+    # do MESMO relatório reaproveita em vez de duplicar turmas/alunos.
+    bloquear_escola_para_importacao(db, escola_id)
 
     data_referencia = dados.data_referencia or datetime.now(timezone.utc)
     avisos: list[str] = []
@@ -987,13 +1045,12 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int,
         chave = _chave_turma(t.nome)
         turma = turmas_por_nome.get(chave)
         if turma is None:
-            turma = Turma(escola_id=escola_id, nome=t.nome, ano_escolar=t.ano_escolar,
-                          ano_letivo=ano, turno=t.turno,
-                          observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None))
-            db.add(turma)
-            db.flush()
+            turma, criada = _inserir_turma(
+                db, escola_id, ano, t.nome, t.ano_escolar, turno=t.turno,
+                observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None))
             turmas_por_nome[chave] = turma
-            criadas += 1
+            if criada:
+                criadas += 1
         resolvidas.append(turma)
     return resolvidas, criadas
 
@@ -1107,6 +1164,10 @@ async def confirmar_matriculas(
     ano = escola.ano_letivo_ativo
     avisos = list(analise.avisos)
 
+    # Serializa importações concorrentes desta escola ANTES de ler o estado: o
+    # casamento roda contra o estado carregado uma vez, então dois envios
+    # sobrepostos duplicariam turmas/alunos sem esta trava (no-op em SQLite).
+    bloquear_escola_para_importacao(db, escola_id)
     estado = _carregar_estado(db, escola_id, ano)
     resolvidas, turmas_criadas = _resolver_turmas(db, escola_id, ano, analise.turmas)
     linhas = [(resolvidas[i], parsed)

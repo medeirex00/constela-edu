@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import JSON, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -20,6 +20,14 @@ class Professor(Base):
 
 class Turma(Base):
     __tablename__ = "turmas"
+    # Uma turma É identificada por (escola, ano letivo, nome): duas com a mesma
+    # tripla são a MESMA sala. O índice único barra a duplicação sob importações
+    # concorrentes (defesa cross-DB, além do advisory lock por escola no
+    # Postgres). O import trata a colisão re-resolvendo para a existente.
+    __table_args__ = (
+        Index("uq_turma_escola_ano_nome", "escola_id", "ano_letivo", "nome",
+              unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)

@@ -51,6 +51,32 @@ def get_db():
         db.close()
 
 
+# Namespace fixo dos advisory locks de importação (o 1º argumento de
+# pg_advisory_xact_lock separa nossos locks de qualquer outro uso futuro).
+_NS_IMPORTACAO = 4711
+
+
+def bloquear_escola_para_importacao(db, escola_id: int) -> None:
+    """Serializa importações concorrentes da MESMA escola.
+
+    A importação faz SELECT-then-INSERT de turmas/alunos casando contra o estado
+    lido no INÍCIO; dois envios sobrepostos (double-click, retry de proxy/mobile)
+    veem ambos o estado antigo e ambos criam — duplicando o corpo discente.
+
+    PostgreSQL: ``pg_advisory_xact_lock`` faz a 2ª importação BLOQUEAR até a 1ª
+    commitar; aí ela relê o estado já com as linhas criadas e CASA em vez de
+    duplicar. É transacional — o lock cai sozinho no commit/rollback, então deve
+    ser adquirido ANTES de carregar o estado e sem commit no meio.
+
+    SQLite (dev/testes): no-op — banco de um único escritor; produção é Postgres.
+    A defesa cross-DB para turmas é o índice único ``uq_turma_escola_ano_nome``
+    (o insert de turma trata a colisão sem estourar 500)."""
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import text
+        db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
+                   {"ns": _NS_IMPORTACAO, "escola": int(escola_id)})
+
+
 # --------------------------------------------------------------------------
 # Correções de DADOS no início da aplicação.
 #
