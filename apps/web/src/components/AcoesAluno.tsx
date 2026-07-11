@@ -39,11 +39,15 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
   const [janela, setJanela] = useState<Janela>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
+  // Erro de Arquivar/Reativar: essas ações partem direto do menu, sem modal,
+  // então precisam de um lugar PRÓPRIO para aparecer — senão a falha some.
+  const [erroAcao, setErroAcao] = useState("");
   const inativo = aluno.status !== "ativo";
 
   async function acaoStatus(acao: "arquivar" | "reativar" | "excluir") {
     setOcupado(true);
     setErro("");
+    setErroAcao("");
     try {
       await api(`/escolas/${escolaId}/alunos/acoes`, {
         method: "POST",
@@ -53,7 +57,11 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
       if (acao === "excluir") aoExcluir?.();
       aoMudar();
     } catch (e) {
-      setErro(e instanceof ApiError ? e.message : "Não foi possível concluir a ação.");
+      const msg = e instanceof ApiError ? e.message : "Não foi possível concluir a ação.";
+      // "excluir" roda dentro do modal (que mostra `erro`); arquivar/reativar
+      // não têm modal → vão para o aviso dedicado.
+      if (acao === "excluir") setErro(msg);
+      else setErroAcao(msg);
     } finally {
       setOcupado(false);
     }
@@ -160,6 +168,17 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
           aoFechar={() => setJanela(null)}
           aoConfirmar={excluirPermanente}
         />
+      )}
+
+      {/* Falha de Arquivar/Reativar (ações diretas, sem modal próprio): nunca
+          silenciosa — mostra o motivo e deixa tentar de novo. */}
+      {erroAcao && (
+        <Modal titulo="Não foi possível concluir a ação" aberto aoFechar={() => setErroAcao("")}>
+          <Mensagem tipo="erro">{erroAcao}</Mensagem>
+          <div className="mt-5 flex justify-end">
+            <Botao variante="neutro" onClick={() => setErroAcao("")}>Fechar</Botao>
+          </div>
+        </Modal>
       )}
     </>
   );
