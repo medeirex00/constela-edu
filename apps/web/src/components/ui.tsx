@@ -65,7 +65,18 @@ export function Mensagem({ tipo, children }: { tipo: "ok" | "erro"; children: Re
     tipo === "ok"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200"
       : "border-red-200 bg-red-50 text-red-800 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200";
-  return <div className={`rounded-lg border px-3 py-2 text-sm ${estilos}`}>{children}</div>;
+  // A11y (WCAG 4.1.3 — Status Messages): erro é anunciado com urgência pelo
+  // leitor de tela (role=alert ⇒ assertive); sucesso é anunciado sem
+  // interromper (role=status ⇒ polite). Aparência inalterada.
+  const anuncio =
+    tipo === "erro"
+      ? ({ role: "alert" } as const)
+      : ({ role: "status", "aria-live": "polite" } as const);
+  return (
+    <div {...anuncio} className={`rounded-lg border px-3 py-2 text-sm ${estilos}`}>
+      {children}
+    </div>
+  );
 }
 
 export function Carregando({ texto = "Carregando..." }: { texto?: string }) {
