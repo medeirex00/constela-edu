@@ -37,6 +37,7 @@ export default function Assistente() {
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [pergunta, setPergunta] = useState("");
   const [aguardando, setAguardando] = useState(false);
+  const [erroAbrir, setErroAbrir] = useState("");
   const fimRef = useRef<HTMLDivElement | null>(null);
 
   // Leitura pela arquitetura única: só busca quando há escola (senão, ocioso).
@@ -54,6 +55,7 @@ export default function Assistente() {
   useEffect(() => {
     setConversaId(null);
     setMensagens([]);
+    setErroAbrir("");
   }, [escolaId]);
 
   useEffect(() => {
@@ -62,12 +64,19 @@ export default function Assistente() {
 
   async function abrirConversa(id: number) {
     if (!escolaId) return;
-    const detalhe = await api<{ id: number; mensagens: Mensagem[] }>(
-      `/escolas/${escolaId}/assistente/conversas/${id}`,
-    ).catch(() => null);
-    if (detalhe) {
+    setErroAbrir("");
+    try {
+      const detalhe = await api<{ id: number; mensagens: Mensagem[] }>(
+        `/escolas/${escolaId}/assistente/conversas/${id}`,
+      );
       setConversaId(detalhe.id);
       setMensagens(detalhe.mensagens);
+    } catch (excecao) {
+      // Não engolir: antes o clique virava no-op silencioso. Agora surfaça o
+      // erro (o usuário pode clicar de novo para tentar).
+      setErroAbrir(
+        excecao instanceof Error ? excecao.message : "Não consegui abrir esta conversa. Tente de novo.",
+      );
     }
   }
 
@@ -118,11 +127,15 @@ export default function Assistente() {
               onClick={() => {
                 setConversaId(null);
                 setMensagens([]);
+                setErroAbrir("");
               }}
             >
               <MessageSquarePlus size={15} /> Nova conversa
             </Botao>
           </div>
+          {erroAbrir && (
+            <p className="p-3 text-xs text-red-600 dark:text-red-400" role="alert">{erroAbrir}</p>
+          )}
           {erroConversas ? (
             <p className="p-3 text-xs text-red-600 dark:text-red-400">{erroConversas.message}</p>
           ) : (conversas ?? []).length === 0 ? (
