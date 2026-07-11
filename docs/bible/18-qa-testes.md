@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 aprovado / approved
 - **Padrão / Standard:** [ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md) (16 partes)
-- **Fontes / Sources:** `INDICE.md` (bloco 18, subseções 18.x), `_estado-atual/RELATORIO-2026-07-09.md`, `backend/tests/` (**29** `test_*.py` + `conftest.py`: SQLite em memória/StaticPool, TestClient FastAPI, fixtures `escola_completa`/`cliente`, autouse que zera o rate-limit; cobre RBAC `test_permissoes.py`/`test_seguranca.py`, cascade FK real `test_integridade_fk.py` (PRAGMA `foreign_keys=ON`), login infantil sem senha `test_quest_auth.py`, reset `test_reset_senha.py`, Alembic `test_alembic.py`, observabilidade `test_observabilidade.py`), `apps/web/src/test/` (**13** `*.test.tsx` Vitest+Testing Library incl. `edge-cases.test.tsx` — RBAC negativo/validação/respostas incompletas) + `vitest.config.ts` (jsdom + coverage v8), `apps/web/e2e/` (**7** specs Playwright + `auth.setup.ts` + `helpers.ts`) + `playwright.config.ts` (sobe backend+frontend reais; `seed_e2e.py`; workers 1, retries 2 no CI; só chromium), `.github/workflows/ci.yml` (6 jobs bloqueantes; a varredura de segurança fica em `security.yml`; cobertura **medida** mas **sem gate**), Seções [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md)/[13](13-acessibilidade.md)/[14](14-infra-deploy-dr.md)/[15](15-arte-audio-assets.md)/[17](17-telemetria-metricas.md), Apêndice F
+- **Fontes / Sources:** `INDICE.md` (bloco 18, subseções 18.x), `_estado-atual/RELATORIO-2026-07-09.md`, `backend/tests/` (**31** `test_*.py` + `conftest.py`: SQLite em memória/StaticPool, TestClient FastAPI, fixtures `escola_completa`/`cliente`, autouse que zera o rate-limit; cobre RBAC `test_permissoes.py`/`test_seguranca.py`, cascade FK real `test_integridade_fk.py` (PRAGMA `foreign_keys=ON`), login infantil sem senha `test_quest_auth.py`, reset `test_reset_senha.py`, Alembic `test_alembic.py`, observabilidade `test_observabilidade.py`), `apps/web/src/test/` (**15** `*.test.tsx` Vitest+Testing Library incl. `edge-cases.test.tsx` — RBAC negativo/validação/respostas incompletas) + `vitest.config.ts` (jsdom + coverage v8), `apps/mobile/src/test/` (**3** Vitest de lógica pura: cifra AES, fila offline, política de retry), `apps/web/e2e/` (**7** specs Playwright + `auth.setup.ts` + `helpers.ts`) + `playwright.config.ts` (sobe backend+frontend reais; `seed_e2e.py`; workers 1, retries 2 no CI; só chromium), `.github/workflows/ci.yml` (**8** jobs bloqueantes; a varredura de segurança fica em `security.yml`; cobertura **medida** e **com gate**/catraca — `backend/pyproject.toml` `fail_under=88` + `vitest.config.ts` `coverage.thresholds`, R4/Onda 2), Seções [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md)/[13](13-acessibilidade.md)/[14](14-infra-deploy-dr.md)/[15](15-arte-audio-assets.md)/[17](17-telemetria-metricas.md), Apêndice F
 - **Depende de / Depends on:** princípios (P1 login código-só · P11 acessibilidade inegociável · P13 servidor é autoridade · P15 isolamento por escola · P17 piso de desempenho) → [01](01-principios-imutaveis.md); **mecanismo** de CI/CD e a **capacidade/operação** do teste de carga → [14](14-infra-deploy-dr.md); **norma** de acessibilidade (contraste 4.5:1/3:1, **playtest com não-leitor** como Done, gate por tela) → [13](13-acessibilidade.md); **auditoria de contraste (A3)** e o orçamento de peso → [15](15-arte-audio-assets.md); **taxonomia** de eventos a instrumentar → [17](17-telemetria-metricas.md); **mecanismo/contratos** de API que se exercita → [11](11-arquitetura.md); **política** de segurança (RBAC/isolamento) → [12](12-seguranca-privacidade.md); **checklists consolidados de DoD** que esta seção alimenta → Apêndice F.
 
 > **Convenção / Convention:** "§N" = uma das 16 **partes deste capítulo** / one of the 16 **parts of this
@@ -30,24 +30,29 @@ apenas os **testa**. É a fonte da parte de QA que **alimenta** o Apêndice F.
 
 ### 2. Contexto
 No ecossistema **Hub → Edu → Quest**, cada release toca **dado de criança** — um bug pode expor, punir ou frustrar
-quem confiou seu filho/aluno. **Estado atual (Q0) — a pirâmide já existe, faltam os gates:**
-- **Unit/integração (backend)** — **29** `test_*.py` (pytest) sobre `conftest.py` (SQLite em memória, TestClient,
+quem confiou seu filho/aluno. **Estado atual (Q0) — a pirâmide já existe; o gate de cobertura já foi ligado
+(R4/Onda 2), faltam os demais gates (acessibilidade/contrato/carga):**
+- **Unit/integração (backend)** — **31** `test_*.py` (pytest) sobre `conftest.py` (SQLite em memória, TestClient,
   fixtures, reset de rate-limit): cobrem **RBAC/papéis**, **cascade FK real** (PRAGMA `foreign_keys=ON`), **login
   infantil sem senha** (código=credencial, QR, limitador por `(código,IP)` que não pune a turma, aluno inativo,
   isolamento de token Edu/Quest), o **motor de cálculo/pontuação** (`test_scoring.py` — normalização Matific/Elefante,
   a "parte mais crítica do sistema"), auth/reset, **Alembic**, observabilidade.
-- **Componente (web)** — **13** `*.test.tsx` (Vitest + Testing Library), incluindo `edge-cases.test.tsx` (RBAC
+- **Componente (web)** — **15** `*.test.tsx` (Vitest + Testing Library), incluindo `edge-cases.test.tsx` (RBAC
   negativo, validação, respostas incompletas da API).
+- **Unit (mobile)** — **3** suítes Vitest de lógica pura (`apps/mobile/src/test/`: cifra AES do cache offline, fila
+  offline, política de retry) — rodam no job `test-mobile` do CI.
 - **E2E** — **7** specs Playwright que sobem **backend e frontend reais** (`seed_e2e.py`); serial, retries no CI,
   **só chromium/Desktop**.
-- **CI** — `ci.yml` com **6 jobs bloqueantes** (`lint` = ruff+typecheck; `test-backend` = pytest+cov; `test-web` =
-  vitest+cov; `build`; `e2e`; `docker`); a varredura de segurança (pip-audit/npm audit/Trivy) é workflow à parte
-  (`security.yml`), não conta como job do `ci.yml`. A **cobertura é medida** e publicada, **mas nunca falha o build**
-  (sem `--cov-fail-under` no pytest nem `coverage.thresholds` no Vitest).
+- **CI** — `ci.yml` com **8 jobs bloqueantes** (`lint` = ruff+typecheck; `test-backend` = pytest+cov;
+  `migracoes-postgres` = Alembic no Postgres real; `test-web` = vitest+cov; `test-mobile` = vitest; `build`; `e2e`;
+  `docker`); a varredura de segurança (pip-audit/npm audit/Trivy) é workflow à parte (`security.yml`), não conta como
+  job do `ci.yml`. A **cobertura é medida E vira gate** (catraca anti-regressão, R4/Onda 2): `backend/pyproject.toml`
+  `fail_under=88` (baseline 91%) reprova o pytest; `vitest.config.ts` `coverage.thresholds` (linhas/stmts 26, funcs
+  38, branches 60; baseline web ~29%/42%/65%) reprova o `test:cov`.
 - **Não existe ainda** — **teste de carga**/pico (sem k6/locust); **acessibilidade automatizada** (sem axe; o
   playtest com não-leitor da Seção [13](13-acessibilidade.md) é manual; a auditoria A3 da Seção [15](15-arte-audio-assets.md)
   não está no CI); **contract test** (sem schemathesis/pact); **testes em `apps/quest`** (Three.js/R3F — só
-  typecheck), `apps/mobile` e `packages/*`; regressão visual; e2e cross-browser/mobile.
+  typecheck) e `packages/*` (só typecheck); regressão visual; e2e cross-browser/mobile.
 
 Este capítulo **formaliza** a pirâmide, define os **gates** e o **método** dos testes que faltam.
 
@@ -85,8 +90,8 @@ O **ciclo de vida de um teste**, do commit ao release. **Fluxo-alvo** (hoje, na 
 
 1. **Local** — o dev roda a suíte (pytest/vitest) antes de abrir o PR.
 2. **CI (gate)** — o pipeline (mecanismo = Seção [14](14-infra-deploy-dr.md)) roda **lint+typecheck → unit+cobertura
-   → componente+cobertura → e2e → build/docker**; a meta é que **cobertura abaixo da meta falhe** o build (Q2 — hoje
-   a cobertura é medida sem falhar).
+   → componente+cobertura → e2e → build/docker**; **cobertura abaixo do piso já falha** o build (Q2, ligado em
+   R4/Onda 2: `fail_under=88` no backend, `coverage.thresholds` no web — catraca anti-regressão).
 3. **Acessibilidade** — o **axe-core** passará a rodar nos e2e/componente (contraste/rótulos/foco — Q3, quando
    adotado); o **playtest com não-leitor** e o **playtest com som desligado** (Seção [13](13-acessibilidade.md) §14)
    são critério de **Done** manual, na granularidade que a Seção [13](13-acessibilidade.md) define (**gate por tela**).
@@ -121,11 +126,11 @@ As **normas de QA** (a fonte da estratégia; o **mecanismo** de CI é da Seção
 | # | Norma | Regra | Fronteira |
 |---|-------|-------|-----------|
 | Q1 | **Pirâmide** | base ampla de **unit/integração** (rápidos), camada média de **componente**, topo enxuto de **e2e** (caros); cada suíte existente tem papel definido | 18 |
-| Q2 | **Cobertura com gate** | meta por camada vira **gate bloqueante** — `--cov-fail-under` (pytest) + `coverage.thresholds` (Vitest); hoje a cobertura é medida **sem** falhar | 18 ⚠️ (número — §15) |
+| Q2 | **Cobertura com gate** | meta por camada é **gate bloqueante** — **ligado (R4/Onda 2)**: `fail_under=88` (pytest, `pyproject.toml`) + `coverage.thresholds` (Vitest web); a catraca é um **piso anti-regressão** ~3 pts abaixo do baseline (não a meta) | 18 ✅ (gate ativo); elevar o piso do web rumo à meta = §15 |
 | Q3 | **Acessibilidade testável** | **axe-core** nos e2e/componente (contraste/rótulos/foco — só DOM/texto); **playtest com não-leitor** + **playtest com som desligado** = critério de Done (Seção [13](13-acessibilidade.md) §14); auditoria de contraste **A3** no CI (valores = Seção [15](15-arte-audio-assets.md); norma/limiar = Seção [13](13-acessibilidade.md)) | 18 (método) ⚠️ (adoção do gate — §15); norma/valor = [13](13-acessibilidade.md)/[15](15-arte-audio-assets.md) |
 | Q4 | **Teste de carga** | **método** do pico **7h30**: perfil de carga (**login-storm** da turma inteira às 7h30, rampa/duração) e métricas de aprovação (**taxa de sucesso do login do aluno**, **p95 de latência do login**, **taxa de erro global**); a **capacidade** (nº de dispositivos/concorrência) e a **execução** são da Seção [14](14-infra-deploy-dr.md) | 18 (método) ⚠️ (ferramenta/números-limiar — §15); capacidade = [14](14-infra-deploy-dr.md) |
 | Q5 | **Contract test** | validação do **contrato** na fronteira API↔web/quest/mobile (proposta: **schemathesis** sobre o OpenAPI) | 18 ⚠️ (adoção — §15) |
-| Q6 | **Cobertura de todos os apps** | mínimo de teste para `apps/quest` (Three.js/R3F), `apps/mobile` e `packages/*` (hoje só typecheck) | 18 ⚠️ (mínimo — §15) |
+| Q6 | **Cobertura de todos os apps** | mínimo de teste por app: `apps/mobile` **já tem** 3 suítes Vitest (cifra/fila/retry); faltam `apps/quest` (Three.js/R3F) e `packages/*` (hoje só typecheck) | 18 ⚠️ (mínimo de quest/packages — §15) |
 | Q7 | **Regressão** | suíte de **não-regressão** dos invariantes; e2e ampliado para **cross-browser + viewport mobile** (o Quest é usado em **tablet**) | 18 ⚠️ (escopo — §15) |
 | Q8 | **Teste de telemetria** | asseverar que o **servidor deriva do ledger imutável** os eventos que a Seção [17](17-telemetria-metricas.md) definiu (fonte primária, P13/P14), mais a instrumentação **suplementar** do cliente (não lista eventos — isso é da 17) | 18 (teste); taxonomia = [17](17-telemetria-metricas.md) |
 | Q9 | **Dados de teste** | **sintéticos/determinísticos** (além do `seed_e2e.py`); **nunca** dado real de criança fora de produção (Seções [14](14-infra-deploy-dr.md) O18/[12](12-seguranca-privacidade.md)) | 18; regra = [12](12-seguranca-privacidade.md) |
@@ -137,13 +142,15 @@ As **normas de QA** (a fonte da estratégia; o **mecanismo** de CI é da Seção
 
 ### 10. Arquitetura técnica
 Onde o QA **toca** o código:
-- **Backend** — `pytest` sobre `conftest.py` (SQLite em memória, TestClient, fixtures); a meta de cobertura vira
-  `--cov-fail-under` (Q2). Novos: contract test (`schemathesis` sobre o OpenAPI do FastAPI), teste de telemetria.
-- **Web** — `Vitest` + Testing Library (`vitest.config.ts`); `coverage.thresholds` (Q2); `axe-core` nos
+- **Backend** — `pytest` sobre `conftest.py` (SQLite em memória, TestClient, fixtures); a cobertura **já é gate**
+  (`fail_under=88` em `pyproject.toml`, Q2). Novos: contract test (`schemathesis` sobre o OpenAPI do FastAPI), teste de telemetria.
+- **Web** — `Vitest` + Testing Library (`vitest.config.ts`); `coverage.thresholds` **ativo** (Q2); `axe-core` nos
   componentes/e2e (Q3).
+- **Mobile** — `Vitest` (`apps/mobile/src/test/`) já cobre a lógica pura (cifra AES, fila offline, retry); job
+  `test-mobile` no CI.
 - **E2E** — `Playwright` (`playwright.config.ts`) sobe backend+frontend reais (`seed_e2e.py`); amplia para
   cross-browser + viewport mobile (Q7) e integra `@axe-core/playwright` (Q3).
-- **Quest/Mobile/Packages** — introduzir unit/e2e mínimos (Q6) — hoje só typecheck.
+- **Quest/Packages** — introduzir unit/e2e mínimos (Q6) — hoje só typecheck.
 - **Carga** — ferramenta de carga (k6/locust — ⚠️) contra o ambiente que a Seção [14](14-infra-deploy-dr.md) provisiona.
 - **CI** — o `ci.yml` (Seção [14](14-infra-deploy-dr.md)) ganha os gates novos; a 18 define os critérios, não edita o mecanismo.
 
@@ -189,11 +196,11 @@ Seção [14](14-infra-deploy-dr.md) mudar o **CI**, a 18 **re-encaixa** os gates
 ### 14. Checklist de implementação
 **"Pronto quando" (liga ao Apêndice F). Itens ⚠️ dependem de decisão do dono (§15) antes de virarem gate:**
 - [ ] **Pirâmide** documentada (papel de cada suíte: pytest/Vitest/Playwright) (Q1).
-- [ ] ⚠️ **Gate de cobertura** ativo — `--cov-fail-under` (pytest) + `coverage.thresholds` (Vitest); build **falha** abaixo da meta (Q2 — número pende §15).
+- [x] **Gate de cobertura** ativo — `fail_under=88` (pytest) + `coverage.thresholds` (Vitest); build **falha** abaixo do piso (Q2, R4/Onda 2). *Resta elevar o piso do web rumo à meta — §15.*
 - [ ] ⚠️ **Acessibilidade** — `axe-core` nos e2e/componente + auditoria A3 no CI; **playtest com não-leitor** e **com som desligado** no DoD (Q3 — adoção pende §15).
 - [ ] ⚠️ **Contract test** (schemathesis/OpenAPI) na fronteira API↔cliente (Q5 — adoção pende §15).
 - [ ] ⚠️ **Teste de carga** do pico 7h30 com critérios de aprovação (método = 18; capacidade = Seção [14](14-infra-deploy-dr.md)) (Q4 — pende §15).
-- [ ] ⚠️ **Cobertura mínima** de `apps/quest`/`apps/mobile`/`packages/*` (Q6 — mínimo pende §15).
+- [ ] ⚠️ **Cobertura mínima** de `apps/quest`/`packages/*` (Q6 — mínimo pende §15); `apps/mobile` **já coberto** (3 suítes Vitest).
 - [ ] ⚠️ **Regressão** dos invariantes + e2e **cross-browser/mobile viewport** (Q7 — escopo pende §15).
 - [ ] **Teste de telemetria** (servidor deriva do ledger os eventos da Seção [17](17-telemetria-metricas.md)) (Q8).
 - [ ] **Dados de teste sintéticos** (nunca dado real de criança — Q9); testes **determinísticos e isolados** (banco em memória por teste, sem estado compartilhado), flaky = bug (Q13, Q14).
@@ -204,9 +211,11 @@ Seção [14](14-infra-deploy-dr.md) mudar o **CI**, a 18 **re-encaixa** os gates
 ### 15. Questões em aberto
 Cada item é **decisão do dono** (⚠️); os defaults são **propostas** da 18, não decisões autônomas:
 
-- ⚠️ **Q2 — Meta de cobertura.** A 18 já decide que a cobertura **vira gate bloqueante** (ADR-18-A); resta ao dono
-  cravar o **número** por camada (proposta: backend ≥ 80% de linhas, web ≥ 70%) e o **momento de ativar**
-  (`--cov-fail-under`/`thresholds`) — hoje o CI mede sem falhar.
+- ✅/⚠️ **Q2 — Meta de cobertura.** **Resolvido em parte (R4/Onda 2):** a cobertura **já é gate bloqueante** —
+  backend `fail_under=88` (baseline 91%) e web `coverage.thresholds` (linhas/stmts 26, funcs 38, branches 60;
+  baseline ~29%/42%/65%), como **catraca anti-regressão** ~3 pts abaixo do baseline. **Resta ao dono** decidir
+  se/quando **elevar o piso do web** rumo à meta aspiracional (≥ 70% de linhas) e com que cadência — o backend já
+  supera a proposta original (≥ 80%).
 - ⚠️ **Q4 — Teste de carga.** É requisito de release **agora** ou plano futuro? Ferramenta (**k6** proposto) e os
   **números-limiar de aprovação** (p95 de latência do login, taxa de erro global, taxa de sucesso do login)
   **sobre** o perfil de carga; o **nº de dispositivos/concorrência** no pico 7h30 é insumo de **capacidade** da
@@ -214,16 +223,18 @@ Cada item é **decisão do dono** (⚠️); os defaults são **propostas** da 18
 - ⚠️ **Q3 — Acessibilidade automatizada.** Adotar **axe-core** como gate no CI, e como **operacionalizar** o
   playtest com não-leitor (frequência, quem conduz) — a **norma** é da Seção [13](13-acessibilidade.md).
 - ⚠️ **Q5 — Contract test.** Vale o custo **agora** (schemathesis sobre o OpenAPI) ou confiamos nos e2e por enquanto?
-- ⚠️ **Q6 — Cobertura de quest/mobile/packages.** Ficam em **typecheck** na Q0 ou a 18 exige um **mínimo** de
-  unit/e2e já nesta versão?
+- ⚠️ **Q6 — Cobertura de quest/packages.** `apps/mobile` **já saiu** do typecheck-only (3 suítes Vitest de lógica
+  pura). Resta ao dono: `apps/quest` (Three.js/R3F) e `packages/*` ficam em **typecheck** na Q0 ou a 18 exige um
+  **mínimo** de unit já nesta versão?
 - ⚠️ **Q7 — e2e cross-browser/mobile.** Continua **só chromium/Desktop** ou amplia para **viewport mobile/tablet**
   (o Quest é a plataforma da criança)?
 - ⚠️ **Q12 — DoD como gate.** O DoD de QA vira **check obrigatório** no CI, ou permanece **checklist humano** no Apêndice F?
 
 ### 16. ADR (Architecture Decision Record)
 - **ADR-18-A — Pirâmide real com gate mecânico.** A base é unit/integração (pytest) + componente (Vitest), o topo
-  é e2e (Playwright) sobre ambiente **real**; a **cobertura vira gate** (`--cov-fail-under`/`thresholds`) — o que
-  importa **falha o build**, não fica em relatório. *Números pendentes (§15).*
+  é e2e (Playwright) sobre ambiente **real**; a **cobertura é gate** (`fail_under`/`thresholds`) — o que importa
+  **falha o build**, não fica em relatório. *Ligado em R4/Onda 2: backend `fail_under=88`, web `coverage.thresholds`
+  (catraca anti-regressão); elevar o piso do web rumo à meta segue em §15.*
 - **ADR-18-B — Acessibilidade testada, não presumida.** `axe-core` no CI (contraste/rótulos/foco — só DOM/texto) +
   auditoria A3 (valores da Seção [15](15-arte-audio-assets.md); norma/limiar da Seção [13](13-acessibilidade.md));
   o **playtest com não-leitor** e o **playtest com som desligado** (Seção [13](13-acessibilidade.md) §14) são
@@ -252,25 +263,29 @@ clear **DoD**. It decides the **strategy and acceptance criteria**; it does **no
 
 ### 2. Context
 In the **Hub → Edu → Quest** ecosystem, every release touches a **child's data** — a bug can expose, punish or
-frustrate whoever entrusted their child/student. **Current state (Q0) — the pyramid already exists, the gates are
-missing:**
-- **Unit/integration (backend)** — **29** `test_*.py` (pytest) over `conftest.py` (in-memory SQLite, TestClient,
+frustrate whoever entrusted their child/student. **Current state (Q0) — the pyramid already exists; the coverage
+gate is already on (R4/Wave 2), the remaining gates (accessibility/contract/load) are missing:**
+- **Unit/integration (backend)** — **31** `test_*.py` (pytest) over `conftest.py` (in-memory SQLite, TestClient,
   fixtures, rate-limit reset): they cover **RBAC/roles**, **real FK cascade** (PRAGMA `foreign_keys=ON`),
   **passwordless child login** (code=credential, QR, per-`(code,IP)` limiter that does not punish the class,
   inactive student, Edu/Quest token isolation), the **scoring engine** (`test_scoring.py` — Matific/Elefante
   normalization, the "most critical part of the system"), auth/reset, **Alembic**, observability.
-- **Component (web)** — **13** `*.test.tsx` (Vitest + Testing Library), including `edge-cases.test.tsx` (negative
+- **Component (web)** — **15** `*.test.tsx` (Vitest + Testing Library), including `edge-cases.test.tsx` (negative
   RBAC, validation, incomplete API responses).
+- **Unit (mobile)** — **3** pure-logic Vitest suites (`apps/mobile/src/test/`: offline-cache AES cipher, offline
+  queue, retry policy) — run in the CI `test-mobile` job.
 - **E2E** — **7** Playwright specs that boot the **real backend and frontend** (`seed_e2e.py`); serial, CI
   retries, **chromium/Desktop only**.
-- **CI** — `ci.yml` with **6 blocking jobs** (`lint` = ruff+typecheck; `test-backend` = pytest+cov; `test-web` =
-  vitest+cov; `build`; `e2e`; `docker`); the security scan (pip-audit/npm audit/Trivy) is a separate workflow
-  (`security.yml`), not counted as a `ci.yml` job. Coverage is **measured** and published, **but never fails the
-  build** (no `--cov-fail-under` in pytest nor `coverage.thresholds` in Vitest).
+- **CI** — `ci.yml` with **8 blocking jobs** (`lint` = ruff+typecheck; `test-backend` = pytest+cov;
+  `migracoes-postgres` = Alembic on real Postgres; `test-web` = vitest+cov; `test-mobile` = vitest; `build`; `e2e`;
+  `docker`); the security scan (pip-audit/npm audit/Trivy) is a separate workflow (`security.yml`), not counted as a
+  `ci.yml` job. Coverage is **measured AND gated** (anti-regression ratchet, R4/Wave 2): `backend/pyproject.toml`
+  `fail_under=88` (baseline 91%) fails pytest; `vitest.config.ts` `coverage.thresholds` (lines/stmts 26, funcs 38,
+  branches 60; web baseline ~29%/42%/65%) fails `test:cov`.
 - **Not yet present** — a **load**/peak test (no k6/locust); **automated accessibility** (no axe; Section
   [13](13-acessibilidade.md)'s non-reader playtest is manual; Section [15](15-arte-audio-assets.md)'s A3 audit is
-  not in CI); **contract test** (no schemathesis/pact); **tests in `apps/quest`** (Three.js/R3F — typecheck only),
-  `apps/mobile` and `packages/*`; visual regression; cross-browser/mobile e2e.
+  not in CI); **contract test** (no schemathesis/pact); **tests in `apps/quest`** (Three.js/R3F — typecheck only)
+  and `packages/*` (typecheck only); visual regression; cross-browser/mobile e2e.
 
 This chapter **formalizes** the pyramid, defines the **gates** and the **method** of the missing tests.
 
@@ -308,8 +323,8 @@ The **lifecycle of a test**, from commit to release. **Target flow** (today, in 
 
 1. **Local** — the dev runs the suite (pytest/vitest) before opening the PR.
 2. **CI (gate)** — the pipeline (mechanism = Section [14](14-infra-deploy-dr.md)) runs **lint+typecheck →
-   unit+coverage → component+coverage → e2e → build/docker**; the goal is for **coverage below the target to fail**
-   the build (Q2 — today coverage is measured without failing).
+   unit+coverage → component+coverage → e2e → build/docker**; **coverage below the floor already fails** the build
+   (Q2, turned on in R4/Wave 2: `fail_under=88` on the backend, `coverage.thresholds` on web — anti-regression ratchet).
 3. **Accessibility** — **axe-core** will run in the e2e/component (contrast/labels/focus — Q3, once adopted); the
    **non-reader playtest** and the **sound-off playtest** (Section [13](13-acessibilidade.md) §14) are a manual
    **Done** criterion, at the granularity Section [13](13-acessibilidade.md) defines (**per-screen gate**).
@@ -343,11 +358,11 @@ accessibility **norm** Section [13](13-acessibilidade.md)'s):
 | # | Norm | Rule | Boundary |
 |---|------|------|----------|
 | Q1 | **Pyramid** | a wide base of **unit/integration** (fast), a middle **component** layer, a lean top of **e2e** (costly); each existing suite has a defined role | 18 |
-| Q2 | **Coverage with a gate** | the per-layer target becomes a **blocking gate** — `--cov-fail-under` (pytest) + `coverage.thresholds` (Vitest); today coverage is measured **without** failing | 18 ⚠️ (number — §15) |
+| Q2 | **Coverage with a gate** | the per-layer target is a **blocking gate** — **on (R4/Wave 2)**: `fail_under=88` (pytest, `pyproject.toml`) + `coverage.thresholds` (Vitest web); the ratchet is an **anti-regression floor** ~3 pts below baseline (not the target) | 18 ✅ (gate on); raising the web floor toward the target = §15 |
 | Q3 | **Testable accessibility** | **axe-core** in e2e/component (contrast/labels/focus — DOM/text only); **non-reader playtest** + **sound-off playtest** = Done criterion (Section [13](13-acessibilidade.md) §14); contrast audit **A3** in CI (values = Section [15](15-arte-audio-assets.md); norm/threshold = Section [13](13-acessibilidade.md)) | 18 (method) ⚠️ (gate adoption — §15); norm/value = [13](13-acessibilidade.md)/[15](15-arte-audio-assets.md) |
 | Q4 | **Load test** | the **method** for the **7:30 a.m.** peak: load profile (**login-storm** of the whole class at 7:30, ramp/duration) and acceptance metrics (**student-login success rate**, **p95 login latency**, **global error rate**); the **capacity** (device count/concurrency) and **execution** are Section [14](14-infra-deploy-dr.md)'s | 18 (method) ⚠️ (tool/threshold-numbers — §15); capacity = [14](14-infra-deploy-dr.md) |
 | Q5 | **Contract test** | **contract** validation at the API↔web/quest/mobile boundary (proposal: **schemathesis** over OpenAPI) | 18 ⚠️ (adoption — §15) |
-| Q6 | **All apps covered** | a minimum of tests for `apps/quest` (Three.js/R3F), `apps/mobile` and `packages/*` (today typecheck only) | 18 ⚠️ (minimum — §15) |
+| Q6 | **All apps covered** | a minimum of tests per app: `apps/mobile` **already has** 3 Vitest suites (cipher/queue/retry); `apps/quest` (Three.js/R3F) and `packages/*` are still typecheck-only | 18 ⚠️ (minimum for quest/packages — §15) |
 | Q7 | **Regression** | a **non-regression** suite of the invariants; e2e widened to **cross-browser + mobile viewport** (Quest is used on **tablet**) | 18 ⚠️ (scope — §15) |
 | Q8 | **Telemetry test** | assert that the **server derives from the immutable ledger** the events Section [17](17-telemetria-metricas.md) defined (primary source, P13/P14), plus the **supplementary** client instrumentation (does not list events — that is 17's) | 18 (test); taxonomy = [17](17-telemetria-metricas.md) |
 | Q9 | **Test data** | **synthetic/deterministic** (beyond `seed_e2e.py`); **never** real child data outside production (Sections [14](14-infra-deploy-dr.md) O18/[12](12-seguranca-privacidade.md)) | 18; rule = [12](12-seguranca-privacidade.md) |
@@ -359,13 +374,15 @@ accessibility **norm** Section [13](13-acessibilidade.md)'s):
 
 ### 10. Technical architecture
 Where QA **touches** code:
-- **Backend** — `pytest` over `conftest.py` (in-memory SQLite, TestClient, fixtures); the coverage target becomes
-  `--cov-fail-under` (Q2). New: contract test (`schemathesis` over FastAPI's OpenAPI), telemetry test.
-- **Web** — `Vitest` + Testing Library (`vitest.config.ts`); `coverage.thresholds` (Q2); `axe-core` in
+- **Backend** — `pytest` over `conftest.py` (in-memory SQLite, TestClient, fixtures); coverage **is already a gate**
+  (`fail_under=88` in `pyproject.toml`, Q2). New: contract test (`schemathesis` over FastAPI's OpenAPI), telemetry test.
+- **Web** — `Vitest` + Testing Library (`vitest.config.ts`); `coverage.thresholds` **active** (Q2); `axe-core` in
   components/e2e (Q3).
+- **Mobile** — `Vitest` (`apps/mobile/src/test/`) already covers the pure logic (AES cipher, offline queue, retry);
+  `test-mobile` job in CI.
 - **E2E** — `Playwright` (`playwright.config.ts`) boots the real backend+frontend (`seed_e2e.py`); widened to
   cross-browser + mobile viewport (Q7) and integrating `@axe-core/playwright` (Q3).
-- **Quest/Mobile/Packages** — introduce minimal unit/e2e (Q6) — today typecheck only.
+- **Quest/Packages** — introduce minimal unit/e2e (Q6) — today typecheck only.
 - **Load** — a load tool (k6/locust — ⚠️) against the environment Section [14](14-infra-deploy-dr.md) provisions.
 - **CI** — Section [14](14-infra-deploy-dr.md)'s `ci.yml` gains the new gates; 18 defines the criteria, does not edit the mechanism.
 
@@ -411,11 +428,11 @@ if Section [14](14-infra-deploy-dr.md) changes the **CI**, 18 **re-fits** the ga
 ### 14. Implementation checklist
 **"Done when" (links to Appendix F). Items marked ⚠️ depend on an owner decision (§15) before becoming a gate:**
 - [ ] **Pyramid** documented (role of each suite: pytest/Vitest/Playwright) (Q1).
-- [ ] ⚠️ **Coverage gate** active — `--cov-fail-under` (pytest) + `coverage.thresholds` (Vitest); the build **fails** below the target (Q2 — number pending §15).
+- [x] **Coverage gate** active — `fail_under=88` (pytest) + `coverage.thresholds` (Vitest); the build **fails** below the floor (Q2, R4/Wave 2). *Raising the web floor toward the target remains — §15.*
 - [ ] ⚠️ **Accessibility** — `axe-core` in e2e/component + A3 audit in CI; **non-reader playtest** and **sound-off playtest** in the DoD (Q3 — adoption pending §15).
 - [ ] ⚠️ **Contract test** (schemathesis/OpenAPI) at the API↔client boundary (Q5 — adoption pending §15).
 - [ ] ⚠️ **Load test** of the 7:30 a.m. peak with acceptance criteria (method = 18; capacity = Section [14](14-infra-deploy-dr.md)) (Q4 — pending §15).
-- [ ] ⚠️ **Minimum coverage** of `apps/quest`/`apps/mobile`/`packages/*` (Q6 — minimum pending §15).
+- [ ] ⚠️ **Minimum coverage** of `apps/quest`/`packages/*` (Q6 — minimum pending §15); `apps/mobile` **already covered** (3 Vitest suites).
 - [ ] ⚠️ **Regression** of the invariants + **cross-browser/mobile-viewport** e2e (Q7 — scope pending §15).
 - [ ] **Telemetry test** (server derives Section [17](17-telemetria-metricas.md)'s events from the ledger) (Q8).
 - [ ] **Synthetic test data** (never real child data — Q9); **deterministic and isolated** tests (per-test in-memory DB, no shared state), flaky = bug (Q13, Q14).
@@ -426,9 +443,11 @@ if Section [14](14-infra-deploy-dr.md) changes the **CI**, 18 **re-fits** the ga
 ### 15. Open questions
 Each item is a **owner decision** (⚠️); the defaults are 18's **proposals**, not autonomous decisions:
 
-- ⚠️ **Q2 — Coverage target.** 18 already decides that coverage **becomes a blocking gate** (ADR-18-A); the owner
-  still has to set the per-layer **number** (proposal: backend ≥ 80% lines, web ≥ 70%) and the **moment to activate**
-  it (`--cov-fail-under`/`thresholds`) — today CI measures without failing.
+- ✅/⚠️ **Q2 — Coverage target.** **Partly resolved (R4/Wave 2):** coverage **is already a blocking gate** — backend
+  `fail_under=88` (baseline 91%) and web `coverage.thresholds` (lines/stmts 26, funcs 38, branches 60; baseline
+  ~29%/42%/65%), as an **anti-regression ratchet** ~3 pts below baseline. **The owner still decides** whether/when to
+  **raise the web floor** toward the aspirational target (≥ 70% lines) and at what cadence — the backend already
+  exceeds the original proposal (≥ 80%).
 - ⚠️ **Q4 — Load test.** Is it a release requirement **now** or a future plan? Tool (**k6** proposed) and the
   **threshold acceptance numbers** (p95 login latency, global error rate, login success rate) **over** the load
   profile; the **device count/concurrency** at the 7:30 a.m. peak is a **capacity** input of Section
@@ -436,16 +455,18 @@ Each item is a **owner decision** (⚠️); the defaults are 18's **proposals**,
 - ⚠️ **Q3 — Automated accessibility.** Adopt **axe-core** as a CI gate, and how to **operationalize** the non-reader
   playtest (frequency, who runs it) — the **norm** is Section [13](13-acessibilidade.md)'s.
 - ⚠️ **Q5 — Contract test.** Is it worth the cost **now** (schemathesis over OpenAPI) or do we trust the e2e for now?
-- ⚠️ **Q6 — quest/mobile/packages coverage.** Do they stay at **typecheck** in Q0 or does 18 require a **minimum**
-  of unit/e2e already in this version?
+- ⚠️ **Q6 — quest/packages coverage.** `apps/mobile` **has left** typecheck-only (3 pure-logic Vitest suites). The
+  owner still decides: do `apps/quest` (Three.js/R3F) and `packages/*` stay at **typecheck** in Q0 or does 18 require
+  a **minimum** of unit already in this version?
 - ⚠️ **Q7 — cross-browser/mobile e2e.** Does it stay **chromium/Desktop only** or widen to **mobile/tablet
   viewport** (Quest is the child's platform)?
 - ⚠️ **Q12 — DoD as a gate.** Does the QA DoD become a **required check** in CI, or remain a **human checklist** in Appendix F?
 
 ### 16. ADR (Architecture Decision Record)
 - **ADR-18-A — Real pyramid with a mechanical gate.** The base is unit/integration (pytest) + component (Vitest),
-  the top is e2e (Playwright) over a **real** environment; **coverage becomes a gate** (`--cov-fail-under`/`thresholds`)
-  — what matters **fails the build**, not a report. *Numbers pending (§15).*
+  the top is e2e (Playwright) over a **real** environment; **coverage is a gate** (`fail_under`/`thresholds`) — what
+  matters **fails the build**, not a report. *Turned on in R4/Wave 2: backend `fail_under=88`, web `coverage.thresholds`
+  (anti-regression ratchet); raising the web floor toward the target stays in §15.*
 - **ADR-18-B — Accessibility tested, not assumed.** `axe-core` in CI (contrast/labels/focus — DOM/text only) + the
   A3 audit (Section [15](15-arte-audio-assets.md)'s values; Section [13](13-acessibilidade.md)'s norm/threshold);
   the **non-reader playtest** and the **sound-off playtest** (Section [13](13-acessibilidade.md) §14) are a manual
