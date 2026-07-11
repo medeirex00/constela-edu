@@ -156,6 +156,7 @@ def simular(
 
     Nada é gravado: serve para testar o efeito de pesos e referências (§44).
     """
+    permissoes.negar_restrito(db, escola_id, usuario)  # config do motor: só gestão
     refs, modo = scoring.referencias_em_uso(db, escola_id)
     if not refs:
         refs = {chave: 0 for chave in scoring.CHAVES_REFERENCIA}

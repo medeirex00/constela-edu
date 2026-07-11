@@ -99,6 +99,7 @@ def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
         f"{base}/importacoes",                                     # histórico da escola
         f"{base}/painel-publico",                                  # config + token do painel
         f"{base}/painel-publico/qr",                               # QR com o token
+        f"{base}/assistente/status",                               # config de IA (irmão F17/F18)
     ]
     for url in bloqueados:
         resposta = c["professor"].get(url)
@@ -106,6 +107,9 @@ def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
     assistente = c["professor"].post(f"{base}/assistente",
                                      json={"pergunta": "Como estão meus alunos?"})
     assert assistente.status_code == 403
+    # Simulador expõe pesos/referências do motor (config) — irmão F17/F18.
+    sim = c["professor"].post(f"{base}/simulador", json={"ano_escolar": "3º Ano"})
+    assert sim.status_code == 403
     # Fundir alunos é gestão — professor não pode.
     fundir = c["professor"].post(f"{base}/alunos/fundir", json={
         "manter_id": c["aluno_da_turma"].id, "remover_id": c["aluno_fora"].id,
@@ -206,8 +210,12 @@ def test_coordenador_tem_acesso_total_a_escola(cenario_professor):
                 f"{base}/configuracoes/dificuldade",
                 f"{base}/notificacoes",
                 f"{base}/importacoes",
-                f"{base}/painel-publico"):
+                f"{base}/painel-publico",
+                f"{base}/assistente/status"):
         assert c["coordenador"].get(url).status_code == 200, url
+    # Simulador (POST) segue acessível à gestão.
+    assert c["coordenador"].post(
+        f"{base}/simulador", json={"ano_escolar": "3º Ano"}).status_code == 200
 
 
 def test_a4_quest_professor_so_acessa_turmas_dele(cenario_professor):

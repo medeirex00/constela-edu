@@ -116,9 +116,9 @@ def mensagens_da_conversa(
 def status_do_assistente(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
-    """Qual provedor está configurado (sem expor chaves)."""
+    """Qual provedor está configurado (sem expor chaves) — config de gestão."""
     config = assistente.config_assistente(db, escola_id)
     return {"provedor": config["provedor"], "modelo": config["modelo"] or "padrão"}
 
