@@ -134,6 +134,22 @@ class Settings(BaseSettings):
     # oficial (notas/snapshots) é a autoritativa.
     IA_RETENCAO_DIAS: int = 90
 
+    # --- Sincronização automática de plataformas (módulo app/sync) --------
+    # O worker roda no processo da API como thread de fundo. DESLIGADO por
+    # padrão (fail-safe): ligue com SYNC_SCHEDULER_ENABLED=true em produção
+    # depois de configurar credenciais. Sem escolas configuradas, é inócuo.
+    SYNC_SCHEDULER_ENABLED: bool = False
+    SYNC_WORKERS: int = 1              # execuções simultâneas (Playwright é pesado)
+    SYNC_POLL_S: int = 30             # intervalo de varredura da fila
+    SYNC_MAX_TENTATIVAS: int = 3      # tentativas antes de desistir (erro recuperável)
+    SYNC_BACKOFF_BASE_S: int = 60     # backoff exponencial: base * 2**(tentativa-1)
+    SYNC_TIMEOUT_S: int = 180         # teto por execução (login+download)
+    SYNC_LENTO_S: int = 120           # acima disso, alerta "sincronização lenta"
+    # Uma execução presa em "executando" além disso é considerada ÓRFÃ (worker
+    # morto/redeploy no meio) e é recuperada: finalizada como erro e re-enfileirada.
+    # Bem acima do teto real de uma execução, para nunca abortar uma sync viva.
+    SYNC_TRAVADA_S: int = 1800        # 30 min
+
     # --- Observabilidade (logs estruturados, métricas, Sentry) ------------
     LOG_JSON: bool = True           # logs em JSON (uma linha por evento)
     LOG_LEVEL: str = "INFO"

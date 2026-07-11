@@ -13,6 +13,7 @@ import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
 const Alunos = lazy(() => import("./pages/Alunos"));
 const Assistente = lazy(() => import("./pages/Assistente"));
 const BibliotecaConquistas = lazy(() => import("./pages/BibliotecaConquistas"));
+const Comecar = lazy(() => import("./pages/Comecar"));
 const Comparador = lazy(() => import("./pages/Comparador"));
 const Insights = lazy(() => import("./pages/Insights"));
 const Conquistas = lazy(() => import("./pages/Conquistas"));
@@ -39,6 +40,7 @@ const RankingMatematica = lazy(() => import("./pages/RankingMatematica"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
+const Sincronizacao = lazy(() => import("./pages/Sincronizacao"));
 const TurmaDetalhe = lazy(() => import("./pages/TurmaDetalhe"));
 const Turmas = lazy(() => import("./pages/Turmas"));
 const Usuarios = lazy(() => import("./pages/Usuarios"));
@@ -110,7 +112,9 @@ export default function App() {
           <Route path="/matific" element={<Matific />} />
           <Route path="/elefante" element={<Elefante />} />
           <Route path="/livros" element={<Livros />} />
+          <Route path="/comecar" element={<Comecar />} />
           <Route path="/importacoes" element={<Importacoes />} />
+          <Route path="/sincronizacao" element={<Sincronizacao />} />
           <Route path="/conquistas" element={<Conquistas />} />
           <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
           <Route path="/insights" element={<Insights />} />

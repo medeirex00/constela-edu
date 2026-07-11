@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   Award,
   Bell,
+  RefreshCw,
   Blocks,
   BookOpen,
   Bot,
@@ -21,6 +22,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Rocket,
   School,
   Search,
   Settings,
@@ -69,6 +71,9 @@ interface GrupoNav {
 
 // Dashboard fica fora dos grupos — é a página inicial, sempre à mão.
 const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard, exato: true };
+// "Comece aqui": assistente de onboarding — fica fora dos grupos, logo abaixo
+// do Dashboard, e só para gestão (admin/coordenador cria turmas e integrações).
+const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Rocket, gestao: true };
 
 // Menu agrupado (accordion): reduz o excesso de itens visíveis sem esconder
 // nenhuma funcionalidade. Cada grupo abre/fecha; o da rota atual abre sozinho.
@@ -99,6 +104,7 @@ const GRUPOS: GrupoNav[] = [
       { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen, gestao: true },
       { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen, gestao: true },
       { rotulo: "Importações", caminho: "/importacoes", icone: Upload, gestao: true },
+      { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw, gestao: true },
     ],
   },
   {
@@ -146,7 +152,11 @@ function gruposVisiveis(gestor: boolean, global: boolean): GrupoNav[] {
 /** Todos os itens de menu que o usuário PODE abrir (Dashboard + grupos
  *  visíveis), achatados — base da busca por páginas. */
 function itensNavVisiveis(gestor: boolean, global: boolean): ItemNav[] {
-  return [DASHBOARD, ...gruposVisiveis(gestor, global).flatMap((g) => g.itens)];
+  return [
+    DASHBOARD,
+    ...(gestor ? [COMECAR] : []),
+    ...gruposVisiveis(gestor, global).flatMap((g) => g.itens),
+  ];
 }
 
 const CHAVE_MENU = "constela_menu_abertos";
@@ -473,6 +483,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
+      {gestor && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
         const aberto = abertos.has(grupo.chave);

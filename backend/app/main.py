@@ -18,6 +18,8 @@ from app.core.database import engine, garantir_dados_base, get_db
 from app.quest.routers import auth as quest_auth
 from app.quest.routers import perfil as quest_perfil
 from app.quest.routers import professor as quest_professor
+from app.sync import router as sync_router
+from app.sync import scheduler as sync_scheduler
 from app.routers import (
     academico,
     admin,
@@ -109,8 +111,21 @@ for router in (
     quest_auth.router,
     quest_perfil.router,
     quest_professor.router,
+    sync_router.router,
+    sync_router.router_global,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
+
+# Scheduler de sincronização automática: sobe como thread de fundo SE
+# SYNC_SCHEDULER_ENABLED (fail-safe: desligado por padrão). Cada worker uvicorn
+# tem o seu; o claim atômico da fila evita processamento duplicado. Encerra
+# junto com o processo (thread daemon) + no shutdown do app.
+sync_scheduler.iniciar()
+
+
+@app.on_event("shutdown")
+def _parar_scheduler_sync() -> None:
+    sync_scheduler.parar()
 
 
 # --- Health checks e métricas (SaaS) -----------------------------------------

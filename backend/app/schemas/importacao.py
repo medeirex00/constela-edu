@@ -114,6 +114,11 @@ class MatriculasAnaliseOut(BaseModel):
     total_turmas: int
     total_alunos: int                 # alunos DISTINTOS (o que será cadastrado)
     total_registros: int = 0          # linhas na planilha (pode repetir aluno)
+    # Resumo por efeito (prévia antes de confirmar): quantos serão CRIADOS vs
+    # ATUALIZADOS (já existem) e quantas turmas já existem (duplicidade).
+    alunos_novos: int = 0
+    alunos_atualizar: int = 0
+    turmas_existentes: int = 0
     turmas: list[MatriculaTurmaOut]
     avisos: list[str] = []
 

@@ -95,6 +95,26 @@ def test_analisar_marca_turmas_existentes(cliente, db, escola_completa):
     assert nomes["1º Ano A"]["exemplos"][0] == "AGATHA VITORIA MOURA DA SILVA"
 
 
+def test_previa_resume_novos_atualizar_e_duplicidade(cliente, db, escola_completa):
+    """Etapa 1: o resumo antes da confirmação separa novos × a atualizar e marca
+    duplicidade de turma; reimportar reconhece os já cadastrados (atualizar)."""
+    escola_id = escola_completa["escola"].id
+    r1 = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/matriculas/analisar",
+                      files=_upload()).json()
+    # 1ª vez: todos os 3 alunos são novos; nenhuma turma da planilha existe ainda
+    assert r1["alunos_novos"] == 3 and r1["alunos_atualizar"] == 0
+    assert r1["turmas_existentes"] == 0
+
+    assert cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/matriculas/confirmar",
+                        files=_upload()).status_code == 200
+
+    r2 = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/matriculas/analisar",
+                      files=_upload()).json()
+    # 2ª vez (idempotente): os mesmos alunos já existem → a atualizar; turmas idem
+    assert r2["alunos_novos"] == 0 and r2["alunos_atualizar"] == 3
+    assert r2["turmas_existentes"] == 2
+
+
 def test_confirmar_cria_turmas_alunos_matriculas_e_ficha(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     r = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/matriculas/confirmar",

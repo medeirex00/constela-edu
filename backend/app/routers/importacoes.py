@@ -179,19 +179,12 @@ async def analisar(
             raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                                 "Arquivo acima de 10 MB.")
         arquivo_nome = arquivo.filename or "relatorio"
-        nome_lower = arquivo_nome.lower()
-        tipo_conteudo = arquivo.content_type or ""
-        # Magic bytes "%PDF-" garantem a detecção mesmo sem extensão/content-type
-        # (ex.: upload mobile com nome "relatorio" e tipo genérico octet-stream).
-        eh_pdf = (nome_lower.endswith(".pdf") or tipo_conteudo == "application/pdf"
-                  or conteudo[:5] == b"%PDF-")
-        # Planilha Excel: .xlsx/.xlsm, content-type de spreadsheet, ou um ZIP
-        # ("PK") que não seja PDF — o Matific exporta o relatório por turma assim.
-        eh_planilha = (not eh_pdf and (
-            nome_lower.endswith((".xlsx", ".xlsm", ".xls"))
-            or "spreadsheet" in tipo_conteudo
-            or tipo_conteudo == "application/vnd.ms-excel"
-            or conteudo[:2] == b"PK"))
+        # Detecção de tipo por FONTE ÚNICA (mesma regra usada pelo sync/
+        # orchestrator) — cobre nome, content-type e magic bytes (PDF, ZIP do
+        # xlsx e OLE2 do xls) mesmo sem extensão confiável (upload mobile).
+        tipo_arquivo = svc.detectar_tipo(conteudo, arquivo_nome, arquivo.content_type or "")
+        eh_pdf = tipo_arquivo == "pdf"
+        eh_planilha = tipo_arquivo == "xlsx"
         if eh_planilha:
             _limpar_temporarios_orfaos()
             try:
@@ -421,6 +414,18 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
                 else (anterior.estrelas if anterior else 0))
     media = (_num(dados["pontuacao_media"], float) if "pontuacao_media" in dados
              else (anterior.pontuacao_media if anterior else 0.0))
+    # Reimportar/complementar no MESMO dia atualiza o snapshot do dia
+    # (idempotente) em vez de empilhar um segundo ponto. Semântica COMPLEMENTAR
+    # preservada: os valores acima já resolveram "campo presente vence; ausente
+    # herda o anterior" — o relatório mais recente é a fonte autoritativa (o
+    # Excel por turma pode legitimamente corrigir as atividades para MENOS sem
+    # que as estrelas do PDF anterior se percam).
+    if anterior is not None and _mesmo_dia(anterior.data_referencia, data_referencia):
+        anterior.atividades = atividades
+        anterior.estrelas = estrelas
+        anterior.pontuacao_media = media
+        anterior.importacao_id = importacao.id
+        return
     db.add(SnapshotMatific(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
@@ -430,6 +435,15 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
 
 def _sem_fuso(momento):
     return momento.replace(tzinfo=None) if momento.tzinfo else momento
+
+
+def _mesmo_dia(a, b) -> bool:
+    """True se dois instantes caem no MESMO dia (ignora fuso). Usado para tornar
+    reimportações do mesmo dia idempotentes: em vez de empilhar um segundo ponto
+    no histórico diário, o snapshot do dia é atualizado no lugar."""
+    if a is None or b is None:
+        return False
+    return _sem_fuso(a).date() == _sem_fuso(b).date()
 
 
 def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
@@ -535,16 +549,32 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
     if livros is None:
         livros = (sum(_num(v, int) for v in por_nivel.values()) if por_nivel
                   else (anterior.livros_unicos if anterior else 0))
+    livros_unicos = _num(livros, int)
+    tempo = _num(dados.get("tempo_leitura_min",
+                           anterior.tempo_leitura_min if anterior else 0), int)
+    tentativas = _num(dados.get("questoes_tentativas",
+                                anterior.questoes_tentativas if anterior else 0), int)
+    acertos = _num(dados.get("questoes_acertos",
+                             anterior.questoes_acertos if anterior else 0), int)
+    # Reimportar/complementar no MESMO dia atualiza o snapshot do dia
+    # (idempotente). Semântica COMPLEMENTAR: os campos já foram resolvidos acima
+    # como "presente vence; ausente herda o anterior" — o relatório mais recente
+    # é a fonte autoritativa.
+    if anterior is not None and _mesmo_dia(anterior.data_referencia, data_referencia):
+        anterior.livros_unicos = livros_unicos
+        anterior.tempo_leitura_min = tempo
+        anterior.questoes_tentativas = tentativas
+        anterior.questoes_acertos = acertos
+        anterior.livros_por_nivel = por_nivel
+        anterior.importacao_id = importacao.id
+        return
     db.add(SnapshotElefante(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
-        livros_unicos=_num(livros, int),
-        tempo_leitura_min=_num(dados.get("tempo_leitura_min",
-                                         anterior.tempo_leitura_min if anterior else 0), int),
-        questoes_tentativas=_num(dados.get("questoes_tentativas",
-                                           anterior.questoes_tentativas if anterior else 0), int),
-        questoes_acertos=_num(dados.get("questoes_acertos",
-                                        anterior.questoes_acertos if anterior else 0), int),
+        livros_unicos=livros_unicos,
+        tempo_leitura_min=tempo,
+        questoes_tentativas=tentativas,
+        questoes_acertos=acertos,
         livros_por_nivel=por_nivel,
     ))
 
@@ -668,6 +698,21 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
         questoes_acertos=anterior.questoes_acertos if anterior else 0,
         livros_por_nivel=por_nivel,
     ))
+
+
+def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str) -> int:
+    """Fecha uma importação: recalcula notas/rankings, invalida o cache do painel
+    público e notifica a escola. Ponto ÚNICO de finalização — usado pelo
+    /confirmar (recalcular=true) e pelo /recalcular (fim do lote), para os dois
+    nunca divergirem no que fazem ao terminar."""
+    from app.routers.publico import invalidar_cache_painel
+
+    n = scoring.recalcular_escola(db, escola_id)
+    invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
+    push.notificar_escola(
+        db, escola_id, titulo="Novos dados no Constela Edu",
+        corpo=corpo, dados={"tela": "ranking"})
+    return n
 
 
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
@@ -830,27 +875,23 @@ def confirmar(
     importacao.qtd_erros = len(dados.linhas) - sum(len(l) for _, l in resolvidos.values())
     importacao.tempo_ms = int((time.monotonic() - inicio) * 1000)
 
+    # LGPD/§15: o log de auditoria é permanente — não persistir os avisos brutos,
+    # que podem citar nomes de alunos. Guardamos só a CONTAGEM (os avisos
+    # completos seguem na resposta HTTP para quem confirmou a importação).
     registrar(db, "importacao.concluida", escola_id=escola_id, usuario_id=usuario.id,
               entidade="importacao", entidade_id=importacao.id,
               detalhes={"plataforma": dados.plataforma, "tipo": dados.tipo,
-                        "alunos": importacao.qtd_alunos, "avisos": avisos})
+                        "alunos": importacao.qtd_alunos, "qtd_avisos": len(avisos)})
     db.commit()
 
     # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
     # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
     if dados.recalcular:
-        scoring.recalcular_escola(db, escola_id)
-        from app.routers.publico import invalidar_cache_painel
-        invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
-
         plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
-        push.notificar_escola(
+        _finalizar_importacao(
             db, escola_id,
-            titulo="Novos dados no Constela Edu",
             corpo=f"{importacao.qtd_alunos} alunos atualizados na {plataforma_nome}. "
-                  "As notas já foram recalculadas.",
-            dados={"tela": "ranking"},
-        )
+                  "As notas já foram recalculadas.")
         mensagem = (f"Importação concluída: {importacao.qtd_alunos} alunos atualizados. "
                     "Notas recalculadas automaticamente.")
     else:
@@ -873,14 +914,9 @@ def recalcular_agora(
 ):
     """Recalcula notas/rankings da escola uma única vez — usado ao final de
     uma importação em lote, depois de vários /confirmar com recalcular=false."""
-    from app.routers.publico import invalidar_cache_painel
-
-    n = scoring.recalcular_escola(db, escola_id)
-    invalidar_cache_painel(escola_id)
-    push.notificar_escola(
-        db, escola_id, titulo="Novos dados no Constela Edu",
-        corpo="Importação em lote concluída. As notas já foram recalculadas.",
-        dados={"tela": "ranking"})
+    n = _finalizar_importacao(
+        db, escola_id,
+        corpo="Importação em lote concluída. As notas já foram recalculadas.")
     return {"mensagem": f"Notas recalculadas para {n} aluno(s).", "alunos": n}
 
 
@@ -947,10 +983,34 @@ async def analisar_matriculas(
         for a in t.alunos:
             ra = lista_piloto.ra_util(a.ficha.get("ra"))
             identidades.add(ra or (_norm(a.nome), _chave_turma(t.nome)))
+
+    # Resumo novos × atualizar (casamento LEVE, só para a prévia — a confirmação
+    # usa o casamento completo em services/matriculas). Existe por RA, senão por
+    # (nome normalizado, turma) do ano ativo.
+    ras_existentes: set[str] = set()
+    nome_turma_existentes: set = set()
+    for aluno, turma_nome in db.execute(
+        select(Aluno, Turma.nome)
+        .join(Matricula, Matricula.aluno_id == Aluno.id)
+        .join(Turma, Turma.id == Matricula.turma_id)
+        .where(Aluno.escola_id == escola_id, Matricula.ano_letivo == ano)
+    ):
+        ra = lista_piloto.ra_util((aluno.ficha or {}).get("ra"))
+        if ra:
+            ras_existentes.add(ra)
+        nome_turma_existentes.add((_norm(aluno.nome), _chave_turma(turma_nome)))
+    def _ja_cadastrado(ident) -> bool:
+        if isinstance(ident, str):
+            return ident in ras_existentes
+        return ident in nome_turma_existentes
+    atualizar = sum(1 for ident in identidades if _ja_cadastrado(ident))
+
     return MatriculasAnaliseOut(
         escola_detectada=analise.escola_detectada, ano_letivo=analise.ano_letivo,
         total_turmas=len(turmas), total_alunos=len(identidades),
         total_registros=analise.total_alunos,
+        alunos_novos=len(identidades) - atualizar, alunos_atualizar=atualizar,
+        turmas_existentes=sum(1 for t in turmas if t.ja_existe),
         turmas=turmas, avisos=analise.avisos,
     )
 

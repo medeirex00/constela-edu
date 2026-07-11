@@ -6,8 +6,9 @@
  * ao confirmar, cria as turmas que faltam e matricula os alunos no ano ativo,
  * guardando nº de chamada, nascimento e a ficha cadastral completa.
  */
-import { CheckCircle2, FileSpreadsheet, Users } from "lucide-react";
+import { ArrowRight, CheckCircle2, FileSpreadsheet, Users } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { Badge, Botao, Card, Mensagem } from "../components/ui";
 import { apiUpload } from "../lib/api";
@@ -28,6 +29,9 @@ interface MatriculasAnalise {
   total_turmas: number;
   total_alunos: number;
   total_registros: number;
+  alunos_novos: number;
+  alunos_atualizar: number;
+  turmas_existentes: number;
   turmas: MatriculaTurma[];
   avisos: string[];
 }
@@ -39,15 +43,20 @@ interface MatriculasResultado {
   avisos: string[];
 }
 
-export default function ImportacaoMatriculas({ escolaId, aoConcluir }: {
+export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }: {
   escolaId: number;
   aoConcluir: () => void;
+  /** Quando embutido no assistente de onboarding: avança o passo em vez de
+   *  navegar para o painel de integrações. Sem timer automático (WCAG 3.2.5). */
+  aoAvancar?: () => void;
 }) {
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [analise, setAnalise] = useState<MatriculasAnalise | null>(null);
   const [resultado, setResultado] = useState<MatriculasResultado | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
+  const navigate = useNavigate();
+  const avancar = aoAvancar ?? (() => navigate("/sincronizacao"));
 
   async function enviar(caminho: string, comArquivo: File) {
     const dados = new FormData();
@@ -107,7 +116,11 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir }: {
               )}
             </div>
           </div>
-          <div className="mt-4">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Botao onClick={avancar}>
+              {aoAvancar ? "Continuar" : "Configurar integrações da escola"}
+              <ArrowRight size={16} className="ml-1 inline" />
+            </Botao>
             <Botao variante="neutro" onClick={recomecar}>Importar outra planilha</Botao>
           </div>
         </Card>
@@ -125,6 +138,7 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir }: {
           <div className="mt-4">
             <input
               type="file"
+              aria-label="Planilha de matrículas da escola (.xls ou .xlsx)"
               accept=".xls,.xlsx,.xlsm"
               className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-indigo-700 dark:file:bg-indigo-500/10 dark:file:text-indigo-300"
               onChange={(e) => { setArquivo(e.target.files?.[0] ?? null); setErro(""); }}
@@ -150,6 +164,23 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir }: {
                 {analise.total_registros > analise.total_alunos
                   ? ` (${analise.total_registros} registros — alguns em mais de uma turma)`
                   : ""}
+              </p>
+              <p className="mt-1 text-xs">
+                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                  {analise.alunos_novos} novo(s)
+                </span>
+                {" · "}
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  {analise.alunos_atualizar} a atualizar
+                </span>
+                {analise.turmas_existentes > 0 && (
+                  <>
+                    {" · "}
+                    <span className="text-amber-600 dark:text-amber-400">
+                      {analise.turmas_existentes} turma(s) já existente(s)
+                    </span>
+                  </>
+                )}
               </p>
             </div>
             <Users size={20} className="text-zinc-300 dark:text-zinc-600" />

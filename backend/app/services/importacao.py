@@ -532,6 +532,24 @@ def _pontuacao(analise: Analise) -> int:
     return sum(1 for l in analise.linhas if not l.erros and l.dados)
 
 
+def detectar_tipo(conteudo: bytes, nome_arquivo: str = "",
+                  content_type: str = "") -> str:
+    """Formato do arquivo: 'pdf' | 'xlsx' | 'texto'. FONTE ÚNICA de verdade,
+    usada pelo upload manual (analisar) E pela sincronização (orchestrator) —
+    para as duas detecções nunca divergirem. Reconhece PDF por magic bytes,
+    planilha por .xlsx/.xlsm/.xls, content-type de spreadsheet, ZIP ('PK') e o
+    OLE2 do .xls antigo."""
+    nome = (nome_arquivo or "").lower()
+    ct = content_type or ""
+    if nome.endswith(".pdf") or ct == "application/pdf" or conteudo[:5] == b"%PDF-":
+        return "pdf"
+    if (nome.endswith((".xlsx", ".xlsm", ".xls")) or "spreadsheet" in ct
+            or ct == "application/vnd.ms-excel" or conteudo[:2] == b"PK"
+            or conteudo[:4] == b"\xd0\xcf\x11\xe0"):
+        return "xlsx"
+    return "texto"
+
+
 def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:
     """Interpreta um relatório colado/extraído. Nunca grava nada."""
     detectada, mensagem = detectar_plataforma_detalhado(texto)

@@ -321,6 +321,69 @@ def test_recalcular_agora_calcula_notas_da_escola(cliente, db, escola_completa):
     assert nota_ana.nota_matific > nota_joao.nota_matific
 
 
+# --- Reimportação idempotente + detecção de tipo (fonte única) ------------------
+
+def test_reimportar_matific_mesmo_dia_atualiza_o_snapshot(cliente, db, escola_completa):
+    """Reimportar o relatório Matific no MESMO dia atualiza o snapshot do dia
+    (idempotente) — não empilha um segundo ponto no histórico diário."""
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+
+    def confirmar(atividades, estrelas):
+        return cliente.post(
+            f"/api/v1/escolas/{escola_id}/importacoes/confirmar",
+            json={"plataforma": "matific", "formato": "resumo", "tipo": "texto",
+                  "linhas": [{"nome": ana.nome, "aluno_id": ana.id,
+                              "dados": {"atividades": atividades, "estrelas": estrelas,
+                                        "pontuacao_media": 80.0}}]})
+
+    assert confirmar(10, 2).status_code == 200
+    assert confirmar(25, 7).status_code == 200
+    snaps = db.query(SnapshotMatific).filter_by(aluno_id=ana.id).all()
+    assert len(snaps) == 1                       # um único ponto no dia
+    assert snaps[0].atividades == 25 and snaps[0].estrelas == 7   # valores do 2º
+
+    # Semântica COMPLEMENTAR: o relatório mais recente é autoritativo — um novo
+    # relatório do MESMO dia com valores presentes sobrescreve (mesmo para menos),
+    # ainda sem empilhar um segundo ponto no histórico do dia.
+    assert confirmar(9, 1).status_code == 200
+    db.expire_all()   # relê do banco (o cliente escreveu em outra sessão)
+    snaps = db.query(SnapshotMatific).filter_by(aluno_id=ana.id).all()
+    assert len(snaps) == 1
+    assert snaps[0].atividades == 9 and snaps[0].estrelas == 1    # sobrescrito
+
+
+def test_reimportar_elefante_resumo_mesmo_dia_atualiza_o_snapshot(cliente, db, escola_completa):
+    """Idem para o resumo do Elefante: reimportar no dia atualiza, não duplica."""
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+
+    def confirmar(livros):
+        return cliente.post(
+            f"/api/v1/escolas/{escola_id}/importacoes/confirmar",
+            json={"plataforma": "elefante", "formato": "resumo", "tipo": "texto",
+                  "linhas": [{"nome": ana.nome, "aluno_id": ana.id,
+                              "dados": {"livros_unicos": livros, "tempo_leitura_min": 30}}]})
+
+    assert confirmar(3).status_code == 200
+    assert confirmar(8).status_code == 200
+    snaps = db.query(SnapshotElefante).filter_by(aluno_id=ana.id).all()
+    assert len(snaps) == 1 and snaps[0].livros_unicos == 8
+
+
+def test_detectar_tipo_reconhece_formatos():
+    """Fonte única de detecção (upload manual E sync): PDF, xlsx (ZIP e OLE2) e
+    texto, por nome, content-type ou magic bytes."""
+    from app.services.importacao import detectar_tipo
+    assert detectar_tipo(b"%PDF-1.7\n...", "sem_extensao", "") == "pdf"
+    assert detectar_tipo(b"qualquer", "relatorio.pdf", "") == "pdf"
+    assert detectar_tipo(b"qualquer", "x", "application/pdf") == "pdf"
+    assert detectar_tipo(b"PK\x03\x04", "sem_extensao", "") == "xlsx"
+    assert detectar_tipo(b"\xd0\xcf\x11\xe0dados", "sem_extensao", "") == "xlsx"  # OLE2 (.xls)
+    assert detectar_tipo(b"", "planilha.xlsx", "") == "xlsx"
+    assert detectar_tipo(b"nome\tativ\n", "colado.txt", "text/plain") == "texto"
+
+
 def test_recalcular_exige_papel_autorizado(cliente, db, escola_completa):
     """O endpoint de recálculo do lote respeita os papéis (admin/coordenador)."""
     escola_id = escola_completa["escola"].id

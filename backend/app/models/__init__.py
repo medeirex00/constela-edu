@@ -16,6 +16,13 @@ from app.models.plataformas import (
     SnapshotElefante,
     SnapshotMatific,
 )
+from app.models.sincronizacao import (
+    PlataformaCredencial,
+    SincronizacaoAlerta,
+    SincronizacaoConfig,
+    SincronizacaoExecucao,
+    SincronizacaoLog,
+)
 from app.models.token_reset import TokenResetSenha
 from app.models.usuario import Usuario
 
