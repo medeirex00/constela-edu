@@ -186,6 +186,13 @@ def _escola_id_do_caminho(caminho: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def redigir_caminho(caminho: str) -> str:
+    """Remove segredos de URL antes de logar: o token do painel público
+    (/publico/{token}/...) NÃO pode aparecer no log de erro — quem lê o log
+    abriria o painel (nomes e notas das crianças)."""
+    return re.sub(r"(/publico/)[^/?#]+", r"\1<token>", caminho)
+
+
 def _usuario_id_do_token(headers: dict[bytes, bytes]) -> int | None:
     """Best-effort: extrai o `sub` do JWT só para RASTREAR (sem virar autorização)."""
     bruto = headers.get(b"authorization", b"").decode("latin-1")
@@ -269,7 +276,7 @@ class ObservabilidadeMiddleware:
         except Exception as erro:  # noqa: BLE001 — rede de segurança de último recurso
             estado["status"] = 500
             logger.exception("erro_nao_tratado", extra={
-                "metodo": metodo, "caminho": caminho})
+                "metodo": metodo, "caminho": redigir_caminho(caminho)})
             capturar_excecao(erro)
             if not estado["iniciou"]:
                 await self._responder_500(enviar)
