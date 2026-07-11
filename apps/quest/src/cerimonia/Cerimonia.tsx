@@ -27,11 +27,29 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
   const [i, setI] = useState(0);
   const [nome, setNome] = useState(perfil?.nome ?? "");
   const [erro, setErro] = useState("");
+  const [erroBases, setErroBases] = useState("");   // passo "personagem" (rede)
   const [ocupado, setOcupado] = useState(false);
   const campoNome = useRef<HTMLInputElement>(null);
 
+  async function carregarBases() {
+    setErroBases("");
+    try {
+      const p = await personagensBase();
+      setBases(Object.values(p));
+    } catch (e) {
+      // Falha de rede no 1º passo do onboarding: mostrar erro + retry (nunca
+      // deixar a criança presa num carrossel vazio). ApiError p/ não vazar
+      // "Failed to fetch" em inglês.
+      setBases([]);
+      const m = e instanceof ApiError
+        ? e.message
+        : "Puxa, não consegui trazer os personagens. Toca pra tentar de novo!";
+      setErroBases(m); tocar("erro"); narrar(m);
+    }
+  }
+
   useEffect(() => {
-    personagensBase().then((p) => setBases(Object.values(p))).catch(() => setBases([]));
+    void carregarBases();
     narrar("Oba! Escolha o seu personagem para começar a aventura!");
   }, []);
 
@@ -50,11 +68,21 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
   };
 
   async function confirmarPersonagem() {
-    if (!base) return;
-    tocar("sucesso");
+    if (!base || ocupado) return;
+    setOcupado(true); setErroBases("");
     const { nome: _n, ...avatar } = base;
-    try { atualizarPerfil(await trocarAvatar(avatar)); } catch { /* ok */ }
-    setPasso("nome");
+    try {
+      // Salvar o personagem ANTES de avançar; o som de sucesso e o passo "nome"
+      // só acontecem se o servidor confirmou (nunca avançar com avatar perdido).
+      atualizarPerfil(await trocarAvatar(avatar));
+      tocar("sucesso");
+      setPasso("nome");
+    } catch (e) {
+      const m = e instanceof ApiError
+        ? e.message
+        : "Não consegui salvar seu personagem. Toca pra tentar de novo!";
+      setErroBases(m); tocar("erro"); narrar(m);
+    } finally { setOcupado(false); }
   }
 
   async function confirmarNome() {
@@ -92,9 +120,19 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
               {bases.map((_, k) => <span key={k} className={`ponto${k === i ? " on" : ""}`} />)}
             </div>
             <p className="dica">Depois você personaliza tudo no vestiário</p>
-            <button className="botao3d verde" disabled={!base} onClick={confirmarPersonagem}>
-              ✅ É esse!
-            </button>
+            {erroBases ? (
+              <div className="entrada-erro" role="alert">
+                <p>{erroBases}</p>
+                <button className="botao3d sol" disabled={ocupado}
+                        onClick={() => { if (!bases.length) void carregarBases(); else void confirmarPersonagem(); }}>
+                  🔄 Tentar de novo
+                </button>
+              </div>
+            ) : (
+              <button className="botao3d verde" disabled={!base || ocupado} onClick={confirmarPersonagem}>
+                ✅ É esse!
+              </button>
+            )}
           </div>
         </>
       )}

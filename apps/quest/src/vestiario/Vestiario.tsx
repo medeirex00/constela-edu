@@ -88,8 +88,18 @@ export function Vestiario() {
   const eq = (slot: string) => (avatar[slot] as string) ?? PADRAO[slot];
 
   async function definir(slot: string, valor: string) {
+    setErro("");
+    try {
+      atualizarPerfil(await trocarAvatar({ [slot]: valor }));
+    } catch (e) {
+      // Não engolir a falha: mostrar erro e NÃO tocar "sucesso" (antes o chime
+      // de sucesso soava mesmo quando a troca falhava — falso-positivo).
+      setErro(e instanceof ApiError || e instanceof Error ? e.message
+        : "Não consegui trocar agora. Tente de novo!");
+      tocar("erro");
+      return;
+    }
     tocar("sucesso");
-    try { atualizarPerfil(await trocarAvatar({ [slot]: valor })); } catch { return; }
     if (slot === "veiculo" && valor === "skate") { setInvocandoSkate(true); narrar("Skate voador!"); }
   }
   function equipar(slot: string, valor: string) { if (eq(slot) !== valor) void definir(slot, valor); }
