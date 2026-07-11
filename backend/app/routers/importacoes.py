@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.deps import escola_autorizada, exigir_papeis
 from app.models import (
     Aluno,
     Escola,
@@ -1135,7 +1135,7 @@ async def confirmar_matriculas(
 def listar(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     linhas = db.execute(
         select(Importacao, Usuario.nome)

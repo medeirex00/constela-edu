@@ -112,6 +112,7 @@ def notificacoes(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Últimos acontecimentos relevantes da escola, derivados da auditoria."""
+    permissoes.negar_restrito(db, escola_id, usuario)  # gestão: só admin/coord/global
     eventos = db.execute(
         select(LogAuditoria, Usuario.nome)
         .outerjoin(Usuario, LogAuditoria.usuario_id == Usuario.id)

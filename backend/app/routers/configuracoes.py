@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.deps import escola_autorizada, exigir_papeis
 from app.models import (
     Configuracao,
     DificuldadeTurma,
@@ -40,7 +40,7 @@ def obter_pesos(
     namespace: str,
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     if namespace not in NAMESPACES_PESOS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Grupo de pesos inexistente.")
@@ -101,7 +101,7 @@ def salvar_pesos(
 def obter_referencias(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     row = db.execute(
         select(ReferenciaNormalizacao).where(ReferenciaNormalizacao.escola_id == escola_id)
@@ -151,7 +151,7 @@ def salvar_referencias(
 def obter_dificuldade(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     niveis = db.execute(
         select(NivelDificuldade)

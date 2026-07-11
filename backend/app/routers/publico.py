@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.deps import escola_autorizada, exigir_papeis
 from app.models import Aluno, Configuracao, Escola, Matricula, Nota, Turma, Usuario
 from app.services import evolucao as svc_evolucao
 from app.services import gamificacao as svc_gami
@@ -105,7 +105,7 @@ def _com_url(valores: dict) -> dict:
 def obter_config(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     return _com_url(_config(db, escola_id))
 
@@ -164,7 +164,7 @@ def trocar_token(
 def qr_code(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_atual),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     """QR code (SVG) apontando para o painel público (PRD §118)."""
     import segno

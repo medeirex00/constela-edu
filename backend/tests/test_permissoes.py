@@ -91,6 +91,14 @@ def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
         f"{base}/professores",                                     # cadastro
         f"{base}/gamificacao/mural",                               # escola toda
         f"{base}/comparar?tipo_a=aluno&id_a=1&tipo_b=aluno&id_b=2",
+        # Onda 2 (F17/F18): GETs de config do motor, gestão e token do painel.
+        f"{base}/configuracoes/pesos/geral",                       # config do motor
+        f"{base}/configuracoes/referencias",
+        f"{base}/configuracoes/dificuldade",
+        f"{base}/notificacoes",                                    # gestão da escola
+        f"{base}/importacoes",                                     # histórico da escola
+        f"{base}/painel-publico",                                  # config + token do painel
+        f"{base}/painel-publico/qr",                               # QR com o token
     ]
     for url in bloqueados:
         resposta = c["professor"].get(url)
@@ -190,6 +198,16 @@ def test_coordenador_tem_acesso_total_a_escola(cenario_professor):
     assert alunos["total"] == 4                          # escola inteira
     dash = c["coordenador"].get(f"{base}/dashboard").json()
     assert dash["total_alunos"] == 4
+    # Onda 2 (F17/F18): os GETs de config/gestão fechados ao professor seguem
+    # 200 para o coordenador — o gate não fechou demais. (O /qr fica de fora:
+    # depende de painel ativo, então 400 sem painel ativo — não é questão de papel.)
+    for url in (f"{base}/configuracoes/pesos/geral",
+                f"{base}/configuracoes/referencias",
+                f"{base}/configuracoes/dificuldade",
+                f"{base}/notificacoes",
+                f"{base}/importacoes",
+                f"{base}/painel-publico"):
+        assert c["coordenador"].get(url).status_code == 200, url
 
 
 def test_a4_quest_professor_so_acessa_turmas_dele(cenario_professor):

@@ -41,6 +41,16 @@ export default defineConfig({
         "src/main.tsx",
         "src/vite-env.d.ts",
       ],
+      // Onda 2 (R4) — CATRACA anti-regressão: trava o nível ATUAL de cobertura
+      // (não é meta). Baseline medido em 2026-07-10: stmts/lines ~29%,
+      // branches ~65%, funcs ~42%. Pisos ~3 pts abaixo p/ flutuação, sem gate
+      // impossível. `vitest run --coverage` (test:cov) reprova se cair abaixo.
+      thresholds: {
+        lines: 26,
+        statements: 26,
+        functions: 38,
+        branches: 60,
+      },
     },
   },
 });

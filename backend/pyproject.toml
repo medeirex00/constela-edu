@@ -1,0 +1,13 @@
+# Configuração de cobertura (coverage.py) — lida por pytest-cov quando o CI/dev
+# roda `pytest --cov=app`.
+#
+# Onda 2 (R4) — GATE de cobertura: `fail_under` reprova o build quando a
+# cobertura cai abaixo do piso. É uma CATRACA anti-regressão, não uma meta.
+# Baseline medido em 2026-07-10 = 91%; piso = 88 (margem ~3 pts para flutuação
+# natural, evitando um gate impossível que quebre o CI de imediato).
+#
+# Contém APENAS [tool.coverage.*] de propósito: sem [tool.pytest.ini_options],
+# para não alterar rootdir nem a descoberta de testes (conftest.py em tests/).
+[tool.coverage.report]
+fail_under = 88
+show_missing = true
