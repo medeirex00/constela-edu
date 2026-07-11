@@ -212,6 +212,34 @@ No Railway, crie um **Cron Job** (ou uma segunda "service" agendada) executando
 aluno**, as conversas do assistente que citam o nome completo dele são removidas
 na mesma operação (direito ao esquecimento).
 
+### Produção cross-origin (Vercel + Railway): CORS e /metrics
+
+Quando o **site e a API ficam em domínios diferentes** — o caso do deploy
+gerenciado (front na **Vercel**, API no **Railway**, banco no **Supabase**) —
+duas variáveis do backend precisam ser configuradas **no painel do provedor**
+(variáveis de ambiente do Railway), e **não** no `.env` do compose:
+
+* **`CORS_ORIGINS`** — allowlist das origens do front que podem chamar a API.
+  **Formato obrigatório: array JSON** (vírgula-separado NÃO funciona e **impede
+  a app de subir**):
+
+  ```
+  CORS_ORIGINS=["https://www.constelaedu.com","https://quest.constelaedu.com"]
+  ```
+
+  Sem isto, o navegador **bloqueia todas as chamadas** e o site "abre mas não
+  funciona". No deploy por **compose/nginx** deste guia isto **não** é preciso:
+  o nginx serve o site e a API na mesma origem.
+
+* **`METRICS_TOKEN`** — protege o `/metrics` (Prometheus). Definido → o *scrape*
+  precisa enviar `Authorization: Bearer <token>`. **Em produção sem token,
+  `/metrics` responde 404** (fail-closed) — as métricas nunca ficam públicas.
+  Defina só se for coletar métricas; senão, deixe vazio.
+
+> Ambas dependem da **infraestrutura real**: configure onde a API roda. No front
+> (Vercel), lembre de definir `VITE_API_URL` apontando para a API — é o que casa
+> com o `connect-src` da CSP e a base das chamadas.
+
 ---
 
 ## Extras opcionais (depois que o site estiver no ar)
