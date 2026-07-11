@@ -69,15 +69,22 @@ def acessos_da_turma(turma_id: int,
     # Professor restrito só vê as turmas dele — o código de login (credencial do
     # aluno na Quest) não pode vazar para turmas de outros professores.
     permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
+    alunos = svc.alunos_da_turma(db, escola_id, turma)
+    ids = [aluno.id for aluno in alunos]
+    # Carrega credenciais e perfis da turma em 2 consultas (aluno_id IN (...)),
+    # não 2 por aluno — evita N+1 numa turma de N (era 2N+1 idas ao banco).
+    # aluno_id é UNIQUE em ambas as tabelas, então há no máx. 1 por aluno.
+    credenciais = {c.aluno_id: c for c in db.execute(
+        select(QuestCredencialAluno)
+        .where(QuestCredencialAluno.aluno_id.in_(ids))
+    ).scalars()} if ids else {}
+    perfis = {p.aluno_id: p for p in db.execute(
+        select(QuestPerfil).where(QuestPerfil.aluno_id.in_(ids))
+    ).scalars()} if ids else {}
     saida: list[schemas.AcessoAlunoOut] = []
-    for aluno in svc.alunos_da_turma(db, escola_id, turma):
-        credencial = db.execute(
-            select(QuestCredencialAluno)
-            .where(QuestCredencialAluno.aluno_id == aluno.id)
-        ).scalar_one_or_none()
-        perfil = db.execute(
-            select(QuestPerfil).where(QuestPerfil.aluno_id == aluno.id)
-        ).scalar_one_or_none()
+    for aluno in alunos:
+        credencial = credenciais.get(aluno.id)
+        perfil = perfis.get(aluno.id)
         saida.append(schemas.AcessoAlunoOut(
             aluno_id=aluno.id,
             nome=aluno.nome,
