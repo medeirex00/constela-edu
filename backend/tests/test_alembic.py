@@ -181,3 +181,63 @@ def test_ondelete_aplicado_pela_migracao(fazer_engine):
     assert od("leituras", "escola_id") is None
     assert od("matriculas", "turma_id") is None
     assert od("snapshots_matific", "importacao_id") is None
+
+
+# As 10 tabelas que a 0001 define e que faltavam no banco de produção carimbado
+# em 0001 (nascido antes das features Quest/responsáveis). Ordem reversa de
+# dependência para o DROP (filhos antes dos pais).
+_TABELAS_DO_INCIDENTE = [
+    "quest_tentativas", "quest_progresso", "quest_habilidades",
+    "responsaveis_alunos", "quest_credenciais_aluno", "quest_perfis",
+    "quest_desafios", "quest_missoes", "quest_jornadas", "quest_mundos",
+]
+
+
+def test_0002a_repara_baseline_carimbado_sem_tabelas_do_quest(fazer_engine):
+    """Regressão do incidente de produção (a 0002a): um banco CARIMBADO em 0001
+    SEM as 10 tabelas de Quest/responsáveis deve migrar até o head sem quebrar —
+    a 0002a recria as tabelas ausentes ANTES de a 0003 adicionar FKs a elas.
+    Sem a 0002a, a 0003 abortava o boot com 'quest_perfis does not exist'."""
+    engine = fazer_engine("incidente.db")
+
+    # 1) Sobe o baseline 0001 (cria TODAS as tabelas, inclusive as 10) e então
+    #    DROPa as 10 — reproduzindo o banco de produção carimbado em 0001 que
+    #    nunca teve essas tabelas. O alembic_version permanece em '0001'.
+    cfg = _config()
+    with engine.begin() as conexao:
+        cfg.attributes["connection"] = conexao
+        command.upgrade(cfg, _REVISAO_BASE)
+    with engine.begin() as c:
+        for tabela in _TABELAS_DO_INCIDENTE:
+            c.execute(text(f"DROP TABLE {tabela}"))
+
+    # Pré-condição: estado EXATO do incidente (carimbado 0001, tabelas ausentes).
+    presentes = set(inspect(engine).get_table_names())
+    assert _versao(engine) == _REVISAO_BASE
+    assert not (set(_TABELAS_DO_INCIDENTE) & presentes), "pré-condição não reproduzida"
+
+    # 2) Caminho REAL de produção: migra do 0001 até o head. Sem a 0002a isto
+    #    estouraria na 0003 (FK sobre quest_perfis inexistente).
+    aplicar_migracoes(engine)
+
+    # 3) Migrou até o fim e recriou TODAS as 10 tabelas.
+    assert _versao(engine) == _head()
+    apos = set(inspect(engine).get_table_names())
+    assert set(_TABELAS_DO_INCIDENTE) <= apos
+
+    # 4) O schema reparado é IDÊNTICO ao dos modelos (colunas, FKs/ON DELETE,
+    #    índices) para as 10 tabelas — a 0002a não pode recriar uma tabela
+    #    "quase igual", e a 0003 tem de aplicar as FKs sobre as recriadas.
+    #    (create_all == schema de produção é garantido por
+    #    test_schema_do_create_all_bate_com_o_das_migracoes; comparar com ele
+    #    evita abrir um 2º banco em arquivo.)
+    from sqlalchemy import create_engine as _criar
+    from sqlalchemy.pool import StaticPool
+
+    e_ref = _criar("sqlite://", connect_args={"check_same_thread": False},
+                   poolclass=StaticPool)
+    Base.metadata.create_all(e_ref)
+    reparado_s, ref_s = _schema(engine), _schema(e_ref)
+    e_ref.dispose()
+    for tabela in _TABELAS_DO_INCIDENTE:
+        assert reparado_s[tabela] == ref_s[tabela], f"schema divergente: {tabela}"
