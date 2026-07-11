@@ -144,10 +144,16 @@ export function acessosDaTurma(
 
 async function baixarPdf(caminho: string, nomePadrao: string) {
   const token = await obterToken();
-  const resposta = await fetch(`${baseDaApi()}${caminho}`, {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  let resposta: Response;
+  try {
+    resposta = await fetch(`${baseDaApi()}${caminho}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    // Falha de rede: pt-BR para o professor, nunca o "Failed to fetch" cru.
+    throw new ErroDeRede();
+  }
   if (!resposta.ok) {
     throw new ApiError(resposta.status, "Não foi possível gerar o PDF.");
   }
