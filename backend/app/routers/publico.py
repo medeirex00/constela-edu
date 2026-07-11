@@ -54,25 +54,60 @@ def _config(db: Session, escola_id: int) -> dict:
     return valores
 
 
+# Cache token->escola_id: evita varrer TODAS as configs de painel a cada poll do
+# telão (~12s). É só uma DICA de performance — a correção vem sempre da validação
+# (compare_digest contra o token real da escola), então um cache velho/errado
+# nunca resolve para a escola errada; no máximo cai na varredura.
+_cache_tokens: dict[str, int] = {}
+
+
 def _escola_pelo_token(db: Session, token: str) -> tuple[Escola, dict] | None:
     """Resolve o token público para uma escola com painel ativo."""
     if not token:
         return None
+
+    def _validar(row) -> tuple[Escola, dict] | None:
+        valores = row.valor or {}
+        if not (valores.get("ativo")
+                and secrets.compare_digest(str(valores.get("token", "")), token)):
+            return None
+        escola = db.get(Escola, row.escola_id)
+        if escola is None or escola.status != "ativa":
+            return None
+        config = dict(PADRAO)
+        config.update(valores)
+        return escola, config
+
+    # Caminho rápido: cache aponta a escola; valida com 1 consulta indexada.
+    escola_id = _cache_tokens.get(token)
+    if escola_id is not None:
+        row = db.execute(
+            select(Configuracao).where(
+                Configuracao.escola_id == escola_id,
+                Configuracao.namespace == "painel_publico",
+                Configuracao.chave == "valores",
+            )
+        ).scalar_one_or_none()
+        if row is not None and (resultado := _validar(row)) is not None:
+            return resultado
+        _cache_tokens.pop(token, None)   # entrada velha: cai para a varredura
+
+    # Miss: varre uma vez e reconstrói o cache de tokens ativos.
     linhas = db.execute(
         select(Configuracao).where(
             Configuracao.namespace == "painel_publico",
             Configuracao.chave == "valores",
         )
     ).scalars().all()
+    encontrado = None
     for row in linhas:
         valores = row.valor or {}
-        if valores.get("ativo") and secrets.compare_digest(str(valores.get("token", "")), token):
-            escola = db.get(Escola, row.escola_id)
-            if escola is not None and escola.status == "ativa":
-                config = dict(PADRAO)
-                config.update(valores)
-                return escola, config
-    return None
+        tok = str(valores.get("token", ""))
+        if valores.get("ativo") and tok:
+            _cache_tokens[tok] = row.escola_id
+        if encontrado is None and (resultado := _validar(row)) is not None:
+            encontrado = resultado
+    return encontrado
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +171,7 @@ def salvar_config(
     registrar(db, "painel_publico.configurado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"ativo": valores["ativo"], "slides": slides})
     db.commit()
+    invalidar_cache_painel(escola_id)   # reflete a nova config/token no telão já
     return _com_url(valores)
 
 
@@ -157,6 +193,7 @@ def trocar_token(
         row.valor = valores
     registrar(db, "painel_publico.token_trocado", escola_id=escola_id, usuario_id=usuario.id)
     db.commit()
+    invalidar_cache_painel(escola_id)   # o link antigo cai imediatamente
     return _com_url(valores)
 
 
@@ -278,13 +315,18 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
 
 
 def invalidar_cache_painel(escola_id: int | None = None) -> None:
-    """Chamado após recálculo/importação para o painel refletir logo."""
+    """Chamado após recálculo/importação/troca de config para o painel refletir
+    logo (inclui o cache de tokens, caso o token tenha rotacionado/desativado)."""
     if escola_id is None:
         _cache_painel.clear()
         _cache_visiveis.clear()
+        _cache_tokens.clear()
     else:
         _cache_painel.pop(escola_id, None)
         _cache_visiveis.pop(escola_id, None)
+        # Remove os tokens que apontavam para esta escola (podem ter mudado).
+        for tok in [t for t, eid in _cache_tokens.items() if eid == escola_id]:
+            _cache_tokens.pop(tok, None)
 
 
 def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
