@@ -214,3 +214,45 @@ def test_sentry_desliga_variaveis_locais_e_pii(monkeypatch):
 
     assert capturado.get("include_local_variables") is False
     assert capturado.get("send_default_pii") is False
+    # O corpo da requisição NUNCA vai ao Sentry (token de reset + senha nova).
+    assert capturado.get("max_request_body_size") == "never"
+    # O init registra o higienizador de URL/query nos dois canais de envio.
+    assert capturado.get("before_send") is obs.higienizar_evento_sentry
+    assert capturado.get("before_send_transaction") is obs.higienizar_evento_sentry
+
+
+# --- Redação de token em log e Sentry (LGPD) ---------------------------------
+
+def test_redigir_caminho_cobre_painel_e_reset_de_senha():
+    """Os dois tokens de rota somem do log de erro (nomes/notas de criança e
+    tomada de conta são o que estaria em jogo)."""
+    assert obs.redigir_caminho("/api/v1/publico/abc123/ranking") == \
+        "/api/v1/publico/<token>/ranking"
+    assert obs.redigir_caminho("/api/v1/auth/redefinir-senha/SEGREDO") == \
+        "/api/v1/auth/redefinir-senha/<token>"
+    # Caminho sem token não é alterado.
+    assert obs.redigir_caminho("/api/v1/escolas/1/alunos") == \
+        "/api/v1/escolas/1/alunos"
+
+
+def test_higienizar_evento_sentry_redige_url_e_query():
+    """Antes de sair para o Sentry, a URL crua perde o token de rota e a query
+    string inteira (onde ?busca=/?qr= poderiam levar nome/código de criança)."""
+    evento = {
+        "request": {
+            "url": "https://api.local/api/v1/auth/redefinir-senha/SEGREDO",
+            "query_string": "busca=AGATHA",
+            "method": "GET",
+        },
+    }
+    saida = obs.higienizar_evento_sentry(evento, None)
+    assert saida["request"]["url"].endswith("/redefinir-senha/<token>")
+    assert "SEGREDO" not in saida["request"]["url"]
+    assert saida["request"]["query_string"] == "<redigido>"
+
+
+def test_higienizar_evento_sentry_tolera_evento_sem_request():
+    """Evento sem contexto de requisição (ex.: erro de tarefa de fundo) passa
+    intacto — o higienizador nunca pode quebrar o envio."""
+    assert obs.higienizar_evento_sentry({}, None) == {}
+    assert obs.higienizar_evento_sentry({"request": None}, None) == {"request": None}

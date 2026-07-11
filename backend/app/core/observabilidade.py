@@ -136,6 +136,22 @@ def render_metricas() -> tuple[bytes, str]:
 _sentry_ativo = False
 
 
+def higienizar_evento_sentry(event, _hint=None):
+    """Redige segredos da URL/query ANTES do evento sair para o Sentry
+    (processador externo). A integração Starlette anexa a URL crua da
+    requisição ao evento — e ``send_default_pii=False`` não cobre isso —, então
+    um 500 em /publico/{token} ou /auth/redefinir-senha/{token} vazaria o token.
+    Espelha a redação dos logs internos (redigir_caminho) e zera a query string,
+    onde nomes/códigos de criança poderiam aparecer (?busca=, ?qr=)."""
+    req = event.get("request") if isinstance(event, dict) else None
+    if isinstance(req, dict):
+        if isinstance(req.get("url"), str):
+            req["url"] = redigir_caminho(req["url"])
+        if req.get("query_string"):
+            req["query_string"] = "<redigido>"
+    return event
+
+
 def configurar_sentry(settings) -> None:
     global _sentry_ativo
     if _sentry is None or not settings.SENTRY_DSN:
@@ -151,6 +167,15 @@ def configurar_sentry(settings) -> None:
         # PII de menor (bytes do arquivo, filename, linhas já parseadas com
         # nomes de alunos). send_default_pii=False não cobre frame-locals.
         include_local_variables=False,
+        # NUNCA anexar o CORPO da requisição: POST /auth/redefinir-senha carrega o
+        # token de reset E a nova senha em texto puro no corpo; imports carregam
+        # nomes de alunos. send_default_pii=False não cobre o corpo (o SDK captura
+        # corpos "medium" por padrão).
+        max_request_body_size="never",
+        # Redige o token de rota e a query string da URL crua em erros E em
+        # transações de performance antes do envio externo.
+        before_send=higienizar_evento_sentry,
+        before_send_transaction=higienizar_evento_sentry,
     )
     _sentry_ativo = True
     logging.getLogger("constela").info("Sentry ativado", extra={"componente": "sentry"})
@@ -187,10 +212,15 @@ def _escola_id_do_caminho(caminho: str) -> int | None:
 
 
 def redigir_caminho(caminho: str) -> str:
-    """Remove segredos de URL antes de logar: o token do painel público
-    (/publico/{token}/...) NÃO pode aparecer no log de erro — quem lê o log
-    abriria o painel (nomes e notas das crianças)."""
-    return re.sub(r"(/publico/)[^/?#]+", r"\1<token>", caminho)
+    """Remove segredos de URL antes de logar/telemetrar. Dois tokens de rota
+    NÃO podem aparecer no log de erro nem no Sentry:
+      * painel público (/publico/{token}/...) — quem lê o log abriria o painel
+        (nomes e notas das crianças);
+      * redefinição de senha (/redefinir-senha/{token}) — quem lê poderia
+        trocar a senha da conta antes de a pessoa usar o link."""
+    caminho = re.sub(r"(/publico/)[^/?#]+", r"\1<token>", caminho)
+    caminho = re.sub(r"(/redefinir-senha/)[^/?#]+", r"\1<token>", caminho)
+    return caminho
 
 
 def _usuario_id_do_token(headers: dict[bytes, bytes]) -> int | None:
