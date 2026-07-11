@@ -162,7 +162,16 @@ segredos do workflow `desktop-release.yml`).
 ## Escalabilidade
 
 - API **stateless** (JWT): escala horizontalmente atrás de um balanceador
-  (`docker compose up --scale backend=N` ou múltiplas réplicas).
+  (`docker compose up --scale backend=N` ou múltiplas réplicas). Duas ressalvas
+  operacionais ao subir N réplicas:
+  - **Migração**: cada container roda `alembic upgrade head` no boot
+    (`entrypoint.sh`). Ao escalar, garanta um **único runner de migração** —
+    aplique as migrações uma vez antes de subir as réplicas, ou deixe só uma
+    subir primeiro — para não haver corrida de DDL entre réplicas.
+  - **Rate limit e cache do painel** vivem **em memória por processo**
+    (best-effort): com N réplicas a proteção anti-abuso passa a ser por réplica.
+    Aceitável por design; para limite global rígido, use um store compartilhado
+    (Redis).
 - PostgreSQL com índices por `escola_id` em todas as tabelas; consultas
   paginadas (PRD §23).
 - Clientes web/desktop servem estático (CDN-ready); mobile reduz carga com
