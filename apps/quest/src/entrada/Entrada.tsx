@@ -110,7 +110,10 @@ export function Entrada({ aoEntrar }: EntradaProps) {
               className="campo-codigo"
               placeholder="SOL1234"
               value={codigo}
-              maxLength={12}
+              // O código atual tem DUAS palavras + 4 dígitos (até 20 = String(20)
+              // no backend, ex.: COBRAPARDAL6832). O limite antigo de 12 truncava
+              // a digitação e barrava o login da maioria das crianças.
+              maxLength={20}
               autoCapitalize="characters"
               autoComplete="off"
               spellCheck={false}
