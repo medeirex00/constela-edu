@@ -181,9 +181,17 @@ def proximas_da_fila(db: Session, limite: int = 10) -> list[SincronizacaoExecuca
 # --------------------------------------------------------------------------
 # Execução
 # --------------------------------------------------------------------------
-def _contexto(db: Session, execucao: SincronizacaoExecucao) -> Contexto:
+def _contexto(db: Session, execucao: SincronizacaoExecucao, *,
+              autonomo: bool = False) -> Contexto:
+    """autonomo=True: cada log COMMITA — usado na fase de FETCH externo, para
+    não segurar uma transação aberta durante a I/O de rede/navegador
+    (idle-in-transaction derrubaria a conexão em Postgres gerenciado).
+    autonomo=False (padrão): o log participa da transação da execução
+    (persistência atômica, com um único commit no fim)."""
     def log(etapa: str, nivel: str, mensagem: str) -> None:
         registrar_log(db, execucao, etapa, nivel, mensagem)
+        if autonomo:
+            db.commit()
     return Contexto(escola_id=execucao.escola_id, execucao_id=execucao.id,
                     log=log, timeout_s=settings.SYNC_TIMEOUT_S)
 
@@ -222,7 +230,16 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
 
         registrar_log(db, execucao, "autenticacao", "info",
                       f"Conectando à {execucao.plataforma}…")
-        arquivos = asyncio.run(conector.sincronizar(cred, contexto))
+        # Não segurar uma transação aberta durante o FETCH externo (rede/
+        # navegador): idle-in-transaction derrubaria a conexão em Postgres
+        # gerenciado. Constrói o contexto de fetch ANTES do commit (captura
+        # escola_id/execucao_id já carregados, sem reabrir transação depois),
+        # commita o que leu/logou e roda o conector com logs AUTÔNOMOS — `cred`
+        # é objeto simples (Credenciais) e `escola` recarrega sob demanda na
+        # persistência, que segue transacional (commit único no fim).
+        contexto_fetch = _contexto(db, execucao, autonomo=True)
+        db.commit()
+        arquivos = asyncio.run(conector.sincronizar(cred, contexto_fetch))
         execucao.parser_versao = "perfis_pdf/planilhas"
 
         totais = {"alunos": 0, "erros": 0, "turmas": 0, "arquivos": 0}
