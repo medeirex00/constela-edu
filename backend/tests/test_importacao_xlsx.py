@@ -228,3 +228,37 @@ def test_xlsx_sem_estrelas_preserva_estrelas_do_pdf_anterior(cliente, db, escola
     assert ultimo.atividades == 30          # atualizado pelo Excel
     assert ultimo.pontuacao_media == pytest.approx(2.4)
     assert ultimo.estrelas == 900           # PRESERVADO do PDF anterior
+
+
+# --- LGPD: falha de parse não vaza o nome do aluno no log (R2) ----------------
+
+def test_erro_de_planilha_nao_loga_o_nome_do_arquivo(
+        cliente, escola_completa, monkeypatch, caplog):
+    """O filename dos relatórios individuais carrega o nome do aluno (PII de
+    menor). Uma falha inesperada de parse NÃO pode logá-lo (o log/Sentry são
+    processadores retidos) — só contexto não-PII (escola, tipo, tamanho)."""
+    import logging
+
+    from app.routers import importacoes
+
+    def _explode(*a, **k):
+        raise RuntimeError("erro interno inesperado de parsing")
+
+    # Força o ramo `except Exception` (não-ValueError) do parser de planilha.
+    monkeypatch.setattr(importacoes.planilhas, "analisar_planilha", _explode)
+
+    escola = escola_completa["escola"]
+    nome_pii = "Relatorio de performance - JOANA DA SILVA REAL.xlsx"
+    conteudo = b"PK\x03\x04conteudo-invalido"  # detectado como planilha (magic "PK")
+
+    with caplog.at_level(logging.ERROR, logger="constela.importacao"):
+        r = cliente.post(
+            f"/api/v1/escolas/{escola.id}/importacoes/analisar",
+            files={"arquivo": (nome_pii, conteudo, CT_XLSX)},
+            data={"plataforma": "matific"})
+
+    assert r.status_code == 400
+    texto = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "JOANA" not in texto              # nome do aluno NÃO vaza
+    assert nome_pii not in texto             # nem o filename cru
+    assert str(escola.id) in texto           # contexto de debug não-PII preservado

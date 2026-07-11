@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.rate_limit import LimitadorTentativas, ip_do_cliente
+from app.core.rate_limit import LimitadorTentativas, ip_do_cliente, mascarar_ip
 from app.quest import schemas
 from app.quest.models import QuestCredencialAluno
 from app.quest.services import credenciais as svc
@@ -70,9 +70,11 @@ def _sessao(db: Session, credencial: QuestCredencialAluno, request: Request,
     primeira_vez = credencial.ultimo_acesso is None
     saida_perfil = _montar_perfil(credencial, perfil, aluno)
     credencial.ultimo_acesso = datetime.now(timezone.utc)
+    # IP da criança MASCARADO no log permanente (LGPD/minimização — §12 §9);
+    # a criança já é identificada por entidade_id=aluno.id.
     registrar(db, "quest.login", escola_id=credencial.escola_id,
               entidade="aluno", entidade_id=aluno.id,
-              detalhes={"via": via, "ip": ip_do_cliente(request)})
+              detalhes={"via": via, "ip": mascarar_ip(ip_do_cliente(request))})
     db.commit()
     return schemas.SessaoOut(
         access_token=svc.criar_token_aluno(credencial),
@@ -126,8 +128,10 @@ def entrar(dados: schemas.EntrarIn, request: Request,
         limitador_codigo.registrar_falha(chave)
         limitador_codigo_conta.registrar_falha(codigo)
         limitador_ip.registrar_falha(ip)
+        # NÃO gravar o código digitado (credencial de menor, near-miss) e
+        # mascarar o IP no log permanente (LGPD/minimização — §12 §9/§15).
         registrar(db, "quest.login_falhou",
-                  detalhes={"codigo": codigo, "ip": ip})
+                  detalhes={"ip": mascarar_ip(ip)})
         db.commit()
 
     credencial = _checar_credencial(svc.buscar_por_codigo(db, codigo), falhou)

@@ -90,9 +90,18 @@ class Settings(BaseSettings):
     EXPORTS_DIR: Path = PROJECT_ROOT / "exports"
 
     CORS_ORIGINS: list[str] = [
+        # Produção (front cross-origin: Vercel + Railway). O default vive no
+        # código — como PUBLIC_BASE_URL/QUEST_BASE_URL — para que um deploy sem
+        # CORS_ORIGINS no ambiente NÃO suba bloqueando todas as chamadas do
+        # navegador. Setar CORS_ORIGINS no provedor passa a ser opcional (para
+        # restringir), não obrigatório.
+        "https://www.constelaedu.com",
+        "https://quest.constelaedu.com",
+        # Desenvolvimento local (web Vite).
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         # App desktop (Tauri): o WebView usa uma origem própria por plataforma
+        # — cross-origin em TODOS os ambientes, inclusive produção.
         "tauri://localhost",
         "http://tauri.localhost",
         "https://tauri.localhost",

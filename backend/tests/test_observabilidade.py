@@ -186,3 +186,31 @@ def test_excecao_nao_tratada_vira_500_generico_com_request_id():
     assert r.status_code == 500
     assert r.json() == {"detail": "Erro interno. Tente novamente em instantes."}
     assert "x-request-id" in {k.lower() for k in r.headers}
+
+
+# --- Sentry: minimização de PII (R2) -----------------------------------------
+
+def test_sentry_desliga_variaveis_locais_e_pii(monkeypatch):
+    """Frame-locals podem carregar PII de menor (bytes do arquivo, filename,
+    linhas parseadas com nomes). O init do Sentry deve desligá-los; e
+    send_default_pii permanece False. send_default_pii=False NÃO cobre locais."""
+    capturado: dict = {}
+
+    class _FakeSentry:
+        def init(self, **kwargs):
+            capturado.update(kwargs)
+
+    monkeypatch.setattr(obs, "_sentry", _FakeSentry())
+    monkeypatch.setattr(obs, "_sentry_ativo", False)
+
+    class _Cfg:
+        SENTRY_DSN = "https://exemplo@sentry.local/1"
+        SENTRY_ENVIRONMENT = ""
+        ENV = "producao"
+        APP_VERSION = "test"
+        SENTRY_TRACES_SAMPLE_RATE = 0.0
+
+    obs.configurar_sentry(_Cfg())
+
+    assert capturado.get("include_local_variables") is False
+    assert capturado.get("send_default_pii") is False

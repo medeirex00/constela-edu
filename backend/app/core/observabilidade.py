@@ -147,6 +147,10 @@ def configurar_sentry(settings) -> None:
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         # As integrações de FastAPI/Starlette/SQLAlchemy ligam sozinhas.
         send_default_pii=False,   # LGPD: sem dados pessoais por padrão
+        # NÃO anexar variáveis locais dos frames às exceções: elas podem conter
+        # PII de menor (bytes do arquivo, filename, linhas já parseadas com
+        # nomes de alunos). send_default_pii=False não cobre frame-locals.
+        include_local_variables=False,
     )
     _sentry_ativo = True
     logging.getLogger("constela").info("Sentry ativado", extra={"componente": "sentry"})

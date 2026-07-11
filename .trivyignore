@@ -1,0 +1,39 @@
+# .trivyignore — riscos de imagem ACEITOS e DOCUMENTADOS (espelha o pip-audit).
+#
+# Por que este arquivo existe: o gate Trivy de IMAGENS escaneia os pacotes REAIS
+# instalados na imagem e reprova em HIGH/CRITICAL COM correção disponível. Isso
+# re-sinaliza os MESMOS riscos que o gate do pip-audit
+# (.github/workflows/security.yml) já aceita via --ignore-vuln — o mesmo CVE não
+# pode reprovar num gate e ser aceito no outro. Cada CVE abaixo é "fixável" em
+# teoria (Status: fixed no Trivy), mas o fix NÃO é aplicável isoladamente hoje:
+# está preso ao pin do FastAPI ou é transitivo de baixo risco. Mesmos critérios,
+# mesma justificativa da allowlist do pip-audit.
+#
+# REGRA DE OURO (mantém o gate vivo): só entram aqui CVEs cujo "fix" não é
+# acionável por nós hoje, listados por ID. Qualquer CVE HIGH/CRITICAL NOVO e
+# corrigível continua REPROVANDO o build. Revisar quando o Dependabot subir o
+# FastAPI (destrava o upgrade do starlette) — aí estes saem daqui.
+#
+# Trivy lê este arquivo do diretório raiz automaticamente (fs e imagens).
+
+# --- starlette (transitivo do FastAPI; fix BLOQUEADO pelo pin fastapi==0.116.1) ---
+# O FastAPI 0.116.1 trava starlette <0.48. Todas as versões que corrigem
+# (0.49.1 / 1.1.0 / 1.3.1) são >=0.48 e exigem subir o FastAPI junto — upgrade
+# major coordenado, conduzido pelo Dependabot, não uma troca de dependência solta.
+
+# CVE-2026-48818 — SSRF e roubo de credencial NTLM via caminho UNC (fix 1.1.0).
+# Já isento no pip-audit. Mitigado no nosso uso: a API não busca URLs/UNC a partir
+# de entrada do cliente.
+CVE-2026-48818
+# CVE-2025-62727 — DoS via merge de header Range (fix 0.49.1). Mesma classe DoS
+# das demais starlette; atrás de rate-limit (nginx + limitador de aplicação).
+CVE-2025-62727
+# CVE-2026-54283 — request.form() ignora limites silenciosamente (fix 1.3.1).
+# Uploads da API têm teto de tamanho próprio (validação na camada de importação).
+CVE-2026-54283
+
+# --- pyasn1 (transitivo: python-jose[cryptography]==3.4.0 -> rsa -> pyasn1) ---
+# CVE-2026-30922 — DoS por decodificação ASN.1 sem limite (fix 0.6.3). Já isento
+# no pip-audit. Baixo risco no nosso uso: assinamos JWT com HS256 (não RSA/ECDSA),
+# então o caminho de decodificação ASN.1 vulnerável não é exercido.
+CVE-2026-30922

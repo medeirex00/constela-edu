@@ -412,3 +412,53 @@ def test_b3_rotacionar_codigo_troca_codigo_qr_e_derruba_sessao(cliente, db,
     assert perfil.status_code == 401
     assert _entrar(codigo_antigo).status_code == 401
     assert _entrar(depois.codigo_login).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# LGPD: minimização de PII de menor no log de auditoria PERMANENTE (R1)
+# ---------------------------------------------------------------------------
+
+def test_mascarar_ip_reduz_a_prefixo_e_nunca_levanta():
+    from app.core.rate_limit import mascarar_ip
+
+    assert mascarar_ip("203.0.113.5") == "203.0.x.x"     # IPv4 -> a.b.x.x
+    assert mascarar_ip("2001:db8::1") == "2001:x"        # IPv6 -> prefixo curto
+    assert mascarar_ip("desconhecido") == "desconhecido"  # fallback intacto
+    assert mascarar_ip("") == "desconhecido"
+    assert mascarar_ip("lixo") == "desconhecido"          # nunca levanta
+
+
+def test_login_grava_ip_mascarado_e_via(cliente, db, escola_completa):
+    from app.models import LogAuditoria
+
+    escola = escola_completa["escola"]
+    _gerar_cartoes(cliente, escola.id, escola_completa["turma"].id)
+    credencial = _credencial_de(db, escola_completa["alunos"][0].id)
+
+    r = TestClient(app).post("/api/v1/quest/auth/entrar",
+                             json={"codigo": credencial.codigo_login},
+                             headers={"X-Forwarded-For": "203.0.113.5"})
+    assert r.status_code == 200, r.text
+
+    log = db.execute(
+        select(LogAuditoria).where(LogAuditoria.acao == "quest.login")
+        .order_by(LogAuditoria.id.desc())).scalars().first()
+    assert log is not None
+    assert log.detalhes["ip"] == "203.0.x.x"       # IP do menor MASCARADO
+    assert log.detalhes["via"] == "codigo"          # contexto útil preservado
+
+
+def test_login_falhou_nao_grava_codigo_e_mascara_ip(db):
+    from app.models import LogAuditoria
+
+    r = TestClient(app).post("/api/v1/quest/auth/entrar",
+                             json={"codigo": "NAOEXISTE999"},
+                             headers={"X-Forwarded-For": "198.51.100.7"})
+    assert r.status_code == 401
+
+    log = db.execute(
+        select(LogAuditoria).where(LogAuditoria.acao == "quest.login_falhou")
+        .order_by(LogAuditoria.id.desc())).scalars().first()
+    assert log is not None
+    assert "codigo" not in log.detalhes            # código do menor NÃO gravado
+    assert log.detalhes["ip"] == "198.51.x.x"       # IP mascarado

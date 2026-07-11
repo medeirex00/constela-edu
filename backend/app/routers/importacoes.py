@@ -190,8 +190,11 @@ async def analisar(
             except ValueError as exc:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 — planilha inesperada
-                logger.exception("Falha ao ler planilha (escola %s, arquivo %r)",
-                                 escola_id, arquivo_nome)
+                # NÃO logar o filename: relatórios individuais trazem o nome do
+                # aluno (PII de menor) no nome do arquivo, e o log/Sentry são
+                # processadores retidos (LGPD/§14). Contexto de debug não-PII:
+                logger.exception("Falha ao ler planilha (escola %s, tipo xlsx, %d bytes)",
+                                 escola_id, len(conteudo))
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler a planilha. O arquivo está íntegro?") from exc
@@ -209,8 +212,9 @@ async def analisar(
             except HTTPException:
                 raise  # mensagem útil do parser genérico chega ao usuário
             except Exception as exc:
-                logger.exception("Falha ao analisar PDF (escola %s, arquivo %r)",
-                                 escola_id, arquivo_nome)
+                # NÃO logar o filename (nome do aluno = PII de menor) — ver acima.
+                logger.exception("Falha ao analisar PDF (escola %s, tipo pdf, %d bytes)",
+                                 escola_id, len(conteudo))
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler o PDF. O arquivo está íntegro?") from exc

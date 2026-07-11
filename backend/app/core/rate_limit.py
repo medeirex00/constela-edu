@@ -113,6 +113,26 @@ def ip_do_cliente(request) -> str:
     return request.client.host if request.client else "desconhecido"
 
 
+def mascarar_ip(ip: str) -> str:
+    """Reduz um IP a um prefixo de rede grosseiro para o log de auditoria
+    PERMANENTE (LGPD/minimização — mascarar, não apagar; Seção 12 §9).
+
+    IPv4 -> mantém só os 2 primeiros octetos (a.b.x.x); IPv6 -> só o primeiro
+    bloco (prefixo curto). O fallback não-IP ("desconhecido", vindo de
+    ip_do_cliente) passa intacto. NUNCA levanta: entrada inesperada volta
+    como "desconhecido" — o log de login não pode virar 500 por causa disto.
+    """
+    if not ip or ip == "desconhecido":
+        return ip or "desconhecido"
+    if ":" in ip:  # IPv6 (inclui IPv4-mapeado ::ffff:a.b.c.d)
+        bloco = ip.split(":", 1)[0]
+        return f"{bloco}:x" if bloco else "desconhecido"
+    partes = ip.split(".")
+    if len(partes) == 4 and all(p.isdigit() for p in partes):
+        return f"{partes[0]}.{partes[1]}.x.x"
+    return "desconhecido"
+
+
 # 8 falhas por 5 min por (e-mail, IP): trava dicionário online sem punir
 # um usuário que erra a senha uma ou duas vezes.
 limitador_login = LimitadorTentativas(max_tentativas=8, janela_s=300)
