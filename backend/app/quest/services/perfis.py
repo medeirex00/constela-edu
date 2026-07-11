@@ -199,8 +199,10 @@ def nome_para_falas(perfil: QuestPerfil, aluno_nome: str) -> str:
 
 
 def atualizar_avatar(perfil: QuestPerfil, mudancas: dict) -> None:
-    """Só aceita slots conhecidos (cor/rosto/chapeu/veiculo) com valores do
-    catálogo — o cliente nunca envia um item fora da whitelist."""
+    """Aplica apenas os slots presentes no catálogo APARENCIA, com valores da
+    whitelist de cada slot: um slot fora de APARENCIA é ignorado; um valor fora
+    da lista do slot é rejeitado (ValueError). O cliente nunca deveria enviá-los.
+    A whitelist é a fonte da verdade — não há lista fixa de 4 slots."""
     avatar = dict(perfil.avatar or {})
     for slot, permitidos in APARENCIA.items():
         if slot in mudancas:
