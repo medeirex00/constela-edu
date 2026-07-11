@@ -6,7 +6,7 @@
  * processados — um indicador flutuante (no Layout) mostra o progresso e leva
  * de volta à tela de Importações. Nada se perde ao trocar de página.
  */
-import { createContext, useCallback, useContext, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api, apiUpload } from "../lib/api";
@@ -123,6 +123,12 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
   // Snapshot dos itens para o loop de importação (evita estado obsoleto).
   const itensRef = useRef<ItemLote[]>([]);
   itensRef.current = itens;
+  // Escola VIVA: os loops assíncronos (análise/importação) comparam a escola em
+  // que começaram com esta ref para abortar o setState se o usuário trocar de
+  // escola no meio — a escrita já em curso continua na escola de origem (o
+  // escolaId fica capturado no closure), mas a UI não repovoa dados de A em B.
+  const escolaIdRef = useRef(escolaId);
+  escolaIdRef.current = escolaId;
 
   const adicionar = useCallback((novos: FileList | File[]) => {
     const pdfs = Array.from(novos).filter(
@@ -150,6 +156,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
 
   const analisarTodos = useCallback(async () => {
     if (!escolaId || arquivos.length === 0) return;
+    const escolaDaAnalise = escolaId; // aborta se o usuário trocar de escola
     setFase("analisando");
     setItens([]);
     let listaTurmas: Turma[] = [];
@@ -158,11 +165,13 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     } catch {
       listaTurmas = [];
     }
+    if (escolaIdRef.current !== escolaDaAnalise) return;
     setTurmas(listaTurmas);
 
     const total = arquivos.length;
     const acumulados: ItemLote[] = [];
     for (let i = 0; i < total; i++) {
+      if (escolaIdRef.current !== escolaDaAnalise) return; // trocou de escola
       const arquivo = arquivos[i];
       setProgresso({ atual: i, total });
       let item: ItemLote;
@@ -182,12 +191,18 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
       acumulados.push(item);
       setItens([...acumulados]);
     }
+    if (escolaIdRef.current !== escolaDaAnalise) return;
     setProgresso({ atual: total, total });
     setFase("conferencia");
   }, [escolaId, arquivos]);
 
   const importarTodos = useCallback(async () => {
     if (!escolaId) return;
+    // A importação PERTENCE à escola em que começou: as gravações vão para ela
+    // (URL explícita) mesmo que o usuário troque de escola no meio — o que NÃO
+    // pode é a UI da nova escola repovoar com o progresso/itens da anterior.
+    const escolaDaImportacao = escolaId;
+    const naEscola = () => escolaIdRef.current === escolaDaImportacao;
     const alvo = itensRef.current.filter(importavel);
     if (alvo.length === 0) return;
     setFase("importando");
@@ -196,7 +211,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     const mapa = new Map(itensRef.current.map((it) => [it.id, { ...it }] as [string, ItemLote]));
     let feitos = 0;
     for (const it of alvo) {
-      setProgresso({ atual: feitos, total });
+      if (naEscola()) setProgresso({ atual: feitos, total });
       try {
         const linhas = it
           .analise!.linhas.filter((l) => l.erros.length === 0)
@@ -206,7 +221,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
             aluno_id: it.acao.tipo === "importar" ? it.acao.alunoId : null,
             criar_em_turma_id: it.acao.tipo === "criar" ? it.acao.turmaId : null,
           }));
-        await api(`/escolas/${escolaId}/importacoes/confirmar`, {
+        await api(`/escolas/${escolaDaImportacao}/importacoes/confirmar`, {
           method: "POST",
           body: JSON.stringify({
             plataforma: it.analise!.plataforma,
@@ -226,21 +241,25 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
         mapa.get(it.id)!.resultado = "erro";
       }
       feitos += 1;
-      setProgresso({ atual: feitos, total });
-      setItens([...mapa.values()]);
+      if (naEscola()) {
+        setProgresso({ atual: feitos, total });
+        setItens([...mapa.values()]);
+      }
     }
     for (const it of mapa.values()) {
       if (it.resultado) continue;
       it.resultado = it.ignorado ? "ignorado" : "pendente";
     }
     try {
-      await api(`/escolas/${escolaId}/importacoes/recalcular`, { method: "POST" });
+      await api(`/escolas/${escolaDaImportacao}/importacoes/recalcular`, { method: "POST" });
     } catch {
       /* dados já gravados; o recálculo pode ser refeito na próxima importação */
     }
-    setTempoMs(Date.now() - inicio);
-    setItens([...mapa.values()]);
-    setFase("relatorio");
+    if (naEscola()) {
+      setTempoMs(Date.now() - inicio);
+      setItens([...mapa.values()]);
+      setFase("relatorio");
+    }
   }, [escolaId]);
 
   const alternarIgnorar = useCallback((id: string) => {
@@ -267,8 +286,18 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     setItens([]);
     setProgresso({ atual: 0, total: 0 });
     setTempoMs(0);
+    setTurmas([]); // turmas foram resolvidas contra o tenant anterior
     setFase("selecao");
   }, []);
+
+  // Ao TROCAR de escola, zera o lote em preparo: os itens foram resolvidos
+  // (aluno_id/turma_id) contra a escola anterior; importá-los já na nova escola
+  // gravaria alunos/notas no tenant errado (isolamento por escola). Uma
+  // importação já em curso continua na escola em que começou (escolaId fica
+  // capturado no closure de importarTodos); aqui só descartamos a prévia.
+  useEffect(() => {
+    recomecar();
+  }, [escolaId, recomecar]);
 
   const emAndamento = fase === "analisando" || fase === "importando";
 

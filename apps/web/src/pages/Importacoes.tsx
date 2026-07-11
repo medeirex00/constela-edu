@@ -20,7 +20,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import ImportacaoMatriculas from "./ImportacaoMatriculas";
@@ -169,6 +169,11 @@ function agrupar(analise: Analise): Grupo[] {
 
 export default function Importacoes() {
   const { escolaId, usuario } = useApp();
+  // Escola VIVA: `analisar()` é assíncrona; se a escola mudar durante o upload,
+  // a continuação descarta a resposta (resolvida contra o tenant anterior) em
+  // vez de repovoar a prévia sob a nova escola.
+  const escolaIdRef = useRef(escolaId);
+  escolaIdRef.current = escolaId;
   const podeImportar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
   const [texto, setTexto] = useState("");
@@ -196,6 +201,22 @@ export default function Importacoes() {
 
   const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);
 
+  // Ao TROCAR de escola, descarta a análise/relatório em preparo: ele foi
+  // resolvido (aluno_id/turma_id) contra a escola anterior; confirmá-lo já na
+  // nova escola gravaria alunos/notas no tenant errado (isolamento por escola).
+  useEffect(() => {
+    setAnalise(null);
+    setAcoes([]);
+    setTurmaEmMassa(null);
+    setTurmaNova("");
+    setEditarGrupo(null);
+    setResultado(null);
+    setErro("");
+    setArquivo(null);
+    setTexto("");
+    if (inputArquivo.current) inputArquivo.current.value = "";
+  }, [escolaId]);
+
   // Leitura via arquitetura única (useApi): sem escola ainda, a fonte é `null`
   // (ocioso). O hook cuida de cancelamento, timeout e retry. O histórico expõe
   // o erro (exibido no card) em vez de engoli-lo; `recarregar` refaz a busca
@@ -210,6 +231,7 @@ export default function Importacoes() {
 
   async function analisar() {
     if (!escolaId) return;
+    const escolaDaAnalise = escolaId;
     setOcupado(true);
     setErro("");
     setResultado(null);
@@ -219,6 +241,8 @@ export default function Importacoes() {
       else dados.append("texto", texto);
       if (plataforma) dados.append("plataforma", plataforma);
       const resposta = await apiUpload<Analise>(`/escolas/${escolaId}/importacoes/analisar`, dados);
+      // Trocou de escola durante o upload: descarta (o reset já limpou a tela).
+      if (escolaIdRef.current !== escolaDaAnalise) return;
       setAnalise(resposta);
 
       // Ação inicial POR GRUPO, já usando a turma lida do relatório.
@@ -255,6 +279,7 @@ export default function Importacoes() {
 
   async function confirmar() {
     if (!escolaId || !analise) return;
+    const escolaDaConfirmacao = escolaId; // grava e reporta na escola de origem
     setOcupado(true);
     setErro("");
     try {
@@ -287,7 +312,7 @@ export default function Importacoes() {
         return;
       }
       const resposta = await api<ResultadoImportacao>(
-        `/escolas/${escolaId}/importacoes/confirmar`,
+        `/escolas/${escolaDaConfirmacao}/importacoes/confirmar`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -304,6 +329,9 @@ export default function Importacoes() {
           }),
         },
       );
+      // Trocou de escola durante a gravação: a escrita foi p/ a escola de
+      // origem (correto); não sobrepõe a tela da nova escola com o resultado.
+      if (escolaIdRef.current !== escolaDaConfirmacao) return;
       setResultado(resposta);
       setAnalise(null);
       setTexto("");
