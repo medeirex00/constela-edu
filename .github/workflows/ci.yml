@@ -68,7 +68,7 @@ jobs:
           retention-days: 7
       - name: Codecov (opcional — só se CODECOV_TOKEN estiver configurado)
         continue-on-error: true
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           files: backend/coverage.xml
           flags: backend
@@ -156,7 +156,7 @@ jobs:
           retention-days: 7
       - name: Codecov (opcional)
         continue-on-error: true
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           directory: apps/web/coverage
           flags: web
