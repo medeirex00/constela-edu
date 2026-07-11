@@ -407,6 +407,10 @@ def _chave_ordenacao(resultado: ResultadoAluno, criterios: list[str]):
             chave.append(resultado.aluno.nome.casefold())
         else:
             chave.append(-float(getattr(resultado, criterio, 0) or 0))
+    # Desempate final DETERMINÍSTICO: dois alunos DISTINTOS homônimos e com todas
+    # as métricas iguais não podem trocar de posição entre recálculos sucessivos
+    # (aluno.id é único e estável).
+    chave.append(resultado.aluno.id)
     return tuple(chave)
 
 
