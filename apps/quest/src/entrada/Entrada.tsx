@@ -108,11 +108,12 @@ export function Entrada({ aoEntrar }: EntradaProps) {
             <input
               ref={campoCodigo}
               className="campo-codigo"
-              placeholder="SOL1234"
+              placeholder="SOL314"
               value={codigo}
-              // O código atual tem DUAS palavras + 4 dígitos (até 20 = String(20)
-              // no backend, ex.: COBRAPARDAL6832). O limite antigo de 12 truncava
-              // a digitação e barrava o login da maioria das crianças.
+              // Códigos novos têm 1 palavra + 3 dígitos (ex.: SOL314), curtos de
+              // digitar. O limite fica em 20 porque cartões já impressos no
+              // formato antigo (2 palavras + 4 dígitos = String(20)) precisam
+              // continuar digitáveis durante a transição.
               maxLength={20}
               autoCapitalize="characters"
               autoComplete="off"

@@ -338,32 +338,33 @@ def test_apelidos_e_codigos_unicos(cliente, db, escola_completa):
 
 
 # ---------------------------------------------------------------------------
-# B3 — código de maior entropia (2 palavras + 4 dígitos) + rotação
+# B3 — código curto de login (1 palavra + 3 dígitos) + rotação
 # ---------------------------------------------------------------------------
 
 def test_b3_lista_de_palavras_segura_para_o_formato():
-    """Palavras curtas (3–8 letras), só A–Z, únicas — e duas palavras + 4
-    dígitos cabem em codigo_login (String(20))."""
+    """Palavras curtas (3–8 letras), só A–Z, únicas. O formato ATUAL (1 palavra
+    + 3 dígitos) cabe fácil; e o antigo (2 palavras + 4 dígitos), dos cartões já
+    impressos, também continua cabendo em codigo_login (String(20))."""
     palavras = svc_credenciais._PALAVRAS_CODIGO
     assert len(palavras) == len(set(palavras))          # sem repetição
-    assert len(palavras) >= 100                          # entropia suficiente
+    assert len(palavras) >= 100                          # variedade suficiente
     assert all(p.isascii() and p.isalpha() and p.isupper() for p in palavras)
     assert all(3 <= len(p) <= 8 for p in palavras)
-    assert 2 * max(len(p) for p in palavras) + 4 <= 20   # 8+8+4 = 20 = String(20)
+    assert max(len(p) for p in palavras) + 3 <= 20       # novo: 1 palavra + 3 díg
+    assert 2 * max(len(p) for p in palavras) + 4 <= 20   # antigo ainda cabe (compat)
 
 
-def test_b3_gera_codigo_duas_palavras_distintas_quatro_digitos(db, escola_completa):
+def test_b3_gera_codigo_uma_palavra_tres_digitos(db, escola_completa):
+    # Decisão de produto: código curto (1 palavra + 3 dígitos, tudo junto, ex.:
+    # SOL314) para a criança digitar fácil. A defesa contra adivinhação é o
+    # limitador por código+IP, não o tamanho.
     codigo = svc_credenciais.gerar_codigo_login(db)
     assert codigo.isalnum() and codigo.isupper() and len(codigo) <= 20
-    casa = re.fullmatch(r"([A-Z]+)(\d{4})", codigo)      # R3/A3: 4 dígitos
+    casa = re.fullmatch(r"([A-Z]+)(\d{3})", codigo)      # 1 palavra + 3 dígitos
     assert casa, codigo
-    letras = casa.group(1)
-    conj = svc_credenciais._CONJ_PALAVRAS
-    partes = [(letras[:i], letras[i:]) for i in range(3, len(letras) - 2)
-              if letras[:i] in conj and letras[i:] in conj]
-    assert partes, codigo                                # parte alfabética = 2 palavras
-    w1, w2 = partes[0]
-    assert w1 != w2                                       # distintas (legibilidade)
+    assert casa.group(1) in svc_credenciais._CONJ_PALAVRAS   # palavra da lista fechada
+    # Exibição do cartão é TUDO JUNTO (sem traço) para o formato novo.
+    assert svc_credenciais.formatar_codigo_exibicao(codigo) == codigo
 
 
 def test_b3_formatar_codigo_exibicao():
