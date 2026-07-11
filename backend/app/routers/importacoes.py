@@ -60,6 +60,18 @@ router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importaçõ
 
 logger = logging.getLogger("constela.importacao")
 
+
+def _num(valor, tipo):
+    """Coerção de um valor NUMÉRICO vindo do payload do cliente: um valor não
+    numérico (cliente adulterado, bug de front) vira 400, não 500."""
+    try:
+        return tipo(valor)
+    except (ValueError, TypeError) as erro:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "O relatório contém um valor numérico inválido.",
+        ) from erro
+
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
 IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
 _TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.(pdf|xlsx)$")
@@ -352,11 +364,11 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
     # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1).
     if anterior is _SEM_PRECARGA:
         anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
-    atividades = (int(dados["atividades"]) if "atividades" in dados
+    atividades = (_num(dados["atividades"], int) if "atividades" in dados
                   else (anterior.atividades if anterior else 0))
-    estrelas = (int(dados["estrelas"]) if "estrelas" in dados
+    estrelas = (_num(dados["estrelas"], int) if "estrelas" in dados
                 else (anterior.estrelas if anterior else 0))
-    media = (float(dados["pontuacao_media"]) if "pontuacao_media" in dados
+    media = (_num(dados["pontuacao_media"], float) if "pontuacao_media" in dados
              else (anterior.pontuacao_media if anterior else 0.0))
     db.add(SnapshotMatific(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
@@ -409,9 +421,9 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
         else:
             posteriores = True
 
-    ativ_rel = int(dados.get("atividades", 0) or 0)
-    estrelas_rel = int(dados.get("estrelas", 0) or 0)
-    media_rel = float(dados.get("pontuacao_media", 0) or 0.0)
+    ativ_rel = _num(dados.get("atividades", 0) or 0, int)
+    estrelas_rel = _num(dados.get("estrelas", 0) or 0, int)
+    media_rel = _num(dados.get("pontuacao_media", 0) or 0.0, float)
 
     base_ativ = base.atividades if base else 0
     base_estrelas = base.estrelas if base else 0
@@ -470,17 +482,18 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
         por_nivel = anterior.livros_por_nivel if anterior else {}
     livros = dados.get("livros_unicos")
     if livros is None:
-        livros = sum(por_nivel.values()) if por_nivel else (anterior.livros_unicos if anterior else 0)
+        livros = (sum(_num(v, int) for v in por_nivel.values()) if por_nivel
+                  else (anterior.livros_unicos if anterior else 0))
     db.add(SnapshotElefante(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
-        livros_unicos=int(livros),
-        tempo_leitura_min=int(dados.get("tempo_leitura_min",
-                                        anterior.tempo_leitura_min if anterior else 0)),
-        questoes_tentativas=int(dados.get("questoes_tentativas",
-                                          anterior.questoes_tentativas if anterior else 0)),
-        questoes_acertos=int(dados.get("questoes_acertos",
-                                       anterior.questoes_acertos if anterior else 0)),
+        livros_unicos=_num(livros, int),
+        tempo_leitura_min=_num(dados.get("tempo_leitura_min",
+                                         anterior.tempo_leitura_min if anterior else 0), int),
+        questoes_tentativas=_num(dados.get("questoes_tentativas",
+                                           anterior.questoes_tentativas if anterior else 0), int),
+        questoes_acertos=_num(dados.get("questoes_acertos",
+                                        anterior.questoes_acertos if anterior else 0), int),
         livros_por_nivel=por_nivel,
     ))
 
@@ -547,7 +560,7 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
             quando = quando.replace(tzinfo=None)
         tempo_livro = linha.dados.get("tempo_livro_min")
         novas.append((livro, quando,
-                      int(tempo_livro) if tempo_livro is not None else None))
+                      _num(tempo_livro, int) if tempo_livro is not None else None))
 
     # Persiste PRIMEIRO os livros novos (ganham id) e então grava todas as
     # leituras num único INSERT executemany — uma ida ao banco, não N.
@@ -590,7 +603,7 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
     # O resumo do relatório individual COMPLEMENTA o tempo de leitura de quem
     # ainda não tem snapshot; nunca rebaixa o valor vindo do relatório da turma.
     tempo_relatorio = max(
-        (int(l.dados.get("tempo_leitura_min", 0) or 0) for l in linhas), default=0)
+        (_num(l.dados.get("tempo_leitura_min", 0) or 0, int) for l in linhas), default=0)
     db.add(SnapshotElefante(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
