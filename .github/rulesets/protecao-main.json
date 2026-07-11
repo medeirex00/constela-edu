@@ -30,6 +30,7 @@
         "required_status_checks": [
           { "context": "Lint (ruff + typecheck)" },
           { "context": "Testes backend (pytest + cobertura)" },
+          { "context": "Migrações Alembic (PostgreSQL real)" },
           { "context": "Testes web (Vitest + cobertura)" },
           { "context": "Build (web + quest)" },
           { "context": "E2E (Playwright)" },
