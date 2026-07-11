@@ -1,6 +1,6 @@
 # 03 — O Universo & a Fantasia / The Universe & Fantasy
 
-- **Status:** 🔴 rascunho / draft
+- **Status:** 🟢 aprovado / approved
 - **Padrão / Standard:** [ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md) (16 partes)
 - **Fontes / Sources:** `docs/quest/README.md`, `docs/quest/02-banco-de-dados.md`, `docs/quest/03-gamificacao-progressao.md`, `docs/quest/05-roadmap.md`, `apps/quest/src/lobby/materias.ts`, `cenasTema.ts`, protótipo `constela-play-v7.html`, `_estado-atual/RELATORIO-2026-07-09.md`
 - **Depende de / Depends on:** [02](02-vocabulario.md), [04](04-personagens-avatar.md), [05](05-sistemas-de-jogo.md), [06](06-pedagogico-bncc.md), [07](07-ux-fluxos-navegacao.md), [11](11-arquitetura.md), [15](15-arte-audio-assets.md)

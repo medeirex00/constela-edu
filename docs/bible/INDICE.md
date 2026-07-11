@@ -632,7 +632,7 @@
 | 11.35 | Política do que nunca é cacheado | Fixa que API dinâmica, gabarito e token de sessão nunca entram em cache/persistência local. |
 | 11.36 | Modos sociais exigem rede | Define que corridas/salas dependem de conexão e são sinalizados com ícone de sinal na UI. |
 | 11.37 | Estado do cliente e sessão sem router | Fixa TanStack Query (servidor) + Zustand (jogo/sessão) e a máquina de estados de sessão do boot ao lobby. |
-| 11.38 | Dois mundos de JWT (isolamento de papéis) | Define que o token papel 'aluno' carrega {papel, perfil_id, aluno_id, escola_id} e é rejeitado no Edu e vice-versa. |
+| 11.38 | Dois mundos de JWT (isolamento de papéis) | Define que o token papel 'aluno' carrega hoje `{sub=id da credencial, papel, ver, iat, exp}` (escola_id/aluno_id/perfil vêm de lookup da credencial, não de claim) e é rejeitado no Edu e vice-versa; contrato unificado é alvo. |
 | 11.39 | Escalabilidade A>B>C (caminho, não big-bang) | Tabela estágio→gatilho→mudança: A instância única, B Redis+réplicas, C extração para serviço próprio + fila real. |
 | 11.40 | Cenário de dimensionamento (pico de aula) | Fixa o pico previsível (meia escola entrando 7h30) como cenário de capacidade, não a média diária. |
 | 11.41 | Assets em CDN e cache HTTP por ETag | Define que trilhas/ilustrações vão por CDN e o catálogo usa cache HTTP com ETag por mudar raramente. |
@@ -670,11 +670,11 @@
 | 12.5 | Rate-limit por (código, IP) | Especifica o limitador dimensionado para ~30 tablets atrás do NAT da escola como principal defesa contra abuso. |
 | 12.6 | Rate-limit distribuído (gap atual → Redis) | Registra que o limitador está em memória hoje e o alvo distribuído com réplicas para não ser burlado por instância. |
 | 12.7 | Escopo mínimo do papel aluno | Fixa que o token aluno só alcança rotas /quest/* não-administrativas e nunca rotas do Edu. |
-| 12.8 | JWT de papel aluno (claims e TTL) | Define claims {papel, perfil_id, aluno_id, escola_id} e o token de 30 dias no aparelho compartilhado. |
+| 12.8 | JWT de papel aluno (claims e TTL) | Registra o TTL (token de 30 dias no aparelho compartilhado); os claims Q0 reais são `{sub, papel, ver, iat, exp}` (desenho do JWT = Seção 11; a 12 defere). |
 | 12.9 | token_version e invalidação de sessão | Especifica a invalidação por versão que revoga cartões/QR antigos ao regenerar. |
 | 12.10 | Conta não salva ao sair e boot 'É você, {nome}?' | Fixa token só em memória e a confirmação obrigatória no boot para não herdar a conta do turno anterior. |
 | 12.11 | Dois mundos de JWT (isolamento de papéis) | Garante que o token aluno é rejeitado no Edu e o token Edu não vale no Quest. |
-| 12.12 | Renovação e expiração de sessão | Define o fluxo de renovar/sair e o comportamento ao expirar sem punir a criança. |
+| 12.12 | Renovação e expiração de sessão | Define o comportamento ao expirar sem punir a criança; em Q0 NÃO há rotas `renovar`/`sair` (o token expira; regenerar o cartão invalida via token_version) — renovar/sair é alvo aspiracional. |
 | 12.13 | Papéis e autorização por rota | Tabela aluno/responsável/professor/coordenador/admin global com o que cada um autentica e acessa, checado no backend. |
 | 12.14 | ⚠️ Autorização do vínculo do responsável | Define responsaveis_alunos e o campo autorizado_por; quem da escola confirma o vínculo e quando a API entra fica a decidir. |
 | 12.15 | Isolamento multi-escola por escola_id | Fixa escola_id indexado e filtrado em toda tabela e rota, idêntico ao Edu. |
@@ -1318,8 +1318,8 @@
 | # | Subseção | Propósito |
 |---|----------|-----------|
 | B.1 | Convenções gerais da API | Base `/api/v1/quest/`, JSON, JWT Bearer, papéis checados por rota no backend, isolamento por escola_id, paginação nos agregados, cache ETag no catálogo, datas UTC. |
-| B.2 | Contrato — /auth | Entrar (código curto ou QR, sem senha/PIN), renovar e sair; claims do JWT papel aluno (`perfil_id, aluno_id, escola_id`); rate-limit por (código, IP). |
-| B.3 | Contrato — /perfil | GET eu, PATCH avatar (whitelist de slots), PATCH preferencias, GET constelacao — nenhum campo administrativo exposto ao aluno. |
+| B.2 | Contrato — /auth | Q0 real: rotas `quem`/`entrar`/`entrar-qr` (código curto ou QR, sem senha/PIN), claims do JWT papel aluno `{sub, papel, ver, iat, exp}`, rate-limit por (código, IP). Aspiracional (sem código): `renovar`/`sair` e claims adicionais (perfil_id/aluno_id/escola_id, hoje derivados por lookup). |
+| B.3 | Contrato — /perfil | Q0 real: GET perfil, GET /cores, GET /aparencia, GET /personagens, PATCH /nome, PATCH /avatar (whitelist de slots), PATCH /preferencias — nenhum campo administrativo exposto ao aluno. Aspiracional (sem código): GET constelacao. |
 | B.4 | Contrato — /catalogo | GET planetas, GET jornadas do planeta, GET missão/{id} com desafios entregues SEM o campo `gabarito`. |
 | B.5 | Contrato — /jogo | POST iniciar tentativa, POST responder desafio, POST finalizar → recompensas calculadas no servidor (autoridade do gabarito, XP/moedas/estrelas server-side). |
 | B.6 | Contrato — /tarefas | GET hoje (diárias + semanais + presente de login) e POST resgatar — geração e viés por habilidade fraca acontecem no servidor. |

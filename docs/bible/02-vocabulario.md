@@ -1,6 +1,6 @@
 # 02 — Vocabulário Canônico / Canonical Vocabulary
 
-- **Status:** 🔴 rascunho / draft
+- **Status:** 🟢 aprovado / approved
 - **Fontes / Sources:** `docs/quest/README.md`, `docs/quest/03-gamificacao-progressao.md`, `docs/quest/05-roadmap.md`, `_estado-atual/RELATORIO-2026-07-09.md`
 
 ---

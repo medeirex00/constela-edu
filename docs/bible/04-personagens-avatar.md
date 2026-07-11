@@ -1,6 +1,6 @@
 # 04 — Personagens & Avatar / Characters & Avatar
 
-- **Status:** 🔴 rascunho / draft
+- **Status:** 🟢 aprovado / approved
 - **Padrão / Standard:** [ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md) (16 partes)
 - **Fontes / Sources:** `apps/quest/src/personagem/*`, `backend/app/quest/services/perfis.py` (APARENCIA, PERSONAGENS_BASE, AVATAR_PADRAO), `apps/quest/src/vestiario/*`, `apps/quest/src/cosmo/*`, [03](03-universo.md), `_estado-atual/RELATORIO-2026-07-09.md`
 - **Depende de / Depends on:** renderização → [11](11-arquitetura.md); economia → [05](05-sistemas-de-jogo.md); telas/rótulos → [07](07-ux-fluxos-navegacao.md)/[02](02-vocabulario.md); telemetria → [17](17-telemetria-metricas.md); produção de arte → [15](15-arte-audio-assets.md); testes → [18](18-qa-testes.md).

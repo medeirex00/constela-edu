@@ -1,6 +1,6 @@
 # 01 — Princípios Imutáveis / Immutable Principles
 
-- **Status:** 🔴 rascunho / draft
+- **Status:** 🟢 aprovado / approved
 - **Fontes / Sources:** `docs/quest/README.md`, `01-arquitetura.md`, `03-gamificacao-progressao.md`, `04-integracao-edu.md`, `_estado-atual/RELATORIO-2026-07-09.md`
 
 ---
