@@ -30,7 +30,7 @@ from app.quest.services import perfis
 # correta (a criança que escreve certo nunca pode ser punida — nada de CEU,
 # VENUS ou TROVAO, que se escrevem com acento). Lista ampliada (~147 termos) para
 # elevar a entropia do código (ver gerar_codigo_login). Limite de 8 letras
-# garante que DUAS palavras + 3 dígitos caibam em codigo_login (String(20)).
+# garante que DUAS palavras + 4 dígitos caibam em codigo_login (String(20)).
 _PALAVRAS_CODIGO = (
     # Céu e espaço
     "SOL", "LUA", "MARTE", "COMETA", "PLANETA", "ESTRELA", "FOGUETE", "NOVA",
@@ -63,16 +63,18 @@ _CONJ_PALAVRAS = frozenset(_PALAVRAS_CODIGO)
 
 
 def gerar_codigo_login(db: Session) -> str:
-    """PALAVRA+PALAVRA+NNN, único na rede toda (ex.: LUAFAROL731; no cartão sai
-    como LUA-FAROL-731). Só letras/dígitos; duas palavras DISTINTAS + 3 dígitos
-    por CSPRNG (secrets). Espaço ~147×146×900 ≈ 19M (≈2^24), ~70× o formato
-    antigo. A unicidade é garantida pela coluna (unique) + esta verificação."""
+    """PALAVRA+PALAVRA+NNNN, único na rede toda (ex.: LUAFAROL7314; no cartão
+    sai como LUA-FAROL-7314). Só letras/dígitos; duas palavras DISTINTAS + 4
+    dígitos por CSPRNG (secrets). Espaço ~147×146×9000 ≈ 1,9×10^8 (≈2^27,5),
+    ~10× o formato de 3 dígitos — eleva o custo de colheita distribuída de
+    contas (R3/A3). 8+8+4 = 20 = String(20) exato (sem migração). A unicidade
+    é garantida pela coluna (unique) + esta verificação."""
     for _ in range(200):
         w1 = secrets.choice(_PALAVRAS_CODIGO)
         w2 = secrets.choice(_PALAVRAS_CODIGO)
         while w2 == w1:                       # duas palavras distintas (legível)
             w2 = secrets.choice(_PALAVRAS_CODIGO)
-        codigo = f"{w1}{w2}{secrets.randbelow(900) + 100}"   # NNN: 100–999
+        codigo = f"{w1}{w2}{secrets.randbelow(9000) + 1000}"   # NNNN: 1000–9999
         existe = db.execute(
             select(QuestCredencialAluno.id)
             .where(QuestCredencialAluno.codigo_login == codigo)
@@ -83,13 +85,15 @@ def gerar_codigo_login(db: Session) -> str:
 
 
 def formatar_codigo_exibicao(codigo: str) -> str:
-    """Para o CARTÃO da criança: PALAVRA-PALAVRA-NNN (LUAFAROL731 → LUA-FAROL-731).
+    """Para o CARTÃO da criança: PALAVRA-PALAVRA-NNNN (LUAFAROL7314 →
+    LUA-FAROL-7314). Aceita 3 OU 4 dígitos, então cartões de 3 dígitos já
+    emitidos continuam sendo hifenizados.
 
-    Código antigo (PALAVRA+NNNN) ou qualquer valor não reconhecido é devolvido
-    como está — nunca quebra a impressão nem os cartões já emitidos. O valor
-    ARMAZENADO/consultado continua sendo o normalizado (sem hífen)."""
+    Código antigo (PALAVRA+NNNN só) ou qualquer valor não reconhecido é
+    devolvido como está — nunca quebra a impressão nem os cartões já emitidos.
+    O valor ARMAZENADO/consultado continua sendo o normalizado (sem hífen)."""
     norm = normalizar_codigo(codigo)
-    casa = re.fullmatch(r"([A-Z]+)(\d{3})", norm)
+    casa = re.fullmatch(r"([A-Z]+)(\d{3,4})", norm)
     if casa:
         letras, digitos = casa.group(1), casa.group(2)
         for i in range(3, len(letras) - 2):   # palavras têm ≥3 letras

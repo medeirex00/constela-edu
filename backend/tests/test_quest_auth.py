@@ -338,24 +338,24 @@ def test_apelidos_e_codigos_unicos(cliente, db, escola_completa):
 
 
 # ---------------------------------------------------------------------------
-# B3 — código de maior entropia (2 palavras + 3 dígitos) + rotação
+# B3 — código de maior entropia (2 palavras + 4 dígitos) + rotação
 # ---------------------------------------------------------------------------
 
 def test_b3_lista_de_palavras_segura_para_o_formato():
-    """Palavras curtas (3–8 letras), só A–Z, únicas — e duas palavras + 3
+    """Palavras curtas (3–8 letras), só A–Z, únicas — e duas palavras + 4
     dígitos cabem em codigo_login (String(20))."""
     palavras = svc_credenciais._PALAVRAS_CODIGO
     assert len(palavras) == len(set(palavras))          # sem repetição
     assert len(palavras) >= 100                          # entropia suficiente
     assert all(p.isascii() and p.isalpha() and p.isupper() for p in palavras)
     assert all(3 <= len(p) <= 8 for p in palavras)
-    assert 2 * max(len(p) for p in palavras) + 3 <= 20   # cabe na coluna
+    assert 2 * max(len(p) for p in palavras) + 4 <= 20   # 8+8+4 = 20 = String(20)
 
 
-def test_b3_gera_codigo_duas_palavras_distintas_tres_digitos(db, escola_completa):
+def test_b3_gera_codigo_duas_palavras_distintas_quatro_digitos(db, escola_completa):
     codigo = svc_credenciais.gerar_codigo_login(db)
     assert codigo.isalnum() and codigo.isupper() and len(codigo) <= 20
-    casa = re.fullmatch(r"([A-Z]+)(\d{3})", codigo)
+    casa = re.fullmatch(r"([A-Z]+)(\d{4})", codigo)      # R3/A3: 4 dígitos
     assert casa, codigo
     letras = casa.group(1)
     conj = svc_credenciais._CONJ_PALAVRAS
@@ -368,9 +368,10 @@ def test_b3_gera_codigo_duas_palavras_distintas_tres_digitos(db, escola_completa
 
 def test_b3_formatar_codigo_exibicao():
     fmt = svc_credenciais.formatar_codigo_exibicao
-    assert fmt("LUAFAROL731") == "LUA-FAROL-731"          # novo: hifenizado no cartão
-    assert fmt("lua farol 731") == "LUA-FAROL-731"        # tolera a digitação
-    assert fmt("SOL1234") == "SOL1234"                    # antigo (PALAVRA+NNNN): igual
+    assert fmt("LUAFAROL7314") == "LUA-FAROL-7314"        # novo (4 díg): hifenizado
+    assert fmt("lua farol 7314") == "LUA-FAROL-7314"      # tolera a digitação
+    assert fmt("LUAFAROL731") == "LUA-FAROL-731"          # cartão de 3 díg já emitido
+    assert fmt("SOL1234") == "SOL1234"                    # 1 palavra só: devolve igual
     assert fmt("XYZ123") == "XYZ123"                      # desconhecido: devolve como está
 
 
