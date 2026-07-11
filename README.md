@@ -100,7 +100,7 @@ Desktop e mobile apontam para essa mesma URL (`VITE_API_URL` /
 ## Testes
 
 ```bash
-cd backend && python -m pytest tests/ -v       # 71 testes (motor, fases 2–6, mobile)
+cd backend && python -m pytest tests/ -v       # suíte pytest completa (motor, fases, Quest, mobile)
 npm run build:web                              # typecheck + build do web
 npm run typecheck:mobile                       # typecheck do app mobile
 ```
@@ -132,7 +132,7 @@ Docker em todo push; instaladores do desktop em tags `v*`
 ## Estrutura
 
 ```
-backend/    API FastAPI (única fonte de regra de negócio, 71 testes)
+backend/    API FastAPI (única fonte de regra de negócio; ampla suíte pytest)
 apps/       web (React) · desktop (Tauri) · mobile (Expo/RN)
 packages/   core — TypeScript compartilhado entre os três clientes
 database/   SQLite de desenvolvimento (gerado; fora do versionamento)

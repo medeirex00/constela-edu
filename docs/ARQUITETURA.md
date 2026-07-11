@@ -31,7 +31,7 @@ flowchart LR
 
 | Decisão | Motivo |
 |---|---|
-| **Manter FastAPI** (não migrar para NestJS) | O backend já é API-first, com 71 testes e o motor de cálculo auditável — o ativo mais valioso do projeto. Reescrever em outra linguagem teria custo e risco altos com ganho funcional zero: “backend único refletido em todas as plataformas” é propriedade do desenho API-first, não da linguagem. |
+| **Manter FastAPI** (não migrar para NestJS) | O backend já é API-first, com ampla suíte de testes e o motor de cálculo auditável — o ativo mais valioso do projeto. Reescrever em outra linguagem teria custo e risco altos com ganho funcional zero: “backend único refletido em todas as plataformas” é propriedade do desenho API-first, não da linguagem. |
 | **JWT próprio** (não Supabase) | Autenticação com papéis validados no servidor e trilha de auditoria já existem e são testados. Supabase adicionaria dependência externa e migração de dados sem eliminar o backend (o motor de cálculo continuaria precisando dele). |
 | **React + React Native** (não Flutter) | Reaproveita 100% do frontend web existente e mantém um único ecossistema (TypeScript) com o pacote `@constela/core` compartilhado. Flutter exigiria reescrever ~20 telas em Dart, e Flutter Web (canvas) é inferior para um sistema administrativo cheio de tabelas (acessibilidade, seleção de texto, carga inicial). |
 | **Tauri 2** (não Electron) | O desktop embrulha exatamente o build do `apps/web` (zero telas duplicadas), com binário ~10x menor (WebView do sistema), atualizador embutido e melhor performance. |

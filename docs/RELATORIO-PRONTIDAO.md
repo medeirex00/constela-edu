@@ -20,8 +20,8 @@ Conclusão do roadmap priorizado de robustez/produção. Todos os commits são
   Prometheus em `/metrics`, Sentry opcional (LGPD: `send_default_pii=False`) e
   health checks (`/api/health`, `/live`, `/ready`). Corrigiu o Alembic que
   desativava os loggers em dev.
-- **Testes**: 58 testes Vitest (12 telas + bordas), 15 E2E Playwright contra o
-  sistema real, somados aos 310 de backend — total **383 testes**.
+- **Testes**: dezenas de testes Vitest (web) + suítes de mobile, 7 specs E2E
+  Playwright contra o sistema real, somados à ampla suíte pytest do backend.
 - **Performance**: code-splitting por rota (bundle inicial 132KB → ~74KB gz +
   vendor cacheável), cache do `useApi`, isolamento de modal (memoização),
   janelamento de listas, correção de N+1 (`selectinload`), batch na importação
@@ -44,7 +44,7 @@ Conclusão do roadmap priorizado de robustez/produção. Todos os commits são
   `requirements.txt`, `scripts/seed_e2e.py`, `tests/` (novos).
 - **Web** (`apps/web`): `App.tsx`, `components/Layout.tsx`, `vite.config.ts`,
   `hooks/useApi.ts`+`useMutation.ts`+`useJanela.ts`, `pages/*` (rankings,
-  Matific, Turmas…), `src/test/` (harness + 13 specs), `src/lib/__mocks__/`,
+  Matific, Turmas…), `src/test/` (harness + suítes por tela), `src/lib/__mocks__/`,
   `playwright.config.ts`, `e2e/` (7 specs).
 - **Mobile** (`apps/mobile`): `App.tsx`, `contexto/Autenticacao.tsx`,
   `notificacoes.ts`, `armazenamento/` (cifra + storage + sessão), `filaOffline.ts`,
@@ -87,9 +87,9 @@ Conclusão do roadmap priorizado de robustez/produção. Todos os commits são
 
 | Suíte | Resultado |
 |---|---|
-| Backend `pytest` | **310 passed** · cobertura **91%** |
-| Web `vitest` | **58 passed** |
-| E2E `playwright` | **15 passed** |
+| Backend `pytest` | ampla suíte pytest · cobertura **91%** |
+| Web `vitest` | verde (suítes por tela + bordas) |
+| E2E `playwright` | verde (7 specs) |
 | `ruff check` (backend) | limpo |
 | `tsc` (mobile) + `vite build` (web) | verdes |
 | `pip-audit` (com allowlist) · `npm audit --audit-level=critical` | verdes |
@@ -98,7 +98,7 @@ Conclusão do roadmap priorizado de robustez/produção. Todos os commits são
 
 - **Operabilidade**: dá para monitorar, achar erros por `request_id`, medir
   latência e identificar gargalos (observabilidade + health checks).
-- **Confiabilidade**: 383 testes automatizados travam regressões; o CI barra
+- **Confiabilidade**: centenas de testes automatizados travam regressões; o CI barra
   merges vermelhos (com branch protection ativa).
 - **Segurança**: parsers de upload/formulário atualizados; varredura contínua +
   Dependabot; segredos e dados de crianças protegidos (LGPD).
