@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 aprovado / approved
 - **Padrão / Standard:** [ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md) (16 partes)
-- **Fontes / Sources:** `INDICE.md` (bloco 14, subseções 14.1–14.45 + espelho de decisões em aberto), `_estado-atual/RELATORIO-2026-07-09.md` (as-is: Vercel+Railway, 1 instância, salas/rate-limit em memória, Redis planejado), `docs/quest/01-arquitetura.md` (escala A›B›C, gatilho de Redis, CDN Cloudflare R2), `backend/Dockerfile` + `backend/entrypoint.sh` (não-root, `$PORT`, `alembic upgrade` no boot via `scripts.migrate`), `backend/app/core/migracoes.py` + `backend/alembic/` (base `0001`, stamp-then-upgrade, revisões 0001–0003), `backend/app/core/config.py` (ENV `dev|producao` fail-closed, flag `DOCS_HABILITADOS`, pool de DB, `PUBLIC_BASE_URL`/`QUEST_BASE_URL`, envs de observabilidade), `backend/app/main.py` (`/api/health/live|ready`, `/api/health`, `/metrics`, docs gated por `DOCS_HABILITADOS`), `backend/app/core/observabilidade.py` (logs JSON, Prometheus, Sentry), `backend/app/core/security.py` (Fernet só na chave de API), `backend/app/core/rate_limit.py` (em memória), `docker-compose.yml` + `Caddyfile` + `vercel.json` + `apps/web/nginx.conf` (topologias de deploy), `.env.example` + `backend/.env.example` (catálogo de segredos), `.github/workflows/ci.yml` (CI sem deploy), Seções [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md), memória de produção (`producao-urls`, `constela-alembic-migrations`)
+- **Fontes / Sources:** `INDICE.md` (bloco 14, subseções 14.1–14.45 + espelho de decisões em aberto), `_estado-atual/RELATORIO-2026-07-09.md` (as-is: Vercel+Railway, 1 instância, salas/rate-limit em memória, Redis planejado), `docs/quest/01-arquitetura.md` (escala A›B›C, gatilho de Redis, CDN Cloudflare R2), `backend/Dockerfile` + `backend/entrypoint.sh` (não-root, `$PORT`, `alembic upgrade` no boot via `scripts.migrate`), `backend/app/core/migracoes.py` + `backend/alembic/` (base `0001`, stamp-then-upgrade, revisões 0001–0005 (com 0002a de reparo)), `backend/app/core/config.py` (ENV `dev|producao` fail-closed, flag `DOCS_HABILITADOS`, pool de DB, `PUBLIC_BASE_URL`/`QUEST_BASE_URL`, envs de observabilidade), `backend/app/main.py` (`/api/health/live|ready`, `/api/health`, `/metrics`, docs gated por `DOCS_HABILITADOS`), `backend/app/core/observabilidade.py` (logs JSON, Prometheus, Sentry), `backend/app/core/security.py` (Fernet só na chave de API), `backend/app/core/rate_limit.py` (em memória), `docker-compose.yml` + `Caddyfile` + `vercel.json` + `apps/web/nginx.conf` (topologias de deploy), `.env.example` + `backend/.env.example` (catálogo de segredos), `.github/workflows/ci.yml` (CI) + `deploy.yml` (CD gated por DEPLOY_ENABLED, com aprovação manual), Seções [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md), memória de produção (`producao-urls`, `constela-alembic-migrations`)
 - **Depende de / Depends on:** princípios (P13 servidor é autoridade · P14 ledger auditável · P15 isolamento por escola · P17 piso de desempenho · P18 sem tracking de terceiros) → [01](01-principios-imutaveis.md); **mecanismo** (token dois-mundos, WebSocket+Redis, outbox, ledger, autoridade do gabarito, rotas, caminho de escala A›B›C, desenho do Alembic, **revogação via `token_version`**) → [11](11-arquitetura.md); **política** (retenção legal, base legal, incidentes, **cadência** de rotação, **exigência** de cifrar/reter backup) **+ delegação da operação** de backup/DR/cripto-em-repouso/segredos → [12](12-seguranca-privacidade.md); **taxonomia** de telemetria e a **definição/lógica** do expurgo (a 14 fornece o **agendador** que o executa) → [17](17-telemetria-metricas.md); **valores** de config `quest.*` → [19](19-liveops.md); **pipeline/autoria** de assets (para storage+CDN) → [15](15-arte-audio-assets.md); **formatação** pt-BR de data/tempo → [16](16-localizacao-i18n.md); **ETL** de dados de escola → [20](20-migracao-importacao.md); **comunicação** de manutenção à escola → [21](21-suporte-operacao.md); **estratégia** de teste de carga → [18](18-qa-testes.md).
 
 > **Convenção / Convention:** "§N" = uma das 16 **partes deste capítulo** / one of the 16 **parts of this
@@ -41,7 +41,7 @@ No ecossistema **Hub → Edu → Quest**, o Quest **reusa a identidade do Edu** 
   retenção 14 d) → o caminho **VPS do Edu**. A 14 precisa **fixar o modelo oficial** e desambiguar (§15/ADR-14-A).
 - **Migração no boot** — `entrypoint.sh` roda `python -m scripts.migrate` **uma vez** (antes dos workers, sem
   corrida de DDL) → `app/core/migracoes.py` (`alembic upgrade head`; stamp base `0001` p/ bancos pré-Alembic) →
-  `alembic/versions/{0001,0002,0003}`. O **desenho** do Alembic é da Seção [11](11-arquitetura.md); a 14 **opera**.
+  `alembic/versions/{0001,0002,0002a,0003,0004,0005}`. O **desenho** do Alembic é da Seção [11](11-arquitetura.md); a 14 **opera**.
 - **Config/segredos** — `config.py` (pydantic-settings; `ENV` **fail-closed** em produção: `_validar_producao`
   exige `SECRET_KEY≥32` e `DATABASE_URL` não-sqlite). O `/docs`, `/redoc` e `/openapi.json` ficam **desligados
   por padrão** pela flag `DOCS_HABILITADOS=False` (aplicada em `main.py`, **independente do `ENV`**; ligados só
@@ -54,10 +54,12 @@ No ecossistema **Hub → Edu → Quest**, o Quest **reusa a identidade do Edu** 
   `/metrics` (Prometheus, gated); `observabilidade.py` (logs JSON com `request_id`/`escola_id`/rota via
   contextvars; prometheus-client; Sentry gated; tudo **degradável a no-op**). `rate_limit.py` = **em memória por
   processo** (não distribuído).
-- **CI** — `.github/workflows/ci.yml` (pytest + typecheck/build + validação de `docker build`); **sem job de
-  deploy**. `desktop-release.yml` (instaladores Tauri em tags `v*`).
+- **CI** — `.github/workflows/ci.yml` (pytest + typecheck/build + validação de `docker build`). O **CD** vive em
+  `deploy.yml` (staging/produção, gated por `DEPLOY_ENABLED`, **dormante** até ativação). `desktop-release.yml`
+  (instaladores Tauri em tags `v*`).
 
-**Não existe ainda:** IaC versionada do host de produção; etapa de **CD**; ambiente de **staging**; **backup
+**Não existe ainda:** IaC versionada do host de produção; **CD/staging ATIVADOS** (o `deploy.yml` já existe, mas
+está gated por `DEPLOY_ENABLED` e dormante); **backup
 automatizado da prod Railway** (o serviço do compose é gated e mira o Postgres local); **runbook de DR**, RTO/RPO,
 failover, teste de restauração; **Redis** provisionado (alvo do estágio B da Seção 11); **CDN** próprio;
 **cofre/rotação** de segredos; **agendador** dos jobs de retenção/expurgo. Este capítulo especifica a operação-alvo.
@@ -288,8 +290,9 @@ Cada item é **decisão do dono** (⚠️); os defaults são **propostas** da 14
   **duas realidades** hoje no repo). Confirmar + decidir a **IaC** (ferramenta para versionar Railway/Vercel).
 - ⚠️ **Ambiente de staging (14.4).** Criar staging/homologação separado (hoje só `dev|producao`)? Limites de
   acesso e que dado pode conter.
-- ⚠️ **CD automatizado (14.10).** Adicionar deploy ao pipeline (com portão de aprovação) ou manter deploy
-  manual/auto-Railway?
+- ✅/⚠️ **CD automatizado (14.10).** JÁ EXISTE `deploy.yml` (staging/produção, gated por `DEPLOY_ENABLED`, com
+  aprovação manual no Environment). Resta ao dono ATIVAR (segredos Railway/Vercel + Required reviewers) ou
+  mantê-lo desligado — o mecanismo está no repo, não é mais questão em aberto de arquitetura.
 - ⚠️ **Rotação de segredos (14.9/O11).** **Procedimento e ferramenta** (cofre/secret manager vs. env vars da
   plataforma; janela/comunicação, dado que a rotação da chave de assinatura **invalida os tokens** — `token_version`
   = revogação, Seção [11](11-arquitetura.md)). *A **cadência** é política da Seção [12](12-seguranca-privacidade.md).*
@@ -363,7 +366,7 @@ single FastAPI backend). **Current state (Q0) — already-mature infra foundatio
   **Edu VPS** path. Section 14 must **fix the official model** and disambiguate (§15/ADR-14-A).
 - **Migration on boot** — `entrypoint.sh` runs `python -m scripts.migrate` **once** (before the workers, no DDL
   race) → `app/core/migracoes.py` (`alembic upgrade head`; stamp base `0001` for pre-Alembic DBs) →
-  `alembic/versions/{0001,0002,0003}`. The Alembic **design** is Section [11](11-arquitetura.md)'s; 14 **operates**.
+  `alembic/versions/{0001,0002,0002a,0003,0004,0005}`. The Alembic **design** is Section [11](11-arquitetura.md)'s; 14 **operates**.
 - **Config/secrets** — `config.py` (pydantic-settings; `ENV` **fail-closed** in production: `_validar_producao`
   requires `SECRET_KEY≥32` and non-sqlite `DATABASE_URL`). `/docs`, `/redoc` and `/openapi.json` are **off by
   default** via the `DOCS_HABILITADOS=False` flag (applied in `main.py`, **independent of `ENV`**; enabled only
