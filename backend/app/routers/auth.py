@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_usuario_atual
-from app.core.rate_limit import ip_do_cliente, limitador_conta, limitador_login
+from app.core.rate_limit import (
+    ip_do_cliente,
+    limitador_conta,
+    limitador_login,
+    mascarar_ip,
+)
 from app.core.security import (
     criar_token,
     hash_senha,
@@ -32,7 +37,8 @@ def login(
 ):
     # Aceita e-mail OU nome de usuário (com ou sem o "@" na frente).
     entrada = form.username.lower().strip().lstrip("@")
-    ip = ip_do_cliente(request)
+    ip = ip_do_cliente(request)          # completo: chave do limitador (precisão)
+    ip_log = mascarar_ip(ip)             # mascarado: log de auditoria (LGPD)
 
     usuario = db.execute(
         select(Usuario).where(Usuario.email == entrada)
@@ -53,7 +59,7 @@ def login(
     if limitador_login.bloqueado(chave) or limitador_conta.bloqueado(identidade):
         espera = max(limitador_login.segundos_restantes(chave),
                      limitador_conta.segundos_restantes(identidade))
-        registrar(db, "login.bloqueado", detalhes={"email": identidade, "ip": ip})
+        registrar(db, "login.bloqueado", detalhes={"email": identidade, "ip": ip_log})
         db.commit()
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -67,7 +73,7 @@ def login(
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou",
-                  detalhes={"email": entrada, "ip": ip, "motivo": "conta_inexistente"})
+                  detalhes={"email": entrada, "ip": ip_log, "motivo": "conta_inexistente"})
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
@@ -76,14 +82,14 @@ def login(
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip, "motivo": "senha_incorreta"})
+                  detalhes={"email": identidade, "ip": ip_log, "motivo": "senha_incorreta"})
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
 
     if usuario.status != "ativo":
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip, "motivo": "conta_desativada"})
+                  detalhes={"email": identidade, "ip": ip_log, "motivo": "conta_desativada"})
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuário desativado.")
 
