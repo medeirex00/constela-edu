@@ -4,8 +4,15 @@ FROM python:3.13-slim
 # psycopg (PostgreSQL) roda em modo binário — sem toolchain de compilação
 WORKDIR /app
 
+# Navegador do robô de sincronização (Playwright/Chromium). Instalado como ROOT,
+# com --with-deps (bibliotecas de SO do Chromium), num caminho COMPARTILHADO que
+# o usuário não-root `app` consegue ler em runtime. Sem isto, o robô Matific/
+# Elefante retorna "navegador_indisponivel" (degradação graciosa por design).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "psycopg[binary]==3.2.3"
+RUN pip install --no-cache-dir -r requirements.txt "psycopg[binary]==3.2.3" \
+    && python -m playwright install --with-deps chromium \
+    && chmod -R a+rx /ms-playwright
 
 COPY app ./app
 COPY scripts ./scripts

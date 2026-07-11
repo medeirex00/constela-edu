@@ -122,6 +122,13 @@ for router in (
 # junto com o processo (thread daemon) + no shutdown do app.
 sync_scheduler.iniciar()
 
+# Diagnóstico do robô: verifica UMA vez, em background, se o Playwright abre o
+# Chromium (reportado em /api/health como `automacao_navegador`). Não liga o
+# scheduler nem coleta nada — só valida a infra do navegador.
+from app.core import automacao  # noqa: E402
+
+automacao.iniciar_verificacao()
+
 
 @app.on_event("shutdown")
 def _parar_scheduler_sync() -> None:
@@ -168,6 +175,8 @@ def health():
              "versao": settings.APP_VERSION,
              "banco": "ok" if banco else "inacessivel",
              "sentry": obs.sentry_ativo(),
+             # true/false = robô abre o Chromium; null = ainda verificando no boot.
+             "automacao_navegador": automacao.status()["navegador"],
              "uptime_s": round(time.time() - _INICIO, 1)}
     if not banco:
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=corpo)
