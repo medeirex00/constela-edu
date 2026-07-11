@@ -95,8 +95,13 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
     return itens
 
 
-def alertas_da_escola(db: Session, escola_id: int) -> list[dict]:
-    """Alertas automáticos (PRD §139): situações que pedem atenção do professor."""
+def alertas_da_escola(db: Session, escola_id: int,
+                      serie_m: dict[int, list] | None = None,
+                      serie_e: dict[int, list] | None = None) -> list[dict]:
+    """Alertas automáticos (PRD §139): situações que pedem atenção do professor.
+
+    `serie_m`/`serie_e` podem ser injetados por um chamador que já os carregou
+    (ex.: /sincronizacao mobile), evitando reler as tabelas de snapshot."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -117,8 +122,10 @@ def alertas_da_escola(db: Session, escola_id: int) -> list[dict]:
                Aluno.status == "ativo")
     ).all()
 
-    serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
-    serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    if serie_m is None:
+        serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
+    if serie_e is None:
+        serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
     notas = {
         nota.aluno_id: nota
         for nota in db.execute(

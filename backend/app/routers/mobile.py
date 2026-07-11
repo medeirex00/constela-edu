@@ -101,10 +101,17 @@ def sincronizar(
     escola = db.get(Escola, escola_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
 
-    alertas = insights.alertas_da_escola(db, escola_id)
+    # Carrega UMA vez as varreduras caras (séries de snapshot + dificuldade) e
+    # injeta em todos os consumidores desta request (alertas, mural, evolução) —
+    # antes, cada um relia as tabelas de snapshot (~3x cada por request). Mesma
+    # estratégia do mural/M4.
+    serie_m, serie_e, mapa_dif = evolucao.series_e_dificuldade(db, escola_id)
+
+    alertas = insights.alertas_da_escola(db, escola_id, serie_m=serie_m, serie_e=serie_e)
     if permitidas is None:
         # Acesso total (admin/coordenador): mural da vitrine da escola inteira.
-        eventos_mural = gamificacao.mural(db, escola_id)["eventos"]
+        eventos_mural = gamificacao.mural(
+            db, escola_id, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)["eventos"]
     else:
         # Professor restrito: sem mural (é vitrine da escola inteira, como no
         # web, que o bloqueia com negar_restrito) e alertas só das turmas dele.
@@ -126,7 +133,8 @@ def sincronizar(
                 "nota_evolucao": item.nota_evolucao,
             }
             for item in evolucao.ranking_evolucao(
-                db, escola_id, dias=30, turma_ids=permitidas)[:20]
+                db, escola_id, dias=30, turma_ids=permitidas,
+                serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)[:20]
         ],
         "alertas": alertas,
         "mural": eventos_mural,

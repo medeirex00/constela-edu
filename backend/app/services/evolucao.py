@@ -297,6 +297,20 @@ def _leituras_no_periodo(db: Session, escola_id: int,
     return alunos_com_leituras, dados
 
 
+def series_e_dificuldade(
+    db: Session, escola_id: int,
+) -> tuple[dict[int, list], dict[int, list], dict[tuple[str, str], float]]:
+    """Pré-carrega, UMA vez, as varreduras CARAS e independentes de janela —
+    séries de Matific/Elefante + mapa de dificuldade. Um chamador que faça
+    VÁRIAS leituras derivadas no mesmo request (ex.: /sincronizacao mobile:
+    alertas + mural + ranking de evolução) injeta o resultado nessas funções em
+    vez de cada uma reler as tabelas de snapshot (mesma estratégia do mural/M4)."""
+    serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
+    serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
+    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    return serie_m, serie_e, mapa_dif
+
+
 def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,

@@ -449,7 +449,9 @@ def _melhor_do_ranking(itens) -> dict | None:
     }
 
 
-def mural(db: Session, escola_id: int) -> dict:
+def mural(db: Session, escola_id: int,
+          serie_m: dict | None = None, serie_e: dict | None = None,
+          mapa_dif: dict | None = None) -> dict:
     """Mural da escola: destaques do dia/semana/mês + eventos recentes.
 
     Trabalha em LOTE: todos os snapshots da escola são carregados em 2
@@ -477,9 +479,11 @@ def mural(db: Session, escola_id: int) -> dict:
     # séries + o mapa de dificuldade alimentam as 3 janelas do ranking abaixo
     # (dia/semana/mês), evitando que cada janela reexecute essas varreduras.
     pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
-    series_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
-    series_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
-    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    # Reusa as varreduras injetadas (ex.: /sincronizacao mobile) ou carrega.
+    series_m = serie_m if serie_m is not None else evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
+    series_e = serie_e if serie_e is not None else evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    if mapa_dif is None:
+        mapa_dif = scoring._mapa_dificuldade(db, escola_id)
     nomes = dict(db.execute(
         select(Aluno.id, Aluno.nome).where(Aluno.escola_id == escola_id)
     ).all())

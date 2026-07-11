@@ -137,6 +137,52 @@ def test_sincronizacao_devolve_pacote_completo(cliente, db, escola_completa):
     assert any(alerta["tipo"] == "sem_dados" for alerta in corpo["alertas"])
 
 
+def test_sincronizacao_nao_recarrega_series_por_consumidor(cliente, db, escola_completa):
+    """Item 2 (perf): /sincronizacao carrega as séries de snapshot UMA vez e as
+    injeta em alertas + mural + evolução — antes, cada consumidor relia as
+    tabelas snapshots_matific/elefante (~3x cada por request). Conta os SELECTs
+    de série e confirma o pacote intacto."""
+    from sqlalchemy import event
+
+    from app.models import Importacao, SnapshotElefante, SnapshotMatific
+
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    importacao = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(importacao)
+    db.flush()
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
+                           atividades=20, estrelas=50, pontuacao_media=75))
+    db.add(SnapshotElefante(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
+                            livros_unicos=5, tempo_leitura_min=100,
+                            questoes_tentativas=10, questoes_acertos=8))
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    engine = db.get_bind()
+    contagem = {"matific": 0, "elefante": 0}
+
+    def _contar(_c, _cur, stmt, _p, _ctx, _m):
+        alvo = stmt.lower()
+        if "from snapshots_matific" in alvo:
+            contagem["matific"] += 1
+        if "from snapshots_elefante" in alvo:
+            contagem["elefante"] += 1
+
+    event.listen(engine, "before_cursor_execute", _contar)
+    try:
+        resposta = cliente.get(f"/api/v1/escolas/{escola.id}/sincronizacao")
+    finally:
+        event.remove(engine, "before_cursor_execute", _contar)
+
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.json()["ranking"][0]["nome"] == ana.nome   # resultado intacto
+    # As séries são carregadas 1x (series_e_dificuldade) e injetadas; o dashboard
+    # ainda soma os KPIs por tabela. Margem folgada <= 3 (antes do fix eram ~6+).
+    assert contagem["matific"] <= 3, contagem
+    assert contagem["elefante"] <= 3, contagem
+
+
 def test_sincronizacao_respeita_isolamento_de_escola(cliente, db, escola_completa):
     from app.models import Escola
     outra = Escola(nome="OUTRA", ano_letivo_ativo=2026)
