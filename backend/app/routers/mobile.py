@@ -51,10 +51,18 @@ def registrar_dispositivo(
         registrar(db, "dispositivo.registrado", escola_id=escola_id,
                   usuario_id=usuario.id, detalhes={"plataforma": dados.plataforma})
     else:
-        # O aparelho trocou de dono/escola: atualiza o vínculo
+        # O aparelho trocou de dono/escola: atualiza o vínculo. O token_push é
+        # um segredo do app da vítima (só quem tem o aparelho o conhece), mas a
+        # TROCA DE DONO fica registrada na auditoria para ser rastreável.
+        dono_anterior = dispositivo.usuario_id
         dispositivo.escola_id = escola_id
         dispositivo.usuario_id = usuario.id
         dispositivo.plataforma = dados.plataforma
+        if dono_anterior != usuario.id:
+            registrar(db, "dispositivo.reassociado", escola_id=escola_id,
+                      usuario_id=usuario.id,
+                      detalhes={"plataforma": dados.plataforma,
+                                "dono_anterior": dono_anterior})
     db.commit()
     db.refresh(dispositivo)
     return {"id": dispositivo.id, "plataforma": dispositivo.plataforma}
