@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from jose import jwt
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -132,6 +133,33 @@ def alunos_da_turma(db: Session, escola_id: int, turma: Turma) -> list[Aluno]:
     return list(linhas)
 
 
+def _inserir_credencial_nova(db: Session, escola_id: int, aluno: Aluno) -> QuestCredencialAluno:
+    """Insere a credencial nova com RETRY em colisão de código (TOCTOU): sob
+    concorrência, dois pedidos podem sortear o MESMO código e ambos passarem pela
+    verificação de unicidade; o UNIQUE barra o segundo INSERT. Em vez de estourar
+    500, sorteamos outro código (savepoint isola a falha sem abortar a transação).
+    Se outra transação já criou a credencial DESTE aluno (colisão de aluno_id),
+    devolvemos a existente."""
+    for _ in range(5):
+        try:
+            with db.begin_nested():
+                cred = QuestCredencialAluno(
+                    escola_id=escola_id, aluno_id=aluno.id,
+                    codigo_login=gerar_codigo_login(db), qr_token=gerar_qr_token())
+                db.add(cred)
+                db.flush()
+            return cred
+        except IntegrityError:
+            existente = db.execute(
+                select(QuestCredencialAluno)
+                .where(QuestCredencialAluno.aluno_id == aluno.id)
+            ).scalar_one_or_none()
+            if existente is not None:
+                return existente          # corrida em aluno_id: usa a existente
+            # colisão só de código: a próxima volta sorteia outro
+    raise RuntimeError("Não foi possível criar a credencial única do aluno.")
+
+
 def garantir_credencial_aluno(
     db: Session, escola_id: int, aluno: Aluno, regenerar: bool = False,
     rotacionar_codigo: bool = False,
@@ -153,13 +181,7 @@ def garantir_credencial_aluno(
     ).scalar_one_or_none()
 
     if credencial is None:
-        credencial = QuestCredencialAluno(
-            escola_id=escola_id,
-            aluno_id=aluno.id,
-            codigo_login=gerar_codigo_login(db),
-            qr_token=gerar_qr_token(),
-        )
-        db.add(credencial)
+        credencial = _inserir_credencial_nova(db, escola_id, aluno)
     elif rotacionar_codigo:
         credencial.codigo_login = gerar_codigo_login(db)
         credencial.qr_token = gerar_qr_token()
