@@ -41,7 +41,9 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
       // deixar a criança presa num carrossel vazio). ApiError p/ não vazar
       // "Failed to fetch" em inglês.
       setBases([]);
-      const m = e instanceof ApiError
+      // Rede (status 0) fala a voz da criança; erro do servidor (4xx) traz a
+      // mensagem pt-BR dele. Nunca "Failed to fetch".
+      const m = e instanceof ApiError && e.status !== 0
         ? e.message
         : "Puxa, não consegui trazer os personagens. Toca pra tentar de novo!";
       setErroBases(m); tocar("erro"); narrar(m);
@@ -78,7 +80,9 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
       tocar("sucesso");
       setPasso("nome");
     } catch (e) {
-      const m = e instanceof ApiError
+      // Falha de rede (status 0) fala a voz da criança; erro do servidor (4xx)
+      // traz a mensagem pt-BR específica dele. Nunca o "Failed to fetch" cru.
+      const m = e instanceof ApiError && e.status !== 0
         ? e.message
         : "Não consegui salvar seu personagem. Toca pra tentar de novo!";
       setErroBases(m); tocar("erro"); narrar(m);
@@ -95,7 +99,9 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
       setPasso("pronto");
       window.setTimeout(aoConcluir, 2600);
     } catch (e) {
-      const m = e instanceof ApiError || e instanceof Error ? e.message : "Não deu.";
+      const m = e instanceof ApiError && e.status !== 0
+        ? e.message
+        : "Não consegui salvar agora. Tenta de novo?";
       setErro(m); tocar("erro"); narrar(m);
     } finally { setOcupado(false); }
   }

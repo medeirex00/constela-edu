@@ -93,8 +93,9 @@ export function Vestiario() {
       atualizarPerfil(await trocarAvatar({ [slot]: valor }));
     } catch (e) {
       // Não engolir a falha: mostrar erro e NÃO tocar "sucesso" (antes o chime
-      // de sucesso soava mesmo quando a troca falhava — falso-positivo).
-      setErro(e instanceof ApiError || e instanceof Error ? e.message
+      // de sucesso soava mesmo quando a troca falhava — falso-positivo). Falha
+      // de rede (status 0) usa a voz da criança, não o "Failed to fetch" cru.
+      setErro(e instanceof ApiError && e.status !== 0 ? e.message
         : "Não consegui trocar agora. Tente de novo!");
       tocar("erro");
       return;
@@ -110,7 +111,11 @@ export function Vestiario() {
     if (salvando || novo === perfil?.nome) return;
     setSalvando(true); setErro("");
     try { atualizarPerfil(await escolherNome(novo)); tocar("sucesso"); narrar(`Agora você é ${novo}!`); }
-    catch (e) { setErro(e instanceof ApiError || e instanceof Error ? e.message : "Não deu."); tocar("erro"); }
+    catch (e) {
+      setErro(e instanceof ApiError && e.status !== 0 ? e.message
+        : "Não consegui salvar agora. Tenta de novo?");
+      tocar("erro");
+    }
     finally { setSalvando(false); }
   }
 

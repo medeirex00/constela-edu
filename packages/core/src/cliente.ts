@@ -78,6 +78,22 @@ async function extrairDetalhe(resposta: Response, padrao: string): Promise<strin
   return padrao;
 }
 
+/** Mensagem amigável (pt-BR) de falha de REDE — nunca o "Failed to fetch" cru
+ *  do navegador, que chegava a ser NARRADO para a criança no Quest. */
+export const MENSAGEM_SEM_REDE =
+  "Não foi possível conectar. Verifique a internet e tente de novo.";
+
+async function buscar(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    // fetch só rejeita por falha de REDE (offline, DNS, CORS, servidor fora) —
+    // um TypeError em inglês. Vira um ApiError(0) traduzido: status 0 sinaliza
+    // "transitório" (a UI pode reconectar em vez de tratar como erro final).
+    throw new ApiError(0, MENSAGEM_SEM_REDE);
+  }
+}
+
 async function tratarErro(resposta: Response): Promise<never> {
   if (resposta.status === 401) {
     await limparToken();
@@ -92,7 +108,7 @@ async function tratarErro(resposta: Response): Promise<never> {
 
 export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
   const token = await obterToken();
-  const resposta = await fetch(`${base}${caminho}`, {
+  const resposta = await buscar(`${base}${caminho}`, {
     ...opcoes,
     headers: {
       "Content-Type": "application/json",
@@ -107,7 +123,7 @@ export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise
 /** Envio multipart (upload de arquivos) — a plataforma define o Content-Type. */
 export async function apiUpload<T>(caminho: string, dados: FormData): Promise<T> {
   const token = await obterToken();
-  const resposta = await fetch(`${base}${caminho}`, {
+  const resposta = await buscar(`${base}${caminho}`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: dados,
@@ -121,7 +137,7 @@ export async function apiBlob(
   caminho: string,
 ): Promise<{ blob: Blob; nomeArquivo: string }> {
   const token = await obterToken();
-  const resposta = await fetch(`${base}${caminho}`, {
+  const resposta = await buscar(`${base}${caminho}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!resposta.ok) await tratarErro(resposta);
@@ -132,7 +148,7 @@ export async function apiBlob(
 
 export async function loginRequest(email: string, senha: string) {
   const corpo = new URLSearchParams({ username: email, password: senha });
-  const resposta = await fetch(`${base}/auth/login`, {
+  const resposta = await buscar(`${base}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: corpo.toString(),
