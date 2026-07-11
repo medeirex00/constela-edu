@@ -426,6 +426,9 @@ def test_mascarar_ip_reduz_a_prefixo_e_nunca_levanta():
     assert mascarar_ip("desconhecido") == "desconhecido"  # fallback intacto
     assert mascarar_ip("") == "desconhecido"
     assert mascarar_ip("lixo") == "desconhecido"          # nunca levanta
+    assert mascarar_ip("1.2.3.4:8080") == "1.2.x.x"       # IPv4 com porta NÃO vaza
+    assert mascarar_ip(" 203.0.113.5 ") == "203.0.x.x"    # espaços tolerados
+    assert mascarar_ip("::ffff:1.2.3.4") == "desconhecido"  # IPv4-mapeado mascarado
 
 
 def test_login_grava_ip_mascarado_e_via(cliente, db, escola_completa):

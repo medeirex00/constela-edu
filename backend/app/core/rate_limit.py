@@ -124,12 +124,16 @@ def mascarar_ip(ip: str) -> str:
     """
     if not ip or ip == "desconhecido":
         return ip or "desconhecido"
-    if ":" in ip:  # IPv6 (inclui IPv4-mapeado ::ffff:a.b.c.d)
-        bloco = ip.split(":", 1)[0]
-        return f"{bloco}:x" if bloco else "desconhecido"
-    partes = ip.split(".")
+    ip = ip.strip()
+    # IPv4 PRIMEIRO (aceitando um sufixo ":porta"), ANTES do ramo IPv6 — senão
+    # "1.2.3.4:8080" cairia no ramo IPv6 e vazaria o IPv4 inteiro no log.
+    host = ip.rsplit(":", 1)[0] if ip.count(":") == 1 else ip
+    partes = host.split(".")
     if len(partes) == 4 and all(p.isdigit() for p in partes):
         return f"{partes[0]}.{partes[1]}.x.x"
+    if ":" in ip:  # IPv6 -> só o primeiro bloco (prefixo curto)
+        bloco = ip.split(":", 1)[0]
+        return f"{bloco}:x" if bloco else "desconhecido"
     return "desconhecido"
 
 
