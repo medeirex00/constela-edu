@@ -159,6 +159,28 @@ def test_a2_sincronizacao_mobile_respeita_turmas_do_professor(cenario_professor,
     assert any(a["aluno_id"] == fora.id for a in coord["alertas"])
 
 
+def test_alto_matific_elefante_respeitam_turmas_do_professor(cenario_professor, db):
+    """ALTO (auditoria go-live): GET /matific e /elefante escopam por turma.
+    Professor vê só os alunos das turmas dele; admin e coordenador veem a escola
+    inteira. Sem isso, um professor lia o desempenho de crianças de outras turmas."""
+    c = cenario_professor
+    base = f"/api/v1/escolas/{c['escola'].id}"
+    fora = c["aluno_fora"].nome                 # aluno da turma B (fora do professor)
+    admin = _cliente_como(db, "admin@teste.local", "s3nh4")
+
+    for modulo in ("matific", "elefante"):
+        prof = c["professor"].get(f"{base}/{modulo}").json()
+        nomes = [x["nome"] for x in prof]
+        assert fora not in nomes                          # não vê aluno de outra turma
+        assert len(nomes) == 3                            # só a turma A (3 alunos)
+        assert c["aluno_da_turma"].nome in nomes          # vê o aluno da turma dele
+
+        for total in (admin, c["coordenador"]):           # acesso total inalterado
+            todos = total.get(f"{base}/{modulo}").json()
+            assert fora in [x["nome"] for x in todos]
+            assert len(todos) == 4                        # escola inteira
+
+
 def test_coordenador_tem_acesso_total_a_escola(cenario_professor):
     c = cenario_professor
     base = f"/api/v1/escolas/{c['escola'].id}"

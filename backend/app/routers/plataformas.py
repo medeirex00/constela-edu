@@ -33,23 +33,27 @@ from app.schemas import (
     MatificEdicao,
     NiveisLeituraEdicao,
 )
-from app.services import scoring
+from app.services import permissoes, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Plataformas"])
 
 
-def _linhas_modulo(db: Session, escola_id: int, modelo):
+def _linhas_modulo(db: Session, escola_id: int, modelo,
+                   turma_ids: list[int] | None = None):
     """Alunos ativos do ano letivo com o snapshot mais recente da plataforma.
 
     "Mais recente" pela data_referencia (id desempata): um relatório de
     período antigo importado depois (backfill mensal do Matific) não pode
-    virar o estado atual do módulo."""
+    virar o estado atual do módulo.
+
+    `turma_ids` restringe às turmas informadas (professor vê só as dele);
+    None = escola inteira (admin/coordenador)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     ids = scoring.ids_snapshots_atuais(modelo, escola_id)
-    return db.execute(
+    consulta = (
         select(Aluno, Turma, modelo)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
               & (Matricula.ano_letivo == escola.ano_letivo_ativo))
@@ -57,7 +61,10 @@ def _linhas_modulo(db: Session, escola_id: int, modelo):
         .outerjoin(modelo, (modelo.aluno_id == Aluno.id) & modelo.id.in_(ids))
         .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
         .order_by(Aluno.nome)
-    ).all()
+    )
+    if turma_ids is not None:
+        consulta = consulta.where(Matricula.turma_id.in_(turma_ids))
+    return db.execute(consulta).all()
 
 
 def _aluno_da_escola(db: Session, escola_id: int, aluno_id: int) -> Aluno:
@@ -83,6 +90,8 @@ def modulo_matific(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    # Professor restrito vê só as turmas dele (None = escola inteira p/ admin/coord).
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     return [
         MatificAlunoOut(
             aluno_id=aluno.id, nome=aluno.nome, turma=turma.nome,
@@ -92,7 +101,8 @@ def modulo_matific(
             pontuacao_media=snap.pontuacao_media if snap else 0.0,
             data_referencia=snap.data_referencia if snap else None,
         )
-        for aluno, turma, snap in _linhas_modulo(db, escola_id, SnapshotMatific)
+        for aluno, turma, snap in _linhas_modulo(
+            db, escola_id, SnapshotMatific, turma_ids=permitidas)
     ]
 
 
@@ -146,6 +156,8 @@ def modulo_elefante(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    # Professor restrito vê só as turmas dele (None = escola inteira p/ admin/coord).
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     return [
         ElefanteAlunoOut(
             aluno_id=aluno.id, nome=aluno.nome, turma=turma.nome,
@@ -157,7 +169,8 @@ def modulo_elefante(
             livros_por_nivel=snap.livros_por_nivel if snap else {},
             data_referencia=snap.data_referencia if snap else None,
         )
-        for aluno, turma, snap in _linhas_modulo(db, escola_id, SnapshotElefante)
+        for aluno, turma, snap in _linhas_modulo(
+            db, escola_id, SnapshotElefante, turma_ids=permitidas)
     ]
 
 
