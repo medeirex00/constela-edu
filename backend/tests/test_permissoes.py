@@ -80,6 +80,34 @@ def test_professor_perfil_superficial_e_sem_alunos_de_fora(cenario_professor):
     assert fora.status_code == 404
 
 
+def test_professor_superficial_nao_recebe_nascimento_nem_observacoes(
+        cenario_professor, db):
+    """Superficial = só posição/pontos. data_nascimento e observacoes (campo
+    livre, potencialmente sensível) NÃO saem para o professor — nem na listagem
+    nem no perfil —, mas o coordenador (acesso total) continua vendo tudo."""
+    from datetime import date
+
+    c = cenario_professor
+    base = f"/api/v1/escolas/{c['escola'].id}"
+    aluno = c["aluno_da_turma"]
+    aluno.data_nascimento = date(2018, 5, 4)
+    aluno.observacoes = "anotação sensível sobre a criança"
+    db.commit()
+
+    # Professor: os dois campos vêm zerados na listagem e no perfil.
+    lista = c["professor"].get(f"{base}/alunos").json()["itens"]
+    alvo = next(a for a in lista if a["id"] == aluno.id)
+    assert alvo["data_nascimento"] is None and alvo["observacoes"] is None
+    perfil = c["professor"].get(f"{base}/alunos/{aluno.id}/perfil").json()
+    assert perfil["aluno"]["data_nascimento"] is None
+    assert perfil["aluno"]["observacoes"] is None
+
+    # Coordenador (acesso total): continua enxergando os dados reais.
+    coord = c["coordenador"].get(f"{base}/alunos/{aluno.id}/perfil").json()
+    assert coord["aluno"]["data_nascimento"] == "2018-05-04"
+    assert coord["aluno"]["observacoes"] == "anotação sensível sobre a criança"
+
+
 def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
     c = cenario_professor
     base = f"/api/v1/escolas/{c['escola'].id}"

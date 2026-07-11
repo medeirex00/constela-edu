@@ -2,6 +2,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -48,6 +49,16 @@ def _ano_ativo(db: Session, escola_id: int) -> int:
     return escola.ano_letivo_ativo
 
 
+def _blindar_superficial(saida: AlunoOut) -> AlunoOut:
+    """Professor vê APENAS dados superficiais do aluno (posição no ranking e
+    pontos — modelo de permissões, permissoes.py). data_nascimento e observacoes
+    (campo livre, potencialmente sensível) pertencem ao cadastro, não à visão
+    superficial: são zerados antes de sair na resposta."""
+    saida.data_nascimento = None
+    saida.observacoes = None
+    return saida
+
+
 # --- Alunos -----------------------------------------------------------------
 
 @router.get("/alunos", response_model=dict)
@@ -91,11 +102,14 @@ def listar_alunos(
         consulta.order_by(Aluno.nome).offset((pagina - 1) * por_pagina).limit(por_pagina)
     ).all()
 
+    superficial = not permissoes.acesso_total(usuario)
     itens = []
     for aluno, turma in linhas:
         item = AlunoOut.model_validate(aluno)
         item.turma = turma.nome
         item.ano_escolar = turma.ano_escolar
+        if superficial:
+            _blindar_superficial(item)
         itens.append(item)
     return {"total": total, "pagina": pagina, "por_pagina": por_pagina, "itens": itens}
 
@@ -168,6 +182,8 @@ def perfil_aluno(
     ).scalar_one_or_none()
 
     saida = AlunoOut.model_validate(aluno)
+    if superficial:
+        _blindar_superficial(saida)
     ano_escolar = ""
     if matricula:
         saida.turma = matricula[1].nome
@@ -804,10 +820,18 @@ def criar_turma(
     turma = Turma(escola_id=escola_id, **{**dados.model_dump(),
                                           "nome": dados.nome.strip()})
     db.add(turma)
-    db.flush()
-    registrar(db, "turma.criada", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="turma", entidade_id=turma.id, detalhes={"nome": turma.nome})
-    db.commit()
+    try:
+        db.flush()
+        registrar(db, "turma.criada", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="turma", entidade_id=turma.id, detalhes={"nome": turma.nome})
+        db.commit()
+    except IntegrityError:
+        # Corrida na criação manual (dois gestores, mesma turma): o índice único
+        # uq_turma_escola_ano_nome barra a 2ª — vira 409, não 500 nem duplicata.
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Já existe a turma “{dados.nome.strip()}” no ano letivo "
+                            f"{dados.ano_letivo}.")
     db.refresh(turma)
     return _turma_out(db, turma)
 
@@ -835,7 +859,12 @@ def atualizar_turma(
         setattr(turma, chave, valor)
     registrar(db, "turma.atualizada", escola_id=escola_id, usuario_id=usuario.id,
               entidade="turma", entidade_id=turma.id, detalhes=campos)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # renomear para uma turma que já existe (índice único)
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Já existe a turma “{nome}” no ano letivo {ano_letivo}.")
     db.refresh(turma)
     return _turma_out(db, turma)
 
