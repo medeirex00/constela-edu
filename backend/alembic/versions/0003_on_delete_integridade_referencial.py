@@ -23,7 +23,10 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0003"
-down_revision: Union[str, None] = "0002"
+# 0002a repara bancos pré-Alembic carimbados em 0001 sem as tabelas quest_*/
+# responsaveis_alunos — precisa existir ANTES desta migração, que adiciona FKs
+# a essas tabelas. Em bancos corretos a 0002a é no-op.
+down_revision: Union[str, None] = "0002a"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
