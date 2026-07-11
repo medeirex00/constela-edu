@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@v4
       # 1) Código/dependências no repositório.
       - name: Trivy — filesystem
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -97,7 +97,7 @@ jobs:
           docker build -t sgpe-backend ./backend
           docker build -t sgpe-web -f apps/web/Dockerfile .
       - name: Trivy — imagem do backend
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: sgpe-backend
@@ -106,7 +106,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
       - name: Trivy — imagem do web
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: sgpe-web
@@ -117,7 +117,7 @@ jobs:
       # 3) Relatório completo (HIGH+) para a aba Security, sem bloquear.
       - name: Trivy — SARIF (código, HIGH+)
         if: ${{ !cancelled() }}
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
