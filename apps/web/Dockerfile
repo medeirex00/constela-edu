@@ -12,6 +12,11 @@ COPY apps/web ./apps/web
 RUN npm run build --workspace @constela/web
 
 FROM nginx:1.27-alpine
+# Aplica os patches de segurança do SO Alpine (OpenSSL/zlib/musl/libxml2/...) que
+# a tag base ainda não reconstruiu. O gate Trivy de imagem reprova em HIGH/CRITICAL
+# COM correção disponível; este upgrade traz os pacotes já corrigidos no rebuild.
+# --no-cache: busca o índice mais recente e não deixa cache do apk na camada.
+RUN apk --no-cache upgrade
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /repo/apps/web/dist /usr/share/nginx/html
 EXPOSE 80
