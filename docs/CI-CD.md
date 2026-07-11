@@ -16,16 +16,19 @@ Nenhum job usa `continue-on-error` nos gates de qualidade: **qualquer erro
 reprova o run** ("falha obrigatória em erro"). Com a proteção de branch (abaixo),
 um run vermelho **barra o merge**.
 
-### `ci.yml` — 6 jobs (rodam em paralelo)
+### `ci.yml` — 8 jobs (rodam em paralelo)
 1. **Lint** — `ruff check backend` (config em `backend/ruff.toml`, focada em bugs
    reais) + `typecheck` (tsc) de core, quest-core e mobile.
-2. **Testes backend** — `pytest` com cobertura (`--cov=app`), publica
-   `coverage.xml` como artefato (e envia ao Codecov se `CODECOV_TOKEN` existir).
-3. **Testes web** — `vitest run --coverage`, publica a cobertura.
-4. **Build** — `vite build` do web e do quest (garante que compila para produção).
-5. **E2E** — Playwright: sobe backend + frontend reais e testa no Chromium;
+2. **Testes backend** — `pytest` com cobertura (`--cov=app`, gate `fail_under=88`),
+   publica `coverage.xml` como artefato (e envia ao Codecov se `CODECOV_TOKEN` existir).
+3. **Migrações Alembic (PostgreSQL real)** — `alembic upgrade` num Postgres de
+   serviço; pega incompatibilidade de dialeto que o SQLite dos testes não vê.
+4. **Testes web** — `vitest run --coverage`, publica a cobertura.
+5. **Testes mobile** — `vitest` da lógica pura do app (cifra AES, fila offline, retry).
+6. **Build** — `vite build` do web e do quest (garante que compila para produção).
+7. **E2E** — Playwright: sobe backend + frontend reais e testa no Chromium;
    publica o `playwright-report`.
-6. **Imagens Docker** — `docker build` do backend e do web (valida os Dockerfiles).
+8. **Imagens Docker** — `docker build` do backend e do web (valida os Dockerfiles).
 
 ### `security.yml` — 3 jobs
 - **pip-audit** — audita `backend/requirements.txt`. Reprova em qualquer CVE,
