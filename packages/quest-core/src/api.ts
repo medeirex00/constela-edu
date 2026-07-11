@@ -92,10 +92,13 @@ export function personagensBase(): Promise<Record<string, PersonagemBase>> {
   return api<Record<string, PersonagemBase>>("/quest/perfil/personagens");
 }
 
-/** Equipa um ou mais slots do avatar (cor, rosto, chapéu, veículo). */
-export function trocarAvatar(
-  mudancas: Partial<Pick<Avatar, "cor" | "rosto" | "chapeu" | "veiculo">>,
-): Promise<PerfilQuest> {
+/**
+ * Equipa um ou mais slots do avatar. Aceita QUALQUER slot de `Avatar`
+ * (pele, cabelo, top, baixo, chapéu, costas, aura, pet, veículo…) — o
+ * antigo `Pick` só admitia 4 slots (e citava `rosto`, que nem existe mais
+ * no tipo), rejeitando no compilador trocas que o backend aceita.
+ */
+export function trocarAvatar(mudancas: Partial<Avatar>): Promise<PerfilQuest> {
   return api<PerfilQuest>("/quest/perfil/avatar", {
     method: "PATCH",
     body: JSON.stringify(mudancas),
