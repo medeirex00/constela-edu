@@ -2,7 +2,7 @@ import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import Layout from "./components/Layout";
-import { Carregando } from "./components/ui";
+import { Botao, Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
 
@@ -47,9 +47,25 @@ const ConfigConquistas = lazy(() => import("./pages/configuracoes/ConfigConquist
 const Configuracoes = lazy(() => import("./pages/configuracoes/Configuracoes"));
 const Metricas = lazy(() => import("./pages/configuracoes/Metricas"));
 
+function ReconectarSessao({ aoTentar }: { aoTentar: () => void }) {
+  // Falha transitória ao abrir a sessão: o token continua válido, então
+  // oferecemos reconectar em vez de mandar a pessoa refazer o login.
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+      <p className="text-lg font-medium">Não consegui conectar ao servidor.</p>
+      <p className="max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+        Sua sessão continua válida — pode ter sido uma queda momentânea de rede
+        ou o servidor iniciando. Tente novamente.
+      </p>
+      <Botao onClick={aoTentar}>Tentar de novo</Botao>
+    </div>
+  );
+}
+
 function AreaProtegida() {
-  const { usuario, carregando } = useApp();
+  const { usuario, carregando, falhaSessao, tentarReconectar } = useApp();
   if (carregando) return <Carregando texto="Abrindo o sistema..." />;
+  if (falhaSessao && !usuario) return <ReconectarSessao aoTentar={tentarReconectar} />;
   if (!usuario) return <Navigate to="/login" replace />;
   // Provider acima do Layout/rotas: a importação em lote segue rodando
   // enquanto o usuário navega (indicador flutuante no Layout).

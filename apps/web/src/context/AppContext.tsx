@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { api, guardarToken, limparToken, loginRequest, obterToken } from "../lib/api";
+import { ApiError, api, guardarToken, limparToken, loginRequest, obterToken } from "../lib/api";
 import type { Escola, Usuario } from "../lib/types";
 
 type Tema = "claro" | "escuro";
@@ -19,6 +19,10 @@ interface AppContexto {
   escolaAtual: Escola | null;
   tema: Tema;
   carregando: boolean;
+  // Falha TRANSITÓRIA ao abrir a sessão (rede/5xx), com o token preservado —
+  // a UI mostra "reconectar" em vez de deslogar.
+  falhaSessao: boolean;
+  tentarReconectar: () => void;
   entrar: (email: string, senha: string) => Promise<void>;
   sair: () => void;
   selecionarEscola: (id: number) => void;
@@ -43,6 +47,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const [tema, setTema] = useState<Tema>(temaInicial);
   const [carregando, setCarregando] = useState(true);
+  const [falhaSessao, setFalhaSessao] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", tema === "escuro");
@@ -64,15 +69,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  useEffect(() => {
-    if (!obterToken()) {
+  // Abre a sessão a partir do token guardado. Distingue sessão INVÁLIDA
+  // (401 → desloga) de falha TRANSITÓRIA (rede/5xx/timeout — cold start do
+  // backend, deploy, blip): o transitório é retentado com backoff e, se
+  // persistir, MANTÉM o token e sinaliza `falhaSessao` (a UI oferece
+  // reconectar). Antes, qualquer erro apagava o token e forçava novo login.
+  const iniciarSessao = useCallback(async () => {
+    setFalhaSessao(false); // limpa antes do early-return: "Tentar de novo" sem
+    if (!obterToken()) {   // token deve cair em /login, não travar em Reconectar
       setCarregando(false);
       return;
     }
-    carregarSessao()
-      .catch(() => limparToken())
-      .finally(() => setCarregando(false));
+    setCarregando(true);
+    const atrasosMs = [500, 1500, 3000];
+    for (let tentativa = 0; ; tentativa++) {
+      try {
+        await carregarSessao();
+        setFalhaSessao(false);
+        setCarregando(false);
+        return;
+      } catch (erro) {
+        if (erro instanceof ApiError && erro.status === 401) {
+          limparToken(); // sessão realmente inválida (o core já redireciona)
+          setCarregando(false);
+          return;
+        }
+        if (tentativa >= atrasosMs.length) {
+          setFalhaSessao(true); // transitório persistente: token preservado
+          setCarregando(false);
+          return;
+        }
+        await new Promise((resolver) => setTimeout(resolver, atrasosMs[tentativa]));
+      }
+    }
   }, [carregarSessao]);
+
+  useEffect(() => {
+    void iniciarSessao();
+  }, [iniciarSessao]);
 
   const entrar = useCallback(
     async (email: string, senha: string) => {
@@ -114,6 +148,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         escolaAtual,
         tema,
         carregando,
+        falhaSessao,
+        tentarReconectar: iniciarSessao,
         entrar,
         sair,
         selecionarEscola,
