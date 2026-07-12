@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   Clock,
   History,
   RefreshCw,
@@ -112,6 +113,10 @@ export default function Sincronizacao() {
   const dashboard = useApi<Dashboard>(usuario?.is_global ? "/sync/dashboard" : null);
 
   const [execLog, setExecLog] = useState<number | null>(null);
+  // Alertas e Histórico ficam recolhíveis (clique no cabeçalho abre/fecha) —
+  // fechados por padrão para a tela ficar limpa.
+  const [verAlertas, setVerAlertas] = useState(false);
+  const [verHistorico, setVerHistorico] = useState(false);
   const logs = useApi<LogLinha[]>(
     base && execLog ? `${base}/logs?execucao_id=${execLog}&limite=200` : null);
 
@@ -237,11 +242,21 @@ export default function Sincronizacao() {
       )}
       {(alertas.dados?.length ?? 0) > 0 && (
         <Card className="p-5">
-          <h2 className="mb-3 flex items-center gap-2 text-base font-semibold tracking-tight">
+          <button
+            type="button"
+            onClick={() => setVerAlertas((v) => !v)}
+            aria-expanded={verAlertas}
+            className="flex w-full items-center gap-2 text-base font-semibold tracking-tight"
+          >
             <AlertTriangle size={17} className="text-amber-500" />
             Alertas ({alertas.dados!.length})
-          </h2>
-          <ul className="space-y-2">
+            <ChevronDown
+              size={17}
+              className={`ml-auto text-zinc-400 transition-transform ${verAlertas ? "rotate-180" : ""}`}
+            />
+          </button>
+          {verAlertas && (
+          <ul className="mt-3 space-y-2">
             {alertas.dados!.map((a) => (
               <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
                 <span className="text-sm">
@@ -258,16 +273,26 @@ export default function Sincronizacao() {
               </li>
             ))}
           </ul>
-          {resolver.erro && <div className="mt-2"><Mensagem tipo="erro">{resolver.erro.message}</Mensagem></div>}
+          )}
+          {verAlertas && resolver.erro && <div className="mt-2"><Mensagem tipo="erro">{resolver.erro.message}</Mensagem></div>}
         </Card>
       )}
 
       {/* Histórico */}
       <Card className="p-5">
-        <h2 className="mb-3 flex items-center gap-2 text-base font-semibold tracking-tight">
+        <button
+          type="button"
+          onClick={() => setVerHistorico((v) => !v)}
+          aria-expanded={verHistorico}
+          className="flex w-full items-center gap-2 text-base font-semibold tracking-tight"
+        >
           <History size={17} className="text-zinc-400" /> Histórico de sincronizações
-        </h2>
-        {historico.carregando && !historico.dados ? (
+          <ChevronDown
+            size={17}
+            className={`ml-auto text-zinc-400 transition-transform ${verHistorico ? "rotate-180" : ""}`}
+          />
+        </button>
+        {verHistorico && (historico.carregando && !historico.dados ? (
           <Carregando texto="Carregando histórico…" />
         ) : (historico.dados?.length ?? 0) === 0 ? (
           <Vazio titulo="Nenhuma sincronização ainda"
@@ -308,7 +333,7 @@ export default function Sincronizacao() {
               </tbody>
             </table>
           </div>
-        )}
+        ))}
       </Card>
 
       {/* Logs da execução — painel lateral */}
