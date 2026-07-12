@@ -5,14 +5,25 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Navegador do robô de sincronização (Playwright/Chromium). Instalado como ROOT,
-# com --with-deps (bibliotecas de SO do Chromium), num caminho COMPARTILHADO que
-# o usuário não-root `app` consegue ler em runtime. Sem isto, o robô Matific/
-# Elefante retorna "navegador_indisponivel" (degradação graciosa por design).
+# num caminho COMPARTILHADO (/ms-playwright) legível pelo usuário não-root `app`
+# em runtime. NÃO usamos `playwright install --with-deps`: o `install-deps` do
+# Playwright pede pacotes de fonte com NOMES DO UBUNTU (ttf-unifont,
+# ttf-ubuntu-font-family) que não existem no Debian slim (falha com exit 100).
+# Em vez disso, instalamos as libs de SO do Chromium com os nomes CORRETOS do
+# Debian (t64 resolvido via Provides) e só baixamos o browser. Sem isto, o robô
+# Matific/Elefante retorna "navegador_indisponivel" (degradação graciosa).
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt "psycopg[binary]==3.2.3" \
-    && python -m playwright install --with-deps chromium \
-    && chmod -R a+rx /ms-playwright
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 \
+        libcups2 libdrm2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+        libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+        libxkbcommon0 libxrandr2 libglib2.0-0 fonts-liberation fonts-unifont \
+    && python -m playwright install chromium \
+    && chmod -R a+rx /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY app ./app
 COPY scripts ./scripts
