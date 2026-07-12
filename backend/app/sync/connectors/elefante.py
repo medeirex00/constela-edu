@@ -275,6 +275,32 @@ class ConectorElefante(ConectorNavegador):
         return type(obj).__name__
 
     @staticmethod
+    def _diag_alunos(cursos: list) -> str:
+        """Diagnóstico SEM PII de onde estão os alunos numa lista de turmas: para
+        a 1ª turma, mostra o TIPO de cada campo candidato a lista de alunos e, se
+        for lista, as CHAVES do 1º elemento (nunca os valores/nomes) + o tamanho.
+        Se for número, é contagem (os alunos vêm de outro endpoint)."""
+        if not (isinstance(cursos, list) and cursos and isinstance(cursos[0], dict)):
+            return "sem turma para inspecionar"
+        curso = cursos[0]
+        partes = []
+        for chave in ("student", "students", "alunos", "studentList", "studentCount"):
+            if chave not in curso:
+                continue
+            v = curso[chave]
+            if isinstance(v, list):
+                elem = (sorted(v[0].keys())[:12] if v and isinstance(v[0], dict)
+                        else (type(v[0]).__name__ if v else "vazia"))
+                partes.append(f"{chave}=lista[{len(v)}] campos_do_1o={elem}")
+            elif isinstance(v, (int, float, bool)):
+                partes.append(f"{chave}={type(v).__name__}={v}")  # nº = contagem, não PII
+            elif isinstance(v, dict):
+                partes.append(f"{chave}=dict{sorted(v.keys())[:12]}")
+            else:
+                partes.append(f"{chave}={type(v).__name__}")
+        return "; ".join(partes) or "nenhum campo de aluno reconhecível"
+
+    @staticmethod
     def _api_elefante(url: str) -> bool:
         """Resposta da API do Elefante (qualquer host *.elefanteletrado.com.br),
         ignorando i18n/assets e trackers de terceiros (userway/cdn)."""
@@ -305,12 +331,24 @@ class ConectorElefante(ConectorNavegador):
                 if not cid:
                     continue
                 sids: list[str] = []
-                alunos = curso.get("student")
-                if alunos is None:
-                    alunos = curso.get("students") or []
+                # A lista de alunos pode vir sob chaves diferentes; cada aluno pode
+                # ter o id sob chaves diferentes. Aceita tudo que for LISTA (se for
+                # int, é contagem — cai fora e o diagnóstico avisa).
+                alunos = None
+                for chave in ("student", "students", "alunos", "studentList",
+                              "studentsList", "studentList "):
+                    v = curso.get(chave)
+                    if isinstance(v, list):
+                        alunos = v
+                        break
                 if isinstance(alunos, list):
                     for al in alunos:
-                        v = _num(al.get("id") or al.get("studentId")) if isinstance(al, dict) else _num(al)
+                        if isinstance(al, dict):
+                            v = _num(al.get("id") or al.get("studentId")
+                                     or al.get("userId") or al.get("personId")
+                                     or al.get("alunoId"))
+                        else:
+                            v = _num(al)
                         if v and v not in sids:
                             sids.append(v)
                 mapa.setdefault(cid, [])
@@ -368,16 +406,21 @@ class ConectorElefante(ConectorNavegador):
                         sid = str(e["id"])
                         if sid not in escolas:
                             escolas.append(sid)
-        # Candidatos: sem params (o JWT já carrega a escola) e por escola.
+        # Candidatos (o 1º que trouxer ALUNO vence): sem params (o JWT já carrega a
+        # escola); por escola; e por escola COM os filtros que a UI usa (period/
+        # products) — os alunos aninhados podem só popular com esses parâmetros.
         ep = f"{base}{_EP_CURSOS}"
+        filtros = f"period={_PERIODO_TUDO}&products=1"
         candidatos = [("GET", ep)]
         for sid in escolas:
             candidatos.append(("GET", f"{ep}?schoolId={sid}"))
+            candidatos.append(("GET", f"{ep}?schoolId={sid}&{filtros}"))
         resumo: list[str] = []
         # Guarda o melhor "turmas sem alunos" — se NENHUM candidato trouxer alunos,
-        # ele vira diagnóstico (forma dos campos → onde estão os alunos), em vez de
+        # ele vira diagnóstico (forma dos campos + onde estão os alunos), em vez de
         # um falso-sucesso "N turmas / 0 alunos".
         melhor_forma = ""
+        melhor_corpo: list = []
         for metodo, url in candidatos:
             res = await nav.avaliar(self._js_fetch(url, metodo, headers, creds))
             res = res if isinstance(res, dict) else {}
@@ -398,12 +441,14 @@ class ConectorElefante(ConectorNavegador):
                         f"{total} aluno(s) (host={base}, "
                         f"auth={'sim' if auth else 'cookie'}).")
                     return mapa
-                if mapa and not melhor_forma:         # turmas, mas 0 alunos: guarda a forma
+                if mapa and not melhor_corpo:         # turmas, mas 0 alunos: guarda p/ diagnóstico
                     melhor_forma = self._forma_json(corpo)
-        if melhor_forma:
+                    melhor_corpo = corpo
+        if melhor_corpo:
             log("navegacao", "warn",
-                f"[Elefante] API direta trouxe turmas mas 0 alunos (alunos sob chave "
-                f"inesperada?). forma={melhor_forma} host={base} tentativas={resumo}")
+                f"[Elefante] API direta trouxe turmas mas 0 alunos. forma={melhor_forma} "
+                f"| alunos: {self._diag_alunos(melhor_corpo)} | host={base} "
+                f"tentativas={resumo}")
             return {}
         log("navegacao", "warn",
             f"[Elefante] API direta não trouxe turmas. host={base} "

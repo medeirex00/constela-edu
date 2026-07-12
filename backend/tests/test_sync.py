@@ -279,6 +279,39 @@ def test_elefante_sincronizar_via_api_direta(monkeypatch):
     assert "via API direta" in " | ".join(etapas)
 
 
+def test_parse_courses_students_aceita_chaves_alternativas():
+    """O id do aluno pode vir sob chave diferente de 'id' (studentId/userId) e a
+    lista sob chave diferente de 'student' — o parser reconhece as duas coisas."""
+    from app.sync.connectors.elefante import ConectorElefante as C
+    caps = [{"url": "https://x/course/get-courses-students", "json": [
+        {"id": 10, "studentList": [{"studentId": 111}, {"studentId": 222}]},
+        {"id": 20, "student": [{"userId": 333}]},
+    ]}]
+    mapa = C._parse_courses_students(caps)
+    assert mapa == {"10": ["111", "222"], "20": ["333"]}
+
+
+def test_parse_courses_students_student_contagem_nao_quebra():
+    """Se 'student' vier como NÚMERO (contagem, não lista), não extrai aluno e não
+    quebra — o diagnóstico é quem sinaliza que os alunos vêm de outro endpoint."""
+    from app.sync.connectors.elefante import ConectorElefante as C
+    caps = [{"url": "https://x/course/get-courses-students",
+             "json": [{"id": 10, "student": 25}]}]
+    mapa = C._parse_courses_students(caps)
+    assert mapa == {"10": []}
+
+
+def test_diag_alunos_sem_pii():
+    """O diagnóstico mostra TIPO e CHAVES (nunca valores/nomes de aluno)."""
+    from app.sync.connectors.elefante import ConectorElefante as C
+    # lista de alunos: só as chaves, jamais o nome
+    d = C._diag_alunos([{"id": 1, "student": [{"id": 9, "name": "Fulano Secreto"}]}])
+    assert "lista[1]" in d and "id" in d and "name" in d
+    assert "Fulano" not in d and "Secreto" not in d
+    # contagem: mostra o número (não é PII)
+    assert "student=int=25" in C._diag_alunos([{"id": 1, "student": 25}])
+
+
 def test_login_detecta_mfa_2fa():
     """Se após o envio aparece tela de verificação em duas etapas (2FA/OTP), o
     conector dá erro ESPECÍFICO (código 'mfa') orientando conta sem 2FA / import
