@@ -202,6 +202,13 @@ def test_diagnosticar_login_sem_credenciais(plataforma):
     ok = asyncio.run(Classe(_fabrica(NavegadorFake()))
                      .diagnosticar_login(_contexto()))
     assert ok["formulario_encontrado"] is True
+    # O diagnóstico confirma os TRÊS alvos do preenchimento/envio (usuário,
+    # senha e botão) — assim "preencher usuário e senha" e "submeter" ficam
+    # validados no ambiente real SEM credenciais.
+    assert ok["usuario_encontrado"] is True
+    assert ok["senha_encontrada"] is True
+    assert ok["botao_encontrado"] is True
+    assert ok["pre_passos_ok"] is True
     assert ok["bloqueio_detectado"] is False
     assert ok["erro"] is None
     assert ok["plataforma"] == plataforma

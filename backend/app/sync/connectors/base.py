@@ -139,6 +139,8 @@ class ConectorNavegador(Conector):
         sem precisar de contas das plataformas. Devolve um dicionário simples."""
         cfg = self._config_login()
         r = {"plataforma": self.plataforma, "formulario_encontrado": False,
+             "usuario_encontrado": False, "senha_encontrada": False,
+             "botao_encontrado": False, "pre_passos_ok": True,
              "bloqueio_detectado": False, "url": cfg["url"], "erro": None}
         try:
             async with self._sessao(contexto) as nav:
@@ -146,10 +148,22 @@ class ConectorNavegador(Conector):
                 r["url"] = await nav.url_atual()
                 r["bloqueio_detectado"] = await nav.visivel(_SEL_BLOQUEIO)
                 for passo in cfg["pre_passos"]:
+                    # clica-se-existir; se aparecer mas o clique falhar, registra.
                     if await nav.esperar(passo, timeout_s=5):
-                        await nav.clicar(passo)
-                r["formulario_encontrado"] = await nav.esperar(
+                        try:
+                            await nav.clicar(passo)
+                        except Exception:  # noqa: BLE001
+                            r["pre_passos_ok"] = False
+                # Confirma que os TRÊS alvos do preenchimento/envio resolvem para
+                # um elemento VISÍVEL — valida "preencher usuário e senha" e
+                # "submeter o formulário" SEM credenciais.
+                r["usuario_encontrado"] = await nav.esperar(
                     cfg["sel_usuario"], timeout_s=min(contexto.timeout_s, 20))
+                r["senha_encontrada"] = await nav.esperar(cfg["sel_senha"], timeout_s=5)
+                r["botao_encontrado"] = await nav.esperar(cfg["sel_entrar"], timeout_s=5)
+                r["formulario_encontrado"] = (
+                    r["usuario_encontrado"] and r["senha_encontrada"]
+                    and r["botao_encontrado"])
                 r["url"] = await nav.url_atual()
                 if not r["bloqueio_detectado"]:
                     r["bloqueio_detectado"] = await nav.visivel(_SEL_BLOQUEIO)
