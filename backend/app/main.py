@@ -179,6 +179,8 @@ def health():
              "automacao_navegador": automacao.status()["navegador"],
              # Diagnóstico (sem credenciais) das páginas de login das plataformas.
              "login_paginas": automacao.status().get("login"),
+             # IP/ASN de saída do robô (evidência: datacenter x residencial).
+             "egress": automacao.status().get("egress"),
              "uptime_s": round(time.time() - _INICIO, 1)}
     if not banco:
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=corpo)

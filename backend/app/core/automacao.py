@@ -18,13 +18,39 @@ import threading
 logger = logging.getLogger("constela.automacao")
 
 # None = ainda verificando; True/False = resultado do boot. `login` guarda o
-# diagnóstico (sem credenciais) das páginas de login de cada plataforma.
-_estado: dict = {"navegador": None, "detalhe": None, "login": None}
+# diagnóstico (sem credenciais) das páginas de login de cada plataforma;
+# `egress` guarda o IP/ASN de saída do robô (evidência: datacenter vs residencial).
+_estado: dict = {"navegador": None, "detalhe": None, "login": None, "egress": None}
 
 
 def status() -> dict:
     """Estado atual da verificação (cópia — imutável para o chamador)."""
     return dict(_estado)
+
+
+def _diagnosticar_egress() -> None:
+    """Descobre o IP de SAÍDA do robô e seu provedor (ASN/org). É a evidência
+    concreta de que a coleta sai por um IP de DATACENTER (Railway) — o que
+    derruba a nota do reCAPTCHA v3 do Matific e faz o login com senha válida ser
+    recusado. Um único GET a um serviço público de geo-IP, sem credenciais."""
+    import json
+    import urllib.request
+
+    for url in ("https://ipinfo.io/json", "https://ipapi.co/json/"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "constela-diag/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
+                d = json.loads(resp.read().decode("utf-8"))
+            _estado["egress"] = {
+                "ip": d.get("ip"),
+                "org": d.get("org") or d.get("asn") or d.get("network"),
+                "cidade": d.get("city"), "regiao": d.get("region"),
+                "pais": d.get("country") or d.get("country_code"),
+            }
+            return
+        except Exception:  # noqa: BLE001 — tenta o próximo serviço
+            continue
+    _estado["egress"] = {"erro": "nao_foi_possivel_descobrir_o_ip"}
 
 
 def _diagnosticar_paginas_login() -> None:
@@ -55,6 +81,9 @@ def _diagnosticar_paginas_login() -> None:
 
 
 def _verificar() -> None:
+    # Descobre o IP/ASN de saída ANTES do resto (independe do Chromium) — é a
+    # evidência do datacenter que explica a recusa do reCAPTCHA v3 do Matific.
+    _diagnosticar_egress()
     try:
         from playwright.sync_api import sync_playwright  # import tardio
         with sync_playwright() as p:
