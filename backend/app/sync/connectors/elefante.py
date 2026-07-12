@@ -89,6 +89,29 @@ _SEL_EXPORTAR = ("button:has-text('Exportar'), a:has-text('Exportar'), "
 # rápido e dar diagnóstico. Sobe (ou vira lote com cursor) após confirmar a cadeia.
 _LIMITE_ALUNOS = 6
 
+# Endpoint interno que lista turmas + alunos aninhados (host prod-ecs-apiadmin…).
+_EP_CURSOS = "/course/get-courses-students"
+
+# CHAMA a API interna direto da PÁGINA autenticada (in-page fetch). Usado quando o
+# SPA não dispara /course/get-courses-students sozinho — ele só o faz depois de
+# selecionar a escola e clicar "Pesquisar" (corrida). Em vez de clicar em
+# componentes Angular frágeis, reproduzimos a chamada com o MESMO token que o SPA
+# já mandou. page.evaluate aguarda a promise; devolve status/corpo (sem PII).
+# credentials: 'omit' quando há Authorization (evita conflito CORS '*'+credenciais);
+# 'include' quando a auth é por cookie (sem header capturado).
+_JS_FETCH_TMPL = r"""(async () => {
+  try {
+    const r = await fetch(__URL__, { method: __METHOD__,
+      credentials: __CREDS__, headers: __HEADERS__ });
+    let body = null;
+    try { body = await r.json(); } catch (e) { body = null; }
+    return { ok: r.ok, status: r.status,
+             tipo: Array.isArray(body) ? 'list' : (body === null ? 'null' : typeof body),
+             n: Array.isArray(body) ? body.length : 0, body: body };
+  } catch (e) { return { ok: false, status: 0, tipo: 'erro',
+                         erro: String(e).slice(0, 160), body: null }; }
+})()"""
+
 # Diagnóstico da tela do aluno quando o Exportar não aparece: quais botões há?
 _JS_PAGINA_ALUNO = r"""(() => {
   const t = (e) => (e.textContent || '').trim().slice(0, 20);
@@ -296,6 +319,97 @@ class ConectorElefante(ConectorNavegador):
                         mapa[cid].append(s)
         return mapa
 
+    @staticmethod
+    def _origem(url: str) -> str:
+        """scheme://host de uma URL (base da API interna capturada)."""
+        from urllib.parse import urlsplit
+        p = urlsplit(url or "")
+        return f"{p.scheme}://{p.netloc}" if p.netloc else ""
+
+    @staticmethod
+    def _js_fetch(url: str, metodo: str, headers: dict, creds: str) -> str:
+        """Monta o fetch in-page com os valores injetados de forma segura
+        (json.dumps → sem quebrar aspas nem template)."""
+        return (_JS_FETCH_TMPL
+                .replace("__URL__", json.dumps(url))
+                .replace("__METHOD__", json.dumps(metodo))
+                .replace("__HEADERS__", json.dumps(headers))
+                .replace("__CREDS__", json.dumps(creds)))
+
+    async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
+        """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students
+        (depende de selecionar escola + Pesquisar — corrida), chama a API interna
+        DIRETO da página autenticada. Descobre host + token do tráfego que SEMPRE
+        dispara (/school/active-schools) e reusa o MESMO Authorization. Sem clicar
+        em nada. Devolve {course_id: [student_ids]} (ou {})."""
+        api = [c for c in caps if self._api_elefante(c["url"])]
+        if not api:
+            return {}
+        # Base da API (prod-ecs-apiadmin…): origem de uma resposta de dados dela.
+        base = ""
+        for c in api:
+            o = self._origem(c["url"])
+            if o and ("apiadmin" in o or "/school" in c["url"] or "/course" in c["url"]):
+                base = o
+                break
+        base = base or self._origem(api[0]["url"])
+        if not base:
+            return {}
+        # Token que o SPA mandou (mesma sessão, segundos atrás).
+        auth = next((c.get("req_auth") for c in api if c.get("req_auth")), "")
+        headers = {"Authorization": auth} if auth else {}
+        creds = "omit" if auth else "include"
+        # Escolas (id) de /school/active-schools — a maioria das contas tem 1.
+        escolas: list[str] = []
+        for c in api:
+            if "active-schools" in c["url"] and isinstance(c.get("json"), list):
+                for e in c["json"]:
+                    if isinstance(e, dict) and str(e.get("id", "")).isdigit():
+                        sid = str(e["id"])
+                        if sid not in escolas:
+                            escolas.append(sid)
+        # Candidatos: sem params (o JWT já carrega a escola) e por escola.
+        ep = f"{base}{_EP_CURSOS}"
+        candidatos = [("GET", ep)]
+        for sid in escolas:
+            candidatos.append(("GET", f"{ep}?schoolId={sid}"))
+        resumo: list[str] = []
+        # Guarda o melhor "turmas sem alunos" — se NENHUM candidato trouxer alunos,
+        # ele vira diagnóstico (forma dos campos → onde estão os alunos), em vez de
+        # um falso-sucesso "N turmas / 0 alunos".
+        melhor_forma = ""
+        for metodo, url in candidatos:
+            res = await nav.avaliar(self._js_fetch(url, metodo, headers, creds))
+            res = res if isinstance(res, dict) else {}
+            det = f"{res.get('status')}/{res.get('tipo')}({res.get('n')})"
+            if res.get("erro"):                       # CORS/rede: mostra a causa real
+                det += f" {res['erro']}"
+            resumo.append(f"{metodo} …{url.split('elefanteletrado.com.br')[-1][:44]}"
+                          f" → {det}")
+            corpo = res.get("body")
+            if isinstance(corpo, list) and corpo:
+                mapa = self._parse_courses_students([{"url": ep, "json": corpo}])
+                # Só é SUCESSO se veio ALUNO — {cid: []} é truthy mas inútil; nesse
+                # caso segue tentando o próximo candidato (ex.: ?schoolId=).
+                if mapa and any(mapa.values()):
+                    total = sum(len(v) for v in mapa.values())
+                    log("navegacao", "info",
+                        f"[Elefante] cursos via API direta: {len(mapa)} turma(s), "
+                        f"{total} aluno(s) (host={base}, "
+                        f"auth={'sim' if auth else 'cookie'}).")
+                    return mapa
+                if mapa and not melhor_forma:         # turmas, mas 0 alunos: guarda a forma
+                    melhor_forma = self._forma_json(corpo)
+        if melhor_forma:
+            log("navegacao", "warn",
+                f"[Elefante] API direta trouxe turmas mas 0 alunos (alunos sob chave "
+                f"inesperada?). forma={melhor_forma} host={base} tentativas={resumo}")
+            return {}
+        log("navegacao", "warn",
+            f"[Elefante] API direta não trouxe turmas. host={base} "
+            f"auth={'sim' if auth else 'nao'} escolas={escolas} tentativas={resumo}")
+        return {}
+
     async def _enumerar(self, nav, log, url: str, tipo: str,
                         excluir: frozenset = frozenset()) -> list[str]:
         """Enumera ids (turma/aluno) navegando p/ `url` e capturando a API JSON
@@ -396,12 +510,20 @@ class ConectorElefante(ConectorNavegador):
                     codigo="falha_auth", recuperavel=True)
             log("navegacao", "info", f"[Elefante] Painel logado em {atual}.")
 
-            # Turmas + alunos vêm da API /course/get-courses-students (capturada
-            # ao abrir a tela de turma). Parse PRECISO: turma.id + turma.student[].
+            # Turmas + alunos vêm da API /course/get-courses-students. Ao abrir a
+            # tela de turma o SPA às vezes já a dispara (fast-path); quando NÃO
+            # dispara (precisa selecionar a escola e "Pesquisar" — corrida), nós
+            # CHAMAMOS a API interna direto da página autenticada, reusando o token
+            # do tráfego que sempre roda (/school/active-schools). Parse PRECISO:
+            # turma.id + turma.student[].
             caps = await nav.coletar_respostas(f"{_URL_APP}/reports/course", timeout_s=25)
             await self._assentar(nav)
             mapa = self._parse_courses_students(caps)
-            if not mapa:
+            # "Turmas sem alunos" ({cid: []}) NÃO conta como sucesso — cai no
+            # fallback da API direta (que pode trazer os alunos com ?schoolId=).
+            if not any(mapa.values()):
+                mapa = await self._cursos_alunos_via_api(nav, log, caps)
+            if not any(mapa.values()):
                 formas = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
                            self._forma_json(c.get("json")))
                           for c in caps if self._api_elefante(c["url"])][:8]

@@ -37,7 +37,9 @@ class Navegador(Protocol):
     async def avaliar(self, expressao: str): ...
     # Navega e captura os corpos JSON das respostas XHR/fetch — revela a API
     # interna do SPA (ex.: lista de turmas/alunos do Elefante Angular) quando os
-    # ids não estão no HTML. Devolve [{"url":..., "json":...}].
+    # ids não estão no HTML. Devolve [{"url", "json", "method", "status",
+    # "req_auth"}] — o Authorization da requisição permite reusar a mesma sessão
+    # para chamar a API interna direto (in-page fetch).
     async def coletar_respostas(self, url: str, timeout_s: int = 25) -> list: ...
     async def baixar(self, seletor: str,
                      timeout_s: int = 60) -> tuple[bytes, str]: ...
@@ -193,7 +195,16 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
         for r in capturadas:
             try:
                 if "json" in (r.headers or {}).get("content-type", ""):
-                    saida.append({"url": r.url, "json": await r.json()})
+                    req = r.request
+                    # Além do corpo: método, status e o Authorization DA REQUISIÇÃO.
+                    # O conector reusa esse token para CHAMAR a API interna direto
+                    # (in-page fetch) quando o SPA não dispara o endpoint sozinho —
+                    # sem depender de clicar em componentes Angular frágeis.
+                    saida.append({
+                        "url": r.url, "json": await r.json(),
+                        "method": getattr(req, "method", "GET"),
+                        "status": getattr(r, "status", None),
+                        "req_auth": (req.headers or {}).get("authorization", "")})
             except Exception:  # noqa: BLE001
                 pass
         return saida

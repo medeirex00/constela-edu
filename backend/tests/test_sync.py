@@ -240,6 +240,45 @@ def test_elefante_sincronizar_coleta_por_aluno(monkeypatch):
     assert "aluno(s) no total" in " | ".join(etapas)
 
 
+def test_elefante_sincronizar_via_api_direta(monkeypatch):
+    """Se o SPA NÃO dispara /course/get-courses-students sozinho (só /school/
+    active-schools aparece), o conector CHAMA a API interna direto da página
+    autenticada (in-page fetch, reusando o token) e ainda coleta os alunos."""
+    from app.sync.connectors import elefante
+    monkeypatch.setattr(elefante, "_SETTLE_S", 0)
+
+    class NavApiDireta(NavegadorFake):
+        async def url_atual(self):
+            return "https://admin.elefanteletrado.com.br/reports/menu"
+
+        async def coletar_respostas(self, url, timeout_s=25):
+            # A navegação só disparou o seletor de escolas (com o token no
+            # Authorization) — NÃO as turmas. É o cenário da execução #9.
+            return [{
+                "url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/school/active-schools",
+                "json": [{"id": 987, "fantasyName": "EMEI", "productIds": [1]}],
+                "method": "GET", "status": 200, "req_auth": "Bearer TOKEN-abc"}]
+
+        async def avaliar(self, expressao):
+            # O fetch in-page da API de cursos devolve as turmas + alunos; qualquer
+            # outra avaliação cai no fake padrão (ids/Exportar).
+            if "fetch(" in expressao and "get-courses-students" in expressao:
+                assert "Bearer TOKEN-abc" in expressao   # reusou o token real
+                return {"ok": True, "status": 200, "tipo": "list", "n": 1,
+                        "body": [{"id": 511434, "name": "5B",
+                                  "student": [{"id": 4427356, "name": "Aluno X"}]}]}
+            return await super().avaliar(expressao)
+
+    etapas: list[str] = []
+    ctx = Contexto(escola_id=1, execucao_id=None,
+                   log=lambda e, n, m: etapas.append(m))
+    con = elefante.ConectorElefante(_fabrica(NavApiDireta(logado=True)))
+    arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
+    assert len(arquivos) == 1
+    assert arquivos[0].formato_hint == "leituras"
+    assert "via API direta" in " | ".join(etapas)
+
+
 def test_login_detecta_mfa_2fa():
     """Se após o envio aparece tela de verificação em duas etapas (2FA/OTP), o
     conector dá erro ESPECÍFICO (código 'mfa') orientando conta sem 2FA / import
