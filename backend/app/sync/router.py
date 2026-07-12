@@ -7,11 +7,14 @@ resposta jamais inclui senha (o cofre só devolve status).
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("constela.sync")
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
@@ -25,7 +28,7 @@ from app.models.sincronizacao import (
 )
 from app.services.audit import registrar
 from app.sync import connectors, scheduler, service, vault
-from app.sync.interfaces import Contexto, Credenciais
+from app.sync.interfaces import Contexto, Credenciais, ResultadoValidacao
 from app.sync.schemas import (
     AlertaOut,
     ConfigIn,
@@ -127,7 +130,19 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     db.commit()
 
     conector = connectors.obter(plataforma)
-    resultado = await conector.testar_credenciais(cred, _ctx_efemero(escola_id))
+    try:
+        resultado = await conector.testar_credenciais(cred, _ctx_efemero(escola_id))
+    except Exception:  # noqa: BLE001 — validação NUNCA derruba o salvamento (500)
+        # Rede de segurança: os conectores já tratam falhas internamente
+        # (retornam ok=False), mas nenhuma exceção pode virar 500 aqui — a
+        # credencial já foi gravada. Log técnico p/ diagnóstico, sem senha.
+        logger.warning("Erro inesperado ao validar credenciais de %s (escola %s)",
+                       plataforma, escola_id, exc_info=True)
+        resultado = ResultadoValidacao(
+            ok=False,
+            mensagem=("Credenciais salvas, mas não foi possível validar o login "
+                      "agora. Tente validar novamente mais tarde."),
+            codigo="erro_navegador")
     # Relê a linha DEPOIS do await (I/O longo): não sobrescreve um status que
     # uma execução concorrente possa ter mudado nesse intervalo (lost update).
     linha = vault.obter_linha(db, escola_id, plataforma) or linha

@@ -40,6 +40,7 @@ interface MatriculasResultado {
   turmas_criadas: number;
   alunos_criados: number;
   alunos_atualizados: number;
+  alunos_fora_lista?: number;
   avisos: string[];
 }
 
@@ -108,7 +109,20 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
                 <Badge tom="ok">{resultado.turmas_criadas} turma(s) criada(s)</Badge>
                 <Badge tom="ok">{resultado.alunos_criados} aluno(s) novo(s)</Badge>
                 <Badge tom="neutro">{resultado.alunos_atualizados} atualizado(s)</Badge>
+                {(resultado.alunos_fora_lista ?? 0) > 0 && (
+                  <Badge tom="alerta">
+                    {resultado.alunos_fora_lista} fora da lista piloto
+                  </Badge>
+                )}
               </div>
+              {(resultado.alunos_fora_lista ?? 0) > 0 && (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                  {resultado.alunos_fora_lista} aluno(s) não constam mais na lista e
+                  foram marcados como <strong>fora da lista piloto</strong> — continuam
+                  cadastrados (nada foi apagado). Reative, transfira ou arquive cada um
+                  quando quiser, na turma correspondente.
+                </p>
+              )}
               {resultado.avisos.length > 0 && (
                 <ul className="mt-2 list-inside list-disc text-xs text-amber-700 dark:text-amber-300">
                   {resultado.avisos.slice(0, 8).map((a, i) => <li key={i}>{a}</li>)}

@@ -10,7 +10,7 @@ import { useNavigate } from "react-router-dom";
 const DESTINOS: Record<string, string> = {
   "1": "/",
   "2": "/ranking",
-  "3": "/evolucao",
+  "3": "/ranking?ver=evolucao",
   "4": "/alunos",
   "5": "/importacoes",
   "6": "/conquistas",

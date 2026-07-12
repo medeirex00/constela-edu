@@ -29,7 +29,7 @@ interface ItemPeriodo {
   };
 }
 
-export default function RankingGeral() {
+export default function RankingGeral({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
   const [turmaId, setTurmaId] = useState("");
@@ -78,19 +78,12 @@ export default function RankingGeral() {
 
   return (
     <div>
-      <PageHeader
-        titulo="Ranking Geral"
-        descricao="Todo o histórico mostra a nota acumulada; escolha um período para classificar apenas pelo que foi feito no intervalo."
-      />
-
-      <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
-        <span>Veja também:</span>
-        <Link to="/ranking-leitura" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Leitura</Link>
-        <span>·</span>
-        <Link to="/evolucao" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Ranking de Evolução</Link>
-        <span>·</span>
-        <Link to="/premiacoes" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">Premiações</Link>
-      </div>
+      {!embutido && (
+        <PageHeader
+          titulo="Ranking Geral"
+          descricao="Todo o histórico mostra a nota acumulada; escolha um período para classificar apenas pelo que foi feito no intervalo."
+        />
+      )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />

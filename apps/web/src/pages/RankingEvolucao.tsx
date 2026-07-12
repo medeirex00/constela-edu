@@ -26,7 +26,7 @@ interface ItemEvolucao {
   };
 }
 
-export default function RankingEvolucao() {
+export default function RankingEvolucao({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "30dias" });
   const [turmaId, setTurmaId] = useState("");
@@ -51,10 +51,12 @@ export default function RankingEvolucao() {
 
   return (
     <div>
-      <PageHeader
-        titulo="Ranking de Evolução"
-        descricao="Quem mais cresceu no período — independente da nota acumulada. Usa os mesmos pesos configuráveis aplicados aos ganhos."
-      />
+      {!embutido && (
+        <PageHeader
+          titulo="Ranking de Evolução"
+          descricao="Quem mais cresceu no período — independente da nota acumulada. Usa os mesmos pesos configuráveis aplicados aos ganhos."
+        />
+      )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />

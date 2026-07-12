@@ -29,7 +29,6 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
-  TrendingUp,
   Trophy,
   Upload,
   UserCog,
@@ -83,10 +82,9 @@ const GRUPOS: GrupoNav[] = [
   {
     chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [
       { rotulo: "Premiações", caminho: "/premiacoes", icone: Award },
+      // Ranking Geral agora reúne Geral/Leitura/Matemática/Evolução num seletor
+      // interno (a própria tela troca o conteúdo, sem abas separadas).
       { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
-      { rotulo: "Ranking de Leitura", caminho: "/ranking-leitura", icone: BookOpen },
-      { rotulo: "Ranking de Matemática", caminho: "/ranking-matematica", icone: Calculator },
-      { rotulo: "Ranking de Evolução", caminho: "/evolucao", icone: TrendingUp },
       { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows, gestao: true },
     ],
   },

@@ -55,7 +55,15 @@ class Aluno(Base):
     foto_url: Mapped[str | None] = mapped_column(String(500))
     data_nascimento: Mapped[date | None] = mapped_column(default=None)
     numero_chamada: Mapped[int | None] = mapped_column(default=None)
+    # ativo | arquivado | excluido | fora_lista_piloto. Todas as consultas de
+    # visão (rankings/relatórios/dashboards) filtram por "ativo", então qualquer
+    # outro valor esconde o aluno SEM apagá-lo (reversível).
     status: Mapped[str] = mapped_column(String(20), default="ativo")
+    # True quando o aluno veio (ou foi casado) por uma importação da Lista
+    # Piloto. Só estes entram na reconciliação incremental: quem some de uma
+    # nova lista vira "fora_lista_piloto"; alunos criados à mão ou por upload
+    # (Matific/Elefante) NUNCA são afetados.
+    da_lista_piloto: Mapped[bool] = mapped_column(default=False)
     observacoes: Mapped[str | None] = mapped_column(String(1000))
     # Ficha cadastral livre (JSON): dados da planilha de matrículas da escola
     # que não têm coluna própria — RA, RM, responsável, endereço, telefone,

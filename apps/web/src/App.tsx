@@ -31,12 +31,9 @@ const PainelPublicoConfig = lazy(() => import("./pages/PainelPublicoConfig"));
 const PerfilAluno = lazy(() => import("./pages/PerfilAluno"));
 const Premiacoes = lazy(() => import("./pages/Premiacoes"));
 const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
-const RankingEvolucao = lazy(() => import("./pages/RankingEvolucao"));
 const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
-const RankingGeral = lazy(() => import("./pages/RankingGeral"));
-const RankingLeitura = lazy(() => import("./pages/RankingLeitura"));
-const RankingMatematica = lazy(() => import("./pages/RankingMatematica"));
+const Rankings = lazy(() => import("./pages/Rankings"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -93,10 +90,12 @@ export default function App() {
         <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
         <Route element={<AreaProtegida />}>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/ranking" element={<RankingGeral />} />
-          <Route path="/evolucao" element={<RankingEvolucao />} />
-          <Route path="/ranking-leitura" element={<RankingLeitura />} />
-          <Route path="/ranking-matematica" element={<RankingMatematica />} />
+          <Route path="/ranking" element={<Rankings />} />
+          {/* Tela única de Ranking Geral com seletor; rotas antigas viram
+              deep-links para a aba correspondente (atalhos/bookmarks seguem). */}
+          <Route path="/evolucao" element={<Navigate to="/ranking?ver=evolucao" replace />} />
+          <Route path="/ranking-leitura" element={<Navigate to="/ranking?ver=leitura" replace />} />
+          <Route path="/ranking-matematica" element={<Navigate to="/ranking?ver=matematica" replace />} />
           <Route path="/comparador" element={<Comparador />} />
           <Route path="/premiacoes" element={<Premiacoes />} />
           <Route path="/escola" element={<VisaoEscola />} />

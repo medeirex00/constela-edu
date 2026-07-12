@@ -14,7 +14,7 @@ import { useJanela } from "../hooks/useJanela";
 import { numero, tempoLeitura } from "../lib/formato";
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
-export default function RankingLeitura() {
+export default function RankingLeitura({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
@@ -37,10 +37,12 @@ export default function RankingLeitura() {
 
   return (
     <div>
-      <PageHeader
-        titulo="Ranking de Leitura"
-        descricao="Livros, pontos de dificuldade e tempo de leitura somados apenas no período escolhido."
-      />
+      {!embutido && (
+        <PageHeader
+          titulo="Ranking de Leitura"
+          descricao="Livros, pontos de dificuldade e tempo de leitura somados apenas no período escolhido."
+        />
+      )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />

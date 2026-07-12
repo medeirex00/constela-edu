@@ -110,6 +110,25 @@ def test_testar_credenciais_ok_e_erro(plataforma):
     assert not ruim.ok and ruim.codigo == "senha_invalida"
 
 
+@pytest.mark.parametrize("plataforma", ["matific", "elefante"])
+def test_testar_credenciais_erro_cru_do_navegador_nao_propaga(plataforma):
+    """Se o navegador lança uma exceção CRUA (seletor mudou/timeout — NÃO
+    ErroConector), testar_credenciais devolve ok=False claro (codigo
+    'erro_navegador') em vez de estourar — a causa raiz do 500 em produção."""
+    class NavegadorQuebra(NavegadorFake):
+        async def preencher(self, seletor, valor):
+            # imita o erro do Playwright: cita o seletor, nunca o valor digitado
+            raise RuntimeError(f"Timeout 30000ms waiting for selector {seletor}")
+
+    Classe = type(connectors.obter(plataforma))
+    res = asyncio.run(Classe(_fabrica(NavegadorQuebra()))
+                      .testar_credenciais(Credenciais(usuario="u", senha="p-secreta"),
+                                          _contexto()))
+    assert res.ok is False
+    assert res.codigo == "erro_navegador"
+    assert "p-secreta" not in res.mensagem          # não vaza a senha na mensagem
+
+
 def test_conector_nao_vaza_senha_no_log():
     registros: list[str] = []
     ctx = Contexto(escola_id=1, execucao_id=None,
@@ -332,6 +351,58 @@ def test_api_salvar_credenciais_valida_e_status(cliente, escola_completa, monkey
     # aparece no histórico
     hist = cliente.get(f"/api/v1/escolas/{e}/sync/historico").json()
     assert any(x["plataforma"] == "matific" for x in hist)
+
+
+def test_api_salvar_credenciais_nunca_500_em_erro_de_navegador(
+        cliente, escola_completa, monkeypatch):
+    """Regressão do 500 em produção: quando a validação do login estoura no
+    navegador (seletor mudou/timeout), o PUT responde 200 com ok=False e
+    mensagem clara — a credencial FICA salva, sem vazar a senha, sem 500."""
+    from app.sync import connectors, service
+
+    e = escola_completa["escola"].id
+
+    class NavegadorQuebra(NavegadorFake):
+        async def ir_para(self, url):
+            raise RuntimeError("net::ERR_TIMED_OUT ao abrir a página de login")
+
+    ConectorReal = type(connectors.obter("matific"))    # conector REAL, browser fake
+    monkeypatch.setitem(connectors._REGISTRO, "matific",
+                        ConectorReal(_fabrica(NavegadorQuebra())))
+    monkeypatch.setattr(service, "disparar_em_thread", lambda _id: None)
+
+    r = cliente.put(f"/api/v1/escolas/{e}/sync/credenciais/matific",
+                    json={"usuario": "prof@x", "senha": "senha-secreta"})
+    assert r.status_code == 200, r.text
+    corpo = r.json()
+    assert corpo["ok"] is False
+    assert corpo["codigo"] == "erro_navegador"
+    assert "senha-secreta" not in (corpo["mensagem"] or "")
+
+    # a credencial FOI gravada (fica como configurada/invalida, revalidável)
+    st = cliente.get(f"/api/v1/escolas/{e}/sync/status").json()
+    matific = next(p for p in st["plataformas"] if p["plataforma"] == "matific")
+    assert matific["credencial_status"] == "invalida"
+    assert st["integracao_configurada"] is True
+
+
+def test_api_salvar_credenciais_conector_fora_do_contrato_nao_da_500(
+        cliente, escola_completa, monkeypatch):
+    """Rede de segurança do endpoint: mesmo um conector que viole o contrato e
+    estoure em testar_credenciais não pode virar 500."""
+    from app.sync import connectors
+
+    e = escola_completa["escola"].id
+
+    class ConectorEstoura(ConectorFake):
+        async def testar_credenciais(self, cred, ctx):
+            raise RuntimeError("boom inesperado")
+
+    monkeypatch.setitem(connectors._REGISTRO, "matific", ConectorEstoura())
+    r = cliente.put(f"/api/v1/escolas/{e}/sync/credenciais/matific",
+                    json={"usuario": "u", "senha": "p"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
 
 
 def test_api_config_agenda_calcula_proxima(cliente, escola_completa):

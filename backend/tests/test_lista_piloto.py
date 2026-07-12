@@ -218,6 +218,132 @@ def test_reimportar_atualiza_sem_duplicar(cliente, db, escola_completa):
 
 
 # --------------------------------------------------------------------------
+# Atualização INCREMENTAL da Lista Piloto: quem some vira "fora_lista_piloto"
+# --------------------------------------------------------------------------
+
+def _planilha_piloto(nome_turma, alunos):
+    """Planilha de UMA turma com `alunos` = [(nº, ra, nome), ...]."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = nome_turma
+    linhas = [[num, 4000 + i, ra, nome, date(2018, 1, 1), "RESP", "RUA X",
+               "BAIRRO", "", "", "", "", "M", "PARDA", "SIM"]
+              for i, (num, ra, nome) in enumerate(alunos)]
+    _aba(ws, nome_turma, "TARDE", "PAULA", 300396614, linhas)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def _files(conteudo, nome="Lista.xlsx"):
+    return {"arquivo": (nome, conteudo, CT_XLSX)}
+
+
+def _aluno(db, nome):
+    return db.execute(select(Aluno).where(Aluno.nome == nome)).scalar_one()
+
+
+def test_reimportar_marca_ausentes_como_fora_da_lista_sem_apagar(
+        cliente, db, escola_completa):
+    """Atualização incremental: aluno que some da nova lista vira
+    'fora_lista_piloto' (continua no banco, nada é apagado); reimportar com ele
+    de volta REATIVA; reimportar a MESMA lista não marca ninguém (idempotente)."""
+    escola_id = escola_completa["escola"].id
+    base = f"/api/v1/escolas/{escola_id}/importacoes/matriculas/confirmar"
+
+    lista_cheia = _planilha_piloto("2º Ano A", [
+        (1, "111-1", "ANA PILOTO UM"),
+        (2, "222-2", "BRUNO PILOTO DOIS"),
+        (3, "333-3", "CARLA PILOTO TRES")])
+
+    # 1ª importação: cria os 3 e estabelece a associação com o piloto.
+    r1 = cliente.post(base, files=_files(lista_cheia)).json()
+    assert r1["alunos_criados"] == 3 and r1["alunos_fora_lista"] == 0
+
+    # 2ª importação SEM Bruno e Carla → marcados fora, NÃO apagados.
+    lista_reduzida = _planilha_piloto("2º Ano A", [(1, "111-1", "ANA PILOTO UM")])
+    r2 = cliente.post(base, files=_files(lista_reduzida))
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["alunos_fora_lista"] == 2
+    assert "fora da lista piloto" in r2.json()["mensagem"]
+
+    db.expire_all()
+    assert db.execute(select(func.count()).select_from(Aluno).where(
+        Aluno.nome.in_(["BRUNO PILOTO DOIS", "CARLA PILOTO TRES"]))).scalar_one() == 2
+    bruno = _aluno(db, "BRUNO PILOTO DOIS")
+    assert bruno.status == "fora_lista_piloto" and bruno.da_lista_piloto is True
+    # Ana continua ativa (segue na lista).
+    assert _aluno(db, "ANA PILOTO UM").status == "ativo"
+    # Aluno da FIXTURE (não veio do piloto) permanece intacto.
+    fixture = _aluno(db, "Ana Beatriz Souza")
+    assert fixture.status == "ativo" and fixture.da_lista_piloto is False
+
+    # 3ª importação com todos de volta → Bruno e Carla REATIVADOS.
+    r3 = cliente.post(base, files=_files(lista_cheia))
+    assert r3.status_code == 200
+    assert r3.json()["alunos_fora_lista"] == 0
+    db.expire_all()
+    assert _aluno(db, "BRUNO PILOTO DOIS").status == "ativo"
+    assert _aluno(db, "CARLA PILOTO TRES").status == "ativo"
+
+    # 4ª importação IDÊNTICA → ninguém sai (idempotente).
+    r4 = cliente.post(base, files=_files(lista_cheia))
+    assert r4.json()["alunos_fora_lista"] == 0
+    assert r4.json()["alunos_criados"] == 0
+
+
+def test_fora_da_lista_nao_toca_aluno_manual_nem_de_upload(
+        cliente, db, escola_completa):
+    """A reconciliação só afeta alunos do piloto (da_lista_piloto=True). Um
+    aluno criado à mão OU por upload (Matific/Elefante) matriculado no ano nunca
+    é marcado 'fora_lista_piloto', mesmo ausente da lista."""
+    escola_id = escola_completa["escola"].id
+    base = f"/api/v1/escolas/{escola_id}/importacoes/matriculas/confirmar"
+
+    # importa uma lista piloto (estabelece o piloto)
+    cliente.post(base, files=_files(_planilha_piloto("2º Ano A", [
+        (1, "111-1", "ANA PILOTO UM"), (2, "222-2", "BRUNO PILOTO DOIS")])))
+    # cadastra um aluno MANUAL (da_lista_piloto=False por padrão) na mesma turma
+    turma_id = db.execute(select(Turma.id).where(
+        Turma.escola_id == escola_id, Turma.nome == "2º Ano A")).scalar_one()
+    manual = cliente.post(f"/api/v1/escolas/{escola_id}/alunos",
+                          json={"nome": "MANUEL CADASTRO MANUAL", "turma_id": turma_id})
+    assert manual.status_code == 201, manual.text
+
+    # nova lista SEM Bruno e SEM o manual → só Bruno (piloto) sai.
+    r = cliente.post(base, files=_files(_planilha_piloto("2º Ano A", [
+        (1, "111-1", "ANA PILOTO UM")]))).json()
+    assert r["alunos_fora_lista"] == 1        # só o Bruno (piloto)
+    db.expire_all()
+    assert _aluno(db, "BRUNO PILOTO DOIS").status == "fora_lista_piloto"
+    assert _aluno(db, "MANUEL CADASTRO MANUAL").status == "ativo"   # intacto
+
+
+def test_reconciliacao_escopada_as_turmas_do_arquivo(cliente, db, escola_completa):
+    """Subir a planilha de UMA turma NÃO tira da lista os alunos de OUTRA turma
+    que nem foi enviada — a reconciliação é escopada às turmas do arquivo."""
+    escola_id = escola_completa["escola"].id
+    base = f"/api/v1/escolas/{escola_id}/importacoes/matriculas/confirmar"
+
+    # DUAS turmas piloto, importadas separadamente.
+    cliente.post(base, files=_files(_planilha_piloto("2º Ano A", [
+        (1, "a1", "ANA A UM"), (2, "a2", "BRUNO A DOIS")])))
+    cliente.post(base, files=_files(_planilha_piloto("2º Ano B", [
+        (1, "b1", "CARLA B UM"), (2, "b2", "DAVI B DOIS")])))
+
+    # Reimporta SÓ a turma A, sem Bruno. Só Bruno (turma A) sai; a turma B, que
+    # nem foi enviada, permanece 100% intacta.
+    r = cliente.post(base, files=_files(_planilha_piloto("2º Ano A", [
+        (1, "a1", "ANA A UM")]))).json()
+    assert r["alunos_fora_lista"] == 1
+    db.expire_all()
+    assert _aluno(db, "BRUNO A DOIS").status == "fora_lista_piloto"
+    assert _aluno(db, "ANA A UM").status == "ativo"
+    assert _aluno(db, "CARLA B UM").status == "ativo"     # turma B não enviada
+    assert _aluno(db, "DAVI B DOIS").status == "ativo"
+
+
+# --------------------------------------------------------------------------
 # Casamento com cadastros ANTIGOS (uploads Matific/Elefante) → nome completo
 # --------------------------------------------------------------------------
 

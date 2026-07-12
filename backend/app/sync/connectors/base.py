@@ -6,10 +6,13 @@ implementa o que é ESPECÍFICO dela: URLs, seletores e o passo de login.
 """
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from app.sync.connectors.navegador import FabricaNavegador, Navegador, abrir_playwright
 from app.sync.interfaces import Conector, Contexto, Credenciais, ErroConector
+
+logger = logging.getLogger("constela.sync")
 
 
 class ConectorNavegador(Conector):
@@ -49,6 +52,28 @@ class ConectorNavegador(Conector):
         except ErroConector as exc:
             contexto.log("autenticacao", "warn", f"Credencial recusada: {exc}")
             return ResultadoValidacao(ok=False, mensagem=str(exc), codigo=exc.codigo)
+        except Exception as exc:  # noqa: BLE001
+            # Qualquer falha INESPERADA do navegador/site (seletor mudou,
+            # timeout, bloqueio anti-bot, página fora do ar) é convertida em um
+            # resultado claro — validar credencial NUNCA deve derrubar o request
+            # (500). Log técnico p/ diagnóstico; a mensagem de Playwright cita o
+            # seletor/timeout, não o valor preenchido, então não vaza a senha.
+            logger.warning(
+                "Falha inesperada ao validar %s (escola %s): %s: %s",
+                self.plataforma, getattr(contexto, "escola_id", "?"),
+                type(exc).__name__, exc, exc_info=True)
+            contexto.log("autenticacao", "erro",
+                         f"Erro inesperado ao validar {self.plataforma}.")
+            nome = (self.plataforma or "plataforma").capitalize()
+            return ResultadoValidacao(
+                ok=False,
+                mensagem=(
+                    f"Não foi possível validar o login no {nome} agora: a página "
+                    "não respondeu como esperado (pode ter mudado, exigir "
+                    "verificação de segurança ou estar indisponível). As "
+                    "credenciais foram salvas — tente validar novamente mais "
+                    "tarde ou use a importação manual do relatório."),
+                codigo="erro_navegador")
         contexto.log("autenticacao", "info", "Credenciais válidas.")
         return ResultadoValidacao(ok=True, mensagem="Conexão bem-sucedida.",
                                   codigo="ok")

@@ -1130,10 +1130,11 @@ def _linhas_para_casamento(linhas: list[tuple[Turma, object]]) -> list[matricula
 
 def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                       linhas: list[tuple[Turma, object]], casamentos: dict[int, int],
-                      estado: _EstadoEscola) -> tuple[int, int, int]:
+                      estado: _EstadoEscola) -> tuple[int, int, int, set[int]]:
     """FASE 2: grava na ORDEM do arquivo (preserva a 1ª ocorrência de cada aluno).
     Cria os novos e atualiza os casados (por RA, nome+turma ou abreviação). Impuro.
-    Devolve (criados, atualizados, vinculados)."""
+    Devolve (criados, atualizados, vinculados, vistos) — ``vistos`` são os ids de
+    TODOS os alunos presentes nesta importação (base da reconciliação)."""
     criados = atualizados = vinculados = 0
     ja_alocado: set[int] = set()
     for idx, (turma, parsed) in enumerate(linhas):
@@ -1150,7 +1151,8 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
         if existente is None:
             aluno = Aluno(escola_id=escola_id, nome=parsed.nome, status="ativo",
                           numero_chamada=parsed.numero_chamada,
-                          data_nascimento=nasc, ficha=dict(parsed.ficha))
+                          data_nascimento=nasc, ficha=dict(parsed.ficha),
+                          da_lista_piloto=True)
             db.add(aluno)
             db.flush()
             db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
@@ -1165,12 +1167,15 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             nome_antigo = existente.nome
             # O Excel é a fonte da verdade da identidade: nome completo vence.
             existente.nome = parsed.nome
+            existente.da_lista_piloto = True   # consta na lista → membro do piloto
             if nasc and existente.data_nascimento is None:
                 existente.data_nascimento = nasc
             if parsed.ficha:
                 existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
             if existente.status != "ativo":
-                existente.status = "ativo"  # consta na lista atual → reativa
+                # Consta na lista atual → reativa (inclusive quem estava
+                # "fora_lista_piloto" numa importação anterior).
+                existente.status = "ativo"
             # nº de chamada e matrícula pertencem à 1ª turma em que aparece.
             if existente.id not in ja_alocado:
                 if parsed.numero_chamada is not None:
@@ -1197,7 +1202,41 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                                         "origem": "importacao_matriculas"})
                 # Conta o aluno DISTINTO uma vez (não a cada turma em que aparece).
                 atualizados += 1
-    return criados, atualizados, vinculados
+    return criados, atualizados, vinculados, ja_alocado
+
+
+def _marcar_fora_da_lista(db: Session, escola_id: int, ano: int, usuario: Usuario,
+                          estado: _EstadoEscola, vistos: set[int],
+                          turmas_import: set[int]) -> int:
+    """Reconciliação incremental: alunos da Lista Piloto (``da_lista_piloto``),
+    ATIVOS e matriculados no ano letivo NAS TURMAS QUE VIERAM NESTA IMPORTAÇÃO,
+    que NÃO aparecem na nova lista viram ``status="fora_lista_piloto"`` —
+    permanecem cadastrados (nunca apagados), somem das visões (todo filtro usa
+    ``status=="ativo"``) e podem depois ser reativados, transferidos ou
+    arquivados.
+
+    ESCOPO POR TURMA (``turmas_import``): só reconcilia dentro das turmas
+    presentes no arquivo. Assim, subir a planilha de UMA turma NÃO tira da lista
+    os alunos das OUTRAS turmas (que nem foram enviadas). Idempotente: reimportar
+    a mesma lista não marca ninguém; quem reaparece é reativado em
+    ``_persistir_linhas``. Alunos criados à mão ou por upload
+    (``da_lista_piloto`` False) são sempre preservados. Devolve quantos marcou."""
+    marcados = 0
+    for aluno_id, matricula in list(estado.matricula_ano.items()):
+        if aluno_id in vistos:
+            continue
+        # Só as turmas enviadas nesta importação entram na reconciliação.
+        if matricula is None or matricula.turma_id not in turmas_import:
+            continue
+        aluno = estado.alunos_por_id.get(aluno_id)
+        if aluno is None or aluno.status != "ativo" or not aluno.da_lista_piloto:
+            continue
+        aluno.status = "fora_lista_piloto"
+        marcados += 1
+        registrar(db, "aluno.fora_lista_piloto", escola_id=escola_id,
+                  usuario_id=usuario.id, entidade="aluno", entidade_id=aluno_id,
+                  detalhes={"nome": aluno.nome, "origem": "importacao_matriculas"})
+    return marcados
 
 
 @router.post("/matriculas/confirmar", response_model=MatriculasResultadoOut)
@@ -1239,15 +1278,23 @@ async def confirmar_matriculas(
     avisos.extend(avisos_casamento)
 
     # FASE 2 — gravação na ordem do arquivo.
-    alunos_criados, alunos_atualizados, alunos_vinculados = _persistir_linhas(
+    alunos_criados, alunos_atualizados, alunos_vinculados, vistos = _persistir_linhas(
         db, escola_id, ano, usuario, linhas, casamentos, estado)
+
+    # FASE 3 — reconciliação incremental: quem saiu da lista vira "fora da lista
+    # piloto" (nunca apagado). Escopo = SÓ as turmas enviadas neste arquivo, para
+    # que subir uma turma só não afete as demais. Idempotente.
+    turmas_import = {t.id for t in resolvidas}
+    alunos_fora_lista = _marcar_fora_da_lista(
+        db, escola_id, ano, usuario, estado, vistos, turmas_import)
 
     registrar(db, "matriculas.importadas", escola_id=escola_id, usuario_id=usuario.id,
               entidade="escola", entidade_id=escola_id,
               detalhes={"turmas_criadas": turmas_criadas,
                         "alunos_criados": alunos_criados,
                         "alunos_atualizados": alunos_atualizados,
-                        "alunos_vinculados": alunos_vinculados})
+                        "alunos_vinculados": alunos_vinculados,
+                        "alunos_fora_lista": alunos_fora_lista})
     db.commit()
 
     scoring.recalcular_escola(db, escola_id)
@@ -1255,11 +1302,17 @@ async def confirmar_matriculas(
     invalidar_cache_painel(escola_id)
     extra = (f" {alunos_vinculados} cadastro(s) de importação anterior recebeu(ram) "
              "o nome completo.") if alunos_vinculados else ""
+    if alunos_fora_lista:
+        extra += (f" {alunos_fora_lista} aluno(s) que não constam mais na lista "
+                  "foram marcados como “fora da lista piloto” — continuam "
+                  "cadastrados (nada foi apagado); reative, transfira ou arquive "
+                  "quando quiser.")
     return MatriculasResultadoOut(
         mensagem=(f"{turmas_criadas} turma(s) criada(s), {alunos_criados} aluno(s) "
                   f"cadastrado(s) e {alunos_atualizados} atualizado(s)." + extra),
         turmas_criadas=turmas_criadas, alunos_criados=alunos_criados,
-        alunos_atualizados=alunos_atualizados, avisos=avisos,
+        alunos_atualizados=alunos_atualizados,
+        alunos_fora_lista=alunos_fora_lista, avisos=avisos,
     )
 
 

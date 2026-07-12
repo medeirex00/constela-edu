@@ -68,6 +68,7 @@ const ORDENACOES = [
 const STATUS_BADGE: Record<string, { tom: "neutro" | "alerta"; texto: string }> = {
   arquivado: { tom: "neutro", texto: "Arquivado" },
   excluido: { tom: "alerta", texto: "Na lixeira" },
+  fora_lista_piloto: { tom: "alerta", texto: "Fora da lista piloto" },
 };
 
 type Acao =
