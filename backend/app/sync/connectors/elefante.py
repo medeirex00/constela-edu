@@ -203,27 +203,115 @@ class ConectorElefante(ConectorNavegador):
             r["erro"] = f"{type(exc).__name__}: {str(exc)[:140]}"
         return r
 
+    async def _extrair_ids(self, nav, tipo: str,
+                           excluir: frozenset = frozenset()) -> list[str]:
+        """Extrai ids (turma ou aluno) da página atual de forma robusta: prefere
+        os hrefs de /reports/{course|student} (inequívocos); se não houver, cai
+        para os values numéricos de options/data-* (menos os `excluir`, ex.: os
+        próprios ids de turma que também aparecem no seletor). Sem clicar em
+        componente frágil (lê o DOM via JS)."""
+        ids = await nav.avaliar(_JS_IDS)
+        if tipo == "turma":
+            cand = ids.get("course_links") or ids.get("option_ids") or ids.get("data_ids") or []
+        else:
+            cand = (ids.get("student_links") or ids.get("option_ids")
+                    or ids.get("data_ids") or [])
+        vistos: set[str] = set()
+        out: list[str] = []
+        for x in cand:
+            if x and x not in vistos and x not in excluir:
+                vistos.add(x)
+                out.append(x)
+        return out
+
+    async def _baixar_relatorio_aluno(self, nav, contexto, course_id: str,
+                                      student_id: str):
+        """Abre o relatório INDIVIDUAL do aluno e baixa o PDF pelo Exportar
+        (fluxo real da plataforma). Devolve ArquivoObtido pronto p/ o pipeline
+        (que reconhece o relatório, casa o nome e gera os eventos)."""
+        await nav.ir_para(_URL_STUDENT.format(student_id=student_id, course_id=course_id))
+        await self._assentar(nav)
+        # O relatório renderiza por XHR — espera o Exportar aparecer (é o sinal
+        # de "pronto"), com um teto curto; se não vier, o download já falha claro.
+        await nav.esperar(_SEL_EXPORTAR, timeout_s=min(contexto.timeout_s, 20))
+        conteudo, nome = await nav.baixar_acao(
+            lambda: nav.clicar(_SEL_EXPORTAR), timeout_s=min(contexto.timeout_s, 45))
+        if not conteudo:
+            return None
+        agora = datetime.now(timezone.utc)
+        return ArquivoObtido(
+            conteudo=conteudo,
+            nome_arquivo=(nome or f"elefante_estudante_{student_id}_{agora:%Y%m%d}.pdf"),
+            plataforma="elefante",
+            content_type="application/pdf",
+            # Relatório INDIVIDUAL = formato "leituras" (parser PerfilElefante
+            # Estudante); a detecção por conteúdo confirma, o hint é a rede.
+            formato_hint="leituras",
+            metadados={"origem": "navegador", "student_id": student_id,
+                       "course_id": course_id})
+
     async def sincronizar(self, cred: Credenciais,
                           contexto: Contexto) -> list[ArquivoObtido]:
-        """Fase E — passo 1 (RECONHECIMENTO ponta a ponta). Antes de coletar de
-        verdade, o robô prova a cadeia REAL (turmas → alunos → relatório →
-        Exportar → PDF) e registra o resultado nos logs (sem PII). A coleta que
-        importa todos os alunos entra assim que esta cadeia estiver confirmada.
-        Retorna [] neste passo (nada é importado)."""
+        """Fase E — COLETA COMPLETA: loga uma vez, varre TODAS as turmas, e para
+        cada uma varre TODOS os alunos, baixando o relatório INDIVIDUAL (PDF) de
+        cada aluno pelo fluxo real (Exportar). Devolve a lista de PDFs; o
+        orquestrador casa o nome e importa cada um pelo mesmo `confirmar` do
+        upload manual — que já gera os eventos da linha do tempo. Idempotente:
+        reimportar não duplica (chave_natural do evento). Logs detalhados por
+        etapa; falha de um aluno não derruba os demais."""
         log = contexto.log
-        r = await self.diagnosticar_navegacao(cred, contexto)
-        log("navegacao", "info",
-            f"[Elefante] RECON sessão-admin={r.get('sessao_admin_ok')} "
-            f"url={r.get('url_pos_login')} erro={r.get('erro')}")
-        log("navegacao", "info", "[Elefante] RECON cadeia: "
-            + json.dumps({"turmas": r.get("turmas"), "alunos": r.get("alunos"),
-                          "aluno_report": r.get("aluno_report"),
-                          "exportar": r.get("exportar"),
-                          "download": r.get("download")}, ensure_ascii=False)[:1800])
-        log("navegacao", "info",
-            "[Elefante] Reconhecimento concluído — se turmas/alunos/exportar/"
-            "download vieram OK, a coleta completa entra no próximo passo.")
-        return []
+        arquivos: list[ArquivoObtido] = []
+        async with self._sessao(contexto) as nav:
+            await self._login(nav, cred, contexto)
+            await nav.ir_para(_URL_REPORTS_MENU)
+            atual = await nav.url_atual()
+            if "admin.elefanteletrado.com.br" not in (atual or ""):
+                raise ErroConector(
+                    f"Não abri o painel do Elefante (endereço final: {atual}). A "
+                    "sessão do login pode não ter cruzado para o admin. Tente "
+                    "novamente ou use a importação manual do relatório.",
+                    codigo="falha_auth", recuperavel=True)
+            log("navegacao", "info", f"[Elefante] Painel logado em {atual}.")
+
+            await nav.ir_para(_URL_COURSE.format(course_id=""))
+            await self._assentar(nav)
+            turmas = await self._extrair_ids(nav, "turma")
+            if not turmas:
+                estr = await nav.avaliar(_JS_IDS)
+                log("navegacao", "warn", "[Elefante] Nenhuma turma encontrada. "
+                    "Estrutura da página: " + json.dumps(estr, ensure_ascii=False)[:900])
+                return []
+            log("navegacao", "info", f"[Elefante] {len(turmas)} turma(s) a varrer.")
+
+            excluir_turmas = frozenset(turmas)
+            vistos: set[str] = set()
+            for idx, cid in enumerate(turmas, 1):
+                if contexto.cancelado():
+                    break
+                await nav.ir_para(_URL_COURSE.format(course_id=cid))
+                await self._assentar(nav)
+                alunos = await self._extrair_ids(nav, "aluno", excluir=excluir_turmas)
+                log("navegacao", "info",
+                    f"[Elefante] Turma {idx}/{len(turmas)} (id {cid}): "
+                    f"{len(alunos)} aluno(s).")
+                for sid in alunos:
+                    if contexto.cancelado():
+                        break
+                    if sid in vistos:      # aluno em 2 turmas → baixa 1 vez
+                        continue
+                    vistos.add(sid)
+                    try:
+                        arq = await self._baixar_relatorio_aluno(nav, contexto, cid, sid)
+                        if arq:
+                            arquivos.append(arq)
+                    except Exception as exc:  # noqa: BLE001 — um aluno não derruba os demais
+                        log("download", "warn",
+                            f"[Elefante] Falha no aluno id {sid} (turma {cid}): "
+                            f"{type(exc).__name__}: {str(exc)[:100]}")
+            log("download", "info",
+                f"[Elefante] {len(arquivos)} relatório(s) individual(is) "
+                f"baixado(s) de {len(vistos)} aluno(s) em {len(turmas)} turma(s).")
+        return arquivos
 
     async def localizar_relatorios(self, cred: Credenciais,
                                    contexto: Contexto) -> list[RelatorioDisponivel]:

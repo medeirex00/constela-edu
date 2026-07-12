@@ -199,27 +199,39 @@ def test_proxy_playwright_traduz_url(monkeypatch):
     assert nav._proxy_playwright() == {"server": "socks5://host:1080"}
 
 
-def test_elefante_sincronizar_faz_recon_da_navegacao(monkeypatch):
-    """Fase E passo 1: sincronizar do Elefante PROVA a cadeia (turmas → alunos →
-    relatório → Exportar → PDF) e registra o resultado (sem PII), sem importar
-    nada ainda."""
+def test_elefante_recon_prova_a_cadeia(monkeypatch):
+    """diagnosticar_navegacao prova a cadeia (turmas → alunos → relatório →
+    Exportar → PDF), reportando ids/estrutura (sem PII)."""
     from app.sync.connectors import elefante
-    monkeypatch.setattr(elefante, "_SETTLE_S", 0)   # sem sleeps no teste
-
-    etapas: list[str] = []
-    ctx = Contexto(escola_id=1, execucao_id=None,
-                   log=lambda e, n, m: etapas.append(m))
+    monkeypatch.setattr(elefante, "_SETTLE_S", 0)
+    ctx = Contexto(escola_id=1, execucao_id=None, log=lambda e, n, m: None)
     con = elefante.ConectorElefante(_fabrica(NavegadorFake(logado=True)))
     r = asyncio.run(con.diagnosticar_navegacao(Credenciais(usuario="u", senha="p"), ctx))
-    # a cadeia inteira foi provada com os ids/estrutura fake
     assert r["turmas"]["candidatas"] == 1 and r["turmas"]["amostra"] == ["511434"]
     assert r["alunos"]["candidatos"] == 1 and r["alunos"]["amostra"] == ["4427356"]
     assert r["exportar"]["tem_exportar"] is True
     assert r["download"]["ok"] is True and r["download"]["bytes"] > 0
 
+
+def test_elefante_sincronizar_coleta_por_aluno(monkeypatch):
+    """A COLETA completa varre turmas → alunos e baixa o relatório individual de
+    cada um (ArquivoObtido no formato 'leituras' p/ o pipeline gerar eventos)."""
+    from app.sync.connectors import elefante
+    monkeypatch.setattr(elefante, "_SETTLE_S", 0)
+
+    class NavAdmin(NavegadorFake):
+        async def url_atual(self):   # sessão cruzou p/ o admin
+            return "https://admin.elefanteletrado.com.br/reports/menu"
+
+    etapas: list[str] = []
+    ctx = Contexto(escola_id=1, execucao_id=None,
+                   log=lambda e, n, m: etapas.append(m))
+    con = elefante.ConectorElefante(_fabrica(NavAdmin(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
-    assert arquivos == []                       # recon não importa nada
-    assert "RECON" in " | ".join(etapas)
+    assert len(arquivos) == 1                     # 1 turma × 1 aluno no fake
+    assert arquivos[0].plataforma == "elefante"
+    assert arquivos[0].formato_hint == "leituras"
+    assert "turma(s) a varrer" in " | ".join(etapas)
 
 
 def test_login_detecta_mfa_2fa():
