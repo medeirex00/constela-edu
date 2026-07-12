@@ -57,11 +57,11 @@ class NavegadorFake:
                 "tem_exportar": True, "n": 1, "textos": ["Exportar"], "tags": ["BUTTON"]}
     async def url_atual(self): return "https://x"
     async def coletar_respostas(self, url, timeout_s=25):
-        # Simula a API interna do SPA do Elefante: 1 turma, 1 aluno.
-        return [{"url": "https://admin.elefanteletrado.com.br/api/courses",
-                 "json": [{"courseId": 511434}]},
-                {"url": "https://admin.elefanteletrado.com.br/api/students",
-                 "json": [{"studentId": 4427356}]}]
+        # API real do Elefante: /course/get-courses-students traz cada turma com
+        # seus alunos aninhados (id da turma + student[].id).
+        return [{"url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/course/get-courses-students",
+                 "json": [{"id": 511434, "name": "5 ANO B",
+                           "student": [{"id": 4427356, "name": "Aluno X"}]}]}]
     async def baixar_acao(self, acao, timeout_s=60):
         try:
             await acao()
@@ -237,7 +237,7 @@ def test_elefante_sincronizar_coleta_por_aluno(monkeypatch):
     assert len(arquivos) == 1                     # 1 turma × 1 aluno no fake
     assert arquivos[0].plataforma == "elefante"
     assert arquivos[0].formato_hint == "leituras"
-    assert "turma(s) a varrer" in " | ".join(etapas)
+    assert "aluno(s) no total" in " | ".join(etapas)
 
 
 def test_login_detecta_mfa_2fa():

@@ -84,6 +84,19 @@ _JS_EXPORTAR = r"""(() => {
 })()"""
 _SEL_EXPORTAR = ("button:has-text('Exportar'), a:has-text('Exportar'), "
                  "[role='button']:has-text('Exportar')")
+
+# 1º lote de VALIDAÇÃO: coleta poucos alunos por execução p/ o run terminar
+# rápido e dar diagnóstico. Sobe (ou vira lote com cursor) após confirmar a cadeia.
+_LIMITE_ALUNOS = 6
+
+# Diagnóstico da tela do aluno quando o Exportar não aparece: quais botões há?
+_JS_PAGINA_ALUNO = r"""(() => {
+  const t = (e) => (e.textContent || '').trim().slice(0, 20);
+  const btns = Array.from(document.querySelectorAll('button, a, [role=button]'))
+    .map(t).filter(Boolean);
+  return { url: location.href, tem_exportar: btns.some(x => /exportar/i.test(x)),
+           botoes: Array.from(new Set(btns)).slice(0, 25) };
+})()"""
 _SEL_PERFIL_GESTOR = ("button:has-text('professor'), button:has-text('gestor'), "
                       "button:has-text('Sou professor')")
 _SEL_USUARIO = ("input[name='Username'], input[placeholder='Digite seu login'], "
@@ -246,6 +259,43 @@ class ConectorElefante(ConectorNavegador):
         return ("elefanteletrado.com.br" in u and "/assets/" not in u
                 and "i18n" not in u and "userway" not in u)
 
+    @staticmethod
+    def _parse_courses_students(caps: list) -> dict:
+        """Da resposta REAL `/course/get-courses-students`: mapa PRECISO
+        {course_id: [student_ids]} — turma.id + os ids do campo `student` de
+        CADA turma (sem varrer ids aninhados que geram ruído)."""
+        mapa: dict[str, list[str]] = {}
+
+        def _num(v) -> str:
+            return str(v) if isinstance(v, (int, str)) and str(v).isdigit() else ""
+
+        for c in caps:
+            if "get-courses-students" not in c["url"]:
+                continue
+            j = c.get("json")
+            if not isinstance(j, list):
+                continue
+            for curso in j:
+                if not isinstance(curso, dict):
+                    continue
+                cid = _num(curso.get("id"))
+                if not cid:
+                    continue
+                sids: list[str] = []
+                alunos = curso.get("student")
+                if alunos is None:
+                    alunos = curso.get("students") or []
+                if isinstance(alunos, list):
+                    for al in alunos:
+                        v = _num(al.get("id") or al.get("studentId")) if isinstance(al, dict) else _num(al)
+                        if v and v not in sids:
+                            sids.append(v)
+                mapa.setdefault(cid, [])
+                for s in sids:
+                    if s not in mapa[cid]:
+                        mapa[cid].append(s)
+        return mapa
+
     async def _enumerar(self, nav, log, url: str, tipo: str,
                         excluir: frozenset = frozenset()) -> list[str]:
         """Enumera ids (turma/aluno) navegando p/ `url` e capturando a API JSON
@@ -287,16 +337,26 @@ class ConectorElefante(ConectorNavegador):
             f"id(s). API Elefante: {json.dumps(formas, ensure_ascii=False)[:1400]}")
         return ids
 
-    async def _baixar_relatorio_aluno(self, nav, contexto, course_id: str,
+    async def _baixar_relatorio_aluno(self, nav, contexto, log, course_id: str,
                                       student_id: str):
-        """Abre o relatório INDIVIDUAL do aluno e baixa o PDF pelo Exportar
-        (fluxo real da plataforma). Devolve ArquivoObtido pronto p/ o pipeline
-        (que reconhece o relatório, casa o nome e gera os eventos)."""
-        await nav.ir_para(_URL_STUDENT.format(student_id=student_id, course_id=course_id))
+        """Abre o relatório INDIVIDUAL do aluno (capturando a API dele) e baixa o
+        PDF pelo Exportar. Falha RÁPIDO se o Exportar não aparecer (12s) e dumpa
+        a estrutura + a API do aluno (revela o botão real ou o endpoint JSON dos
+        dados). Devolve ArquivoObtido pronto p/ o pipeline, ou None."""
+        caps = await nav.coletar_respostas(
+            _URL_STUDENT.format(student_id=student_id, course_id=course_id),
+            timeout_s=25)
         await self._assentar(nav)
-        # O relatório renderiza por XHR — espera o Exportar aparecer (é o sinal
-        # de "pronto"), com um teto curto; se não vier, o download já falha claro.
-        await nav.esperar(_SEL_EXPORTAR, timeout_s=min(contexto.timeout_s, 20))
+        if not await nav.esperar(_SEL_EXPORTAR, timeout_s=12):
+            pag = await nav.avaliar(_JS_PAGINA_ALUNO)
+            apis = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
+                     self._forma_json(c.get("json")))
+                    for c in caps if self._api_elefante(c["url"])][:8]
+            log("download", "warn",
+                f"[Elefante] aluno {student_id}: Exportar não apareceu (12s). "
+                f"Botões: {pag.get('botoes')}. API do aluno: "
+                + json.dumps(apis, ensure_ascii=False)[:900])
+            return None
         conteudo, nome = await nav.baixar_acao(
             lambda: nav.clicar(_SEL_EXPORTAR), timeout_s=min(contexto.timeout_s, 45))
         if not conteudo:
@@ -336,44 +396,54 @@ class ConectorElefante(ConectorNavegador):
                     codigo="falha_auth", recuperavel=True)
             log("navegacao", "info", f"[Elefante] Painel logado em {atual}.")
 
-            # A lista de turmas vem da API interna do SPA (Angular) — capturamos
-            # navegando para a tela de turma; DOM é tentado como reforço.
-            turmas = await self._enumerar(nav, log, f"{_URL_APP}/reports/course", "turma")
-            if not turmas:
+            # Turmas + alunos vêm da API /course/get-courses-students (capturada
+            # ao abrir a tela de turma). Parse PRECISO: turma.id + turma.student[].
+            caps = await nav.coletar_respostas(f"{_URL_APP}/reports/course", timeout_s=25)
+            await self._assentar(nav)
+            mapa = self._parse_courses_students(caps)
+            if not mapa:
+                formas = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
+                           self._forma_json(c.get("json")))
+                          for c in caps if self._api_elefante(c["url"])][:8]
                 log("navegacao", "warn",
-                    "[Elefante] Nenhuma turma encontrada nem no DOM nem na API. "
-                    "Veja os endpoints capturados no log acima para calibrar.")
+                    "[Elefante] Não achei /course/get-courses-students. API: "
+                    + json.dumps(formas, ensure_ascii=False)[:1000])
                 return []
-            log("navegacao", "info", f"[Elefante] {len(turmas)} turma(s) a varrer.")
+            total = sum(len(v) for v in mapa.values())
+            log("navegacao", "info",
+                f"[Elefante] {len(mapa)} turma(s), {total} aluno(s) no total.")
 
-            excluir_turmas = frozenset(turmas)
             vistos: set[str] = set()
-            for idx, cid in enumerate(turmas, 1):
-                if contexto.cancelado():
+            tentados = 0
+            parou_limite = False
+            for cid, sids in mapa.items():
+                if contexto.cancelado() or parou_limite:
                     break
-                alunos = await self._enumerar(
-                    nav, log, _URL_COURSE.format(course_id=cid), "aluno",
-                    excluir=excluir_turmas)
-                log("navegacao", "info",
-                    f"[Elefante] Turma {idx}/{len(turmas)} (id {cid}): "
-                    f"{len(alunos)} aluno(s).")
-                for sid in alunos:
+                log("navegacao", "info", f"[Elefante] Turma {cid}: {len(sids)} aluno(s).")
+                for sid in sids:
                     if contexto.cancelado():
                         break
                     if sid in vistos:      # aluno em 2 turmas → baixa 1 vez
                         continue
                     vistos.add(sid)
+                    if tentados >= _LIMITE_ALUNOS:
+                        parou_limite = True
+                        log("download", "info",
+                            f"[Elefante] Limite de {_LIMITE_ALUNOS} alunos deste lote "
+                            "(validação) atingido — subo/faço em lotes após confirmar.")
+                        break
+                    tentados += 1
                     try:
-                        arq = await self._baixar_relatorio_aluno(nav, contexto, cid, sid)
+                        arq = await self._baixar_relatorio_aluno(nav, contexto, log, cid, sid)
                         if arq:
                             arquivos.append(arq)
                     except Exception as exc:  # noqa: BLE001 — um aluno não derruba os demais
                         log("download", "warn",
                             f"[Elefante] Falha no aluno id {sid} (turma {cid}): "
-                            f"{type(exc).__name__}: {str(exc)[:100]}")
+                            f"{type(exc).__name__}: {str(exc)[:90]}")
             log("download", "info",
-                f"[Elefante] {len(arquivos)} relatório(s) individual(is) "
-                f"baixado(s) de {len(vistos)} aluno(s) em {len(turmas)} turma(s).")
+                f"[Elefante] {len(arquivos)} relatório(s) baixado(s) de "
+                f"{tentados} tentativa(s).")
         return arquivos
 
     async def localizar_relatorios(self, cred: Credenciais,
