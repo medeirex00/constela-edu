@@ -39,13 +39,14 @@ from app.sync.interfaces import (
 # dispensado. Endereço configurável por escola via extra['url_login'].
 _URL_LOGIN = "https://www.matific.com/bra/pt-br/login-page/"
 _URL_LEADERBOARD = "https://www.matific.com/bra/pt-br/teachers/admin/school-leaderboard/"
-_SEL_COOKIE = "#c-later-btn, #c-accept-btn, button:has-text('Aceitar Todos')"
+_SEL_COOKIE = "#c-later-btn, #c-accept-btn"
 _SEL_USUARIO = "#username-input, input[name='username']"
 _SEL_SENHA = "#password-input, input[name='password']"
 _SEL_ENTRAR = "#login-button, button[type='submit']"
 _SEL_ERRO_LOGIN = ".login-error, .error-message, .errorlist, .error, [role='alert']"
-_SEL_LOGADO = ("a[href*='logout'], a[href*='sign-out'], [class*='dashboard' i], "
-               "[class*='teacher' i], nav.main-nav")
+# Indicadores de "já entrou" — evita `nav` genérico (existe na tela de login).
+_SEL_LOGADO = ("a[href*='logout'], a[href*='sign-out'], a[href*='signout'], "
+               "[class*='dashboard' i], [class*='school-leaderboard' i]")
 _SEL_BAIXAR = "a[href*='export'], button:has-text('Exportar'), button:has-text('Download')"
 
 

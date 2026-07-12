@@ -89,21 +89,28 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
     async def ir_para(self, url: str) -> None:
         await self._pagina.goto(url, wait_until="domcontentloaded")
 
+    # Usamos SEMPRE ``locator(...).first``: seletores com alternativas (vírgula)
+    # podem casar VÁRIOS elementos e o modo estrito do Playwright estoura em
+    # fill/click. Pegando o primeiro, os seletores-fallback ficam robustos.
     async def preencher(self, seletor: str, valor: str) -> None:
-        await self._pagina.fill(seletor, valor)
+        await self._pagina.locator(seletor).first.fill(valor)
 
     async def clicar(self, seletor: str) -> None:
-        await self._pagina.click(seletor)
+        await self._pagina.locator(seletor).first.click()
 
     async def esperar(self, seletor: str, timeout_s: int = 20) -> bool:
         try:
-            await self._pagina.wait_for_selector(seletor, timeout=timeout_s * 1000)
+            await self._pagina.locator(seletor).first.wait_for(
+                state="visible", timeout=timeout_s * 1000)
             return True
         except Exception:  # noqa: BLE001 — ausência do seletor = False
             return False
 
     async def visivel(self, seletor: str) -> bool:
-        return await self._pagina.is_visible(seletor)
+        try:
+            return await self._pagina.locator(seletor).first.is_visible()
+        except Exception:  # noqa: BLE001
+            return False
 
     async def texto(self, seletor: str) -> str:
         return (await self._pagina.text_content(seletor)) or ""
