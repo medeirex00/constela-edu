@@ -54,8 +54,8 @@ _URL_STUDENT = (_URL_APP + "/reports/student/{student_id}?period=" + _PERIODO_TU
                 + "&products=1&courseId={course_id}")
 
 # SPA Angular: após navegar (domcontentloaded), os dados vêm por XHR — dá um
-# tempo para renderizar antes de ler o DOM. Tests zeram (_SETTLE_S=0).
-_SETTLE_S = 3
+# tempo curto para renderizar antes de ler o DOM. Tests zeram (_SETTLE_S=0).
+_SETTLE_S = 1
 
 # Extrai CANDIDATOS a id numérico (turma/aluno) de ONDE quer que estejam —
 # options de <select>, hrefs de /reports/course|student, ou data-*. Robusto a
@@ -90,9 +90,10 @@ _SEL_EXPORTAR = ("button:has-text('Exportar'), a:has-text('Exportar'), "
 _SEL_PESQUISAR = ("button:has-text('Pesquisar'), [role='button']:has-text('Pesquisar'), "
                   "input[type='submit'][value='Pesquisar']")
 
-# 1º lote de VALIDAÇÃO: coleta poucos alunos por execução p/ o run terminar
-# rápido e dar diagnóstico. Sobe (ou vira lote com cursor) após confirmar a cadeia.
-_LIMITE_ALUNOS = 6
+# Fallback do browser (relatório por aluno) é lento e instável — mantido só como
+# última tentativa RÁPIDA de poucos alunos. O caminho principal dos dados é a API
+# interna (in-page fetch), como o roster.
+_LIMITE_ALUNOS = 2
 
 # Endpoint interno que lista turmas + alunos aninhados (host prod-ecs-apiadmin…).
 _EP_CURSOS = "/course/get-courses-students"
@@ -379,32 +380,88 @@ class ConectorElefante(ConectorNavegador):
                 .replace("__HEADERS__", json.dumps(headers))
                 .replace("__CREDS__", json.dumps(creds)))
 
+    @classmethod
+    def _base_e_auth(cls, caps: list) -> tuple[str, dict, str, str]:
+        """Descobre a base da API interna (prod-ecs-apiadmin…) e o Authorization
+        que o SPA já mandou — para o conector CHAMAR a API direto (in-page fetch),
+        reusando a mesma sessão. Devolve (base, headers, creds, auth)."""
+        api = [c for c in caps if cls._api_elefante(c["url"])]
+        base = ""
+        for c in api:
+            o = cls._origem(c["url"])
+            if o and ("apiadmin" in o or "/school" in c["url"] or "/course" in c["url"]):
+                base = o
+                break
+        base = base or (cls._origem(api[0]["url"]) if api else "")
+        auth = next((c.get("req_auth") for c in api if c.get("req_auth")), "")
+        headers = {"Authorization": auth} if auth else {}
+        creds = "omit" if auth else "include"   # Bearer → sem cookie (evita CORS *)
+        return base, headers, creds, auth
+
+    @staticmethod
+    def _amostra_roster(cursos: list) -> str:
+        """Campos (CHAVES, sem valores/PII) da 1ª turma e do 1º aluno do roster —
+        revela se os DADOS DE LEITURA já vêm embutidos no aluno (aí extraímos na
+        hora) ou se só há id/nome (aí buscamos os dados noutro endpoint)."""
+        if not (isinstance(cursos, list) and cursos and isinstance(cursos[0], dict)):
+            return ""
+        t = cursos[0]
+        acampos: list = []
+        for k in ("student", "students", "alunos", "studentList"):
+            v = t.get(k)
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                acampos = sorted(v[0].keys())[:24]
+                break
+        return f"turma_campos={sorted(t.keys())[:24]} aluno_campos={acampos}"
+
+    async def _probar_relatorio(self, nav, log, caps: list, cid: str, sid: str) -> None:
+        """DIAGNÓSTICO RÁPIDO (uma vez, in-page fetch — segundos): tenta endpoints
+        PROVÁVEIS de dados de leitura por aluno/turma e loga status + FORMA (nomes
+        de campos, sem PII). É assim que localizo a API real dos dados sem depender
+        do relatório em tela (que não renderiza por URL)."""
+        base, headers, creds, _auth = self._base_e_auth(caps)
+        if not base:
+            return
+        f = f"period={_PERIODO_TUDO}&products=1"
+        alvos = [
+            f"{base}/student/get-student-report?studentId={sid}&courseId={cid}&{f}",
+            f"{base}/student/get-report?studentId={sid}&courseId={cid}&{f}",
+            f"{base}/report/student?studentId={sid}&courseId={cid}&{f}",
+            f"{base}/course/get-course-report?courseId={cid}&{f}",
+            f"{base}/course/get-students-report?courseId={cid}&{f}",
+            f"{base}/report/course?courseId={cid}&{f}",
+        ]
+        achados: list[str] = []
+        for url in alvos:
+            try:
+                res = await nav.avaliar(self._js_fetch(url, "GET", headers, creds))
+            except Exception as exc:  # noqa: BLE001
+                res = {"status": "exc", "erro": str(exc)[:60]}
+            res = res if isinstance(res, dict) else {}
+            path = url.split("elefanteletrado.com.br")[-1].split("?")[0]
+            det = f"{res.get('status')}/{res.get('tipo')}({res.get('n')})"
+            if res.get("erro"):
+                det += f" {res['erro']}"
+            corpo = res.get("body")
+            if res.get("status") == 200 and isinstance(corpo, (list, dict)):
+                det += " forma=" + self._forma_json(corpo)   # só nomes de campos
+            achados.append(f"{path} → {det}")
+        log("navegacao", "info",
+            "[Elefante] sonda de dados de leitura: "
+            + json.dumps(achados, ensure_ascii=False)[:1300])
+
     async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
         """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students
         (depende de selecionar escola + Pesquisar — corrida), chama a API interna
         DIRETO da página autenticada. Descobre host + token do tráfego que SEMPRE
         dispara (/school/active-schools) e reusa o MESMO Authorization. Sem clicar
         em nada. Devolve {course_id: [student_ids]} (ou {})."""
-        api = [c for c in caps if self._api_elefante(c["url"])]
-        if not api:
-            return {}
-        # Base da API (prod-ecs-apiadmin…): origem de uma resposta de dados dela.
-        base = ""
-        for c in api:
-            o = self._origem(c["url"])
-            if o and ("apiadmin" in o or "/school" in c["url"] or "/course" in c["url"]):
-                base = o
-                break
-        base = base or self._origem(api[0]["url"])
+        base, headers, creds, auth = self._base_e_auth(caps)
         if not base:
             return {}
-        # Token que o SPA mandou (mesma sessão, segundos atrás).
-        auth = next((c.get("req_auth") for c in api if c.get("req_auth")), "")
-        headers = {"Authorization": auth} if auth else {}
-        creds = "omit" if auth else "include"
         # Escolas (id) de /school/active-schools — a maioria das contas tem 1.
         escolas: list[str] = []
-        for c in api:
+        for c in caps:
             if "active-schools" in c["url"] and isinstance(c.get("json"), list):
                 for e in c["json"]:
                     if isinstance(e, dict) and str(e.get("id", "")).isdigit():
@@ -444,7 +501,8 @@ class ConectorElefante(ConectorNavegador):
                     log("navegacao", "info",
                         f"[Elefante] cursos via API direta: {len(mapa)} turma(s), "
                         f"{total} aluno(s) (host={base}, "
-                        f"auth={'sim' if auth else 'cookie'}).")
+                        f"auth={'sim' if auth else 'cookie'}). "
+                        f"{self._amostra_roster(corpo)}")
                     return mapa
                 if mapa and not melhor_corpo:         # turmas, mas 0 alunos: guarda p/ diagnóstico
                     melhor_forma = self._forma_json(corpo)
@@ -508,20 +566,22 @@ class ConectorElefante(ConectorNavegador):
         baixa o PDF pelo Exportar. Falha RÁPIDO se o Exportar não aparecer e dumpa
         a estrutura + a API do aluno (revela o endpoint JSON dos dados p/ eu passar
         a puxar direto). Devolve ArquivoObtido pronto p/ o pipeline, ou None."""
+        # Timeouts CURTOS: este caminho (relatório em tela) é um fallback instável
+        # que quase sempre falha rápido — não pode gastar minutos por aluno.
         caps = await nav.coletar_respostas(
             _URL_STUDENT.format(student_id=student_id, course_id=course_id),
-            timeout_s=25)
+            timeout_s=8)
         await self._assentar(nav)
         # Os params vão na URL, mas o relatório só RENDERIZA ao submeter a busca —
         # clicar "Pesquisar" dispara a API de dados do aluno e revela o Exportar.
-        if await nav.esperar(_SEL_PESQUISAR, timeout_s=6):
+        if await nav.esperar(_SEL_PESQUISAR, timeout_s=3):
             try:
                 caps += await nav.coletar_apos_acao(
-                    lambda: nav.clicar(_SEL_PESQUISAR), timeout_s=20)
+                    lambda: nav.clicar(_SEL_PESQUISAR), timeout_s=6)
             except Exception:  # noqa: BLE001 — clique pode falhar; segue p/ diagnóstico
                 pass
             await self._assentar(nav)
-        if not await nav.esperar(_SEL_EXPORTAR, timeout_s=12):
+        if not await nav.esperar(_SEL_EXPORTAR, timeout_s=4):
             pag = await nav.avaliar(_JS_PAGINA_ALUNO)
             # SÓ os endpoints NOVOS do aluno (tira o roster e a rede do município já
             # conhecidos) — é aqui que aparece a API de dados por aluno.
@@ -600,6 +660,17 @@ class ConectorElefante(ConectorNavegador):
             total = sum(len(v) for v in mapa.values())
             log("navegacao", "info",
                 f"[Elefante] {len(mapa)} turma(s), {total} aluno(s) no total.")
+
+            # DIAGNÓSTICO RÁPIDO (uma vez): onde estão os DADOS DE LEITURA? Sonda a
+            # API interna direto (o relatório em tela não renderiza por URL). Isso
+            # aponta o endpoint dos dados por aluno/turma p/ a coleta definitiva
+            # (in-page fetch, rápida) — sem depender do PDF/navegador.
+            cid0 = next(iter(mapa))
+            sid0 = mapa[cid0][0] if mapa[cid0] else ""
+            try:
+                await self._probar_relatorio(nav, log, caps, cid0, sid0)
+            except Exception as exc:  # noqa: BLE001 — sonda nunca derruba a sync
+                log("navegacao", "warn", f"[Elefante] sonda falhou: {str(exc)[:80]}")
 
             vistos: set[str] = set()
             tentados = 0
