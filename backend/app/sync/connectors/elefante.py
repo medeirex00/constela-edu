@@ -61,6 +61,18 @@ class ConectorElefante(ConectorNavegador):
             raise ErroConector("Usuário e senha do Elefante são obrigatórios.",
                                codigo="senha_invalida", recuperavel=False)
         await nav.ir_para(cred.extra.get("url_login") or _URL_LOGIN)
+        # Espera o formulário aparecer; se não surgir, erro CLARO com o endereço
+        # alcançado (endereço mudou, redirecionou, ou exigiu verificação) em vez
+        # de estourar no preencher.
+        if not await nav.esperar(_SEL_USUARIO, timeout_s=min(contexto.timeout_s, 20)):
+            atual = await nav.url_atual()
+            raise ErroConector(
+                "Não encontrei o formulário de login do Elefante "
+                f"(endereço atual: {atual}). O endereço de login pode ter "
+                "mudado, a página redirecionou, ou exigiu verificação de "
+                "segurança. Informe o endereço correto em ‘url de login’ nas "
+                "opções avançadas, ou use a importação manual do relatório.",
+                codigo="pagina_login", recuperavel=True)
         await nav.preencher(_SEL_USUARIO, cred.usuario)
         await nav.preencher(_SEL_SENHA, cred.senha)
         await nav.clicar(_SEL_ENTRAR)

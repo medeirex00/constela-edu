@@ -35,6 +35,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { api } from "../lib/api";
+import { dataHora } from "../lib/formato";
 
 // --- Tipos (espelham app/sync/schemas.py) ----------------------------------
 interface Execucao {
@@ -73,8 +74,8 @@ interface Dashboard {
 const NOME: Record<string, string> = { matific: "Matific", elefante: "Elefante Letrado" };
 const DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"];
 
-const fmtData = (s: string | null) =>
-  s ? new Date(s).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
+// Usa o formatador compartilhado (trata UTC naive + horário de Brasília).
+const fmtData = (s: string | null) => dataHora(s);
 const fmtDur = (ms: number | null) => (ms ? `${(ms / 1000).toFixed(1)}s` : "—");
 
 // Estados possíveis (credencial + execução) → rótulo humano + cor theme-aware.

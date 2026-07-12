@@ -58,6 +58,20 @@ class ConectorMatific(ConectorNavegador):
             raise ErroConector("Usuário e senha do Matific são obrigatórios.",
                                codigo="senha_invalida", recuperavel=False)
         await nav.ir_para(cred.extra.get("url_login") or _URL_LOGIN)
+        # Espera o formulário aparecer (a página é uma SPA e pode redirecionar).
+        # Se o campo de usuário não surgir, dá um erro CLARO com o endereço
+        # alcançado — em vez de estourar no preencher — para o admin saber o
+        # motivo real (endereço mudou, redirecionou p/ a home, ou exigiu
+        # verificação de segurança).
+        if not await nav.esperar(_SEL_USUARIO, timeout_s=min(contexto.timeout_s, 20)):
+            atual = await nav.url_atual()
+            raise ErroConector(
+                "Não encontrei o formulário de login do Matific "
+                f"(endereço atual: {atual}). O endereço de login pode ter "
+                "mudado, a página redirecionou, ou exigiu verificação de "
+                "segurança. Informe o endereço correto em ‘url de login’ nas "
+                "opções avançadas, ou use a importação manual do relatório.",
+                codigo="pagina_login", recuperavel=True)
         await nav.preencher(_SEL_USUARIO, cred.usuario)
         await nav.preencher(_SEL_SENHA, cred.senha)
         await nav.clicar(_SEL_ENTRAR)

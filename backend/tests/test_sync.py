@@ -29,7 +29,13 @@ class NavegadorFake:
     async def ir_para(self, url): pass
     async def preencher(self, seletor, valor): self.valores_preenchidos.append(valor)
     async def clicar(self, seletor): pass
-    async def esperar(self, seletor, timeout_s=20): return self.logado
+    async def esperar(self, seletor, timeout_s=20):
+        # Distingue "cheguei na área logada" (usa self.logado) de "o formulário
+        # de login apareceu" (True) — o conector espera o form antes de digitar.
+        marcas_logado = ("logout", "sair", "dashboard", "painel", "nav")
+        if any(m in seletor for m in marcas_logado):
+            return self.logado
+        return True
     async def visivel(self, seletor): return self.erro_login
     async def texto(self, seletor): return ""
     async def url_atual(self): return "https://x"
@@ -127,6 +133,27 @@ def test_testar_credenciais_erro_cru_do_navegador_nao_propaga(plataforma):
     assert res.ok is False
     assert res.codigo == "erro_navegador"
     assert "p-secreta" not in res.mensagem          # não vaza a senha na mensagem
+
+
+@pytest.mark.parametrize("plataforma", ["matific", "elefante"])
+def test_login_sem_formulario_da_diagnostico_claro(plataforma):
+    """Quando a página de login não mostra o formulário (endereço mudou,
+    redirecionou p/ a home, ou exigiu verificação), o conector dá um erro CLARO
+    e ACIONÁVEL (código 'pagina_login', com o endereço alcançado) — não um
+    timeout cru nem a mensagem genérica."""
+    class SemFormulario(NavegadorFake):
+        async def esperar(self, seletor, timeout_s=20):
+            return False  # nada aparece
+        async def url_atual(self):
+            return "https://www.matific.com/"  # redirecionou para a home
+
+    Classe = type(connectors.obter(plataforma))
+    res = asyncio.run(Classe(_fabrica(SemFormulario()))
+                      .testar_credenciais(Credenciais(usuario="u", senha="p"),
+                                          _contexto()))
+    assert res.ok is False
+    assert res.codigo == "pagina_login"
+    assert "endereço atual" in res.mensagem and "manual" in res.mensagem.lower()
 
 
 def test_conector_nao_vaza_senha_no_log():

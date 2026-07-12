@@ -37,13 +37,16 @@ export function CredenciaisForm({
 }: CredenciaisFormProps) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
+  const [urlLogin, setUrlLogin] = useState("");
+  const [avancado, setAvancado] = useState(false);
   const [resultado, setResultado] = useState<ResultadoTeste | null>(null);
   const configurada = status !== "nao_configurada";
 
   const salvar = useMutation(async () => {
+    const extra = urlLogin.trim() ? { url_login: urlLogin.trim() } : undefined;
     const r = await api<ResultadoTeste>(`${base}/credenciais/${plataforma}`, {
       method: "PUT",
-      body: JSON.stringify({ usuario, senha }),
+      body: JSON.stringify({ usuario, senha, ...(extra ? { extra } : {}) }),
     });
     setResultado(r);
     setSenha("");
@@ -94,6 +97,30 @@ export function CredenciaisForm({
         A senha é cifrada no servidor e nunca é exibida de novo — serve apenas para
         o sistema baixar os relatórios por você.
       </p>
+
+      <div>
+        <button
+          type="button"
+          className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+          onClick={() => setAvancado((v) => !v)}
+        >
+          {avancado ? "Ocultar opções avançadas" : "Opções avançadas"}
+        </button>
+        {avancado && (
+          <Campo rotulo="Endereço de login (opcional)">
+            <input
+              className={estiloInput}
+              value={urlLogin}
+              placeholder="ex.: https://…/login — só se o padrão não funcionar"
+              onChange={(e) => setUrlLogin(e.target.value)}
+            />
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              Se a validação disser que não encontrou o formulário de login, cole
+              aqui o endereço exato da página de login da plataforma.
+            </p>
+          </Campo>
+        )}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         <Botao disabled={salvar.enviando || !usuario || !senha} onClick={() => salvar.executar()}>
