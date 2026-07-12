@@ -16,6 +16,7 @@ PONTOS DE EXTENSÃO (verificáveis só com conta real):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -46,33 +47,43 @@ _URL_LOGIN = "https://login.elefanteletrado.com.br/manager"
 _URL_APP = "https://admin.elefanteletrado.com.br"
 _URL_REPORTS_MENU = f"{_URL_APP}/reports/menu"
 _URL_RELATORIOS = _URL_REPORTS_MENU  # compat: descritor legado aponta p/ o menu real
+_PERIODO_TUDO = "PERIODS.LIFETIME"    # "Desde o início" (confirmado nas URLs reais)
+_URL_COURSE = (_URL_APP + "/reports/course?period=" + _PERIODO_TUDO
+               + "&products=1&courseId={course_id}")
+_URL_STUDENT = (_URL_APP + "/reports/student/{student_id}?period=" + _PERIODO_TUDO
+                + "&products=1&courseId={course_id}")
 
-# Recon estrutural da área de relatórios — SEM PII (só tags, contagens, ids em
-# hrefs/values e cabeçalhos de tabela; nunca nomes de alunos). Revela onde ficam
-# os códigos de turma/aluno para montar a enumeração sem seletor frágil.
-_JS_RECON = r"""(() => {
-  const sel = (s) => Array.from(document.querySelectorAll(s));
-  const only = (v) => (/^[0-9]+$/.test(String(v||'').trim()) ? String(v).trim() : '');
+# SPA Angular: após navegar (domcontentloaded), os dados vêm por XHR — dá um
+# tempo para renderizar antes de ler o DOM. Tests zeram (_SETTLE_S=0).
+_SETTLE_S = 3
+
+# Extrai CANDIDATOS a id numérico (turma/aluno) de ONDE quer que estejam —
+# options de <select>, hrefs de /reports/course|student, ou data-*. Robusto a
+# qualquer biblioteca de dropdown (não depende de clicar num componente frágil).
+_JS_IDS = r"""(() => {
+  const uniq = (a) => Array.from(new Set(a)).filter(Boolean);
+  const num = (v) => { const m = String(v==null?'':v).match(/([0-9]{3,})/); return m ? m[1] : ''; };
+  const q = (s) => Array.from(document.querySelectorAll(s));
   return {
-    url: location.href,
-    titulo: (document.querySelector('h1,h2')||{}).textContent?.trim().slice(0,40) || '',
-    selects: sel('select').slice(0,8).map(s => ({
-      id: s.id||'', name: s.name||'', n: s.options.length,
-      valores: Array.from(s.options).slice(0,4).map(o => only(o.value)).filter(Boolean),
-    })),
-    combos: sel('[role="combobox"], [class*="select" i], [class*="dropdown" i]')
-      .slice(0,10).map(e => ({ tag: e.tagName, cls: String(e.className||'').slice(0,50) })),
-    n_links_course: sel("a[href*='/reports/course']").length,
-    n_links_student: sel("a[href*='/reports/student']").length,
-    ex_links_course: sel("a[href*='/reports/course']").slice(0,4).map(a => a.getAttribute('href')),
-    ex_links_student: sel("a[href*='/reports/student']").slice(0,4).map(a => a.getAttribute('href')),
-    tem_exportar: sel('button, a').some(e => /exportar/i.test(e.textContent||'')),
-    tabelas: sel('table').slice(0,4).map(t => ({
-      linhas: t.rows.length,
-      cabecalhos: sel('th').slice(0,8).map(th => (th.textContent||'').trim()).filter(Boolean),
-    })),
+    n_selects: document.querySelectorAll('select').length,
+    n_options: document.querySelectorAll('option').length,
+    option_ids: uniq(q('option').map(o => num(o.value))).slice(0,120),
+    course_links: uniq(q("a[href*='course']").map(a => { const m=(a.getAttribute('href')||a.href||'').match(/courseId=([0-9]+)/); return m?m[1]:''; })).slice(0,120),
+    student_links: uniq(q("a[href*='student']").map(a => { const m=(a.getAttribute('href')||a.href||'').match(/student\/([0-9]+)/); return m?m[1]:''; })).slice(0,120),
+    data_ids: uniq(q('[data-course-id],[data-student-id],[data-id],[data-value]').map(e => num(e.getAttribute('data-course-id')||e.getAttribute('data-student-id')||e.getAttribute('data-id')||e.getAttribute('data-value')))).slice(0,120),
   };
 })()"""
+
+# Confirma o botão Exportar dentro do relatório (existe? texto? tag?).
+_JS_EXPORTAR = r"""(() => {
+  const c = Array.from(document.querySelectorAll('button, a, [role=button]'))
+    .filter(e => /exportar/i.test((e.textContent||'') + ' ' + (e.getAttribute('aria-label')||'')));
+  return { tem_exportar: c.length > 0, n: c.length,
+           textos: c.slice(0,3).map(e => (e.textContent||'').trim().slice(0,24)),
+           tags: c.slice(0,3).map(e => e.tagName) };
+})()"""
+_SEL_EXPORTAR = ("button:has-text('Exportar'), a:has-text('Exportar'), "
+                 "[role='button']:has-text('Exportar')")
 _SEL_PERFIL_GESTOR = ("button:has-text('professor'), button:has-text('gestor'), "
                       "button:has-text('Sou professor')")
 _SEL_USUARIO = ("input[name='Username'], input[placeholder='Digite seu login'], "
@@ -119,27 +130,73 @@ class ConectorElefante(ConectorNavegador):
                     sel_erro=_SEL_ERRO_LOGIN, pre_passos=(_SEL_PERFIL_GESTOR,),
                     nome="Elefante")
 
+    @staticmethod
+    async def _assentar(nav) -> None:
+        """Dá tempo do SPA carregar os dados por XHR após a navegação."""
+        if _SETTLE_S:
+            await asyncio.sleep(_SETTLE_S)
+
     async def diagnosticar_navegacao(self, cred: Credenciais,
                                      contexto: Contexto) -> dict:
-        """RECON estrutural (SEM PII) da área de relatórios logada — para
-        CONFIRMAR a navegação real (host admin, onde ficam os códigos de turma/
-        aluno, botão Exportar) ANTES de implementar a coleta. Loga com as
-        credenciais salvas, abre o menu de relatórios e a tela de turma, e
-        devolve a estrutura (contagens/ids/cabeçalhos — nunca nomes de alunos)."""
+        """RECON de ponta a ponta (SEM PII): loga, entra no admin, ENUMERA as
+        turmas, entra numa turma, ENUMERA os alunos, abre o relatório de UM
+        aluno e CONFIRMA o Exportar — chegando a baixar o PDF só para provar que
+        a cadeia funciona (conta bytes; NÃO importa/persiste nada). Reporta
+        contagens e ids (nunca nomes de aluno) para calibrar a coleta real."""
         r = {"plataforma": self.plataforma, "url_pos_login": None,
-             "sessao_admin_ok": False, "erro": None, "estrutura": {}}
+             "sessao_admin_ok": False, "erro": None,
+             "turmas": {}, "alunos": {}, "aluno_report": {},
+             "exportar": {}, "download": {}}
         try:
             async with self._sessao(contexto) as nav:
                 await self._login(nav, cred, contexto)
                 await nav.ir_para(_URL_REPORTS_MENU)
                 atual = await nav.url_atual()
                 r["url_pos_login"] = atual
-                # A sessão criada no login (login.elefante…) precisa valer no
-                # admin.elefante… — se voltar p/ login, o cookie não cruzou.
                 r["sessao_admin_ok"] = "admin.elefanteletrado.com.br" in (atual or "")
-                r["estrutura"]["menu"] = await nav.avaliar(_JS_RECON)
-                await nav.ir_para(f"{_URL_APP}/reports/course")
-                r["estrutura"]["course"] = await nav.avaliar(_JS_RECON)
+
+                # 1) TURMAS — abre a tela de turma (sem courseId) e extrai ids.
+                await nav.ir_para(_URL_COURSE.format(course_id=""))
+                await self._assentar(nav)
+                ids_t = await nav.avaliar(_JS_IDS)
+                turmas = (ids_t.get("course_links") or ids_t.get("option_ids")
+                          or ids_t.get("data_ids") or [])
+                r["turmas"] = {"n_selects": ids_t.get("n_selects"),
+                               "n_options": ids_t.get("n_options"),
+                               "candidatas": len(turmas), "amostra": turmas[:5]}
+                if not turmas:
+                    return r
+                cid = turmas[0]
+
+                # 2) ALUNOS — abre a turma (com courseId) e extrai ids de aluno.
+                await nav.ir_para(_URL_COURSE.format(course_id=cid))
+                await self._assentar(nav)
+                ids_a = await nav.avaliar(_JS_IDS)
+                alunos = (ids_a.get("student_links")
+                          or [x for x in (ids_a.get("option_ids") or []) if x != cid]
+                          or ids_a.get("data_ids") or [])
+                r["alunos"] = {"n_options": ids_a.get("n_options"),
+                               "candidatos": len(alunos), "amostra": alunos[:5]}
+                if not alunos:
+                    return r
+                sid = alunos[0]
+
+                # 3) RELATÓRIO DO ALUNO — confirma o Exportar e prova o download.
+                await nav.ir_para(_URL_STUDENT.format(student_id=sid, course_id=cid))
+                await self._assentar(nav)
+                r["aluno_report"] = {"url": await nav.url_atual()}
+                r["exportar"] = await nav.avaliar(_JS_EXPORTAR)
+                if r["exportar"].get("tem_exportar"):
+                    try:
+                        conteudo, nome = await nav.baixar_acao(
+                            lambda: nav.clicar(_SEL_EXPORTAR),
+                            timeout_s=min(contexto.timeout_s, 45))
+                        r["download"] = {
+                            "ok": True, "bytes": len(conteudo or b""),
+                            "parece_pdf": (conteudo or b"")[:5] == b"%PDF-"}
+                    except Exception as exc:  # noqa: BLE001
+                        r["download"] = {"ok": False,
+                                         "erro": f"{type(exc).__name__}: {str(exc)[:80]}"}
         except ErroConector as exc:
             r["erro"] = f"{exc.codigo}: {str(exc)[:140]}"
         except Exception as exc:  # noqa: BLE001
@@ -148,23 +205,24 @@ class ConectorElefante(ConectorNavegador):
 
     async def sincronizar(self, cred: Credenciais,
                           contexto: Contexto) -> list[ArquivoObtido]:
-        """Fase E — passo 1 (RECONHECIMENTO). Antes de coletar, o robô mapeia a
-        estrutura REAL da área logada e registra nos logs (sem PII), para a
-        coleta ser construída sobre a interface confirmada, não sobre suposição.
-        A coleta por aluno (baixar cada relatório → eventos) entra assim que
-        esta estrutura for confirmada. Retorna [] neste passo (nada é importado).
-        """
+        """Fase E — passo 1 (RECONHECIMENTO ponta a ponta). Antes de coletar de
+        verdade, o robô prova a cadeia REAL (turmas → alunos → relatório →
+        Exportar → PDF) e registra o resultado nos logs (sem PII). A coleta que
+        importa todos os alunos entra assim que esta cadeia estiver confirmada.
+        Retorna [] neste passo (nada é importado)."""
         log = contexto.log
-        recon = await self.diagnosticar_navegacao(cred, contexto)
+        r = await self.diagnosticar_navegacao(cred, contexto)
         log("navegacao", "info",
-            f"[Elefante] RECON — sessão no admin: {recon.get('sessao_admin_ok')} · "
-            f"endereço: {recon.get('url_pos_login')} · erro: {recon.get('erro')}")
+            f"[Elefante] RECON sessão-admin={r.get('sessao_admin_ok')} "
+            f"url={r.get('url_pos_login')} erro={r.get('erro')}")
+        log("navegacao", "info", "[Elefante] RECON cadeia: "
+            + json.dumps({"turmas": r.get("turmas"), "alunos": r.get("alunos"),
+                          "aluno_report": r.get("aluno_report"),
+                          "exportar": r.get("exportar"),
+                          "download": r.get("download")}, ensure_ascii=False)[:1800])
         log("navegacao", "info",
-            "[Elefante] RECON estrutura (sem PII): "
-            + json.dumps(recon.get("estrutura", {}), ensure_ascii=False)[:1800])
-        log("navegacao", "info",
-            "[Elefante] Reconhecimento concluído — mapeando a interface real "
-            "antes de coletar. A coleta por aluno entra no próximo passo.")
+            "[Elefante] Reconhecimento concluído — se turmas/alunos/exportar/"
+            "download vieram OK, a coleta completa entra no próximo passo.")
         return []
 
     async def localizar_relatorios(self, cred: Credenciais,

@@ -49,10 +49,19 @@ class NavegadorFake:
         return self.erro_login
     async def texto(self, seletor): return ""
     async def avaliar(self, expressao):
-        # Estrutura fake da área logada (recon) — inclui o host admin real.
-        return {"url": "https://admin.elefanteletrado.com.br/reports/menu",
-                "selects": [], "n_links_student": 0, "tem_exportar": True}
+        # Fake do recon: ids de turma/aluno e o botão Exportar presente. Serve
+        # tanto ao _JS_IDS quanto ao _JS_EXPORTAR (o fake não distingue a query).
+        return {"n_selects": 1, "n_options": 3,
+                "option_ids": ["511434"], "course_links": ["511434"],
+                "student_links": ["4427356"], "data_ids": [],
+                "tem_exportar": True, "n": 1, "textos": ["Exportar"], "tags": ["BUTTON"]}
     async def url_atual(self): return "https://x"
+    async def baixar_acao(self, acao, timeout_s=60):
+        try:
+            await acao()
+        except Exception:       # noqa: BLE001 — clique fake é no-op
+            pass
+        return (self.conteudo, "rel.pdf")
     async def baixar(self, seletor, timeout_s=60): return (self.conteudo, "rel.xlsx")
     async def fechar(self): pass
 
@@ -190,20 +199,27 @@ def test_proxy_playwright_traduz_url(monkeypatch):
     assert nav._proxy_playwright() == {"server": "socks5://host:1080"}
 
 
-def test_elefante_sincronizar_faz_recon_da_navegacao():
-    """Fase E passo 1: sincronizar do Elefante faz o RECON da área logada e
-    registra a estrutura (sem PII) nos logs, sem importar nada ainda."""
+def test_elefante_sincronizar_faz_recon_da_navegacao(monkeypatch):
+    """Fase E passo 1: sincronizar do Elefante PROVA a cadeia (turmas → alunos →
+    relatório → Exportar → PDF) e registra o resultado (sem PII), sem importar
+    nada ainda."""
+    from app.sync.connectors import elefante
+    monkeypatch.setattr(elefante, "_SETTLE_S", 0)   # sem sleeps no teste
+
     etapas: list[str] = []
     ctx = Contexto(escola_id=1, execucao_id=None,
                    log=lambda e, n, m: etapas.append(m))
-    Classe = type(connectors.obter("elefante"))
-    arquivos = asyncio.run(Classe(_fabrica(NavegadorFake(logado=True)))
-                           .sincronizar(Credenciais(usuario="u", senha="p"), ctx))
+    con = elefante.ConectorElefante(_fabrica(NavegadorFake(logado=True)))
+    r = asyncio.run(con.diagnosticar_navegacao(Credenciais(usuario="u", senha="p"), ctx))
+    # a cadeia inteira foi provada com os ids/estrutura fake
+    assert r["turmas"]["candidatas"] == 1 and r["turmas"]["amostra"] == ["511434"]
+    assert r["alunos"]["candidatos"] == 1 and r["alunos"]["amostra"] == ["4427356"]
+    assert r["exportar"]["tem_exportar"] is True
+    assert r["download"]["ok"] is True and r["download"]["bytes"] > 0
+
+    arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
     assert arquivos == []                       # recon não importa nada
-    texto = " | ".join(etapas)
-    assert "RECON" in texto
-    # a estrutura da área logada real foi reportada
-    assert "admin.elefanteletrado.com.br" in texto
+    assert "RECON" in " | ".join(etapas)
 
 
 def test_login_detecta_mfa_2fa():
