@@ -39,10 +39,13 @@ class NavegadorFake:
             return self.logado
         return True
     async def visivel(self, seletor):
-        # Distingue o seletor de CAPTCHA/bloqueio do de mensagem de erro.
+        # CAPTCHA/bloqueio → self.bloqueado; campo de senha → visível (login de
+        # UMA etapa, ex.: Elefante); demais chamadas são sobre a msg de erro.
         marcas_bloqueio = ("captcha", "recaptcha", "hcaptcha", "challenge", "cloudflare")
         if any(m in seletor for m in marcas_bloqueio):
             return self.bloqueado
+        if "password" in seletor.lower() or "senha" in seletor.lower():
+            return True
         return self.erro_login
     async def texto(self, seletor): return ""
     async def url_atual(self): return "https://x"
@@ -213,9 +216,73 @@ def test_diagnosticar_login_sem_credenciais(plataforma):
     assert ok["erro"] is None
     assert ok["plataforma"] == plataforma
 
+    # Login de uma etapa: a senha já aparece → NÃO é progressivo.
+    assert ok["login_progressivo"] is False
+
     bloq = asyncio.run(Classe(_fabrica(NavegadorFake(bloqueado=True)))
                        .diagnosticar_login(_contexto()))
     assert bloq["bloqueio_detectado"] is True
+
+
+class NavegadorProgressivo(NavegadorFake):
+    """Simula login em DUAS etapas (ex.: Matific): a senha só fica visível DEPOIS
+    de clicar em avançar ("Continuar")."""
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._revelada = False
+        self.cliques: list[str] = []
+
+    def _eh_avancar(self, seletor):
+        s = seletor.lower()
+        return "login-button" in s or "submit" in s or "entrar" in s
+
+    async def clicar(self, seletor):
+        self.cliques.append(seletor)
+        if self._eh_avancar(seletor):     # avançar/enviar revela a senha
+            self._revelada = True
+
+    async def esperar(self, seletor, timeout_s=20):
+        if "password" in seletor.lower() or "senha" in seletor.lower():
+            return self._revelada
+        return await super().esperar(seletor, timeout_s)
+
+    async def visivel(self, seletor):
+        if "password" in seletor.lower() or "senha" in seletor.lower():
+            return self._revelada
+        return await super().visivel(seletor)
+
+
+def test_login_duas_etapas_revela_e_preenche_a_senha():
+    """Login progressivo (Matific 'Continuar'): o robô preenche o usuário, avança
+    para revelar a senha, preenche a senha e envia. A senha só é digitada DEPOIS
+    de revelada (não some/erra) e o resultado é sucesso."""
+    etapas: list[str] = []
+    ctx = Contexto(escola_id=1, execucao_id=None,
+                   log=lambda e, n, m: etapas.append(m))
+    nav = NavegadorProgressivo(logado=True)
+    Classe = type(connectors.obter("matific"))
+    res = asyncio.run(Classe(_fabrica(nav))
+                      .testar_credenciais(Credenciais(usuario="u@x", senha="S3nh4"), ctx))
+    assert res.ok is True
+    assert "S3nh4" in nav.valores_preenchidos          # a senha FOI preenchida
+    # avançou (revelar senha) e depois enviou → o botão foi clicado 2x
+    assert sum(nav._eh_avancar(c) for c in nav.cliques) >= 2
+    assert any("avançando para a senha" in m for m in etapas)
+
+
+def test_diagnosticar_login_progressivo():
+    """No login em duas etapas, o diagnóstico reconhece o formulário mesmo sem
+    a senha visível (login_progressivo=True) — usuário e botão bastam para
+    confirmar que o robô chega ao formulário."""
+    nav = NavegadorProgressivo()               # senha ainda não revelada
+    Classe = type(connectors.obter("matific"))
+    r = asyncio.run(Classe(_fabrica(nav)).diagnosticar_login(_contexto()))
+    assert r["usuario_encontrado"] is True
+    assert r["botao_encontrado"] is True
+    assert r["senha_encontrada"] is False
+    assert r["login_progressivo"] is True
+    assert r["formulario_encontrado"] is True
+    assert r["bloqueio_detectado"] is False
 
 
 def test_conector_nao_vaza_senha_no_log():

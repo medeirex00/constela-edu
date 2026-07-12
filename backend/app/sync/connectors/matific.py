@@ -42,7 +42,12 @@ _URL_LEADERBOARD = "https://www.matific.com/bra/pt-br/teachers/admin/school-lead
 _SEL_COOKIE = "#c-later-btn, #c-accept-btn"
 _SEL_USUARIO = "#username-input, input[name='username']"
 _SEL_SENHA = "#password-input, input[name='password']"
-_SEL_ENTRAR = "#login-button, button[type='submit']"
+# Login em DUAS etapas: o MESMO #login-button é "Continuar" (revela a senha) e
+# depois "Iniciar sessão" (envia). NÃO usar `button[type='submit']` genérico: o
+# #login-button é type=button, e a página tem outros submit (cookies, acessibi-
+# lidade, SSO) que poderiam ser clicados por engano. Fallback por RÓTULO.
+_SEL_ENTRAR = ("#login-button, button:has-text('Iniciar sessão'), "
+               "button:has-text('Continuar')")
 _SEL_ERRO_LOGIN = ".login-error, .error-message, .errorlist, .error, [role='alert']"
 # Indicadores de "já entrou" — evita `nav` genérico (existe na tela de login).
 _SEL_LOGADO = ("a[href*='logout'], a[href*='sign-out'], a[href*='signout'], "

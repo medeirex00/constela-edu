@@ -17,11 +17,19 @@ logger = logging.getLogger("constela.sync")
 # Sinais de verificação anti-robô (CAPTCHA/desafio) que a automação NÃO resolve.
 # reCAPTCHA / hCaptcha / Cloudflare "Just a moment". Detectados p/ dar um erro
 # específico (código "captcha") em vez de um "não confirmei o login" genérico.
+#
+# IMPORTANTE: só entra aqui o DESAFIO INTERATIVO — o que de fato bloqueia. O
+# reCAPTCHA invisível (v3) mostra um BADGE fixo ("protegido por reCAPTCHA":
+# iframe .../api2/anchor dentro de .grecaptcha-badge, com title "reCAPTCHA") que
+# NÃO bloqueia login algum. O Matific usa exatamente esse badge — por isso NÃO
+# casamos o iframe genérico de recaptcha nem o title "captcha" (dariam falso
+# positivo e travariam TODO login do Matific). O desafio real é o bframe (janela
+# de imagens), identificado pelo src (independe de idioma), visível só quando
+# aparece; o checkbox v2 vive num contêiner .g-recaptcha.
 _SEL_BLOQUEIO = (
-    "iframe[src*='recaptcha'], .g-recaptcha, #g-recaptcha, "
-    "iframe[src*='hcaptcha'], .h-captcha, "
-    "#challenge-form, #cf-challenge-running, iframe[src*='challenges.cloudflare'], "
-    "iframe[title*='challenge' i], iframe[title*='captcha' i]")
+    "iframe[src*='recaptcha/api2/bframe'], .g-recaptcha, #g-recaptcha, "
+    ".h-captcha, iframe[src*='hcaptcha'], "
+    "#challenge-form, #cf-challenge-running, iframe[src*='challenges.cloudflare']")
 
 
 class ConectorNavegador(Conector):
@@ -99,8 +107,36 @@ class ConectorNavegador(Conector):
                 "‘url de login’ nas opções avançadas, ou use a importação manual.",
                 codigo="pagina_login", recuperavel=True)
 
-        log("login", "info", f"[{nome}] Formulário encontrado — preenchendo credenciais…")
+        log("login", "info", f"[{nome}] Formulário encontrado — preenchendo o usuário…")
         await nav.preencher(sel_usuario, cred.usuario)
+
+        # Login em DUAS etapas (ex.: Matific "Continuar"): se o campo de senha
+        # ainda não está visível, avança para revelá-lo antes de digitar. Em
+        # formulários de uma etapa (ex.: Elefante) a senha já está visível e este
+        # bloco é pulado. Confirmado ao vivo: o Matific só mostra #password-input
+        # depois de clicar #login-button (que então vira "Iniciar sessão").
+        if not await nav.visivel(sel_senha):
+            log("login", "info", f"[{nome}] Etapa 1 concluída — avançando para a senha…")
+            await nav.clicar(sel_entrar)
+            if not await nav.esperar(sel_senha, timeout_s=min(contexto.timeout_s, 15)):
+                if await nav.visivel(_SEL_BLOQUEIO):
+                    raise ErroConector(
+                        f"O {nome} pediu verificação de segurança (CAPTCHA) após o "
+                        "usuário. Use a importação manual do relatório.",
+                        codigo="captcha", recuperavel=True)
+                if await nav.visivel(sel_erro):
+                    raise ErroConector(
+                        f"Usuário do {nome} não reconhecido.",
+                        codigo="senha_invalida", recuperavel=False)
+                atual = await nav.url_atual()
+                log("login", "erro", f"[{nome}] Campo de senha não apareceu ({atual}).")
+                raise ErroConector(
+                    f"Não consegui avançar para a senha no {nome} (endereço atual: "
+                    f"{atual}). A página pode ter mudado. Tente novamente ou use a "
+                    "importação manual do relatório.",
+                    codigo="pagina_login", recuperavel=True)
+
+        log("login", "info", f"[{nome}] Preenchendo a senha…")
         await nav.preencher(sel_senha, cred.senha)
         log("login", "info", f"[{nome}] Enviando o formulário de login…")
         await nav.clicar(sel_entrar)
@@ -140,8 +176,9 @@ class ConectorNavegador(Conector):
         cfg = self._config_login()
         r = {"plataforma": self.plataforma, "formulario_encontrado": False,
              "usuario_encontrado": False, "senha_encontrada": False,
-             "botao_encontrado": False, "pre_passos_ok": True,
-             "bloqueio_detectado": False, "url": cfg["url"], "erro": None}
+             "botao_encontrado": False, "login_progressivo": False,
+             "pre_passos_ok": True, "bloqueio_detectado": False,
+             "url": cfg["url"], "erro": None}
         try:
             async with self._sessao(contexto) as nav:
                 await nav.ir_para(cfg["url"])
@@ -161,9 +198,16 @@ class ConectorNavegador(Conector):
                     cfg["sel_usuario"], timeout_s=min(contexto.timeout_s, 20))
                 r["senha_encontrada"] = await nav.esperar(cfg["sel_senha"], timeout_s=5)
                 r["botao_encontrado"] = await nav.esperar(cfg["sel_entrar"], timeout_s=5)
+                # Login em duas etapas (ex.: Matific "Continuar"): usuário e botão
+                # já visíveis, senha revelada só depois de avançar. O diagnóstico
+                # não avança (sem credenciais), então reconhece o padrão pela
+                # senha ainda oculta com usuário+botão presentes.
+                r["login_progressivo"] = (
+                    r["usuario_encontrado"] and r["botao_encontrado"]
+                    and not r["senha_encontrada"])
                 r["formulario_encontrado"] = (
-                    r["usuario_encontrado"] and r["senha_encontrada"]
-                    and r["botao_encontrado"])
+                    r["usuario_encontrado"] and r["botao_encontrado"]
+                    and (r["senha_encontrada"] or r["login_progressivo"]))
                 r["url"] = await nav.url_atual()
                 if not r["bloqueio_detectado"]:
                     r["bloqueio_detectado"] = await nav.visivel(_SEL_BLOQUEIO)
