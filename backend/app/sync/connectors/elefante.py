@@ -16,6 +16,7 @@ PONTOS DE EXTENSÃO (verificáveis só com conta real):
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from app.sync.connectors.base import ConectorNavegador
@@ -38,7 +39,40 @@ from app.sync.interfaces import (
 # antes o perfil; se por acaso cair nele, o passo de escolher perfil (abaixo) é
 # executado como fallback.
 _URL_LOGIN = "https://login.elefanteletrado.com.br/manager"
-_URL_RELATORIOS = "https://www.elefanteletrado.com.br/relatorios"
+# Área LOGADA fica em admin.elefanteletrado.com.br (mapeado por prints do gestor,
+# jul/2026) — NÃO no www marketing. Relatórios parametrizados por URL:
+#   turma:  /reports/course?period=PERIODS.LIFETIME&products=1&courseId={id}
+#   aluno:  /reports/student/{studentId}?period=PERIODS.LIFETIME&products=1&courseId={id}
+_URL_APP = "https://admin.elefanteletrado.com.br"
+_URL_REPORTS_MENU = f"{_URL_APP}/reports/menu"
+_URL_RELATORIOS = _URL_REPORTS_MENU  # compat: descritor legado aponta p/ o menu real
+
+# Recon estrutural da área de relatórios — SEM PII (só tags, contagens, ids em
+# hrefs/values e cabeçalhos de tabela; nunca nomes de alunos). Revela onde ficam
+# os códigos de turma/aluno para montar a enumeração sem seletor frágil.
+_JS_RECON = r"""(() => {
+  const sel = (s) => Array.from(document.querySelectorAll(s));
+  const only = (v) => (/^[0-9]+$/.test(String(v||'').trim()) ? String(v).trim() : '');
+  return {
+    url: location.href,
+    titulo: (document.querySelector('h1,h2')||{}).textContent?.trim().slice(0,40) || '',
+    selects: sel('select').slice(0,8).map(s => ({
+      id: s.id||'', name: s.name||'', n: s.options.length,
+      valores: Array.from(s.options).slice(0,4).map(o => only(o.value)).filter(Boolean),
+    })),
+    combos: sel('[role="combobox"], [class*="select" i], [class*="dropdown" i]')
+      .slice(0,10).map(e => ({ tag: e.tagName, cls: String(e.className||'').slice(0,50) })),
+    n_links_course: sel("a[href*='/reports/course']").length,
+    n_links_student: sel("a[href*='/reports/student']").length,
+    ex_links_course: sel("a[href*='/reports/course']").slice(0,4).map(a => a.getAttribute('href')),
+    ex_links_student: sel("a[href*='/reports/student']").slice(0,4).map(a => a.getAttribute('href')),
+    tem_exportar: sel('button, a').some(e => /exportar/i.test(e.textContent||'')),
+    tabelas: sel('table').slice(0,4).map(t => ({
+      linhas: t.rows.length,
+      cabecalhos: sel('th').slice(0,8).map(th => (th.textContent||'').trim()).filter(Boolean),
+    })),
+  };
+})()"""
 _SEL_PERFIL_GESTOR = ("button:has-text('professor'), button:has-text('gestor'), "
                       "button:has-text('Sou professor')")
 _SEL_USUARIO = ("input[name='Username'], input[placeholder='Digite seu login'], "
@@ -84,6 +118,54 @@ class ConectorElefante(ConectorNavegador):
                     sel_entrar=_SEL_ENTRAR, sel_logado=_SEL_LOGADO,
                     sel_erro=_SEL_ERRO_LOGIN, pre_passos=(_SEL_PERFIL_GESTOR,),
                     nome="Elefante")
+
+    async def diagnosticar_navegacao(self, cred: Credenciais,
+                                     contexto: Contexto) -> dict:
+        """RECON estrutural (SEM PII) da área de relatórios logada — para
+        CONFIRMAR a navegação real (host admin, onde ficam os códigos de turma/
+        aluno, botão Exportar) ANTES de implementar a coleta. Loga com as
+        credenciais salvas, abre o menu de relatórios e a tela de turma, e
+        devolve a estrutura (contagens/ids/cabeçalhos — nunca nomes de alunos)."""
+        r = {"plataforma": self.plataforma, "url_pos_login": None,
+             "sessao_admin_ok": False, "erro": None, "estrutura": {}}
+        try:
+            async with self._sessao(contexto) as nav:
+                await self._login(nav, cred, contexto)
+                await nav.ir_para(_URL_REPORTS_MENU)
+                atual = await nav.url_atual()
+                r["url_pos_login"] = atual
+                # A sessão criada no login (login.elefante…) precisa valer no
+                # admin.elefante… — se voltar p/ login, o cookie não cruzou.
+                r["sessao_admin_ok"] = "admin.elefanteletrado.com.br" in (atual or "")
+                r["estrutura"]["menu"] = await nav.avaliar(_JS_RECON)
+                await nav.ir_para(f"{_URL_APP}/reports/course")
+                r["estrutura"]["course"] = await nav.avaliar(_JS_RECON)
+        except ErroConector as exc:
+            r["erro"] = f"{exc.codigo}: {str(exc)[:140]}"
+        except Exception as exc:  # noqa: BLE001
+            r["erro"] = f"{type(exc).__name__}: {str(exc)[:140]}"
+        return r
+
+    async def sincronizar(self, cred: Credenciais,
+                          contexto: Contexto) -> list[ArquivoObtido]:
+        """Fase E — passo 1 (RECONHECIMENTO). Antes de coletar, o robô mapeia a
+        estrutura REAL da área logada e registra nos logs (sem PII), para a
+        coleta ser construída sobre a interface confirmada, não sobre suposição.
+        A coleta por aluno (baixar cada relatório → eventos) entra assim que
+        esta estrutura for confirmada. Retorna [] neste passo (nada é importado).
+        """
+        log = contexto.log
+        recon = await self.diagnosticar_navegacao(cred, contexto)
+        log("navegacao", "info",
+            f"[Elefante] RECON — sessão no admin: {recon.get('sessao_admin_ok')} · "
+            f"endereço: {recon.get('url_pos_login')} · erro: {recon.get('erro')}")
+        log("navegacao", "info",
+            "[Elefante] RECON estrutura (sem PII): "
+            + json.dumps(recon.get("estrutura", {}), ensure_ascii=False)[:1800])
+        log("navegacao", "info",
+            "[Elefante] Reconhecimento concluído — mapeando a interface real "
+            "antes de coletar. A coleta por aluno entra no próximo passo.")
+        return []
 
     async def localizar_relatorios(self, cred: Credenciais,
                                    contexto: Contexto) -> list[RelatorioDisponivel]:

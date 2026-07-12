@@ -48,6 +48,10 @@ class NavegadorFake:
             return True
         return self.erro_login
     async def texto(self, seletor): return ""
+    async def avaliar(self, expressao):
+        # Estrutura fake da área logada (recon) — inclui o host admin real.
+        return {"url": "https://admin.elefanteletrado.com.br/reports/menu",
+                "selects": [], "n_links_student": 0, "tem_exportar": True}
     async def url_atual(self): return "https://x"
     async def baixar(self, seletor, timeout_s=60): return (self.conteudo, "rel.xlsx")
     async def fechar(self): pass
@@ -184,6 +188,22 @@ def test_proxy_playwright_traduz_url(monkeypatch):
     monkeypatch.setattr(settings, "SYNC_PROXY_URL", "socks5://host:1080",
                         raising=False)
     assert nav._proxy_playwright() == {"server": "socks5://host:1080"}
+
+
+def test_elefante_sincronizar_faz_recon_da_navegacao():
+    """Fase E passo 1: sincronizar do Elefante faz o RECON da área logada e
+    registra a estrutura (sem PII) nos logs, sem importar nada ainda."""
+    etapas: list[str] = []
+    ctx = Contexto(escola_id=1, execucao_id=None,
+                   log=lambda e, n, m: etapas.append(m))
+    Classe = type(connectors.obter("elefante"))
+    arquivos = asyncio.run(Classe(_fabrica(NavegadorFake(logado=True)))
+                           .sincronizar(Credenciais(usuario="u", senha="p"), ctx))
+    assert arquivos == []                       # recon não importa nada
+    texto = " | ".join(etapas)
+    assert "RECON" in texto
+    # a estrutura da área logada real foi reportada
+    assert "admin.elefanteletrado.com.br" in texto
 
 
 def test_login_detecta_mfa_2fa():

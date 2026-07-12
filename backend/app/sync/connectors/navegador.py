@@ -31,8 +31,14 @@ class Navegador(Protocol):
     async def visivel(self, seletor: str) -> bool: ...
     async def texto(self, seletor: str) -> str: ...
     async def url_atual(self) -> str: ...
+    # Avalia uma expressão JS na página e devolve o resultado (JSON-serializável).
+    # É como lemos ESTRUTURA (ids de turma/aluno, links) de forma robusta — sem
+    # depender de clicar em componentes de UI frágeis.
+    async def avaliar(self, expressao: str): ...
     async def baixar(self, seletor: str,
                      timeout_s: int = 60) -> tuple[bytes, str]: ...
+    async def baixar_acao(self, acao,
+                          timeout_s: int = 60) -> tuple[bytes, str]: ...
     async def fechar(self) -> None: ...
 
 
@@ -155,9 +161,19 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
     async def url_atual(self) -> str:
         return self._pagina.url
 
+    async def avaliar(self, expressao: str):
+        return await self._pagina.evaluate(expressao)
+
     async def baixar(self, seletor: str, timeout_s: int = 60) -> tuple[bytes, str]:
+        return await self.baixar_acao(
+            lambda: self._loc(seletor).click(), timeout_s=timeout_s)
+
+    async def baixar_acao(self, acao, timeout_s: int = 60) -> tuple[bytes, str]:
+        """Captura o download disparado por uma AÇÃO qualquer (ex.: clicar em
+        Exportar, que pode abrir um modal e só então baixar). ``acao`` é um
+        callable async que executa o gesto; devolvemos (bytes, nome_sugerido)."""
         async with self._pagina.expect_download(timeout=timeout_s * 1000) as info:
-            await self._pagina.click(seletor)
+            await acao()
         download = await info.value
         caminho = await download.path()
         with open(caminho, "rb") as fh:
