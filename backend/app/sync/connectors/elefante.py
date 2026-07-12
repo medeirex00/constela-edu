@@ -238,43 +238,53 @@ class ConectorElefante(ConectorNavegador):
             return "{" + ",".join(list(obj.keys())[:12]) + "}"
         return type(obj).__name__
 
+    @staticmethod
+    def _api_elefante(url: str) -> bool:
+        """Resposta da API do Elefante (qualquer host *.elefanteletrado.com.br),
+        ignorando i18n/assets e trackers de terceiros (userway/cdn)."""
+        u = (url or "").lower()
+        return ("elefanteletrado.com.br" in u and "/assets/" not in u
+                and "i18n" not in u and "userway" not in u)
+
     async def _enumerar(self, nav, log, url: str, tipo: str,
                         excluir: frozenset = frozenset()) -> list[str]:
         """Enumera ids (turma/aluno) navegando p/ `url` e capturando a API JSON
-        interna do SPA — E também tentando o DOM. Loga os endpoints e as
-        contagens (sem PII) para calibrar sem novo recon."""
+        do Elefante (qualquer host dela) — E o DOM. SEMPRE loga a FORMA (nomes de
+        campos, sem PII) das respostas da API, para eu ver onde ficam os códigos
+        e calibrar sem novo recon."""
         caps = await nav.coletar_respostas(url, timeout_s=25)
         await self._assentar(nav)
         dom = await nav.avaliar(_JS_IDS)
         if tipo == "turma":
             dom_ids = dom.get("course_links") or []
-            chaves = ("courseId", "classId", "id", "code")
-            casa = ("course", "class", "turma")
+            chaves = ("courseId", "classId", "turmaId", "id", "code")
         else:
             dom_ids = dom.get("student_links") or []
-            chaves = ("studentId", "userId", "id")
-            casa = ("student", "user", "aluno", "course")
+            chaves = ("studentId", "userId", "alunoId", "id")
         dom_ids = dom_ids or dom.get("option_ids") or dom.get("data_ids") or []
+
+        relevantes = [c for c in caps if self._api_elefante(c["url"])]
         api_ids: list[str] = []
-        for c in caps:
-            if any(k in c["url"].lower() for k in casa):
-                api_ids += self._ids_do_json(c.get("json"), chaves)
-        endpoints = list(dict.fromkeys(c["url"].split("?")[0] for c in caps))[:12]
+        for c in relevantes:
+            j = c.get("json")
+            # Pula listas gigantes (ex.: todas as escolas do município) p/ não
+            # extrair ruído; extrai de listas de tamanho razoável.
+            if isinstance(j, list) and len(j) > 300:
+                continue
+            api_ids += self._ids_do_json(j, chaves)
+
         ids: list[str] = []
         for x in list(dom_ids) + api_ids:
             if x and x not in ids and x not in excluir:
                 ids.append(x)
+
+        # SEMPRE: forma (nomes de campos) das respostas da API — mostra a
+        # estrutura real p/ eu mirar o endpoint/campo certo dos códigos.
+        formas = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
+                   self._forma_json(c.get("json"))) for c in relevantes][:8]
         log("navegacao", "info",
-            f"[Elefante] {tipo}: DOM={len(dom_ids)} API={len(api_ids)} "
-            f"→ {len(ids)} id(s). {len(caps)} resposta(s) JSON; endpoints: {endpoints}")
-        if not ids:
-            # Sem ids: dumpa a FORMA (nomes de campos, sem PII) dos endpoints
-            # relevantes — num único log dá para ver como extrair.
-            formas = [(c["url"].split("?")[0], self._forma_json(c.get("json")))
-                      for c in caps if any(k in c["url"].lower() for k in casa)][:6]
-            log("navegacao", "warn",
-                f"[Elefante] {tipo}: 0 ids — formas dos endpoints: "
-                + json.dumps(formas, ensure_ascii=False)[:1200])
+            f"[Elefante] {tipo}: DOM={len(dom_ids)} API={len(api_ids)} → {len(ids)} "
+            f"id(s). API Elefante: {json.dumps(formas, ensure_ascii=False)[:1400]}")
         return ids
 
     async def _baixar_relatorio_aluno(self, nav, contexto, course_id: str,
