@@ -402,6 +402,25 @@ def enfileirar_agendados(db: Session) -> int:
     return n
 
 
+def finalizar_orfas_no_boot(db: Session) -> int:
+    """No BOOT do processo: toda execução ainda em 'executando' é ÓRFÃ — o worker
+    que a rodava morreu no restart/redeploy (instância única: nada está rodando
+    ao subir). Marca como 'erro' e LIBERA a trava (uq_sync_exec_ativa) na hora,
+    SEM re-enfileirar (o usuário retoma quando quiser). Assim um redeploy no meio
+    de uma sync não prende a escola até o timeout de 30 min. Idempotente."""
+    orfas = db.execute(
+        select(SincronizacaoExecucao).where(
+            SincronizacaoExecucao.status == "executando")
+    ).scalars().all()
+    n = 0
+    for ex in orfas:
+        if _finalizar_travada(db, ex):
+            n += 1
+    if n:
+        db.commit()
+    return n
+
+
 def recuperar_execucoes_travadas(db: Session) -> int:
     """Reaper (retomada após crash): execuções presas em 'executando' além de
     ``SYNC_TRAVADA_S`` — worker morto ou redeploy no meio — são finalizadas como

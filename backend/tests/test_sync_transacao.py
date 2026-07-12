@@ -5,9 +5,9 @@ idle-in-transaction derruba a conexão no meio da coleta.
 Prova: com um conector fake, no INÍCIO do fetch e APÓS um log de fetch, a sessão
 não tem transação aberta; e a persistência segue transacional.
 """
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
-from app.models.sincronizacao import SincronizacaoLog
+from app.models.sincronizacao import SincronizacaoExecucao, SincronizacaoLog
 from app.sync import service, vault
 from app.sync.interfaces import Credenciais
 
@@ -67,3 +67,41 @@ def test_executar_nao_deixa_transacao_aberta_durante_o_fetch(
     assert vistos["no_inicio"] is False
     assert vistos["apos_log"] is False
     assert res.status == "sem_dados"
+
+
+def test_finalizar_orfas_no_boot_libera_execucao_presa(db, escola_completa):
+    """Um redeploy no MEIO de uma sync deixa a execução presa em 'executando' e
+    trava a escola (uq_sync_exec_ativa). No boot, finalizar_orfas_no_boot marca a
+    órfã como 'erro' na hora — sem esperar o timeout de 30 min — e uma nova
+    sincronização já pode ser enfileirada (instância única: nada roda ao subir)."""
+    escola = escola_completa["escola"]
+    ex = service.enfileirar(db, escola.id, "elefante", origem="teste")
+    # Simula a sync que começou e cujo worker morreu no restart (fica órfã).
+    db.execute(
+        update(SincronizacaoExecucao)
+        .where(SincronizacaoExecucao.id == ex.id)
+        .values(status="executando", iniciada_em=service._agora()))
+    db.commit()
+
+    liberadas = service.finalizar_orfas_no_boot(db)
+    assert liberadas == 1
+
+    db.refresh(ex)
+    assert ex.status == "erro"
+
+    # Trava liberada: dá para enfileirar de novo (execução NOVA, não a órfã).
+    nova = service.enfileirar(db, escola.id, "elefante", origem="teste")
+    assert nova.id != ex.id
+    assert nova.status == "fila"
+
+
+def test_finalizar_orfas_no_boot_sem_orfas_e_noop(db, escola_completa):
+    """Sem execuções presas, o boot não mexe em nada (idempotente/barato)."""
+    escola = escola_completa["escola"]
+    ex = service.enfileirar(db, escola.id, "elefante", origem="teste")  # fica 'fila'
+    db.commit()
+
+    assert service.finalizar_orfas_no_boot(db) == 0
+
+    db.refresh(ex)
+    assert ex.status == "fila"  # a fila NÃO é órfã — não pode ser tocada

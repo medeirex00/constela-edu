@@ -58,6 +58,22 @@ if not settings.em_producao:
 # Correções de DADOS idempotentes (baratas e seguras de repetir por worker).
 garantir_dados_base(engine)
 
+# Um redeploy no MEIO de uma sync deixa a execução presa em 'executando' e trava
+# a escola (uq_sync_exec_ativa) até o timeout de 30 min. No boot, libera essas
+# órfãs na hora (o worker que as rodava morreu no restart). Nunca impede o boot.
+try:
+    from app.sync import service as _sync_service  # noqa: E402
+
+    _db_boot = next(get_db())
+    try:
+        _orfas = _sync_service.finalizar_orfas_no_boot(_db_boot)
+        if _orfas:
+            logger.info("Sync: %d execução(ões) órfã(s) liberada(s) no boot.", _orfas)
+    finally:
+        _db_boot.close()
+except Exception:  # noqa: BLE001
+    logger.warning("Falha ao liberar órfãs de sync no boot", exc_info=True)
+
 # /docs, /redoc e /openapi.json só quando explicitamente habilitados (dev).
 _docs = "/docs" if settings.DOCS_HABILITADOS else None
 _redoc = "/redoc" if settings.DOCS_HABILITADOS else None
