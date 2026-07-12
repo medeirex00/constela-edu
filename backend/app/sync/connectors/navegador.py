@@ -55,8 +55,25 @@ async def abrir_playwright(*, headless: bool = True,
             recuperavel=False) from exc
 
     pw = await async_playwright().start()  # pragma: no cover — precisa do browser
-    navegador = await pw.chromium.launch(headless=headless)
-    contexto = await navegador.new_context(accept_downloads=True)
+    navegador = await pw.chromium.launch(
+        headless=headless,
+        # Flags que reduzem a chance de bloqueio anti-robô em SPAs.
+        args=["--disable-blink-features=AutomationControlled", "--no-sandbox"])
+    # Contexto REALISTA: locale/fuso/idioma do Brasil e um user-agent de Chrome
+    # comum. Sem isto, as plataformas (rodando a partir de um IP de datacenter
+    # nos EUA) redirecionam para a versão gringa e/ou barram a automação.
+    contexto = await navegador.new_context(
+        accept_downloads=True,
+        locale="pt-BR",
+        timezone_id="America/Sao_Paulo",
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+        viewport={"width": 1366, "height": 768},
+        extra_http_headers={"Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"})
+    # Esconde o marcador navigator.webdriver (sinal clássico de automação).
+    await contexto.add_init_script(
+        "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
     pagina = await contexto.new_page()
     pagina.set_default_timeout(timeout_s * 1000)
     return _NavegadorPlaywright(pw, navegador, pagina)

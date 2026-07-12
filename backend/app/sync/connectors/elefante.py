@@ -29,13 +29,22 @@ from app.sync.interfaces import (
     RelatorioDisponivel,
 )
 
-_URL_LOGIN = "https://www.elefanteletrado.com.br/login"
+# --- Contrato de UI com o Elefante (verificado em jul/2026) ------------------
+# O login mudou para o subdomínio "login.elefanteletrado.com.br/welcome" (o
+# antigo "/login" hoje dá 404). É um SPA Angular em 2 passos: primeiro escolhe
+# o perfil "Sou professor ou gestor", depois mostra o formulário (campos
+# name=Username / name=Password). Endereço configurável via extra['url_login'].
+_URL_LOGIN = "https://login.elefanteletrado.com.br/welcome"
 _URL_RELATORIOS = "https://www.elefanteletrado.com.br/relatorios"
-_SEL_USUARIO = "input[name='email'], input[name='usuario'], input[type='email']"
-_SEL_SENHA = "input[name='senha'], input[type='password']"
-_SEL_ENTRAR = "button[type='submit']"
-_SEL_ERRO_LOGIN = ".error, .alert-danger, [role='alert']"
-_SEL_LOGADO = "a[href*='logout'], a[href*='sair'], .painel, nav"
+_SEL_PERFIL_GESTOR = ("button:has-text('professor'), button:has-text('gestor'), "
+                      "button:has-text('Sou professor')")
+_SEL_USUARIO = ("input[name='Username'], input[placeholder='Digite seu login'], "
+                "input[name='email'], input[type='email']")
+_SEL_SENHA = "input[name='Password'], input[type='password']"
+_SEL_ENTRAR = "form input[type='submit'], form button[type='submit']"
+_SEL_ERRO_LOGIN = ".error, .alert-danger, .invalid-feedback, [role='alert']"
+_SEL_LOGADO = ("a[href*='logout'], a[href*='sair'], [class*='painel' i], "
+               "[class*='dashboard' i], nav")
 _SEL_BAIXAR = "a[href*='export'], button:has-text('Exportar'), button:has-text('Baixar')"
 
 
@@ -61,9 +70,13 @@ class ConectorElefante(ConectorNavegador):
             raise ErroConector("Usuário e senha do Elefante são obrigatórios.",
                                codigo="senha_invalida", recuperavel=False)
         await nav.ir_para(cred.extra.get("url_login") or _URL_LOGIN)
-        # Espera o formulário aparecer; se não surgir, erro CLARO com o endereço
-        # alcançado (endereço mudou, redirecionou, ou exigiu verificação) em vez
-        # de estourar no preencher.
+        # Passo 1 — a tela de boas-vindas pede o perfil: escolhe "Sou professor
+        # ou gestor" para chegar ao formulário. (Se o endereço já cair direto no
+        # formulário, este passo é pulado sem erro.)
+        if await nav.esperar(_SEL_PERFIL_GESTOR, timeout_s=10):
+            await nav.clicar(_SEL_PERFIL_GESTOR)
+        # Passo 2 — espera o formulário; se não surgir, erro CLARO com o endereço
+        # alcançado em vez de estourar no preencher.
         if not await nav.esperar(_SEL_USUARIO, timeout_s=min(contexto.timeout_s, 20)):
             atual = await nav.url_atual()
             raise ErroConector(

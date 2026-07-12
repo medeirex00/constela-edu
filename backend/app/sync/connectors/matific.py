@@ -32,14 +32,20 @@ from app.sync.interfaces import (
     RelatorioDisponivel,
 )
 
-# --- Contrato de UI com o Matific (pontos de extensão) -----------------------
-_URL_LOGIN = "https://www.matific.com/bra/pt-br/account/login/"
+# --- Contrato de UI com o Matific (verificado em jul/2026) -------------------
+# A página de login mudou de "/account/login/" (que hoje redireciona p/ a home
+# de marketing) para "/login-page/". Campos: #username-input / #password-input;
+# botão "Continuar" (#login-button). Um aviso de cookies aparece antes e é
+# dispensado. Endereço configurável por escola via extra['url_login'].
+_URL_LOGIN = "https://www.matific.com/bra/pt-br/login-page/"
 _URL_LEADERBOARD = "https://www.matific.com/bra/pt-br/teachers/admin/school-leaderboard/"
-_SEL_USUARIO = "input[name='username'], input[type='email']"
-_SEL_SENHA = "input[name='password'], input[type='password']"
-_SEL_ENTRAR = "button[type='submit']"
-_SEL_ERRO_LOGIN = ".errorlist, .error, [role='alert']"
-_SEL_LOGADO = "a[href*='logout'], .teacher-dashboard, nav.main-nav"
+_SEL_COOKIE = "#c-later-btn, #c-accept-btn, button:has-text('Aceitar Todos')"
+_SEL_USUARIO = "#username-input, input[name='username']"
+_SEL_SENHA = "#password-input, input[name='password']"
+_SEL_ENTRAR = "#login-button, button[type='submit']"
+_SEL_ERRO_LOGIN = ".login-error, .error-message, .errorlist, .error, [role='alert']"
+_SEL_LOGADO = ("a[href*='logout'], a[href*='sign-out'], [class*='dashboard' i], "
+               "[class*='teacher' i], nav.main-nav")
 _SEL_BAIXAR = "a[href*='export'], button:has-text('Exportar'), button:has-text('Download')"
 
 
@@ -58,11 +64,12 @@ class ConectorMatific(ConectorNavegador):
             raise ErroConector("Usuário e senha do Matific são obrigatórios.",
                                codigo="senha_invalida", recuperavel=False)
         await nav.ir_para(cred.extra.get("url_login") or _URL_LOGIN)
-        # Espera o formulário aparecer (a página é uma SPA e pode redirecionar).
-        # Se o campo de usuário não surgir, dá um erro CLARO com o endereço
-        # alcançado — em vez de estourar no preencher — para o admin saber o
-        # motivo real (endereço mudou, redirecionou p/ a home, ou exigiu
-        # verificação de segurança).
+        # Dispensa o aviso de cookies, se aparecer (senão intercepta cliques).
+        if await nav.esperar(_SEL_COOKIE, timeout_s=5):
+            await nav.clicar(_SEL_COOKIE)
+        # Espera o formulário aparecer (SPA + possível redirecionamento). Se não
+        # surgir, erro CLARO com o endereço alcançado — em vez de estourar no
+        # preencher — para o admin saber o motivo real.
         if not await nav.esperar(_SEL_USUARIO, timeout_s=min(contexto.timeout_s, 20)):
             atual = await nav.url_atual()
             raise ErroConector(
