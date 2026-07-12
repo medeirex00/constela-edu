@@ -62,6 +62,12 @@ class NavegadorFake:
         return [{"url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/course/get-courses-students",
                  "json": [{"id": 511434, "name": "5 ANO B",
                            "student": [{"id": 4427356, "name": "Aluno X"}]}]}]
+    async def coletar_apos_acao(self, acao, timeout_s=20):
+        try:
+            await acao()
+        except Exception:       # noqa: BLE001 — clique fake é no-op
+            pass
+        return []
     async def baixar_acao(self, acao, timeout_s=60):
         try:
             await acao()

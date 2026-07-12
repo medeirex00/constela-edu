@@ -41,6 +41,10 @@ class Navegador(Protocol):
     # "req_auth"}] — o Authorization da requisição permite reusar a mesma sessão
     # para chamar a API interna direto (in-page fetch).
     async def coletar_respostas(self, url: str, timeout_s: int = 25) -> list: ...
+    # Como coletar_respostas, mas em torno de uma AÇÃO (ex.: clicar "Pesquisar")
+    # em vez de navegar — captura os XHR/fetch que a ação dispara (o SPA só
+    # renderiza o relatório do aluno DEPOIS de submeter a busca).
+    async def coletar_apos_acao(self, acao, timeout_s: int = 20) -> list: ...
     async def baixar(self, seletor: str,
                      timeout_s: int = 60) -> tuple[bytes, str]: ...
     async def baixar_acao(self, acao,
@@ -170,7 +174,12 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
     async def avaliar(self, expressao: str):
         return await self._pagina.evaluate(expressao)
 
-    async def coletar_respostas(self, url: str, timeout_s: int = 25) -> list:
+    async def _capturar(self, acao, timeout_s: int) -> list:
+        """Executa ``acao`` (navegar OU clicar) com um listener de respostas ligado
+        e devolve os corpos JSON das XHR/fetch capturadas. Além do corpo: método,
+        status e o Authorization DA REQUISIÇÃO — o conector reusa esse token para
+        CHAMAR a API interna direto (in-page fetch) sem clicar em componentes
+        Angular frágeis."""
         capturadas = []
 
         def _on(resp):
@@ -182,9 +191,8 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
 
         self._pagina.on("response", _on)
         try:
-            await self._pagina.goto(url, wait_until="domcontentloaded",
-                                    timeout=timeout_s * 1000)
-            try:  # espera a rede assentar p/ pegar os XHR pós-load do SPA
+            await acao()
+            try:  # espera a rede assentar p/ pegar os XHR pós-ação do SPA
                 await self._pagina.wait_for_load_state(
                     "networkidle", timeout=timeout_s * 1000)
             except Exception:  # noqa: BLE001 — segue com o que já capturou
@@ -196,10 +204,6 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
             try:
                 if "json" in (r.headers or {}).get("content-type", ""):
                     req = r.request
-                    # Além do corpo: método, status e o Authorization DA REQUISIÇÃO.
-                    # O conector reusa esse token para CHAMAR a API interna direto
-                    # (in-page fetch) quando o SPA não dispara o endpoint sozinho —
-                    # sem depender de clicar em componentes Angular frágeis.
                     saida.append({
                         "url": r.url, "json": await r.json(),
                         "method": getattr(req, "method", "GET"),
@@ -208,6 +212,15 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
             except Exception:  # noqa: BLE001
                 pass
         return saida
+
+    async def coletar_respostas(self, url: str, timeout_s: int = 25) -> list:
+        return await self._capturar(
+            lambda: self._pagina.goto(url, wait_until="domcontentloaded",
+                                      timeout=timeout_s * 1000),
+            timeout_s)
+
+    async def coletar_apos_acao(self, acao, timeout_s: int = 20) -> list:
+        return await self._capturar(acao, timeout_s)
 
     async def baixar(self, seletor: str, timeout_s: int = 60) -> tuple[bytes, str]:
         return await self.baixar_acao(

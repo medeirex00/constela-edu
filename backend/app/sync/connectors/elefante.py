@@ -84,6 +84,11 @@ _JS_EXPORTAR = r"""(() => {
 })()"""
 _SEL_EXPORTAR = ("button:has-text('Exportar'), a:has-text('Exportar'), "
                  "[role='button']:has-text('Exportar')")
+# O relatório do aluno só RENDERIZA depois de submeter a busca (os params vão na
+# URL, mas é o "Pesquisar" que executa a consulta — dispara a API de dados e
+# revela o Exportar). Ancorado no texto (rótulo estável), não em classe CSS.
+_SEL_PESQUISAR = ("button:has-text('Pesquisar'), [role='button']:has-text('Pesquisar'), "
+                  "input[type='submit'][value='Pesquisar']")
 
 # 1º lote de VALIDAÇÃO: coleta poucos alunos por execução p/ o run terminar
 # rápido e dar diagnóstico. Sobe (ou vira lote com cursor) após confirmar a cadeia.
@@ -498,23 +503,39 @@ class ConectorElefante(ConectorNavegador):
 
     async def _baixar_relatorio_aluno(self, nav, contexto, log, course_id: str,
                                       student_id: str):
-        """Abre o relatório INDIVIDUAL do aluno (capturando a API dele) e baixa o
-        PDF pelo Exportar. Falha RÁPIDO se o Exportar não aparecer (12s) e dumpa
-        a estrutura + a API do aluno (revela o botão real ou o endpoint JSON dos
-        dados). Devolve ArquivoObtido pronto p/ o pipeline, ou None."""
+        """Abre o relatório INDIVIDUAL do aluno, SUBMETE a busca (Pesquisar — o SPA
+        só renderiza o relatório depois disso) capturando a API de dados dele, e
+        baixa o PDF pelo Exportar. Falha RÁPIDO se o Exportar não aparecer e dumpa
+        a estrutura + a API do aluno (revela o endpoint JSON dos dados p/ eu passar
+        a puxar direto). Devolve ArquivoObtido pronto p/ o pipeline, ou None."""
         caps = await nav.coletar_respostas(
             _URL_STUDENT.format(student_id=student_id, course_id=course_id),
             timeout_s=25)
         await self._assentar(nav)
+        # Os params vão na URL, mas o relatório só RENDERIZA ao submeter a busca —
+        # clicar "Pesquisar" dispara a API de dados do aluno e revela o Exportar.
+        if await nav.esperar(_SEL_PESQUISAR, timeout_s=6):
+            try:
+                caps += await nav.coletar_apos_acao(
+                    lambda: nav.clicar(_SEL_PESQUISAR), timeout_s=20)
+            except Exception:  # noqa: BLE001 — clique pode falhar; segue p/ diagnóstico
+                pass
+            await self._assentar(nav)
         if not await nav.esperar(_SEL_EXPORTAR, timeout_s=12):
             pag = await nav.avaliar(_JS_PAGINA_ALUNO)
+            # SÓ os endpoints NOVOS do aluno (tira o roster e a rede do município já
+            # conhecidos) — é aqui que aparece a API de dados por aluno.
             apis = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
-                     self._forma_json(c.get("json")))
-                    for c in caps if self._api_elefante(c["url"])][:8]
+                     f"{c.get('method', '')} {c.get('status', '')} "
+                     + self._forma_json(c.get("json")))
+                    for c in caps if self._api_elefante(c["url"])
+                    and "get-courses-students" not in c["url"]
+                    and "all-sp-municipal" not in c["url"]
+                    and "active-schools" not in c["url"]][:10]
             log("download", "warn",
-                f"[Elefante] aluno {student_id}: Exportar não apareceu (12s). "
+                f"[Elefante] aluno {student_id}: Exportar não apareceu. "
                 f"Botões: {pag.get('botoes')}. API do aluno: "
-                + json.dumps(apis, ensure_ascii=False)[:900])
+                + json.dumps(apis, ensure_ascii=False)[:1100])
             return None
         conteudo, nome = await nav.baixar_acao(
             lambda: nav.clicar(_SEL_EXPORTAR), timeout_s=min(contexto.timeout_s, 45))
