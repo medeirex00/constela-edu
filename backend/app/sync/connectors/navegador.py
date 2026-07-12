@@ -40,6 +40,29 @@ class Navegador(Protocol):
 FabricaNavegador = Callable[..., Awaitable[Navegador]]
 
 
+def _proxy_playwright() -> dict | None:
+    """Traduz ``settings.SYNC_PROXY_URL`` (ex.: http://user:pass@host:porta)
+    para o formato ``proxy=`` do Playwright ({server, username, password}).
+    Devolve None se não houver proxy configurado. O proxy sobe o score do
+    reCAPTCHA v3 (login recusado a partir de IP de datacenter)."""
+    from urllib.parse import urlsplit
+
+    from app.core.config import settings
+    url = (settings.SYNC_PROXY_URL or "").strip()
+    if not url:
+        return None
+    p = urlsplit(url)
+    if not p.hostname:
+        return None
+    porta = f":{p.port}" if p.port else ""
+    cfg: dict = {"server": f"{p.scheme or 'http'}://{p.hostname}{porta}"}
+    if p.username:
+        cfg["username"] = p.username
+    if p.password:
+        cfg["password"] = p.password
+    return cfg
+
+
 async def abrir_playwright(*, headless: bool = True,
                            timeout_s: int = 30) -> Navegador:
     """Fábrica REAL — import tardio do Playwright. Só chamada em produção com
@@ -55,8 +78,13 @@ async def abrir_playwright(*, headless: bool = True,
             recuperavel=False) from exc
 
     pw = await async_playwright().start()  # pragma: no cover — precisa do browser
+    proxy = _proxy_playwright()
     navegador = await pw.chromium.launch(
         headless=headless,
+        # Roteia o robô por um IP residencial/móvel reputável quando configurado
+        # (SYNC_PROXY_URL) — necessário para passar o reCAPTCHA v3 do Matific a
+        # partir de datacenter. Sem proxy, sai direto (comportamento atual).
+        proxy=proxy,
         # Flags que reduzem a chance de bloqueio anti-robô em SPAs.
         args=["--disable-blink-features=AutomationControlled", "--no-sandbox"])
     # Contexto REALISTA: locale/fuso/idioma do Brasil e um user-agent de Chrome

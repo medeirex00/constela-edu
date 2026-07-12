@@ -156,8 +156,13 @@ class ConectorNavegador(Conector):
             return
         if await nav.visivel(sel_erro):
             log("login", "warn", f"[{nome}] Mensagem de erro de login detectada.")
-            raise ErroConector(f"Usuário ou senha do {nome} inválidos.",
-                               codigo="senha_invalida", recuperavel=False)
+            raise ErroConector(
+                f"Usuário ou senha do {nome} inválidos. Se as credenciais estão "
+                "corretas e funcionam no navegador, a plataforma pode estar "
+                "recusando o acesso automatizado do servidor por proteção "
+                "anti-robô (reCAPTCHA) — nesse caso é preciso um IP residencial "
+                "(configurar SYNC_PROXY_URL).",
+                codigo="senha_invalida", recuperavel=False)
         if await nav.visivel(_SEL_BLOQUEIO):
             raise ErroConector(
                 f"O {nome} pediu verificação de segurança (CAPTCHA) após o envio. "

@@ -150,6 +150,16 @@ class Settings(BaseSettings):
     # Bem acima do teto real de uma execução, para nunca abortar uma sync viva.
     SYNC_TRAVADA_S: int = 1800        # 30 min
 
+    # Proxy de SAÍDA do robô (Playwright). VAZIO por padrão. Existe porque
+    # algumas plataformas (ex.: Matific) protegem o login com reCAPTCHA v3, que
+    # PONTUA a sessão pela reputação do IP + sinais de automação: de um IP de
+    # DATACENTER (Railway) o score é baixo e o login com credencial VÁLIDA é
+    # recusado como se fosse senha errada. Roteando por um IP residencial/móvel
+    # reputável o score sobe e o login passa. Formato:
+    # "http://usuario:senha@host:porta" (ou socks5://...). Só o robô usa; a API
+    # continua saindo direto. Se vazio, sem proxy (comportamento atual).
+    SYNC_PROXY_URL: str = ""
+
     # --- Observabilidade (logs estruturados, métricas, Sentry) ------------
     LOG_JSON: bool = True           # logs em JSON (uma linha por evento)
     LOG_LEVEL: str = "INFO"

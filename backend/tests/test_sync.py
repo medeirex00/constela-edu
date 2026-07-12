@@ -166,6 +166,26 @@ def test_login_sem_formulario_da_diagnostico_claro(plataforma):
     assert "endereço atual" in res.mensagem and "manual" in res.mensagem.lower()
 
 
+def test_proxy_playwright_traduz_url(monkeypatch):
+    """SYNC_PROXY_URL vira o formato proxy= do Playwright — necessário para o
+    robô sair por IP residencial e passar o reCAPTCHA v3 do Matific."""
+    from app.core.config import settings
+    from app.sync.connectors import navegador as nav
+
+    monkeypatch.setattr(settings, "SYNC_PROXY_URL", "", raising=False)
+    assert nav._proxy_playwright() is None                    # sem proxy = None
+
+    monkeypatch.setattr(settings, "SYNC_PROXY_URL",
+                        "http://usuario:segredo@proxy.exemplo:3128", raising=False)
+    cfg = nav._proxy_playwright()
+    assert cfg == {"server": "http://proxy.exemplo:3128",
+                   "username": "usuario", "password": "segredo"}
+
+    monkeypatch.setattr(settings, "SYNC_PROXY_URL", "socks5://host:1080",
+                        raising=False)
+    assert nav._proxy_playwright() == {"server": "socks5://host:1080"}
+
+
 def test_login_detecta_mfa_2fa():
     """Se após o envio aparece tela de verificação em duas etapas (2FA/OTP), o
     conector dá erro ESPECÍFICO (código 'mfa') orientando conta sem 2FA / import
