@@ -477,6 +477,14 @@ export default function Turmas() {
   const [paraExcluir, setParaExcluir] = useState<Turma | null>(null);
   const [erroExclusao, setErroExclusao] = useState<string | null>(null);
   const [excluindo, setExcluindo] = useState(false);
+  // Seleção em massa (checkbox por linha + "selecionar todas") e o modal de
+  // exclusão em massa. `confirmaApagarDados` trava o caminho destrutivo (apagar
+  // também os alunos e seus dados) — LGPD: dados de crianças, sem volta.
+  const [selecionadas, setSelecionadas] = useState<Set<number>>(new Set());
+  const [exclusaoMassaAberta, setExclusaoMassaAberta] = useState(false);
+  const [erroMassa, setErroMassa] = useState<string | null>(null);
+  const [confirmaApagarDados, setConfirmaApagarDados] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const temporizador = useRef<number | null>(null);
 
@@ -491,6 +499,49 @@ export default function Turmas() {
   const visiveis = (turmas ?? []).filter(
     (turma) => mostrarTodas || (turma.status === "ativa" && turma.ano_letivo === anoAtivo),
   );
+
+  // Seleção: "todas" refere-se às turmas VISÍVEIS (as que o usuário vê agora).
+  const idsVisiveis = visiveis.map((t) => t.id);
+  const todasSelecionadas =
+    idsVisiveis.length > 0 && idsVisiveis.every((id) => selecionadas.has(id));
+  const algumasSelecionadas = idsVisiveis.some((id) => selecionadas.has(id));
+  const turmasSelecionadas = (turmas ?? []).filter((t) => selecionadas.has(t.id));
+  // Matrículas CRUAS (o que a exclusão realmente enxerga — inclui alunos
+  // arquivados / de outro ano). É o sinal de "há dados a apagar", não o
+  // total_alunos filtrado (que subestima e deixaria passar sem confirmação).
+  const matriculasNasSelecionadas = turmasSelecionadas.reduce(
+    (soma, t) => soma + (t.total_matriculas ?? 0),
+    0,
+  );
+
+  // Checkbox do cabeçalho fica "traço" (indeterminado) quando só parte está marcada.
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = algumasSelecionadas && !todasSelecionadas;
+    }
+  }, [algumasSelecionadas, todasSelecionadas]);
+
+  function alternarSelecao(id: number) {
+    setSelecionadas((atuais) => {
+      const prox = new Set(atuais);
+      if (prox.has(id)) prox.delete(id);
+      else prox.add(id);
+      return prox;
+    });
+  }
+
+  function alternarTodas() {
+    setSelecionadas((atuais) => {
+      const marcadasTodas =
+        idsVisiveis.length > 0 && idsVisiveis.every((id) => atuais.has(id));
+      if (marcadasTodas) {
+        const prox = new Set(atuais);
+        idsVisiveis.forEach((id) => prox.delete(id));
+        return prox;
+      }
+      return new Set([...atuais, ...idsVisiveis]);
+    });
+  }
 
   function abrirNova() {
     setEmEdicao(null);
@@ -530,20 +581,55 @@ export default function Turmas() {
     }
   }
 
-  async function excluir() {
+  async function excluir(comAlunos: boolean) {
     if (!escolaId || !paraExcluir) return;
     setExcluindo(true);
     setErroExclusao(null);
     try {
-      await api<{ mensagem: string }>(`/escolas/${escolaId}/turmas/${paraExcluir.id}`, {
-        method: "DELETE",
+      const r = await api<{ mensagem: string }>(
+        `/escolas/${escolaId}/turmas/${paraExcluir.id}?com_alunos=${comAlunos}`,
+        { method: "DELETE" },
+      );
+      avisar("ok", r.mensagem);
+      setSelecionadas((atuais) => {
+        const prox = new Set(atuais);
+        prox.delete(paraExcluir.id);
+        return prox;
       });
-      avisar("ok", `Turma “${paraExcluir.nome}” excluída.`);
       setParaExcluir(null);
+      setConfirmaApagarDados(false);
       recarregarTurmas();
     } catch (erro) {
       setErroExclusao(
         erro instanceof ApiError ? erro.message : "Não foi possível excluir a turma.",
+      );
+    } finally {
+      setExcluindo(false);
+    }
+  }
+
+  async function excluirMassa(comAlunos: boolean) {
+    if (!escolaId || selecionadas.size === 0) return;
+    setExcluindo(true);
+    setErroMassa(null);
+    try {
+      const r = await api<{
+        mensagem: string;
+        excluidas: number;
+        bloqueadas: number;
+        alunos_excluidos: number;
+      }>(`/escolas/${escolaId}/turmas/excluir`, {
+        method: "POST",
+        body: JSON.stringify({ turma_ids: [...selecionadas], com_alunos: comAlunos }),
+      });
+      avisar(r.excluidas > 0 ? "ok" : "erro", r.mensagem);
+      setSelecionadas(new Set());
+      setExclusaoMassaAberta(false);
+      setConfirmaApagarDados(false);
+      recarregarTurmas();
+    } catch (erro) {
+      setErroMassa(
+        erro instanceof ApiError ? erro.message : "Não foi possível excluir as turmas.",
       );
     } finally {
       setExcluindo(false);
@@ -605,6 +691,30 @@ export default function Turmas() {
         Mostrar turmas arquivadas e de outros anos letivos
       </label>
 
+      {selecionadas.size > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 dark:border-indigo-900/60 dark:bg-indigo-950/40">
+          <span className="text-sm font-medium text-indigo-800 dark:text-indigo-200">
+            {selecionadas.size} turma{selecionadas.size === 1 ? "" : "s"} selecionada
+            {selecionadas.size === 1 ? "" : "s"}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <Botao variante="neutro" onClick={() => setSelecionadas(new Set())}>
+              Limpar seleção
+            </Botao>
+            <Botao
+              className="!bg-red-600 hover:!bg-red-500"
+              onClick={() => {
+                setErroMassa(null);
+                setConfirmaApagarDados(false);
+                setExclusaoMassaAberta(true);
+              }}
+            >
+              <Trash2 size={16} /> Excluir selecionadas
+            </Botao>
+          </div>
+        </div>
+      )}
+
       <Card>
         {carregandoTurmas ? (
           <Carregando />
@@ -620,6 +730,17 @@ export default function Turmas() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  <th className="w-10 px-4 py-2 font-medium">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                      checked={todasSelecionadas}
+                      onChange={alternarTodas}
+                      aria-label="Selecionar todas as turmas visíveis"
+                      title="Selecionar todas"
+                    />
+                  </th>
                   <th className="px-4 py-2 font-medium">Turma</th>
                   <th className="px-4 py-2 font-medium">Série</th>
                   <th className="hidden px-4 py-2 font-medium sm:table-cell">Turno</th>
@@ -634,8 +755,19 @@ export default function Turmas() {
                 {visiveis.map((turma) => (
                   <tr
                     key={turma.id}
-                    className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60"
+                    className={`border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${
+                      selecionadas.has(turma.id) ? "bg-indigo-50/60 dark:bg-indigo-950/30" : ""
+                    }`}
                   >
+                    <td className="px-4 py-2.5">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                        checked={selecionadas.has(turma.id)}
+                        onChange={() => alternarSelecao(turma.id)}
+                        aria-label={`Selecionar turma ${turma.nome}`}
+                      />
+                    </td>
                     <td className="px-4 py-2.5">
                       <Link
                         to={`/turmas/${turma.id}`}
@@ -695,6 +827,7 @@ export default function Turmas() {
                           className={`${estiloAcao} hover:text-red-600 dark:hover:text-red-400`}
                           onClick={() => {
                             setErroExclusao(null);
+                            setConfirmaApagarDados(false);
                             setParaExcluir(turma);
                           }}
                         >
@@ -725,34 +858,175 @@ export default function Turmas() {
         aberto={paraExcluir !== null}
         aoFechar={() => setParaExcluir(null)}
       >
+        {(() => {
+          // Conta CRUA (o que a exclusão enxerga): pega alunos arquivados / de
+          // outro ano que o total_alunos filtrado esconderia. É o que decide se
+          // há dados a apagar — evita liberar o botão destrutivo sem confirmação.
+          const matriculas = paraExcluir?.total_matriculas ?? 0;
+          const temAlunos = matriculas > 0;
+          return (
+            <>
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                Excluir a turma <strong>{paraExcluir?.nome}</strong> ({paraExcluir?.ano_letivo})?
+                Esta ação é definitiva e não pode ser desfeita.
+              </p>
+
+              {temAlunos ? (
+                <>
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                    Esta turma tem <strong>{matriculas} aluno(s)</strong> matriculado(s). Escolha o
+                    que fazer:
+                    <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+                      <li>
+                        <strong>Excluir só a turma</strong> — indisponível enquanto houver alunos.
+                        Mova/remova os alunos antes, ou use “Arquivar” para preservar o histórico.
+                      </li>
+                      <li>
+                        <strong>Excluir turma + alunos e dados</strong> — apaga a turma e também os
+                        alunos com todos os seus dados (leituras, notas, conquistas, snapshots). Um
+                        aluno que também esteja em outra turma é apenas desvinculado desta.
+                      </li>
+                    </ul>
+                  </div>
+                  <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 rounded border-red-300 accent-red-600"
+                      checked={confirmaApagarDados}
+                      onChange={(e) => setConfirmaApagarDados(e.target.checked)}
+                    />
+                    <span>
+                      Entendo que os alunos desta turma e <strong>todos os seus dados</strong> serão
+                      apagados permanentemente. Sem volta.
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                  A turma não tem alunos matriculados.
+                </p>
+              )}
+
+              {erroExclusao && (
+                <div className="mt-3">
+                  <Mensagem tipo="erro">{erroExclusao}</Mensagem>
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <Botao variante="neutro" onClick={() => setParaExcluir(null)} disabled={excluindo}>
+                  Cancelar
+                </Botao>
+                {temAlunos ? (
+                  <>
+                    <Botao
+                      variante="neutro"
+                      disabled
+                      title="A turma tem alunos — mova/remova os alunos ou use “turma + alunos e dados”."
+                    >
+                      Excluir só a turma
+                    </Botao>
+                    <Botao
+                      className="!bg-red-600 hover:!bg-red-500"
+                      onClick={() => excluir(true)}
+                      disabled={excluindo || !confirmaApagarDados}
+                    >
+                      {excluindo ? "Excluindo..." : "Excluir turma + alunos e dados"}
+                    </Botao>
+                  </>
+                ) : (
+                  <Botao
+                    className="!bg-red-600 hover:!bg-red-500"
+                    onClick={() => excluir(false)}
+                    disabled={excluindo}
+                  >
+                    {excluindo ? "Excluindo..." : "Sim, excluir"}
+                  </Botao>
+                )}
+              </div>
+            </>
+          );
+        })()}
+      </Modal>
+
+      <Modal
+        titulo="Excluir turmas selecionadas"
+        aberto={exclusaoMassaAberta}
+        aoFechar={() => setExclusaoMassaAberta(false)}
+      >
         <p className="text-sm text-zinc-600 dark:text-zinc-300">
-          Excluir a turma <strong>{paraExcluir?.nome}</strong> ({paraExcluir?.ano_letivo})?
+          Você selecionou <strong>{selecionadas.size} turma(s)</strong>
+          {matriculasNasSelecionadas > 0 ? (
+            <>
+              , com <strong>{matriculasNasSelecionadas} aluno(s)</strong> matriculado(s).
+            </>
+          ) : (
+            <> (sem alunos matriculados).</>
+          )}{" "}
           Esta ação é definitiva e não pode ser desfeita.
         </p>
-        {(paraExcluir?.total_alunos ?? 0) > 0 && (
+
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          Escolha o que fazer:
+          <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+            <li>
+              <strong>Excluir só as turmas</strong> — remove as turmas vazias. As que ainda têm
+              alunos são <strong>mantidas</strong> (arquive ou remova os alunos antes).
+            </li>
+            <li>
+              <strong>Excluir turmas + alunos e dados</strong> — apaga as turmas e também os alunos
+              matriculados nelas, com todos os seus dados. Um aluno que também esteja em outra turma
+              (não selecionada) é apenas desvinculado, não apagado. Irreversível.
+            </li>
+          </ul>
+        </div>
+
+        {matriculasNasSelecionadas > 0 && (
+          <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-red-300 accent-red-600"
+              checked={confirmaApagarDados}
+              onChange={(e) => setConfirmaApagarDados(e.target.checked)}
+            />
+            <span>
+              Entendo que os <strong>{matriculasNasSelecionadas} aluno(s)</strong> das turmas
+              selecionadas e <strong>todos os seus dados</strong> serão apagados permanentemente.
+              Sem volta.
+            </span>
+          </label>
+        )}
+
+        {erroMassa && (
           <div className="mt-3">
-            <Mensagem tipo="erro">
-              Esta turma possui {paraExcluir?.total_alunos} aluno(s) vinculado(s). Mova ou
-              remova os alunos antes de excluir — ou use “Arquivar” para preservar o histórico.
-            </Mensagem>
+            <Mensagem tipo="erro">{erroMassa}</Mensagem>
           </div>
         )}
-        {erroExclusao && (
-          <div className="mt-3">
-            <Mensagem tipo="erro">{erroExclusao}</Mensagem>
-          </div>
-        )}
-        <div className="mt-4 flex justify-end gap-2">
-          <Botao variante="neutro" onClick={() => setParaExcluir(null)} disabled={excluindo}>
-            Cancelar
-          </Botao>
+
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
           <Botao
-            className="!bg-red-600 hover:!bg-red-500"
-            onClick={excluir}
+            variante="neutro"
+            onClick={() => setExclusaoMassaAberta(false)}
             disabled={excluindo}
           >
-            {excluindo ? "Excluindo..." : "Sim, excluir"}
+            Cancelar
           </Botao>
+          <Botao variante="neutro" onClick={() => excluirMassa(false)} disabled={excluindo}>
+            {excluindo ? "Excluindo..." : "Excluir só as turmas"}
+          </Botao>
+          {/* O caminho destrutivo só aparece quando há alunos a apagar (conta
+              crua). Assim um número desatualizado/zero nunca dispara com_alunos
+              sem a confirmação — se surgirem alunos depois, o backend mantém as
+              turmas (bloqueadas) via "Excluir só as turmas". */}
+          {matriculasNasSelecionadas > 0 && (
+            <Botao
+              className="!bg-red-600 hover:!bg-red-500"
+              onClick={() => excluirMassa(true)}
+              disabled={excluindo || !confirmaApagarDados}
+            >
+              {excluindo ? "Excluindo..." : "Excluir turmas + alunos e dados"}
+            </Botao>
+          )}
         </div>
       </Modal>
     </div>

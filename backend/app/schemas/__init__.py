@@ -7,6 +7,7 @@ from app.schemas.comum import (
     AlunoUpdate,
     DashboardOut,
     ExclusaoPermanenteAlunos,
+    ExcluirTurmas,
     FusaoAlunos,
     DificuldadeSerieOut,
     DificuldadeUpdate,

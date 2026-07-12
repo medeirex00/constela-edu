@@ -28,6 +28,7 @@ from app.schemas import (
     AlunoPerfilOut,
     AlunoUpdate,
     ExclusaoPermanenteAlunos,
+    ExcluirTurmas,
     FusaoAlunos,
     ProfessorCompletoIn,
     ProfessorCreate,
@@ -411,6 +412,52 @@ def acoes_em_alunos(
     return {"mensagem": mensagem, "afetados": len(ids)}
 
 
+def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
+                           aluno_ids: list[int]) -> int:
+    """Exclusão FÍSICA de alunos + TODOS os dados vinculados (leituras, snapshots
+    Matific/Elefante, notas, matrículas) e — LGPD/direito ao esquecimento — as
+    conversas da IA que citem o nome. Auditado (§17). NÃO commita nem recalcula:
+    o chamador decide. Reusado pela exclusão permanente e pela exclusão de turma
+    com alunos. Devolve quantos alunos foram removidos."""
+    nomes = {a.id: a.nome for a in db.execute(
+        select(Aluno).where(Aluno.escola_id == escola_id, Aluno.id.in_(aluno_ids))
+    ).scalars()}
+    ids = list(nomes)
+    if not ids:
+        return 0
+    # Filhos Edu explícitos (ordem p/ recálculo/log); Quest/responsáveis somem
+    # por ON DELETE CASCADE (migração 0003) ao deletar o aluno.
+    db.execute(delete(Leitura).where(Leitura.aluno_id.in_(ids)))
+    db.execute(delete(SnapshotMatific).where(SnapshotMatific.aluno_id.in_(ids)))
+    db.execute(delete(SnapshotElefante).where(SnapshotElefante.aluno_id.in_(ids)))
+    db.execute(delete(Nota).where(Nota.aluno_id.in_(ids)))
+    db.execute(delete(Matricula).where(Matricula.aluno_id.in_(ids)))
+    for aid in ids:  # auditoria ANTES de apagar (entidade_id só referência)
+        registrar(db, "aluno.excluido_permanente", escola_id=escola_id,
+                  usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
+                  detalhes={"nome": nomes[aid], "tipo": "exclusao_permanente"})
+    db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
+
+    # LGPD: esquecimento das conversas da IA que citem o nome COMPLETO de algum
+    # aluno excluído (a cascata da 0003 apaga as mensagens).
+    from app.models import ConversaIA, MensagemIA
+    ids_conversas: set[int] = set()
+    for nome in {nomes[aid] for aid in ids if nomes[aid] and nomes[aid].strip()}:
+        ids_conversas.update(db.execute(
+            select(ConversaIA.id)
+            .join(MensagemIA, MensagemIA.conversa_id == ConversaIA.id)
+            .where(ConversaIA.escola_id == escola_id,
+                   MensagemIA.conteudo.icontains(nome, autoescape=True))
+        ).scalars())
+    if ids_conversas:
+        db.execute(delete(ConversaIA).where(ConversaIA.id.in_(ids_conversas)))
+        registrar(db, "ia.conversas_esquecimento", escola_id=escola_id,
+                  usuario_id=usuario.id,
+                  detalhes={"conversas_removidas": len(ids_conversas),
+                            "motivo": "exclusao_permanente_aluno"})
+    return len(ids)
+
+
 @router.post("/alunos/excluir-permanente", response_model=dict)
 def excluir_alunos_permanente(
     dados: ExclusaoPermanenteAlunos,
@@ -427,47 +474,11 @@ def excluir_alunos_permanente(
             "Confirmação inválida. Digite EXCLUIR para confirmar a exclusão "
             "permanente e irreversível.")
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
-    ids = [a.id for a in alunos]
-    nomes = {a.id: a.nome for a in alunos}
-
-    # Apaga os filhos Edu explicitamente (mantém a ordem do recálculo/log);
-    # os demais filhos (Quest, responsáveis) somem por ON DELETE CASCADE
-    # (migração 0003) quando o aluno é deletado.
-    db.execute(delete(Leitura).where(Leitura.aluno_id.in_(ids)))
-    db.execute(delete(SnapshotMatific).where(SnapshotMatific.aluno_id.in_(ids)))
-    db.execute(delete(SnapshotElefante).where(SnapshotElefante.aluno_id.in_(ids)))
-    db.execute(delete(Nota).where(Nota.aluno_id.in_(ids)))
-    db.execute(delete(Matricula).where(Matricula.aluno_id.in_(ids)))
-    # Auditoria ANTES de apagar o aluno (entidade_id fica só como referência).
-    for aid in ids:
-        registrar(db, "aluno.excluido_permanente", escola_id=escola_id,
-                  usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
-                  detalhes={"nome": nomes[aid], "tipo": "exclusao_permanente"})
-    db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
-
-    # Direito ao esquecimento (LGPD): remove conversas do assistente que citem o
-    # nome COMPLETO de algum aluno excluído (escopo da escola; a cascata da 0003
-    # apaga as mensagens). Dados da IA são derivados — a fonte oficial já sumiu.
-    from app.models import ConversaIA, MensagemIA
-    ids_conversas: set[int] = set()
-    for nome in {nomes[aid] for aid in ids if nomes[aid] and nomes[aid].strip()}:
-        ids_conversas.update(db.execute(
-            select(ConversaIA.id)
-            .join(MensagemIA, MensagemIA.conversa_id == ConversaIA.id)
-            .where(ConversaIA.escola_id == escola_id,
-                   MensagemIA.conteudo.icontains(nome, autoescape=True))
-        ).scalars())
-    if ids_conversas:
-        db.execute(delete(ConversaIA).where(ConversaIA.id.in_(ids_conversas)))
-        registrar(db, "ia.conversas_esquecimento", escola_id=escola_id,
-                  usuario_id=usuario.id,
-                  detalhes={"conversas_removidas": len(ids_conversas),
-                            "motivo": "exclusao_permanente_aluno"})
+    n = _apagar_alunos_e_dados(db, escola_id, usuario, [a.id for a in alunos])
     db.commit()
-
     _recalcular_escola(db, escola_id)
-    return {"mensagem": f"{len(ids)} aluno(s) excluído(s) permanentemente, com "
-                        "todos os dados vinculados.", "afetados": len(ids)}
+    return {"mensagem": f"{n} aluno(s) excluído(s) permanentemente, com "
+                        "todos os dados vinculados.", "afetados": n}
 
 
 @router.post("/alunos/fundir", response_model=dict)
@@ -711,6 +722,11 @@ def _turma_out(db: Session, turma: Turma) -> TurmaOut:
                Matricula.ano_letivo == turma.ano_letivo,
                Aluno.status == "ativo")
     ).scalar_one()
+    # Contagem CRUA (qualquer ano/situação): é o que a exclusão enxerga.
+    saida.total_matriculas = db.execute(
+        select(func.count()).select_from(Matricula)
+        .where(Matricula.turma_id == turma.id)
+    ).scalar_one()
     return saida
 
 
@@ -724,8 +740,17 @@ def listar_turmas(
     """Turmas ativas do ano letivo ativo; `todas=true` inclui arquivadas e
     outros anos (tela de gestão). Filtros e seletores usam o padrão."""
     ano = _ano_ativo(db, escola_id)
+    # Matrículas CRUAS por turma (qualquer ano/situação) — subconsulta
+    # correlacionada para não conflitar com o JOIN filtrado do total_alunos.
+    sub_matriculas = (
+        select(func.count())
+        .select_from(Matricula)
+        .where(Matricula.turma_id == Turma.id)
+        .correlate(Turma)
+        .scalar_subquery()
+    )
     consulta = (
-        select(Turma, Professor.nome, func.count(Aluno.id))
+        select(Turma, Professor.nome, func.count(Aluno.id), sub_matriculas)
         .outerjoin(Professor, Turma.professor_id == Professor.id)
         .outerjoin(Matricula, (Matricula.turma_id == Turma.id)
                    & (Matricula.ano_letivo == Turma.ano_letivo))
@@ -744,10 +769,11 @@ def listar_turmas(
     if permitidas is not None:
         consulta = consulta.where(Turma.id.in_(permitidas))
     saida = []
-    for turma, professor_nome, total_alunos in db.execute(consulta).all():
+    for turma, professor_nome, total_alunos, total_matriculas in db.execute(consulta).all():
         item = TurmaOut.model_validate(turma)
         item.professor_nome = professor_nome
         item.total_alunos = total_alunos
+        item.total_matriculas = total_matriculas
         saida.append(item)
     return saida
 
@@ -869,31 +895,138 @@ def atualizar_turma(
     return _turma_out(db, turma)
 
 
+def _excluir_turmas(db: Session, escola_id: int, usuario: Usuario,
+                    turma_ids: list[int], com_alunos: bool) -> dict:
+    """Exclui turmas (validadas por escola).
+
+    Com ``com_alunos``: apaga fisicamente (com todos os dados) SOMENTE os alunos
+    cujas matrículas estão TODAS dentro das turmas selecionadas. Um aluno que
+    ainda tenha matrícula em OUTRA turma (ex.: o ano letivo ativo, quando se
+    exclui uma turma antiga) NÃO é apagado — é apenas DESVINCULADO das turmas
+    excluídas, preservando a ficha e os dados dos outros anos. Isso evita apagar
+    permanentemente a criança e os dados atuais dela ao limpar um histórico.
+
+    Sem ``com_alunos``: as turmas com QUALQUER matrícula ficam BLOQUEADAS (só as
+    vazias são excluídas). Recalcula uma vez ao final se algum aluno foi afetado.
+    Devolve: excluidas, bloqueadas, alunos_excluidos, alunos_desvinculados."""
+    turmas = list(db.execute(
+        select(Turma).where(Turma.escola_id == escola_id, Turma.id.in_(turma_ids))
+    ).scalars())
+    if not turmas:
+        return {"excluidas": 0, "bloqueadas": 0, "alunos_excluidos": 0,
+                "alunos_desvinculados": 0}
+    ids = [t.id for t in turmas]
+    # Alunos com matrícula (qualquer ano/situação) em alguma das turmas.
+    aluno_ids = list(db.execute(
+        select(Matricula.aluno_id).where(Matricula.turma_id.in_(ids)).distinct()
+    ).scalars())
+
+    a_excluir = turmas
+    bloqueadas = 0
+    alunos_excluidos = 0
+    alunos_desvinculados = 0
+    if aluno_ids:
+        if com_alunos:
+            # Quem AINDA tem matrícula fora do conjunto excluído é preservado.
+            ainda = set(db.execute(
+                select(Matricula.aluno_id).where(
+                    Matricula.aluno_id.in_(aluno_ids),
+                    Matricula.turma_id.notin_(ids),
+                ).distinct()
+            ).scalars())
+            apagar = [aid for aid in aluno_ids if aid not in ainda]
+            if apagar:
+                # Só destes as matrículas estão todas nas turmas excluídas.
+                alunos_excluidos = _apagar_alunos_e_dados(db, escola_id, usuario, apagar)
+            if ainda:
+                # Remove APENAS o vínculo com as turmas excluídas (mantém o aluno).
+                db.execute(delete(Matricula).where(
+                    Matricula.aluno_id.in_(ainda), Matricula.turma_id.in_(ids)))
+                alunos_desvinculados = len(ainda)
+                registrar(db, "turma.alunos_desvinculados", escola_id=escola_id,
+                          usuario_id=usuario.id,
+                          detalhes={"turmas": ids, "alunos": alunos_desvinculados,
+                                    "motivo": "exclusao_turma_com_alunos_matriculado_em_outra"})
+        else:
+            com = set(db.execute(
+                select(Matricula.turma_id).where(Matricula.turma_id.in_(ids)).distinct()
+            ).scalars())
+            a_excluir = [t for t in turmas if t.id not in com]
+            bloqueadas = len(turmas) - len(a_excluir)
+
+    for t in a_excluir:
+        registrar(db, "turma.excluida", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="turma", entidade_id=t.id,
+                  detalhes={"nome": t.nome, "com_alunos": com_alunos})
+        db.delete(t)
+    db.commit()
+    if alunos_excluidos or alunos_desvinculados:
+        _recalcular_escola(db, escola_id)
+    return {"excluidas": len(a_excluir), "bloqueadas": bloqueadas,
+            "alunos_excluidos": alunos_excluidos,
+            "alunos_desvinculados": alunos_desvinculados}
+
+
 @router.delete("/turmas/{turma_id}", response_model=dict)
 def excluir_turma(
     turma_id: int,
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    com_alunos: bool = Query(default=False),
 ):
-    """Exclusão definitiva — bloqueada enquanto houver alunos vinculados."""
+    """Exclusão definitiva de uma turma. Por padrão é BLOQUEADA se houver alunos
+    vinculados (arquive para preservar o histórico). Com ``com_alunos=true``,
+    remove TAMBÉM os alunos matriculados na turma e todos os seus dados
+    (leituras, snapshots, notas, matrículas) — irreversível."""
     turma = _turma_da_escola(db, escola_id, turma_id)
-    vinculados = db.execute(
-        select(func.count()).select_from(Matricula)
-        .where(Matricula.turma_id == turma.id)
-    ).scalar_one()
-    if vinculados:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"A turma “{turma.nome}” possui {vinculados} aluno(s) vinculado(s). "
-            "Mova ou remova os alunos antes de excluir — ou arquive a turma "
-            "para preservar o histórico.")
     nome = turma.nome
-    db.delete(turma)
-    registrar(db, "turma.excluida", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="turma", entidade_id=turma_id, detalhes={"nome": nome})
-    db.commit()
-    return {"mensagem": f"Turma “{nome}” excluída."}
+    if not com_alunos:
+        # Trava clássica: sem alunos → exclui; com alunos → 409 orientando a
+        # mover/remover, arquivar, ou usar com_alunos=true (apagar tudo).
+        vinculados = db.execute(
+            select(func.count()).select_from(Matricula)
+            .where(Matricula.turma_id == turma.id)
+        ).scalar_one()
+        if vinculados:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"A turma “{nome}” possui {vinculados} aluno(s) vinculado(s). "
+                "Mova ou remova os alunos antes de excluir — ou exclua a turma "
+                "junto com os alunos, ou arquive a turma para preservar o "
+                "histórico.")
+    r = _excluir_turmas(db, escola_id, usuario, [turma.id], com_alunos)
+    msg = f"Turma “{nome}” excluída"
+    if r["alunos_excluidos"]:
+        msg += f" com {r['alunos_excluidos']} aluno(s) e todos os dados"
+    if r["alunos_desvinculados"]:
+        msg += (f" ({r['alunos_desvinculados']} aluno(s) mantido(s) por ainda "
+                "estarem em outra turma)")
+    msg += "."
+    return {"mensagem": msg, **r}
+
+
+@router.post("/turmas/excluir", response_model=dict)
+def excluir_turmas_massa(
+    dados: ExcluirTurmas,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Exclusão em massa de turmas (botão 'excluir selecionadas'). Com
+    ``com_alunos``, remove também os alunos e seus dados. Sem, as turmas com
+    alunos são mantidas e reportadas em ``bloqueadas``."""
+    r = _excluir_turmas(db, escola_id, usuario, dados.turma_ids, dados.com_alunos)
+    partes = [f"{r['excluidas']} turma(s) excluída(s)"]
+    if r["alunos_excluidos"]:
+        partes.append(f"{r['alunos_excluidos']} aluno(s) e todos os dados removidos")
+    if r["alunos_desvinculados"]:
+        partes.append(f"{r['alunos_desvinculados']} aluno(s) mantido(s) por ainda "
+                      "estarem em outra turma")
+    if r["bloqueadas"]:
+        partes.append(f"{r['bloqueadas']} com alunos foram mantida(s) — use "
+                      "‘excluir com os alunos’ para removê-las")
+    return {"mensagem": "; ".join(partes) + ".", **r}
 
 
 @router.get("/professores", response_model=list[ProfessorOut])

@@ -45,7 +45,10 @@ export interface Turma {
   observacoes: string | null;
   status: string;
   professor_nome: string | null;
+  /** Alunos ativos do ano letivo da turma (número amigável exibido). */
   total_alunos: number;
+  /** Matrículas cruas (qualquer ano/situação) — o que a exclusão enxerga. */
+  total_matriculas: number;
 }
 
 /** Payload de criação/edição de turma (campos opcionais podem ir nulos). */

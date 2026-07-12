@@ -103,7 +103,12 @@ class TurmaOut(ORMModel):
     status: str = "ativa"
     # Preenchidos na listagem para a tela de gestão
     professor_nome: str | None = None
+    # Alunos ATIVOS do ano letivo da turma (o número "amigável" exibido).
     total_alunos: int = 0
+    # Matrículas CRUAS vinculadas à turma (qualquer ano/situação). É o que a
+    # trava de exclusão enxerga (a FK bloqueia excluir turma com QUALQUER
+    # matrícula) — a tela usa este número para decidir se há dados a apagar.
+    total_matriculas: int = 0
 
 
 class TurmaCreate(BaseModel):
@@ -195,6 +200,14 @@ class FusaoAlunos(BaseModel):
     manter_id: int
     remover_id: int
     confirmacao: str = ""
+
+
+class ExcluirTurmas(BaseModel):
+    """Exclusão em massa de turmas. Com ``com_alunos``, remove também os alunos
+    matriculados nessas turmas e todos os seus dados (irreversível); sem, as
+    turmas que ainda têm alunos são mantidas e reportadas."""
+    turma_ids: list[int] = Field(min_length=1)
+    com_alunos: bool = False
 
 
 class FaixaLeituraOut(BaseModel):

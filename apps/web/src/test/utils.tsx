@@ -66,6 +66,7 @@ export function rankingItemFake(over: Partial<RankingItem> = {}): RankingItem {
 }
 
 export function turmaFake(over: Partial<Turma> = {}): Turma {
+  const total_alunos = over.total_alunos ?? 3;
   return {
     id: 1,
     nome: "3º Ano A",
@@ -77,7 +78,10 @@ export function turmaFake(over: Partial<Turma> = {}): Turma {
     observacoes: null,
     status: "ativa",
     professor_nome: null,
-    total_alunos: 3,
+    total_alunos,
+    // Por padrão espelha o total_alunos; sobrescreva para simular alunos
+    // arquivados / de outro ano (matrículas cruas > alunos ativos).
+    total_matriculas: over.total_matriculas ?? total_alunos,
     ...over,
   };
 }
