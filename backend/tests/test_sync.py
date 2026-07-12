@@ -166,6 +166,27 @@ def test_login_sem_formulario_da_diagnostico_claro(plataforma):
     assert "endereço atual" in res.mensagem and "manual" in res.mensagem.lower()
 
 
+def test_login_detecta_mfa_2fa():
+    """Se após o envio aparece tela de verificação em duas etapas (2FA/OTP), o
+    conector dá erro ESPECÍFICO (código 'mfa') orientando conta sem 2FA / import
+    manual — não um 'falha_auth' genérico."""
+    class ComMFA(NavegadorFake):
+        async def visivel(self, seletor):
+            s = seletor.lower()
+            if "otp" in s or "one-time-code" in s or "2fa" in s or "mfa" in s \
+                    or "verification" in s or "authcode" in s:
+                return True          # tela de 2FA visível após o envio
+            return await super().visivel(seletor)
+
+    Classe = type(connectors.obter("matific"))
+    res = asyncio.run(Classe(_fabrica(ComMFA(logado=False)))
+                      .testar_credenciais(Credenciais(usuario="u", senha="p"),
+                                          _contexto()))
+    assert res.ok is False
+    assert res.codigo == "mfa"
+    assert "duas etapas" in res.mensagem.lower()
+
+
 @pytest.mark.parametrize("plataforma", ["matific", "elefante"])
 def test_login_detecta_captcha_bloqueio(plataforma):
     """Se a plataforma mostra CAPTCHA/desafio anti-robô, o conector devolve um

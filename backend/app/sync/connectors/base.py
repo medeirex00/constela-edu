@@ -31,6 +31,15 @@ _SEL_BLOQUEIO = (
     ".h-captcha, iframe[src*='hcaptcha'], "
     "#challenge-form, #cf-challenge-running, iframe[src*='challenges.cloudflare']")
 
+# Tela de verificação em DUAS ETAPAS (2FA/OTP) após o envio — a automação não
+# completa código enviado por SMS/app. Damos um erro específico (código "mfa")
+# em vez de um "falha_auth" genérico, orientando conta-robô sem 2FA ou import
+# manual. Seletores de campo de código de uso único (não casam página logada).
+_SEL_MFA = (
+    "input[autocomplete='one-time-code'], input[name*='otp' i], "
+    "input[name*='mfa' i], input[name*='2fa' i], input[id*='otp' i], "
+    "input[name*='verification' i], input[name*='authcode' i]")
+
 
 class ConectorNavegador(Conector):
     """Conector com sessão de navegador. Subclasses definem ``_login`` e os
@@ -154,13 +163,25 @@ class ConectorNavegador(Conector):
                 f"O {nome} pediu verificação de segurança (CAPTCHA) após o envio. "
                 "Use a importação manual do relatório.",
                 codigo="captcha", recuperavel=True)
+        if await nav.visivel(_SEL_MFA):
+            log("login", "warn", f"[{nome}] Verificação em duas etapas (2FA) detectada.")
+            raise ErroConector(
+                f"O {nome} pediu verificação em duas etapas (código/2FA), que a "
+                "automação não completa. Use uma conta-robô SEM 2FA (dedicada, papel "
+                "de gestor) ou a importação manual do relatório.",
+                codigo="mfa", recuperavel=True)
         atual = await nav.url_atual()
+        # A conta pode ser Google-only (SSO) sem senha direta: aí o login
+        # tradicional falha sem "área logada" nem erro explícito. Damos o
+        # endereço final e orientamos definir senha direta / usar import manual.
         log("login", "erro", f"[{nome}] Não confirmei a área logada nem erro ({atual}).")
         raise ErroConector(
             f"Não foi possível confirmar o login no {nome}: enviei as credenciais "
             "mas não reconheci nem a área logada nem uma mensagem de erro (o "
-            f"endereço final foi {atual}). A página pode ter mudado. Tente "
-            "novamente ou use a importação manual do relatório.",
+            f"endereço final foi {atual}). A conta pode usar login pelo Google (SSO) "
+            "sem senha direta, ter verificação extra, ou a página pode ter mudado. "
+            "Defina uma senha direta na conta (ex.: ‘Esqueci a senha’) ou use a "
+            "importação manual do relatório.",
             codigo="falha_auth", recuperavel=True)
 
     def _config_login(self) -> dict:
