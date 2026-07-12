@@ -89,26 +89,35 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
     async def ir_para(self, url: str) -> None:
         await self._pagina.goto(url, wait_until="domcontentloaded")
 
-    # Usamos SEMPRE ``locator(...).first``: seletores com alternativas (vírgula)
-    # podem casar VÁRIOS elementos e o modo estrito do Playwright estoura em
-    # fill/click. Pegando o primeiro, os seletores-fallback ficam robustos.
+    @staticmethod
+    def _vis(seletor: str) -> str:
+        """Filtra CADA alternativa por ``:visible``. Assim a automação ignora
+        campos ESCONDIDOS que casam o mesmo seletor (ex.: o Elefante tem um
+        ``input[name='Username']`` type=hidden ANTES do visível — o ``.first``
+        pegaria o errado). Também evita o modo estrito do Playwright: seletores
+        com alternativas (vírgula) resolvem para o primeiro elemento VISÍVEL."""
+        partes = [p.strip() + ":visible" for p in seletor.split(",") if p.strip()]
+        return ", ".join(partes) or seletor
+
+    def _loc(self, seletor: str):
+        return self._pagina.locator(self._vis(seletor)).first
+
     async def preencher(self, seletor: str, valor: str) -> None:
-        await self._pagina.locator(seletor).first.fill(valor)
+        await self._loc(seletor).fill(valor)
 
     async def clicar(self, seletor: str) -> None:
-        await self._pagina.locator(seletor).first.click()
+        await self._loc(seletor).click()
 
     async def esperar(self, seletor: str, timeout_s: int = 20) -> bool:
         try:
-            await self._pagina.locator(seletor).first.wait_for(
-                state="visible", timeout=timeout_s * 1000)
+            await self._loc(seletor).wait_for(state="visible", timeout=timeout_s * 1000)
             return True
-        except Exception:  # noqa: BLE001 — ausência do seletor = False
+        except Exception:  # noqa: BLE001 — ausência do seletor visível = False
             return False
 
     async def visivel(self, seletor: str) -> bool:
         try:
-            return await self._pagina.locator(seletor).first.is_visible()
+            return await self._loc(seletor).is_visible()
         except Exception:  # noqa: BLE001
             return False
 
