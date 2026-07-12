@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import AcoesAluno from "../components/AcoesAluno";
 import EvolucaoAlunoAba from "../components/EvolucaoAlunoAba";
 import HistoricoLeituras from "../components/HistoricoLeituras";
+import LinhaDoTempoAluno from "../components/LinhaDoTempoAluno";
 import { Badge, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
@@ -216,7 +217,9 @@ export default function PerfilAluno() {
   // histórico de leituras, evolução detalhada nem ações de gestão.
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const [aba, setAba] = useState<"perfil" | "historico" | "evolucao">("perfil");
+  const [aba, setAba] = useState<
+    "perfil" | "linha_do_tempo" | "historico" | "evolucao"
+  >("perfil");
 
   // Leitura via hook único: cuida de cancelamento, timeout e retry. Fica
   // ocioso (null) enquanto escolaId/id não existirem.
@@ -285,7 +288,7 @@ export default function PerfilAluno() {
 
       <div role="tablist" className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
         {/* Professor: só a aba Perfil (histórico e evolução detalhada são de gestão) */}
-        {([["perfil", "Perfil"], ["historico", "Histórico de Leituras"], ["evolucao", "Evolução"]] as const)
+        {([["perfil", "Perfil"], ["linha_do_tempo", "Linha do tempo"], ["historico", "Histórico de Leituras"], ["evolucao", "Evolução"]] as const)
           .filter(([chave]) => gestor || chave === "perfil")
           .map(([chave, rotulo]) => (
           <button
@@ -303,6 +306,10 @@ export default function PerfilAluno() {
           </button>
         ))}
       </div>
+
+      {gestor && aba === "linha_do_tempo" && escolaId && id && (
+        <LinhaDoTempoAluno escolaId={escolaId} alunoId={id} />
+      )}
 
       {gestor && aba === "historico" && escolaId && id && (
         <HistoricoLeituras escolaId={escolaId} alunoId={id} />
