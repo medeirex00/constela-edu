@@ -35,6 +35,10 @@ class Navegador(Protocol):
     # É como lemos ESTRUTURA (ids de turma/aluno, links) de forma robusta — sem
     # depender de clicar em componentes de UI frágeis.
     async def avaliar(self, expressao: str): ...
+    # Navega e captura os corpos JSON das respostas XHR/fetch — revela a API
+    # interna do SPA (ex.: lista de turmas/alunos do Elefante Angular) quando os
+    # ids não estão no HTML. Devolve [{"url":..., "json":...}].
+    async def coletar_respostas(self, url: str, timeout_s: int = 25) -> list: ...
     async def baixar(self, seletor: str,
                      timeout_s: int = 60) -> tuple[bytes, str]: ...
     async def baixar_acao(self, acao,
@@ -163,6 +167,36 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
 
     async def avaliar(self, expressao: str):
         return await self._pagina.evaluate(expressao)
+
+    async def coletar_respostas(self, url: str, timeout_s: int = 25) -> list:
+        capturadas = []
+
+        def _on(resp):
+            try:
+                if resp.request.resource_type in ("xhr", "fetch"):
+                    capturadas.append(resp)
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._pagina.on("response", _on)
+        try:
+            await self._pagina.goto(url, wait_until="domcontentloaded",
+                                    timeout=timeout_s * 1000)
+            try:  # espera a rede assentar p/ pegar os XHR pós-load do SPA
+                await self._pagina.wait_for_load_state(
+                    "networkidle", timeout=timeout_s * 1000)
+            except Exception:  # noqa: BLE001 — segue com o que já capturou
+                pass
+        finally:
+            self._pagina.remove_listener("response", _on)
+        saida = []
+        for r in capturadas:
+            try:
+                if "json" in (r.headers or {}).get("content-type", ""):
+                    saida.append({"url": r.url, "json": await r.json()})
+            except Exception:  # noqa: BLE001
+                pass
+        return saida
 
     async def baixar(self, seletor: str, timeout_s: int = 60) -> tuple[bytes, str]:
         return await self.baixar_acao(

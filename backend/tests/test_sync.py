@@ -56,6 +56,12 @@ class NavegadorFake:
                 "student_links": ["4427356"], "data_ids": [],
                 "tem_exportar": True, "n": 1, "textos": ["Exportar"], "tags": ["BUTTON"]}
     async def url_atual(self): return "https://x"
+    async def coletar_respostas(self, url, timeout_s=25):
+        # Simula a API interna do SPA do Elefante: 1 turma, 1 aluno.
+        return [{"url": "https://admin.elefanteletrado.com.br/api/courses",
+                 "json": [{"courseId": 511434}]},
+                {"url": "https://admin.elefanteletrado.com.br/api/students",
+                 "json": [{"studentId": 4427356}]}]
     async def baixar_acao(self, acao, timeout_s=60):
         try:
             await acao()

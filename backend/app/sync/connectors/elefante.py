@@ -203,26 +203,79 @@ class ConectorElefante(ConectorNavegador):
             r["erro"] = f"{type(exc).__name__}: {str(exc)[:140]}"
         return r
 
-    async def _extrair_ids(self, nav, tipo: str,
-                           excluir: frozenset = frozenset()) -> list[str]:
-        """Extrai ids (turma ou aluno) da página atual de forma robusta: prefere
-        os hrefs de /reports/{course|student} (inequívocos); se não houver, cai
-        para os values numéricos de options/data-* (menos os `excluir`, ex.: os
-        próprios ids de turma que também aparecem no seletor). Sem clicar em
-        componente frágil (lê o DOM via JS)."""
-        ids = await nav.avaliar(_JS_IDS)
+    @staticmethod
+    def _ids_do_json(obj, chaves: tuple) -> list[str]:
+        """Extrai ids de ENTIDADES de um JSON: para cada objeto que é item de uma
+        lista e tem um campo id-like (`chaves`), pega esse id. Assim pega "lista
+        de turmas/alunos" sem varrer ids aninhados (livro, atividade…)."""
+        achados: list[str] = []
+
+        def anda(o):
+            if isinstance(o, list):
+                for item in o:
+                    if isinstance(item, dict):
+                        for k in chaves:
+                            v = item.get(k)
+                            if isinstance(v, (int, str)) and str(v).isdigit():
+                                achados.append(str(v))
+                                break
+                    anda(item)
+            elif isinstance(o, dict):
+                for v in o.values():
+                    anda(v)
+
+        anda(obj)
+        return achados
+
+    @staticmethod
+    def _forma_json(obj, prof: int = 0) -> str:
+        """Forma (nomes de campos, SEM valores/PII) de um JSON — p/ eu ver como
+        extrair os ids quando a heurística falha, num único log."""
+        if isinstance(obj, list):
+            return f"[{len(obj)}]" + (ConectorElefante._forma_json(obj[0], prof + 1)
+                                      if obj and prof < 2 else "")
+        if isinstance(obj, dict):
+            return "{" + ",".join(list(obj.keys())[:12]) + "}"
+        return type(obj).__name__
+
+    async def _enumerar(self, nav, log, url: str, tipo: str,
+                        excluir: frozenset = frozenset()) -> list[str]:
+        """Enumera ids (turma/aluno) navegando p/ `url` e capturando a API JSON
+        interna do SPA — E também tentando o DOM. Loga os endpoints e as
+        contagens (sem PII) para calibrar sem novo recon."""
+        caps = await nav.coletar_respostas(url, timeout_s=25)
+        await self._assentar(nav)
+        dom = await nav.avaliar(_JS_IDS)
         if tipo == "turma":
-            cand = ids.get("course_links") or ids.get("option_ids") or ids.get("data_ids") or []
+            dom_ids = dom.get("course_links") or []
+            chaves = ("courseId", "classId", "id", "code")
+            casa = ("course", "class", "turma")
         else:
-            cand = (ids.get("student_links") or ids.get("option_ids")
-                    or ids.get("data_ids") or [])
-        vistos: set[str] = set()
-        out: list[str] = []
-        for x in cand:
-            if x and x not in vistos and x not in excluir:
-                vistos.add(x)
-                out.append(x)
-        return out
+            dom_ids = dom.get("student_links") or []
+            chaves = ("studentId", "userId", "id")
+            casa = ("student", "user", "aluno", "course")
+        dom_ids = dom_ids or dom.get("option_ids") or dom.get("data_ids") or []
+        api_ids: list[str] = []
+        for c in caps:
+            if any(k in c["url"].lower() for k in casa):
+                api_ids += self._ids_do_json(c.get("json"), chaves)
+        endpoints = list(dict.fromkeys(c["url"].split("?")[0] for c in caps))[:12]
+        ids: list[str] = []
+        for x in list(dom_ids) + api_ids:
+            if x and x not in ids and x not in excluir:
+                ids.append(x)
+        log("navegacao", "info",
+            f"[Elefante] {tipo}: DOM={len(dom_ids)} API={len(api_ids)} "
+            f"→ {len(ids)} id(s). {len(caps)} resposta(s) JSON; endpoints: {endpoints}")
+        if not ids:
+            # Sem ids: dumpa a FORMA (nomes de campos, sem PII) dos endpoints
+            # relevantes — num único log dá para ver como extrair.
+            formas = [(c["url"].split("?")[0], self._forma_json(c.get("json")))
+                      for c in caps if any(k in c["url"].lower() for k in casa)][:6]
+            log("navegacao", "warn",
+                f"[Elefante] {tipo}: 0 ids — formas dos endpoints: "
+                + json.dumps(formas, ensure_ascii=False)[:1200])
+        return ids
 
     async def _baixar_relatorio_aluno(self, nav, contexto, course_id: str,
                                       student_id: str):
@@ -273,13 +326,13 @@ class ConectorElefante(ConectorNavegador):
                     codigo="falha_auth", recuperavel=True)
             log("navegacao", "info", f"[Elefante] Painel logado em {atual}.")
 
-            await nav.ir_para(_URL_COURSE.format(course_id=""))
-            await self._assentar(nav)
-            turmas = await self._extrair_ids(nav, "turma")
+            # A lista de turmas vem da API interna do SPA (Angular) — capturamos
+            # navegando para a tela de turma; DOM é tentado como reforço.
+            turmas = await self._enumerar(nav, log, f"{_URL_APP}/reports/course", "turma")
             if not turmas:
-                estr = await nav.avaliar(_JS_IDS)
-                log("navegacao", "warn", "[Elefante] Nenhuma turma encontrada. "
-                    "Estrutura da página: " + json.dumps(estr, ensure_ascii=False)[:900])
+                log("navegacao", "warn",
+                    "[Elefante] Nenhuma turma encontrada nem no DOM nem na API. "
+                    "Veja os endpoints capturados no log acima para calibrar.")
                 return []
             log("navegacao", "info", f"[Elefante] {len(turmas)} turma(s) a varrer.")
 
@@ -288,9 +341,9 @@ class ConectorElefante(ConectorNavegador):
             for idx, cid in enumerate(turmas, 1):
                 if contexto.cancelado():
                     break
-                await nav.ir_para(_URL_COURSE.format(course_id=cid))
-                await self._assentar(nav)
-                alunos = await self._extrair_ids(nav, "aluno", excluir=excluir_turmas)
+                alunos = await self._enumerar(
+                    nav, log, _URL_COURSE.format(course_id=cid), "aluno",
+                    excluir=excluir_turmas)
                 log("navegacao", "info",
                     f"[Elefante] Turma {idx}/{len(turmas)} (id {cid}): "
                     f"{len(alunos)} aluno(s).")
