@@ -36,10 +36,14 @@ from app.sync.interfaces import (
 # A página de login mudou de "/account/login/" (que hoje redireciona p/ a home
 # de marketing) para "/login-page/". Campos: #username-input / #password-input;
 # botão "Continuar" (#login-button). Um aviso de cookies aparece antes e é
-# dispensado. Endereço configurável por escola via extra['url_login'].
+# apenas DISPENSADO (nunca "Aceitar Todos"). Endereço configurável via
+# extra['url_login'].
 _URL_LOGIN = "https://www.matific.com/bra/pt-br/login-page/"
 _URL_LEADERBOARD = "https://www.matific.com/bra/pt-br/teachers/admin/school-leaderboard/"
-_SEL_COOKIE = "#c-later-btn, #c-accept-btn"
+# Só DISPENSAR o aviso de cookies (privacidade): "Mais tarde"/fechar (X). Nunca
+# "Aceitar Todos" — o robô não dá consentimento de cookies pela escola. Se
+# nenhum aparecer, o passo é pulado (clica-se-existir).
+_SEL_COOKIE = "#c-later-btn, #c-close-btn"
 _SEL_USUARIO = "#username-input, input[name='username']"
 _SEL_SENHA = "#password-input, input[name='password']"
 # Login em DUAS etapas: o MESMO #login-button é "Continuar" (revela a senha) e
