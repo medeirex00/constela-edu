@@ -22,8 +22,10 @@ from app.sync.interfaces import (
 # Navegador fake — exercita TODO o conector sem Playwright nem conta real
 # --------------------------------------------------------------------------
 class NavegadorFake:
-    def __init__(self, *, logado=True, erro_login=False, conteudo=b"PKxlsxfake"):
+    def __init__(self, *, logado=True, erro_login=False, bloqueado=False,
+                 conteudo=b"PKxlsxfake"):
         self.logado, self.erro_login, self.conteudo = logado, erro_login, conteudo
+        self.bloqueado = bloqueado          # simula CAPTCHA/desafio anti-robô
         self.valores_preenchidos: list[str] = []
 
     async def ir_para(self, url): pass
@@ -36,7 +38,12 @@ class NavegadorFake:
         if any(m in seletor for m in marcas_logado):
             return self.logado
         return True
-    async def visivel(self, seletor): return self.erro_login
+    async def visivel(self, seletor):
+        # Distingue o seletor de CAPTCHA/bloqueio do de mensagem de erro.
+        marcas_bloqueio = ("captcha", "recaptcha", "hcaptcha", "challenge", "cloudflare")
+        if any(m in seletor for m in marcas_bloqueio):
+            return self.bloqueado
+        return self.erro_login
     async def texto(self, seletor): return ""
     async def url_atual(self): return "https://x"
     async def baixar(self, seletor, timeout_s=60): return (self.conteudo, "rel.xlsx")
@@ -154,6 +161,54 @@ def test_login_sem_formulario_da_diagnostico_claro(plataforma):
     assert res.ok is False
     assert res.codigo == "pagina_login"
     assert "endereço atual" in res.mensagem and "manual" in res.mensagem.lower()
+
+
+@pytest.mark.parametrize("plataforma", ["matific", "elefante"])
+def test_login_detecta_captcha_bloqueio(plataforma):
+    """Se a plataforma mostra CAPTCHA/desafio anti-robô, o conector devolve um
+    erro ESPECÍFICO (código 'captcha') orientando a importação manual — não um
+    'não confirmei o login' genérico."""
+    Classe = type(connectors.obter(plataforma))
+    res = asyncio.run(Classe(_fabrica(NavegadorFake(bloqueado=True)))
+                      .testar_credenciais(Credenciais(usuario="u", senha="p"),
+                                          _contexto()))
+    assert res.ok is False
+    assert res.codigo == "captcha"
+    assert "manual" in res.mensagem.lower()
+
+
+def test_login_registra_etapas_no_log():
+    """O fluxo de login registra etapas CLARAS (abrir → formulário → enviar →
+    resultado) em SincronizacaoLog, sem vazar a senha."""
+    etapas: list[str] = []
+    ctx = Contexto(escola_id=1, execucao_id=None,
+                   log=lambda etapa, nivel, msg: etapas.append(msg))
+    Classe = type(connectors.obter("matific"))
+    asyncio.run(Classe(_fabrica(NavegadorFake(logado=True)))
+                .testar_credenciais(Credenciais(usuario="u", senha="TOPSECRET"), ctx))
+    texto = " | ".join(etapas)
+    assert "Abrindo a página de login" in texto
+    assert "Formulário encontrado" in texto
+    assert "Enviando o formulário" in texto
+    assert "Login confirmado" in texto
+    assert "TOPSECRET" not in texto        # a senha NUNCA aparece no log
+
+
+@pytest.mark.parametrize("plataforma", ["matific", "elefante"])
+def test_diagnosticar_login_sem_credenciais(plataforma):
+    """O diagnóstico (sem credenciais) abre a página e reporta se o formulário
+    aparece e se há bloqueio — para validar o ambiente sem contas reais."""
+    Classe = type(connectors.obter(plataforma))
+    ok = asyncio.run(Classe(_fabrica(NavegadorFake()))
+                     .diagnosticar_login(_contexto()))
+    assert ok["formulario_encontrado"] is True
+    assert ok["bloqueio_detectado"] is False
+    assert ok["erro"] is None
+    assert ok["plataforma"] == plataforma
+
+    bloq = asyncio.run(Classe(_fabrica(NavegadorFake(bloqueado=True)))
+                       .diagnosticar_login(_contexto()))
+    assert bloq["bloqueio_detectado"] is True
 
 
 def test_conector_nao_vaza_senha_no_log():

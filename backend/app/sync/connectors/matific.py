@@ -59,40 +59,20 @@ class ConectorMatific(ConectorNavegador):
         "professor (login → school leaderboard → exportar). Trocável por API "
         "oficial via novo conector, sem alterar o núcleo.")
 
+    def _config_login(self) -> dict:
+        """URL + seletores do login. Usado pelo fluxo real E pelo diagnóstico."""
+        return dict(url=_URL_LOGIN, sel_usuario=_SEL_USUARIO, sel_senha=_SEL_SENHA,
+                    sel_entrar=_SEL_ENTRAR, sel_logado=_SEL_LOGADO,
+                    sel_erro=_SEL_ERRO_LOGIN, pre_passos=(_SEL_COOKIE,),
+                    nome="Matific")
+
     async def _login(self, nav: Navegador, cred: Credenciais,
                      contexto: Contexto) -> None:
         if not cred.usuario or not cred.senha:
             raise ErroConector("Usuário e senha do Matific são obrigatórios.",
                                codigo="senha_invalida", recuperavel=False)
-        await nav.ir_para(cred.extra.get("url_login") or _URL_LOGIN)
-        # Dispensa o aviso de cookies, se aparecer (senão intercepta cliques).
-        if await nav.esperar(_SEL_COOKIE, timeout_s=5):
-            await nav.clicar(_SEL_COOKIE)
-        # Espera o formulário aparecer (SPA + possível redirecionamento). Se não
-        # surgir, erro CLARO com o endereço alcançado — em vez de estourar no
-        # preencher — para o admin saber o motivo real.
-        if not await nav.esperar(_SEL_USUARIO, timeout_s=min(contexto.timeout_s, 20)):
-            atual = await nav.url_atual()
-            raise ErroConector(
-                "Não encontrei o formulário de login do Matific "
-                f"(endereço atual: {atual}). O endereço de login pode ter "
-                "mudado, a página redirecionou, ou exigiu verificação de "
-                "segurança. Informe o endereço correto em ‘url de login’ nas "
-                "opções avançadas, ou use a importação manual do relatório.",
-                codigo="pagina_login", recuperavel=True)
-        await nav.preencher(_SEL_USUARIO, cred.usuario)
-        await nav.preencher(_SEL_SENHA, cred.senha)
-        await nav.clicar(_SEL_ENTRAR)
-        # Sucesso = elemento de área logada aparece; senão, erro de login.
-        if await nav.esperar(_SEL_LOGADO, timeout_s=min(contexto.timeout_s, 25)):
-            return
-        if await nav.visivel(_SEL_ERRO_LOGIN):
-            raise ErroConector("Usuário ou senha do Matific inválidos.",
-                               codigo="senha_invalida", recuperavel=False)
-        raise ErroConector(
-            "Não foi possível confirmar o login no Matific (a página pode ter "
-            "mudado ou exige verificação adicional).",
-            codigo="falha_auth", recuperavel=True)
+        # Fluxo instrumentado (logs por etapa + detecção de CAPTCHA) no base.
+        await self._executar_login(nav, cred, contexto, **self._config_login())
 
     async def localizar_relatorios(self, cred: Credenciais,
                                    contexto: Contexto) -> list[RelatorioDisponivel]:

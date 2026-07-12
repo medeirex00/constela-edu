@@ -74,35 +74,16 @@ class ConectorElefante(ConectorNavegador):
         if not cred.usuario or not cred.senha:
             raise ErroConector("Usuário e senha do Elefante são obrigatórios.",
                                codigo="senha_invalida", recuperavel=False)
-        await nav.ir_para(cred.extra.get("url_login") or _URL_LOGIN)
-        # Fallback: se cair na tela de boas-vindas (em vez do form direto),
-        # escolhe "Sou professor ou gestor". Sonda rápida — no /manager o
-        # formulário já vem direto e este passo é pulado.
-        if await nav.esperar(_SEL_PERFIL_GESTOR, timeout_s=4):
-            await nav.clicar(_SEL_PERFIL_GESTOR)
-        # Passo 2 — espera o formulário; se não surgir, erro CLARO com o endereço
-        # alcançado em vez de estourar no preencher.
-        if not await nav.esperar(_SEL_USUARIO, timeout_s=min(contexto.timeout_s, 20)):
-            atual = await nav.url_atual()
-            raise ErroConector(
-                "Não encontrei o formulário de login do Elefante "
-                f"(endereço atual: {atual}). O endereço de login pode ter "
-                "mudado, a página redirecionou, ou exigiu verificação de "
-                "segurança. Informe o endereço correto em ‘url de login’ nas "
-                "opções avançadas, ou use a importação manual do relatório.",
-                codigo="pagina_login", recuperavel=True)
-        await nav.preencher(_SEL_USUARIO, cred.usuario)
-        await nav.preencher(_SEL_SENHA, cred.senha)
-        await nav.clicar(_SEL_ENTRAR)
-        if await nav.esperar(_SEL_LOGADO, timeout_s=min(contexto.timeout_s, 25)):
-            return
-        if await nav.visivel(_SEL_ERRO_LOGIN):
-            raise ErroConector("Usuário ou senha do Elefante inválidos.",
-                               codigo="senha_invalida", recuperavel=False)
-        raise ErroConector(
-            "Não foi possível confirmar o login no Elefante (a página pode ter "
-            "mudado ou exige verificação).",
-            codigo="falha_auth", recuperavel=True)
+        # Fluxo instrumentado (logs por etapa + detecção de CAPTCHA) no base.
+        await self._executar_login(nav, cred, contexto, **self._config_login())
+
+    def _config_login(self) -> dict:
+        """URL + seletores do login. Usado pelo fluxo real E pelo diagnóstico.
+        Pré-passo (fallback): se cair na tela de boas-vindas, escolhe o perfil."""
+        return dict(url=_URL_LOGIN, sel_usuario=_SEL_USUARIO, sel_senha=_SEL_SENHA,
+                    sel_entrar=_SEL_ENTRAR, sel_logado=_SEL_LOGADO,
+                    sel_erro=_SEL_ERRO_LOGIN, pre_passos=(_SEL_PERFIL_GESTOR,),
+                    nome="Elefante")
 
     async def localizar_relatorios(self, cred: Credenciais,
                                    contexto: Contexto) -> list[RelatorioDisponivel]:
