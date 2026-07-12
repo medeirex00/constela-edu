@@ -161,6 +161,85 @@ def test_individual_casa_aluno_do_relatorio_geral(cliente, db, escola_completa):
     ).scalar_one() == len(escola_completa["alunos"]) + 1
 
 
+def test_import_individual_gera_eventos_e_e_idempotente(cliente, db, escola_completa):
+    """O relatório individual alimenta a LINHA DO TEMPO: 1 EventoAluno por
+    leitura do histórico (com data/hora, título, nível, gênero), e reimportar o
+    MESMO relatório não duplica (idempotência por chave_natural)."""
+    from datetime import datetime
+
+    from app.models import EventoAluno
+
+    escola = escola_completa["escola"]
+    turma = escola_completa["turma"]
+    aluna = Aluno(escola_id=escola.id, nome="Maria Clara Teste")
+    db.add(aluna)
+    db.flush()
+    db.add(Matricula(escola_id=escola.id, aluno_id=aluna.id,
+                     turma_id=turma.id, ano_letivo=escola.ano_letivo_ativo))
+    db.commit()
+
+    def _confirmar():
+        resp = cliente.post(
+            f"/api/v1/escolas/{escola.id}/importacoes/analisar",
+            files={"arquivo": ("individual.pdf",
+                               _pdf_individual(nome="MARIA CLARA TESTE"),
+                               "application/pdf")})
+        assert resp.status_code == 200, resp.text
+        linhas = [{"nome": l["nome"], "dados": l["dados"], "aluno_id": aluna.id}
+                  for l in resp.json()["linhas"]]
+        conf = cliente.post(
+            f"/api/v1/escolas/{escola.id}/importacoes/confirmar",
+            json={"plataforma": "elefante", "formato": "leituras", "tipo": "pdf",
+                  "linhas": linhas})
+        assert conf.status_code == 200, conf.text
+
+    _confirmar()
+    eventos = db.execute(
+        select(EventoAluno).where(EventoAluno.aluno_id == aluna.id,
+                                  EventoAluno.plataforma == "elefante")
+        .order_by(EventoAluno.ocorrido_em)).scalars().all()
+    assert len(eventos) == 2
+    assert all(e.tipo_evento == "leitura" for e in eventos)
+    assert {e.conteudo_titulo for e in eventos} == {"O Pequeno Livro Azul",
+                                                    "A Casa Amarela"}
+    assert {e.nivel_codigo for e in eventos} == {"K", "D"}
+    assert eventos[0].ocorrido_em == datetime(2026, 7, 1)
+    assert eventos[1].ocorrido_em == datetime(2026, 7, 2)
+    assert eventos[0].dados.get("genero")            # gênero preservado
+    assert all(e.livro_id is not None for e in eventos)   # ligado ao catálogo
+
+    # Reimportar o MESMO relatório: nenhum evento novo (idempotente).
+    _confirmar()
+    n = db.execute(
+        select(func.count()).select_from(EventoAluno)
+        .where(EventoAluno.aluno_id == aluna.id)).scalar_one()
+    assert n == 2
+
+
+def test_ingerir_eventos_dedup_por_chave(db, escola_completa):
+    """O serviço de eventos ingere só os novos e é determinístico na chave."""
+    from datetime import datetime
+
+    from app.models import EventoAluno
+    from app.services.eventos import chave_evento, ingerir_eventos
+
+    escola = escola_completa["escola"]
+    aluno = Aluno(escola_id=escola.id, nome="Zé Evento")
+    db.add(aluno)
+    db.flush()
+    quando = datetime(2026, 5, 3, 9, 15)
+    k = chave_evento("elefante", "leitura", aluno.id, "Livro X", quando)
+    assert k == chave_evento("elefante", "leitura", aluno.id, "livro x  ", quando)  # normaliza
+    ev = {"escola_id": escola.id, "aluno_id": aluno.id, "plataforma": "elefante",
+          "tipo_evento": "leitura", "ocorrido_em": quando, "chave_natural": k,
+          "conteudo_titulo": "Livro X", "dados": {}}
+    assert ingerir_eventos(db, aluno.id, "elefante", [ev, dict(ev)]) == 1   # lote dedup
+    db.flush()
+    assert ingerir_eventos(db, aluno.id, "elefante", [ev]) == 0             # já existe
+    assert db.execute(select(func.count()).select_from(EventoAluno)
+                      .where(EventoAluno.aluno_id == aluno.id)).scalar_one() == 1
+
+
 def test_individual_cria_aluno_uma_vez_na_turma_detectada(cliente, db, escola_completa):
     """Aluno inexistente + turma do PDF conhecida: cria UMA vez (não 1 por livro)."""
     escola = escola_completa["escola"]

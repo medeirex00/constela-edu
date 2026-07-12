@@ -31,9 +31,11 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import settings
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis
+from app.services.eventos import chave_evento, ingerir_eventos
 from app.models import (
     Aluno,
     Escola,
+    EventoAluno,
     Importacao,
     Leitura,
     Livro,
@@ -653,6 +655,40 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
              "data": quando, "tempo_leitura_min": tempo}
             for livro, quando, tempo in novas
         ])
+
+    # ESPELHO evento a evento (linha do tempo): 1 EventoAluno por leitura do
+    # histórico individual — inclui RELEITURAS (cada linha tem sua data/hora
+    # própria, diferente das leituras que pontuam o livro uma única vez §35).
+    # Idempotente por chave_natural: reimportar o mesmo relatório não duplica.
+    eventos: list[dict] = []
+    for linha in linhas:
+        titulo = str(linha.dados.get("livro", "")).strip()
+        bruto = linha.dados.get("data")
+        if not titulo or not bruto:
+            continue  # um evento de leitura exige título e data/hora reais
+        try:
+            quando = datetime.fromisoformat(str(bruto))
+        except ValueError:
+            continue
+        if quando.tzinfo is not None:
+            quando = quando.replace(tzinfo=None)
+        tempo_livro = linha.dados.get("tempo_livro_min")
+        genero = str(linha.dados.get("genero", "")).strip(" ,")
+        nivel = str(linha.dados.get("nivel", "")).strip().upper()
+        livro = catalogo.get(titulo.casefold())
+        eventos.append({
+            "escola_id": escola_id, "aluno_id": aluno.id,
+            "importacao_id": importacao.id, "plataforma": "elefante",
+            "tipo_evento": "leitura", "ocorrido_em": quando,
+            "chave_natural": chave_evento("elefante", "leitura", aluno.id,
+                                          titulo, quando),
+            "conteudo_titulo": titulo[:300], "nivel_codigo": nivel or None,
+            "tempo_segundos": (_num(tempo_livro, int) * 60
+                               if tempo_livro is not None else None),
+            "livro_id": (livro.id if livro is not None else None),
+            "dados": ({"genero": genero} if genero else {}),
+        })
+    ingerir_eventos(db, aluno.id, "elefante", eventos)
 
     # Snapshot derivado do total de leituras registradas
     leituras = db.execute(

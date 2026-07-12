@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
-from app.services import periodos, permissoes
+from app.services import periodos, permissoes, timeline
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
 
@@ -65,6 +65,60 @@ def evolucao_leitura_do_aluno(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Data inválida (use AAAA-MM-DD).") from exc
     return svc.evolucao_leitura(db, escola_id, aluno_id, granularidade, ini, fim_dt)
+
+
+@router.get("/alunos/{aluno_id}/linha-do-tempo")
+def linha_do_tempo_do_aluno(
+    aluno_id: int,
+    plataforma: str | None = Query(default=None, pattern="^(matific|elefante)$"),
+    tipo: str | None = Query(default=None, max_length=40),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+    cursor: str | None = Query(default=None, max_length=80),
+    limite: int = Query(default=50, ge=1, le=200),
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Linha do tempo cronológica (evento a evento) do aluno, do mais recente ao
+    mais antigo, paginada por cursor. Sem período informado, traz o histórico
+    TODO. Dado detalhado: professor restrito não acessa."""
+    permissoes.negar_restrito(db, escola_id, usuario)
+    aluno = db.get(Aluno, aluno_id)
+    if aluno is None or aluno.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    ini = fim_dt = None
+    if inicio or fim:
+        escola = db.get(Escola, escola_id)
+        try:
+            ini, fim_dt, _ = periodos.resolver(
+                "personalizado", date.today(), escola.ano_letivo_ativo,
+                periodos._parse_data(inicio), periodos._parse_data(fim))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Data inválida (use AAAA-MM-DD).") from exc
+    dados = timeline.linha_do_tempo(
+        db, escola_id, aluno_id, plataforma=plataforma, tipo_evento=tipo,
+        inicio=ini, fim=fim_dt, cursor=cursor, limite=limite)
+    return {"aluno_id": aluno_id, "nome": aluno.nome, **dados}
+
+
+@router.get("/alunos/{aluno_id}/espelho")
+def espelho_do_aluno(
+    aluno_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Resumo do 'espelho' de dados do aluno (contadores por tipo/plataforma,
+    primeira/última atividade, tempo total). Dado detalhado: professor não
+    acessa."""
+    permissoes.negar_restrito(db, escola_id, usuario)
+    aluno = db.get(Aluno, aluno_id)
+    if aluno is None or aluno.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    return {"aluno_id": aluno_id, "nome": aluno.nome,
+            "espelho": timeline.espelho(db, escola_id, aluno_id)}
 
 
 @router.get("/ranking-evolucao")

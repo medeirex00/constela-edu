@@ -10,11 +10,13 @@ from app.models.escola import Escola
 from app.models.ia import ConversaIA, MensagemIA
 from app.models.nota import LogAuditoria, Nota
 from app.models.plataformas import (
+    EventoAluno,
     Importacao,
     Leitura,
     Livro,
     SnapshotElefante,
     SnapshotMatific,
+    SyncMarcador,
 )
 from app.models.sincronizacao import (
     PlataformaCredencial,
@@ -31,10 +33,12 @@ __all__ = [
     "Configuracao",
     "ConversaIA",
     "DispositivoMovel",
+    "EventoAluno",
     "MensagemIA",
     "DificuldadeTurma",
     "Escola",
     "Importacao",
+    "SyncMarcador",
     "Leitura",
     "Livro",
     "LogAuditoria",

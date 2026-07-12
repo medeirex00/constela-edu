@@ -71,6 +71,84 @@ class SnapshotElefante(Base):
     livros_por_nivel: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class EventoAluno(Base):
+    """Evento GRANULAR de um aluno numa plataforma (uma leitura, uma atividade)
+    — o 'espelho' evento a evento e a base da LINHA DO TEMPO cronológica.
+
+    ADITIVO: os snapshots agregados (SnapshotElefante/SnapshotMatific) seguem
+    sendo a base de scoring/evolução/ranking — nada muda lá. Esta é a camada de
+    histórico fino. Genérica de propósito (serve às DUAS plataformas): campos
+    comuns + ``dados`` JSON para o que é específico (ex.: gênero textual). NÃO
+    guarda voz/áudio de criança (dado sensível fica fora por decisão de projeto).
+
+    IDEMPOTÊNCIA: ``UniqueConstraint(aluno_id, plataforma, chave_natural)``. Como
+    Matific/Elefante não expõem id de evento estável, a chave é sintética e
+    DETERMINÍSTICA (hash do que identifica o evento: plataforma, tipo, título,
+    data/hora). Reimportar o mesmo relatório é no-op — nunca duplica, nunca perde
+    histórico. Backfill fora de ordem entra na sua data real (append-only).
+    """
+
+    __tablename__ = "eventos_aluno"
+    __table_args__ = (
+        UniqueConstraint("aluno_id", "plataforma", "chave_natural",
+                         name="uq_evento_natural"),
+        # Feed cronológico e filtro por período (linha do tempo por aluno).
+        Index("ix_eventos_aluno_ocorrido", "escola_id", "aluno_id", "ocorrido_em"),
+        Index("ix_eventos_tipo", "escola_id", "aluno_id", "tipo_evento"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
+    importacao_id: Mapped[int | None] = mapped_column(
+        ForeignKey("importacoes.id"), index=True, default=None)
+    plataforma: Mapped[str] = mapped_column(String(30))    # matific | elefante
+    tipo_evento: Mapped[str] = mapped_column(String(40))   # leitura | atividade | ...
+    # Data + HORA reais do evento — eixo da linha do tempo cronológica.
+    ocorrido_em: Mapped[datetime] = mapped_column(index=True)
+    # Chave de dedup determinística (hash). Ver docstring.
+    chave_natural: Mapped[str] = mapped_column(String(64), index=True)
+    conteudo_titulo: Mapped[str | None] = mapped_column(String(300), default=None)
+    habilidade: Mapped[str | None] = mapped_column(String(200), default=None)
+    nivel_codigo: Mapped[str | None] = mapped_column(String(10), default=None)
+    acertos: Mapped[int | None] = mapped_column(default=None)
+    erros: Mapped[int | None] = mapped_column(default=None)
+    tentativas: Mapped[int | None] = mapped_column(default=None)
+    pontuacao: Mapped[float | None] = mapped_column(default=None)
+    tempo_segundos: Mapped[int | None] = mapped_column(default=None)
+    livro_id: Mapped[int | None] = mapped_column(
+        ForeignKey("livros.id"), index=True, default=None)
+    # Payload bruto específico da plataforma sem coluna própria (ex.: gênero).
+    dados: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=agora)
+
+
+class SyncMarcador(Base):
+    """Marca-d'água do incremental por (escola, plataforma, tipo_evento): até
+    onde já capturamos eventos. Na 1ª sync (``historico_completo`` False) busca-se
+    o histórico TOTAL; nas seguintes, só a partir de ``ultimo_evento_em`` (com
+    uma janela de segurança), e a UNIQUE de EventoAluno descarta o que repetir.
+    """
+
+    __tablename__ = "sync_marcadores"
+    __table_args__ = (
+        UniqueConstraint("escola_id", "plataforma", "tipo_evento",
+                         name="uq_sync_marcador"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
+    plataforma: Mapped[str] = mapped_column(String(30))
+    tipo_evento: Mapped[str] = mapped_column(String(40))
+    primeira_sync_em: Mapped[datetime | None] = mapped_column(default=None)
+    historico_completo: Mapped[bool] = mapped_column(default=False)
+    # Maior ocorrido_em já ingerido (cursor do incremental).
+    ultimo_evento_em: Mapped[datetime | None] = mapped_column(default=None)
+    ultima_chave_natural: Mapped[str | None] = mapped_column(String(64), default=None)
+    updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
+
+
 class Livro(Base):
     __tablename__ = "livros"
 
