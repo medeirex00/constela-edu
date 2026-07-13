@@ -468,29 +468,26 @@ class ConectorElefante(ConectorNavegador):
             return "str"        # NUNCA o valor
         return "null" if obj is None else type(obj).__name__
 
-    async def _diagnosticar_relatorio_api(self, nav, log, caps: list, mapa: dict) -> None:
-        """Chama a API REAL dos dados (/report/overall-*, POST — descoberta por
-        DevTools) e loga a ESTRUTURA da resposta (só tipos/chaves, sem PII). É o
-        mapa para o parser final que vira eventos da linha do tempo."""
-        base, headers, creds, _auth = self._base_e_auth(caps)
-        if not base:
-            return
-        escola = self._school_id(caps)
-        cid = next((c for c in mapa if mapa[c]), next(iter(mapa), ""))
-        alvos = []
-        # overall-course-report: dados por ALUNO dentro da turma (10 chamadas p/ a
-        # escola toda) — o caminho definitivo (o per-aluno dá 403 e é dispensável).
-        if cid.isdigit():
-            corpo_curso = self._corpo_relatorio(courseId=int(cid),
-                                                useCache=True, selectedProducts="")
-            if escola.isdigit():
-                corpo_curso["schoolId"] = int(escola)
-            alvos.append(("overall-course-report", corpo_curso))
-        if escola.isdigit():
-            alvos.append(("overall-school-report",
-                          self._corpo_relatorio(schoolId=int(escola),
-                                                useCache=True, selectedProducts="")))
-        for nome, corpo in alvos:
+    async def _sondar_por_aluno(self, nav, log, base, headers, creds, sid: str) -> None:
+        """Sonda os endpoints POR ALUNO com o studentId CERTO (vindo do course-
+        report — antes o robô usava o userId do roster e dava 403). Loga a
+        ESTRUTURA (só tipos/chaves, SEM PII). Alvo: os DADOS GRANULARES — livros
+        lidos COM DATA e questões respondidas COM DATA — base do prêmio por
+        período. O nome do endpoint das questões ainda não é confirmado: sonda
+        candidatos e loga qual responde 200."""
+        corpo = self._corpo_relatorio(studentId=int(sid))
+        alvos = [
+            "overall-student-report",           # 40kB: histórico de livros + compreensão
+            "overall-student-books-read",        # livros lidos (lista com data)
+            # candidatos ao "Questões Respondidas" do Histórico de Atividades:
+            "overall-student-answered-questions",
+            "overall-student-questions-answered",
+            "overall-student-questions",
+            "overall-student-answered-question",
+            "overall-student-activities",
+            "overall-student-question",
+        ]
+        for nome in alvos:
             url = f"{base}/report/{nome}"
             try:
                 res = await nav.avaliar(self._js_fetch(url, "POST", headers, creds, corpo))
@@ -500,17 +497,10 @@ class ConectorElefante(ConectorNavegador):
             det = f"{res.get('status')}/{res.get('tipo')}"
             if res.get("erro"):
                 det += f" {res['erro']}"
-            body = res.get("body")
             if res.get("status") == 200:
-                det += " estrutura=" + self._estrutura(body)
-            log("navegacao", "info", f"[Elefante] /report/{nome} → " + det[:1200])
-            # DUMP DEDICADO do array de alunos (o que interessa p/ o parser): os
-            # campos de leitura POR ALUNO dentro da turma.
-            if isinstance(body, dict) and isinstance(body.get("students"), list) \
-                    and body["students"]:
-                log("navegacao", "info",
-                    f"[Elefante] {nome} students[0] = "
-                    + self._estrutura(body["students"][0])[:1500])
+                det += " estrutura=" + self._estrutura(res.get("body"))
+            log("navegacao", "info",
+                f"[Elefante] aluno {sid} /report/{nome} → " + det[:1600])
 
     async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
         """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students
@@ -737,6 +727,7 @@ class ConectorElefante(ConectorNavegador):
             if not base:
                 log("navegacao", "warn", "[Elefante] sem base da API p/ os dados.")
                 return arquivos
+            primeiro_sid = ""   # studentId (do course-report) p/ sondar o per-aluno
             for cid in mapa:
                 if contexto.cancelado():
                     break
@@ -770,10 +761,24 @@ class ConectorElefante(ConectorNavegador):
                     plataforma="elefante", content_type=_CT_API,
                     formato_hint="resumo",
                     metadados={"origem": "api", "course_id": cid}))
+                if not primeiro_sid:
+                    cand = str((alunos[0] or {}).get("studentId") or "") if isinstance(alunos[0], dict) else ""
+                    if cand.isdigit():
+                        primeiro_sid = cand
                 log("download", "info",
                     f"[Elefante] turma {cid}: {len(alunos)} aluno(s) coletado(s).")
             log("download", "info",
                 f"[Elefante] {len(arquivos)} turma(s) coletada(s) via API interna.")
+
+            # SONDA por aluno (1x) com o studentId CERTO do course-report: descobre
+            # os dados GRANULARES (livros com data + questões com data) p/ o prêmio
+            # por período. Não derruba a sync se falhar.
+            if primeiro_sid:
+                try:
+                    await self._sondar_por_aluno(nav, log, base, headers, creds, primeiro_sid)
+                except Exception as exc:  # noqa: BLE001
+                    log("navegacao", "warn",
+                        f"[Elefante] sonda por aluno falhou: {str(exc)[:80]}")
         return arquivos
 
     async def localizar_relatorios(self, cred: Credenciais,
