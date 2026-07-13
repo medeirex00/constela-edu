@@ -107,8 +107,14 @@ _EP_CURSOS = "/course/get-courses-students"
 # 'include' quando a auth é por cookie (sem header capturado).
 _JS_FETCH_TMPL = r"""(async () => {
   try {
-    const r = await fetch(__URL__, { method: __METHOD__,
-      credentials: __CREDS__, headers: __HEADERS__ });
+    const opts = { method: __METHOD__, credentials: __CREDS__,
+                   headers: Object.assign({}, __HEADERS__) };
+    const corpo = __BODY__;
+    if (corpo !== null) {                 // POST com JSON (relatórios /report/*)
+      opts.body = JSON.stringify(corpo);
+      opts.headers['Content-Type'] = 'application/json';
+    }
+    const r = await fetch(__URL__, opts);
     let body = null;
     try { body = await r.json(); } catch (e) { body = null; }
     return { ok: r.ok, status: r.status,
@@ -371,14 +377,16 @@ class ConectorElefante(ConectorNavegador):
         return f"{p.scheme}://{p.netloc}" if p.netloc else ""
 
     @staticmethod
-    def _js_fetch(url: str, metodo: str, headers: dict, creds: str) -> str:
+    def _js_fetch(url: str, metodo: str, headers: dict, creds: str,
+                  corpo: dict | None = None) -> str:
         """Monta o fetch in-page com os valores injetados de forma segura
-        (json.dumps → sem quebrar aspas nem template)."""
+        (json.dumps → sem quebrar aspas nem template). `corpo` != None → POST JSON."""
         return (_JS_FETCH_TMPL
                 .replace("__URL__", json.dumps(url))
                 .replace("__METHOD__", json.dumps(metodo))
                 .replace("__HEADERS__", json.dumps(headers))
-                .replace("__CREDS__", json.dumps(creds)))
+                .replace("__CREDS__", json.dumps(creds))
+                .replace("__BODY__", json.dumps(corpo)))
 
     @classmethod
     def _base_e_auth(cls, caps: list) -> tuple[str, dict, str, str]:
@@ -414,41 +422,83 @@ class ConectorElefante(ConectorNavegador):
                 break
         return f"turma_campos={sorted(t.keys())[:24]} aluno_campos={acampos}"
 
-    async def _probar_relatorio(self, nav, log, caps: list, cid: str, sid: str) -> None:
-        """DIAGNÓSTICO RÁPIDO (uma vez, in-page fetch — segundos): tenta endpoints
-        PROVÁVEIS de dados de leitura por aluno/turma e loga status + FORMA (nomes
-        de campos, sem PII). É assim que localizo a API real dos dados sem depender
-        do relatório em tela (que não renderiza por URL)."""
+    @staticmethod
+    def _school_id(caps: list) -> str:
+        """schoolId da resposta /school/active-schools (para o overall-school-report)."""
+        for c in caps:
+            if "active-schools" in c["url"] and isinstance(c.get("json"), list):
+                for e in c["json"]:
+                    if isinstance(e, dict) and str(e.get("id", "")).isdigit():
+                        return str(e["id"])
+        return ""
+
+    @staticmethod
+    def _corpo_relatorio(**extra) -> dict:
+        """Corpo POST dos endpoints /report/* (formato capturado por DevTools do
+        gestor): período LIFETIME com datas amplas + fuso do Brasil. `extra` traz
+        studentId/schoolId/etc."""
+        hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        corpo = {"startPeriodCustom": "2010-01-01", "endPeriodCustom": hoje,
+                 "timezoneOffset": 180, "languageId": 1, "period": _PERIODO_TUDO}
+        corpo.update(extra)
+        return corpo
+
+    @classmethod
+    def _estrutura(cls, obj, prof: int = 0, max_prof: int = 5) -> str:
+        """Árvore de TIPOS/CHAVES de um JSON (SEM valores → sem PII: nomes de livro,
+        de aluno etc. nunca aparecem). Revela onde estão leituras/livros/questões
+        para eu escrever o parser dos eventos com precisão."""
+        if isinstance(obj, dict):
+            if prof >= max_prof:
+                return "{…}"
+            return "{" + ", ".join(
+                f"{k}:{cls._estrutura(v, prof + 1, max_prof)}"
+                for k, v in list(obj.items())[:40]) + "}"
+        if isinstance(obj, list):
+            return "[]" if not obj else f"[{len(obj)}×{cls._estrutura(obj[0], prof + 1, max_prof)}]"
+        if isinstance(obj, bool):
+            return "bool"
+        if isinstance(obj, (int, float)):
+            return "num"
+        if isinstance(obj, str):
+            return "str"        # NUNCA o valor
+        return "null" if obj is None else type(obj).__name__
+
+    async def _diagnosticar_relatorio_api(self, nav, log, caps: list, mapa: dict) -> None:
+        """Chama a API REAL dos dados (/report/overall-*, POST — descoberta por
+        DevTools) e loga a ESTRUTURA da resposta (só tipos/chaves, sem PII). É o
+        mapa para o parser final que vira eventos da linha do tempo."""
         base, headers, creds, _auth = self._base_e_auth(caps)
         if not base:
             return
-        f = f"period={_PERIODO_TUDO}&products=1"
-        alvos = [
-            f"{base}/student/get-student-report?studentId={sid}&courseId={cid}&{f}",
-            f"{base}/student/get-report?studentId={sid}&courseId={cid}&{f}",
-            f"{base}/report/student?studentId={sid}&courseId={cid}&{f}",
-            f"{base}/course/get-course-report?courseId={cid}&{f}",
-            f"{base}/course/get-students-report?courseId={cid}&{f}",
-            f"{base}/report/course?courseId={cid}&{f}",
-        ]
-        achados: list[str] = []
-        for url in alvos:
+        escola = self._school_id(caps)
+        sid = next((mapa[c][0] for c in mapa if mapa[c]), "")
+        alvos = []
+        if sid.isdigit():
+            alvos += [
+                ("overall-student-report",
+                 self._corpo_relatorio(studentId=int(sid))),
+                ("overall-student-books-read",
+                 self._corpo_relatorio(studentId=int(sid))),
+            ]
+        if escola.isdigit():
+            alvos.append(("overall-school-report",
+                          self._corpo_relatorio(schoolId=int(escola),
+                                                useCache=True, selectedProducts="")))
+        for nome, corpo in alvos:
+            url = f"{base}/report/{nome}"
             try:
-                res = await nav.avaliar(self._js_fetch(url, "GET", headers, creds))
+                res = await nav.avaliar(self._js_fetch(url, "POST", headers, creds, corpo))
             except Exception as exc:  # noqa: BLE001
-                res = {"status": "exc", "erro": str(exc)[:60]}
+                res = {"status": "exc", "erro": str(exc)[:80]}
             res = res if isinstance(res, dict) else {}
-            path = url.split("elefanteletrado.com.br")[-1].split("?")[0]
-            det = f"{res.get('status')}/{res.get('tipo')}({res.get('n')})"
+            det = f"{res.get('status')}/{res.get('tipo')}"
             if res.get("erro"):
                 det += f" {res['erro']}"
-            corpo = res.get("body")
-            if res.get("status") == 200 and isinstance(corpo, (list, dict)):
-                det += " forma=" + self._forma_json(corpo)   # só nomes de campos
-            achados.append(f"{path} → {det}")
-        log("navegacao", "info",
-            "[Elefante] sonda de dados de leitura: "
-            + json.dumps(achados, ensure_ascii=False)[:1300])
+            if res.get("status") == 200:
+                det += " estrutura=" + self._estrutura(res.get("body"))
+            log("navegacao", "info",
+                f"[Elefante] /report/{nome} → " + det[:1700])
 
     async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
         """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students
@@ -661,48 +711,15 @@ class ConectorElefante(ConectorNavegador):
             log("navegacao", "info",
                 f"[Elefante] {len(mapa)} turma(s), {total} aluno(s) no total.")
 
-            # DIAGNÓSTICO RÁPIDO (uma vez): onde estão os DADOS DE LEITURA? Sonda a
-            # API interna direto (o relatório em tela não renderiza por URL). Isso
-            # aponta o endpoint dos dados por aluno/turma p/ a coleta definitiva
-            # (in-page fetch, rápida) — sem depender do PDF/navegador.
-            cid0 = next(iter(mapa))
-            sid0 = mapa[cid0][0] if mapa[cid0] else ""
+            # DADOS DE LEITURA pela API REAL (/report/overall-*, POST — descoberta
+            # por DevTools). Esta rodada mapeia a ESTRUTURA da resposta (sem PII)
+            # para o parser final que vira eventos da linha do tempo. O caminho por
+            # PDF/navegador (Exportar) foi abandonado: o relatório não renderiza por
+            # URL e era lento/instável — a coleta definitiva será por esta API.
             try:
-                await self._probar_relatorio(nav, log, caps, cid0, sid0)
-            except Exception as exc:  # noqa: BLE001 — sonda nunca derruba a sync
-                log("navegacao", "warn", f"[Elefante] sonda falhou: {str(exc)[:80]}")
-
-            vistos: set[str] = set()
-            tentados = 0
-            parou_limite = False
-            for cid, sids in mapa.items():
-                if contexto.cancelado() or parou_limite:
-                    break
-                log("navegacao", "info", f"[Elefante] Turma {cid}: {len(sids)} aluno(s).")
-                for sid in sids:
-                    if contexto.cancelado():
-                        break
-                    if sid in vistos:      # aluno em 2 turmas → baixa 1 vez
-                        continue
-                    vistos.add(sid)
-                    if tentados >= _LIMITE_ALUNOS:
-                        parou_limite = True
-                        log("download", "info",
-                            f"[Elefante] Limite de {_LIMITE_ALUNOS} alunos deste lote "
-                            "(validação) atingido — subo/faço em lotes após confirmar.")
-                        break
-                    tentados += 1
-                    try:
-                        arq = await self._baixar_relatorio_aluno(nav, contexto, log, cid, sid)
-                        if arq:
-                            arquivos.append(arq)
-                    except Exception as exc:  # noqa: BLE001 — um aluno não derruba os demais
-                        log("download", "warn",
-                            f"[Elefante] Falha no aluno id {sid} (turma {cid}): "
-                            f"{type(exc).__name__}: {str(exc)[:90]}")
-            log("download", "info",
-                f"[Elefante] {len(arquivos)} relatório(s) baixado(s) de "
-                f"{tentados} tentativa(s).")
+                await self._diagnosticar_relatorio_api(nav, log, caps, mapa)
+            except Exception as exc:  # noqa: BLE001 — nunca derruba a sync
+                log("navegacao", "warn", f"[Elefante] sonda de relatório falhou: {str(exc)[:80]}")
         return arquivos
 
     async def localizar_relatorios(self, cred: Credenciais,

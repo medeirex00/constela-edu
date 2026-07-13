@@ -225,9 +225,10 @@ def test_elefante_recon_prova_a_cadeia(monkeypatch):
     assert r["download"]["ok"] is True and r["download"]["bytes"] > 0
 
 
-def test_elefante_sincronizar_coleta_por_aluno(monkeypatch):
-    """A COLETA completa varre turmas → alunos e baixa o relatório individual de
-    cada um (ArquivoObtido no formato 'leituras' p/ o pipeline gerar eventos)."""
+def test_elefante_sincronizar_mapeia_turmas_e_sonda_relatorio(monkeypatch):
+    """A sincronização enumera turmas+alunos (roster via API) e sonda a API real
+    dos dados de leitura (/report/overall-*). Rodada de mapeamento: sem download
+    por PDF (o relatório não renderiza por URL)."""
     from app.sync.connectors import elefante
     monkeypatch.setattr(elefante, "_SETTLE_S", 0)
 
@@ -240,10 +241,10 @@ def test_elefante_sincronizar_coleta_por_aluno(monkeypatch):
                    log=lambda e, n, m: etapas.append(m))
     con = elefante.ConectorElefante(_fabrica(NavAdmin(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
-    assert len(arquivos) == 1                     # 1 turma × 1 aluno no fake
-    assert arquivos[0].plataforma == "elefante"
-    assert arquivos[0].formato_hint == "leituras"
-    assert "aluno(s) no total" in " | ".join(etapas)
+    juntos = " | ".join(etapas)
+    assert "aluno(s) no total" in juntos                 # roster enumerado
+    assert "/report/overall-student-report" in juntos    # sondou a API real
+    assert arquivos == []                                 # rodada de mapeamento
 
 
 def test_elefante_sincronizar_via_api_direta(monkeypatch):
@@ -280,9 +281,8 @@ def test_elefante_sincronizar_via_api_direta(monkeypatch):
                    log=lambda e, n, m: etapas.append(m))
     con = elefante.ConectorElefante(_fabrica(NavApiDireta(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
-    assert len(arquivos) == 1
-    assert arquivos[0].formato_hint == "leituras"
     assert "via API direta" in " | ".join(etapas)
+    assert arquivos == []                                 # rodada de mapeamento
 
 
 def test_parse_courses_students_aceita_chaves_alternativas():
@@ -305,6 +305,32 @@ def test_parse_courses_students_student_contagem_nao_quebra():
              "json": [{"id": 10, "student": 25}]}]
     mapa = C._parse_courses_students(caps)
     assert mapa == {"10": []}
+
+
+def test_corpo_relatorio_e_js_fetch_post():
+    """O corpo POST do /report/* leva os filtros certos; o js_fetch com corpo vira
+    um POST com JSON (Content-Type) e injeta studentId sem quebrar o template."""
+    from app.sync.connectors.elefante import ConectorElefante as C
+    corpo = C._corpo_relatorio(studentId=4427356)
+    assert corpo["studentId"] == 4427356
+    assert corpo["period"] == "PERIODS.LIFETIME"
+    assert corpo["languageId"] == 1 and corpo["timezoneOffset"] == 180
+    js = C._js_fetch("https://api/report/overall-student-report", "POST",
+                     {"Authorization": "Bearer T"}, "omit", corpo)
+    assert '"POST"' in js and "4427356" in js and "application/json" in js
+
+
+def test_estrutura_tipos_sem_valores():
+    """_estrutura mostra chaves+tipos e NUNCA valores string (sem PII: nome de
+    aluno / título de livro jamais aparecem)."""
+    from app.sync.connectors.elefante import ConectorElefante as C
+    dados = {"studentName": "Fulano Secreto",
+             "completedReadings": 86,
+             "books": [{"title": "O Livro Secreto", "date": "2026-01-01"}]}
+    e = C._estrutura(dados)
+    assert "studentName:str" in e and "completedReadings:num" in e
+    assert "books:[1×{title:str, date:str}]" in e
+    assert "Fulano" not in e and "Secreto" not in e and "Livro" not in e
 
 
 def test_diag_alunos_sem_pii():
