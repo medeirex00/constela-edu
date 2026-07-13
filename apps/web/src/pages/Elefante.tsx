@@ -53,7 +53,7 @@ export default function Elefante() {
     recarregar: recarregarLinhas,
   } = useApi<ElefanteAluno[]>(escolaId ? `/escolas/${escolaId}/elefante` : null);
   const { dados: dadosDificuldade, erro: erroNiveis } = useApi<{ niveis: Nivel[] }>(
-    escolaId ? `/escolas/${escolaId}/dificuldade` : null,
+    escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
   );
   const niveis = dadosDificuldade?.niveis ?? [];
 

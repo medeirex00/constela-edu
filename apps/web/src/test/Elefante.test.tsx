@@ -12,7 +12,7 @@ import {
 } from "./utils";
 
 const URL_ELEFANTE = "/escolas/1/elefante";
-const URL_DIFICULDADE = "/escolas/1/dificuldade";
+const URL_DIFICULDADE = "/escolas/1/configuracoes/dificuldade";
 
 function alunoFake(over = {}) {
   return {
