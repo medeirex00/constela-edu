@@ -550,6 +550,66 @@ def detectar_tipo(conteudo: bytes, nome_arquivo: str = "",
     return "texto"
 
 
+def _int_api(v) -> int:
+    """Inteiro tolerante (aceita int/float/str/None) — para os campos numéricos da
+    API interna do Elefante."""
+    try:
+        return int(round(float(v)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analise:
+    """Converte a resposta da API interna do Elefante ``/report/overall-course-
+    report`` (uma TURMA) numa ``Analise`` no formato "resumo" — UMA linha por
+    aluno. Reusa TODO o pipeline de importação (casar_nomes → confirmar → scoring),
+    exatamente como um upload manual do relatório de turma. Não grava nem loga.
+
+    Mapeamento (campo da API → dado do snapshot):
+      studentName        → nome (casado por nome, como o upload manual)
+      totalBooksRead     → livros_unicos (headline do ranking de leitura)
+      totalReadTime (s)  → tempo_leitura_min (a API dá SEGUNDOS)
+      responses          → questoes_tentativas
+      approvedResponses  → questoes_acertos
+    O nível por faixa (distribuição) não vem no agregado da turma — fica p/ depois.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    desc = payload.get("courseSchoolDescriptors")
+    desc = desc if isinstance(desc, dict) else {}
+    turma = str(desc.get("courseName") or "").strip()
+    if not turma and payload.get("courseId"):
+        # Sem nome de turma no relatório: NÃO deixa a turma vazia (senão os alunos
+        # novos seriam descartados por falta de turma para criar). Usa o id.
+        turma = f"Turma {payload['courseId']}"
+    escola = str(desc.get("schoolName") or "").strip()
+    professor = str(desc.get("teachers") or "").strip()
+    alunos = payload.get("students")
+    linhas: list[LinhaImportacao] = []
+    for i, al in enumerate(alunos or [], start=1):
+        if not isinstance(al, dict):
+            continue
+        nome = str(al.get("studentName") or "").strip()
+        if not nome:
+            continue
+        tempo_seg = _int_api(al.get("totalReadTime", al.get("readTime")))
+        linhas.append(LinhaImportacao(
+            numero=i, nome=nome,
+            dados={
+                "livros_unicos": _int_api(al.get("totalBooksRead", al.get("qtdBooksRead"))),
+                "tempo_leitura_min": round(tempo_seg / 60) if tempo_seg else 0,
+                "questoes_tentativas": _int_api(al.get("responses")),
+                "questoes_acertos": _int_api(al.get("approvedResponses")),
+                # Desambigua HOMÔNIMOS na turma certa (mesmo campo que o parser de
+                # PDF usa) — evita casar/duplicar aluno errado.
+                "turma_relatorio": turma,
+            }))
+    return Analise(
+        plataforma=plataforma, formato="resumo", estrategia="api-elefante",
+        mensagem_deteccao="Relatório de turma (API interna do Elefante Letrado).",
+        linhas=linhas, turma_detectada=turma, escola_detectada=escola,
+        professor_detectado=professor)
+
+
 def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:
     """Interpreta um relatório colado/extraído. Nunca grava nada."""
     detectada, mensagem = detectar_plataforma_detalhado(texto)

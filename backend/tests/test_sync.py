@@ -49,6 +49,17 @@ class NavegadorFake:
         return self.erro_login
     async def texto(self, seletor): return ""
     async def avaliar(self, expressao):
+        # Fetch in-page do relatório de turma: devolve students[] com os dados por
+        # aluno (é o que a sincronização coleta).
+        if "fetch(" in expressao and "overall-course-report" in expressao:
+            return {"ok": True, "status": 200, "tipo": "object", "n": 0, "body": {
+                "courseSchoolDescriptors": {"courseName": "5 ANO B",
+                                            "schoolName": "EMEI", "teachers": "Prof X",
+                                            "grade": 5},
+                "students": [{"studentId": 4427356, "studentName": "Aluno X",
+                              "currentStudentLevel": "N5", "totalBooksRead": 86,
+                              "totalReadTime": 15731, "responses": 100,
+                              "approvedResponses": 90}]}}
         # Fake do recon: ids de turma/aluno e o botão Exportar presente. Serve
         # tanto ao _JS_IDS quanto ao _JS_EXPORTAR (o fake não distingue a query).
         return {"n_selects": 1, "n_options": 3,
@@ -225,10 +236,10 @@ def test_elefante_recon_prova_a_cadeia(monkeypatch):
     assert r["download"]["ok"] is True and r["download"]["bytes"] > 0
 
 
-def test_elefante_sincronizar_mapeia_turmas_e_sonda_relatorio(monkeypatch):
-    """A sincronização enumera turmas+alunos (roster via API) e sonda a API real
-    dos dados de leitura (/report/overall-*). Rodada de mapeamento: sem download
-    por PDF (o relatório não renderiza por URL)."""
+def test_elefante_sincronizar_coleta_dados_por_turma(monkeypatch):
+    """A sincronização enumera turmas+alunos (roster via API) e coleta os DADOS de
+    cada turma pelo overall-course-report → um ArquivoObtido (JSON) por turma, no
+    formato que o pipeline importa (resumo)."""
     from app.sync.connectors import elefante
     monkeypatch.setattr(elefante, "_SETTLE_S", 0)
 
@@ -241,10 +252,11 @@ def test_elefante_sincronizar_mapeia_turmas_e_sonda_relatorio(monkeypatch):
                    log=lambda e, n, m: etapas.append(m))
     con = elefante.ConectorElefante(_fabrica(NavAdmin(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
-    juntos = " | ".join(etapas)
-    assert "aluno(s) no total" in juntos                 # roster enumerado
-    assert "/report/overall-course-report" in juntos     # sondou a API real dos dados
-    assert arquivos == []                                 # rodada de mapeamento
+    assert "aluno(s) no total" in " | ".join(etapas)          # roster enumerado
+    assert len(arquivos) == 1                                 # 1 turma no fake
+    assert arquivos[0].content_type == elefante._CT_API
+    assert arquivos[0].formato_hint == "resumo"
+    assert b"Aluno X" in arquivos[0].conteudo                 # students[] embutido
 
 
 def test_elefante_sincronizar_via_api_direta(monkeypatch):
@@ -282,7 +294,8 @@ def test_elefante_sincronizar_via_api_direta(monkeypatch):
     con = elefante.ConectorElefante(_fabrica(NavApiDireta(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
     assert "via API direta" in " | ".join(etapas)
-    assert arquivos == []                                 # rodada de mapeamento
+    assert len(arquivos) == 1                             # coletou a turma
+    assert arquivos[0].content_type == elefante._CT_API
 
 
 def test_parse_courses_students_aceita_chaves_alternativas():
@@ -305,6 +318,35 @@ def test_parse_courses_students_student_contagem_nao_quebra():
              "json": [{"id": 10, "student": 25}]}]
     mapa = C._parse_courses_students(caps)
     assert mapa == {"10": []}
+
+
+def test_analisar_elefante_api_mapeia_campos():
+    """O JSON do overall-course-report vira uma Analise 'resumo' com os campos
+    certos por aluno (livros/tempo/questões) — o mesmo que o import manual gera."""
+    from app.services.importacao import analisar_elefante_api
+    payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B",
+                                           "schoolName": "EMEI", "teachers": "Prof"},
+               "students": [{"studentId": 1, "studentName": "Veronica X",
+                             "currentStudentLevel": "N5", "totalBooksRead": 86,
+                             "totalReadTime": 15731, "responses": 100,
+                             "approvedResponses": 90},
+                            {"studentName": "", "totalBooksRead": 5}]}  # sem nome → ignorado
+    a = analisar_elefante_api(payload)
+    assert a.plataforma == "elefante" and a.formato == "resumo"
+    assert a.turma_detectada == "5 ANO B"
+    assert len(a.linhas) == 1                       # o sem-nome foi descartado
+    d = a.linhas[0].dados
+    assert a.linhas[0].nome == "Veronica X"
+    assert d["livros_unicos"] == 86
+    assert d["tempo_leitura_min"] == round(15731 / 60)   # segundos → minutos
+    assert d["questoes_tentativas"] == 100 and d["questoes_acertos"] == 90
+    assert d["turma_relatorio"] == "5 ANO B"             # desambigua homônimos
+
+    # Sem courseName: cai no id da turma (não deixa a turma vazia → não descarta).
+    b = analisar_elefante_api({"courseId": 511434,
+                               "students": [{"studentName": "Fulano", "totalBooksRead": 3}]})
+    assert b.turma_detectada == "Turma 511434"
+    assert b.linhas[0].dados["turma_relatorio"] == "Turma 511434"
 
 
 def test_corpo_relatorio_e_js_fetch_post():
@@ -537,6 +579,42 @@ def test_orquestrador_reusa_pipeline_cria_snapshot(db, escola_completa, monkeypa
         SnapshotMatific.escola_id == escola.id,
         SnapshotMatific.aluno_id == ana.id)).scalars().first()
     assert snap is not None
+    assert db.execute(select(Importacao).where(
+        Importacao.escola_id == escola.id)).scalars().first() is not None
+
+
+def test_orquestrador_importa_elefante_api_json(db, escola_completa, monkeypatch):
+    """Ponta a ponta: um ArquivoObtido JSON (overall-course-report) passa pelo
+    _parsear REAL (branch da API) → casar_nomes → confirmar → SnapshotElefante com
+    os valores mapeados. Prova que a coleta por API entra no pipeline existente."""
+    import json as _json
+
+    from app.models.plataformas import Importacao, SnapshotElefante
+    from app.sync import orchestrator
+
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
+    monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
+
+    payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B"},
+               "students": [{"studentId": 1, "studentName": "Ana Beatriz Souza",
+                             "totalBooksRead": 42, "totalReadTime": 12000,
+                             "responses": 30, "approvedResponses": 25}]}
+    arq = ArquivoObtido(
+        conteudo=_json.dumps(payload).encode("utf-8"),
+        nome_arquivo="elefante_turma_1.json", plataforma="elefante",
+        content_type=orchestrator.CT_ELEFANTE_API, formato_hint="resumo")
+    res = orchestrator.aplicar_arquivo(
+        db, escola, arq, usuario_id=None, recalcular=True, contexto=_contexto(escola.id))
+
+    assert res["qtd_alunos"] == 1 and res["sem_dados"] is False
+    snap = db.execute(select(SnapshotElefante).where(
+        SnapshotElefante.escola_id == escola.id,
+        SnapshotElefante.aluno_id == ana.id)).scalars().first()
+    assert snap is not None
+    assert snap.livros_unicos == 42
+    assert snap.tempo_leitura_min == round(12000 / 60)   # segundos → minutos
+    assert snap.questoes_tentativas == 30 and snap.questoes_acertos == 25
     assert db.execute(select(Importacao).where(
         Importacao.escola_id == escola.id)).scalars().first() is not None
 

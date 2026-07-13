@@ -26,12 +26,26 @@ from app.services import perfis_pdf, planilhas
 from app.sync.interfaces import ArquivoObtido, Contexto
 
 
+# Marcador do conteúdo JSON vindo da API interna do Elefante (overall-course-
+# report) — roteia direto para o analisador da API, SEM tocar na detecção do
+# upload manual (pdf/xlsx/texto), que fica intacta.
+CT_ELEFANTE_API = "application/x-elefante-course-report"
+
+
 def _parsear(arquivo: ArquivoObtido):
     """Detecta o formato pelos bytes (mesma regra do ``analisar``) e roteia para
     o parser certo. Devolve (analise, tipo)."""
     conteudo = arquivo.conteudo
     plataforma = arquivo.plataforma
     nome = arquivo.nome_arquivo or ""
+    # Sync do Elefante pela API interna: o conteúdo é JSON do relatório de turma
+    # (não um arquivo binário). Vai direto p/ o analisador da API.
+    if arquivo.content_type == CT_ELEFANTE_API:
+        import json
+        payload = json.loads(conteudo.decode("utf-8"))
+        # "texto" é o tipo aceito pelo ImportacaoConfirm (^pdf|texto|xlsx$) para
+        # conteúdo não-binário; o arquivamento cai no ramo padrão.
+        return svc.analisar_elefante_api(payload, plataforma or "elefante"), "texto"
     # Mesma detecção do upload manual (fonte única) — nunca divergem.
     tipo = svc.detectar_tipo(conteudo, nome, arquivo.content_type)
     if tipo == "pdf":
@@ -124,6 +138,12 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     contexto.log("ranking", "info",
                  f"{resultado.qtd_alunos} aluno(s) atualizado(s)"
                  + (" e notas recalculadas." if recalcular else "."))
+    # Surfaça (SEM PII — só a contagem) linhas não casadas/ignoradas, para o gestor
+    # perceber alunos que ficaram de fora em vez de sumirem em silêncio.
+    if resultado.avisos:
+        contexto.log("validacao", "warn",
+                     f"{len(resultado.avisos)} aviso(s): linhas não casadas ou "
+                     "ignoradas nesta turma (ver detalhes na importação).")
     return {
         "qtd_alunos": resultado.qtd_alunos,
         "qtd_erros": resultado.qtd_erros,

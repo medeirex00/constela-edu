@@ -97,6 +97,10 @@ _LIMITE_ALUNOS = 2
 
 # Endpoint interno que lista turmas + alunos aninhados (host prod-ecs-apiadmin…).
 _EP_CURSOS = "/course/get-courses-students"
+# Relatório de TURMA (POST /report/*): traz students[] com os dados por aluno.
+_EP_COURSE_REPORT = "overall-course-report"
+# Marcador do arquivo JSON entregue ao orquestrador (== orchestrator.CT_ELEFANTE_API).
+_CT_API = "application/x-elefante-course-report"
 
 # CHAMA a API interna direto da PÁGINA autenticada (in-page fetch). Usado quando o
 # SPA não dispara /course/get-courses-students sozinho — ele só o faz depois de
@@ -567,10 +571,13 @@ class ConectorElefante(ConectorNavegador):
                     melhor_corpo = corpo
         if melhor_corpo:
             log("navegacao", "warn",
-                f"[Elefante] API direta trouxe turmas mas 0 alunos. forma={melhor_forma} "
-                f"| alunos: {self._diag_alunos(melhor_corpo)} | host={base} "
-                f"tentativas={resumo}")
-            return {}
+                f"[Elefante] API direta: turmas OK, mas não li os alunos do roster "
+                f"(alunos: {self._diag_alunos(melhor_corpo)}). Sigo pelos ids de "
+                f"turma — o overall-course-report traz os alunos por nome. "
+                f"forma={melhor_forma} host={base} tentativas={resumo}")
+            # Devolve as turmas (com lista de alunos vazia): o id da turma basta
+            # para o relatório de turma coletar os dados por aluno.
+            return self._parse_courses_students([{"url": ep, "json": melhor_corpo}])
         log("navegacao", "warn",
             f"[Elefante] API direta não trouxe turmas. host={base} "
             f"auth={'sim' if auth else 'nao'} escolas={escolas} tentativas={resumo}")
@@ -703,11 +710,12 @@ class ConectorElefante(ConectorNavegador):
             caps = await nav.coletar_respostas(f"{_URL_APP}/reports/course", timeout_s=25)
             await self._assentar(nav)
             mapa = self._parse_courses_students(caps)
-            # "Turmas sem alunos" ({cid: []}) NÃO conta como sucesso — cai no
-            # fallback da API direta (que pode trazer os alunos com ?schoolId=).
-            if not any(mapa.values()):
+            # Sem NENHUMA turma (nem o id) → tenta a API direta. Basta o id da
+            # turma: o overall-course-report devolve os alunos por nome, então a
+            # coleta NÃO depende da enumeração de alunos do roster.
+            if not mapa:
                 mapa = await self._cursos_alunos_via_api(nav, log, caps)
-            if not any(mapa.values()):
+            if not mapa:
                 formas = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
                            self._forma_json(c.get("json")))
                           for c in caps if self._api_elefante(c["url"])][:8]
@@ -719,15 +727,53 @@ class ConectorElefante(ConectorNavegador):
             log("navegacao", "info",
                 f"[Elefante] {len(mapa)} turma(s), {total} aluno(s) no total.")
 
-            # DADOS DE LEITURA pela API REAL (/report/overall-*, POST — descoberta
-            # por DevTools). Esta rodada mapeia a ESTRUTURA da resposta (sem PII)
-            # para o parser final que vira eventos da linha do tempo. O caminho por
-            # PDF/navegador (Exportar) foi abandonado: o relatório não renderiza por
-            # URL e era lento/instável — a coleta definitiva será por esta API.
-            try:
-                await self._diagnosticar_relatorio_api(nav, log, caps, mapa)
-            except Exception as exc:  # noqa: BLE001 — nunca derruba a sync
-                log("navegacao", "warn", f"[Elefante] sonda de relatório falhou: {str(exc)[:80]}")
+            # DADOS DE LEITURA pela API REAL (/report/overall-course-report, POST —
+            # descoberta por DevTools). UMA chamada por turma (≈10 p/ a escola toda)
+            # traz students[] com os dados por aluno → um ArquivoObtido (JSON) por
+            # turma. O orquestrador importa pelo MESMO pipeline (casar nome + resumo
+            # + scoring), como um upload manual do relatório de turma.
+            base, headers, creds, _auth = self._base_e_auth(caps)
+            escola = self._school_id(caps)
+            if not base:
+                log("navegacao", "warn", "[Elefante] sem base da API p/ os dados.")
+                return arquivos
+            for cid in mapa:
+                if contexto.cancelado():
+                    break
+                corpo = self._corpo_relatorio(courseId=int(cid), useCache=True,
+                                              selectedProducts="")
+                if escola.isdigit():
+                    corpo["schoolId"] = int(escola)
+                try:
+                    res = await nav.avaliar(self._js_fetch(
+                        f"{base}/report/{_EP_COURSE_REPORT}", "POST", headers, creds, corpo))
+                except Exception as exc:  # noqa: BLE001 — uma turma não derruba as demais
+                    log("download", "warn",
+                        f"[Elefante] turma {cid}: falha na API ({str(exc)[:80]}).")
+                    continue
+                res = res if isinstance(res, dict) else {}
+                body = res.get("body")
+                alunos = body.get("students") if isinstance(body, dict) else None
+                if res.get("status") != 200 or not isinstance(alunos, list) or not alunos:
+                    log("download", "warn",
+                        f"[Elefante] turma {cid}: overall-course-report "
+                        f"{res.get('status')} ({len(alunos or [])} aluno(s)).")
+                    continue
+                # Só id + descritores + alunos no arquivo (menos peso, mesmo dado).
+                # courseId garante um nome de turma mesmo se courseName vier vazio.
+                payload = {"courseId": body.get("courseId") or cid,
+                           "courseSchoolDescriptors": body.get("courseSchoolDescriptors"),
+                           "students": alunos}
+                arquivos.append(ArquivoObtido(
+                    conteudo=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    nome_arquivo=f"elefante_turma_{cid}.json",
+                    plataforma="elefante", content_type=_CT_API,
+                    formato_hint="resumo",
+                    metadados={"origem": "api", "course_id": cid}))
+                log("download", "info",
+                    f"[Elefante] turma {cid}: {len(alunos)} aluno(s) coletado(s).")
+            log("download", "info",
+                f"[Elefante] {len(arquivos)} turma(s) coletada(s) via API interna.")
         return arquivos
 
     async def localizar_relatorios(self, cred: Credenciais,
