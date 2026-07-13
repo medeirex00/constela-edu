@@ -14,15 +14,16 @@ preserva o pipeline 100% (zero risco de regressão). A verdade de auditoria de
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Usuario
+from app.models.academico import Turma
 from app.models.escola import Escola
 from app.routers import importacoes as imp  # reuso: confirmar, _guardar_temporario
 from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
 from app.services import importacao as svc
-from app.services import perfis_pdf, planilhas
+from app.services import perfis_pdf, planilhas, professores
 from app.sync.interfaces import ArquivoObtido, Contexto
 
 
@@ -138,6 +139,31 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     contexto.log("ranking", "info",
                  f"{resultado.qtd_alunos} aluno(s) atualizado(s)"
                  + (" e notas recalculadas." if recalcular else "."))
+
+    # Cria automaticamente a conta de login dos PROFESSORES da turma detectada
+    # (login = NomeSobrenome, senha = Primeiro nome + 123) e vincula o titular
+    # para o RBAC. Acessório e idempotente: roda numa transação própria (o
+    # confirmar já commitou os alunos) e NUNCA derruba a sync se falhar.
+    professor_txt = getattr(analise, "professor_detectado", "") or ""
+    turma_txt = getattr(analise, "turma_detectada", "") or ""
+    if professor_txt and turma_txt:
+        try:
+            turma_obj = db.execute(
+                select(Turma).where(
+                    Turma.escola_id == escola.id,
+                    func.lower(Turma.nome) == turma_txt.strip().lower())
+            ).scalars().first()
+            n_prof = professores.garantir_professores_da_turma(
+                db, escola.id, turma_obj, professor_txt)
+            db.commit()
+            if n_prof:
+                contexto.log("professores", "info",
+                             f"{n_prof} conta(s) de professor criada(s) "
+                             "automaticamente (usuário = NomeSobrenome).")
+        except Exception:  # noqa: BLE001 — professor é acessório; aluno é o essencial
+            db.rollback()
+            contexto.log("professores", "warn",
+                         "Não foi possível criar as contas de professor da turma.")
     # Surfaça (SEM PII — só a contagem) linhas não casadas/ignoradas, para o gestor
     # perceber alunos que ficaram de fora em vez de sumirem em silêncio.
     if resultado.avisos:

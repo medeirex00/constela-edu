@@ -56,7 +56,8 @@ from app.schemas import (
     MatriculaTurmaOut,
 )
 from app.services import importacao as svc
-from app.services import lista_piloto, matriculas, perfis_pdf, planilhas, push, scoring
+from app.services import lista_piloto, matriculas, perfis_pdf, planilhas
+from app.services import professores, push, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
@@ -1128,14 +1129,16 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
 
 
 def _resolver_turmas(db: Session, escola_id: int, ano: int,
-                     turmas_analise) -> tuple[list[Turma], int]:
+                     turmas_analise) -> tuple[list[Turma], int, int]:
     """Cria as turmas que faltam (chave insensível a º/acento/caixa) e devolve,
-    na ordem da análise, a Turma resolvida de cada uma + quantas foram criadas."""
+    na ordem da análise, a Turma resolvida de cada uma + quantas turmas foram
+    criadas + quantas CONTAS de professor foram criadas automaticamente."""
     turmas_por_nome: dict[str, Turma] = {}
     for t in db.execute(select(Turma).where(Turma.escola_id == escola_id,
                                             Turma.ano_letivo == ano)).scalars():
         turmas_por_nome.setdefault(_chave_turma(t.nome), t)
     criadas = 0
+    profs_criados = 0
     resolvidas: list[Turma] = []
     for t in turmas_analise:
         chave = _chave_turma(t.nome)
@@ -1147,8 +1150,18 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int,
             turmas_por_nome[chave] = turma
             if criada:
                 criadas += 1
+        # Cria a conta de login de cada professor da turma (idempotente) e
+        # vincula o titular para o RBAC. O SAVEPOINT garante que QUALQUER falha
+        # aqui desfaça só o professor — nunca polui a transação nem derruba a
+        # importação de alunos (que é o essencial).
+        try:
+            with db.begin_nested():
+                profs_criados += professores.garantir_professores_da_turma(
+                    db, escola_id, turma, getattr(t, "professor", "") or "")
+        except Exception:  # noqa: BLE001 — professor é acessório; aluno é o essencial
+            logging.getLogger(__name__).exception("falha ao criar professor da turma")
         resolvidas.append(turma)
-    return resolvidas, criadas
+    return resolvidas, criadas, profs_criados
 
 
 def _linhas_para_casamento(linhas: list[tuple[Turma, object]]) -> list[matriculas.LinhaMatricula]:
@@ -1304,7 +1317,8 @@ async def confirmar_matriculas(
     # sobrepostos duplicariam turmas/alunos sem esta trava (no-op em SQLite).
     bloquear_escola_para_importacao(db, escola_id)
     estado = _carregar_estado(db, escola_id, ano)
-    resolvidas, turmas_criadas = _resolver_turmas(db, escola_id, ano, analise.turmas)
+    resolvidas, turmas_criadas, profs_criados = _resolver_turmas(
+        db, escola_id, ano, analise.turmas)
     linhas = [(resolvidas[i], parsed)
               for i, t in enumerate(analise.turmas) for parsed in t.alunos]
 
@@ -1327,6 +1341,7 @@ async def confirmar_matriculas(
     registrar(db, "matriculas.importadas", escola_id=escola_id, usuario_id=usuario.id,
               entidade="escola", entidade_id=escola_id,
               detalhes={"turmas_criadas": turmas_criadas,
+                        "professores_criados": profs_criados,
                         "alunos_criados": alunos_criados,
                         "alunos_atualizados": alunos_atualizados,
                         "alunos_vinculados": alunos_vinculados,
@@ -1338,6 +1353,10 @@ async def confirmar_matriculas(
     invalidar_cache_painel(escola_id)
     extra = (f" {alunos_vinculados} cadastro(s) de importação anterior recebeu(ram) "
              "o nome completo.") if alunos_vinculados else ""
+    if profs_criados:
+        extra += (f" {profs_criados} professor(es) ganharam conta de acesso "
+                  "automática (usuário = NomeSobrenome, senha = Primeiro nome + 123 "
+                  "— peça para trocarem no primeiro acesso).")
     if alunos_fora_lista:
         extra += (f" {alunos_fora_lista} aluno(s) que não constam mais na lista "
                   "foram marcados como “fora da lista piloto” — continuam "
@@ -1348,7 +1367,8 @@ async def confirmar_matriculas(
                   f"cadastrado(s) e {alunos_atualizados} atualizado(s)." + extra),
         turmas_criadas=turmas_criadas, alunos_criados=alunos_criados,
         alunos_atualizados=alunos_atualizados,
-        alunos_fora_lista=alunos_fora_lista, avisos=avisos,
+        alunos_fora_lista=alunos_fora_lista,
+        professores_criados=profs_criados, avisos=avisos,
     )
 
 

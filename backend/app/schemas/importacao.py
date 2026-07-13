@@ -131,4 +131,6 @@ class MatriculasResultadoOut(BaseModel):
     # Alunos do piloto que sumiram da lista e foram marcados "fora_lista_piloto"
     # (continuam cadastrados; nada é apagado).
     alunos_fora_lista: int = 0
+    # Contas de professor criadas automaticamente (login = NomeSobrenome).
+    professores_criados: int = 0
     avisos: list[str] = []
