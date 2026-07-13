@@ -1,5 +1,6 @@
 /** Inteligência Pedagógica (PRD §129–§153): índices e alertas automáticos. */
-import { AlertTriangle, Lightbulb } from "lucide-react";
+import { AlertTriangle, ChevronDown, Lightbulb } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
@@ -44,6 +45,7 @@ function BarraIndice({ valor }: { valor: number }) {
 
 export default function Insights() {
   const { escolaId } = useApp();
+  const [verAlertas, setVerAlertas] = useState(false);
   const { dados: dadosInsights, erro, carregando } = useApi<InsightsResposta>(
     escolaId ? `/escolas/${escolaId}/insights` : null,
   );
@@ -62,32 +64,42 @@ export default function Insights() {
       />
 
       <Card>
-        <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <button
+          type="button"
+          onClick={() => setVerAlertas((v) => !v)}
+          aria-expanded={verAlertas}
+          className="flex w-full items-center gap-2 border-b border-zinc-200 px-4 py-3 text-left dark:border-zinc-800"
+        >
           <AlertTriangle size={15} className="text-amber-500" />
           <h3 className="text-sm font-semibold">Alertas ({dadosInsights.alertas.length})</h3>
-        </div>
-        {dadosInsights.alertas.length === 0 ? (
-          <Vazio titulo="Nenhum alerta" descricao="Todos os alunos estão com dados recentes e desempenho estável." />
-        ) : (
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
-            {dadosInsights.alertas.map((alerta, indice) => (
-              <li key={indice} className="flex items-start gap-3 px-4 py-3">
-                <Badge tom={alerta.gravidade === "alta" ? "alerta" : "neutro"}>
-                  {alerta.gravidade}
-                </Badge>
-                <div>
-                  <p className="text-sm">{alerta.texto}</p>
-                  <Link
-                    to={`/alunos/${alerta.aluno_id}`}
-                    className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-                  >
-                    ver perfil de {alerta.nome}
-                  </Link>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+          <ChevronDown
+            size={16}
+            className={`ml-auto text-zinc-400 transition-transform ${verAlertas ? "rotate-180" : ""}`}
+          />
+        </button>
+        {verAlertas &&
+          (dadosInsights.alertas.length === 0 ? (
+            <Vazio titulo="Nenhum alerta" descricao="Todos os alunos estão com dados recentes e desempenho estável." />
+          ) : (
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+              {dadosInsights.alertas.map((alerta, indice) => (
+                <li key={indice} className="flex items-start gap-3 px-4 py-3">
+                  <Badge tom={alerta.gravidade === "alta" ? "alerta" : "neutro"}>
+                    {alerta.gravidade}
+                  </Badge>
+                  <div>
+                    <p className="text-sm">{alerta.texto}</p>
+                    <Link
+                      to={`/alunos/${alerta.aluno_id}`}
+                      className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      ver perfil de {alerta.nome}
+                    </Link>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ))}
       </Card>
 
       <Card>
