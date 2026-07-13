@@ -472,14 +472,24 @@ class ConectorElefante(ConectorNavegador):
         if not base:
             return
         escola = self._school_id(caps)
-        sid = next((mapa[c][0] for c in mapa if mapa[c]), "")
+        cid = next((c for c in mapa if mapa[c]), next(iter(mapa), ""))
+        sid = mapa.get(cid, [""])[0] if cid else ""
         alvos = []
-        if sid.isdigit():
+        # overall-course-report: dados por ALUNO dentro da turma (10 chamadas p/ a
+        # escola toda) — provável caminho definitivo, e evita o 403 do per-aluno.
+        if cid.isdigit():
+            corpo_curso = self._corpo_relatorio(courseId=int(cid),
+                                                useCache=True, selectedProducts="")
+            if escola.isdigit():
+                corpo_curso["schoolId"] = int(escola)
+            alvos.append(("overall-course-report", corpo_curso))
+        # per-aluno deu 403 SEM courseId → tenta COM o contexto da turma.
+        if sid.isdigit() and cid.isdigit():
             alvos += [
                 ("overall-student-report",
-                 self._corpo_relatorio(studentId=int(sid))),
+                 self._corpo_relatorio(studentId=int(sid), courseId=int(cid))),
                 ("overall-student-books-read",
-                 self._corpo_relatorio(studentId=int(sid))),
+                 self._corpo_relatorio(studentId=int(sid), courseId=int(cid))),
             ]
         if escola.isdigit():
             alvos.append(("overall-school-report",
