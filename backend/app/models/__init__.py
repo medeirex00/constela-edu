@@ -3,6 +3,7 @@ from app.models.configuracao import (
     Configuracao,
     DificuldadeTurma,
     NivelDificuldade,
+    PontuacaoNivelTurma,
     ReferenciaNormalizacao,
 )
 from app.models.dispositivo import DispositivoMovel
@@ -44,6 +45,7 @@ __all__ = [
     "LogAuditoria",
     "Matricula",
     "NivelDificuldade",
+    "PontuacaoNivelTurma",
     "Nota",
     "Professor",
     "ReferenciaNormalizacao",

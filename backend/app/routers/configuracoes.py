@@ -13,10 +13,12 @@ from app.models import (
     Configuracao,
     DificuldadeTurma,
     NivelDificuldade,
+    PontuacaoNivelTurma,
     ReferenciaNormalizacao,
     Turma,
     Usuario,
 )
+from pydantic import BaseModel, Field
 from app.schemas import (
     DificuldadeUpdate,
     NivelOut,
@@ -218,3 +220,99 @@ def salvar_dificuldade(
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     return {"mensagem": f"{len(alteracoes)} valores atualizados. Notas recalculadas."}
+
+
+# --- Pontuação LIVRE por nível, por TURMA (PRD §39) --------------------------
+
+class PontuacaoTurmaUpdate(BaseModel):
+    turma_id: int
+    # {"AA": 1.0, "M": 2.0, ...} — parcial; código ausente herda o padrão.
+    pontos: dict[str, float] = Field(default_factory=dict)
+
+
+def _catalogo_niveis(db: Session, escola_id: int) -> list[dict]:
+    """Catálogo canônico e ORDENADO dos códigos de nível (AA..Z) da escola, com o
+    ponto PADRÃO de cada um e a faixa a que pertence. Derivado das faixas
+    (NivelDificuldade.codigos) — sem tabela nova, sem código fixo."""
+    niveis = db.execute(
+        select(NivelDificuldade)
+        .where(NivelDificuldade.escola_id == escola_id)
+        .order_by(NivelDificuldade.ordem)
+    ).scalars().all()
+    catalogo: list[dict] = []
+    vistos: set[str] = set()
+    for nivel in niveis:
+        for codigo in (nivel.codigos or []):
+            cod = str(codigo).strip().upper()
+            if not cod or cod in vistos:
+                continue
+            vistos.add(cod)
+            catalogo.append({"codigo": cod, "pontos_padrao": float(nivel.pontos_padrao),
+                             "faixa": nivel.nome})
+    return catalogo
+
+
+@router.get("/pontuacao-turma")
+def obter_pontuacao_turma(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+):
+    """Catálogo de níveis (com padrões) + a config LIVRE já salva por turma."""
+    catalogo = _catalogo_niveis(db, escola_id)
+    turmas = db.execute(
+        select(Turma).where(Turma.escola_id == escola_id, Turma.status == "ativa")
+        .order_by(Turma.ano_escolar, Turma.nome)
+    ).scalars().all()
+    overrides = {
+        row.turma_id: {str(k).upper(): float(v) for k, v in (row.pontos_por_codigo or {}).items()}
+        for row in db.execute(
+            select(PontuacaoNivelTurma).where(PontuacaoNivelTurma.escola_id == escola_id)
+        ).scalars()
+    }
+    return {
+        "catalogo": catalogo,
+        "turmas": [{"turma_id": t.id, "nome": t.nome, "ano_escolar": t.ano_escolar,
+                    "pontos": overrides.get(t.id, {})} for t in turmas],
+    }
+
+
+@router.put("/pontuacao-turma")
+def salvar_pontuacao_turma(
+    dados: PontuacaoTurmaUpdate,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Salva a tabela de pontos por nível de UMA turma. Guarda só o que difere do
+    padrão (config esparsa); zera a linha se ficar vazia. Recalcula as notas."""
+    turma = db.get(Turma, dados.turma_id)
+    if turma is None or turma.escola_id != escola_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
+    validos = {c["codigo"] for c in _catalogo_niveis(db, escola_id)}
+    limpos: dict[str, float] = {}
+    for codigo, pontos in (dados.pontos or {}).items():
+        cod = str(codigo).strip().upper()
+        if cod not in validos:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Nível “{codigo}” não existe nesta escola.")
+        if pontos is None or float(pontos) < 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Pontos não podem ser negativos.")
+        limpos[cod] = round(float(pontos), 2)
+
+    row = db.execute(
+        select(PontuacaoNivelTurma).where(
+            PontuacaoNivelTurma.escola_id == escola_id,
+            PontuacaoNivelTurma.turma_id == dados.turma_id)
+    ).scalar_one_or_none()
+    if row is None:
+        row = PontuacaoNivelTurma(escola_id=escola_id, turma_id=dados.turma_id)
+        db.add(row)
+    row.pontos_por_codigo = limpos
+
+    registrar(db, "pontuacao_turma.alterada", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="pontuacao_nivel_turma",
+              detalhes={"turma_id": dados.turma_id, "n_codigos": len(limpos)})
+    db.commit()
+    scoring.recalcular_escola(db, escola_id)
+    return {"mensagem": f"Pontuação da turma {turma.nome} salva. Notas recalculadas.",
+            "turma_id": dados.turma_id, "pontos": limpos}

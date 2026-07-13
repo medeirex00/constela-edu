@@ -84,6 +84,27 @@ class DificuldadeTurma(Base):
     updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
 
 
+class PontuacaoNivelTurma(Base):
+    """Pontuação por CÓDIGO de nível de livro (AA..Z), configurável LIVREMENTE por
+    TURMA (PRD §39) — cada turma pode valer pontos diferentes por nível, sem faixas
+    fixas. ESPARSO: só turmas customizadas têm linha; as demais herdam o padrão da
+    escola (``NivelDificuldade.pontos_padrao``). ``pontos_por_codigo`` é PARCIAL —
+    código ausente herda o padrão. Escala p/ centenas de turmas (1 linha/turma)."""
+
+    __tablename__ = "pontuacao_nivel_turma"
+    __table_args__ = (
+        UniqueConstraint("escola_id", "turma_id", name="uq_pontos_nivel_turma"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
+    turma_id: Mapped[int] = mapped_column(
+        ForeignKey("turmas.id", ondelete="CASCADE"), index=True)
+    # {"AA": 1.0, "A": 2.0, ..., "Z": 40.0} — parcial; sobrepõe o padrão por código.
+    pontos_por_codigo: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
+
+
 class ReferenciaNormalizacao(Base):
     """Referências usadas para levar todo indicador à escala 0–100 (PRD §31, §62)."""
 

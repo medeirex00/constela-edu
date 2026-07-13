@@ -136,66 +136,117 @@ def _chaves_do_nivel(nivel: NivelDificuldade) -> list[str]:
     return chaves
 
 
-def _mapa_dificuldade(db: Session, escola_id: int) -> dict[tuple[str, str], float]:
-    """Mapa (série, chave) -> pontos, com fallback no padrão da faixa."""
+def _overrides_turma(db: Session, escola_id: int) -> dict[int, dict[str, float]]:
+    """Config LIVRE de pontos por TURMA: ``{turma_id: {CODIGO_UPPER: pontos}}``
+    (esparso — só turmas customizadas). Sobrepõe o padrão da escola por código."""
+    from app.models.configuracao import PontuacaoNivelTurma
+
+    saida: dict[int, dict[str, float]] = {}
+    for row in db.execute(
+        select(PontuacaoNivelTurma).where(PontuacaoNivelTurma.escola_id == escola_id)
+    ).scalars():
+        m: dict[str, float] = {}
+        for k, v in (row.pontos_por_codigo or {}).items():
+            try:
+                m[str(k).strip().upper()] = float(v)
+            except (TypeError, ValueError):
+                continue
+        if m:
+            saida[row.turma_id] = m
+    return saida
+
+
+def _mapa_dificuldade(db: Session, escola_id: int) -> dict:
+    """Mapa de resolução de pontos. Chaves:
+      ``"__padrao__"``     -> {codigo: pontos_padrao da faixa} (case preservado)
+      ``(ano_escolar, codigo)`` -> override por SÉRIE (DificuldadeTurma, legado)
+      ``"__turma__"``      -> {turma_id: {CODIGO_UPPER: pontos}} livre por TURMA
+    Resolução (em ``_pontos_dificuldade``): TURMA > SÉRIE > padrão."""
     niveis = db.execute(
         select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
     ).scalars().all()
-    mapa: dict[tuple[str, str], float] = {}
+    mapa: dict = {}
     padrao_por_codigo: dict[str, float] = {}
     for nivel in niveis:
         for codigo in _chaves_do_nivel(nivel):
             padrao_por_codigo[codigo] = float(nivel.pontos_padrao)
 
-    overrides = db.execute(
-        select(DificuldadeTurma).where(DificuldadeTurma.escola_id == escola_id)
-    ).scalars().all()
     niveis_por_id = {n.id: n for n in niveis}
-    for override in overrides:
+    for override in db.execute(
+        select(DificuldadeTurma).where(DificuldadeTurma.escola_id == escola_id)
+    ).scalars():
         nivel = niveis_por_id.get(override.nivel_id)
         if nivel is None:
             continue
         for codigo in _chaves_do_nivel(nivel):
             mapa[(override.ano_escolar, codigo)] = float(override.pontos)
 
-    mapa["__padrao__"] = padrao_por_codigo  # type: ignore[assignment]
+    mapa["__padrao__"] = padrao_por_codigo
+    mapa["__turma__"] = _overrides_turma(db, escola_id)
     return mapa
 
 
 def _pontos_dificuldade(
-    livros_por_nivel: dict, ano_escolar: str, mapa: dict
+    livros_por_nivel: dict, ano_escolar: str, mapa: dict,
+    turma_id: int | None = None,
 ) -> float:
-    padrao: dict[str, float] = mapa.get("__padrao__", {})  # type: ignore[assignment]
+    padrao: dict[str, float] = mapa.get("__padrao__", {})
+    por_turma: dict[str, float] = (
+        mapa.get("__turma__", {}).get(turma_id, {}) if turma_id else {})
     total = 0.0
     for codigo, quantidade in (livros_por_nivel or {}).items():
-        pontos = mapa.get((ano_escolar, codigo), padrao.get(codigo, 0.0))
+        cod_up = str(codigo).strip().upper()
+        if cod_up in por_turma:                       # 1) livre por TURMA
+            pontos = por_turma[cod_up]
+        elif (ano_escolar, codigo) in mapa:           # 2) por SÉRIE (legado)
+            pontos = mapa[(ano_escolar, codigo)]
+        else:                                          # 3) padrão da faixa
+            pontos = padrao.get(codigo, 0.0)
         total += float(pontos) * int(quantidade)
     return round(total, 2)
 
 
-def pontos_por_codigo(db: Session, escola_id: int) -> dict[str, float]:
+def pontos_por_codigo(db: Session, escola_id: int,
+                      turma_id: int | None = None) -> dict[str, float]:
     """Pontos de dificuldade por CÓDIGO de letra do livro (ex.: {"AA": 1.0,
-    "D": 4.0}). Base para pontuar cada leitura no histórico e no ranking de
-    leitura por período."""
+    "D": 4.0}). Base do ranking de leitura por período. Com ``turma_id``, aplica a
+    config LIVRE daquela turma sobre o padrão da escola."""
     mapa: dict[str, float] = {}
     for nivel in db.execute(
         select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
     ).scalars():
         for codigo in (nivel.codigos or []):
             if codigo:
-                mapa[codigo.upper()] = float(nivel.pontos_padrao)
+                mapa[str(codigo).upper()] = float(nivel.pontos_padrao)
+    if turma_id:
+        mapa.update(_overrides_turma(db, escola_id).get(turma_id, {}))
     return mapa
 
 
+def mapa_pontos_turmas(db: Session, escola_id: int) -> dict:
+    """``{turma_id | None: {CODIGO_UPPER: pontos}}`` — ``None`` = padrão da escola;
+    cada turma customizada tem o seu (padrão + override). Para o ranking por
+    período resolver a pontuação pela turma do aluno numa passada só."""
+    base = pontos_por_codigo(db, escola_id)
+    saida: dict = {None: base}
+    for turma_id, override in _overrides_turma(db, escola_id).items():
+        combinado = dict(base)
+        combinado.update(override)
+        saida[turma_id] = combinado
+    return saida
+
+
 def distribuicao_niveis(
-    db: Session, escola_id: int, livros_por_nivel: dict, ano_escolar: str = ""
+    db: Session, escola_id: int, livros_por_nivel: dict, ano_escolar: str = "",
+    turma_id: int | None = None,
 ) -> dict:
     """Distribuição dos livros de um aluno pelas FAIXAS de dificuldade.
 
     Para relatórios/gráficos: por faixa devolve quantidade, pontos por livro
-    (respeitando o override da série), pontos ganhos e percentual; além do
-    total de livros, dos pontos de dificuldade e da faixa predominante.
-    Funciona tanto com livros informados por faixa quanto por código de letra.
+    (respeitando a config LIVRE da turma, senão o override da série, senão o
+    padrão), pontos ganhos e percentual; além do total de livros, dos pontos de
+    dificuldade e da faixa predominante. Funciona com livros por faixa ou por
+    código de letra.
     """
     from app.models.configuracao import slug_nivel
 
@@ -206,6 +257,8 @@ def distribuicao_niveis(
     ).scalars().all()
     mapa = _mapa_dificuldade(db, escola_id)
     padrao: dict[str, float] = mapa.get("__padrao__", {})  # type: ignore[assignment]
+    por_turma: dict[str, float] = (
+        mapa.get("__turma__", {}).get(turma_id, {}) if turma_id else {})
     dados = livros_por_nivel or {}
 
     faixas = []
@@ -215,8 +268,14 @@ def distribuicao_niveis(
         slug = nivel.codigo or slug_nivel(nivel.nome)
         chaves = _chaves_do_nivel(nivel)
         quantidade = sum(int(dados.get(c, 0) or 0) for c in chaves)
+        # Config LIVRE da turma (representada pela 1ª letra da faixa com override)
+        # tem prioridade sobre a série e o padrão.
+        override_turma = next(
+            (por_turma[str(c).upper()] for c in chaves if str(c).upper() in por_turma),
+            None)
         pontos_unidade = float(
-            mapa.get((ano_escolar, slug), padrao.get(slug, nivel.pontos_padrao)))
+            override_turma if override_turma is not None
+            else mapa.get((ano_escolar, slug), padrao.get(slug, nivel.pontos_padrao)))
         pontos = round(quantidade * pontos_unidade, 2)
         faixas.append({
             "codigo": slug,
@@ -446,7 +505,8 @@ def _carregar_contexto(db: Session, escola_id: int):
     for matricula, turma in matriculas:
         snap = elefante.get(matricula.aluno_id)
         pontos_dif[matricula.aluno_id] = _pontos_dificuldade(
-            snap.livros_por_nivel if snap else {}, turma.ano_escolar, mapa_dif
+            snap.livros_por_nivel if snap else {}, turma.ano_escolar, mapa_dif,
+            turma_id=turma.id,
         )
     return escola, ano, matriculas, matific, elefante, pontos_dif
 

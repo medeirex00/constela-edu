@@ -26,6 +26,7 @@ from app.models import (
     Livro,
     Matricula,
     NivelDificuldade,
+    PontuacaoNivelTurma,
     Nota,
     Professor,
     ReferenciaNormalizacao,
@@ -49,6 +50,7 @@ MODELOS: list[tuple[str, type]] = [
     ("snapshots_elefante", SnapshotElefante),
     ("niveis_dificuldade", NivelDificuldade),
     ("dificuldade_turma", DificuldadeTurma),
+    ("pontuacao_nivel_turma", PontuacaoNivelTurma),
     ("referencias_normalizacao", ReferenciaNormalizacao),
     ("configuracoes", Configuracao),
     ("notas", Nota),
@@ -62,6 +64,7 @@ FKS: dict[str, dict[str, str]] = {
     "snapshots_matific": {"aluno_id": "alunos", "importacao_id": "importacoes"},
     "snapshots_elefante": {"aluno_id": "alunos", "importacao_id": "importacoes"},
     "dificuldade_turma": {"nivel_id": "niveis_dificuldade"},
+    "pontuacao_nivel_turma": {"turma_id": "turmas"},
     "notas": {"aluno_id": "alunos"},
 }
 

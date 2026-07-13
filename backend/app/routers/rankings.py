@@ -104,7 +104,7 @@ def ranking_leitura(
 
     consulta = (
         select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min,
-               Aluno.nome, Turma.nome, Turma.ano_escolar)
+               Aluno.nome, Turma.nome, Turma.ano_escolar, Turma.id)
         .join(Livro, Leitura.livro_id == Livro.id)
         .join(Aluno, Aluno.id == Leitura.aluno_id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
@@ -123,14 +123,18 @@ def ranking_leitura(
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
 
-    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    # Pontuação por CÓDIGO resolvida pela TURMA do aluno (config LIVRE por turma):
+    # {turma_id|None: {CODIGO_UPPER: pontos}}. Sem override, cai no padrão (None).
+    mapa_turmas = scoring.mapa_pontos_turmas(db, escola_id)
+    padrao_pontos = mapa_turmas[None]
     agg: dict[int, dict] = {}
-    for aluno_id, codigo, tempo, nome, turma_nome, serie in db.execute(consulta).all():
+    for aluno_id, codigo, tempo, nome, turma_nome, serie, turma_id in db.execute(consulta).all():
         item = agg.setdefault(aluno_id, {
             "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
             "ano_escolar": serie, "livros": 0, "pontos": 0.0, "tempo_leitura_min": 0,
         })
         item["livros"] += 1
+        pontos_map = mapa_turmas.get(turma_id, padrao_pontos)
         item["pontos"] += pontos_map.get((codigo or "").upper(), 0.0)
         item["tempo_leitura_min"] += tempo or 0
 
