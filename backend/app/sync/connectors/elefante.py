@@ -99,6 +99,9 @@ _LIMITE_ALUNOS = 2
 _EP_CURSOS = "/course/get-courses-students"
 # Relatório de TURMA (POST /report/*): traz students[] com os dados por aluno.
 _EP_COURSE_REPORT = "overall-course-report"
+# Por ALUNO (POST, studentId): livros lidos COM DATA (lastReadWhen) e questões.
+_EP_BOOKS_READ = "overall-student-books-read"
+_EP_ANSWERED_Q = "overall-answered-questions"   # confirmado por DevTools do gestor
 # Marcador do arquivo JSON entregue ao orquestrador (== orchestrator.CT_ELEFANTE_API).
 _CT_API = "application/x-elefante-course-report"
 
@@ -110,8 +113,10 @@ _CT_API = "application/x-elefante-course-report"
 # credentials: 'omit' quando há Authorization (evita conflito CORS '*'+credenciais);
 # 'include' quando a auth é por cookie (sem header capturado).
 _JS_FETCH_TMPL = r"""(async () => {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), 20000);   // não trava a sync p/ sempre
   try {
-    const opts = { method: __METHOD__, credentials: __CREDS__,
+    const opts = { method: __METHOD__, credentials: __CREDS__, signal: ctrl.signal,
                    headers: Object.assign({}, __HEADERS__) };
     const corpo = __BODY__;
     if (corpo !== null) {                 // POST com JSON (relatórios /report/*)
@@ -125,7 +130,35 @@ _JS_FETCH_TMPL = r"""(async () => {
              tipo: Array.isArray(body) ? 'list' : (body === null ? 'null' : typeof body),
              n: Array.isArray(body) ? body.length : 0, body: body };
   } catch (e) { return { ok: false, status: 0, tipo: 'erro',
-                         erro: String(e).slice(0, 160), body: null }; }
+                         erro: String(e).slice(0, 160), body: null };
+  } finally { clearTimeout(tid); }
+})()"""
+
+# LOTE: chama o MESMO endpoint POST para vários studentIds de uma vez (o navegador
+# limita ~6 conexões simultâneas por host — throttle natural). Usado p/ coletar os
+# livros lidos (com data) de todos os alunos de uma turma numa só ida. Devolve
+# [{studentId, n, books}] (ou status/erro por aluno).
+_JS_FETCH_LOTE = r"""(async () => {
+  const ids = __IDS__, corpoBase = __CORPO__, headers0 = __HEADERS__;
+  const out = [];
+  await Promise.all(ids.map(async (sid) => {
+    // timeout por requisição (AbortController): um aluno travado NÃO pode segurar
+    // o Promise.all (e a sync) para sempre.
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 20000);
+    try {
+      const body = Object.assign({}, corpoBase, { studentId: sid });
+      const r = await fetch(__URL__, { method: 'POST', credentials: __CREDS__,
+        signal: ctrl.signal,
+        headers: Object.assign({ 'Content-Type': 'application/json' }, headers0),
+        body: JSON.stringify(body) });
+      if (!r.ok) { out.push({ studentId: sid, status: r.status }); return; }
+      let j = null; try { j = await r.json(); } catch (e) { j = null; }
+      out.push({ studentId: sid, n: Array.isArray(j) ? j.length : 0, books: j });
+    } catch (e) { out.push({ studentId: sid, erro: String(e).slice(0, 80) }); }
+    finally { clearTimeout(tid); }
+  }));
+  return out;
 })()"""
 
 # Diagnóstico da tela do aluno quando o Exportar não aparece: quais botões há?
@@ -392,6 +425,18 @@ class ConectorElefante(ConectorNavegador):
                 .replace("__CREDS__", json.dumps(creds))
                 .replace("__BODY__", json.dumps(corpo)))
 
+    @staticmethod
+    def _js_fetch_lote(url: str, headers: dict, creds: str, corpo_base: dict,
+                       ids: list) -> str:
+        """Fetch em LOTE: um POST por studentId (concorrente), corpo = corpo_base +
+        {studentId}. Devolve [{studentId, n, books|status|erro}]."""
+        return (_JS_FETCH_LOTE
+                .replace("__URL__", json.dumps(url))
+                .replace("__HEADERS__", json.dumps(headers))
+                .replace("__CREDS__", json.dumps(creds))
+                .replace("__CORPO__", json.dumps(corpo_base))
+                .replace("__IDS__", json.dumps(ids)))
+
     @classmethod
     def _base_e_auth(cls, caps: list) -> tuple[str, dict, str, str]:
         """Descobre a base da API interna (prod-ecs-apiadmin…) e o Authorization
@@ -477,15 +522,10 @@ class ConectorElefante(ConectorNavegador):
         candidatos e loga qual responde 200."""
         corpo = self._corpo_relatorio(studentId=int(sid))
         alvos = [
+            # Questões respondidas COM DATA (confirmado por DevTools do gestor) — o
+            # que falta p/ a linha do tempo; sonda a ESTRUTURA p/ o parser.
+            _EP_ANSWERED_Q,
             "overall-student-report",           # 40kB: histórico de livros + compreensão
-            "overall-student-books-read",        # livros lidos (lista com data)
-            # candidatos ao "Questões Respondidas" do Histórico de Atividades:
-            "overall-student-answered-questions",
-            "overall-student-questions-answered",
-            "overall-student-questions",
-            "overall-student-answered-question",
-            "overall-student-activities",
-            "overall-student-question",
         ]
         for nome in alvos:
             url = f"{base}/report/{nome}"
@@ -767,6 +807,55 @@ class ConectorElefante(ConectorNavegador):
                         primeiro_sid = cand
                 log("download", "info",
                     f"[Elefante] turma {cid}: {len(alunos)} aluno(s) coletado(s).")
+
+                # GRANULAR: livros lidos COM DATA por aluno (overall-student-books-
+                # read, em LOTE concorrente) → 1 ArquivoObtido "leituras" por turma
+                # → Leitura DATADA (ranking por período) + linha do tempo.
+                sid_nome = {}
+                for al in alunos:
+                    if isinstance(al, dict):
+                        s = str(al.get("studentId") or "")
+                        if s.isdigit() and al.get("studentName"):
+                            sid_nome[s] = str(al["studentName"])
+                if sid_nome and not contexto.cancelado():
+                    try:
+                        lote = await nav.avaliar(self._js_fetch_lote(
+                            f"{base}/report/{_EP_BOOKS_READ}", headers, creds,
+                            self._corpo_relatorio(), [int(s) for s in sid_nome]))
+                    except Exception as exc:  # noqa: BLE001
+                        lote = None
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: falha nos livros ({str(exc)[:60]}).")
+                    leituras: list[dict] = []
+                    for item in (lote or []):
+                        if not isinstance(item, dict):
+                            continue
+                        nome_al = sid_nome.get(str(item.get("studentId") or ""), "")
+                        livros = item.get("books")
+                        if not nome_al or not isinstance(livros, list):
+                            continue
+                        for b in livros:
+                            if isinstance(b, dict) and b.get("bookTitle"):
+                                leituras.append({
+                                    "nome": nome_al,
+                                    "bookTitle": b.get("bookTitle"),
+                                    "levelName": b.get("levelName"),
+                                    "genre": b.get("genre"), "theme": b.get("theme"),
+                                    "totalTimeSpent": b.get("totalTimeSpent"),
+                                    "lastReadWhen": b.get("lastReadWhen")})
+                    if leituras:
+                        payload_l = {
+                            "courseId": body.get("courseId") or cid,
+                            "courseSchoolDescriptors": body.get("courseSchoolDescriptors"),
+                            "leituras": leituras}
+                        arquivos.append(ArquivoObtido(
+                            conteudo=json.dumps(payload_l, ensure_ascii=False).encode("utf-8"),
+                            nome_arquivo=f"elefante_leituras_{cid}.json",
+                            plataforma="elefante", content_type=_CT_API,
+                            formato_hint="leituras",
+                            metadados={"origem": "api", "course_id": cid, "tipo": "leituras"}))
+                        log("download", "info",
+                            f"[Elefante] turma {cid}: {len(leituras)} leitura(s) datada(s).")
             log("download", "info",
                 f"[Elefante] {len(arquivos)} turma(s) coletada(s) via API interna.")
 

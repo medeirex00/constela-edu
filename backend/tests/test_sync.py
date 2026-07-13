@@ -49,6 +49,11 @@ class NavegadorFake:
         return self.erro_login
     async def texto(self, seletor): return ""
     async def avaliar(self, expressao):
+        # Lote de livros lidos COM DATA por aluno (overall-student-books-read).
+        if "fetch(" in expressao and "overall-student-books-read" in expressao:
+            return [{"studentId": 4427356, "n": 1, "books": [
+                {"bookTitle": "Livro X", "levelName": "F", "genre": "Aventura",
+                 "totalTimeSpent": 1088, "lastReadWhen": "2026-06-26T08:59:43"}]}]
         # Fetch in-page do relatório de turma: devolve students[] com os dados por
         # aluno (é o que a sincronização coleta).
         if "fetch(" in expressao and "overall-course-report" in expressao:
@@ -253,10 +258,12 @@ def test_elefante_sincronizar_coleta_dados_por_turma(monkeypatch):
     con = elefante.ConectorElefante(_fabrica(NavAdmin(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
     assert "aluno(s) no total" in " | ".join(etapas)          # roster enumerado
-    assert len(arquivos) == 1                                 # 1 turma no fake
-    assert arquivos[0].content_type == elefante._CT_API
-    assert arquivos[0].formato_hint == "resumo"
-    assert b"Aluno X" in arquivos[0].conteudo                 # students[] embutido
+    # 2 arquivos por turma: o agregado (resumo) + o granular (leituras datadas).
+    formatos = {a.formato_hint for a in arquivos}
+    assert formatos == {"resumo", "leituras"}
+    assert all(a.content_type == elefante._CT_API for a in arquivos)
+    granular = next(a for a in arquivos if a.formato_hint == "leituras")
+    assert b"Livro X" in granular.conteudo and b"lastReadWhen" in granular.conteudo
 
 
 def test_elefante_sincronizar_via_api_direta(monkeypatch):
@@ -294,8 +301,8 @@ def test_elefante_sincronizar_via_api_direta(monkeypatch):
     con = elefante.ConectorElefante(_fabrica(NavApiDireta(logado=True)))
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
     assert "via API direta" in " | ".join(etapas)
-    assert len(arquivos) == 1                             # coletou a turma
-    assert arquivos[0].content_type == elefante._CT_API
+    assert len(arquivos) >= 1                             # coletou a turma
+    assert all(a.content_type == elefante._CT_API for a in arquivos)
 
 
 def test_parse_courses_students_aceita_chaves_alternativas():
@@ -347,6 +354,38 @@ def test_analisar_elefante_api_mapeia_campos():
                                "students": [{"studentName": "Fulano", "totalBooksRead": 3}]})
     assert b.turma_detectada == "Turma 511434"
     assert b.linhas[0].dados["turma_relatorio"] == "Turma 511434"
+
+
+def test_analisar_elefante_api_leituras_datadas():
+    """O payload GRANULAR (leituras) vira Analise 'leituras' — uma linha por LIVRO,
+    com data normalizada p/ ISO (ranking por período) e tempo em minutos."""
+    from app.services.importacao import analisar_elefante_api
+    payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B"},
+               "leituras": [
+                   {"nome": "Veronica X", "bookTitle": "De bem com a vida",
+                    "levelName": "F", "genre": "Amizade", "totalTimeSpent": 1088,
+                    "lastReadWhen": "2026-06-26T08:59:43"},
+                   {"nome": "", "bookTitle": "Ignorado"},        # sem nome → descartado
+                   {"nome": "Veronica X", "bookTitle": "Sem data",
+                    "lastReadWhen": ""}]}                        # sem data → descartado
+    a = analisar_elefante_api(payload)
+    assert a.formato == "leituras" and a.turma_detectada == "5 ANO B"
+    assert len(a.linhas) == 1                       # só o livro COM data entra
+    d = a.linhas[0].dados
+    assert a.linhas[0].nome == "Veronica X"
+    assert d["livro"] == "De bem com a vida" and d["nivel"] == "F"
+    assert d["data"].startswith("2026-06-26T08:59:43")
+    assert d["tempo_livro_min"] == round(1088 / 60)  # segundos → minutos
+    assert d["turma_relatorio"] == "5 ANO B"
+
+
+def test_data_iso_elefante_formatos():
+    """Normaliza ISO e formato brasileiro; vazio quando não parseia."""
+    from app.services.importacao import _data_iso_elefante
+    assert _data_iso_elefante("2026-06-26T08:59:43").startswith("2026-06-26T08:59:43")
+    assert _data_iso_elefante("26/06/2026 08:59:43").startswith("2026-06-26T08:59:43")
+    assert _data_iso_elefante("26/06/2026").startswith("2026-06-26")
+    assert _data_iso_elefante("bagunça") == "" and _data_iso_elefante(None) == ""
 
 
 def test_corpo_relatorio_e_js_fetch_post():
@@ -617,6 +656,37 @@ def test_orquestrador_importa_elefante_api_json(db, escola_completa, monkeypatch
     assert snap.questoes_tentativas == 30 and snap.questoes_acertos == 25
     assert db.execute(select(Importacao).where(
         Importacao.escola_id == escola.id)).scalars().first() is not None
+
+
+def test_orquestrador_importa_elefante_api_leituras_datadas(db, escola_completa, monkeypatch):
+    """Ponta a ponta do GRANULAR: um ArquivoObtido 'leituras' (JSON do books-read)
+    vira Leitura DATADA — base do ranking por período e da linha do tempo."""
+    import json as _json
+
+    from app.models import Leitura, Livro
+    from app.sync import orchestrator
+
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
+    monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
+
+    payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B"},
+               "leituras": [{"nome": "Ana Beatriz Souza", "bookTitle": "De bem com a vida",
+                             "levelName": "F", "genre": "Amizade", "totalTimeSpent": 1088,
+                             "lastReadWhen": "2026-06-26T08:59:43"}]}
+    arq = ArquivoObtido(
+        conteudo=_json.dumps(payload).encode("utf-8"),
+        nome_arquivo="elefante_leituras_1.json", plataforma="elefante",
+        content_type=orchestrator.CT_ELEFANTE_API, formato_hint="leituras")
+    res = orchestrator.aplicar_arquivo(
+        db, escola, arq, usuario_id=None, recalcular=True, contexto=_contexto(escola.id))
+
+    assert res["qtd_alunos"] == 1
+    leit = db.execute(
+        select(Leitura).join(Livro, Leitura.livro_id == Livro.id)
+        .where(Leitura.aluno_id == ana.id)).scalars().first()
+    assert leit is not None
+    assert (leit.data.year, leit.data.month, leit.data.day) == (2026, 6, 26)
 
 
 def test_orquestrador_resolve_ator_admin_da_escola(db, escola_completa):

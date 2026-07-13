@@ -31,6 +31,7 @@ import io
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import datetime
 from difflib import SequenceMatcher
 
 from sqlalchemy import select
@@ -559,6 +560,27 @@ def _int_api(v) -> int:
         return 0
 
 
+def _data_iso_elefante(bruto) -> str:
+    """Normaliza a data/hora do Elefante (``lastReadWhen``) para ISO — o importador
+    de leituras faz ``datetime.fromisoformat``. Aceita ISO (com/sem T, com/sem
+    fuso/Z) e o formato brasileiro (dd/mm/aaaa [hh:mm[:ss]]). Vazio se não parsear
+    (a leitura ainda conta, só não entra nos rankings por período)."""
+    s = str(bruto or "").strip()
+    if not s:
+        return ""
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        pass
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
 def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analise:
     """Converte a resposta da API interna do Elefante ``/report/overall-course-
     report`` (uma TURMA) numa ``Analise`` no formato "resumo" — UMA linha por
@@ -583,6 +605,45 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         turma = f"Turma {payload['courseId']}"
     escola = str(desc.get("schoolName") or "").strip()
     professor = str(desc.get("teachers") or "").strip()
+
+    # GRANULAR ("leituras"): UMA linha por LIVRO lido, com DATA — vindo do
+    # overall-student-books-read por aluno. Gera Leitura datada (ranking por
+    # período: semana/mês/bimestre) + eventos da linha do tempo. Cada item traz o
+    # nome do aluno + o livro (título/nível/gênero/tempo/data).
+    if isinstance(payload.get("leituras"), list):
+        linhas_l: list[LinhaImportacao] = []
+        for i, r in enumerate(payload["leituras"], start=1):
+            if not isinstance(r, dict):
+                continue
+            nome = str(r.get("nome") or r.get("studentName") or "").strip()
+            titulo = str(r.get("bookTitle") or r.get("livro") or "").strip()
+            if not nome or not titulo:
+                continue
+            data_iso = _data_iso_elefante(r.get("lastReadWhen") or r.get("data"))
+            if not data_iso:
+                # SEM data confiável → NÃO vira leitura datada (senão o importador a
+                # dataria em "hoje" e ela cairia no período ERRADO do prêmio). O
+                # total do aluno já está no snapshot agregado (ranking "Todo o
+                # histórico"); aqui só entram leituras com data real.
+                continue
+            tempo_seg = _int_api(r.get("totalTimeSpent", r.get("tempo_livro_seg")))
+            linhas_l.append(LinhaImportacao(
+                numero=i, nome=nome,
+                dados={
+                    "livro": titulo,
+                    "nivel": str(r.get("levelName") or r.get("nivel") or "").strip(),
+                    "genero": str(r.get("genre") or r.get("theme") or r.get("genero") or "").strip(),
+                    "data": data_iso,
+                    # tempo do livro em MINUTOS (a API dá segundos em totalTimeSpent).
+                    "tempo_livro_min": round(tempo_seg / 60) if tempo_seg else None,
+                    "turma_relatorio": turma,
+                }))
+        return Analise(
+            plataforma=plataforma, formato="leituras", estrategia="api-elefante",
+            mensagem_deteccao="Histórico de leitura por aluno (API Elefante Letrado).",
+            linhas=linhas_l, turma_detectada=turma, escola_detectada=escola,
+            professor_detectado=professor)
+
     alunos = payload.get("students")
     linhas: list[LinhaImportacao] = []
     for i, al in enumerate(alunos or [], start=1):
