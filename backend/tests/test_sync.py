@@ -243,7 +243,7 @@ def test_elefante_sincronizar_mapeia_turmas_e_sonda_relatorio(monkeypatch):
     arquivos = asyncio.run(con.sincronizar(Credenciais(usuario="u", senha="p"), ctx))
     juntos = " | ".join(etapas)
     assert "aluno(s) no total" in juntos                 # roster enumerado
-    assert "/report/overall-student-report" in juntos    # sondou a API real
+    assert "/report/overall-course-report" in juntos     # sondou a API real dos dados
     assert arquivos == []                                 # rodada de mapeamento
 
 

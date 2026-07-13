@@ -473,24 +473,15 @@ class ConectorElefante(ConectorNavegador):
             return
         escola = self._school_id(caps)
         cid = next((c for c in mapa if mapa[c]), next(iter(mapa), ""))
-        sid = mapa.get(cid, [""])[0] if cid else ""
         alvos = []
         # overall-course-report: dados por ALUNO dentro da turma (10 chamadas p/ a
-        # escola toda) — provável caminho definitivo, e evita o 403 do per-aluno.
+        # escola toda) — o caminho definitivo (o per-aluno dá 403 e é dispensável).
         if cid.isdigit():
             corpo_curso = self._corpo_relatorio(courseId=int(cid),
                                                 useCache=True, selectedProducts="")
             if escola.isdigit():
                 corpo_curso["schoolId"] = int(escola)
             alvos.append(("overall-course-report", corpo_curso))
-        # per-aluno deu 403 SEM courseId → tenta COM o contexto da turma.
-        if sid.isdigit() and cid.isdigit():
-            alvos += [
-                ("overall-student-report",
-                 self._corpo_relatorio(studentId=int(sid), courseId=int(cid))),
-                ("overall-student-books-read",
-                 self._corpo_relatorio(studentId=int(sid), courseId=int(cid))),
-            ]
         if escola.isdigit():
             alvos.append(("overall-school-report",
                           self._corpo_relatorio(schoolId=int(escola),
@@ -505,10 +496,17 @@ class ConectorElefante(ConectorNavegador):
             det = f"{res.get('status')}/{res.get('tipo')}"
             if res.get("erro"):
                 det += f" {res['erro']}"
+            body = res.get("body")
             if res.get("status") == 200:
-                det += " estrutura=" + self._estrutura(res.get("body"))
-            log("navegacao", "info",
-                f"[Elefante] /report/{nome} → " + det[:1700])
+                det += " estrutura=" + self._estrutura(body)
+            log("navegacao", "info", f"[Elefante] /report/{nome} → " + det[:1200])
+            # DUMP DEDICADO do array de alunos (o que interessa p/ o parser): os
+            # campos de leitura POR ALUNO dentro da turma.
+            if isinstance(body, dict) and isinstance(body.get("students"), list) \
+                    and body["students"]:
+                log("navegacao", "info",
+                    f"[Elefante] {nome} students[0] = "
+                    + self._estrutura(body["students"][0])[:1500])
 
     async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
         """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students
