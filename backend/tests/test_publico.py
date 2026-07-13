@@ -212,6 +212,38 @@ def test_desativar_painel_bloqueia_acesso(cliente, db, escola_completa):
     assert cliente.get(f"/api/v1/publico/{token}/painel").status_code == 404
 
 
+def test_reativar_painel_gera_novo_endereco(cliente, db, escola_completa):
+    """Gerar um novo painel (reativar) cria um endereço NOVO — o QR e o link
+    anteriores param de funcionar, sem precisar clicar em 'Gerar novo endereço'."""
+    escola_id = escola_completa["escola"].id
+    token1 = _ativar_painel(cliente, escola_id)
+    assert cliente.get(f"/api/v1/publico/{token1}/painel").status_code == 200
+
+    # Desativa: o link cai.
+    cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
+                json={"ativo": False, "slides": ["ranking"], "intervalo_s": 8, "max_posicoes": 5})
+    assert cliente.get(f"/api/v1/publico/{token1}/painel").status_code == 404
+
+    # Reativa = painel NOVO: endereço diferente; o antigo continua morto.
+    token2 = _ativar_painel(cliente, escola_id)
+    assert token2 != token1
+    assert cliente.get(f"/api/v1/publico/{token2}/painel").status_code == 200
+    assert cliente.get(f"/api/v1/publico/{token1}/painel").status_code == 404
+
+
+def test_editar_painel_ativo_preserva_endereco(cliente, db, escola_completa):
+    """Ajustar um painel JÁ ativo (slides/intervalo) NÃO troca o endereço — não
+    derruba o telão nem o QR já impresso no meio do uso."""
+    escola_id = escola_completa["escola"].id
+    token1 = _ativar_painel(cliente, escola_id)
+    r = cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
+                    json={"ativo": True, "slides": ["ranking", "destaques", "evolucao"],
+                          "intervalo_s": 20, "max_posicoes": 8})
+    assert r.status_code == 200
+    assert r.json()["url"].rsplit("/", 1)[-1] == token1
+    assert cliente.get(f"/api/v1/publico/{token1}/painel").status_code == 200
+
+
 def test_qr_code_svg(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     _ativar_painel(cliente, escola_id)

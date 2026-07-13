@@ -157,10 +157,16 @@ def salvar_config(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Escolha pelo menos um slide para o painel.")
     row = _config_row(db, escola_id)
-    valores = dict((row.valor or {}) if row else {})
+    anterior = dict((row.valor or {}) if row else {})
+    estava_ativo = bool(anterior.get("ativo"))
+    valores = dict(anterior)
     valores.update(dados.model_dump())
     valores["slides"] = slides
-    if valores["ativo"] and not valores.get("token"):
+    # (RE)ATIVAR o painel = "gerar um novo painel público": sempre nasce um
+    # endereço NOVO, então qualquer QR/link gerado antes deixa de funcionar na
+    # hora (o token antigo não resolve mais). Editar/ajustar um painel que JÁ
+    # está ativo preserva o endereço em uso — não derruba o telão no meio.
+    if valores["ativo"] and (not estava_ativo or not valores.get("token")):
         valores["token"] = secrets.token_urlsafe(9)
     if row is None:
         row = Configuracao(escola_id=escola_id, namespace="painel_publico",

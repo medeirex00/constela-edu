@@ -50,8 +50,15 @@ export default function PainelPublicoConfig() {
           max_posicoes: novaConfig.max_posicoes,
         }),
       });
+      // Ativar o painel gera um endereço NOVO (o anterior deixa de funcionar).
+      const ativou = novaConfig.ativo && !config?.ativo;
       setConfig(salvo);
-      setMensagem({ tipo: "ok", texto: "Configuração salva." });
+      setMensagem({
+        tipo: "ok",
+        texto: ativou
+          ? "Painel ativado com um endereço NOVO — o QR code e o link anteriores deixaram de funcionar. Baixe o QR code novo."
+          : "Configuração salva.",
+      });
     } catch (excecao) {
       setMensagem({ tipo: "erro", texto: excecao instanceof Error ? excecao.message : "Falha ao salvar." });
     } finally {
