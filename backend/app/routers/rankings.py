@@ -134,6 +134,42 @@ def ranking_leitura(
         item["pontos"] += pontos_map.get((codigo or "").upper(), 0.0)
         item["tempo_leitura_min"] += tempo or 0
 
+    # No "Todo o histórico" (sem recorte de datas), inclui o TOTAL acumulado do
+    # Elefante (SnapshotElefante) — que a sincronização por API popula de forma
+    # AGREGADA (livros/tempo por aluno, sem uma linha por livro com data). Sem
+    # isso, a aba Leitura ficava vazia para escolas que só têm o import por turma.
+    if periodo == "tudo":
+        sub_e = (
+            select(SnapshotElefante.aluno_id,
+                   func.max(SnapshotElefante.id).label("max_id"))
+            .where(SnapshotElefante.escola_id == escola_id)
+            .group_by(SnapshotElefante.aluno_id).subquery())
+        q_snap = (
+            select(SnapshotElefante.aluno_id, SnapshotElefante.livros_unicos,
+                   SnapshotElefante.tempo_leitura_min,
+                   Aluno.nome, Turma.nome, Turma.ano_escolar)
+            .join(sub_e, SnapshotElefante.id == sub_e.c.max_id)
+            .join(Aluno, Aluno.id == SnapshotElefante.aluno_id)
+            .join(Matricula, (Matricula.aluno_id == Aluno.id)
+                  & (Matricula.ano_letivo == ano))
+            .join(Turma, Matricula.turma_id == Turma.id)
+            .where(Aluno.escola_id == escola_id, Aluno.status == "ativo"))
+        if turma_id:
+            q_snap = q_snap.where(Turma.id == turma_id)
+        if ano_escolar:
+            q_snap = q_snap.where(Turma.ano_escolar == ano_escolar)
+        if permitidas is not None:
+            q_snap = q_snap.where(Turma.id.in_(permitidas))
+        for aluno_id, livros, tempo, nome, turma_nome, serie in db.execute(q_snap).all():
+            item = agg.setdefault(aluno_id, {
+                "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
+                "ano_escolar": serie, "livros": 0, "pontos": 0.0,
+                "tempo_leitura_min": 0})
+            # O snapshot é o TOTAL autoritativo; o ranking por livro (com data) pode
+            # ter menos (só livros datados). Fica o MAIOR — sem dupla contagem.
+            item["livros"] = max(item["livros"], int(livros or 0))
+            item["tempo_leitura_min"] = max(item["tempo_leitura_min"], int(tempo or 0))
+
     itens = sorted(agg.values(),
                    key=lambda x: (-x["pontos"], -x["livros"],
                                   -x["tempo_leitura_min"], x["nome"].casefold()))

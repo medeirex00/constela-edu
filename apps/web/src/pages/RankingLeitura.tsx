@@ -16,7 +16,10 @@ import type { RankingLeituraItem, Turma } from "../lib/types";
 
 export default function RankingLeitura({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
+  // "Todo o histórico" por padrão: a sincronização do Elefante Letrado traz o
+  // TOTAL acumulado por aluno (livros/tempo), sem uma linha por livro com data —
+  // então os recortes por semana/mês só têm dados quando há relatório individual.
+  const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
   const [turmaId, setTurmaId] = useState("");
 
   const { dados: turmas } = useApi<Turma[]>(
@@ -64,7 +67,7 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
           <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
         ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Nenhuma leitura no período"
-                 descricao="Ajuste o período ou importe os relatórios individuais do Elefante Letrado." />
+                 descricao="Sincronize o Elefante Letrado (ou importe o relatório) e use “Todo o histórico” para ver o total acumulado por aluno." />
         ) : (
           <>
           <div className="overflow-x-auto">

@@ -76,6 +76,28 @@ def test_ranking_xp_ordena_e_posiciona(db, escola_completa):
     assert itens[0]["xp"] > itens[1]["xp"]
 
 
+def test_ranking_leitura_historico_inclui_snapshot_elefante(cliente, db, escola_completa):
+    """A aba Leitura em "Todo o histórico" mostra o TOTAL acumulado do Elefante
+    (SnapshotElefante) — a sync por API popula de forma AGREGADA (livros/tempo por
+    aluno, sem leitura datada). Sem isso a aba ficava vazia. Nos recortes por
+    período (sem datas) o agregado não entra (não dá para datar)."""
+    _dados_basicos(db, escola_completa)  # Ana: SnapshotElefante livros_unicos=12, tempo=650
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+
+    r = cliente.get(f"/api/v1/escolas/{escola.id}/ranking/leitura?periodo=tudo")
+    assert r.status_code == 200
+    itens = {i["aluno_id"]: i for i in r.json()}
+    assert ana.id in itens
+    assert itens[ana.id]["livros"] == 12
+    assert itens[ana.id]["tempo_leitura_min"] == 650
+
+    # Recorte por mês (sem leituras datadas) NÃO traz o agregado.
+    r_mes = cliente.get(f"/api/v1/escolas/{escola.id}/ranking/leitura?periodo=mes")
+    assert r_mes.status_code == 200
+    assert all(i["aluno_id"] != ana.id for i in r_mes.json())
+
+
 def test_mural_traz_destaques_e_eventos(cliente, db, escola_completa):
     _dados_basicos(db, escola_completa)
     escola = escola_completa["escola"]

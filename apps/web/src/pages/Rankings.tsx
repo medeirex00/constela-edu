@@ -8,16 +8,20 @@
 import { useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../components/ui";
+import RankingEscolar from "./RankingEscolar";
 import RankingEvolucao from "./RankingEvolucao";
 import RankingGeral from "./RankingGeral";
 import RankingLeitura from "./RankingLeitura";
 import RankingMatematica from "./RankingMatematica";
 
+// Uma aba por FONTE de dados: Geral (consolidado), Elefante Letrado (leitura),
+// Matific (matemática), Evolução e Escolar (dados escolares — em construção).
 const VISOES = [
   { chave: "geral", rotulo: "Geral" },
-  { chave: "leitura", rotulo: "Leitura" },
-  { chave: "matematica", rotulo: "Matemática" },
+  { chave: "leitura", rotulo: "Elefante Letrado" },
+  { chave: "matematica", rotulo: "Matific" },
   { chave: "evolucao", rotulo: "Evolução" },
+  { chave: "escolar", rotulo: "Escolar" },
 ] as const;
 
 type Visao = (typeof VISOES)[number]["chave"];
@@ -78,6 +82,7 @@ export default function Rankings() {
       {visao === "leitura" && <RankingLeitura embutido />}
       {visao === "matematica" && <RankingMatematica embutido />}
       {visao === "evolucao" && <RankingEvolucao embutido />}
+      {visao === "escolar" && <RankingEscolar embutido />}
     </div>
   );
 }
