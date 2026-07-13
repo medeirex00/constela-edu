@@ -196,6 +196,52 @@ def _contexto(db: Session, execucao: SincronizacaoExecucao, *,
                     log=log, timeout_s=settings.SYNC_TIMEOUT_S)
 
 
+_NS_INCREMENTAL = "sync_incremental"   # namespace da Configuracao (KV) por escola
+
+
+def _carregar_contadores(db: Session, escola_id: int, plataforma: str) -> dict:
+    """{studentId: total_de_livros} da última sync bem-sucedida (por escola/
+    plataforma). Base do incremental SEGURO por aluno: quem não mudou, o conector
+    pula. Guardado na tabela Configuracao (KV genérico — sem migração)."""
+    from app.models.configuracao import Configuracao
+
+    row = db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == _NS_INCREMENTAL,
+            Configuracao.chave == plataforma)
+    ).scalar_one_or_none()
+    return dict(row.valor) if row and isinstance(row.valor, dict) else {}
+
+
+def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
+                       contadores: dict) -> None:
+    """Persiste (fazendo MERGE) as contagens por aluno vistas nesta sync. O merge
+    preserva as contagens de turmas que falharam nesta rodada (não vieram em
+    ``contadores``) — assim uma falha parcial nunca zera o cursor de um aluno."""
+    if not contadores:
+        return
+    from app.models.configuracao import Configuracao
+
+    row = db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == _NS_INCREMENTAL,
+            Configuracao.chave == plataforma)
+    ).scalar_one_or_none()
+    if row is None:
+        row = Configuracao(escola_id=escola_id, namespace=_NS_INCREMENTAL,
+                           chave=plataforma, valor={})
+        db.add(row)
+    atual = dict(row.valor) if isinstance(row.valor, dict) else {}
+    for sid, total in contadores.items():
+        try:
+            atual[str(sid)] = int(total)
+        except (TypeError, ValueError):
+            continue
+    row.valor = atual
+
+
 def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecucao:
     """Roda UMA execução do início ao fim. Atualiza status, contadores, logs e
     alertas. Em erro recuperável, re-enfileira com backoff."""
@@ -238,6 +284,11 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         # é objeto simples (Credenciais) e `escola` recarrega sob demanda na
         # persistência, que segue transacional (commit único no fim).
         contexto_fetch = _contexto(db, execucao, autonomo=True)
+        # INCREMENTAL SEGURO: passa as contagens por aluno da última sync — o
+        # conector pula a coleta pesada de quem não mudou (aluno novo/atrasado
+        # SEMPRE coleta tudo). 1ª sync = vazio = tudo.
+        contexto_fetch.contadores_anteriores = _carregar_contadores(
+            db, execucao.escola_id, execucao.plataforma)
         db.commit()
         arquivos = asyncio.run(conector.sincronizar(cred, contexto_fetch))
         execucao.parser_versao = "perfis_pdf/planilhas"
@@ -261,6 +312,11 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         execucao.qtd_turmas = totais["turmas"]
         execucao.qtd_alteracoes = totais["alunos"]
         execucao.status = "concluida" if totais["arquivos"] else "sem_dados"
+        # INCREMENTAL: guarda as contagens por aluno vistas nesta sync (merge) —
+        # a próxima pula quem não mudou.
+        if totais["arquivos"]:
+            _salvar_contadores(db, execucao.escola_id, execucao.plataforma,
+                               contexto_fetch.contadores_novos)
         # Sucesso: fecha alertas de credencial/indisponibilidade da plataforma.
         vault_linha = vault.obter_linha(db, execucao.escola_id, execucao.plataforma)
         if vault_linha is not None:

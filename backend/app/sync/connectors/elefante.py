@@ -811,12 +811,28 @@ class ConectorElefante(ConectorNavegador):
                 # GRANULAR: livros lidos COM DATA por aluno (overall-student-books-
                 # read, em LOTE concorrente) → 1 ArquivoObtido "leituras" por turma
                 # → Leitura DATADA (ranking por período) + linha do tempo.
-                sid_nome = {}
+                # INCREMENTAL SEGURO: registra a contagem de CADA aluno e só busca
+                # os livros de quem MUDOU (aluno novo/atrasado não tem contagem
+                # anterior → é buscado; a UNIQUE de Leitura evita duplicar).
+                anteriores = getattr(contexto, "contadores_anteriores", None) or {}
+                novos = getattr(contexto, "contadores_novos", None)
+                sid_nome = {}      # só os alunos que MUDARAM (para buscar livros)
                 for al in alunos:
-                    if isinstance(al, dict):
-                        s = str(al.get("studentId") or "")
-                        if s.isdigit() and al.get("studentName"):
-                            sid_nome[s] = str(al["studentName"])
+                    if not isinstance(al, dict):
+                        continue
+                    s = str(al.get("studentId") or "")
+                    nome_al = str(al.get("studentName") or "")
+                    if not s.isdigit() or not nome_al:
+                        continue
+                    total = int(al.get("totalBooksRead") or al.get("qtdBooksRead") or 0)
+                    if novos is not None:
+                        novos[s] = total
+                    try:
+                        inalterado = int(anteriores.get(s, -1)) == total
+                    except (TypeError, ValueError):
+                        inalterado = False
+                    if not inalterado:
+                        sid_nome[s] = nome_al
                 if sid_nome and not contexto.cancelado():
                     try:
                         lote = await nav.avaliar(self._js_fetch_lote(

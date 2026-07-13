@@ -98,6 +98,13 @@ class Contexto:
     log: Registrar
     timeout_s: int = 120
     cancelado: Callable[[], bool] = lambda: False
+    # INCREMENTAL SEGURO (por aluno): {studentId: total_de_livros} da última sync.
+    # O conector PULA a coleta pesada (livros/questões) do aluno cujo total NÃO
+    # mudou — nada novo. Aluno novo/transferido/sem contagem SEMPRE coleta tudo, e
+    # as UNIQUE de Leitura/EventoAluno garantem que nada duplica. `contadores_novos`
+    # é preenchido pelo conector para o serviço persistir ao fim.
+    contadores_anteriores: dict = field(default_factory=dict)
+    contadores_novos: dict = field(default_factory=dict)
 
 
 class ErroConector(Exception):

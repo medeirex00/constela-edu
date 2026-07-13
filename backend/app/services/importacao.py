@@ -611,6 +611,10 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
     # período: semana/mês/bimestre) + eventos da linha do tempo. Cada item traz o
     # nome do aluno + o livro (título/nível/gênero/tempo/data).
     if isinstance(payload.get("leituras"), list):
+        # NUNCA filtra por data aqui (dropar por data global perderia a leitura
+        # de um aluno novo/atrasado). A dedução do que é novo é por ALUNO, no
+        # conector (pula quem não mudou); a UNIQUE de Leitura garante zero
+        # duplicidade quando reprocessa.
         linhas_l: list[LinhaImportacao] = []
         for i, r in enumerate(payload["leituras"], start=1):
             if not isinstance(r, dict):
