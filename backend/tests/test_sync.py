@@ -575,12 +575,16 @@ def test_conector_nao_vaza_senha_no_log():
     assert all("TOPSECRET" not in r for r in registros)
 
 
-def test_sincronizar_devolve_arquivo_para_pipeline():
+def test_obter_devolve_arquivo_para_pipeline():
+    """O download direto (obter) do Matific ainda alimenta o pipeline como
+    fallback. A coleta PRINCIPAL agora é pela API interna do Placar da Escola —
+    coberta em test_matific_api.py (sincronizar sobrescrito)."""
     Classe = type(connectors.obter("matific"))
-    arquivos = asyncio.run(Classe(_fabrica(NavegadorFake(conteudo=b"PKdados")))
-                           .sincronizar(Credenciais(usuario="a", senha="b"), _contexto()))
-    assert len(arquivos) == 1
-    assert arquivos[0].plataforma == "matific" and arquivos[0].conteudo == b"PKdados"
+    con = Classe(_fabrica(NavegadorFake(conteudo=b"PKdados")))
+    cred, ctx = Credenciais(usuario="a", senha="b"), _contexto()
+    rel = asyncio.run(con.localizar_relatorios(cred, ctx))
+    arquivo = asyncio.run(con.obter(cred, rel[0], ctx))
+    assert arquivo.plataforma == "matific" and arquivo.conteudo == b"PKdados"
 
 
 # --------------------------------------------------------------------------

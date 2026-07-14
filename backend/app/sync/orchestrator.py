@@ -31,6 +31,9 @@ from app.sync.interfaces import ArquivoObtido, Contexto
 # report) — roteia direto para o analisador da API, SEM tocar na detecção do
 # upload manual (pdf/xlsx/texto), que fica intacta.
 CT_ELEFANTE_API = "application/x-elefante-course-report"
+# Marcador do JSON vindo da API interna do Matific (Placar da Escola). Roteia
+# direto para o analisador da API, sem tocar na detecção do upload manual.
+CT_MATIFIC_API = "application/x-matific-leaderboard"
 
 
 def _parsear(arquivo: ArquivoObtido):
@@ -47,6 +50,12 @@ def _parsear(arquivo: ArquivoObtido):
         # "texto" é o tipo aceito pelo ImportacaoConfirm (^pdf|texto|xlsx$) para
         # conteúdo não-binário; o arquivamento cai no ramo padrão.
         return svc.analisar_elefante_api(payload, plataforma or "elefante"), "texto"
+    # Sync do Matific pela API interna (Placar da Escola): conteúdo é JSON já com
+    # o nome completo casado; uma turma por arquivo.
+    if arquivo.content_type == CT_MATIFIC_API:
+        import json
+        payload = json.loads(conteudo.decode("utf-8"))
+        return svc.analisar_matific_api(payload), "texto"
     # Mesma detecção do upload manual (fonte única) — nunca divergem.
     tipo = svc.detectar_tipo(conteudo, nome, arquivo.content_type)
     if tipo == "pdf":

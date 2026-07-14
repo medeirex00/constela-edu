@@ -675,6 +675,46 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         professor_detectado=professor)
 
 
+def analisar_matific_api(payload) -> Analise:
+    """Placar da Escola pela API interna do Matific (school_student), já com o
+    nome COMPLETO casado (via student-leaderboard) pelo conector. Uma turma por
+    payload (o conector agrupa por ``klassName``), no MESMO formato do upload do
+    Excel do Matific — reusa ``_importar_matific`` (atividades/estrelas/média).
+
+    Mapeamento (campo da API → dado do snapshot):
+      score               → estrelas (headline do ranking de matemática)
+      activities_completed→ atividades
+      score / atividades  → pontuacao_media (0–5; = "Pontuação média" da tela)
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    turma = str(payload.get("turma") or "").strip()
+    linhas: list[LinhaImportacao] = []
+    for i, a in enumerate(payload.get("alunos") or [], start=1):
+        if not isinstance(a, dict):
+            continue
+        nome = str(a.get("nome") or "").strip()
+        if not nome:
+            continue
+        estrelas = _int_api(a.get("estrelas"))
+        atividades = _int_api(a.get("atividades"))
+        # "Pontuação média" da tela = estrelas por atividade (0–5). Ex.: 3914/1082=3.62.
+        media = round(estrelas / atividades, 2) if atividades else 0.0
+        linhas.append(LinhaImportacao(
+            numero=i, nome=nome,
+            dados={
+                "atividades": atividades,
+                "estrelas": estrelas,
+                "pontuacao_media": media,
+                # Desambigua homônimos na turma certa (mesmo campo do Excel/PDF).
+                "turma_relatorio": turma,
+            }))
+    return Analise(
+        plataforma="matific", formato="resumo", estrategia="api-matific",
+        mensagem_deteccao="Placar da Escola (API interna do Matific).",
+        linhas=linhas, turma_detectada=turma, escola_detectada="",
+        professor_detectado="")
+
+
 def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:
     """Interpreta um relatório colado/extraído. Nunca grava nada."""
     detectada, mensagem = detectar_plataforma_detalhado(texto)
