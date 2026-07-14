@@ -45,6 +45,8 @@ _API_BASE = "https://www.matific.com"
 #     → { leaderboard:[{ student_id(=uuid), student_name(NOME COMPLETO), ... }] }
 # Auth por COOKIE de sessão (Django sessionid) — same-origin, então o fetch da
 # própria página logada já a envia (credentials:'include'); sem token/Bearer.
+_EP_CURRENT = f"{_API_BASE}/api/v2/accounts/current/"   # traz school_id do logado
+_EP_COMPETITIONS = f"{_API_BASE}/api/v2/competition-v2/"  # lista (p/ competition_id)
 _DURATION_PADRAO = "this-year"   # "Ano acadêmico atual" (cumulativo)
 _RE_SCHOOL_ID = re.compile(r"school_id=([0-9a-f-]{36})", re.I)
 _RE_COMPETICAO = re.compile(r"/competition-v2/([0-9a-f-]{36})/", re.I)
@@ -235,6 +237,30 @@ class ConectorMatific(ConectorNavegador):
             })
         return alunos
 
+    async def _buscar_json_campo(self, nav, url: str, campo: str) -> str:
+        """GET in-page (cookie) e devolve um campo string do corpo (dict). '' se falhar."""
+        try:
+            res = await nav.avaliar(_js_get(url))
+        except Exception:  # noqa: BLE001 — endpoint acessório; segue com fallback
+            return ""
+        body = res.get("body") if isinstance(res, dict) else None
+        return str(body.get(campo) or "").strip() if isinstance(body, dict) else ""
+
+    async def _primeira_competicao(self, nav) -> str:
+        """id da competição (para o student-leaderboard com nome completo). Prefere
+        a que está AO VIVO; senão a primeira. '' se não houver."""
+        try:
+            res = await nav.avaliar(_js_get(_EP_COMPETITIONS))
+        except Exception:  # noqa: BLE001
+            return ""
+        body = res.get("body") if isinstance(res, dict) else None
+        if not isinstance(body, list):
+            return ""
+        comps = [c for c in body if isinstance(c, dict) and c.get("id")]
+        ao_vivo = next((c for c in comps if c.get("is_live")), None)
+        alvo = ao_vivo or (comps[0] if comps else None)
+        return str(alvo.get("id")).strip() if alvo else ""
+
     async def sincronizar(self, cred: Credenciais,
                           contexto: Contexto) -> list[ArquivoObtido]:
         """Coleta o Placar da Escola pela API INTERNA do Matific (sem PDF):
@@ -260,17 +286,25 @@ class ConectorMatific(ConectorNavegador):
             rotulo_periodo = duration
         async with self._sessao(contexto) as nav:
             await self._login(nav, cred, contexto)
-            # A página do Placar dispara as chamadas internas ao carregar; captura-
-            # mos os ids delas (school_id/competition_id) para então reconsultar
-            # com o PERÍODO desejado.
-            caps = await nav.coletar_respostas(_URL_LEADERBOARD, timeout_s=25)
-            school_id, comp_id = self._ids_do_placar(caps)
+            # Fica numa página logada em www.matific.com (same-origin p/ os fetches
+            # com cookie de sessão). NÃO dependemos das chamadas que a tela dispara.
+            await nav.ir_para(_URL_LEADERBOARD)
+            # school_id de forma DETERMINÍSTICA: accounts/current/ traz school_id do
+            # usuário logado (não depende de timing de captura, que era o bug). Só se
+            # falhar caímos nas requisições capturadas da página.
+            school_id = await self._buscar_json_campo(nav, _EP_CURRENT, "school_id")
+            comp_id = await self._primeira_competicao(nav)
+            if not school_id:
+                caps = await nav.coletar_respostas(_URL_LEADERBOARD, timeout_s=20)
+                cap_school, cap_comp = self._ids_do_placar(caps)
+                school_id = school_id or cap_school
+                comp_id = comp_id or cap_comp
             if not school_id:
                 log("navegacao", "warn",
-                    "[Matific] não achei o school_id no Placar da Escola — "
+                    "[Matific] não achei o school_id da escola (accounts/current) — "
                     "usando o upload manual do relatório.")
                 return arquivos
-            log("navegacao", "info", "[Matific] Placar da Escola localizado.")
+            log("navegacao", "info", "[Matific] Escola localizada — coletando o Placar.")
 
             # Nomes completos (uuid → nome) da competição, quando houver.
             nomes: dict = {}

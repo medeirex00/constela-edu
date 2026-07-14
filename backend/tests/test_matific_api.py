@@ -245,8 +245,14 @@ def test_sincronizar_agrupa_por_turma_com_api_interna(monkeypatch):
                             "e3e918e8-0000-0000-0000-000000000001/student-leaderboard/"}]
 
         async def avaliar(self, expr):
-            if "student-leaderboard" in expr:
+            if "student-leaderboard" in expr:      # checar ANTES de competition-v2
                 return _STUDENT_LEADERBOARD
+            if "accounts/current" in expr:          # fonte determinística do school_id
+                return {"ok": True, "status": 200,
+                        "body": {"school_id": "e3e918e8-0000-0000-0000-000000000001"}}
+            if "competition-v2" in expr:            # a LISTA de competições
+                return {"ok": True, "status": 200,
+                        "body": [{"id": "8773b0bf-0000-0000-0000-0000000000aa", "is_live": True}]}
             if "school_student" in expr:
                 return _SCHOOL_STUDENT
             return {"ok": False, "status": 0, "body": None}
