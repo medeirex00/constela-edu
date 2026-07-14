@@ -15,13 +15,15 @@ export interface Periodo {
   fim?: string; // AAAA-MM-DD (personalizado)
 }
 
-// Só os períodos que a escola usa para premiar: dia, semana, mês, bimestre e ano.
+// Só os períodos que a escola usa para premiar: dia, semana, mês, bimestre, ano
+// e o PERSONALIZADO (escolher as datas — premiação por qualquer intervalo).
 export const PRESETS_PERIODO = [
   { valor: "hoje", rotulo: "Hoje" },
   { valor: "semana", rotulo: "Esta semana" },
   { valor: "mes", rotulo: "Este mês" },
   { valor: "bimestre", rotulo: "Este bimestre" },
   { valor: "ano_letivo", rotulo: "Ano letivo" },
+  { valor: "personalizado", rotulo: "Período personalizado" },
 ] as const;
 
 /** Monta a query string (?periodo=... / ?dia=... / ?inicio=&fim=). */
