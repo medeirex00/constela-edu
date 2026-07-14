@@ -8,6 +8,7 @@ resposta jamais inclui senha (o cofre só devolve status).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -223,7 +224,8 @@ def salvar_config(plataforma: str, dados: ConfigIn,
 # Ações (botões)
 # ---------------------------------------------------------------------------
 def _enfileirar_agora(db: Session, escola_id: int, usuario: Usuario,
-                      plataforma: str | None) -> list[SincronizacaoExecucao]:
+                      plataforma: str | None,
+                      parametros: dict | None = None) -> list[SincronizacaoExecucao]:
     alvos = ([plataforma] if plataforma
              else connectors.plataformas_automatizaveis())
     execucoes = []
@@ -231,8 +233,10 @@ def _enfileirar_agora(db: Session, escola_id: int, usuario: Usuario,
         _validar_plataforma(plat)
         if vault.obter_credencial(db, escola_id, plat) is None:
             continue  # sem credencial: silenciosamente pula (aparece no status)
+        # A janela de datas (coleta por período) só se aplica ao Matific.
+        params = parametros if (parametros and plat == "matific") else None
         ex = service.enfileirar(db, escola_id, plat, origem="manual",
-                                usuario_id=usuario.id)
+                                usuario_id=usuario.id, parametros=params)
         execucoes.append(ex)
     db.commit()
     for ex in execucoes:
@@ -240,17 +244,35 @@ def _enfileirar_agora(db: Session, escola_id: int, usuario: Usuario,
     return execucoes
 
 
+_RE_DATA_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 @router.post("/agora", response_model=list[ExecucaoOut])
 def sincronizar_agora(escola_id: int = Depends(escola_autorizada),
                       usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
                       db: Session = Depends(get_db),
-                      plataforma: str | None = Query(default=None)):
+                      plataforma: str | None = Query(default=None),
+                      inicio: str | None = Query(default=None),
+                      fim: str | None = Query(default=None)):
     """Botões 'Sincronizar agora / Matific / Elefante': obtém e importa de novo,
     enfileirando e disparando. Sem ``plataforma`` cobre todas as automatizáveis
     com credencial. A idempotência do pipeline (Matific por período/leituras,
     dedup diário dos snapshots) garante que reexecutar não duplica dados — por
-    isso não existe uma ação 'reprocessar' separada: sincronizar É reprocessar."""
-    execucoes = _enfileirar_agora(db, escola_id, usuario, plataforma)
+    isso não existe uma ação 'reprocessar' separada: sincronizar É reprocessar.
+
+    ``inicio``/``fim`` (AAAA-MM-DD): coleta o MATIFIC POR PERÍODO (premiação por
+    semana/mês/intervalo) — o Placar é buscado com start_date/end_date e importado
+    como período; ignorado para as demais plataformas."""
+    parametros = None
+    if inicio or fim:
+        if not (inicio and fim and _RE_DATA_ISO.match(inicio) and _RE_DATA_ISO.match(fim)):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Informe início E fim no formato AAAA-MM-DD.")
+        if fim < inicio:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "A data final não pode ser antes da inicial.")
+        parametros = {"matific_start_date": inicio, "matific_end_date": fim}
+    execucoes = _enfileirar_agora(db, escola_id, usuario, plataforma, parametros)
     if not execucoes:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma plataforma com credencial configurada.")

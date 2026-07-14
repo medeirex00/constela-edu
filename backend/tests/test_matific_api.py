@@ -131,6 +131,25 @@ def test_orquestrador_matific_api_por_periodo(db, escola_completa, monkeypatch):
     assert any(s.estrelas == 50 for s in snaps)
 
 
+def test_enfileirar_guarda_parametros_do_periodo(db, escola_completa):
+    """Coleta integrada por período: a execução guarda as datas (a thread relê a
+    linha pelo id) → o service injeta em cred.extra → o conector usa start_date/
+    end_date. Persistência é a peça nova."""
+    from app.sync import service
+    escola = escola_completa["escola"]
+    ex = service.enfileirar(
+        db, escola.id, "matific", origem="manual",
+        parametros={"matific_start_date": "2026-07-07", "matific_end_date": "2026-07-14"})
+    db.commit()
+    db.refresh(ex)
+    assert ex.parametros == {"matific_start_date": "2026-07-07",
+                             "matific_end_date": "2026-07-14"}
+    # Sync normal (sem período) continua com parametros vazio.
+    ex2 = service.enfileirar(db, escola.id, "elefante", origem="manual")
+    db.commit()
+    assert ex2.parametros == {}
+
+
 def test_payload_matific_placar_detecta():
     from app.routers.importacoes import _payload_matific_placar
     bom = '{"fonte":"matific-placar","alunos":[{"nome":"X","turma":"T"}]}'

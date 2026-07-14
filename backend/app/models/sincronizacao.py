@@ -18,7 +18,7 @@ chave de cifra vem da ``SECRET_KEY`` (fora do banco). Ver ``app/sync/vault.py``.
 """
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, text
+from sqlalchemy import JSON, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -113,6 +113,10 @@ class SincronizacaoExecucao(Base):
         ForeignKey("importacoes.id", ondelete="SET NULL"), default=None)
     tentativa: Mapped[int] = mapped_column(default=1)
     erro_resumo: Mapped[str | None] = mapped_column(String(300), default=None)
+    # Parâmetros específicos DESTA execução (ex.: janela de datas do Matific
+    # p/ coleta por período). Vazio = sync normal. Persistido porque o worker
+    # roda numa thread que relê a linha pelo id.
+    parametros: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     created_at: Mapped[datetime] = mapped_column(default=agora)
 
     __table_args__ = (

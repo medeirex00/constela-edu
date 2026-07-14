@@ -134,10 +134,14 @@ export default function Sincronizacao() {
     return () => clearInterval(t);
   }, [emAndamento, recarregar]);
 
-  const sincronizar = useMutation(async (plataforma?: string) => {
-    const q = plataforma ? `?plataforma=${plataforma}` : "";
-    await api(`${base}/agora${q}`, { method: "POST" });
-  }, { aoSucesso: recarregar });
+  const sincronizar = useMutation(
+    async (opts?: { plataforma?: string; inicio?: string; fim?: string }) => {
+      const q = new URLSearchParams();
+      if (opts?.plataforma) q.set("plataforma", opts.plataforma);
+      if (opts?.inicio && opts?.fim) { q.set("inicio", opts.inicio); q.set("fim", opts.fim); }
+      const qs = q.toString();
+      await api(`${base}/agora${qs ? `?${qs}` : ""}`, { method: "POST" });
+    }, { aoSucesso: recarregar });
 
   const resolver = useMutation(async (id: number) => {
     await api(`${base}/alertas/${id}/resolver`, { method: "POST" });
@@ -228,7 +232,9 @@ export default function Sincronizacao() {
           base={base!}
           p={p}
           onMudou={recarregar}
-          onSincronizar={() => sincronizar.executar(p.plataforma)}
+          onSincronizar={() => sincronizar.executar({ plataforma: p.plataforma })}
+          onSincronizarPeriodo={(inicio, fim) =>
+            sincronizar.executar({ plataforma: p.plataforma, inicio, fim })}
           sincronizando={sincronizar.enviando}
           onVerLogs={(execId) => setExecLog(execId)}
         />
@@ -363,16 +369,19 @@ export default function Sincronizacao() {
 
 // --- Card de uma plataforma -------------------------------------------------
 function PlataformaCard({
-  base, p, onMudou, onSincronizar, sincronizando, onVerLogs,
+  base, p, onMudou, onSincronizar, onSincronizarPeriodo, sincronizando, onVerLogs,
 }: {
   base: string;
   p: PlataformaStatus;
   onMudou: () => void;
   onSincronizar: () => void;
+  onSincronizarPeriodo: (inicio: string, fim: string) => void;
   sincronizando: boolean;
   onVerLogs: (id: number) => void;
 }) {
   const nome = NOME[p.plataforma] ?? p.plataforma;
+  const [pInicio, setPInicio] = useState("");
+  const [pFim, setPFim] = useState("");
   return (
     <Card className="p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -420,6 +429,36 @@ function PlataformaCard({
           </span>
         )}
       </div>
+
+      {/* Coleta POR PERÍODO — só Matific (o Elefante já tem leituras datadas). */}
+      {p.plataforma === "matific" && p.conectada && (
+        <div className="mt-4 border-t border-zinc-100 pt-4 dark:border-zinc-800">
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Premiar por período
+          </h3>
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+            Colete o Matific de um intervalo específico (semana, mês…). O ranking
+            de matemática desse período mostra o que foi feito só naquelas datas.
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs text-zinc-500 dark:text-zinc-400">
+              De
+              <input type="date" className={`${estiloInput} mt-1 w-auto`} value={pInicio}
+                     onChange={(e) => setPInicio(e.target.value)} />
+            </label>
+            <label className="text-xs text-zinc-500 dark:text-zinc-400">
+              Até
+              <input type="date" className={`${estiloInput} mt-1 w-auto`} value={pFim}
+                     onChange={(e) => setPFim(e.target.value)} />
+            </label>
+            <Botao variante="neutro"
+                   disabled={sincronizando || !pInicio || !pFim || pFim < pInicio}
+                   onClick={() => onSincronizarPeriodo(pInicio, pFim)}>
+              <CalendarClock size={15} /> Coletar do Matific este período
+            </Botao>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

@@ -121,7 +121,8 @@ def _finalizar_travada(db: Session, execucao: SincronizacaoExecucao) -> bool:
 
 def enfileirar(db: Session, escola_id: int, plataforma: str, *, origem: str,
                usuario_id: int | None = None, tentativa: int = 1,
-               disponivel_em: datetime | None = None) -> SincronizacaoExecucao:
+               disponivel_em: datetime | None = None,
+               parametros: dict | None = None) -> SincronizacaoExecucao:
     """Cria uma execução na fila. IDEMPOTENTE / anti-duplicidade em DUAS camadas:
     (1) fast-path: se já houver uma ativa (fila/executando) para (escola,
     plataforma), devolve-a; (2) garantia forte: o índice único parcial
@@ -151,7 +152,7 @@ def enfileirar(db: Session, escola_id: int, plataforma: str, *, origem: str,
     execucao = SincronizacaoExecucao(
         escola_id=escola_id, plataforma=plataforma, origem=origem,
         usuario_id=usuario_id, status="fila", tentativa=tentativa,
-        disponivel_em=disponivel_em,
+        disponivel_em=disponivel_em, parametros=parametros or {},
         conector_versao=getattr(connectors.obter(plataforma), "versao", None))
     try:
         with db.begin_nested():          # savepoint: só o INSERT rola em conflito
@@ -269,6 +270,10 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
             raise ErroConector(f"Sem conector para {execucao.plataforma}.",
                                codigo="parser_incompativel", recuperavel=False)
         cred = vault.obter_credencial(db, execucao.escola_id, execucao.plataforma)
+        # Parâmetros DESTA execução (ex.: janela de datas do Matific) entram no
+        # extra da credencial — o conector os lê (matific_start_date/end_date).
+        if cred is not None and execucao.parametros:
+            cred.extra = {**(cred.extra or {}), **execucao.parametros}
         if cred is None:
             raise ErroConector(
                 "Credenciais não configuradas ou ilegíveis.",
