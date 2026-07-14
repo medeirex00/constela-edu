@@ -605,26 +605,55 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
     ))
 
 
-def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_referencia, avisos):
-    """Formato "uma linha por livro concluído": registra leituras únicas (§35).
-
-    Todo o trabalho de banco é feito EM LOTE: uma consulta para o catálogo,
-    uma para as leituras existentes e um único flush no final. A versão
-    anterior consultava livro-a-livro (~600 idas ao banco por arquivo), o que
-    num Postgres de rede (Supabase) transformava cada relatório em minutos.
-    """
-    # Catálogo da escola indexado por título case-insensitive — equivale ao
-    # antigo ILIKE literal (primeiro correspondente vence em caso de duplicata).
+def _catalogo_livros(db, escola_id: int) -> dict:
+    """Livros da escola por título case-insensitive — carregado UMA vez por sync
+    e compartilhado entre todos os alunos (era relido por aluno)."""
     catalogo: dict[str, Livro] = {}
     for livro in db.execute(
         select(Livro).where(Livro.escola_id == escola_id).order_by(Livro.id)
     ).scalars():
         catalogo.setdefault(livro.titulo.strip().casefold(), livro)
+    return catalogo
 
-    ja_lidos: set[int] = set(db.execute(
-        select(Leitura.livro_id).where(Leitura.aluno_id == aluno.id)
-    ).scalars().all())
 
+def _codigos_faixa_escola(db, escola_id: int) -> set:
+    """Letras de nível que estão em ALGUMA faixa configurada (UMA vez por sync)."""
+    return {
+        c.upper()
+        for nivel in db.execute(
+            select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
+        ).scalars()
+        for c in (nivel.codigos or [])
+    }
+
+
+def _ja_lidos_por_aluno(db, aluno_ids) -> dict:
+    """{aluno_id: set(livro_id)} das leituras já gravadas — UMA consulta em lote
+    (era uma por aluno). Dedup de releitura (§35) sem N idas ao banco."""
+    mapa: dict[int, set] = {}
+    ids = list(aluno_ids)
+    if not ids:
+        return mapa
+    for aid, lid in db.execute(
+        select(Leitura.aluno_id, Leitura.livro_id)
+        .where(Leitura.aluno_id.in_(ids))
+    ).all():
+        mapa.setdefault(aid, set()).add(lid)
+    return mapa
+
+
+def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
+                                data_referencia, avisos, catalogo, ja_lidos,
+                                codigos_faixa):
+    """Formato "uma linha por livro concluído": registra leituras únicas (§35).
+
+    Todo o trabalho de banco é feito EM LOTE. O ``catalogo`` (livros da escola),
+    o ``ja_lidos`` (livros já lidos por este aluno) e o ``codigos_faixa`` (níveis
+    configurados) são carregados UMA vez por sincronização e passados — antes
+    eram relidos por ALUNO (~190× numa escola de 10 turmas), o que no Postgres de
+    rede (Supabase) transformava a coleta do Elefante em ~15 min. Livros criados
+    aqui entram no ``catalogo`` compartilhado (dedup também entre alunos do lote).
+    """
     vistos: set[str] = set()  # títulos já processados NESTE lote
     novas: list[Leitura] = []
     for linha in linhas:
@@ -727,13 +756,7 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas, data_r
     # Avisa se algum nível de letra não está em nenhuma faixa configurada:
     # esses livros contam no total, mas não geram pontos de dificuldade nem
     # aparecem no gráfico por nível até a letra ser incluída em Métricas.
-    codigos_faixa = {
-        c.upper()
-        for nivel in db.execute(
-            select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
-        ).scalars()
-        for c in (nivel.codigos or [])
-    }
+    # (``codigos_faixa`` já vem carregado uma vez por sincronização.)
     fora = sorted({c for c in por_nivel if c and c.upper() not in codigos_faixa})
     if fora:
         avisos.append(
@@ -896,6 +919,15 @@ def confirmar(
         elif dados.plataforma != "matific" and dados.formato != "leituras":
             anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotElefante)
 
+    # PERFORMANCE das leituras (Elefante): catálogo de livros, faixas de nível e
+    # "já lidos" carregados UMA vez para o arquivo inteiro — antes eram relidos
+    # por aluno (~190× numa escola de 10 turmas), o gargalo da sync de ~15 min.
+    cat_livros = cod_faixa = ja_lidos_map = None
+    if dados.formato == "leituras" and resolvidos:
+        cat_livros = _catalogo_livros(db, escola_id)
+        cod_faixa = _codigos_faixa_escola(db, escola_id)
+        ja_lidos_map = _ja_lidos_por_aluno(db, [a.id for a, _ in resolvidos.values()])
+
     for aluno, linhas_aluno in resolvidos.values():
         if dados.plataforma == "matific" and periodo_inicio is not None:
             _importar_matific_periodo(db, escola_id, importacao, aluno,
@@ -908,7 +940,9 @@ def confirmar(
                               anterior=anteriores.get(aluno.id))
         elif dados.formato == "leituras":
             _importar_elefante_leituras(db, escola_id, importacao, aluno,
-                                        linhas_aluno, data_referencia, avisos)
+                                        linhas_aluno, data_referencia, avisos,
+                                        cat_livros, ja_lidos_map.get(aluno.id, set()),
+                                        cod_faixa)
         else:
             _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                       linhas_aluno[-1].dados, data_referencia,
