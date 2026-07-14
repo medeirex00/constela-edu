@@ -19,7 +19,7 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
   // "Todo o histórico" por padrão: a sincronização do Elefante Letrado traz o
   // TOTAL acumulado por aluno (livros/tempo), sem uma linha por livro com data —
   // então os recortes por semana/mês só têm dados quando há relatório individual.
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
+  const [periodo, setPeriodo] = useState<Periodo>({ preset: "ano_letivo" });
   const [turmaId, setTurmaId] = useState("");
 
   const { dados: turmas } = useApi<Turma[]>(

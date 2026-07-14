@@ -12,7 +12,7 @@ from datetime import date, datetime, time, timedelta
 
 # Presets aceitos pela API (o frontend usa exatamente estas chaves).
 PRESETS = (
-    "hoje", "ontem", "7dias", "30dias", "mes", "mes_anterior",
+    "hoje", "semana", "ontem", "7dias", "30dias", "mes", "mes_anterior",
     "bimestre", "bimestre_anterior", "semestre", "ano_letivo",
     "tudo", "personalizado",
 )
@@ -70,6 +70,10 @@ def resolver(
     if preset == "ontem":
         o = hoje - timedelta(days=1)
         return _ini(o), _fim(o), "Ontem"
+
+    if preset == "semana":
+        # Semana atual: segunda-feira até hoje (weekday(): 0 = segunda).
+        return _ini(hoje - timedelta(days=hoje.weekday())), _fim(hoje), "Esta semana"
 
     if preset == "7dias":
         return _ini(hoje - timedelta(days=6)), _fim(hoje), "Últimos 7 dias"

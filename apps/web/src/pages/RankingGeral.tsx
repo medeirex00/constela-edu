@@ -31,11 +31,13 @@ interface ItemPeriodo {
 
 export default function RankingGeral({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "tudo" });
+  const [periodo, setPeriodo] = useState<Periodo>({ preset: "ano_letivo" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
 
-  const porPeriodo = periodo.preset !== "tudo";
+  // "Ano letivo" mostra a classificação ACUMULADA (nota geral Matific+Leitura);
+  // os períodos mais curtos mostram só o que foi feito no intervalo (evolução).
+  const porPeriodo = periodo.preset !== "ano_letivo";
 
   // Cache curto: a lista de turmas do dropdown de filtro muda raramente e é
   // invalidada em Turmas.tsx ao criar/editar/excluir (limparCacheApi).

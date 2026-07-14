@@ -33,6 +33,10 @@ def test_resolver_presets():
     assert i.date() == date(2026, 5, 1) and f.date() == date(2026, 6, 30)
     i, f, _ = periodos.resolver("mes", h, 2026)
     assert i.date() == date(2026, 7, 1) and f.date() == date(2026, 7, 31)
+    # "semana": segunda-feira até hoje (2026-07-17 é sexta → semana começa 13).
+    i, f, rot = periodos.resolver("semana", h, 2026)
+    assert i.date() == date(2026, 7, 13) and f.date() == date(2026, 7, 17)
+    assert rot == "Esta semana"
     i, f, _ = periodos.resolver("tudo", h, 2026)
     assert i is None and f is None
     # bimestre anterior em janeiro rola para nov/dez do ano anterior

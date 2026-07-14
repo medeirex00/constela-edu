@@ -28,7 +28,7 @@ interface ItemEvolucao {
 
 export default function RankingEvolucao({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "30dias" });
+  const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
 

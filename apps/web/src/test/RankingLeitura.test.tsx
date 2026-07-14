@@ -66,7 +66,7 @@ describe("RankingLeitura", () => {
     responder("GET", URL_TURMAS, turmasFake);
     // Responde de acordo com o período embutido na query string.
     responder("GET", URL_RANKING, (caminho: string) =>
-      caminho.includes("periodo=7dias")
+      caminho.includes("periodo=semana")
         ? [{
             posicao: 1, aluno_id: 20, nome: "Leitor da Semana", turma: null,
             ano_escolar: null, livros: 3, pontos: 50, tempo_leitura_min: 30,
@@ -79,8 +79,8 @@ describe("RankingLeitura", () => {
     // Estado inicial (período "mes").
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
 
-    // Troca para "Últimos 7 dias" -> a URL muda e o hook rebusca.
-    await u.selectOptions(screen.getByLabelText("Período de análise"), "7dias");
+    // Troca para "Esta semana" -> a URL muda e o hook rebusca.
+    await u.selectOptions(screen.getByLabelText("Período de análise"), "semana");
 
     expect(await screen.findByRole("link", { name: /Leitor da Semana/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Ana Beatriz Souza/ })).not.toBeInTheDocument();

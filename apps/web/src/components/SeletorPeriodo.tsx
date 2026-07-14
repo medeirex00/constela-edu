@@ -15,20 +15,13 @@ export interface Periodo {
   fim?: string; // AAAA-MM-DD (personalizado)
 }
 
+// Só os períodos que a escola usa para premiar: dia, semana, mês, bimestre e ano.
 export const PRESETS_PERIODO = [
-  { valor: "tudo", rotulo: "Todo o histórico" },
   { valor: "hoje", rotulo: "Hoje" },
-  { valor: "ontem", rotulo: "Ontem" },
-  { valor: "7dias", rotulo: "Últimos 7 dias" },
-  { valor: "30dias", rotulo: "Últimos 30 dias" },
+  { valor: "semana", rotulo: "Esta semana" },
   { valor: "mes", rotulo: "Este mês" },
-  { valor: "mes_anterior", rotulo: "Mês anterior" },
   { valor: "bimestre", rotulo: "Este bimestre" },
-  { valor: "bimestre_anterior", rotulo: "Bimestre anterior" },
-  { valor: "semestre", rotulo: "Este semestre" },
   { valor: "ano_letivo", rotulo: "Ano letivo" },
-  { valor: "personalizado", rotulo: "Período personalizado" },
-  { valor: "dia", rotulo: "Dia específico" },
 ] as const;
 
 /** Monta a query string (?periodo=... / ?dia=... / ?inicio=&fim=). */

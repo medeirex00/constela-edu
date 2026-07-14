@@ -30,16 +30,17 @@ describe("Rankings (tela única com seletor)", () => {
 
     // Cabeçalho único + os 4 tipos como abas do seletor.
     expect(await screen.findByText("Ranking Geral")).toBeInTheDocument();
-    for (const rotulo of ["Geral", "Leitura", "Matemática", "Evolução"]) {
+    for (const rotulo of ["Geral", "Elefante Letrado", "Matific", "Evolução"]) {
       expect(screen.getByRole("tab", { name: rotulo })).toBeInTheDocument();
     }
 
-    // Começa no Geral: mostra o aluno do /ranking e o cabeçalho "Matific".
+    // Começa no Geral: mostra o aluno do /ranking e as colunas do consolidado
+    // (usa "Leitura" — "Matific" agora também é o nome de uma aba, seria ambíguo).
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
-    expect(screen.getByText("Matific")).toBeInTheDocument();
+    expect(screen.getByText("Leitura")).toBeInTheDocument();
 
-    // Troca para Leitura: só o CONTEÚDO muda (busca /ranking/leitura).
-    await u.click(screen.getByRole("tab", { name: "Leitura" }));
+    // Troca para Elefante Letrado (leitura): só o CONTEÚDO muda (busca /ranking/leitura).
+    await u.click(screen.getByRole("tab", { name: "Elefante Letrado" }));
     expect(await screen.findByRole("link", { name: /Carla Leitora Silva/ })).toBeInTheDocument();
     expect(screen.getByText("Livros")).toBeInTheDocument();
     // O cabeçalho da tela continua único (sem "voltar" para outra página).
@@ -57,7 +58,7 @@ describe("Rankings (tela única com seletor)", () => {
 
     renderComApp(<Rankings />, { rota: "/ranking?ver=matematica" });
 
-    expect(screen.getByRole("tab", { name: "Matemática" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Matific" })).toHaveAttribute(
       "aria-selected", "true");
     expect(await screen.findByRole("link", { name: /Davi Mat Souza/ })).toBeInTheDocument();
     expect(screen.getByText("Estrelas")).toBeInTheDocument();
