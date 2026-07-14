@@ -261,6 +261,104 @@ class ConectorMatific(ConectorNavegador):
         alvo = ao_vivo or (comps[0] if comps else None)
         return str(alvo.get("id")).strip() if alvo else ""
 
+    async def _coletar_do_placar(self, nav, filtro: str, log) -> list[dict]:
+        """Estando LOGADO em www.matific.com, coleta o Placar da Escola pela API
+        interna para o ``filtro`` (``duration=…`` OU ``start_date=…&end_date=…``):
+        resolve school_id/competition_id, busca os nomes completos e o
+        ``school_student``, cruza por uuid e devolve
+        ``[{nome, nome_abrev, uuid, turma, serie, estrelas, atividades}]``.
+
+        Levanta ``ErroConector(codigo='sem_escola')`` se não achar a escola — o
+        chamador decide: a sync cai no upload manual; a consulta ao vivo mostra o
+        erro. Núcleo COMPARTILHADO pela sync (por turma) e pela consulta ao vivo."""
+        # same-origin para os fetches com cookie de sessão; NÃO dependemos das
+        # chamadas que a própria tela dispara (school_id vem do accounts/current).
+        await nav.ir_para(_URL_LEADERBOARD)
+        school_id = await self._buscar_json_campo(nav, _EP_CURRENT, "school_id")
+        comp_id = await self._primeira_competicao(nav)
+        if not school_id:  # fallback: requisições que a página do Placar dispara
+            caps = await nav.coletar_respostas(_URL_LEADERBOARD, timeout_s=20)
+            cap_school, cap_comp = self._ids_do_placar(caps)
+            school_id = school_id or cap_school
+            comp_id = comp_id or cap_comp
+        if not school_id:
+            raise ErroConector(
+                "[Matific] não localizei a escola do usuário (accounts/current).",
+                codigo="sem_escola", recuperavel=True)
+        log("navegacao", "info", "[Matific] Escola localizada — coletando o Placar.")
+
+        # Nomes completos (uuid → nome) da competição, quando houver.
+        nomes: dict = {}
+        if comp_id:
+            url_lb = (f"{_API_BASE}/api/v2/competition-v2/{comp_id}"
+                      f"/school/{school_id}/student-leaderboard/")
+            try:
+                nomes = self._mapa_nomes(await nav.avaliar(_js_get(url_lb)))
+            except Exception as exc:  # noqa: BLE001 — nome cheio é um plus, não bloqueia
+                log("download", "warn",
+                    f"[Matific] student-leaderboard falhou ({str(exc)[:80]}).")
+
+        # Dados por aluno (estrelas/atividades) DENTRO do período pedido.
+        url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
+                  f"?{filtro}&school_id={school_id}")
+        try:
+            res = await nav.avaliar(_js_get(url_ss))
+        except Exception as exc:  # noqa: BLE001
+            raise ErroConector(
+                f"Placar do Matific falhou na API ({str(exc)[:80]}).",
+                codigo="falha_download", recuperavel=True) from exc
+        alunos = self._parse_school_student(res, nomes)
+        if not alunos:
+            log("download", "warn",
+                f"[Matific] Placar sem alunos no período (status "
+                f"{(res or {}).get('status') if isinstance(res, dict) else '?'}).")
+        return alunos
+
+    async def _sessao_valida(self, nav) -> bool:
+        """True se a sessão REAPROVEITADA caiu numa área logada (URL /teachers|
+        /dashboard ou selo de logado) — assim a consulta ao vivo pula o login."""
+        try:
+            atual = (await nav.url_atual()) or ""
+        except Exception:  # noqa: BLE001
+            return False
+        if any(m in atual for m in ("/teachers", "/dashboard")):
+            return True
+        if "login" in atual:            # voltou pro formulário → sessão expirou
+            return False
+        try:
+            return await nav.visivel(_SEL_LOGADO)
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def coletar_placar_ao_vivo(
+        self, cred: Credenciais, contexto: Contexto, *, filtro: str,
+        storage_state: dict | None = None,
+    ) -> tuple[list[dict], dict | None]:
+        """Consulta em TEMPO REAL o Placar do Matific para o ``filtro`` e devolve
+        ``(alunos, novo_storage_state)``. Reusa ``storage_state`` (sessão de um
+        login anterior): se ainda válida, PULA o login (rápido); senão, loga. O
+        chamador persiste o ``novo_storage_state`` cifrado para a próxima consulta
+        já sair rápida. Não escreve nada no banco — é leitura pura do período."""
+        async with self._sessao(contexto, storage_state=storage_state) as nav:
+            logado = False
+            if storage_state:
+                try:
+                    await nav.ir_para(_URL_LEADERBOARD)
+                    logado = await self._sessao_valida(nav)
+                except Exception:  # noqa: BLE001 — sessão ruim: refaz o login
+                    logado = False
+            if logado:
+                contexto.log("login", "info",
+                             "[Matific] Sessão reaproveitada — sem novo login.")
+            else:
+                await self._login(nav, cred, contexto)
+            alunos = await self._coletar_do_placar(nav, filtro, contexto.log)
+            try:
+                novo_estado = await nav.estado_sessao()
+            except Exception:  # noqa: BLE001 — sem estado, só perde o atalho
+                novo_estado = None
+            return alunos, novo_estado
+
     async def sincronizar(self, cred: Credenciais,
                           contexto: Contexto) -> list[ArquivoObtido]:
         """Coleta o Placar da Escola pela API INTERNA do Matific (sem PDF):
@@ -286,51 +384,16 @@ class ConectorMatific(ConectorNavegador):
             rotulo_periodo = duration
         async with self._sessao(contexto) as nav:
             await self._login(nav, cred, contexto)
-            # Fica numa página logada em www.matific.com (same-origin p/ os fetches
-            # com cookie de sessão). NÃO dependemos das chamadas que a tela dispara.
-            await nav.ir_para(_URL_LEADERBOARD)
-            # school_id de forma DETERMINÍSTICA: accounts/current/ traz school_id do
-            # usuário logado (não depende de timing de captura, que era o bug). Só se
-            # falhar caímos nas requisições capturadas da página.
-            school_id = await self._buscar_json_campo(nav, _EP_CURRENT, "school_id")
-            comp_id = await self._primeira_competicao(nav)
-            if not school_id:
-                caps = await nav.coletar_respostas(_URL_LEADERBOARD, timeout_s=20)
-                cap_school, cap_comp = self._ids_do_placar(caps)
-                school_id = school_id or cap_school
-                comp_id = comp_id or cap_comp
-            if not school_id:
-                log("navegacao", "warn",
-                    "[Matific] não achei o school_id da escola (accounts/current) — "
-                    "usando o upload manual do relatório.")
-                return arquivos
-            log("navegacao", "info", "[Matific] Escola localizada — coletando o Placar.")
-
-            # Nomes completos (uuid → nome) da competição, quando houver.
-            nomes: dict = {}
-            if comp_id:
-                url_lb = (f"{_API_BASE}/api/v2/competition-v2/{comp_id}"
-                          f"/school/{school_id}/student-leaderboard/")
-                try:
-                    nomes = self._mapa_nomes(await nav.avaliar(_js_get(url_lb)))
-                except Exception as exc:  # noqa: BLE001 — nome cheio é um plus, não bloqueia
-                    log("download", "warn",
-                        f"[Matific] student-leaderboard falhou ({str(exc)[:80]}).")
-
-            # Dados por aluno (estrelas/atividades) no período pedido.
-            url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
-                      f"?{filtro}&school_id={school_id}")
             try:
-                res = await nav.avaliar(_js_get(url_ss))
-            except Exception as exc:  # noqa: BLE001
-                raise ErroConector(
-                    f"Placar do Matific falhou na API ({str(exc)[:80]}).",
-                    codigo="falha_download", recuperavel=True) from exc
-            alunos = self._parse_school_student(res, nomes)
+                alunos = await self._coletar_do_placar(nav, filtro, log)
+            except ErroConector as exc:
+                # Sem escola localizada: cai no upload manual (não derruba a sync).
+                if exc.codigo == "sem_escola":
+                    log("navegacao", "warn",
+                        f"{exc} Usando o upload manual do relatório.")
+                    return arquivos
+                raise
             if not alunos:
-                log("download", "warn",
-                    f"[Matific] Placar sem alunos (status "
-                    f"{(res or {}).get('status') if isinstance(res, dict) else '?'}).")
                 return arquivos
 
             # UM ArquivoObtido por turma (reusa o pipeline do Excel do Matific).

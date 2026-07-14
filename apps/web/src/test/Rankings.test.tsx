@@ -8,7 +8,7 @@ import { rankingItemFake, renderComApp, responder, screen, turmaFake, userEvent 
 const URL_TURMAS = "/escolas/1/turmas";
 const URL_GERAL = "/escolas/1/ranking";
 const URL_LEITURA = "/escolas/1/ranking/leitura";
-const URL_MATEMATICA = "/escolas/1/ranking/matematica";
+const URL_MATEMATICA = "/escolas/1/sync/matific/placar-ao-vivo";
 
 describe("Rankings (tela única com seletor)", () => {
   it("mostra o seletor e alterna o conteúdo sem trocar de página", async () => {
@@ -49,12 +49,16 @@ describe("Rankings (tela única com seletor)", () => {
 
   it("respeita o tipo vindo da URL (?ver=matematica) para deep-links/atalhos", async () => {
     responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
-    responder("GET", URL_MATEMATICA, [
-      {
-        posicao: 1, aluno_id: 30, nome: "Davi Mat Souza", turma: "3º Ano A",
-        ano_escolar: "3º Ano", estrelas: 40, atividades: 12, pontuacao_media: 80,
-      },
-    ]);
+    responder("GET", URL_MATEMATICA, {
+      periodo: "Este mês", filtro: "start_date=2026-07-01&end_date=2026-07-14",
+      atualizado_em: "2026-07-14T12:00:00Z", total: 1, com_link: 1,
+      itens: [
+        {
+          posicao: 1, aluno_id: 30, nome: "Davi Mat Souza", turma: "3º Ano A",
+          serie: "3", estrelas: 40, atividades: 12, pontuacao_media: 3.33,
+        },
+      ],
+    });
 
     renderComApp(<Rankings />, { rota: "/ranking?ver=matematica" });
 

@@ -51,9 +51,16 @@ class ConectorNavegador(Conector):
         self._fabrica: FabricaNavegador = fabrica_navegador or abrir_playwright
 
     @asynccontextmanager
-    async def _sessao(self, contexto: Contexto):
-        """Abre o navegador e garante o fechamento mesmo em erro."""
-        nav = await self._fabrica(timeout_s=contexto.timeout_s)
+    async def _sessao(self, contexto: Contexto, *, storage_state: dict | None = None):
+        """Abre o navegador e garante o fechamento mesmo em erro.
+
+        ``storage_state`` reidrata a sessão de um login anterior (consulta ao
+        vivo) — só é repassado à fábrica quando presente, para não quebrar
+        fábricas de teste que não conhecem o parâmetro."""
+        kwargs: dict = {"timeout_s": contexto.timeout_s}
+        if storage_state is not None:
+            kwargs["storage_state"] = storage_state
+        nav = await self._fabrica(**kwargs)
         try:
             yield nav
         finally:

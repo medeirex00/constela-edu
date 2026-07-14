@@ -197,6 +197,11 @@ def health():
              "login_paginas": automacao.status().get("login"),
              # IP/ASN de saída do robô (evidência: datacenter x residencial).
              "egress": automacao.status().get("egress"),
+             # Agendador de sincronização: habilitado (env) e efetivamente rodando.
+             # Se enabled=true e ativo=false, o processo precisa ser reiniciado;
+             # se enabled=false, falta ligar SYNC_SCHEDULER_ENABLED no servidor.
+             "scheduler_sync": {"habilitado": settings.SYNC_SCHEDULER_ENABLED,
+                                "ativo": sync_scheduler.ativo()},
              "uptime_s": round(time.time() - _INICIO, 1)}
     if not banco:
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=corpo)

@@ -28,8 +28,8 @@ from app.models.sincronizacao import (
     SincronizacaoLog,
 )
 from app.services.audit import registrar
-from app.sync import connectors, scheduler, service, vault
-from app.sync.interfaces import Contexto, Credenciais, ResultadoValidacao
+from app.sync import aovivo, connectors, scheduler, service, vault
+from app.sync.interfaces import Contexto, Credenciais, ErroConector, ResultadoValidacao
 from app.sync.schemas import (
     AlertaOut,
     ConfigIn,
@@ -126,6 +126,8 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     _validar_plataforma(plataforma)
     cred = Credenciais(usuario=dados.usuario, senha=dados.senha, extra=dados.extra)
     linha = vault.salvar_credencial(db, escola_id, plataforma, cred)
+    if plataforma == "matific":
+        aovivo.limpar_sessao(db, escola_id)  # esquece sessão da credencial antiga
     registrar(db, "sync.credencial_salva", escola_id=escola_id, usuario_id=usuario.id,
               entidade="plataforma", detalhes={"plataforma": plataforma})  # sem senha
     db.commit()
@@ -277,6 +279,43 @@ def sincronizar_agora(escola_id: int = Depends(escola_autorizada),
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma plataforma com credencial configurada.")
     return [ExecucaoOut.model_validate(e) for e in execucoes]
+
+
+# HTTP por código de erro do conector (o Matific é um upstream → 502 quando ele
+# nega/bloqueia; 4xx quando o problema é a configuração; 409 quando ocupado).
+_STATUS_ERRO = {
+    "sem_credencial": status.HTTP_400_BAD_REQUEST,
+    "periodo_invalido": status.HTTP_400_BAD_REQUEST,
+    "escola": status.HTTP_404_NOT_FOUND,
+    "sem_conector": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "navegador_indisponivel": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "ocupado": status.HTTP_409_CONFLICT,
+    "timeout": status.HTTP_504_GATEWAY_TIMEOUT,
+}
+
+
+@router.get("/matific/placar-ao-vivo")
+def matific_placar_ao_vivo(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+    periodo: str | None = Query(default=None),
+    inicio: str | None = Query(default=None),
+    fim: str | None = Query(default=None),
+):
+    """PREMIAR POR PERÍODO — consulta o Placar do Matific EM TEMPO REAL para o
+    período pedido e devolve o ranking (nome, turma, estrelas, atividades, média)
+    exatamente como o site mostra. Sem PDF/importação: o Constela é cliente do
+    Matific. ``periodo`` ∈ hoje|semana|mes|bimestre|ano_letivo|personalizado;
+    ``inicio``/``fim`` (AAAA-MM-DD) para o personalizado. A 1ª consulta pode fazer
+    login (mais lenta); as seguintes reusam a sessão cifrada e são rápidas."""
+    try:
+        return aovivo.placar_matific(db, escola_id, periodo=periodo,
+                                     inicio=inicio, fim=fim)
+    except ErroConector as exc:
+        raise HTTPException(
+            _STATUS_ERRO.get(exc.codigo, status.HTTP_502_BAD_GATEWAY),
+            str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

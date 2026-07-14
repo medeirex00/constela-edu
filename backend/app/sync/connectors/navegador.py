@@ -49,6 +49,9 @@ class Navegador(Protocol):
                      timeout_s: int = 60) -> tuple[bytes, str]: ...
     async def baixar_acao(self, acao,
                           timeout_s: int = 60) -> tuple[bytes, str]: ...
+    # Estado da sessão (cookies + localStorage) para REUSO: guardado cifrado e
+    # reinjetado numa próxima consulta ao vivo, evitando um novo login por clique.
+    async def estado_sessao(self) -> dict: ...
     async def fechar(self) -> None: ...
 
 
@@ -80,10 +83,14 @@ def _proxy_playwright() -> dict | None:
 
 
 async def abrir_playwright(*, headless: bool = True,
-                           timeout_s: int = 30) -> Navegador:
+                           timeout_s: int = 30,
+                           storage_state: dict | None = None) -> Navegador:
     """Fábrica REAL — import tardio do Playwright. Só chamada em produção com
     credenciais reais. Levanta ``ErroConector`` claro se o pacote não estiver
-    instalado (o app não depende dele para subir)."""
+    instalado (o app não depende dele para subir).
+
+    ``storage_state`` (opcional) reidrata cookies/localStorage de uma sessão
+    anterior — a consulta ao vivo do Matific reusa a sessão e pula o login."""
     try:
         from playwright.async_api import async_playwright  # import tardio
     except ImportError as exc:  # pragma: no cover — exige o pacote instalado
@@ -106,7 +113,7 @@ async def abrir_playwright(*, headless: bool = True,
     # Contexto REALISTA: locale/fuso/idioma do Brasil e um user-agent de Chrome
     # comum. Sem isto, as plataformas (rodando a partir de um IP de datacenter
     # nos EUA) redirecionam para a versão gringa e/ou barram a automação.
-    contexto = await navegador.new_context(
+    ctx_kwargs: dict = dict(
         accept_downloads=True,
         locale="pt-BR",
         timezone_id="America/Sao_Paulo",
@@ -115,6 +122,10 @@ async def abrir_playwright(*, headless: bool = True,
             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
         viewport={"width": 1366, "height": 768},
         extra_http_headers={"Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"})
+    # Sessão reaproveitada (cookies de um login anterior) → pula o formulário.
+    if storage_state is not None:
+        ctx_kwargs["storage_state"] = storage_state
+    contexto = await navegador.new_context(**ctx_kwargs)
     # Esconde o marcador navigator.webdriver (sinal clássico de automação).
     await contexto.add_init_script(
         "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
@@ -236,6 +247,11 @@ class _NavegadorPlaywright:  # pragma: no cover — exercitado só com browser r
         caminho = await download.path()
         with open(caminho, "rb") as fh:
             return fh.read(), (download.suggested_filename or "relatorio")
+
+    async def estado_sessao(self) -> dict:
+        """Cookies + localStorage atuais (formato ``storage_state`` do Playwright)
+        para persistir cifrado e reusar numa próxima consulta ao vivo."""
+        return await self._pagina.context.storage_state()
 
     async def fechar(self) -> None:
         try:

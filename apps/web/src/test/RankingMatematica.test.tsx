@@ -6,26 +6,35 @@ import {
   responder,
   responderErro,
   screen,
-  turmaFake,
   userEvent,
 } from "./utils";
 
-// A escola atual é id=1 (sessão autenticada por padrão).
-const URL_RANKING = "/escolas/1/ranking/matematica"; // casa com qualquer query (?periodo=...)
-const URL_TURMAS = "/escolas/1/turmas";
+// A escola atual é id=1 (sessão autenticada por padrão). A tela consulta o
+// Placar do Matific AO VIVO — casa com qualquer query (?periodo=...).
+const URL = "/escolas/1/sync/matific/placar-ao-vivo";
 
-// Não há fábrica pronta para RankingMatematicaItem — construímos o shape inline
-// (ver packages/core/src/tipos.ts).
 function itemMat(over: Record<string, unknown> = {}) {
   return {
     posicao: 1,
     aluno_id: 21,
     nome: "Marina Duarte",
     turma: "4º Ano B",
-    ano_escolar: "4º Ano",
+    serie: "4",
     estrelas: 120,
     atividades: 34,
-    pontuacao_media: 87.5,
+    pontuacao_media: 3.53,
+    ...over,
+  };
+}
+
+function placar(itens: Record<string, unknown>[], over: Record<string, unknown> = {}) {
+  return {
+    periodo: "Este mês",
+    filtro: "start_date=2026-07-01&end_date=2026-07-14",
+    atualizado_em: "2026-07-14T12:00:00Z",
+    total: itens.length,
+    com_link: itens.filter((i) => i.aluno_id).length,
+    itens,
     ...over,
   };
 }
@@ -33,35 +42,26 @@ function itemMat(over: Record<string, unknown> = {}) {
 const abrirTela = () =>
   renderComApp(<RankingMatematica />, { rota: "/ranking-matematica" });
 
-describe("RankingMatematica", () => {
-  it("mostra o cabeçalho e o ranking de matemática do período", async () => {
-    responder("GET", URL_TURMAS, [turmaFake()]);
-    responder("GET", URL_RANKING, [
+describe("RankingMatematica (Matific ao vivo)", () => {
+  it("mostra o ranking consultado do Matific no período", async () => {
+    responder("GET", URL, placar([
       itemMat(),
       itemMat({ posicao: 2, aluno_id: 22, nome: "Rafael Nogueira" }),
-    ]);
+    ]));
 
     abrirTela();
 
-    // Cabeçalho da página.
     expect(
-      await screen.findByRole("heading", { name: "Ranking de Matemática" }),
+      await screen.findByRole("heading", { name: /Premiar por período/ }),
     ).toBeInTheDocument();
-
-    // Colunas e linhas de alunos.
     expect(screen.getByText("Estrelas")).toBeInTheDocument();
     expect(screen.getByText("Atividades")).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /Marina Duarte/ }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /Rafael Nogueira/ }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Marina Duarte/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Rafael Nogueira/ })).toBeInTheDocument();
   });
 
-  it("mostra o estado vazio quando não há atividade no período", async () => {
-    responder("GET", URL_TURMAS, []);
-    responder("GET", URL_RANKING, []);
+  it("mostra o estado vazio quando ninguém pontuou no período", async () => {
+    responder("GET", URL, placar([]));
 
     abrirTela();
 
@@ -70,70 +70,40 @@ describe("RankingMatematica", () => {
     ).toBeInTheDocument();
   });
 
-  it("mostra a falha quando a API do ranking erra", async () => {
-    responder("GET", URL_TURMAS, []);
-    responderErro("GET", URL_RANKING, 500, "Erro interno");
+  it("mostra a falha quando o Matific recusa a consulta", async () => {
+    responderErro("GET", URL, 502, "O Matific exibiu uma verificação de segurança (CAPTCHA).");
 
     abrirTela();
 
     expect(
-      await screen.findByText("Não foi possível carregar"),
+      await screen.findByText("Não foi possível consultar o Matific"),
     ).toBeInTheDocument();
   });
 
-  it("rebusca o ranking ao trocar o período", async () => {
-    const u = userEvent.setup();
-    responder("GET", URL_TURMAS, [turmaFake()]);
-    responder("GET", URL_RANKING, (caminho: string) =>
-      caminho.includes("periodo=bimestre")
-        ? [itemMat({ aluno_id: 30, nome: "Rafael Nogueira" })]
-        : [itemMat({ aluno_id: 21, nome: "Marina Duarte" })],
-    );
+  it("mostra sem link o aluno que não casou com um cadastro do Constela", async () => {
+    responder("GET", URL, placar([itemMat({ aluno_id: null, nome: "Aluno Solto" })]));
 
     abrirTela();
 
-    // Período padrão ("Este mês").
-    expect(
-      await screen.findByRole("link", { name: /Marina Duarte/ }),
-    ).toBeInTheDocument();
-
-    // Troca para "Este bimestre" -> a URL muda e o hook rebusca sozinho.
-    await u.selectOptions(
-      screen.getByLabelText("Período de análise"),
-      "bimestre",
-    );
-
-    expect(
-      await screen.findByRole("link", { name: /Rafael Nogueira/ }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /Marina Duarte/ }),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText(/Aluno Solto/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Aluno Solto/ })).not.toBeInTheDocument();
   });
 
-  it("filtra o ranking por turma", async () => {
+  it("filtra por turma no cliente (sem nova consulta ao Matific)", async () => {
     const u = userEvent.setup();
-    responder("GET", URL_TURMAS, [turmaFake({ id: 7, nome: "5º Ano C" })]);
-    responder("GET", URL_RANKING, (caminho: string) =>
-      caminho.includes("turma_id=7")
-        ? [itemMat({ aluno_id: 40, nome: "Sofia Lima" })]
-        : [itemMat({ aluno_id: 21, nome: "Marina Duarte" })],
-    );
+    responder("GET", URL, placar([
+      itemMat({ aluno_id: 21, nome: "Marina Duarte", turma: "4º Ano B" }),
+      itemMat({ posicao: 2, aluno_id: 40, nome: "Sofia Lima", turma: "5º Ano C" }),
+    ]));
 
     abrirTela();
 
-    expect(
-      await screen.findByRole("link", { name: /Marina Duarte/ }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Marina Duarte/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
 
-    // Seleciona a turma no filtro -> acrescenta &turma_id=7 à URL.
-    await u.selectOptions(screen.getByLabelText("Filtrar por turma"), "7");
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma"), "5º Ano C");
 
-    expect(
-      await screen.findByRole("link", { name: /Sofia Lima/ }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /Marina Duarte/ }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Marina Duarte/ })).not.toBeInTheDocument();
   });
 });
