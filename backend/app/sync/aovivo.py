@@ -128,6 +128,8 @@ def mapa_filtro(periodo: str | None, inicio: str | None, fim: str | None,
     if p == "semana":
         i, f, _ = periodos.resolver("semana", hoje, ano_letivo)
         return "duration=week", "Esta semana", i.date(), f.date()
+    if p in ("semana_anterior", "semana_passada"):
+        return "duration=last-week", "Semana passada", None, None
     if p in ("ano_letivo", "ano", "tudo"):
         return "duration=this-year", f"Ano letivo {ano_letivo}", None, None
 
@@ -201,6 +203,80 @@ def limpar_sessao(db: Session, escola_id: int) -> None:
         db.commit()
 
 
+# --- Cache curto de RESULTADO (dedupe de consultas idênticas) ----------------
+# Vários usuários pedindo o MESMO período em segundos → uma única ida ao Matific.
+# Por processo (cada worker tem o seu): reduz carga sem precisar de Redis. TTL
+# curto porque o dado é "ao vivo". A tecla é (escola_id, filtro).
+_CACHE_TTL_S = 60
+_cache: dict[tuple[int, str], tuple[datetime, dict]] = {}
+_cache_guard = threading.Lock()
+
+
+def _cache_get(escola_id: int, filtro: str, agora: datetime) -> dict | None:
+    with _cache_guard:
+        item = _cache.get((escola_id, filtro))
+    if item is None:
+        return None
+    quando, valor = item
+    if (agora - quando).total_seconds() > _CACHE_TTL_S:
+        return None
+    return valor
+
+
+def _cache_put(escola_id: int, filtro: str, agora: datetime, valor: dict) -> None:
+    with _cache_guard:
+        _cache[(escola_id, filtro)] = (agora, valor)
+        # Poda preguiçosa: descarta entradas vencidas para não crescer sem fim.
+        if len(_cache) > 512:
+            vencidos = [k for k, (q, _) in _cache.items()
+                        if (agora - q).total_seconds() > _CACHE_TTL_S]
+            for k in vencidos:
+                _cache.pop(k, None)
+
+
+def invalidar_cache(escola_id: int) -> None:
+    """Descarta o cache de resultado desta escola — chamado ao trocar/remover a
+    credencial, para NUNCA servir o ranking da conta antiga (PII de outra conta)."""
+    with _cache_guard:
+        for k in [k for k in _cache if k[0] == escola_id]:
+            _cache.pop(k, None)
+
+
+def _coletar_http_first(conector, cred, contexto, estado: dict | None,
+                        filtro: str) -> tuple[list[dict], dict | None]:
+    """Coleta o Placar priorizando a API por HTTP; o navegador entra SÓ para
+    autenticar (renovar cookies) e o fetch-no-navegador é o ÚLTIMO recurso.
+    Devolve (alunos, novo_storage_state_ou_None). Teto DURO por etapa lenta."""
+    # 1) HTTP direto com a sessão salva (sem navegador algum).
+    if estado:
+        try:
+            return conector.coletar_via_http(estado, filtro), None
+        except ErroConector as exc:
+            if exc.codigo not in ("sessao_invalida", "http_indisponivel"):
+                raise  # erro real da API (não é sessão velha/rede) → sobe
+
+    # 2) Navegador SÓ para AUTENTICAR (login/renova cookies) e refaz por HTTP.
+    novo = asyncio.run(asyncio.wait_for(
+        conector.autenticar(cred, contexto, storage_state=estado),
+        timeout=_TIMEOUT_S))
+    if novo and novo.get("cookies"):   # só tenta HTTP se de fato temos os cookies
+        try:
+            return conector.coletar_via_http(novo, filtro), novo
+        except ErroConector as exc:
+            if exc.codigo not in ("sessao_invalida", "http_indisponivel"):
+                raise
+
+    # 3) Último recurso: fetch DENTRO do navegador (same-origin), caso o HTTP
+    # server-side seja recusado apesar do cookie fresco.
+    contexto.log("download", "warn",
+                 "[Matific] HTTP recusado após login — usando fetch no navegador.")
+    alunos, novo2 = asyncio.run(asyncio.wait_for(
+        conector.coletar_placar_ao_vivo(cred, contexto, filtro=filtro,
+                                        storage_state=novo),
+        timeout=_TIMEOUT_S))
+    return alunos, (novo2 or novo)
+
+
 # --- Casamento best-effort com o aluno do Constela (link p/ a ficha) ---------
 
 def _norm(nome: str) -> str:
@@ -257,10 +333,12 @@ def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int]) -> list[dict
 # --- Consulta ao vivo (entrada única, síncrona) ------------------------------
 
 def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
-                   inicio: str | None, fim: str | None,
+                   inicio: str | None, fim: str | None, forcar: bool = False,
                    agora: datetime | None = None) -> dict:
     """Consulta o Placar do Matific AO VIVO para o período e devolve o ranking
-    pronto para a tela. Levanta ``ErroConector`` (o router traduz em HTTP)."""
+    pronto para a tela. Prioriza a API por HTTP (navegador só para autenticar) e
+    tem cache curto de resultado. ``forcar`` ignora o cache (botão Atualizar).
+    Levanta ``ErroConector`` (o router traduz em HTTP)."""
     agora = agora or datetime.utcnow()          # UTC — TTL da sessão e atualizado_em
     # A data do FILTRO é a de HOJE no Brasil (o Matific interpreta o intervalo no
     # fuso da escola). O Brasil não tem horário de verão desde 2019 → UTC-3 fixo.
@@ -275,6 +353,12 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
 
     filtro, rotulo, _di, _df = mapa_filtro(periodo, inicio, fim, ano_letivo, hoje_br)
 
+    # Cache curto de resultado (dedupe): antes de qualquer trabalho pesado.
+    if not forcar:
+        hit = _cache_get(escola_id, filtro, agora)
+        if hit is not None:
+            return {**hit, "cache": True}
+
     cred = vault.obter_credencial(db, escola_id, "matific")
     if cred is None:
         raise ErroConector(
@@ -283,15 +367,22 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             recuperavel=False)
 
     conector = connectors.obter("matific")
-    if conector is None or not hasattr(conector, "coletar_placar_ao_vivo"):
+    if conector is None or not hasattr(conector, "coletar_via_http"):
         raise ErroConector("Conector do Matific indisponível.",
                            codigo="sem_conector", recuperavel=False)
 
     with _lock_consulta(escola_id):
+        # Re-checa o cache: outra requisição pode tê-lo preenchido enquanto
+        # esperávamos o lock (evita duas coletas para o mesmo período).
+        if not forcar:
+            hit = _cache_get(escola_id, filtro, agora)
+            if hit is not None:
+                return {**hit, "cache": True}
+
         estado = _carregar_sessao(db, escola_id, agora)
-        # Solta a conexão do banco ANTES do login do Playwright (~1 min): nada de
-        # transação ociosa segurando o pool durante o I/O de rede longo. As
-        # escritas/leituras seguintes reabrem a conexão sob demanda.
+        # Solta a conexão do banco ANTES do I/O de rede longo: nada de transação
+        # ociosa segurando o pool durante o HTTP/login. As leituras/escritas
+        # seguintes reabrem a conexão sob demanda.
         db.rollback()
 
         eventos: list[str] = []
@@ -302,35 +393,32 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
         contexto = Contexto(escola_id=escola_id, execucao_id=None, log=log,
                             timeout_s=_TIMEOUT_S)
 
-        async def _consultar():
-            # Teto DURO da consulta inteira (login + fetch): uma coleta travada
-            # não segura o lock da escola para sempre.
-            return await asyncio.wait_for(
-                conector.coletar_placar_ao_vivo(cred, contexto, filtro=filtro,
-                                                storage_state=estado),
-                timeout=_TIMEOUT_S)
-
         try:
-            alunos, novo_estado = asyncio.run(_consultar())
+            # HTTP-first: API por httpx; navegador só para autenticar (fallback).
+            alunos, novo_estado = _coletar_http_first(
+                conector, cred, contexto, estado, filtro)
         except asyncio.TimeoutError as exc:
             raise ErroConector(
                 "A consulta ao Matific demorou demais e foi cancelada. "
                 "Tente novamente.", codigo="timeout", recuperavel=True) from exc
 
-        # Persiste a sessão nova (cookies renovados) para a próxima consulta
-        # sair rápida. Falha ao salvar não invalida o resultado já obtido.
-        try:
-            _salvar_sessao(db, escola_id, novo_estado, agora)
-        except Exception:  # noqa: BLE001
-            db.rollback()
+        # Persiste a sessão nova (cookies renovados), se o navegador autenticou.
+        if novo_estado:
+            try:
+                _salvar_sessao(db, escola_id, novo_estado, agora)
+            except Exception:  # noqa: BLE001
+                db.rollback()
 
         mapa_aluno = _mapa_nome_para_aluno(db, escola_id, ano_letivo)
         itens = _montar_ranking(alunos, mapa_aluno)
-        return {
+        resultado = {
             "periodo": rotulo,
             "filtro": filtro,
             "atualizado_em": agora.isoformat() + "Z",
             "total": len(itens),
             "com_link": sum(1 for i in itens if i["aluno_id"]),
             "itens": itens,
+            "cache": False,
         }
+        _cache_put(escola_id, filtro, agora, resultado)
+        return resultado

@@ -16,6 +16,15 @@ from app.sync.interfaces import Contexto, Credenciais, ErroConector
 SCHOOL = "e3e918e8-0000-0000-0000-000000000001"
 
 
+@pytest.fixture(autouse=True)
+def _limpar_cache_resultado():
+    """O cache de resultado é global (por processo); zera entre testes para não
+    contaminar (escola_id=1 e agora fixo se repetem)."""
+    aovivo._cache.clear()
+    yield
+    aovivo._cache.clear()
+
+
 # --- 1. Período → filtro (sem suposição: preset nativo onde há, datas no resto)
 
 def test_mapa_filtro_presets_nativos_e_datas():
@@ -222,6 +231,148 @@ def test_placar_matific_sem_credencial_erro_claro(db, escola_completa):
     with pytest.raises(ErroConector) as exc:
         aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None)
     assert exc.value.codigo == "sem_credencial"
+
+
+# --- 5. Presets expandidos + HTTP direto + cache -----------------------------
+
+def test_mapa_filtro_presets_expandidos():
+    hoje = date(2026, 7, 14)  # terça
+    assert aovivo.mapa_filtro("semana_anterior", None, None, 2026, hoje)[0] == "duration=last-week"
+    # Ontem e mês/bimestre passados são intervalos no PASSADO (fim < hoje, sem clamp).
+    assert aovivo.mapa_filtro("ontem", None, None, 2026, hoje)[0] == \
+        "start_date=2026-07-13&end_date=2026-07-13"
+    assert aovivo.mapa_filtro("mes_anterior", None, None, 2026, hoje)[0] == \
+        "start_date=2026-06-01&end_date=2026-06-30"
+
+
+class _FakeResp:
+    def __init__(self, corpo, status=200, ct="application/json"):
+        self._corpo, self.status_code = corpo, status
+        self.headers = {"content-type": ct}
+        self.is_redirect = status in (301, 302, 303, 307, 308)
+
+    def json(self):
+        if self._corpo is None:
+            raise ValueError("sem json")
+        return self._corpo
+
+
+def _fake_httpx_client(rotas):
+    class _C:
+        def __init__(self, **_kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url):
+            for frag, resp in rotas.items():
+                if frag in url:
+                    return resp
+            return _FakeResp(None, 404, "text/html")
+    return _C
+
+
+def test_coletar_via_http_sucesso(monkeypatch):
+    """Caminho preferencial: coleta por HTTP direto (sem navegador), com o cookie."""
+    import httpx
+    ss, sl = _payloads({"u-ana": "Ana Beatriz Souza", "u-joao": "João Pedro Barbosa"})
+    rotas = {                       # ordem importa: student-leaderboard antes de competition-v2
+        "student-leaderboard": _FakeResp(sl["body"]),
+        "school_student": _FakeResp(ss["body"]),
+        "accounts/current": _FakeResp({"school_id": SCHOOL}),
+        "competition-v2": _FakeResp([{"id": "c1", "is_live": True}]),
+    }
+    monkeypatch.setattr(httpx, "Client", _fake_httpx_client(rotas))
+
+    async def fab(**_kw):
+        return NavFake(ss, sl)
+
+    con = matific.ConectorMatific(fab)
+    estado = {"cookies": [{"name": "sessionid", "value": "abc", "domain": ".matific.com"}]}
+    alunos = con.coletar_via_http(estado, "duration=week")
+    assert [a["nome"] for a in alunos] == ["Ana Beatriz Souza", "João Pedro Barbosa"]
+
+
+def test_coletar_via_http_sem_cookie_e_expirada(monkeypatch):
+    async def fab(**_kw):
+        return NavFake(*_payloads({"u-ana": "Ana Beatriz Souza"}))
+
+    con = matific.ConectorMatific(fab)
+    # Sem sessionid → sessão inválida (chamador cai para o navegador).
+    with pytest.raises(ErroConector) as e1:
+        con.coletar_via_http({"cookies": []}, "duration=week")
+    assert e1.value.codigo == "sessao_invalida"
+
+    # 302/HTML (redireciona para login) → sessão inválida.
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _fake_httpx_client(
+        {"accounts/current": _FakeResp(None, 302, "text/html")}))
+    with pytest.raises(ErroConector) as e2:
+        con.coletar_via_http(
+            {"cookies": [{"name": "sessionid", "value": "x", "domain": ".matific.com"}]},
+            "duration=week")
+    assert e2.value.codigo == "sessao_invalida"
+
+
+def test_placar_matific_cache_dedupe(db, escola_completa, monkeypatch):
+    """Mesmo período em segundos → uma única coleta; forcar=True ignora o cache."""
+    escola = escola_completa["escola"]
+    vault.salvar_credencial(db, escola.id, "matific",
+                            Credenciais(usuario="u", senha="p"))
+    db.commit()
+    chamadas = {"n": 0}
+
+    def fake_coletar(conector, cred, contexto, estado, filtro):
+        chamadas["n"] += 1
+        return ([{"nome": "Ana Beatriz Souza", "turma": "3º Ano A", "serie": "3",
+                  "estrelas": 10, "atividades": 2}], None)
+
+    monkeypatch.setattr(aovivo, "_coletar_http_first", fake_coletar)
+    agora = datetime(2026, 7, 14, 12, 0, 0)
+
+    r1 = aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None, agora=agora)
+    r2 = aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None, agora=agora)
+    assert chamadas["n"] == 1 and r1["cache"] is False and r2["cache"] is True
+
+    r3 = aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None,
+                               forcar=True, agora=agora)
+    assert chamadas["n"] == 2 and r3["cache"] is False
+
+
+def test_invalidar_cache_so_da_escola():
+    """Trocar a credencial não pode servir o ranking da conta antiga (PII)."""
+    agora = datetime(2026, 7, 14, 12, 0, 0)
+    aovivo._cache_put(1, "f", agora, {"itens": []})
+    aovivo._cache_put(2, "f", agora, {"itens": []})
+    aovivo.invalidar_cache(1)
+    assert aovivo._cache_get(1, "f", agora) is None       # limpou a escola 1
+    assert aovivo._cache_get(2, "f", agora) is not None    # preservou a escola 2
+
+
+def test_agenda_diaria_criada_uma_vez_e_respeita_opt_out(db, escola_completa):
+    """Cria a agenda diária na 1ª validação; NUNCA reativa o que o admin desligou."""
+    from sqlalchemy import select
+
+    from app.models.sincronizacao import SincronizacaoConfig
+    from app.sync.router import _garantir_agenda_diaria
+
+    escola = escola_completa["escola"]
+
+    def _conf():
+        return db.execute(select(SincronizacaoConfig).where(
+            SincronizacaoConfig.escola_id == escola.id,
+            SincronizacaoConfig.plataforma == "matific")).scalars().first()
+
+    # 1) Sem config → cria uma DIÁRIA ativa.
+    _garantir_agenda_diaria(db, escola.id, "matific")
+    conf = _conf()
+    assert conf is not None and conf.ativo is True and conf.cadencia == "diaria"
+
+    # 2) Admin DESLIGA tudo de propósito → nova validação NÃO reativa.
+    conf.ativo = False
+    conf.cadencia = "manual"
+    db.flush()
+    _garantir_agenda_diaria(db, escola.id, "matific")
+    db.refresh(conf)
+    assert conf.ativo is False and conf.cadencia == "manual"
 
 
 def test_placar_matific_usa_data_do_brasil_perto_da_meia_noite(db, escola_completa,

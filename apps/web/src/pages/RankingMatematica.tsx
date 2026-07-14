@@ -1,13 +1,15 @@
 /**
- * Ranking de Matemática (Matific) EM TEMPO REAL — "Premiar por período".
+ * Ranking de Matemática (Matific) — "Premiar por período".
  *
- * A tela não lê mais snapshots locais: ao escolher o período, o Constela
- * CONSULTA o Placar do Matific ao vivo (mesmo mecanismo do site — duration/
- * start_date+end_date) e mostra exatamente os mesmos alunos, estrelas e
- * atividades. A 1ª consulta após ociosidade faz login (mais lenta); as
- * seguintes reusam a sessão cifrada e são rápidas.
+ * Arquitetura:
+ *  • ANO LETIVO → lê o BANCO LOCAL (mantido pela sincronização diária). Rápido e
+ *    não depende do Matific estar no ar.
+ *  • Sub-períodos (Hoje, Ontem, Esta/Semana passada, Mês/Mês passado, Bimestre/
+ *    Bimestre passado, Personalizado) → CONSULTA O MATIFIC AO VIVO (API interna
+ *    por HTTP; navegador só para autenticar). Mostra os mesmos alunos, estrelas e
+ *    atividades do site. Resultado tem cache curto; "Atualizar" força a busca.
  */
-import { Calculator, Radio, RefreshCw } from "lucide-react";
+import { Calculator, Database, Radio, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -21,7 +23,7 @@ type PlacarItem = {
   posicao: number;
   nome: string;
   turma: string | null;
-  serie: string | null;
+  serie?: string | null;
   estrelas: number;
   atividades: number;
   pontuacao_media: number;
@@ -29,10 +31,8 @@ type PlacarItem = {
 };
 type PlacarAoVivo = {
   periodo: string;
-  filtro: string;
   atualizado_em: string;
   total: number;
-  com_link: number;
   itens: PlacarItem[];
 };
 
@@ -40,46 +40,59 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
   const [turmaSel, setTurmaSel] = useState("");
+  const [forcarTick, setForcarTick] = useState(0);
 
-  // Só consulta quando o período está completo (personalizado exige as 2 datas)
-  // — evita disparar um login no Matific com o intervalo pela metade.
+  const isAno = periodo.preset === "ano_letivo";
+  // Personalizado só busca com as duas datas — evita disparar login pela metade.
   const periodoCompleto =
     periodo.preset !== "personalizado" || Boolean(periodo.inicio && periodo.fim);
 
   const q = periodoParaQuery(periodo);
-  const { dados, erro, carregando, recarregar } = useApi<PlacarAoVivo>(
-    escolaId ? `/escolas/${escolaId}/sync/matific/placar-ao-vivo?${q}` : null,
-    {
-      ativo: Boolean(escolaId) && periodoCompleto,
-      // Login no Matific pode levar ~1 min na 1ª consulta; não retentar (não
-      // queremos disparar um segundo login por timeout).
-      timeoutMs: 180_000,
-      tentativas: 0,
-    },
+  // Trocar de período zera o "forçar" NA MESMA atualização (sem efeito atrasado
+  // que dispararia uma busca forcada indevida do período novo).
+  const trocarPeriodo = (p: Periodo) => {
+    setForcarTick(0);
+    setPeriodo(p);
+  };
+
+  // ANO LETIVO: banco local (sincronização diária). Sub-períodos: Matific ao vivo.
+  const forcarQS = forcarTick > 0 ? `&forcar=true&r=${forcarTick}` : "";
+  const local = useApi<PlacarItem[]>(
+    escolaId && isAno ? `/escolas/${escolaId}/ranking/matematica?periodo=ano_letivo` : null,
+  );
+  const live = useApi<PlacarAoVivo>(
+    escolaId && !isAno && periodoCompleto
+      ? `/escolas/${escolaId}/sync/matific/placar-ao-vivo?${q}${forcarQS}`
+      : null,
+    { timeoutMs: 180_000, tentativas: 0 },
   );
 
-  const itens = dados?.itens ?? [];
+  const carregando = isAno ? local.carregando : live.carregando;
+  const erro = isAno ? local.erro : live.erro;
+  const itens: PlacarItem[] = isAno ? (local.dados ?? []) : (live.dados?.itens ?? []);
+  const atualizar = () => (isAno ? local.recarregar() : setForcarTick((t) => t + 1));
+
   const turmas = useMemo(
     () => (Array.from(new Set(itens.map((i) => i.turma).filter(Boolean))) as string[]).sort(),
     [itens],
   );
   const visiveis = turmaSel ? itens.filter((i) => i.turma === turmaSel) : itens;
 
-  const atualizadoEm = dados?.atualizado_em
-    ? new Date(dados.atualizado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })
+  const atualizadoEm = !isAno && live.dados?.atualizado_em
+    ? new Date(live.dados.atualizado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })
     : null;
 
   return (
     <div>
       {!embutido && (
         <PageHeader
-          titulo="Premiar por período (Matific ao vivo)"
-          descricao="Consulta o Placar do Matific em tempo real para o período escolhido — os mesmos alunos, estrelas e atividades do site oficial."
+          titulo="Premiar por período"
+          descricao="Ano letivo vem do banco local (sincronizado diariamente). Qualquer outro período é consultado no Matific em tempo real — os mesmos alunos, estrelas e atividades do site."
         />
       )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
-        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
+        <SeletorPeriodo valor={periodo} onChange={trocarPeriodo} />
         <select
           aria-label="Filtrar por turma"
           className={`${estiloInput} w-auto`}
@@ -91,13 +104,18 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
         </select>
         <button
           type="button"
-          onClick={() => recarregar()}
+          onClick={atualizar}
           disabled={carregando || !periodoCompleto}
           className={`${estiloInput} inline-flex w-auto items-center gap-1.5 disabled:opacity-50`}
         >
           <RefreshCw size={14} className={carregando ? "animate-spin" : ""} /> Atualizar
         </button>
-        {atualizadoEm && !carregando && (
+        {!carregando && isAno && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            <Database size={13} /> Banco local · sincronização diária
+          </span>
+        )}
+        {!carregando && !isAno && atualizadoEm && (
           <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
             <Radio size={13} /> Dados do Matific · {atualizadoEm}
           </span>
@@ -111,16 +129,21 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
         ) : carregando ? (
           <div className="flex flex-col items-center gap-2 py-10 text-center">
             <Carregando />
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Consultando o Matific em tempo real…
-            </p>
-            <p className="max-w-md text-xs text-zinc-400">
-              A primeira consulta pode levar cerca de um minuto (o robô faz login no
-              Matific). As próximas ficam rápidas.
-            </p>
+            {!isAno && (
+              <>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Consultando o Matific em tempo real…
+                </p>
+                <p className="max-w-md text-xs text-zinc-400">
+                  Normalmente rápido. Se a sessão expirou, a primeira consulta pode levar
+                  cerca de um minuto (o robô refaz o login no Matific).
+                </p>
+              </>
+            )}
           </div>
         ) : erro ? (
-          <Vazio titulo="Não foi possível consultar o Matific" descricao={erro.message} />
+          <Vazio titulo={isAno ? "Não foi possível carregar" : "Não foi possível consultar o Matific"}
+                 descricao={erro.message} />
         ) : visiveis.length === 0 ? (
           <Vazio titulo="Nenhuma atividade de matemática no período"
                  descricao="Ninguém pontuou no Matific nesse intervalo. Ajuste o período." />

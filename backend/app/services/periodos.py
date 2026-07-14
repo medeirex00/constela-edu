@@ -12,8 +12,8 @@ from datetime import date, datetime, time, timedelta
 
 # Presets aceitos pela API (o frontend usa exatamente estas chaves).
 PRESETS = (
-    "hoje", "semana", "ontem", "7dias", "30dias", "mes", "mes_anterior",
-    "bimestre", "bimestre_anterior", "semestre", "ano_letivo",
+    "hoje", "semana", "semana_anterior", "ontem", "7dias", "30dias", "mes",
+    "mes_anterior", "bimestre", "bimestre_anterior", "semestre", "ano_letivo",
     "tudo", "personalizado",
 )
 
@@ -74,6 +74,11 @@ def resolver(
     if preset == "semana":
         # Semana atual: segunda-feira até hoje (weekday(): 0 = segunda).
         return _ini(hoje - timedelta(days=hoje.weekday())), _fim(hoje), "Esta semana"
+
+    if preset in ("semana_anterior", "semana_passada"):
+        # Semana passada COMPLETA: segunda a domingo anteriores à semana atual.
+        domingo = hoje - timedelta(days=hoje.weekday() + 1)
+        return _ini(domingo - timedelta(days=6)), _fim(domingo), "Semana passada"
 
     if preset == "7dias":
         return _ini(hoje - timedelta(days=6)), _fim(hoje), "Últimos 7 dias"

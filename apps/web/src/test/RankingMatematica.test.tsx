@@ -89,6 +89,26 @@ describe("RankingMatematica (Matific ao vivo)", () => {
     expect(screen.queryByRole("link", { name: /Aluno Solto/ })).not.toBeInTheDocument();
   });
 
+  it("Ano letivo vem do banco local (não consulta o Matific ao vivo)", async () => {
+    const u = userEvent.setup();
+    // Ao vivo (padrão "Este mês")
+    responder("GET", URL, placar([itemMat({ nome: "Marina AoVivo" })]));
+    // Banco local (endpoint de snapshots) — retorna um ARRAY, não {itens}
+    responder("GET", "/escolas/1/ranking/matematica", [
+      { posicao: 1, aluno_id: 99, nome: "Ana Local", turma: "3º Ano A",
+        estrelas: 900, atividades: 200, pontuacao_media: 4.5 },
+    ]);
+
+    abrirTela();
+    expect(await screen.findByRole("link", { name: /Marina AoVivo/ })).toBeInTheDocument();
+
+    await u.selectOptions(screen.getByLabelText("Período de análise"), "ano_letivo");
+
+    expect(await screen.findByRole("link", { name: /Ana Local/ })).toBeInTheDocument();
+    expect(screen.getByText(/Banco local/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Marina AoVivo/ })).not.toBeInTheDocument();
+  });
+
   it("filtra por turma no cliente (sem nova consulta ao Matific)", async () => {
     const u = userEvent.setup();
     responder("GET", URL, placar([

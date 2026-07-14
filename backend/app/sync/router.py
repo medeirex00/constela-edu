@@ -127,7 +127,8 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     cred = Credenciais(usuario=dados.usuario, senha=dados.senha, extra=dados.extra)
     linha = vault.salvar_credencial(db, escola_id, plataforma, cred)
     if plataforma == "matific":
-        aovivo.limpar_sessao(db, escola_id)  # esquece sessão da credencial antiga
+        aovivo.limpar_sessao(db, escola_id)     # esquece sessão da credencial antiga
+        aovivo.invalidar_cache(escola_id)       # e o ranking cacheado da conta antiga
     registrar(db, "sync.credencial_salva", escola_id=escola_id, usuario_id=usuario.id,
               entidade="plataforma", detalhes={"plataforma": plataforma})  # sem senha
     db.commit()
@@ -154,6 +155,9 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     if resultado.ok:
         service.resolver_alertas(db, escola_id, plataforma,
                                  ("senha_invalida", "senha_expirada", "falha_auth"))
+        # Credencial válida → liga a sincronização DIÁRIA automática (se ainda não
+        # houver cadência), para o banco local do ano ficar em dia sozinho.
+        _garantir_agenda_diaria(db, escola_id, plataforma)
     else:
         service.abrir_alerta(db, escola_id, plataforma,
                              resultado.codigo or "senha_invalida", resultado.mensagem,
@@ -192,6 +196,9 @@ def remover_credenciais(plataforma: str,
                         db: Session = Depends(get_db)):
     _validar_plataforma(plataforma)
     vault.remover_credencial(db, escola_id, plataforma)
+    if plataforma == "matific":
+        aovivo.limpar_sessao(db, escola_id)
+        aovivo.invalidar_cache(escola_id)  # não servir ranking da conta removida
     registrar(db, "sync.credencial_removida", escola_id=escola_id,
               usuario_id=usuario.id, detalhes={"plataforma": plataforma})
     db.commit()
@@ -220,6 +227,25 @@ def salvar_config(plataforma: str, dados: ConfigIn,
     conf.proxima_execucao = service.calcular_proxima(conf)
     db.commit()
     return {"proxima_execucao": conf.proxima_execucao}
+
+
+def _garantir_agenda_diaria(db: Session, escola_id: int, plataforma: str) -> None:
+    """Liga uma agenda DIÁRIA (03:00) na PRIMEIRA vez que a credencial é validada
+    — assim o banco local do ano letivo fica em dia SOZINHO. Só cria quando NÃO
+    existe configuração alguma: qualquer linha já gravada é escolha explícita do
+    admin (inclusive 'desligado': ativo=False + manual) e é respeitada — nunca
+    reativa uma sincronização que o admin desligou de propósito (opt-out/LGPD).
+    Só roda de fato quando o servidor tem SYNC_SCHEDULER_ENABLED=true."""
+    conf = db.execute(select(SincronizacaoConfig).where(
+        SincronizacaoConfig.escola_id == escola_id,
+        SincronizacaoConfig.plataforma == plataforma)).scalars().first()
+    if conf is not None:
+        return  # o admin já configurou (ligado OU desligado) — não mexe
+    conf = SincronizacaoConfig(escola_id=escola_id, plataforma=plataforma,
+                               ativo=True, cadencia="diaria", hora_local="03:00")
+    db.add(conf)
+    db.flush()
+    conf.proxima_execucao = service.calcular_proxima(conf)
 
 
 # ---------------------------------------------------------------------------
@@ -302,16 +328,18 @@ def matific_placar_ao_vivo(
     periodo: str | None = Query(default=None),
     inicio: str | None = Query(default=None),
     fim: str | None = Query(default=None),
+    forcar: bool = Query(default=False),
 ):
     """PREMIAR POR PERÍODO — consulta o Placar do Matific EM TEMPO REAL para o
     período pedido e devolve o ranking (nome, turma, estrelas, atividades, média)
-    exatamente como o site mostra. Sem PDF/importação: o Constela é cliente do
-    Matific. ``periodo`` ∈ hoje|semana|mes|bimestre|ano_letivo|personalizado;
-    ``inicio``/``fim`` (AAAA-MM-DD) para o personalizado. A 1ª consulta pode fazer
-    login (mais lenta); as seguintes reusam a sessão cifrada e são rápidas."""
+    exatamente como o site mostra. Prioriza a API por HTTP (navegador só para
+    autenticar). ``periodo`` ∈ hoje|ontem|semana|semana_anterior|mes|mes_anterior
+    |bimestre|bimestre_anterior|personalizado; ``inicio``/``fim`` (AAAA-MM-DD) no
+    personalizado. Resultado tem cache curto; ``forcar=true`` (botão Atualizar)
+    ignora o cache."""
     try:
         return aovivo.placar_matific(db, escola_id, periodo=periodo,
-                                     inicio=inicio, fim=fim)
+                                     inicio=inicio, fim=fim, forcar=forcar)
     except ErroConector as exc:
         raise HTTPException(
             _STATUS_ERRO.get(exc.codigo, status.HTTP_502_BAD_GATEWAY),

@@ -15,13 +15,18 @@ export interface Periodo {
   fim?: string; // AAAA-MM-DD (personalizado)
 }
 
-// Só os períodos que a escola usa para premiar: dia, semana, mês, bimestre, ano
-// e o PERSONALIZADO (escolher as datas — premiação por qualquer intervalo).
+// Períodos de premiação: os atuais e os ANTERIORES (dia/semana/mês/bimestre), o
+// ano letivo e o PERSONALIZADO (qualquer intervalo). Esta/semana passada e ano
+// usam presets nativos do Matific; os demais vão por datas.
 export const PRESETS_PERIODO = [
   { valor: "hoje", rotulo: "Hoje" },
+  { valor: "ontem", rotulo: "Ontem" },
   { valor: "semana", rotulo: "Esta semana" },
+  { valor: "semana_anterior", rotulo: "Semana passada" },
   { valor: "mes", rotulo: "Este mês" },
+  { valor: "mes_anterior", rotulo: "Mês passado" },
   { valor: "bimestre", rotulo: "Este bimestre" },
+  { valor: "bimestre_anterior", rotulo: "Bimestre passado" },
   { valor: "ano_letivo", rotulo: "Ano letivo" },
   { valor: "personalizado", rotulo: "Período personalizado" },
 ] as const;

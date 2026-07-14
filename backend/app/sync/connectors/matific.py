@@ -70,6 +70,19 @@ def _js_get(url: str) -> str:
     return _JS_GET.replace("__URL__", json.dumps(url))
 
 
+# Cabeçalhos das requisições HTTP DIRETAS (sem navegador): imitam o Chrome do
+# robô para que a API interna aceite o cookie de sessão same-origin. GET a
+# endpoint DRF com SessionAuthentication não exige CSRF.
+_HEADERS_HTTP = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Referer": "https://www.matific.com/bra/pt-br/teachers/admin/school-leaderboard/",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+
 def _slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (texto or "turma").lower()).strip("-")[:40] or "turma"
 
@@ -329,6 +342,115 @@ class ConectorMatific(ConectorNavegador):
             return await nav.visivel(_SEL_LOGADO)
         except Exception:  # noqa: BLE001
             return False
+
+    # ---- COLETA POR HTTP DIRETO (sem navegador) -----------------------------
+
+    @staticmethod
+    def _cookies_de(storage_state: dict | None) -> dict:
+        """{nome: valor} dos cookies de matific.com de um storage_state salvo."""
+        out: dict[str, str] = {}
+        for c in (storage_state or {}).get("cookies") or []:
+            if not isinstance(c, dict):
+                continue
+            if "matific.com" in str(c.get("domain") or "") and c.get("name"):
+                out[str(c["name"])] = str(c.get("value") or "")
+        return out
+
+    def coletar_via_http(self, storage_state: dict | None, filtro: str) -> list[dict]:
+        """Coleta o Placar pela API interna por HTTP DIRETO — SEM navegador —,
+        reusando o cookie de sessão do ``storage_state``. É o caminho preferencial
+        (item de arquitetura): rápido e sem abrir o Chromium.
+
+        Levanta ``ErroConector('sessao_invalida')`` se a sessão não serve (sem
+        cookie / 401 / 403 / redirecionou para o login) — o chamador então usa o
+        navegador SÓ para autenticar e tenta de novo por HTTP. Não faz login aqui."""
+        import httpx
+
+        cookies = self._cookies_de(storage_state)
+        if "sessionid" not in cookies:
+            raise ErroConector("Sem cookie de sessão do Matific para o HTTP direto.",
+                               codigo="sessao_invalida", recuperavel=True)
+
+        def _get(client: "httpx.Client", url: str) -> dict:
+            r = client.get(url)
+            ct = r.headers.get("content-type", "")
+            # Sessão expirada → o Matific responde 401/403 ou REDIRECIONA para o
+            # login (302/HTML). Em qualquer caso, não é o JSON esperado.
+            if r.status_code in (401, 403) or r.is_redirect or "json" not in ct:
+                raise ErroConector(
+                    f"Sessão do Matific inválida no HTTP (status {r.status_code}).",
+                    codigo="sessao_invalida", recuperavel=True)
+            try:
+                corpo = r.json()
+            except ValueError as exc:
+                raise ErroConector("Resposta não-JSON do Matific no HTTP.",
+                                   codigo="sessao_invalida", recuperavel=True) from exc
+            return {"ok": True, "status": r.status_code, "body": corpo}
+
+        try:
+            with httpx.Client(cookies=cookies, headers=_HEADERS_HTTP, timeout=25.0,
+                              follow_redirects=False) as client:
+                cur = _get(client, _EP_CURRENT)
+                school_id = str((cur.get("body") or {}).get("school_id") or "").strip()
+                if not school_id:
+                    raise ErroConector("HTTP: não achei o school_id (accounts/current).",
+                                       codigo="sessao_invalida", recuperavel=True)
+                # competition_id (nomes completos) — ACESSÓRIO: engole QUALQUER
+                # falha (inclusive um 403/non-JSON que _get mapeia p/ sessao_
+                # invalida). A sessão de verdade é validada por accounts/current
+                # (acima) e school_student (abaixo); não deixamos o placar cair por
+                # causa do nome completo, que é só um plus.
+                comp_id = ""
+                try:
+                    comps = _get(client, _EP_COMPETITIONS).get("body")
+                    if isinstance(comps, list):
+                        vivos = [c for c in comps if isinstance(c, dict) and c.get("id")]
+                        alvo = next((c for c in vivos if c.get("is_live")),
+                                    vivos[0] if vivos else None)
+                        comp_id = str((alvo or {}).get("id") or "").strip()
+                except Exception:  # noqa: BLE001 — acessório, não derruba a coleta
+                    comp_id = ""
+                nomes: dict = {}
+                if comp_id:
+                    url_lb = (f"{_API_BASE}/api/v2/competition-v2/{comp_id}"
+                              f"/school/{school_id}/student-leaderboard/")
+                    try:
+                        nomes = self._mapa_nomes(_get(client, url_lb))
+                    except Exception:  # noqa: BLE001 — nome cheio é um plus
+                        nomes = {}
+                url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
+                          f"?{filtro}&school_id={school_id}")
+                return self._parse_school_student(_get(client, url_ss), nomes)
+        except ErroConector:
+            raise
+        except httpx.HTTPError as exc:
+            # Falha de transporte (rede/timeout/conexão): não é "sessão inválida",
+            # mas o chamador deve cair para o navegador (fetch same-origin).
+            raise ErroConector(f"HTTP ao Matific indisponível ({str(exc)[:80]}).",
+                               codigo="http_indisponivel", recuperavel=True) from exc
+
+    async def autenticar(self, cred: Credenciais, contexto: Contexto, *,
+                         storage_state: dict | None = None) -> dict:
+        """Usa o navegador APENAS para autenticar (item de arquitetura: navegador
+        só para login/fallback) e devolve o storage_state (cookies) para as
+        consultas HTTP. Reaproveita a sessão salva quando ainda válida."""
+        async with self._sessao(contexto, storage_state=storage_state) as nav:
+            logado = False
+            if storage_state:
+                try:
+                    await nav.ir_para(_URL_LEADERBOARD)
+                    logado = await self._sessao_valida(nav)
+                except Exception:  # noqa: BLE001
+                    logado = False
+            if logado:
+                contexto.log("login", "info", "[Matific] Sessão reaproveitada (auth).")
+            else:
+                await self._login(nav, cred, contexto)
+                await nav.ir_para(_URL_LEADERBOARD)
+            try:
+                return await nav.estado_sessao()
+            except Exception:  # noqa: BLE001
+                return {}
 
     async def coletar_placar_ao_vivo(
         self, cred: Credenciais, contexto: Contexto, *, filtro: str,
