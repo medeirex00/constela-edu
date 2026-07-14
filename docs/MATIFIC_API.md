@@ -126,34 +126,72 @@ GET /api/v2/competition-v2/<COMPETITION_UUID>/school/<SCHOOL_UUID>/student-leade
 
 ---
 
-## 5. Endpoints OBSERVADOS (na aba Network — corpo a capturar)
+## 5. Catálogo de endpoints DESCOBERTOS (crawler, jul/2026)
 
-Vistos ao abrir o **Placar da Escola**; nomes reais na coluna *Name* do DevTools.
-Rode o crawler (§10) para capturar os corpos e promovê-los a ✅.
+Rota com `{uuid}`/`{id}` no lugar dos identificadores. **200 GET** em todos.
+Status: ✅ corpo capturado/conhecido · 🟡 rota confirmada, corpo a mapear.
+Os corpos ficam em `matific_captura/NNN_*.json` na máquina do gestor.
 
-| Método | Caminho (provável) | Observado | O que deve ser |
-|---|---|---|---|
-| GET | `/api/v2/reports/leaderboard/school_klass/?duration=&school_id=` | 🔍 1.7 kB | Placar por **TURMA** (Turmas líderes) |
-| GET | `/api/v2/competition-v2/<comp>/school/<school>/class-leaderboard/` | 🔍 1.9 kB | Placar de **turmas** na competição |
-| GET | `/api/v2/competition-v2/?require_participation=false` | 🔍 1.8 kB | **Lista de competições** (provável fonte do `competition_id` + `school_id` — endpoint de descoberta) |
-| GET | `/api/v2/.../score/` | 🔍 1.0 kB | Resumo de pontuação (estrelas/média da escola) |
-| GET | `/api/v2/.../activity-list/` | 🔍 0.8 kB | Lista de atividades |
-| GET | `/api/v2/.../locales/` | 🔍 32 kB | i18n (não é dado pedagógico) |
+### 5.1 Contas / autenticação
+| Rota | Status | O que é |
+|---|---|---|
+| `GET /api/v2/accounts/current/` | 🟡 | Usuário logado (papel, escola, id). |
+| `GET /api/v2/accounts/teachers/` | 🟡⭐ | **Professores da escola** — fonte confiável de professor (melhor que `teacher_name` do placar). |
+| `GET /api/v2/accounts/firebase-config/` | 🟡 | Config do **Firebase** (há integração — provável realtime/notif; NÃO é o data-out). |
+| `GET /api/v2/accounts/user-tutorial-state/` | 🟡 | Estado do tutorial (ruído — o SPA repete muito). |
+| `GET /api/v2/accounts/quick-start-guide-status/` · `/onboarding-register-school/` | 🟡 | Onboarding. |
+| `GET /api/v2/settings/` · `/enums/{uuid}/` · `/locale/current/` · `/locale/locales/` | 🟡 | Config e i18n. |
 
-## 6. Endpoints por área (a completar pelo crawler)
+### 5.2 Turmas e alunos ⭐ (o mais valioso p/ o Constela)
+| Rota | Status | O que é |
+|---|---|---|
+| `GET /api/v2/class-management/classes/` | 🟡⭐ | **Todas as turmas** (uuid + nome + série). |
+| `GET /api/v2/class-management/classes/{uuid}/students/` | 🟡⭐⭐ | **Alunos da turma** — o ROSTER real (provável nome completo + id), inclusive quem não está no placar. |
 
-Alvos do objetivo; ✅ = já temos, 🔍 = observado, ❓ = a descobrir.
+### 5.3 Escola / relatórios administrativos
+| Rota | Status | O que é |
+|---|---|---|
+| `GET /api/v2/school-management/schools/{uuid}/stats/` | 🟡 | Estatísticas da escola. |
+| `GET /api/v2/school-management/schools/{uuid}/class-activity/?subject` | 🟡 | Atividade por turma (por matéria). |
+| `GET /api/v2/school-management/schools/{uuid}/teacher-activity/` | 🟡 | Atividade dos professores. |
+| `GET /api/v2/school-management/schools/{uuid}/student-readiness-report/year/` | 🟡⭐ | **Relatório de prontidão** do aluno (ano). |
+| `GET /api/v2/school-management/school_representative/{uuid}/` · `/school_license_info/{uuid}/` | 🟡 | Representante / licença. |
 
-- **School Leaderboard:** ✅ `reports/leaderboard/school_student/`, 🔍 `reports/leaderboard/school_klass/`
-- **Student Leaderboard:** ✅ `competition-v2/<c>/school/<s>/student-leaderboard/`
-- **Class Leaderboard:** 🔍 `competition-v2/<c>/school/<s>/class-leaderboard/`
-- **Competition:** 🔍 `competition-v2/?require_participation=false`, ✅ `competition-v2/<c>/school/<s>/...`
-- **Schools:** ❓ (provável `schools/` ou `me/schools/` — onde o SPA descobre o `school_id`)
-- **Classes:** ❓ (`klasses/` / `classes/`)
-- **Students:** ❓ (lista de alunos da turma — "Todos os Estudantes")
-- **Teachers:** ❓ ("Todos os Professores")
-- **Reports / Analytics / Dashboard:** ❓ ("Painel do Administrador", "Uso da escola")
-- **Export / PDF:** ❓ (o botão "Placares"/"Uso da escola" pode chamar um `export`/`pdf`)
+### 5.4 Placar (leaderboard) — base da coleta atual
+| Rota | Status | O que é |
+|---|---|---|
+| `GET /api/v2/reports/leaderboard/school_student/?school_id=&duration=` | ✅⭐⭐ | Placar por aluno (§4.1). |
+| `GET /api/v2/reports/leaderboard/school_klass/?school_id=&duration=` | 🟡⭐ | Placar por **turma**. |
+
+### 5.5 Competição
+| Rota | Status | O que é |
+|---|---|---|
+| `GET /api/v2/competition-v2/` | 🟡 | **Lista de competições** (fonte do `competition_id` + `school_id`). |
+| `GET /api/v2/competition-v2/{uuid}/school/{uuid}/student-leaderboard/` | ✅⭐⭐ | Placar por aluno com NOME COMPLETO (§4.2). |
+| `GET /api/v2/competition-v2/{uuid}/school/{uuid}/class-leaderboard/` | 🟡 | Placar por turma na competição. |
+| `GET /api/v2/competition-v2/{uuid}/school/{uuid}/score/` | 🟡 | Placar/score-resumo da competição. |
+
+### 5.6 Outros
+| Rota | Status | O que é |
+|---|---|---|
+| `GET /api/v2/campaigns/teacher-campaigns/` | 🟡 | Campanhas do professor. |
+| `GET /api/v2/notifications/notifications/` | 🟡 | Notificações. |
+| `GET /api/v2/episodes/feedback/activity-list/` | 🟡 | Lista de atividades/feedback. |
+| `GET /find-mo/.../reports/get_browse_nodes` · `/get_locale_mappings` | 🟡 | Serviço de conteúdo ("find math objects"). |
+
+## 6. Mapa por área (objetivos 1–3)
+
+- **School Leaderboard:** ✅ `reports/leaderboard/school_student/` · 🟡 `school_klass/`
+- **Student Leaderboard:** ✅ `competition-v2/{c}/school/{s}/student-leaderboard/`
+- **Class Leaderboard:** 🟡 `competition-v2/{c}/school/{s}/class-leaderboard/`
+- **Reports:** 🟡 `reports/leaderboard/*`, `school-management/schools/{s}/student-readiness-report/year/`
+- **Students:** 🟡⭐ `class-management/classes/{c}/students/`
+- **Teachers:** 🟡⭐ `accounts/teachers/`, `school-management/schools/{s}/teacher-activity/`
+- **Classes:** 🟡⭐ `class-management/classes/`
+- **Schools:** 🟡 `school-management/schools/{s}/stats|class-activity|...`
+- **Competition:** 🟡 `competition-v2/` (+ subrecursos)
+- **Analytics/Dashboard:** 🟡 `school-management/schools/{s}/stats/`, `class-activity/`
+- **Export / PDF:** ❓ ainda não apareceu como chamada de API — os botões "Placares"/"Uso da escola" podem gerar o PDF no cliente ou por um endpoint só disparado no clique (rodar o crawler no modo "clicar nas abas").
 
 ## 7. Endpoints ocultos
 

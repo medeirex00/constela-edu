@@ -41,6 +41,8 @@ SEMENTES = [
 SAIDA = os.path.join(os.getcwd(), "matific_captura")
 MAX_TELAS = 40          # trava de segurança do BFS
 ESPERA_MS = 3500        # tempo p/ a tela disparar as chamadas
+MAX_POR_ROTA = 2        # salva no máx. 2 exemplos de cada rota (corta o ruído
+                        # de polls como user-tutorial-state, que repetem centenas de vezes)
 
 
 def _slug(url: str) -> str:
@@ -61,6 +63,7 @@ async def main() -> None:
     os.makedirs(SAIDA, exist_ok=True)
     capturas: list[dict] = []
     vistos_rota: dict[str, dict] = {}
+    contador_rota: dict[str, int] = {}
 
     async with async_playwright() as pw:
         nav = await pw.chromium.launch(headless=False)   # VISÍVEL p/ login manual
@@ -75,6 +78,14 @@ async def main() -> None:
                 ct = (resp.headers or {}).get("content-type", "")
                 if "json" not in ct:
                     return
+                # Corta o ruído: cada rota é salva no máx. MAX_POR_ROTA vezes.
+                rota = _rota_template(resp.url)
+                contador_rota[rota] = contador_rota.get(rota, 0) + 1
+                vistos_rota.setdefault(rota, {
+                    "metodo": resp.request.method, "rota": rota,
+                    "exemplo_url": resp.url, "status": resp.status})
+                if contador_rota[rota] > MAX_POR_ROTA:
+                    return
                 try:
                     corpo = await resp.json()
                 except Exception:  # noqa: BLE001
@@ -83,7 +94,7 @@ async def main() -> None:
                     "url": url,
                     "metodo": resp.request.method,
                     "status": resp.status,
-                    "rota": _rota_template(url),
+                    "rota": rota,
                     "request_headers": dict(resp.request.headers),
                     "response": corpo,
                 }
@@ -92,10 +103,7 @@ async def main() -> None:
                 with open(os.path.join(SAIDA, f"{idx:03d}_{_slug(url)}.json"),
                           "w", encoding="utf-8") as f:
                     json.dump(rec, f, ensure_ascii=False, indent=2)
-                vistos_rota.setdefault(rec["rota"], {
-                    "metodo": rec["metodo"], "rota": rec["rota"],
-                    "exemplo_url": url, "status": rec["status"]})
-                print(f"  [{idx:03d}] {rec['metodo']} {resp.status}  {rec['rota']}")
+                print(f"  [{idx:03d}] {rec['metodo']} {resp.status}  {rota}")
             except Exception as exc:  # noqa: BLE001 — nunca derruba o crawl
                 print(f"  (erro ao capturar: {str(exc)[:80]})")
 
