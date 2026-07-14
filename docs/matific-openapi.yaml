@@ -1,0 +1,130 @@
+openapi: 3.0.3
+info:
+  title: Matific — API interna (engenharia reversa)
+  version: "0.1-descoberta"
+  description: >
+    Especificação NÃO oficial da API interna do painel do professor/administrador
+    do Matific, obtida da conta da própria escola (DevTools). Base para a
+    integração do Constela Edu. Endpoints marcados "confirmado" têm o corpo
+    capturado; os demais foram observados no Network e serão completados pelo
+    crawler (tools/matific_crawler.py). Sem PII: exemplos anonimizados.
+servers:
+  - url: https://www.matific.com
+components:
+  securitySchemes:
+    sessaoCookie:
+      type: apiKey
+      in: cookie
+      name: sessionid          # sessão Django; sem Bearer/JWT/refresh token
+  parameters:
+    duration:
+      name: duration
+      in: query
+      required: true
+      schema: { type: string, example: this-year }
+      description: >
+        Período. Confirmado: this-year (Ano acadêmico atual). A capturar:
+        this-week / this-month / custom (Período Personalizado) — objetivo #8.
+    schoolId:
+      name: school_id
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    SchoolStudentLeaderboard:
+      type: array
+      items:
+        type: object
+        properties:
+          school_id: { type: string, format: uuid }
+          total_points: { type: integer, example: 38163 }
+          school_score: { type: number, example: 180.01 }
+          students_count_in_school: { type: integer, example: 212 }
+          data:
+            type: array
+            items: { $ref: '#/components/schemas/SchoolStudentRow' }
+    SchoolStudentRow:
+      type: object
+      properties:
+        account_id: { type: string, example: "ALUNO A", description: nome ABREVIADO }
+        score: { type: string, example: "362", description: estrelas (string) }
+        activities_completed: { type: string, example: "100" }
+        grade_code: { type: string, example: "3" }
+        klassName: { type: string, example: "3 ANO B (300396804)" }
+        schoolName: { type: string }
+        region: { type: integer }
+        rank_score: { type: integer, nullable: true }
+        id: { type: string }
+        uuid: { type: string, format: uuid, description: chave p/ cruzar com student-leaderboard }
+    StudentLeaderboard:
+      type: object
+      properties:
+        leaderboard:
+          type: array
+          items: { $ref: '#/components/schemas/StudentLeaderboardRow' }
+    StudentLeaderboardRow:
+      type: object
+      properties:
+        student_id: { type: string, format: uuid, description: "== uuid do school_student" }
+        student_name: { type: string, example: "Nome Completo Do Aluno" }
+        class_name: { type: string, example: "4 ANO A (300397061)" }
+        class_id: { type: string, format: uuid }
+        class_grade: { type: integer, example: 4 }
+        teacher_name: { type: string, description: "não confiável (dono da conta)" }
+        accuracy: { type: string, example: "90.65" }
+        goal_score: { type: integer, example: 250 }
+        total_attempts: { type: integer, example: 62 }
+        percentile: { type: integer, example: -1 }
+        rank: { type: integer, nullable: true }
+        school_id: { type: string, format: uuid }
+        school_name: { type: string }
+security:
+  - sessaoCookie: []
+paths:
+  /api/v2/reports/leaderboard/school_student/:
+    get:
+      summary: "[confirmado] Placar por aluno (estrelas/atividades) da escola"
+      parameters:
+        - $ref: '#/components/parameters/duration'
+        - $ref: '#/components/parameters/schoolId'
+      responses:
+        '200':
+          description: Lista dos alunos com desempenho no período
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SchoolStudentLeaderboard' }
+  /api/v2/reports/leaderboard/school_klass/:
+    get:
+      summary: "[observado] Placar por turma (Turmas líderes)"
+      parameters:
+        - $ref: '#/components/parameters/duration'
+        - $ref: '#/components/parameters/schoolId'
+      responses:
+        '200': { description: "corpo a capturar (crawler)" }
+  /api/v2/competition-v2/{competitionId}/school/{schoolId}/student-leaderboard/:
+    get:
+      summary: "[confirmado] Placar por aluno da competição (com NOME COMPLETO)"
+      parameters:
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: schoolId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Ranking de alunos da competição
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentLeaderboard' }
+  /api/v2/competition-v2/{competitionId}/school/{schoolId}/class-leaderboard/:
+    get:
+      summary: "[observado] Placar por turma da competição"
+      parameters:
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: schoolId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: "corpo a capturar (crawler)" }
+  /api/v2/competition-v2/:
+    get:
+      summary: "[observado] Lista de competições (provável fonte de competition_id + school_id)"
+      parameters:
+        - { name: require_participation, in: query, schema: { type: boolean, example: false } }
+      responses:
+        '200': { description: "corpo a capturar (crawler)" }

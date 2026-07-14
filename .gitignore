@@ -46,3 +46,6 @@ exports/*
 .env
 .env.local
 *.tsbuildinfo
+
+# Capturas do crawler do Matific (contêm dados reais de alunos — NUNCA commitar)
+matific_captura/
