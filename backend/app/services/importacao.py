@@ -687,7 +687,9 @@ def analisar_matific_api(payload) -> Analise:
       score / atividades  → pontuacao_media (0–5; = "Pontuação média" da tela)
     """
     payload = payload if isinstance(payload, dict) else {}
-    turma = str(payload.get("turma") or "").strip()
+    # O conector manda UMA turma por payload (``turma`` no topo); o upload do
+    # bookmarklet manda a ESCOLA inteira (turma por aluno). Aceita os dois.
+    turma_topo = str(payload.get("turma") or "").strip()
     linhas: list[LinhaImportacao] = []
     for i, a in enumerate(payload.get("alunos") or [], start=1):
         if not isinstance(a, dict):
@@ -695,6 +697,7 @@ def analisar_matific_api(payload) -> Analise:
         nome = str(a.get("nome") or "").strip()
         if not nome:
             continue
+        turma = turma_topo or str(a.get("turma") or "").strip()
         estrelas = _int_api(a.get("estrelas"))
         atividades = _int_api(a.get("atividades"))
         # "Pontuação média" da tela = estrelas por atividade (0–5). Ex.: 3914/1082=3.62.
@@ -711,7 +714,7 @@ def analisar_matific_api(payload) -> Analise:
     return Analise(
         plataforma="matific", formato="resumo", estrategia="api-matific",
         mensagem_deteccao="Placar da Escola (API interna do Matific).",
-        linhas=linhas, turma_detectada=turma, escola_detectada="",
+        linhas=linhas, turma_detectada=turma_topo, escola_detectada="",
         professor_detectado="")
 
 

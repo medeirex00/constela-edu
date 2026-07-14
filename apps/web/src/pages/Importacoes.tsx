@@ -523,7 +523,7 @@ export default function Importacoes() {
               <input
                 ref={inputArquivo}
                 type="file"
-                accept=".pdf,.xlsx,.xlsm,.txt,.csv,.tsv"
+                accept=".pdf,.xlsx,.xlsm,.txt,.csv,.tsv,.json"
                 className={`${estiloInput} file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1 file:text-indigo-700 dark:file:bg-indigo-500/10 dark:file:text-indigo-300`}
                 onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
               />

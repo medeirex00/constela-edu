@@ -4,6 +4,7 @@ Fluxo em duas etapas: `analisar` devolve a prévia (nada é gravado) e
 `confirmar` grava somente as linhas aprovadas pelo usuário, registrando
 tudo em `importacoes` e guardando o arquivo original em /uploads (§15).
 """
+import json
 import logging
 import re
 import shutil
@@ -232,10 +233,14 @@ async def analisar(
         else:
             texto = conteudo.decode("utf-8", errors="replace")
             tipo = "texto"
-            analise = await run_in_threadpool(svc.analisar_texto, texto, plataforma)
+            payload_mat = _payload_matific_placar(texto)
+            analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
+                       else await run_in_threadpool(svc.analisar_texto, texto, plataforma))
     elif texto and texto.strip():
         tipo = "texto"
-        analise = await run_in_threadpool(svc.analisar_texto, texto, plataforma)
+        payload_mat = _payload_matific_placar(texto)
+        analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
+                   else await run_in_threadpool(svc.analisar_texto, texto, plataforma))
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
@@ -275,6 +280,24 @@ async def analisar(
 
 
 # --- Etapa 2: confirmação -----------------------------------------------------
+
+def _payload_matific_placar(texto: str) -> dict | None:
+    """Reconhece o JSON exportado pelo bookmarklet do Placar do Matific (coleta
+    pela API interna, feita na aba logada do gestor — sem PDF, com nome completo).
+    Marcado por ``fonte='matific-placar'`` + ``alunos[]``. Devolve o payload ou
+    None (aí segue como texto normal)."""
+    t = (texto or "").lstrip()
+    if not t.startswith("{") or "matific-placar" not in t:
+        return None
+    try:
+        dados = json.loads(t)
+    except (ValueError, TypeError):
+        return None
+    if (isinstance(dados, dict) and dados.get("fonte") == "matific-placar"
+            and isinstance(dados.get("alunos"), list)):
+        return dados
+    return None
+
 
 _RE_SERIE_NO_NOME = re.compile(r"^\s*(\d)\s*[ºo°]?\s*(?:ano)?\b", re.IGNORECASE)
 

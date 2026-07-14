@@ -75,6 +75,51 @@ def test_analisar_matific_api_media_zero_sem_atividade():
     assert analise.linhas[0].dados["pontuacao_media"] == 0.0
 
 
+def test_analisar_matific_api_upload_multi_turma():
+    """Upload da ESCOLA inteira (bookmarklet): sem ``turma`` no topo, cada aluno
+    traz a sua turma em ``turma`` → vira turma_relatorio por linha."""
+    payload = {"fonte": "matific-placar", "alunos": [
+        {"nome": "Aluno A", "turma": "3 ANO B (300396804)", "estrelas": 100, "atividades": 40},
+        {"nome": "Aluno B", "turma": "4 ANO A (300397061)", "estrelas": 80, "atividades": 20},
+    ]}
+    analise = svc.analisar_matific_api(payload)
+    assert analise.turma_detectada == ""   # multi-turma → o front usa a turma por linha
+    turmas = {l.dados["turma_relatorio"] for l in analise.linhas}
+    assert turmas == {"3 ANO B (300396804)", "4 ANO A (300397061)"}
+    assert analise.linhas[0].dados["pontuacao_media"] == 2.5   # 100/40
+
+
+def test_payload_matific_placar_detecta():
+    from app.routers.importacoes import _payload_matific_placar
+    bom = '{"fonte":"matific-placar","alunos":[{"nome":"X","turma":"T"}]}'
+    assert _payload_matific_placar(bom) is not None
+    # Não é o nosso JSON → None (segue como texto normal).
+    assert _payload_matific_placar('{"foo":1}') is None
+    assert _payload_matific_placar("texto qualquer colado") is None
+    assert _payload_matific_placar('{"fonte":"matific-placar"}') is None  # sem alunos[]
+
+
+def test_upload_json_matific_pela_api(cliente, escola_completa):
+    """Upload do constela-matific.json → prévia com o aluno casado, sem PDF."""
+    escola_id = escola_completa["escola"].id
+    conteudo = json.dumps({"fonte": "matific-placar", "duration": "this-year", "alunos": [
+        {"nome": "Ana Beatriz Souza", "nome_abrev": "Ana B",
+         "turma": "3 ANO B (300396804)", "estrelas": 362, "atividades": 100}]})
+    resposta = cliente.post(
+        f"/api/v1/escolas/{escola_id}/importacoes/analisar",
+        files={"arquivo": ("constela-matific.json", conteudo.encode("utf-8"), "application/json")},
+    )
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+    assert corpo["plataforma"] == "matific"
+    assert corpo["total_alunos"] == 1
+    linha = corpo["linhas"][0]
+    assert linha["nome"] == "Ana Beatriz Souza"
+    assert linha["dados"]["estrelas"] == 362 and linha["dados"]["pontuacao_media"] == 3.62
+    # casou com a aluna real da turma (nome completo casa exato).
+    assert linha["correspondencia"]["status"] == "exato"
+
+
 # --- Conector: parse + join + agrupamento ------------------------------------
 
 def test_parse_school_student_junta_nome_completo_e_pula_fantasma():
