@@ -1,4 +1,10 @@
-from app.models.academico import Aluno, Matricula, Professor, Turma
+from app.models.academico import (
+    Aluno,
+    IdentidadeExterna,
+    Matricula,
+    Professor,
+    Turma,
+)
 from app.models.configuracao import (
     Configuracao,
     DificuldadeTurma,
@@ -35,6 +41,7 @@ __all__ = [
     "ConversaIA",
     "DispositivoMovel",
     "EventoAluno",
+    "IdentidadeExterna",
     "MensagemIA",
     "DificuldadeTurma",
     "Escola",

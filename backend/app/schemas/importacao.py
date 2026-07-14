@@ -54,6 +54,9 @@ class LinhaConfirmacao(BaseModel):
     # turma uma única vez e matricula o aluno nela — primeiro import da escola
     # funciona sem cadastrar turmas antes.
     criar_em_turma_nome: str | None = None
+    # COMO o aluno foi identificado (uuid|exato|provavel): a sincronização usa
+    # para só mover de turma quem casou com segurança (só vem da sync automática).
+    via: str | None = None
 
 
 class ImportacaoConfirm(BaseModel):
@@ -72,6 +75,10 @@ class ImportacaoConfirm(BaseModel):
     # No lote, cada arquivo confirma com recalcular=False; o recálculo roda
     # uma vez ao final via POST /recalcular.
     recalcular: bool = True
+    # Sincronização AUTOMÁTICA (não upload manual): autoriza mover a matrícula do
+    # aluno quando a turma do Matific muda. Só o orquestrador liga isto — o
+    # upload manual pela tela NUNCA move turma sozinho.
+    sincronizar_turma: bool = False
 
 
 class ImportacaoOut(ORMModel):

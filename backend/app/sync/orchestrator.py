@@ -121,7 +121,8 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
             turmas_novas.add(turma_nome)
         linhas.append(LinhaConfirmacao(nome=l.nome, dados=l.dados,
                                        aluno_id=aluno_id,
-                                       criar_em_turma_nome=turma_nome))
+                                       criar_em_turma_nome=turma_nome,
+                                       via=corr.get("via")))
 
     confirm = ImportacaoConfirm(
         plataforma=analise.plataforma or arquivo.plataforma,
@@ -133,6 +134,7 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
         periodo_fim=arquivo.periodo_fim,
         linhas=linhas,
         recalcular=recalcular,
+        sincronizar_turma=True,   # sync automática: pode mover de turma (com segurança)
     )
 
     ator = _resolver_ator(db, escola.id, usuario_id)

@@ -33,6 +33,10 @@ def _uma_rodada() -> None:
     db = SessionLocal()
     try:
         service.recuperar_execucoes_travadas(db)  # retomada após crash/redeploy
+        # AUTO-CURA: garante a agenda diária de quem tem credencial e nenhuma
+        # config (elimina o "re-salvar credencial"; sobrevive a restart pois a
+        # config fica no Postgres, e se recria caso suma).
+        service.garantir_agendas_diarias(db)
         service.enfileirar_agendados(db)
         pendentes = service.proximas_da_fila(db, limite=settings.SYNC_WORKERS)
         ids = [e.id for e in pendentes]

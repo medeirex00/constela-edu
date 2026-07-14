@@ -37,6 +37,7 @@ from app.models import (
     Aluno,
     Escola,
     EventoAluno,
+    IdentidadeExterna,
     Importacao,
     Leitura,
     Livro,
@@ -423,6 +424,117 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         return aluno
     avisos.append(f"Linha “{linha.nome}”: sem aluno vinculado — ignorada.")
     return None
+
+
+def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
+                         plataforma: str, id_externo: str) -> None:
+    """Grava o vínculo aluno ↔ id externo (UUID do Matific). Idempotente e seguro
+    sob concorrência (savepoint na unique). NÃO reatribui um id já vinculado a
+    outro aluno — evita mover o vínculo por engano."""
+    if not id_externo:
+        return
+    ja = db.execute(select(IdentidadeExterna).where(
+        IdentidadeExterna.escola_id == escola_id,
+        IdentidadeExterna.plataforma == plataforma,
+        IdentidadeExterna.id_externo == id_externo)).scalars().first()
+    if ja is not None:
+        return
+    try:
+        with db.begin_nested():
+            db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=aluno_id,
+                                     plataforma=plataforma, id_externo=id_externo))
+            db.flush()
+    except IntegrityError:
+        pass  # corrida: outro processo vinculou primeiro — ok
+
+
+def _turma_existente_por_tokens(db: Session, escola_id: int, ano: int,
+                                klass_nome: str) -> Turma | None:
+    """Turma JÁ CADASTRADA da escola/ano que casa com o nome do Matific por
+    sobreposição de tokens (série+letra) — a MESMA noção de identidade de turma
+    do resto do sistema (``overlap_turma``). Ex.: "5 ANO B MANHA ANUAL" casa com
+    "5º Ano B". NUNCA cria turma. Devolve None se nenhuma casar de forma
+    INEQUÍVOCA (nenhuma ≥2, ou empate no melhor overlap) — porque mover criança
+    de sala sem supervisão exige certeza."""
+    alvo = svc.tokens_turma(klass_nome)
+    if not alvo:
+        return None
+    candidatas: list[tuple[int, Turma]] = []
+    for turma in db.execute(
+        select(Turma).where(Turma.escola_id == escola_id,
+                            Turma.ano_letivo == ano)).scalars():
+        ov = matriculas.overlap_turma(alvo, svc.tokens_turma(turma.nome))
+        if ov >= 2:                       # série + letra em comum
+            candidatas.append((ov, turma))
+    if not candidatas:
+        return None
+    candidatas.sort(key=lambda par: par[0], reverse=True)
+    if len(candidatas) > 1 and candidatas[0][0] == candidatas[1][0]:
+        return None                       # empate → ambíguo → não arrisca
+    return candidatas[0][1]
+
+
+def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
+                               resolvidos: dict, avisos: list[str]) -> int:
+    """Na sync AUTOMÁTICA do Matific: vincula o UUID (identificação confiável) e
+    MOVE a matrícula quando a turma reportada mudou. Regras de segurança (mexe em
+    dado de criança, sem humano no loop):
+
+    * só age em quem casou por UUID (já vinculado) ou nome EXATO — nunca fuzzy;
+    * o UUID é vinculado no 1º encontro (via 'exato') e só a PARTIR daí (via
+      'uuid') a turma pode mudar;
+    * identidade de turma é por TOKENS (série+letra), não por string crua — o
+      ``klassName`` do Matific ("5 ANO B MANHA ANUAL") NÃO cria uma turma-fantasma
+      quando já existe a "5º Ano B";
+    * só move entre turmas JÁ CADASTRADAS e de forma INEQUÍVOCA. Se o Matific
+      apontar uma turma que não casa com nenhuma cadastrada, NÃO move nem cria —
+      só registra um aviso para revisão humana.
+
+    Devolve quantos alunos foram movidos."""
+    movidos = 0
+    for aluno, linhas in resolvidos.values():
+        linha = linhas[-1]
+        uuid = str((linha.dados or {}).get("matific_uuid") or "").strip()
+        if not uuid:
+            continue
+        via = getattr(linha, "via", None)
+        if via not in ("uuid", "exato"):
+            continue  # só identidade confiável (UUID vinculado, ou nome exato)
+        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid)
+        if via != "uuid":
+            continue  # 1ª vez: só vincula o UUID; move só quando ele já é a chave
+        turma_nome = str((linha.dados or {}).get("turma_relatorio") or "").strip()
+        if not turma_nome:
+            continue
+        matricula = db.execute(select(Matricula).where(
+            Matricula.aluno_id == aluno.id,
+            Matricula.ano_letivo == ano)).scalars().first()
+        if matricula is None:
+            continue
+        atual = db.get(Turma, matricula.turma_id)
+        # Mesma turma (tokens série+letra) → nada a fazer (evita turma-fantasma).
+        if atual is not None and matriculas.overlap_turma(
+                svc.tokens_turma(atual.nome), svc.tokens_turma(turma_nome)) >= 2:
+            continue
+        nova = _turma_existente_por_tokens(db, escola_id, ano, turma_nome)
+        if nova is None:
+            avisos.append(
+                f"{aluno.nome}: o Matific indica a turma “{turma_nome}”, que não "
+                "casa com nenhuma turma cadastrada — revise manualmente (não movi "
+                "automaticamente).")
+            continue
+        if nova.id == matricula.turma_id:
+            continue
+        antiga = atual.nome if atual is not None else "—"
+        matricula.turma_id = nova.id
+        db.flush()
+        registrar(db, "matricula.turma_sincronizada", escola_id=escola_id,
+                  entidade="aluno", entidade_id=aluno.id,
+                  detalhes={"de": antiga, "para": nova.nome, "origem": "matific"})
+        avisos.append(f"{aluno.nome}: movido de “{antiga}” para “{nova.nome}” "
+                      "(mudança de turma detectada no Matific).")
+        movidos += 1
+    return movidos
 
 
 def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
@@ -894,6 +1006,14 @@ def confirmar(
         if aluno is None:
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)
+
+    # MUDANÇA AUTOMÁTICA DE TURMA (só na sync automática do Matific): vincula o
+    # UUID e move a matrícula de quem trocou de sala. Antes do recálculo para o
+    # ranking já refletir a turma nova.
+    if getattr(dados, "sincronizar_turma", False) and dados.plataforma == "matific" \
+            and resolvidos:
+        _sincronizar_turma_matific(
+            db, escola_id, escola.ano_letivo_ativo, resolvidos, avisos)
 
     # Import por período: as séries de snapshots dos alunos envolvidos vêm
     # numa ÚNICA consulta (212 alunos = 1 ida ao banco, não 212).

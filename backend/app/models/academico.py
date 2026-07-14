@@ -94,3 +94,26 @@ class Matricula(Base):
 
     aluno: Mapped[Aluno] = relationship()
     turma: Mapped[Turma] = relationship()
+
+
+class IdentidadeExterna(Base):
+    """Vínculo estável aluno ↔ id do aluno numa plataforma externa (UUID do
+    Matific, id do Elefante). É a identificação CONFIÁVEL entre sincronizações:
+    permite recasar o aluno mesmo se o nome mudar e, principalmente, detectar
+    MUDANÇA DE TURMA com segurança (o UUID não muda quando o aluno troca de sala).
+    Genérico por ``plataforma`` para o Elefante reusar a mesma arquitetura."""
+
+    __tablename__ = "identidades_externas"
+    __table_args__ = (
+        # Um id externo aponta para UM aluno por escola/plataforma.
+        UniqueConstraint("escola_id", "plataforma", "id_externo",
+                         name="uq_identidade_externa"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
+    aluno_id: Mapped[int] = mapped_column(
+        ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
+    plataforma: Mapped[str] = mapped_column(String(30))      # matific | elefante
+    id_externo: Mapped[str] = mapped_column(String(80))       # UUID/id do aluno lá
+    created_at: Mapped[datetime] = mapped_column(default=agora)

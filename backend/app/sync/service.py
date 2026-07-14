@@ -463,6 +463,43 @@ def enfileirar_agendados(db: Session) -> int:
     return n
 
 
+def garantir_agendas_diarias(db: Session,
+                             plataformas: tuple[str, ...] = ("matific", "elefante")) -> int:
+    """AUTO-CURA da agenda: toda escola com credencial da plataforma mas SEM
+    NENHUMA configuração de agenda ganha uma DIÁRIA (03:00) ativa.
+
+    É o que elimina o "re-salvar credencial": rodando a cada rodada do scheduler,
+    a sync diária passa a funcionar sozinha depois de configurar a credencial UMA
+    vez — e se recria caso a linha suma. Respeita OPT-OUT: quem desliga usa
+    ``ativo=False`` (a linha PERMANECE, então não é recriada); só escolas sem
+    linha alguma recebem a agenda. Idempotente."""
+    from app.models.sincronizacao import PlataformaCredencial
+
+    n = 0
+    for plat in plataformas:
+        sem_config = select(PlataformaCredencial.escola_id).where(
+            PlataformaCredencial.plataforma == plat,
+            PlataformaCredencial.escola_id.notin_(
+                select(SincronizacaoConfig.escola_id).where(
+                    SincronizacaoConfig.plataforma == plat)))
+        for escola_id in db.execute(sem_config).scalars().all():
+            try:
+                with db.begin_nested():   # savepoint: corrida entre réplicas na unique
+                    cfg = SincronizacaoConfig(escola_id=escola_id, plataforma=plat,
+                                              ativo=True, cadencia="diaria",
+                                              hora_local="03:00")
+                    db.add(cfg)
+                    db.flush()
+                cfg.proxima_execucao = calcular_proxima(cfg)
+                n += 1
+            except IntegrityError:
+                # Outra réplica criou a config para esta escola primeiro — ok.
+                pass
+    if n:
+        db.commit()
+    return n
+
+
 def finalizar_orfas_no_boot(db: Session) -> int:
     """No BOOT do processo: toda execução ainda em 'executando' é ÓRFÃ — o worker
     que a rodava morreu no restart/redeploy (instância única: nada está rodando

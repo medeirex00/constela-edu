@@ -37,7 +37,7 @@ from difflib import SequenceMatcher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Matricula, Turma
+from app.models import Aluno, IdentidadeExterna, Matricula, Turma
 
 # --------------------------------------------------------------------------
 # Normalização de texto e números
@@ -710,6 +710,9 @@ def analisar_matific_api(payload) -> Analise:
                 "pontuacao_media": media,
                 # Desambigua homônimos na turma certa (mesmo campo do Excel/PDF).
                 "turma_relatorio": turma,
+                # UUID do aluno no Matific: identidade estável p/ recasar e para
+                # detectar mudança de turma com segurança (não muda de sala p/ sala).
+                "matific_uuid": str(a.get("uuid") or "").strip(),
             }))
     # Período personalizado (start_date/end_date do Placar) → import POR PERÍODO
     # (premiação por semana/mês). Sem período, cai no import cumulativo.
@@ -921,18 +924,36 @@ def _casar_abreviado(alvo: str, indice, turma_relatorio: str | None,
     return {"status": "nao_encontrado", "alternativas": alternativas}
 
 
+def mapa_identidade(db: Session, escola_id: int, plataforma: str) -> dict[str, int]:
+    """{id_externo: aluno_id} dos alunos já VINCULADOS a esta plataforma (UUID do
+    Matific). É a identificação mais confiável — usada antes do nome no casamento."""
+    return {
+        str(ext): int(aid) for ext, aid in db.execute(
+            select(IdentidadeExterna.id_externo, IdentidadeExterna.aluno_id)
+            .where(IdentidadeExterna.escola_id == escola_id,
+                   IdentidadeExterna.plataforma == plataforma)).all()
+    }
+
+
 def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> None:
     """Preenche `correspondencia` de cada linha comparando com os alunos ativos.
 
-    * exato — nomes iguais ignorando acentos/caixa: importa direto.
+    * exato — UUID do Matific já vinculado, OU nomes iguais (acentos/caixa): direto.
     * provavel — parecido o suficiente: exige confirmação do usuário (§52).
     * nao_encontrado — o usuário decide entre criar o aluno ou ignorar a linha.
+
+    ``correspondencia['via']`` diz COMO casou (uuid|exato|provavel) — a
+    sincronização usa isso para só mover de turma quem foi identificado com
+    segurança.
     """
     alunos = db.execute(
         select(Aluno).where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
         .order_by(Aluno.id)  # ordem determinística ao desempatar homônimos
     ).scalars().all()
     indice = [(aluno, normalizar_nome(aluno.nome)) for aluno in alunos]
+    por_id = {aluno.id: aluno for aluno in alunos}
+    # UUID do Matific já vinculado → casamento DEFINITIVO (independe do nome).
+    id_matific = mapa_identidade(db, escola_id, "matific")
 
     # Turma atual de cada aluno (matrícula mais recente) — desempata abreviados
     turma_de: dict[int, str] = {}
@@ -945,6 +966,16 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
         turma_de[aluno_id] = f"{nome_turma} {ano_escolar}"
 
     for linha in linhas:
+        # 1) UUID do Matific já vinculado → casa direto, sem depender do nome.
+        uuid = str(linha.dados.get("matific_uuid") or "").strip()
+        if uuid and uuid in id_matific:
+            aluno = por_id.get(id_matific[uuid])
+            if aluno is not None:  # só alunos ativos entram no índice `por_id`
+                linha.correspondencia = {
+                    "status": "exato", "via": "uuid", "aluno_id": aluno.id,
+                    "aluno_nome": aluno.nome, "similaridade": 100.0,
+                    "alternativas": []}
+                continue
         if not linha.nome:
             linha.correspondencia = {"status": "nao_encontrado", "alternativas": []}
             continue
@@ -973,7 +1004,8 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
         if len(exatos) == 1:
             aluno = exatos[0]
             linha.correspondencia = {
-                "status": "exato", "aluno_id": aluno.id, "aluno_nome": aluno.nome,
+                "status": "exato", "via": "exato", "aluno_id": aluno.id,
+                "aluno_nome": aluno.nome,
                 "similaridade": 100.0, "alternativas": alternativas,
             }
         elif len(exatos) > 1:
