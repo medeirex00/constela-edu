@@ -286,14 +286,21 @@ Chamadas disparadas por worker/lib que não aparecem fácil no Network são capt
 pelo crawler (intercepta `page.on('response')` de TODAS as requisições) e pelo
 interceptador de console (monkey-patch de `fetch`/`XMLHttpRequest`). Ver §10.
 
-## 8. Datas personalizadas (custom range)
+## 8. Datas personalizadas (custom range) — ✅ CONFIRMADO
 
-- Confirmado: `?duration=this-year` (= "Ano acadêmico atual").
-- A tela tem também **"Período Personalizado"** → deve existir uma variante de
-  `duration` ou params de data. ❓ **A capturar:** abra o Placar, troque o filtro
-  para *Personalizado* (ou semana/mês) e veja a nova URL do `school_student` —
-  candidatos: `?duration=this-week|this-month|custom`, ou `?start=YYYY-MM-DD&end=YYYY-MM-DD`
-  / `?from=&to=`. **É o que habilita premiar por período no Constela.**
+Os placares aceitam **período personalizado** trocando `duration` por
+`start_date`/`end_date` (formato `YYYY-MM-DD`):
+
+```
+GET /api/v2/reports/leaderboard/school_student/?start_date=2026-07-07&end_date=2026-07-14&school_id=<SCHOOL_UUID>
+```
+- Os números (`score`/`activities_completed`) passam a ser o que o aluno fez
+  **dentro do intervalo** (não o acumulado) — é a base da **premiação por período**.
+- `duration` e `start_date`/`end_date` são mutuamente exclusivos; `duration` é
+  opcional (sem nenhum, o SPA usa um padrão).
+- **Integrado no Constela:** o bookmarklet pergunta o período; o JSON carrega
+  `periodo_inicio`/`periodo_fim` e o import roteia para o fluxo POR PERÍODO
+  (`_importar_matific_periodo`) — semana/mês sem bagunçar o acumulado.
 
 ## 9. API pública × interna
 

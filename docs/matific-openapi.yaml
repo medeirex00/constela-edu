@@ -20,11 +20,23 @@ components:
     duration:
       name: duration
       in: query
-      required: true
+      required: false
       schema: { type: string, example: this-year }
       description: >
-        Período. Confirmado: this-year (Ano acadêmico atual). A capturar:
-        this-week / this-month / custom (Período Personalizado) — objetivo #8.
+        Período pré-definido (ex.: this-year = Ano acadêmico atual). Opcional e
+        mutuamente exclusivo com start_date/end_date.
+    startDate:
+      name: start_date
+      in: query
+      required: false
+      schema: { type: string, format: date, example: "2026-07-07" }
+      description: Início do período personalizado (com end_date). Objetivo #8 — confirmado.
+    endDate:
+      name: end_date
+      in: query
+      required: false
+      schema: { type: string, format: date, example: "2026-07-14" }
+      description: Fim do período personalizado (com start_date).
     schoolId:
       name: school_id
       in: query
@@ -123,9 +135,12 @@ paths:
   /api/v2/reports/leaderboard/school_student/:
     get:
       summary: "[confirmado] Placar por aluno (estrelas/atividades) da escola"
+      description: "Use duration OU (start_date + end_date) para período personalizado."
       parameters:
-        - $ref: '#/components/parameters/duration'
         - $ref: '#/components/parameters/schoolId'
+        - $ref: '#/components/parameters/duration'
+        - $ref: '#/components/parameters/startDate'
+        - $ref: '#/components/parameters/endDate'
       responses:
         '200':
           description: Lista dos alunos com desempenho no período

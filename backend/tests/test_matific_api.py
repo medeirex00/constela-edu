@@ -89,6 +89,48 @@ def test_analisar_matific_api_upload_multi_turma():
     assert analise.linhas[0].dados["pontuacao_media"] == 2.5   # 100/40
 
 
+def test_analisar_matific_api_com_periodo():
+    """start_date/end_date do Placar → analise.periodo_* preenchidos (import por
+    período: premiação por semana/mês)."""
+    analise = svc.analisar_matific_api({
+        "alunos": [{"nome": "X", "turma": "T", "estrelas": 10, "atividades": 5}],
+        "periodo_inicio": "2026-07-07", "periodo_fim": "2026-07-14"})
+    assert analise.periodo_inicio == "2026-07-07"
+    assert analise.periodo_fim == "2026-07-14"
+    assert "2026-07-07" in analise.mensagem_deteccao
+
+
+def test_orquestrador_matific_api_por_periodo(db, escola_completa, monkeypatch):
+    """ArquivoObtido com período → dispatch para _importar_matific_periodo (o
+    valor do intervalo vira snapshot do período, base do ranking por semana/mês)."""
+    from datetime import datetime
+
+    from app.models.plataformas import SnapshotMatific
+    from app.sync import orchestrator
+
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
+    monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
+
+    payload = {"turma": "3 ANO B (300396804)",
+               "periodo_inicio": "2026-07-07", "periodo_fim": "2026-07-14",
+               "alunos": [{"nome": "Ana Beatriz Souza", "turma": "3 ANO B (300396804)",
+                           "estrelas": 50, "atividades": 20}]}
+    arq = ArquivoObtido(
+        conteudo=json.dumps(payload).encode("utf-8"), nome_arquivo="matific.json",
+        plataforma="matific", content_type=orchestrator.CT_MATIFIC_API,
+        formato_hint="resumo",
+        periodo_inicio=datetime(2026, 7, 7), periodo_fim=datetime(2026, 7, 14))
+    res = orchestrator.aplicar_arquivo(
+        db, escola, arq, usuario_id=None, recalcular=True, contexto=_contexto(escola.id))
+
+    assert res["qtd_alunos"] == 1
+    snaps = db.execute(select(SnapshotMatific).where(
+        SnapshotMatific.aluno_id == ana.id)).scalars().all()
+    # o ganho do período (50 estrelas sobre base zero) virou snapshot.
+    assert any(s.estrelas == 50 for s in snaps)
+
+
 def test_payload_matific_placar_detecta():
     from app.routers.importacoes import _payload_matific_placar
     bom = '{"fonte":"matific-placar","alunos":[{"nome":"X","turma":"T"}]}'
@@ -230,5 +272,7 @@ def test_sincronizar_agrupa_por_turma_com_api_interna(monkeypatch):
     for arq in arquivos:
         payload = json.loads(arq.conteudo.decode("utf-8"))
         turmas.add(payload["turma"])
-        assert payload["duration"] == "this-year"
+        # sem datas configuradas → modo "ano todo" (sem período → import cumulativo).
+        assert payload["periodo_inicio"] == "" and payload["periodo_fim"] == ""
+        assert arq.periodo_inicio is None
     assert turmas == {"3 ANO B (300396804)", "4 ANO A (300397061)"}

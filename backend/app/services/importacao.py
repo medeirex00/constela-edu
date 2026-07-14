@@ -711,11 +711,18 @@ def analisar_matific_api(payload) -> Analise:
                 # Desambigua homônimos na turma certa (mesmo campo do Excel/PDF).
                 "turma_relatorio": turma,
             }))
+    # Período personalizado (start_date/end_date do Placar) → import POR PERÍODO
+    # (premiação por semana/mês). Sem período, cai no import cumulativo.
+    pi = str(payload.get("periodo_inicio") or "").strip()
+    pf = str(payload.get("periodo_fim") or "").strip()
+    msg = "Placar da Escola (API interna do Matific)."
+    if pi and pf:
+        msg = f"Placar do Matific no período {pi} a {pf} (API interna)."
     return Analise(
         plataforma="matific", formato="resumo", estrategia="api-matific",
-        mensagem_deteccao="Placar da Escola (API interna do Matific).",
-        linhas=linhas, turma_detectada=turma_topo, escola_detectada="",
-        professor_detectado="")
+        mensagem_deteccao=msg, linhas=linhas, turma_detectada=turma_topo,
+        escola_detectada="", professor_detectado="",
+        periodo_inicio=pi, periodo_fim=pf)
 
 
 def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:

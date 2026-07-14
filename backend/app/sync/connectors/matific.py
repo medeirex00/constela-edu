@@ -79,6 +79,14 @@ def _para_int(valor) -> int:
     except (TypeError, ValueError):
         return 0
 
+
+def _parse_data(s: str):
+    """'2026-07-14' → datetime (p/ periodo_inicio/fim); '' → None."""
+    try:
+        return datetime.strptime(s, "%Y-%m-%d") if s else None
+    except (TypeError, ValueError):
+        return None
+
 # --- Contrato de UI com o Matific (verificado em jul/2026) -------------------
 # A página de login mudou de "/account/login/" (que hoje redireciona p/ a home
 # de marketing) para "/login-page/". Campos: #username-input / #password-input;
@@ -238,7 +246,18 @@ class ConectorMatific(ConectorNavegador):
         """
         log = contexto.log
         arquivos: list[ArquivoObtido] = []
-        duration = (getattr(cred, "extra", None) or {}).get("matific_duration") or _DURATION_PADRAO
+        extra = getattr(cred, "extra", None) or {}
+        # Período personalizado (premiação por semana/mês): se vierem as datas,
+        # usa ?start_date=&end_date= (import POR PERÍODO); senão, ?duration=.
+        pi = str(extra.get("matific_start_date") or "").strip()
+        pf = str(extra.get("matific_end_date") or "").strip()
+        duration = str(extra.get("matific_duration") or "").strip() or _DURATION_PADRAO
+        if pi and pf:
+            filtro = f"start_date={pi}&end_date={pf}"
+            rotulo_periodo = f"{pi} a {pf}"
+        else:
+            filtro = f"duration={duration}"
+            rotulo_periodo = duration
         async with self._sessao(contexto) as nav:
             await self._login(nav, cred, contexto)
             # A página do Placar dispara as chamadas internas ao carregar; captura-
@@ -266,7 +285,7 @@ class ConectorMatific(ConectorNavegador):
 
             # Dados por aluno (estrelas/atividades) no período pedido.
             url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
-                      f"?duration={duration}&school_id={school_id}")
+                      f"?{filtro}&school_id={school_id}")
             try:
                 res = await nav.avaliar(_js_get(url_ss))
             except Exception as exc:  # noqa: BLE001
@@ -284,17 +303,21 @@ class ConectorMatific(ConectorNavegador):
             por_turma: dict[str, list] = {}
             for a in alunos:
                 por_turma.setdefault(a["turma"], []).append(a)
+            dt_i, dt_f = _parse_data(pi), _parse_data(pf)
             for turma, lista in por_turma.items():
-                payload = {"turma": turma, "duration": duration, "alunos": lista}
+                payload = {"turma": turma, "alunos": lista,
+                           "periodo_inicio": pi, "periodo_fim": pf}
                 arquivos.append(ArquivoObtido(
                     conteudo=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                     nome_arquivo=f"matific_{_slug(turma)}.json",
                     plataforma="matific", content_type=_CT_API,
                     formato_hint="resumo",
-                    metadados={"origem": "api", "duration": duration}))
+                    # Com datas → import POR PERÍODO (o orquestrador lê daqui).
+                    periodo_inicio=dt_i, periodo_fim=dt_f,
+                    metadados={"origem": "api", "periodo": rotulo_periodo}))
             # Sem PII: só contagens (nome completo casado / abreviado).
             com_nome = sum(1 for a in alunos if a["nome"] != a["nome_abrev"])
             log("download", "info",
                 f"[Matific] {len(alunos)} aluno(s) em {len(por_turma)} turma(s) "
-                f"(período {duration}; {com_nome} com nome completo).")
+                f"(período {rotulo_periodo}; {com_nome} com nome completo).")
         return arquivos
