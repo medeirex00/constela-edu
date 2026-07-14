@@ -72,7 +72,7 @@ class ConectorNavegador(Conector):
         self, nav: Navegador, cred: Credenciais, contexto: Contexto, *,
         url: str, sel_usuario: str, sel_senha: str, sel_entrar: str,
         sel_logado: str, sel_erro: str, pre_passos: tuple[str, ...] = (),
-        nome: str = "a plataforma",
+        url_logado: tuple[str, ...] = (), nome: str = "a plataforma",
     ) -> None:
         """Fluxo de login GENÉRICO, instrumentado e com detecção de bloqueio.
 
@@ -153,6 +153,15 @@ class ConectorNavegador(Conector):
 
         if await nav.esperar(sel_logado, timeout_s=min(contexto.timeout_s, 25)):
             log("login", "info", f"[{nome}] Login confirmado (área logada detectada).")
+            return
+        # A URL saiu da tela de login e caiu numa área logada conhecida (ex.: o
+        # Matific redireciona p/ /teachers). É um sinal tão forte quanto o
+        # seletor — alguns painéis não expõem link de logout no HTML inicial.
+        atual = await nav.url_atual()
+        rota = (atual or "").split("?")[0].rstrip("/")
+        if (url_logado and any(marca in rota for marca in url_logado)
+                and "login" not in rota.rsplit("/", 1)[-1].lower()):
+            log("login", "info", f"[{nome}] Login confirmado (área logada pela URL: {atual}).")
             return
         if await nav.visivel(sel_erro):
             log("login", "warn", f"[{nome}] Mensagem de erro de login detectada.")

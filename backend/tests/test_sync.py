@@ -575,6 +575,31 @@ def test_conector_nao_vaza_senha_no_log():
     assert all("TOPSECRET" not in r for r in registros)
 
 
+def test_login_confirmado_pela_url_sem_seletor():
+    """Matific: pós-login cai em /teachers, que não tem link de logout no HTML
+    inicial. A URL confirma o login — senão o robô dava 'não confirmei a área
+    logada' mesmo com o login OK (bug reportado pelo gestor)."""
+    class NavTeachers(NavegadorFake):
+        async def url_atual(self):
+            return "https://www.matific.com/bra/pt-br/teachers"
+    nav = NavTeachers(logado=False)   # o seletor de área logada NÃO casa
+    con = type(connectors.obter("matific"))(_fabrica(nav))
+    # Não deve levantar: o login é confirmado pela URL /teachers.
+    asyncio.run(con._login(nav, Credenciais(usuario="a", senha="b"), _contexto()))
+
+
+def test_login_url_de_login_nao_conta_como_logado():
+    """Guarda: se a URL final AINDA é a de login, não confirma (evita falso OK)."""
+    from app.sync.interfaces import ErroConector
+    class NavPreso(NavegadorFake):
+        async def url_atual(self):
+            return "https://www.matific.com/bra/pt-br/login-page/"
+    nav = NavPreso(logado=False)
+    con = type(connectors.obter("matific"))(_fabrica(nav))
+    with pytest.raises(ErroConector):
+        asyncio.run(con._login(nav, Credenciais(usuario="a", senha="b"), _contexto()))
+
+
 def test_obter_devolve_arquivo_para_pipeline():
     """O download direto (obter) do Matific ainda alimenta o pipeline como
     fallback. A coleta PRINCIPAL agora é pela API interna do Placar da Escola —

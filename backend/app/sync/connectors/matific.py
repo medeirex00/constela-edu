@@ -120,6 +120,9 @@ class ConectorMatific(ConectorNavegador):
         return dict(url=_URL_LOGIN, sel_usuario=_SEL_USUARIO, sel_senha=_SEL_SENHA,
                     sel_entrar=_SEL_ENTRAR, sel_logado=_SEL_LOGADO,
                     sel_erro=_SEL_ERRO_LOGIN, pre_passos=(_SEL_COOKIE,),
+                    # Pós-login o Matific redireciona p/ a área do professor; a
+                    # URL confirma o login mesmo sem link de logout no HTML.
+                    url_logado=("/teachers", "/dashboard"),
                     nome="Matific")
 
     async def _login(self, nav: Navegador, cred: Credenciais,
