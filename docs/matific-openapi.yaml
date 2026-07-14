@@ -78,6 +78,45 @@ components:
         rank: { type: integer, nullable: true }
         school_id: { type: string, format: uuid }
         school_name: { type: string }
+    Turma:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, example: "1 ANO A TARDE ANUAL (300396614)" }
+        grade_code: { type: integer, example: 1 }
+        class_code: { type: string, example: "W6MJ8D" }
+        teacher: { type: string, format: uuid, description: professor titular }
+        teacher_name: { type: string }
+        teacher_email: { type: string }
+        number_of_students: { type: integer, example: 23 }
+        status: { type: string, example: active }
+    Aluno:
+      type: object
+      description: Roster real da turma (nome completo + credenciais — sensível).
+      properties:
+        id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        username: { type: string }
+        temp_password: { type: string, description: "SENSÍVEL — credencial do aluno" }
+        klass_id: { type: string, format: uuid }
+        primary_class_name: { type: string, example: "1 ANO A TARDE ANUAL (300396614)" }
+        learning_level: { type: integer }
+        activated: { type: boolean }
+        last_login: { type: string, format: date-time, nullable: true }
+        days_since_last_login: { type: integer, nullable: true }
+    Professor:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        username: { type: string }
+        is_school_admin: { type: boolean }
+        current_access_level: { type: integer }
+        classes: { type: array, items: { type: string, format: uuid } }
 security:
   - sessaoCookie: []
 paths:
@@ -123,8 +162,37 @@ paths:
         '200': { description: "corpo a capturar (crawler)" }
   /api/v2/competition-v2/:
     get:
-      summary: "[observado] Lista de competições (provável fonte de competition_id + school_id)"
+      summary: "[confirmado] Lista de competições (fonte do competition_id)"
       parameters:
         - { name: require_participation, in: query, schema: { type: boolean, example: false } }
       responses:
-        '200': { description: "corpo a capturar (crawler)" }
+        '200': { description: Competições (id, datas, goal, school_leaderboard_url estático) }
+  /api/v2/class-management/classes/:
+    get:
+      summary: "[confirmado] Turmas da escola"
+      responses:
+        '200':
+          description: Lista de turmas
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Turma' } }
+  /api/v2/class-management/classes/{classId}/students/:
+    get:
+      summary: "[confirmado] Alunos da turma (roster com nome completo)"
+      parameters:
+        - { name: classId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Roster da turma
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Aluno' } }
+  /api/v2/accounts/teachers/:
+    get:
+      summary: "[confirmado] Professores da escola"
+      responses:
+        '200':
+          description: Lista de professores
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Professor' } }

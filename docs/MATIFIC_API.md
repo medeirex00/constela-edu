@@ -124,6 +124,93 @@ GET /api/v2/competition-v2/<COMPETITION_UUID>/school/<SCHOOL_UUID>/student-leade
 }]}
 ```
 
+### 4.3 ✅ Turmas da escola
+
+```
+GET /api/v2/class-management/classes/
+```
+```jsonc
+[{
+  "id": "<CLASS_UUID>",
+  "name": "1 ANO A TARDE ANUAL (300396614)",  // nome da turma (o (nº)=código SED)
+  "grade_code": 1,                             // série
+  "class_code": "W6MJ8D",                      // código de acesso da turma
+  "teacher": "<TEACHER_UUID>",                 // professor titular (uuid)
+  "teacher_name": "…", "teacher_email": "…",   // professor titular
+  "teachers": [], "number_of_students": 23,
+  "status": "active",
+  "calendar": { "beginning_of_the_year": "2025-12-29T00:00:00Z",
+                "ending_of_the_year": "2027-01-31T00:00:00Z" }
+}]
+```
+
+### 4.4 ✅ Alunos da turma (ROSTER completo) ⭐
+
+```
+GET /api/v2/class-management/classes/<CLASS_UUID>/students/
+```
+```jsonc
+[{
+  "id": "<STUDENT_UUID>",
+  "first_name": "…", "last_name": "…",     // NOME COMPLETO (separado)
+  "username": "…", "temp_password": "1234", // credenciais de acesso do aluno (SENSÍVEL)
+  "klass_id": "<CLASS_UUID>",
+  "primary_class_name": "1 ANO A TARDE ANUAL (300396614)",
+  "learning_level": 1, "activated": true,
+  "last_login": "2026-05-20T02:07:07Z", "days_since_last_login": 55,
+  "added_to_class_on": "…", "created_on": "…"
+}]
+```
+> **Cadastro direto do Matific:** dá para criar turmas + alunos (com nome completo)
+> sem planilha nem PDF. `temp_password`/`username` são credenciais — tratar como
+> sensível (não exibir/logar).
+
+### 4.5 ✅ Professores da escola ⭐
+
+```
+GET /api/v2/accounts/teachers/
+```
+```jsonc
+[{
+  "id": "<TEACHER_UUID>",
+  "first_name": "…", "last_name": "…", "full_name": "…",
+  "email": "…", "username": "…",
+  "is_school_admin": true, "current_access_level": 1,
+  "classes": [], "number_of_classes": 0, "number_of_students": 0
+}]
+```
+> Fonte **confiável** de professor (nome real + quais turmas) — para a criação
+> automática de contas de professor no Constela.
+
+### 4.6 ✅ Placar por TURMA
+
+```
+GET /api/v2/reports/leaderboard/school_klass/?school_id=<SCHOOL_UUID>[&duration=]
+```
+```jsonc
+[{ "id": "<CLASS_UUID>", "klassName": "1 ANO A TARDE ANUAL (300396614)",
+   "grade_code": "1", "class_score": "50.96", "activities_completed": "300",
+   "rank_score": "1", "bonus_score": null, "region": 4,
+   "klass_id": "A Evangelista" }]   // atenção: "klass_id" aqui traz o PROFESSOR (nome mal rotulado)
+```
+
+### 4.7 ✅ Lista de competições (descoberta do competition_id)
+
+```
+GET /api/v2/competition-v2/
+```
+```jsonc
+[{ "id": "<COMPETITION_UUID>", "name": "…",
+   "start_date": "2026-05-18T09:00:00Z", "end_date": "2026-05-23T02:59:00Z",
+   "competition_goal": 250, "is_live": false,
+   // JSON ESTÁTICO do placar da competição (host separado):
+   "school_leaderboard_url": "https://competition-prod.matific.com/prod/<COMPETITION_UUID>/school-leaderboard.json",
+   "server_time": "…" }]
+```
+> `duration` é OPCIONAL nos placares (o SPA às vezes chama sem ele). Confirmado
+> `this-year`; **datas personalizadas (§8) ainda a capturar** (trocar o filtro p/
+> "Período Personalizado" e ver a URL).
+
 ---
 
 ## 5. Catálogo de endpoints DESCOBERTOS (crawler, jul/2026)
