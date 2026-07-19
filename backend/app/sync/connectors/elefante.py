@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 
 from app.sync.connectors.base import ConectorNavegador
@@ -541,6 +542,112 @@ class ConectorElefante(ConectorNavegador):
                 det += " estrutura=" + self._estrutura(res.get("body"))
             log("navegacao", "info",
                 f"[Elefante] aluno {sid} /report/{nome} → " + det[:1600])
+
+    # ---- AUTO-INVENTÁRIO (tela de Diagnóstico da Integração) -----------------
+
+    _CHAVES_PAGINACAO = (
+        "page", "pageNumber", "currentPage", "total", "totalCount", "totalPages",
+        "totalItems", "totalElements", "hasMore", "hasNext", "next", "offset",
+        "limit", "pageSize", "count", "perPage", "per_page", "size", "content")
+
+    @classmethod
+    def _sinais_paginacao(cls, body) -> dict:
+        """Detecta sinais de paginação na resposta (sem tocar em valores/PII)."""
+        if isinstance(body, list):
+            return {"formato": "lista_simples", "itens": len(body),
+                    "chaves_paginacao": []}
+        if isinstance(body, dict):
+            achadas = [k for k in body if k in cls._CHAVES_PAGINACAO]
+            lista_em = next((k for k, v in body.items() if isinstance(v, list)), None)
+            return {"formato": "objeto", "chaves_paginacao": achadas,
+                    "lista_em": lista_em,
+                    "itens": len(body[lista_em]) if lista_em else None}
+        return {"formato": type(body).__name__, "chaves_paginacao": []}
+
+    async def _sondar_endpoint(self, nav, nome: str, metodo: str, url: str,
+                               headers: dict, creds: str, corpo) -> dict:
+        """Sonda UM endpoint e devolve o registro do inventário (estrutura só com
+        tipos/chaves, SEM PII; status; parâmetros; contagem; paginação)."""
+        reg = {"nome": nome, "metodo": metodo,
+               "rota": "/" + url.split("elefanteletrado.com.br/")[-1].split("?")[0].lstrip("/"),
+               "parametros": sorted((corpo or {}).keys()) if isinstance(corpo, dict) else []}
+        try:
+            res = await nav.avaliar(self._js_fetch(url, metodo, headers, creds, corpo))
+        except Exception as exc:  # noqa: BLE001
+            reg.update(status=0, erro=str(exc)[:120])
+            return reg
+        res = res if isinstance(res, dict) else {}
+        body = res.get("body")
+        reg["status"] = res.get("status")
+        if res.get("erro"):
+            reg["erro"] = str(res["erro"])[:120]
+        if res.get("status") == 200:
+            reg["paginacao"] = self._sinais_paginacao(body)
+            reg["estrutura"] = self._estrutura(body, max_prof=6)
+        return reg
+
+    async def diagnosticar_endpoints(self, cred: Credenciais,
+                                     contexto: Contexto) -> dict:
+        """AUTO-INVENTÁRIO para a tela de Diagnóstico da Integração Elefante.
+
+        Usa a SESSÃO AUTENTICADA do robô (login + JWT descobertos do próprio
+        tráfego) para sondar os endpoints internos e devolver a ESTRUTURA (tipos e
+        chaves, SEM nome de criança), os parâmetros aceitos, os períodos vistos no
+        tráfego, os sinais de paginação e a contagem por endpoint. É o que
+        substitui crawler/F12 — nada fica público; o serviço persiste e compara."""
+        log = contexto.log
+        async with self._sessao(contexto) as nav:
+            await self._login(nav, cred, contexto)
+            await nav.ir_para(_URL_REPORTS_MENU)
+            caps = await nav.coletar_respostas(f"{_URL_APP}/reports/course", timeout_s=25)
+            await self._assentar(nav)
+            mapa = self._parse_courses_students(caps) or \
+                await self._cursos_alunos_via_api(nav, log, caps)
+            base, headers, creds, auth = self._base_e_auth(caps)
+            escola = self._school_id(caps)
+            if not base:
+                return {"ok": False, "turmas": len(mapa or {}), "endpoints": [],
+                        "periodos": [],
+                        "erro": "Não descobri a base da API interna do Elefante "
+                                "(a sessão do robô logou, mas o tráfego não revelou "
+                                "o host/token). Tente novamente."}
+
+            cid = next(iter(mapa), "") if mapa else ""
+            sid = next((s for v in (mapa or {}).values() for s in v), "")
+            # Períodos REAIS vistos no tráfego do SPA (sem chutar nomes de enum).
+            periodos = sorted({
+                m.group(1) for c in caps
+                for m in [re.search(r"[?&]period=([^&\"']+)", str(c.get("url", "")))] if m})
+
+            corpo_c = self._corpo_relatorio(courseId=int(cid)) if str(cid).isdigit() else None
+            if corpo_c is not None and escola.isdigit():
+                corpo_c["schoolId"] = int(escola)
+            corpo_s = self._corpo_relatorio(studentId=int(sid)) if str(sid).isdigit() else None
+
+            alvos = [
+                ("get-courses-students", "GET",
+                 f"{base}{_EP_CURSOS}?schoolId={escola}&period={_PERIODO_TUDO}&products=1", None),
+                ("overall-course-report", "POST", f"{base}/report/{_EP_COURSE_REPORT}", corpo_c),
+                ("overall-student-books-read", "POST", f"{base}/report/{_EP_BOOKS_READ}", corpo_s),
+                ("overall-answered-questions", "POST", f"{base}/report/{_EP_ANSWERED_Q}", corpo_s),
+                ("overall-student-report", "POST",
+                 f"{base}/report/overall-student-report", corpo_s),
+            ]
+            endpoints = []
+            for nome, metodo, url, corpo in alvos:
+                if metodo == "POST" and corpo is None:
+                    endpoints.append({"nome": nome, "metodo": metodo, "status": None,
+                                      "erro": "sem id de turma/aluno para sondar "
+                                              "(nenhuma turma/aluno encontrado)"})
+                    continue
+                endpoints.append(await self._sondar_endpoint(
+                    nav, nome, metodo, url, headers, creds, corpo))
+
+        return {"ok": True, "turmas": len(mapa or {}),
+                "auth": "jwt" if auth else "cookie",
+                # _corpo_relatorio já envia startPeriodCustom/endPeriodCustom:
+                "aceita_datas_personalizadas": True,
+                "periodos_no_trafego": periodos, "endpoints": endpoints}
 
     async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
         """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students

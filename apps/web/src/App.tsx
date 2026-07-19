@@ -38,6 +38,7 @@ const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
 const Sincronizacao = lazy(() => import("./pages/Sincronizacao"));
+const DiagnosticoElefante = lazy(() => import("./pages/DiagnosticoElefante"));
 const TurmaDetalhe = lazy(() => import("./pages/TurmaDetalhe"));
 const Turmas = lazy(() => import("./pages/Turmas"));
 const Usuarios = lazy(() => import("./pages/Usuarios"));
@@ -114,6 +115,7 @@ export default function App() {
           <Route path="/comecar" element={<Comecar />} />
           <Route path="/importacoes" element={<Importacoes />} />
           <Route path="/sincronizacao" element={<Sincronizacao />} />
+          <Route path="/diagnostico-elefante" element={<DiagnosticoElefante />} />
           <Route path="/conquistas" element={<Conquistas />} />
           <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
           <Route path="/insights" element={<Insights />} />

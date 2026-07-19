@@ -28,7 +28,7 @@ from app.models.sincronizacao import (
     SincronizacaoLog,
 )
 from app.services.audit import registrar
-from app.sync import aovivo, connectors, scheduler, service, vault
+from app.sync import aovivo, connectors, diagnostico_elefante, scheduler, service, vault
 from app.sync.interfaces import Contexto, Credenciais, ErroConector, ResultadoValidacao
 from app.sync.schemas import (
     AlertaOut,
@@ -340,6 +340,24 @@ def matific_placar_ao_vivo(
     try:
         return aovivo.placar_matific(db, escola_id, periodo=periodo,
                                      inicio=inicio, fim=fim, forcar=forcar)
+    except ErroConector as exc:
+        raise HTTPException(
+            _STATUS_ERRO.get(exc.codigo, status.HTTP_502_BAD_GATEWAY),
+            str(exc)) from exc
+
+
+@router.post("/elefante/diagnostico")
+def elefante_diagnostico(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """DIAGNÓSTICO DA INTEGRAÇÃO ELEFANTE (auto-inventário) — roda a investigação
+    com a SESSÃO AUTENTICADA do robô e devolve os endpoints, a estrutura (tipos e
+    chaves, SEM dado de criança), os períodos, a paginação e o DIFF vs o último
+    inventário (com avisos se a API mudou). Substitui crawler/F12; nada é público."""
+    try:
+        return diagnostico_elefante.executar(db, escola_id)
     except ErroConector as exc:
         raise HTTPException(
             _STATUS_ERRO.get(exc.codigo, status.HTTP_502_BAD_GATEWAY),

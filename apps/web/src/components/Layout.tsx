@@ -22,6 +22,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Radar,
   Rocket,
   School,
   Search,
@@ -103,6 +104,7 @@ const GRUPOS: GrupoNav[] = [
       { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen, gestao: true },
       { rotulo: "Importações", caminho: "/importacoes", icone: Upload, gestao: true },
       { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw, gestao: true },
+      { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar, gestao: true },
     ],
   },
   {
