@@ -45,6 +45,9 @@ class EscolaOut(ORMModel):
     logotipo_url: str | None
     ano_letivo_ativo: int
     status: str
+    rede_id: int | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class EscolaCreate(BaseModel):
@@ -63,6 +66,14 @@ class EscolaUpdate(BaseModel):
     # Um status fora do vocabulário faria a escola sumir de TODAS as listas
     # (o GET filtra por igualdade exata) sem caminho de volta pela interface.
     status: str | None = Field(default=None, pattern="^(ativa|inativa)$")
+    # Geolocalização/endereço — permite CORRIGIR À MÃO o pino no mapa quando a
+    # geocodificação automática erra ou não encontra a escola.
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    endereco: str | None = Field(default=None, max_length=300)
+    bairro: str | None = Field(default=None, max_length=120)
+    cep: str | None = Field(default=None, max_length=9)
+    codigo_ibge: str | None = Field(default=None, max_length=7)
 
 
 # --- Acadêmico --------------------------------------------------------------
