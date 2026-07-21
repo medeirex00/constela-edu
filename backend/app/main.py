@@ -34,6 +34,7 @@ from app.routers import (
     plataformas,
     publico,
     rankings,
+    rede,
     relatorios,
     sistema,
 )
@@ -122,6 +123,7 @@ for router in (
     admin.router,
     sistema.router,
     publico.router,
+    rede.router,
     ia.router,
     mobile.router,
     quest_auth.router,
