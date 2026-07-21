@@ -207,3 +207,60 @@ def test_recalculo_gera_ranking_completo_e_auditavel(db):
     assert melhor.nota_matific == pytest.approx(100.0)
     assert melhor.detalhes["modo_normalizacao"] == "auto"
     assert "referencias" in melhor.detalhes
+    # Escola pequena (< MIN_ALUNOS_ROBUSTO) recai na escala simples por máximo,
+    # sem saturação — comportamento estável para turmas minúsculas.
+    assert melhor.detalhes["referencia_tipo"] == "maximo"
+    assert melhor.detalhes["saturacao"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Correção do Ranking Geral: saturação de volume + referência robusta (auto)
+# ---------------------------------------------------------------------------
+
+def test_normalizar_saturado_retornos_decrescentes():
+    """A curva de volume é côncava: dobrar a quantidade não dobra a nota,
+    a referência ainda mapeia para 100, e valores abaixo dela são ELEVADOS
+    (compressão em direção ao topo). k<=0 recai no linear."""
+    assert scoring.normalizar_saturado(100, 100, 50) == pytest.approx(100.0)  # ref → 100
+    assert scoring.normalizar_saturado(0, 100, 50) == 0.0
+    n50 = scoring.normalizar_saturado(50, 100, 50)
+    n100 = scoring.normalizar_saturado(100, 100, 50)
+    assert 0 < n50 < n100                    # monótona crescente
+    assert n100 < 2 * n50                    # RETORNOS DECRESCENTES
+    assert n50 > scoring.normalizar(50, 100)  # eleva o sub-referência (menos esmagamento)
+    # sem k → idêntico ao linear (evolução/manual não são afetados)
+    assert scoring.normalizar_saturado(50, 100, 0) == scoring.normalizar(50, 100)
+
+
+def test_ranking_auto_robusto_nao_esmaga_por_volume(db):
+    """Com dados suficientes, o modo auto usa P90 + saturação de volume: um
+    aluno com volume MUITO maior (mesma qualidade) continua em 1º, mas não
+    'esmaga' os demais — e o mérito (ordem) é preservado. Regra geral, sem
+    ajuste para nenhum aluno específico."""
+    escola, turma, importacao, _ = montar_escola(db, modo_referencia="auto")
+    # 1 outlier de VOLUME + 9 típicos; TODOS com a mesma qualidade (média 5,0).
+    linhas = [(4000, 5.0, 6000)] + [(100 + i * 10, 5.0, 200 + i * 10) for i in range(9)]
+    alunos = []
+    for i, (ativ, media, estrelas) in enumerate(linhas):
+        aluno = novo_aluno(db, escola, turma, f"Aluno {i:02d}")
+        alunos.append(aluno)
+        db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id,
+                               importacao_id=importacao.id, atividades=ativ,
+                               pontuacao_media=media, estrelas=estrelas))
+    db.commit()
+
+    scoring.recalcular_escola(db, escola.id)
+    por_pos = {n.posicao: n for n in db.query(scoring.Nota).all()}
+    top, segundo = por_pos[1], por_pos[2]
+
+    # mérito preservado: o líder de volume continua em 1º
+    assert top.aluno_id == alunos[0].id
+    # a correção está registrada e auditável
+    assert top.detalhes["referencia_tipo"] == "p90_robusto"
+    assert top.detalhes["saturacao"]  # k por indicador de volume
+    # NÃO esmaga: no linear o 2º cairia para ~uma fração ínfima do 1º; agora
+    # fica próximo (o volume exagerado do 1º satura).
+    assert segundo.nota_geral > top.nota_geral * 0.6
+    # mas ainda DISCRIMINA (não deu "pontos grátis" iguais a todos):
+    ultimo = por_pos[10]
+    assert top.nota_geral - ultimo.nota_geral > 5

@@ -60,6 +60,54 @@ def normalizar(valor: float, referencia: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Normalização robusta (auto): saturação de VOLUME + referência por percentil
+# ---------------------------------------------------------------------------
+# Indicadores de VOLUME (contagens acumuladas) recebem RETORNOS DECRESCENTES:
+# dobrar a quantidade não dobra a nota. Indicadores de QUALIDADE (média de
+# desempenho, dificuldade, acertos) permanecem LINEARES. A referência do modo
+# auto passa a ser o P90 (robusto) em vez do MÁXIMO, para que um único outlier
+# não defina a régua e "esmague" os demais. Corrige a distorção de o ranking
+# medir volume acumulado sem punir excesso — sem regra específica por aluno.
+INDICADORES_VOLUME = {"atividades", "estrelas", "livros", "tempo", "tentativas"}
+# Estatística robusta (P90/mediana) só é confiável com amostra suficiente;
+# abaixo disso a escola cai na escala simples por máximo (comportamento antigo).
+MIN_ALUNOS_ROBUSTO = 8
+
+
+def normalizar_saturado(valor: float, referencia: float, k: float) -> float:
+    """Normalização CÔNCAVA (retornos decrescentes) reescalada p/ referência→100.
+
+    Curva de saturação hiperbólica ``x/(x+k)``: cresce rápido no começo e satura
+    depois. ``k`` é a meia-saturação (mediana da escola) — no valor ``k`` a curva
+    entrega metade do teto. ``k<=0`` ou referência inválida recai no linear.
+    Preserva ordem (monótona) e teto 100; comprime distâncias entre volumes altos.
+    """
+    if not referencia or referencia <= 0:
+        return 0.0
+    if not k or k <= 0:
+        return normalizar(valor, referencia)
+    f_ref = referencia / (referencia + k)
+    if f_ref <= 0:
+        return 0.0
+    return round(min(100.0, (float(valor) / (float(valor) + k)) / f_ref * 100.0), 2)
+
+
+def _percentil(valores: list[float], p: float) -> float:
+    """Percentil ``p`` (0–1) por interpolação linear. Lista vazia → 0."""
+    v = sorted(float(x) for x in valores)
+    if not v:
+        return 0.0
+    if len(v) == 1:
+        return v[0]
+    pos = (len(v) - 1) * p
+    baixo = int(pos)
+    frac = pos - baixo
+    if baixo + 1 < len(v):
+        return v[baixo] + (v[baixo + 1] - v[baixo]) * frac
+    return v[-1]
+
+
+# ---------------------------------------------------------------------------
 # Leitura de configurações
 # ---------------------------------------------------------------------------
 
@@ -326,22 +374,41 @@ def _referencias(
     matific: dict[int, SnapshotMatific],
     elefante: dict[int, SnapshotElefante],
     pontos_dificuldade: dict[int, float],
-) -> tuple[dict[str, float], str]:
-    """Resolve as referências no modo auto (máximos da base) ou manual.
+) -> tuple[dict[str, float], str, dict[str, float]]:
+    """Resolve as referências e o k de saturação de cada indicador.
 
-    No modo manual, chaves não preenchidas caem no valor automático,
-    para que uma configuração parcial nunca zere as notas.
+    Modo AUTO (robusto): referência = **P90** dos alunos ATIVOS (>0) — não o
+    máximo — para um único outlier não definir a régua; e ``k`` (meia-saturação)
+    = mediana dos ativos, só para os indicadores de VOLUME. Escola pequena
+    (< ``MIN_ALUNOS_ROBUSTO``) ou indicador com poucos ativos recai no máximo
+    (escala simples, sem saturação). Modo MANUAL: valores do admin, LINEARES
+    (sem saturação — previsível), com chaves ausentes caindo no auto.
+    Retorna ``(referencias, modo, k_por_indicador)``; ``k`` vazio = sem saturação.
     """
-    auto = {
-        "max_atividades": max((s.atividades for s in matific.values()), default=0),
-        "max_media": max((s.pontuacao_media for s in matific.values()), default=0),
-        "max_estrelas": max((s.estrelas for s in matific.values()), default=0),
-        "max_livros": max((s.livros_unicos for s in elefante.values()), default=0),
-        "max_pontos_dificuldade": max(pontos_dificuldade.values(), default=0),
-        "max_tentativas": max((s.questoes_tentativas for s in elefante.values()), default=0),
-        "max_acertos": max((s.questoes_acertos for s in elefante.values()), default=0),
-        "max_tempo": max((s.tempo_leitura_min for s in elefante.values()), default=0),
+    listas = {
+        "atividades": [s.atividades for s in matific.values()],
+        "media": [s.pontuacao_media for s in matific.values()],
+        "estrelas": [s.estrelas for s in matific.values()],
+        "livros": [s.livros_unicos for s in elefante.values()],
+        "pontos_dificuldade": list(pontos_dificuldade.values()),
+        "tentativas": [s.questoes_tentativas for s in elefante.values()],
+        "acertos": [s.questoes_acertos for s in elefante.values()],
+        "tempo": [s.tempo_leitura_min for s in elefante.values()],
     }
+    n_alunos = max(len(matific), len(elefante))
+    usar_robusto = n_alunos >= MIN_ALUNOS_ROBUSTO
+
+    auto: dict[str, float] = {}
+    k_vol: dict[str, float] = {}
+    for indicador, valores in listas.items():
+        chave = "max_" + indicador
+        ativos = [x for x in valores if x and x > 0]
+        if usar_robusto and len(ativos) >= 2:
+            auto[chave] = _percentil(ativos, 0.90)        # régua robusta (top 10%)
+            if indicador in INDICADORES_VOLUME:
+                k_vol[indicador] = _percentil(ativos, 0.50)  # meia-saturação = mediana
+        else:
+            auto[chave] = max(valores, default=0)          # poucos dados → escala simples
 
     ref_row = db.execute(
         select(ReferenciaNormalizacao).where(
@@ -350,21 +417,31 @@ def _referencias(
     ).scalar_one_or_none()
 
     if ref_row is None or ref_row.modo == "auto":
-        return auto, "auto"
+        return auto, "auto", k_vol
 
+    # MANUAL: o admin define a régua → linear e previsível (sem saturação).
     manuais = ref_row.valores_manuais or {}
     resolvidas = {
         chave: float(manuais.get(chave) or auto[chave]) for chave in CHAVES_REFERENCIA
     }
-    return resolvidas, "manual"
+    return resolvidas, "manual", {}
 
 
 # ---------------------------------------------------------------------------
 # Cálculo por módulo
 # ---------------------------------------------------------------------------
 
-def _linha(nome: str, valor: float, referencia: float, peso_pct: float) -> dict:
-    norm = normalizar(valor, referencia)
+def _norm(indicador: str, valor: float, referencia: float,
+          k_vol: dict[str, float] | None) -> float:
+    """Normaliza um indicador: saturado se ``k_vol`` tiver o k dele (volume no
+    modo auto), senão linear (qualidade, modo manual, evolução)."""
+    k = (k_vol or {}).get(indicador)
+    return normalizar_saturado(valor, referencia, k) if k else normalizar(valor, referencia)
+
+
+def _linha(nome: str, indicador: str, valor: float, referencia: float,
+           peso_pct: float, k_vol: dict[str, float] | None) -> dict:
+    norm = _norm(indicador, valor, referencia, k_vol)
     return {
         "indicador": nome,
         "valor": valor,
@@ -380,20 +457,21 @@ def calcular_matific(
     refs: dict[str, float],
     pesos: dict[str, float],
     pesos_pct: dict[str, float],
+    k_vol: dict[str, float] | None = None,
 ) -> tuple[float, list[dict]]:
     atividades = snapshot.atividades if snapshot else 0
     media = snapshot.pontuacao_media if snapshot else 0.0
     estrelas = snapshot.estrelas if snapshot else 0
 
     linhas = [
-        _linha("Atividades finalizadas", atividades, refs["max_atividades"], pesos_pct.get("atividades", 0)),
-        _linha("Pontuação média", media, refs["max_media"], pesos_pct.get("media", 0)),
-        _linha("Estrelas", estrelas, refs["max_estrelas"], pesos_pct.get("estrelas", 0)),
+        _linha("Atividades finalizadas", "atividades", atividades, refs["max_atividades"], pesos_pct.get("atividades", 0), k_vol),
+        _linha("Pontuação média", "media", media, refs["max_media"], pesos_pct.get("media", 0), k_vol),
+        _linha("Estrelas", "estrelas", estrelas, refs["max_estrelas"], pesos_pct.get("estrelas", 0), k_vol),
     ]
     nota = (
-        normalizar(atividades, refs["max_atividades"]) * pesos.get("atividades", 0)
-        + normalizar(media, refs["max_media"]) * pesos.get("media", 0)
-        + normalizar(estrelas, refs["max_estrelas"]) * pesos.get("estrelas", 0)
+        _norm("atividades", atividades, refs["max_atividades"], k_vol) * pesos.get("atividades", 0)
+        + _norm("media", media, refs["max_media"], k_vol) * pesos.get("media", 0)
+        + _norm("estrelas", estrelas, refs["max_estrelas"], k_vol) * pesos.get("estrelas", 0)
     )
     return round(nota, 2), linhas
 
@@ -406,14 +484,16 @@ def calcular_elefante(
     pesos_pct: dict[str, float],
     pesos_questoes: dict[str, float],
     pesos_questoes_pct: dict[str, float],
+    k_vol: dict[str, float] | None = None,
 ) -> tuple[float, list[dict], dict]:
     livros = snapshot.livros_unicos if snapshot else 0
     tempo = snapshot.tempo_leitura_min if snapshot else 0
     tentativas = snapshot.questoes_tentativas if snapshot else 0
     acertos = snapshot.questoes_acertos if snapshot else 0
 
-    # Sub-nota de questões: tentativa + aprendizado (PRD §36)
-    n_tentativas = normalizar(tentativas, refs["max_tentativas"])
+    # Sub-nota de questões: tentativas (volume → satura) + acertos (qualidade →
+    # linear), PRD §36. Assim tentar muito não infla; acertar é que conta.
+    n_tentativas = _norm("tentativas", tentativas, refs["max_tentativas"], k_vol)
     n_acertos = normalizar(acertos, refs["max_acertos"])
     nota_questoes = round(
         n_tentativas * pesos_questoes.get("tentativas", 0)
@@ -427,16 +507,16 @@ def calcular_elefante(
     }
 
     linhas = [
-        _linha("Livros únicos concluídos", livros, refs["max_livros"], pesos_pct.get("livros", 0)),
-        _linha("Pontos de dificuldade", pontos_dificuldade, refs["max_pontos_dificuldade"], pesos_pct.get("dificuldade", 0)),
-        _linha("Questões (tentativas + acertos)", nota_questoes, 100.0, pesos_pct.get("questoes", 0)),
-        _linha("Tempo de leitura (min)", tempo, refs["max_tempo"], pesos_pct.get("tempo", 0)),
+        _linha("Livros únicos concluídos", "livros", livros, refs["max_livros"], pesos_pct.get("livros", 0), k_vol),
+        _linha("Pontos de dificuldade", "pontos_dificuldade", pontos_dificuldade, refs["max_pontos_dificuldade"], pesos_pct.get("dificuldade", 0), k_vol),
+        _linha("Questões (tentativas + acertos)", "questoes", nota_questoes, 100.0, pesos_pct.get("questoes", 0), None),
+        _linha("Tempo de leitura (min)", "tempo", tempo, refs["max_tempo"], pesos_pct.get("tempo", 0), k_vol),
     ]
     nota = (
-        normalizar(livros, refs["max_livros"]) * pesos.get("livros", 0)
+        _norm("livros", livros, refs["max_livros"], k_vol) * pesos.get("livros", 0)
         + normalizar(pontos_dificuldade, refs["max_pontos_dificuldade"]) * pesos.get("dificuldade", 0)
         + nota_questoes * pesos.get("questoes", 0)
-        + normalizar(tempo, refs["max_tempo"]) * pesos.get("tempo", 0)
+        + _norm("tempo", tempo, refs["max_tempo"], k_vol) * pesos.get("tempo", 0)
     )
     return round(nota, 2), linhas, detalhe_questoes
 
@@ -513,9 +593,18 @@ def _carregar_contexto(db: Session, escola_id: int):
 
 def referencias_em_uso(db: Session, escola_id: int) -> tuple[dict, str]:
     """Referências efetivas (tela REFERÊNCIAS DE NORMALIZAÇÃO, PRD §62)."""
+    refs, modo, _ = contexto_normalizacao(db, escola_id)
+    return refs, modo
+
+
+def contexto_normalizacao(
+    db: Session, escola_id: int
+) -> tuple[dict, str, dict[str, float]]:
+    """``(referencias, modo, k_saturacao)`` — para o ranking e o simulador
+    (sistema.py) usarem exatamente a mesma normalização."""
     contexto = _carregar_contexto(db, escola_id)
     if contexto is None:
-        return {}, "auto"
+        return {}, "auto", {}
     _, _, _, matific, elefante, pontos_dif = contexto
     return _referencias(db, escola_id, matific, elefante, pontos_dif)
 
@@ -527,7 +616,7 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         return 0
     escola, ano, matriculas, matific, elefante, pontos_dif = contexto
 
-    refs, modo = _referencias(db, escola_id, matific, elefante, pontos_dif)
+    refs, modo, k_vol = _referencias(db, escola_id, matific, elefante, pontos_dif)
 
     p_matific = obter_pesos(db, escola_id, "pesos.matific")
     p_elefante = obter_pesos(db, escola_id, "pesos.elefante")
@@ -544,10 +633,10 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         snap_m = matific.get(aluno.id)
         snap_e = elefante.get(aluno.id)
 
-        nota_m, linhas_m = calcular_matific(snap_m, refs, p_matific, pct_matific)
+        nota_m, linhas_m = calcular_matific(snap_m, refs, p_matific, pct_matific, k_vol)
         nota_e, linhas_e, det_q = calcular_elefante(
             snap_e, pontos_dif[aluno.id], refs, p_elefante, pct_elefante,
-            p_questoes, pct_questoes,
+            p_questoes, pct_questoes, k_vol,
         )
         nota_geral = round(
             nota_m * p_geral.get("matific", 0) + nota_e * p_geral.get("elefante", 0), 2
@@ -569,6 +658,11 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                 detalhes={
                     "modo_normalizacao": modo,
                     "referencias": refs,
+                    # Registro auditável da correção (PRD §45): referência P90 e a
+                    # meia-saturação (k) por indicador de volume, quando aplicadas.
+                    "referencia_tipo": ("p90_robusto" if (modo == "auto" and k_vol)
+                                        else ("maximo" if modo == "auto" else "manual")),
+                    "saturacao": dict(k_vol),
                     "matific": {"indicadores": linhas_m, "nota": nota_m},
                     "elefante": {"indicadores": linhas_e, "questoes": det_q, "nota": nota_e},
                     "geral": {"pesos": pct_geral, "nota": nota_geral},

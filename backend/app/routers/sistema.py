@@ -157,7 +157,7 @@ def simular(
     Nada é gravado: serve para testar o efeito de pesos e referências (§44).
     """
     permissoes.negar_restrito(db, escola_id, usuario)  # config do motor: só gestão
-    refs, modo = scoring.referencias_em_uso(db, escola_id)
+    refs, modo, k_vol = scoring.contexto_normalizacao(db, escola_id)
     if not refs:
         refs = {chave: 0 for chave in scoring.CHAVES_REFERENCIA}
 
@@ -185,9 +185,9 @@ def simular(
     pct_questoes = scoring.obter_pesos_brutos(db, escola_id, "pesos.questoes")
     pct_geral = scoring.obter_pesos_brutos(db, escola_id, "pesos.geral")
 
-    nota_m, linhas_m = scoring.calcular_matific(snap_m, refs, p_matific, pct_matific)
+    nota_m, linhas_m = scoring.calcular_matific(snap_m, refs, p_matific, pct_matific, k_vol)
     nota_e, linhas_e, det_q = scoring.calcular_elefante(
-        snap_e, pontos_dif, refs, p_elefante, pct_elefante, p_questoes, pct_questoes,
+        snap_e, pontos_dif, refs, p_elefante, pct_elefante, p_questoes, pct_questoes, k_vol,
     )
     nota_geral = round(
         nota_m * p_geral.get("matific", 0) + nota_e * p_geral.get("elefante", 0), 2
