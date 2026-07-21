@@ -69,18 +69,47 @@ def escola_autorizada(
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ) -> int:
-    """Isolamento multi-escolas: usuários comuns só acessam a própria escola.
+    """Isolamento multi-escolas: o usuário só acessa escolas DENTRO do seu escopo.
+
+    O escopo vem de `permissoes.escopo_escolas` (fonte única): `None` = todas
+    (admin global); um conjunto = a própria escola OU todas as escolas da rede
+    (secretaria). Para o caso comum (escola única) o comportamento é IDÊNTICO ao
+    anterior — é extensão pura, não mudança.
 
     Também confirma que a escola existe — evita 500 (AttributeError) quando um
     admin global aponta para um id inexistente e impede escritas órfãs.
     """
+    # Import local evita qualquer ciclo de importação (core ↔ services).
+    from app.services.permissoes import escopo_escolas
+
     if db.get(Escola, escola_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
-    if usuario.is_global:
+    escopo = escopo_escolas(db, usuario)
+    if escopo is None or escola_id in escopo:
         return escola_id
-    if usuario.escola_id != escola_id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Acesso negado aos dados desta escola.",
-        )
-    return escola_id
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "Acesso negado aos dados desta escola.",
+    )
+
+
+def exigir_rede(
+    rede_id: int = Path(...),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+) -> int:
+    """Escopo de REDE/Secretaria: acessa a rede quem é admin global OU o usuário
+    daquela rede (`usuario.rede_id == rede_id`). Um usuário de rede NÃO enxerga
+    outra rede (isolamento entre redes — IDOR). Coordenador/professor de escola
+    única (sem `rede_id`) não têm acesso a nenhuma rota `/redes/*`.
+    """
+    from app.models import Rede
+
+    if db.get(Rede, rede_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    if usuario.is_global or usuario.rede_id == rede_id:
+        return rede_id
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "Acesso negado aos dados desta rede.",
+    )

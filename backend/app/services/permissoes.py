@@ -20,7 +20,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Matricula, Professor, Turma, Usuario
+from app.models import Aluno, Escola, Matricula, Professor, Turma, Usuario
 
 CARGOS_TOTAIS = ("admin", "coordenador")
 
@@ -29,10 +29,43 @@ def acesso_total(usuario: Usuario) -> bool:
     return bool(usuario.is_global) or usuario.cargo in CARGOS_TOTAIS
 
 
+def escopo_escolas(db: Session, usuario: Usuario) -> set[int] | None:
+    """Fonte ÚNICA do ALCANCE de um usuário: quais escolas ele enxerga.
+
+    Retorna:
+      * ``None``  → TODAS as escolas (admin global da plataforma).
+      * ``{ids}`` → conjunto explícito (rede/secretaria = todas as escolas da
+                    rede; usuário comum = só a própria escola).
+      * ``set()`` → nenhuma (fail-closed: sem escola e sem rede).
+
+    Isto GENERALIZA o isolamento por escola sem mudar o caso comum: um usuário
+    de escola única devolve ``{escola_id}`` — comportamento idêntico ao antigo.
+    O eixo de alcance (quantas escolas) é ortogonal ao ``cargo`` (quais ações).
+    """
+    if usuario.is_global:
+        return None
+    if usuario.rede_id is not None:
+        return set(db.execute(
+            select(Escola.id).where(Escola.rede_id == usuario.rede_id)
+        ).scalars().all())
+    if usuario.escola_id is not None:
+        return {usuario.escola_id}
+    return set()
+
+
 def turmas_permitidas(db: Session, escola_id: int, usuario: Usuario) -> list[int] | None:
-    """None = sem restrição. Lista (pode ser vazia) = restrito a essas turmas."""
+    """None = sem restrição. Lista (pode ser vazia) = restrito a essas turmas.
+
+    Vínculo FORTE por FK (`usuario.professor_id`) — preferido, imune a divergência
+    de e-mail. O casamento por e-mail continua como FALLBACK para contas ainda
+    não migradas (professores criados antes da FK)."""
     if acesso_total(usuario):
         return None
+    if usuario.professor_id is not None:
+        return list(db.execute(
+            select(Turma.id).where(Turma.escola_id == escola_id,
+                                   Turma.professor_id == usuario.professor_id)
+        ).scalars().all())
     email = (usuario.email or "").strip().lower()
     if not email:
         return []

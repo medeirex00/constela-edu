@@ -22,6 +22,8 @@ class UsuarioOut(ORMModel):
     cargo: str
     is_global: bool
     escola_id: int | None
+    # Escopo de rede/Secretaria: quando presente, o usuário enxerga a rede toda.
+    rede_id: int | None = None
     status: str = "ativo"
     ultimo_acesso: datetime | None = None
     created_at: datetime | None = None

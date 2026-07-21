@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
 from app.models import Escola, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
+from app.services import permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas", tags=["Escolas"])
@@ -23,8 +24,11 @@ def listar(
     consulta = select(Escola).order_by(Escola.nome)
     if not (incluir_inativas and usuario.is_global):
         consulta = consulta.where(Escola.status == "ativa")
-    if not usuario.is_global:
-        consulta = consulta.where(Escola.id == usuario.escola_id)
+    # Escopo: global vê todas; usuário de rede vê as escolas da sua rede;
+    # usuário de escola vê só a própria. Fonte única `escopo_escolas`.
+    escopo = permissoes.escopo_escolas(db, usuario)
+    if escopo is not None:
+        consulta = consulta.where(Escola.id.in_(escopo or {-1}))
     return db.execute(consulta).scalars().all()
 
 
