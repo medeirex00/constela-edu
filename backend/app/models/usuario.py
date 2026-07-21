@@ -26,6 +26,16 @@ class Usuario(Base):
     cargo: Mapped[str] = mapped_column(String(30), default="professor")
     # Administrador global: gerencia todas as escolas (PRD §136)
     is_global: Mapped[bool] = mapped_column(default=False)
+    # Escopo de REDE (Secretaria): quando setado, o usuário enxerga TODAS as
+    # escolas desta rede (não só a própria) sem ser is_global. É o eixo de
+    # ALCANCE, ortogonal ao `cargo` (que governa as AÇÕES). Ver services/permissoes.
+    rede_id: Mapped[int | None] = mapped_column(
+        ForeignKey("redes.id", ondelete="SET NULL"), index=True, default=None)
+    # Vínculo FORTE professor↔cadastro (substitui o casamento frágil por e-mail).
+    # Quando setado, define as turmas que o professor enxerga por FK, não por
+    # string de e-mail. Nullable: contas de gestão não são professores.
+    professor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("professores.id", ondelete="SET NULL"), index=True, default=None)
     status: Mapped[str] = mapped_column(String(20), default="ativo")
     ultimo_acesso: Mapped[datetime | None] = mapped_column(default=None)
     # Incrementado ao redefinir a senha: invalida tokens emitidos antes

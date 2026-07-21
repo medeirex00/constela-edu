@@ -16,6 +16,7 @@ from app.models.dispositivo import DispositivoMovel
 from app.models.escola import Escola
 from app.models.ia import ConversaIA, MensagemIA
 from app.models.nota import LogAuditoria, Nota
+from app.models.rede import Rede
 from app.models.plataformas import (
     EventoAluno,
     Importacao,
@@ -55,6 +56,7 @@ __all__ = [
     "PontuacaoNivelTurma",
     "Nota",
     "Professor",
+    "Rede",
     "ReferenciaNormalizacao",
     "SnapshotElefante",
     "SnapshotMatific",
