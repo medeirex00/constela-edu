@@ -66,17 +66,25 @@ def test_aluno_novo_evolui_a_partir_do_zero(db, escola_completa):
 
 
 def test_ranking_evolucao_premia_quem_mais_cresceu(db, escola_completa):
-    """Quem tem nota alta mas estagnou fica atrás de quem cresceu (PRD §72)."""
+    """Quem tem nota alta mas estagnou fica atrás de quem cresceu (PRD §72).
+
+    O ganho é o crescimento REAL dentro da janela (delta entre snapshots), não
+    o acumulado de vida: a veterana Ana cresceu pouco no período; João cresceu
+    muito. Ver `test_ranking_justo.py` para a justiça do critério."""
     escola = escola_completa["escola"]
     ana, joao, _ = escola_completa["alunos"]
     importacao = _importacao(db, escola.id)
 
-    # Ana: veterana com números altos, mas parada há 60 dias
+    # Ana: veterana com números altos (baseline antes da janela) e quase parada.
     _snap_matific(db, escola.id, importacao, ana.id, 60,
                   atividades=100, estrelas=500, pontuacao_media=95)
-    # João: começou do zero e cresceu dentro do período
-    _snap_matific(db, escola.id, importacao, joao.id, 10,
-                  atividades=30, estrelas=80, pontuacao_media=75)
+    _snap_matific(db, escola.id, importacao, ana.id, 5,
+                  atividades=105, estrelas=505, pontuacao_media=95)  # +5 no período
+    # João: cresceu muito DENTRO do período (1º snapshot na janela = base justa).
+    _snap_matific(db, escola.id, importacao, joao.id, 20,
+                  atividades=10, estrelas=20, pontuacao_media=70)
+    _snap_matific(db, escola.id, importacao, joao.id, 2,
+                  atividades=40, estrelas=80, pontuacao_media=75)  # +30 no período
     db.commit()
 
     itens = svc.ranking_evolucao(db, escola.id, dias=30)

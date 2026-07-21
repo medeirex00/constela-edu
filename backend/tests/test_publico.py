@@ -96,9 +96,23 @@ def test_b2_perfil_publico_bloqueia_enumeracao_fora_do_painel(cliente, db, escol
     """B2/IDOR: o perfil público só abre para alunos EXIBIDOS no painel. Um
     atacante anônimo com o token (público, do QR) não pode varrer aluno_id
     sequencial e coletar nome+notas de quem está fora do top-N."""
+    from datetime import datetime, timedelta, timezone
+
     from app.models import Aluno, Matricula
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id
+    # Baselines ANTES da janela → os 3 alunos de `_com_notas` têm crescimento
+    # REAL (a regra justa mede o delta; um snapshot único daria evolução 0 e o
+    # slide de evolução ficaria vazio, sem "visíveis" para testar o IDOR).
+    _base_imp = Importacao(escola_id=escola_id, plataforma="matific", tipo="seed")
+    db.add(_base_imp)
+    db.flush()
+    _dt = datetime.now(timezone.utc) - timedelta(days=40)
+    for _indice, _aluno in enumerate(escola_completa["alunos"]):
+        db.add(SnapshotMatific(escola_id=escola_id, aluno_id=_aluno.id,
+                               importacao_id=_base_imp.id, data_referencia=_dt,
+                               atividades=2 * (_indice + 1), estrelas=5, pontuacao_media=60))
+    db.commit()
     # 4º aluno ATIVO e matriculado, porém SEM nota → nunca aparece no painel.
     fora_aluno = Aluno(escola_id=escola_id, nome="Invisivel No Painel")
     db.add(fora_aluno)

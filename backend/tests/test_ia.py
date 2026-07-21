@@ -29,6 +29,10 @@ def _snapshot(db, escola_id, aluno_id, dias_atras=1, **valores):
 def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
+    # Baseline anterior + recente = crescimento REAL no período (o índice de
+    # evolução mede o delta, não o acumulado — ver test_ranking_justo).
+    _snapshot(db, escola.id, ana.id, dias_atras=25,
+              atividades=10, estrelas=40, pontuacao_media=75)
     _snapshot(db, escola.id, ana.id, dias_atras=2,
               atividades=30, estrelas=100, pontuacao_media=80)
     db.commit()

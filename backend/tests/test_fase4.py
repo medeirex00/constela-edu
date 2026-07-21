@@ -1,5 +1,6 @@
 """Testes da Fase 4 — gamificação, relatórios, administração e utilidades."""
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -7,6 +8,27 @@ from app.models import Importacao, Leitura, Livro, SnapshotElefante, SnapshotMat
 from app.services import backup as svc_backup
 from app.services import gamificacao as svc_gami
 from app.services import scoring
+
+
+def _baseline_ana(db, escola_completa, dias=45):
+    """Snapshot ANTERIOR à janela para Ana, de modo que os snapshots recentes de
+    `_dados_basicos` representem CRESCIMENTO real medível (a regra justa mede o
+    delta dentro do período, não o acumulado de vida — ver test_ranking_justo)."""
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(imp)
+    db.flush()
+    dt = datetime.now(timezone.utc) - timedelta(days=dias)
+    db.add_all([
+        SnapshotMatific(escola_id=escola.id, aluno_id=ana.id, importacao_id=imp.id,
+                        data_referencia=dt, atividades=20, estrelas=80, pontuacao_media=80),
+        SnapshotElefante(escola_id=escola.id, aluno_id=ana.id, importacao_id=imp.id,
+                         data_referencia=dt, livros_unicos=4, tempo_leitura_min=200,
+                         questoes_tentativas=10, questoes_acertos=9,
+                         livros_por_nivel={"AA": 3, "D": 1}),
+    ])
+    db.commit()
 
 
 def _dados_basicos(db, escola_completa):
@@ -100,11 +122,12 @@ def test_ranking_leitura_historico_inclui_snapshot_elefante(cliente, db, escola_
 
 def test_mural_traz_destaques_e_eventos(cliente, db, escola_completa):
     _dados_basicos(db, escola_completa)
+    _baseline_ana(db, escola_completa)  # Ana tem crescimento REAL no período
     escola = escola_completa["escola"]
     resposta = cliente.get(f"/api/v1/escolas/{escola.id}/gamificacao/mural")
     assert resposta.status_code == 200
     corpo = resposta.json()
-    # Ana cresceu no período (snapshot recente) → destaque do mês
+    # Ana cresceu de verdade no período (delta vs. baseline) → destaque do mês
     assert corpo["destaques"]["mes"]["nome"] == "Ana Beatriz Souza"
     assert any(evento["tipo"] == "conquista" for evento in corpo["eventos"])
 
@@ -117,6 +140,7 @@ def test_mural_reusa_series_sem_recarregar_por_janela(db, escola_completa):
     from sqlalchemy import event
 
     _dados_basicos(db, escola_completa)
+    _baseline_ana(db, escola_completa)  # Ana tem crescimento REAL no período
     escola = escola_completa["escola"]
 
     engine = db.get_bind()

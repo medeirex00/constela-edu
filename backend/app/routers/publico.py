@@ -252,7 +252,12 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         .limit(limite)
     ).all()
 
-    evolucao_itens = svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]
+    # "Quem mais cresceu" só lista quem REALMENTE cresceu no período (evolução
+    # > 0). Sem isto, quando ninguém cresce (ex.: 1ª importação, só snapshots de
+    # base), o slide preencheria por ordem alfabética com alunos de crescimento
+    # zero — enganoso e ainda abriria o perfil deles pela regra de visibilidade.
+    evolucao_itens = [i for i in svc_evolucao.ranking_evolucao(db, escola.id, dias=30)
+                      if i.nota_evolucao > 0][:limite]
     mural = svc_gami.mural(db, escola.id)
 
     return {
@@ -360,8 +365,10 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
         .order_by(Nota.posicao)
         .limit(limite)
     ).scalars())
-    # A evolução também é exibida (slide próprio) — seus alunos podem ser abertos.
-    for item in svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]:
+    # A evolução também é exibida (slide próprio) — mas só QUEM CRESCEU (nota
+    # > 0) aparece, então só esses podem ser abertos (espelha o filtro do slide).
+    for item in [i for i in svc_evolucao.ranking_evolucao(db, escola.id, dias=30)
+                 if i.nota_evolucao > 0][:limite]:
         ids.add(item.aluno_id)
     _cache_visiveis[escola.id] = (agora, ids)
     return ids

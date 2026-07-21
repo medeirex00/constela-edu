@@ -370,15 +370,24 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     ganhos_m: dict[int, SimpleNamespace] = {}
     ganhos_e: dict[int, SimpleNamespace] = {}
     pontos_dif: dict[int, float] = {}
+    # base_no_periodo=True: JUSTIÇA do ranking. Sem snapshot ANTERIOR ao início
+    # da janela, o ganho é medido do 1º snapshot DENTRO do período (0 se houver
+    # só um) — NUNCA o acumulado de vida. Sem isto, um aluno cujo histórico
+    # inteiro é importado num único snapshot recente teria toda a sua vida
+    # contada como "evolução do período" e, pela normalização por máximo,
+    # dominaria o ranking (bug "Antonella"). É o mesmo critério que as
+    # premiações já adotam (premiacoes.py: "ganho estritamente dentro do
+    # período"). Quem tem baseline anterior não muda: o ganho segue sendo o
+    # delta real; leituras individuais seguem pela data real de cada livro.
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
-        atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim)
+        atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim, base_no_periodo=True)
         ganhos_m[aluno_id] = SimpleNamespace(
             atividades=_delta(atual_m, base_m, "atividades"),
             estrelas=_delta(atual_m, base_m, "estrelas"),
             pontuacao_media=_delta(atual_m, base_m, "pontuacao_media"),
         )
-        atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim)
+        atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim, base_no_periodo=True)
         # Questões só existem agregadas (snapshot); leitura tem data real.
         questoes_t = _delta(atual_e, base_e, "questoes_tentativas")
         questoes_a = _delta(atual_e, base_e, "questoes_acertos")
