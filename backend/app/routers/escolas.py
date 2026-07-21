@@ -69,7 +69,10 @@ def atualizar(
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
-    if not usuario.is_global and usuario.escola_id != escola_id:
+    # Escopo (fonte única): global vê todas; usuário de rede edita qualquer escola
+    # da sua rede (ex.: corrigir o pino no mapa); admin de escola só a própria.
+    escopo = permissoes.escopo_escolas(db, usuario)
+    if escopo is not None and escola_id not in escopo:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Acesso negado a esta escola.")
     alteracoes = dados.model_dump(exclude_unset=True)
     for campo, valor in alteracoes.items():

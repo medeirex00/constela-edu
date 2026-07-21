@@ -36,10 +36,12 @@ const ATALHOS = [
 export default function MinhasTurmas() {
   const { escolaId, usuario } = useApp();
   const base = escolaId ? `/escolas/${escolaId}` : null;
-  const { dados: dash, carregando } = useApi<Dashboard>(base ? `${base}/dashboard` : null);
+  const { dados: dash, erro, carregando } = useApi<Dashboard>(base ? `${base}/dashboard` : null);
   const { dados: turmas } = useApi<Turma[]>(base ? `${base}/turmas` : null);
 
   if (carregando && !dash) return <Carregando texto="Carregando suas turmas..." />;
+  if (erro && !dash)
+    return <Vazio titulo="Não foi possível carregar suas turmas" descricao={erro.message} />;
 
   return (
     <div className="space-y-6">

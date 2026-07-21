@@ -11,6 +11,7 @@ import { Link } from "react-router-dom";
 import { Card, Carregando, PageHeader, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { corPorMedia } from "../../lib/cores";
 import { nota, numero } from "../../lib/formato";
 
 interface Dashboard {
@@ -30,19 +31,15 @@ interface Professor {
   turmas: { turma_id: number; nome: string; total_alunos: number; media_geral: number }[];
 }
 
-function corPorMedia(m: number): string {
-  if (m >= 7) return "#2EB88A";
-  if (m >= 5) return "#F5B942";
-  return "#E2555A";
-}
-
 export default function GestaoEscola() {
   const { escolaId, escolaAtual } = useApp();
   const base = escolaId ? `/escolas/${escolaId}` : null;
-  const { dados: dash, carregando } = useApi<Dashboard>(base ? `${base}/dashboard` : null);
+  const { dados: dash, erro, carregando } = useApi<Dashboard>(base ? `${base}/dashboard` : null);
   const { dados: professores } = useApi<Professor[]>(base ? `${base}/consolidado-professores` : null);
 
   if (carregando && !dash) return <Carregando texto="Carregando a escola..." />;
+  if (erro && !dash)
+    return <Vazio titulo="Não foi possível carregar a escola" descricao={erro.message} />;
 
   return (
     <div className="space-y-6">

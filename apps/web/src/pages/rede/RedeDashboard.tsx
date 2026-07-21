@@ -17,6 +17,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, Carregando, PageHeader, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { corPorMedia } from "../../lib/cores";
 import { nota, numero } from "../../lib/formato";
 
 interface EscolaCartao {
@@ -50,13 +51,6 @@ interface DashboardRede {
     media_elefante: number;
   };
   escolas: EscolaCartao[];
-}
-
-/** Cor por desempenho (0–10): verde (alto) → âmbar → vermelho (baixo). */
-function corPorMedia(m: number): string {
-  if (m >= 7) return "#2EB88A";
-  if (m >= 5) return "#F5B942";
-  return "#E2555A";
 }
 
 function iconeEscola(cartao: EscolaCartao): L.DivIcon {
@@ -187,7 +181,7 @@ function PainelRede({ redeId }: { redeId: number }) {
 
   const abrirEscola = (escolaId: number) => {
     selecionarEscola(escolaId);        // troca a escola ativa (o backend autoriza: é da rede)
-    navegar("/dashboard");
+    navegar("/escola");                // Visão da Escola lê a escola ativa do contexto
   };
 
   const escolasFiltradas = useMemo(() => {
@@ -260,12 +254,14 @@ export default function RedeDashboard() {
   // Usuário de rede → sua rede. Admin global sem rede definida → usa a 1ª rede
   // que ele puder ver (o backend já escopa /redes).
   const redeDoUsuario = usuario?.rede_id ?? null;
-  const { dados: redes } = useApi<{ id: number; nome: string }[]>(
+  const { dados: redes, carregando } = useApi<{ id: number; nome: string }[]>(
     redeDoUsuario == null ? "/redes" : null,
   );
   const redeId = redeDoUsuario ?? redes?.[0]?.id ?? null;
 
   if (redeId == null) {
+    // Enquanto a lista de redes (admin global) carrega, não afirmar "sem rede".
+    if (carregando) return <Carregando texto="Carregando as redes..." />;
     return (
       <Vazio
         titulo="Nenhuma rede disponível"

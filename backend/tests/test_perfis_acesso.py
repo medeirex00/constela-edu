@@ -46,8 +46,9 @@ def rede_setup(db):
     db.add_all([a1, a2, b1])
     db.flush()
 
+    # Secretaria/Admin Supremo da rede = admin (ações) + rede_id (alcance).
     sec_a = Usuario(nome="Sec A", email="seca@t.local", senha_hash=hash_senha("x"),
-                    cargo="coordenador", rede_id=rede_a.id, escola_id=a1.id)
+                    cargo="admin", rede_id=rede_a.id, escola_id=a1.id)
     sec_b = Usuario(nome="Sec B", email="secb@t.local", senha_hash=hash_senha("x"),
                     cargo="coordenador", rede_id=rede_b.id, escola_id=b1.id)
     glob = Usuario(nome="Global", email="glob@t.local", senha_hash=hash_senha("x"),
@@ -249,3 +250,23 @@ def test_consolidado_por_professor_gestor_only(rede_setup, db):
     url = f"/api/v1/escolas/{s['a1'].id}/consolidado-professores"
     assert _cliente(s["coord_escola"]).get(url).status_code == 200
     assert _cliente(s["professor"]).get(url).status_code == 403
+
+
+def test_secretaria_corrige_geo_de_escola_da_rede(rede_setup):
+    """A Secretaria (admin+rede) corrige o pino de QUALQUER escola da sua rede
+    (PATCH), inclusive uma que não é a 'sua' escola-base; barrada em outra rede."""
+    s = rede_setup
+    c = _cliente(s["sec_a"])
+    ok = c.patch(f"/api/v1/escolas/{s['a2'].id}", json={"latitude": -23.6, "longitude": -45.4})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["latitude"] == -23.6
+    assert c.patch(f"/api/v1/escolas/{s['b1'].id}", json={"latitude": 0.0}).status_code == 403
+
+
+def test_ranking_da_rede_traz_posicao_no_dashboard(rede_setup):
+    """O dashboard da rede já numera as escolas (posicao 1..N) — a tela não
+    precisa do endpoint /ranking para exibir o ranking."""
+    s = rede_setup
+    corpo = _cliente(s["sec_a"]).get(f"/api/v1/redes/{s['rede_a'].id}/dashboard").json()
+    assert corpo["escolas"][0]["posicao"] == 1
+    assert [e["posicao"] for e in corpo["escolas"]] == list(range(1, len(corpo["escolas"]) + 1))
