@@ -34,6 +34,7 @@ const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
 const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
+const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -60,6 +61,16 @@ function ReconectarSessao({ aoTentar }: { aoTentar: () => void }) {
       <Botao onClick={aoTentar}>Tentar de novo</Botao>
     </div>
   );
+}
+
+/** Guarda de papel: só rede/Secretaria (ou admin global) entra em /rede. É a
+ * barreira de UX — a segurança real está no backend (`exigir_rede`). */
+function RotaRede() {
+  const { usuario } = useApp();
+  if (!usuario || (!usuario.is_global && usuario.rede_id == null)) {
+    return <Navigate to="/" replace />;
+  }
+  return <RedeDashboard />;
 }
 
 function AreaProtegida() {
@@ -91,6 +102,7 @@ export default function App() {
         <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
         <Route element={<AreaProtegida />}>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/rede" element={<RotaRede />} />
           <Route path="/ranking" element={<Rankings />} />
           {/* Tela única de Ranking Geral com seletor; rotas antigas viram
               deep-links para a aba correspondente (atalhos/bookmarks seguem). */}

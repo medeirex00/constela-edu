@@ -14,6 +14,7 @@ import {
   Lightbulb,
   GitCompareArrows,
   GraduationCap,
+  Landmark,
   LayoutDashboard,
   LogOut,
   Medal,
@@ -71,6 +72,8 @@ interface GrupoNav {
 
 // Dashboard fica fora dos grupos — é a página inicial, sempre à mão.
 const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard, exato: true };
+// Secretaria/Rede: painel municipal + mapa — só para usuário de rede ou global.
+const SECRETARIA: ItemNav = { rotulo: "Secretaria", caminho: "/rede", icone: Landmark };
 // "Comece aqui": assistente de onboarding — fica fora dos grupos, logo abaixo
 // do Dashboard, e só para gestão (admin/coordenador cria turmas e integrações).
 const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Rocket, gestao: true };
@@ -483,6 +486,9 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
+      {(Boolean(usuario?.is_global) || usuario?.rede_id != null) && (
+        <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />
+      )}
       {gestor && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {

@@ -33,9 +33,12 @@ export default defineConfig({
         // com o code-splitting por rota (React.lazy), só o chunk da página
         // alterada muda entre deploys.
         manualChunks(id) {
+          // Barra final em "react/" para NÃO capturar react-leaflet (mapa da
+          // Secretaria) no vendor — ele deve ficar no chunk lazy da rota /rede,
+          // carregando o Leaflet só quando a Secretaria abre.
           if (
-            id.includes("node_modules/react") ||
-            id.includes("node_modules/react-dom") ||
+            id.includes("node_modules/react/") ||
+            id.includes("node_modules/react-dom/") ||
             id.includes("node_modules/react-router") ||
             id.includes("node_modules/scheduler")
           ) {

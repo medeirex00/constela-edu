@@ -7,6 +7,8 @@ export interface Usuario {
   cargo: string;
   is_global: boolean;
   escola_id: number | null;
+  /** Escopo de rede/Secretaria: quando presente, o usuário enxerga a rede toda. */
+  rede_id?: number | null;
   status?: string;
   ultimo_acesso?: string | null;
   created_at?: string | null;
