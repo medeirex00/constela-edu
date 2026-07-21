@@ -55,7 +55,9 @@ def rede_setup(db):
     coord_escola = Usuario(nome="Coord Escola", email="ce@t.local",
                            senha_hash=hash_senha("x"), cargo="coordenador",
                            escola_id=a1.id)
-    db.add_all([sec_a, sec_b, glob, coord_escola])
+    professor = Usuario(nome="Prof A1", email="prof@t.local",
+                        senha_hash=hash_senha("x"), cargo="professor", escola_id=a1.id)
+    db.add_all([sec_a, sec_b, glob, coord_escola, professor])
     db.flush()
 
     # Dados em a1: 1 turma, 3 alunos com nota (para o dashboard ter conteúdo).
@@ -72,7 +74,8 @@ def rede_setup(db):
                     nota_geral=9.0 - i, nota_matific=8.0, nota_elefante=7.0, posicao=i + 1))
     db.commit()
     return {"rede_a": rede_a, "rede_b": rede_b, "a1": a1, "a2": a2, "b1": b1,
-            "sec_a": sec_a, "sec_b": sec_b, "glob": glob, "coord_escola": coord_escola}
+            "sec_a": sec_a, "sec_b": sec_b, "glob": glob,
+            "coord_escola": coord_escola, "professor": professor}
 
 
 # --------------------------------------------------------------- escopo_escolas
@@ -210,3 +213,39 @@ def test_ranking_municipal_por_escola(rede_setup):
     # ESCOLA (não expõe criança individual entre escolas).
     assert [e["escola_id"] for e in r] == [s["a1"].id]
     assert r[0]["posicao"] == 1 and "media_geral" in r[0]
+
+
+# ------------------------------------------------- MATRIZ IDOR (cross-escopo)
+
+def test_idor_matriz_por_escopo(rede_setup):
+    """A tabela-verdade de acesso a dados de UMA escola (dashboard), por perfil.
+    Tudo imposto no backend — o front nem entra na conta."""
+    s = rede_setup
+    a1, a2, b1 = s["a1"].id, s["a2"].id, s["b1"].id
+
+    def dash(user, escola_id):
+        return _cliente(user).get(f"/api/v1/escolas/{escola_id}/dashboard").status_code
+
+    # Professor da a1: sua escola OK; outra escola (mesma "rede", mas ele não é
+    # de rede) e escola de outra rede → 403.
+    assert dash(s["professor"], a1) == 200
+    assert dash(s["professor"], a2) == 403      # professor -> outra escola
+    assert dash(s["professor"], b1) == 403
+    # Coordenador de UMA escola: só a dele (não vê a2, mesmo da mesma rede —
+    # coordenador comum é escola-scoped, não rede-scoped).
+    assert dash(s["coord_escola"], a1) == 200
+    assert dash(s["coord_escola"], a2) == 403   # coordenador -> outra escola
+    assert dash(s["coord_escola"], b1) == 403
+    # Secretaria da rede A: qualquer escola da rede A; nunca a de B.
+    assert dash(s["sec_a"], a1) == 200 and dash(s["sec_a"], a2) == 200
+    assert dash(s["sec_a"], b1) == 403          # secretaria -> outra rede
+    # Admin global: tudo.
+    assert dash(s["glob"], a1) == 200 and dash(s["glob"], b1) == 200
+
+
+def test_consolidado_por_professor_gestor_only(rede_setup, db):
+    """O consolidado por professor é gestão: coordenador vê; professor 403."""
+    s = rede_setup
+    url = f"/api/v1/escolas/{s['a1'].id}/consolidado-professores"
+    assert _cliente(s["coord_escola"]).get(url).status_code == 200
+    assert _cliente(s["professor"]).get(url).status_code == 403

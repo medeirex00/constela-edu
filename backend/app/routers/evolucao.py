@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
-from app.services import periodos, permissoes, timeline
+from app.services import gestao, periodos, permissoes, timeline
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
 
@@ -192,6 +192,18 @@ def resumo_escola(
     """Página da escola: comparação entre turmas (PRD §78) — gestão apenas."""
     permissoes.negar_restrito(db, escola_id, usuario)
     return svc.resumo_escola(db, escola_id)
+
+
+@router.get("/consolidado-professores")
+def consolidado_professores(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Cockpit do coordenador: desempenho consolidado POR PROFESSOR (regente) —
+    gestão apenas (professor não vê a escola inteira)."""
+    permissoes.negar_restrito(db, escola_id, usuario)
+    return gestao.consolidado_por_professor(db, escola_id)
 
 
 @router.get("/comparar")

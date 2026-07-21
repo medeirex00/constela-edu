@@ -35,6 +35,8 @@ const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
+const MinhasTurmas = lazy(() => import("./pages/perfil/MinhasTurmas"));
+const GestaoEscola = lazy(() => import("./pages/perfil/GestaoEscola"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -61,6 +63,20 @@ function ReconectarSessao({ aoTentar }: { aoTentar: () => void }) {
       <Botao onClick={aoTentar}>Tentar de novo</Botao>
     </div>
   );
+}
+
+/** Landing por perfil: cada papel entra direto na sua home. É só UX — toda
+ * rota abaixo continua protegida no backend pelo escopo do usuário. */
+function Home() {
+  const { usuario } = useApp();
+  // Secretaria/rede (não-global) cai direto na Gestão da Rede.
+  if (usuario?.rede_id != null && !usuario.is_global) return <Navigate to="/rede" replace />;
+  if (usuario && !usuario.is_global) {
+    if (usuario.cargo === "professor") return <MinhasTurmas />;
+    if (usuario.cargo === "admin" || usuario.cargo === "coordenador") return <GestaoEscola />;
+  }
+  // Admin global (plataforma): dashboard por escola + menu Secretaria à mão.
+  return <Dashboard />;
 }
 
 /** Guarda de papel: só rede/Secretaria (ou admin global) entra em /rede. É a
@@ -101,7 +117,7 @@ export default function App() {
         <Route path="/p/:token" element={<PainelPublico />} />
         <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
         <Route element={<AreaProtegida />}>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Home />} />
           <Route path="/rede" element={<RotaRede />} />
           <Route path="/ranking" element={<Rankings />} />
           {/* Tela única de Ranking Geral com seletor; rotas antigas viram
