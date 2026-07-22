@@ -88,6 +88,10 @@ class Settings(BaseSettings):
 
     UPLOADS_DIR: Path = PROJECT_ROOT / "uploads"
     EXPORTS_DIR: Path = PROJECT_ROOT / "exports"
+    # Retenção das cópias de relatórios em /exports (contêm nomes de alunos):
+    # expurgadas após N dias para não acumular PII indefinidamente (LGPD). 0
+    # desliga o expurgo. O download em si nunca depende da cópia.
+    EXPORTS_RETENCAO_DIAS: int = 7
 
     CORS_ORIGINS: list[str] = [
         # Produção (front cross-origin: Vercel + Railway). O default vive no
