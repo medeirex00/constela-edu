@@ -16,9 +16,12 @@ Você **não precisa saber programar**. É copiar, colar e ler o resultado.
 3. A senha de cifra do backup (a `BACKUP_PASSPHRASE` que você definir).
 
 Se ainda não instalou o cliente do Postgres, faça uma vez:
-- Baixe o **PostgreSQL** em <https://www.postgresql.org/download/windows/> e, no
-  instalador, deixe marcado **"Command Line Tools"** (é o que traz `pg_dump` e
-  `psql`). Não precisa instalar o servidor; só as ferramentas de linha de comando.
+- Baixe o **PostgreSQL versão 17 (ou mais nova)** em
+  <https://www.postgresql.org/download/windows/> e, no instalador, deixe marcado
+  **"Command Line Tools"** (é o que traz `pg_dump` e `psql`). Não precisa instalar
+  o servidor; só as ferramentas de linha de comando. **A versão precisa ser 17+**
+  porque o banco do Supabase é o Postgres 17 (uma versão mais antiga recusa o
+  backup).
 
 ---
 
