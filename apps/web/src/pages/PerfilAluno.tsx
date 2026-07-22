@@ -12,38 +12,20 @@ import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
 import type { LeituraNiveis, LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
 
-// Rótulos e ORDEM de exibição da ficha cadastral (planilha de matrículas).
-// Só aparecem os campos que a planilha da escola realmente preencheu.
+// Ficha cadastral MINIMIZADA (LGPD): o produto guarda só o RA como identidade.
+// Nome e nº de chamada aparecem no topo do perfil (não aqui). Nada de dados
+// sensíveis (raça/cor, SUS) ou documentos (CPF/RG) — nem são coletados.
 const ROTULOS_FICHA: Record<string, string> = {
-  rm: "RM",
   ra: "RA",
-  responsavel_completo: "Responsável (nome completo)",
-  responsavel: "Responsável",
-  telefone: "Telefone",
-  endereco: "Endereço",
-  bairro: "Bairro",
-  matricula: "Matrícula",
-  transferencia: "Transferência",
-  remanejamento: "Remanejamento",
-  rg: "RG",
-  cpf: "CPF",
-  sus: "SUS",
-  sexo: "Sexo",
-  raca_cor: "Raça/Cor",
-  bolsa_familia: "Bolsa Família",
 };
 
-/** Dados cadastrais do aluno vindos da planilha de matrículas (só gestor). */
+/** Dados cadastrais do aluno (minimizados: só o RA). */
 function FichaCadastral({ ficha }: { ficha: Record<string, string> }) {
   const itens: Array<readonly [string, string]> = [];
+  // Só campos EXPLICITAMENTE permitidos aparecem — sem fallback que exibiria
+  // qualquer chave residual da ficha (defesa em profundidade de privacidade).
   for (const chave of Object.keys(ROTULOS_FICHA)) {
     if (ficha[chave]) itens.push([ROTULOS_FICHA[chave], ficha[chave]] as const);
-  }
-  // Colunas extras da planilha que ainda não têm rótulo próprio.
-  for (const [chave, valor] of Object.entries(ficha)) {
-    if (!(chave in ROTULOS_FICHA) && valor) {
-      itens.push([chave.replace(/_/g, " "), String(valor)] as const);
-    }
   }
   if (itens.length === 0) return null;
   return (

@@ -83,6 +83,8 @@ def test_professor_nao_cadastra_professor(cliente, db, escola_completa):
 
 
 def test_criar_aluno_com_ficha_sanitizada(cliente, db, escola_completa):
+    """Minimização (LGPD): só o RA entra na ficha; sensíveis, documentos e
+    chaves desconhecidas são descartados."""
     escola = escola_completa["escola"]
     turma = escola_completa["turma"]
     r = cliente.post(f"/api/v1/escolas/{escola.id}/alunos", json={
@@ -99,10 +101,10 @@ def test_criar_aluno_com_ficha_sanitizada(cliente, db, escola_completa):
     db.expire_all()
     aluno = db.execute(select(Aluno).where(
         Aluno.nome == "Miguel Torres Lima")).scalar_one()
-    assert aluno.ficha["ra"] == "111.222.333-4"
-    assert aluno.ficha["endereco"] == "Rua das Flores, 10"   # espaços aparados
-    assert "chave_desconhecida" not in aluno.ficha
-    # A ficha aparece no perfil (gestor).
+    assert aluno.ficha == {"ra": "111.222.333-4"}   # só o RA sobreviveu
+    for sensivel in ("responsavel", "telefone", "endereco", "chave_desconhecida"):
+        assert sensivel not in aluno.ficha
+    # A ficha aparece no perfil (gestor), minimizada.
     perfil = cliente.get(
         f"/api/v1/escolas/{escola.id}/alunos/{aluno.id}/perfil").json()
-    assert perfil["ficha"]["responsavel"] == "Carla Lima"
+    assert perfil["ficha"] == {"ra": "111.222.333-4"}

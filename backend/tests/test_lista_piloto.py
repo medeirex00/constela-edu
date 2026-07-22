@@ -76,10 +76,10 @@ def test_parser_reconhece_turmas_alunos_e_ficha():
     al = t.alunos[0]
     assert al.nome == "AGATHA VITORIA MOURA DA SILVA"
     assert al.numero_chamada == 1 and al.data_nascimento == "2019-09-18"
-    assert al.ficha["ra"] == "123.100.026-0"
-    assert al.ficha["responsavel"] == "BRENDA"
-    assert al.ficha["bairro"] == "JARAGUAZINHO"
-    assert al.ficha["cpf"] == "574.900.168-78"
+    # Minimização (LGPD): só o RA é guardado; sensíveis/documentos são ignorados.
+    assert al.ficha == {"ra": "123.100.026-0"}
+    assert "cpf" not in al.ficha and "raca_cor" not in al.ficha
+    assert "sus" not in al.ficha and "responsavel" not in al.ficha
 
 
 def test_analisar_marca_turmas_existentes(cliente, db, escola_completa):
@@ -131,15 +131,15 @@ def test_confirmar_cria_turmas_alunos_matriculas_e_ficha(cliente, db, escola_com
         Aluno.nome == "AGATHA VITORIA MOURA DA SILVA")).scalar_one()
     assert aluno.numero_chamada == 1
     assert aluno.data_nascimento == date(2019, 9, 18)
-    assert aluno.ficha["ra"] == "123.100.026-0"
-    assert aluno.ficha["responsavel"] == "BRENDA"
+    assert aluno.ficha == {"ra": "123.100.026-0"}   # minimização LGPD: só RA
+    assert "cpf" not in aluno.ficha and "responsavel" not in aluno.ficha
     # Matriculado na turma certa, no ano ativo.
     mat = db.execute(select(Matricula).where(Matricula.aluno_id == aluno.id)).scalar_one()
     assert mat.turma_id == turma.id
 
-    # A ficha aparece no perfil (gestor), não na listagem.
+    # A ficha aparece no perfil (gestor), minimizada: só o RA, sem sensíveis.
     perfil = cliente.get(f"/api/v1/escolas/{escola_id}/alunos/{aluno.id}/perfil").json()
-    assert perfil["ficha"]["responsavel"] == "BRENDA"
+    assert perfil["ficha"] == {"ra": "123.100.026-0"}
 
 
 def _planilha_com_duplicado() -> bytes:
