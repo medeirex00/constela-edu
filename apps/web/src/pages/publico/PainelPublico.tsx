@@ -2,9 +2,27 @@
  * Painel Público (PRD §104–§128): acessível por URL sem login, pensado para
  * telão/TV da escola. Carrossel de slides configurável, atualização
  * automática dos dados e modo tela cheia.
+ *
+ * Visual: "noite Constela" — fundo azul profundo da marca (#0F1626→#1B2A4A)
+ * com uma constelação sutil de estrelas (o próprio nome da marca), acento pela
+ * cor primária da escola e ouro/prata/bronze celebrativos no pódio. Pensado
+ * para leitura à distância numa TV: nomes/números grandes em Poppins.
  */
-import { Expand, Pause, Play } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  Calendar,
+  Crown,
+  Expand,
+  Medal,
+  Pause,
+  Play,
+  Sparkles,
+  Star,
+  TrendingUp,
+  Trophy,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { useApi } from "../../hooks/useApi";
@@ -25,6 +43,14 @@ interface Destaque {
   nome: string;
   turma: string;
   nota_evolucao: number;
+  /** Ganhos reais do período (o que a criança avançou) — vêm do backend. */
+  ganhos?: {
+    atividades?: number;
+    estrelas?: number;
+    livros?: number;
+    tempo_leitura_min?: number;
+    acertos?: number;
+  };
 }
 
 interface DadosPainel {
@@ -34,71 +60,364 @@ interface DadosPainel {
   ranking: ItemRanking[];
   evolucao: ItemRanking[];
   destaques: { dia: Destaque | null; semana: Destaque | null; mes: Destaque | null };
+  /** Agregados REAIS da escola (snapshots atuais) — faixa de indicadores. */
+  estatisticas?: { alunos: number; atividades: number; estrelas: number; livros: number };
   mural: { icone: string; texto: string }[];
 }
 
-const TITULOS: Record<string, string> = {
-  ranking: "🏆 Ranking Geral",
-  evolucao: "📈 Quem mais cresceu (30 dias)",
-  destaques: "🌟 Destaques",
-  mural: "📣 Mural da escola",
+const TITULOS: Record<string, { titulo: string; icone: LucideIcon; legenda: string }> = {
+  ranking: { titulo: "Ranking Geral", icone: Trophy, legenda: "Os destaques da escola" },
+  evolucao: { titulo: "Quem mais cresceu", icone: TrendingUp, legenda: "Evolução dos últimos 30 dias" },
+  destaques: { titulo: "Estrelas em Destaque", icone: Sparkles, legenda: "Do dia, da semana e do mês" },
+  mural: { titulo: "Mural da Escola", icone: Star, legenda: "Novidades e conquistas" },
 };
 
-function TabelaPublica({ itens, campo, token }: { itens: ItemRanking[]; campo: "nota_geral" | "nota_evolucao"; token: string }) {
+// Dica do dia: mensagens fixas de motivação (giram com o dia — nada é dado).
+const DICAS = [
+  "Cada pequena conquista é um passo para uma grande jornada!",
+  "Capricho vale mais que pressa: acertar bem sobe mais que fazer correndo.",
+  "Quem lê um pouquinho todo dia constrói um universo inteiro.",
+  "Todo mundo pode ser a estrela do mês — continue brilhando!",
+  "Errar faz parte: tentar de novo é o que faz a estrela crescer.",
+  "Constância vence: um passo por dia leva mais longe que um salto por mês.",
+];
+
+// Pódio: cada posição/ período ganha uma cor de metal e um emoji de medalha.
+const OURO = "#F5B942"; // âmbar-estrela da marca
+const PRATA = "#CBD5E9";
+const BRONZE = "#E0955A";
+const MEDALHAS: Record<number, { emoji: string; cor: string }> = {
+  1: { emoji: "🥇", cor: OURO },
+  2: { emoji: "🥈", cor: PRATA },
+  3: { emoji: "🥉", cor: BRONZE },
+};
+
+/** Céu estrelado determinístico (posições estáveis entre renders). */
+function useEstrelas(qtd: number) {
+  return useMemo(() => {
+    let semente = 987654321;
+    const rnd = () => (semente = (semente * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    return Array.from({ length: qtd }, () => ({
+      x: rnd() * 100,
+      y: rnd() * 100,
+      r: 0.5 + rnd() * 1.7,
+      atraso: (rnd() * 4).toFixed(2),
+    }));
+  }, [qtd]);
+}
+
+/** Fundo: gradiente azul da marca + brilho na cor da escola + constelação. */
+function FundoConstela({ cor }: { cor: string }) {
+  const estrelas = useEstrelas(52);
   return (
-    <div className="mx-auto w-full max-w-3xl">
-      {itens.length === 0 ? (
-        <p className="py-16 text-center text-xl text-zinc-400">Ainda sem dados.</p>
-      ) : (
-        <ol className="space-y-2">
-          {itens.map((item) => (
-            <li
-              key={item.aluno_id}
-              className={`flex items-center gap-4 rounded-xl px-5 py-3 ${
-                item.posicao === 1
-                  ? "bg-amber-400/15 text-amber-100"
-                  : item.posicao <= 3
-                    ? "bg-white/10"
-                    : "bg-white/5"
-              }`}
-            >
-              <span className="w-12 text-2xl font-bold tabular-nums">{item.posicao}º</span>
-              <Link
-                to={`/p/${token}/alunos/${item.aluno_id}`}
-                className="flex-1 truncate text-xl font-semibold hover:underline"
-              >
-                {item.nome}
-              </Link>
-              <span className="hidden text-base text-zinc-300 sm:block">{item.turma}</span>
-              <span className="text-2xl font-bold tabular-nums">
-                {nota(item[campo] ?? 0)}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(120% 80% at 50% -10%, #26365F 0%, #1B2A4A 42%, #0F1626 100%)",
+        }}
+      />
+      {/* Dois halos suaves tingidos pela cor da escola — dão vida sem poluir. */}
+      <div
+        className="absolute -left-40 top-1/4 h-[46rem] w-[46rem] rounded-full opacity-30 blur-3xl"
+        style={{ background: `radial-gradient(circle, ${cor}, transparent 60%)` }}
+      />
+      <div
+        className="absolute -right-40 bottom-0 h-[42rem] w-[42rem] rounded-full opacity-20 blur-3xl"
+        style={{ background: `radial-gradient(circle, ${OURO}, transparent 62%)` }}
+      />
+      <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+        {estrelas.map((e, i) => (
+          <circle
+            key={i}
+            cx={e.x}
+            cy={e.y}
+            r={e.r * 0.12}
+            fill="#ffffff"
+            className="painel-estrela"
+            style={{ animationDelay: `${e.atraso}s` }}
+          />
+        ))}
+      </svg>
     </div>
   );
 }
 
-function CartaoDestaquePublico({ titulo, destaque }: { titulo: string; destaque: Destaque | null }) {
+/** Chip discreto de turma. */
+function ChipTurma({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className="rounded-2xl bg-white/10 p-6 text-center">
-      <p className="text-lg text-zinc-300">{titulo}</p>
+    <span
+      className={`inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-sm font-medium text-white/80 ring-1 ring-inset ring-white/15 ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ Destaques */
+
+const inteiro = (v?: number) => Math.round(v ?? 0).toLocaleString("pt-BR");
+
+/** Ganhos reais do período em micro-chips ("+91 atividades · +3 livros"). */
+function MicroGanhos({ ganhos }: { ganhos?: Destaque["ganhos"] }) {
+  if (!ganhos) return null;
+  const partes = [
+    ganhos.atividades ? `+${inteiro(ganhos.atividades)} atividades` : null,
+    ganhos.estrelas ? `+${inteiro(ganhos.estrelas)} estrelas` : null,
+    ganhos.livros ? `+${inteiro(ganhos.livros)} livros` : null,
+  ].filter(Boolean) as string[];
+  if (partes.length === 0) return null;
+  return (
+    <p className="mt-2 text-[clamp(0.7rem,1.2vw,0.95rem)] font-medium tabular-nums text-white/55">
+      {partes.slice(0, 3).join(" · ")}
+    </p>
+  );
+}
+
+/** Coluna do pódio: cartão do aluno + base de palco com o número. */
+function ColunaPodio({
+  titulo,
+  icone: Icone,
+  cor,
+  posicao,
+  campeao = false,
+  destaque,
+  token,
+}: {
+  titulo: string;
+  icone: LucideIcon;
+  cor: string;
+  posicao: number;
+  campeao?: boolean;
+  destaque: Destaque | null;
+  token: string;
+}) {
+  const cartao = (
+    <div
+      className={`relative flex h-full flex-col items-center overflow-hidden text-center ring-1 ring-inset ${
+        campeao
+          ? "painel-brilho rounded-[2rem] px-6 py-8 ring-amber-300/40 sm:px-8 sm:py-9"
+          : "rounded-3xl bg-white/[0.06] px-5 py-6 ring-white/10"
+      }`}
+      style={
+        campeao
+          ? {
+              background: "linear-gradient(160deg, rgba(245,185,66,0.22), rgba(27,42,74,0.55) 70%)",
+              boxShadow: `0 0 60px -12px ${OURO}66`,
+            }
+          : { boxShadow: "inset 0 1px 0 0 rgba(255,255,255,0.05)" }
+      }
+    >
+      {!campeao && <span className="absolute inset-x-0 top-0 h-1.5" style={{ background: cor }} />}
+      <div
+        className={`painel-flutua mb-2 flex items-center justify-center rounded-full ${
+          campeao ? "h-16 w-16 sm:h-20 sm:w-20" : "h-12 w-12 rounded-2xl"
+        }`}
+        style={{ background: campeao ? `radial-gradient(circle, ${OURO}, #C98A1A)` : `${cor}22` }}
+      >
+        <Icone
+          className={campeao ? "h-9 w-9 text-white sm:h-11 sm:w-11" : "h-6 w-6"}
+          style={campeao ? undefined : { color: cor }}
+          strokeWidth={2.2}
+        />
+      </div>
+      <p
+        className={`font-semibold uppercase ${
+          campeao ? "text-sm tracking-[0.25em] text-amber-200 sm:text-base" : "text-xs tracking-[0.2em] text-white/60"
+        }`}
+      >
+        {titulo}
+      </p>
       {destaque ? (
         <>
-          <p className="mt-3 text-3xl font-bold">{destaque.nome}</p>
-          <p className="mt-1 text-zinc-300">{destaque.turma}</p>
-          <p className="mt-2 text-xl tabular-nums text-emerald-300">
-            evolução {nota(destaque.nota_evolucao)}
+          {/* O NOME é o protagonista: gigante, legível do fundo da sala. */}
+          <p
+            className={`mt-2 font-extrabold leading-tight text-white ${
+              campeao ? "text-[clamp(1.9rem,4.2vw,4rem)]" : "text-[clamp(1.35rem,2.4vw,2.1rem)]"
+            }`}
+            style={{ fontFamily: "Poppins, Inter, sans-serif" }}
+          >
+            {destaque.nome}
           </p>
+          <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+            <ChipTurma>{destaque.turma}</ChipTurma>
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-400/15 px-3 py-1 font-bold tabular-nums text-emerald-300 ring-1 ring-inset ring-emerald-300/25 ${
+                campeao ? "text-lg" : "text-base"
+              }`}
+            >
+              <TrendingUp className={campeao ? "h-5 w-5" : "h-4 w-4"} /> {nota(destaque.nota_evolucao)}
+            </span>
+          </div>
+          <MicroGanhos ganhos={destaque.ganhos} />
         </>
       ) : (
-        <p className="mt-6 text-zinc-400">Sem destaque no período.</p>
+        <p className="mt-5 text-white/45">Sem destaque no período.</p>
       )}
     </div>
   );
+  return (
+    <div className="flex h-full flex-col">
+      {destaque ? (
+        <Link
+          to={`/p/${token}/alunos/${destaque.aluno_id}`}
+          className="block flex-1 transition-transform hover:scale-[1.015]"
+        >
+          {cartao}
+        </Link>
+      ) : (
+        <div className="flex-1">{cartao}</div>
+      )}
+      {/* Base do pódio: tablado com o número da posição e estrelinhas. */}
+      <div
+        className={`mx-3 flex items-center justify-center gap-3 rounded-b-2xl ${campeao ? "h-14" : "h-10"}`}
+        style={{
+          background: `linear-gradient(180deg, ${cor}55, ${cor}22)`,
+          boxShadow: `inset 0 2px 0 0 ${cor}88`,
+        }}
+      >
+        <Star className="h-4 w-4 opacity-60" style={{ color: cor }} fill="currentColor" />
+        <span
+          className={`font-extrabold tabular-nums ${campeao ? "text-3xl" : "text-xl"}`}
+          style={{ color: cor, fontFamily: "Poppins, Inter, sans-serif" }}
+        >
+          {posicao}
+        </span>
+        <Star className="h-4 w-4 opacity-60" style={{ color: cor }} fill="currentColor" />
+      </div>
+    </div>
+  );
 }
+
+/** Pódio de premiação: Mês no centro (elevado), Semana e Dia aos lados. */
+function SlideDestaques({ destaques, token }: { destaques: DadosPainel["destaques"]; token: string }) {
+  return (
+    <div className="mx-auto w-full max-w-6xl">
+      <div className="grid items-end gap-4 sm:gap-5 lg:grid-cols-3">
+        <div className="order-2 lg:order-1">
+          <ColunaPodio titulo="Aluno da Semana" icone={Medal} cor={PRATA} posicao={2}
+                       destaque={destaques.semana} token={token} />
+        </div>
+        <div className="order-1 lg:order-2 lg:-translate-y-5">
+          <ColunaPodio titulo="Aluno do Mês" icone={Crown} cor={OURO} posicao={1} campeao
+                       destaque={destaques.mes} token={token} />
+        </div>
+        <div className="order-3">
+          <ColunaPodio titulo="Aluno do Dia" icone={Star} cor={BRONZE} posicao={3}
+                       destaque={destaques.dia} token={token} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------- Rankings */
+
+function LinhaRanking({
+  item,
+  campo,
+  token,
+  larguraRelativa,
+}: {
+  item: ItemRanking;
+  campo: "nota_geral" | "nota_evolucao";
+  token: string;
+  larguraRelativa: number;
+}) {
+  const medalha = MEDALHAS[item.posicao];
+  const top3 = item.posicao <= 3;
+  const valor = item[campo] ?? 0;
+  return (
+    <Link
+      to={`/p/${token}/alunos/${item.aluno_id}`}
+      className={`group relative flex items-center gap-3 overflow-hidden rounded-2xl px-4 py-3 ring-1 ring-inset transition-colors sm:gap-4 sm:px-5 ${
+        top3 ? "bg-white/[0.09] ring-white/15" : "bg-white/[0.04] ring-white/[0.07] hover:bg-white/[0.07]"
+      }`}
+      style={top3 ? { boxShadow: `inset 4px 0 0 0 ${medalha?.cor ?? OURO}` } : undefined}
+    >
+      {/* Barra de progresso relativa ao 1º lugar (derivada dos dados exibidos). */}
+      <span
+        aria-hidden
+        className="absolute inset-y-0 left-0 -z-10 rounded-2xl opacity-[0.10]"
+        style={{ width: `${larguraRelativa}%`, background: medalha?.cor ?? "#6B7DE4" }}
+      />
+      <span className="flex w-10 shrink-0 items-center justify-center text-2xl sm:w-12">
+        {medalha ? (
+          <span aria-label={`${item.posicao}º lugar`}>{medalha.emoji}</span>
+        ) : (
+          <span className="font-bold tabular-nums text-white/45">{item.posicao}º</span>
+        )}
+      </span>
+      <span
+        className={`flex-1 truncate font-semibold text-white text-[clamp(1.05rem,2vw,1.6rem)] ${top3 ? "" : "text-white/90"}`}
+        style={{ fontFamily: "Poppins, Inter, sans-serif" }}
+      >
+        {item.nome}
+      </span>
+      <ChipTurma className="hidden sm:inline-flex">{item.turma}</ChipTurma>
+      <span
+        className="w-20 shrink-0 text-right font-bold tabular-nums text-white text-[clamp(1.1rem,2vw,1.75rem)] sm:w-28"
+        style={top3 ? { color: medalha?.cor } : undefined}
+      >
+        {nota(valor)}
+      </span>
+    </Link>
+  );
+}
+
+function SlideRanking({
+  itens,
+  campo,
+  token,
+}: {
+  itens: ItemRanking[];
+  campo: "nota_geral" | "nota_evolucao";
+  token: string;
+}) {
+  if (itens.length === 0) {
+    return <p className="py-16 text-center text-xl text-white/40">Ainda sem dados para exibir.</p>;
+  }
+  // Topo = maior valor exibido (posição 1). Base para as barras relativas.
+  const topo = Math.max(...itens.map((i) => i[campo] ?? 0), 0) || 1;
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-2.5">
+      {itens.map((item) => (
+        <LinhaRanking
+          key={item.aluno_id}
+          item={item}
+          campo={campo}
+          token={token}
+          larguraRelativa={Math.max(6, ((item[campo] ?? 0) / topo) * 100)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SlideMural({ mural }: { mural: DadosPainel["mural"] }) {
+  if (mural.length === 0) {
+    return <p className="py-16 text-center text-xl text-white/40">Nada no mural ainda.</p>;
+  }
+  return (
+    <ul className="mx-auto grid w-full max-w-3xl gap-3">
+      {mural.map((evento, indice) => (
+        <li
+          key={indice}
+          className="painel-surgir flex items-center gap-4 rounded-2xl bg-white/[0.06] px-5 py-4 text-lg text-white/90 ring-1 ring-inset ring-white/10"
+          style={{ animationDelay: `${Math.min(indice, 8) * 0.06}s` }}
+        >
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-2xl">
+            {evento.icone}
+          </span>
+          <span className="text-[clamp(1rem,1.8vw,1.4rem)]">{evento.texto}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/* --------------------------------------------------------------------- Painel */
 
 export default function PainelPublico() {
   const { token = "" } = useParams();
@@ -110,7 +429,80 @@ export default function PainelPublico() {
   );
   const [slideAtivo, setSlideAtivo] = useState(0);
   const [pausado, setPausado] = useState(false);
+  const [agora, setAgora] = useState(() => new Date());
+  const [atualizadoEm, setAtualizadoEm] = useState<Date | null>(null);
+  const [telaCheia, setTelaCheia] = useState(false);
+  const [ocioso, setOcioso] = useState(false);
   const raiz = useRef<HTMLDivElement | null>(null);
+
+  const alternarTelaCheia = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void raiz.current?.requestFullscreen();
+  };
+
+  useEffect(() => {
+    // Modo TV: acompanha o estado real do fullscreen (inclusive tecla Esc).
+    const aoMudar = () => setTelaCheia(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", aoMudar);
+    return () => document.removeEventListener("fullscreenchange", aoMudar);
+  }, []);
+
+  useEffect(() => {
+    // Numa TV, controles e cursor somem após 5s parados — só o palco fica.
+    let timer = 0;
+    const acordar = () => {
+      setOcioso(false);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setOcioso(true), 5_000);
+    };
+    acordar();
+    window.addEventListener("mousemove", acordar);
+    window.addEventListener("keydown", acordar);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("mousemove", acordar);
+      window.removeEventListener("keydown", acordar);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Atalhos de telão: F = tela cheia, Espaço = pausar/retomar o carrossel.
+    const aoTeclar = (evento: KeyboardEvent) => {
+      if (evento.key === "f" || evento.key === "F") alternarTelaCheia();
+      if (evento.key === " ") {
+        evento.preventDefault();
+        setPausado((atual) => !atual);
+      }
+    };
+    window.addEventListener("keydown", aoTeclar);
+    return () => window.removeEventListener("keydown", aoTeclar);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Wake Lock: a TV/tablet não pode dormir no meio da exposição. Reaquire ao
+    // voltar a ficar visível (o navegador solta o lock quando a aba esconde).
+    type WakeLockSentinel = { release?: () => Promise<void> };
+    let trava: WakeLockSentinel | null = null;
+    const pedir = async () => {
+      try {
+        trava = await (navigator as Navigator & {
+          wakeLock?: { request: (t: "screen") => Promise<WakeLockSentinel> };
+        }).wakeLock?.request("screen") ?? null;
+      } catch {
+        /* sem suporte/permitido — segue sem trava */
+      }
+    };
+    void pedir();
+    const rearmar = () => {
+      if (document.visibilityState === "visible") void pedir();
+    };
+    document.addEventListener("visibilitychange", rearmar);
+    return () => {
+      document.removeEventListener("visibilitychange", rearmar);
+      void trava?.release?.();
+    };
+  }, []);
 
   useEffect(() => {
     // Dados sempre frescos no telão: recarrega a cada 60s (o hook cuida do
@@ -118,6 +510,17 @@ export default function PainelPublico() {
     const atualizador = window.setInterval(recarregar, 60_000);
     return () => window.clearInterval(atualizador);
   }, [recarregar]);
+
+  useEffect(() => {
+    // Relógio do cabeçalho (data/hora atual) — atualiza a cada 30s.
+    const relogio = window.setInterval(() => setAgora(new Date()), 30_000);
+    return () => window.clearInterval(relogio);
+  }, []);
+
+  useEffect(() => {
+    // Marca quando o último quadro bom chegou (rodapé "atualizado às HH:MM").
+    if (dados) setAtualizadoEm(new Date());
+  }, [dados]);
 
   useEffect(() => {
     if (!dados || pausado || dados.slides.length <= 1) return;
@@ -139,8 +542,9 @@ export default function PainelPublico() {
       erro.status === 0 || erro.status === 408 || erro.status === 429 ||
       erro.status >= 500;
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-300">
-        <p className="text-xl">
+      <div className="relative flex min-h-screen items-center justify-center bg-[#0F1626] text-white/70">
+        <FundoConstela cor="#5B6EE1" />
+        <p className="relative text-xl">
           {transitorio
             ? "Reconectando ao painel..."
             : "Painel não encontrado ou desativado."}
@@ -150,88 +554,176 @@ export default function PainelPublico() {
   }
   if (!dados) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        Carregando painel...
+      <div className="relative flex min-h-screen items-center justify-center bg-[#0F1626] text-white/60">
+        <FundoConstela cor="#5B6EE1" />
+        <p className="relative flex items-center gap-3 text-lg">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
+          Carregando painel...
+        </p>
       </div>
     );
   }
 
   const slide = dados.slides[slideAtivo % dados.slides.length];
+  const meta = TITULOS[slide] ?? TITULOS.ranking;
   const cor = dados.escola.cor_primaria;
+  const dataFmt = agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  const horaFmt = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+  // Em fullscreen ocioso, controles/cursor somem — só o palco fica (modo TV).
+  const modoTv = telaCheia && ocioso;
 
   return (
-    <div ref={raiz} className="flex min-h-screen flex-col bg-zinc-950 text-white">
-      <header
-        className="flex items-center justify-between px-6 py-4"
-        style={{ background: `linear-gradient(90deg, ${cor}, transparent)` }}
-      >
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{dados.escola.nome}</h1>
-          <p className="text-sm text-white/70">Painel de conquistas e rankings</p>
+    <div
+      ref={raiz}
+      className={`relative flex min-h-screen flex-col overflow-hidden bg-[#0F1626] text-white ${modoTv ? "cursor-none" : ""}`}
+    >
+      <FundoConstela cor={cor} />
+
+      {/* ---------------------------------------------------------- Cabeçalho */}
+      <header className="relative flex items-center justify-between gap-4 px-5 py-4 sm:px-8 sm:py-5">
+        <div className="flex items-center gap-3 sm:gap-4">
+          <img src="/simbolo-escuro.svg" alt="Constela Edu" width={44} height={44} className="h-9 w-9 sm:h-11 sm:w-11" />
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-amber-300 sm:text-sm">
+              <Trophy className="h-3.5 w-3.5" /> Painel de Conquistas
+            </p>
+            <h1
+              className="truncate font-extrabold leading-tight text-white text-[clamp(1.25rem,3vw,2.5rem)]"
+              style={{ fontFamily: "Poppins, Inter, sans-serif" }}
+            >
+              {dados.escola.nome}
+            </h1>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            aria-label={pausado ? "Retomar carrossel" : "Pausar carrossel"}
-            className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
-            onClick={() => setPausado((atual) => !atual)}
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="hidden text-right sm:block">
+            <p className="flex items-center justify-end gap-1.5 text-sm font-medium capitalize text-white/80">
+              <Calendar className="h-4 w-4 text-white/50" /> {dataFmt}
+            </p>
+            <p className="text-lg font-bold tabular-nums text-white/95">{horaFmt}</p>
+          </div>
+          <div
+            className={`flex items-center gap-2 transition-opacity duration-500 ${modoTv ? "pointer-events-none opacity-0" : "opacity-100"}`}
           >
-            {pausado ? <Play size={18} /> : <Pause size={18} />}
-          </button>
-          <button
-            aria-label="Modo TV (tela cheia)"
-            className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
-            onClick={() => {
-              if (document.fullscreenElement) document.exitFullscreen();
-              else raiz.current?.requestFullscreen();
-            }}
-          >
-            <Expand size={18} />
-          </button>
+            <button
+              aria-label={pausado ? "Retomar carrossel (Espaço)" : "Pausar carrossel (Espaço)"}
+              title={pausado ? "Retomar (Espaço)" : "Pausar (Espaço)"}
+              className="rounded-xl bg-white/10 p-2.5 text-white/80 ring-1 ring-inset ring-white/15 transition-colors hover:bg-white/20"
+              onClick={() => setPausado((atual) => !atual)}
+            >
+              {pausado ? <Play size={18} /> : <Pause size={18} />}
+            </button>
+            <button
+              aria-label="Modo TV — tela cheia (F)"
+              title="Modo TV (F)"
+              className="rounded-xl bg-white/10 p-2.5 text-white/80 ring-1 ring-inset ring-white/15 transition-colors hover:bg-white/20"
+              onClick={alternarTelaCheia}
+            >
+              <Expand size={18} />
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="flex flex-1 flex-col justify-center px-4 py-8">
-        <h2 className="mb-8 text-center text-3xl font-bold">{TITULOS[slide]}</h2>
+      {/* Filete com a cor da escola separando cabeçalho do palco. */}
+      <div className="relative mx-5 h-px sm:mx-8" style={{ background: `linear-gradient(90deg, ${cor}, transparent 80%)` }} />
 
-        {slide === "ranking" && <TabelaPublica itens={dados.ranking} campo="nota_geral" token={token} />}
-        {slide === "evolucao" && <TabelaPublica itens={dados.evolucao} campo="nota_evolucao" token={token} />}
-        {slide === "destaques" && (
-          <div className="mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-3">
-            <CartaoDestaquePublico titulo="Aluno do Dia" destaque={dados.destaques.dia} />
-            <CartaoDestaquePublico titulo="Aluno da Semana" destaque={dados.destaques.semana} />
-            <CartaoDestaquePublico titulo="Aluno do Mês" destaque={dados.destaques.mes} />
+      {/* -------------------------------------------------------------- Palco */}
+      <main className="relative flex flex-1 flex-col justify-center overflow-y-auto px-4 py-6 sm:px-8 sm:py-8">
+        <div key={slide} className="painel-surgir mx-auto w-full">
+          <div className="mb-6 text-center sm:mb-8">
+            <h2
+              className="flex items-center justify-center gap-3 font-extrabold text-white text-[clamp(1.6rem,3.4vw,3rem)]"
+              style={{ fontFamily: "Poppins, Inter, sans-serif" }}
+            >
+              <meta.icone className="h-7 w-7 shrink-0 sm:h-9 sm:w-9" style={{ color: OURO }} strokeWidth={2.3} />
+              {meta.titulo}
+            </h2>
+            <p className="mt-1 text-sm text-white/50 sm:text-base">{meta.legenda}</p>
           </div>
-        )}
-        {slide === "mural" && (
-          <ul className="mx-auto w-full max-w-2xl space-y-2">
-            {dados.mural.length === 0 ? (
-              <p className="py-16 text-center text-xl text-zinc-400">Nada no mural ainda.</p>
-            ) : (
-              dados.mural.map((evento, indice) => (
-                <li key={indice} className="flex items-center gap-3 rounded-xl bg-white/5 px-5 py-3 text-lg">
-                  <span className="text-2xl">{evento.icone}</span>
-                  {evento.texto}
-                </li>
-              ))
-            )}
-          </ul>
-        )}
+
+          {slide === "ranking" && <SlideRanking itens={dados.ranking} campo="nota_geral" token={token} />}
+          {slide === "evolucao" && <SlideRanking itens={dados.evolucao} campo="nota_evolucao" token={token} />}
+          {slide === "destaques" && <SlideDestaques destaques={dados.destaques} token={token} />}
+          {slide === "mural" && <SlideMural mural={dados.mural} />}
+        </div>
       </main>
 
-      {dados.slides.length > 1 && (
-        <footer className="flex justify-center gap-2 pb-5">
-          {dados.slides.map((nomeSlide, indice) => (
-            <button
-              key={nomeSlide}
-              aria-label={`Ir para o slide ${TITULOS[nomeSlide]}`}
-              className={`h-2.5 rounded-full transition-all ${
-                indice === slideAtivo % dados.slides.length ? "w-8 bg-white" : "w-2.5 bg-white/30"
-              }`}
-              onClick={() => setSlideAtivo(indice)}
-            />
+      {/* --------------------------------------- Indicadores REAIS da escola */}
+      {dados.estatisticas && (
+        <section
+          aria-label="Números da escola"
+          className="relative mx-4 mb-1 grid grid-cols-2 gap-2 rounded-2xl bg-white/[0.05] px-3 py-2.5 ring-1 ring-inset ring-white/10 sm:mx-8 sm:grid-cols-4 sm:gap-3 sm:px-5"
+        >
+          {[
+            { emoji: "👥", rotulo: "Alunos", valor: dados.estatisticas.alunos },
+            { emoji: "🎯", rotulo: "Atividades", valor: dados.estatisticas.atividades },
+            { emoji: "⭐", rotulo: "Estrelas", valor: dados.estatisticas.estrelas },
+            { emoji: "📚", rotulo: "Livros lidos", valor: dados.estatisticas.livros },
+          ].map((e) => (
+            <div key={e.rotulo} className="flex items-center justify-center gap-2.5">
+              <span className="text-xl sm:text-2xl" aria-hidden>{e.emoji}</span>
+              <div className="text-left leading-tight">
+                <p
+                  className="font-extrabold tabular-nums text-white text-[clamp(1.1rem,2.2vw,1.8rem)]"
+                  style={{ fontFamily: "Poppins, Inter, sans-serif" }}
+                >
+                  {e.valor.toLocaleString("pt-BR")}
+                </p>
+                <p className="text-[clamp(0.6rem,1vw,0.8rem)] font-semibold uppercase tracking-wider text-white/50">
+                  {e.rotulo}
+                </p>
+              </div>
+            </div>
           ))}
-        </footer>
+        </section>
       )}
+
+      {/* Dica do dia: motivação discreta, gira com o dia do ano. */}
+      <p className="relative px-6 pb-1 text-center text-[clamp(0.75rem,1.3vw,1rem)] text-white/45">
+        <Sparkles className="mr-1.5 inline h-3.5 w-3.5 text-amber-300/80" aria-hidden />
+        {DICAS[Math.floor((agora.getTime() / 86_400_000)) % DICAS.length]}
+      </p>
+
+      {/* ------------------------------------------------------------- Rodapé */}
+      <footer
+        className={`relative flex flex-col items-center gap-3 px-5 py-4 transition-opacity duration-500 sm:flex-row sm:justify-between sm:px-8 ${
+          modoTv ? "opacity-30" : "opacity-100"
+        }`}
+      >
+        <div className="flex items-center gap-2 text-sm font-medium text-white/50">
+          <img src="/simbolo-escuro.svg" alt="" aria-hidden width={18} height={18} className="h-4 w-4 opacity-70" />
+          <span style={{ fontFamily: "Poppins, Inter, sans-serif" }}>
+            constela<span className="text-amber-300">edu</span>
+          </span>
+        </div>
+
+        {dados.slides.length > 1 && (
+          <div className="flex items-center gap-2">
+            {dados.slides.map((nomeSlide, indice) => (
+              <button
+                key={nomeSlide}
+                aria-label={`Ir para ${TITULOS[nomeSlide]?.titulo ?? nomeSlide}`}
+                className={`h-2.5 rounded-full transition-all ${
+                  indice === slideAtivo % dados.slides.length ? "w-8 bg-amber-300" : "w-2.5 bg-white/25 hover:bg-white/40"
+                }`}
+                onClick={() => setSlideAtivo(indice)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 text-xs text-white/40">
+          <span className="painel-pulso h-2 w-2 rounded-full bg-emerald-400" />
+          Atualização automática
+          {atualizadoEm && (
+            <span className="hidden tabular-nums sm:inline">
+              · {atualizadoEm.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+        </div>
+      </footer>
     </div>
   );
 }

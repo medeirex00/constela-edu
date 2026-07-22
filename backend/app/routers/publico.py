@@ -13,16 +13,20 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis
-from app.models import Aluno, Configuracao, Escola, Matricula, Nota, Turma, Usuario
+from app.models import (
+    Aluno, Configuracao, Escola, Matricula, Nota,
+    SnapshotElefante, SnapshotMatific, Turma, Usuario,
+)
 from app.services import evolucao as svc_evolucao
 from app.services import gamificacao as svc_gami
 from app.services import relatorios as svc_relatorios
+from app.services import scoring
 from app.services.audit import registrar
 
 router = APIRouter(tags=["Painel Público"])
@@ -255,6 +259,26 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     evolucao_itens = svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]
     mural = svc_gami.mural(db, escola.id)
 
+    # Estatísticas REAIS da escola (agregadas dos snapshots atuais — nada é
+    # inventado): faixa de indicadores do painel. Custo absorvido pelo cache
+    # TTL_PAINEL_S do endpoint.
+    snaps_m = scoring._snapshots_atuais(db, escola.id, SnapshotMatific)
+    snaps_e = scoring._snapshots_atuais(db, escola.id, SnapshotElefante)
+    total_alunos = db.execute(
+        select(func.count())
+        .select_from(Matricula)
+        .join(Aluno, Matricula.aluno_id == Aluno.id)
+        .where(Matricula.escola_id == escola.id,
+               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
+    ).scalar() or 0
+    estatisticas = {
+        "alunos": int(total_alunos),
+        "atividades": int(sum(s.atividades for s in snaps_m.values())),
+        "estrelas": int(sum(s.estrelas for s in snaps_m.values())),
+        "livros": int(sum(s.livros_unicos for s in snaps_e.values())),
+    }
+
     return {
         "escola": {
             "nome": escola.nome,
@@ -283,6 +307,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             for item in evolucao_itens
         ],
         "destaques": mural["destaques"],
+        "estatisticas": estatisticas,
         "mural": [
             {"icone": evento["icone"], "texto": evento["texto"]}
             for evento in mural["eventos"][:10]

@@ -58,3 +58,39 @@
     @apply rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Painel Público (telão da escola) — animações de celebração.
+   CSS plano (fora de @layer) para o Tailwind NÃO purgar; classes com prefixo
+   "painel-" para não colidir com utilitárias. Tudo desliga em reduced-motion.
+--------------------------------------------------------------------------- */
+@keyframes painel-cintila { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.85; } }
+@keyframes painel-brilho { 0% { transform: translateX(-130%); } 60%, 100% { transform: translateX(240%); } }
+@keyframes painel-surgir { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes painel-flutua { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes painel-pulso { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
+
+.painel-estrela { animation: painel-cintila 4s ease-in-out infinite; }
+.painel-surgir { animation: painel-surgir 0.6s ease-out both; }
+.painel-flutua { animation: painel-flutua 5.5s ease-in-out infinite; }
+.painel-pulso { animation: painel-pulso 2s ease-in-out infinite; }
+/* Faixa de brilho que varre um cartão (usar em elemento com position:relative e overflow:hidden). */
+.painel-brilho::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 32%, rgba(255, 255, 255, 0.16) 50%, transparent 68%);
+  transform: translateX(-130%);
+  animation: painel-brilho 5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .painel-estrela,
+  .painel-surgir,
+  .painel-flutua,
+  .painel-pulso,
+  .painel-brilho::after {
+    animation: none !important;
+  }
+}
