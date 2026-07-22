@@ -198,13 +198,15 @@ _COLUNAS = {
 }
 
 # Rótulos legíveis da ficha (para exibir no perfil do aluno).
+# MINIMIZAÇÃO DE DADOS (LGPD Art. 5º/6º/11): o produto guarda do aluno APENAS o
+# necessário para premiar e identificar — nome e nº de chamada (colunas próprias)
+# e o RA (identidade única entre plataformas). Categorias SENSÍVEIS (raça/cor,
+# saúde/SUS) e documentos (CPF, RG) NÃO são coletados: colunas dessas nas
+# planilhas são simplesmente ignoradas na importação. A migração 0014 purga o que
+# já havia sido gravado. Para reintroduzir qualquer campo, exige base legal
+# documentada (ROPA) — não basta acrescentar aqui.
 ROTULOS_FICHA = {
-    "rm": "RM", "ra": "RA", "responsavel": "Responsável",
-    "responsavel_completo": "Responsável (nome completo)",
-    "endereco": "Endereço", "bairro": "Bairro", "telefone": "Telefone",
-    "matricula": "Matrícula", "transferencia": "Transferência",
-    "remanejamento": "Remanejamento", "rg": "RG", "cpf": "CPF", "sus": "SUS",
-    "sexo": "Sexo", "raca_cor": "Raça/Cor", "bolsa_familia": "Bolsa Família",
+    "ra": "RA",
 }
 
 _NAO_ALUNO = ("total", "toda a turma", "whole class", "toda la clase")
