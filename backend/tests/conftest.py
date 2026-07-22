@@ -32,7 +32,7 @@ def _reset_estado_global():
 
     for lim in (rate_limit.limitador_login, rate_limit.limitador_conta,
                 quest_auth.limitador_codigo, quest_auth.limitador_ip,
-                quest_auth.limitador_codigo_conta):
+                quest_auth.limitador_codigo_conta, quest_auth.limitador_ip_falha):
         lim._eventos.clear()
     publico._cache_painel.clear()
     publico._cache_visiveis.clear()
