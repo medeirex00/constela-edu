@@ -23,13 +23,22 @@ router = APIRouter(prefix="/quest/auth", tags=["Quest — Autenticação"])
 # Chaveado por (código, IP): o erro de digitação de uma criança nunca pune a
 # turma inteira atrás do NAT da escola (um único IP público para 30 tablets).
 limitador_codigo = LimitadorTentativas(max_tentativas=8, janela_s=300)
-# Teto largo por IP só contra enumeração em massa — dimensionado para o
-# pior caso legítimo: uma sala inteira errando o código algumas vezes.
+# Teto largo por IP para REVELAÇÃO de nome (/quem) — contra colheita em massa.
 limitador_ip = LimitadorTentativas(max_tentativas=300, janela_s=300)
 # Por CÓDIGO (sem IP): freia adivinhação de UM código específico mesmo com o
 # atacante trocando de IP. Seguro: acertar o código já dá acesso (é a
 # credencial), então travá-lo não é pior que o modelo de produto atual.
 limitador_codigo_conta = LimitadorTentativas(max_tentativas=20, janela_s=900)
+# Anti-ENUMERAÇÃO por IP: conta só as tentativas com código INEXISTENTE. Um
+# ataque de adivinhação por força-bruta é quase 100% de erros (cada palpite
+# toca um código distinto, escapando dos limitadores por-código), então esta é
+# a rede que o barra a partir de um único IP — importante porque, na topologia
+# real (API no Railway, sem nginx na frente), NÃO há limite de borda. O teto é
+# generoso para uma sala inteira com alguns erros de digitação, mas milhares de
+# vezes menor que o espaço de códigos. (A defesa completa — limitador
+# compartilhado entre réplicas via Redis + limite de borda — fica como ação de
+# infraestrutura; ver docs de segurança.)
+limitador_ip_falha = LimitadorTentativas(max_tentativas=50, janela_s=300)
 
 ERRO_CODIGO = "Não encontrei esse código. Confira o cartão e tente de novo!"
 ERRO_INATIVO = ("Seu cartão está descansando! Peça um cartão novo "
@@ -86,7 +95,8 @@ def _sessao(db: Session, credencial: QuestCredencialAluno, request: Request,
 def _limites(request: Request, chave_conta: str) -> tuple[str, str]:
     ip = ip_do_cliente(request)
     chave = f"{chave_conta}|{ip}"
-    if (limitador_ip.bloqueado(ip) or limitador_codigo.bloqueado(chave)
+    if (limitador_ip.bloqueado(ip) or limitador_ip_falha.bloqueado(ip)
+            or limitador_codigo.bloqueado(chave)
             or limitador_codigo_conta.bloqueado(chave_conta)):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_MUITAS)
     return ip, chave
@@ -102,6 +112,7 @@ def quem(dados: schemas.QuemIn, request: Request, db: Session = Depends(get_db))
         limitador_codigo.registrar_falha(chave)
         limitador_codigo_conta.registrar_falha(codigo)
         limitador_ip.registrar_falha(ip)
+        limitador_ip_falha.registrar_falha(ip)  # código inexistente → anti-enum
 
     credencial = _checar_credencial(svc.buscar_por_codigo(db, codigo), falhou)
     # Anti-enumeração: revelar um nome conta contra o teto POR IP (limitador_ip).
@@ -128,6 +139,7 @@ def entrar(dados: schemas.EntrarIn, request: Request,
         limitador_codigo.registrar_falha(chave)
         limitador_codigo_conta.registrar_falha(codigo)
         limitador_ip.registrar_falha(ip)
+        limitador_ip_falha.registrar_falha(ip)  # código inexistente → anti-enum
         # NÃO gravar o código digitado (credencial de menor, near-miss) e
         # mascarar o IP no log permanente (LGPD/minimização — §12 §9/§15).
         registrar(db, "quest.login_falhou",

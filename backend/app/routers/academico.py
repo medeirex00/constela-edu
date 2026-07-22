@@ -412,6 +412,40 @@ def acoes_em_alunos(
     return {"mensagem": mensagem, "afetados": len(ids)}
 
 
+def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
+                              aluno_ids: list[int], nomes: set[str]) -> None:
+    """Redige o nome civil das entradas ANTERIORES do log de auditoria que se
+    referem ao aluno excluído (LGPD/esquecimento).
+
+    Escopo: entradas cujo ``entidade_id`` é o próprio aluno (criação, edição,
+    fusão em que ele foi o mantido). O ``entidade_id`` permanece como referência
+    ANÔNIMA (o registro do "quê/quando/por quem" é preservado para auditoria);
+    apenas o nome em texto claro é trocado por ``"[removido]"``."""
+    from app.models import LogAuditoria  # noqa: E402
+    nomes_limpos = {n for n in nomes if n and n.strip()}
+
+    def _redigir(valor):
+        if isinstance(valor, dict):
+            return {chave: ("[removido]" if chave == "nome" else _redigir(v))
+                    for chave, v in valor.items()}
+        if isinstance(valor, list):
+            return [_redigir(v) for v in valor]
+        if isinstance(valor, str) and valor in nomes_limpos:
+            return "[removido]"
+        return valor
+
+    logs = db.execute(
+        select(LogAuditoria).where(
+            LogAuditoria.escola_id == escola_id,
+            LogAuditoria.entidade == "aluno",
+            LogAuditoria.entidade_id.in_(aluno_ids),
+        )
+    ).scalars().all()
+    for log in logs:
+        if log.detalhes:
+            log.detalhes = _redigir(log.detalhes)  # reatribui → dirty tracking
+
+
 def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
                            aluno_ids: list[int]) -> int:
     """Exclusão FÍSICA de alunos + TODOS os dados vinculados (leituras, snapshots
@@ -432,10 +466,17 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     db.execute(delete(SnapshotElefante).where(SnapshotElefante.aluno_id.in_(ids)))
     db.execute(delete(Nota).where(Nota.aluno_id.in_(ids)))
     db.execute(delete(Matricula).where(Matricula.aluno_id.in_(ids)))
-    for aid in ids:  # auditoria ANTES de apagar (entidade_id só referência)
+    # LGPD/esquecimento: NÃO gravar o nome da criança no log permanente (o
+    # entidade_id basta como referência; o nome, uma vez apagado, não deve
+    # sobreviver em texto claro). Guarda só a contagem por lote.
+    for aid in ids:
         registrar(db, "aluno.excluido_permanente", escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
-                  detalhes={"nome": nomes[aid], "tipo": "exclusao_permanente"})
+                  detalhes={"tipo": "exclusao_permanente"})
+    # E anonimiza as entradas ANTERIORES do log que citam o nome deste aluno
+    # (criação/edição/fusão/importação) — sem isso o nome civil do menor
+    # persistiria para sempre no histórico de auditoria.
+    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()))
     db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
 
     # LGPD: esquecimento das conversas da IA que citem o nome COMPLETO de algum
@@ -491,9 +532,10 @@ def fundir_alunos(
     """Funde dois cadastros do MESMO aluno (duplicados).
 
     Junta no `manter` TUDO do `remover` — snapshots Matific e Elefante,
-    leituras, matrículas, notas e também o lado Quest (perfil + telemetria,
-    credencial e responsáveis) — e apaga o `remover`. É o caso do aluno cujos
-    dados vieram separados (Matific num cadastro, Elefante noutro).
+    leituras, matrículas, notas, a linha do tempo de eventos, o vínculo de
+    identidade externa (UUID das plataformas) e também o lado Quest (perfil +
+    telemetria, credencial e responsáveis) — e apaga o `remover`. É o caso do
+    aluno cujos dados vieram separados (Matific num cadastro, Elefante noutro).
 
     Conflitos são resolvidos sem perder nem duplicar:
       * leitura do mesmo livro nos dois → mantém uma (a releitura nunca
@@ -550,6 +592,52 @@ def fundir_alunos(
         update(SnapshotElefante).where(SnapshotElefante.aluno_id == remover.id)
         .values(aluno_id=manter.id)
     ).rowcount
+
+    # Eventos (linha do tempo) e identidade externa (vínculo UUID do Matific):
+    # SEM esta reatribuição, o `db.delete(remover)` cascatearia (ON DELETE
+    # CASCADE das migrações 0010/0013) e apagaria em SILÊNCIO todo o histórico
+    # de eventos do `remover` E o seu vínculo UUID — e aí a próxima sincronização
+    # voltaria a casar por nome e poderia recriar a duplicata, DESFAZENDO a
+    # fusão. Reatribui preservando as respectivas unicidades.
+    from app.models import EventoAluno, IdentidadeExterna  # noqa: E402
+
+    # Eventos: migra os que o `manter` ainda não tem; descarta os duplicados
+    # (mesma plataforma+chave_natural) para respeitar a UNIQUE de idempotência.
+    chaves_evt_manter = set(db.execute(
+        select(EventoAluno.plataforma, EventoAluno.chave_natural)
+        .where(EventoAluno.aluno_id == manter.id)
+    ).all())
+    eventos_movidos = eventos_descartados = 0
+    for evento in db.execute(
+        select(EventoAluno).where(EventoAluno.aluno_id == remover.id)
+    ).scalars().all():
+        chave = (evento.plataforma, evento.chave_natural)
+        if chave in chaves_evt_manter:
+            db.delete(evento)
+            eventos_descartados += 1
+        else:
+            evento.aluno_id = manter.id
+            chaves_evt_manter.add(chave)
+            eventos_movidos += 1
+
+    # Identidade externa: migra o vínculo de plataformas que o `manter` ainda não
+    # tem; se ambos têm a MESMA plataforma, o vínculo do `manter` prevalece e o
+    # do `remover` é descartado (evita violar a UNIQUE escola+plataforma+id).
+    plats_ident_manter = set(db.execute(
+        select(IdentidadeExterna.plataforma)
+        .where(IdentidadeExterna.aluno_id == manter.id)
+    ).scalars().all())
+    identidades_movidas = identidades_descartadas = 0
+    for ident in db.execute(
+        select(IdentidadeExterna).where(IdentidadeExterna.aluno_id == remover.id)
+    ).scalars().all():
+        if ident.plataforma in plats_ident_manter:
+            db.delete(ident)
+            identidades_descartadas += 1
+        else:
+            ident.aluno_id = manter.id
+            plats_ident_manter.add(ident.plataforma)
+            identidades_movidas += 1
 
     # Matrículas: move as de anos que o `manter` ainda não tem; nos anos em
     # que ambos têm, mantém a do `manter` e descarta a do `remover`.
@@ -654,6 +742,10 @@ def fundir_alunos(
                         "leituras_descartadas": descartadas,
                         "snapshots_matific": snaps_matific,
                         "snapshots_elefante": snaps_elefante,
+                        "eventos_movidos": eventos_movidos,
+                        "eventos_descartados": eventos_descartados,
+                        "identidades_movidas": identidades_movidas,
+                        "identidades_descartadas": identidades_descartadas,
                         "quest_perfil_movido": quest_perfil_movido,
                         "quest_perfil_descartado": quest_perfil_descartado})
     # Garante que as reatribuições (UPDATE aluno_id) sejam gravadas ANTES do
@@ -671,6 +763,10 @@ def fundir_alunos(
         "aluno_id": manter_id,
         "leituras_movidas": leituras_movidas,
         "leituras_descartadas": descartadas,
+        "eventos_movidos": eventos_movidos,
+        "eventos_descartados": eventos_descartados,
+        "identidades_movidas": identidades_movidas,
+        "identidades_descartadas": identidades_descartadas,
         "quest_perfil_movido": quest_perfil_movido,
         "quest_perfil_descartado": quest_perfil_descartado,
     }

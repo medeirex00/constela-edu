@@ -72,31 +72,47 @@ def gerar_senha_legivel() -> str:
 # devolver acesso a quem esqueceu a senha existe a redefinição por token
 # (gerar_token_reset / hash_token) — a senha original jamais é recuperável.
 
-def _chave_fernet() -> bytes:
+def _derivar_fernet(segredo: str) -> bytes:
     import base64
     import hashlib
 
     # A string de derivação é mantida ("senha-visivel") por COMPATIBILIDADE:
-    # segredos já cifrados em produção (ex.: chave de API do assistente)
-    # continuam legíveis após esta refatoração.
-    derivada = hashlib.sha256(f"{settings.SECRET_KEY}|senha-visivel".encode()).digest()
+    # segredos já cifrados em produção continuam legíveis após a refatoração.
+    derivada = hashlib.sha256(f"{segredo}|senha-visivel".encode()).digest()
     return base64.urlsafe_b64encode(derivada)
 
 
-def cifrar_segredo(valor: str) -> str:
-    from cryptography.fernet import Fernet
+def _fernet_dados():
+    """Cifra/decifra os segredos em repouso (credenciais de plataforma, chave
+    de IA, cookies do robô).
 
-    return Fernet(_chave_fernet()).encrypt(valor.encode("utf-8")).decode("ascii")
+    Se ``DATA_ENCRYPTION_KEY`` estiver definida, ela é a chave PRIMÁRIA de cifra
+    — SEPARADA da ``SECRET_KEY`` que assina os JWT. Assim um vazamento da
+    SECRET_KEY sozinho não decifra os segredos de integração, e a chave de
+    dados pode ser rotacionada de forma independente. A chave derivada da
+    SECRET_KEY permanece como SECUNDÁRIA de DECIFRA (``MultiFernet``), para que
+    tudo que já foi cifrado continue legível sem re-cifrar. Sem
+    ``DATA_ENCRYPTION_KEY``, o comportamento é idêntico ao anterior."""
+    from cryptography.fernet import Fernet, MultiFernet
+
+    legado = Fernet(_derivar_fernet(settings.SECRET_KEY))
+    dedicada = (settings.DATA_ENCRYPTION_KEY or "").strip()
+    if dedicada and dedicada != settings.SECRET_KEY:
+        # Cifra nova usa a dedicada (1ª); decifra tenta dedicada e depois legado.
+        return MultiFernet([Fernet(_derivar_fernet(dedicada)), legado])
+    return legado
+
+
+def cifrar_segredo(valor: str) -> str:
+    return _fernet_dados().encrypt(valor.encode("utf-8")).decode("ascii")
 
 
 def decifrar_segredo(token: str | None) -> str | None:
-    """Valor em texto, ou None se não houver cópia / a SECRET_KEY mudou."""
+    """Valor em texto, ou None se não houver cópia / as chaves não decifram."""
     if not token:
         return None
     try:
-        from cryptography.fernet import Fernet
-
-        return Fernet(_chave_fernet()).decrypt(token.encode("ascii")).decode("utf-8")
+        return _fernet_dados().decrypt(token.encode("ascii")).decode("utf-8")
     except Exception:  # noqa: BLE001 — chave trocada/valor corrompido: sem cópia
         return None
 

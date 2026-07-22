@@ -143,16 +143,15 @@ def ranking_leitura(
     # AGREGADA (livros/tempo por aluno, sem uma linha por livro com data). Sem
     # isso, a aba Leitura ficava vazia para escolas que só têm o import por turma.
     if periodo == "tudo":
-        sub_e = (
-            select(SnapshotElefante.aluno_id,
-                   func.max(SnapshotElefante.id).label("max_id"))
-            .where(SnapshotElefante.escola_id == escola_id)
-            .group_by(SnapshotElefante.aluno_id).subquery())
+        # Snapshot ATUAL por (data_referencia, id) — não por max(id): um import
+        # de período antigo (backfill) grava id maior com data menor e NÃO pode
+        # virar o estado atual. Mesma régua do ranking/scoring (fonte única).
+        ids_atuais_e = scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)
         q_snap = (
             select(SnapshotElefante.aluno_id, SnapshotElefante.livros_unicos,
                    SnapshotElefante.tempo_leitura_min,
                    Aluno.nome, Turma.nome, Turma.ano_escolar)
-            .join(sub_e, SnapshotElefante.id == sub_e.c.max_id)
+            .where(SnapshotElefante.id.in_(ids_atuais_e))
             .join(Aluno, Aluno.id == SnapshotElefante.aluno_id)
             .join(Matricula, (Matricula.aluno_id == Aluno.id)
                   & (Matricula.ano_letivo == ano))
@@ -344,32 +343,25 @@ def montar_dashboard(db: Session, escola_id: int,
                    Matricula.turma_id.in_(turma_ids))
         )
 
-    # Estado atual = snapshot mais recente de cada aluno
-    sub_m = (
-        select(SnapshotMatific.aluno_id, func.max(SnapshotMatific.id).label("max_id"))
-        .where(SnapshotMatific.escola_id == escola_id)
-        .group_by(SnapshotMatific.aluno_id)
-        .subquery()
-    )
+    # Estado atual = snapshot mais recente de cada aluno POR (data_referencia,
+    # id) — não por max(id). Um import de período antigo (backfill mensal do
+    # Matific) grava id maior com data menor; usar max(id) faria os totais do
+    # painel divergirem do ranking, que usa esta mesma régua (fonte única).
+    ids_atuais_m = scoring.ids_snapshots_atuais(SnapshotMatific, escola_id)
     consulta_atividades = (
         select(func.coalesce(func.sum(SnapshotMatific.atividades), 0))
-        .join(sub_m, SnapshotMatific.id == sub_m.c.max_id)
+        .where(SnapshotMatific.id.in_(ids_atuais_m))
     )
     if alunos_sub is not None:
         consulta_atividades = consulta_atividades.where(SnapshotMatific.aluno_id.in_(alunos_sub))
     total_atividades = db.execute(consulta_atividades).scalar_one()
 
-    sub_e = (
-        select(SnapshotElefante.aluno_id, func.max(SnapshotElefante.id).label("max_id"))
-        .where(SnapshotElefante.escola_id == escola_id)
-        .group_by(SnapshotElefante.aluno_id)
-        .subquery()
-    )
+    ids_atuais_e = scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)
     consulta_elefante = (
         select(
             func.coalesce(func.sum(SnapshotElefante.livros_unicos), 0),
             func.coalesce(func.sum(SnapshotElefante.tempo_leitura_min), 0),
-        ).join(sub_e, SnapshotElefante.id == sub_e.c.max_id)
+        ).where(SnapshotElefante.id.in_(ids_atuais_e))
     )
     if alunos_sub is not None:
         consulta_elefante = consulta_elefante.where(SnapshotElefante.aluno_id.in_(alunos_sub))

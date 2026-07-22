@@ -198,6 +198,18 @@ def test_limite_por_codigo_nao_pune_a_turma(cliente, db, escola_completa):
     assert _entrar(colega.codigo_login).status_code == 200
 
 
+def test_enumeracao_de_codigos_distintos_e_barrada_por_ip(cliente, db, escola_completa):
+    """Força-bruta real: o atacante SPRAYA códigos DIFERENTES de um mesmo IP —
+    cada palpite toca uma chave distinta e escaparia dos limitadores por-código.
+    O limitador de FALHAS por IP (anti-enumeração) é quem o barra. Sem ele, e
+    sem limite de borda na produção (Railway), a adivinhação seria viável."""
+    # 50 palpites de códigos inexistentes e DISTINTOS → 401 (mas contam falha/IP).
+    for i in range(50):
+        assert _entrar(f"NAOEXISTE{i:03d}").status_code == 401
+    # O 51º palpite (ainda outro código inexistente) já é barrado pelo teto/IP.
+    assert _entrar("NAOEXISTE999").status_code == 429
+
+
 def test_aluno_inativo_recebe_mensagem_propria(cliente, db, escola_completa):
     """Transferido/arquivado não pode achar que 'errou o código'."""
     escola = escola_completa["escola"]

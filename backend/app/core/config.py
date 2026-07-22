@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 1800
 
     SECRET_KEY: str = SECRET_KEY_INSEGURA
+    # Chave DEDICADA para cifrar segredos em repouso (credenciais de plataforma,
+    # chave de IA, cookies do robô), separada da SECRET_KEY que assina os JWT.
+    # Opcional: se vazia, usa-se a SECRET_KEY (comportamento anterior). Definir
+    # em produção reduz o raio de um vazamento e permite rotação independente;
+    # dados já cifrados com a SECRET_KEY continuam legíveis (MultiFernet).
+    DATA_ENCRYPTION_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # jornada escolar
 
@@ -88,6 +94,10 @@ class Settings(BaseSettings):
 
     UPLOADS_DIR: Path = PROJECT_ROOT / "uploads"
     EXPORTS_DIR: Path = PROJECT_ROOT / "exports"
+    # Retenção das cópias de relatórios em /exports (contêm nomes de alunos):
+    # expurgadas após N dias para não acumular PII indefinidamente (LGPD). 0
+    # desliga o expurgo. O download em si nunca depende da cópia.
+    EXPORTS_RETENCAO_DIAS: int = 7
 
     CORS_ORIGINS: list[str] = [
         # Produção (front cross-origin: Vercel + Railway). O default vive no

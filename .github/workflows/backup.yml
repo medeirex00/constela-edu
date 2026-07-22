@@ -1,0 +1,55 @@
+# =============================================================================
+# Backup diário CIFRADO do Postgres de produção → artefato off-site (GitHub).
+#
+# DESLIGADO por padrão (fail-safe): só roda quando a variável de repositório
+# BACKUP_ENABLED == 'true'. Assim o arquivo pode ser mesclado sem começar a
+# tocar a produção antes de o dono configurar os segredos.
+#
+# Para ativar (uma vez), no GitHub → Settings:
+#   • Variables → BACKUP_ENABLED = true
+#   • Secrets → DATABASE_URL_RO   = string de conexão (idealmente read-only)
+#   • Secrets → BACKUP_PASSPHRASE = senha forte que cifra o dump
+#                                   (guarde-a num cofre, NÃO no repositório)
+#
+# Restauração e teste (“game day”): docs/DR-RUNBOOK.md
+# =============================================================================
+name: Backup do banco (produção)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC ≈ 03:00 BRT (fora do horário escolar)
+  workflow_dispatch: {}    # permite disparo manual para testar
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    if: vars.BACKUP_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar postgresql-client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Gerar backup cifrado
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_RO }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: bash backend/scripts/backup_postgres.sh ./backups
+
+      - name: Guardar off-site (artefato retido 30 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-postgres-${{ github.run_id }}
+          path: backups/*.enc
+          retention-days: 30
+          if-no-files-found: error
+
+      # OPCIONAL (recomendado ao escalar para rede municipal): enviar também
+      # para um bucket S3/Backblaze com versionamento e Object Lock, em vez de
+      # depender só do artefato do GitHub. Ver docs/DR-RUNBOOK.md §“Off-site”.

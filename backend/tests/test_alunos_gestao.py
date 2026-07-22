@@ -157,12 +157,45 @@ def test_exclusao_permanente_remove_todos_os_vinculos(cliente, db, escola_comple
     assert db.get(Aluno, joao.id) is not None
     assert conta(SnapshotMatific, joao.id) >= 1
 
-    # Auditoria preservada (§17).
+    # Auditoria preservada (§17) — mas SEM o nome do menor em texto claro
+    # (LGPD/esquecimento): o entidade_id basta como referência anônima.
     log = db.execute(select(LogAuditoria)
                      .where(LogAuditoria.acao == "aluno.excluido_permanente")
                      .order_by(LogAuditoria.id.desc())).scalars().first()
     assert log is not None
-    assert log.detalhes.get("nome") == ana_nome
+    assert "nome" not in log.detalhes           # nome NÃO persiste em claro
+    assert log.entidade_id == ana_id            # referência anônima preservada
+    assert ana_nome not in str(log.detalhes)
+
+
+def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, db, escola_completa):
+    """Direito ao esquecimento: ao excluir o aluno em definitivo, o nome civil
+    do menor é anonimizado também nas entradas ANTERIORES do log (ex.: edição),
+    não só omitido na entrada da exclusão."""
+    escola_id = escola_completa["escola"].id
+    ana = escola_completa["alunos"][0]
+    ana_id, ana_nome = ana.id, ana.nome
+
+    # Uma edição gera um log com o nome do aluno em detalhes.
+    cliente.patch(f"{_base(escola_id)}/alunos/{ana_id}",
+                  json={"observacoes": "anotação"})
+    logs_antes = db.execute(
+        select(LogAuditoria).where(LogAuditoria.entidade == "aluno",
+                                   LogAuditoria.entidade_id == ana_id)).scalars().all()
+    assert any(ana_nome in str(l.detalhes) for l in logs_antes), \
+        "pré-condição: algum log anterior cita o nome"
+
+    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    assert r.status_code == 200, r.text
+
+    db.expire_all()
+    logs_depois = db.execute(
+        select(LogAuditoria).where(LogAuditoria.entidade == "aluno",
+                                   LogAuditoria.entidade_id == ana_id)).scalars().all()
+    # Nenhuma entrada do aluno excluído ainda contém o nome civil em claro.
+    for log in logs_depois:
+        assert ana_nome not in str(log.detalhes), log.acao
 
 
 def test_exclusao_permanente_exige_confirmacao(cliente, db, escola_completa):
@@ -227,6 +260,49 @@ def test_fundir_combina_matific_e_elefante_e_deduplica_leituras(cliente, db, esc
     assert livros == 2                                     # união, sem repetir
     # Nenhum órfão apontando para o aluno removido.
     for modelo in (Leitura, SnapshotMatific, SnapshotElefante, Nota, Matricula):
+        sobra = db.execute(select(func.count()).select_from(modelo)
+                           .where(modelo.aluno_id == remover_id)).scalar_one()
+        assert sobra == 0, modelo.__name__
+
+
+def test_fundir_preserva_eventos_e_identidade_externa(cliente, db, escola_completa):
+    """A fusão leva a linha do tempo (EventoAluno) e o vínculo UUID
+    (IdentidadeExterna) do `remover` para o `manter`. Sem isso, o ON DELETE
+    CASCADE apagaria em silêncio o histórico e o vínculo — e a próxima
+    sincronização poderia recriar a duplicata, DESFAZENDO a fusão."""
+    from datetime import datetime, timezone
+
+    from app.models import EventoAluno, IdentidadeExterna
+
+    escola_id = escola_completa["escola"].id
+    manter, remover = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    manter_id, remover_id = manter.id, remover.id
+
+    # `remover` carrega o vínculo UUID do Matific e um evento na linha do tempo.
+    db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=remover_id,
+                             plataforma="matific", id_externo="uuid-abc-123"))
+    db.add(EventoAluno(escola_id=escola_id, aluno_id=remover_id,
+                       plataforma="matific", tipo_evento="atividade",
+                       ocorrido_em=datetime(2026, 3, 1, tzinfo=timezone.utc),
+                       chave_natural="evt-natural-1"))
+    db.commit()
+
+    resposta = cliente.post(f"{_base(escola_id)}/alunos/fundir", json={
+        "manter_id": manter_id, "remover_id": remover_id, "confirmacao": "FUNDIR"})
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.json()["eventos_movidos"] == 1
+    assert resposta.json()["identidades_movidas"] == 1
+
+    db.expire_all()
+    assert db.get(Aluno, remover_id) is None
+    # Evento e identidade agora pertencem ao `manter` (não sumiram no cascade).
+    assert db.execute(select(func.count()).select_from(EventoAluno)
+                      .where(EventoAluno.aluno_id == manter_id)).scalar_one() == 1
+    ident = db.execute(select(IdentidadeExterna)
+                       .where(IdentidadeExterna.aluno_id == manter_id)).scalar_one()
+    assert ident.id_externo == "uuid-abc-123"    # vínculo UUID preservado
+    # Nenhum órfão do aluno removido.
+    for modelo in (EventoAluno, IdentidadeExterna):
         sobra = db.execute(select(func.count()).select_from(modelo)
                            .where(modelo.aluno_id == remover_id)).scalar_one()
         assert sobra == 0, modelo.__name__
