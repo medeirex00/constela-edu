@@ -45,6 +45,9 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
+          # O runner já tinha o client 16 no PATH. Coloca o 17 na FRENTE do PATH
+          # para os passos seguintes (senão o pg_dump 16 é usado e dá mismatch).
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
       - name: Gerar backup cifrado
         env:
