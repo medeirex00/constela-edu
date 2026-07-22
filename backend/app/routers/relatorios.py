@@ -3,6 +3,7 @@
 Cada exportação também deixa uma cópia em /exports e um registro no log.
 """
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -22,11 +23,33 @@ router = APIRouter(prefix="/escolas/{escola_id}", tags=["Relatórios"])
 logger = logging.getLogger("constela.relatorios")
 
 
+def _expurgar_exports_antigos() -> None:
+    """Remove cópias de relatórios além da retenção (LGPD/minimização — contêm
+    nomes de alunos). Chamado a cada nova exportação — barato e evita acúmulo
+    indefinido de PII em disco. EXPORTS_RETENCAO_DIAS=0 desliga."""
+    dias = settings.EXPORTS_RETENCAO_DIAS
+    if dias <= 0 or not settings.EXPORTS_DIR.exists():
+        return
+    limite = time.time() - dias * 86_400
+    for arquivo in settings.EXPORTS_DIR.iterdir():
+        # Preserva dotfiles de infraestrutura (ex.: .gitkeep) — só expurga as
+        # cópias de relatórios de fato.
+        if arquivo.name.startswith("."):
+            continue
+        try:
+            if arquivo.is_file() and arquivo.stat().st_mtime < limite:
+                arquivo.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _arquivar_copia(nome_arquivo: str, conteudo: bytes) -> None:
     """Cópia local em /exports — MELHOR ESFORÇO: se o disco não for gravável,
-    o download segue normal (o arquivo vai na resposta); só a cópia é pulada."""
+    o download segue normal (o arquivo vai na resposta); só a cópia é pulada.
+    Expurga cópias antigas na mesma passada (retenção — não acumula PII)."""
     try:
         settings.EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        _expurgar_exports_antigos()
         (settings.EXPORTS_DIR / nome_arquivo).write_bytes(conteudo)
     except OSError:
         logger.warning("Sem acesso de escrita em %s — relatório enviado, cópia "
