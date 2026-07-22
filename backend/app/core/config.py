@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 1800
 
     SECRET_KEY: str = SECRET_KEY_INSEGURA
+    # Chave DEDICADA para cifrar segredos em repouso (credenciais de plataforma,
+    # chave de IA, cookies do robô), separada da SECRET_KEY que assina os JWT.
+    # Opcional: se vazia, usa-se a SECRET_KEY (comportamento anterior). Definir
+    # em produção reduz o raio de um vazamento e permite rotação independente;
+    # dados já cifrados com a SECRET_KEY continuam legíveis (MultiFernet).
+    DATA_ENCRYPTION_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # jornada escolar
 
