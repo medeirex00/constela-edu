@@ -70,17 +70,21 @@ def test_executar_nao_deixa_transacao_aberta_durante_o_fetch(
 
 
 def test_finalizar_orfas_no_boot_libera_execucao_presa(db, escola_completa):
-    """Um redeploy no MEIO de uma sync deixa a execução presa em 'executando' e
-    trava a escola (uq_sync_exec_ativa). No boot, finalizar_orfas_no_boot marca a
-    órfã como 'erro' na hora — sem esperar o timeout de 30 min — e uma nova
-    sincronização já pode ser enfileirada (instância única: nada roda ao subir)."""
+    """Uma sync cujo worker morreu (redeploy) fica presa em 'executando' e trava
+    a escola. No boot, finalizar_orfas_no_boot libera as ANTIGAS (além de
+    SYNC_TRAVADA_S) e uma nova sincronização já pode ser enfileirada."""
+    from datetime import timedelta
+
+    from app.core.config import settings
+
     escola = escola_completa["escola"]
     ex = service.enfileirar(db, escola.id, "elefante", origem="teste")
-    # Simula a sync que começou e cujo worker morreu no restart (fica órfã).
+    # Órfã ANTIGA: começou há mais que o limiar de "travada" (worker morto).
+    antiga = service._agora() - timedelta(seconds=settings.SYNC_TRAVADA_S + 60)
     db.execute(
         update(SincronizacaoExecucao)
         .where(SincronizacaoExecucao.id == ex.id)
-        .values(status="executando", iniciada_em=service._agora()))
+        .values(status="executando", iniciada_em=antiga))
     db.commit()
 
     liberadas = service.finalizar_orfas_no_boot(db)
@@ -93,6 +97,53 @@ def test_finalizar_orfas_no_boot_libera_execucao_presa(db, escola_completa):
     nova = service.enfileirar(db, escola.id, "elefante", origem="teste")
     assert nova.id != ex.id
     assert nova.status == "fila"
+
+
+def test_boot_reaper_nao_mata_sync_viva_de_worker_vizinho(db, escola_completa):
+    """Com MÚLTIPLOS workers, o boot de um NÃO pode matar a sync EM ANDAMENTO de
+    outro. Uma execução recém-iniciada (dentro de SYNC_TRAVADA_S) é preservada."""
+    escola = escola_completa["escola"]
+    ex = service.enfileirar(db, escola.id, "elefante", origem="teste")
+    # Sync VIVA de outro worker: começou agora mesmo.
+    db.execute(
+        update(SincronizacaoExecucao)
+        .where(SincronizacaoExecucao.id == ex.id)
+        .values(status="executando", iniciada_em=service._agora()))
+    db.commit()
+
+    assert service.finalizar_orfas_no_boot(db) == 0   # não tocou a viva
+    db.refresh(ex)
+    assert ex.status == "executando"                  # continua rodando
+
+
+def test_disparar_manual_respeita_semaforo(monkeypatch):
+    """O disparo manual ('sincronizar agora') não sobe threads de trabalho
+    pesado sem limite: com o semáforo em 1, a 2ª execução espera a 1ª liberar —
+    evita estourar RAM/pool num pico de cliques."""
+    import threading
+
+    entrou = threading.Event()
+    liberar = threading.Event()
+    executando: list[int] = []
+
+    def fake_executar(execucao_id: int) -> None:
+        executando.append(execucao_id)
+        entrou.set()
+        liberar.wait(2)
+        executando.remove(execucao_id)
+
+    monkeypatch.setattr(service, "_semaforo_manual", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(service, "executar_por_id", fake_executar)
+
+    service.disparar_em_thread(1)
+    assert entrou.wait(2)                 # a 1ª entrou e segura o semáforo
+    entrou.clear()
+    service.disparar_em_thread(2)
+    assert not entrou.wait(0.3)           # a 2ª está BLOQUEADA no semáforo
+    assert executando == [1]              # só uma rodando
+
+    liberar.set()                         # libera a 1ª
+    assert entrou.wait(2)                 # agora a 2ª entra
 
 
 def test_finalizar_orfas_no_boot_sem_orfas_e_noop(db, escola_completa):

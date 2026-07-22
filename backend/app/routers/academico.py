@@ -191,12 +191,16 @@ def perfil_aluno(
         saida.ano_escolar = matricula[1].ano_escolar
         ano_escolar = matricula[1].ano_escolar
 
-    # Distribuição de leitura por faixa de dificuldade (gráfico + estatísticas)
+    # Distribuição de leitura por faixa de dificuldade (gráfico + estatísticas).
+    # Snapshot ATUAL por (data_referencia, id), não por max(id): um import
+    # retroativo (backfill) grava id maior com data menor e NÃO pode virar o
+    # estado atual. Mesma régua do dashboard/ranking (scoring.ids_snapshots_atuais).
     snap_e = db.execute(
         select(SnapshotElefante)
         .where(SnapshotElefante.escola_id == escola_id,
-               SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.id.desc()).limit(1)
+               SnapshotElefante.aluno_id == aluno_id,
+               SnapshotElefante.id.in_(
+                   scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)))
     ).scalar_one_or_none()
     leitura_niveis = scoring.distribuicao_niveis(
         db, escola_id, snap_e.livros_por_nivel if snap_e else {}, ano_escolar)

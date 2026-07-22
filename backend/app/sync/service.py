@@ -400,10 +400,22 @@ def executar_por_id(execucao_id: int) -> None:
         db.close()
 
 
+# Limita quantas sincronizações MANUAIS ("sincronizar agora") rodam de fato ao
+# mesmo tempo. Cada uma pode subir um Chromium (login) e abrir conexões — sem
+# esse teto, um pico de cliques de coordenadores poderia estourar RAM/pool e
+# derrubar a instância. O caminho manual não passava pelo SYNC_WORKERS (que só
+# limita o scheduler); este semáforo fecha essa lacuna. Excesso espera sua vez.
+_semaforo_manual = threading.BoundedSemaphore(max(1, settings.SYNC_WORKERS))
+
+
 def disparar_em_thread(execucao_id: int) -> None:
-    """Processa uma execução manual sem bloquear o request (thread daemon)."""
-    threading.Thread(target=executar_por_id, args=(execucao_id,),
-                     daemon=True, name=f"sync-manual-{execucao_id}").start()
+    """Processa uma execução manual sem bloquear o request (thread daemon),
+    respeitando ``_semaforo_manual`` para não estourar recursos num pico."""
+    def _rodar() -> None:
+        with _semaforo_manual:            # espera um slot antes do trabalho pesado
+            executar_por_id(execucao_id)
+    threading.Thread(target=_rodar, daemon=True,
+                     name=f"sync-manual-{execucao_id}").start()
 
 
 # --------------------------------------------------------------------------
@@ -501,14 +513,23 @@ def garantir_agendas_diarias(db: Session,
 
 
 def finalizar_orfas_no_boot(db: Session) -> int:
-    """No BOOT do processo: toda execução ainda em 'executando' é ÓRFÃ — o worker
-    que a rodava morreu no restart/redeploy (instância única: nada está rodando
-    ao subir). Marca como 'erro' e LIBERA a trava (uq_sync_exec_ativa) na hora,
-    SEM re-enfileirar (o usuário retoma quando quiser). Assim um redeploy no meio
-    de uma sync não prende a escola até o timeout de 30 min. Idempotente."""
+    """No BOOT do processo: libera execuções presas em 'executando' há mais de
+    ``SYNC_TRAVADA_S`` — o worker que as rodava morreu no restart/redeploy. Marca
+    'erro' e LIBERA a trava (uq_sync_exec_ativa) SEM re-enfileirar (o usuário
+    retoma quando quiser). Idempotente.
+
+    O GATE DE IDADE é essencial com MÚLTIPLOS workers (uvicorn --workers > 1): o
+    boot de UM worker NÃO significa que o vizinho parou. Sem o gate, este reaper
+    mataria a sincronização EM ANDAMENTO de outro worker (furando a exclusão
+    mútua e podendo duplicar recálculos). Com o gate, só toca execuções antigas o
+    bastante para que ninguém mais as esteja executando — o mesmo limiar do
+    reaper periódico (recuperar_execucoes_travadas)."""
+    limite = _agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)
     orfas = db.execute(
         select(SincronizacaoExecucao).where(
-            SincronizacaoExecucao.status == "executando")
+            SincronizacaoExecucao.status == "executando",
+            SincronizacaoExecucao.iniciada_em.isnot(None),
+            SincronizacaoExecucao.iniciada_em < limite)
     ).scalars().all()
     n = 0
     for ex in orfas:
