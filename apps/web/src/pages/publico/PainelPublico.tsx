@@ -23,7 +23,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 import { useApi } from "../../hooks/useApi";
 import { ApiError } from "../../lib/api";
@@ -175,7 +175,62 @@ function MicroGanhos({ ganhos }: { ganhos?: Destaque["ganhos"] }) {
   );
 }
 
-/** Coluna do pódio: cartão do aluno + base de palco com o número. */
+/** Iniciais do aluno (1º + último nome) — avatar sem foto, sem PII extra. */
+function iniciaisDe(nome: string): string {
+  const partes = nome.trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return "★";
+  const primeira = partes[0][0] ?? "";
+  const ultima = partes.length > 1 ? partes[partes.length - 1][0] ?? "" : "";
+  return (primeira + ultima).toUpperCase();
+}
+
+/** Avatar circular com iniciais + medalha numerada sobreposta (estilo pódio). */
+function AvatarPodio({
+  nome,
+  cor,
+  posicao,
+  campeao,
+}: {
+  nome: string;
+  cor: string;
+  posicao: number;
+  campeao: boolean;
+}) {
+  return (
+    <div className={`painel-flutua relative ${campeao ? "h-28 w-28 sm:h-32 sm:w-32" : "h-20 w-20 sm:h-24 sm:w-24"}`}>
+      <div
+        className="flex h-full w-full items-center justify-center rounded-full ring-4"
+        style={{
+          background: `linear-gradient(140deg, ${cor}, ${cor}55 65%, #1B2A4A)`,
+          boxShadow: `0 0 40px -6px ${cor}AA`,
+          borderColor: cor,
+          // ring-4 usa currentColor via CSS var do Tailwind; forçamos com boxShadow interno
+          outline: `3px solid ${cor}`,
+          outlineOffset: "-3px",
+        }}
+      >
+        <span
+          className={`font-extrabold text-white ${campeao ? "text-4xl sm:text-5xl" : "text-2xl sm:text-3xl"}`}
+          style={{ fontFamily: "Poppins, Inter, sans-serif", textShadow: "0 2px 8px rgba(0,0,0,.35)" }}
+        >
+          {iniciaisDe(nome)}
+        </span>
+      </div>
+      {/* Medalha numerada sobreposta, como nas premiações. */}
+      <span
+        className={`absolute -right-1 -top-1 flex items-center justify-center rounded-full font-extrabold text-[#1B2A4A] ring-2 ring-white/70 ${
+          campeao ? "h-10 w-10 text-lg" : "h-8 w-8 text-sm"
+        }`}
+        style={{ background: `radial-gradient(circle at 35% 30%, #fff8, transparent 45%), ${cor}` }}
+        aria-label={`${posicao}º lugar`}
+      >
+        {posicao}
+      </span>
+    </div>
+  );
+}
+
+/** Coluna do pódio: cartão do aluno (SÓ exibição — sem link/clique) + base. */
 function ColunaPodio({
   titulo,
   icone: Icone,
@@ -183,7 +238,6 @@ function ColunaPodio({
   posicao,
   campeao = false,
   destaque,
-  token,
 }: {
   titulo: string;
   icone: LucideIcon;
@@ -191,121 +245,124 @@ function ColunaPodio({
   posicao: number;
   campeao?: boolean;
   destaque: Destaque | null;
-  token: string;
 }) {
-  const cartao = (
-    <div
-      className={`relative flex h-full flex-col items-center overflow-hidden text-center ring-1 ring-inset ${
-        campeao
-          ? "painel-brilho rounded-[2rem] px-6 py-8 ring-amber-300/40 sm:px-8 sm:py-9"
-          : "rounded-3xl bg-white/[0.06] px-5 py-6 ring-white/10"
-      }`}
-      style={
-        campeao
-          ? {
-              background: "linear-gradient(160deg, rgba(245,185,66,0.22), rgba(27,42,74,0.55) 70%)",
-              boxShadow: `0 0 60px -12px ${OURO}66`,
-            }
-          : { boxShadow: "inset 0 1px 0 0 rgba(255,255,255,0.05)" }
-      }
-    >
-      {!campeao && <span className="absolute inset-x-0 top-0 h-1.5" style={{ background: cor }} />}
-      <div
-        className={`painel-flutua mb-2 flex items-center justify-center rounded-full ${
-          campeao ? "h-16 w-16 sm:h-20 sm:w-20" : "h-12 w-12 rounded-2xl"
-        }`}
-        style={{ background: campeao ? `radial-gradient(circle, ${OURO}, #C98A1A)` : `${cor}22` }}
-      >
-        <Icone
-          className={campeao ? "h-9 w-9 text-white sm:h-11 sm:w-11" : "h-6 w-6"}
-          style={campeao ? undefined : { color: cor }}
-          strokeWidth={2.2}
-        />
-      </div>
-      <p
-        className={`font-semibold uppercase ${
-          campeao ? "text-sm tracking-[0.25em] text-amber-200 sm:text-base" : "text-xs tracking-[0.2em] text-white/60"
-        }`}
-      >
-        {titulo}
-      </p>
-      {destaque ? (
-        <>
-          {/* O NOME é o protagonista: gigante, legível do fundo da sala. */}
-          <p
-            className={`mt-2 font-extrabold leading-tight text-white ${
-              campeao ? "text-[clamp(1.9rem,4.2vw,4rem)]" : "text-[clamp(1.35rem,2.4vw,2.1rem)]"
-            }`}
-            style={{ fontFamily: "Poppins, Inter, sans-serif" }}
-          >
-            {destaque.nome}
-          </p>
-          <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
-            <ChipTurma>{destaque.turma}</ChipTurma>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-400/15 px-3 py-1 font-bold tabular-nums text-emerald-300 ring-1 ring-inset ring-emerald-300/25 ${
-                campeao ? "text-lg" : "text-base"
-              }`}
-            >
-              <TrendingUp className={campeao ? "h-5 w-5" : "h-4 w-4"} /> {nota(destaque.nota_evolucao)}
-            </span>
-          </div>
-          <MicroGanhos ganhos={destaque.ganhos} />
-        </>
-      ) : (
-        <p className="mt-5 text-white/45">Sem destaque no período.</p>
-      )}
-    </div>
-  );
   return (
     <div className="flex h-full flex-col">
-      {destaque ? (
-        <Link
-          to={`/p/${token}/alunos/${destaque.aluno_id}`}
-          className="block flex-1 transition-transform hover:scale-[1.015]"
-        >
-          {cartao}
-        </Link>
-      ) : (
-        <div className="flex-1">{cartao}</div>
-      )}
-      {/* Base do pódio: tablado com o número da posição e estrelinhas. */}
       <div
-        className={`mx-3 flex items-center justify-center gap-3 rounded-b-2xl ${campeao ? "h-14" : "h-10"}`}
+        className={`relative flex flex-1 flex-col items-center justify-start overflow-hidden text-center ring-1 ring-inset ${
+          campeao
+            ? "painel-brilho rounded-[2.25rem] px-6 pb-8 pt-9 ring-amber-300/40 sm:px-8 sm:pb-10 sm:pt-10"
+            : "rounded-3xl bg-white/[0.06] px-5 pb-6 pt-7 ring-white/10"
+        }`}
+        style={
+          campeao
+            ? {
+                background:
+                  "linear-gradient(165deg, rgba(245,185,66,0.26), rgba(27,42,74,0.6) 62%, rgba(15,22,38,0.75))",
+                boxShadow: `0 0 90px -14px ${OURO}88, inset 0 1px 0 0 rgba(255,255,255,0.12)`,
+              }
+            : {
+                background: `linear-gradient(170deg, ${cor}14, rgba(255,255,255,0.05) 55%)`,
+                boxShadow: "inset 0 1px 0 0 rgba(255,255,255,0.06)",
+              }
+        }
+      >
+        {!campeao && <span className="absolute inset-x-0 top-0 h-1.5" style={{ background: cor }} />}
+        {/* Brilhos celebrativos (reusam a animação de cintilar; some em reduced-motion). */}
+        {campeao && (
+          <>
+            <span className="painel-estrela absolute left-6 top-8 text-xl text-amber-200/80" aria-hidden>✦</span>
+            <span className="painel-estrela absolute right-8 top-16 text-sm text-amber-100/70" style={{ animationDelay: "1.2s" }} aria-hidden>✦</span>
+            <span className="painel-estrela absolute bottom-16 left-10 text-base text-amber-200/60" style={{ animationDelay: "2.1s" }} aria-hidden>✦</span>
+            <span className="painel-estrela absolute bottom-24 right-6 text-lg text-white/50" style={{ animationDelay: "0.6s" }} aria-hidden>✦</span>
+          </>
+        )}
+        {campeao && (
+          <div className="mb-2 flex h-12 w-12 items-center justify-center">
+            <Crown className="painel-flutua h-11 w-11 text-amber-300 drop-shadow-[0_0_14px_rgba(245,185,66,0.7)]" strokeWidth={2.1} />
+          </div>
+        )}
+        {destaque ? (
+          <AvatarPodio nome={destaque.nome} cor={cor} posicao={posicao} campeao={campeao} />
+        ) : (
+          <div
+            className={`flex items-center justify-center rounded-full bg-white/5 ${campeao ? "h-28 w-28" : "h-20 w-20"}`}
+          >
+            <Icone className="h-8 w-8 text-white/25" />
+          </div>
+        )}
+        <p
+          className={`mt-3 font-semibold uppercase ${
+            campeao ? "text-sm tracking-[0.28em] text-amber-200 sm:text-base" : "text-xs tracking-[0.22em] text-white/60"
+          }`}
+        >
+          {titulo}
+        </p>
+        {destaque ? (
+          <>
+            {/* Nome protagonista: grande mas SEMPRE dentro do cartão (nomes longos
+               quebram com equilíbrio — nada de letras cortadas na borda). */}
+            <p
+              className={`mt-2 w-full break-words px-1 font-extrabold leading-[1.12] text-white [text-wrap:balance] ${
+                campeao ? "text-[clamp(1.45rem,2.5vw,2.6rem)]" : "text-[clamp(1.1rem,1.7vw,1.7rem)]"
+              }`}
+              style={{ fontFamily: "Poppins, Inter, sans-serif" }}
+            >
+              {destaque.nome}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+              <ChipTurma>{destaque.turma}</ChipTurma>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-400/15 px-3 py-1 font-bold tabular-nums text-emerald-300 ring-1 ring-inset ring-emerald-300/25 ${
+                  campeao ? "text-lg" : "text-base"
+                }`}
+              >
+                <TrendingUp className={campeao ? "h-5 w-5" : "h-4 w-4"} /> {nota(destaque.nota_evolucao)}
+              </span>
+            </div>
+            <MicroGanhos ganhos={destaque.ganhos} />
+          </>
+        ) : (
+          <p className="mt-5 text-white/45">Sem destaque no período.</p>
+        )}
+      </div>
+      {/* Base do pódio: tablado com bisel, número e estrelinhas. */}
+      <div
+        className={`mx-2 flex items-center justify-center gap-3 rounded-b-3xl ${campeao ? "h-16" : "h-11"}`}
         style={{
-          background: `linear-gradient(180deg, ${cor}55, ${cor}22)`,
-          boxShadow: `inset 0 2px 0 0 ${cor}88`,
+          background: `linear-gradient(180deg, ${cor}66, ${cor}1e)`,
+          boxShadow: `inset 0 3px 0 0 ${cor}AA, inset 0 -8px 16px -8px rgba(0,0,0,0.5)`,
         }}
       >
-        <Star className="h-4 w-4 opacity-60" style={{ color: cor }} fill="currentColor" />
+        <Star className="h-4 w-4 opacity-70" style={{ color: cor }} fill="currentColor" />
         <span
-          className={`font-extrabold tabular-nums ${campeao ? "text-3xl" : "text-xl"}`}
-          style={{ color: cor, fontFamily: "Poppins, Inter, sans-serif" }}
+          className={`font-extrabold tabular-nums ${campeao ? "text-4xl" : "text-2xl"}`}
+          style={{ color: cor, fontFamily: "Poppins, Inter, sans-serif", textShadow: `0 0 18px ${cor}88` }}
         >
           {posicao}
         </span>
-        <Star className="h-4 w-4 opacity-60" style={{ color: cor }} fill="currentColor" />
+        <Star className="h-4 w-4 opacity-70" style={{ color: cor }} fill="currentColor" />
       </div>
     </div>
   );
 }
 
-/** Pódio de premiação: Mês no centro (elevado), Semana e Dia aos lados. */
-function SlideDestaques({ destaques, token }: { destaques: DadosPainel["destaques"]; token: string }) {
+/** Pódio: Aluno do DIA no centro (campeão do agora!), Semana 2º, Mês 3º. */
+function SlideDestaques({ destaques }: { destaques: DadosPainel["destaques"] }) {
   return (
-    <div className="mx-auto w-full max-w-6xl">
-      <div className="grid items-end gap-4 sm:gap-5 lg:grid-cols-3">
+    <div className="mx-auto w-full max-w-7xl">
+      <div className="grid items-end gap-5 sm:gap-6 lg:grid-cols-3">
         <div className="order-2 lg:order-1">
           <ColunaPodio titulo="Aluno da Semana" icone={Medal} cor={PRATA} posicao={2}
-                       destaque={destaques.semana} token={token} />
+                       destaque={destaques.semana} />
         </div>
-        <div className="order-1 lg:order-2 lg:-translate-y-5">
-          <ColunaPodio titulo="Aluno do Mês" icone={Crown} cor={OURO} posicao={1} campeao
-                       destaque={destaques.mes} token={token} />
+        <div className="order-1 lg:order-2 lg:-translate-y-7">
+          <ColunaPodio titulo="Aluno do Dia" icone={Crown} cor={OURO} posicao={1} campeao
+                       destaque={destaques.dia} />
         </div>
         <div className="order-3">
-          <ColunaPodio titulo="Aluno do Dia" icone={Star} cor={BRONZE} posicao={3}
-                       destaque={destaques.dia} token={token} />
+          <ColunaPodio titulo="Aluno do Mês" icone={Star} cor={BRONZE} posicao={3}
+                       destaque={destaques.mes} />
         </div>
       </div>
     </div>
@@ -317,22 +374,20 @@ function SlideDestaques({ destaques, token }: { destaques: DadosPainel["destaque
 function LinhaRanking({
   item,
   campo,
-  token,
   larguraRelativa,
 }: {
   item: ItemRanking;
   campo: "nota_geral" | "nota_evolucao";
-  token: string;
   larguraRelativa: number;
 }) {
   const medalha = MEDALHAS[item.posicao];
   const top3 = item.posicao <= 3;
   const valor = item[campo] ?? 0;
+  // SÓ exibição: o painel público não abre dados individuais de aluno.
   return (
-    <Link
-      to={`/p/${token}/alunos/${item.aluno_id}`}
-      className={`group relative flex items-center gap-3 overflow-hidden rounded-2xl px-4 py-3 ring-1 ring-inset transition-colors sm:gap-4 sm:px-5 ${
-        top3 ? "bg-white/[0.09] ring-white/15" : "bg-white/[0.04] ring-white/[0.07] hover:bg-white/[0.07]"
+    <div
+      className={`group relative flex items-center gap-3 overflow-hidden rounded-2xl px-4 py-3 ring-1 ring-inset sm:gap-4 sm:px-5 ${
+        top3 ? "bg-white/[0.09] ring-white/15" : "bg-white/[0.04] ring-white/[0.07]"
       }`}
       style={top3 ? { boxShadow: `inset 4px 0 0 0 ${medalha?.cor ?? OURO}` } : undefined}
     >
@@ -362,18 +417,16 @@ function LinhaRanking({
       >
         {nota(valor)}
       </span>
-    </Link>
+    </div>
   );
 }
 
 function SlideRanking({
   itens,
   campo,
-  token,
 }: {
   itens: ItemRanking[];
   campo: "nota_geral" | "nota_evolucao";
-  token: string;
 }) {
   if (itens.length === 0) {
     return <p className="py-16 text-center text-xl text-white/40">Ainda sem dados para exibir.</p>;
@@ -387,7 +440,6 @@ function SlideRanking({
           key={item.aluno_id}
           item={item}
           campo={campo}
-          token={token}
           larguraRelativa={Math.max(6, ((item[campo] ?? 0) / topo) * 100)}
         />
       ))}
@@ -643,9 +695,9 @@ export default function PainelPublico() {
             <p className="mt-1 text-sm text-white/50 sm:text-base">{meta.legenda}</p>
           </div>
 
-          {slide === "ranking" && <SlideRanking itens={dados.ranking} campo="nota_geral" token={token} />}
-          {slide === "evolucao" && <SlideRanking itens={dados.evolucao} campo="nota_evolucao" token={token} />}
-          {slide === "destaques" && <SlideDestaques destaques={dados.destaques} token={token} />}
+          {slide === "ranking" && <SlideRanking itens={dados.ranking} campo="nota_geral" />}
+          {slide === "evolucao" && <SlideRanking itens={dados.evolucao} campo="nota_evolucao" />}
+          {slide === "destaques" && <SlideDestaques destaques={dados.destaques} />}
           {slide === "mural" && <SlideMural mural={dados.mural} />}
         </div>
       </main>
