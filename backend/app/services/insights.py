@@ -5,11 +5,14 @@ modelo de IA participa destes cálculos, então os números são reproduzíveis
 e auditáveis. O Assistente de IA (services/ia) usa estes mesmos índices
 como contexto, nunca o contrário.
 
-Índices (0–100):
-  * Engajamento  — volume de atividade recente (nota de evolução em 30 dias)
-  * Evolução     — crescimento sustentado (nota de evolução em 90 dias)
-  * Persistência — constância: sequência de semanas ativas + volume de
-                   tentativas de questões (continua tentando mesmo errando)
+Índices (0–100) — leitura PEDAGÓGICA, robusta a outlier (rebalanceamento
+aprovado: percentil/mediana/auto-referência no lugar de máximo/média):
+  * Engajamento  — POSIÇÃO PERCENTILAR do avanço em 30 dias: "superou X% dos
+                   colegas ativos". 50 = aluno mediano; o melhor vira 100 sem
+                   comprimir o número de ninguém.
+  * Evolução     — idem, na janela de 90 dias (crescimento sustentado).
+  * Persistência — CONSTÂNCIA pura: semanas consecutivas com avanço. Não usa
+                   volume acumulado nem o máximo da escola.
 """
 from __future__ import annotations
 
@@ -27,11 +30,13 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import evolucao, gamificacao, scoring
+from app.services import evolucao, gamificacao
 
 DIAS_SEM_ATIVIDADE = 30
 QUEDA_ACERTOS_PONTOS = 15.0
 FRACAO_ABAIXO_TURMA = 0.5
+# Constância: 8 semanas consecutivas com avanço = nota máxima (escala gradual).
+PONTOS_POR_SEMANA_CONSTANCIA = 12.5
 
 
 def _pct_acertos(snap) -> float | None:
@@ -40,16 +45,41 @@ def _pct_acertos(snap) -> float | None:
     return round(snap.questoes_acertos / snap.questoes_tentativas * 100, 1)
 
 
+def _percentil_rank(ordenados_ativos: list[float], valor: float) -> float:
+    """Posição percentilar: % dos alunos ATIVOS com valor <= o do aluno.
+
+    Imune a outlier POR CONSTRUÇÃO: um aluno excepcional vira 100 sem alterar
+    o percentil de nenhum colega (diferente de normalizar pelo máximo, em que
+    o outlier comprime todo mundo). 50 = aluno mediano da escola.
+    """
+    if not ordenados_ativos:
+        return 0.0
+    abaixo = sum(1 for x in ordenados_ativos if x <= valor)
+    return round(100.0 * abaixo / len(ordenados_ativos), 1)
+
+
 def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
-    """Engajamento, evolução e persistência de cada aluno ativo."""
-    engajamento = {
+    """Engajamento, evolução e persistência de cada aluno ativo.
+
+    Engajamento/Evolução partem da nota de evolução (régua justa do ranking),
+    mas o ÍNDICE exibido é a posição percentilar — leitura pedagógica de
+    distribuição ("onde o aluno está na escola"), não nota competitiva.
+    """
+    engajamento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(db, escola_id, dias=30)
     }
-    crescimento = {
+    crescimento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(db, escola_id, dias=90)
     }
+    # Só quem avançou (>0) entra na régua percentilar; quem não avançou fica 0.
+    ativos_30 = sorted(v for v in engajamento_bruto.values() if v > 0)
+    ativos_90 = sorted(v for v in crescimento_bruto.values() if v > 0)
+
+    def _indice(bruto: dict[int, float], ativos: list[float], aluno_id: int) -> float:
+        valor = bruto.get(aluno_id, 0.0)
+        return _percentil_rank(ativos, valor) if valor > 0 else 0.0
 
     escola = db.get(Escola, escola_id)
     # selectinload(Matricula.aluno): o laço lê matricula.aluno.nome; sem isto,
@@ -66,9 +96,6 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
 
     serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
     serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
-    max_tentativas = max(
-        (s[-1].questoes_tentativas for s in serie_e.values() if s), default=0
-    )
 
     itens = []
     for matricula, turma in matriculas:
@@ -76,20 +103,18 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
         sequencia = gamificacao.sequencia_semanas(
             serie_m.get(aluno_id, []), serie_e.get(aluno_id, [])
         )
-        snap_e = serie_e.get(aluno_id, [])
-        tentativas = snap_e[-1].questoes_tentativas if snap_e else 0
-        # Persistência: constância semanal (até 60 pts) + volume de tentativas
-        # relativo à escola (até 40 pts) — quem insiste pontua, mesmo errando.
-        persistencia = min(60.0, sequencia * 15.0) + (
-            scoring.normalizar(tentativas, max_tentativas) * 0.4
-        )
+        # Persistência = CONSTÂNCIA pura: semanas consecutivas com avanço.
+        # (O antigo componente "volume de tentativas ÷ máximo da escola" foi
+        # removido: era acumulado de vida normalizado pelo melhor aluno — um
+        # outlier zerava a persistência de alunos perfeitamente constantes.)
+        persistencia = min(100.0, sequencia * PONTOS_POR_SEMANA_CONSTANCIA)
         itens.append({
             "aluno_id": aluno_id,
             "nome": matricula.aluno.nome,
             "turma": turma.nome,
-            "engajamento": round(engajamento.get(aluno_id, 0.0), 1),
-            "evolucao": round(crescimento.get(aluno_id, 0.0), 1),
-            "persistencia": round(min(100.0, persistencia), 1),
+            "engajamento": _indice(engajamento_bruto, ativos_30, aluno_id),
+            "evolucao": _indice(crescimento_bruto, ativos_90, aluno_id),
+            "persistencia": round(persistencia, 1),
         })
     itens.sort(key=lambda item: -item["engajamento"])
     return itens
@@ -133,14 +158,23 @@ def alertas_da_escola(db: Session, escola_id: int,
         ).scalars()
     }
 
-    # Média da turma para o alerta "muito abaixo da turma"
-    media_turma: dict[int, float] = {}
+    # MEDIANA da turma para o alerta "muito abaixo da turma" — robusta a
+    # outlier: um aluno excepcional não infla a referência nem empurra colegas
+    # normais para o alerta (a média aritmética fazia exatamente isso).
+    mediana_turma: dict[int, float] = {}
     alunos_por_turma: dict[int, list[int]] = {}
     for matricula, turma in matriculas:
         alunos_por_turma.setdefault(turma.id, []).append(matricula.aluno_id)
     for turma_id, ids in alunos_por_turma.items():
-        com_nota = [notas[i].nota_geral for i in ids if i in notas]
-        media_turma[turma_id] = sum(com_nota) / len(com_nota) if com_nota else 0.0
+        com_nota = sorted(notas[i].nota_geral for i in ids if i in notas)
+        if not com_nota:
+            mediana_turma[turma_id] = 0.0
+        else:
+            meio = len(com_nota) // 2
+            mediana_turma[turma_id] = (
+                com_nota[meio] if len(com_nota) % 2
+                else (com_nota[meio - 1] + com_nota[meio]) / 2
+            )
 
     alertas: list[dict] = []
     for matricula, turma in matriculas:
@@ -181,13 +215,13 @@ def alertas_da_escola(db: Session, escola_id: int,
                 })
 
         nota = notas.get(aluno_id)
-        media = media_turma.get(turma.id, 0.0)
-        if nota and media > 0 and nota.nota_geral < media * FRACAO_ABAIXO_TURMA:
+        mediana = mediana_turma.get(turma.id, 0.0)
+        if nota and mediana > 0 and nota.nota_geral < mediana * FRACAO_ABAIXO_TURMA:
             alertas.append({
                 "tipo": "abaixo_da_turma", "gravidade": "media",
                 "aluno_id": aluno_id, "nome": nome, "turma": turma.nome,
                 "texto": (f"{nome} está com nota {nota.nota_geral:.1f}, "
-                          f"menos da metade da média da turma ({media:.1f})."),
+                          f"menos da metade da mediana da turma ({mediana:.1f})."),
             })
 
     ordem = {"alta": 0, "media": 1, "baixa": 2}

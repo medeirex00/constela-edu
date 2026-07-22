@@ -107,7 +107,7 @@ export default function Insights() {
           <Lightbulb size={15} className="text-indigo-500" />
           <h3 className="text-sm font-semibold">Índices por aluno</h3>
           <span className="ml-auto text-xs text-zinc-400">
-            engajamento (30d) · evolução (90d) · persistência (constância)
+            engajamento e evolução = posição na escola (percentil · 50 = aluno mediano) · persistência = constância semanal
           </span>
         </div>
         {dadosInsights.indices.length === 0 ? (

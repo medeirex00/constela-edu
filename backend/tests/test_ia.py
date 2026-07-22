@@ -43,6 +43,18 @@ def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
     assert sem_dados["engajamento"] == 0.0
 
 
+def test_percentil_rank_imune_a_outlier():
+    """A leitura pedagógica é POSIÇÃO na distribuição: um aluno gigante vira
+    100 sem 'esmagar' o percentil dos colegas (antes, normalizar pelo máximo
+    fazia todo mundo despencar quando surgia um outlier)."""
+    base = sorted([10.0, 20.0, 30.0, 40.0, 50.0])
+    assert insights._percentil_rank(base, 30.0) == 60.0        # 3 de 5 ≤ 30
+    com_outlier = sorted(base + [5000.0])                       # entra um gigante
+    assert insights._percentil_rank(com_outlier, 30.0) == 50.0  # 3 de 6 — quase nada muda
+    assert insights._percentil_rank(com_outlier, 5000.0) == 100.0  # outlier = 100
+    assert insights._percentil_rank([], 10.0) == 0.0
+
+
 def test_alerta_sem_dados_e_sem_atividade(db, escola_completa):
     escola = escola_completa["escola"]
     ana, joao, sofia = escola_completa["alunos"]
