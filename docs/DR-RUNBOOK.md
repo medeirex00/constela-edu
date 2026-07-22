@@ -61,14 +61,30 @@ cd backend && alembic upgrade head
 
 ## 5. Teste de restauração (“game day”) — OBRIGATÓRIO antes de escalar
 
-O backup só vale se a restauração já foi testada. Uma vez (e a cada mudança
-grande de schema), num banco descartável:
+O backup só vale se a restauração já foi testada. Há um script que faz o ciclo
+inteiro (backup → cifra → decifra → restaura em banco isolado → compara
+contagens origem×restaurado → confere versão do Alembic → PASSOU/FALHOU):
 
-1. Baixe o último artefato de backup.
-2. Rode a **Restauração** (§4) num Postgres local/temporário.
-3. Confirme: nº de escolas, alunos e notas confere; login funciona; ranking
-   abre. Anote a data do teste e o tempo que levou (seu **RTO** real).
-4. Descarte o banco de teste.
+```bash
+SRC_DATABASE_URL="postgresql+psycopg://.../staging" \
+DR_SCRATCH_URL="postgresql+psycopg://.../dr_scratch" \
+BACKUP_PASSPHRASE="sua-senha" \
+  bash backend/scripts/dr_drill.sh
+```
+
+- `SRC_DATABASE_URL`: banco de ORIGEM — **use o staging**, nunca a produção.
+- `DR_SCRATCH_URL`: um banco **vazio e separado** (crie um `dr_scratch`
+  descartável no Supabase/Railway). O script se recusa a rodar se origem = scratch.
+
+Ao final, anote a data do drill e o tempo que levou (seu **RTO** real) no §6.
+
+### O que já foi validado automaticamente vs. o que depende de você
+
+| Item | Estado |
+|------|--------|
+| Round-trip de **cifra/decifra** do backup (openssl AES-256, com acentos; senha errada não decifra) | ✅ **testado automaticamente** neste repositório |
+| Normalização da URL (`postgresql+psycopg` → `postgresql`) para o `pg_dump` | ✅ implementado |
+| **Restauração real** num Postgres + conferência de integridade | ⏳ **depende de você**: exige `pg_dump`/`psql` e um banco scratch — rode o `dr_drill.sh` no staging. Não foi possível executar no ambiente de desenvolvimento (sem cliente Postgres). |
 
 ## 6. Metas (preencher após o 1º game day)
 
