@@ -107,6 +107,33 @@ def _percentil(valores: list[float], p: float) -> float:
     return v[-1]
 
 
+def referencias_robustas(
+    listas: dict[str, list[float]],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Régua justa (P90 + k=mediana) a partir de listas de valores por indicador.
+
+    Mesma regra do modo auto do Ranking Geral, em forma PURA e reutilizável —
+    o Ranking de EVOLUÇÃO usa esta função sobre os GANHOS do período, para o
+    topo ficar disputado lá também (um único gigante não vira a régua de todos).
+    Amostra pequena (< ``MIN_ALUNOS_ROBUSTO``) recai no máximo, sem saturação.
+    Retorna ``(referencias, k_por_indicador)``.
+    """
+    n_alunos = max((len(v) for v in listas.values()), default=0)
+    usar_robusto = n_alunos >= MIN_ALUNOS_ROBUSTO
+    refs: dict[str, float] = {}
+    k_vol: dict[str, float] = {}
+    for indicador, valores in listas.items():
+        chave = "max_" + indicador
+        ativos = [x for x in valores if x and x > 0]
+        if usar_robusto and len(ativos) >= 2:
+            refs[chave] = _percentil(ativos, 0.90)
+            if indicador in INDICADORES_VOLUME:
+                k_vol[indicador] = _percentil(ativos, 0.50)
+        else:
+            refs[chave] = max(valores, default=0)
+    return refs, k_vol
+
+
 # ---------------------------------------------------------------------------
 # Leitura de configurações
 # ---------------------------------------------------------------------------

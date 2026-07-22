@@ -404,17 +404,20 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             niveis_ganho, turma.ano_escolar, mapa_dif
         )
 
-    # Referências = maiores ganhos da escola no período (sempre automático)
-    refs = {
-        "max_atividades": max((g.atividades for g in ganhos_m.values()), default=0),
-        "max_media": max((g.pontuacao_media for g in ganhos_m.values()), default=0),
-        "max_estrelas": max((g.estrelas for g in ganhos_m.values()), default=0),
-        "max_livros": max((g.livros_unicos for g in ganhos_e.values()), default=0),
-        "max_pontos_dificuldade": max(pontos_dif.values(), default=0),
-        "max_tentativas": max((g.questoes_tentativas for g in ganhos_e.values()), default=0),
-        "max_acertos": max((g.questoes_acertos for g in ganhos_e.values()), default=0),
-        "max_tempo": max((g.tempo_leitura_min for g in ganhos_e.values()), default=0),
-    }
+    # Referências JUSTAS sobre os ganhos (mesma régua do Geral): P90 dos ativos
+    # + saturação de volume (k=mediana). Um único aluno-gigante deixa de ser a
+    # régua de todos — o topo fica disputado; quem mais cresceu segue na frente.
+    # Turma pequena recai no máximo (comportamento antigo), via a própria helper.
+    refs, k_vol = scoring.referencias_robustas({
+        "atividades": [g.atividades for g in ganhos_m.values()],
+        "media": [g.pontuacao_media for g in ganhos_m.values()],
+        "estrelas": [g.estrelas for g in ganhos_m.values()],
+        "livros": [g.livros_unicos for g in ganhos_e.values()],
+        "pontos_dificuldade": list(pontos_dif.values()),
+        "tentativas": [g.questoes_tentativas for g in ganhos_e.values()],
+        "acertos": [g.questoes_acertos for g in ganhos_e.values()],
+        "tempo": [g.tempo_leitura_min for g in ganhos_e.values()],
+    })
 
     p_matific = scoring.obter_pesos(db, escola_id, "pesos.matific")
     p_elefante = scoring.obter_pesos(db, escola_id, "pesos.elefante")
@@ -427,10 +430,11 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     itens: list[ItemEvolucao] = []
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
-        nota_m, _ = scoring.calcular_matific(ganhos_m[aluno_id], refs, p_matific, pct_matific)
+        nota_m, _ = scoring.calcular_matific(
+            ganhos_m[aluno_id], refs, p_matific, pct_matific, k_vol)
         nota_e, _, _ = scoring.calcular_elefante(
             ganhos_e[aluno_id], pontos_dif[aluno_id], refs,
-            p_elefante, pct_elefante, p_questoes, pct_questoes,
+            p_elefante, pct_elefante, p_questoes, pct_questoes, k_vol,
         )
         nota = round(nota_m * p_geral.get("matific", 0) + nota_e * p_geral.get("elefante", 0), 2)
         ganhos = {

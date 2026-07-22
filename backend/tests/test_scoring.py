@@ -217,6 +217,22 @@ def test_recalculo_gera_ranking_completo_e_auditavel(db):
 # Correção do Ranking Geral: saturação de volume + referência robusta (auto)
 # ---------------------------------------------------------------------------
 
+def test_referencias_robustas_gate_e_p90():
+    """Helper pura usada pelo Ranking de EVOLUÇÃO: P90 + k=mediana com amostra
+    suficiente; amostra pequena recai no máximo sem saturação; qualidade nunca
+    recebe k (fica linear)."""
+    # amostra pequena (< MIN_ALUNOS_ROBUSTO): máximo, sem saturação
+    refs, k = scoring.referencias_robustas({"atividades": [10, 20, 30]})
+    assert refs["max_atividades"] == 30
+    assert k == {}
+    # amostra grande: P90 (menor que o máximo) + k=mediana só p/ VOLUME
+    vals = [float(x) for x in range(1, 21)]  # 20 alunos ativos
+    refs, k = scoring.referencias_robustas({"atividades": vals, "media": vals})
+    assert refs["max_atividades"] < 20.0            # régua robusta, não o máximo
+    assert k["atividades"] == pytest.approx(10.5)   # meia-saturação = mediana
+    assert "media" not in k                          # qualidade não satura
+
+
 def test_normalizar_saturado_retornos_decrescentes():
     """A curva de volume é côncava: dobrar a quantidade não dobra a nota,
     a referência ainda mapeia para 100, e valores abaixo dela são ELEVADOS
