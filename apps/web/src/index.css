@@ -71,6 +71,9 @@
 @keyframes painel-pulso { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
 
 .painel-estrela { animation: painel-cintila 4s ease-in-out infinite; }
+/* Rolagem invisível: telão nunca mostra barra; toque/roda continuam funcionando. */
+.painel-sem-barra { scrollbar-width: none; -ms-overflow-style: none; }
+.painel-sem-barra::-webkit-scrollbar { display: none; }
 .painel-surgir { animation: painel-surgir 0.6s ease-out both; }
 .painel-flutua { animation: painel-flutua 5.5s ease-in-out infinite; }
 .painel-pulso { animation: painel-pulso 2s ease-in-out infinite; }

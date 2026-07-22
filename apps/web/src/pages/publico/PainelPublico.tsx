@@ -20,8 +20,8 @@ import {
   TrendingUp,
   Trophy,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 import type { LucideIcon } from "lucide-react";
 import { useParams } from "react-router-dom";
 
@@ -91,6 +91,32 @@ const MEDALHAS: Record<number, { emoji: string; cor: string }> = {
   2: { emoji: "🥈", cor: PRATA },
   3: { emoji: "🥉", cor: BRONZE },
 };
+
+/**
+ * Modo telão: quantas linhas cabem no palco SEM rolagem. Mede a 1ª linha real
+ * (a altura varia com o clamp/viewport) e corta a lista no que couber — nada é
+ * cortado no meio nem gera barra de rolagem. `reserva` guarda espaço para a
+ * linha "+ N alunos" quando nem todos couberem.
+ */
+function useLinhasQueCabem(
+  listaRef: RefObject<HTMLElement | null>,
+  altura: number,
+  total: number,
+  gap: number,
+  reserva: number,
+) {
+  const [visiveis, setVisiveis] = useState(total);
+  useLayoutEffect(() => {
+    const primeira = listaRef.current?.firstElementChild as HTMLElement | null;
+    const alturaLinha = primeira?.offsetHeight ?? 0;
+    if (altura <= 0 || alturaLinha <= 0) return;
+    const cabem = Math.floor((altura + gap) / (alturaLinha + gap));
+    // Se TODAS cabem, mostra todas; senão, corta reservando a linha "+ N".
+    const cortadas = Math.floor((altura - reserva + gap) / (alturaLinha + gap));
+    setVisiveis(cabem >= total ? total : Math.max(3, cortadas));
+  }, [listaRef, altura, total, gap, reserva]);
+  return Math.min(visiveis, total);
+}
 
 /** Céu estrelado determinístico (posições estáveis entre renders). */
 function useEstrelas(qtd: number) {
@@ -356,7 +382,7 @@ function SlideDestaques({ destaques }: { destaques: DadosPainel["destaques"] }) 
           <ColunaPodio titulo="Aluno da Semana" icone={Medal} cor={PRATA} posicao={2}
                        destaque={destaques.semana} />
         </div>
-        <div className="order-1 lg:order-2 lg:-translate-y-7">
+        <div className="order-1 lg:order-2 lg:-translate-y-4">
           <ColunaPodio titulo="Aluno do Dia" icone={Crown} cor={OURO} posicao={1} campeao
                        destaque={destaques.dia} />
         </div>
@@ -424,18 +450,25 @@ function LinhaRanking({
 function SlideRanking({
   itens,
   campo,
+  altura,
 }: {
   itens: ItemRanking[];
   campo: "nota_geral" | "nota_evolucao";
+  /** Altura disponível do palco (px) — a lista corta no que couber. */
+  altura: number;
 }) {
+  const listaRef = useRef<HTMLDivElement | null>(null);
+  // gap-2.5 = 10px; reserva ~30px para a linha "+ N alunos".
+  const visiveis = useLinhasQueCabem(listaRef, altura, itens.length, 10, 30);
   if (itens.length === 0) {
     return <p className="py-16 text-center text-xl text-white/40">Ainda sem dados para exibir.</p>;
   }
   // Topo = maior valor exibido (posição 1). Base para as barras relativas.
   const topo = Math.max(...itens.map((i) => i[campo] ?? 0), 0) || 1;
+  const ocultos = itens.length - visiveis;
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-2.5">
-      {itens.map((item) => (
+    <div ref={listaRef} className="mx-auto flex w-full max-w-3xl flex-col gap-2.5">
+      {itens.slice(0, visiveis).map((item) => (
         <LinhaRanking
           key={item.aluno_id}
           item={item}
@@ -443,17 +476,26 @@ function SlideRanking({
           larguraRelativa={Math.max(6, ((item[campo] ?? 0) / topo) * 100)}
         />
       ))}
+      {ocultos > 0 && (
+        <p className="text-center text-sm font-medium text-white/40">
+          + {ocultos} {ocultos === 1 ? "aluno brilhando" : "alunos brilhando"} na jornada
+        </p>
+      )}
     </div>
   );
 }
 
-function SlideMural({ mural }: { mural: DadosPainel["mural"] }) {
+function SlideMural({ mural, altura }: { mural: DadosPainel["mural"]; altura: number }) {
+  const listaRef = useRef<HTMLUListElement | null>(null);
+  // gap-3 = 12px; reserva ~30px para a linha "+ N novidades".
+  const visiveis = useLinhasQueCabem(listaRef, altura, mural.length, 12, 30);
   if (mural.length === 0) {
     return <p className="py-16 text-center text-xl text-white/40">Nada no mural ainda.</p>;
   }
+  const ocultos = mural.length - visiveis;
   return (
-    <ul className="mx-auto grid w-full max-w-3xl gap-3">
-      {mural.map((evento, indice) => (
+    <ul ref={listaRef} className="mx-auto grid w-full max-w-3xl gap-3">
+      {mural.slice(0, visiveis).map((evento, indice) => (
         <li
           key={indice}
           className="painel-surgir flex items-center gap-4 rounded-2xl bg-white/[0.06] px-5 py-4 text-lg text-white/90 ring-1 ring-inset ring-white/10"
@@ -465,6 +507,11 @@ function SlideMural({ mural }: { mural: DadosPainel["mural"] }) {
           <span className="text-[clamp(1rem,1.8vw,1.4rem)]">{evento.texto}</span>
         </li>
       ))}
+      {ocultos > 0 && (
+        <li className="list-none text-center text-sm font-medium text-white/40">
+          + {ocultos} {ocultos === 1 ? "novidade" : "novidades"} no mural
+        </li>
+      )}
     </ul>
   );
 }
@@ -486,6 +533,20 @@ export default function PainelPublico() {
   const [telaCheia, setTelaCheia] = useState(false);
   const [ocioso, setOcioso] = useState(false);
   const raiz = useRef<HTMLDivElement | null>(null);
+  // Palco = área útil do slide. A altura medida aqui é o que decide quantas
+  // linhas cada lista mostra (telão nunca rola nem corta pela metade).
+  const palcoRef = useRef<HTMLDivElement | null>(null);
+  const [alturaPalco, setAlturaPalco] = useState(0);
+
+  useEffect(() => {
+    const palco = palcoRef.current;
+    if (!palco) return;
+    const medir = () => setAlturaPalco(palco.clientHeight);
+    medir();
+    const observador = new ResizeObserver(medir);
+    observador.observe(palco);
+    return () => observador.disconnect();
+  }, [dados]);
 
   const alternarTelaCheia = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
@@ -628,7 +689,10 @@ export default function PainelPublico() {
   return (
     <div
       ref={raiz}
-      className={`relative flex min-h-screen flex-col overflow-hidden bg-[#0F1626] text-white ${modoTv ? "cursor-none" : ""}`}
+      // Altura EXATA da tela (100dvh; h-screen é o fallback) + overflow-hidden:
+      // o telão nunca tem barra de rolagem nem conteúdo cortado pela borda.
+      className={`relative flex h-screen flex-col overflow-hidden bg-[#0F1626] text-white ${modoTv ? "cursor-none" : ""}`}
+      style={{ height: "100dvh" }}
     >
       <FundoConstela cor={cor} />
 
@@ -682,11 +746,12 @@ export default function PainelPublico() {
       <div className="relative mx-5 h-px sm:mx-8" style={{ background: `linear-gradient(90deg, ${cor}, transparent 80%)` }} />
 
       {/* -------------------------------------------------------------- Palco */}
-      <main className="relative flex flex-1 flex-col justify-center overflow-y-auto px-4 py-6 sm:px-8 sm:py-8">
-        <div key={slide} className="painel-surgir mx-auto w-full">
-          <div className="mb-6 text-center sm:mb-8">
+      <main className="relative flex min-h-0 flex-1 flex-col px-4 pb-2 pt-4 sm:px-8 sm:pt-5">
+        <div key={slide} className="painel-surgir flex min-h-0 w-full flex-1 flex-col">
+          {/* Título sempre visível (fora da área rolável — nunca é cortado). */}
+          <div className="mb-3 shrink-0 text-center sm:mb-4">
             <h2
-              className="flex items-center justify-center gap-3 font-extrabold text-white text-[clamp(1.6rem,3.4vw,3rem)]"
+              className="flex items-center justify-center gap-3 font-extrabold text-white text-[clamp(1.5rem,3vw,2.6rem)]"
               style={{ fontFamily: "Poppins, Inter, sans-serif" }}
             >
               <meta.icone className="h-7 w-7 shrink-0 sm:h-9 sm:w-9" style={{ color: OURO }} strokeWidth={2.3} />
@@ -695,10 +760,20 @@ export default function PainelPublico() {
             <p className="mt-1 text-sm text-white/50 sm:text-base">{meta.legenda}</p>
           </div>
 
-          {slide === "ranking" && <SlideRanking itens={dados.ranking} campo="nota_geral" />}
-          {slide === "evolucao" && <SlideRanking itens={dados.evolucao} campo="nota_evolucao" />}
-          {slide === "destaques" && <SlideDestaques destaques={dados.destaques} />}
-          {slide === "mural" && <SlideMural mural={dados.mural} />}
+          {/* Palco medido: as listas mostram só o que cabe (sem barra, sem corte).
+             A rolagem invisível fica de reserva para telas pequenas (celular). */}
+          <div ref={palcoRef} className="painel-sem-barra flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div className="my-auto w-full py-1">
+              {slide === "ranking" && (
+                <SlideRanking itens={dados.ranking} campo="nota_geral" altura={alturaPalco} />
+              )}
+              {slide === "evolucao" && (
+                <SlideRanking itens={dados.evolucao} campo="nota_evolucao" altura={alturaPalco} />
+              )}
+              {slide === "destaques" && <SlideDestaques destaques={dados.destaques} />}
+              {slide === "mural" && <SlideMural mural={dados.mural} altura={alturaPalco} />}
+            </div>
+          </div>
         </div>
       </main>
 
