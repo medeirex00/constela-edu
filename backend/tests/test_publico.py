@@ -159,6 +159,56 @@ def test_medio7_perfil_publico_usa_cache_de_visiveis(cliente, db, escola_complet
     assert chamadas["n"] == 1
 
 
+def test_painel_publico_anonimiza_nomes_por_padrao(cliente, db, escola_completa):
+    """LGPD/ECA: o telão SEM login não expõe o nome COMPLETO da criança — por
+    padrão mostra 'primeiro nome + inicial' (ex.: 'Ana Beatriz Souza' -> 'Ana B.')."""
+    from app.services.gamificacao import anonimizar_nome
+    _com_notas(db, escola_completa)
+    escola_id = escola_completa["escola"].id
+    token = _ativar_painel(cliente, escola_id)
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)
+    corpo = anon.get(f"/api/v1/publico/{token}/painel").json()
+
+    completos = {a.nome for a in escola_completa["alunos"]}
+    ranking = corpo["ranking"]
+    assert ranking  # há ranking
+    for item in ranking:
+        assert item["nome"] not in completos      # nenhum nome completo vaza
+        aluno = next(a for a in escola_completa["alunos"] if a.id == item["aluno_id"])
+        assert item["nome"] == anonimizar_nome(aluno.nome)  # forma reduzida correta
+
+    # A configuração reflete o padrão seguro (anonimização ligada).
+    cfg = cliente.get(f"/api/v1/escolas/{escola_id}/painel-publico").json()
+    assert cfg["anonimizar"] is True
+
+
+def test_painel_publico_nome_completo_so_quando_escola_opta(cliente, db, escola_completa):
+    """A escola PODE optar por exibir o nome completo (com consentimento):
+    anonimizar=False. É explícito e não é o padrão."""
+    _com_notas(db, escola_completa)
+    escola_id = escola_completa["escola"].id
+    resposta = cliente.put(
+        f"/api/v1/escolas/{escola_id}/painel-publico",
+        json={"ativo": True, "slides": ["ranking"], "intervalo_s": 8,
+              "max_posicoes": 5, "anonimizar": False},
+    )
+    assert resposta.status_code == 200
+    assert resposta.json()["anonimizar"] is False
+    token = resposta.json()["url"].rsplit("/", 1)[-1]
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)
+    corpo = anon.get(f"/api/v1/publico/{token}/painel").json()
+    nomes_no_painel = {i["nome"] for i in corpo["ranking"]}
+    completos = {a.nome for a in escola_completa["alunos"]}
+    # Com anonimização desligada, aparece pelo menos um nome completo real.
+    assert nomes_no_painel & completos
+
+
 def test_max_posicoes_limita_o_ranking(cliente, db, escola_completa):
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id
@@ -182,7 +232,10 @@ def test_perfil_publico_restrito_a_dados_pedagogicos(cliente, db, escola_complet
     resposta = anonimo.get(f"/api/v1/publico/{token}/alunos/{ana.id}")
     assert resposta.status_code == 200
     corpo = resposta.json()
-    assert corpo["nome"] == ana.nome
+    # Link público → nome ANONIMIZADO por padrão (não o nome completo da criança).
+    from app.services.gamificacao import anonimizar_nome
+    assert corpo["nome"] == anonimizar_nome(ana.nome)
+    assert corpo["nome"] != ana.nome
     assert "conquistas" in corpo
     # Nada de dados pessoais sensíveis (PRD §120)
     for campo in ("data_nascimento", "observacoes", "numero_chamada", "email", "foto_url"):

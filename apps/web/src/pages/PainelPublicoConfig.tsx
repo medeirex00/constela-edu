@@ -12,6 +12,7 @@ interface ConfigPainel {
   slides: string[];
   intervalo_s: number;
   max_posicoes: number;
+  anonimizar: boolean;
   url: string | null;
 }
 
@@ -48,6 +49,7 @@ export default function PainelPublicoConfig() {
           slides: novaConfig.slides,
           intervalo_s: novaConfig.intervalo_s,
           max_posicoes: novaConfig.max_posicoes,
+          anonimizar: novaConfig.anonimizar,
         }),
       });
       // Ativar o painel gera um endereço NOVO (o anterior deixa de funcionar).
@@ -197,6 +199,28 @@ export default function PainelPublicoConfig() {
                 />
               </Campo>
             </div>
+          </Card>
+        )}
+
+        {config.ativo && (
+          <Card className="p-5">
+            <h3 className="mb-1 text-sm font-semibold">Privacidade dos alunos</h3>
+            <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+              O telão é um endereço público, sem senha. Por proteção, o nome do
+              aluno aparece de forma reduzida — só o primeiro nome e a inicial do
+              sobrenome (ex.: <strong>Ana B.</strong>). Recomendado para redes
+              públicas com dados de crianças.
+            </p>
+            <label className="flex items-center gap-3 text-sm font-medium">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-indigo-600"
+                checked={config.anonimizar}
+                disabled={!podeEditar || ocupado}
+                onChange={(evento) => salvar({ ...config, anonimizar: evento.target.checked })}
+              />
+              Proteger o nome dos alunos no telão (recomendado)
+            </label>
           </Card>
         )}
 

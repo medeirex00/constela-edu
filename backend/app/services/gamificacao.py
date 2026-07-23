@@ -449,10 +449,30 @@ def _melhor_do_ranking(itens) -> dict | None:
     }
 
 
+def anonimizar_nome(nome: str | None) -> str:
+    """Nome reduzido para telas PÚBLICAS (sem login): primeiro nome + inicial do
+    primeiro sobrenome — ex.: "Ana Beatriz Souza" -> "Ana B.".
+
+    Um telão numa rede municipal não deve expor o nome COMPLETO de uma criança
+    (LGPD/ECA, melhor interesse do menor); o primeiro nome + inicial ainda deixa
+    a criança se reconhecer no ranking, mas não a identifica publicamente.
+    """
+    if not nome:
+        return nome or ""
+    partes = nome.split()
+    if len(partes) == 1:
+        return partes[0]
+    return f"{partes[0]} {partes[1][0]}."
+
+
 def mural(db: Session, escola_id: int,
           serie_m: dict | None = None, serie_e: dict | None = None,
-          mapa_dif: dict | None = None) -> dict:
+          mapa_dif: dict | None = None, anonimizar: bool = False) -> dict:
     """Mural da escola: destaques do dia/semana/mês + eventos recentes.
+
+    ``anonimizar=True`` (uso no painel PÚBLICO sem login) reduz o nome do aluno
+    nos destaques e nos eventos a "primeiro nome + inicial" — ver
+    :func:`anonimizar_nome`.
 
     Trabalha em LOTE: todos os snapshots da escola são carregados em 2
     consultas e a gamificação de cada aluno é computada em memória — antes
@@ -499,11 +519,13 @@ def mural(db: Session, escola_id: int,
                 continue
             data_cmp = data.replace(tzinfo=timezone.utc) if data.tzinfo is None else data
             if data_cmp >= corte:
+                nome_evt = nomes.get(aluno_id, "Aluno")
+                if anonimizar:
+                    nome_evt = anonimizar_nome(nome_evt)
                 eventos.append({
                     "tipo": "conquista",
                     "icone": conquista["icone"],
-                    "texto": f"{nomes.get(aluno_id, 'Aluno')} desbloqueou "
-                             f"“{conquista['nome']}”",
+                    "texto": f"{nome_evt} desbloqueou “{conquista['nome']}”",
                     "data": data,
                 })
 
@@ -512,9 +534,12 @@ def mural(db: Session, escola_id: int,
     # ranking_evolucao é caro: cada janela reusa as séries + mapa de dificuldade
     # já carregados (só a leitura por período varia entre as janelas).
     def _destaque(dias: int):
-        return _melhor_do_ranking(evolucao.ranking_evolucao(
+        melhor = _melhor_do_ranking(evolucao.ranking_evolucao(
             db, escola_id, dias=dias,
             serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif))
+        if melhor and anonimizar:
+            melhor = {**melhor, "nome": anonimizar_nome(melhor["nome"])}
+        return melhor
 
     return {
         "destaques": {

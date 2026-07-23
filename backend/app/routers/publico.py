@@ -6,7 +6,9 @@ Duas metades:
     gerar QR code e trocar o token (invalida o link antigo).
   * `/publico/{token}/*` (SEM login) — dados exibidos no telão/celular.
     Somente dados pedagógicos saem por aqui: nome, turma, notas, posição,
-    conquistas. Nada de datas de nascimento, observações ou contatos.
+    conquistas. Nada de datas de nascimento, observações ou contatos. O nome
+    do aluno sai ANONIMIZADO por padrão (primeiro nome + inicial), pois o link
+    é público — a escola pode optar por nome completo (config `anonimizar`).
 """
 import secrets
 import time
@@ -37,6 +39,10 @@ PADRAO = {
     "slides": SLIDES_VALIDOS,
     "intervalo_s": 12,
     "max_posicoes": 10,
+    # Telão SEM login: por padrão o nome do aluno sai anonimizado (primeiro nome
+    # + inicial). Expor nome COMPLETO de criança num link público é risco
+    # LGPD/ECA. A escola pode desligar (mostrar nome completo) com consentimento.
+    "anonimizar": True,
 }
 
 
@@ -127,6 +133,8 @@ class PainelConfigIn(BaseModel):
     slides: list[str] = Field(default=SLIDES_VALIDOS)
     intervalo_s: int = Field(default=12, ge=4, le=120)
     max_posicoes: int = Field(default=10, ge=3, le=50)
+    # Padrão seguro: anonimiza o nome no telão público (ver PADRAO).
+    anonimizar: bool = True
 
 
 def _com_url(valores: dict) -> dict:
@@ -136,6 +144,7 @@ def _com_url(valores: dict) -> dict:
         "slides": valores.get("slides", SLIDES_VALIDOS),
         "intervalo_s": valores.get("intervalo_s", 12),
         "max_posicoes": valores.get("max_posicoes", 10),
+        "anonimizar": valores.get("anonimizar", True),
         "url": f"{settings.PUBLIC_BASE_URL}/p/{token}" if token else None,
     }
 
@@ -242,6 +251,9 @@ publico_router = APIRouter(prefix="/publico", tags=["Painel Público"])
 
 def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     limite = int(config.get("max_posicoes", 10))
+    # Telão sem login: nome anonimizado por padrão (primeiro nome + inicial).
+    anonimizar = bool(config.get("anonimizar", True))
+    nome_pub = (svc_gami.anonimizar_nome if anonimizar else (lambda n: n))
     ranking = db.execute(
         select(Nota, Aluno, Turma)
         .join(Aluno, Nota.aluno_id == Aluno.id)
@@ -257,7 +269,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     ).all()
 
     evolucao_itens = svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]
-    mural = svc_gami.mural(db, escola.id)
+    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar)
 
     # Estatísticas REAIS da escola (agregadas dos snapshots atuais — nada é
     # inventado): faixa de indicadores do painel. Custo absorvido pelo cache
@@ -290,7 +302,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             {
                 "posicao": nota.posicao,
                 "aluno_id": aluno.id,
-                "nome": aluno.nome,
+                "nome": nome_pub(aluno.nome),
                 "turma": turma.nome,
                 "nota_geral": nota.nota_geral,
             }
@@ -300,7 +312,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             {
                 "posicao": item.posicao,
                 "aluno_id": item.aluno_id,
-                "nome": item.nome,
+                "nome": nome_pub(item.nome),
                 "turma": item.turma,
                 "nota_evolucao": item.nota_evolucao,
             }
@@ -418,9 +430,11 @@ def perfil_publico(token: str, aluno_id: int, db: Session = Depends(get_db)):
     ).scalar_one_or_none()
     gamificacao = svc_gami.gamificacao_do_aluno(db, escola.id, aluno_id)
 
-    # Estritamente pedagógico: nome, turma, notas e conquistas.
+    # Estritamente pedagógico: nome, turma, notas e conquistas. O nome sai
+    # anonimizado por padrão (mesma regra do telão) — este link é público.
+    anonimizar = bool(config.get("anonimizar", True))
     return {
-        "nome": aluno.nome,
+        "nome": svc_gami.anonimizar_nome(aluno.nome) if anonimizar else aluno.nome,
         "turma": matricula[1].nome if matricula else None,
         "posicao": nota.posicao if nota else None,
         "nota_matific": nota.nota_matific if nota else 0.0,
