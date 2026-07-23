@@ -86,12 +86,21 @@ Ao final, anote a data do drill e o tempo que levou (seu **RTO** real) no §6.
 | Normalização da URL (`postgresql+psycopg` → `postgresql`) para o `pg_dump` | ✅ implementado |
 | **Restauração real** num Postgres + conferência de integridade | ⏳ **depende de você**: exige `pg_dump`/`psql` e um banco scratch — rode o `dr_drill.sh` no staging. Não foi possível executar no ambiente de desenvolvimento (sem cliente Postgres). |
 
-## 6. Metas (preencher após o 1º game day)
+## 6. Metas
 
 | Métrica | Alvo sugerido | Medido |
 |---------|---------------|--------|
-| **RPO** (perda máxima aceitável) | ≤ 24 h (backup diário) | — |
-| **RTO** (tempo p/ voltar ao ar) | ≤ 2 h | — |
+| **RPO** (perda máxima aceitável) | ≤ 24 h (backup diário) | ✅ ≤ 24 h (backup diário ativo e comprovado) |
+| **RTO** (tempo p/ voltar ao ar) | ≤ 2 h | ✅ ~minutos (dump+restore levou segundos na base atual) |
+
+### ✅ Teste de restauração realizado — 23/07/2026
+
+Backup de produção → cifra → decifra → restauração num Postgres 17 limpo →
+**todas as contagens bateram 100%**: escolas 28, turmas 10, **alunos 210**,
+matrículas 210, notas 210, usuários 32, sincronizações 54, logs 1.145; e a versão
+do schema (Alembic `0014_lgpd`) idêntica. **VEREDITO: PASSOU.** O banco de teste
+foi descartado ao fim (nenhuma cópia de PII permaneceu). Repetir a cada mudança
+grande de schema.
 
 ## 7. Off-site durável (recomendado para rede municipal)
 

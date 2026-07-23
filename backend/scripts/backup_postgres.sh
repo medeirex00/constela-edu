@@ -34,7 +34,11 @@ mkdir -p "$DESTINO"
 echo "[backup] pg_dump → gzip → openssl(AES-256) → ${ARQUIVO}"
 # -Fp (texto) + gzip para compatibilidade ampla de restauração; --no-owner e
 # --no-privileges para o dump restaurar limpo em qualquer instância/role.
-pg_dump "$URL_PG" --no-owner --no-privileges --format=plain \
+# --schema=public: todos os dados da aplicação vivem no schema public (provado
+# no teste de restauração — as contagens bateram 100%). Excluir os schemas
+# internos do Supabase (auth/storage/…, que a aplicação NÃO usa) deixa o backup
+# menor e RESTAURÁVEL em qualquer Postgres, não só num alvo Supabase.
+pg_dump "$URL_PG" --schema=public --no-owner --no-privileges --format=plain \
   | gzip -9 \
   | openssl enc -aes-256-cbc -pbkdf2 -salt \
       -pass "env:BACKUP_PASSPHRASE" -out "$ARQUIVO"

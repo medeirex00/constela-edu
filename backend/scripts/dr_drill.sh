@@ -37,8 +37,8 @@ trap 'rm -rf "$TMP"' EXIT
 ENC="$TMP/backup.sql.gz.enc"
 SQL="$TMP/backup.sql"
 
-echo "[dr] 1/5 Backup cifrado da origem..."
-pg_dump "$SRC" --no-owner --no-privileges --format=plain \
+echo "[dr] 1/5 Backup cifrado da origem (schema public)..."
+pg_dump "$SRC" --schema=public --no-owner --no-privileges --format=plain \
   | gzip -9 | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "env:BACKUP_PASSPHRASE" -out "$ENC"
 echo "[dr]     -> $(du -h "$ENC" | cut -f1) cifrado"
 
