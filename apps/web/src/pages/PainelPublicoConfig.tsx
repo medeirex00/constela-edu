@@ -204,8 +204,9 @@ export default function PainelPublicoConfig() {
           </Card>
         )}
 
-        {config.ativo && (
-          <Card className="p-5">
+        {/* Visível SEMPRE (mesmo com o painel desativado): o gestor vê a
+            proteção padrão antes de ligar o telão, não depois. */}
+        <Card className="p-5">
             <h3 className="mb-1 text-sm font-semibold">Privacidade dos alunos</h3>
             <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
               O telão é um endereço público, sem senha. Por proteção, o nome do
@@ -232,7 +233,6 @@ export default function PainelPublicoConfig() {
               Proteger o nome dos alunos no telão (recomendado)
             </label>
           </Card>
-        )}
 
         {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
       </div>

@@ -63,6 +63,37 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Sinal de vida (dead-man's-switch)
+        # A cada backup BEM-SUCEDIDO, pinga um monitor externo (ex.: healthchecks.io,
+        # grátis). Se o ping PARAR (backup falhou ou não rodou), o monitor avisa o
+        # dono por e-mail — é o alarme de "nenhum backup nas últimas ~26h", que o
+        # GitHub sozinho não dá. Sem o segredo configurado, o passo é ignorado.
+        if: success()
+        env:
+          HEARTBEAT_URL: ${{ secrets.BACKUP_HEARTBEAT_URL }}
+        run: |
+          if [ -n "$HEARTBEAT_URL" ]; then
+            curl -fsS -m 15 --retry 3 "$HEARTBEAT_URL" || true
+          else
+            echo "BACKUP_HEARTBEAT_URL não configurado — pulando o sinal de vida."
+          fi
+
+      - name: Avisar se o backup FALHOU
+        # Em QUALQUER falha, notifica um webhook (Slack/Discord/genérico) se
+        # configurado. Independente disso, o GitHub já envia e-mail ao dono quando
+        # um workflow agendado falha (aviso padrão) — este passo é um reforço.
+        if: failure()
+        env:
+          ALERT_WEBHOOK: ${{ secrets.BACKUP_ALERT_WEBHOOK }}
+        run: |
+          if [ -n "$ALERT_WEBHOOK" ]; then
+            curl -fsS -m 15 -X POST -H 'Content-Type: application/json' \
+              -d '{"text":"⚠️ Constela Edu: o BACKUP diario do banco FALHOU. Verifique o GitHub Actions."}' \
+              "$ALERT_WEBHOOK" || true
+          else
+            echo "BACKUP_ALERT_WEBHOOK não configurado — pulando o aviso de falha."
+          fi
+
       # OPCIONAL (recomendado ao escalar para rede municipal): enviar também
       # para um bucket S3/Backblaze com versionamento e Object Lock, em vez de
       # depender só do artefato do GitHub. Ver docs/DR-RUNBOOK.md §“Off-site”.
