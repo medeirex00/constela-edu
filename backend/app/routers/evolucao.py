@@ -147,11 +147,13 @@ def ranking_evolucao(
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Data inválida (use AAAA-MM-DD).") from exc
         dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar,
-                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
+                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
+                                     base_no_periodo=True)
     else:
         dados = svc.ranking_evolucao(db, escola_id, turma_id=turma_id,
                                      ano_escolar=ano_escolar, dias=dias,
-                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
+                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
+                                     base_no_periodo=True)
     return [
         {
             "posicao": item.posicao,

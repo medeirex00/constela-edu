@@ -231,8 +231,10 @@ def test_ranking_evolucao_usa_datas_reais_das_leituras(cliente, escola_completa)
     assert ana_item["ganhos"]["livros"] == 2                # só as do intervalo
     assert ana_item["ganhos"]["tempo_leitura_min"] == 50    # 30 + 20 (não 90)
 
-    # Aluno SEM leituras individuais (só relatório-resumo da turma): mantém o
-    # comportamento por delta de snapshot ("evolui a partir do zero").
+    # Aluno SEM leituras individuais (só relatório-resumo da turma), com um ÚNICO
+    # snapshot dentro da janela e SEM histórico anterior: pela régua JUSTA do
+    # gestor (base_no_periodo=True), o acumulado NÃO vira "evolução do período" —
+    # ele pontua 0 até haver um 2º registro que prove crescimento na janela.
     resp = cliente.post(f"{_base(escola_id)}/importacoes/confirmar", json={
         "plataforma": "elefante", "formato": "resumo", "tipo": "texto",
         "data_referencia": "2026-07-05T12:00:00",  # snapshot dentro da janela
@@ -243,8 +245,8 @@ def test_ranking_evolucao_usa_datas_reais_das_leituras(cliente, escola_completa)
     assert resp.status_code == 200
     r2 = cliente.get(f"{_base(escola_id)}/ranking-evolucao"
                      "?periodo=personalizado&inicio=2026-07-04&fim=2026-07-07").json()
-    joao_item = next(i for i in r2 if i["aluno_id"] == joao.id)
-    assert joao_item["ganhos"]["livros"] == 5               # fallback por snapshot
+    joao_itens = [i for i in r2 if i["aluno_id"] == joao.id]
+    assert not joao_itens or joao_itens[0]["ganhos"]["livros"] == 0
 
 
 def test_podio_desempata_por_nome_normalizado():
