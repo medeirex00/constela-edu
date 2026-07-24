@@ -17,7 +17,7 @@ import {
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
-import { nota, numero } from "../lib/formato";
+import { numero } from "../lib/formato";
 import type { Livro, Nivel, PaginaLivros } from "../lib/types";
 
 interface FormularioLivro {
@@ -148,7 +148,6 @@ export default function Livros() {
                   <th className="px-4 py-2 font-medium">Título</th>
                   <th className="hidden px-4 py-2 font-medium md:table-cell">Autor</th>
                   <th className="px-4 py-2 font-medium">Nível</th>
-                  <th className="px-4 py-2 text-right font-medium">Pontos</th>
                   <th className="px-4 py-2 text-right font-medium">Leituras</th>
                   {podeEditar && <th className="px-4 py-2" />}
                 </tr>
@@ -164,7 +163,6 @@ export default function Livros() {
                     </td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{livro.autor ?? "—"}</td>
                     <td className="px-4 py-2.5"><Badge tom="destaque">{livro.nivel_codigo}</Badge></td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{nota(livro.pontos)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{numero(livro.leituras)}</td>
                     {podeEditar && (
                       <td className="px-4 py-2.5 text-right">

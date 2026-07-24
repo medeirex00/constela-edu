@@ -36,7 +36,11 @@ function CartaoCategoria({ categoria }: { categoria: CategoriaPremiacao }) {
       </div>
 
       {!campeao ? (
-        <p className="py-6 text-center text-sm text-zinc-400">Sem dados no período.</p>
+        <p className="py-6 text-center text-sm text-zinc-400">
+          {categoria.titulo.toLowerCase().includes("matific")
+            ? "Sem crescimento do Matific neste período. Diferente da leitura (que tem data por livro), o Matific vem como um retrato do dia — premiar por período precisa de pelo menos dois retratos na janela. A sincronização diária vai preenchendo os próximos meses; para um mês já passado, importe o relatório do Matific escolhendo o intervalo de datas."
+            : "Sem dados no período."}
+        </p>
       ) : (
         <>
           {/* Campeão em destaque */}

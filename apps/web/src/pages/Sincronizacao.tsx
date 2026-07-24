@@ -15,11 +15,13 @@ import {
   History,
   RefreshCw,
   ScrollText,
+  Users,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { CredenciaisForm } from "../components/CredenciaisForm";
+import ImportacaoMatriculas from "./ImportacaoMatriculas";
 import {
   Badge,
   Botao,
@@ -153,6 +155,8 @@ export default function Sincronizacao() {
 
   const dados = status.dados;
 
+  const [verMatriculas, setVerMatriculas] = useState(false);
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -167,6 +171,11 @@ export default function Sincronizacao() {
             )}
             <Botao variante="neutro" onClick={recarregar}>
               <RefreshCw size={15} /> Atualizar
+            </Botao>
+            {/* Matrícula (Lista Piloto) NÃO vem da sincronização — ela coleta
+                desempenho, não o cadastro. Por isso o roster é atualizado aqui. */}
+            <Botao variante="neutro" onClick={() => setVerMatriculas(true)}>
+              <Users size={15} /> {dados?.lista_piloto_importada ? "Atualizar Lista Piloto" : "Importar Lista Piloto"}
             </Botao>
             <Botao disabled={sincronizar.enviando || !dados?.integracao_configurada}
               onClick={() => sincronizar.executar(undefined)}>
@@ -362,6 +371,19 @@ export default function Sincronizacao() {
             ))}
           </div>
         )}
+      </Drawer>
+
+      {/* Atualizar/Importar a Lista Piloto (matrículas) — reusa o mesmo
+          componente e endpoint idempotente (casa por RA/nome, atualiza os
+          existentes e marca quem saiu como "fora da lista", sem apagar). */}
+      <Drawer titulo="Atualizar Lista Piloto" aberto={verMatriculas} aoFechar={() => setVerMatriculas(false)}>
+        {escolaId ? (
+          <ImportacaoMatriculas
+            escolaId={escolaId}
+            aoConcluir={recarregar}
+            aoAvancar={() => setVerMatriculas(false)}
+          />
+        ) : null}
       </Drawer>
     </div>
   );

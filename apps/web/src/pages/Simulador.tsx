@@ -68,7 +68,12 @@ export default function Simulador() {
         }),
       );
     } catch (excecao) {
-      setErro(excecao instanceof Error ? excecao.message : "Falha na simulação.");
+      // ApiError carrega .status: 0 = falha de transporte (sem rede / servidor
+      // reiniciando) → mostra a mensagem de conexão; >0 = erro do servidor →
+      // mostra o código, para não mascarar um 4xx/5xx como "sem internet".
+      const status = (excecao as { status?: number })?.status;
+      const msg = excecao instanceof Error ? excecao.message : "Falha na simulação.";
+      setErro(status ? `Erro ${status}: ${msg}` : msg);
     } finally {
       setOcupado(false);
     }

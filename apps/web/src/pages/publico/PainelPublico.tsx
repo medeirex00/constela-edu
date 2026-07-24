@@ -277,7 +277,7 @@ function ColunaPodio({
       <div
         className={`relative flex flex-1 flex-col items-center justify-start overflow-hidden text-center ring-1 ring-inset ${
           campeao
-            ? "painel-brilho rounded-[2.25rem] px-6 pb-8 pt-9 ring-amber-300/40 sm:px-8 sm:pb-10 sm:pt-10"
+            ? "painel-brilho rounded-[2.25rem] px-6 pb-8 pt-9 ring-white/10 sm:px-8 sm:pb-10 sm:pt-10"
             : "rounded-3xl bg-white/[0.06] px-5 pb-6 pt-7 ring-white/10"
         }`}
         style={
@@ -288,7 +288,9 @@ function ColunaPodio({
                 // cartão do campeão — sem perder o destaque (a sombra dourada fica).
                 background:
                   "linear-gradient(165deg, rgba(245,185,66,0.12), rgba(27,42,74,0.34) 60%, rgba(15,22,38,0.5))",
-                boxShadow: `0 0 90px -14px ${OURO}88, inset 0 1px 0 0 rgba(255,255,255,0.12)`,
+                // Só o brilho dourado difuso (sem linha branca no topo nem aro
+                // âmbar): elimina a "borda que acaba do nada" no cartão translúcido.
+                boxShadow: `0 0 90px -14px ${OURO}88`,
               }
             : {
                 background: `linear-gradient(170deg, ${cor}14, rgba(255,255,255,0.05) 55%)`,
