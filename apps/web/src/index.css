@@ -112,14 +112,14 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  /* As estrelas NÃO entram aqui de propósito: o cintilar é um respiro LENTO de
-     opacidade (4s, sem nenhum movimento), então fica CONSISTENTE em toda tela
-     (web e Android) em vez de piscar só em uma. Os efeitos com movimento (surgir,
-     flutuar, pulsar, varredura de brilho) continuam desligados em reduced-motion. */
+  /* As estrelas (cintilar) e as CADENTES NÃO entram aqui de propósito: o telão é
+     uma decoração de vitrine (não uma UI que o usuário opera), e a graça pedida é
+     justamente o céu vivo — se o dispositivo estiver com "reduzir movimento", elas
+     ainda aparecem. Os efeitos de UI com movimento (entrada dos cards, flutuar,
+     pulsar, varredura de brilho) seguem desligados em reduced-motion. */
   .painel-surgir,
   .painel-flutua,
   .painel-pulso,
-  .painel-cadente,
   .painel-brilho::after {
     animation: none !important;
   }

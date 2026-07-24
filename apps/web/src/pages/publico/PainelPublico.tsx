@@ -166,11 +166,13 @@ function FundoConstela({ cor }: { cor: string }) {
           />
         ))}
       </svg>
-      {/* Estrelas cadentes esporádicas — posições e atrasos distintos para
-          cruzarem o céu em momentos diferentes (nunca em enxame). */}
-      <span className="painel-cadente" style={{ top: "10%", left: "82%", animationDelay: "2s", animationDuration: "10s" }} aria-hidden />
-      <span className="painel-cadente" style={{ top: "24%", left: "92%", animationDelay: "6.5s", animationDuration: "13s" }} aria-hidden />
-      <span className="painel-cadente" style={{ top: "6%", left: "60%", animationDelay: "11s", animationDuration: "16s" }} aria-hidden />
+      {/* Estrelas cadentes — posições, atrasos e durações distintos para
+          cruzarem o céu em momentos diferentes (a 1ª logo no início). */}
+      <span className="painel-cadente" style={{ top: "8%", left: "80%", animationDelay: "1s", animationDuration: "8s" }} aria-hidden />
+      <span className="painel-cadente" style={{ top: "18%", left: "94%", animationDelay: "4s", animationDuration: "9s" }} aria-hidden />
+      <span className="painel-cadente" style={{ top: "5%", left: "55%", animationDelay: "7s", animationDuration: "11s" }} aria-hidden />
+      <span className="painel-cadente" style={{ top: "30%", left: "72%", animationDelay: "10s", animationDuration: "10s" }} aria-hidden />
+      <span className="painel-cadente" style={{ top: "13%", left: "38%", animationDelay: "13.5s", animationDuration: "12s" }} aria-hidden />
     </div>
   );
 }
