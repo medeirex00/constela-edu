@@ -50,6 +50,8 @@ export default function PainelPublicoConfig() {
           intervalo_s: novaConfig.intervalo_s,
           max_posicoes: novaConfig.max_posicoes,
           anonimizar: novaConfig.anonimizar,
+          // Exigido pelo servidor p/ expor nome completo (o clique já avisou).
+          confirmar_exposicao: !novaConfig.anonimizar,
         }),
       });
       // Ativar o painel gera um endereço NOVO (o anterior deixa de funcionar).

@@ -135,6 +135,9 @@ class PainelConfigIn(BaseModel):
     max_posicoes: int = Field(default=10, ge=3, le=50)
     # Padrão seguro: anonimiza o nome no telão público (ver PADRAO).
     anonimizar: bool = True
+    # Gesto consciente EXIGIDO pelo servidor para passar de protegido→exposto
+    # (não é persistido; é um flag da ação, não configuração).
+    confirmar_exposicao: bool = False
 
 
 def _com_url(valores: dict) -> dict:
@@ -172,8 +175,17 @@ def salvar_config(
     row = _config_row(db, escola_id)
     anterior = dict((row.valor or {}) if row else {})
     estava_ativo = bool(anterior.get("ativo"))
+    # Barreira de SERVIDOR: só passa de protegido→exposto (nome completo de
+    # criança em link sem senha) com confirmação explícita — defesa contra
+    # cliente antigo/chamada direta que burle o aviso do navegador.
+    if (bool(anterior.get("anonimizar", True)) and not dados.anonimizar
+            and not dados.confirmar_exposicao):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Para exibir o nome completo das crianças no telão público (link "
+            "sem senha), é preciso confirmar a exposição explicitamente.")
     valores = dict(anterior)
-    valores.update(dados.model_dump())
+    valores.update(dados.model_dump(exclude={"confirmar_exposicao"}))
     valores["slides"] = slides
     # (RE)ATIVAR o painel = "gerar um novo painel público": sempre nasce um
     # endereço NOVO, então qualquer QR/link gerado antes deixa de funcionar na

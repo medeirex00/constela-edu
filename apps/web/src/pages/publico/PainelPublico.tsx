@@ -33,7 +33,7 @@ interface ItemRanking {
   posicao: number;
   aluno_id: number;
   nome: string;
-  turma: string;
+  turma: string | null;
   nota_geral?: number;
   nota_evolucao?: number;
 }
@@ -41,7 +41,7 @@ interface ItemRanking {
 interface Destaque {
   aluno_id: number;
   nome: string;
-  turma: string;
+  turma: string | null;
   nota_evolucao: number;
   /** Ganhos reais do período (o que a criança avançou) — vêm do backend. */
   ganhos?: {
@@ -337,7 +337,7 @@ function ColunaPodio({
               {destaque.nome}
             </p>
             <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
-              <ChipTurma>{destaque.turma}</ChipTurma>
+              {destaque.turma && <ChipTurma>{destaque.turma}</ChipTurma>}
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-400/15 px-3 py-1 font-bold tabular-nums text-emerald-300 ring-1 ring-inset ring-emerald-300/25 ${
                   campeao ? "text-lg" : "text-base"
@@ -436,7 +436,7 @@ function LinhaRanking({
       >
         {item.nome}
       </span>
-      <ChipTurma className="hidden sm:inline-flex">{item.turma}</ChipTurma>
+      {item.turma && <ChipTurma className="hidden sm:inline-flex">{item.turma}</ChipTurma>}
       <span
         className="w-20 shrink-0 text-right font-bold tabular-nums text-white text-[clamp(1.1rem,2vw,1.75rem)] sm:w-28"
         style={top3 ? { color: medalha?.cor } : undefined}

@@ -54,7 +54,7 @@ export default function PerfilPublico() {
         <div className="rounded-2xl bg-white/5 p-8 text-center">
           <p className="text-sm uppercase tracking-wide text-zinc-400">{perfil.escola}</p>
           <h1 className="mt-2 text-3xl font-bold">{perfil.nome}</h1>
-          <p className="mt-1 text-zinc-400">{perfil.turma}</p>
+          {perfil.turma && <p className="mt-1 text-zinc-400">{perfil.turma}</p>}
           {perfil.posicao && (
             <p className="mt-3 inline-block rounded-full bg-amber-400/20 px-4 py-1 text-amber-200">
               {perfil.posicao}º no Ranking Geral

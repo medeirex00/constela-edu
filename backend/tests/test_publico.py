@@ -194,7 +194,7 @@ def test_painel_publico_nome_completo_so_quando_escola_opta(cliente, db, escola_
     resposta = cliente.put(
         f"/api/v1/escolas/{escola_id}/painel-publico",
         json={"ativo": True, "slides": ["ranking"], "intervalo_s": 8,
-              "max_posicoes": 5, "anonimizar": False},
+              "max_posicoes": 5, "anonimizar": False, "confirmar_exposicao": True},
     )
     assert resposta.status_code == 200
     assert resposta.json()["anonimizar"] is False
@@ -210,6 +210,26 @@ def test_painel_publico_nome_completo_so_quando_escola_opta(cliente, db, escola_
     assert nomes_no_painel & completos
     # E a turma volta a ser exibida (a escola optou por expor).
     assert any(i["turma"] for i in corpo["ranking"])
+
+
+def test_painel_publico_expor_nome_exige_confirmacao_no_servidor(cliente, db, escola_completa):
+    """#5: o servidor RECUSA passar de protegido→exposto sem confirmação
+    explícita — defesa contra cliente antigo/chamada direta que burle o aviso do
+    navegador (a confirmação não pode existir só no front)."""
+    escola_id = escola_completa["escola"].id
+    base = {"ativo": True, "slides": ["ranking"], "intervalo_s": 8, "max_posicoes": 5}
+    # Expor sem confirmar → 400
+    r = cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
+                    json={**base, "anonimizar": False})
+    assert r.status_code == 400
+    # Com confirmação explícita → 200
+    r = cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
+                    json={**base, "anonimizar": False, "confirmar_exposicao": True})
+    assert r.status_code == 200
+    assert r.json()["anonimizar"] is False
+    # confirmar_exposicao NÃO é persistido (é flag de ação, não config).
+    assert "confirmar_exposicao" not in cliente.get(
+        f"/api/v1/escolas/{escola_id}/painel-publico").json()
 
 
 def test_painel_publico_evolucao_justa_nao_infla_acumulado(cliente, db, escola_completa):
