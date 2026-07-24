@@ -178,6 +178,45 @@ def test_certificado_pdf(cliente, db, escola_completa):
     assert resposta.content[:5] == b"%PDF-"
 
 
+def test_logo_da_cidade_por_escola(cliente, db, escola_completa):
+    """Envio/remoção do brasão POR ESCOLA: o serviço passa a usar o logo da
+    escola nos documentos; remover volta ao padrão. Admin apenas."""
+    import io
+
+    from PIL import Image
+
+    from app.services import relatorios as rel
+    escola = escola_completa["escola"]
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (120, 120), (200, 30, 30, 255)).save(buffer, format="PNG")
+    buffer.seek(0)
+    resp = cliente.post(
+        f"/api/v1/escolas/{escola.id}/aparencia/logo?tipo=brasao",
+        files={"arquivo": ("brasao.png", buffer, "image/png")})
+    assert resp.status_code == 200, resp.text
+
+    aparencia = cliente.get(f"/api/v1/escolas/{escola.id}/aparencia").json()
+    assert aparencia["brasao_data_uri"].startswith("data:image/png;base64,")
+    assert aparencia["prefeitura_data_uri"] == ""
+
+    brasao, prefeitura = rel.logos_da_escola(db, escola.id)
+    assert brasao.startswith("data:image/png;base64,")
+    assert prefeitura == ""
+
+    # Enviar algo que não é imagem → 400 (não derruba nada).
+    ruim = cliente.post(
+        f"/api/v1/escolas/{escola.id}/aparencia/logo?tipo=prefeitura",
+        files={"arquivo": ("x.png", io.BytesIO(b"nao sou imagem"), "image/png")})
+    assert ruim.status_code == 400
+
+    # Remover volta ao padrão (data URI vazio).
+    rem = cliente.delete(f"/api/v1/escolas/{escola.id}/aparencia/logo?tipo=brasao")
+    assert rem.status_code == 200
+    aparencia2 = cliente.get(f"/api/v1/escolas/{escola.id}/aparencia").json()
+    assert aparencia2["brasao_data_uri"] == ""
+
+
 def test_pdf_alunos_e_livros_layout_vitrine(cliente, db, escola_completa):
     """Lista de Alunos e Catálogo de Livros em PDF de vitrine (HTML→Chromium,
     reserva fpdf) — sempre um PDF válido."""

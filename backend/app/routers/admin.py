@@ -522,9 +522,14 @@ def obter_aparencia(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     valores = scoring.obter_config(db, escola_id, "aparencia", "valores", {})
+    logos = scoring.obter_config(db, escola_id, "aparencia", "logos", {})
     return {
         "cor_primaria": valores.get("cor_primaria", "#1B2A4A"),
         "mostrar_fotos": valores.get("mostrar_fotos", True),
+        # Logos da cidade DESTA escola (data URIs) para o certificado/relatórios.
+        # Vazios = usa o padrão do piloto (app/marca/) ou só a marca Constela.
+        "brasao_data_uri": logos.get("brasao_data_uri", ""),
+        "prefeitura_data_uri": logos.get("prefeitura_data_uri", ""),
     }
 
 
@@ -552,3 +557,88 @@ def salvar_aparencia(
               detalhes=dados.model_dump())
     db.commit()
     return dados.model_dump()
+
+
+# Logos institucionais POR ESCOLA (brasão da cidade + logo da prefeitura). Ficam
+# numa chave SEPARADA ("logos") para que salvar a cor (chave "valores") nunca os
+# apague. Entram no topo dos certificados/relatórios em PDF — automático por
+# escola/cidade (relatorios.logos_da_escola / _cabecalho_logos).
+_LOGO_MAX_BYTES = 3 * 1024 * 1024  # 3 MB no upload (antes de reduzir)
+
+
+def _row_logos_aparencia(db: Session, escola_id: int) -> Configuracao:
+    row = db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == "aparencia",
+            Configuracao.chave == "logos",
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = Configuracao(escola_id=escola_id, namespace="aparencia",
+                           chave="logos", valor={})
+        db.add(row)
+    return row
+
+
+@router.post("/aparencia/logo")
+async def enviar_logo_aparencia(
+    tipo: str = Query(pattern="^(brasao|prefeitura)$"),
+    arquivo: UploadFile = File(...),
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Envia o brasão da cidade ou o logo da prefeitura DESTA escola. A imagem é
+    reduzida (máx. 400 px) e guardada como data URI, entrando no topo de
+    certificados e relatórios em PDF. PNG com fundo transparente fica melhor."""
+    conteudo = await arquivo.read()
+    if len(conteudo) > _LOGO_MAX_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            "Imagem muito grande (máximo 3 MB).")
+    if not (arquivo.content_type or "").startswith("image/"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Envie um arquivo de imagem (PNG, JPG, WEBP…).")
+    import base64
+    import io
+
+    from PIL import Image
+    try:
+        imagem = Image.open(io.BytesIO(conteudo)).convert("RGBA")
+        imagem.thumbnail((400, 400))
+        buffer = io.BytesIO()
+        imagem.save(buffer, format="PNG")
+        data_uri = ("data:image/png;base64,"
+                    + base64.b64encode(buffer.getvalue()).decode("ascii"))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — arquivo não é imagem válida
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Não foi possível ler a imagem enviada.") from exc
+
+    row = _row_logos_aparencia(db, escola_id)
+    valor = dict(row.valor or {})
+    valor[f"{tipo}_data_uri"] = data_uri
+    row.valor = valor
+    registrar(db, "aparencia.logo.enviado", escola_id=escola_id,
+              usuario_id=usuario.id, detalhes={"tipo": tipo})
+    db.commit()
+    return {"tipo": tipo, "ok": True}
+
+
+@router.delete("/aparencia/logo")
+def remover_logo_aparencia(
+    tipo: str = Query(pattern="^(brasao|prefeitura)$"),
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Remove o logo da cidade desta escola (volta ao padrão do piloto/sem logo)."""
+    row = _row_logos_aparencia(db, escola_id)
+    valor = dict(row.valor or {})
+    valor.pop(f"{tipo}_data_uri", None)
+    row.valor = valor
+    registrar(db, "aparencia.logo.removido", escola_id=escola_id,
+              usuario_id=usuario.id, detalhes={"tipo": tipo})
+    db.commit()
+    return {"tipo": tipo, "removido": True}

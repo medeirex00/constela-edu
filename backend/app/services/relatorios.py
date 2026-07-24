@@ -231,7 +231,7 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
 
 def gerar_certificado(escola_nome: str, cor: str, aluno_nome: str,
                       turma: str, posicao: int | None, nota_geral: float,
-                      ano_letivo: int) -> bytes:
+                      ano_letivo: int, logos: tuple[str, str] | None = None) -> bytes:
     """Certificado individual em paisagem (PRD §99).
 
     Renderiza um certificado ELEGANTE (moldura azul-marinho + dourado, logo
@@ -240,7 +240,7 @@ def gerar_certificado(escola_nome: str, cor: str, aluno_nome: str,
     — o certificado NUNCA falha por falta do Chromium."""
     try:
         return _certificado_html_pdf(escola_nome, cor, aluno_nome, turma,
-                                     posicao, nota_geral, ano_letivo)
+                                     posicao, nota_geral, ano_letivo, logos)
     except Exception:  # noqa: BLE001 — sem Chromium/erro de render: usa a reserva
         return _certificado_fpdf(escola_nome, cor, aluno_nome, turma,
                                  posicao, nota_geral, ano_letivo)
@@ -297,11 +297,30 @@ def _asset_data_uri(nome: str) -> str:
     return f"data:{mime};base64," + base64.b64encode(dados).decode("ascii")
 
 
-def _cabecalho_logos() -> str:
-    """Cabeçalho com até 3 logos (brasão · Constela · prefeitura). Os logos da
-    cidade só entram se os respectivos arquivos existirem em app/marca/."""
-    brasao = _asset_data_uri("cidade-brasao.png")
-    prefeitura = _asset_data_uri("prefeitura.png")
+def logos_da_escola(db: Session, escola_id: int) -> tuple[str, str]:
+    """(brasão, prefeitura) DESTA escola como data URIs, se foram enviados em
+    Configurações → Aparência. Strings vazias quando não há — aí os documentos
+    caem para o logo padrão de `app/marca/` (piloto) e, na falta, só a marca
+    Constela. É isto que torna o brasão/prefeitura automáticos por cidade."""
+    cfg = scoring.obter_config(db, escola_id, "aparencia", "logos", {})
+    return (str(cfg.get("brasao_data_uri") or ""),
+            str(cfg.get("prefeitura_data_uri") or ""))
+
+
+def _cabecalho_logos(logos: tuple[str, str] | None = None) -> str:
+    """Cabeçalho com até 3 logos (brasão · Constela · prefeitura).
+
+    Regra ALL-OR-NOTHING por escola: se a escola enviou QUALQUER logo próprio
+    (Aparência), usa SÓ os dela — nunca completa o que falta com o padrão de
+    OUTRA cidade (evita misturar, ex.: brasão da cidade nova + prefeitura de
+    Caraguá). Só quando a escola não tem NENHUM logo próprio é que caímos para
+    o padrão do piloto em `app/marca/`; e na falta dele, só a marca Constela."""
+    brasao_uri, pref_uri = logos or ("", "")
+    if brasao_uri or pref_uri:
+        brasao, prefeitura = brasao_uri, pref_uri
+    else:
+        brasao = _asset_data_uri("cidade-brasao.png")
+        prefeitura = _asset_data_uri("prefeitura.png")
     esq = f'<img class="logo-cidade" src="{brasao}" alt="Brasão da cidade">' if brasao else ""
     dire = f'<img class="logo-pref" src="{prefeitura}" alt="Prefeitura">' if prefeitura else ""
     return (f'<div class="cabecalho">{esq}'
@@ -398,7 +417,7 @@ def _esc_html(texto: str) -> str:
 
 def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
                           turma: str, posicao: int | None, nota_geral: float,
-                          ano_letivo: int) -> bytes:
+                          ano_letivo: int, logos: tuple[str, str] | None = None) -> bytes:
     """Renderiza o certificado bonito em PDF via Chromium (Playwright)."""
     from playwright.sync_api import sync_playwright
 
@@ -408,7 +427,7 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
     pos_txt = (f" e a <b>{posicao}ª posição</b> no Ranking Geral" if posicao else "")
     html = (_CERT_TEMPLATE
             .replace("⟦CANTOS⟧", cantos)
-            .replace("⟦CABECALHO⟧", _cabecalho_logos())
+            .replace("⟦CABECALHO⟧", _cabecalho_logos(logos))
             .replace("⟦MEDALHA⟧", _MEDALHA_SVG)
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
@@ -655,17 +674,18 @@ def _faixa_anos(linhas: list[list]) -> tuple[str, str]:
 
 def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
                          cabecalho: list[str], linhas: list[list],
-                         estatisticas: dict) -> bytes:
+                         estatisticas: dict,
+                         logos: tuple[str, str] | None = None) -> bytes:
     """Cartaz do Ranking Geral em PDF (todos os alunos). HTML→Chromium com o
     layout completo; sem navegador, cai para o PDF simples de ranking (reserva)."""
     try:
-        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas)
+        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas, logos)
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples de ranking
         return gerar_pdf("Ranking Geral", escola_nome, cor, cabecalho, linhas)
 
 
 def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
-                     estatisticas: dict) -> bytes:
+                     estatisticas: dict, logos: tuple[str, str] | None = None) -> bytes:
     from playwright.sync_api import sync_playwright
 
     def _mil(n) -> str:
@@ -683,7 +703,7 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
         for n, r in tiles)
 
     html = (_CARTAZ_TEMPLATE
-            .replace("⟦CABECALHO⟧", _cabecalho_logos())
+            .replace("⟦CABECALHO⟧", _cabecalho_logos(logos))
             .replace("⟦IC_STAR⟧", _IC_STAR)
             .replace("⟦IC_ELE⟧", _IC_ELEFANTE)
             .replace("⟦IC_TRO⟧", _IC_TROFEU)
@@ -774,9 +794,10 @@ def _report_tiles(tiles: list[tuple[str, str]]) -> str:
 
 
 def _relatorio_shell(titulo: str, escola_nome: str, subtitulo: str,
-                     tiles: list[tuple[str, str]], intro: str, corpo: str) -> str:
+                     tiles: list[tuple[str, str]], intro: str, corpo: str,
+                     logos: tuple[str, str] | None = None) -> str:
     return (_REPORT_CSS
-            + '<div class="faixa">' + _cabecalho_logos() + '</div>'
+            + '<div class="faixa">' + _cabecalho_logos(logos) + '</div>'
             + f'<h1>{_esc_html(titulo)}</h1>'
             + f'<p class="escola-nome">{_esc_html(escola_nome)}</p>'
             + f'<p class="subtitulo">{subtitulo}</p>'
@@ -818,15 +839,17 @@ def _faixa_anos_relatorio(series) -> tuple[str, str]:
 
 
 def gerar_lista_alunos_pdf(escola_nome: str, cor: str, ano_letivo: int,
-                           cabecalho: list[str], linhas: list[list]) -> bytes:
+                           cabecalho: list[str], linhas: list[list],
+                           logos: tuple[str, str] | None = None) -> bytes:
     """Lista de Alunos em PDF de vitrine (agrupada por turma). Reserva: PDF simples."""
     try:
-        return _relatorio_html_pdf(_shell_lista_alunos(escola_nome, ano_letivo, linhas))
+        return _relatorio_html_pdf(_shell_lista_alunos(escola_nome, ano_letivo, linhas, logos))
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples
         return gerar_pdf("Lista de Alunos", escola_nome, cor, cabecalho, linhas)
 
 
-def _shell_lista_alunos(escola_nome: str, ano_letivo: int, linhas: list[list]) -> str:
+def _shell_lista_alunos(escola_nome: str, ano_letivo: int, linhas: list[list],
+                        logos: tuple[str, str] | None = None) -> str:
     from itertools import groupby
 
     # linhas de linhas_alunos: [Aluno, Turma, Série, Nº de chamada, Situação]
@@ -864,19 +887,21 @@ def _shell_lista_alunos(escola_nome: str, ano_letivo: int, linhas: list[list]) -
     intro = ("Relação oficial de estudantes cadastrados no Constela Edu. A situação "
              "corresponde ao status registrado no momento da emissão deste relatório.")
     return _relatorio_shell("Lista de Alunos", escola_nome, subtitulo, tiles,
-                            intro, "".join(corpo))
+                            intro, "".join(corpo), logos)
 
 
 def gerar_catalogo_livros_pdf(escola_nome: str, cor: str, ano_letivo: int,
-                              cabecalho: list[str], linhas: list[list]) -> bytes:
+                              cabecalho: list[str], linhas: list[list],
+                              logos: tuple[str, str] | None = None) -> bytes:
     """Catálogo de Livros em PDF de vitrine. Reserva: PDF simples."""
     try:
-        return _relatorio_html_pdf(_shell_catalogo(escola_nome, ano_letivo, linhas))
+        return _relatorio_html_pdf(_shell_catalogo(escola_nome, ano_letivo, linhas, logos))
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples
         return gerar_pdf("Catálogo de Livros", escola_nome, cor, cabecalho, linhas)
 
 
-def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list]) -> str:
+def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list],
+                    logos: tuple[str, str] | None = None) -> str:
     # linhas de linhas_livros: [Título, Autor, Nível, Categoria, Leituras]
     total = len(linhas)
     autores = {linha[1] for linha in linhas if len(linha) > 1 and linha[1]}
@@ -905,4 +930,4 @@ def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list]) -> st
     intro = ("Catálogo de livros disponíveis no Constela Edu, com o total de "
              "leituras registradas por título.")
     return _relatorio_shell("Catálogo de Livros", escola_nome, subtitulo, tiles,
-                            intro, "".join(corpo))
+                            intro, "".join(corpo), logos)

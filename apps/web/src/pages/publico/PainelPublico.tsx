@@ -283,8 +283,11 @@ function ColunaPodio({
         style={
           campeao
             ? {
+                // Faixa dourada do topo mais TRANSPARENTE (0.26→0.12) e o corpo
+                // menos opaco, para as estrelas do fundo aparecerem através do
+                // cartão do campeão — sem perder o destaque (a sombra dourada fica).
                 background:
-                  "linear-gradient(165deg, rgba(245,185,66,0.26), rgba(27,42,74,0.6) 62%, rgba(15,22,38,0.75))",
+                  "linear-gradient(165deg, rgba(245,185,66,0.12), rgba(27,42,74,0.34) 60%, rgba(15,22,38,0.5))",
                 boxShadow: `0 0 90px -14px ${OURO}88, inset 0 1px 0 0 rgba(255,255,255,0.12)`,
               }
             : {

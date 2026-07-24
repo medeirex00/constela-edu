@@ -9,14 +9,113 @@ import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { api, ApiError, apiDownload, apiUpload } from "../../lib/api";
 
-/** Aparência (PRD §18): cor primária usada nos relatórios e certificados. */
+interface AparenciaDados {
+  cor_primaria: string;
+  brasao_data_uri?: string;
+  prefeitura_data_uri?: string;
+}
+
+/** Um "slot" de logo da cidade (brasão ou prefeitura): prévia + enviar + remover.
+ * A imagem sobe para a escola e passa a aparecer no topo dos PDFs (certificado,
+ * cartaz, lista de alunos, catálogo). Sem envio, o PDF usa o logo padrão. */
+function LogoUploader({
+  escolaId, tipo, titulo, atual, onMudou, editavel,
+}: {
+  escolaId: number;
+  tipo: "brasao" | "prefeitura";
+  titulo: string;
+  atual?: string;
+  onMudou: () => Promise<unknown> | void;
+  editavel: boolean;
+}) {
+  const arquivoRef = useRef<HTMLInputElement | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState("");
+
+  async function enviar(arquivo: File) {
+    setOcupado(true);
+    setErro("");
+    try {
+      const dados = new FormData();
+      dados.append("arquivo", arquivo);
+      await apiUpload(`/escolas/${escolaId}/aparencia/logo?tipo=${tipo}`, dados);
+      await onMudou();
+    } catch (excecao) {
+      setErro(excecao instanceof Error ? excecao.message : "Falha ao enviar a imagem.");
+    } finally {
+      setOcupado(false);
+      if (arquivoRef.current) arquivoRef.current.value = "";
+    }
+  }
+
+  async function remover() {
+    setOcupado(true);
+    setErro("");
+    try {
+      await api(`/escolas/${escolaId}/aparencia/logo?tipo=${tipo}`, { method: "DELETE" });
+      await onMudou();
+    } catch (excecao) {
+      setErro(excecao instanceof Error ? excecao.message : "Falha ao remover.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+      <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded bg-zinc-50 dark:bg-zinc-900">
+        {atual ? (
+          <img src={atual} alt={titulo} className="max-h-14 max-w-[3.5rem] object-contain" />
+        ) : (
+          <span className="text-[10px] text-zinc-400">padrão</span>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{titulo}</p>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          {atual ? "Enviado por esta escola." : "Usando o logo padrão do sistema."}
+        </p>
+        {erro && <p className="mt-1 text-xs text-rose-600">{erro}</p>}
+      </div>
+      {editavel && (
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Botao variante="neutro" disabled={ocupado} onClick={() => arquivoRef.current?.click()}>
+            <UploadCloud size={14} /> {atual ? "Trocar" : "Enviar"}
+          </Botao>
+          {atual && (
+            <button
+              type="button"
+              onClick={remover}
+              disabled={ocupado}
+              className="text-xs text-zinc-500 hover:text-rose-600 disabled:opacity-50"
+            >
+              Remover
+            </button>
+          )}
+          <input
+            ref={arquivoRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(evento) => {
+              const arquivo = evento.target.files?.[0];
+              if (arquivo) enviar(arquivo);
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Aparência (PRD §18): cor primária e logos da cidade usados nos PDFs. */
 function Aparencia() {
   const { escolaId, usuario } = useApp();
   const ehAdmin = usuario?.is_global || usuario?.cargo === "admin";
   const [cor, setCor] = useState("#1B2A4A");
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   // A cor é estado editável (color picker + PUT); buscamos a salva e semeamos o input.
-  const { dados: aparencia, erro: erroAparencia } = useApi<{ cor_primaria: string }>(
+  const { dados: aparencia, erro: erroAparencia, recarregar } = useApi<AparenciaDados>(
     escolaId ? `/escolas/${escolaId}/aparencia` : null,
   );
 
@@ -58,9 +157,39 @@ function Aparencia() {
       <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
         Aplicada no cabeçalho dos relatórios em PDF/Excel e nos certificados.
       </p>
+
+      {escolaId && (
+        <div className="mt-5 border-t border-zinc-100 pt-4 dark:border-zinc-800">
+          <p className="text-sm font-medium">Logos da cidade nos documentos</p>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Aparecem no topo dos certificados e relatórios em PDF, ao lado da marca
+            Constela (brasão à esquerda, prefeitura à direita). PNG com fundo
+            transparente fica melhor. Sem envio, o sistema usa o logo padrão.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <LogoUploader
+              escolaId={escolaId}
+              tipo="brasao"
+              titulo="Brasão da cidade"
+              atual={aparencia?.brasao_data_uri}
+              onMudou={recarregar}
+              editavel={!!ehAdmin}
+            />
+            <LogoUploader
+              escolaId={escolaId}
+              tipo="prefeitura"
+              titulo="Logo da prefeitura"
+              atual={aparencia?.prefeitura_data_uri}
+              onMudou={recarregar}
+              editavel={!!ehAdmin}
+            />
+          </div>
+        </div>
+      )}
+
       {erroAparencia && (
         <div className="mt-3">
-          <Mensagem tipo="erro">Não foi possível carregar a cor salva: {erroAparencia.message}</Mensagem>
+          <Mensagem tipo="erro">Não foi possível carregar a aparência salva: {erroAparencia.message}</Mensagem>
         </div>
       )}
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}

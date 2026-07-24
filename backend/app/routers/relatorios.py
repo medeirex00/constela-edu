@@ -105,13 +105,16 @@ def exportar_relatorio(
         # das suas turmas (cai no else).
         conteudo = svc.gerar_cartaz_ranking(
             escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
-            svc.estatisticas_cartaz(db, escola_id))
+            svc.estatisticas_cartaz(db, escola_id),
+            logos=svc.logos_da_escola(db, escola_id))
     elif tipo == "alunos":
         conteudo = svc.gerar_lista_alunos_pdf(
-            escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas)
+            escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
+            logos=svc.logos_da_escola(db, escola_id))
     elif tipo == "livros":
         conteudo = svc.gerar_catalogo_livros_pdf(
-            escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas)
+            escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
+            logos=svc.logos_da_escola(db, escola_id))
     else:
         conteudo = svc.gerar_pdf(titulo, escola.nome, cor, cabecalho, linhas)
 
@@ -151,6 +154,7 @@ def cartaz_ranking(
         cabecalho=cabecalho,
         linhas=linhas,
         estatisticas=svc.estatisticas_cartaz(db, escola_id),
+        logos=svc.logos_da_escola(db, escola_id),
     )
     momento = datetime.now(timezone.utc)
     nome_arquivo = f"ranking_cartaz_{momento:%Y%m%d_%H%M%S}.pdf"
@@ -199,6 +203,7 @@ def certificado(
         posicao=nota.posicao if nota else None,
         nota_geral=nota.nota_geral if nota else 0.0,
         ano_letivo=escola.ano_letivo_ativo,
+        logos=svc.logos_da_escola(db, escola_id),
     )
     registrar(db, "certificado.emitido", escola_id=escola_id, usuario_id=usuario.id,
               entidade="aluno", entidade_id=aluno_id)
