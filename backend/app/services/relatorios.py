@@ -707,3 +707,202 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
         finally:
             navegador.close()
     return pdf
+
+
+# ---------------------------------------------------------------------------
+# Relatórios "de vitrine" em PDF — Lista de Alunos e Catálogo de Livros.
+# Mesma família visual dos demais documentos (faixa com os 3 logos, título,
+# cartões de estatística, tabelas navy+zebra), com rodapé/numeração de página
+# em TODAS as páginas via header/footer do Chromium. Reserva: gerar_pdf simples.
+# ---------------------------------------------------------------------------
+
+_REPORT_CSS = """<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: Georgia,'Times New Roman',serif; color:#25304a;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .faixa { border:1.5px solid #1B2A4A; border-left:6px solid #C9A24B; border-radius:6px;
+           padding:9px 22px; }
+  .faixa .cabecalho { display:flex; align-items:center; justify-content:space-between; width:100%; gap:16px; }
+  .faixa .logo-cidade { height:48px; width:48px; }
+  .faixa .logo-pref { height:34px; width:auto; }
+  .faixa .constela { display:flex; flex-direction:column; align-items:center; gap:1px; }
+  .faixa .constela .nome { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-weight:800;
+                 font-size:19px; letter-spacing:1px; color:#1B2A4A; }
+  .faixa .constela .nome b { color:#F5B942; }
+  h1 { text-align:center; font-size:30px; font-weight:700; letter-spacing:3px; color:#1B2A4A; margin-top:14px; }
+  .escola-nome { text-align:center; font-size:13px; font-weight:700; letter-spacing:.4px; color:#1B2A4A; margin-top:7px; }
+  .subtitulo { text-align:center; font-size:11.5px; color:#6b7488; margin-top:3px; }
+  .tiles { display:flex; border:1px solid #E4D3A6; border-radius:8px; overflow:hidden; margin:14px 0 10px; }
+  .tile { flex:1; padding:9px 16px; border-left:1px solid #EFE9DA; }
+  .tile:first-child { border-left:0; }
+  .tile .n { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-size:17px; font-weight:800; color:#1B2A4A; }
+  .tile .r { font-size:8.5px; letter-spacing:.4px; text-transform:uppercase; color:#8A6D2B; margin-top:2px; }
+  .intro { font-size:10.5px; color:#6b7488; line-height:1.5; margin-bottom:4px; }
+  .secao { font-size:15px; font-weight:700; color:#1B2A4A; letter-spacing:1px; margin:16px 0 6px; break-after:avoid; }
+  table.tab { width:100%; border-collapse:collapse; font-size:10.5px; }
+  table.tab thead { display:table-header-group; }
+  table.tab thead th { background:#1B2A4A; color:#fff; font-family:'Trebuchet MS','Segoe UI',sans-serif;
+             font-weight:700; font-size:8.5px; letter-spacing:.4px; text-transform:uppercase;
+             padding:8px 10px; text-align:center; }
+  table.tab thead th.esq { text-align:left; }
+  table.tab tbody td { padding:6px 10px; border-bottom:1px solid #ECEEF2; text-align:center;
+             font-variant-numeric:tabular-nums; }
+  table.tab tbody td.esq { text-align:left; }
+  table.tab tbody td.num { color:#8a93a5; width:38px; }
+  table.tab tbody td.nome { font-weight:600; color:#25304a; }
+  table.tab tbody tr:nth-child(even) td { background:#F7F8FA; }
+  .sit { font-weight:700; color:#5a6478; }
+  .sit.ativo { color:#2FA24B; }
+  .sit .dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+              background:#2FA24B; margin-right:5px; vertical-align:middle; }
+</style>"""
+
+# Rodapé com numeração — renderizado pelo Chromium em TODAS as páginas. Precisa
+# de estilo inline (o CSS da página não se aplica ao template de rodapé).
+_REPORT_FOOTER = (
+    '<div style="width:100%; box-sizing:border-box; padding:4px 11mm 0; margin:0 6mm;'
+    ' border-top:1px solid #C9A24B; font-family:Georgia,serif; font-size:8px;'
+    ' color:#8a93a5; display:flex; justify-content:space-between; align-items:center;">'
+    '<span>CONSTELA EDU &bull; Conectando aprendizagem, inspirando futuros.</span>'
+    '<span>Página <span class="pageNumber"></span></span></div>')
+
+
+def _report_tiles(tiles: list[tuple[str, str]]) -> str:
+    return ('<div class="tiles">' + "".join(
+        f'<div class="tile"><div class="n">{_esc_html(n)}</div>'
+        f'<div class="r">{_esc_html(r)}</div></div>' for n, r in tiles) + '</div>')
+
+
+def _relatorio_shell(titulo: str, escola_nome: str, subtitulo: str,
+                     tiles: list[tuple[str, str]], intro: str, corpo: str) -> str:
+    return (_REPORT_CSS
+            + '<div class="faixa">' + _cabecalho_logos() + '</div>'
+            + f'<h1>{_esc_html(titulo)}</h1>'
+            + f'<p class="escola-nome">{_esc_html(escola_nome)}</p>'
+            + f'<p class="subtitulo">{subtitulo}</p>'
+            + _report_tiles(tiles)
+            + f'<p class="intro">{intro}</p>'
+            + corpo)
+
+
+def _relatorio_html_pdf(html_body: str) -> bytes:
+    """Renderiza um relatório 'de vitrine' (A4 retrato) com rodapé/numeração."""
+    from playwright.sync_api import sync_playwright
+
+    doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
+           f"</head><body>{html_body}</body></html>")
+    with sync_playwright() as p:
+        try:
+            navegador = p.chromium.launch()
+        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
+            navegador = p.chromium.launch(channel="chrome")
+        try:
+            pagina = navegador.new_page()
+            pagina.set_content(doc, wait_until="networkidle")
+            pdf = pagina.pdf(
+                format="A4", print_background=True, display_header_footer=True,
+                header_template="<div></div>", footer_template=_REPORT_FOOTER,
+                margin={"top": "12mm", "bottom": "16mm", "left": "11mm", "right": "11mm"})
+        finally:
+            navegador.close()
+    return pdf
+
+
+def _faixa_anos_relatorio(series) -> tuple[str, str]:
+    anos = [int(m.group(1)) for s in series
+            if (m := re.match(r"\s*(\d+)", str(s)))]
+    if anos:
+        lo, hi = min(anos), max(anos)
+        return (f"{lo}º → {hi}º", "anos") if lo != hi else (f"{lo}º", "ano")
+    return str(len({s for s in series if s})), "séries"
+
+
+def gerar_lista_alunos_pdf(escola_nome: str, cor: str, ano_letivo: int,
+                           cabecalho: list[str], linhas: list[list]) -> bytes:
+    """Lista de Alunos em PDF de vitrine (agrupada por turma). Reserva: PDF simples."""
+    try:
+        return _relatorio_html_pdf(_shell_lista_alunos(escola_nome, ano_letivo, linhas))
+    except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples
+        return gerar_pdf("Lista de Alunos", escola_nome, cor, cabecalho, linhas)
+
+
+def _shell_lista_alunos(escola_nome: str, ano_letivo: int, linhas: list[list]) -> str:
+    from itertools import groupby
+
+    # linhas de linhas_alunos: [Aluno, Turma, Série, Nº de chamada, Situação]
+    total = len(linhas)
+    turmas = {linha[1] for linha in linhas}
+    faixa_n, faixa_r = _faixa_anos_relatorio([linha[2] for linha in linhas])
+    ativos = sum(1 for linha in linhas if str(linha[4]).lower().startswith("ativ"))
+    pct = f"{round(100 * ativos / total)}%" if total else "—"
+    tiles = [(str(total), "alunos cadastrados"), (str(len(turmas)), "turmas"),
+             (faixa_n, faixa_r), (pct, "status ativo")]
+
+    corpo = []
+    for turma, grupo in groupby(linhas, key=lambda linha: linha[1]):
+        corpo.append(f'<h2 class="secao">{_esc_html(turma)}</h2>')
+        corpo.append('<table class="tab"><thead><tr>'
+                     '<th>Nº</th><th class="esq">Nome do estudante</th>'
+                     '<th>Série</th><th>Nº de chamada</th><th>Situação</th>'
+                     '</tr></thead><tbody>')
+        for i, linha in enumerate(grupo, 1):
+            nome, _turma, serie, chamada, status = (list(linha) + [""] * 5)[:5]
+            ativo = str(status).lower().startswith("ativ")
+            chamada_txt = str(chamada) if chamada not in (None, "", 0, "0") else "—"
+            dot = '<span class="dot"></span>' if ativo else ''
+            corpo.append(
+                f'<tr><td class="num">{i:02d}</td>'
+                f'<td class="esq nome">{_esc_html(nome)}</td>'
+                f'<td>{_esc_html(serie)}</td>'
+                f'<td>{_esc_html(chamada_txt)}</td>'
+                f'<td class="sit {"ativo" if ativo else ""}">{dot}'
+                f'{_esc_html(str(status).capitalize())}</td></tr>')
+        corpo.append('</tbody></table>')
+
+    subtitulo = (f"Cadastro escolar · Ano letivo de {ano_letivo} · "
+                 f"Gerado em {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+    intro = ("Relação oficial de estudantes cadastrados no Constela Edu. A situação "
+             "corresponde ao status registrado no momento da emissão deste relatório.")
+    return _relatorio_shell("Lista de Alunos", escola_nome, subtitulo, tiles,
+                            intro, "".join(corpo))
+
+
+def gerar_catalogo_livros_pdf(escola_nome: str, cor: str, ano_letivo: int,
+                              cabecalho: list[str], linhas: list[list]) -> bytes:
+    """Catálogo de Livros em PDF de vitrine. Reserva: PDF simples."""
+    try:
+        return _relatorio_html_pdf(_shell_catalogo(escola_nome, ano_letivo, linhas))
+    except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples
+        return gerar_pdf("Catálogo de Livros", escola_nome, cor, cabecalho, linhas)
+
+
+def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list]) -> str:
+    # linhas de linhas_livros: [Título, Autor, Nível, Categoria, Leituras]
+    total = len(linhas)
+    autores = {linha[1] for linha in linhas if len(linha) > 1 and linha[1]}
+    niveis = {linha[2] for linha in linhas if len(linha) > 2 and linha[2]}
+    leituras = sum(int(linha[4] or 0) for linha in linhas if len(linha) > 4)
+    tiles = [(str(total), "livros no acervo"), (str(len(autores)), "autores"),
+             (str(len(niveis)), "níveis"),
+             (f"{leituras:,}".replace(",", "."), "leituras")]
+
+    corpo = ['<table class="tab"><thead><tr>'
+             '<th class="esq">Título</th><th class="esq">Autor</th><th>Nível</th>'
+             '<th class="esq">Categoria</th><th>Leituras</th>'
+             '</tr></thead><tbody>']
+    for linha in linhas:
+        titulo, autor, nivel, categoria, leituras_n = (list(linha) + [""] * 5)[:5]
+        corpo.append(
+            f'<tr><td class="esq nome">{_esc_html(titulo)}</td>'
+            f'<td class="esq">{_esc_html(autor or "—")}</td>'
+            f'<td>{_esc_html(nivel or "—")}</td>'
+            f'<td class="esq">{_esc_html(categoria or "—")}</td>'
+            f'<td>{_esc_html(leituras_n)}</td></tr>')
+    corpo.append('</tbody></table>')
+
+    subtitulo = (f"Acervo de leitura · Ano letivo de {ano_letivo} · "
+                 f"Gerado em {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+    intro = ("Catálogo de livros disponíveis no Constela Edu, com o total de "
+             "leituras registradas por título.")
+    return _relatorio_shell("Catálogo de Livros", escola_nome, subtitulo, tiles,
+                            intro, "".join(corpo))

@@ -178,6 +178,31 @@ def test_certificado_pdf(cliente, db, escola_completa):
     assert resposta.content[:5] == b"%PDF-"
 
 
+def test_pdf_alunos_e_livros_layout_vitrine(cliente, db, escola_completa):
+    """Lista de Alunos e Catálogo de Livros em PDF de vitrine (HTML→Chromium,
+    reserva fpdf) — sempre um PDF válido."""
+    _dados_basicos(db, escola_completa)
+    escola = escola_completa["escola"]
+    scoring.recalcular_escola(db, escola.id)
+    for tipo in ("alunos", "livros"):
+        resposta = cliente.get(f"/api/v1/escolas/{escola.id}/relatorios/{tipo}",
+                               params={"formato": "pdf"})
+        assert resposta.status_code == 200, resposta.text
+        assert resposta.content[:5] == b"%PDF-"
+        assert resposta.headers["content-type"] == "application/pdf"
+
+
+def test_ranking_pdf_gestao_e_o_cartaz(cliente, db, escola_completa):
+    """Na aba de Relatórios, o PDF do Ranking Geral (gestão) é o cartaz/pôster."""
+    _dados_basicos(db, escola_completa)
+    escola = escola_completa["escola"]
+    scoring.recalcular_escola(db, escola.id)
+    resposta = cliente.get(f"/api/v1/escolas/{escola.id}/relatorios/ranking",
+                           params={"formato": "pdf"})
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.content[:5] == b"%PDF-"
+
+
 def test_cartaz_ranking_pdf(cliente, db, escola_completa):
     """Cartaz (pôster) do Ranking Geral: PDF válido com todos os alunos."""
     _dados_basicos(db, escola_completa)
