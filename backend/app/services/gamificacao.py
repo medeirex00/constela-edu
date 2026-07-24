@@ -540,7 +540,10 @@ def mural(db: Session, escola_id: int,
             serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif,
             base_no_periodo=base_no_periodo))
         if melhor and anonimizar:
-            melhor = {**melhor, "nome": anonimizar_nome(melhor["nome"])}
+            # k-anonimato no PÓDIO: além do nome reduzido, a TURMA também some —
+            # "Ana B." + turma + destaque reidentificaria a criança no elemento
+            # MAIS visível do telão (o "Aluno do Dia/Semana/Mês"), que é público.
+            melhor = {**melhor, "nome": anonimizar_nome(melhor["nome"]), "turma": None}
         return melhor
 
     return {

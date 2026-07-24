@@ -254,6 +254,47 @@ def test_painel_publico_evolucao_justa_nao_infla_acumulado(cliente, db, escola_c
     assert corpo["evolucao"] == []
 
 
+def test_painel_publico_destaque_esconde_turma_no_modo_anonimo(cliente, db, escola_completa):
+    """k-anonimato no PÓDIO de destaques (o 'Aluno do Dia/Semana/Mês', ligado por
+    padrão e o elemento MAIS visível do telão): no modo anônimo o destaque sai com
+    nome reduzido E SEM turma — senão nome+turma reidentifica a criança."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import Importacao, SnapshotMatific
+    from app.services import scoring
+
+    escola = escola_completa["escola"]
+    aluno = escola_completa["alunos"][0]
+    imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(imp)
+    db.flush()
+    agora = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Base antiga + crescimento recente → há evolução REAL (o destaque existe).
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
+                           atividades=10, estrelas=5, pontuacao_media=50,
+                           data_referencia=agora - timedelta(days=20)))
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
+                           atividades=60, estrelas=30, pontuacao_media=80,
+                           data_referencia=agora))
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    resposta = cliente.put(
+        f"/api/v1/escolas/{escola.id}/painel-publico",
+        json={"ativo": True, "slides": ["destaques"], "intervalo_s": 8, "max_posicoes": 10},
+    )
+    token = resposta.json()["url"].rsplit("/", 1)[-1]
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)
+    destaques = anon.get(f"/api/v1/publico/{token}/painel").json()["destaques"]
+    algum = next((d for d in destaques.values() if d), None)
+    assert algum is not None                 # o aluno cresceu → há destaque
+    assert algum["turma"] is None            # k-anonimato: turma escondida no pódio
+    assert algum["nome"] != aluno.nome       # nome reduzido
+
+
 def test_max_posicoes_limita_o_ranking(cliente, db, escola_completa):
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id
