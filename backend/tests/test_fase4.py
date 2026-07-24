@@ -178,6 +178,18 @@ def test_certificado_pdf(cliente, db, escola_completa):
     assert resposta.content[:5] == b"%PDF-"
 
 
+def test_cartaz_ranking_pdf(cliente, db, escola_completa):
+    """Cartaz (pôster) do Ranking Geral: PDF válido com todos os alunos."""
+    _dados_basicos(db, escola_completa)
+    escola = escola_completa["escola"]
+    scoring.recalcular_escola(db, escola.id)
+
+    resposta = cliente.get(f"/api/v1/escolas/{escola.id}/ranking/cartaz")
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.content[:5] == b"%PDF-"
+    assert resposta.headers["content-type"] == "application/pdf"
+
+
 def test_pdf_com_nome_longo_nao_quebra(cliente, db, escola_completa):
     """Regressão: nomes COMPLETOS (lista de matrículas) passam de 28 letras;
     o corte antigo acrescentava "…", que não existe em latin-1 e derrubava o

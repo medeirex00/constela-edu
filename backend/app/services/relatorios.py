@@ -6,14 +6,19 @@ cor primária configurável) aparece no Excel e no PDF.
 """
 from __future__ import annotations
 
+import base64
 import csv
 import io
+import mimetypes
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, Leitura, Livro, Matricula, Nota, Turma
+from app.models import (Aluno, Escola, Leitura, Livro, Matricula, Nota,
+                        SnapshotElefante, SnapshotMatific, Turma)
 from app.services import scoring
 
 COR_PRIMARIA_PADRAO = "#1B2A4A"  # azul profundo da marca Constela Edu
@@ -267,6 +272,68 @@ _MEDALHA_SVG = (
     ' -7.7 -6.9 10.3 -1 Z" fill="#1B2A4A"/></svg>'
 )
 
+# ---------------------------------------------------------------------------
+# Logos institucionais (cidade / prefeitura) — OPCIONAIS, por arquivo em
+# app/marca/. Quando existem, entram no cabeçalho dos documentos "de vitrine"
+# (certificado e cartaz do ranking): brasão da cidade à esquerda, marca
+# Constela ao centro, prefeitura à direita — como no exemplo do piloto de
+# Caraguatatuba. Sem os arquivos, aparece só a marca Constela (o produto segue
+# genérico para qualquer escola — é só soltar os PNGs da cidade na pasta).
+# ---------------------------------------------------------------------------
+_MARCA_DIR = Path(__file__).resolve().parent.parent / "marca"
+
+
+def _asset_data_uri(nome: str) -> str:
+    """data: URI de um arquivo de app/marca/ (ou '' se não existir).
+
+    Sem cache de propósito: os arquivos são lidos a cada documento (leitura de
+    poucos KB, rara — o gargalo é o Chromium), para que trocar/adicionar um logo
+    na pasta tenha efeito imediato, sem precisar reiniciar o processo."""
+    try:
+        dados = (_MARCA_DIR / nome).read_bytes()
+    except OSError:
+        return ""
+    mime = mimetypes.guess_type(nome)[0] or "image/png"
+    return f"data:{mime};base64," + base64.b64encode(dados).decode("ascii")
+
+
+def _cabecalho_logos() -> str:
+    """Cabeçalho com até 3 logos (brasão · Constela · prefeitura). Os logos da
+    cidade só entram se os respectivos arquivos existirem em app/marca/."""
+    brasao = _asset_data_uri("cidade-brasao.png")
+    prefeitura = _asset_data_uri("prefeitura.png")
+    esq = f'<img class="logo-cidade" src="{brasao}" alt="Brasão da cidade">' if brasao else ""
+    dire = f'<img class="logo-pref" src="{prefeitura}" alt="Prefeitura">' if prefeitura else ""
+    return (f'<div class="cabecalho">{esq}'
+            f'<div class="constela">{_LOGO_C_SVG}'
+            f'<span class="nome">Constela <b>Edu</b></span></div>'
+            f'{dire}</div>')
+
+
+# Ícones (SVG dourado) das colunas de nota do cartaz do ranking.
+_IC_STAR = ('<svg class="ic" width="13" height="13" viewBox="0 0 24 24">'
+            '<path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77 5.82 21'
+            'l1.18-6.88-5-4.87 6.9-1.01z" fill="#F5B841"/></svg>')
+_IC_TROFEU = ('<svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="#F5B841">'
+              '<path d="M18 3H6v2H3v3a4 4 0 0 0 4 4 5 5 0 0 0 4 3v2H8v2h8v-2h-3v-2'
+              'a5 5 0 0 0 4-3 4 4 0 0 0 4-4V5h-3zM5 8V7h1v3a2 2 0 0 1-1-2zm14 0'
+              'a2 2 0 0 1-1 2V7h1z"/></svg>')
+_IC_ELEFANTE = ('<svg class="ic" width="15" height="14" viewBox="0 0 34 32" fill="#F5B841">'
+                '<ellipse cx="8" cy="14" rx="7" ry="9"/>'
+                '<ellipse cx="26" cy="14" rx="7" ry="9"/>'
+                '<circle cx="17" cy="14" r="10.5"/>'
+                '<path d="M13.5 17h7v6.5a3 3 0 0 0 6 0v-1.2a1.1 1.1 0 0 0-2.2 0v1.2'
+                'a0.8 0.8 0 0 1-1.6 0V17z"/></svg>')
+
+
+def _fmt_nota(valor) -> str:
+    """Nota 0–100 com uma casa e vírgula decimal ('85,3'); '—' se vazia."""
+    try:
+        return f"{float(valor):.1f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return "—"
+
+
 _CERT_TEMPLATE = """<style>
   @page { size: A4 landscape; margin: 0; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -281,11 +348,14 @@ _CERT_TEMPLATE = """<style>
   .frame::after { content:""; position:absolute; inset:3.5mm; border:1px solid #C9A24B; }
   .conteudo { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
               justify-content:flex-start; text-align:center; padding:20mm 40mm 0; }
-  .marca { display:flex; flex-direction:column; align-items:center; gap:4px; }
-  .marca .nome { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-weight:800; font-size:19px;
-                 letter-spacing:1px; color:#1B2A4A; }
-  .marca .nome b { color:#F5B942; }
-  h1 { font-size:52px; font-weight:700; letter-spacing:8px; color:#1B2A4A; margin-top:14px; }
+  .cabecalho { display:flex; align-items:center; justify-content:center; gap:44px; }
+  .cabecalho .logo-cidade { height:74px; width:74px; }
+  .cabecalho .logo-pref { height:60px; width:auto; }
+  .cabecalho .constela { display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .cabecalho .constela .nome { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-weight:800;
+                 font-size:19px; letter-spacing:1px; color:#1B2A4A; }
+  .cabecalho .constela .nome b { color:#F5B942; }
+  h1 { font-size:52px; font-weight:700; letter-spacing:8px; color:#1B2A4A; margin-top:12px; }
   .divisor { display:flex; align-items:center; gap:12px; margin:8px 0 14px; color:#C9A24B; }
   .divisor .linha { width:120px; height:1.5px; background:#C9A24B; }
   .divisor .losango { width:9px; height:9px; background:#F5B942; transform:rotate(45deg); }
@@ -303,7 +373,7 @@ _CERT_TEMPLATE = """<style>
 ⟦CANTOS⟧
 <div class="frame"></div>
 <div class="conteudo">
-  <div class="marca">⟦LOGO⟧<span class="nome">Constela <b>Edu</b></span></div>
+  ⟦CABECALHO⟧
   <h1>CERTIFICADO</h1>
   <div class="divisor"><span class="linha"></span><span class="losango"></span><span class="linha"></span></div>
   <p class="intro">A escola ⟦ESCOLA⟧ certifica que</p>
@@ -319,8 +389,11 @@ _CERT_TEMPLATE = """<style>
 
 
 def _esc_html(texto: str) -> str:
+    # Escapa HTML e NEUTRALIZA os delimitadores de placeholder ⟦ ⟧: sem isso,
+    # um nome/escola que contivesse literalmente "⟦LINHAS⟧" reintroduziria um
+    # token que um .replace posterior preencheria, corrompendo o documento.
     return (str(texto).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;"))
+            .replace(">", "&gt;").replace("⟦", "").replace("⟧", ""))
 
 
 def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
@@ -335,7 +408,7 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
     pos_txt = (f" e a <b>{posicao}ª posição</b> no Ranking Geral" if posicao else "")
     html = (_CERT_TEMPLATE
             .replace("⟦CANTOS⟧", cantos)
-            .replace("⟦LOGO⟧", _LOGO_C_SVG)
+            .replace("⟦CABECALHO⟧", _cabecalho_logos())
             .replace("⟦MEDALHA⟧", _MEDALHA_SVG)
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
@@ -421,3 +494,216 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
     pdf.cell(0, 6, "Direção", align="C")
 
     return bytes(pdf.output())
+
+
+# ---------------------------------------------------------------------------
+# Cartaz do Ranking Geral (pôster): documento "de vitrine" com a MESMA marca do
+# certificado (moldura navy+dourado, 3 logos), a TABELA COMPLETA (todos os
+# alunos, paginada automaticamente pelo Chromium) e um rodapé comemorativo.
+# ---------------------------------------------------------------------------
+
+def estatisticas_cartaz(db: Session, escola_id: int) -> dict:
+    """Totais para os cartões do pôster: atividades (Matific) e livros
+    (Elefante).
+
+    Soma o SNAPSHOT ATUAL (o mais recente por data de referência — o mesmo
+    critério usado no ranking e no painel, via scoring._snapshots_atuais), e só
+    da MESMA população da tabela: alunos ATIVOS matriculados no ano letivo
+    corrente. Assim os números batem com a tabela e com "estudantes ranqueados",
+    sem inflar com alunos de anos anteriores/arquivados nem com correções para
+    menos. Best-effort: qualquer falha vira zero — o cartaz nunca quebra por
+    causa das estatísticas."""
+    try:
+        escola = db.get(Escola, escola_id)
+        cohort = set(db.execute(
+            select(Aluno.id)
+            .join(Matricula, (Matricula.aluno_id == Aluno.id)
+                  & (Matricula.ano_letivo == escola.ano_letivo_ativo))
+            .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
+        ).scalars().all())
+        m_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+        e_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+        atividades = sum(s.atividades for aid, s in m_atuais.items() if aid in cohort)
+        livros = sum(s.livros_unicos for aid, s in e_atuais.items() if aid in cohort)
+        return {"atividades": int(atividades), "livros": int(livros)}
+    except Exception:  # noqa: BLE001 — cartões decorativos: nunca derrubam o cartaz
+        return {"atividades": 0, "livros": 0}
+
+
+_CARTAZ_TEMPLATE = """<style>
+  @page { size: A4 portrait; margin: 13mm 12mm 12mm; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: Georgia,'Times New Roman',serif; color:#25304a;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .barra { height:5px; border-radius:3px;
+           background:linear-gradient(90deg,#1B2A4A,#C9A24B 50%,#1B2A4A); }
+  .cabecalho { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:12px 2px 2px; }
+  .cabecalho .logo-cidade { height:60px; width:60px; }
+  .cabecalho .logo-pref { height:50px; width:auto; }
+  .cabecalho .constela { display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .cabecalho .constela .nome { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-weight:800;
+                 font-size:15px; letter-spacing:.5px; color:#1B2A4A; }
+  .cabecalho .constela .nome b { color:#F5B942; }
+  h1 { text-align:center; font-size:33px; font-weight:700; letter-spacing:7px; color:#1B2A4A; margin-top:8px; }
+  .divisor { display:flex; align-items:center; justify-content:center; gap:10px; margin:6px 0 10px; }
+  .divisor .linha { width:80px; height:1.5px; background:#C9A24B; }
+  .divisor .losango { width:8px; height:8px; background:#F5B942; transform:rotate(45deg); }
+  .pills { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .pill { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-size:10.5px; letter-spacing:.6px;
+          text-transform:uppercase; padding:5px 14px; border-radius:20px; }
+  .pill.ano { background:#1B2A4A; color:#fff; }
+  .pill.escola { background:#F3ECDA; color:#8A6D2B; border:1px solid #E4D3A6; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  thead { display:table-header-group; }
+  thead th { background:#1B2A4A; color:#fff; font-family:'Trebuchet MS','Segoe UI',sans-serif;
+             font-weight:700; font-size:9.5px; letter-spacing:.4px; text-transform:uppercase;
+             padding:8px 6px; text-align:center; }
+  thead th.esq { text-align:left; }
+  .ic { vertical-align:middle; margin-right:4px; }
+  tbody td { padding:5.5px 6px; border-bottom:1px solid #ECEEF2; text-align:center;
+             font-variant-numeric:tabular-nums; }
+  tbody td.aluno { text-align:left; font-weight:600; color:#25304a; }
+  tbody td.turma, tbody td.serie { text-align:left; color:#5a6478; }
+  tbody td.geral { font-weight:800; color:#1B2A4A; }
+  tbody tr.top td { background:#FBF6E9; }
+  tbody tr:nth-child(even):not(.top) td { background:#FAFBFC; }
+  .medalha { display:inline-flex; width:23px; height:23px; border-radius:50%; align-items:center;
+             justify-content:center; font-family:'Trebuchet MS',sans-serif; font-weight:800;
+             font-size:12px; color:#1B2A4A; }
+  .m1 { background:linear-gradient(#F8DA7B,#E3A62A); }
+  .m2 { background:linear-gradient(#E5E9EF,#B7BFCC); }
+  .m3 { background:linear-gradient(#E7BE86,#C07F3C); color:#fff; }
+  .rodape { break-inside:avoid; }
+  .tiles { display:flex; gap:10px; margin:16px 0 12px; }
+  .tile { flex:1; text-align:center; border:1px solid #E7E3D4; border-radius:10px; padding:12px 6px; background:#FCFAF4; }
+  .tile .n { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-size:23px; font-weight:800; color:#1B2A4A; }
+  .tile .r { font-size:9px; letter-spacing:.5px; text-transform:uppercase; color:#8A6D2B; margin-top:3px; }
+  .banner { display:flex; align-items:center; justify-content:center; gap:8px; text-align:center;
+            background:#1B2A4A; color:#fff; border-radius:10px; padding:12px 16px; font-size:12px; letter-spacing:.3px; }
+  .banner b { color:#F5D98A; }
+  .frase { text-align:center; font-style:italic; color:#6b7488; font-size:12.5px; margin:13px 0 4px; }
+  .frase::before { content:'“'; color:#C9A24B; } .frase::after { content:'”'; color:#C9A24B; }
+  .rodape-marca { text-align:center; font-family:'Trebuchet MS','Segoe UI',sans-serif; font-size:9.5px;
+                  letter-spacing:1.5px; text-transform:uppercase; color:#1B2A4A;
+                  margin-top:10px; padding-top:9px; border-top:1px solid #E7E3D4; }
+  .gerado { text-align:center; font-size:8.5px; color:#9aa2b1; margin-top:4px; }
+</style>
+<div class="barra"></div>
+⟦CABECALHO⟧
+<h1>RANKING GERAL</h1>
+<div class="divisor"><span class="linha"></span><span class="losango"></span><span class="linha"></span></div>
+<div class="pills">
+  <span class="pill ano">Constela Edu · Ano letivo de ⟦ANO⟧</span>
+  <span class="pill escola">⟦ESCOLA⟧</span>
+</div>
+<table>
+  <thead><tr>
+    <th>Posição</th><th class="esq">Aluno</th><th class="esq">Turma</th><th class="esq">Série</th>
+    <th>⟦IC_STAR⟧Nota Matific</th><th>⟦IC_ELE⟧Nota Elefante</th><th>⟦IC_TRO⟧Nota Geral</th>
+  </tr></thead>
+  <tbody>⟦LINHAS⟧</tbody>
+</table>
+<div class="rodape">
+  <div class="tiles">⟦TILES⟧</div>
+  <div class="banner">⟦IC_STAR⟧<span><b>Parabéns</b> a todos os estudantes por cada passo na jornada do conhecimento!</span></div>
+  <div class="frase">Cada conquista é uma estrela no caminho do conhecimento</div>
+  <div class="rodape-marca">Constela Edu — Conectando aprendizagem, inspirando futuros</div>
+  <div class="gerado">Gerado em ⟦DATA⟧</div>
+</div>
+"""
+
+
+def _linhas_cartaz_html(linhas: list[list]) -> str:
+    partes = []
+    for linha in linhas:
+        pos, nome, turma, serie, nm, ne, ng = (linha + [""] * 7)[:7]
+        try:
+            pos_int = int(pos)
+        except (TypeError, ValueError):
+            pos_int = 0
+        if 1 <= pos_int <= 3:
+            classe = {1: "m1", 2: "m2", 3: "m3"}[pos_int]
+            pos_html = f'<span class="medalha {classe}">{pos_int}</span>'
+            tr_classe = "top"
+        else:
+            pos_html = f"{pos_int}º"
+            tr_classe = ""
+        partes.append(
+            f'<tr class="{tr_classe}"><td class="pos">{pos_html}</td>'
+            f'<td class="aluno">{_esc_html(nome)}</td>'
+            f'<td class="turma">{_esc_html(turma)}</td>'
+            f'<td class="serie">{_esc_html(serie)}</td>'
+            f'<td>{_fmt_nota(nm)}</td><td>{_fmt_nota(ne)}</td>'
+            f'<td class="geral">{_fmt_nota(ng)}</td></tr>')
+    return "".join(partes)
+
+
+def _faixa_anos(linhas: list[list]) -> tuple[str, str]:
+    """Deriva 'N' e rótulo do 4º cartão a partir das séries dos alunos
+    ('2º–5º' / 'anos atendidos'). Sem séries numéricas, cai para nº de turmas."""
+    anos = []
+    for linha in linhas:
+        m = re.match(r"\s*(\d+)", str(linha[3]) if len(linha) > 3 else "")
+        if m:
+            anos.append(int(m.group(1)))
+    if anos:
+        lo, hi = min(anos), max(anos)
+        return (f"{lo}º–{hi}º", "anos atendidos") if lo != hi else (f"{lo}º", "ano")
+    turmas = len({linha[2] for linha in linhas if len(linha) > 2})
+    return str(turmas), ("turmas" if turmas != 1 else "turma")
+
+
+def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
+                         cabecalho: list[str], linhas: list[list],
+                         estatisticas: dict) -> bytes:
+    """Cartaz do Ranking Geral em PDF (todos os alunos). HTML→Chromium com o
+    layout completo; sem navegador, cai para o PDF simples de ranking (reserva)."""
+    try:
+        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas)
+    except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples de ranking
+        return gerar_pdf("Ranking Geral", escola_nome, cor, cabecalho, linhas)
+
+
+def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
+                     estatisticas: dict) -> bytes:
+    from playwright.sync_api import sync_playwright
+
+    def _mil(n) -> str:
+        return f"{int(n):,}".replace(",", ".")
+
+    faixa_n, faixa_r = _faixa_anos(linhas)
+    tiles = [
+        (_mil(estatisticas.get("atividades", 0)), "atividades"),
+        (_mil(estatisticas.get("livros", 0)), "livros lidos"),
+        (_mil(len(linhas)), "estudantes ranqueados"),
+        (faixa_n, faixa_r),
+    ]
+    tiles_html = "".join(
+        f'<div class="tile"><div class="n">{n}</div><div class="r">{r}</div></div>'
+        for n, r in tiles)
+
+    html = (_CARTAZ_TEMPLATE
+            .replace("⟦CABECALHO⟧", _cabecalho_logos())
+            .replace("⟦IC_STAR⟧", _IC_STAR)
+            .replace("⟦IC_ELE⟧", _IC_ELEFANTE)
+            .replace("⟦IC_TRO⟧", _IC_TROFEU)
+            .replace("⟦ANO⟧", str(ano_letivo))
+            .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
+            .replace("⟦LINHAS⟧", _linhas_cartaz_html(linhas))
+            .replace("⟦TILES⟧", tiles_html)
+            .replace("⟦DATA⟧", datetime.now(timezone.utc).strftime("%d/%m/%Y")))
+    doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
+           f"</head><body>{html}</body></html>")
+
+    with sync_playwright() as p:
+        try:
+            navegador = p.chromium.launch()
+        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
+            navegador = p.chromium.launch(channel="chrome")
+        try:
+            pagina = navegador.new_page()
+            pagina.set_content(doc, wait_until="networkidle")
+            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True)
+        finally:
+            navegador.close()
+    return pdf

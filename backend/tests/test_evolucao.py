@@ -181,6 +181,25 @@ def test_comparador_escola_de_outra_escola_so_admin_supremo(db, cliente, escola_
     assert resposta.status_code == 403
 
 
+def test_estatisticas_cartaz_usa_snapshot_atual(db, escola_completa):
+    """Cartaz do ranking: os cartões somam o snapshot ATUAL (mais recente por
+    data), não o máximo histórico — igual ao ranking/painel. Uma correção para
+    MENOS não pode inflar o total."""
+    from app.services import relatorios as rel
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    importacao = _importacao(db, escola.id)
+    _snap_matific(db, escola.id, importacao, ana.id, 10, atividades=100, estrelas=50)
+    # Correção posterior (data mais recente) reduziu as atividades para 90.
+    _snap_matific(db, escola.id, importacao, ana.id, 1, atividades=90, estrelas=45)
+    _snap_elefante(db, escola.id, importacao, ana.id, 1, livros_unicos=7)
+    db.commit()
+
+    stats = rel.estatisticas_cartaz(db, escola.id)
+    assert stats["atividades"] == 90  # snapshot atual, não max(100, 90)
+    assert stats["livros"] == 7
+
+
 def test_resumo_escola_lista_todas_as_turmas(cliente, escola_completa):
     escola = escola_completa["escola"]
     resposta = cliente.get(f"/api/v1/escolas/{escola.id}/resumo-escola")

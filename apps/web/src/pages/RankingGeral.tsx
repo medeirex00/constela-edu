@@ -4,13 +4,15 @@
  * com o que foi feito dentro do intervalo (leituras com data real + ganhos do
  * Matific), usando os mesmos pesos configuráveis.
  */
-import { useMemo, useState } from "react";
+import { Download } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
-import { Badge, Botao, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { Badge, Botao, Card, Carregando, Mensagem, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { apiDownload } from "../lib/api";
 import { nota, numero } from "../lib/formato";
 import type { RankingItem, Turma } from "../lib/types";
 
@@ -30,10 +32,15 @@ interface ItemPeriodo {
 }
 
 export default function RankingGeral({ embutido = false }: { embutido?: boolean } = {}) {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "ano_letivo" });
   const [turmaId, setTurmaId] = useState("");
   const [serie, setSerie] = useState("");
+  const [baixandoCartaz, setBaixandoCartaz] = useState(false);
+  const [erroCartaz, setErroCartaz] = useState("");
+
+  // O cartaz (pôster) é documento de vitrine — só gestão (admin/coordenador/rede).
+  const gestor = Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
   // "Ano letivo" mostra a classificação ACUMULADA (nota geral Matific+Leitura);
   // os períodos mais curtos mostram só o que foi feito no intervalo (evolução).
@@ -78,6 +85,24 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
     [turmas],
   );
 
+  // O cartaz é sempre da escola inteira; ao mudar período/filtro, um erro antigo
+  // do cartaz perde o contexto — limpa para não ficar pendurado na tela.
+  useEffect(() => { setErroCartaz(""); }, [periodo, turmaId, serie]);
+
+  // Baixa o cartaz do Ranking Geral (PDF de vitrine, com TODOS os alunos).
+  async function baixarCartaz() {
+    if (!escolaId) return;
+    setBaixandoCartaz(true);
+    setErroCartaz("");
+    try {
+      await apiDownload(`/escolas/${escolaId}/ranking/cartaz`);
+    } catch (excecao) {
+      setErroCartaz(excecao instanceof Error ? excecao.message : "Não foi possível gerar o cartaz.");
+    } finally {
+      setBaixandoCartaz(false);
+    }
+  }
+
   return (
     <div>
       {!embutido && (
@@ -114,7 +139,24 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
         {porPeriodo && (
           <Badge tom="destaque">calculado só com o período selecionado</Badge>
         )}
+        {gestor && (
+          <Botao
+            onClick={baixarCartaz}
+            // O cartaz é sempre da escola inteira; não depende dos filtros de
+            // turma/série (só exige a visão "Ano letivo"). Só desabilita por
+            // escola vazia quando NENHUM filtro está aplicado.
+            disabled={baixandoCartaz || porPeriodo || (!turmaId && !serie && (itens ?? []).length === 0)}
+            title={porPeriodo
+              ? "O cartaz usa o Ranking Geral do ano — selecione “Ano letivo”."
+              : "Gera um pôster em PDF com todos os alunos da escola (não usa os filtros de turma/série)"}
+            className="ml-auto"
+          >
+            <Download size={15} /> {baixandoCartaz ? "Gerando cartaz…" : "Baixar cartaz"}
+          </Botao>
+        )}
       </Card>
+
+      {erroCartaz && <div className="mb-4"><Mensagem tipo="erro">{erroCartaz}</Mensagem></div>}
 
       <Card>
         {carregando ? (

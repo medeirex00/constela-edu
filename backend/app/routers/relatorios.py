@@ -119,6 +119,39 @@ def exportar_relatorio(
     )
 
 
+@router.get("/ranking/cartaz")
+def cartaz_ranking(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_atual),
+):
+    """Cartaz (pôster) do Ranking Geral em PDF — TODOS os alunos, paginado.
+    Documento de vitrine (gestão apenas): moldura Constela + logos da cidade,
+    medalhas para o pódio e cartões de estatística."""
+    permissoes.negar_restrito(db, escola_id, usuario)
+    escola = db.get(Escola, escola_id)
+    cabecalho, linhas = svc.linhas_ranking(db, escola_id)
+    conteudo = svc.gerar_cartaz_ranking(
+        escola_nome=escola.nome,
+        cor=svc.cor_primaria(db, escola_id),
+        ano_letivo=escola.ano_letivo_ativo,
+        cabecalho=cabecalho,
+        linhas=linhas,
+        estatisticas=svc.estatisticas_cartaz(db, escola_id),
+    )
+    momento = datetime.now(timezone.utc)
+    nome_arquivo = f"ranking_cartaz_{momento:%Y%m%d_%H%M%S}.pdf"
+    _arquivar_copia(nome_arquivo, conteudo)
+    registrar(db, "relatorio.exportado", escola_id=escola_id, usuario_id=usuario.id,
+              detalhes={"tipo": "ranking_cartaz", "formato": "pdf", "linhas": len(linhas)})
+    db.commit()
+    return Response(
+        content=conteudo,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )
+
+
 @router.get("/certificados/{aluno_id}")
 def certificado(
     aluno_id: int,
