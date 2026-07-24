@@ -209,6 +209,48 @@ def test_painel_publico_nome_completo_so_quando_escola_opta(cliente, db, escola_
     assert nomes_no_painel & completos
 
 
+def test_painel_publico_evolucao_justa_nao_infla_acumulado(cliente, db, escola_completa):
+    """Telão público: a evolução mede só o crescimento DENTRO da janela
+    (base_no_periodo=True). Um aluno com apenas o acumulado de vida (um único
+    snapshot, sem histórico anterior) NÃO aparece 'evoluindo tudo' — evita o
+    'caso Antonella' no telão, que é público. Falharia com o comportamento antigo
+    (acumulado exibido como evolução)."""
+    from datetime import datetime, timezone
+
+    from app.models import Importacao, SnapshotMatific
+    from app.services import scoring
+
+    escola = escola_completa["escola"]
+    imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(imp)
+    db.flush()
+    hoje = datetime.now(timezone.utc).replace(tzinfo=None)
+    for indice, aluno in enumerate(escola_completa["alunos"]):
+        db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id,
+                               importacao_id=imp.id, atividades=100 * (indice + 1),
+                               estrelas=50, pontuacao_media=70, data_referencia=hoje))
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    resposta = cliente.put(
+        f"/api/v1/escolas/{escola.id}/painel-publico",
+        json={"ativo": True, "slides": ["ranking", "evolucao"],
+              "intervalo_s": 8, "max_posicoes": 10},
+    )
+    token = resposta.json()["url"].rsplit("/", 1)[-1]
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)
+    corpo = anon.get(f"/api/v1/publico/{token}/painel").json()
+    # O ranking geral (acumulado) funciona normalmente.
+    assert corpo["ranking"]
+    # Mas a evolução do telão fica VAZIA: sem base anterior, ninguém "cresceu no
+    # período", então o acumulado de vida não é atribuído nem exibido. (Com o
+    # bug antigo, os de maior acumulado apareceriam inflados aqui.)
+    assert corpo["evolucao"] == []
+
+
 def test_max_posicoes_limita_o_ranking(cliente, db, escola_completa):
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id

@@ -268,8 +268,17 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         .limit(limite)
     ).all()
 
-    evolucao_itens = svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]
-    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar)
+    # Telão PÚBLICO: base_no_periodo=True → só o crescimento DENTRO da janela
+    # conta (regra justa das premiações). Sem isso, no começo do piloto o
+    # acumulado de vida da criança apareceria como "evolução" (caso Antonella).
+    # Só quem REALMENTE cresceu (>0) aparece — no início, quando todos empatam
+    # em 0, o slide fica vazio em vez de exibir alunos por acaso (sem dado).
+    evolucao_itens = [
+        it for it in svc_evolucao.ranking_evolucao(
+            db, escola.id, dias=30, base_no_periodo=True)
+        if it.nota_evolucao > 0
+    ][:limite]
+    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True)
 
     # Estatísticas REAIS da escola (agregadas dos snapshots atuais — nada é
     # inventado): faixa de indicadores do painel. Custo absorvido pelo cache
@@ -398,7 +407,12 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
         .limit(limite)
     ).scalars())
     # A evolução também é exibida (slide próprio) — seus alunos podem ser abertos.
-    for item in svc_evolucao.ranking_evolucao(db, escola.id, dias=30)[:limite]:
+    # base_no_periodo=True + só quem cresceu (>0): mesma regra do payload público
+    # (não expõe, no começo do piloto, quem só tem acumulado como "evolução" nem
+    # abre perfil de aluno que não aparece de fato no telão).
+    for item in [it for it in svc_evolucao.ranking_evolucao(
+            db, escola.id, dias=30, base_no_periodo=True)
+            if it.nota_evolucao > 0][:limite]:
         ids.add(item.aluno_id)
     _cache_visiveis[escola.id] = (agora, ids)
     return ids

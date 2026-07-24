@@ -319,6 +319,7 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      serie_m: dict[int, list] | None = None,
                      serie_e: dict[int, list] | None = None,
                      mapa_dif: dict[tuple[str, str], float] | None = None,
+                     base_no_periodo: bool = False,
                      ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
@@ -372,13 +373,15 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     pontos_dif: dict[int, float] = {}
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
-        atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim)
+        atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim,
+                                  base_no_periodo=base_no_periodo)
         ganhos_m[aluno_id] = SimpleNamespace(
             atividades=_delta(atual_m, base_m, "atividades"),
             estrelas=_delta(atual_m, base_m, "estrelas"),
             pontuacao_media=_delta(atual_m, base_m, "pontuacao_media"),
         )
-        atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim)
+        atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim,
+                                  base_no_periodo=base_no_periodo)
         # Questões só existem agregadas (snapshot); leitura tem data real.
         questoes_t = _delta(atual_e, base_e, "questoes_tentativas")
         questoes_a = _delta(atual_e, base_e, "questoes_acertos")

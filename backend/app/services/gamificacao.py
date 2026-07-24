@@ -467,7 +467,8 @@ def anonimizar_nome(nome: str | None) -> str:
 
 def mural(db: Session, escola_id: int,
           serie_m: dict | None = None, serie_e: dict | None = None,
-          mapa_dif: dict | None = None, anonimizar: bool = False) -> dict:
+          mapa_dif: dict | None = None, anonimizar: bool = False,
+          base_no_periodo: bool = False) -> dict:
     """Mural da escola: destaques do dia/semana/mês + eventos recentes.
 
     ``anonimizar=True`` (uso no painel PÚBLICO sem login) reduz o nome do aluno
@@ -536,7 +537,8 @@ def mural(db: Session, escola_id: int,
     def _destaque(dias: int):
         melhor = _melhor_do_ranking(evolucao.ranking_evolucao(
             db, escola_id, dias=dias,
-            serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif))
+            serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif,
+            base_no_periodo=base_no_periodo))
         if melhor and anonimizar:
             melhor = {**melhor, "nome": anonimizar_nome(melhor["nome"])}
         return melhor
