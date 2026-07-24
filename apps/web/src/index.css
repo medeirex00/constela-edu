@@ -94,6 +94,45 @@
   will-change: transform, opacity;
   animation: painel-cadente 9s ease-in infinite;
 }
+
+/* Estrela brilhante: brilho radial + duas "pontas" finas (as hastes que as
+   estrelas têm nas fotos). Herda o cintilar quando combinada com .painel-estrela. */
+.painel-astro {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0.5) 34%, transparent 70%);
+}
+.painel-astro::before,
+.painel-astro::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.painel-astro::before {
+  width: 320%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+}
+.painel-astro::after {
+  width: 1px;
+  height: 320%;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+}
+
+/* Satélite cruzando o céu bem devagar (órbita longa e discreta). */
+@keyframes painel-satelite {
+  0%   { transform: translate(0, 0); opacity: 0; }
+  8%   { opacity: 0.5; }
+  90%  { opacity: 0.5; }
+  100% { transform: translate(360px, -130px); opacity: 0; }
+}
+.painel-satelite {
+  position: absolute;
+  opacity: 0;
+  animation: painel-satelite 55s linear infinite;
+}
 /* Rolagem invisível: telão nunca mostra barra; toque/roda continuam funcionando. */
 .painel-sem-barra { scrollbar-width: none; -ms-overflow-style: none; }
 .painel-sem-barra::-webkit-scrollbar { display: none; }
