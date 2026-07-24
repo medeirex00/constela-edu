@@ -8,7 +8,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { nota, tempoLeitura } from "../lib/formato";
-import type { PaginaAlunos, Turma } from "../lib/types";
+import type { Escola, PaginaAlunos, Turma } from "../lib/types";
 
 interface Lado {
   tipo: string;
@@ -37,6 +37,8 @@ function SeletorLado({
   setId,
   alunos,
   turmas,
+  escolas,
+  podeEscola,
 }: {
   rotulo: string;
   tipo: string;
@@ -45,19 +47,24 @@ function SeletorLado({
   setId: (id: string) => void;
   alunos: OpcaoAluno[];
   turmas: Turma[];
+  escolas: OpcaoAluno[];
+  podeEscola: boolean;
 }) {
+  const opcoes = tipo === "aluno" ? alunos : tipo === "escola" ? escolas : turmas;
   return (
     <div className="grid flex-1 gap-2 sm:grid-cols-2">
       <Campo rotulo={`${rotulo} — tipo`}>
         <select className={estiloInput} value={tipo} onChange={(evento) => { setTipo(evento.target.value); setId(""); }}>
           <option value="aluno">Aluno</option>
           <option value="turma">Turma</option>
+          {/* "Escola" só para ADM supremo (rede/Secretaria) — compara escolas inteiras. */}
+          {podeEscola && <option value="escola">Escola</option>}
         </select>
       </Campo>
       <Campo rotulo={rotulo}>
         <select className={estiloInput} value={id} onChange={(evento) => setId(evento.target.value)}>
           <option value="">Selecione…</option>
-          {(tipo === "aluno" ? alunos : turmas).map((opcao) => (
+          {opcoes.map((opcao) => (
             <option key={opcao.id} value={opcao.id}>{opcao.nome}</option>
           ))}
         </select>
@@ -77,7 +84,9 @@ const INDICADORES: { chave: string; rotulo: string; formato?: (valor: number) =>
 ];
 
 export default function Comparador() {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
+  // "Escola" como lado é exclusivo do ADM supremo (rede/Secretaria).
+  const podeEscola = !!usuario?.is_global;
   // Opções dos seletores: buscas de leitura (ociosas sem escola) via useApi.
   const { dados: turmas, erro: erroTurmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null,
@@ -85,6 +94,9 @@ export default function Comparador() {
   const { dados: paginaAlunos, erro: erroAlunos } = useApi<PaginaAlunos>(
     escolaId ? `/escolas/${escolaId}/alunos?por_pagina=100` : null,
   );
+  // Lista de escolas p/ o ADM supremo comparar escola×escola (ocioso p/ os demais).
+  const { dados: escolasLista } = useApi<Escola[]>(podeEscola ? "/escolas" : null);
+  const escolas: OpcaoAluno[] = (escolasLista ?? []).map((e) => ({ id: e.id, nome: e.nome }));
   // Reduz a página de alunos às opções (id + nome) que os seletores consomem.
   const alunos: OpcaoAluno[] = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
   const erroOpcoes = erroTurmas ?? erroAlunos;
@@ -120,8 +132,8 @@ export default function Comparador() {
 
       <Card className="mb-6 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <SeletorLado rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} alunos={alunos} turmas={turmas ?? []} />
-          <SeletorLado rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} alunos={alunos} turmas={turmas ?? []} />
+          <SeletorLado rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
           <Botao onClick={comparar} disabled={carregando || !idA || !idB} className="shrink-0">
             <GitCompareArrows size={15} /> Comparar
           </Botao>
@@ -145,7 +157,7 @@ export default function Comparador() {
               <Card key={chave} className="p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                   Nota {chave === "geral" ? "Geral" : chave === "matific" ? "Matific" : "Elefante Letrado"}
-                  {(comparacao.a.tipo === "turma" || comparacao.b.tipo === "turma") && " (média p/ turmas)"}
+                  {(comparacao.a.tipo !== "aluno" || comparacao.b.tipo !== "aluno") && " (média)"}
                 </p>
                 <div className="mt-2 flex items-end justify-between">
                   <div>

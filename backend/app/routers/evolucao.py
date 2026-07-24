@@ -198,19 +198,26 @@ def resumo_escola(
 
 @router.get("/comparar")
 def comparar(
-    tipo_a: str = Query(pattern="^(aluno|turma)$"),
+    tipo_a: str = Query(pattern="^(aluno|turma|escola)$"),
     id_a: int = Query(),
-    tipo_b: str = Query(pattern="^(aluno|turma)$"),
+    tipo_b: str = Query(pattern="^(aluno|turma|escola)$"),
     id_b: int = Query(),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Comparador aluno×aluno, aluno×turma e turma×turma (PRD §73–§75) —
-    dados detalhados: gestão apenas."""
+    """Comparador aluno×aluno, aluno×turma, turma×turma e (ADM da rede)
+    escola×escola (PRD §73–§75) — dados detalhados: gestão apenas."""
     permissoes.negar_restrito(db, escola_id, usuario)
+    # "Escola" como lado é recurso de ADM SUPREMO (rede/global). Um usuário
+    # não-global só pode usar a PRÓPRIA escola como lado "escola".
+    for tipo, ident in ((tipo_a, id_a), (tipo_b, id_b)):
+        if tipo == "escola" and not usuario.is_global and ident != escola_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Comparar outra escola é exclusivo de administradores da rede.")
     resultado = svc.comparar(db, escola_id, tipo_a, id_a, tipo_b, id_b)
     if resultado is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
-                            "Aluno ou turma não encontrado nesta escola.")
+                            "Aluno, turma ou escola não encontrado.")
     return resultado

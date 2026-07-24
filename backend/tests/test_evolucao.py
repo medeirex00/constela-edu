@@ -144,6 +144,43 @@ def test_comparador_turmas_usa_medias(db, cliente, escola_completa):
     assert corpo["b"]["indicadores"]["atividades"] == 40
 
 
+def test_comparador_escola_agrega_a_escola_inteira(db, cliente, escola_completa):
+    """Novo lado 'escola': agrega a escola inteira (médias + somas)."""
+    escola = escola_completa["escola"]
+    turma = escola_completa["turma"]
+    ana, joao, _ = escola_completa["alunos"]
+    importacao = _importacao(db, escola.id)
+    _snap_matific(db, escola.id, importacao, ana.id, 1,
+                  atividades=10, estrelas=20, pontuacao_media=80)
+    _snap_matific(db, escola.id, importacao, joao.id, 1,
+                  atividades=30, estrelas=40, pontuacao_media=60)
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    resposta = cliente.get(
+        f"/api/v1/escolas/{escola.id}/comparar",
+        params={"tipo_a": "escola", "id_a": escola.id, "tipo_b": "turma", "id_b": turma.id},
+    )
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+    assert corpo["a"]["tipo"] == "escola"
+    assert corpo["a"]["nome"] == escola.nome
+    assert corpo["a"]["total_alunos"] == 3
+    assert corpo["a"]["indicadores"]["atividades"] == 40  # soma da escola inteira
+
+
+def test_comparador_escola_de_outra_escola_so_admin_supremo(db, cliente, escola_completa):
+    """Comparar OUTRA escola (id diferente) é exclusivo de ADM da rede (is_global);
+    admin comum recebe 403."""
+    escola = escola_completa["escola"]
+    resposta = cliente.get(
+        f"/api/v1/escolas/{escola.id}/comparar",
+        params={"tipo_a": "escola", "id_a": escola.id + 9999,
+                "tipo_b": "turma", "id_b": escola_completa["turma"].id},
+    )
+    assert resposta.status_code == 403
+
+
 def test_resumo_escola_lista_todas_as_turmas(cliente, escola_completa):
     escola = escola_completa["escola"]
     resposta = cliente.get(f"/api/v1/escolas/{escola.id}/resumo-escola")

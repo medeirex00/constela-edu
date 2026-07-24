@@ -594,11 +594,52 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int) -> dict | None:
     }
 
 
+def _lado_escola(db: Session, escola_id: int) -> dict | None:
+    """A escola inteira como um lado do comparador: médias das notas de todos os
+    alunos ativos + soma dos indicadores (mesma regra das turmas). O `escola_id`
+    é o da escola A COMPARAR (pode ser outra, para ADM da rede)."""
+    escola = db.get(Escola, escola_id)
+    if escola is None:
+        return None
+    aluno_ids = list(db.execute(
+        select(Aluno.id)
+        .join(Matricula, Matricula.aluno_id == Aluno.id)
+        .where(Matricula.escola_id == escola_id,
+               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
+    ).scalars())
+    notas = db.execute(
+        select(Nota).join(Aluno, Nota.aluno_id == Aluno.id)
+        .where(Nota.escola_id == escola_id,
+               Nota.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
+    ).scalars().all()
+    n = len(notas) or 1
+    return {
+        "tipo": "escola",
+        "id": escola.id,
+        "nome": escola.nome,
+        "total_alunos": len(aluno_ids),
+        "indicadores": _indicadores_atuais(db, escola_id, aluno_ids),
+        "notas": {
+            "matific": round(sum(x.nota_matific for x in notas) / n, 2),
+            "elefante": round(sum(x.nota_elefante for x in notas) / n, 2),
+            "geral": round(sum(x.nota_geral for x in notas) / n, 2),
+            "posicao": None,
+        },
+    }
+
+
 def comparar(db: Session, escola_id: int, tipo_a: str, id_a: int,
              tipo_b: str, id_b: int) -> dict | None:
     lados = []
     for tipo, identificador in ((tipo_a, id_a), (tipo_b, id_b)):
-        lado = (_lado_aluno if tipo == "aluno" else _lado_turma)(db, escola_id, identificador)
+        if tipo == "aluno":
+            lado = _lado_aluno(db, escola_id, identificador)
+        elif tipo == "escola":
+            lado = _lado_escola(db, identificador)  # id = escola a comparar
+        else:
+            lado = _lado_turma(db, escola_id, identificador)
         if lado is None:
             return None
         lados.append(lado)
