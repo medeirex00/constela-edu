@@ -227,7 +227,144 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
 def gerar_certificado(escola_nome: str, cor: str, aluno_nome: str,
                       turma: str, posicao: int | None, nota_geral: float,
                       ano_letivo: int) -> bytes:
-    """Certificado individual em paisagem (PRD §99)."""
+    """Certificado individual em paisagem (PRD §99).
+
+    Renderiza um certificado ELEGANTE (moldura azul-marinho + dourado, logo
+    Constela, medalha) via HTML→PDF (Chromium). Se o navegador não estiver
+    disponível no ambiente (ex.: CI sem browser), cai para a versão fpdf simples
+    — o certificado NUNCA falha por falta do Chromium."""
+    try:
+        return _certificado_html_pdf(escola_nome, cor, aluno_nome, turma,
+                                     posicao, nota_geral, ano_letivo)
+    except Exception:  # noqa: BLE001 — sem Chromium/erro de render: usa a reserva
+        return _certificado_fpdf(escola_nome, cor, aluno_nome, turma,
+                                 posicao, nota_geral, ano_letivo)
+
+
+# Logo oficial (C) embutida como SVG — a mesma de identidade/logo-oficial.png.
+_LOGO_C_SVG = (
+    '<svg viewBox="0 0 100 100" width="66" height="66">'
+    '<rect width="100" height="100" rx="22" fill="#1B2A4A"/>'
+    '<path d="M 67,20.555 A 34,34 0 1 0 67,79.445" fill="none" stroke="#FFFFFF"'
+    ' stroke-width="7" stroke-linecap="round"/>'
+    '<circle cx="33" cy="79.445" r="4.2" fill="#FFFFFF"/>'
+    '<circle cx="16" cy="50" r="4.6" fill="#FFFFFF"/>'
+    '<circle cx="33" cy="20.555" r="4.2" fill="#FFFFFF"/>'
+    '<circle cx="50" cy="50" r="12.5" fill="#F5B942"/></svg>'
+)
+_CANTO_SVG = (
+    '<svg viewBox="0 0 300 300" class="canto">'
+    '<path d="M0,0 L300,0 Q140,8 78,86 Q14,168 0,300 Z" fill="#1B2A4A"/>'
+    '<path d="M0,0 L232,0 Q108,12 60,74 Q14,140 0,232 Z" fill="none"'
+    ' stroke="#F5B942" stroke-width="5" opacity="0.9"/></svg>'
+)
+_MEDALHA_SVG = (
+    '<svg viewBox="0 0 72 100" width="66" height="92">'
+    '<path d="M27 46 L18 82 L31 73 L36 86 L41 73 L54 82 L45 46 Z" fill="#1B2A4A"/>'
+    '<circle cx="36" cy="30" r="26" fill="#F5B942" stroke="#1B2A4A" stroke-width="3"/>'
+    '<circle cx="36" cy="30" r="19" fill="none" stroke="#1B2A4A" stroke-width="1.5" opacity="0.45"/>'
+    '<path d="M36 15 l4.2 9.4 10.3 1 -7.7 6.9 2.4 10.1 -9.2 -5.4 -9.2 5.4 2.4 -10.1'
+    ' -7.7 -6.9 10.3 -1 Z" fill="#1B2A4A"/></svg>'
+)
+
+_CERT_TEMPLATE = """<style>
+  @page { size: A4 landscape; margin: 0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:297mm; height:210mm; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { font-family: Georgia,'Times New Roman',serif; background:#ffffff; position:relative; overflow:hidden; }
+  .canto { position:absolute; width:118mm; height:118mm; }
+  .c-tl { top:0; left:0; }
+  .c-tr { top:0; right:0; transform:scaleX(-1); }
+  .c-bl { bottom:0; left:0; transform:scaleY(-1); }
+  .c-br { bottom:0; right:0; transform:scale(-1,-1); }
+  .frame { position:absolute; inset:11mm; border:2px solid #1B2A4A; }
+  .frame::after { content:""; position:absolute; inset:3.5mm; border:1px solid #C9A24B; }
+  .conteudo { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+              justify-content:flex-start; text-align:center; padding:20mm 40mm 0; }
+  .marca { display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .marca .nome { font-family:'Trebuchet MS','Segoe UI',sans-serif; font-weight:800; font-size:19px;
+                 letter-spacing:1px; color:#1B2A4A; }
+  .marca .nome b { color:#F5B942; }
+  h1 { font-size:52px; font-weight:700; letter-spacing:8px; color:#1B2A4A; margin-top:14px; }
+  .divisor { display:flex; align-items:center; gap:12px; margin:8px 0 14px; color:#C9A24B; }
+  .divisor .linha { width:120px; height:1.5px; background:#C9A24B; }
+  .divisor .losango { width:9px; height:9px; background:#F5B942; transform:rotate(45deg); }
+  .intro { font-size:15px; color:#555; letter-spacing:.5px; }
+  .aluno { font-size:40px; font-weight:700; color:#1B2A4A; margin:14px 0 6px; letter-spacing:.5px; text-transform:uppercase; }
+  .sublinhado { width:60%; max-width:520px; height:1.5px; background:#C9A24B; margin:0 auto 16px; }
+  .detalhe { font-size:15.5px; color:#444; line-height:1.7; max-width:640px; }
+  .detalhe b { color:#1B2A4A; }
+  .medalha { margin:14px 0 4px; }
+  .emitido { font-size:12.5px; color:#666; letter-spacing:.5px; }
+  .assinatura { position:absolute; bottom:26mm; left:50%; transform:translateX(-50%); text-align:center; }
+  .assinatura .linha { width:230px; height:1px; background:#8a8a8a; margin:0 auto 6px; }
+  .assinatura .rotulo { font-size:12.5px; color:#555; }
+</style>
+⟦CANTOS⟧
+<div class="frame"></div>
+<div class="conteudo">
+  <div class="marca">⟦LOGO⟧<span class="nome">Constela <b>Edu</b></span></div>
+  <h1>CERTIFICADO</h1>
+  <div class="divisor"><span class="linha"></span><span class="losango"></span><span class="linha"></span></div>
+  <p class="intro">A escola ⟦ESCOLA⟧ certifica que</p>
+  <p class="aluno">⟦ALUNO⟧</p>
+  <div class="sublinhado"></div>
+  <p class="detalhe">da turma <b>⟦TURMA⟧</b>, alcançou a nota geral <b>⟦NOTA⟧</b>⟦POSICAO⟧<br>
+     no <b>Constela Edu</b> — ano letivo de <b>⟦ANO⟧</b>.</p>
+  <div class="medalha">⟦MEDALHA⟧</div>
+  <p class="emitido">Emitido em <b>⟦DATA⟧</b></p>
+</div>
+<div class="assinatura"><div class="linha"></div><div class="rotulo">Direção</div></div>
+"""
+
+
+def _esc_html(texto: str) -> str:
+    return (str(texto).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
+                          turma: str, posicao: int | None, nota_geral: float,
+                          ano_letivo: int) -> bytes:
+    """Renderiza o certificado bonito em PDF via Chromium (Playwright)."""
+    from playwright.sync_api import sync_playwright
+
+    cantos = "".join(
+        _CANTO_SVG.replace('class="canto"', f'class="canto {c}"')
+        for c in ("c-tl", "c-tr", "c-bl", "c-br"))
+    pos_txt = (f" e a <b>{posicao}ª posição</b> no Ranking Geral" if posicao else "")
+    html = (_CERT_TEMPLATE
+            .replace("⟦CANTOS⟧", cantos)
+            .replace("⟦LOGO⟧", _LOGO_C_SVG)
+            .replace("⟦MEDALHA⟧", _MEDALHA_SVG)
+            .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
+            .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
+            .replace("⟦TURMA⟧", _esc_html(turma or "—"))
+            .replace("⟦NOTA⟧", f"{nota_geral:.1f}".replace(".", ","))
+            .replace("⟦POSICAO⟧", pos_txt)
+            .replace("⟦ANO⟧", str(ano_letivo))
+            .replace("⟦DATA⟧", datetime.now(timezone.utc).strftime("%d/%m/%Y")))
+    doc = f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'></head><body>{html}</body></html>"
+
+    with sync_playwright() as p:
+        try:
+            navegador = p.chromium.launch()
+        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
+            navegador = p.chromium.launch(channel="chrome")
+        try:
+            pagina = navegador.new_page()
+            pagina.set_content(doc, wait_until="networkidle")
+            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True,
+                             landscape=True)
+        finally:
+            navegador.close()
+    return pdf
+
+
+def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
+                      turma: str, posicao: int | None, nota_geral: float,
+                      ano_letivo: int) -> bytes:
+    """Reserva simples (sem navegador): moldura + texto, 100% em Python."""
     from fpdf import FPDF
 
     pdf = FPDF(orientation="L", unit="mm", format="A4")
