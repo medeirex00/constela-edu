@@ -166,6 +166,11 @@ function FundoConstela({ cor }: { cor: string }) {
           />
         ))}
       </svg>
+      {/* Estrelas cadentes esporádicas — posições e atrasos distintos para
+          cruzarem o céu em momentos diferentes (nunca em enxame). */}
+      <span className="painel-cadente" style={{ top: "10%", left: "82%", animationDelay: "2s", animationDuration: "10s" }} aria-hidden />
+      <span className="painel-cadente" style={{ top: "24%", left: "92%", animationDelay: "6.5s", animationDuration: "13s" }} aria-hidden />
+      <span className="painel-cadente" style={{ top: "6%", left: "60%", animationDelay: "11s", animationDuration: "16s" }} aria-hidden />
     </div>
   );
 }

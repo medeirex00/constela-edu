@@ -74,6 +74,26 @@
 @keyframes painel-pulso { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
 
 .painel-estrela { animation: painel-cintila 4s ease-in-out infinite; }
+/* Estrela cadente: um rastro fino que surge, corre na diagonal e some. Com
+   ciclos longos e atrasos diferentes, aparecem esporádicas (não em enxame). */
+@keyframes painel-cadente {
+  0%   { opacity: 0; transform: rotate(202deg) translateX(-40px); }
+  5%   { opacity: 0.9; }
+  17%  { opacity: 0.9; }
+  27%  { opacity: 0; transform: rotate(202deg) translateX(320px); }
+  100% { opacity: 0; transform: rotate(202deg) translateX(320px); }
+}
+.painel-cadente {
+  position: absolute;
+  width: 150px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), #ffffff);
+  filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.55));
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: painel-cadente 9s ease-in infinite;
+}
 /* Rolagem invisível: telão nunca mostra barra; toque/roda continuam funcionando. */
 .painel-sem-barra { scrollbar-width: none; -ms-overflow-style: none; }
 .painel-sem-barra::-webkit-scrollbar { display: none; }
@@ -99,6 +119,7 @@
   .painel-surgir,
   .painel-flutua,
   .painel-pulso,
+  .painel-cadente,
   .painel-brilho::after {
     animation: none !important;
   }
