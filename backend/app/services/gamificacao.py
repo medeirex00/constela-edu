@@ -15,12 +15,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     Aluno,
     Escola,
-    Importacao,
     Matricula,
     SnapshotElefante,
     SnapshotMatific,
     Turma,
-    Usuario,
 )
 from app.services import evolucao, scoring
 
@@ -479,22 +477,10 @@ def mural(db: Session, escola_id: int,
     consultas e a gamificação de cada aluno é computada em memória — antes
     isto disparava ~2 queries por aluno (milhares numa escola grande).
     """
+    # O mural do telão mostra SÓ conquistas de alunos (decisão de produto): os
+    # avisos de "dados atualizados na Matific/Elefante" (importação) foram
+    # removidos para o painel ficar 100% celebrativo, sem ruído operacional.
     eventos: list[dict] = []
-
-    importacoes = db.execute(
-        select(Importacao, Usuario.nome)
-        .outerjoin(Usuario, Importacao.usuario_id == Usuario.id)
-        .where(Importacao.escola_id == escola_id, Importacao.tipo != "manual")
-        .order_by(Importacao.id.desc()).limit(5)
-    ).all()
-    for importacao, usuario_nome in importacoes:
-        plataforma = "Matific" if importacao.plataforma == "matific" else "Elefante Letrado"
-        eventos.append({
-            "tipo": "importacao",
-            "icone": "📥",
-            "texto": f"Dados de {importacao.qtd_alunos} alunos atualizados na {plataforma}",
-            "data": importacao.created_at,
-        })
 
     # Séries de TODOS os alunos em 2 queries + regras uma única vez. As mesmas
     # séries + o mapa de dificuldade alimentam as 3 janelas do ranking abaixo

@@ -64,7 +64,7 @@
    CSS plano (fora de @layer) para o Tailwind NÃO purgar; classes com prefixo
    "painel-" para não colidir com utilitárias. Tudo desliga em reduced-motion.
 --------------------------------------------------------------------------- */
-@keyframes painel-cintila { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.85; } }
+@keyframes painel-cintila { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.82; } }
 @keyframes painel-brilho { 0% { transform: translateX(-130%); } 60%, 100% { transform: translateX(240%); } }
 @keyframes painel-surgir { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes painel-flutua { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
@@ -89,7 +89,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .painel-estrela,
+  /* As estrelas NÃO entram aqui de propósito: o cintilar é um respiro LENTO de
+     opacidade (4s, sem nenhum movimento), então fica CONSISTENTE em toda tela
+     (web e Android) em vez de piscar só em uma. Os efeitos com movimento (surgir,
+     flutuar, pulsar, varredura de brilho) continuam desligados em reduced-motion. */
   .painel-surgir,
   .painel-flutua,
   .painel-pulso,

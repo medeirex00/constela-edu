@@ -549,15 +549,37 @@ export default function PainelPublico() {
   }, [dados]);
 
   const alternarTelaCheia = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void raiz.current?.requestFullscreen();
+    // Fallback com prefixo webkit: Android (Samsung Internet / versões antigas) e
+    // Safari expõem requestFullscreen/exitFullscreen só como webkit*. Sem isto, o
+    // botão "não fazia nada" no celular. try/catch: se o navegador bloquear
+    // (alguns mobile exigem gesto/são restritos), ignora sem quebrar o telão.
+    const d = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => void;
+    };
+    const el = raiz.current as (HTMLElement & { webkitRequestFullscreen?: () => void }) | null;
+    try {
+      if (d.fullscreenElement || d.webkitFullscreenElement) {
+        (d.exitFullscreen ?? d.webkitExitFullscreen)?.call(d);
+      } else if (el) {
+        (el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el);
+      }
+    } catch {
+      /* fullscreen indisponível neste navegador — segue em janela normal */
+    }
   };
 
   useEffect(() => {
-    // Modo TV: acompanha o estado real do fullscreen (inclusive tecla Esc).
-    const aoMudar = () => setTelaCheia(Boolean(document.fullscreenElement));
+    // Modo TV: acompanha o estado real do fullscreen (inclusive tecla Esc e o
+    // evento com prefixo webkit dos navegadores mobile).
+    const d = document as Document & { webkitFullscreenElement?: Element };
+    const aoMudar = () => setTelaCheia(Boolean(d.fullscreenElement || d.webkitFullscreenElement));
     document.addEventListener("fullscreenchange", aoMudar);
-    return () => document.removeEventListener("fullscreenchange", aoMudar);
+    document.addEventListener("webkitfullscreenchange", aoMudar);
+    return () => {
+      document.removeEventListener("fullscreenchange", aoMudar);
+      document.removeEventListener("webkitfullscreenchange", aoMudar);
+    };
   }, []);
 
   useEffect(() => {
