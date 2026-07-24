@@ -179,6 +179,7 @@ def test_painel_publico_anonimiza_nomes_por_padrao(cliente, db, escola_completa)
         assert item["nome"] not in completos      # nenhum nome completo vaza
         aluno = next(a for a in escola_completa["alunos"] if a.id == item["aluno_id"])
         assert item["nome"] == anonimizar_nome(aluno.nome)  # forma reduzida correta
+        assert item["turma"] is None  # k-anonimato: turma omitida (não reidentificar)
 
     # A configuração reflete o padrão seguro (anonimização ligada).
     cfg = cliente.get(f"/api/v1/escolas/{escola_id}/painel-publico").json()
@@ -207,6 +208,8 @@ def test_painel_publico_nome_completo_so_quando_escola_opta(cliente, db, escola_
     completos = {a.nome for a in escola_completa["alunos"]}
     # Com anonimização desligada, aparece pelo menos um nome completo real.
     assert nomes_no_painel & completos
+    # E a turma volta a ser exibida (a escola optou por expor).
+    assert any(i["turma"] for i in corpo["ranking"])
 
 
 def test_painel_publico_evolucao_justa_nao_infla_acumulado(cliente, db, escola_completa):

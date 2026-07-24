@@ -217,7 +217,15 @@ export default function PainelPublicoConfig() {
                 className="h-4 w-4 accent-indigo-600"
                 checked={config.anonimizar}
                 disabled={!podeEditar || ocupado}
-                onChange={(evento) => salvar({ ...config, anonimizar: evento.target.checked })}
+                onChange={(evento) => {
+                  const proteger = evento.target.checked;
+                  // Desligar a proteção EXPÕE nome completo em link público:
+                  // exige confirmação consciente (o QR pode já estar impresso).
+                  if (!proteger && !window.confirm(
+                    "Atenção: desligar a proteção vai EXIBIR O NOME COMPLETO das crianças no telão público (endereço sem senha). Só faça isso com o consentimento dos responsáveis. Deseja continuar?",
+                  )) return;
+                  salvar({ ...config, anonimizar: proteger });
+                }}
               />
               Proteger o nome dos alunos no telão (recomendado)
             </label>

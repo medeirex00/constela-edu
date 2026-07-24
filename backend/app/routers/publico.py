@@ -188,7 +188,8 @@ def salvar_config(
     else:
         row.valor = valores
     registrar(db, "painel_publico.configurado", escola_id=escola_id, usuario_id=usuario.id,
-              detalhes={"ativo": valores["ativo"], "slides": slides})
+              detalhes={"ativo": valores["ativo"], "slides": slides,
+                        "anonimizar": valores.get("anonimizar", True)})
     db.commit()
     invalidar_cache_painel(escola_id)   # reflete a nova config/token no telão já
     return _com_url(valores)
@@ -254,6 +255,9 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     # Telão sem login: nome anonimizado por padrão (primeiro nome + inicial).
     anonimizar = bool(config.get("anonimizar", True))
     nome_pub = (svc_gami.anonimizar_nome if anonimizar else (lambda n: n))
+    # K-anonimato: no modo anônimo, a TURMA também é omitida — senão "Ana B." +
+    # turma + posição identifica a criança numa turma pequena (LGPD/ECA).
+    turma_pub = (lambda _t: None) if anonimizar else (lambda t: t)
     ranking = db.execute(
         select(Nota, Aluno, Turma)
         .join(Aluno, Nota.aluno_id == Aluno.id)
@@ -312,7 +316,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
                 "posicao": nota.posicao,
                 "aluno_id": aluno.id,
                 "nome": nome_pub(aluno.nome),
-                "turma": turma.nome,
+                "turma": turma_pub(turma.nome),
                 "nota_geral": nota.nota_geral,
             }
             for nota, aluno, turma in ranking
@@ -322,7 +326,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
                 "posicao": item.posicao,
                 "aluno_id": item.aluno_id,
                 "nome": nome_pub(item.nome),
-                "turma": item.turma,
+                "turma": turma_pub(item.turma),
                 "nota_evolucao": item.nota_evolucao,
             }
             for item in evolucao_itens
@@ -449,7 +453,8 @@ def perfil_publico(token: str, aluno_id: int, db: Session = Depends(get_db)):
     anonimizar = bool(config.get("anonimizar", True))
     return {
         "nome": svc_gami.anonimizar_nome(aluno.nome) if anonimizar else aluno.nome,
-        "turma": matricula[1].nome if matricula else None,
+        # K-anonimato: turma omitida no modo anônimo (não reidentificar).
+        "turma": None if anonimizar else (matricula[1].nome if matricula else None),
         "posicao": nota.posicao if nota else None,
         "nota_matific": nota.nota_matific if nota else 0.0,
         "nota_elefante": nota.nota_elefante if nota else 0.0,
