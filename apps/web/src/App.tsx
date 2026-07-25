@@ -34,6 +34,7 @@ const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
 const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
+const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -93,6 +94,14 @@ function RotaGlobal({ children }: { children: React.ReactNode }) {
   return usuario?.is_global ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+/** Só a Secretaria (usuário com rede vinculada) ou o admin global entra em
+ *  /rede — o painel municipal com o mapa. Professor/escola cai no Dashboard. */
+function RotaRede({ children }: { children: React.ReactNode }) {
+  const { usuario } = useApp();
+  const temRede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
+  return temRede ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 export default function App() {
   return (
     // Um único limite de Suspense cobre o carregamento dos chunks de rota.
@@ -125,6 +134,9 @@ export default function App() {
           <Route path="/relatorios" element={<Relatorios />} />
           {/* Usuários: professor entra mas o backend só devolve a própria conta. */}
           <Route path="/usuarios" element={<Usuarios />} />
+
+          {/* --- Secretaria (rede) ou admin global: painel municipal + mapa --- */}
+          <Route path="/rede" element={<RotaRede><RedeDashboard /></RotaRede>} />
 
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
           <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />

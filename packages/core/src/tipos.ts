@@ -7,6 +7,9 @@ export interface Usuario {
   cargo: string;
   is_global: boolean;
   escola_id: number | null;
+  /** Rede/Secretaria à qual o usuário pertence (nulo = escola única). Habilita
+   *  a visão da Secretaria (menu + /rede). */
+  rede_id?: number | null;
   status?: string;
   ultimo_acesso?: string | null;
   created_at?: string | null;

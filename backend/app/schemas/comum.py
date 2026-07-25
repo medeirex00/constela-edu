@@ -22,6 +22,9 @@ class UsuarioOut(ORMModel):
     cargo: str
     is_global: bool
     escola_id: int | None
+    # Vínculo com a rede/Secretaria (nulo = usuário de escola única). Habilita a
+    # visão da Secretaria no frontend (menu + /rede).
+    rede_id: int | None = None
     status: str = "ativo"
     ultimo_acesso: datetime | None = None
     created_at: datetime | None = None

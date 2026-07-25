@@ -14,6 +14,7 @@ import {
   Lightbulb,
   GitCompareArrows,
   GraduationCap,
+  Landmark,
   LayoutDashboard,
   LogOut,
   Medal,
@@ -74,6 +75,9 @@ const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDas
 // "Comece aqui": assistente de onboarding — fica fora dos grupos, logo abaixo
 // do Dashboard, e só para gestão (admin/coordenador cria turmas e integrações).
 const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Rocket, gestao: true };
+// "Secretaria": painel municipal (rede de escolas) + mapa — fica fora dos grupos,
+// no topo, e só aparece para quem tem rede vinculada ou é admin global.
+const SECRETARIA: ItemNav = { rotulo: "Secretaria", caminho: "/rede", icone: Landmark, exato: true };
 
 // Menu agrupado (accordion): reduz o excesso de itens visíveis sem esconder
 // nenhuma funcionalidade. Cada grupo abre/fecha; o da rota atual abre sozinho.
@@ -153,9 +157,10 @@ function gruposVisiveis(gestor: boolean, global: boolean): GrupoNav[] {
 
 /** Todos os itens de menu que o usuário PODE abrir (Dashboard + grupos
  *  visíveis), achatados — base da busca por páginas. */
-function itensNavVisiveis(gestor: boolean, global: boolean): ItemNav[] {
+function itensNavVisiveis(gestor: boolean, global: boolean, rede: boolean): ItemNav[] {
   return [
     DASHBOARD,
+    ...(rede ? [SECRETARIA] : []),
     ...(gestor ? [COMECAR] : []),
     ...gruposVisiveis(gestor, global).flatMap((g) => g.itens),
   ];
@@ -215,6 +220,7 @@ function PesquisaGlobal() {
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const global = Boolean(usuario?.is_global);
+  const rede = global || usuario?.rede_id != null;
 
   const consulta = termo.trim();
 
@@ -239,7 +245,7 @@ function PesquisaGlobal() {
 
   // Páginas do menu que casam com o texto (só as que o cargo pode abrir).
   const alvo = normalizar(consulta);
-  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis(gestor, global)
+  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis(gestor, global, rede)
     .filter((item) => normalizar(item.rotulo).includes(alvo))
     .slice(0, 6)
     .map((item) => ({
@@ -454,6 +460,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const { usuario } = useApp();
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const rede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
   const grupos = gruposVisiveis(gestor, Boolean(usuario?.is_global));
   const ativo = grupoDaRota(pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
@@ -485,6 +492,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
+      {rede && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
       {gestor && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
