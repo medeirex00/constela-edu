@@ -184,3 +184,80 @@ def test_crud_rede_exige_admin_global(db):
     assert cliente.get("/api/v1/redes/gerenciar").status_code == 403
     assert cliente.put(f"/api/v1/redes/{rede_id}/escolas",
                        json={"escola_ids": []}).status_code == 403
+
+
+# --- Boletim da rede (PDF) --------------------------------------------------
+
+_DADOS_BOLETIM = {
+    "rede_id": 1,
+    "totais": {"escolas": 3, "escolas_ativas": 3, "alunos": 120, "turmas": 9,
+               "alunos_com_dados": 100, "adocao": 83.3, "media_geral": 62.5,
+               "media_matific": 60.0, "media_elefante": 65.0, "escolas_em_atencao": 1},
+    "equidade": {"gap_media": 40.0, "escola_maior_media": 80.0,
+                 "escola_menor_media": 40.0, "escolas_abaixo_da_media": 1},
+    "escolas": [
+        {"escola_id": 1, "nome": "EM Alfa", "posicao": 1, "total_alunos": 40, "adocao": 95.0,
+         "media_matific": 78.0, "media_elefante": 82.0, "media_geral": 80.0,
+         "precisa_atencao": False, "motivo_atencao": None},
+        {"escola_id": 3, "nome": "EM Gama", "posicao": 3, "total_alunos": 40, "adocao": 20.0,
+         "media_matific": 40.0, "media_elefante": 40.0, "media_geral": 40.0,
+         "precisa_atencao": True, "motivo_atencao": "Baixa adoção: só 20% dos alunos têm dados."},
+    ],
+    "atencao": [
+        {"escola_id": 3, "nome": "EM Gama", "posicao": 3, "total_alunos": 40, "adocao": 20.0,
+         "media_matific": 40.0, "media_elefante": 40.0, "media_geral": 40.0,
+         "precisa_atencao": True, "motivo_atencao": "Baixa adoção: só 20% dos alunos têm dados."},
+    ],
+}
+
+
+def _forcar_reserva_fpdf(monkeypatch):
+    """Faz o boletim usar a RESERVA fpdf (sem depender do Chromium no ambiente
+    de teste), forçando o caminho HTML→navegador a falhar."""
+    from app.services import relatorios as rel
+
+    def _boom(_html):
+        raise RuntimeError("sem chromium (teste)")
+
+    monkeypatch.setattr(rel, "_relatorio_html_pdf", _boom)
+
+
+def test_boletim_shell_reune_os_dados_da_rede():
+    from app.services import relatorios as rel
+    html = rel._shell_boletim_rede("Rede Municipal X", _DADOS_BOLETIM)
+    assert "Rede Municipal X" in html and "Boletim da Rede" in html
+    assert "EM Alfa" in html and "EM Gama" in html          # ranking das escolas
+    assert "precisam de atenção" in html                    # seção de atenção
+    assert "Baixa adoção" in html                           # motivo da escola em atenção
+    assert "Equidade entre escolas" in html
+    # PRIVACIDADE: só escolas/agregados — nada de nome de criança no documento.
+    assert "Crianca" not in html
+
+
+def test_gerar_boletim_rede_produz_pdf(monkeypatch):
+    from app.services import relatorios as rel
+    _forcar_reserva_fpdf(monkeypatch)
+    conteudo = rel.gerar_boletim_rede("Rede X", _DADOS_BOLETIM)
+    assert conteudo[:4] == b"%PDF"  # PDF válido mesmo na reserva
+
+
+def test_boletim_endpoint_pdf_e_isolamento(db, monkeypatch):
+    _forcar_reserva_fpdf(monkeypatch)
+    rede = Rede(nome="Rede do Boletim", status="ativa")
+    outra = Rede(nome="Outra Rede", status="ativa")
+    db.add_all([rede, outra])
+    db.flush()
+    _escola_com_notas(db, rede.id, "Escola Boletim", [80.0, 70.0])
+    db.add(Usuario(nome="Sec", email="sec@bol.gov", senha_hash=hash_senha("s3nh4boletim1"),
+                   cargo="coordenador", rede_id=rede.id))
+    db.commit()
+
+    cliente = _login("sec@bol.gov", "s3nh4boletim1")
+    r = cliente.get(f"/api/v1/redes/{rede.id}/boletim")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+    assert "boletim_rede" in r.headers.get("content-disposition", "")
+
+    # Isolamento: a Secretaria de uma rede NÃO baixa o boletim de OUTRA (IDOR).
+    assert cliente.get(f"/api/v1/redes/{outra.id}/boletim").status_code == 403

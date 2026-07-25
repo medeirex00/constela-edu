@@ -5,7 +5,9 @@ rede do próprio usuário (``usuario.rede_id``) ou o admin global. Uma secretari
 NUNCA lê os dados de outra rede (IDOR entre redes barrado). Só AGREGA — não
 reimplementa scoring, não toca em pesos/fórmulas e não expõe PII de criança.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,7 @@ from app.schemas import (
     RedeUsuariosIn,
 )
 from app.services import geocodificacao as svc_geo
+from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
 
@@ -291,3 +294,28 @@ def ranking(
     """Ranking municipal POR ESCOLA (privacidade: não expõe ranking individual de
     crianças entre escolas). Ordena por média geral e adoção."""
     return svc_rede.ranking_escolas(db, rede_id, limite=limite)
+
+
+@router.get("/{rede_id}/boletim")
+def boletim(
+    rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Boletim da rede em PDF — documento de vitrine para a Secretaria levar a
+    reuniões: panorama, equidade, escolas em atenção e ranking das escolas. Só
+    dados AGREGADOS por escola (sem PII de criança). Acesso: a própria Secretaria
+    (``exigir_rede``) ou o admin global."""
+    rede = db.get(Rede, rede_id)
+    dados = svc_rede.dashboard_rede(db, rede_id)
+    conteudo = svc_relatorios.gerar_boletim_rede(rede.nome, dados)
+    registrar(db, "rede.boletim_exportado", usuario_id=usuario.id, entidade="rede",
+              entidade_id=rede_id, detalhes={"escolas": dados["totais"]["escolas"]})
+    db.commit()
+    momento = datetime.now(timezone.utc)
+    nome_arquivo = f"boletim_rede_{rede_id}_{momento:%Y%m%d}.pdf"
+    return Response(
+        content=conteudo,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )

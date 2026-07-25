@@ -12,6 +12,7 @@ import L from "leaflet";
 import {
   AlertTriangle,
   Building2,
+  FileDown,
   GraduationCap,
   MapPin,
   Scale,
@@ -24,9 +25,10 @@ import { useEffect, useMemo, useState } from "react";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import { useNavigate } from "react-router-dom";
 
-import { Botao, Card, Carregando, PageHeader, StatCard, Vazio } from "../../components/ui";
+import { Botao, Card, Carregando, Mensagem, PageHeader, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { apiDownload } from "../../lib/api";
 import { corPorMedia } from "../../lib/cores";
 import { nota, numero } from "../../lib/formato";
 
@@ -174,6 +176,20 @@ function PainelRede({ redeId }: { redeId: number }) {
   const navegar = useNavigate();
   const { dados, erro, carregando } = useApi<DashboardRede>(`/redes/${redeId}/dashboard`);
   const [filtro, setFiltro] = useState("");
+  const [baixando, setBaixando] = useState(false);
+  const [boletimErro, setBoletimErro] = useState("");
+
+  async function baixarBoletim() {
+    setBaixando(true);
+    setBoletimErro("");
+    try {
+      await apiDownload(`/redes/${redeId}/boletim`);
+    } catch (e) {
+      setBoletimErro(e instanceof Error ? e.message : "Não foi possível gerar o boletim.");
+    } finally {
+      setBaixando(false);
+    }
+  }
 
   const abrirEscola = (escolaId: number) => {
     selecionarEscola(escolaId); // troca a escola ativa (o backend autoriza: é da rede)
@@ -198,12 +214,20 @@ function PainelRede({ redeId }: { redeId: number }) {
       <PageHeader
         titulo="Secretaria de Educação"
         descricao="Visão consolidada da rede: desempenho, adoção, equidade entre escolas e distribuição geográfica."
-        acoes={usuario?.is_global ? (
-          <Botao variante="neutro" onClick={() => navegar("/rede/gerenciar")}>
-            <Settings2 size={15} /> Gerenciar redes
-          </Botao>
-        ) : undefined}
+        acoes={
+          <div className="flex flex-wrap gap-2">
+            <Botao variante="neutro" onClick={baixarBoletim} disabled={baixando}>
+              <FileDown size={15} /> {baixando ? "Gerando..." : "Baixar boletim (PDF)"}
+            </Botao>
+            {usuario?.is_global && (
+              <Botao variante="neutro" onClick={() => navegar("/rede/gerenciar")}>
+                <Settings2 size={15} /> Gerenciar redes
+              </Botao>
+            )}
+          </div>
+        }
       />
+      {boletimErro && <Mensagem tipo="erro">{boletimErro}</Mensagem>}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icone={<Building2 size={16} />} rotulo="Escolas" valor={numero(t.escolas)} detalhe={`${t.escolas_ativas} ativas`} />

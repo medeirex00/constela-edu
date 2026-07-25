@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import csv
 import io
+import logging
 import mimetypes
 import re
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from sqlalchemy.orm import Session
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, Nota,
                         SnapshotElefante, SnapshotMatific, Turma)
 from app.services import scoring
+
+_log = logging.getLogger(__name__)
 
 COR_PRIMARIA_PADRAO = "#1B2A4A"  # azul profundo da marca Constela Edu
 
@@ -935,3 +938,99 @@ def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list],
              "leituras registradas por título.")
     return _relatorio_shell("Catálogo de Livros", escola_nome, subtitulo, tiles,
                             intro, "".join(corpo), logos)
+
+
+# ---------------------------------------------------------------------------
+# Boletim da REDE (Secretaria) — documento de vitrine MUNICIPAL: panorama da
+# rede, equidade entre escolas, escolas em atenção e o ranking das escolas.
+# Mesma família visual (faixa com os 3 logos da cidade, cartões, tabelas
+# navy+zebra, rodapé/numeração). SÓ dados agregados por escola — nunca PII de
+# criança. Parte do dashboard_rede (services/rede.py), a mesma fonte do painel.
+# ---------------------------------------------------------------------------
+
+def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
+    """Cabeçalho + linhas do ranking de escolas — base da reserva fpdf e do CSV,
+    para o boletim nunca divergir do painel."""
+    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Matific", "Elefante", "Geral"]
+    linhas = [
+        [e.get("posicao", ""), e["nome"], e["total_alunos"], e["adocao"],
+         e["media_matific"], e["media_elefante"], e["media_geral"]]
+        for e in dados.get("escolas", [])
+    ]
+    return cabecalho, linhas
+
+
+def _shell_boletim_rede(rede_nome: str, dados: dict,
+                        logos: tuple[str, str] | None = None) -> str:
+    t = dados.get("totais", {})
+    eq = dados.get("equidade", {})
+    tiles = [
+        (str(t.get("escolas", 0)), "escolas na rede"),
+        (f'{int(t.get("alunos", 0)):,}'.replace(",", "."), "alunos"),
+        (_fmt_nota(t.get("adocao")) + "%", "adoção"),
+        (_fmt_nota(t.get("media_geral")), "média geral"),
+    ]
+
+    corpo = ['<h2 class="secao">Equidade entre escolas</h2>']
+    corpo.append(_report_tiles([
+        (_fmt_nota(eq.get("gap_media")), "diferença melhor↔pior"),
+        (_fmt_nota(eq.get("escola_maior_media")), "melhor escola"),
+        (_fmt_nota(eq.get("escola_menor_media")), "pior escola"),
+        (str(eq.get("escolas_abaixo_da_media", 0)), "abaixo da média"),
+    ]))
+
+    atencao = dados.get("atencao", [])
+    if atencao:
+        corpo.append('<h2 class="secao">Escolas que precisam de atenção</h2>')
+        corpo.append('<table class="tab"><thead><tr>'
+                     '<th class="esq">Escola</th><th class="esq">Motivo</th>'
+                     '</tr></thead><tbody>')
+        for e in atencao:
+            corpo.append(
+                f'<tr><td class="esq nome">{_esc_html(e["nome"])}</td>'
+                f'<td class="esq">{_esc_html(e.get("motivo_atencao") or "")}</td></tr>')
+        corpo.append('</tbody></table>')
+
+    corpo.append('<h2 class="secao">Ranking das escolas</h2>')
+    corpo.append('<table class="tab"><thead><tr>'
+                 '<th>#</th><th class="esq">Escola</th><th>Alunos</th><th>Adoção</th>'
+                 '<th>Matific</th><th>Elefante</th><th>Geral</th>'
+                 '</tr></thead><tbody>')
+    for e in dados.get("escolas", []):
+        corpo.append(
+            f'<tr><td class="num">{_esc_html(str(e.get("posicao", "")))}º</td>'
+            f'<td class="esq nome">{_esc_html(e["nome"])}</td>'
+            f'<td>{_esc_html(str(e["total_alunos"]))}</td>'
+            f'<td>{_fmt_nota(e["adocao"])}%</td>'
+            f'<td>{_fmt_nota(e["media_matific"])}</td>'
+            f'<td>{_fmt_nota(e["media_elefante"])}</td>'
+            f'<td><b>{_fmt_nota(e["media_geral"])}</b></td></tr>')
+    corpo.append('</tbody></table>')
+
+    subtitulo = (f"Rede de ensino · Gerado em "
+                 f"{datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+    intro = ("Panorama consolidado da rede: adoção das plataformas, desempenho médio, "
+             "equidade entre as escolas e as unidades que requerem atenção. Apenas "
+             "dados agregados por escola — sem identificação de estudantes.")
+    return _relatorio_shell("Boletim da Rede", rede_nome, subtitulo, tiles,
+                            intro, "".join(corpo), logos)
+
+
+def gerar_boletim_rede(rede_nome: str, dados: dict, cor: str = COR_PRIMARIA_PADRAO,
+                       logos: tuple[str, str] | None = None) -> bytes:
+    """Boletim da rede em PDF (vitrine A4 com rodapé/numeração). HTML→Chromium;
+    sem navegador (ou erro de render), cai para o PDF simples com a tabela do
+    ranking (reserva)."""
+    # Monta o HTML FORA do try: um erro de FORMA dos dados (chave faltando) deve
+    # aparecer como 500 visível — não degradar calado para a reserva feia. Só a
+    # RENDERIZAÇÃO (que pode faltar navegador) fica protegida pela reserva.
+    shell = _shell_boletim_rede(rede_nome, dados, logos)
+    try:
+        return _relatorio_html_pdf(shell)
+    except Exception:  # noqa: BLE001 — sem Chromium/erro de render: reserva fpdf
+        # Loga (com traceback) para uma falha que NÃO seja 'sem navegador' ficar
+        # observável, em vez de o documento de vitrine degradar em silêncio.
+        _log.warning("Boletim da rede: render HTML->PDF falhou; usando reserva fpdf.",
+                     exc_info=True)
+        cabecalho, linhas = linhas_boletim_rede(dados)
+        return gerar_pdf("Boletim da Rede", rede_nome, cor, cabecalho, linhas)
