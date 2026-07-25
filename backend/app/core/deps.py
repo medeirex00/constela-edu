@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import decodificar_token
-from app.models import Escola, Usuario
+from app.models import Escola, Rede, Usuario
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_PREFIX}/auth/login")
 
@@ -84,3 +84,23 @@ def escola_autorizada(
             "Acesso negado aos dados desta escola.",
         )
     return escola_id
+
+
+def exigir_rede(
+    rede_id: int = Path(...),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+) -> int:
+    """Isolamento por REDE (tier Secretaria): o usuário só acessa a PRÓPRIA rede
+    (``usuario.rede_id``); o admin global acessa qualquer uma. Bloqueia IDOR
+    entre redes — uma secretaria nunca lê os dados agregados de outra."""
+    if db.get(Rede, rede_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    if usuario.is_global:
+        return rede_id
+    if usuario.rede_id != rede_id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Acesso negado: você não pertence a esta rede.",
+        )
+    return rede_id

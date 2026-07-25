@@ -26,6 +26,11 @@ class Usuario(Base):
     cargo: Mapped[str] = mapped_column(String(30), default="professor")
     # Administrador global: gerencia todas as escolas (PRD §136)
     is_global: Mapped[bool] = mapped_column(default=False)
+    # Secretaria de Educação: usuário com rede_id enxerga (agregado) TODAS as
+    # escolas dessa rede — sem ser global e sem ver PII de criança de escola
+    # nenhuma. Nulo = usuário de escola única (ou global).
+    rede_id: Mapped[int | None] = mapped_column(
+        ForeignKey("redes.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="ativo")
     ultimo_acesso: Mapped[datetime | None] = mapped_column(default=None)
     # Incrementado ao redefinir a senha: invalida tokens emitidos antes

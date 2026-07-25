@@ -34,6 +34,7 @@ from app.routers import (
     plataformas,
     publico,
     rankings,
+    rede,
     relatorios,
     sistema,
 )
@@ -114,6 +115,7 @@ for router in (
     academico.router,
     configuracoes.router,
     rankings.router,
+    rede.router,
     importacoes.router,
     plataformas.router,
     evolucao.router,
