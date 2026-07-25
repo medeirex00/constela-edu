@@ -86,6 +86,7 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
              .where(SincronizacaoConfig.escola_id == escola_id)).scalars()}
 
     plataformas = []
+    agora = service._agora()
     for con in connectors.listar():
         if con.plataforma == "manual":
             continue
@@ -103,7 +104,9 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
             hora_local=conf.hora_local if conf else "03:00",
             dia_semana=conf.dia_semana if conf else None,
             proxima_execucao=conf.proxima_execucao if conf else None,
-            ultima_execucao=ExecucaoOut.model_validate(ult) if ult else None))
+            ultima_execucao=ExecucaoOut.model_validate(ult) if ult else None,
+            ultimo_sucesso_em=service.ultimo_sucesso_em(db, escola_id, con.plataforma),
+            desatualizada=service.esta_desatualizada(db, conf, agora) if conf else False))
 
     abertos = db.scalar(select(func.count(SincronizacaoAlerta.id)).where(
         SincronizacaoAlerta.escola_id == escola_id,
@@ -226,6 +229,11 @@ def salvar_config(plataforma: str, dados: ConfigIn,
     conf.dia_semana = dados.dia_semana
     db.flush()
     conf.proxima_execucao = service.calcular_proxima(conf)
+    # Se a agenda foi DESLIGADA (ou virou manual), fecha um eventual alerta de
+    # obsolescência — mantê-lo aberto seria mentira (não há mais nada agendado
+    # para envelhecer, e ele inflaria o painel para sempre).
+    if not (conf.ativo and conf.cadencia in service.OBSOLETO_POR_CADENCIA):
+        service.resolver_alertas(db, escola_id, plataforma, ("desatualizada",))
     db.commit()
     return {"proxima_execucao": conf.proxima_execucao}
 
@@ -470,10 +478,17 @@ def dashboard(usuario: Usuario = Depends(get_usuario_atual),
         SincronizacaoExecucao.status == "executando")) or 0
     fila = db.scalar(select(func.count(SincronizacaoExecucao.id)).where(
         SincronizacaoExecucao.status == "fila")) or 0
+    # "Com erro" = FALHAS de execução (crítico) — exclui 'desatualizada', que tem
+    # seu próprio contador; senão a mesma escola contaria nos dois (dupla contagem).
     com_erro = db.scalar(select(func.count(func.distinct(
         SincronizacaoAlerta.escola_id))).where(
         SincronizacaoAlerta.resolvido.is_(False),
-        SincronizacaoAlerta.severidade == "critico")) or 0
+        SincronizacaoAlerta.severidade == "critico",
+        SincronizacaoAlerta.tipo != "desatualizada")) or 0
+    desatualizadas = db.scalar(select(func.count(func.distinct(
+        SincronizacaoAlerta.escola_id))).where(
+        SincronizacaoAlerta.resolvido.is_(False),
+        SincronizacaoAlerta.tipo == "desatualizada")) or 0
     sincronizadas = db.scalar(select(func.count(func.distinct(
         SincronizacaoExecucao.escola_id))).where(
         SincronizacaoExecucao.status == "concluida")) or 0
@@ -490,6 +505,7 @@ def dashboard(usuario: Usuario = Depends(get_usuario_atual),
     return DashboardOut(
         escolas_total=escolas_total, escolas_configuradas=escolas_config,
         escolas_sincronizadas=sincronizadas, escolas_com_erro=com_erro,
+        escolas_desatualizadas=desatualizadas,
         em_andamento=em_andamento, fila=fila,
         workers_ativos=(1 if scheduler.ativo() else 0),
         scheduler_ligado=scheduler.ativo(),

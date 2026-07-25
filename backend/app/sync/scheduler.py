@@ -37,6 +37,9 @@ def _uma_rodada() -> None:
         # config (elimina o "re-salvar credencial"; sobrevive a restart pois a
         # config fica no Postgres, e se recria caso suma).
         service.garantir_agendas_diarias(db)
+        # Blindagem: sinaliza integrações que envelheceram em silêncio (sem sync
+        # bem-sucedida além do limite) — antes de enfileirar as vencidas.
+        service.verificar_obsolescencia(db)
         service.enfileirar_agendados(db)
         pendentes = service.proximas_da_fila(db, limite=settings.SYNC_WORKERS)
         ids = [e.id for e in pendentes]

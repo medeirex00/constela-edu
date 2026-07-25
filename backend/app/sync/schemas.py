@@ -85,6 +85,10 @@ class PlataformaStatus(BaseModel):
     dia_semana: int | None = None
     proxima_execucao: datetime | None = None
     ultima_execucao: ExecucaoOut | None = None
+    # Blindagem: "os dados estão envelhecendo em silêncio?" — quando foi a última
+    # sincronização BEM-SUCEDIDA e se já passou do limite da cadência.
+    ultimo_sucesso_em: datetime | None = None
+    desatualizada: bool = False
 
 
 class EscolaStatus(BaseModel):
@@ -104,6 +108,7 @@ class DashboardOut(BaseModel):
     escolas_configuradas: int
     escolas_sincronizadas: int
     escolas_com_erro: int
+    escolas_desatualizadas: int = 0   # dado envelhecendo em silêncio (sem sucesso há X)
     em_andamento: int
     fila: int
     workers_ativos: int

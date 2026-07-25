@@ -53,6 +53,7 @@ interface PlataformaStatus {
   credencial_status: string; validada_em: string | null; ultimo_erro: string | null;
   agendada: boolean; cadencia: string; hora_local: string; dia_semana: number | null;
   proxima_execucao: string | null; ultima_execucao: Execucao | null;
+  ultimo_sucesso_em: string | null; desatualizada: boolean;
 }
 interface EscolaStatus {
   escola_id: number; escola_nome: string; qtd_alunos: number; qtd_turmas: number;
@@ -69,7 +70,8 @@ interface Alerta {
 }
 interface Dashboard {
   escolas_total: number; escolas_configuradas: number; escolas_sincronizadas: number;
-  escolas_com_erro: number; em_andamento: number; fila: number; workers_ativos: number;
+  escolas_com_erro: number; escolas_desatualizadas: number;
+  em_andamento: number; fila: number; workers_ativos: number;
   scheduler_ligado: boolean; ultima_sincronizacao: string | null;
   duracao_ultima_ms: number | null; tempo_medio_ms: number | null; alertas_abertos: number;
 }
@@ -215,10 +217,11 @@ export default function Sincronizacao() {
           )}
           {dashboard.carregando && !dashboard.dados && <Carregando texto="Carregando visão geral…" />}
           {dashboard.dados && (<>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
             <StatCard icone={<CheckCircle2 size={15} />} rotulo="Configuradas" valor={String(dashboard.dados.escolas_configuradas)} detalhe={`de ${dashboard.dados.escolas_total}`} />
             <StatCard icone={<RefreshCw size={15} />} rotulo="Sincronizadas" valor={String(dashboard.dados.escolas_sincronizadas)} />
             <StatCard icone={<AlertTriangle size={15} />} rotulo="Com erro" valor={String(dashboard.dados.escolas_com_erro)} />
+            <StatCard icone={<Clock size={15} />} rotulo="Desatualizadas" valor={String(dashboard.dados.escolas_desatualizadas)} detalhe="dados envelhecendo" />
             <StatCard icone={<Clock size={15} />} rotulo="Em andamento" valor={String(dashboard.dados.em_andamento)} detalhe={`${dashboard.dados.fila} na fila`} />
             <StatCard icone={<Clock size={15} />} rotulo="Tempo médio" valor={fmtDur(dashboard.dados.tempo_medio_ms)} />
             <StatCard icone={<History size={15} />} rotulo="Última" valor={fmtData(dashboard.dados.ultima_sincronizacao)} />
@@ -408,7 +411,10 @@ function PlataformaCard({
     <Card className="p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold tracking-tight">{nome}</h2>
-        <EstadoBadge status={p.credencial_status} />
+        <div className="flex items-center gap-2">
+          {p.desatualizada && <Badge tom="alerta">⚠ Dados desatualizados</Badge>}
+          <EstadoBadge status={p.credencial_status} />
+        </div>
       </div>
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
         Estratégia: {p.estrategia === "navegador" ? "automação de navegador" : p.estrategia}
@@ -416,6 +422,14 @@ function PlataformaCard({
         {" · "}Última sincronização: {fmtData(p.ultima_execucao?.iniciada_em ?? null)}
         {" · "}Próxima: {p.agendada ? fmtData(p.proxima_execucao) : "manual"}
       </p>
+      {p.desatualizada && (
+        <div className="mt-3">
+          <Mensagem tipo="erro">
+            Sem sincronização bem-sucedida{p.ultimo_sucesso_em ? ` desde ${fmtData(p.ultimo_sucesso_em)}` : " ainda"}
+            {" "}— os dados desta plataforma podem estar desatualizados. Confira a credencial e a agenda.
+          </Mensagem>
+        </div>
+      )}
       {p.ultimo_erro && (
         <div className="mt-3"><Mensagem tipo="erro">Último erro: {p.ultimo_erro}</Mensagem></div>
       )}

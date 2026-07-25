@@ -128,6 +128,11 @@ class SincronizacaoExecucao(Base):
         Index("uq_sync_exec_ativa", "escola_id", "plataforma", unique=True,
               postgresql_where=text("status IN ('fila', 'executando')"),
               sqlite_where=text("status IN ('fila', 'executando')")),
+        # FRESCOR: a varredura de obsolescência faz GROUP BY MAX(finalizada_em)
+        # sobre os 'concluida' por (escola, plataforma). O histórico é PERMANENTE
+        # (cresce ~1/dia por integração), então sem este índice a varredura
+        # degradaria com o tempo; com ele, é um lookup barato.
+        Index("ix_sync_exec_frescor", "status", "escola_id", "plataforma", "finalizada_em"),
     )
 
 

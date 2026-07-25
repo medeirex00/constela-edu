@@ -17,7 +17,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -82,6 +82,110 @@ def resolver_alertas(db: Session, escola_id: int, plataforma: str,
         al.resolvido = True
         al.resolvido_em = _agora()
     db.flush()
+
+
+# --------------------------------------------------------------------------
+# Blindagem: OBSOLESCÊNCIA ("os dados estão envelhecendo em silêncio?")
+#
+# O sistema já alerta quando uma EXECUÇÃO falha. Mas o risco pior é o silencioso:
+# a agenda parou, a credencial expirou ou toda tentativa vem falhando — e o dado
+# vai ficando velho sem ninguém notar ("por que esse dado é da semana passada?").
+# Aqui a gente detecta isso: uma integração AGENDADA sem sincronização BEM-
+# SUCEDIDA além do limite da cadência abre um alerta 'desatualizada' (deduplicado)
+# que se resolve sozinho quando uma sync conclui com dados.
+# --------------------------------------------------------------------------
+
+# Tempo sem sucesso (status "concluida") até considerar a integração desatualizada.
+# Folga sobre a cadência: uma janela perdida + margem. Cadências sem agenda (manual)
+# não disparam alerta automático.
+OBSOLETO_POR_CADENCIA = {
+    "diaria": timedelta(days=2),
+    "semanal": timedelta(days=10),
+}
+
+
+def limite_obsolescencia(cadencia: str) -> timedelta | None:
+    return OBSOLETO_POR_CADENCIA.get(cadencia)
+
+
+def ultimo_sucesso_em(db: Session, escola_id: int, plataforma: str) -> datetime | None:
+    """Quando foi a última sincronização BEM-SUCEDIDA (status 'concluida') desta
+    integração — o marco de 'frescor' do dado. Falhas e 'sem_dados' não contam."""
+    return db.scalar(
+        select(func.max(SincronizacaoExecucao.finalizada_em)).where(
+            SincronizacaoExecucao.escola_id == escola_id,
+            SincronizacaoExecucao.plataforma == plataforma,
+            SincronizacaoExecucao.status == "concluida",
+        ))
+
+
+def _referencia_frescor(cfg: SincronizacaoConfig, ultimo: datetime | None) -> datetime | None:
+    """Marco a partir do qual medir a obsolescência: o último sucesso ou, se nunca
+    houve, quando a AGENDA passou a valer (``updated_at``, bumpado ao ativar/trocar
+    cadência) — NÃO a criação da linha. Assim uma agenda ANTIGA reativada hoje ganha
+    a folga da cadência a partir de agora, em vez de alertar na hora ("cry-wolf")."""
+    ref = ultimo or cfg.updated_at
+    # NORMALIZA para naive: created_at/updated_at vêm do default do modelo
+    # (base.agora() é tz-AWARE) e num objeto recém-flushado ainda estão aware;
+    # _agora() e os datetimes do sync são naive. Sem isto, subtrair aware de naive
+    # levanta TypeError. Lido do banco já volta naive — a normalização é a rede.
+    if ref is not None and ref.tzinfo is not None:
+        ref = ref.astimezone(timezone.utc).replace(tzinfo=None)
+    return ref
+
+
+def esta_desatualizada(db: Session, cfg: SincronizacaoConfig,
+                       agora: datetime | None = None) -> bool:
+    """True se a integração AGENDADA está sem sucesso há mais que o limite da
+    cadência (usa uma consulta de último sucesso — para uma escola só, ex.: /status)."""
+    limite = limite_obsolescencia(cfg.cadencia)
+    if limite is None or not cfg.ativo:
+        return False
+    agora = agora or _agora()
+    referencia = _referencia_frescor(cfg, ultimo_sucesso_em(db, cfg.escola_id, cfg.plataforma))
+    return referencia is not None and (agora - referencia) > limite
+
+
+def _mapa_ultimo_sucesso(db: Session) -> dict[tuple[int, str], datetime]:
+    """{(escola_id, plataforma): última sincronização bem-sucedida} em UMA consulta
+    agregada — evita um MAX por config na varredura do scheduler (N+1)."""
+    linhas = db.execute(
+        select(SincronizacaoExecucao.escola_id, SincronizacaoExecucao.plataforma,
+               func.max(SincronizacaoExecucao.finalizada_em))
+        .where(SincronizacaoExecucao.status == "concluida")
+        .group_by(SincronizacaoExecucao.escola_id, SincronizacaoExecucao.plataforma)
+    ).all()
+    return {(eid, plat): ultimo for eid, plat, ultimo in linhas}
+
+
+def verificar_obsolescencia(db: Session) -> int:
+    """Varre as integrações AGENDADAS e abre um alerta 'desatualizada' para as que
+    envelheceram em silêncio. Idempotente (abrir_alerta deduplica). Devolve quantas
+    estão desatualizadas. Escala: uma consulta agregada do último sucesso (não N)."""
+    agora = _agora()
+    configs = db.execute(
+        select(SincronizacaoConfig).where(
+            SincronizacaoConfig.ativo.is_(True),
+            SincronizacaoConfig.cadencia.in_(tuple(OBSOLETO_POR_CADENCIA)),
+        )
+    ).scalars().all()
+    if not configs:
+        return 0
+    ultimos = _mapa_ultimo_sucesso(db)  # 1 consulta, não N
+    n = 0
+    for cfg in configs:
+        limite = limite_obsolescencia(cfg.cadencia)
+        referencia = _referencia_frescor(cfg, ultimos.get((cfg.escola_id, cfg.plataforma)))
+        if referencia is None or (agora - referencia) <= limite:
+            continue
+        dias = max(1, (agora - referencia).days)
+        abrir_alerta(db, cfg.escola_id, cfg.plataforma, "desatualizada",
+                     f"Sem sincronização bem-sucedida há {dias} dia(s) — os dados "
+                     f"desta plataforma podem estar desatualizados.",
+                     severidade="critico")
+        n += 1
+    db.commit()
+    return n
 
 
 # --------------------------------------------------------------------------
@@ -322,6 +426,10 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         if totais["arquivos"]:
             _salvar_contadores(db, execucao.escola_id, execucao.plataforma,
                                contexto_fetch.contadores_novos)
+            # Sucesso COM dados: a integração voltou a estar fresca — fecha o
+            # alerta de obsolescência (dado atualizado agora).
+            resolver_alertas(db, execucao.escola_id, execucao.plataforma,
+                             ("desatualizada",))
         # Sucesso: fecha alertas de credencial/indisponibilidade da plataforma.
         vault_linha = vault.obter_linha(db, execucao.escola_id, execucao.plataforma)
         if vault_linha is not None:
