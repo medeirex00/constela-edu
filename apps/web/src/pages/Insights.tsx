@@ -43,6 +43,30 @@ function BarraIndice({ valor }: { valor: number }) {
   );
 }
 
+/** Persistência = semanas SEGUIDAS com avanço (12,5 por semana; 8 = índice cheio).
+ * Mostra o Nº DE SEMANAS em vez do número cru (12,5), para não parecer "nota
+ * baixa" — o índice cresce naturalmente conforme a escola acumula histórico. */
+function BarraPersistencia({ valor }: { valor: number }) {
+  const semanas = Math.round(valor / 12.5);
+  const cor = valor >= 66 ? "bg-emerald-500" : valor >= 33 ? "bg-amber-500" : "bg-red-400";
+  const rotulo = semanas === 0 ? "—" : `${semanas} ${semanas === 1 ? "semana" : "semanas"}`;
+  return (
+    <div
+      className="flex items-center gap-2"
+      title={
+        semanas === 0
+          ? "Ainda sem semanas seguidas com avanço. Cresce conforme a escola acumula histórico."
+          : `${semanas} semana(s) seguida(s) com avanço (8 semanas = índice cheio). Cresce com o tempo.`
+      }
+    >
+      <div className="h-2 w-16 overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
+        <div className={`h-full rounded ${cor}`} style={{ width: `${Math.min(100, valor)}%` }} />
+      </div>
+      <span className="min-w-[4.5rem] whitespace-nowrap text-right tabular-nums">{rotulo}</span>
+    </div>
+  );
+}
+
 export default function Insights() {
   const { escolaId } = useApp();
   const [verAlertas, setVerAlertas] = useState(false);
@@ -107,7 +131,7 @@ export default function Insights() {
           <Lightbulb size={15} className="text-indigo-500" />
           <h3 className="text-sm font-semibold">Índices por aluno</h3>
           <span className="ml-auto text-xs text-zinc-400">
-            engajamento e evolução = posição na escola (percentil · 50 = aluno mediano) · persistência = constância semanal
+            engajamento e evolução = posição na escola (percentil · 50 = aluno mediano) · persistência = semanas seguidas com avanço (cresce com o tempo)
           </span>
         </div>
         {dadosInsights.indices.length === 0 ? (
@@ -135,7 +159,7 @@ export default function Insights() {
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{item.turma}</td>
                     <td className="px-4 py-2.5"><BarraIndice valor={item.engajamento} /></td>
                     <td className="px-4 py-2.5"><BarraIndice valor={item.evolucao} /></td>
-                    <td className="px-4 py-2.5"><BarraIndice valor={item.persistencia} /></td>
+                    <td className="px-4 py-2.5"><BarraPersistencia valor={item.persistencia} /></td>
                   </tr>
                 ))}
               </tbody>
