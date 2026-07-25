@@ -43,30 +43,24 @@ function BarraIndice({ valor }: { valor: number }) {
   );
 }
 
-/** Persistência = semanas SEGUIDAS com avanço (12,5 por semana; 8 = índice cheio).
- * Mostra o Nº DE SEMANAS em vez do número cru (12,5), para não parecer "nota
- * baixa" — o índice cresce naturalmente conforme a escola acumula histórico. */
 const SEMANAS_CHEIO = 8; // 8 semanas seguidas com avanço = índice cheio
 
+/** Persistência = semanas SEGUIDAS com avanço (0–8). Mesma cara de engajamento/
+ * evolução (barra + número), mas o NÚMERO é a contagem de semanas — o cabeçalho
+ * "(semanal)" deixa a unidade clara. Não mostro o valor cru (12,5), que parecia
+ * nota baixa. */
 function BarraPersistencia({ valor }: { valor: number }) {
   const semanas = Math.round(valor / 12.5);
   const cor = valor >= 66 ? "bg-emerald-500" : valor >= 33 ? "bg-amber-500" : "bg-red-400";
-  // Mostra sempre o NÚMERO com a escala ("2 de 8 semanas") — só "2 semanas" não
-  // dizia se era pouco ou muito. 0 vira "0 de 8" (ainda sem constância).
-  const rotulo = `${semanas} de ${SEMANAS_CHEIO} semanas`;
   return (
     <div
       className="flex items-center gap-2"
-      title={
-        semanas === 0
-          ? "Ainda sem semanas seguidas com avanço. Cresce conforme a escola acumula histórico."
-          : `${semanas} de ${SEMANAS_CHEIO} semanas seguidas com avanço (8 = índice cheio). Cresce com o tempo.`
-      }
+      title={`${semanas} de ${SEMANAS_CHEIO} semanas seguidas com avanço. Cresce com o tempo.`}
     >
       <div className="h-2 w-16 overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
         <div className={`h-full rounded ${cor}`} style={{ width: `${Math.min(100, valor)}%` }} />
       </div>
-      <span className="min-w-[6.5rem] whitespace-nowrap text-right tabular-nums">{rotulo}</span>
+      <span className="w-10 text-right tabular-nums">{semanas}</span>
     </div>
   );
 }
@@ -135,7 +129,7 @@ export default function Insights() {
           <Lightbulb size={15} className="text-indigo-500" />
           <h3 className="text-sm font-semibold">Índices por aluno</h3>
           <span className="ml-auto text-xs text-zinc-400">
-            engajamento e evolução = posição na escola (percentil · 50 = aluno mediano) · persistência = semanas seguidas com avanço (cresce com o tempo)
+            engajamento e evolução = posição na escola (percentil · 50 = aluno mediano) · persistência = nº de semanas seguidas com avanço (0–8; cresce com o tempo)
           </span>
         </div>
         {dadosInsights.indices.length === 0 ? (
@@ -149,7 +143,7 @@ export default function Insights() {
                   <th className="hidden px-4 py-2 font-medium md:table-cell">Turma</th>
                   <th className="px-4 py-2 font-medium">Engajamento</th>
                   <th className="px-4 py-2 font-medium">Evolução</th>
-                  <th className="px-4 py-2 font-medium">Persistência</th>
+                  <th className="px-4 py-2 font-medium">Persistência (semanal)</th>
                 </tr>
               </thead>
               <tbody>
