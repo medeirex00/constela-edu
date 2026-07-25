@@ -66,15 +66,23 @@ def test_professor_ve_apenas_alunos_das_suas_turmas(cenario_professor):
     assert [t["id"] for t in turmas] == [c["turma_a"].id]  # só a designada
 
 
-def test_professor_perfil_superficial_e_sem_alunos_de_fora(cenario_professor):
+def test_professor_ve_detalhamento_da_nota_mas_nao_leituras_nem_aluno_de_fora(
+        cenario_professor, db):
+    from app.models import Nota
     c = cenario_professor
     base = f"/api/v1/escolas/{c['escola'].id}"
-    # Aluno da turma dele: perfil SUPERFICIAL (notas/posição, sem detalhes).
-    perfil = c["professor"].get(f"{base}/alunos/{c['aluno_da_turma'].id}/perfil")
+    aluno = c["aluno_da_turma"]
+    db.add(Nota(escola_id=c["escola"].id, aluno_id=aluno.id, ano_letivo=2026,
+                nota_geral=50.0, posicao=1,
+                detalhes={"matific": {"nota": 60.0, "indicadores": []}}))
+    db.commit()
+
+    # Aluno da turma dele: agora VÊ o passo a passo do cálculo (liberado)...
+    perfil = c["professor"].get(f"{base}/alunos/{aluno.id}/perfil")
     assert perfil.status_code == 200
     corpo = perfil.json()
-    assert corpo["detalhes"] == {}                       # sem passo a passo
-    assert corpo["leitura_niveis"] is None               # sem distribuição
+    assert corpo["detalhes"].get("matific")              # passo a passo liberado
+    assert corpo["leitura_niveis"] is None               # ...mas leituras seguem restritas
     # Aluno de outra turma: como se não existisse.
     fora = c["professor"].get(f"{base}/alunos/{c['aluno_fora'].id}/perfil")
     assert fora.status_code == 404

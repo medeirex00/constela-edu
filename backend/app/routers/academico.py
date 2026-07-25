@@ -164,8 +164,9 @@ def perfil_aluno(
 ):
     """Perfil com a explicação completa da nota (PRD §45, §54).
 
-    Professor: só alunos das turmas dele, e em versão SUPERFICIAL (posição no
-    ranking geral e pontos — sem o detalhamento do cálculo nem leituras)."""
+    Professor: só alunos das turmas dele. Vê as notas, a posição e o PASSO A
+    PASSO do cálculo (liberado pelo dono); a ficha cadastral (dados pessoais) e a
+    distribuição de leituras seguem restritas à gestão."""
     ano = _ano_ativo(db, escola_id)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
@@ -211,9 +212,11 @@ def perfil_aluno(
         nota_elefante=nota.nota_elefante if nota else 0.0,
         nota_geral=nota.nota_geral if nota else 0.0,
         posicao=nota.posicao if nota else None,
-        # Professor vê o superficial: notas e posição — sem o passo a passo do
-        # cálculo nem a distribuição de leituras.
-        detalhes=(nota.detalhes if nota else {}) if not superficial else {},
+        # O professor também vê o PASSO A PASSO do cálculo (liberado pelo dono) —
+        # só das crianças das turmas dele (exigir_aluno_permitido acima barra as
+        # de fora). A ficha cadastral (dados pessoais) e as leituras seguem só p/
+        # gestão.
+        detalhes=(nota.detalhes if nota else {}),
         calculada_em=nota.calculada_em if nota else None,
         leitura_niveis=leitura_niveis if not superficial else None,
         ficha=(aluno.ficha or {}) if not superficial else {},

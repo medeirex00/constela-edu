@@ -5,10 +5,10 @@ Regras aplicadas NO SERVIDOR (o frontend só esconde o que aqui é bloqueado):
   * admin / coordenador / conta global — acesso total à escola (o que separa
     admin de coordenador são as ações administrativas já protegidas por
     `exigir_papeis("admin")`/admin global: gestão de usuários, escolas, backup).
-  * professor — enxerga APENAS as turmas designadas a ele e dados
-    SUPERFICIAIS dos seus alunos (posição no ranking geral e pontos). Nada de
-    histórico de leituras, evolução detalhada, visão da escola, cadastro de
-    professores, métricas ou configurações.
+  * professor — enxerga APENAS as turmas designadas a ele: posição no ranking,
+    pontos e o PASSO A PASSO do cálculo da nota dos seus alunos (liberado pelo
+    dono). Continua SEM histórico de leituras, evolução detalhada, ficha
+    cadastral (dados pessoais), visão da escola, métricas ou configurações.
 
 O vínculo professor ↔ turmas vem do cadastro de Professores: o registro cujo
 e-mail é o MESMO do usuário logado; as turmas designadas são as que apontam

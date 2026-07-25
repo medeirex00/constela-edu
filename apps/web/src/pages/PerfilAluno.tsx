@@ -429,11 +429,9 @@ export default function PerfilAluno() {
         </section>
       )}
 
-      {/* Transparência total do cálculo (PRD §45, §54). SÓ gestão: o professor
-          vê as notas e a posição (cartões acima), não o passo a passo — então
-          esta seção não aparece para ele (mostrar "sem nota" seria enganoso,
-          pois a nota existe). */}
-      {gestor && (
+      {/* Transparência total do cálculo (PRD §45, §54). O professor também vê o
+          passo a passo (das crianças da turma dele); o backend só envia o
+          `detalhes` de quem ele pode acessar. */}
       <section className="space-y-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Como esta nota foi calculada
@@ -458,7 +456,6 @@ export default function PerfilAluno() {
           <Vazio titulo="Ainda não há nota calculada para este aluno" descricao="Importe dados das plataformas para gerar a primeira nota." />
         )}
       </section>
-      )}
         </>
       )}
     </div>
