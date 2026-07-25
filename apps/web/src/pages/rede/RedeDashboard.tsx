@@ -15,6 +15,7 @@ import {
   GraduationCap,
   MapPin,
   Scale,
+  Settings2,
   TrendingUp,
   Trophy,
   Users,
@@ -23,7 +24,7 @@ import { useEffect, useMemo, useState } from "react";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import { useNavigate } from "react-router-dom";
 
-import { Card, Carregando, PageHeader, StatCard, Vazio } from "../../components/ui";
+import { Botao, Card, Carregando, PageHeader, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { corPorMedia } from "../../lib/cores";
@@ -169,7 +170,7 @@ function LinhaEscola({ escola, aoAbrir }: { escola: EscolaCartao; aoAbrir: (id: 
 }
 
 function PainelRede({ redeId }: { redeId: number }) {
-  const { selecionarEscola } = useApp();
+  const { usuario, selecionarEscola } = useApp();
   const navegar = useNavigate();
   const { dados, erro, carregando } = useApi<DashboardRede>(`/redes/${redeId}/dashboard`);
   const [filtro, setFiltro] = useState("");
@@ -197,6 +198,11 @@ function PainelRede({ redeId }: { redeId: number }) {
       <PageHeader
         titulo="Secretaria de Educação"
         descricao="Visão consolidada da rede: desempenho, adoção, equidade entre escolas e distribuição geográfica."
+        acoes={usuario?.is_global ? (
+          <Botao variante="neutro" onClick={() => navegar("/rede/gerenciar")}>
+            <Settings2 size={15} /> Gerenciar redes
+          </Botao>
+        ) : undefined}
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -286,6 +292,7 @@ function PainelRede({ redeId }: { redeId: number }) {
 
 export default function RedeDashboard() {
   const { usuario } = useApp();
+  const navegar = useNavigate();
   // Usuário de rede → sua rede. Admin global sem rede definida → usa a 1ª rede
   // que ele puder ver (o backend já escopa /redes).
   const redeDoUsuario = usuario?.rede_id ?? null;
@@ -296,11 +303,23 @@ export default function RedeDashboard() {
 
   if (redeId == null) {
     if (carregando) return <Carregando texto="Carregando as redes..." />;
+    // Admin global sem nenhuma rede: oferece criar a primeira (bootstrap).
     return (
-      <Vazio
-        titulo="Nenhuma rede disponível"
-        descricao="Sua conta não está vinculada a uma rede/Secretaria."
-      />
+      <div className="space-y-4">
+        <Vazio
+          titulo="Nenhuma rede disponível"
+          descricao={usuario?.is_global
+            ? "Ainda não há redes cadastradas. Crie a primeira para habilitar o painel da Secretaria."
+            : "Sua conta não está vinculada a uma rede/Secretaria."}
+        />
+        {usuario?.is_global && (
+          <div className="flex justify-center">
+            <Botao onClick={() => navegar("/rede/gerenciar")}>
+              <Settings2 size={15} /> Gerenciar redes
+            </Botao>
+          </div>
+        )}
+      </div>
     );
   }
   return <PainelRede redeId={redeId} />;

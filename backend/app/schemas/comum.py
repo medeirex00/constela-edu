@@ -308,3 +308,48 @@ class DashboardOut(BaseModel):
     tempo_leitura_min: int
     media_geral: float
     top10: list[RankingItemOut]
+
+
+# --- Rede / Secretaria (CRUD do admin global) -------------------------------
+
+class RedeOut(ORMModel):
+    id: int
+    nome: str
+    uf: str | None = None
+    codigo_ibge: str | None = None
+    status: str = "ativa"
+
+
+class RedeCreate(BaseModel):
+    nome: str = Field(min_length=2, max_length=200)
+    uf: str | None = Field(default=None, max_length=2)
+    codigo_ibge: str | None = Field(default=None, max_length=7)
+
+
+class RedeUpdate(BaseModel):
+    """Atualização parcial — só o que foi enviado muda."""
+    nome: str | None = Field(default=None, min_length=2, max_length=200)
+    uf: str | None = Field(default=None, max_length=2)
+    codigo_ibge: str | None = Field(default=None, max_length=7)
+    status: str | None = Field(default=None, pattern="^(ativa|inativa)$")
+
+
+class RedeEscolasIn(BaseModel):
+    """Define o CONJUNTO de escolas da rede: as listadas passam a pertencer a
+    ela; as que estavam na rede e não vieram na lista são desvinculadas."""
+    escola_ids: list[int] = Field(default_factory=list)
+
+
+class RedeUsuariosIn(BaseModel):
+    """Define QUAIS usuários são a Secretaria desta rede (recebem o rede_id);
+    os que estavam na rede e saíram da lista voltam a ficar sem rede."""
+    usuario_ids: list[int] = Field(default_factory=list)
+
+
+class EscolaLocalIn(BaseModel):
+    """Localização da escola (para o mapa da Secretaria) — cidade/UF e as
+    coordenadas geográficas. Atualização parcial."""
+    cidade: str | None = Field(default=None, max_length=120)
+    estado: str | None = Field(default=None, max_length=2)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)

@@ -35,6 +35,7 @@ const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
+const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -137,6 +138,9 @@ export default function App() {
 
           {/* --- Secretaria (rede) ou admin global: painel municipal + mapa --- */}
           <Route path="/rede" element={<RotaRede><RedeDashboard /></RotaRede>} />
+          {/* Provisionar redes (criar, vincular escolas + coords, designar Secretaria)
+              é ação de admin GLOBAL — uma rede cruza várias escolas. */}
+          <Route path="/rede/gerenciar" element={<RotaGlobal><RedeGestao /></RotaGlobal>} />
 
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
           <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />
