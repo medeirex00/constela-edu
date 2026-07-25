@@ -76,6 +76,23 @@ function AreaProtegida() {
   );
 }
 
+/** Trava de ROTA por cargo (defesa em profundidade além do menu e do backend):
+ *  o professor que digitar a URL — ou chegar por um link — de uma tela de GESTÃO
+ *  é mandado de volta ao Dashboard, em vez de abrir a tela com botões de admin
+ *  (ex.: importar Lista Piloto). O backend continua sendo a trava real dos dados. */
+function RotaGestao({ children }: { children: React.ReactNode }) {
+  const { usuario } = useApp();
+  const gestor = Boolean(usuario?.is_global)
+    || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  return gestor ? <>{children}</> : <Navigate to="/" replace />;
+}
+
+/** Só administrador GLOBAL (gestão de todas as escolas). */
+function RotaGlobal({ children }: { children: React.ReactNode }) {
+  const { usuario } = useApp();
+  return usuario?.is_global ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 export default function App() {
   return (
     // Um único limite de Suspense cobre o carregamento dos chunks de rota.
@@ -90,6 +107,7 @@ export default function App() {
         <Route path="/p/:token" element={<PainelPublico />} />
         <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
         <Route element={<AreaProtegida />}>
+          {/* --- Abertas ao professor (dados já filtrados pelas turmas dele) --- */}
           <Route path="/" element={<Dashboard />} />
           <Route path="/ranking" element={<Rankings />} />
           {/* Tela única de Ranking Geral com seletor; rotas antigas viram
@@ -97,34 +115,41 @@ export default function App() {
           <Route path="/evolucao" element={<Navigate to="/ranking?ver=evolucao" replace />} />
           <Route path="/ranking-leitura" element={<Navigate to="/ranking?ver=leitura" replace />} />
           <Route path="/ranking-matematica" element={<Navigate to="/ranking?ver=matematica" replace />} />
-          <Route path="/comparador" element={<Comparador />} />
           <Route path="/premiacoes" element={<Premiacoes />} />
-          <Route path="/escola" element={<VisaoEscola />} />
           <Route path="/alunos" element={<Alunos />} />
           <Route path="/alunos/:id" element={<PerfilAluno />} />
-          <Route path="/alunos/:id/evolucao" element={<EvolucaoAluno />} />
-          <Route path="/turmas" element={<Turmas />} />
-          <Route path="/turmas/:id" element={<TurmaDetalhe />} />
-          <Route path="/professores" element={<Professores />} />
-          <Route path="/metricas" element={<Metricas />} />
-          <Route path="/configuracoes" element={<Configuracoes />} />
-          <Route path="/configuracoes/conquistas" element={<ConfigConquistas />} />
-          <Route path="/matific" element={<Matific />} />
-          <Route path="/elefante" element={<Elefante />} />
-          <Route path="/livros" element={<Livros />} />
-          <Route path="/comecar" element={<Comecar />} />
-          <Route path="/importacoes" element={<Importacoes />} />
-          <Route path="/sincronizacao" element={<Sincronizacao />} />
-          <Route path="/diagnostico-elefante" element={<DiagnosticoElefante />} />
-          <Route path="/conquistas" element={<Conquistas />} />
           <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
           <Route path="/insights" element={<Insights />} />
-          <Route path="/assistente" element={<Assistente />} />
-          <Route path="/painel-publico" element={<PainelPublicoConfig />} />
+          {/* Relatórios: professor exporta o ranking e a lista das turmas dele
+              (o backend filtra por turmas_permitidas). */}
           <Route path="/relatorios" element={<Relatorios />} />
-          <Route path="/simulador" element={<Simulador />} />
+          {/* Usuários: professor entra mas o backend só devolve a própria conta. */}
           <Route path="/usuarios" element={<Usuarios />} />
-          <Route path="/escolas" element={<Escolas />} />
+
+          {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
+          <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />
+          <Route path="/escola" element={<RotaGestao><VisaoEscola /></RotaGestao>} />
+          <Route path="/alunos/:id/evolucao" element={<RotaGestao><EvolucaoAluno /></RotaGestao>} />
+          <Route path="/turmas" element={<RotaGestao><Turmas /></RotaGestao>} />
+          <Route path="/turmas/:id" element={<RotaGestao><TurmaDetalhe /></RotaGestao>} />
+          <Route path="/professores" element={<RotaGestao><Professores /></RotaGestao>} />
+          <Route path="/metricas" element={<RotaGestao><Metricas /></RotaGestao>} />
+          <Route path="/configuracoes" element={<RotaGestao><Configuracoes /></RotaGestao>} />
+          <Route path="/configuracoes/conquistas" element={<RotaGestao><ConfigConquistas /></RotaGestao>} />
+          <Route path="/matific" element={<RotaGestao><Matific /></RotaGestao>} />
+          <Route path="/elefante" element={<RotaGestao><Elefante /></RotaGestao>} />
+          <Route path="/livros" element={<RotaGestao><Livros /></RotaGestao>} />
+          <Route path="/comecar" element={<RotaGestao><Comecar /></RotaGestao>} />
+          <Route path="/importacoes" element={<RotaGestao><Importacoes /></RotaGestao>} />
+          <Route path="/sincronizacao" element={<RotaGestao><Sincronizacao /></RotaGestao>} />
+          <Route path="/diagnostico-elefante" element={<RotaGestao><DiagnosticoElefante /></RotaGestao>} />
+          <Route path="/conquistas" element={<RotaGestao><Conquistas /></RotaGestao>} />
+          <Route path="/assistente" element={<RotaGestao><Assistente /></RotaGestao>} />
+          <Route path="/painel-publico" element={<RotaGestao><PainelPublicoConfig /></RotaGestao>} />
+          <Route path="/simulador" element={<RotaGestao><Simulador /></RotaGestao>} />
+
+          {/* --- Só administrador GLOBAL --- */}
+          <Route path="/escolas" element={<RotaGlobal><Escolas /></RotaGlobal>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

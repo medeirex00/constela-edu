@@ -180,6 +180,57 @@ describe("Usuarios", () => {
     );
   });
 
+  // --- Corrigir professores duplicados ---------------------------------------
+
+  it("marca as fusões, desmarca uma de revisão e corrige com os loser_ids escolhidos", async () => {
+    responder("GET", URL_LISTA, [MARIA]);
+    responder("GET", "/escolas/1/professores/duplicados", {
+      total: 2,
+      revisar: 1,
+      candidatos: [
+        { loser_id: 10, apagar: "PAULA", manter: "Paula Benedita Vilela Nogueira",
+          confianca: "alta", usuario_novo: "PaulaNogueira", senha_nova: "paulanogueira123", turmas_movidas: ["1º Ano A"] },
+        { loser_id: 20, apagar: "Ana Paula", manter: "Ana Paula Souza",
+          confianca: "revisar", usuario_novo: "AnaSouza", senha_nova: "anasouza123", turmas_movidas: [] },
+      ],
+    });
+    responder("POST", "/escolas/1/professores/duplicados/corrigir", {
+      corrigidos: 1,
+      folha: [{ nome: "Paula Benedita Vilela Nogueira", usuario: "PaulaNogueira", senha: "paulanogueira123" }],
+    });
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+    await u.click(await screen.findByRole("button", { name: /professores duplicados/i }));
+
+    // Prévia: as duas fusões aparecem (@ único por candidato); a de "revisar" avisa.
+    expect(await screen.findByText("@PaulaNogueira")).toBeInTheDocument();
+    expect(screen.getByText("@AnaSouza")).toBeInTheDocument();
+    expect(screen.getByText(/pode ser outra pessoa/)).toBeInTheDocument();
+
+    // Desmarca a "Ana Paula" (loser 20) — só a PAULA vai no POST.
+    await u.click(screen.getByRole("checkbox", { name: /Ana Paula/ }));
+    await u.click(screen.getByRole("button", { name: /unir 1 selecionada/i }));
+
+    expect(await screen.findByText(/1 professor\(es\) unificado/i)).toBeInTheDocument();
+    expect(screen.getByText("paulanogueira123")).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith(
+      "/escolas/1/professores/duplicados/corrigir",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ loser_ids: [10] }) }),
+    );
+  });
+
+  it("informa quando não há professores duplicados", async () => {
+    responder("GET", URL_LISTA, [MARIA]);
+    responder("GET", "/escolas/1/professores/duplicados", { candidatos: [], total: 0, revisar: 0 });
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+    await u.click(await screen.findByRole("button", { name: /professores duplicados/i }));
+
+    expect(await screen.findByText("Nenhuma duplicata")).toBeInTheDocument();
+  });
+
   it("vincula uma turma nova (PUT com o id marcado)", async () => {
     mocarModalTurmas({
       ativas: [turmaFake({ id: 30, nome: "2º Ano D", ano_escolar: "2º Ano", professor_id: null, professor_nome: null })],

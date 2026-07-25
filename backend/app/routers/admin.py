@@ -138,6 +138,11 @@ class TurmasDoProfessor(BaseModel):
     turma_ids: list[int] = Field(default_factory=list)
 
 
+class CorrigirDuplicados(BaseModel):
+    """Ids dos professores (os que SAEM) das fusões que o gestor confirmou."""
+    loser_ids: list[int] = Field(default_factory=list)
+
+
 def _username_em_uso(db: Session, username: str, exceto_id: int | None = None) -> bool:
     # Comparação CASE-INSENSÍVEL: o @ das professoras é guardado em CamelCase
     # (ex.: "PaulaNogueira") e o login casa por minúsculas — sem isto, um admin
@@ -484,31 +489,33 @@ def professores_duplicados(
     usuario: Usuario = Depends(exigir_papeis("admin")),
     db: Session = Depends(get_db),
 ):
-    """PRÉVIA (não altera nada) das professoras duplicadas: qual nome fica, o novo
-    @/senha, as turmas que serão movidas e as contas que serão apagadas."""
-    grupos = prof_svc.plano_deduplicacao(db, escola_id)
-    return {"grupos": grupos, "total_grupos": len(grupos),
-            "total_apagar": sum(len(g["apagar"]) for g in grupos)}
+    """PRÉVIA (não altera nada): UMA linha por candidato a fusão — qual nome sai,
+    em qual fica, a confiança (alta/revisar), o novo @/senha e as turmas movidas.
+    O gestor marca quais confirmar antes de aplicar."""
+    candidatos = prof_svc.plano_deduplicacao(db, escola_id)
+    return {"candidatos": candidatos, "total": len(candidatos),
+            "revisar": sum(1 for c in candidatos if c["confianca"] == "revisar")}
 
 
 @router.post("/professores/duplicados/corrigir", response_model=dict)
 def corrigir_professores_duplicados(
+    dados: CorrigirDuplicados,
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin")),
     db: Session = Depends(get_db),
 ):
-    """Aplica a correção: mantém o nome COMPLETO, move as turmas das grafias
-    curtas para ele, apaga as contas duplicadas e padroniza @/senha na convenção.
+    """Aplica SÓ as fusões confirmadas (``loser_ids``): mantém o nome completo,
+    move as turmas, apaga as contas duplicadas e padroniza @/senha na convenção.
     Devolve a FOLHA DE CREDENCIAIS (nome · @ · senha) para o gestor entregar —
     a senha só trafega nesta resposta, nunca vai para o log."""
-    folha = prof_svc.aplicar_deduplicacao(db, escola_id)
+    folha = prof_svc.aplicar_deduplicacao(db, escola_id, dados.loser_ids)
     registrar(db, "professor.duplicados_corrigidos", escola_id=escola_id,
               usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
-              detalhes={"grupos": len(folha)})  # só a contagem — nunca a senha
+              detalhes={"fusoes": len(folha)})  # só a contagem — nunca a senha
     db.commit()
     return {"folha": folha, "corrigidos": len(folha),
             "mensagem": (f"{len(folha)} professor(es) unificado(s)." if folha
-                         else "Nenhuma duplicata encontrada.")}
+                         else "Nenhuma fusão aplicada.")}
 
 
 @router.delete("/usuarios/{usuario_id}", response_model=dict)

@@ -46,23 +46,27 @@ function BarraIndice({ valor }: { valor: number }) {
 /** Persistência = semanas SEGUIDAS com avanço (12,5 por semana; 8 = índice cheio).
  * Mostra o Nº DE SEMANAS em vez do número cru (12,5), para não parecer "nota
  * baixa" — o índice cresce naturalmente conforme a escola acumula histórico. */
+const SEMANAS_CHEIO = 8; // 8 semanas seguidas com avanço = índice cheio
+
 function BarraPersistencia({ valor }: { valor: number }) {
   const semanas = Math.round(valor / 12.5);
   const cor = valor >= 66 ? "bg-emerald-500" : valor >= 33 ? "bg-amber-500" : "bg-red-400";
-  const rotulo = semanas === 0 ? "—" : `${semanas} ${semanas === 1 ? "semana" : "semanas"}`;
+  // Mostra sempre o NÚMERO com a escala ("2 de 8 semanas") — só "2 semanas" não
+  // dizia se era pouco ou muito. 0 vira "0 de 8" (ainda sem constância).
+  const rotulo = `${semanas} de ${SEMANAS_CHEIO} semanas`;
   return (
     <div
       className="flex items-center gap-2"
       title={
         semanas === 0
           ? "Ainda sem semanas seguidas com avanço. Cresce conforme a escola acumula histórico."
-          : `${semanas} semana(s) seguida(s) com avanço (8 semanas = índice cheio). Cresce com o tempo.`
+          : `${semanas} de ${SEMANAS_CHEIO} semanas seguidas com avanço (8 = índice cheio). Cresce com o tempo.`
       }
     >
       <div className="h-2 w-16 overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800">
         <div className={`h-full rounded ${cor}`} style={{ width: `${Math.min(100, valor)}%` }} />
       </div>
-      <span className="min-w-[4.5rem] whitespace-nowrap text-right tabular-nums">{rotulo}</span>
+      <span className="min-w-[6.5rem] whitespace-nowrap text-right tabular-nums">{rotulo}</span>
     </div>
   );
 }

@@ -298,3 +298,51 @@ def test_cargo_visitante_nao_pode_ser_criado(db, cenario_professor):
         "nome": "Visita", "email": "visita@teste.local",
         "senha": "SenhaForte123", "cargo": "visitante"})
     assert r.status_code in (400, 422)
+
+def test_professor_ranking_renumerado_1n(cenario_professor, escola_completa, db):
+    """Ranking Geral na perspectiva do professor: só os alunos das turmas dele,
+    renumerados 1..N (não a posição global 100/105/110 da escola inteira)."""
+    from app.models import Nota
+    c = cenario_professor
+    escola = escola_completa["escola"]
+    alunos = escola_completa["alunos"]          # 3 alunos da turma A (do professor)
+    fora = c["aluno_fora"]                        # turma B (fora do alcance)
+    posicoes = {alunos[0].id: 100, alunos[1].id: 105, alunos[2].id: 110, fora.id: 103}
+    valores = {alunos[0].id: 50.0, alunos[1].id: 40.0, alunos[2].id: 30.0, fora.id: 45.0}
+    for aid, pos in posicoes.items():
+        db.add(Nota(escola_id=escola.id, aluno_id=aid, ano_letivo=2026,
+                    nota_geral=valores[aid], posicao=pos))
+    db.commit()
+
+    r = c["professor"].get(f"/api/v1/escolas/{escola.id}/ranking")
+    assert r.status_code == 200, r.text
+    corpo = r.json()
+    assert [x["posicao"] for x in corpo] == [1, 2, 3]        # renumerado, não global
+    assert fora.id not in [x["aluno_id"] for x in corpo]     # só a turma dele
+
+    # O admin continua vendo a posição GERAL (100, 103, 105, 110).
+    admin = _cliente_como(db, "admin@teste.local", "s3nh4")
+    posic_admin = [x["posicao"] for x in admin.get(f"/api/v1/escolas/{escola.id}/ranking").json()]
+    assert 100 in posic_admin and 110 in posic_admin
+
+
+def test_professor_placar_matific_filtra_seus_alunos(cenario_professor, escola_completa, db, monkeypatch):
+    """O professor CONSULTA o Placar do Matific ao vivo (antes dava 403), mas o
+    servidor filtra para só os alunos das turmas dele."""
+    from app.sync import aovivo
+    c = cenario_professor
+    escola = escola_completa["escola"]
+    alunos = escola_completa["alunos"]
+    fora = c["aluno_fora"]
+
+    def _fake(db_, escola_id, **_kw):
+        return {"rotulo": "Semana", "itens": [
+            {"nome": "Meu Aluno", "aluno_id": alunos[0].id, "atividades": 5, "estrelas": 10, "turma": "3º Ano A"},
+            {"nome": "De Outra Turma", "aluno_id": fora.id, "atividades": 9, "estrelas": 20, "turma": "5º Ano B"},
+            {"nome": "Sem Vínculo", "aluno_id": None, "atividades": 3, "estrelas": 6, "turma": None},
+        ]}
+
+    monkeypatch.setattr(aovivo, "placar_matific", _fake)
+    r = c["professor"].get(f"/api/v1/escolas/{escola.id}/sync/matific/placar-ao-vivo?periodo=semana")
+    assert r.status_code == 200, r.text
+    assert [i["aluno_id"] for i in r.json()["itens"]] == [alunos[0].id]  # só o dele

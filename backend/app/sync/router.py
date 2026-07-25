@@ -27,6 +27,7 @@ from app.models.sincronizacao import (
     SincronizacaoExecucao,
     SincronizacaoLog,
 )
+from app.services import permissoes
 from app.services.audit import registrar
 from app.sync import aovivo, connectors, diagnostico_elefante, scheduler, service, vault
 from app.sync.interfaces import Contexto, Credenciais, ErroConector, ResultadoValidacao
@@ -323,7 +324,7 @@ _STATUS_ERRO = {
 @router.get("/matific/placar-ao-vivo")
 def matific_placar_ao_vivo(
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
     periodo: str | None = Query(default=None),
     inicio: str | None = Query(default=None),
@@ -336,14 +337,26 @@ def matific_placar_ao_vivo(
     autenticar). ``periodo`` ∈ hoje|ontem|semana|semana_anterior|mes|mes_anterior
     |bimestre|bimestre_anterior|personalizado; ``inicio``/``fim`` (AAAA-MM-DD) no
     personalizado. Resultado tem cache curto; ``forcar=true`` (botão Atualizar)
-    ignora o cache."""
+    ignora o cache.
+
+    O PROFESSOR também consulta (usa a credencial da escola guardada — nunca a
+    vê), mas o servidor filtra o resultado para SÓ os alunos das turmas dele."""
     try:
-        return aovivo.placar_matific(db, escola_id, periodo=periodo,
-                                     inicio=inicio, fim=fim, forcar=forcar)
+        resultado = aovivo.placar_matific(db, escola_id, periodo=periodo,
+                                          inicio=inicio, fim=fim, forcar=forcar)
     except ErroConector as exc:
         raise HTTPException(
             _STATUS_ERRO.get(exc.codigo, status.HTTP_502_BAD_GATEWAY),
             str(exc)) from exc
+
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    if permitidas is not None:  # professor: recorta para os alunos das turmas dele
+        escola = db.get(Escola, escola_id)
+        ids = permissoes.alunos_permitidos(
+            db, escola_id, escola.ano_letivo_ativo if escola else 0, permitidas)
+        itens = [i for i in resultado.get("itens", []) if i.get("aluno_id") in ids]
+        resultado = {**resultado, "itens": itens}
+    return resultado
 
 
 @router.post("/elefante/diagnostico")

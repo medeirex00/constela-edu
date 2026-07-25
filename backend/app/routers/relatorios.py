@@ -93,6 +93,18 @@ def exportar_relatorio(
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 "Relatório indisponível para o seu perfil.")
         linhas = [l for l in linhas if str(l[idx_turma]) in nomes_turmas]
+        if tipo == "ranking":
+            # Posição RELATIVA à turma do professor (1..N), como na tela — a
+            # posição global (109, 111…) da escola inteira não cabe aqui.
+            try:
+                idx_pos = next(i for i, c in enumerate(cabecalho)
+                               if c.strip().lower().startswith("posi"))
+                linhas = [
+                    [pos if j == idx_pos else v for j, v in enumerate(linha)]
+                    for pos, linha in enumerate(linhas, start=1)
+                ]
+            except StopIteration:
+                pass
     cor = svc.cor_primaria(db, escola_id)
 
     if formato == "csv":

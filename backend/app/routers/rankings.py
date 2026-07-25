@@ -70,12 +70,17 @@ def ranking_geral(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Ranking Geral com filtros por turma e série (PRD §63). Professor vê a
-    posição GERAL dos alunos dele — mas apenas os alunos das turmas dele."""
+    """Ranking Geral com filtros por turma e série (PRD §63). O PROFESSOR vê o
+    ranking na perspectiva DELE: só os alunos das turmas dele, renumerados 1..N
+    (a posição global 109/111/… não fazia sentido para uma turma só)."""
     escola = db.get(Escola, escola_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
-    return _ranking(db, escola_id, escola.ano_letivo_ativo, turma_id, ano_escolar,
-                    turma_ids=permitidas)
+    itens = _ranking(db, escola_id, escola.ano_letivo_ativo, turma_id, ano_escolar,
+                     turma_ids=permitidas)
+    if permitidas is not None:  # professor: posição RELATIVA aos alunos dele
+        for posicao, item in enumerate(itens, start=1):
+            item.posicao = posicao
+    return itens
 
 
 @router.get("/ranking/leitura", response_model=list[dict])
@@ -378,6 +383,13 @@ def montar_dashboard(db: Session, escola_id: int,
         consulta_media = consulta_media.where(Nota.aluno_id.in_(alunos_sub))
     media_geral = db.execute(consulta_media).scalar_one()
 
+    top10 = _ranking(db, escola_id, ano, limite=10, turma_ids=turma_ids)
+    # Professor: posição RELATIVA às turmas dele (1..N), igual ao Ranking Geral —
+    # o Top 10 e a tela de ranking não podem mostrar posições diferentes.
+    if turma_ids is not None:
+        for posicao, item in enumerate(top10, start=1):
+            item.posicao = posicao
+
     return DashboardOut(
         escola=EscolaOut.model_validate(escola),
         total_alunos=total_alunos,
@@ -387,7 +399,7 @@ def montar_dashboard(db: Session, escola_id: int,
         total_livros=int(total_livros),
         tempo_leitura_min=int(tempo_total),
         media_geral=round(float(media_geral), 2),
-        top10=_ranking(db, escola_id, ano, limite=10, turma_ids=turma_ids),
+        top10=top10,
     )
 
 

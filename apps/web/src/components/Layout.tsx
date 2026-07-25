@@ -122,6 +122,8 @@ const GRUPOS: GrupoNav[] = [
   },
   {
     chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [
+      // O professor TAMBÉM exporta — mas só o ranking e a lista de alunos das
+      // turmas dele (o backend filtra por turmas_permitidas).
       { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
       { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay, gestao: true },
     ],

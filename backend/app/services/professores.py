@@ -250,46 +250,48 @@ def garantir_professores_da_turma(db: Session, escola_id: int, turma,
 
 # --- Deduplicação de professores (limpeza do que já duplicou) ------------------
 
-def _clusters_duplicados(db: Session, escola_id: int) -> list[tuple[Professor, list[Professor]]]:
-    """Agrupa os professores duplicados da escola: cada tupla é (survivor, losers)
-    onde o survivor é o nome MAIS COMPLETO e os losers são as grafias mais curtas
-    da MESMA pessoa. Só funde o inequívoco: um nome curto que é subconjunto de
-    DOIS nomes completos diferentes (homônimos) NÃO é fundido."""
+def _candidatos(db: Session, escola_id: int) -> list[tuple[Professor, Professor, str]]:
+    """Pares (loser, survivor, confiança) da MESMA pessoa: um nome que é
+    subconjunto ESTRITO de EXATAMENTE UM nome mais completo do mesmo primeiro
+    nome. ``confiança``:
+      * "alta"    — o loser é o primeiro nome SOZINHO ('PAULA' → 'PAULA BENEDITA
+                    VILELA NOGUEIRA'): é sempre a mesma pessoa (fonte real da
+                    duplicata do Matific);
+      * "revisar" — o loser já tem sobrenome ('Ana Lucia' → 'Ana Lucia Ferreira
+                    de Camargo' É a pessoa, mas 'Ana Paula' → 'Ana Paula Souza'
+                    PODE ser outra). Não dá para decidir por algoritmo — quem
+                    confirma é o gestor, no botão "Corrigir professores
+                    duplicados" (cada fusão tem sua caixa de seleção).
+
+    Subconjunto de DOIS nomes diferentes (homônimas) → ambíguo, nunca entra."""
     profs = list(db.execute(
         select(Professor).where(Professor.escola_id == escola_id)).scalars())
     grupos: dict[str, list[Professor]] = defaultdict(list)
     for p in profs:
         grupos[_primeiro_token(p.nome)].append(p)
 
-    clusters: list[tuple[Professor, list[Professor]]] = []
+    pares: list[tuple[Professor, Professor, str]] = []
     for primeiro, grupo in grupos.items():
         if not primeiro or len(grupo) < 2:
             continue
-        # 'Completos' já têm sobrenome (≥2 tokens): cada um é uma IDENTIDADE — só
-        # se fundem se forem IDÊNTICOS. 'Curtos' são o primeiro nome sozinho (a
-        # forma que o Matific manda) — a única fonte real de duplicata.
-        completos = [p for p in grupo if len(_tokens(p.nome)) >= 2]
-        curtos = [p for p in grupo if len(_tokens(p.nome)) == 1]
-        # Colapsa completos de tokens IDÊNTICOS (mesma pessoa): sobra 1 (menor id).
-        canon: list[Professor] = []
-        losers: dict[int, list[Professor]] = {}
-        for m in sorted(completos, key=lambda p: p.id):
-            gemeo = next((c for c in canon if _tokens(c.nome) == _tokens(m.nome)), None)
-            if gemeo is None:
-                canon.append(m)
-                losers[m.id] = []
-            else:
-                losers[gemeo.id].append(m)
-        # Cada nome curto funde no ÚNICO completo do grupo. Se há DOIS completos
-        # com sobrenomes diferentes (homônimas: Maria Silva × Maria Souza), o
-        # curto 'Maria' é ambíguo → NÃO funde (nunca junta pessoas diferentes).
-        for curto in curtos:
-            if len(canon) == 1:
-                losers[canon[0].id].append(curto)
-        for survivor in canon:
-            if losers[survivor.id]:
-                clusters.append((survivor, losers[survivor.id]))
-    return clusters
+        # Titular de cada NOME (conjunto de tokens) = o de MENOR id. Gêmeos
+        # exatos (mesmo nome, id maior) fundem nele.
+        titular_por_tokens: dict[frozenset, Professor] = {}
+        for p in sorted(grupo, key=lambda x: x.id):
+            titular_por_tokens.setdefault(_tokens(p.nome), p)
+        for p in grupo:
+            tk = _tokens(p.nome)
+            titular = titular_por_tokens[tk]
+            if p.id != titular.id:
+                pares.append((p, titular, "revisar"))  # gêmeo exato do mesmo nome
+                continue
+            # Nomes DISTINTOS (por tokens) que contêm ESTRITAMENTE este. Se houver
+            # exatamente UM, é o completo da mesma pessoa (subconjunto do único).
+            maiores = {_tokens(q.nome) for q in grupo if _tokens(q.nome) > tk}
+            if len(maiores) == 1:
+                survivor = titular_por_tokens[next(iter(maiores))]
+                pares.append((p, survivor, "alta" if len(tk) == 1 else "revisar"))
+    return pares
 
 
 def _apagar_conta(db: Session, usuario: Usuario) -> None:
@@ -308,43 +310,54 @@ def _apagar_conta(db: Session, usuario: Usuario) -> None:
 
 
 def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
-    """PRÉVIA (read-only) do que a correção fará: para cada pessoa duplicada, qual
-    nome fica, o novo @ e senha, as turmas que serão movidas e quais contas serão
-    apagadas. Nada é alterado aqui — é o que o gestor vê ANTES de confirmar."""
+    """PRÉVIA (read-only) — UMA linha por candidato a fusão: qual nome sai, em
+    qual fica, a confiança (alta/revisar), o novo @/senha do que fica e as turmas
+    que serão movidas. Nada é alterado; o gestor marca quais confirmar."""
     preview: list[dict] = []
-    for survivor, losers in _clusters_duplicados(db, escola_id):
+    for loser, survivor, confianca in _candidatos(db, escola_id):
         cred = credenciais_professor(survivor.nome)
         su = _usuario_do_professor(db, escola_id, survivor)
-        # Conta JÁ USADA não tem o @/senha trocados (preserva o que a professora
-        # já definiu) — a prévia reflete isso: mostra o @ atual e senha mantida.
+        # Conta JÁ USADA não troca @/senha (preserva o que a professora definiu).
         ativa = su is not None and su.ultimo_acesso is not None
-        loser_ids = [l.id for l in losers]
         turmas = list(db.execute(
             select(Turma.nome).where(Turma.escola_id == escola_id,
-                                     Turma.professor_id.in_(loser_ids))
+                                     Turma.professor_id == loser.id)
         ).scalars().all())
         preview.append({
+            "loser_id": loser.id,
+            "apagar": loser.nome,
             "manter": survivor.nome,
+            "confianca": confianca,   # "alta" | "revisar"
             "usuario_novo": (su.username if ativa and su else
                              (cred[0] if cred else None)),
             "senha_nova": None if ativa else (cred[1] if cred else None),
             "turmas_movidas": turmas,
-            "apagar": [{"nome": l.nome} for l in losers],
         })
     return preview
 
 
-def aplicar_deduplicacao(db: Session, escola_id: int) -> list[dict]:
-    """APLICA a correção: move as turmas dos losers para o survivor, apaga as
-    contas duplicadas e regenera o @ (CamelCase) + senha (usuário+123) do
-    survivor na convenção. Devolve a folha de credenciais (nome, @, senha) para o
-    gestor entregar. NÃO commita — quem chama decide (endpoint faz o commit)."""
+def aplicar_deduplicacao(db: Session, escola_id: int,
+                         loser_ids: list[int]) -> list[dict]:
+    """APLICA só as fusões CONFIRMADAS (``loser_ids``): move as turmas de cada
+    duplicado para o que fica, apaga as contas duplicadas e padroniza o @/senha do
+    que fica (guardando quem já usava a conta). Devolve a folha de credenciais.
+    NÃO commita — quem chama decide (o endpoint faz o commit)."""
+    escolhidos = set(loser_ids or [])
+    # Agrupa os losers escolhidos por survivor (um survivor pode absorver vários).
+    por_survivor: dict[int, list[Professor]] = defaultdict(list)
+    for loser, survivor, _c in _candidatos(db, escola_id):
+        if loser.id in escolhidos:
+            por_survivor[survivor.id].append(loser)
+
     folha: list[dict] = []
-    for survivor, losers in _clusters_duplicados(db, escola_id):
-        loser_ids = [l.id for l in losers]
-        # 1) as turmas dos duplicados passam para o survivor (antes de apagar).
+    for survivor_id, losers in por_survivor.items():
+        survivor = db.get(Professor, survivor_id)
+        if survivor is None:
+            continue
+        ids = [l.id for l in losers]
+        # 1) as turmas dos duplicados passam para o que fica (antes de apagar).
         db.execute(update(Turma).where(Turma.escola_id == escola_id,
-                                       Turma.professor_id.in_(loser_ids))
+                                       Turma.professor_id.in_(ids))
                    .values(professor_id=survivor.id))
         # 2) apaga as contas duplicadas (Usuario + Professor).
         for loser in losers:
@@ -352,15 +365,12 @@ def aplicar_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             if u is not None:
                 _apagar_conta(db, u)
             db.delete(loser)
-        # 3) padroniza @ e senha do survivor — SÓ se a conta nunca foi usada.
-        #    Se a professora já entrou (ultimo_acesso), a senha dela é preservada
-        #    (não sobrescreve com o padrão nem derruba a sessão): mostra o @ atual
-        #    na folha com "senha mantida".
+        # 3) padroniza @ e senha do survivor — SÓ se a conta nunca foi usada
+        #    (se já entrou, preserva a senha e a sessão; folha = "senha mantida").
         cred = credenciais_professor(survivor.nome)
         su = _usuario_do_professor(db, escola_id, survivor)
-        entrada = {"nome": survivor.nome, "usuario": None, "senha": None}
         if su is not None and su.ultimo_acesso is not None:
-            entrada = {"nome": survivor.nome, "usuario": su.username, "senha": None}
+            folha.append({"nome": survivor.nome, "usuario": su.username, "senha": None})
         elif cred and su is not None:
             base, senha = cred
             username, email = _identidade_livre(db, base, escola_id, excluir_id=su.id)
@@ -368,6 +378,7 @@ def aplicar_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             su.senha_hash = hash_senha(senha)
             su.token_version = (su.token_version or 0) + 1  # invalida sessões antigas
             survivor.email = email
-            entrada = {"nome": survivor.nome, "usuario": username, "senha": senha}
-        folha.append(entrada)
+            folha.append({"nome": survivor.nome, "usuario": username, "senha": senha})
+        else:
+            folha.append({"nome": survivor.nome, "usuario": None, "senha": None})
     return folha

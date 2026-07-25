@@ -103,6 +103,11 @@ type PlacarAoVivo = { periodo: string; atualizado_em: string; total: number; ite
 function CartaoMatificAoVivo({ escolaId, periodo, turmaNome }: {
   escolaId: number; periodo: Periodo; turmaNome?: string;
 }) {
+  // Professor não acessa Sincronização — para ele o erro não oferece o link,
+  // aponta para o coordenador. (O placar já vem filtrado nos alunos dele.)
+  const { usuario } = useApp();
+  const gestor = Boolean(usuario?.is_global)
+    || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const isAno = periodo.preset === "ano_letivo";
   // Personalizado só busca com as duas datas — não dispara login pela metade.
   const periodoCompleto = periodo.preset !== "personalizado" || Boolean(periodo.inicio && periodo.fim);
@@ -160,8 +165,15 @@ function CartaoMatificAoVivo({ escolaId, periodo, turmaNome }: {
         <div className="py-6"><Carregando texto="Consultando o Matific…" /></div>
       ) : erro ? (
         <p className="py-6 text-center text-sm text-zinc-400">
-          Não foi possível consultar o Matific agora. Verifique as credenciais em{" "}
-          <Link to="/sincronizacao" className="font-medium underline">Sincronização</Link> e tente de novo.
+          Não foi possível consultar o Matific agora.{" "}
+          {gestor ? (
+            <>
+              Verifique as credenciais em{" "}
+              <Link to="/sincronizacao" className="font-medium underline">Sincronização</Link> e tente de novo.
+            </>
+          ) : (
+            "Peça ao coordenador para verificar a conexão com o Matific."
+          )}
         </p>
       ) : !campeao ? (
         <p className="py-6 text-center text-sm text-zinc-400">Sem atividades do Matific neste período.</p>
