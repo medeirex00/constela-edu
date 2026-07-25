@@ -20,6 +20,7 @@ from app.schemas import (
     RedeUpdate,
     RedeUsuariosIn,
 )
+from app.services import geocodificacao as svc_geo
 from app.services import rede as svc_rede
 from app.services.audit import registrar
 
@@ -215,6 +216,59 @@ def definir_usuarios(
               entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos)})
     db.commit()
     return {"rede_id": rede_id, "usuario_ids": sorted(ids_validos)}
+
+
+@router.post("/{rede_id}/geocodificar")
+def geocodificar(
+    rede_id: int,
+    forcar: bool = Query(default=False),
+    limite: int = Query(default=6, ge=1, le=10),
+    depois_de: int = Query(default=0, ge=0),
+    usuario: Usuario = Depends(exigir_admin_global),
+    geocoder: svc_geo.Geocoder = Depends(svc_geo.get_geocoder),
+    intervalo: float = Depends(svc_geo.get_intervalo_geocode),
+    db: Session = Depends(get_db),
+):
+    """Preenche lat/long das escolas da rede via OSM (as SEM coordenada, ou todas
+    com ``?forcar``). Processa em lotes de ``limite`` para a requisição não ficar
+    longa (o OSM pede ~1s por escola).
+
+    Paginação por CURSOR de id (``depois_de``): cada lote avança pelas escolas
+    com ``id`` maior que o cursor — INDEPENDENTE de a geocodificação ter dado
+    certo. Isso é essencial porque uma escola que o OSM não localiza continua sem
+    coordenada; sem o cursor ela voltaria à mesma janela e o lote nunca avançaria
+    (martelando o OSM e nunca alcançando as escolas seguintes). O front chama em
+    sequência passando ``depois_de=ultimo_id`` até ``restantes``=0. Só admin
+    global; o ajuste manual (PATCH /redes/escolas/{id}) corrige o não localizado."""
+    rede = db.get(Rede, rede_id)
+    if rede is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+
+    def pendentes_apos(cursor: int):
+        q = select(Escola).where(Escola.rede_id == rede_id, Escola.id > cursor)
+        return q if forcar else q.where(Escola.latitude.is_(None))
+
+    lote = db.execute(
+        pendentes_apos(depois_de).order_by(Escola.id).limit(limite)
+    ).scalars().all()
+    resultado = svc_geo.geocodificar_lote(lote, geocoder, intervalo)
+    ultimo_id = lote[-1].id if lote else depois_de
+    # Quantas ainda faltam ALÉM deste lote — contadas por id (falha ou sucesso já
+    # ficaram para trás do cursor), então este número decresce a cada lote.
+    restantes = db.execute(
+        select(func.count()).select_from(pendentes_apos(ultimo_id).subquery())
+    ).scalar() or 0
+    registrar(db, "rede.geocodificada", usuario_id=usuario.id, entidade="rede",
+              entidade_id=rede_id,
+              detalhes={"processadas": len(lote), "ultimo_id": ultimo_id, **resultado})
+    db.commit()
+    return {
+        "processadas": len(lote),
+        "encontradas": resultado["encontradas"],
+        "falhas": resultado["falhas"],
+        "restantes": restantes,
+        "ultimo_id": ultimo_id,
+    }
 
 
 @router.get("/{rede_id}/dashboard")

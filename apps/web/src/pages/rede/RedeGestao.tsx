@@ -7,7 +7,7 @@
  * Sem isto, a rede só existia por seed. A segurança real é no backend
  * (todas as rotas exigem admin global); esta tela é só a interface.
  */
-import { Landmark, MapPin, Plus, Save, Users } from "lucide-react";
+import { Landmark, LocateFixed, MapPin, Plus, Save, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -76,7 +76,7 @@ export default function RedeGestao() {
   // Seleções editáveis da rede escolhida
   const [escolasSel, setEscolasSel] = useState<Set<number>>(new Set());
   const [usuariosSel, setUsuariosSel] = useState<Set<number>>(new Set());
-  const [coords, setCoords] = useState<Record<number, { lat: string; lng: string }>>({});
+  const [coords, setCoords] = useState<Record<number, { cidade: string; uf: string; lat: string; lng: string }>>({});
 
   // Ao carregar (ou trocar de rede), assume a primeira e sincroniza as seleções.
   useEffect(() => {
@@ -93,6 +93,8 @@ export default function RedeGestao() {
       dados.escolas
         .filter((e) => e.rede_id === redeSel)
         .map((e) => [e.id, {
+          cidade: e.cidade ?? "",
+          uf: e.estado ?? "",
           lat: e.latitude != null ? String(e.latitude) : "",
           lng: e.longitude != null ? String(e.longitude) : "",
         }]),
@@ -174,23 +176,30 @@ export default function RedeGestao() {
     }
   }
 
-  async function salvarCoordenadas() {
+  async function salvarLocalizacoes() {
     if (!dados || redeSel === null) return;
     setOcupado(true);
     let ok = 0;
     let falhas = 0;
-    // Só as escolas VINCULADAS à rede que tiveram lat E long preenchidos.
     const naRede = dados.escolas.filter((e) => e.rede_id === redeSel);
     for (const escola of naRede) {
       const c = coords[escola.id];
-      if (!c || c.lat.trim() === "" || c.lng.trim() === "") continue;
-      const lat = Number(c.lat.replace(",", "."));
-      const lng = Number(c.lng.replace(",", "."));
-      if (Number.isNaN(lat) || Number.isNaN(lng)) { falhas += 1; continue; }
+      if (!c) continue;
+      const corpo: Record<string, unknown> = {};
+      if (c.cidade.trim()) corpo.cidade = c.cidade.trim();
+      if (c.uf.trim()) corpo.estado = c.uf.trim().toUpperCase();
+      if (c.lat.trim() !== "" && c.lng.trim() !== "") {
+        const lat = Number(c.lat.replace(",", "."));
+        const lng = Number(c.lng.replace(",", "."));
+        if (Number.isNaN(lat) || Number.isNaN(lng)) { falhas += 1; continue; }
+        corpo.latitude = lat;
+        corpo.longitude = lng;
+      }
+      if (Object.keys(corpo).length === 0) continue;
       try {
         await api(`/redes/escolas/${escola.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ latitude: lat, longitude: lng }),
+          body: JSON.stringify(corpo),
         });
         ok += 1;
       } catch {
@@ -199,10 +208,45 @@ export default function RedeGestao() {
     }
     setAviso({
       tipo: falhas ? "erro" : "ok",
-      texto: `${ok} escola(s) posicionada(s) no mapa` + (falhas ? `; ${falhas} com erro.` : "."),
+      texto: `${ok} escola(s) salva(s)` + (falhas ? `; ${falhas} com erro.` : "."),
     });
     recarregar();
     setOcupado(false);
+  }
+
+  async function geocodificar() {
+    if (redeSel === null) return;
+    setOcupado(true);
+    let encontradas = 0;
+    let processadas = 0;
+    let depoisDe = 0; // cursor de id: avança lote a lote, sem reprocessar falhas
+    try {
+      // O backend processa em LOTES (rate-limit do OSM ~1s/escola); chamamos em
+      // sequência avançando o cursor `depois_de` até esgotar. `passo` é só um
+      // limite de segurança (o cursor garante que cada escola é vista uma vez).
+      for (let passo = 0; passo < 500; passo++) {
+        const r = await api<{ processadas: number; encontradas: number; falhas: number; restantes: number; ultimo_id: number }>(
+          `/redes/${redeSel}/geocodificar?depois_de=${depoisDe}`, { method: "POST" });
+        encontradas += r.encontradas;
+        processadas += r.processadas;
+        depoisDe = r.ultimo_id;
+        setAviso({ tipo: "ok", texto: `Geocodificando... ${encontradas} escola(s) localizada(s)` });
+        if (r.restantes <= 0 || r.processadas === 0) break;
+      }
+      setAviso({
+        tipo: encontradas ? "ok" : "erro",
+        texto: processadas === 0
+          ? "Todas as escolas já têm coordenada."
+          : `Geocodificação concluída: ${encontradas} de ${processadas} localizada(s)`
+            + (encontradas < processadas ? " — as demais podem ser ajustadas à mão." : "."),
+      });
+      recarregar();
+      recarregarEscolas?.();
+    } catch (e) {
+      setAviso({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível geocodificar." });
+    } finally {
+      setOcupado(false);
+    }
   }
 
   const escolas = dados?.escolas ?? [];
@@ -322,17 +366,24 @@ export default function RedeGestao() {
 
               {/* --- Localização no mapa --- */}
               <Card className="p-4 lg:col-span-2">
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h2 className="flex items-center gap-2 text-sm font-semibold">
                     <MapPin size={16} className="text-indigo-600" /> Localização no mapa
                   </h2>
-                  <Botao onClick={salvarCoordenadas} disabled={ocupado || escolasNaRede.length === 0}>
-                    <Save size={14} /> Salvar localizações
-                  </Botao>
+                  <div className="flex flex-wrap gap-2">
+                    <Botao variante="neutro" onClick={geocodificar} disabled={ocupado || escolasNaRede.length === 0}>
+                      <LocateFixed size={14} /> Geocodificar automaticamente
+                    </Botao>
+                    <Botao onClick={salvarLocalizacoes} disabled={ocupado || escolasNaRede.length === 0}>
+                      <Save size={14} /> Salvar localizações
+                    </Botao>
+                  </div>
                 </div>
                 <p className="mb-2 text-xs text-zinc-500">
-                  Coordenadas (latitude, longitude) de cada escola vinculada — é o que posiciona
-                  os marcadores no mapa da Secretaria. Salve os vínculos antes de posicionar.
+                  Preencha ao menos a <b>cidade</b> e clique em <b>Geocodificar</b> — o sistema
+                  busca as coordenadas no OpenStreetMap e posiciona os marcadores do mapa. Você
+                  também pode informar latitude/longitude à mão (corrige o que não for localizado).
+                  Salve os vínculos das escolas antes de posicionar.
                 </p>
                 {escolasNaRede.length === 0 ? (
                   <p className="py-4 text-center text-sm text-zinc-500">
@@ -341,19 +392,32 @@ export default function RedeGestao() {
                 ) : (
                   <div className="space-y-1.5">
                     {escolasNaRede.map((e) => {
-                      const c = coords[e.id] ?? { lat: "", lng: "" };
+                      const c = coords[e.id] ?? { cidade: "", uf: "", lat: "", lng: "" };
                       return (
                         <div key={e.id} className="flex flex-wrap items-center gap-2">
-                          <span className="w-48 truncate text-sm font-medium">{e.nome}</span>
+                          <span className="w-40 truncate text-sm font-medium">{e.nome}</span>
                           <input
-                            className={`${estiloInput} w-32`}
+                            className={`${estiloInput} w-40`}
+                            placeholder="cidade"
+                            value={c.cidade}
+                            onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, cidade: ev.target.value } }))}
+                          />
+                          <input
+                            className={`${estiloInput} w-14`}
+                            placeholder="UF"
+                            maxLength={2}
+                            value={c.uf}
+                            onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, uf: ev.target.value.toUpperCase() } }))}
+                          />
+                          <input
+                            className={`${estiloInput} w-28`}
                             placeholder="latitude"
                             inputMode="decimal"
                             value={c.lat}
                             onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, lat: ev.target.value } }))}
                           />
                           <input
-                            className={`${estiloInput} w-32`}
+                            className={`${estiloInput} w-28`}
                             placeholder="longitude"
                             inputMode="decimal"
                             value={c.lng}
