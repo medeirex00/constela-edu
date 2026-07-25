@@ -54,6 +54,7 @@ from app.models import (
 )
 from app.schemas import UsuarioOut
 from app.services import backup as svc_backup
+from app.services import professores as prof_svc
 from app.services import scoring
 from app.services.audit import registrar
 
@@ -138,10 +139,14 @@ class TurmasDoProfessor(BaseModel):
 
 
 def _username_em_uso(db: Session, username: str, exceto_id: int | None = None) -> bool:
-    consulta = select(Usuario).where(Usuario.username == username)
+    # Comparação CASE-INSENSÍVEL: o @ das professoras é guardado em CamelCase
+    # (ex.: "PaulaNogueira") e o login casa por minúsculas — sem isto, um admin
+    # poderia criar "paulanogueira" ao lado de "PaulaNogueira" e o login veria
+    # DUAS contas (MultipleResultsFound → 500). `username` já vem normalizado.
+    consulta = select(Usuario).where(func.lower(Usuario.username) == username.lower())
     if exceto_id is not None:
         consulta = consulta.where(Usuario.id != exceto_id)
-    return db.execute(consulta).scalar_one_or_none() is not None
+    return db.execute(consulta).first() is not None
 
 
 def _usuario_alvo(db: Session, escola_id: int, usuario_id: int,
@@ -469,6 +474,41 @@ def definir_turmas_do_professor(
             "mensagem": (f"{len(validas)} turma(s) designada(s) a {alvo.nome}."
                          if validas else
                          f"{alvo.nome} ficou sem turmas designadas.")}
+
+
+# --- Professores duplicados (limpeza) -----------------------------------------
+
+@router.get("/professores/duplicados", response_model=dict)
+def professores_duplicados(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """PRÉVIA (não altera nada) das professoras duplicadas: qual nome fica, o novo
+    @/senha, as turmas que serão movidas e as contas que serão apagadas."""
+    grupos = prof_svc.plano_deduplicacao(db, escola_id)
+    return {"grupos": grupos, "total_grupos": len(grupos),
+            "total_apagar": sum(len(g["apagar"]) for g in grupos)}
+
+
+@router.post("/professores/duplicados/corrigir", response_model=dict)
+def corrigir_professores_duplicados(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Aplica a correção: mantém o nome COMPLETO, move as turmas das grafias
+    curtas para ele, apaga as contas duplicadas e padroniza @/senha na convenção.
+    Devolve a FOLHA DE CREDENCIAIS (nome · @ · senha) para o gestor entregar —
+    a senha só trafega nesta resposta, nunca vai para o log."""
+    folha = prof_svc.aplicar_deduplicacao(db, escola_id)
+    registrar(db, "professor.duplicados_corrigidos", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
+              detalhes={"grupos": len(folha)})  # só a contagem — nunca a senha
+    db.commit()
+    return {"folha": folha, "corrigidos": len(folha),
+            "mensagem": (f"{len(folha)} professor(es) unificado(s)." if folha
+                         else "Nenhuma duplicata encontrada.")}
 
 
 @router.delete("/usuarios/{usuario_id}", response_model=dict)

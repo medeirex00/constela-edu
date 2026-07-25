@@ -9,6 +9,7 @@
  * interface apenas exibe as mensagens e evita oferecer o que será negado.
  */
 import {
+  Copy,
   Eye,
   GraduationCap,
   KeyRound,
@@ -19,6 +20,7 @@ import {
   TriangleAlert,
   UserCheck,
   UserPlus,
+  UsersRound,
   UserX,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -381,6 +383,152 @@ function ModalTurmasProfessor({ alvo, escolaId, aoFechar, aoSalvar }: {
 }
 
 
+// --- Corrigir professores duplicados -----------------------------------------
+
+interface GrupoDuplicado {
+  manter: string;
+  usuario_novo: string | null;
+  senha_nova: string | null;
+  turmas_movidas: string[];
+  apagar: { nome: string }[];
+}
+interface PreviaDuplicados {
+  grupos: GrupoDuplicado[];
+  total_grupos: number;
+  total_apagar: number;
+}
+interface CredencialProf {
+  nome: string;
+  usuario: string | null;
+  senha: string | null;
+}
+
+/** Mostra as professoras duplicadas (nome curto do Matific + nome completo da
+ *  Lista Piloto = 2 contas da MESMA pessoa), deixa CONFERIR antes e, ao aplicar,
+ *  devolve a folha de credenciais (@/senha) para o gestor entregar. */
+function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
+  escolaId: number;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  const [previa, setPrevia] = useState<PreviaDuplicados | null>(null);
+  const [folha, setFolha] = useState<CredencialProf[] | null>(null);
+  const [erro, setErro] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+
+  useEffect(() => {
+    let vivo = true;
+    api<PreviaDuplicados>(`/escolas/${escolaId}/professores/duplicados`)
+      .then((r) => { if (vivo) setPrevia(r); })
+      .catch((e) => { if (vivo) setErro(e instanceof ApiError ? e.message : "Não foi possível carregar."); });
+    return () => { vivo = false; };
+  }, [escolaId]);
+
+  async function corrigir() {
+    setOcupado(true);
+    setErro("");
+    try {
+      const r = await api<{ folha: CredencialProf[] }>(
+        `/escolas/${escolaId}/professores/duplicados/corrigir`, { method: "POST" });
+      setFolha(r.folha);
+      aoConcluir();   // recarrega a lista de usuários por trás
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Não foi possível corrigir.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  const textoFolha = (folha ?? [])
+    .map((c) => `${c.nome}\t@${c.usuario ?? "—"}\tsenha: ${c.senha ?? "—"}`)
+    .join("\n");
+
+  return (
+    <Modal titulo="Corrigir professores duplicados" aberto aoFechar={aoFechar}>
+      {folha !== null ? (
+        // --- Resultado: folha de credenciais para entregar ---
+        <>
+          <Mensagem tipo="ok">
+            {folha.length} professor(es) unificado(s). Entregue as credenciais abaixo — no
+            primeiro acesso, cada uma pode trocar a senha.
+          </Mensagem>
+          <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800">
+                  <th className="px-3 py-2 font-medium">Professora</th>
+                  <th className="px-3 py-2 font-medium">Usuário</th>
+                  <th className="px-3 py-2 font-medium">Senha</th>
+                </tr>
+              </thead>
+              <tbody>
+                {folha.map((c) => (
+                  <tr key={c.nome} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                    <td className="px-3 py-2">{c.nome}</td>
+                    <td className="px-3 py-2 font-mono text-xs">@{c.usuario ?? "—"}</td>
+                    <td className="px-3 py-2 select-all font-mono text-xs">
+                      {c.senha ?? <span className="text-zinc-400">senha mantida</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <Botao variante="neutro" onClick={() => copiarTexto(textoFolha, () => setCopiado(true))}>
+              <Copy size={15} /> {copiado ? "Copiado!" : "Copiar lista"}
+            </Botao>
+            <Botao onClick={aoFechar}>Fechar</Botao>
+          </div>
+        </>
+      ) : previa === null && !erro ? (
+        <div className="mt-2"><Carregando /></div>
+      ) : previa && previa.total_grupos === 0 ? (
+        <Vazio titulo="Nenhuma duplicata" descricao="As contas de professor já estão únicas." />
+      ) : (
+        // --- Prévia: confira ANTES de aplicar ---
+        <>
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+            Encontrei <strong>{previa?.total_grupos}</strong> professora(s) com conta duplicada.
+            Vou <strong>manter o nome completo</strong>, mover as turmas para ele e <strong>apagar
+            {" "}{previa?.total_apagar} conta(s)</strong> sobrando. Confira antes:
+          </p>
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+            {previa?.grupos.map((g) => (
+              <div key={g.manter} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="text-sm">
+                  <span className="font-medium">{g.manter}</span>{" "}
+                  <span className="font-mono text-xs text-indigo-600 dark:text-indigo-400">@{g.usuario_novo}</span>
+                  {g.senha_nova === null && (
+                    <span className="ml-1 text-xs text-zinc-400">(já ativa — senha mantida)</span>
+                  )}
+                </div>
+                {g.turmas_movidas.length > 0 && (
+                  <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    Turmas movidas: {g.turmas_movidas.join(", ")}
+                  </div>
+                )}
+                <div className="mt-0.5 text-xs text-red-600 dark:text-red-400">
+                  Apagar: {g.apagar.map((a) => a.nome).join(", ")}
+                </div>
+              </div>
+            ))}
+          </div>
+          {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+          <div className="mt-4 flex justify-end gap-2">
+            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao className="!bg-red-600 hover:!bg-red-500" disabled={ocupado} onClick={corrigir}>
+              <UsersRound size={15} /> {ocupado ? "Corrigindo..." : "Corrigir agora"}
+            </Botao>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+
 // --- Página -------------------------------------------------------------------
 
 export default function Usuarios() {
@@ -394,6 +542,7 @@ export default function Usuarios() {
   // ação em andamento: qual modal está aberto e para quem
   const [acao, setAcao] = useState<{ tipo: Acao; alvo: Usuario } | null>(null);
   const [novo, setNovo] = useState(false);
+  const [verDuplicados, setVerDuplicados] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const [erroAcao, setErroAcao] = useState("");
 
@@ -482,12 +631,26 @@ export default function Usuarios() {
         descricao="Contas de acesso desta escola. Toda alteração fica no log de auditoria."
         acoes={
           souAdmin ? (
-            <Botao onClick={abrirNovo}>
-              <UserPlus size={15} /> Novo usuário
-            </Botao>
+            <div className="flex flex-wrap gap-2">
+              <Botao variante="neutro" onClick={() => setVerDuplicados(true)}>
+                <UsersRound size={15} /> Professores duplicados
+              </Botao>
+              <Botao onClick={abrirNovo}>
+                <UserPlus size={15} /> Novo usuário
+              </Botao>
+            </div>
           ) : undefined
         }
       />
+
+      {/* --- Corrigir professores duplicados --- */}
+      {verDuplicados && escolaId && (
+        <ModalProfessoresDuplicados
+          escolaId={escolaId}
+          aoFechar={() => setVerDuplicados(false)}
+          aoConcluir={carregar}
+        />
+      )}
 
       {mensagem && (
         <div className="mb-4">

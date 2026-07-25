@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -44,9 +44,14 @@ def login(
         select(Usuario).where(Usuario.email == entrada)
     ).scalar_one_or_none()
     if usuario is None:
+        # Case-insensitive: o @ é guardado em CamelCase (ex.: "PaulaNogueira"),
+        # mas a pessoa digita de qualquer jeito — `entrada` já vem em minúsculas.
+        # `.first()` com ordem determinística NUNCA estoura 500 se, por dado
+        # legado, houver duas variações de caixa do mesmo @ (a criação já barra).
         usuario = db.execute(
-            select(Usuario).where(Usuario.username == entrada)
-        ).scalar_one_or_none()
+            select(Usuario).where(func.lower(Usuario.username) == entrada)
+            .order_by(Usuario.id)
+        ).scalars().first()
 
     # O limitador conta pela CONTA (e-mail canônico): tentar pelo e-mail e
     # pelo @username soma no MESMO contador — dois identificadores não podem
