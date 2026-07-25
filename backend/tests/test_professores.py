@@ -1,6 +1,7 @@
-"""Criação AUTOMÁTICA de contas de professor (login = NomeSobrenome, senha =
-Primeiro nome + 123). Idempotente entre fontes (Lista Piloto e Elefante) e em
-reimportações; senha só como HASH; username único na rede."""
+"""Criação AUTOMÁTICA de contas de professor (login = NomeSobrenome em CamelCase,
+senha = o mesmo usuário em minúsculo + 123, ex.: paulavilela123). Idempotente
+entre fontes (Lista Piloto e Elefante) e em reimportações; senha só como HASH;
+username único na rede."""
 from sqlalchemy import func, select
 
 from app.core.security import verificar_senha
@@ -11,13 +12,13 @@ from app.services import professores as svc
 # --- Convenção pedida pelo gestor -------------------------------------------
 
 def test_credenciais_seguem_a_convencao():
-    assert svc.credenciais_professor("Paula Vilela") == ("PaulaVilela", "Paula123")
+    assert svc.credenciais_professor("Paula Vilela") == ("PaulaVilela", "paulavilela123")
     # Vários nomes → Primeiro + ÚLTIMO.
-    assert svc.credenciais_professor("Regiane Gomes Sousa") == ("RegianeSousa", "Regiane123")
+    assert svc.credenciais_professor("Regiane Gomes Sousa") == ("RegianeSousa", "regianesousa123")
     # Um nome só.
-    assert svc.credenciais_professor("Zuleide") == ("Zuleide", "Zuleide123")
-    # Acentos e caixa são normalizados (usuário sem acento, senha capitalizada).
-    assert svc.credenciais_professor("josé ANTÔNIO") == ("JoseAntonio", "Jose123")
+    assert svc.credenciais_professor("Zuleide") == ("Zuleide", "zuleide123")
+    # Acentos e caixa são normalizados (usuário sem acento; senha = o mesmo em minúsculo).
+    assert svc.credenciais_professor("josé ANTÔNIO") == ("JoseAntonio", "joseantonio123")
     # Lixo → None (não cria conta).
     assert svc.credenciais_professor("   ") is None
     assert svc.credenciais_professor("") is None
@@ -40,14 +41,14 @@ def test_cria_professor_e_conta_de_login(db, escola_completa):
     db.commit()
     assert novo is True and prof is not None
 
-    user = db.execute(select(Usuario).where(Usuario.username == "paulavilela")).scalars().one()
+    user = db.execute(select(Usuario).where(Usuario.username == "PaulaVilela")).scalars().one()
     assert user.cargo == "professor" and user.status == "ativo"
     assert user.escola_id == escola.id
     # RBAC: o e-mail do Usuario casa com o do Professor (permissoes.turmas_permitidas).
     assert user.email == prof.email
     # Senha guardada só como HASH — nunca em texto puro.
-    assert user.senha_hash != "Paula123"
-    assert verificar_senha("Paula123", user.senha_hash)
+    assert user.senha_hash != "paulavilela123"
+    assert verificar_senha("paulavilela123", user.senha_hash)
 
 
 def test_idempotente_nao_duplica(db, escola_completa):
@@ -58,15 +59,16 @@ def test_idempotente_nao_duplica(db, escola_completa):
     db.commit()
     assert novo2 is False
     n_users = db.execute(select(func.count()).select_from(Usuario)
-                         .where(Usuario.username == "paulavilela")).scalar()
+                         .where(Usuario.username == "PaulaVilela")).scalar()
     n_profs = db.execute(select(func.count()).select_from(Professor)
                          .where(Professor.escola_id == escola.id)).scalar()
     assert n_users == 1 and n_profs == 1
 
 
 def test_username_colidido_ganha_sufixo(db, escola_completa):
-    """Dois 'João Silva' (mesmo nome de usuário) → o 2º vira joaosilva2 (username
-    é único na REDE). São pessoas diferentes (nomes idênticos, escolas/ordens)."""
+    """Dois 'João Silva' (mesmo nome de usuário) → o 2º vira JoaoSilva2 (username
+    é único na REDE, colisão insensível à caixa). São pessoas diferentes (nomes
+    idênticos, escolas/ordens)."""
     escola = escola_completa["escola"]
     # Ocupa 'joaosilva' com um usuário pré-existente qualquer.
     db.add(Usuario(escola_id=escola.id, nome="Outro", email="x@y.z",
@@ -75,7 +77,7 @@ def test_username_colidido_ganha_sufixo(db, escola_completa):
     prof, novo = svc.garantir_professor(db, escola.id, "João Silva")
     db.commit()
     user = db.execute(select(Usuario).where(Usuario.email == prof.email)).scalars().one()
-    assert novo is True and user.username == "joaosilva2"
+    assert novo is True and user.username == "JoaoSilva2"
 
 
 def test_turma_cria_todos_e_vincula_titular(db, escola_completa):
@@ -118,7 +120,7 @@ def test_resolver_turmas_cria_professores_da_lista_piloto(db, escola_completa):
     assert resolvidas[0].professor_id is not None
     titular = db.get(Professor, resolvidas[0].professor_id)
     assert titular.nome == "Regiane Gomes Sousa"
-    assert db.execute(select(Usuario).where(Usuario.username == "regianesousa")
+    assert db.execute(select(Usuario).where(Usuario.username == "RegianeSousa")
                       ).scalars().first() is not None
 
 
@@ -165,7 +167,7 @@ def test_email_ocupado_recebe_sufixo(db, escola_completa):
     db.commit()
     assert novo is True
     user = db.execute(select(Usuario).where(Usuario.email == prof.email)).scalars().one()
-    assert user.username == "paulavilela2"
+    assert user.username == "PaulaVilela2"
     assert prof.email == "paulavilela2@professor.constelaedu.com"
 
 
