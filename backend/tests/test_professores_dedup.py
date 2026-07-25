@@ -227,6 +227,39 @@ def test_username_em_uso_case_insensitive(db, escola_completa):
     assert _username_em_uso(db, "outronome") is False
 
 
+def test_padronizar_usernames_recaixa_usados_e_regenera_novos(db, escola_completa):
+    """Padroniza o @ de TODAS as professoras: conta nunca usada ganha @ CamelCase
+    + senha nova; conta já usada só re-caixa o @ (senha/sessão intactas)."""
+    from datetime import datetime, timezone
+    escola = escola_completa["escola"]
+    nova = Professor(escola_id=escola.id, nome="Gabriela Camargo",
+                     email="gabrielacamargo@professor.constelaedu.com")
+    usada = Professor(escola_id=escola.id, nome="Zuleide",
+                      email="zuleide@professor.constelaedu.com")
+    db.add_all([nova, usada])
+    db.flush()
+    db.add(Usuario(escola_id=escola.id, nome="Gabriela Camargo", email=nova.email,
+                   username="gabrielacamargo", senha_hash=hash_senha("x"), cargo="professor"))
+    db.add(Usuario(escola_id=escola.id, nome="Zuleide", email=usada.email,
+                   username="zuleide", senha_hash=hash_senha("SenhaDela#1"),
+                   cargo="professor", ultimo_acesso=datetime.now(timezone.utc)))
+    db.commit()
+
+    folha = P.padronizar_usernames(db, escola.id)
+    db.commit()
+
+    # Nunca usada: @ CamelCase + senha nova na folha.
+    assert {"nome": "Gabriela Camargo", "usuario": "GabrielaCamargo",
+            "senha": "gabrielacamargo123"} in folha
+    assert db.execute(select(Usuario).where(
+        Usuario.username == "GabrielaCamargo")).scalar_one_or_none() is not None
+    # Já usada: só re-caixa (senha mantida) e a senha dela continua entrando.
+    u2 = db.execute(select(Usuario).where(Usuario.username == "Zuleide")).scalar_one()
+    assert u2.username == "Zuleide"
+    assert {"nome": "Zuleide", "usuario": "Zuleide", "senha": None} in folha
+    assert _login("zuleide", "SenhaDela#1") == 200
+
+
 def test_login_aceita_qualquer_caixa(db, escola_completa):
     escola = escola_completa["escola"]
     db.add(Usuario(escola_id=escola.id, nome="Teste Prof", email="t@professor.constelaedu.com",

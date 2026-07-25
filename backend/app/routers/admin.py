@@ -518,6 +518,26 @@ def corrigir_professores_duplicados(
                          else "Nenhuma fusão aplicada.")}
 
 
+@router.post("/professores/padronizar-usuarios", response_model=dict)
+def padronizar_usuarios_professores(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Coloca o @ de TODAS as professoras na convenção (PrimeiroÚltimo, maiúsculas)
+    — as contas antigas ficaram minúsculas. Conta já usada só re-caixa o @ (login
+    é case-insensível, senha mantida); conta nunca usada regenera @ + senha.
+    Devolve a folha de credenciais (senha só trafega aqui, nunca no log)."""
+    folha = prof_svc.padronizar_usernames(db, escola_id)
+    registrar(db, "professor.usuarios_padronizados", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
+              detalhes={"contas": len(folha)})  # só a contagem — nunca a senha
+    db.commit()
+    return {"folha": folha, "ajustados": len(folha),
+            "mensagem": (f"{len(folha)} conta(s) padronizada(s)." if folha
+                         else "Todos os @ já estão na convenção.")}
+
+
 @router.delete("/usuarios/{usuario_id}", response_model=dict)
 def excluir_usuario(
     usuario_id: int,

@@ -111,13 +111,13 @@ def exportar_relatorio(
         conteudo = svc.gerar_csv(cabecalho, linhas)
     elif formato == "xlsx":
         conteudo = svc.gerar_xlsx(titulo, escola.nome, cor, cabecalho, linhas)
-    elif tipo == "ranking" and permitidas is None:
-        # PDF do Ranking Geral = o CARTAZ (pôster) de vitrine, com todos os
-        # alunos. Só para gestão; professor restrito segue com o PDF simples
-        # das suas turmas (cai no else).
+    elif tipo == "ranking":
+        # PDF do Ranking Geral = o CARTAZ (pôster). Gestão: escola inteira.
+        # Professor: as linhas já vêm filtradas + renumeradas (1..N) nas turmas
+        # dele, e as estatísticas do cartaz também recortadas para elas.
         conteudo = svc.gerar_cartaz_ranking(
             escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
-            svc.estatisticas_cartaz(db, escola_id),
+            svc.estatisticas_cartaz(db, escola_id, turma_ids=permitidas),
             logos=svc.logos_da_escola(db, escola_id))
     elif tipo == "alunos":
         conteudo = svc.gerar_lista_alunos_pdf(

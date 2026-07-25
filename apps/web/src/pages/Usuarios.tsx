@@ -9,6 +9,7 @@
  * interface apenas exibe as mensagens e evita oferecer o que será negado.
  */
 import {
+  AtSign,
   Copy,
   Eye,
   GraduationCap,
@@ -575,6 +576,105 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
 }
 
 
+// --- Padronizar o @ de todas as professoras ----------------------------------
+
+/** Coloca o @ de TODA conta de professor no padrão CamelCase (PrimeiroÚltimo).
+ *  As contas antigas nasceram minúsculas (@paulanogueira); esta ação arruma
+ *  todas. Quem já entrou mantém a senha (só o @ muda de caixa). */
+function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
+  escolaId: number;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  const [folha, setFolha] = useState<CredencialProf[] | null>(null);
+  const [erro, setErro] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+
+  async function padronizar() {
+    setOcupado(true);
+    setErro("");
+    try {
+      const r = await api<{ folha: CredencialProf[] }>(
+        `/escolas/${escolaId}/professores/padronizar-usuarios`, { method: "POST" });
+      setFolha(r.folha);
+      aoConcluir();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Não foi possível padronizar.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  const textoFolha = (folha ?? [])
+    .map((c) => `${c.nome}\t@${c.usuario ?? "—"}\tsenha: ${c.senha ?? "mantida"}`)
+    .join("\n");
+
+  return (
+    <Modal titulo="Padronizar @ das professoras" aberto aoFechar={aoFechar}>
+      {folha !== null ? (
+        <>
+          <Mensagem tipo="ok">
+            {folha.length === 0
+              ? "Todos os @ já estavam no padrão."
+              : `${folha.length} conta(s) ajustada(s). As com senha nova estão abaixo — entregue às professoras.`}
+          </Mensagem>
+          {folha.length > 0 && (
+            <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800">
+                    <th className="px-3 py-2 font-medium">Professora</th>
+                    <th className="px-3 py-2 font-medium">Usuário</th>
+                    <th className="px-3 py-2 font-medium">Senha</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {folha.map((c) => (
+                    <tr key={c.nome} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                      <td className="px-3 py-2">{c.nome}</td>
+                      <td className="px-3 py-2 font-mono text-xs">@{c.usuario ?? "—"}</td>
+                      <td className="px-3 py-2 select-all font-mono text-xs">
+                        {c.senha ?? <span className="text-zinc-400">senha mantida</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            {folha.length > 0 && (
+              <Botao variante="neutro" onClick={() => copiarTexto(textoFolha, () => setCopiado(true))}>
+                <Copy size={15} /> {copiado ? "Copiado!" : "Copiar lista"}
+              </Botao>
+            )}
+            <Botao onClick={aoFechar}>Fechar</Botao>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+            Coloca o <strong>@</strong> de todas as professoras no padrão{" "}
+            <strong>PrimeiroÚltimo</strong> com maiúsculas (ex.: <code>@PaulaNogueira</code>).
+            Quem <strong>já entrou</strong> mantém a senha (muda só a caixa do @, o login aceita
+            qualquer caixa); quem <strong>nunca entrou</strong> recebe @ e senha novos, que
+            aparecem numa lista para você entregar.
+          </p>
+          {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+          <div className="mt-4 flex justify-end gap-2">
+            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao disabled={ocupado} onClick={padronizar}>
+              <AtSign size={15} /> {ocupado ? "Padronizando..." : "Padronizar agora"}
+            </Botao>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+
 // --- Página -------------------------------------------------------------------
 
 export default function Usuarios() {
@@ -589,6 +689,7 @@ export default function Usuarios() {
   const [acao, setAcao] = useState<{ tipo: Acao; alvo: Usuario } | null>(null);
   const [novo, setNovo] = useState(false);
   const [verDuplicados, setVerDuplicados] = useState(false);
+  const [verPadronizar, setVerPadronizar] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const [erroAcao, setErroAcao] = useState("");
 
@@ -678,6 +779,9 @@ export default function Usuarios() {
         acoes={
           souAdmin ? (
             <div className="flex flex-wrap gap-2">
+              <Botao variante="neutro" onClick={() => setVerPadronizar(true)}>
+                <AtSign size={15} /> Padronizar @
+              </Botao>
               <Botao variante="neutro" onClick={() => setVerDuplicados(true)}>
                 <UsersRound size={15} /> Professores duplicados
               </Botao>
@@ -694,6 +798,15 @@ export default function Usuarios() {
         <ModalProfessoresDuplicados
           escolaId={escolaId}
           aoFechar={() => setVerDuplicados(false)}
+          aoConcluir={carregar}
+        />
+      )}
+
+      {/* --- Padronizar o @ de todas as professoras --- */}
+      {verPadronizar && escolaId && (
+        <ModalPadronizarUsuarios
+          escolaId={escolaId}
+          aoFechar={() => setVerPadronizar(false)}
           aoConcluir={carregar}
         />
       )}

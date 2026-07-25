@@ -521,7 +521,8 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
 # alunos, paginada automaticamente pelo Chromium) e um rodapé comemorativo.
 # ---------------------------------------------------------------------------
 
-def estatisticas_cartaz(db: Session, escola_id: int) -> dict:
+def estatisticas_cartaz(db: Session, escola_id: int,
+                        turma_ids: list[int] | None = None) -> dict:
     """Totais para os cartões do pôster: atividades (Matific) e livros
     (Elefante).
 
@@ -534,12 +535,15 @@ def estatisticas_cartaz(db: Session, escola_id: int) -> dict:
     causa das estatísticas."""
     try:
         escola = db.get(Escola, escola_id)
-        cohort = set(db.execute(
+        consulta_cohort = (
             select(Aluno.id)
             .join(Matricula, (Matricula.aluno_id == Aluno.id)
                   & (Matricula.ano_letivo == escola.ano_letivo_ativo))
             .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
-        ).scalars().all())
+        )
+        if turma_ids is not None:  # professor: só as turmas dele
+            consulta_cohort = consulta_cohort.where(Matricula.turma_id.in_(turma_ids))
+        cohort = set(db.execute(consulta_cohort).scalars().all())
         m_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
         e_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
         atividades = sum(s.atividades for aid, s in m_atuais.items() if aid in cohort)

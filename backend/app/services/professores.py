@@ -382,3 +382,43 @@ def aplicar_deduplicacao(db: Session, escola_id: int,
         else:
             folha.append({"nome": survivor.nome, "usuario": None, "senha": None})
     return folha
+
+
+def padronizar_usernames(db: Session, escola_id: int) -> list[dict]:
+    """Coloca o @ de TODA conta de professor na convenção CamelCase (Primeiro+
+    Último sobrenome). Contas antigas nasceram minúsculas (@paulanogueira) e o
+    dedup só regenera as que funde — esta função arruma as demais.
+
+    Conta JÁ USADA (``ultimo_acesso``): só RE-CAIXA o @ (o login é case-insensível,
+    então não quebra) e MANTÉM a senha/sessão. Conta nunca usada: regenera @ +
+    senha na convenção. Devolve a folha (nome · @ · senha; senha=None = mantida).
+    NÃO commita."""
+    folha: list[dict] = []
+    professores = list(db.execute(
+        select(Professor).where(Professor.escola_id == escola_id)).scalars())
+    for prof in professores:
+        u = _usuario_do_professor(db, escola_id, prof)
+        if u is None or u.cargo != "professor":
+            continue
+        cred = credenciais_professor(prof.nome)
+        if cred is None:
+            continue
+        base, senha = cred                       # base = @ CamelCase da convenção
+        atual = u.username or ""
+        if atual == base:
+            continue                             # já está na convenção
+        if u.ultimo_acesso is not None:
+            # Conta usada: só re-caixa se for a MESMA identidade (mesmo minúsculo);
+            # trocar por um @ diferente quebraria o login dela — aí não mexe.
+            if atual.lower() == base.lower():
+                u.username = base
+                folha.append({"nome": prof.nome, "usuario": base, "senha": None})
+            continue
+        # Conta nunca usada: regenera @ + senha na convenção.
+        username, email = _identidade_livre(db, base, escola_id, excluir_id=u.id)
+        u.username, u.email = username, email
+        u.senha_hash = hash_senha(senha)
+        u.token_version = (u.token_version or 0) + 1
+        prof.email = email
+        folha.append({"nome": prof.nome, "usuario": username, "senha": senha})
+    return folha
