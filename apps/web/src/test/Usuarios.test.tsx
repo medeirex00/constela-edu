@@ -7,6 +7,7 @@ import {
   responder,
   responderErro,
   screen,
+  turmaFake,
   userEvent,
   usuarioFake,
 } from "./utils";
@@ -98,6 +99,104 @@ describe("Usuarios", () => {
     expect(api).toHaveBeenCalledWith(
       "/escolas/1/usuarios/2",
       expect.objectContaining({ method: "PATCH" }),
+    );
+  });
+
+  // --- Vincular turmas ao professor ------------------------------------------
+
+  const MARIA = usuarioFake({ id: 2, nome: "Maria Souza", email: "maria@escola.com", cargo: "professor" });
+
+  /** Mocka a lista + os dois GET de turmas (default e ?todas=true, que casam o
+   *  mesmo caminho no mock — por isso o matcher por função) + a atribuição. */
+  function mocarModalTurmas(opts: {
+    ativas: ReturnType<typeof turmaFake>[];
+    todas?: ReturnType<typeof turmaFake>[];
+    designadas: number[];
+  }) {
+    responder("GET", URL_LISTA, [MARIA]);
+    responder(
+      "GET",
+      (c: string) => c.startsWith("/escolas/1/turmas"),
+      (caminho: string) => (caminho.includes("todas=true") ? (opts.todas ?? opts.ativas) : opts.ativas),
+    );
+    responder("GET", "/escolas/1/usuarios/2/turmas", { turma_ids: opts.designadas });
+  }
+
+  async function abrirModalTurmas(u: ReturnType<typeof userEvent.setup>) {
+    comoAdmin(<Usuarios />);
+    await u.click(await screen.findByRole("button", { name: "Ações do usuário Maria Souza" }));
+    await u.click(await screen.findByRole("menuitem", { name: "Vincular turmas" }));
+  }
+
+  it("não acusa transferência ao desmarcar a turma da própria professora, mas acusa a de outro", async () => {
+    mocarModalTurmas({
+      ativas: [
+        turmaFake({ id: 10, nome: "4º Ano A", ano_escolar: "4º Ano", professor_id: 2, professor_nome: "Maria Souza" }),
+        turmaFake({ id: 20, nome: "5º Ano B", ano_escolar: "5º Ano", professor_id: 7, professor_nome: "Bia Rocha" }),
+      ],
+      designadas: [10],
+    });
+
+    const u = userEvent.setup();
+    await abrirModalTurmas(u);
+
+    // Turma de OUTRA professora acusa a transferência; a dela mesma, não.
+    expect(await screen.findByText(/hoje com Bia Rocha — marcar passa a turma para Maria Souza/)).toBeInTheDocument();
+    expect(screen.queryByText(/hoje com Maria Souza/)).not.toBeInTheDocument();
+
+    // Desmarcar a turma DELA não pode fazer surgir a dica auto-referente (o bug).
+    await u.click(screen.getByRole("checkbox", { name: /4º Ano A/ }));
+    expect(screen.queryByText(/hoje com Maria Souza/)).not.toBeInTheDocument();
+  });
+
+  it("mostra a turma arquivada/de outro ano que ela já tem, com etiqueta, e permite removê-la", async () => {
+    mocarModalTurmas({
+      ativas: [turmaFake({ id: 10, nome: "4º Ano A", ano_escolar: "4º Ano", professor_id: 2, professor_nome: "Maria Souza" })],
+      // A 99 (2025, arquivada) só existe no ?todas=true — mas a professora ainda a titulariza.
+      todas: [
+        turmaFake({ id: 10, nome: "4º Ano A", ano_escolar: "4º Ano", professor_id: 2, professor_nome: "Maria Souza" }),
+        turmaFake({ id: 99, nome: "3º Ano C", ano_escolar: "3º Ano", ano_letivo: 2025, status: "arquivada", professor_id: 2, professor_nome: "Maria Souza" }),
+      ],
+      designadas: [10, 99],
+    });
+    responder("PUT", "/escolas/1/usuarios/2/turmas", { mensagem: "1 turma(s) designada(s) a Maria Souza." });
+
+    const u = userEvent.setup();
+    await abrirModalTurmas(u);
+
+    // A turma antiga aparece (não apareceria sem o ?todas=true) com a etiqueta do ano.
+    const antiga = await screen.findByRole("checkbox", { name: /3º Ano C/ });
+    expect(antiga).toBeInTheDocument();
+    expect(screen.getByText(/2025 · arquivada/)).toBeInTheDocument();
+
+    // Removê-la e salvar → o PUT vai SEM o id 99 (antes ele ficava preso, invisível).
+    await u.click(antiga);
+    await u.click(screen.getByRole("button", { name: /salvar turmas/i }));
+
+    expect(await screen.findByText("1 turma(s) designada(s) a Maria Souza.")).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith(
+      "/escolas/1/usuarios/2/turmas",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ turma_ids: [10] }) }),
+    );
+  });
+
+  it("vincula uma turma nova (PUT com o id marcado)", async () => {
+    mocarModalTurmas({
+      ativas: [turmaFake({ id: 30, nome: "2º Ano D", ano_escolar: "2º Ano", professor_id: null, professor_nome: null })],
+      designadas: [],
+    });
+    responder("PUT", "/escolas/1/usuarios/2/turmas", { mensagem: "1 turma(s) designada(s) a Maria Souza." });
+
+    const u = userEvent.setup();
+    await abrirModalTurmas(u);
+
+    await u.click(await screen.findByRole("checkbox", { name: /2º Ano D/ }));
+    await u.click(screen.getByRole("button", { name: /salvar turmas/i }));
+
+    expect(await screen.findByText("1 turma(s) designada(s) a Maria Souza.")).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith(
+      "/escolas/1/usuarios/2/turmas",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ turma_ids: [30] }) }),
     );
   });
 });

@@ -10,6 +10,7 @@
  */
 import {
   Eye,
+  GraduationCap,
   KeyRound,
   Pencil,
   RotateCcw,
@@ -37,7 +38,7 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { ApiError, api } from "../lib/api";
-import type { Usuario } from "../lib/types";
+import type { Turma, Usuario } from "../lib/types";
 
 const CARGOS = [
   { valor: "admin", rotulo: "Administrador", descricao: "Acesso total: usuários, configurações, importações e exclusões." },
@@ -83,6 +84,7 @@ type Acao =
   | "editar"
   | "redefinir"
   | "permissoes"
+  | "turmas"
   | "situacao"
   | "excluir"
   | "permanente";
@@ -125,6 +127,13 @@ function MenuAcoes({
             {!excluido && souAdmin && (
               <>
                 <ItemMenu icone={<Pencil size={15} />} rotulo="Editar" onClick={() => escolher("editar")} />
+                {usuario.cargo === "professor" && (
+                  <ItemMenu
+                    icone={<GraduationCap size={15} />}
+                    rotulo="Vincular turmas"
+                    onClick={() => escolher("turmas")}
+                  />
+                )}
                 {!souEu && (
                   <>
                     <ItemMenu
@@ -229,6 +238,144 @@ function ModalRedefinirSenha({ alvo, base, aoFechar }: {
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+
+// --- Vincular turmas ao professor --------------------------------------------
+
+/** Marca quais turmas o professor acompanha (o vínculo do RBAC por turma). Uma
+ *  turma tem um titular por vez; marcar uma que era de outro professor a
+ *  transfere. Um professor pode ter várias turmas. */
+function ModalTurmasProfessor({ alvo, escolaId, aoFechar, aoSalvar }: {
+  alvo: Usuario;
+  escolaId: number;
+  aoFechar: () => void;
+  aoSalvar: (mensagem: string) => void;
+}) {
+  // `lista` = turmas exibidas (as designáveis do ano ativo + as que a professora
+  // já tem fora dele, para poder removê-las). `iniciais` = as que já eram dela
+  // ao abrir — é a régua da dica de transferência (nunca o estado ao vivo, senão
+  // desmarcar uma turma dela mesma acusaria "passar para ela mesma").
+  const [lista, setLista] = useState<Turma[] | null>(null);
+  const [foraDoAno, setForaDoAno] = useState<Set<number>>(new Set());
+  const [iniciais, setIniciais] = useState<Set<number>>(new Set());
+  const [selecionadas, setSelecionadas] = useState<Set<number>>(new Set());
+  const [erro, setErro] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  useEffect(() => {
+    let vivo = true;
+    Promise.all([
+      api<Turma[]>(`/escolas/${escolaId}/turmas`),               // designáveis (ano ativo, ativas)
+      api<Turma[]>(`/escolas/${escolaId}/turmas?todas=true`),    // inclui arquivadas/outros anos
+      api<{ turma_ids: number[] }>(`/escolas/${escolaId}/usuarios/${alvo.id}/turmas`),
+    ])
+      .then(([ativas, todas, atuais]) => {
+        if (!vivo) return;
+        const donas = new Set(atuais.turma_ids);
+        const idsAtivas = new Set(ativas.map((t) => t.id));
+        // Turmas que ela JÁ tem mas que não estão na lista normal (ano/arquivo):
+        // aparecem só para poder ser removidas, com etiqueta do porquê.
+        const extras = todas.filter((t) => donas.has(t.id) && !idsAtivas.has(t.id));
+        setLista([...ativas, ...extras]);
+        setForaDoAno(new Set(extras.map((t) => t.id)));
+        setIniciais(donas);
+        setSelecionadas(new Set(donas));
+      })
+      .catch((e) => {
+        if (vivo) setErro(e instanceof ApiError ? e.message : "Não foi possível carregar as turmas.");
+      });
+    return () => { vivo = false; };
+  }, [escolaId, alvo.id]);
+
+  function alternar(id: number) {
+    setSelecionadas((atual) => {
+      const nova = new Set(atual);
+      if (nova.has(id)) nova.delete(id);
+      else nova.add(id);
+      return nova;
+    });
+  }
+
+  async function salvar() {
+    setOcupado(true);
+    setErro("");
+    try {
+      const r = await api<{ mensagem?: string }>(
+        `/escolas/${escolaId}/usuarios/${alvo.id}/turmas`,
+        { method: "PUT", body: JSON.stringify({ turma_ids: [...selecionadas] }) },
+      );
+      aoSalvar(r?.mensagem ?? "Turmas atualizadas.");
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Não foi possível salvar.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Modal titulo={`Turmas de ${alvo.nome}`} aberto aoFechar={aoFechar}>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300">
+        Marque as turmas que <strong>{alvo.nome}</strong> acompanha. O professor passa a ver
+        apenas os alunos dessas turmas — e pode ter <strong>várias</strong>.
+      </p>
+      {lista === null && !erro ? (
+        <div className="mt-4"><Carregando /></div>
+      ) : lista && lista.length === 0 ? (
+        <div className="mt-4">
+          <Vazio titulo="Nenhuma turma" descricao="Cadastre turmas antes de vinculá-las a um professor." />
+        </div>
+      ) : (
+        <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
+          {(lista ?? []).map((t) => {
+            const marcada = selecionadas.has(t.id);
+            // "de outro professor" pela régua INICIAL: uma turma que já era dela
+            // nunca acusa transferência, mesmo desmarcada.
+            const deOutro = t.professor_id !== null && !iniciais.has(t.id) && t.professor_nome;
+            const antiga = foraDoAno.has(t.id);
+            return (
+              <label
+                key={t.id}
+                className={`flex cursor-pointer items-center gap-3 rounded-lg border p-2.5 transition-colors ${
+                  marcada
+                    ? "border-indigo-400 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
+                    : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                  checked={marcada}
+                  onChange={() => alternar(t.id)}
+                />
+                <span className="text-sm">
+                  <span className="font-medium">{t.nome}</span>
+                  <span className="ml-2 text-xs text-zinc-400">{t.ano_escolar}</span>
+                  {antiga && (
+                    <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                      {t.ano_letivo}{t.status !== "ativa" ? " · arquivada" : ""}
+                    </span>
+                  )}
+                  {deOutro && (
+                    <span className="mt-0.5 block text-xs text-amber-600 dark:text-amber-400">
+                      hoje com {t.professor_nome} — marcar passa a turma para {alvo.nome}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+      <div className="mt-4 flex justify-end gap-2">
+        <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+        <Botao disabled={ocupado || lista === null} onClick={salvar}>
+          <GraduationCap size={15} /> {ocupado ? "Salvando..." : "Salvar turmas"}
+        </Botao>
+      </div>
     </Modal>
   );
 }
@@ -581,6 +728,20 @@ export default function Usuarios() {
           </div>
         </div>
       </Modal>
+
+      {/* --- Vincular turmas ao professor --- */}
+      {acao?.tipo === "turmas" && alvo && escolaId && (
+        <ModalTurmasProfessor
+          alvo={alvo}
+          escolaId={escolaId}
+          aoFechar={() => setAcao(null)}
+          aoSalvar={(msg) => {
+            avisar("ok", msg);
+            setAcao(null);
+            carregar();
+          }}
+        />
+      )}
 
       {/* --- Desativar / Reativar / Restaurar --- */}
       <Modal

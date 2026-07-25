@@ -47,7 +47,9 @@ from app.models import (
     Importacao,
     LogAuditoria,
     MensagemIA,
+    Professor,
     TokenResetSenha,
+    Turma,
     Usuario,
 )
 from app.schemas import UsuarioOut
@@ -128,6 +130,11 @@ class UsuarioUpdate(BaseModel):
     @classmethod
     def _username(cls, valor: str | None) -> str | None:
         return _normalizar_username(valor)
+
+
+class TurmasDoProfessor(BaseModel):
+    """Ids das turmas designadas a um professor (vínculo do RBAC por turma)."""
+    turma_ids: list[int] = Field(default_factory=list)
 
 
 def _username_em_uso(db: Session, username: str, exceto_id: int | None = None) -> bool:
@@ -366,6 +373,102 @@ def redefinir_senha(
                     "uma única vez e expira em "
                     f"{settings.RESET_SENHA_EXPIRA_MIN} minutos.",
     }
+
+
+# --- Vínculo professor ↔ turmas (PRD §18) -------------------------------------
+
+def _professor_do_usuario(db: Session, escola_id: int, alvo: Usuario,
+                          criar: bool = False) -> Professor | None:
+    """O registro Professor cujo e-mail casa com o do usuário — é o vínculo que
+    o RBAC por turma usa (``permissoes.turmas_permitidas`` faz o mesmo join por
+    e-mail). Cria o Professor sob demanda quando a conta foi cadastrada à mão
+    (as contas criadas pela importação já vêm com o Professor emparelhado)."""
+    email = (alvo.email or "").strip().lower()
+    if not email:
+        return None
+    prof = db.execute(
+        select(Professor).where(Professor.escola_id == escola_id,
+                                func.lower(Professor.email) == email)
+    ).scalars().first()
+    if prof is None and criar:
+        prof = Professor(escola_id=escola_id, nome=alvo.nome, email=alvo.email)
+        db.add(prof)
+        db.flush()
+    return prof
+
+
+@router.get("/usuarios/{usuario_id}/turmas", response_model=dict)
+def turmas_do_professor(
+    usuario_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Ids das turmas atualmente designadas ao professor (marca as caixas)."""
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    prof = _professor_do_usuario(db, escola_id, alvo)
+    if prof is None:
+        return {"turma_ids": []}
+    ids = db.execute(
+        select(Turma.id).where(Turma.escola_id == escola_id,
+                               Turma.professor_id == prof.id)
+    ).scalars().all()
+    return {"turma_ids": list(ids)}
+
+
+@router.put("/usuarios/{usuario_id}/turmas", response_model=dict)
+def definir_turmas_do_professor(
+    usuario_id: int,
+    dados: TurmasDoProfessor,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin")),
+    db: Session = Depends(get_db),
+):
+    """Designa ao professor EXATAMENTE as turmas enviadas: as que saíram da
+    lista ficam sem titular. Uma turma tem um titular por vez, mas um professor
+    pode ter várias. Coordenador/admin já enxergam todas — não precisam disto."""
+    alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    if alvo.cargo != "professor":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Só professores precisam de turmas designadas — coordenadores e "
+            "administradores já enxergam todas as turmas da escola.")
+
+    pedidos = set(dados.turma_ids)
+    # Só turmas REAIS desta escola entram (barra id de outra escola/inexistente).
+    validas = set(db.execute(
+        select(Turma.id).where(Turma.escola_id == escola_id,
+                               Turma.id.in_(pedidos))
+    ).scalars().all()) if pedidos else set()
+    if pedidos - validas:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Uma ou mais turmas não pertencem a esta escola.")
+
+    # Cria o Professor só se houver turma a designar; para esvaziar, basta o
+    # que já existe (se não existe, não há nada a soltar).
+    prof = _professor_do_usuario(db, escola_id, alvo, criar=bool(validas))
+    atuais = set(db.execute(
+        select(Turma.id).where(Turma.escola_id == escola_id,
+                               Turma.professor_id == prof.id)
+    ).scalars().all()) if prof else set()
+
+    if prof is not None:
+        entram, saem = validas - atuais, atuais - validas
+        if entram:
+            db.execute(update(Turma).where(Turma.id.in_(entram))
+                       .values(professor_id=prof.id))
+        if saem:
+            db.execute(update(Turma).where(Turma.id.in_(saem))
+                       .values(professor_id=None))
+
+    registrar(db, "professor.turmas_designadas", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="usuario", entidade_id=alvo.id,
+              detalhes={"turma_ids": sorted(validas), "email": alvo.email})
+    db.commit()
+    return {"turma_ids": sorted(validas),
+            "mensagem": (f"{len(validas)} turma(s) designada(s) a {alvo.nome}."
+                         if validas else
+                         f"{alvo.nome} ficou sem turmas designadas.")}
 
 
 @router.delete("/usuarios/{usuario_id}", response_model=dict)
