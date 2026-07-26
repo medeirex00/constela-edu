@@ -8,12 +8,12 @@ casando escola por CÓDIGO INEP. Só admin/coordenador; o alcance segue o perfil
 """
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
-from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, Usuario
+from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao, Usuario
 from app.services import avaliacoes as svc
 from app.services.audit import registrar
 
@@ -113,6 +113,51 @@ def importar(
               entidade="avaliacao_externa", detalhes=resultado)
     db.commit()
     return resultado
+
+
+@router.delete("/resultados")
+def excluir_resultados(
+    avaliacao: str,
+    edicao: int,
+    indicador: str,
+    etapa: str | None = None,
+    componente: str | None = None,
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Remove UMA série específica de resultados — para DESFAZER uma importação
+    errada (ano trocado, arquivo errado). A série é identificada por (avaliação,
+    edição, indicador, etapa, componente): assim remover a série mostrada NÃO
+    apaga as irmãs da mesma edição (ex.: SAEB matemática ≠ português; anos_iniciais
+    ≠ anos_finais). Dimensão OMITIDA casa quem NÃO tem essa dimensão (NULL).
+    Escopado pelo perfil: global remove de todas as escolas; rede só das dela."""
+    if avaliacao not in svc.CATALOGO:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"Avaliação desconhecida: {avaliacao}.")
+    av = svc.obter_avaliacao(db, avaliacao)
+    filtros = [
+        ResultadoAvaliacao.avaliacao_id == av.id,
+        ResultadoAvaliacao.edicao == edicao,
+        ResultadoAvaliacao.indicador == indicador,
+        # etapa/componente ausentes ⇒ casa NULL (a série não tem a dimensão);
+        # presentes ⇒ casa o valor exato — nunca apaga série irmã não selecionada.
+        ResultadoAvaliacao.etapa == etapa if etapa is not None
+        else ResultadoAvaliacao.etapa.is_(None),
+        ResultadoAvaliacao.componente == componente if componente is not None
+        else ResultadoAvaliacao.componente.is_(None),
+    ]
+    escopo = _escopo_escolas(db, usuario)
+    if escopo is not None:                       # None = global (todas as escolas)
+        if not escopo:                           # perfil sem alcance: nada a remover
+            return {"removidos": 0}
+        filtros.append(ResultadoAvaliacao.escola_id.in_(escopo))
+    removidos = db.execute(sa_delete(ResultadoAvaliacao).where(*filtros)).rowcount
+    registrar(db, "avaliacao.resultados_removidos", usuario_id=usuario.id,
+              entidade="avaliacao_externa",
+              detalhes={"avaliacao": avaliacao, "edicao": edicao, "indicador": indicador,
+                        "etapa": etapa, "componente": componente, "removidos": removidos})
+    db.commit()
+    return {"removidos": removidos}
 
 
 # --- Fontes de COLETA AUTOMÁTICA (o "robô") — só admin global -----------------

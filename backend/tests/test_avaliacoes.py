@@ -402,6 +402,69 @@ def test_importa_layout_real_do_ideb_em_zip(db):
     assert "11025310" not in linhas                        # o "-" não virou registro
 
 
+def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, cliente):
+    # Cenário do dono: importou o mesmo arquivo como 2025 SEM QUERER (além de 2023).
+    # Remover a edição 2025 não pode tocar na 2023.
+    escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
+    dados = dict(avaliacao_chave="ideb", indicador="ideb", unidade="indice",
+                 linha_dados=2, col_inep=0, col_valor=2, etapa_fixa="anos_iniciais",
+                 escopo_escolas=None)
+    svc.importar_resultados(db, _PLANILHA, "ideb.csv", edicao=2023, **dados)
+    svc.importar_resultados(db, _PLANILHA, "ideb.csv", edicao=2025, **dados)  # engano
+    db.commit()
+    assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 2   # 1 em 2023, 1 em 2025
+
+    r = cliente.delete(
+        "/api/v1/avaliacoes/resultados?avaliacao=ideb&edicao=2025&indicador=ideb&etapa=anos_iniciais")
+    assert r.status_code == 200, r.text
+    assert r.json()["removidos"] == 1
+    db.expire_all()
+    restantes = db.execute(select(ResultadoAvaliacao)).scalars().all()
+    assert len(restantes) == 1 and restantes[0].edicao == 2023   # a boa continua
+
+
+def test_excluir_resultados_nao_apaga_serie_irma(db, escola_completa, cliente):
+    # Achado da revisão (alto): remover UMA série não pode apagar as irmãs da MESMA
+    # edição (outra etapa/componente importados à parte, e corretos).
+    escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
+    base = dict(avaliacao_chave="ideb", edicao=2023, indicador="ideb", unidade="indice",
+                linha_dados=2, col_inep=0, col_valor=2, escopo_escolas=None)
+    svc.importar_resultados(db, _PLANILHA, "ai.csv", etapa_fixa="anos_iniciais", **base)
+    svc.importar_resultados(db, _PLANILHA, "af.csv", etapa_fixa="anos_finais", **base)
+    db.commit()
+    assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 2
+
+    r = cliente.delete(
+        "/api/v1/avaliacoes/resultados?avaliacao=ideb&edicao=2023&indicador=ideb&etapa=anos_iniciais")
+    assert r.status_code == 200 and r.json()["removidos"] == 1   # só anos_iniciais
+    db.expire_all()
+    restante = db.execute(select(ResultadoAvaliacao)).scalars().one()
+    assert restante.etapa == "anos_finais"                       # a irmã sobreviveu
+
+
+def test_excluir_resultados_escopo_de_rede(db):
+    # Um coordenador de rede só remove os resultados das escolas DA rede dele.
+    ra = Rede(nome="A", status="ativa"); rb = Rede(nome="B", status="ativa")
+    db.add_all([ra, rb]); db.flush()
+    _escola_inep(db, ra.id, "EM A", "35012345")
+    _escola_inep(db, rb.id, "EM B", "35067890")
+    db.commit()
+    _importar_ideb(db, [("35012345", "6,0"), ("35067890", "4,0")])  # casa as duas (global)
+    db.commit()
+    cliente = _login_rede(db, ra.id)   # coordenador da rede A
+
+    r = cliente.delete("/api/v1/avaliacoes/resultados?avaliacao=ideb&edicao=2023&indicador=ideb")
+    assert r.status_code == 200 and r.json()["removidos"] == 1   # só a EM A
+    db.expire_all()
+    restante = db.execute(select(ResultadoAvaliacao)).scalars().one()
+    assert restante.codigo_inep == "35067890"                    # a EM B (rede B) fica
+
+
+def test_excluir_resultados_avaliacao_desconhecida_400(db, escola_completa, cliente):
+    r = cliente.delete("/api/v1/avaliacoes/resultados?avaliacao=enem&edicao=2023&indicador=x")
+    assert r.status_code == 400
+
+
 def test_tetos_de_tamanho_cobrem_o_ideb_real():
     # Regressão (achado com o arquivo real): o ZIP oficial do IDEB tem ~97 MB.
     # Os tetos de upload e de download NÃO podem cair abaixo dele de novo.

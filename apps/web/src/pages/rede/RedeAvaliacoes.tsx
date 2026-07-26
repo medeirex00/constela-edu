@@ -139,10 +139,14 @@ function forcaPearson(r: number): string {
 
 // --- Correlação --------------------------------------------------------------
 
-function Correlacao({ redeId, opcoes }: { redeId: number; opcoes: SerieOpcao[] }) {
+function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
+  redeId: number; opcoes: SerieOpcao[]; podeImportar: boolean; aoRemover: () => void;
+}) {
   const [idx, setIdx] = useState(0);
   const [edicao, setEdicao] = useState<number | null>(null);
   const [metrica, setMetrica] = useState("media_geral");
+  const [removendo, setRemovendo] = useState(false);
+  const [msgRemover, setMsgRemover] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const serie = opcoes[idx];
   const ed = edicao ?? serie?.edicoes[0] ?? null;
 
@@ -153,6 +157,30 @@ function Correlacao({ redeId, opcoes }: { redeId: number; opcoes: SerieOpcao[] }
       + (serie.componente ? `&componente=${encodeURIComponent(serie.componente)}` : "")
     : null;
   const { dados, carregando, erro } = useApi<Correlacao>(url);
+
+  async function removerSerie() {
+    if (!serie || ed == null) return;
+    if (!window.confirm(
+      `Remover os resultados de “${rotuloSerie(serie)} · edição ${ed}”? `
+      + "Apaga só ESTA série (não afeta outras edições, etapas nem componentes). "
+      + "Use para desfazer uma importação errada.")) return;
+    setRemovendo(true); setMsgRemover(null);
+    try {
+      // Identifica a série EXATA (com etapa/componente) — não apaga as irmãs.
+      const qs = new URLSearchParams({
+        avaliacao: serie.avaliacao, edicao: String(ed), indicador: serie.indicador,
+      });
+      if (serie.etapa) qs.set("etapa", serie.etapa);
+      if (serie.componente) qs.set("componente", serie.componente);
+      const r = await api<{ removidos: number }>(
+        `/avaliacoes/resultados?${qs.toString()}`, { method: "DELETE" });
+      setMsgRemover({ tipo: "ok", texto: `${r.removidos} resultado(s) removido(s) da edição ${ed}.` });
+      setEdicao(null);
+      aoRemover();
+    } catch (e) {
+      setMsgRemover({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível remover." });
+    } finally { setRemovendo(false); }
+  }
 
   return (
     <Card className="space-y-4 p-5">
@@ -173,7 +201,15 @@ function Correlacao({ redeId, opcoes }: { redeId: number; opcoes: SerieOpcao[] }
             {Object.entries(METRICAS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </Campo>
+        {podeImportar && serie && ed != null && (
+          <button onClick={removerSerie} disabled={removendo}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:hover:bg-red-500/10"
+                  title="Remover os resultados desta edição (desfazer importação errada)">
+            <Trash2 size={14} /> {removendo ? "Removendo..." : `Remover edição ${ed}`}
+          </button>
+        )}
       </div>
+      {msgRemover && <Mensagem tipo={msgRemover.tipo}>{msgRemover.texto}</Mensagem>}
 
       {erro && !dados && <Mensagem tipo="erro">{erro.message}</Mensagem>}
       {carregando && !dados ? <Carregando /> : dados && (
@@ -719,7 +755,7 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
           </Mensagem>
         </Card>
       ) : opcoes && opcoes.length > 0 ? (
-        <Correlacao redeId={redeId} opcoes={opcoes} />
+        <Correlacao redeId={redeId} opcoes={opcoes} podeImportar={podeImportar} aoRemover={recarregar} />
       ) : (
         <Card className="p-6">
           <p className="flex items-center gap-2 text-sm text-zinc-500">
