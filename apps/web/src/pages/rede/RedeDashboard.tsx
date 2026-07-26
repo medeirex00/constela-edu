@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Building2,
   FileDown,
+  Globe,
   GraduationCap,
   LineChart,
   MapPin,
@@ -29,7 +30,7 @@ import { useNavigate } from "react-router-dom";
 import { Botao, Card, Carregando, Mensagem, PageHeader, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
-import { apiDownload } from "../../lib/api";
+import { api, apiDownload } from "../../lib/api";
 import { corPorMedia } from "../../lib/cores";
 import { nota, numero } from "../../lib/formato";
 
@@ -172,6 +173,54 @@ function LinhaEscola({ escola, aoAbrir }: { escola: EscolaCartao; aoAbrir: (id: 
   );
 }
 
+function VitrinePublica({ redeId }: { redeId: number }) {
+  const { dados, recarregar } = useApi<{ ativo: boolean; token: string | null; url: string | null }>(
+    `/redes/${redeId}/publico`);
+  const [ocupado, setOcupado] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+
+  async function alternar(ativo: boolean) {
+    setOcupado(true);
+    try {
+      await api(`/redes/${redeId}/publico`, { method: "PUT", body: JSON.stringify({ ativo }) });
+      recarregar();
+    } finally {
+      setOcupado(false);
+    }
+  }
+  async function copiar() {
+    if (!dados?.url) return;
+    try {
+      await navigator.clipboard.writeText(dados.url);
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 1500);
+    } catch { /* clipboard indisponível: o link fica visível para copiar à mão */ }
+  }
+
+  return (
+    <Card className="flex flex-wrap items-center gap-x-4 gap-y-2 p-4 text-sm">
+      <span className="flex items-center gap-2 font-semibold">
+        <Globe size={16} className="text-indigo-600" /> Vitrine pública
+      </span>
+      {dados?.ativo ? (
+        <>
+          <span className="text-zinc-500">Link aberto (sem login) com as melhores escolas:</span>
+          <code className="rounded bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800">{dados.url}</code>
+          <Botao variante="neutro" onClick={copiar}>{copiado ? "Copiado!" : "Copiar link"}</Botao>
+          <Botao variante="neutro" onClick={() => alternar(false)} disabled={ocupado}>Desligar</Botao>
+        </>
+      ) : (
+        <>
+          <span className="text-zinc-500">
+            Publique um link aberto com as 5 melhores escolas em leitura e matemática — sem nome de criança.
+          </span>
+          <Botao onClick={() => alternar(true)} disabled={ocupado}>Ligar vitrine pública</Botao>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function PainelRede({ redeId }: { redeId: number }) {
   const { usuario, selecionarEscola } = useApp();
   const navegar = useNavigate();
@@ -284,6 +333,8 @@ function PainelRede({ redeId }: { redeId: number }) {
           <b className="tabular-nums">{eq.escolas_abaixo_da_media}</b> escola(s) abaixo da média da rede
         </span>
       </Card>
+
+      <VitrinePublica redeId={redeId} />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">

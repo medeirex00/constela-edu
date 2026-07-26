@@ -13,10 +13,12 @@ escolas. O filtro de ano correlaciona a coluna por-escola ``Escola.ano_letivo_at
 """
 from __future__ import annotations
 
+import secrets
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, Matricula, Nota, Turma
+from app.models import Aluno, Escola, Matricula, Nota, Rede, Turma
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -173,3 +175,57 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50) -> list[dict]:
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
         cartao["posicao"] = posicao
     return cartoes[:limite]
+
+
+# ---------------------------------------------------------------------------
+# Painel PÚBLICO da Secretaria (vitrine SEM login): as MELHORES ESCOLAS da rede
+# em leitura e matemática — decisão de produto do dono. NUNCA nome de criança
+# nem ranking individual; só escolas + a métrica. Habilitado por um token na
+# rede (nulo = desligado); trocar/limpar o token invalida o link imediatamente.
+# ---------------------------------------------------------------------------
+
+def _top_escolas(cartoes: list[dict], chave: str, limite: int = 5) -> list[dict]:
+    """Top-N escolas por uma métrica (>0), sem PII — só nome + valor."""
+    validos = [c for c in cartoes if c["alunos_com_dados"] > 0 and c.get(chave, 0) > 0]
+    validos.sort(key=lambda c: (-c[chave], c["nome"].casefold()))
+    return [{"nome": c["nome"], "valor": round(float(c[chave]), 1)}
+            for c in validos[:limite]]
+
+
+def painel_publico_rede(db: Session, rede_id: int) -> dict:
+    """Dados da vitrine pública: top 5 escolas em LEITURA (Elefante) e em
+    MATEMÁTICA (Matific). Só agregado por escola — sem PII de criança."""
+    rede = db.get(Rede, rede_id)
+    cartoes = _kpis_da_rede(db, rede_id)
+    return {
+        "rede_nome": rede.nome if rede else "",
+        "top_leitura": _top_escolas(cartoes, "media_elefante"),
+        "top_matematica": _top_escolas(cartoes, "media_matific"),
+    }
+
+
+def rede_pelo_token_publico(db: Session, token: str) -> Rede | None:
+    """Resolve o token público para a rede (comparação em tempo constante contra
+    força bruta de token). Só redes ATIVAS com painel habilitado."""
+    # Todo token real é token_urlsafe (ASCII). Rejeita não-ASCII ANTES de comparar:
+    # secrets.compare_digest levanta TypeError com não-ASCII — e o endpoint é sem
+    # login, então isso viraria um 500 disparável por qualquer anônimo (deve ser 404).
+    if not token or not token.isascii():
+        return None
+    candidatas = db.execute(
+        select(Rede).where(Rede.token_publico.isnot(None), Rede.status == "ativa")
+    ).scalars().all()
+    for rede in candidatas:
+        if secrets.compare_digest(str(rede.token_publico), token):
+            return rede
+    return None
+
+
+def definir_painel_publico(db: Session, rede_id: int, ativo: bool) -> str | None:
+    """Liga (gera token novo) ou desliga (limpa o token) a vitrine pública da
+    rede. Devolve o token atual (ou None se desligado)."""
+    rede = db.get(Rede, rede_id)
+    if rede is None:
+        return None
+    rede.token_publico = secrets.token_urlsafe(9) if ativo else None
+    return rede.token_publico

@@ -27,4 +27,9 @@ class Rede(Base):
     # municipal, independente de variações de grafia do nome da cidade.
     codigo_ibge: Mapped[str | None] = mapped_column(String(7), index=True)
     status: Mapped[str] = mapped_column(String(20), default="ativa")  # ativa | inativa
+    # Painel público da Secretaria (vitrine SEM login): quando definido, habilita
+    # /publico/rede/{token} com as MELHORES ESCOLAS (top 5 em leitura e matemática)
+    # — NUNCA nome de criança. Nulo = desligado. Trocar o token invalida o link.
+    token_publico: Mapped[str | None] = mapped_column(String(64), unique=True,
+                                                      index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)

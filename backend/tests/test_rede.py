@@ -261,3 +261,100 @@ def test_boletim_endpoint_pdf_e_isolamento(db, monkeypatch):
 
     # Isolamento: a Secretaria de uma rede NÃO baixa o boletim de OUTRA (IDOR).
     assert cliente.get(f"/api/v1/redes/{outra.id}/boletim").status_code == 403
+
+
+# --- Painel público da rede (top 5 escolas, sem PII) ------------------------
+
+def _escola_publico(db, rede_id, nome, matific, elefante):
+    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
+    db.add(esc)
+    db.flush()
+    turma = Turma(escola_id=esc.id, nome="1A", ano_escolar="1º Ano", ano_letivo=2026,
+                  status="ativa")
+    db.add(turma)
+    db.flush()
+    a = Aluno(escola_id=esc.id, nome=f"Aluno {nome}")
+    db.add(a)
+    db.flush()
+    db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+    db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
+                nota_geral=(matific + elefante) / 2, nota_matific=matific,
+                nota_elefante=elefante, posicao=1))
+    return esc
+
+
+def test_painel_publico_top5_sem_pii(db):
+    from app.services import rede as svc_rede
+    rede = Rede(nome="Rede Pública", status="ativa")
+    db.add(rede)
+    db.flush()
+    for i, (m, e) in enumerate([(90, 50), (80, 60), (70, 70), (60, 80), (50, 90), (40, 40)]):
+        _escola_publico(db, rede.id, f"EM {i}", m, e)
+    db.commit()
+
+    p = svc_rede.painel_publico_rede(db, rede.id)
+    assert p["rede_nome"] == "Rede Pública"
+    assert len(p["top_matematica"]) == 5 and len(p["top_leitura"]) == 5
+    assert p["top_matematica"][0]["valor"] == 90.0   # maior média Matific
+    assert p["top_leitura"][0]["valor"] == 90.0       # maior média Elefante
+    # PRIVACIDADE: só nome de ESCOLA + valor — nada de aluno/criança.
+    import json
+    texto = json.dumps(p, ensure_ascii=False).lower()
+    assert "aluno" not in texto and "crianca" not in texto
+
+
+def test_painel_publico_token_liga_desliga_e_endpoint(db):
+    rede = Rede(nome="Rede Token", status="ativa")
+    db.add(rede)
+    db.flush()
+    _escola_publico(db, rede.id, "EM A", 80.0, 70.0)
+    db.commit()
+    publico = TestClient(app)          # SEM login
+
+    root = _admin_global(db)
+    r = root.put(f"/api/v1/redes/{rede.id}/publico", json={"ativo": True})
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    assert token and r.json()["ativo"] and "/rede/p/" in r.json()["url"]
+
+    # Público sem login resolve o token e mostra os tops.
+    pub = publico.get(f"/api/v1/publico/rede/{token}")
+    assert pub.status_code == 200
+    assert pub.json()["rede_nome"] == "Rede Token"
+    assert pub.json()["top_matematica"][0]["valor"] == 80.0
+
+    # Desligar invalida o link; token aleatório também é 404.
+    root.put(f"/api/v1/redes/{rede.id}/publico", json={"ativo": False})
+    assert publico.get(f"/api/v1/publico/rede/{token}").status_code == 404
+    assert publico.get("/api/v1/publico/rede/inexistente").status_code == 404
+
+
+def test_painel_publico_token_nao_ascii_nao_500(db):
+    # Regressão (achado da revisão): token não-ASCII num endpoint SEM login não
+    # pode virar 500 (secrets.compare_digest levanta TypeError com não-ASCII).
+    # Com a vitrine LIGADA (há candidata), sem a guarda o compare rodaria e daria 500.
+    rede = Rede(nome="Rede NA", status="ativa")
+    db.add(rede)
+    db.flush()
+    _escola_publico(db, rede.id, "EM A", 80.0, 70.0)
+    db.commit()
+    _admin_global(db).put(f"/api/v1/redes/{rede.id}/publico", json={"ativo": True})
+
+    publico = TestClient(app)
+    assert publico.get("/api/v1/publico/rede/café").status_code == 404
+    assert publico.get("/api/v1/publico/rede/%C3%A9").status_code == 404
+
+
+def test_painel_publico_config_exige_a_rede(db):
+    r1 = Rede(nome="Rede 1", status="ativa")
+    r2 = Rede(nome="Rede 2", status="ativa")
+    db.add_all([r1, r2])
+    db.flush()
+    db.add(Usuario(nome="Sec1", email="sec1@pub.gov", senha_hash=hash_senha("s3nh4publica1"),
+                   cargo="coordenador", rede_id=r1.id))
+    db.commit()
+    cliente = _login("sec1@pub.gov", "s3nh4publica1")
+    # A Secretaria da rede 1 liga o SEU painel...
+    assert cliente.put(f"/api/v1/redes/{r1.id}/publico", json={"ativo": True}).status_code == 200
+    # ...mas não pode ligar o de OUTRA rede (IDOR barrado).
+    assert cliente.put(f"/api/v1/redes/{r2.id}/publico", json={"ativo": True}).status_code == 403

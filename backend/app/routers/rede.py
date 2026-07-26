@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
 from app.models import Escola, Rede, Usuario
@@ -19,6 +20,7 @@ from app.schemas import (
     RedeCreate,
     RedeEscolasIn,
     RedeOut,
+    RedePublicoIn,
     RedeUpdate,
     RedeUsuariosIn,
 )
@@ -324,6 +326,41 @@ def avaliacoes_correlacao(
     return svc_avaliacoes.correlacao_rede(
         db, rede_id, avaliacao_chave=avaliacao, indicador=indicador, edicao=edicao,
         etapa=etapa, componente=componente, metrica=metrica)
+
+
+def _painel_publico_saida(rede: Rede | None) -> dict:
+    token = rede.token_publico if rede else None
+    return {
+        "ativo": bool(token),
+        "token": token,
+        "url": f"{settings.PUBLIC_BASE_URL}/rede/p/{token}" if token else None,
+    }
+
+
+@router.get("/{rede_id}/publico")
+def painel_publico_config(
+    rede_id: int = Depends(exigir_rede),
+    db: Session = Depends(get_db),
+):
+    """Estado da vitrine pública da rede (ligada/desligada + link)."""
+    return _painel_publico_saida(db.get(Rede, rede_id))
+
+
+@router.put("/{rede_id}/publico")
+def painel_publico_definir(
+    dados: RedePublicoIn,
+    rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Liga (gera token) ou desliga (invalida o link) a vitrine pública da rede —
+    top 5 escolas em leitura e matemática, SEM PII de criança. Ação de quem tem a
+    rede (Secretaria) ou o admin global."""
+    svc_rede.definir_painel_publico(db, rede_id, dados.ativo)
+    registrar(db, "rede.painel_publico", usuario_id=usuario.id, entidade="rede",
+              entidade_id=rede_id, detalhes={"ativo": dados.ativo})
+    db.commit()
+    return _painel_publico_saida(db.get(Rede, rede_id))
 
 
 @router.get("/{rede_id}/boletim")

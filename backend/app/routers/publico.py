@@ -73,7 +73,10 @@ _cache_tokens: dict[str, int] = {}
 
 def _escola_pelo_token(db: Session, token: str) -> tuple[Escola, dict] | None:
     """Resolve o token público para uma escola com painel ativo."""
-    if not token:
+    # Token real é token_urlsafe (ASCII). Rejeita não-ASCII antes de comparar:
+    # secrets.compare_digest levanta TypeError com não-ASCII e este endpoint é sem
+    # login — sem isto, um token com acento viraria 500 (deve ser 404).
+    if not token or not token.isascii():
         return None
 
     def _validar(row) -> tuple[Escola, dict] | None:
@@ -479,6 +482,20 @@ def perfil_publico(token: str, aluno_id: int, db: Session = Depends(get_db)):
         ],
         "escola": escola.nome,
     }
+
+
+@publico_router.get("/rede/{token}")
+def painel_publico_rede(token: str, response: Response, db: Session = Depends(get_db)):
+    """Vitrine PÚBLICA da Secretaria (sem login): as melhores escolas da rede em
+    leitura e matemática. Só agregado por ESCOLA — nunca nome de criança."""
+    from app.services import rede as svc_rede
+
+    rede = svc_rede.rede_pelo_token_publico(db, token)
+    if rede is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "Painel público não encontrado ou desativado.")
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return svc_rede.painel_publico_rede(db, rede.id)
 
 
 # O router "pai" agrega os dois para o main.py registrar de uma vez

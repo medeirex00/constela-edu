@@ -32,6 +32,7 @@ const PerfilAluno = lazy(() => import("./pages/PerfilAluno"));
 const Premiacoes = lazy(() => import("./pages/Premiacoes"));
 const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
 const PainelPublico = lazy(() => import("./pages/publico/PainelPublico"));
+const PainelPublicoRede = lazy(() => import("./pages/publico/PainelPublicoRede"));
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
@@ -117,6 +118,8 @@ export default function App() {
         {/* Painel Público: acessível sem login (PRD §104) */}
         <Route path="/p/:token" element={<PainelPublico />} />
         <Route path="/p/:token/alunos/:id" element={<PerfilPublico />} />
+        {/* Vitrine pública da Secretaria (top 5 escolas), também sem login */}
+        <Route path="/rede/p/:token" element={<PainelPublicoRede />} />
         <Route element={<AreaProtegida />}>
           {/* --- Abertas ao professor (dados já filtrados pelas turmas dele) --- */}
           <Route path="/" element={<Dashboard />} />

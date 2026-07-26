@@ -346,6 +346,12 @@ class RedeUsuariosIn(BaseModel):
     usuario_ids: list[int] = Field(default_factory=list)
 
 
+class RedePublicoIn(BaseModel):
+    """Liga/desliga a vitrine pública da rede (sem login). Ligar gera um token
+    novo; desligar limpa (invalida o link)."""
+    ativo: bool
+
+
 class EscolaLocalIn(BaseModel):
     """Localização da escola (para o mapa da Secretaria) — cidade/UF e as
     coordenadas geográficas. Atualização parcial."""

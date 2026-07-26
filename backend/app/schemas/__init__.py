@@ -26,6 +26,7 @@ from app.schemas.comum import (
     RedeCreate,
     RedeEscolasIn,
     RedeOut,
+    RedePublicoIn,
     RedeUpdate,
     RedeUsuariosIn,
     ReferenciasOut,
