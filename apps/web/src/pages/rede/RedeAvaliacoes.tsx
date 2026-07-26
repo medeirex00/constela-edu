@@ -633,7 +633,7 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
 // aplica o mapeamento sozinho (SAEB traz Matemática e Português numa leitura só).
 // O download continua manual (o INEP bloqueia servidor) — o resto é 1 clique.
 
-interface PresetImport { chave: string; rotulo: string; avaliacao: string }
+interface PresetImport { chave: string; rotulo: string; avaliacao: string; dica: string }
 interface RespPreset {
   rotulo: string; edicao: number;
   series: { componente: string | null; casados: number; inseridos: number; atualizados: number }[];
@@ -675,10 +675,9 @@ function ImportarUmClique({ aoImportar }: { aoImportar: () => void }) {
         <FileUp size={16} className="text-indigo-600" /> Importar oficial em 1 clique
       </h2>
       <p className="text-xs text-zinc-500">
-        Baixe o arquivo oficial do INEP (o <b>.zip</b> dos Anos Iniciais), escolha a base e suba o
-        arquivo — o sistema já sabe ler as colunas e casa por código INEP, sem você mapear nada.
-        O <b>SAEB</b> traz Matemática e Português de uma vez. (O download continua seu porque o INEP
-        bloqueia servidores; o resto é 1 clique.)
+        Escolha a base e suba o arquivo — o sistema <b>já sabe ler as colunas</b> e casa por código
+        INEP, sem você mapear nada. O <b>SAEB</b> traz Matemática e Português de uma vez; o
+        <b> IDEB/SAEB</b> saem do próprio arquivo do INEP e a <b>SARESP</b> do arquivo que o Constela prepara.
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <Campo rotulo="Base oficial">
@@ -697,6 +696,11 @@ function ImportarUmClique({ aoImportar }: { aoImportar: () => void }) {
                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importar(f); e.target.value = ""; }} />
         </label>
       </div>
+      {preset?.dica && (
+        <p className="flex items-start gap-1.5 rounded-lg bg-indigo-50 p-2.5 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
+          <Info size={14} className="mt-0.5 shrink-0" /> {preset.dica}
+        </p>
+      )}
       {msg && <Mensagem tipo={msg.tipo}>{msg.texto}</Mensagem>}
     </Card>
   );

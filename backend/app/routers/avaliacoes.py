@@ -123,16 +123,25 @@ def importar(
 _PRESETS_IMPORT: dict[str, dict] = {
     "ideb_ai": {
         "rotulo": "IDEB — Anos Iniciais", "avaliacao": "ideb",
+        "dica": "Suba o .zip oficial do INEP — Anos Iniciais (o arquivo grande que você baixou).",
         "indicador": "ideb", "unidade": "indice", "linha_dados": 8, "col_inep": 3,
         "series": [{"col_valor": 115, "etapa_fixa": "anos_iniciais"}],
     },
     "saeb_ai": {
         "rotulo": "SAEB — Anos Iniciais (Matemática e Português)", "avaliacao": "saeb",
+        "dica": "Suba o MESMO .zip do INEP — Anos Iniciais (o SAEB está dentro do arquivo do IDEB).",
         "indicador": "proficiencia", "unidade": "escala_saeb", "linha_dados": 8, "col_inep": 3,
         "series": [
             {"col_valor": 103, "componente_fixo": "matematica", "etapa_fixa": "anos_iniciais"},
             {"col_valor": 104, "componente_fixo": "portugues", "etapa_fixa": "anos_iniciais"},
         ],
+    },
+    "saresp_ai": {
+        "rotulo": "SARESP — Anos Iniciais (5º ano)", "avaliacao": "saresp",
+        "dica": "Suba o arquivo da SARESP que o Constela preparou para você (INEP · componente · nota).",
+        "indicador": "proficiencia", "unidade": "escala_saresp", "linha_dados": 1, "col_inep": 0,
+        # componente vem de uma COLUNA (não fixo): matemática/português na col 1.
+        "series": [{"col_valor": 2, "col_componente": 1, "etapa_fixa": "anos_iniciais"}],
     },
 }
 
@@ -140,7 +149,8 @@ _PRESETS_IMPORT: dict[str, dict] = {
 @router.get("/presets-import")
 def presets_import(usuario: Usuario = Depends(get_usuario_atual)):
     """As bases oficiais que importam em 1 clique (só escolher + subir o arquivo)."""
-    return [{"chave": k, "rotulo": p["rotulo"], "avaliacao": p["avaliacao"]}
+    return [{"chave": k, "rotulo": p["rotulo"], "avaliacao": p["avaliacao"],
+             "dica": p.get("dica", "")}
             for k, p in _PRESETS_IMPORT.items()]
 
 
@@ -170,6 +180,7 @@ def importar_preset(
             indicador=p["indicador"], unidade=p["unidade"],
             linha_dados=p["linha_dados"], col_inep=p["col_inep"],
             col_valor=s["col_valor"], componente_fixo=s.get("componente_fixo"),
+            col_componente=s.get("col_componente"),  # SARESP: componente vem da coluna
             etapa_fixa=s.get("etapa_fixa"), escopo_escolas=escopo)
         series_out.append({"componente": s.get("componente_fixo"),
                            "casados": r["casados"], "inseridos": r["inseridos"],

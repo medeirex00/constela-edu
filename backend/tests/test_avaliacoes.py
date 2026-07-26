@@ -445,6 +445,22 @@ def test_importar_preset_desconhecido_400(db, escola_completa, cliente):
     assert r.status_code == 400
 
 
+def test_importar_preset_saresp_componente_em_coluna(db, escola_completa, cliente):
+    # SARESP: o preset lê o COMPONENTE de uma COLUNA (não fixo) — arquivo enxuto
+    # INEP;COMPONENTE;PROFICIENCIA que o Constela prepara dos microdados.
+    escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
+    arq = _csv([["CO_ESCOLA", "COMPONENTE", "PROFICIENCIA"],
+                ["35012345", "portugues", "210.5"],
+                ["35012345", "matematica", "225.0"]])
+    r = cliente.post("/api/v1/avaliacoes/importar-preset",
+                     data={"preset": "saresp_ai", "edicao": 2025},
+                     files={"arquivo": ("saresp.csv", arq, "text/csv")})
+    assert r.status_code == 200, r.text
+    regs = {reg.componente: reg.valor
+            for reg in db.execute(select(ResultadoAvaliacao)).scalars()}
+    assert round(regs["portugues"], 1) == 210.5 and round(regs["matematica"], 1) == 225.0
+
+
 def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, cliente):
     # Cenário do dono: importou o mesmo arquivo como 2025 SEM QUERER (além de 2023).
     # Remover a edição 2025 não pode tocar na 2023.
