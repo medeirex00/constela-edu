@@ -413,7 +413,10 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
 Baixador = Callable[[str], bytes]
 _UA_NAVEGADOR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                  "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-_MAX_DOWNLOAD = 60 * 1024 * 1024  # teto do arquivo baixado
+# Teto do arquivo baixado. O IDEB oficial por escola é GRANDE: o ZIP de "anos
+# iniciais" 2023 tem ~97 MB (XLSX de ~50 MB dentro, 126 colunas, ~65 mil escolas).
+# 150 MB dá folga sobre o real e ainda barra abuso.
+_MAX_DOWNLOAD = 150 * 1024 * 1024
 
 
 def _agora() -> datetime:

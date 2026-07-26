@@ -344,3 +344,68 @@ def test_endpoints_correlacao_e_opcoes(db):
         f"?avaliacao=ideb&indicador=ideb&edicao=2023&metrica=media_geral")
     assert corr.status_code == 200, corr.text
     assert corr.json()["n"] == 2
+
+
+# --- Layout REAL do IDEB (validado no arquivo oficial de 2023) ---------------
+# O arquivo do INEP tem pré-âmbulo + cabeçalhos, o INEP não é a 1ª coluna
+# (ID_ESCOLA = col 3), o valor fica numa coluna distante (VL_OBSERVADO_2023),
+# faltantes são "-" e o decimal é PONTO. Este teste fixa essa realidade.
+
+def _ideb_real_xlsx() -> bytes:
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active
+    ws.title = "IDEB_Escolas (Anos_Iniciais)"
+    ws.append(["Ministério da Educação"])                     # pré-âmbulo
+    ws.append(["Ensino Fundamental — Anos Iniciais"])         # pré-âmbulo
+    cab = [None] * 9
+    cab[0], cab[3], cab[4], cab[8] = "SG_UF", "ID_ESCOLA", "NO_ESCOLA", "VL_OBSERVADO_2023"
+    ws.append(cab)                                            # cabeçalho técnico (idx 2)
+    def linha(uf, inep, nome, ideb):
+        r = [None] * 9
+        r[0], r[3], r[4], r[8] = uf, inep, nome, ideb
+        return r
+    ws.append(linha("RO", "11024682", "EEEFM EURIDICE", "6.7"))   # ponto decimal
+    ws.append(linha("RO", "11024828", "EMEIEF BOA VISTA", "4.0"))
+    ws.append(linha("RO", "99999999", "EM DE OUTRA REDE", "5.5"))  # não está no banco
+    ws.append(linha("RO", "11025310", "EMEIEF SEM IDEB", "-"))     # faltante → ignora
+    import io as _io
+    buf = _io.BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
+def test_importa_layout_real_do_ideb_em_zip(db):
+    import zipfile
+    _escola_inep(db, None, "EEEFM EURIDICE", "11024682")
+    _escola_inep(db, None, "EMEIEF BOA VISTA", "11024828")
+    _escola_inep(db, None, "EMEIEF SEM IDEB", "11025310")
+    db.commit()
+    # ZIP como o oficial: um .ods (que o extrator DEVE ignorar) + o .xlsx.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("divulgacao_anos_iniciais_escolas_2023/x.ods", b"nao-e-planilha-lida")
+        zf.writestr("divulgacao_anos_iniciais_escolas_2023/x.xlsx", _ideb_real_xlsx())
+    conteudo = buf.getvalue()
+
+    res = svc.importar_resultados(
+        db, conteudo, "divulgacao_anos_iniciais_escolas_2023.zip",
+        avaliacao_chave="ideb", edicao=2023, indicador="ideb", unidade="indice",
+        linha_dados=3, col_inep=3, col_valor=8, etapa_fixa="anos_iniciais",
+        escopo_escolas=None)
+    db.commit()
+
+    assert res["casados"] == 2 and res["inseridos"] == 2   # as duas com IDEB numérico
+    assert res["nao_casados"] == 1                         # 99999999 fora do banco
+    assert res["ignorados"] == 1                           # "-" sem valor
+    linhas = {r.codigo_inep: round(r.valor, 2)
+              for r in db.execute(select(ResultadoAvaliacao)).scalars()}
+    assert linhas == {"11024682": 6.7, "11024828": 4.0}    # ponto decimal parseado
+    assert "11025310" not in linhas                        # o "-" não virou registro
+
+
+def test_tetos_de_tamanho_cobrem_o_ideb_real():
+    # Regressão (achado com o arquivo real): o ZIP oficial do IDEB tem ~97 MB.
+    # Os tetos de upload e de download NÃO podem cair abaixo dele de novo.
+    from app.routers import avaliacoes as rot
+    real_ideb = 97 * 1024 * 1024
+    assert rot._MAX_BYTES >= real_ideb        # upload manual (plano B)
+    assert svc._MAX_DOWNLOAD >= real_ideb     # robô baixando sozinho

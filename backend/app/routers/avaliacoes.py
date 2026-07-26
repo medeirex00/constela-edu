@@ -19,7 +19,10 @@ from app.services.audit import registrar
 
 router = APIRouter(prefix="/avaliacoes", tags=["Avaliações externas"])
 
-_MAX_BYTES = 25 * 1024 * 1024  # planilhas oficiais cabem folgado; barra abuso
+# O arquivo oficial do IDEB por escola é grande (ZIP de "anos iniciais" ~97 MB).
+# O caminho principal é o robô baixar sozinho pelo servidor; este teto cobre o
+# upload manual (plano B) sem estourar a RAM. Ver _MAX_DOWNLOAD no serviço.
+_MAX_BYTES = 150 * 1024 * 1024
 
 
 def _escopo_escolas(db: Session, usuario: Usuario) -> set[int] | None:
