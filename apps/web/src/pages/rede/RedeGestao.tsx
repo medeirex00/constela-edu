@@ -26,6 +26,7 @@ import {
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { ApiError, api, apiUpload } from "../../lib/api";
+import { normalizar } from "../../lib/nomes";
 
 interface RedeItem {
   id: number;
@@ -72,6 +73,39 @@ interface Gerenciar {
 
 type Aviso = { tipo: "ok" | "erro"; texto: string } | null;
 
+// Palavras que NÃO distinguem uma escola de outra (tipo de unidade e títulos).
+// Tiradas antes de casar o nome colado com a escola da rede.
+const RUIDO_ESCOLA = new Set([
+  "emef", "emei", "emeiemef", "emefebs", "ciefi", "cei", "ciase", "cries",
+  "escola", "municipal", "ensino", "fundamental", "infantil", "creche",
+  "prof", "profa", "professor", "professora", "dr", "dra",
+  "de", "do", "da", "das", "dos", "e",
+]);
+function tokensEscola(nome: string): string[] {
+  return normalizar(nome)
+    .replace(/[.,()/º°ª-]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 1 && !RUIDO_ESCOLA.has(t));
+}
+/** Casa um nome colado a UMA escola da rede: todos os tokens distintivos do
+ *  nome colado precisam existir na escola, e a correspondência tem de ser
+ *  única (senão devolve null e a linha entra em "não encontrei"). */
+function casarEscola(escolas: EscolaItem[], nome: string): EscolaItem | null {
+  const alvo = tokensEscola(nome);
+  if (!alvo.length) return null;
+  const casa = escolas.filter((e) => {
+    const toks = new Set(tokensEscola(e.nome));
+    return alvo.every((t) => toks.has(t));
+  });
+  if (casa.length === 1) return casa[0];
+  if (casa.length > 1) {
+    // empate: só aceita se UMA escola tiver exatamente os mesmos tokens.
+    const exata = casa.filter((e) => tokensEscola(e.nome).length === alvo.length);
+    return exata.length === 1 ? exata[0] : null;
+  }
+  return null;
+}
+
 export default function RedeGestao() {
   const { usuario, recarregarEscolas } = useApp();
   const navegar = useNavigate();
@@ -90,6 +124,9 @@ export default function RedeGestao() {
   const [escolasSel, setEscolasSel] = useState<Set<number>>(new Set());
   const [usuariosSel, setUsuariosSel] = useState<Set<number>>(new Set());
   const [coords, setCoords] = useState<Record<number, { cidade: string; bairro: string; uf: string; lat: string; lng: string }>>({});
+  // Colagem em massa de localizações (uma escola por linha).
+  const [colar, setColar] = useState("");
+  const [resColar, setResColar] = useState<{ ok: number; erros: string[] } | null>(null);
   // Códigos INEP (editável) + as propostas do casamento automático (para conferência).
   const [inep, setInep] = useState<Record<number, string>>({});
   const [propostas, setPropostas] = useState<Record<number, PropostaInep>>({});
@@ -206,6 +243,38 @@ export default function RedeGestao() {
     } finally {
       setOcupado(false);
     }
+  }
+
+  // Cola um bloco "Nome; bairro; latitude; longitude" (bairro e/ou coordenadas
+  // opcionais), casa cada linha com uma escola da rede pelo nome e preenche os
+  // campos do formulário. NÃO salva — o usuário confere e clica em Salvar.
+  function aplicarColagem() {
+    if (!dados || redeSel === null) return;
+    const escolas = dados.escolas.filter((e) => e.rede_id === redeSel);
+    const eNumero = (p: string) => /^-?\d{1,3}[.,]\d+$/.test(p);
+    const naoAchou: string[] = [];
+    let ok = 0;
+    const novo = { ...coords };
+    for (const linha of colar.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+      const partes = linha.split(/[;\t]/).map((p) => p.trim()).filter(Boolean);
+      if (partes.length < 2) continue;
+      const escola = casarEscola(escolas, partes[0]);
+      if (!escola) { naoAchou.push(partes[0]); continue; }
+      const resto = partes.slice(1);
+      const nums = resto.filter(eNumero);
+      const bairro = resto.find((p) => !eNumero(p));
+      const atual = novo[escola.id] ?? { cidade: "", bairro: "", uf: "", lat: "", lng: "" };
+      const proximo = { ...atual };
+      if (bairro) proximo.bairro = bairro;
+      if (nums.length >= 2) {
+        proximo.lat = nums[0].replace(",", ".");
+        proximo.lng = nums[1].replace(",", ".");
+      }
+      novo[escola.id] = proximo;
+      ok += 1;
+    }
+    setCoords(novo);
+    setResColar({ ok, erros: naoAchou });
   }
 
   async function salvarLocalizacoes() {
@@ -477,6 +546,39 @@ export default function RedeGestao() {
                   Sem o bairro, escolas municipais pequenas costumam não ser localizadas.
                   Você também pode informar latitude/longitude à mão. Salve os vínculos antes.
                 </p>
+
+                {escolasNaRede.length > 0 && (
+                  <div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50/50 p-3 dark:border-indigo-500/30 dark:bg-indigo-500/5">
+                    <p className="mb-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                      Colar localizações em massa
+                    </p>
+                    <p className="mb-2 text-xs text-zinc-500">
+                      Uma escola por linha: <code>Nome; bairro; latitude; longitude</code> (bairro e
+                      coordenadas são opcionais). O sistema casa pelo nome e preenche os campos —
+                      confira e clique em <b>Salvar localizações</b>.
+                    </p>
+                    <textarea
+                      className={`${estiloInput} h-28 w-full font-mono text-xs`}
+                      placeholder={"Jorge Passos; Jaraguazinho; -23.61590; -45.43217\nBenedito Inácio Soares; Massaguaçu; -23.58121; -45.33248"}
+                      value={colar}
+                      onChange={(ev) => setColar(ev.target.value)}
+                    />
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Botao variante="neutro" onClick={aplicarColagem} disabled={!colar.trim()}>
+                        <MapPin size={14} /> Aplicar ao formulário
+                      </Botao>
+                      {resColar && (
+                        <span className="text-xs text-zinc-600 dark:text-zinc-300">
+                          {resColar.ok} preenchida(s)
+                          {resColar.erros.length > 0 && (
+                            <> · não encontrei: <b>{resColar.erros.join(", ")}</b></>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {escolasNaRede.length === 0 ? (
                   <p className="py-4 text-center text-sm text-zinc-500">
                     Nenhuma escola vinculada ainda.
