@@ -87,23 +87,38 @@ function tokensEscola(nome: string): string[] {
     .split(/\s+/)
     .filter((t) => t.length > 1 && !RUIDO_ESCOLA.has(t));
 }
-/** Casa um nome colado a UMA escola da rede: todos os tokens distintivos do
- *  nome colado precisam existir na escola, e a correspondência tem de ser
- *  única (senão devolve null e a linha entra em "não encontrei"). */
+/** Casa um nome colado a UMA escola da rede pelos tokens distintivos. Funciona
+ *  nos dois sentidos: o nome no sistema pode ser o oficial completo OU um
+ *  apelido curto (ex.: "Adolfina") — basta um caber no outro. Pontua por
+ *  tokens em comum e exige um vencedor claro; empate sem desempate = null
+ *  (a linha entra em "não encontrei" e o usuário resolve à mão). */
 function casarEscola(escolas: EscolaItem[], nome: string): EscolaItem | null {
   const alvo = tokensEscola(nome);
   if (!alvo.length) return null;
-  const casa = escolas.filter((e) => {
-    const toks = new Set(tokensEscola(e.nome));
-    return alvo.every((t) => toks.has(t));
-  });
-  if (casa.length === 1) return casa[0];
-  if (casa.length > 1) {
-    // empate: só aceita se UMA escola tiver exatamente os mesmos tokens.
-    const exata = casa.filter((e) => tokensEscola(e.nome).length === alvo.length);
-    return exata.length === 1 ? exata[0] : null;
-  }
-  return null;
+  const A = new Set(alvo);
+  const cand = escolas
+    .map((e) => {
+      const t = tokensEscola(e.nome);
+      const T = new Set(t);
+      const shared = alvo.filter((x) => T.has(x)).length;
+      // subconjunto em qualquer direção: apelido curto cabe no oficial, ou vice-versa.
+      const sub = (t.length > 0 && t.every((x) => A.has(x))) || alvo.every((x) => T.has(x));
+      return { e, t, shared, sub };
+    })
+    .filter((c) => c.shared > 0);
+  if (!cand.length) return null;
+  cand.sort((a, b) => b.shared - a.shared);
+  const maxs = cand[0].shared;
+  const top = cand.filter((c) => c.shared === maxs);
+  // Vencedor único em nº de tokens comuns: aceita se 2+ em comum (sinal forte)
+  // ou se um nome for subconjunto do outro (apelido curto reconhecido).
+  if (top.length === 1) return top[0].shared >= 2 || top[0].sub ? top[0].e : null;
+  // Empate: prefere quem for subconjunto (o apelido cabe inteiro em um só).
+  const subs = top.filter((c) => c.sub);
+  if (subs.length === 1) return subs[0].e;
+  // Ainda empatado: só aceita igualdade exata de tokens.
+  const ex = cand.filter((c) => c.t.length === alvo.length && c.shared === alvo.length);
+  return ex.length === 1 ? ex[0].e : null;
 }
 
 export default function RedeGestao() {
