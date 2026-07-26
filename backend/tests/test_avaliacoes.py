@@ -461,6 +461,19 @@ def test_importar_preset_saresp_componente_em_coluna(db, escola_completa, client
     assert round(regs["portugues"], 1) == 210.5 and round(regs["matematica"], 1) == 225.0
 
 
+def test_importar_preset_crianca_alfabetizada(db, escola_completa, cliente):
+    # Criança Alfabetizada: taxa (%) por escola, derivada do 2º ano da SARESP.
+    escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
+    arq = _csv([["CO_ESCOLA", "TAXA_ALFABETIZADOS_PCT"], ["35012345", "96.8"]])
+    r = cliente.post("/api/v1/avaliacoes/importar-preset",
+                     data={"preset": "crianca_alfab", "edicao": 2025},
+                     files={"arquivo": ("alfab.csv", arq, "text/csv")})
+    assert r.status_code == 200, r.text
+    reg = db.execute(select(ResultadoAvaliacao)).scalars().one()
+    assert reg.indicador == "taxa_alfabetizacao" and round(reg.valor, 1) == 96.8
+    assert reg.etapa == "2_ano" and reg.unidade == "percentual"
+
+
 def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, cliente):
     # Cenário do dono: importou o mesmo arquivo como 2025 SEM QUERER (além de 2023).
     # Remover a edição 2025 não pode tocar na 2023.

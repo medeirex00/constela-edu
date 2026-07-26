@@ -143,6 +143,13 @@ _PRESETS_IMPORT: dict[str, dict] = {
         # componente vem de uma COLUNA (não fixo): matemática/português na col 1.
         "series": [{"col_valor": 2, "col_componente": 1, "etapa_fixa": "anos_iniciais"}],
     },
+    "crianca_alfab": {
+        "rotulo": "Criança Alfabetizada — 2º ano (taxa %)",
+        "dica": "Suba o arquivo de alfabetização que o Constela preparou (INEP · taxa %).",
+        "avaliacao": "crianca_alfabetizada", "indicador": "taxa_alfabetizacao",
+        "unidade": "percentual", "linha_dados": 1, "col_inep": 0,
+        "series": [{"col_valor": 1, "etapa_fixa": "2_ano"}],
+    },
 }
 
 
