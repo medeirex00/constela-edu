@@ -7,8 +7,9 @@
  * Sem isto, a rede só existia por seed. A segurança real é no backend
  * (todas as rotas exigem admin global); esta tela é só a interface.
  */
-import { Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users } from "lucide-react";
+import { ArrowRight, Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
   Badge,
@@ -72,6 +73,7 @@ type Aviso = { tipo: "ok" | "erro"; texto: string } | null;
 
 export default function RedeGestao() {
   const { usuario, recarregarEscolas } = useApp();
+  const navegar = useNavigate();
   const { dados, erro, carregando, recarregar } = useApi<Gerenciar>("/redes/gerenciar");
 
   const [redeSel, setRedeSel] = useState<number | null>(null);
@@ -355,7 +357,8 @@ export default function RedeGestao() {
                descricao="Crie a primeira rede para habilitar o painel da Secretaria." />
       ) : (
         <>
-          {/* Seletor de rede */}
+          {/* Seletor de rede. Clicar na rede JÁ selecionada abre o painel dela
+              (a tela com "Avaliações externas"); clicar em outra a seleciona. */}
           <Card className="flex flex-wrap items-center gap-2 p-3">
             <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-500">
               <Landmark size={15} /> Rede:
@@ -363,16 +366,19 @@ export default function RedeGestao() {
             {dados?.redes.map((r) => (
               <button
                 key={r.id}
-                onClick={() => setRedeSel(r.id)}
-                className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                onClick={() => (r.id === redeSel ? navegar("/rede") : setRedeSel(r.id))}
+                title={r.id === redeSel ? "Abrir o painel desta rede" : "Selecionar para gerenciar"}
+                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
                   r.id === redeSel
-                    ? "bg-indigo-600 text-white"
+                    ? "bg-indigo-600 text-white hover:bg-indigo-500"
                     : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                 }`}
               >
                 {r.nome}{r.status !== "ativa" ? " (inativa)" : ""}
+                {r.id === redeSel && <ArrowRight size={14} className="opacity-80" />}
               </button>
             ))}
+            <span className="text-xs text-zinc-400">— clique na rede selecionada para abrir o painel</span>
           </Card>
 
           {redeAtual && (
