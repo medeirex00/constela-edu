@@ -1,44 +1,70 @@
 /**
  * Vitrine PÚBLICA da Secretaria (sem login) — as MELHORES ESCOLAS da rede em
- * leitura e matemática. Feita para telão/link aberto: sem nenhum dado de criança,
- * só escolas + a métrica. Decisão de produto do dono (top 5 escolas, não alunos).
+ * leitura e matemática, no tema "noite Constela" (mesmo do painel da escola),
+ * mas com TOP 5 ESCOLAS (não top 3 alunos). Só agregado por escola: nunca
+ * expõe nome de criança. Decisão de produto do dono.
  */
 import { BookOpen, Calculator } from "lucide-react";
+import { useEffect } from "react";
+import type { LucideIcon } from "lucide-react";
 import { useParams } from "react-router-dom";
 
-import { Carregando } from "../../components/ui";
+import { FundoConstela, MEDALHAS, OURO } from "../../components/FundoConstela";
 import { useApi } from "../../hooks/useApi";
+import { ApiError } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
 interface TopEscola { nome: string; valor: number }
 interface PainelPublico { rede_nome: string; top_leitura: TopEscola[]; top_matematica: TopEscola[] }
 
-const MEDALHA = ["🥇", "🥈", "🥉"];
+const FONTE = "Poppins, Inter, sans-serif";
 
-function Coluna({ titulo, icone, escolas }: {
-  titulo: string; icone: React.ReactNode; escolas: TopEscola[];
-}) {
+/** Uma linha de escola no ranking (pódio para top 3, barra relativa ao 1º). */
+function LinhaEscola({ pos, escola, topo }: { pos: number; escola: TopEscola; topo: number }) {
+  const medalha = MEDALHAS[pos];
+  const top3 = pos <= 3;
+  const largura = Math.max(8, (escola.valor / topo) * 100);
   return (
-    <div className="flex-1 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <h2 className="mb-4 flex items-center justify-center gap-2 text-xl font-bold text-indigo-700 dark:text-indigo-300">
-        {icone} {titulo}
+    <div
+      className={`relative flex items-center gap-3 overflow-hidden rounded-2xl px-4 py-3 ring-1 ring-inset sm:gap-4 sm:px-5 ${
+        top3 ? "bg-white/[0.09] ring-white/15" : "bg-white/[0.04] ring-white/[0.07]"}`}
+      style={top3 ? { boxShadow: `inset 4px 0 0 0 ${medalha?.cor ?? OURO}` } : undefined}
+    >
+      <span aria-hidden className="absolute inset-y-0 left-0 -z-10 rounded-2xl opacity-[0.10]"
+        style={{ width: `${largura}%`, background: medalha?.cor ?? "#6B7DE4" }} />
+      <span className="flex w-9 shrink-0 items-center justify-center text-2xl sm:w-11">
+        {medalha ? <span aria-label={`${pos}º lugar`}>{medalha.emoji}</span>
+          : <span className="font-bold tabular-nums text-white/45">{pos}º</span>}
+      </span>
+      <span className="flex-1 truncate text-[clamp(1rem,1.7vw,1.4rem)] font-semibold text-white"
+        style={{ fontFamily: FONTE }}>
+        {escola.nome}
+      </span>
+      <span className="w-16 shrink-0 text-right text-[clamp(1.05rem,1.7vw,1.5rem)] font-bold tabular-nums text-white sm:w-24"
+        style={top3 ? { color: medalha?.cor } : undefined}>
+        {nota(escola.valor)}
+      </span>
+    </div>
+  );
+}
+
+/** Coluna de uma matéria (Leitura/Matemática) com as 5 melhores escolas. */
+function Coluna({ titulo, icone: Icone, escolas }: {
+  titulo: string; icone: LucideIcon; escolas: TopEscola[];
+}) {
+  const topo = Math.max(...escolas.map((e) => e.valor), 0) || 1;
+  return (
+    <div className="flex-1 rounded-3xl bg-white/[0.05] p-5 ring-1 ring-inset ring-white/10 sm:p-6">
+      <h2 className="mb-4 flex items-center justify-center gap-2.5 text-[clamp(1.2rem,2.4vw,1.9rem)] font-extrabold text-white"
+        style={{ fontFamily: FONTE }}>
+        <Icone className="h-7 w-7 shrink-0" style={{ color: OURO }} strokeWidth={2.3} /> {titulo}
       </h2>
       {escolas.length === 0 ? (
-        <p className="py-6 text-center text-sm text-zinc-500">Sem dados ainda.</p>
+        <p className="py-10 text-center text-white/40">Sem dados ainda.</p>
       ) : (
-        <ol className="space-y-2">
-          {escolas.map((e, i) => (
-            <li key={e.nome}
-                className={`flex items-center gap-3 rounded-xl px-4 py-3 ${
-                  i < 3 ? "bg-amber-50 dark:bg-amber-500/10" : "bg-zinc-50 dark:bg-zinc-800/50"}`}>
-              <span className="w-8 text-center text-xl font-bold tabular-nums">
-                {i < 3 ? MEDALHA[i] : `${i + 1}º`}
-              </span>
-              <span className="flex-1 truncate text-base font-semibold">{e.nome}</span>
-              <span className="text-lg font-bold tabular-nums text-indigo-600 dark:text-indigo-400">
-                {nota(e.valor)}
-              </span>
-            </li>
+        <ol className="space-y-2.5">
+          {escolas.slice(0, 5).map((e, i) => (
+            <LinhaEscola key={e.nome} pos={i + 1} escola={e} topo={topo} />
           ))}
         </ol>
       )}
@@ -46,42 +72,70 @@ function Coluna({ titulo, icone, escolas }: {
   );
 }
 
+function Moldura({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative flex min-h-screen items-center justify-center bg-[#0F1626] px-6 text-center text-white/70"
+      style={{ minHeight: "100dvh" }}>
+      <FundoConstela cor="#5B6EE1" />
+      <div className="relative">{children}</div>
+    </div>
+  );
+}
+
 export default function PainelPublicoRede() {
   const { token } = useParams<{ token: string }>();
-  const { dados, erro, carregando } = useApi<PainelPublico>(
+  const { dados, erro, carregando, recarregar } = useApi<PainelPublico>(
     token ? `/publico/rede/${token}` : null);
 
-  if (carregando && !dados) return <Carregando texto="Carregando o painel..." />;
+  // Telão: revalida a cada 60s (pega quando a vitrine é desligada e some).
+  useEffect(() => {
+    const t = window.setInterval(recarregar, 60_000);
+    return () => window.clearInterval(t);
+  }, [recarregar]);
+
+  if (carregando && !dados) {
+    return <Moldura><p className="flex items-center gap-3 text-lg">
+      <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
+      Carregando a vitrine...
+    </p></Moldura>;
+  }
   if (erro || !dados) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-8 text-center">
-        <p className="text-lg text-zinc-500">
-          Painel público não encontrado ou desativado.
-        </p>
-      </div>
-    );
+    // Transitório (rede/servidor) mostra "reconectando"; 404 = desativada.
+    const transitorio = !(erro instanceof ApiError)
+      || erro.status === 0 || erro.status === 408 || erro.status >= 500;
+    return <Moldura><p className="text-xl">
+      {transitorio ? "Reconectando à vitrine..." : "Vitrine não encontrada ou desativada."}
+    </p></Moldura>;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-white px-4 py-10 dark:from-zinc-950 dark:to-zinc-900">
-      <div className="mx-auto max-w-4xl">
+    <div className="relative min-h-screen bg-[#0F1626] px-4 py-10 text-white" style={{ minHeight: "100dvh" }}>
+      <FundoConstela cor="#5B6EE1" />
+      <div className="relative mx-auto max-w-5xl">
         <header className="mb-8 text-center">
-          <p className="text-sm font-semibold uppercase tracking-widest text-indigo-500">
+          <div className="mb-3 flex items-center justify-center gap-2.5">
+            <img src="/simbolo-escuro.svg" alt="Constela Edu" width={40} height={40} className="h-9 w-9" />
+          </div>
+          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">
             Secretaria de Educação
           </p>
-          <h1 className="mt-1 text-3xl font-extrabold text-zinc-800 dark:text-zinc-100">
+          <h1 className="mt-1 text-[clamp(1.8rem,4vw,3rem)] font-extrabold text-white" style={{ fontFamily: FONTE }}>
             {dados.rede_nome}
           </h1>
-          <p className="mt-2 text-zinc-500">Escolas em destaque da nossa rede</p>
+          <p className="mt-2 text-white/50">As escolas em destaque da nossa rede</p>
         </header>
 
         <div className="flex flex-col gap-6 md:flex-row">
-          <Coluna titulo="Leitura" icone={<BookOpen size={22} />} escolas={dados.top_leitura} />
-          <Coluna titulo="Matemática" icone={<Calculator size={22} />} escolas={dados.top_matematica} />
+          <Coluna titulo="Leitura" icone={BookOpen} escolas={dados.top_leitura} />
+          <Coluna titulo="Matemática" icone={Calculator} escolas={dados.top_matematica} />
         </div>
 
-        <footer className="mt-10 text-center text-xs text-zinc-400">
-          Constela Edu — celebrando o esforço de cada escola. Sem dados individuais de estudantes.
+        <footer className="mt-10 flex items-center justify-center gap-2 text-center text-xs text-white/40">
+          <img src="/simbolo-escuro.svg" alt="" aria-hidden width={16} height={16} className="h-4 w-4 opacity-70" />
+          <span style={{ fontFamily: FONTE }}>
+            constela<span className="text-amber-300">edu</span>
+          </span>
+          <span>· celebrando o esforço de cada escola · sem dados individuais de estudantes</span>
         </footer>
       </div>
     </div>

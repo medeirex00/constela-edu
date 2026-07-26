@@ -353,11 +353,13 @@ class RedePublicoIn(BaseModel):
 
 
 class EscolaLocalIn(BaseModel):
-    """Localização da escola (para o mapa da Secretaria) — cidade/UF e as
-    coordenadas geográficas — e o código INEP (para casar avaliações oficiais).
-    Atualização parcial."""
+    """Localização da escola (para o mapa da Secretaria) — cidade/UF, bairro/
+    endereço (geocodificação), coordenadas — e o código INEP (para casar
+    avaliações oficiais). Atualização parcial."""
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
+    bairro: str | None = Field(default=None, max_length=120)
+    endereco: str | None = Field(default=None, max_length=200)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     # "" limpa o código; qualquer valor é normalizado p/ 8 dígitos no endpoint.

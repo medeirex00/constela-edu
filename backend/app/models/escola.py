@@ -16,6 +16,10 @@ class Escola(Base):
     nome: Mapped[str] = mapped_column(String(200), index=True)
     cidade: Mapped[str | None] = mapped_column(String(120))
     estado: Mapped[str | None] = mapped_column(String(2))
+    # Bairro: usado para geocodificar no mapa (o OSM acha o bairro; o NOME da
+    # escola municipal quase nunca está lá). Endereço opcional refina ainda mais.
+    bairro: Mapped[str | None] = mapped_column(String(120), default=None)
+    endereco: Mapped[str | None] = mapped_column(String(200), default=None)
     logotipo_url: Mapped[str | None] = mapped_column(String(500))
     ano_letivo_ativo: Mapped[int] = mapped_column(default=2026)
     status: Mapped[str] = mapped_column(String(20), default="ativa")  # ativa | inativa

@@ -380,8 +380,10 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
     else:
         dados = _dados_publicos(db, escola, config)
         _cache_painel[escola.id] = (agora, dados)
-    # O próprio navegador/proxy também absorve parte dos polls.
-    response.headers["Cache-Control"] = f"public, max-age={TTL_PAINEL_S}"
+    # NUNCA cachear no navegador/CDN: DESLIGAR o painel (ou trocar o token) tem que
+    # bloquear NA HORA, e o payload pode conter nome de criança (anonimizar=False).
+    # O cache em memória (_cache_painel) já absorve os polls do telão no servidor.
+    response.headers["Cache-Control"] = "no-store"
     return dados
 
 
@@ -438,8 +440,12 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
 
 
 @publico_router.get("/{token}/alunos/{aluno_id}")
-def perfil_publico(token: str, aluno_id: int, db: Session = Depends(get_db)):
+def perfil_publico(token: str, aluno_id: int, response: Response,
+                   db: Session = Depends(get_db)):
     """Perfil público restrito a dados pedagógicos (PRD §120)."""
+    # Nunca cachear: pode ter nome de criança (anonimizar=False) e o desligar/
+    # trocar token tem que bloquear na hora — não sobreviver no cache de borda.
+    response.headers["Cache-Control"] = "no-store"
     resolvido = _escola_pelo_token(db, token)
     if resolvido is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
@@ -494,7 +500,9 @@ def painel_publico_rede(token: str, response: Response, db: Session = Depends(ge
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "Painel público não encontrado ou desativado.")
-    response.headers["Cache-Control"] = "public, max-age=300"
+    # NUNCA cachear: DESLIGAR a vitrine (token=None) tem que bloquear NA HORA. Com
+    # cache, o link continuava servindo o quadro antigo por minutos após o desligar.
+    response.headers["Cache-Control"] = "no-store"
     return svc_rede.painel_publico_rede(db, rede.id)
 
 

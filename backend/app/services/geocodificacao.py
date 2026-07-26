@@ -33,9 +33,13 @@ Geocoder = Callable[[str], Optional[tuple[float, float]]]
 
 
 def montar_consulta(escola: Escola) -> str:
-    """Endereço textual a partir do que a escola tiver preenchido (nome, cidade,
-    UF). Ordem do mais específico ao mais geral; ignora campos vazios."""
-    partes = [escola.nome, escola.cidade, escola.estado, "Brasil"]
+    """Endereço textual para o OSM. Se a escola tem BAIRRO/endereço, usa ELES (o
+    OSM conhece bairros/ruas — acha a localização); senão, cai no NOME + cidade
+    (o comportamento antigo, que só acha escolas famosas). Ignora campos vazios."""
+    if escola.bairro or escola.endereco:
+        partes = [escola.endereco, escola.bairro, escola.cidade, escola.estado, "Brasil"]
+    else:
+        partes = [escola.nome, escola.cidade, escola.estado, "Brasil"]
     return ", ".join(p.strip() for p in partes if p and str(p).strip())
 
 

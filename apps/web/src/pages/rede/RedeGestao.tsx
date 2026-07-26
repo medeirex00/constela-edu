@@ -39,6 +39,7 @@ interface EscolaItem {
   nome: string;
   cidade: string | null;
   estado: string | null;
+  bairro: string | null;
   status: string;
   rede_id: number | null;
   latitude: number | null;
@@ -88,7 +89,7 @@ export default function RedeGestao() {
   // Seleções editáveis da rede escolhida
   const [escolasSel, setEscolasSel] = useState<Set<number>>(new Set());
   const [usuariosSel, setUsuariosSel] = useState<Set<number>>(new Set());
-  const [coords, setCoords] = useState<Record<number, { cidade: string; uf: string; lat: string; lng: string }>>({});
+  const [coords, setCoords] = useState<Record<number, { cidade: string; bairro: string; uf: string; lat: string; lng: string }>>({});
   // Códigos INEP (editável) + as propostas do casamento automático (para conferência).
   const [inep, setInep] = useState<Record<number, string>>({});
   const [propostas, setPropostas] = useState<Record<number, PropostaInep>>({});
@@ -113,6 +114,7 @@ export default function RedeGestao() {
         .filter((e) => e.rede_id === redeSel)
         .map((e) => [e.id, {
           cidade: e.cidade ?? "",
+          bairro: e.bairro ?? "",
           uf: e.estado ?? "",
           lat: e.latitude != null ? String(e.latitude) : "",
           lng: e.longitude != null ? String(e.longitude) : "",
@@ -217,6 +219,7 @@ export default function RedeGestao() {
       if (!c) continue;
       const corpo: Record<string, unknown> = {};
       if (c.cidade.trim()) corpo.cidade = c.cidade.trim();
+      if (c.bairro.trim()) corpo.bairro = c.bairro.trim();  // bairro = a chave da geocodificação
       if (c.uf.trim()) corpo.estado = c.uf.trim().toUpperCase();
       if (c.lat.trim() !== "" && c.lng.trim() !== "") {
         const lat = Number(c.lat.replace(",", "."));
@@ -469,10 +472,10 @@ export default function RedeGestao() {
                   </div>
                 </div>
                 <p className="mb-2 text-xs text-zinc-500">
-                  Preencha ao menos a <b>cidade</b> e clique em <b>Geocodificar</b> — o sistema
-                  busca as coordenadas no OpenStreetMap e posiciona os marcadores do mapa. Você
-                  também pode informar latitude/longitude à mão (corrige o que não for localizado).
-                  Salve os vínculos das escolas antes de posicionar.
+                  Preencha o <b>bairro</b> (e a cidade) e clique em <b>Geocodificar</b> — o sistema
+                  acha as coordenadas no OpenStreetMap pelo bairro e posiciona os marcadores.
+                  Sem o bairro, escolas municipais pequenas costumam não ser localizadas.
+                  Você também pode informar latitude/longitude à mão. Salve os vínculos antes.
                 </p>
                 {escolasNaRede.length === 0 ? (
                   <p className="py-4 text-center text-sm text-zinc-500">
@@ -481,15 +484,21 @@ export default function RedeGestao() {
                 ) : (
                   <div className="space-y-1.5">
                     {escolasNaRede.map((e) => {
-                      const c = coords[e.id] ?? { cidade: "", uf: "", lat: "", lng: "" };
+                      const c = coords[e.id] ?? { cidade: "", bairro: "", uf: "", lat: "", lng: "" };
                       return (
                         <div key={e.id} className="flex flex-wrap items-center gap-2">
                           <span className="w-40 truncate text-sm font-medium">{e.nome}</span>
                           <input
-                            className={`${estiloInput} w-40`}
+                            className={`${estiloInput} w-36`}
                             placeholder="cidade"
                             value={c.cidade}
                             onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, cidade: ev.target.value } }))}
+                          />
+                          <input
+                            className={`${estiloInput} w-40`}
+                            placeholder="bairro (para o mapa)"
+                            value={c.bairro}
+                            onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, bairro: ev.target.value } }))}
                           />
                           <input
                             className={`${estiloInput} w-14`}

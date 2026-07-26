@@ -81,6 +81,7 @@ def gerenciar(
         ],
         "escolas": [
             {"id": e.id, "nome": e.nome, "cidade": e.cidade, "estado": e.estado,
+             "bairro": e.bairro, "endereco": e.endereco,
              "status": e.status, "rede_id": e.rede_id,
              "latitude": e.latitude, "longitude": e.longitude,
              "codigo_inep": e.codigo_inep}
@@ -198,6 +199,7 @@ def atualizar_local_escola(
     db.commit()
     db.refresh(escola)
     return {"id": escola.id, "cidade": escola.cidade, "estado": escola.estado,
+            "bairro": escola.bairro, "endereco": escola.endereco,
             "latitude": escola.latitude, "longitude": escola.longitude,
             "codigo_inep": escola.codigo_inep}
 

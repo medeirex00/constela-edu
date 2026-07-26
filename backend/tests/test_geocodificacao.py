@@ -18,6 +18,17 @@ from app.services import geocodificacao as svc
 def test_montar_consulta_usa_campos_preenchidos():
     e = Escola(nome="EM Centro", cidade="Caraguatatuba", estado="SP")
     assert svc.montar_consulta(e) == "EM Centro, Caraguatatuba, SP, Brasil"
+
+
+def test_montar_consulta_prefere_bairro_ao_nome():
+    # Com bairro, busca pelo BAIRRO (o OSM acha) — não pelo nome da escola.
+    e = Escola(nome="EMEF Jorge Passos", cidade="Caraguatatuba", estado="SP",
+               bairro="Jaraguazinho")
+    assert svc.montar_consulta(e) == "Jaraguazinho, Caraguatatuba, SP, Brasil"
+    # Com endereço + bairro, refina ainda mais.
+    e2 = Escola(nome="EM X", cidade="Caraguatatuba", estado="SP",
+                bairro="Tabatinga", endereco="Rua das Flores, 100")
+    assert svc.montar_consulta(e2) == "Rua das Flores, 100, Tabatinga, Caraguatatuba, SP, Brasil"
     # Campos vazios são ignorados (sem vírgulas duplas).
     assert svc.montar_consulta(Escola(nome="EM X")) == "EM X, Brasil"
 
