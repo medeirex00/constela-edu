@@ -14,7 +14,7 @@ import io
 from itertools import islice
 from typing import Iterator
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import AvaliacaoExterna, Escola, ResultadoAvaliacao
@@ -255,4 +255,126 @@ def importar_resultados(
         "nao_casados": nao_casados,
         "ignorados": ignorados,
         "inep_nao_casados_amostra": sorted(inep_nao_casados)[:20],
+    }
+
+
+# --- Correlação / evolução (cruzar avaliação × engajamento) -------------------
+
+def _escolas_da_rede_ids(db: Session, rede_id: int) -> list[int]:
+    return list(db.execute(select(Escola.id).where(Escola.rede_id == rede_id)).scalars())
+
+
+def opcoes_rede(db: Session, rede_id: int) -> list[dict]:
+    """As séries de avaliação que EXISTEM para as escolas da rede — por
+    (avaliação, indicador, etapa, componente) e as edições presentes. A tela usa
+    para montar os seletores sem oferecer combinação vazia."""
+    ids = _escolas_da_rede_ids(db, rede_id)
+    if not ids:
+        return []
+    linhas = db.execute(
+        select(AvaliacaoExterna.chave, AvaliacaoExterna.nome, AvaliacaoExterna.tipo,
+               ResultadoAvaliacao.indicador, ResultadoAvaliacao.etapa,
+               ResultadoAvaliacao.componente, ResultadoAvaliacao.edicao)
+        .join(ResultadoAvaliacao, ResultadoAvaliacao.avaliacao_id == AvaliacaoExterna.id)
+        .where(ResultadoAvaliacao.escola_id.in_(ids))
+        .distinct()
+    ).all()
+    series: dict[tuple, dict] = {}
+    for chave, nome, tipo, indicador, etapa, componente, edicao in linhas:
+        k = (chave, indicador, etapa, componente)
+        s = series.setdefault(k, {
+            "avaliacao": chave, "nome": nome, "tipo": tipo, "indicador": indicador,
+            "etapa": etapa, "componente": componente, "edicoes": set()})
+        s["edicoes"].add(edicao)
+    saida = []
+    for s in series.values():
+        s = {**s, "edicoes": sorted(s["edicoes"], reverse=True)}
+        saida.append(s)
+    saida.sort(key=lambda s: (s["nome"], s["indicador"] or "", s["etapa"] or "",
+                              s["componente"] or ""))
+    return saida
+
+
+def _pearson(pares: list[tuple[float, float]]) -> float | None:
+    """Correlação de Pearson de uma lista de (x, y). None se n<3 ou variância nula
+    (sem correlação definível — a tela mostra 'dados insuficientes')."""
+    n = len(pares)
+    if n < 3:
+        return None
+    mx = sum(x for x, _ in pares) / n
+    my = sum(y for _, y in pares) / n
+    sxy = sum((x - mx) * (y - my) for x, y in pares)
+    sxx = sum((x - mx) ** 2 for x, _ in pares)
+    syy = sum((y - my) ** 2 for _, y in pares)
+    if sxx <= 0 or syy <= 0:
+        return None
+    return round(sxy / (sxx ** 0.5 * syy ** 0.5), 3)
+
+
+def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicador: str,
+                    edicao: int, etapa: str | None = None, componente: str | None = None,
+                    metrica: str = "media_geral") -> dict:
+    """Cruza, por ESCOLA da rede, o valor da avaliação (edição escolhida) com o
+    ENGAJAMENTO nas plataformas (média_geral ou adoção). Devolve os pontos do
+    gráfico de dispersão, a correlação de Pearson e a EVOLUÇÃO histórica (média da
+    rede por edição). NUNCA afirma causalidade — a tela deixa isso explícito."""
+    from app.services import rede as svc_rede  # engajamento por escola (reuso)
+
+    if metrica not in ("media_geral", "adocao"):
+        metrica = "media_geral"
+    av = obter_avaliacao(db, avaliacao_chave)
+    engaj = {c["escola_id"]: c for c in svc_rede._kpis_da_rede(db, rede_id)}
+    ids = _escolas_da_rede_ids(db, rede_id)
+
+    def _filtro(q):
+        # ESCOPO da rede (isolamento): só resultados das escolas DESTA rede — senão
+        # a evolução somaria escolas de outras redes que importaram a mesma série.
+        q = q.where(ResultadoAvaliacao.avaliacao_id == av.id,
+                    ResultadoAvaliacao.indicador == indicador,
+                    ResultadoAvaliacao.escola_id.in_(ids))
+        q = q.where(ResultadoAvaliacao.etapa == etapa) if etapa else q.where(
+            ResultadoAvaliacao.etapa.is_(None))
+        q = q.where(ResultadoAvaliacao.componente == componente) if componente else q.where(
+            ResultadoAvaliacao.componente.is_(None))
+        return q
+
+    # Valor por ESCOLA (média sobre eventuais turmas) na edição escolhida — 1 ponto
+    # por escola, determinístico mesmo se a fonte trouxer resultado por turma.
+    valores = {
+        eid: v for eid, v in db.execute(
+            _filtro(select(ResultadoAvaliacao.escola_id,
+                           func.avg(ResultadoAvaliacao.valor)))
+            .where(ResultadoAvaliacao.edicao == edicao)
+            .group_by(ResultadoAvaliacao.escola_id))
+    }
+    pontos = []
+    for eid, valor in valores.items():
+        c = engaj.get(eid)
+        if c is None or c.get("alunos_com_dados", 0) <= 0:
+            continue  # sem engajamento com dados: não entra na correlação
+        x = float(c[metrica])
+        pontos.append({"escola_id": eid, "nome": c["nome"], "x": round(x, 1),
+                       "y": round(float(valor), 2)})
+    pearson = _pearson([(p["x"], p["y"]) for p in pontos])
+
+    # Evolução: média por (escola, edição) e DEPOIS média entre as escolas por
+    # edição (ponderação por escola, não por linha) + contagem de escolas DISTINTAS.
+    sub = (_filtro(select(ResultadoAvaliacao.edicao.label("ed"),
+                          ResultadoAvaliacao.escola_id.label("eid"),
+                          func.avg(ResultadoAvaliacao.valor).label("v")))
+           .group_by(ResultadoAvaliacao.edicao, ResultadoAvaliacao.escola_id)
+           .subquery())
+    ev = db.execute(
+        select(sub.c.ed, func.avg(sub.c.v), func.count(sub.c.eid))
+        .group_by(sub.c.ed).order_by(sub.c.ed)
+    ).all()
+    evolucao = [{"edicao": e, "media_valor": round(float(m), 2), "escolas": int(n)}
+                for e, m, n in ev]
+
+    return {
+        "avaliacao": av.chave, "nome": av.nome, "tipo": av.tipo,
+        "indicador": indicador, "etapa": etapa, "componente": componente,
+        "edicao": edicao, "metrica": metrica,
+        "pontos": pontos, "n": len(pontos), "pearson": pearson,
+        "evolucao": evolucao,
     }

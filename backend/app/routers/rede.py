@@ -22,6 +22,7 @@ from app.schemas import (
     RedeUpdate,
     RedeUsuariosIn,
 )
+from app.services import avaliacoes as svc_avaliacoes
 from app.services import geocodificacao as svc_geo
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
@@ -294,6 +295,35 @@ def ranking(
     """Ranking municipal POR ESCOLA (privacidade: não expõe ranking individual de
     crianças entre escolas). Ordena por média geral e adoção."""
     return svc_rede.ranking_escolas(db, rede_id, limite=limite)
+
+
+@router.get("/{rede_id}/avaliacoes/opcoes")
+def avaliacoes_opcoes(
+    rede_id: int = Depends(exigir_rede),
+    db: Session = Depends(get_db),
+):
+    """Séries de avaliação disponíveis para as escolas da rede (para os seletores
+    da tela de correlação) — só combinações que têm dado."""
+    return svc_avaliacoes.opcoes_rede(db, rede_id)
+
+
+@router.get("/{rede_id}/avaliacoes/correlacao")
+def avaliacoes_correlacao(
+    rede_id: int = Depends(exigir_rede),
+    avaliacao: str = Query(...),
+    indicador: str = Query(...),
+    edicao: int = Query(...),
+    etapa: str | None = Query(default=None),
+    componente: str | None = Query(default=None),
+    metrica: str = Query(default="media_geral"),
+    db: Session = Depends(get_db),
+):
+    """Cruza, por escola, a avaliação oficial × o engajamento nas plataformas:
+    pontos do gráfico, correlação de Pearson e a evolução histórica. Sem afirmar
+    causalidade (a tela deixa explícito). Só dados agregados por escola."""
+    return svc_avaliacoes.correlacao_rede(
+        db, rede_id, avaliacao_chave=avaliacao, indicador=indicador, edicao=edicao,
+        etapa=etapa, componente=componente, metrica=metrica)
 
 
 @router.get("/{rede_id}/boletim")

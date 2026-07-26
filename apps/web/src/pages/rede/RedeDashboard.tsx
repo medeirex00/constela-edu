@@ -14,6 +14,7 @@ import {
   Building2,
   FileDown,
   GraduationCap,
+  LineChart,
   MapPin,
   Scale,
   Settings2,
@@ -216,6 +217,9 @@ function PainelRede({ redeId }: { redeId: number }) {
         descricao="Visão consolidada da rede: desempenho, adoção, equidade entre escolas e distribuição geográfica."
         acoes={
           <div className="flex flex-wrap gap-2">
+            <Botao variante="neutro" onClick={() => navegar("/rede/avaliacoes")}>
+              <LineChart size={15} /> Avaliações externas
+            </Botao>
             <Botao variante="neutro" onClick={baixarBoletim} disabled={baixando}>
               <FileDown size={15} /> {baixando ? "Gerando..." : "Baixar boletim (PDF)"}
             </Botao>

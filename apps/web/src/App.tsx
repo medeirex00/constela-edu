@@ -36,6 +36,7 @@ const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
 const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
+const RedeAvaliacoes = lazy(() => import("./pages/rede/RedeAvaliacoes"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -141,6 +142,8 @@ export default function App() {
           {/* Provisionar redes (criar, vincular escolas + coords, designar Secretaria)
               é ação de admin GLOBAL — uma rede cruza várias escolas. */}
           <Route path="/rede/gerenciar" element={<RotaGlobal><RedeGestao /></RotaGlobal>} />
+          {/* Avaliações externas (SAEB/IDEB/...) × engajamento — Secretaria ou global. */}
+          <Route path="/rede/avaliacoes" element={<RotaRede><RedeAvaliacoes /></RotaRede>} />
 
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
           <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />
