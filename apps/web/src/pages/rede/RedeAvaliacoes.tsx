@@ -282,14 +282,14 @@ function ImportarAvaliacao({ catalogo, aoImportar }: {
         <FileUp size={16} className="text-indigo-600" /> Importar resultado oficial
       </h2>
       <p className="text-xs text-zinc-500">
-        Suba a planilha oficial (XLSX/CSV) do INEP/SEDUC. O sistema mostra as primeiras linhas;
+        Suba o arquivo oficial (XLSX, CSV ou o ZIP) do INEP/SEDUC. O sistema mostra as primeiras linhas;
         você escolhe a linha onde começam os dados e qual coluna é o código INEP e o valor.
         O casamento com as escolas é pelo <b>código INEP</b>.
       </p>
 
       <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
         <Upload size={15} /> {arquivo ? arquivo.name : "Escolher arquivo..."}
-        <input type="file" accept=".xlsx,.xls,.csv" className="hidden"
+        <input type="file" accept=".xlsx,.xls,.csv,.zip" className="hidden"
                onChange={(e) => { const f = e.target.files?.[0]; if (f) analisar(f); }} />
       </label>
 

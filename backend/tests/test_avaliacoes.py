@@ -180,6 +180,28 @@ def test_dimensao_mapeada_vazia_vira_null_nao_string_none(db, escola_completa):
     assert r.componente is None   # e NÃO "None"
 
 
+def test_importa_de_dentro_de_zip(db):
+    # Os arquivos oficiais do INEP (IDEB/SAEB) vêm em ZIP — o importador extrai o
+    # XLSX/CSV de dentro sozinho (o gestor não descompacta à mão).
+    import zipfile
+    rede = Rede(nome="Rede Zip", status="ativa"); db.add(rede); db.flush()
+    _escola_inep(db, rede.id, "EM A", "35012345")
+    db.commit()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("divulgacao_anos_iniciais_escolas_2023/planilha.csv", _PLANILHA.decode("utf-8"))
+    conteudo = buf.getvalue()
+
+    a = svc.analisar_planilha(conteudo, "ideb.zip")
+    assert a["primeiras_linhas"][1] == ["CO_ESCOLA", "NO_ESCOLA", "IDEB_2023"]
+    res = svc.importar_resultados(
+        db, conteudo, "ideb.zip", avaliacao_chave="ideb", edicao=2023, indicador="ideb",
+        unidade="indice", linha_dados=2, col_inep=0, col_valor=2, etapa_fixa="anos_iniciais",
+        escopo_escolas=None)
+    db.commit()
+    assert res["casados"] == 1                          # casou EM A pelo INEP, de dentro do ZIP
+
+
 def test_importar_endpoint_avaliacao_desconhecida_400(db, escola_completa, cliente):
     r = cliente.post(
         "/api/v1/avaliacoes/importar",

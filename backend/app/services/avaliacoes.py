@@ -60,11 +60,33 @@ def _nao_vazia(linha: list) -> bool:
     return any(c is not None and str(c).strip() for c in linha)
 
 
+# Teto do arquivo INTERNO descomprimido de um ZIP — barra zip-bomb (os arquivos
+# oficiais por escola têm poucos MB; 150MB é folga larga).
+_MAX_ZIP_INTERNO = 150 * 1024 * 1024
+
+
 def _iterar_grade(conteudo: bytes, nome: str) -> Iterator[list]:
     """GERA as linhas não-vazias do arquivo (1ª aba do XLSX, ou CSV) em STREAMING
     — não materializa a grade inteira (senão um XLSX comprimido explodiria em
-    memória). Nunca levanta por conteúdo: arquivo ilegível → não gera nada."""
+    memória). Arquivos oficiais do INEP vêm em ZIP: extrai o 1º XLSX/CSV de dentro.
+    Nunca levanta por conteúdo: arquivo ilegível → não gera nada."""
     nome_l = (nome or "").lower()
+    if nome_l.endswith(".zip"):
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+                interno = next(
+                    (n for n in zf.namelist()
+                     if n.lower().endswith((".xlsx", ".xlsm", ".csv"))
+                     and not n.startswith("__MACOSX")),
+                    None)
+                if interno is None or zf.getinfo(interno).file_size > _MAX_ZIP_INTERNO:
+                    return
+                dados = zf.read(interno)
+        except Exception:  # noqa: BLE001 — zip corrompido: não gera nada
+            return
+        yield from _iterar_grade(dados, interno)  # recursa com o arquivo de dentro
+        return
     try:
         if nome_l.endswith((".xlsx", ".xlsm")):
             from openpyxl import load_workbook
