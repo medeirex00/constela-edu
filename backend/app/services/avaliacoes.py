@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import csv
 import io
+import ipaddress
+import socket
+from datetime import datetime, timedelta, timezone
 from itertools import islice
-from typing import Iterator
+from typing import Callable, Iterator
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import AvaliacaoExterna, Escola, ResultadoAvaliacao
+from app.core.config import settings
+from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao
 
 # Teto rígido de linhas processadas na importação — barra decompression-bomb de
 # XLSX (arquivo pequeno comprimido que declara milhões de linhas). Muito acima de
@@ -400,3 +406,121 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
         "pontos": pontos, "n": len(pontos), "pearson": pearson,
         "evolucao": evolucao,
     }
+
+
+# --- Coleta AUTOMÁTICA (o "robô": baixa o arquivo oficial e importa) ----------
+
+Baixador = Callable[[str], bytes]
+_UA_NAVEGADOR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                 "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+_MAX_DOWNLOAD = 60 * 1024 * 1024  # teto do arquivo baixado
+
+
+def _agora() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+_MAX_REDIRECTS = 5
+
+
+def _exigir_destino_publico(url: str) -> None:
+    """Anti-SSRF: só https e host que resolve para IP PÚBLICO (rejeita privado/
+    loopback/link-local/reservado/multicast — inclui 169.254.169.254 de metadata).
+    Aplicado ANTES de cada conexão, inclusive a cada redirect (revalida o salto)."""
+    partes = urlparse(url)
+    if partes.scheme != "https":
+        raise ValueError(f"esquema não permitido (só https): {partes.scheme or 'vazio'}")
+    host = partes.hostname
+    if not host:
+        raise ValueError("URL sem host")
+    try:
+        infos = socket.getaddrinfo(host, partes.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"host não resolvido: {host}") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ValueError(f"host aponta para rede não-pública ({ip}): {host}")
+
+
+def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
+    """Baixa o arquivo oficial (User-Agent de navegador — os portais oficiais
+    bloqueiam clientes 'crus'). Guarda anti-SSRF: só https para host público, e os
+    redirects são seguidos MANUALMENTE revalidando cada destino (o alvo final não
+    fica a cargo do upstream). LEVANTA em erro; o chamador registra o status."""
+    cabecalhos = {"User-Agent": _UA_NAVEGADOR, "Accept": "*/*"}
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos) as cli:
+        for _ in range(_MAX_REDIRECTS + 1):
+            _exigir_destino_publico(url)
+            with cli.stream("GET", url) as r:
+                if r.is_redirect:
+                    destino = r.headers.get("location")
+                    if not destino:
+                        raise ValueError("redirect sem destino")
+                    url = str(r.url.join(destino))  # resolve relativo → absoluto
+                    continue
+                r.raise_for_status()
+                buf = bytearray()
+                for chunk in r.iter_bytes():
+                    buf += chunk
+                    if len(buf) > _MAX_DOWNLOAD:
+                        raise ValueError("arquivo excede o teto de download")
+                return bytes(buf)
+    raise ValueError("excesso de redirects")
+
+
+def _nome_do_url(url: str) -> str:
+    return url.rstrip("/").split("/")[-1] or "arquivo"
+
+
+def coletar_fonte(db: Session, fonte: FonteAvaliacao,
+                  baixador: Baixador | None = None) -> dict:
+    """Baixa o arquivo da fonte e importa (MESMA máquina do upload manual), casando
+    por INEP globalmente. NUNCA levanta: erro de download/parse vira ultimo_status=
+    'erro' (o painel mostra — não quebra em silêncio). ``baixador`` é injetável
+    (default = ``baixar_url``, resolvido em tempo de chamada p/ ser testável)."""
+    baixador = baixador or baixar_url
+    av = db.get(AvaliacaoExterna, fonte.avaliacao_id)
+    m = fonte.mapeamento or {}
+    try:
+        conteudo = baixador(fonte.url)
+        resumo = importar_resultados(
+            db, conteudo, _nome_do_url(fonte.url),
+            avaliacao_chave=av.chave, edicao=fonte.edicao,
+            indicador=fonte.indicador, unidade=fonte.unidade,
+            linha_dados=int(m.get("linha_dados", 0)),
+            col_inep=int(m.get("col_inep", 0)), col_valor=int(m.get("col_valor", 0)),
+            col_etapa=m.get("col_etapa"), col_componente=m.get("col_componente"),
+            col_turma=m.get("col_turma"),
+            etapa_fixa=m.get("etapa_fixa"), componente_fixo=m.get("componente_fixo"),
+            escopo_escolas=None)  # global: casa qualquer escola da base por código INEP
+        fonte.ultimo_status, fonte.ultimo_erro, fonte.ultimo_resumo = "ok", None, resumo
+    except Exception as exc:  # noqa: BLE001 — nunca quebra: registra o erro
+        fonte.ultimo_status = "erro"
+        fonte.ultimo_erro = f"{type(exc).__name__}: {exc}"[:300]
+        fonte.ultimo_resumo = {"erro": fonte.ultimo_erro}
+    fonte.ultima_coleta = _agora()
+    fonte.proxima_coleta = (_agora() + timedelta(days=30)) if fonte.cadencia == "mensal" else None
+    return {"status": fonte.ultimo_status, **(fonte.ultimo_resumo or {})}
+
+
+def coletar_pendentes(db: Session, baixador: Baixador | None = None,
+                      limite: int | None = None) -> int:
+    """Coleta as fontes ATIVAS com proxima_coleta vencida — chamado pelo scheduler.
+    Devolve quantas foram coletadas. ``limite`` é o TETO por rodada (a coleta roda
+    embutida na thread do sync; sem teto, muitas fontes — ou uma lenta — poderiam
+    estagnar a fila). O que sobrar vai na próxima rodada; a mais antiga vai primeiro."""
+    limite = settings.AVALIACOES_COLETA_POR_RODADA if limite is None else limite
+    pendentes = db.execute(
+        select(FonteAvaliacao).where(
+            FonteAvaliacao.ativo.is_(True),
+            FonteAvaliacao.proxima_coleta.isnot(None),
+            FonteAvaliacao.proxima_coleta <= _agora(),
+        ).order_by(FonteAvaliacao.proxima_coleta).limit(limite)
+    ).scalars().all()
+    for fonte in pendentes:
+        coletar_fonte(db, fonte, baixador)
+    if pendentes:
+        db.commit()
+    return len(pendentes)

@@ -7,10 +7,22 @@
  * (2) IMPORTAÇÃO — upload do arquivo oficial → mapear colunas → conferir → gravar
  * (casa por código INEP). Só dados agregados por escola.
  */
-import { AlertTriangle, FileUp, Info, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  Clock,
+  FileUp,
+  Info,
+  Pause,
+  Play,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
+  Badge,
   Botao,
   Campo,
   Card,
@@ -22,7 +34,7 @@ import {
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
-import { ApiError, apiUpload } from "../../lib/api";
+import { ApiError, api, apiUpload } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
 interface SerieOpcao {
@@ -38,6 +50,19 @@ interface Correlacao {
 }
 interface CatalogoItem { chave: string; nome: string; tipo: string; descricao: string | null }
 interface Analise { linhas_lidas: number; n_colunas: number; primeiras_linhas: string[][] }
+interface Mapeamento {
+  linha_dados: number; col_inep: number; col_valor: number;
+  col_etapa?: number | null; col_componente?: number | null; col_turma?: number | null;
+  etapa_fixa?: string | null; componente_fixo?: string | null;
+}
+interface Fonte {
+  id: number; avaliacao: string; avaliacao_nome: string | null; nome: string;
+  url: string; edicao: number; indicador: string; unidade: string;
+  cadencia: string; ativo: boolean; mapeamento: Mapeamento;
+  ultima_coleta: string | null; proxima_coleta: string | null;
+  ultimo_status: string; ultimo_erro: string | null;
+  ultimo_resumo: Record<string, unknown> | null;
+}
 
 const METRICAS: Record<string, string> = {
   media_geral: "Média geral (engajamento)",
@@ -205,13 +230,19 @@ const PRESETS: Record<string, { indicador: string; unidade: string }> = {
   crianca_alfabetizada: { indicador: "proficiencia", unidade: "pontos" },
 };
 
-function ImportarAvaliacao({ catalogo, aoImportar }: {
+function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
   catalogo: CatalogoItem[]; aoImportar: () => void;
+  ehGlobal: boolean; aoSalvarFonte?: () => void;
 }) {
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [analise, setAnalise] = useState<Analise | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  // Robô (só admin global): salvar o MESMO mapeamento como fonte de coleta.
+  const [urlFonte, setUrlFonte] = useState("");
+  const [cadencia, setCadencia] = useState("mensal");
+  const [salvandoFonte, setSalvandoFonte] = useState(false);
+  const [msgFonte, setMsgFonte] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
 
   const [avaliacao, setAvaliacao] = useState("ideb");
   const [edicao, setEdicao] = useState(new Date().getFullYear() - 1);
@@ -274,6 +305,32 @@ function ImportarAvaliacao({ catalogo, aoImportar }: {
     } catch (e) {
       setMsg({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Falha ao importar." });
     } finally { setOcupado(false); }
+  }
+
+  async function salvarFonte() {
+    setSalvandoFonte(true); setMsgFonte(null);
+    try {
+      const mapeamento: Mapeamento = {
+        linha_dados: linhaDados, col_inep: colInep, col_valor: colValor,
+        col_etapa: colEtapa === "" ? null : Number(colEtapa),
+        col_componente: colComp === "" ? null : Number(colComp),
+        etapa_fixa: etapaFixa.trim() || null,
+        componente_fixo: compFixo.trim() || null,
+      };
+      await api<Fonte>("/avaliacoes/fontes", {
+        method: "POST",
+        body: JSON.stringify({
+          avaliacao, nome: `${catalogo.find((c) => c.chave === avaliacao)?.nome ?? avaliacao} ${edicao}`,
+          url: urlFonte.trim(), edicao, indicador: indicador.trim(), unidade: unidade.trim(),
+          cadencia, mapeamento,
+        }),
+      });
+      setMsgFonte({ tipo: "ok", texto: "Fonte salva. O robô passa a baixar e importar sozinho." });
+      setUrlFonte("");
+      aoSalvarFonte?.();
+    } catch (e) {
+      setMsgFonte({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Falha ao salvar a fonte." });
+    } finally { setSalvandoFonte(false); }
   }
 
   return (
@@ -374,7 +431,150 @@ function ImportarAvaliacao({ catalogo, aoImportar }: {
               <FileUp size={15} /> {ocupado ? "Importando..." : "Importar resultados"}
             </Botao>
           </div>
+
+          {ehGlobal && (
+            <div className="space-y-3 rounded-lg border border-indigo-200 bg-indigo-50/60 p-4 dark:border-indigo-500/30 dark:bg-indigo-500/10">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-indigo-800 dark:text-indigo-300">
+                <Bot size={16} /> Automatizar (montar o robô com este mapeamento)
+              </h3>
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                Guarde o endereço <b>fixo</b> do arquivo oficial (a URL de download do INEP/SEDUC).
+                O sistema passa a baixar dessa URL e importar sozinho, com o <b>mesmo mapeamento</b>{" "}
+                que você conferiu acima — sem ninguém subir arquivo de novo.
+              </p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[280px] flex-1">
+                  <Campo rotulo="URL do arquivo oficial">
+                    <input className={estiloInput} value={urlFonte} placeholder="https://download.inep.gov.br/..."
+                           onChange={(e) => setUrlFonte(e.target.value)} />
+                  </Campo>
+                </div>
+                <Campo rotulo="Cadência">
+                  <select className={estiloInput} value={cadencia} onChange={(e) => setCadencia(e.target.value)}>
+                    <option value="mensal">Mensal (verifica sozinho)</option>
+                    <option value="manual">Manual (só quando eu clicar)</option>
+                  </select>
+                </Campo>
+                <Botao variante="neutro" onClick={salvarFonte}
+                       disabled={salvandoFonte || !urlFonte.trim() || !indicador.trim() || !unidade.trim()}>
+                  <Bot size={15} /> {salvandoFonte ? "Salvando..." : "Salvar fonte automática"}
+                </Botao>
+              </div>
+              {msgFonte && <Mensagem tipo={msgFonte.tipo}>{msgFonte.texto}</Mensagem>}
+            </div>
+          )}
         </>
+      )}
+    </Card>
+  );
+}
+
+// --- Fontes automáticas (o robô) — só admin global --------------------------
+
+const _STATUS_TOM: Record<string, "ok" | "alerta" | "neutro"> = {
+  ok: "ok", erro: "alerta", nunca: "neutro",
+};
+
+function quando(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
+  fontes: Fonte[] | null; carregando: boolean;
+  erro: { message: string } | null; recarregar: () => void;
+}) {
+  const [ocupada, setOcupada] = useState<number | null>(null);
+  const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+
+  async function acao(fn: () => Promise<unknown>, id: number, okTxt: string) {
+    setOcupada(id); setMsg(null);
+    try {
+      await fn();
+      setMsg({ tipo: "ok", texto: okTxt });
+      recarregar();
+    } catch (e) {
+      setMsg({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Falha na operação." });
+    } finally { setOcupada(null); }
+  }
+
+  const coletar = (f: Fonte) => acao(
+    () => api<Fonte>(`/avaliacoes/fontes/${f.id}/coletar`, { method: "POST" }), f.id,
+    "Coleta disparada — veja o status atualizado abaixo.");
+  const alternar = (f: Fonte) => acao(
+    () => api<Fonte>(`/avaliacoes/fontes/${f.id}?ativo=${!f.ativo}`, { method: "PUT" }), f.id,
+    f.ativo ? "Fonte pausada." : "Fonte reativada.");
+  const excluir = (f: Fonte) => {
+    if (!window.confirm(`Remover a fonte "${f.nome}"? Os resultados já importados permanecem.`)) return;
+    acao(() => api(`/avaliacoes/fontes/${f.id}`, { method: "DELETE" }), f.id, "Fonte removida.");
+  };
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <Bot size={16} className="text-indigo-600" /> Coleta automática (robô)
+        </h2>
+        <button onClick={recarregar} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                title="Atualizar" aria-label="Atualizar">
+          <RefreshCw size={15} />
+        </button>
+      </div>
+      <p className="text-xs text-zinc-500">
+        As fontes que o sistema baixa e importa sozinho (por URL fixa, casando por INEP). Cadastre uma
+        importando o arquivo oficial acima e clicando em <b>“Salvar fonte automática”</b>.
+      </p>
+
+      {msg && <Mensagem tipo={msg.tipo}>{msg.texto}</Mensagem>}
+      {erro && !fontes && <Mensagem tipo="erro">Não foi possível carregar as fontes: {erro.message}</Mensagem>}
+      {/* Refetch que falha (blip de rede) NÃO limpa a lista — surfaça o erro mesmo assim. */}
+      {erro && fontes && <Mensagem tipo="erro">Não foi possível atualizar a lista: {erro.message}</Mensagem>}
+
+      {carregando && !fontes ? <Carregando /> : fontes && fontes.length === 0 ? (
+        <p className="flex items-center gap-2 py-4 text-sm text-zinc-500">
+          <Info size={16} /> Nenhuma fonte automática cadastrada ainda.
+        </p>
+      ) : fontes && (
+        <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          {fontes.map((f) => (
+            <li key={f.id} className="flex flex-wrap items-center gap-3 py-3">
+              <div className="min-w-[200px] flex-1">
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  {f.nome}
+                  <Badge tom={_STATUS_TOM[f.ultimo_status] ?? "neutro"}>{f.ultimo_status}</Badge>
+                  {!f.ativo && <Badge tom="neutro">pausada</Badge>}
+                </p>
+                <p className="truncate text-xs text-zinc-500" title={f.url}>{f.url}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-400">
+                  <span className="inline-flex items-center gap-1">
+                    <Clock size={12} /> última: {quando(f.ultima_coleta)}
+                  </span>
+                  <span>cadência: {f.cadencia}</span>
+                  {f.cadencia === "mensal" && f.ativo && <span>próxima: {quando(f.proxima_coleta)}</span>}
+                  {f.ultimo_status === "erro" && f.ultimo_erro && (
+                    <span className="text-amber-600 dark:text-amber-400">{f.ultimo_erro}</span>
+                  )}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Botao variante="neutro" onClick={() => coletar(f)} disabled={ocupada === f.id}>
+                  <RefreshCw size={14} /> Coletar agora
+                </Botao>
+                <button onClick={() => alternar(f)} disabled={ocupada === f.id}
+                        className="rounded-lg border border-zinc-200 p-2 text-zinc-500 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                        title={f.ativo ? "Pausar" : "Reativar"} aria-label={f.ativo ? "Pausar" : "Reativar"}>
+                  {f.ativo ? <Pause size={14} /> : <Play size={14} />}
+                </button>
+                <button onClick={() => excluir(f)} disabled={ocupada === f.id}
+                        className="rounded-lg border border-zinc-200 p-2 text-red-500 hover:bg-red-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-red-500/10"
+                        title="Remover" aria-label="Remover">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </Card>
   );
@@ -382,10 +582,15 @@ function ImportarAvaliacao({ catalogo, aoImportar }: {
 
 // --- Página ------------------------------------------------------------------
 
-function Painel({ redeId, podeImportar }: { redeId: number; podeImportar: boolean }) {
+function Painel({ redeId, podeImportar, ehGlobal }: {
+  redeId: number; podeImportar: boolean; ehGlobal: boolean;
+}) {
   const { dados: opcoes, carregando, erro: erroOpcoes, recarregar } = useApi<SerieOpcao[]>(
     `/redes/${redeId}/avaliacoes/opcoes`);
   const { dados: catalogo } = useApi<CatalogoItem[]>("/avaliacoes");
+  // Lista das fontes do robô: vive AQUI (não dentro de FontesAutomaticas) para que
+  // salvar uma fonte no bloco de importação (componente irmão) a atualize.
+  const fontesApi = useApi<Fonte[]>(ehGlobal ? "/avaliacoes/fontes" : null);
 
   return (
     <div className="space-y-6">
@@ -414,7 +619,13 @@ function Painel({ redeId, podeImportar }: { redeId: number; podeImportar: boolea
       )}
 
       {podeImportar && catalogo && (
-        <ImportarAvaliacao catalogo={catalogo} aoImportar={recarregar} />
+        <ImportarAvaliacao catalogo={catalogo} aoImportar={recarregar}
+                           ehGlobal={ehGlobal} aoSalvarFonte={fontesApi.recarregar} />
+      )}
+
+      {ehGlobal && (
+        <FontesAutomaticas fontes={fontesApi.dados} carregando={fontesApi.carregando}
+                           erro={fontesApi.erro} recarregar={fontesApi.recarregar} />
       )}
     </div>
   );
@@ -426,7 +637,8 @@ export default function RedeAvaliacoes() {
   const { dados: redes, carregando, erro: erroRedes } = useApi<{ id: number; nome: string }[]>(
     redeDoUsuario == null ? "/redes" : null);
   const redeId = redeDoUsuario ?? redes?.[0]?.id ?? null;
-  const podeImportar = Boolean(usuario?.is_global)
+  const ehGlobal = Boolean(usuario?.is_global);
+  const podeImportar = ehGlobal
     || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
 
   const conteudo = useMemo(() => {
@@ -437,8 +649,8 @@ export default function RedeAvaliacoes() {
       return <Vazio titulo="Nenhuma rede disponível"
                     descricao="Sua conta não está vinculada a uma rede/Secretaria." />;
     }
-    return <Painel redeId={redeId} podeImportar={podeImportar} />;
-  }, [redeId, carregando, erroRedes, podeImportar]);
+    return <Painel redeId={redeId} podeImportar={podeImportar} ehGlobal={ehGlobal} />;
+  }, [redeId, carregando, erroRedes, podeImportar, ehGlobal]);
 
   return conteudo;
 }

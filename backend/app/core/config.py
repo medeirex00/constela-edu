@@ -155,6 +155,10 @@ class Settings(BaseSettings):
     SYNC_BACKOFF_BASE_S: int = 60     # backoff exponencial: base * 2**(tentativa-1)
     SYNC_TIMEOUT_S: int = 180         # teto por execução (login+download)
     SYNC_LENTO_S: int = 120           # acima disso, alerta "sincronização lenta"
+    # Robô de avaliações externas: teto de fontes coletadas por rodada do
+    # scheduler — evita que muitas fontes (ou uma lenta) estagnem a fila de sync,
+    # já que a coleta roda embutida na mesma thread. O resto vai na próxima rodada.
+    AVALIACOES_COLETA_POR_RODADA: int = 3
     # Uma execução presa em "executando" além disso é considerada ÓRFÃ (worker
     # morto/redeploy no meio) e é recuperada: finalizada como erro e re-enfileirada.
     # Bem acima do teto real de uma execução, para nunca abortar uma sync viva.

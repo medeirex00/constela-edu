@@ -54,6 +54,25 @@ def _uma_rodada() -> None:
         except Exception:                 # noqa: BLE001 — worker nunca cai
             logger.exception("Falha ao processar execução %s", execucao_id)
 
+    _coletar_avaliacoes_pendentes()       # robô das avaliações externas (IDEB etc.)
+
+
+def _coletar_avaliacoes_pendentes() -> None:
+    """Coleta as fontes de avaliação externa com agenda vencida (o "robô" do IDEB).
+    Sessão própria e isolada: um erro aqui nunca afeta o worker de sync."""
+    from app.core.database import SessionLocal
+    from app.services import avaliacoes
+
+    db = SessionLocal()
+    try:
+        n = avaliacoes.coletar_pendentes(db)
+        if n:
+            logger.info("Coleta de avaliações externas: %s fonte(s) processada(s).", n)
+    except Exception:                     # noqa: BLE001 — nunca derruba o worker
+        logger.exception("Falha na coleta agendada de avaliações externas.")
+    finally:
+        db.close()
+
 
 def _loop() -> None:
     logger.info("Scheduler de sincronização iniciado (poll=%ss).", settings.SYNC_POLL_S)
