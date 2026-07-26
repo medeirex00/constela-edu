@@ -442,6 +442,11 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
                 O sistema passa a baixar dessa URL e importar sozinho, com o <b>mesmo mapeamento</b>{" "}
                 que você conferiu acima — sem ninguém subir arquivo de novo.
               </p>
+              <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                <span>Não funciona para o INEP (bloqueia downloads de servidor) — a importação que você
+                acabou de fazer acima é o caminho certo. Guarde a URL só para quando isso for possível.</span>
+              </p>
               <div className="flex flex-wrap items-end gap-3">
                 <div className="min-w-[280px] flex-1">
                   <Campo rotulo="URL do arquivo oficial">
@@ -522,8 +527,15 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
         </button>
       </div>
       <p className="text-xs text-zinc-500">
-        As fontes que o sistema baixa e importa sozinho (por URL fixa, casando por INEP). Cadastre uma
-        importando o arquivo oficial acima e clicando em <b>“Salvar fonte automática”</b>.
+        As fontes que o sistema tentaria baixar e importar sozinho (por URL fixa, casando por INEP).
+      </p>
+      <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <span>
+          Uma fonte do INEP aqui vai ficar com <b>erro</b> (“Connection reset by peer”): os portais
+          oficiais bloqueiam downloads de servidor. Pode <b>apagar (🗑)</b> a que deu erro — para
+          IDEB/SAEB, o caminho é <b>“Importar resultado oficial”</b> acima.
+        </span>
       </p>
 
       {msg && <Mensagem tipo={msg.tipo}>{msg.texto}</Mensagem>}
@@ -636,11 +648,19 @@ function CadastrarOficial({ aoCadastrar }: { aoCadastrar: () => void }) {
   return (
     <Card className="space-y-4 p-5">
       <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Bot size={16} className="text-indigo-600" /> Cadastrar avaliação oficial (sem subir arquivo)
+        <Bot size={16} className="text-indigo-600" /> Cadastrar avaliação oficial (robô baixa sozinho)
       </h2>
       <p className="text-xs text-zinc-500">
-        Escolha a base oficial, confira o link e cadastre. A receita de leitura já foi conferida —
-        o robô <b>baixa e importa sozinho</b>, casando as escolas pelo código INEP. Você não sobe arquivo.
+        A receita de leitura já foi conferida — o robô <b>baixa e importa sozinho</b>, casando as
+        escolas pelo código INEP. Você não sobe arquivo.
+      </p>
+      <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <span>
+          <b>Hoje isto NÃO funciona para o INEP</b> (SAEB/IDEB): os portais oficiais bloqueiam downloads
+          de servidor. Para essas provas, use <b>“Importar resultado oficial”</b> acima (subir o arquivo).
+          Este robô fica pronto para o dia em que a coleta rodar de um endereço no Brasil.
+        </span>
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <Campo rotulo="Base oficial">
