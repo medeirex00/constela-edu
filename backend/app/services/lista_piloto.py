@@ -211,6 +211,17 @@ ROTULOS_FICHA = {
 
 _NAO_ALUNO = ("total", "toda a turma", "whole class", "toda la clase")
 
+# Marcadores de rodapé que algumas planilhas anexam ao nome (asterisco de
+# "observação", bolinha, cerquilha). NÃO fazem parte do nome — e, se ficassem
+# colados nele, quebrariam o casamento por nome com Matific/Elefante (a nota
+# não colaria no aluno). Removidos só das pontas, nunca do miolo.
+_MARCADORES_NOME = " \t*#•·‧∙°º"
+
+
+def _limpar_nome(bruto: str) -> str:
+    """Colapsa espaços e tira marcadores de rodapé das pontas do nome."""
+    return " ".join((bruto or "").split()).strip(_MARCADORES_NOME)
+
 
 def _casar_coluna(rotulo: str, ja_usadas: set[str]) -> str | None:
     """Casa o cabeçalho com o campo cujo sinônimo casado é o MAIS específico
@@ -425,13 +436,13 @@ def _extrair_aluno(linha: list, colunas: dict[str, int]) -> AlunoMatricula | Non
         c = colunas.get(campo)
         return _txt(linha[c]) if c is not None and c < len(linha) else ""
 
-    nome = val("nome")
+    nome = _limpar_nome(val("nome"))
     if not nome or normalizar_nome(nome).startswith(_NAO_ALUNO):
         return None
     if not any(ch.isalpha() for ch in nome):
         return None
 
-    aluno = AlunoMatricula(nome=" ".join(nome.split()))
+    aluno = AlunoMatricula(nome=nome)
     numero = val("numero")
     if numero.isdigit():
         aluno.numero_chamada = int(numero)

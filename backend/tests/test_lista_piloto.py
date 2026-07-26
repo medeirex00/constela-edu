@@ -82,6 +82,31 @@ def test_parser_reconhece_turmas_alunos_e_ficha():
     assert "sus" not in al.ficha and "responsavel" not in al.ficha
 
 
+def test_marcador_de_rodape_no_nome_e_removido():
+    """Algumas planilhas anexam '*' (nota de rodapé) a certos nomes. Se ficasse
+    colado, o aluno seria cadastrado como 'NOME *' e o casamento por nome com
+    Matific/Elefante falharia (a nota não colaria nele). O marcador deve sair só
+    das pontas, preservando hífen, apóstrofo e acento do miolo."""
+    from app.services.lista_piloto import _limpar_nome, analisar_matriculas
+    assert _limpar_nome("LAURA GAGLIANO DA SILVA*") == "LAURA GAGLIANO DA SILVA"
+    assert _limpar_nome("ANA JULIA CAMARGO DOMICIANO *") == "ANA JULIA CAMARGO DOMICIANO"
+    assert _limpar_nome("* PEDRO") == "PEDRO"
+    assert _limpar_nome("  JOÃO   D'ÁVILA  ") == "JOÃO D'ÁVILA"      # miolo intacto
+    assert _limpar_nome("MARIA-CLARA DOS SANTOS") == "MARIA-CLARA DOS SANTOS"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "5º Ano A"
+    _aba(ws, "5º Ano A", "MANHÃ", "SUELI", 300396700, [
+        [1, 5001, "111.111.111-1", "THEO LUCAS SOARES DOS SANTOS*",
+         date(2015, 1, 1), "MÃE", "RUA A, 1", "CENTRO",
+         "", "", "", "", "M", "PARDA", "SIM"],
+    ])
+    buf = io.BytesIO(); wb.save(buf)
+    a = analisar_matriculas(buf.getvalue(), "Lista.xlsx")
+    assert a.turmas[0].alunos[0].nome == "THEO LUCAS SOARES DOS SANTOS"
+
+
 def test_analisar_marca_turmas_existentes(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     r = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/matriculas/analisar",
