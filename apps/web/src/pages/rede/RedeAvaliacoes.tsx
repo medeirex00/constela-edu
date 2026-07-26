@@ -628,101 +628,76 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
   );
 }
 
-// --- Cadastrar avaliação oficial SEM subir arquivo (preset já validado) ------
-// A "receita" de cada base oficial (mapeamento de colunas) foi conferida no
-// arquivo real; aqui o admin global só confere o link e cadastra — o robô baixa
-// e importa sozinho, pelo servidor (sem upload pesado pelo navegador).
+// --- Importar oficial em 1 CLIQUE (mapeamento já conhecido) ------------------
+// O gestor escolhe a base (IDEB/SAEB) e sobe o arquivo oficial do INEP; o sistema
+// aplica o mapeamento sozinho (SAEB traz Matemática e Português numa leitura só).
+// O download continua manual (o INEP bloqueia servidor) — o resto é 1 clique.
 
-interface PresetOficial {
-  chave: string; rotulo: string; resumo: string; url: string;
-  corpo: {
-    avaliacao: string; nome: string; edicao: number; indicador: string;
-    unidade: string; cadencia: string; mapeamento: Mapeamento;
-  };
+interface PresetImport { chave: string; rotulo: string; avaliacao: string }
+interface RespPreset {
+  rotulo: string; edicao: number;
+  series: { componente: string | null; casados: number; inseridos: number; atualizados: number }[];
 }
 
-const PRESETS_OFICIAIS: PresetOficial[] = [
-  {
-    chave: "ideb_ai_2023",
-    rotulo: "IDEB — Anos Iniciais (2023)",
-    resumo: "Casa por código INEP · lê a nota do IDEB 2023 · anos iniciais",
-    url: "https://download.inep.gov.br/ideb/resultados/divulgacao_anos_iniciais_escolas_2023.zip",
-    corpo: {
-      avaliacao: "ideb", nome: "IDEB Anos Iniciais 2023", edicao: 2023,
-      indicador: "ideb", unidade: "indice", cadencia: "mensal",
-      mapeamento: { linha_dados: 8, col_inep: 3, col_valor: 115, etapa_fixa: "anos_iniciais" },
-    },
-  },
-];
-
-function CadastrarOficial({ aoCadastrar }: { aoCadastrar: () => void }) {
+function ImportarUmClique({ aoImportar }: { aoImportar: () => void }) {
+  const { dados: presets } = useApi<PresetImport[]>("/avaliacoes/presets-import");
   const [idx, setIdx] = useState(0);
-  const preset = PRESETS_OFICIAIS[idx];
-  const [url, setUrl] = useState(preset.url);
+  const [edicao, setEdicao] = useState(new Date().getFullYear() - 2);
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  const preset = presets?.[idx];
 
-  function trocar(i: number) {
-    setIdx(i); setUrl(PRESETS_OFICIAIS[i].url); setMsg(null);
-  }
-
-  async function cadastrar() {
+  async function importar(f: File) {
+    if (!preset) return;
     setOcupado(true); setMsg(null);
     try {
-      await api<Fonte>("/avaliacoes/fontes", {
-        method: "POST",
-        body: JSON.stringify({ ...preset.corpo, url: url.trim() }),
+      const fd = new FormData();
+      fd.append("arquivo", f);
+      fd.append("preset", preset.chave);
+      fd.append("edicao", String(edicao));
+      const r = await apiUpload<RespPreset>("/avaliacoes/importar-preset", fd);
+      const casadas = r.series.reduce((m, s) => Math.max(m, s.casados), 0);
+      const detalhe = r.series
+        .map((s) => `${s.componente ?? "resultado"}: ${s.casados}`).join(" · ");
+      setMsg({
+        tipo: casadas > 0 ? "ok" : "erro",
+        texto: `${r.rotulo} (${r.edicao}) importado — ${detalhe} escola(s) casada(s) por INEP.`,
       });
-      setMsg({ tipo: "ok",
-        texto: "Fonte cadastrada. Clique em “Coletar agora” abaixo para puxar já, ou deixe o robô fazer sozinho." });
-      aoCadastrar();
+      aoImportar();
     } catch (e) {
-      setMsg({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Falha ao cadastrar." });
+      setMsg({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Falha ao importar." });
     } finally { setOcupado(false); }
   }
 
   return (
     <Card className="space-y-4 p-5">
       <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Bot size={16} className="text-indigo-600" /> Cadastrar avaliação oficial (robô baixa sozinho)
+        <FileUp size={16} className="text-indigo-600" /> Importar oficial em 1 clique
       </h2>
       <p className="text-xs text-zinc-500">
-        A receita de leitura já foi conferida — o robô <b>baixa e importa sozinho</b>, casando as
-        escolas pelo código INEP. Você não sobe arquivo.
-      </p>
-      <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
-        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-        <span>
-          <b>Hoje isto NÃO funciona para o INEP</b> (SAEB/IDEB): os portais oficiais bloqueiam downloads
-          de servidor. Para essas provas, use <b>“Importar resultado oficial”</b> acima (subir o arquivo).
-          Este robô fica pronto para o dia em que a coleta rodar de um endereço no Brasil.
-        </span>
+        Baixe o arquivo oficial do INEP (o <b>.zip</b> dos Anos Iniciais), escolha a base e suba o
+        arquivo — o sistema já sabe ler as colunas e casa por código INEP, sem você mapear nada.
+        O <b>SAEB</b> traz Matemática e Português de uma vez. (O download continua seu porque o INEP
+        bloqueia servidores; o resto é 1 clique.)
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <Campo rotulo="Base oficial">
-          <select className={estiloInput} value={idx} onChange={(e) => trocar(Number(e.target.value))}>
-            {PRESETS_OFICIAIS.map((p, i) => <option key={p.chave} value={i}>{p.rotulo}</option>)}
+          <select className={estiloInput} value={idx}
+                  onChange={(e) => { setIdx(Number(e.target.value)); setMsg(null); }}>
+            {(presets ?? []).map((p, i) => <option key={p.chave} value={i}>{p.rotulo}</option>)}
           </select>
         </Campo>
-        <span className="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-          {preset.resumo}
-        </span>
-      </div>
-      <div>
-        <Campo rotulo="Link oficial do arquivo (INEP)">
-          <input className={estiloInput} value={url} onChange={(e) => setUrl(e.target.value)} />
+        <Campo rotulo="Edição (ano)">
+          <input type="number" className={`${estiloInput} w-28`} value={edicao}
+                 onChange={(e) => setEdicao(Number(e.target.value))} />
         </Campo>
-        <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          <span>Confira se este é o endereço de <b>download do arquivo</b> na página do INEP (deve terminar em <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">.zip</code>).</span>
-        </p>
+        <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-indigo-500 ${ocupado || !preset ? "pointer-events-none opacity-50" : ""}`}>
+          <Upload size={15} /> {ocupado ? "Importando..." : "Escolher arquivo e importar"}
+          <input type="file" accept=".xlsx,.xls,.csv,.zip" className="hidden"
+                 onChange={(e) => { const f = e.target.files?.[0]; if (f) importar(f); e.target.value = ""; }} />
+        </label>
       </div>
       {msg && <Mensagem tipo={msg.tipo}>{msg.texto}</Mensagem>}
-      <div className="flex justify-end">
-        <Botao onClick={cadastrar} disabled={ocupado || !url.trim()}>
-          <Bot size={15} /> {ocupado ? "Cadastrando..." : "Cadastrar fonte"}
-        </Botao>
-      </div>
     </Card>
   );
 }
@@ -765,12 +740,12 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
         </Card>
       )}
 
+      {podeImportar && <ImportarUmClique aoImportar={recarregar} />}
+
       {podeImportar && catalogo && (
         <ImportarAvaliacao catalogo={catalogo} aoImportar={recarregar}
                            ehGlobal={ehGlobal} aoSalvarFonte={fontesApi.recarregar} />
       )}
-
-      {ehGlobal && <CadastrarOficial aoCadastrar={fontesApi.recarregar} />}
 
       {ehGlobal && (
         <FontesAutomaticas fontes={fontesApi.dados} carregando={fontesApi.carregando}

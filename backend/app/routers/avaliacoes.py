@@ -115,6 +115,73 @@ def importar(
     return resultado
 
 
+# Presets de IMPORT DE 1 CLIQUE: o gestor escolhe a base e sobe o ARQUIVO OFICIAL
+# do INEP (o mapeamento de colunas já é conhecido — travado no layout do arquivo).
+# Uma base pode gerar VÁRIAS séries numa leitura só (SAEB = Matemática + Português,
+# ambos dentro do mesmo arquivo do IDEB). Ligado ao layout de 2023; se o INEP mudar
+# as colunas numa edição futura, é aqui que se ajusta.
+_PRESETS_IMPORT: dict[str, dict] = {
+    "ideb_ai": {
+        "rotulo": "IDEB — Anos Iniciais", "avaliacao": "ideb",
+        "indicador": "ideb", "unidade": "indice", "linha_dados": 8, "col_inep": 3,
+        "series": [{"col_valor": 115, "etapa_fixa": "anos_iniciais"}],
+    },
+    "saeb_ai": {
+        "rotulo": "SAEB — Anos Iniciais (Matemática e Português)", "avaliacao": "saeb",
+        "indicador": "proficiencia", "unidade": "escala_saeb", "linha_dados": 8, "col_inep": 3,
+        "series": [
+            {"col_valor": 103, "componente_fixo": "matematica", "etapa_fixa": "anos_iniciais"},
+            {"col_valor": 104, "componente_fixo": "portugues", "etapa_fixa": "anos_iniciais"},
+        ],
+    },
+}
+
+
+@router.get("/presets-import")
+def presets_import(usuario: Usuario = Depends(get_usuario_atual)):
+    """As bases oficiais que importam em 1 clique (só escolher + subir o arquivo)."""
+    return [{"chave": k, "rotulo": p["rotulo"], "avaliacao": p["avaliacao"]}
+            for k, p in _PRESETS_IMPORT.items()]
+
+
+@router.post("/importar-preset")
+def importar_preset(
+    arquivo: UploadFile = File(...),
+    preset: str = Form(...),
+    edicao: int = Form(...),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Import de 1 CLIQUE: escolha a base (preset) + suba o arquivo oficial do INEP.
+    O mapeamento (colunas) já é conhecido; roda as séries do preset (ex.: SAEB =
+    matemática + português) numa única leitura. Casa por INEP, escopado pelo perfil."""
+    p = _PRESETS_IMPORT.get(preset)
+    if p is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Base desconhecida: {preset}.")
+    conteudo = arquivo.file.read(_MAX_BYTES + 1)
+    if len(conteudo) > _MAX_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo muito grande.")
+    escopo = _escopo_escolas(db, usuario)
+    series_out = []
+    for s in p["series"]:
+        r = svc.importar_resultados(
+            db, conteudo, arquivo.filename or "",
+            avaliacao_chave=p["avaliacao"], edicao=edicao,
+            indicador=p["indicador"], unidade=p["unidade"],
+            linha_dados=p["linha_dados"], col_inep=p["col_inep"],
+            col_valor=s["col_valor"], componente_fixo=s.get("componente_fixo"),
+            etapa_fixa=s.get("etapa_fixa"), escopo_escolas=escopo)
+        series_out.append({"componente": s.get("componente_fixo"),
+                           "casados": r["casados"], "inseridos": r["inseridos"],
+                           "atualizados": r["atualizados"]})
+    registrar(db, "avaliacao.importada_preset", usuario_id=usuario.id,
+              entidade="avaliacao_externa",
+              detalhes={"preset": preset, "edicao": edicao, "series": series_out})
+    db.commit()
+    return {"avaliacao": p["avaliacao"], "rotulo": p["rotulo"],
+            "edicao": edicao, "series": series_out}
+
+
 @router.delete("/resultados")
 def excluir_resultados(
     avaliacao: str,

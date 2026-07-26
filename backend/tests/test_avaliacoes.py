@@ -402,6 +402,49 @@ def test_importa_layout_real_do_ideb_em_zip(db):
     assert "11025310" not in linhas                        # o "-" não virou registro
 
 
+def _raw_layout(escolas, preamble=8) -> bytes:
+    """Arquivo no layout do INEP (Anos Iniciais): col3=INEP, col103=Mat, col104=Port,
+    col115=IDEB; dados após 8 linhas de pré-âmbulo. ``escolas``=[(inep,ideb,mat,port)]."""
+    linhas = [[f"cab {i}"] for i in range(preamble)]
+    for inep, ideb, mat, port in escolas:
+        row = [""] * 116
+        row[3], row[103], row[104], row[115] = inep, mat, port, ideb
+        linhas.append(row)
+    return "\n".join(";".join(c for c in ln) for ln in linhas).encode("utf-8")
+
+
+def test_importar_preset_ideb_1_clique(db, escola_completa, cliente):
+    escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
+    arq = _raw_layout([("35012345", "6.5", "220.0", "210.0")])
+    r = cliente.post("/api/v1/avaliacoes/importar-preset",
+                     data={"preset": "ideb_ai", "edicao": 2023},
+                     files={"arquivo": ("ideb.csv", arq, "text/csv")})
+    assert r.status_code == 200, r.text
+    assert r.json()["series"][0]["casados"] == 1
+    reg = db.execute(select(ResultadoAvaliacao)).scalars().one()
+    assert reg.indicador == "ideb" and round(reg.valor, 1) == 6.5 and reg.etapa == "anos_iniciais"
+
+
+def test_importar_preset_saeb_duas_series_1_clique(db, escola_completa, cliente):
+    escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
+    arq = _raw_layout([("35012345", "6.5", "220.5", "210.2")])
+    r = cliente.post("/api/v1/avaliacoes/importar-preset",
+                     data={"preset": "saeb_ai", "edicao": 2023},
+                     files={"arquivo": ("saeb.csv", arq, "text/csv")})
+    assert r.status_code == 200, r.text
+    series = {s["componente"]: s for s in r.json()["series"]}
+    assert series["matematica"]["casados"] == 1 and series["portugues"]["casados"] == 1
+    regs = {reg.componente: reg.valor for reg in db.execute(select(ResultadoAvaliacao)).scalars()}
+    assert round(regs["matematica"], 1) == 220.5 and round(regs["portugues"], 1) == 210.2   # SAEB Mat/Port
+
+
+def test_importar_preset_desconhecido_400(db, escola_completa, cliente):
+    r = cliente.post("/api/v1/avaliacoes/importar-preset",
+                     data={"preset": "xyz", "edicao": 2023},
+                     files={"arquivo": ("x.csv", b"a;b", "text/csv")})
+    assert r.status_code == 400
+
+
 def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, cliente):
     # Cenário do dono: importou o mesmo arquivo como 2025 SEM QUERER (além de 2023).
     # Remover a edição 2025 não pode tocar na 2023.
