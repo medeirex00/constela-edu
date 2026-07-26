@@ -26,4 +26,7 @@ class Escola(Base):
     # Coordenadas para o mapa da rede (opcional; preenchidas por geocodificação).
     latitude: Mapped[float | None] = mapped_column(default=None)
     longitude: Mapped[float | None] = mapped_column(default=None)
+    # Código INEP da escola (8 dígitos) — identificador OFICIAL para casar com as
+    # bases de avaliações externas (SAEB/IDEB/...) sem depender do nome.
+    codigo_inep: Mapped[str | None] = mapped_column(String(8), index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)

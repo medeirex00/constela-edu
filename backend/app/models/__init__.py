@@ -5,6 +5,7 @@ from app.models.academico import (
     Professor,
     Turma,
 )
+from app.models.avaliacao_externa import AvaliacaoExterna, ResultadoAvaliacao
 from app.models.configuracao import (
     Configuracao,
     DificuldadeTurma,
@@ -38,6 +39,8 @@ from app.models.usuario import Usuario
 
 __all__ = [
     "Aluno",
+    "AvaliacaoExterna",
+    "ResultadoAvaliacao",
     "Configuracao",
     "ConversaIA",
     "DispositivoMovel",
