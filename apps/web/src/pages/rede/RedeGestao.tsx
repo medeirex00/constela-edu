@@ -7,8 +7,8 @@
  * Sem isto, a rede só existia por seed. A segurança real é no backend
  * (todas as rotas exigem admin global); esta tela é só a interface.
  */
-import { Landmark, LocateFixed, MapPin, Plus, Save, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Badge,
@@ -24,7 +24,7 @@ import {
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
-import { ApiError, api } from "../../lib/api";
+import { ApiError, api, apiUpload } from "../../lib/api";
 
 interface RedeItem {
   id: number;
@@ -42,6 +42,16 @@ interface EscolaItem {
   rede_id: number | null;
   latitude: number | null;
   longitude: number | null;
+  codigo_inep: string | null;
+}
+interface PropostaInep {
+  escola_id: number;
+  inep: string | null;
+  nome_oficial: string | null;
+  municipio_oficial: string | null;
+  ja_tem: string | null;
+  valor: number | null;
+  confianca: "alta" | "revisar" | "nenhum";
 }
 interface UsuarioItem {
   id: number;
@@ -77,6 +87,13 @@ export default function RedeGestao() {
   const [escolasSel, setEscolasSel] = useState<Set<number>>(new Set());
   const [usuariosSel, setUsuariosSel] = useState<Set<number>>(new Set());
   const [coords, setCoords] = useState<Record<number, { cidade: string; uf: string; lat: string; lng: string }>>({});
+  // Códigos INEP (editável) + as propostas do casamento automático (para conferência).
+  const [inep, setInep] = useState<Record<number, string>>({});
+  const [propostas, setPropostas] = useState<Record<number, PropostaInep>>({});
+  // Rede já carregada no estado de INEP: só reseto os códigos/propostas quando a
+  // rede REALMENTE muda — um refetch da mesma rede (salvar local, geocodificar)
+  // não pode apagar o casamento em revisão ainda não salvo.
+  const redeCarregadaInep = useRef<number | null>(null);
 
   // Ao carregar (ou trocar de rede), assume a primeira e sincroniza as seleções.
   useEffect(() => {
@@ -99,6 +116,17 @@ export default function RedeGestao() {
           lng: e.longitude != null ? String(e.longitude) : "",
         }]),
     ));
+    // Só (re)semeia os códigos INEP e zera as propostas quando a rede MUDA — não
+    // em refetch da mesma rede (senão apagaria o casamento em revisão não salvo).
+    if (redeCarregadaInep.current !== redeSel) {
+      redeCarregadaInep.current = redeSel;
+      setInep(Object.fromEntries(
+        dados.escolas
+          .filter((e) => e.rede_id === redeSel)
+          .map((e) => [e.id, e.codigo_inep ?? ""]),
+      ));
+      setPropostas({});
+    }
   }, [dados, redeSel]);
 
   const redeAtual = useMemo(
@@ -247,6 +275,61 @@ export default function RedeGestao() {
     } finally {
       setOcupado(false);
     }
+  }
+
+  async function preencherInep(f: File) {
+    if (redeSel === null) return;
+    setOcupado(true); setAviso(null);
+    try {
+      const fd = new FormData(); fd.append("arquivo", f);
+      const r = await apiUpload<{
+        propostas: PropostaInep[]; total: number; casadas: number;
+        revisar: number; sem_correspondencia: number;
+      }>(`/redes/${redeSel}/casar-inep`, fd);
+      // Só preenche o campo de quem AINDA NÃO tem código — nunca sobrescreve um
+      // INEP já verificado com um palpite. As propostas aparecem para conferência
+      // em TODAS (os badges), mas o valor editável do que já tem fica intacto.
+      setInep((m) => {
+        const novo = { ...m };
+        for (const p of r.propostas) if (p.inep && !p.ja_tem) novo[p.escola_id] = p.inep;
+        return novo;
+      });
+      setPropostas(Object.fromEntries(r.propostas.map((p) => [p.escola_id, p])));
+      setAviso({
+        tipo: r.casadas > 0 ? "ok" : "erro",
+        texto: `${r.casadas} casada(s) com alta confiança · ${r.revisar} para revisar · `
+          + `${r.sem_correspondencia} sem correspondência. Confira e clique em Salvar códigos.`,
+      });
+    } catch (e) {
+      setAviso({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível casar os códigos." });
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function salvarInep() {
+    if (!dados || redeSel === null) return;
+    setOcupado(true);
+    let ok = 0;
+    let falhas = 0;
+    for (const e of dados.escolas.filter((x) => x.rede_id === redeSel)) {
+      const valor = (inep[e.id] ?? "").trim();
+      if (valor === (e.codigo_inep ?? "")) continue; // nada mudou
+      try {
+        await api(`/redes/escolas/${e.id}`, {
+          method: "PATCH", body: JSON.stringify({ codigo_inep: valor }),
+        });
+        ok += 1;
+      } catch {
+        falhas += 1;
+      }
+    }
+    setAviso({
+      tipo: falhas ? "erro" : "ok",
+      texto: `${ok} código(s) salvo(s)` + (falhas ? `; ${falhas} com erro.` : "."),
+    });
+    recarregar();
+    setOcupado(false);
   }
 
   const escolas = dados?.escolas ?? [];
@@ -425,6 +508,78 @@ export default function RedeGestao() {
                           />
                           {e.latitude != null && (
                             <Badge tom="ok">no mapa</Badge>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+
+              {/* --- Códigos INEP (para casar avaliações oficiais) --- */}
+              <Card className="p-4 lg:col-span-2">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-2 text-sm font-semibold">
+                    <ScanLine size={16} className="text-indigo-600" /> Códigos INEP das escolas
+                  </h2>
+                  <div className="flex flex-wrap gap-2">
+                    <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 ${ocupado || escolasNaRede.length === 0 ? "pointer-events-none opacity-50" : ""}`}>
+                      <ScanLine size={14} /> Preencher automaticamente
+                      <input type="file" accept=".xlsx,.xls,.csv,.zip" className="hidden"
+                             onChange={(ev) => { const f = ev.target.files?.[0]; if (f) preencherInep(f); ev.target.value = ""; }} />
+                    </label>
+                    <Botao onClick={salvarInep} disabled={ocupado || escolasNaRede.length === 0}>
+                      <Save size={14} /> Salvar códigos
+                    </Botao>
+                  </div>
+                </div>
+                <p className="mb-2 text-xs text-zinc-500">
+                  O código INEP casa cada escola com as avaliações oficiais (IDEB, SAEB). Clique em{" "}
+                  <b>Preencher automaticamente</b> e suba o arquivo oficial do INEP — o sistema casa
+                  suas escolas <b>pelo nome</b>, dentro do município (preencha a cidade antes). Confira
+                  as marcadas para <b>revisar</b> e clique em <b>Salvar códigos</b>.
+                </p>
+                {escolasNaRede.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-zinc-500">
+                    Nenhuma escola vinculada ainda.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {escolasNaRede.map((e) => {
+                      const p = propostas[e.id];
+                      return (
+                        <div key={e.id} className="flex flex-wrap items-center gap-2">
+                          <span className="w-40 truncate text-sm font-medium">{e.nome}</span>
+                          <input
+                            className={`${estiloInput} w-32`}
+                            placeholder="código INEP"
+                            inputMode="numeric"
+                            value={inep[e.id] ?? ""}
+                            onChange={(ev) => setInep((m) => ({ ...m, [e.id]: ev.target.value }))}
+                          />
+                          {p && p.confianca !== "nenhum" && (() => {
+                            // Município oficial ≠ cidade da escola (casou fora da cidade)
+                            // é o sinal para o gestor rejeitar homônima de outra cidade.
+                            const foraDaCidade = Boolean(
+                              p.municipio_oficial && e.cidade &&
+                              p.municipio_oficial.trim().toLowerCase() !== e.cidade.trim().toLowerCase());
+                            return (
+                              <>
+                                <Badge tom={p.confianca === "alta" ? "ok" : "alerta"}>
+                                  {p.confianca === "alta" ? "casou" : "revisar"}
+                                </Badge>
+                                <span className="max-w-[320px] truncate text-xs text-zinc-500" title={p.nome_oficial ?? ""}>
+                                  {p.nome_oficial}{p.valor != null ? ` · IDEB ${p.valor}` : ""}
+                                  {p.municipio_oficial ? ` · ${p.municipio_oficial}` : ""}
+                                </span>
+                                {foraDaCidade && (
+                                  <Badge tom="alerta">outra cidade!</Badge>
+                                )}
+                              </>
+                            );
+                          })()}
+                          {p && p.confianca === "nenhum" && (
+                            <Badge tom="neutro">sem correspondência</Badge>
                           )}
                         </div>
                       );

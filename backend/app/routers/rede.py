@@ -7,7 +7,8 @@ reimplementa scoring, não toca em pesos/fórmulas e não expõe PII de criança
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
+                     UploadFile, status)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -25,10 +26,13 @@ from app.schemas import (
     RedeUsuariosIn,
 )
 from app.services import avaliacoes as svc_avaliacoes
+from app.services import casamento_inep as svc_inep
 from app.services import geocodificacao as svc_geo
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
+
+_MAX_BYTES_INEP = 150 * 1024 * 1024  # mesmo teto do IDEB (arquivo oficial ~97 MB)
 
 router = APIRouter(prefix="/redes", tags=["Rede / Secretaria"])
 
@@ -78,7 +82,8 @@ def gerenciar(
         "escolas": [
             {"id": e.id, "nome": e.nome, "cidade": e.cidade, "estado": e.estado,
              "status": e.status, "rede_id": e.rede_id,
-             "latitude": e.latitude, "longitude": e.longitude}
+             "latitude": e.latitude, "longitude": e.longitude,
+             "codigo_inep": e.codigo_inep}
             for e in escolas
         ],
         "usuarios": [
@@ -177,11 +182,15 @@ def atualizar_local_escola(
     usuario: Usuario = Depends(exigir_admin_global),
     db: Session = Depends(get_db),
 ):
-    """Cidade/UF e coordenadas de uma escola (para o mapa da Secretaria)."""
+    """Cidade/UF, coordenadas e código INEP de uma escola (mapa + avaliações)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     alteracoes = dados.model_dump(exclude_unset=True)
+    if "codigo_inep" in alteracoes:
+        bruto = (alteracoes["codigo_inep"] or "").strip()
+        # "" limpa; caso contrário normaliza p/ 8 dígitos (recusa lixo).
+        alteracoes["codigo_inep"] = svc_avaliacoes.normalizar_inep(bruto) if bruto else None
     for campo, valor in alteracoes.items():
         setattr(escola, campo, valor)
     registrar(db, "escola.local_atualizado", escola_id=escola.id, usuario_id=usuario.id,
@@ -189,7 +198,33 @@ def atualizar_local_escola(
     db.commit()
     db.refresh(escola)
     return {"id": escola.id, "cidade": escola.cidade, "estado": escola.estado,
-            "latitude": escola.latitude, "longitude": escola.longitude}
+            "latitude": escola.latitude, "longitude": escola.longitude,
+            "codigo_inep": escola.codigo_inep}
+
+
+@router.post("/{rede_id}/casar-inep")
+def casar_inep(
+    rede_id: int,
+    arquivo: UploadFile = File(...),
+    usuario: Usuario = Depends(exigir_admin_global),
+    db: Session = Depends(get_db),
+):
+    """Propõe o código INEP oficial para cada escola da rede, casando pelo NOME
+    (dentro do mesmo município) contra o arquivo oficial do INEP. NÃO grava —
+    devolve as propostas para o gestor conferir e salvar. Layout padrão = IDEB
+    por escola (a coluna do nome/município/INEP já é conhecida)."""
+    if db.get(Rede, rede_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    conteudo = arquivo.file.read(_MAX_BYTES_INEP + 1)
+    if len(conteudo) > _MAX_BYTES_INEP:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            "Arquivo muito grande.")
+    propostas = svc_inep.casar_inep(db, rede_id, conteudo, arquivo.filename or "")
+    casadas = sum(1 for p in propostas if p["inep"] and p["confianca"] == "alta")
+    revisar = sum(1 for p in propostas if p["inep"] and p["confianca"] == "revisar")
+    return {"propostas": propostas, "total": len(propostas),
+            "casadas": casadas, "revisar": revisar,
+            "sem_correspondencia": len(propostas) - casadas - revisar}
 
 
 @router.put("/{rede_id}/usuarios")
