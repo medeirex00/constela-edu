@@ -580,6 +580,97 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
   );
 }
 
+// --- Cadastrar avaliação oficial SEM subir arquivo (preset já validado) ------
+// A "receita" de cada base oficial (mapeamento de colunas) foi conferida no
+// arquivo real; aqui o admin global só confere o link e cadastra — o robô baixa
+// e importa sozinho, pelo servidor (sem upload pesado pelo navegador).
+
+interface PresetOficial {
+  chave: string; rotulo: string; resumo: string; url: string;
+  corpo: {
+    avaliacao: string; nome: string; edicao: number; indicador: string;
+    unidade: string; cadencia: string; mapeamento: Mapeamento;
+  };
+}
+
+const PRESETS_OFICIAIS: PresetOficial[] = [
+  {
+    chave: "ideb_ai_2023",
+    rotulo: "IDEB — Anos Iniciais (2023)",
+    resumo: "Casa por código INEP · lê a nota do IDEB 2023 · anos iniciais",
+    url: "https://download.inep.gov.br/ideb/resultados/divulgacao_anos_iniciais_escolas_2023.zip",
+    corpo: {
+      avaliacao: "ideb", nome: "IDEB Anos Iniciais 2023", edicao: 2023,
+      indicador: "ideb", unidade: "indice", cadencia: "mensal",
+      mapeamento: { linha_dados: 8, col_inep: 3, col_valor: 115, etapa_fixa: "anos_iniciais" },
+    },
+  },
+];
+
+function CadastrarOficial({ aoCadastrar }: { aoCadastrar: () => void }) {
+  const [idx, setIdx] = useState(0);
+  const preset = PRESETS_OFICIAIS[idx];
+  const [url, setUrl] = useState(preset.url);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+
+  function trocar(i: number) {
+    setIdx(i); setUrl(PRESETS_OFICIAIS[i].url); setMsg(null);
+  }
+
+  async function cadastrar() {
+    setOcupado(true); setMsg(null);
+    try {
+      await api<Fonte>("/avaliacoes/fontes", {
+        method: "POST",
+        body: JSON.stringify({ ...preset.corpo, url: url.trim() }),
+      });
+      setMsg({ tipo: "ok",
+        texto: "Fonte cadastrada. Clique em “Coletar agora” abaixo para puxar já, ou deixe o robô fazer sozinho." });
+      aoCadastrar();
+    } catch (e) {
+      setMsg({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Falha ao cadastrar." });
+    } finally { setOcupado(false); }
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <Bot size={16} className="text-indigo-600" /> Cadastrar avaliação oficial (sem subir arquivo)
+      </h2>
+      <p className="text-xs text-zinc-500">
+        Escolha a base oficial, confira o link e cadastre. A receita de leitura já foi conferida —
+        o robô <b>baixa e importa sozinho</b>, casando as escolas pelo código INEP. Você não sobe arquivo.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <Campo rotulo="Base oficial">
+          <select className={estiloInput} value={idx} onChange={(e) => trocar(Number(e.target.value))}>
+            {PRESETS_OFICIAIS.map((p, i) => <option key={p.chave} value={i}>{p.rotulo}</option>)}
+          </select>
+        </Campo>
+        <span className="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+          {preset.resumo}
+        </span>
+      </div>
+      <div>
+        <Campo rotulo="Link oficial do arquivo (INEP)">
+          <input className={estiloInput} value={url} onChange={(e) => setUrl(e.target.value)} />
+        </Campo>
+        <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <span>Confira se este é o endereço de <b>download do arquivo</b> na página do INEP (deve terminar em <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">.zip</code>).</span>
+        </p>
+      </div>
+      {msg && <Mensagem tipo={msg.tipo}>{msg.texto}</Mensagem>}
+      <div className="flex justify-end">
+        <Botao onClick={cadastrar} disabled={ocupado || !url.trim()}>
+          <Bot size={15} /> {ocupado ? "Cadastrando..." : "Cadastrar fonte"}
+        </Botao>
+      </div>
+    </Card>
+  );
+}
+
 // --- Página ------------------------------------------------------------------
 
 function Painel({ redeId, podeImportar, ehGlobal }: {
@@ -622,6 +713,8 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
         <ImportarAvaliacao catalogo={catalogo} aoImportar={recarregar}
                            ehGlobal={ehGlobal} aoSalvarFonte={fontesApi.recarregar} />
       )}
+
+      {ehGlobal && <CadastrarOficial aoCadastrar={fontesApi.recarregar} />}
 
       {ehGlobal && (
         <FontesAutomaticas fontes={fontesApi.dados} carregando={fontesApi.carregando}
