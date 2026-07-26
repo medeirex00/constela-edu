@@ -9,6 +9,7 @@ import {
   Building2,
   Calculator,
   ChevronDown,
+  ExternalLink,
   FileText,
   FlaskConical,
   Lightbulb,
@@ -16,6 +17,7 @@ import {
   GraduationCap,
   Landmark,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Medal,
   Menu,
@@ -61,6 +63,8 @@ interface ItemNav {
   gestao?: boolean;
   /** Só para o administrador GLOBAL (gerencia todas as escolas). */
   global?: boolean;
+  /** Link externo (abre em nova aba) em vez de rota interna. */
+  externo?: boolean;
 }
 
 interface GrupoNav {
@@ -78,6 +82,14 @@ const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Ro
 // "Secretaria": painel municipal (rede de escolas) + mapa — fica fora dos grupos,
 // no topo, e só aparece para quem tem rede vinculada ou é admin global.
 const SECRETARIA: ItemNav = { rotulo: "Secretaria", caminho: "/rede", icone: Landmark, exato: true };
+// "Suporte": pasta no Google Drive com todos os guias de uso (Secretaria e Escola).
+// Fica no rodapé do menu e aparece para TODOS os papéis — abre em nova aba.
+const SUPORTE: ItemNav = {
+  rotulo: "Suporte",
+  caminho: "https://drive.google.com/drive/folders/1kbDGPRSsh7TOb6nk6smwXNyAJPkySk-i?hl=pt-br",
+  icone: LifeBuoy,
+  externo: true,
+};
 
 // Menu agrupado (accordion): reduz o excesso de itens visíveis sem esconder
 // nenhuma funcionalidade. Cada grupo abre/fecha; o da rota atual abre sozinho.
@@ -435,6 +447,23 @@ function LinkMenu({ item, aoNavegar, subitem }: {
   aoNavegar?: () => void;
   subitem?: boolean;
 }) {
+  // Link externo (ex.: Suporte → Google Drive): abre em nova aba, nunca fica
+  // "ativo" e não interfere no roteamento interno.
+  if (item.externo) {
+    return (
+      <a
+        href={item.caminho}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={aoNavegar}
+        className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
+      >
+        <item.icone size={subitem ? 15 : 16} strokeWidth={2} className="shrink-0" />
+        <span className="flex-1 truncate">{item.rotulo}</span>
+        <ExternalLink size={13} strokeWidth={2} className="shrink-0 text-zinc-400" aria-hidden />
+      </a>
+    );
+  }
   return (
     <NavLink
       to={item.caminho}
@@ -542,6 +571,12 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
           </div>
         );
       })}
+
+      {/* Suporte: fica destacado no rodapé, separado dos grupos, para todos os
+          papéis (professor, coordenador, secretaria, admin). */}
+      <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+        <LinkMenu item={SUPORTE} aoNavegar={aoNavegar} />
+      </div>
     </nav>
   );
 }
