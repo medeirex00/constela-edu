@@ -128,7 +128,7 @@ export default function EvolucaoAluno() {
         <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
           Um gráfico por indicador — cada um na sua própria escala, com os valores marcados.
         </p>
-        <div className="grid gap-5 lg:grid-cols-3">
+        <div className="grid gap-6 sm:grid-cols-2">
           {([
             ["atividades", "Atividades"],
             ["estrelas", "Estrelas"],
@@ -136,7 +136,7 @@ export default function EvolucaoAluno() {
           ] as const).map(([campo, nome]) => (
             <div key={campo}>
               <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">{nome}</p>
-              <GraficoLinha series={[serie(linha.matific, campo, nome)]} altura={150} />
+              <GraficoLinha series={[serie(linha.matific, campo, nome)]} altura={170} />
             </div>
           ))}
         </div>
@@ -147,7 +147,7 @@ export default function EvolucaoAluno() {
         <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
           Um gráfico por indicador — cada um na sua própria escala, com os valores marcados.
         </p>
-        <div className="grid gap-5 lg:grid-cols-3">
+        <div className="grid gap-6 sm:grid-cols-2">
           {([
             ["livros_unicos", "Livros únicos"],
             ["questoes_acertos", "Acertos"],
@@ -155,7 +155,7 @@ export default function EvolucaoAluno() {
           ] as const).map(([campo, nome]) => (
             <div key={campo}>
               <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">{nome}</p>
-              <GraficoLinha series={[serie(linha.elefante, campo, nome)]} altura={150} />
+              <GraficoLinha series={[serie(linha.elefante, campo, nome)]} altura={170} />
             </div>
           ))}
         </div>

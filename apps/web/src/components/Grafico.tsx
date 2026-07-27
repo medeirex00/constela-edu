@@ -18,8 +18,11 @@ export function GraficoLinha({
   if (visiveis.length === 0) {
     return <p className="py-8 text-center text-sm text-zinc-400">Sem dados suficientes para o gráfico.</p>;
   }
-  const largura = 640;
-  const margem = { esquerda: 42, direita: 12, topo: 12, base: 28 };
+  // viewBox menor => fontes, pontos e linhas renderizam MAIORES (o SVG escala
+  // para a largura do container). Com 2 gráficos por linha (~450px), os números
+  // saem em ~12px, legíveis.
+  const largura = 500;
+  const margem = { esquerda: 46, direita: 12, topo: 14, base: 26 };
   const maximo = Math.max(1, ...visiveis.flatMap((serie) => serie.pontos.map((ponto) => ponto.valor)));
   const quantidade = Math.max(...visiveis.map((serie) => serie.pontos.length));
 
@@ -47,7 +50,7 @@ export function GraficoLinha({
             />
             <text
               x={margem.esquerda - 6} y={y(maximo * fracao) + 4} textAnchor="end"
-              className="fill-zinc-400 text-[10px] tabular-nums"
+              className="fill-zinc-400 text-[13px] tabular-nums"
             >
               {Math.round(maximo * fracao).toLocaleString("pt-BR")}
             </text>
@@ -78,7 +81,7 @@ export function GraficoLinha({
                       x={x(indice)}
                       y={y(ponto.valor) - 7}
                       textAnchor={indice === 0 ? "start" : indice === serie.pontos.length - 1 ? "end" : "middle"}
-                      className="text-[10px] font-medium tabular-nums"
+                      className="text-[13px] font-semibold tabular-nums"
                       fill={CORES[indiceSerie % CORES.length]}
                     >
                       {ponto.valor.toLocaleString("pt-BR")}
@@ -94,7 +97,7 @@ export function GraficoLinha({
             <text
               key={indice}
               x={x(indice)} y={altura - 8} textAnchor="middle"
-              className="fill-zinc-400 text-[10px]"
+              className="fill-zinc-400 text-[12px]"
             >
               {ponto.rotulo}
             </text>
