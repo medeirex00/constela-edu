@@ -16,7 +16,7 @@ aprovado: percentil/mediana/auto-referência no lugar de máximo/média):
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -30,13 +30,14 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import evolucao, gamificacao
+from app.services import evolucao
 
 DIAS_SEM_ATIVIDADE = 30
 QUEDA_ACERTOS_PONTOS = 15.0
 FRACAO_ABAIXO_TURMA = 0.5
-# Constância: 8 semanas consecutivas com avanço = nota máxima (escala gradual).
-PONTOS_POR_SEMANA_CONSTANCIA = 12.5
+# Persistência SEMANAL: janela de referência do "ritmo próprio" do aluno (o
+# ganho da semana atual é comparado à média das últimas N semanas dele mesmo).
+SEMANAS_BASE_PERSISTENCIA = 8
 
 
 def _pct_acertos(snap) -> float | None:
@@ -97,24 +98,45 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
     serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
     serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
 
+    # PERSISTÊNCIA SEMANAL pelo ritmo do PRÓPRIO aluno (decisão de produto):
+    # compara o crescimento da SEMANA ATUAL (segunda→agora) com o ritmo semanal
+    # recente dele mesmo (média das últimas N semanas). Não compara com colegas —
+    # turma fraca não penaliza. Reusa o motor de evolução (que já normaliza as
+    # plataformas numa nota) nas séries já carregadas; as duas janelas usam os
+    # MESMOS parâmetros, então a razão semana/ritmo é consistente.
+    agora = datetime.now(timezone.utc).replace(tzinfo=None)
+    iso_hoje = agora.isocalendar()
+    inicio_semana = datetime.combine(
+        date.fromisocalendar(iso_hoje[0], iso_hoje[1], 1), datetime.min.time())
+    inicio_base = agora - timedelta(weeks=SEMANAS_BASE_PERSISTENCIA)
+    cresc_semana = {
+        i.aluno_id: i.nota_evolucao
+        for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_semana,
+                                           fim=agora, serie_m=serie_m, serie_e=serie_e)
+    }
+    cresc_base = {
+        i.aluno_id: i.nota_evolucao
+        for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_base,
+                                           fim=agora, serie_m=serie_m, serie_e=serie_e)
+    }
+
+    def _persistencia_semanal(aluno_id: int) -> float:
+        semana = cresc_semana.get(aluno_id, 0.0)
+        ritmo = cresc_base.get(aluno_id, 0.0) / SEMANAS_BASE_PERSISTENCIA
+        if ritmo <= 0:
+            return 100.0 if semana > 0 else 0.0   # sem histórico: começou a se mexer
+        return round(min(100.0, 100.0 * semana / ritmo), 1)  # 100 = manteve/superou o próprio ritmo
+
     itens = []
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
-        sequencia = gamificacao.sequencia_semanas(
-            serie_m.get(aluno_id, []), serie_e.get(aluno_id, [])
-        )
-        # Persistência = CONSTÂNCIA pura: semanas consecutivas com avanço.
-        # (O antigo componente "volume de tentativas ÷ máximo da escola" foi
-        # removido: era acumulado de vida normalizado pelo melhor aluno — um
-        # outlier zerava a persistência de alunos perfeitamente constantes.)
-        persistencia = min(100.0, sequencia * PONTOS_POR_SEMANA_CONSTANCIA)
         itens.append({
             "aluno_id": aluno_id,
             "nome": matricula.aluno.nome,
             "turma": turma.nome,
             "engajamento": _indice(engajamento_bruto, ativos_30, aluno_id),
             "evolucao": _indice(crescimento_bruto, ativos_90, aluno_id),
-            "persistencia": round(persistencia, 1),
+            "persistencia": _persistencia_semanal(aluno_id),
         })
     itens.sort(key=lambda item: -item["engajamento"])
     return itens

@@ -29,7 +29,9 @@ def _snapshot(db, escola_id, aluno_id, dias_atras=1, **valores):
 def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
-    _snapshot(db, escola.id, ana.id, dias_atras=2,
+    # dias_atras=0: atividade DENTRO da semana atual — a Persistência agora é
+    # semanal (ritmo da semana), então precisa de dado nesta semana para ser > 0.
+    _snapshot(db, escola.id, ana.id, dias_atras=0,
               atividades=30, estrelas=100, pontuacao_media=80)
     db.commit()
 
@@ -41,6 +43,26 @@ def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
     # Quem não tem dados fica com índices zerados
     sem_dados = next(i for i in indices if i["aluno_id"] != ana.id)
     assert sem_dados["engajamento"] == 0.0
+    assert sem_dados["persistencia"] == 0.0
+
+
+def test_persistencia_e_semanal_nao_acumulada(db, escola_completa):
+    """A Persistência mede a SEMANA ATUAL (ritmo do próprio aluno), não um streak
+    acumulado: quem foi ativo só em semanas passadas, mas parou esta semana,
+    zera; quem está ativo esta semana pontua."""
+    escola = escola_completa["escola"]
+    parou, ativo = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    # 'parou': atividade só 2 semanas atrás (semana passada), nada nesta semana.
+    _snapshot(db, escola.id, parou.id, dias_atras=14,
+              atividades=40, estrelas=120, pontuacao_media=70)
+    # 'ativo': atividade nesta semana.
+    _snapshot(db, escola.id, ativo.id, dias_atras=0,
+              atividades=25, estrelas=90, pontuacao_media=75)
+    db.commit()
+
+    indices = {i["aluno_id"]: i for i in insights.indices_da_escola(db, escola.id)}
+    assert indices[parou.id]["persistencia"] == 0.0    # sem avanço NESTA semana
+    assert indices[ativo.id]["persistencia"] > 0        # ativo nesta semana
 
 
 def test_percentil_rank_imune_a_outlier():
