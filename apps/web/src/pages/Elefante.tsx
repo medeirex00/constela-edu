@@ -160,7 +160,6 @@ export default function Elefante() {
                   <th className="px-4 py-2 font-medium">Aluno</th>
                   <th className="hidden px-4 py-2 font-medium md:table-cell">Turma</th>
                   <th className="px-4 py-2 text-right font-medium">Livros</th>
-                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Níveis</th>
                   <th className="px-4 py-2 text-right font-medium">Tempo</th>
                   <th className="px-4 py-2 text-right font-medium">Questões</th>
                   <th className="px-4 py-2 text-right font-medium">Acertos</th>
@@ -178,9 +177,6 @@ export default function Elefante() {
                     </td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{linha.turma}</td>
                     <td className="px-4 py-2.5 text-right">{numero(linha.livros_unicos)}</td>
-                    <td className="hidden px-4 py-2.5 text-xs text-zinc-500 dark:text-zinc-400 sm:table-cell">
-                      {niveisParaTexto(linha.livros_por_nivel) || "—"}
-                    </td>
                     <td className="px-4 py-2.5 text-right">{tempoLeitura(linha.tempo_leitura_min)}</td>
                     <td className="px-4 py-2.5 text-right">{numero(linha.questoes_tentativas)}</td>
                     <td className="px-4 py-2.5 text-right">
