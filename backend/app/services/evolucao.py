@@ -183,17 +183,26 @@ def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
 # Linha do tempo e resumo de evolução por aluno (PRD §67–§71)
 # ---------------------------------------------------------------------------
 
-def linha_do_tempo(db: Session, escola_id: int, aluno_id: int) -> dict:
-    matific = db.execute(
-        select(SnapshotMatific)
-        .where(SnapshotMatific.escola_id == escola_id, SnapshotMatific.aluno_id == aluno_id)
-        .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
-    ).scalars().all()
-    elefante = db.execute(
-        select(SnapshotElefante)
-        .where(SnapshotElefante.escola_id == escola_id, SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.data_referencia, SnapshotElefante.id)
-    ).scalars().all()
+def linha_do_tempo(db: Session, escola_id: int, aluno_id: int,
+                   dias: int | None = None) -> dict:
+    """Série temporal dos snapshots do aluno. `dias` recorta a janela (o seletor
+    de período da tela: 7/30/90/365); None traz todo o histórico."""
+    inicio = None
+    if dias is not None:
+        inicio = (datetime.now(timezone.utc) - timedelta(days=dias)).replace(tzinfo=None)
+
+    def consultar(modelo):
+        consulta = (
+            select(modelo)
+            .where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
+            .order_by(modelo.data_referencia, modelo.id)
+        )
+        if inicio is not None:
+            consulta = consulta.where(modelo.data_referencia >= inicio)
+        return db.execute(consulta).scalars().all()
+
+    matific = consultar(SnapshotMatific)
+    elefante = consultar(SnapshotElefante)
     return {
         "matific": [
             {

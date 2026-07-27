@@ -33,7 +33,7 @@ def evolucao_do_aluno(
     return {
         "aluno_id": aluno_id,
         "nome": aluno.nome,
-        "linha_do_tempo": svc.linha_do_tempo(db, escola_id, aluno_id),
+        "linha_do_tempo": svc.linha_do_tempo(db, escola_id, aluno_id, dias),
         "resumo": svc.resumo_evolucao(db, escola_id, aluno_id, dias),
     }
 

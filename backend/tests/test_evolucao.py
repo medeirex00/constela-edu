@@ -223,3 +223,21 @@ def test_evolucao_do_aluno_pela_api(cliente, db, escola_completa):
     assert corpo["nome"] == ana.nome
     assert len(corpo["linha_do_tempo"]["matific"]) == 1
     assert corpo["resumo"]["dias"] == 30
+
+
+def test_linha_do_tempo_respeita_o_periodo(db, escola_completa):
+    """O gráfico 'ao longo do tempo' deve recortar pela janela `dias` (o seletor
+    da tela): período curto não traz pontos antigos; None traz todo o histórico."""
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    importacao = _importacao(db, escola.id)
+    _snap_matific(db, escola.id, importacao, ana.id, 200, atividades=10, estrelas=40)  # antigo
+    _snap_matific(db, escola.id, importacao, ana.id, 2, atividades=30, estrelas=120)   # recente
+    db.commit()
+
+    curto = svc.linha_do_tempo(db, escola.id, ana.id, dias=30)
+    assert len(curto["matific"]) == 1                       # só o recente (2 dias)
+    ano = svc.linha_do_tempo(db, escola.id, ana.id, dias=365)
+    assert len(ano["matific"]) == 2                          # ano inteiro traz os dois
+    tudo = svc.linha_do_tempo(db, escola.id, ana.id)         # sem período = histórico todo
+    assert len(tudo["matific"]) == 2
