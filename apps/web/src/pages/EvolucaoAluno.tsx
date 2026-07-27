@@ -136,7 +136,7 @@ export default function EvolucaoAluno() {
           ] as const).map(([campo, nome]) => (
             <div key={campo}>
               <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">{nome}</p>
-              <GraficoLinha series={[serie(linha.matific, campo, nome)]} altura={170} />
+              <GraficoLinha series={[serie(linha.matific, campo, nome)]} altura={185} />
             </div>
           ))}
         </div>
@@ -155,7 +155,7 @@ export default function EvolucaoAluno() {
           ] as const).map(([campo, nome]) => (
             <div key={campo}>
               <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">{nome}</p>
-              <GraficoLinha series={[serie(linha.elefante, campo, nome)]} altura={170} />
+              <GraficoLinha series={[serie(linha.elefante, campo, nome)]} altura={185} />
             </div>
           ))}
         </div>

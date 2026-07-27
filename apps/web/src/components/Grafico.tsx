@@ -22,7 +22,9 @@ export function GraficoLinha({
   // para a largura do container). Com 2 gráficos por linha (~450px), os números
   // saem em ~12px, legíveis.
   const largura = 500;
-  const margem = { esquerda: 46, direita: 12, topo: 14, base: 26 };
+  // topo folgado: os rótulos de valor ficam ACIMA do ponto; nos pontos de valor
+  // MÁXIMO (colados no teto) o número precisa caber sem ser cortado pela borda.
+  const margem = { esquerda: 46, direita: 12, topo: 30, base: 26 };
   const maximo = Math.max(1, ...visiveis.flatMap((serie) => serie.pontos.map((ponto) => ponto.valor)));
   const quantidade = Math.max(...visiveis.map((serie) => serie.pontos.length));
 
