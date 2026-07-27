@@ -124,25 +124,41 @@ export default function EvolucaoAluno() {
       </Card>
 
       <Card className="p-4">
-        <h3 className="mb-3 text-sm font-semibold">Matific ao longo do tempo</h3>
-        <GraficoLinha
-          series={[
-            serie(linha.matific, "atividades", "Atividades"),
-            serie(linha.matific, "estrelas", "Estrelas"),
-            serie(linha.matific, "pontuacao_media", "Pontuação média"),
-          ]}
-        />
+        <h3 className="mb-1 text-sm font-semibold">Matific ao longo do tempo</h3>
+        <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+          Um gráfico por indicador — cada um na sua própria escala, com os valores marcados.
+        </p>
+        <div className="grid gap-5 lg:grid-cols-3">
+          {([
+            ["atividades", "Atividades"],
+            ["estrelas", "Estrelas"],
+            ["pontuacao_media", "Pontuação média"],
+          ] as const).map(([campo, nome]) => (
+            <div key={campo}>
+              <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">{nome}</p>
+              <GraficoLinha series={[serie(linha.matific, campo, nome)]} altura={150} />
+            </div>
+          ))}
+        </div>
       </Card>
 
       <Card className="p-4">
-        <h3 className="mb-3 text-sm font-semibold">Elefante Letrado ao longo do tempo</h3>
-        <GraficoLinha
-          series={[
-            serie(linha.elefante, "livros_unicos", "Livros únicos"),
-            serie(linha.elefante, "questoes_acertos", "Acertos"),
-            serie(linha.elefante, "tempo_leitura_min", "Tempo (min)"),
-          ]}
-        />
+        <h3 className="mb-1 text-sm font-semibold">Elefante Letrado ao longo do tempo</h3>
+        <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+          Um gráfico por indicador — cada um na sua própria escala, com os valores marcados.
+        </p>
+        <div className="grid gap-5 lg:grid-cols-3">
+          {([
+            ["livros_unicos", "Livros únicos"],
+            ["questoes_acertos", "Acertos"],
+            ["tempo_leitura_min", "Tempo (min)"],
+          ] as const).map(([campo, nome]) => (
+            <div key={campo}>
+              <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">{nome}</p>
+              <GraficoLinha series={[serie(linha.elefante, campo, nome)]} altura={150} />
+            </div>
+          ))}
+        </div>
       </Card>
     </div>
   );

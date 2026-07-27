@@ -30,6 +30,10 @@ export function GraficoLinha({
     margem.topo + (1 - valor / maximo) * (altura - margem.topo - margem.base);
 
   const rotulos = visiveis[0].pontos;
+  // Rotula os pontos com o VALOR visível só quando há UMA série (mini-gráfico
+  // por métrica) — assim os números não se sobrepõem entre séries. Mostra no
+  // 1º, no último e sempre que o valor MUDA (pula os trechos planos repetidos).
+  const rotularPontos = visiveis.length === 1;
 
   return (
     <div>
@@ -57,15 +61,32 @@ export function GraficoLinha({
               strokeWidth={2}
               points={serie.pontos.map((ponto, indice) => `${x(indice)},${y(ponto.valor)}`).join(" ")}
             />
-            {serie.pontos.map((ponto, indice) => (
-              <circle
-                key={indice}
-                cx={x(indice)} cy={y(ponto.valor)} r={3}
-                fill={CORES[indiceSerie % CORES.length]}
-              >
-                <title>{`${serie.nome} — ${ponto.rotulo}: ${ponto.valor.toLocaleString("pt-BR")}`}</title>
-              </circle>
-            ))}
+            {serie.pontos.map((ponto, indice) => {
+              const mudou = indice === 0
+                || indice === serie.pontos.length - 1
+                || ponto.valor !== serie.pontos[indice - 1].valor;
+              return (
+                <g key={indice}>
+                  <circle
+                    cx={x(indice)} cy={y(ponto.valor)} r={3}
+                    fill={CORES[indiceSerie % CORES.length]}
+                  >
+                    <title>{`${serie.nome} — ${ponto.rotulo}: ${ponto.valor.toLocaleString("pt-BR")}`}</title>
+                  </circle>
+                  {rotularPontos && mudou && (
+                    <text
+                      x={x(indice)}
+                      y={y(ponto.valor) - 7}
+                      textAnchor={indice === 0 ? "start" : indice === serie.pontos.length - 1 ? "end" : "middle"}
+                      className="text-[10px] font-medium tabular-nums"
+                      fill={CORES[indiceSerie % CORES.length]}
+                    >
+                      {ponto.valor.toLocaleString("pt-BR")}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
           </g>
         ))}
         {rotulos.map((ponto, indice) =>
