@@ -68,6 +68,19 @@ export default function EvolucaoAluno() {
 
   const { linha_do_tempo: linha, resumo } = dadosEvolucao;
 
+  // Primeira data COM dado (nas duas plataformas). Se o período escolhido vai
+  // mais para trás do que o 1º registro, avisamos: não há histórico anterior —
+  // é quando o Constela começou a coletar este aluno (não um bug do gráfico).
+  const datas = [...linha.matific, ...linha.elefante]
+    .map((ponto) => new Date(ponto.data).getTime())
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b);
+  const primeira = datas[0];
+  const faltaHistorico =
+    primeira != null && primeira - (Date.now() - dias * 864e5) > 2 * 864e5;
+  const primeiraFmt =
+    primeira != null ? new Date(primeira).toLocaleDateString("pt-BR") : "";
+
   return (
     <div className="space-y-6">
       <div>
@@ -95,6 +108,14 @@ export default function EvolucaoAluno() {
           }
         />
       </div>
+
+      {faltaHistorico && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-4 py-2.5 text-xs text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+          Este aluno tem dados a partir de <b>{primeiraFmt}</b> — foi quando o Constela
+          começou a registrar a evolução dele. Não há histórico anterior a essa data
+          para exibir; a linha do tempo cresce a cada sincronização.
+        </div>
+      )}
 
       <Card className="p-4">
         <h3 className="mb-3 text-sm font-semibold">Variação no período ({resumo.dias} dias)</h3>
