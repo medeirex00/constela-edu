@@ -7,7 +7,7 @@ import logging
 import secrets
 import time
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core import observabilidade as obs
 from app.core.database import engine, garantir_dados_base, get_db
+from app.core.deps import negar_secretaria
 from app.quest.routers import auth as quest_auth
 from app.quest.routers import perfil as quest_perfil
 from app.quest.routers import professor as quest_professor
@@ -118,7 +119,6 @@ for router in (
     rankings.router,
     rede.router,
     avaliacoes.router,
-    importacoes.router,
     plataformas.router,
     evolucao.router,
     gamificacao.router,
@@ -131,10 +131,20 @@ for router in (
     quest_auth.router,
     quest_perfil.router,
     quest_professor.router,
+):
+    app.include_router(router, prefix=settings.API_V1_PREFIX)
+
+# Áreas OPERACIONAIS de escola — importação, sincronização e diagnóstico Elefante.
+# A Secretaria acompanha os resultados da REDE, mas não opera as escolas: fica
+# bloqueada na raiz destes routers (leitura e escrita). Coordenador de escola
+# (sem rede) e admin global passam normalmente.
+for router in (
+    importacoes.router,
     sync_router.router,
     sync_router.router_global,
 ):
-    app.include_router(router, prefix=settings.API_V1_PREFIX)
+    app.include_router(router, prefix=settings.API_V1_PREFIX,
+                       dependencies=[Depends(negar_secretaria)])
 
 # Scheduler de sincronização automática: sobe como thread de fundo SE
 # SYNC_SCHEDULER_ENABLED (fail-safe: desligado por padrão). Cada worker uvicorn

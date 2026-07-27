@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis
+from app.core.deps import escola_autorizada, exigir_papeis, exigir_papeis_escola
 from app.models import (
     Configuracao,
     DificuldadeTurma,
@@ -55,7 +55,7 @@ def salvar_pesos(
     namespace: str,
     dados: PesosUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     if namespace not in NAMESPACES_PESOS:
@@ -120,7 +120,7 @@ def obter_referencias(
 def salvar_referencias(
     dados: ReferenciasUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     invalidas = set(dados.valores_manuais) - set(scoring.CHAVES_REFERENCIA)
@@ -191,7 +191,7 @@ def obter_dificuldade(
 def salvar_dificuldade(
     alteracoes: list[DificuldadeUpdate],
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     for alteracao in alteracoes:
@@ -281,7 +281,7 @@ def obter_pontuacao_turma(
 def salvar_pontuacao_turma(
     dados: PontuacaoTurmaUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     """Salva a tabela de pontos por nível de UMA turma. Guarda só o que difere do

@@ -54,6 +54,48 @@ def exigir_papeis(*papeis: str):
     return dependencia
 
 
+def _e_secretaria(usuario: Usuario) -> bool:
+    """Secretaria = tem rede vinculada e NÃO é admin global. Ela enxerga o
+    agregado da rede e pode LER as telas de escola, mas não ESCREVER nelas."""
+    return usuario.rede_id is not None and not usuario.is_global
+
+
+def negar_secretaria(usuario: Usuario = Depends(get_usuario_atual)) -> Usuario:
+    """Bloqueia a Secretaria em áreas OPERACIONAIS de escola (importação,
+    sincronização, diagnóstico). O admin global e o coordenador de escola
+    (sem rede) passam. Aplicada no registro do router (leitura e escrita)."""
+    if _e_secretaria(usuario):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "A Secretaria acompanha os resultados da rede, mas não opera as "
+            "escolas (importação, sincronização e diagnóstico são da escola).",
+        )
+    return usuario
+
+
+def exigir_papeis_escola(*papeis: str):
+    """Como ``exigir_papeis``, mas também NEGA a Secretaria (rede vinculada).
+    Usada nas rotas de ESCRITA por-escola (ex.: métricas): a Secretaria pode
+    LER (essas rotas usam ``exigir_papeis``), mas não gravar. Só o coordenador
+    da própria escola (sem rede) e o admin global alteram."""
+    def dependencia(usuario: Usuario = Depends(get_usuario_atual)) -> Usuario:
+        if usuario.is_global:
+            return usuario
+        if usuario.cargo not in papeis:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Você não possui permissão para esta ação.",
+            )
+        if _e_secretaria(usuario):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "A Secretaria pode visualizar, mas não alterar as métricas da escola.",
+            )
+        return usuario
+
+    return dependencia
+
+
 def exigir_admin_global(usuario: Usuario = Depends(get_usuario_atual)) -> Usuario:
     """Ações que abrangem todas as escolas (criar escola, exclusão permanente)."""
     if not usuario.is_global:

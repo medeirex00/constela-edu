@@ -105,6 +105,18 @@ function RotaRede({ children }: { children: React.ReactNode }) {
   return temRede ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+/** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding): a
+ *  Secretaria (rede vinculada, não-global) acompanha os resultados da rede mas
+ *  NÃO opera as escolas — é mandada ao Dashboard. Coordenador de escola (sem
+ *  rede) e admin global entram. O backend também barra (deps.negar_secretaria). */
+function RotaEscolaOp({ children }: { children: React.ReactNode }) {
+  const { usuario } = useApp();
+  const gestor = Boolean(usuario?.is_global)
+    || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  return gestor && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 export default function App() {
   return (
     // Um único limite de Suspense cobre o carregamento dos chunks de rota.
@@ -161,10 +173,10 @@ export default function App() {
           <Route path="/matific" element={<RotaGestao><Matific /></RotaGestao>} />
           <Route path="/elefante" element={<RotaGestao><Elefante /></RotaGestao>} />
           <Route path="/livros" element={<RotaGestao><Livros /></RotaGestao>} />
-          <Route path="/comecar" element={<RotaGestao><Comecar /></RotaGestao>} />
-          <Route path="/importacoes" element={<RotaGestao><Importacoes /></RotaGestao>} />
-          <Route path="/sincronizacao" element={<RotaGestao><Sincronizacao /></RotaGestao>} />
-          <Route path="/diagnostico-elefante" element={<RotaGestao><DiagnosticoElefante /></RotaGestao>} />
+          <Route path="/comecar" element={<RotaEscolaOp><Comecar /></RotaEscolaOp>} />
+          <Route path="/importacoes" element={<RotaEscolaOp><Importacoes /></RotaEscolaOp>} />
+          <Route path="/sincronizacao" element={<RotaEscolaOp><Sincronizacao /></RotaEscolaOp>} />
+          <Route path="/diagnostico-elefante" element={<RotaEscolaOp><DiagnosticoElefante /></RotaEscolaOp>} />
           <Route path="/conquistas" element={<RotaGestao><Conquistas /></RotaGestao>} />
           <Route path="/assistente" element={<RotaGestao><Assistente /></RotaGestao>} />
           <Route path="/painel-publico" element={<RotaGestao><PainelPublicoConfig /></RotaGestao>} />

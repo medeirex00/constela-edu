@@ -65,6 +65,9 @@ interface ItemNav {
   global?: boolean;
   /** Link externo (abre em nova aba) em vez de rota interna. */
   externo?: boolean;
+  /** Operação de escola (importar, sincronizar, diagnosticar, onboarding):
+   *  some para a Secretaria, que acompanha a rede mas não opera as escolas. */
+  escolaOp?: boolean;
 }
 
 interface GrupoNav {
@@ -78,7 +81,7 @@ interface GrupoNav {
 const DASHBOARD: ItemNav = { rotulo: "Dashboard", caminho: "/", icone: LayoutDashboard, exato: true };
 // "Comece aqui": assistente de onboarding — fica fora dos grupos, logo abaixo
 // do Dashboard, e só para gestão (admin/coordenador cria turmas e integrações).
-const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Rocket, gestao: true };
+const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Rocket, gestao: true, escolaOp: true };
 // "Secretaria": painel municipal (rede de escolas) + mapa — fica fora dos grupos,
 // no topo, e só aparece para quem tem rede vinculada ou é admin global.
 const SECRETARIA: ItemNav = { rotulo: "Secretaria", caminho: "/rede", icone: Landmark, exato: true };
@@ -118,9 +121,9 @@ const GRUPOS: GrupoNav[] = [
       { rotulo: "Matific", caminho: "/matific", icone: Calculator, gestao: true },
       { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen, gestao: true },
       { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen, gestao: true },
-      { rotulo: "Importações", caminho: "/importacoes", icone: Upload, gestao: true },
-      { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw, gestao: true },
-      { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar, gestao: true },
+      { rotulo: "Importações", caminho: "/importacoes", icone: Upload, gestao: true, escolaOp: true },
+      { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw, gestao: true, escolaOp: true },
+      { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar, gestao: true, escolaOp: true },
     ],
   },
   {
@@ -158,23 +161,24 @@ const GRUPOS: GrupoNav[] = [
 
 /** Grupos visíveis para o papel do usuário (itens de gestão saem para o
  *  professor; itens globais só para o admin global; grupos vazios somem). */
-function gruposVisiveis(gestor: boolean, global: boolean): GrupoNav[] {
+function gruposVisiveis(gestor: boolean, global: boolean, secretaria = false): GrupoNav[] {
   return GRUPOS
     .map((g) => ({
       ...g,
-      itens: g.itens.filter((i) => (gestor || !i.gestao) && (global || !i.global)),
+      itens: g.itens.filter((i) =>
+        (gestor || !i.gestao) && (global || !i.global) && !(secretaria && i.escolaOp)),
     }))
     .filter((g) => g.itens.length > 0);
 }
 
 /** Todos os itens de menu que o usuário PODE abrir (Dashboard + grupos
  *  visíveis), achatados — base da busca por páginas. */
-function itensNavVisiveis(gestor: boolean, global: boolean, rede: boolean): ItemNav[] {
+function itensNavVisiveis(gestor: boolean, global: boolean, rede: boolean, secretaria = false): ItemNav[] {
   return [
     DASHBOARD,
     ...(rede ? [SECRETARIA] : []),
-    ...(gestor ? [COMECAR] : []),
-    ...gruposVisiveis(gestor, global).flatMap((g) => g.itens),
+    ...(gestor && !secretaria ? [COMECAR] : []),
+    ...gruposVisiveis(gestor, global, secretaria).flatMap((g) => g.itens),
   ];
 }
 
@@ -233,6 +237,8 @@ function PesquisaGlobal() {
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const global = Boolean(usuario?.is_global);
   const rede = global || usuario?.rede_id != null;
+  // Secretaria = tem rede vinculada e NÃO é admin global: some das operações de escola.
+  const secretaria = !global && usuario?.rede_id != null;
 
   const consulta = termo.trim();
 
@@ -257,7 +263,7 @@ function PesquisaGlobal() {
 
   // Páginas do menu que casam com o texto (só as que o cargo pode abrir).
   const alvo = normalizar(consulta);
-  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis(gestor, global, rede)
+  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis(gestor, global, rede, secretaria)
     .filter((item) => normalizar(item.rotulo).includes(alvo))
     .slice(0, 6)
     .map((item) => ({
@@ -490,7 +496,9 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const rede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
-  const grupos = gruposVisiveis(gestor, Boolean(usuario?.is_global));
+  // Secretaria = tem rede vinculada e NÃO é admin global.
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  const grupos = gruposVisiveis(gestor, Boolean(usuario?.is_global), secretaria);
   const ativo = grupoDaRota(pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
     const iniciais = carregarAbertos();
@@ -522,7 +530,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
       {rede && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
-      {gestor && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
+      {gestor && !secretaria && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
         const aberto = abertos.has(grupo.chave);

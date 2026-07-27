@@ -20,7 +20,9 @@ export function PesosEditor({
   rotulos: Record<string, string>;
   descricao?: string;
 }) {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
+  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
+  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
   const { dados, erro, carregando } = useApi<Pesos>(
     escolaId ? `/escolas/${escolaId}/configuracoes/pesos/${namespace}` : null,
   );
@@ -105,8 +107,8 @@ export function PesosEditor({
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
         <Badge tom={valido ? "ok" : "alerta"}>Soma: {nota(soma)}%{valido ? "" : " — precisa ser 100%"}</Badge>
-        <Botao onClick={salvar} disabled={!valido || salvando}>
-          {salvando ? "Salvando e recalculando..." : "Salvar pesos"}
+        <Botao onClick={salvar} disabled={!valido || salvando || somenteLeitura}>
+          {somenteLeitura ? "Somente leitura" : salvando ? "Salvando e recalculando..." : "Salvar pesos"}
         </Botao>
       </div>
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
@@ -129,7 +131,9 @@ const ROTULOS_REFERENCIAS: Record<string, string> = {
 };
 
 function ReferenciasNormalizacao() {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
+  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
+  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
   const { dados: dadosApi, erro, carregando } = useApi<Referencias>(
     escolaId ? `/escolas/${escolaId}/configuracoes/referencias` : null,
   );
@@ -227,8 +231,8 @@ function ReferenciasNormalizacao() {
       </div>
 
       <div className="mt-4 flex justify-end border-t border-zinc-200 pt-4 dark:border-zinc-800">
-        <Botao onClick={salvar} disabled={salvando}>
-          {salvando ? "Salvando e recalculando..." : "Salvar referências"}
+        <Botao onClick={salvar} disabled={salvando || somenteLeitura}>
+          {somenteLeitura ? "Somente leitura" : salvando ? "Salvando e recalculando..." : "Salvar referências"}
         </Botao>
       </div>
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
@@ -246,7 +250,9 @@ type TurmaPontos = { turma_id: number; nome: string; ano_escolar: string; pontos
 type PontuacaoResp = { catalogo: CatalogoNivel[]; turmas: TurmaPontos[] };
 
 function PontuacaoPorTurma() {
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
+  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
+  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
   const { dados, erro, carregando, recarregar } = useApi<PontuacaoResp>(
     escolaId ? `/escolas/${escolaId}/configuracoes/pontuacao-turma` : null,
   );
@@ -387,8 +393,8 @@ function PontuacaoPorTurma() {
 
       {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
       <div className="flex items-center gap-3">
-        <Botao onClick={salvar} disabled={salvando}>
-          {salvando ? "Salvando e recalculando..." : `Salvar pontuação da turma`}
+        <Botao onClick={salvar} disabled={salvando || somenteLeitura}>
+          {somenteLeitura ? "Somente leitura" : salvando ? "Salvando e recalculando..." : `Salvar pontuação da turma`}
         </Botao>
         <span className="text-sm text-zinc-500 dark:text-zinc-400">
           {alterados > 0 ? `${alterados} nível(is) diferente(s) do padrão.` : "Usando o padrão da escola."}
@@ -406,6 +412,9 @@ const ABAS = ["Matific", "Elefante Letrado", "Dificuldade por Turma", "Referênc
 type Aba = (typeof ABAS)[number];
 
 export default function Metricas() {
+  const { usuario } = useApp();
+  // Secretaria (rede vinculada, não-global): vê os critérios, mas não altera.
+  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
   const [aba, setAba] = useState<Aba>("Matific");
   const [subAbaElefante, setSubAbaElefante] = useState<"pesos" | "questoes">("pesos");
 
@@ -415,6 +424,13 @@ export default function Metricas() {
         titulo="Métricas"
         descricao="Todos os critérios de avaliação são configuráveis. Alterações recalculam as notas automaticamente."
       />
+
+      {somenteLeitura && (
+        <div className="mb-5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+          Você está vendo as métricas em <b>modo leitura</b>. Só o coordenador da escola e o
+          administrador geral podem alterar os critérios de avaliação.
+        </div>
+      )}
 
       <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
         {ABAS.map((nome) => (
