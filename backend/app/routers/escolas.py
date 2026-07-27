@@ -24,7 +24,12 @@ def listar(
     if not (incluir_inativas and usuario.is_global):
         consulta = consulta.where(Escola.status == "ativa")
     if not usuario.is_global:
-        consulta = consulta.where(Escola.id == usuario.escola_id)
+        # Secretaria (rede vinculada): vê TODAS as escolas da rede dela; usuário
+        # de escola única continua preso à própria escola.
+        if usuario.rede_id is not None:
+            consulta = consulta.where(Escola.rede_id == usuario.rede_id)
+        else:
+            consulta = consulta.where(Escola.id == usuario.escola_id)
     return db.execute(consulta).scalars().all()
 
 

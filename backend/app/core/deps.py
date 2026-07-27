@@ -3,7 +3,7 @@
 Toda permissão é validada aqui, no backend — o frontend nunca é a
 única barreira (PRD §13, Permissões).
 """
-from fastapi import Depends, HTTPException, Path, status
+from fastapi import Depends, HTTPException, Path, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -107,18 +107,34 @@ def exigir_admin_global(usuario: Usuario = Depends(get_usuario_atual)) -> Usuari
 
 
 def escola_autorizada(
+    request: Request,
     escola_id: int = Path(...),
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ) -> int:
     """Isolamento multi-escolas: usuários comuns só acessam a própria escola.
 
+    A SECRETARIA (rede vinculada, não-global) é supervisora da rede: LÊ os dados
+    de QUALQUER escola da rede dela (métodos GET), mas NÃO altera nenhuma (todo
+    POST/PUT/PATCH/DELETE por-escola é negado num só ponto — impossível abrir
+    escrita por engano em alguma rota específica). O admin global é irrestrito.
+
     Também confirma que a escola existe — evita 500 (AttributeError) quando um
     admin global aponta para um id inexistente e impede escritas órfãs.
     """
-    if db.get(Escola, escola_id) is None:
+    escola = db.get(Escola, escola_id)
+    if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     if usuario.is_global:
+        return escola_id
+    if _e_secretaria(usuario):
+        if escola.rede_id != usuario.rede_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Acesso negado aos dados desta escola.")
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "A Secretaria acompanha os dados da rede, mas não altera dados da escola.")
         return escola_id
     if usuario.escola_id != escola_id:
         raise HTTPException(
