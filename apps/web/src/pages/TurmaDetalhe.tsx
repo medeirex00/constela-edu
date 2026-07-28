@@ -122,8 +122,11 @@ function Avatar({ aluno }: { aluno: AlunoGestao }) {
 
 export default function TurmaDetalhe() {
   const { id } = useParams();
-  const { escolaId } = useApp();
+  const { escolaId, usuario } = useApp();
   const navegar = useNavigate();
+  // Secretaria (rede vinculada, não-global): só visualiza — sem seleção em massa,
+  // menu de ações, transferência nem geração de cartões (o backend também barra).
+  const podeEditar = !(!usuario?.is_global && usuario?.rede_id != null);
 
   const [busca, setBusca] = useState("");
   const [buscaAplicada, setBuscaAplicada] = useState("");
@@ -262,15 +265,17 @@ export default function TurmaDetalhe() {
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold tracking-tight">{resumo.turma.nome}</h1>
           <Badge tom="destaque">{resumo.turma.ano_escolar}</Badge>
-          <Botao
-            variante="neutro"
-            className="ml-auto"
-            onClick={baixarCartoesQuest}
-            disabled={ocupado}
-            title="Gera o PDF com QR, código e senha de figuras de cada aluno"
-          >
-            <Rocket size={15} /> Cartões do Quest
-          </Botao>
+          {podeEditar && (
+            <Botao
+              variante="neutro"
+              className="ml-auto"
+              onClick={baixarCartoesQuest}
+              disabled={ocupado}
+              title="Gera o PDF com QR, código e senha de figuras de cada aluno"
+            >
+              <Rocket size={15} /> Cartões do Quest
+            </Botao>
+          )}
         </div>
       </div>
 
@@ -308,7 +313,7 @@ export default function TurmaDetalhe() {
         </div>
 
         {/* Barra de ações em massa */}
-        {selecionados.size > 0 && (
+        {podeEditar && selecionados.size > 0 && (
           <div className="flex flex-wrap items-center gap-2 border-b border-indigo-200 bg-indigo-50/70 px-4 py-2.5 text-sm dark:border-indigo-500/20 dark:bg-indigo-500/10">
             <span className="font-medium text-indigo-800 dark:text-indigo-200">
               {selecionados.size} selecionado{selecionados.size === 1 ? "" : "s"}
@@ -347,14 +352,16 @@ export default function TurmaDetalhe() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="w-10 px-4 py-2">
-                    <input type="checkbox" aria-label="Selecionar todos" className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
-                           checked={todosSelecionados} onChange={alternarTodos} />
-                  </th>
+                  {podeEditar && (
+                    <th className="w-10 px-4 py-2">
+                      <input type="checkbox" aria-label="Selecionar todos" className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                             checked={todosSelecionados} onChange={alternarTodos} />
+                    </th>
+                  )}
                   <th className="px-2 py-2 font-medium">Aluno</th>
                   <th className="px-2 py-2 text-center font-medium">Nº</th>
                   <th className="px-2 py-2 text-right font-medium">Desempenho</th>
-                  <th className="w-12 px-4 py-2"></th>
+                  {podeEditar && <th className="w-12 px-4 py-2"></th>}
                 </tr>
               </thead>
               <tbody>
@@ -366,10 +373,12 @@ export default function TurmaDetalhe() {
                         className={`border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${
                           marcado ? "bg-indigo-50/50 dark:bg-indigo-500/5" : ""
                         } ${aluno.status !== "ativo" ? "opacity-60" : ""}`}>
-                      <td className="px-4 py-2.5">
-                        <input type="checkbox" aria-label={`Selecionar ${aluno.nome}`} className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
-                               checked={marcado} onChange={() => alternarUm(aluno.id)} />
-                      </td>
+                      {podeEditar && (
+                        <td className="px-4 py-2.5">
+                          <input type="checkbox" aria-label={`Selecionar ${aluno.nome}`} className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                                 checked={marcado} onChange={() => alternarUm(aluno.id)} />
+                        </td>
+                      )}
                       <td className="px-2 py-2.5">
                         <div className="flex items-center gap-2.5">
                           <Avatar aluno={aluno} />
@@ -401,9 +410,11 @@ export default function TurmaDetalhe() {
                           <span className="text-xs text-zinc-400">sem nota</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-right">
-                        <MenuAcoes aluno={aluno} aoEscolher={(escolha) => aoEscolherNoMenu(aluno, escolha)} />
-                      </td>
+                      {podeEditar && (
+                        <td className="px-4 py-2.5 text-right">
+                          <MenuAcoes aluno={aluno} aoEscolher={(escolha) => aoEscolherNoMenu(aluno, escolha)} />
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

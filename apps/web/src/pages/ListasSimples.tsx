@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Badge, Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import type { Professor, Turma } from "../lib/types";
 
 // A gestão de turmas ganhou página própria: pages/Turmas.tsx
@@ -149,6 +149,10 @@ export function Professores() {
   const { escolaId, usuario } = useApp();
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  // Secretaria (rede vinculada, não-global): acompanha a rede, mas NÃO altera
+  // dados da escola — some com os controles de escrita (o backend também barra).
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  const podeEditar = gestor && !secretaria;
   const { dados: professores, erro, carregando, recarregar: recarregarProfessores } =
     useApi<Professor[]>(escolaId ? `/escolas/${escolaId}/professores` : null);
   const { dados: turmas, recarregar: recarregarTurmas } =
@@ -158,6 +162,7 @@ export function Professores() {
   const [editando, setEditando] = useState<number | null>(null);
   const [nomeEdit, setNomeEdit] = useState("");
   const [salvando, setSalvando] = useState(false);
+  const [erroEdicao, setErroEdicao] = useState("");
 
   // Refaz as duas buscas após criar um professor (que vincula turma).
   function carregar() {
@@ -169,11 +174,16 @@ export function Professores() {
     const novo = nomeEdit.trim();
     if (!escolaId || novo.length < 2 || novo === prof.nome) { setEditando(null); return; }
     setSalvando(true);
+    setErroEdicao("");
     try {
       await api(`/escolas/${escolaId}/professores/${prof.id}`,
         { method: "PATCH", body: JSON.stringify({ nome: novo }) });
       setEditando(null);
       recarregarProfessores();
+    } catch (excecao) {
+      // Nunca engolir o erro em silêncio: sem isto, um 403/validação fazia o
+      // salvar "não acontecer nada" (era exatamente o sintoma relatado).
+      setErroEdicao(excecao instanceof ApiError ? excecao.message : "Não foi possível salvar o nome.");
     } finally {
       setSalvando(false);
     }
@@ -188,12 +198,15 @@ export function Professores() {
       <PageHeader
         titulo="Professores"
         descricao="Equipe cadastrada nesta escola e as turmas sob responsabilidade de cada um."
-        acoes={gestor ? (
+        acoes={podeEditar ? (
           <Botao onClick={() => setModalAberto(true)}>
             <UserPlus size={15} /> Adicionar professor
           </Botao>
         ) : undefined}
       />
+      {erroEdicao && (
+        <div className="mb-4"><Mensagem tipo="erro">{erroEdicao}</Mensagem></div>
+      )}
       <Card>
         {carregando ? (
           <Carregando />
@@ -209,7 +222,7 @@ export function Professores() {
                 <th className="px-4 py-2 font-medium">Nome</th>
                 <th className="px-4 py-2 font-medium">E-mail</th>
                 <th className="px-4 py-2 font-medium">Turmas</th>
-                {gestor && <th className="w-16 px-4 py-2" />}
+                {podeEditar && <th className="w-16 px-4 py-2" />}
               </tr>
             </thead>
             <tbody>
@@ -246,7 +259,7 @@ export function Professores() {
                           ))}
                     </span>
                   </td>
-                  {gestor && (
+                  {podeEditar && (
                     <td className="px-4 py-2.5 text-right">
                       {editando === professor.id ? (
                         <span className="inline-flex gap-1">

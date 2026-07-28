@@ -18,6 +18,7 @@ import {
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
@@ -36,6 +37,10 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
   mostrarVisualizar?: boolean;
 }) {
   const navegar = useNavigate();
+  const { usuario } = useApp();
+  // Secretaria (rede vinculada, não-global): só visualiza — sem ações de escrita
+  // (editar, transferir turma, fundir, arquivar, excluir). O backend também barra.
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
   const [janela, setJanela] = useState<Janela>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
@@ -85,6 +90,9 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
     }
   }
 
+  // Secretaria sem sequer "Visualizar" não teria nenhuma ação → não mostra o menu.
+  if (secretaria && !mostrarVisualizar) return null;
+
   return (
     <>
       <MenuSuspenso ariaLabel={`Ações de ${aluno.nome}`}>
@@ -96,25 +104,29 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
                 <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar"
                           onClick={escolher(() => navegar(`/alunos/${aluno.id}`))} />
               )}
-              <ItemMenu icone={<Pencil size={15} />} rotulo="Editar dados"
-                        onClick={escolher(() => setJanela("editar"))} />
-              {/* Fundir só entre alunos ativos (o backend também recusa inativos). */}
-              {!inativo && (
-                <ItemMenu icone={<Merge size={15} />} rotulo="Fundir com outro aluno"
-                          onClick={escolher(() => setJanela("fundir"))} />
+              {!secretaria && (
+                <>
+                  <ItemMenu icone={<Pencil size={15} />} rotulo="Editar dados"
+                            onClick={escolher(() => setJanela("editar"))} />
+                  {/* Fundir só entre alunos ativos (o backend também recusa inativos). */}
+                  {!inativo && (
+                    <ItemMenu icone={<Merge size={15} />} rotulo="Fundir com outro aluno"
+                              onClick={escolher(() => setJanela("fundir"))} />
+                  )}
+                  {inativo ? (
+                    <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar"
+                              onClick={escolher(() => acaoStatus("reativar"))} />
+                  ) : (
+                    <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar"
+                              onClick={escolher(() => acaoStatus("arquivar"))} />
+                  )}
+                  <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+                  <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva
+                            onClick={escolher(() => setJanela("excluir"))} />
+                  <ItemMenu icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva
+                            onClick={escolher(() => setJanela("permanente"))} />
+                </>
               )}
-              {inativo ? (
-                <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar"
-                          onClick={escolher(() => acaoStatus("reativar"))} />
-              ) : (
-                <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar"
-                          onClick={escolher(() => acaoStatus("arquivar"))} />
-              )}
-              <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
-              <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva
-                        onClick={escolher(() => setJanela("excluir"))} />
-              <ItemMenu icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva
-                        onClick={escolher(() => setJanela("permanente"))} />
             </>
           );
         }}
