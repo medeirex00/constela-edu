@@ -82,8 +82,11 @@ class ProfessorCreate(BaseModel):
 
 
 class ProfessorUpdate(BaseModel):
-    """Edita o nome do professor (ex.: completar um apelido vindo da importação)."""
-    nome: str = Field(min_length=2, max_length=200)
+    """Edita o nome e/ou o e-mail do professor (ex.: completar um apelido vindo da
+    importação, ou corrigir o e-mail — que é o login e o vínculo com as turmas).
+    Só os campos enviados mudam."""
+    nome: str | None = Field(default=None, min_length=2, max_length=200)
+    email: EmailStr | None = None
 
 
 class ProfessorCompletoIn(BaseModel):

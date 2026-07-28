@@ -158,11 +158,20 @@ export function Professores() {
   const { dados: turmas, recarregar: recarregarTurmas } =
     useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const [modalAberto, setModalAberto] = useState(false);
-  // Edição inline do NOME do professor (ex.: completar um apelido da importação).
+  // Edição inline do NOME e do E-MAIL do professor (ex.: completar um apelido
+  // ou corrigir o e-mail vindos da importação).
   const [editando, setEditando] = useState<number | null>(null);
   const [nomeEdit, setNomeEdit] = useState("");
+  const [emailEdit, setEmailEdit] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erroEdicao, setErroEdicao] = useState("");
+
+  function abrirEdicao(prof: Professor) {
+    setEditando(prof.id);
+    setNomeEdit(prof.nome);
+    setEmailEdit(prof.email ?? "");
+    setErroEdicao("");
+  }
 
   // Refaz as duas buscas após criar um professor (que vincula turma).
   function carregar() {
@@ -170,20 +179,29 @@ export function Professores() {
     recarregarTurmas();
   }
 
-  async function salvarNome(prof: Professor) {
-    const novo = nomeEdit.trim();
-    if (!escolaId || novo.length < 2 || novo === prof.nome) { setEditando(null); return; }
+  async function salvarEdicao(prof: Professor) {
+    if (!escolaId) return;
+    const novoNome = nomeEdit.trim();
+    const novoEmail = emailEdit.trim();
+    if (novoNome.length < 2) { setErroEdicao("O nome precisa ter ao menos 2 letras."); return; }
+    const mudouNome = novoNome !== prof.nome;
+    // Só troca o e-mail se preenchido e diferente (esta tela não apaga e-mail).
+    const mudouEmail = novoEmail !== "" && novoEmail.toLowerCase() !== (prof.email ?? "").toLowerCase();
+    if (!mudouNome && !mudouEmail) { setEditando(null); return; }
+    const corpo: { nome?: string; email?: string } = {};
+    if (mudouNome) corpo.nome = novoNome;
+    if (mudouEmail) corpo.email = novoEmail;
     setSalvando(true);
     setErroEdicao("");
     try {
       await api(`/escolas/${escolaId}/professores/${prof.id}`,
-        { method: "PATCH", body: JSON.stringify({ nome: novo }) });
+        { method: "PATCH", body: JSON.stringify(corpo) });
       setEditando(null);
       recarregarProfessores();
     } catch (excecao) {
       // Nunca engolir o erro em silêncio: sem isto, um 403/validação fazia o
       // salvar "não acontecer nada" (era exatamente o sintoma relatado).
-      setErroEdicao(excecao instanceof ApiError ? excecao.message : "Não foi possível salvar o nome.");
+      setErroEdicao(excecao instanceof ApiError ? excecao.message : "Não foi possível salvar.");
     } finally {
       setSalvando(false);
     }
@@ -231,14 +249,15 @@ export function Professores() {
                   <td className="px-4 py-2.5 font-medium">
                     {editando === professor.id ? (
                       <input
-                        className={`${estiloInput} w-64`}
+                        className={`${estiloInput} w-56`}
                         value={nomeEdit}
                         autoFocus
                         minLength={2}
                         disabled={salvando}
+                        aria-label="Nome do professor"
                         onChange={(e) => setNomeEdit(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") salvarNome(professor);
+                          if (e.key === "Enter") salvarEdicao(professor);
                           if (e.key === "Escape") setEditando(null);
                         }}
                       />
@@ -249,7 +268,25 @@ export function Professores() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">{professor.email ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">
+                    {editando === professor.id ? (
+                      <input
+                        type="email"
+                        className={`${estiloInput} w-56`}
+                        value={emailEdit}
+                        placeholder="email@escola.com"
+                        disabled={salvando}
+                        aria-label="E-mail do professor"
+                        onChange={(e) => setEmailEdit(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") salvarEdicao(professor);
+                          if (e.key === "Escape") setEditando(null);
+                        }}
+                      />
+                    ) : (
+                      professor.email ?? "—"
+                    )}
+                  </td>
                   <td className="px-4 py-2.5">
                     <span className="flex flex-wrap gap-1">
                       {turmasDe(professor.id).length === 0
@@ -267,7 +304,7 @@ export function Professores() {
                             type="button"
                             title="Salvar"
                             disabled={salvando}
-                            onClick={() => salvarNome(professor)}
+                            onClick={() => salvarEdicao(professor)}
                             className="rounded p-1 text-emerald-600 hover:bg-emerald-50 disabled:opacity-40 dark:hover:bg-emerald-500/10"
                           >
                             <Check size={16} />
@@ -284,8 +321,8 @@ export function Professores() {
                       ) : (
                         <button
                           type="button"
-                          title="Editar nome"
-                          onClick={() => { setEditando(professor.id); setNomeEdit(professor.nome); }}
+                          title="Editar nome e e-mail"
+                          onClick={() => abrirEdicao(professor)}
                           className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
                         >
                           <Pencil size={15} />

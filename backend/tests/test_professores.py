@@ -229,3 +229,40 @@ def test_coordenador_edita_nome_do_professor(db, escola_completa):
     assert prof.nome == "Camila Souza Oliveira"
     # professor comum é barrado
     assert login("prof@ed.local").patch(rota, json={"nome": "X"}).status_code == 403
+
+
+def test_coordenador_edita_email_e_sincroniza_a_conta(db, escola_completa):
+    """Corrigir o e-mail do professor também atualiza a CONTA de login vinculada
+    (é o mesmo e-mail que liga o professor às turmas). E-mail já usado por outra
+    conta → 409 (não quebra a unicidade do login)."""
+    from fastapi.testclient import TestClient
+
+    from app.core.security import hash_senha
+    from app.main import app
+
+    escola = escola_completa["escola"]
+    prof = Professor(escola_id=escola.id, nome="Ana Lima", email="ana.velho@x.com")
+    db.add(prof)
+    db.add(Usuario(escola_id=escola.id, nome="Ana Lima", email="ana.velho@x.com",
+                   username="AnaLima", senha_hash=hash_senha("s3nh4"), cargo="professor"))
+    db.add(Usuario(escola_id=escola.id, nome="Coord", email="coord@ed.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="coordenador"))
+    db.add(Usuario(escola_id=escola.id, nome="Outra", email="ocupado@x.com",
+                   username="Outra", senha_hash=hash_senha("s3nh4"), cargo="professor"))
+    db.commit()
+
+    c = TestClient(app)
+    tok = c.post("/api/v1/auth/login", data={"username": "coord@ed.local", "password": "s3nh4"}).json()
+    c.headers["Authorization"] = f"Bearer {tok['access_token']}"
+    rota = f"/api/v1/escolas/{escola.id}/professores/{prof.id}"
+
+    # Troca do e-mail: professor E a conta de login acompanham.
+    r = c.patch(rota, json={"email": "ana.NOVO@x.com"})
+    assert r.status_code == 200, r.text
+    db.refresh(prof)
+    assert prof.email == "ana.novo@x.com"
+    conta = db.execute(select(Usuario).where(Usuario.username == "AnaLima")).scalar_one()
+    assert conta.email == "ana.novo@x.com"
+
+    # E-mail de OUTRA conta de acesso → 409 (não duplica login).
+    assert c.patch(rota, json={"email": "ocupado@x.com"}).status_code == 409

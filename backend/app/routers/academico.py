@@ -1168,16 +1168,42 @@ def atualizar_professor(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    """Edita o NOME do professor — ex.: completar um nome que veio só como
-    apelido na importação da Lista Piloto. Não mexe na conta de acesso nem nos
-    vínculos de turma (esses continuam pelo botão de vincular turmas / Usuários)."""
+    """Edita o NOME e/ou o E-MAIL do professor — ex.: completar um nome que veio
+    só como apelido na importação, ou corrigir o e-mail. O e-mail é o LOGIN do
+    professor e o que liga a conta às turmas dele: por isso, ao trocá-lo, a conta
+    de acesso vinculada é atualizada junto (senão o professor perderia as turmas).
+    Não mexe nos vínculos de turma (esses continuam pelo botão de vincular turmas)."""
     professor = db.get(Professor, professor_id)
     if professor is None or professor.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Professor não encontrado.")
-    professor.nome = dados.nome.strip()
+
+    campos = dados.model_dump(exclude_unset=True)
+    if campos.get("nome"):
+        professor.nome = campos["nome"].strip()
+    if campos.get("email"):
+        novo_email = str(campos["email"]).strip().lower()
+        # Conta de login atualmente vinculada a este professor (casa pelo e-mail
+        # ATUAL do professor). Se existir, o e-mail dela precisa acompanhar a
+        # troca — é o mesmo e-mail que o RBAC usa para achar as turmas do prof.
+        conta = None
+        if professor.email:
+            conta = db.execute(
+                select(Usuario).where(func.lower(Usuario.email) == professor.email.strip().lower())
+            ).scalar_one_or_none()
+        if conta is not None:
+            # Vou trocar o e-mail (login) da conta → não pode colidir com OUTRA.
+            colisao = db.execute(
+                select(Usuario).where(func.lower(Usuario.email) == novo_email, Usuario.id != conta.id)
+            ).scalar_one_or_none()
+            if colisao is not None:
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    "Este e-mail já está em uso por outra conta de acesso.")
+            conta.email = novo_email
+        professor.email = novo_email
+
     registrar(db, "professor.atualizado", escola_id=escola_id, usuario_id=usuario.id,
               entidade="professor", entidade_id=professor.id,
-              detalhes={"nome": professor.nome})
+              detalhes={"nome": professor.nome, "email": professor.email})
     db.commit()
     db.refresh(professor)
     return professor

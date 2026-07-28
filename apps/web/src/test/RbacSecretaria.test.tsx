@@ -45,7 +45,7 @@ describe("Secretaria é somente leitura", () => {
     renderComApp(<Professores />);
     expect(await screen.findByText("Prof Ana")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Adicionar professor/ })).toBeInTheDocument();
-    expect(screen.getByTitle("Editar nome")).toBeInTheDocument();
+    expect(screen.getByTitle("Editar nome e e-mail")).toBeInTheDocument();
   });
 
   it("Professores: Secretaria não vê 'Adicionar professor' nem o lápis", async () => {
@@ -53,6 +53,6 @@ describe("Secretaria é somente leitura", () => {
     renderComApp(<Professores />, { usuario: secretaria });
     expect(await screen.findByText("Prof Ana")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Adicionar professor/ })).toBeNull();
-    expect(screen.queryByTitle("Editar nome")).toBeNull();
+    expect(screen.queryByTitle("Editar nome e e-mail")).toBeNull();
   });
 });
