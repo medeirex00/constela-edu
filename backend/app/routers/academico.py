@@ -27,6 +27,7 @@ from app.schemas import (
     AlunoOut,
     AlunoPerfilOut,
     AlunoUpdate,
+    ConsolidarTurmasIn,
     ExclusaoPermanenteAlunos,
     ExcluirTurmas,
     FusaoAlunos,
@@ -38,7 +39,7 @@ from app.schemas import (
     TurmaOut,
     TurmaUpdate,
 )
-from app.services import periodos, permissoes, scoring
+from app.services import periodos, permissoes, scoring, turmas_dedup
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -1131,6 +1132,52 @@ def excluir_turmas_massa(
         partes.append(f"{r['bloqueadas']} com alunos foram mantida(s) — use "
                       "‘excluir com os alunos’ para removê-las")
     return {"mensagem": "; ".join(partes) + ".", **r}
+
+
+@router.get("/turmas/duplicadas", response_model=list[dict])
+def listar_turmas_duplicadas(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Grupos de turmas que são a MESMA sala escrita de formas diferentes
+    (ex.: '1 ANO A TARDE ANUAL (300302821)' e '1ºA'). Sugere como canônica o
+    nome curto/padronizado e lista as duplicadas com a contagem de alunos."""
+    return turmas_dedup.detectar(db, escola_id)
+
+
+@router.post("/turmas/duplicadas/corrigir", response_model=dict)
+def corrigir_turmas_duplicadas(
+    grupos: list[ConsolidarTurmasIn],
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Consolida os grupos escolhidos: move as matrículas das duplicadas para a
+    canônica, herda o titular quando ela não tem e remove as turmas duplicadas.
+    Recalcula ao final. Não funde alunos — reporta possíveis duplicados."""
+    resumos: list[dict] = []
+    try:
+        for g in grupos:
+            resumos.append(turmas_dedup.consolidar(db, escola_id, g.canonica_id, g.duplicada_ids))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    total_rem = sum(r["turmas_removidas"] for r in resumos)
+    total_mov = sum(r["alunos_movidos"] for r in resumos)
+    dup_total = sum(r["possiveis_alunos_duplicados"] for r in resumos)
+    registrar(db, "turmas.consolidadas", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="turma", detalhes={"grupos": len(grupos),
+                                          "removidas": total_rem, "alunos_movidos": total_mov})
+    db.commit()
+    _recalcular_escola(db, escola_id)
+
+    msg = f"{total_rem} turma(s) duplicada(s) consolidada(s); {total_mov} aluno(s) migrado(s)."
+    if dup_total:
+        msg += (f" Atenção: {dup_total} nome(s) aparecem repetidos na(s) turma(s) — "
+                "confira em Alunos e use “Fundir alunos” se for a mesma pessoa.")
+    return {"mensagem": msg, "grupos": resumos, "turmas_removidas": total_rem,
+            "alunos_movidos": total_mov, "possiveis_alunos_duplicados": dup_total}
 
 
 @router.get("/professores", response_model=list[ProfessorOut])

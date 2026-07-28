@@ -213,6 +213,14 @@ class FusaoAlunos(BaseModel):
     confirmacao: str = ""
 
 
+class ConsolidarTurmasIn(BaseModel):
+    """Um grupo de consolidação de turmas duplicadas: a turma CANÔNICA que
+    permanece + as DUPLICADAS cujas matrículas migram para ela (e depois são
+    removidas)."""
+    canonica_id: int
+    duplicada_ids: list[int] = Field(min_length=1)
+
+
 class ExcluirTurmas(BaseModel):
     """Exclusão em massa de turmas. Com ``com_alunos``, remove também os alunos
     matriculados nessas turmas e todos os seus dados (irreversível); sem, as

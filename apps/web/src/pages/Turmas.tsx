@@ -6,7 +6,7 @@
  * mesma listagem GET /turmas. Excluir é bloqueado pela API enquanto houver
  * alunos vinculados — arquivar é o caminho que preserva o histórico.
  */
-import { Archive, ArchiveRestore, LayoutGrid, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Combine, LayoutGrid, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -449,8 +449,135 @@ function CriarVariasTurmas({ escolaId, anoLetivo, existentes, aberto, aoFechar, 
   );
 }
 
+// --- Consolidação de turmas duplicadas --------------------------------------
+
+type TurmaDup = { id: number; nome: string; turno: string | null; alunos: number };
+type GrupoDup = { chave: string; ano_letivo: number; canonica: TurmaDup; duplicadas: TurmaDup[] };
+
+/** Detecta salas cadastradas com nomes diferentes (ex.: "1 ANO A TARDE ANUAL
+ *  (300302821)" e "1ºA") e, ao aplicar, migra os alunos para o nome curto e
+ *  remove as duplicadas. Revisão por grupo antes de aplicar. */
+function ModalTurmasDuplicadas({ escolaId, aberto, aoFechar, aoConcluir }: {
+  escolaId: number;
+  aberto: boolean;
+  aoFechar: () => void;
+  aoConcluir: (mensagem: string) => void;
+}) {
+  const { dados: grupos, erro, carregando } = useApi<GrupoDup[]>(
+    aberto ? `/escolas/${escolaId}/turmas/duplicadas` : null);
+  const [escolhidos, setEscolhidos] = useState<Set<string>>(new Set());
+  const [aplicando, setAplicando] = useState(false);
+  const [erroApi, setErroApi] = useState("");
+
+  // Por padrão, todos os grupos vêm marcados (o gestor pode desmarcar).
+  useEffect(() => {
+    if (grupos) setEscolhidos(new Set(grupos.map((g) => g.chave)));
+  }, [grupos]);
+
+  function alternar(chave: string) {
+    setEscolhidos((atuais) => {
+      const prox = new Set(atuais);
+      if (prox.has(chave)) prox.delete(chave);
+      else prox.add(chave);
+      return prox;
+    });
+  }
+
+  async function aplicar() {
+    const alvos = (grupos ?? []).filter((g) => escolhidos.has(g.chave));
+    if (alvos.length === 0) return;
+    setAplicando(true);
+    setErroApi("");
+    try {
+      const r = await api<{ mensagem: string }>(
+        `/escolas/${escolaId}/turmas/duplicadas/corrigir`,
+        {
+          method: "POST",
+          body: JSON.stringify(alvos.map((g) => ({
+            canonica_id: g.canonica.id,
+            duplicada_ids: g.duplicadas.map((d) => d.id),
+          }))),
+        },
+      );
+      aoConcluir(r.mensagem);
+    } catch (e) {
+      setErroApi(e instanceof ApiError ? e.message : "Não foi possível consolidar as turmas.");
+    } finally {
+      setAplicando(false);
+    }
+  }
+
+  if (!aberto) return null;
+  return (
+    <Modal titulo="Corrigir turmas duplicadas" aberto={aberto} aoFechar={aoFechar}>
+      {carregando ? (
+        <Carregando />
+      ) : erro ? (
+        <Mensagem tipo="erro">{erro.message}</Mensagem>
+      ) : (grupos ?? []).length === 0 ? (
+        <Vazio
+          titulo="Nenhuma turma duplicada encontrada"
+          descricao="Não há salas cadastradas com nomes diferentes que representem a mesma turma."
+        />
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+            Encontrei salas cadastradas de formas diferentes. Em cada grupo, os alunos vão para o
+            nome <strong>curto e padronizado</strong> (que fica) e as versões duplicadas são
+            removidas. Revise e desmarque o que não quiser mexer.
+          </p>
+          <div className="max-h-[52vh] space-y-2 overflow-y-auto">
+            {(grupos ?? []).map((g) => (
+              <label
+                key={g.chave}
+                className="flex cursor-pointer gap-3 rounded-lg border border-zinc-200 p-3 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/40"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                  checked={escolhidos.has(g.chave)}
+                  onChange={() => alternar(g.chave)}
+                />
+                <div className="min-w-0 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tom="ok">Fica: {g.canonica.nome}</Badge>
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {g.canonica.alunos} aluno(s) · {g.ano_letivo}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    Migram para ela e são removidas:
+                  </p>
+                  <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-zinc-600 dark:text-zinc-300">
+                    {g.duplicadas.map((d) => (
+                      <li key={d.id}>
+                        <span className="font-medium">{d.nome}</span>{" "}
+                        <span className="text-xs text-zinc-400">({d.alunos} aluno(s))</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </label>
+            ))}
+          </div>
+          {erroApi && <Mensagem tipo="erro">{erroApi}</Mensagem>}
+          <div className="flex justify-end gap-2">
+            <Botao variante="neutro" onClick={aoFechar} disabled={aplicando}>Cancelar</Botao>
+            <Botao onClick={aplicar} disabled={aplicando || escolhidos.size === 0}>
+              {aplicando ? "Consolidando..." : `Consolidar ${escolhidos.size} grupo(s)`}
+            </Botao>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export default function Turmas() {
-  const { escolaId, escolaAtual } = useApp();
+  const { escolaId, escolaAtual, usuario } = useApp();
+  // Secretaria (rede vinculada, não-global): só visualiza — sem consolidar
+  // (o backend também barra). Coordenador/admin operam a própria escola.
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
   // Listagem de turmas (todas — o filtro visível é aplicado depois, no cliente).
   const {
     dados: turmas,
@@ -473,6 +600,7 @@ export default function Turmas() {
   const [mostrarTodas, setMostrarTodas] = useState(false);
   const [formAberto, setFormAberto] = useState(false);
   const [variasAberto, setVariasAberto] = useState(false);
+  const [dedupAberto, setDedupAberto] = useState(false);
   const [emEdicao, setEmEdicao] = useState<Turma | null>(null);
   const [paraExcluir, setParaExcluir] = useState<Turma | null>(null);
   const [erroExclusao, setErroExclusao] = useState<string | null>(null);
@@ -646,6 +774,11 @@ export default function Turmas() {
         descricao="Cadastre, edite e organize as turmas da escola."
         acoes={
           <div className="flex flex-wrap gap-2">
+            {!secretaria && (
+              <Botao variante="neutro" onClick={() => setDedupAberto(true)}>
+                <Combine size={16} /> Corrigir duplicadas
+              </Botao>
+            )}
             <Botao variante="neutro" onClick={() => setVariasAberto(true)}>
               <LayoutGrid size={16} /> Criar várias
             </Botao>
@@ -655,6 +788,20 @@ export default function Turmas() {
           </div>
         }
       />
+
+      {escolaId && (
+        <ModalTurmasDuplicadas
+          escolaId={escolaId}
+          aberto={dedupAberto}
+          aoFechar={() => setDedupAberto(false)}
+          aoConcluir={(mensagem) => {
+            setDedupAberto(false);
+            setSelecionadas(new Set());
+            avisar("ok", mensagem);
+            recarregarTurmas();
+          }}
+        />
+      )}
 
       {escolaId && (
         <CriarVariasTurmas

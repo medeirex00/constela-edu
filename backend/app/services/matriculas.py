@@ -12,6 +12,7 @@ banco para estas estruturas, chama estas funções e aplica o resultado.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -69,11 +70,44 @@ def normalizar(texto: str) -> str:
     return svc.normalizar_nome(texto or "")
 
 
+_TURNO_COD = {"manha": "M", "tarde": "T", "noite": "N", "integral": "I"}
+_TURNO_TXT = {
+    "matutino": "manha", "manha": "manha", "tarde": "tarde", "vespertino": "tarde",
+    "noturno": "noite", "noite": "noite", "integral": "integral",
+}
+# número da série + ordinal opcional + 'ano/série' opcional + LETRA ISOLADA da
+# sala (\b…\b — 1 caractere, p/ NÃO capturar o "A" de "ANUAL").
+_RE_CANON = re.compile(r"(\d+)\s*[ºªo°]?\s*(?:ano|serie)?\s*\b([a-z])\b", re.IGNORECASE)
+
+
+def chave_canonica(nome: str, ano_escolar: str = "", turno: str | None = None) -> str:
+    """Identidade CANÔNICA de uma turma, reconhecendo a MESMA sala escrita de
+    formas diferentes: "1 ANO A TARDE ANUAL (300302821)" e "1ºA" (turno tarde)
+    → ambos ``"1|A|T"`` (série · letra · turno). Reune número da série + letra
+    da sala + turno (do campo `turno`, senão inferido do texto do nome). É
+    CONSERVADORA: nomes sem o padrão número+letra (Maternal, Pré, EJA, AEE,
+    Multisseriado…) caem no nome normalizado e nunca são fundidos por engano;
+    turnos diferentes (1ºA manhã ≠ 1ºA tarde) geram chaves diferentes."""
+    # Tira o código (SED) entre () e troca o ordinal (º ª °) por espaço — senão
+    # "1ºA" cola o º no "A" e o \b da letra não casa.
+    limpo = re.sub(r"[ºª°]", " ", re.sub(r"\(.*?\)", " ", nome or ""))
+    base = normalizar(limpo)
+    m = _RE_CANON.search(base) or _RE_CANON.search(normalizar(re.sub(r"[ºª°]", " ", ano_escolar or "")))
+    ano_num = m.group(1) if m else ""
+    letra = m.group(2).upper() if m else ""
+    t = (turno or "").strip().lower()                          # 1º: campo/metadado 'Turno:'
+    if t not in _TURNO_COD:                                    # 2º: inferir do próprio nome
+        t = next((v for k, v in _TURNO_TXT.items() if k in base.split()), "")
+    if not ano_num and not letra:
+        return base                                            # formato desconhecido: não funde
+    return f"{ano_num}|{letra}|{_TURNO_COD.get(t, '')}"
+
+
 def chave_turma(nome: str) -> str:
-    """Chave de turma insensível a ordinal/acento/caixa: "5º Ano B" == "5 ANO B".
-    normalizar_nome NÃO remove º, então turmas bifurcariam sem isto."""
-    import re
-    return normalizar(re.sub(r"[ºª°]", "", nome or ""))
+    """Chave de casamento de turma na importação (só o NOME disponível). Delega
+    à `chave_canonica`, colapsando "1 ANO A TARDE ANUAL (cod)" e "1º Ano A" na
+    mesma turma — evita recriar duplicata em importações futuras."""
+    return chave_canonica(nome)
 
 
 def overlap_turma(a: frozenset[str] | set[str], b: frozenset[str] | set[str]) -> int:
