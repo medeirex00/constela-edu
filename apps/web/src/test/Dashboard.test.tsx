@@ -42,4 +42,15 @@ describe("Dashboard", () => {
       await screen.findByText("Não foi possível carregar os indicadores"),
     ).toBeInTheDocument();
   });
+
+  it("no primeiro acesso (escola sem turmas nem alunos) mostra só o Comece aqui", async () => {
+    // Escola nova: sem turmas e sem alunos → tela inicial limpa.
+    responder("GET", URL_DASH, dashboardFake({ total_turmas: 0, total_alunos: 0, top10: [] }));
+    renderComApp(<Dashboard />);
+
+    expect(await screen.findByText("Bem-vindo(a) ao Constela Edu")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Comece aqui/ })).toBeInTheDocument();
+    // Nada de indicadores nem ranking na tela limpa.
+    expect(screen.queryByText("Top 10 — Ranking Geral")).not.toBeInTheDocument();
+  });
 });

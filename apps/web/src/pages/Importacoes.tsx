@@ -192,11 +192,12 @@ export default function Importacoes() {
   const [erro, setErro] = useState("");
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null);
 
-  // Com um lote em andamento (análise/conferência/importação rodando no
-  // contexto global), a página já abre no modo "Em lote" para mostrá-lo.
+  // Por padrão a página abre em "Matrículas da escola" — é por onde se importa
+  // a Lista Piloto (o fluxo mais comum). Só abre em "Em lote" quando já há um
+  // lote em andamento (análise/conferência/importação rodando no contexto).
   const { fase: faseLote } = useImportacaoLote();
   const [modo, setModo] = useState<"individual" | "lote" | "matriculas">(
-    faseLote !== "selecao" ? "lote" : "individual",
+    faseLote !== "selecao" ? "lote" : "matriculas",
   );
 
   const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);

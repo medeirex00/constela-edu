@@ -47,6 +47,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { useApi } from "../hooks/useApi";
+import { useOnboarding } from "../hooks/useOnboarding";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
@@ -498,6 +499,9 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const rede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
   // Secretaria = tem rede vinculada e NÃO é admin global.
   const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  // "Comece aqui" só aparece enquanto a escola não foi configurada; depois da
+  // config inicial ele some (novas importações passam a ser por "Importações").
+  const { precisaConfigurar } = useOnboarding();
   const grupos = gruposVisiveis(gestor, Boolean(usuario?.is_global), secretaria);
   const ativo = grupoDaRota(pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
@@ -530,7 +534,7 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
       {rede && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
-      {gestor && !secretaria && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
+      {gestor && !secretaria && precisaConfigurar && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
         const aberto = abertos.has(grupo.chave);

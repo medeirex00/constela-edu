@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge, Botao, Card, Carregando, Mensagem, PageHeader } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
@@ -6,6 +6,7 @@ import { useApi } from "../../hooks/useApi";
 import { api, ApiError } from "../../lib/api";
 import { nota } from "../../lib/formato";
 import type { Pesos, Referencias } from "../../lib/types";
+import { EditorNiveis, PontuacaoPorTurma } from "./dificuldade";
 
 /* -------------------------------------------------------------------------
  * Editor genérico de pesos — reutilizado por Matific, Elefante, Questões
@@ -241,174 +242,16 @@ function ReferenciasNormalizacao() {
 }
 
 /* -------------------------------------------------------------------------
- * Dificuldade por Turma (PRD §39): pontuação LIVRE por nível, para CADA turma.
- * Sem faixas fixas — o gestor define quantos pontos cada nível (AA..Z) vale na
- * turma escolhida. Turmas sem config usam o padrão da escola.
+ * Página Métricas. A configuração de dificuldade (níveis + pontuação por turma)
+ * vive em ./dificuldade e é reutilizada aqui e no módulo Elefante Letrado.
  * ----------------------------------------------------------------------- */
-type CatalogoNivel = { codigo: string; pontos_padrao: number; faixa: string };
-type TurmaPontos = { turma_id: number; nome: string; ano_escolar: string; pontos: Record<string, number> };
-type PontuacaoResp = { catalogo: CatalogoNivel[]; turmas: TurmaPontos[] };
-
-function PontuacaoPorTurma() {
-  const { escolaId, usuario } = useApp();
-  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
-  const { dados, erro, carregando, recarregar } = useApi<PontuacaoResp>(
-    escolaId ? `/escolas/${escolaId}/configuracoes/pontuacao-turma` : null,
-  );
-  const [turmaId, setTurmaId] = useState<number | null>(null);
-  const [edit, setEdit] = useState<Record<string, number>>({});
-  const [aplicarTodos, setAplicarTodos] = useState("");
-  const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
-  const [salvando, setSalvando] = useState(false);
-
-  const padrao = useMemo(
-    () => Object.fromEntries((dados?.catalogo ?? []).map((c) => [c.codigo, c.pontos_padrao])),
-    [dados],
-  );
-  const turma = (dados?.turmas ?? []).find((t) => t.turma_id === turmaId) ?? null;
-
-  // Seleciona a 1ª turma quando os dados chegam.
-  useEffect(() => {
-    if (dados && turmaId === null && dados.turmas.length) setTurmaId(dados.turmas[0].turma_id);
-  }, [dados, turmaId]);
-
-  // Semeia a tabela editável da turma escolhida (override sobre o padrão).
-  useEffect(() => {
-    if (!dados || !turma) return;
-    const seed: Record<string, number> = {};
-    for (const c of dados.catalogo) seed[c.codigo] = turma.pontos[c.codigo] ?? c.pontos_padrao;
-    setEdit(seed);
-    setMensagem(null);
-  }, [turmaId, dados]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (carregando) return <Carregando />;
-  if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
-  if (!dados) return <Carregando />;
-  if (dados.turmas.length === 0)
-    return (
-      <Card className="p-6 text-sm text-zinc-500 dark:text-zinc-400">
-        Cadastre turmas para configurar a pontuação por nível.
-      </Card>
-    );
-  if (dados.catalogo.length === 0)
-    return (
-      <Card className="p-6 text-sm text-zinc-500 dark:text-zinc-400">
-        Cadastre os níveis de dificuldade (na aba anterior) para poder pontuá-los.
-      </Card>
-    );
-
-  const alterados = Object.keys(edit).filter((c) => edit[c] !== padrao[c]).length;
-
-  async function salvar() {
-    if (!escolaId || turmaId === null) return;
-    // Envia só o que DIFERE do padrão (config esparsa).
-    const pontos: Record<string, number> = {};
-    for (const [cod, val] of Object.entries(edit)) if (val !== padrao[cod]) pontos[cod] = val;
-    setSalvando(true);
-    setMensagem(null);
-    try {
-      const r = await api<{ mensagem: string }>(
-        `/escolas/${escolaId}/configuracoes/pontuacao-turma`,
-        { method: "PUT", body: JSON.stringify({ turma_id: turmaId, pontos }) },
-      );
-      setMensagem({ tipo: "ok", texto: r.mensagem });
-      recarregar();
-    } catch (e) {
-      setMensagem({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível salvar." });
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">
-        Defina livremente quantos pontos cada nível de livro vale <strong>nesta turma</strong>. Cada
-        turma pode ter a sua tabela; níveis não alterados usam o padrão da escola.
-      </p>
-
-      <Card className="flex flex-wrap items-center gap-3 p-4">
-        <label className="text-sm font-medium">Turma</label>
-        <select
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-          value={turmaId ?? ""}
-          onChange={(e) => setTurmaId(Number(e.target.value))}
-        >
-          {dados.turmas.map((t) => (
-            <option key={t.turma_id} value={t.turma_id}>
-              {t.nome} · {t.ano_escolar}
-            </option>
-          ))}
-        </select>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-zinc-500 dark:text-zinc-400">Aplicar a todos:</span>
-          <input
-            type="number"
-            min={0}
-            step="0.5"
-            value={aplicarTodos}
-            onChange={(e) => setAplicarTodos(e.target.value)}
-            className="w-20 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
-          />
-          <Botao
-            variante="neutro"
-            onClick={() => {
-              const v = Number(aplicarTodos);
-              if (aplicarTodos === "" || Number.isNaN(v) || v < 0) return;
-              setEdit(Object.fromEntries(Object.keys(edit).map((c) => [c, v])));
-            }}
-          >
-            Aplicar
-          </Botao>
-        </div>
-      </Card>
-
-      <Card>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1 p-4 sm:grid-cols-3 lg:grid-cols-4">
-          {dados.catalogo.map((c) => {
-            const val = edit[c.codigo] ?? c.pontos_padrao;
-            const custom = val !== c.pontos_padrao;
-            return (
-              <div key={c.codigo} className="flex items-center justify-between gap-2 py-1">
-                <span className="flex items-center gap-1.5 text-sm">
-                  <span className="font-medium tabular-nums">{c.codigo}</span>
-                  {custom && <Badge tom="destaque">alterado</Badge>}
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.5"
-                  value={val}
-                  onChange={(e) =>
-                    setEdit((prev) => ({ ...prev, [c.codigo]: Number(e.target.value) }))
-                  }
-                  className="w-16 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
-                />
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
-      <div className="flex items-center gap-3">
-        <Botao onClick={salvar} disabled={salvando || somenteLeitura}>
-          {somenteLeitura ? "Somente leitura" : salvando ? "Salvando e recalculando..." : `Salvar pontuação da turma`}
-        </Botao>
-        <span className="text-sm text-zinc-500 dark:text-zinc-400">
-          {alterados > 0 ? `${alterados} nível(is) diferente(s) do padrão.` : "Usando o padrão da escola."}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-
-/* -------------------------------------------------------------------------
- * Página Métricas — exatamente os 4 módulos definidos no PRD §58.
- * ----------------------------------------------------------------------- */
-const ABAS = ["Matific", "Elefante Letrado", "Dificuldade por Turma", "Referências de Normalização"] as const;
+const ABAS = [
+  "Matific",
+  "Elefante Letrado",
+  "Níveis de dificuldade",
+  "Dificuldade por Turma",
+  "Referências de Normalização",
+] as const;
 type Aba = (typeof ABAS)[number];
 
 export default function Metricas() {
@@ -506,6 +349,11 @@ export default function Metricas() {
         </div>
       )}
 
+      {aba === "Níveis de dificuldade" && (
+        <div className="max-w-3xl">
+          <EditorNiveis />
+        </div>
+      )}
       {aba === "Dificuldade por Turma" && <PontuacaoPorTurma />}
       {aba === "Referências de Normalização" && <ReferenciasNormalizacao />}
     </div>

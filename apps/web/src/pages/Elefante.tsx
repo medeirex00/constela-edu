@@ -19,6 +19,16 @@ import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
 import type { ElefanteAluno, Nivel } from "../lib/types";
+import { AvisoSemNiveis, EditorNiveis, PontuacaoPorTurma } from "./configuracoes/dificuldade";
+
+// Sub-abas do módulo: os alunos e a configuração de dificuldade (níveis +
+// pontuação por turma) num só lugar — cadastrar os níveis vem ANTES de pontuar.
+const SUBABAS = [
+  ["alunos", "Alunos"],
+  ["niveis", "Níveis de dificuldade"],
+  ["pontuacao", "Dificuldade por turma"],
+] as const;
+type SubAba = (typeof SUBABAS)[number][0];
 
 function niveisParaTexto(niveis: Record<string, number>): string {
   return Object.entries(niveis)
@@ -52,11 +62,13 @@ export default function Elefante() {
     carregando,
     recarregar: recarregarLinhas,
   } = useApi<ElefanteAluno[]>(escolaId ? `/escolas/${escolaId}/elefante` : null);
-  const { dados: dadosDificuldade, erro: erroNiveis } = useApi<{ niveis: Nivel[] }>(
-    escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
-  );
+  const { dados: dadosDificuldade, erro: erroNiveis, recarregar: recarregarNiveis } =
+    useApi<{ niveis: Nivel[] }>(
+      escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
+    );
   const niveis = dadosDificuldade?.niveis ?? [];
 
+  const [aba, setAba] = useState<SubAba>("alunos");
   const [editando, setEditando] = useState<ElefanteAluno | null>(null);
   const [formulario, setFormulario] = useState({
     tempo_leitura_min: 0,
@@ -145,6 +157,34 @@ export default function Elefante() {
         titulo="Elefante Letrado"
         descricao="Livros por nível de dificuldade, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
       />
+
+      <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        {SUBABAS.map(([chave, rotulo]) => (
+          <button
+            key={chave}
+            role="tab"
+            aria-selected={aba === chave}
+            onClick={() => setAba(chave)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              aba === chave
+                ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
+                : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            {rotulo}
+          </button>
+        ))}
+      </div>
+
+      {aba === "niveis" && (
+        <div className="max-w-3xl">
+          <EditorNiveis aoMudar={recarregarNiveis} />
+        </div>
+      )}
+      {aba === "pontuacao" && <PontuacaoPorTurma />}
+
+      {aba === "alunos" && (
+        <>
       <Card>
         {carregando ? (
           <Carregando />
@@ -234,9 +274,12 @@ export default function Elefante() {
           {erroNiveis ? (
             <Mensagem tipo="erro">{erroNiveis.message}</Mensagem>
           ) : niveis.length === 0 ? (
-            <Mensagem tipo="erro">
-              Nenhum nível de dificuldade configurado. Configure-os em Métricas primeiro.
-            </Mensagem>
+            <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+              <AvisoSemNiveis aoCriar={recarregarNiveis} />
+              <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+                Ou cadastre manualmente na aba <strong>Níveis de dificuldade</strong>.
+              </p>
+            </div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
               {niveis.map((faixa) => (
@@ -320,6 +363,8 @@ export default function Elefante() {
           </div>
         </div>
       </Modal>
+        </>
+      )}
     </div>
   );
 }

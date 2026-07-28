@@ -142,6 +142,10 @@ describe("Importacoes", () => {
     // Espera a tela terminar de carregar (histórico vazio) antes de interagir.
     await screen.findByText("Nenhuma importação ainda");
 
+    // A página abre por padrão em "Matrículas da escola"; este teste é do envio
+    // individual, então troca para a aba "Um por vez" primeiro.
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+
     // A área de texto é o único textbox do formulário de envio individual.
     await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42");
     await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));

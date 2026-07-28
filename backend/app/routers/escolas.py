@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
 from app.models import Escola, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
+from app.services import provisionamento
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas", tags=["Escolas"])
@@ -53,6 +54,10 @@ def criar(
     escola = Escola(**{**dados.model_dump(), "nome": nome})
     db.add(escola)
     db.flush()
+    # Provisiona a config de partida (pesos, níveis de dificuldade, referências)
+    # para a escola nascer pronta — sem isso, uma escola criada pela interface
+    # ficava sem níveis e caía no beco de "cadastre os níveis de dificuldade".
+    provisionamento.semear_config_inicial(db, escola.id)
     registrar(db, "escola.criada", escola_id=escola.id, usuario_id=usuario.id,
               entidade="escola", entidade_id=escola.id, detalhes={"nome": escola.nome})
     db.commit()

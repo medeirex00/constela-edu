@@ -268,6 +268,22 @@ class NivelOut(ORMModel):
     ordem: int
 
 
+class NivelCreate(BaseModel):
+    """Cadastro de um novo nível de dificuldade (faixa) do Elefante Letrado."""
+    nome: str = Field(min_length=1, max_length=60)
+    # Códigos de letra dos livros que pertencem à faixa (ex.: ["AA","BB"]).
+    codigos: list[str] = Field(default_factory=list)
+    pontos_padrao: float = Field(default=1.0, ge=0)
+
+
+class NivelUpdate(BaseModel):
+    """Edição parcial de um nível — só os campos enviados mudam."""
+    nome: str | None = Field(default=None, min_length=1, max_length=60)
+    codigos: list[str] | None = None
+    pontos_padrao: float | None = Field(default=None, ge=0)
+    ordem: int | None = Field(default=None, ge=0)
+
+
 class DificuldadeSerieOut(BaseModel):
     ano_escolar: str
     pontos: dict[int, float]  # nivel_id -> pontos

@@ -4,7 +4,7 @@ Tudo que o motor de cálculo usa é editável por aqui (PRD §5, §29, §58–§
 Qualquer alteração dispara recálculo integral (PRD §43) e fica no log.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -18,16 +18,19 @@ from app.models import (
     Turma,
     Usuario,
 )
+from app.models.configuracao import slug_nivel
 from pydantic import BaseModel, Field
 from app.schemas import (
     DificuldadeUpdate,
+    NivelCreate,
     NivelOut,
+    NivelUpdate,
     PesosOut,
     PesosUpdate,
     ReferenciasOut,
     ReferenciasUpdate,
 )
-from app.services import scoring
+from app.services import provisionamento, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/configuracoes", tags=["Configurações"])
@@ -220,6 +223,129 @@ def salvar_dificuldade(
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     return {"mensagem": f"{len(alteracoes)} valores atualizados. Notas recalculadas."}
+
+
+# --- Cadastro dos níveis de dificuldade (faixas) — CRUD (PRD §38) ------------
+# As faixas (NivelDificuldade) são a BASE de tudo no Elefante: sem elas, não há
+# catálogo de códigos para pontuar por turma nem para informar "livros por
+# nível". Estas rotas permitem cadastrá-las/editá-las pela interface (antes,
+# só o seed criava faixas — escola criada pela tela ficava sem nenhuma).
+
+def _normalizar_codigos(codigos: list[str] | None) -> list[str]:
+    """Códigos de letra em MAIÚSCULA, sem espaços, sem vazios nem repetidos."""
+    limpos: list[str] = []
+    vistos: set[str] = set()
+    for bruto in codigos or []:
+        cod = str(bruto).strip().upper()
+        if cod and cod not in vistos:
+            vistos.add(cod)
+            limpos.append(cod)
+    return limpos
+
+
+@router.post("/niveis", response_model=NivelOut, status_code=status.HTTP_201_CREATED)
+def criar_nivel(
+    dados: NivelCreate,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    ordem_max = db.execute(
+        select(func.max(NivelDificuldade.ordem)).where(NivelDificuldade.escola_id == escola_id)
+    ).scalar()
+    nome = dados.nome.strip()
+    nivel = NivelDificuldade(
+        escola_id=escola_id,
+        nome=nome,
+        codigo=slug_nivel(nome),
+        codigos=_normalizar_codigos(dados.codigos),
+        pontos_padrao=float(dados.pontos_padrao),
+        ordem=0 if ordem_max is None else ordem_max + 1,
+    )
+    db.add(nivel)
+    registrar(db, "nivel.criado", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="nivel_dificuldade",
+              detalhes={"nome": nome, "codigos": nivel.codigos, "pontos": nivel.pontos_padrao})
+    db.commit()
+    db.refresh(nivel)
+    scoring.recalcular_escola(db, escola_id)
+    return NivelOut.model_validate(nivel)
+
+
+@router.put("/niveis/{nivel_id}", response_model=NivelOut)
+def atualizar_nivel(
+    nivel_id: int,
+    dados: NivelUpdate,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    nivel = db.get(NivelDificuldade, nivel_id)
+    if nivel is None or nivel.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nível não encontrado nesta escola.")
+    if dados.nome is not None:
+        nivel.nome = dados.nome.strip()
+        nivel.codigo = slug_nivel(nivel.nome)
+    if dados.codigos is not None:
+        nivel.codigos = _normalizar_codigos(dados.codigos)
+    if dados.pontos_padrao is not None:
+        nivel.pontos_padrao = float(dados.pontos_padrao)
+    if dados.ordem is not None:
+        nivel.ordem = dados.ordem
+    registrar(db, "nivel.alterado", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="nivel_dificuldade", entidade_id=nivel.id,
+              detalhes={"nome": nivel.nome, "codigos": nivel.codigos, "pontos": nivel.pontos_padrao})
+    db.commit()
+    db.refresh(nivel)
+    scoring.recalcular_escola(db, escola_id)
+    return NivelOut.model_validate(nivel)
+
+
+@router.delete("/niveis/{nivel_id}")
+def excluir_nivel(
+    nivel_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    nivel = db.get(NivelDificuldade, nivel_id)
+    if nivel is None or nivel.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nível não encontrado nesta escola.")
+    nome = nivel.nome
+    # Remove antes os pontos por série que referenciam este nível (FK) — de forma
+    # explícita, sem depender do CASCADE do banco (portável entre SQLite/Postgres).
+    db.execute(delete(DificuldadeTurma).where(
+        DificuldadeTurma.escola_id == escola_id, DificuldadeTurma.nivel_id == nivel_id))
+    db.delete(nivel)
+    registrar(db, "nivel.excluido", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="nivel_dificuldade", entidade_id=nivel_id, detalhes={"nome": nome})
+    db.commit()
+    scoring.recalcular_escola(db, escola_id)
+    return {"mensagem": f"Nível “{nome}” removido. Notas recalculadas."}
+
+
+@router.post("/niveis/padrao")
+def restaurar_niveis_padrao(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Cria os níveis de dificuldade PADRÃO do Elefante Letrado — atalho de 1
+    clique para escolas que nasceram sem faixas. Se já houver níveis, não mexe
+    (não duplica); devolve os atuais."""
+    vazia = provisionamento.escola_sem_niveis(db, escola_id)
+    niveis = provisionamento.semear_niveis_padrao(db, escola_id)
+    if vazia:
+        registrar(db, "niveis.padrao_criados", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="nivel_dificuldade", detalhes={"quantidade": len(niveis)})
+        db.commit()
+        for n in niveis:
+            db.refresh(n)
+        scoring.recalcular_escola(db, escola_id)
+    return {
+        "criados": len(niveis) if vazia else 0,
+        "niveis": [NivelOut.model_validate(n) for n in niveis],
+    }
 
 
 # --- Pontuação LIVRE por nível, por TURMA (PRD §39) --------------------------
