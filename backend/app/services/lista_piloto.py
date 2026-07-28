@@ -25,10 +25,17 @@ from datetime import date, datetime, timedelta
 
 from app.services.importacao import normalizar_nome
 
-# Teto de células lidas: uma escola tem centenas/milhares de alunos; muito
+# Teto de células COM CONTEÚDO: uma escola tem centenas/milhares de alunos; muito
 # acima disso é planilha inválida ou tentativa de exaustão de memória (uma
 # .xlsx é um zip e pode inflar muito). Barra antes de materializar tudo.
+# IMPORTANTE: conta só células NÃO vazias — é comum um Excel real declarar a
+# planilha inteira (ex.: formatação aplicada nas 16.384 colunas de uma aba),
+# o que inflaria o total com milhões de células vazias e barraria o arquivo à toa.
 _MAX_CELULAS = 2_000_000
+# Ignora colunas/linhas muito além de qualquer lista de matrícula real (uma
+# formatação de coluna/linha inteira não deve ser lida nem contada).
+_MAX_COLS = 256
+_MAX_LINHAS = 50_000
 
 # --------------------------------------------------------------------------
 # Estruturas de resultado
@@ -81,22 +88,27 @@ def _abrir_xls(conteudo: bytes) -> list[tuple[str, list[list]]]:
     from xlrd.xldate import xldate_as_datetime
 
     wb = xlrd.open_workbook(file_contents=conteudo)
-    if sum(s.nrows * s.ncols for s in wb.sheets()) > _MAX_CELULAS:
-        raise ValueError("planilha grande demais")
     abas: list[tuple[str, list[list]]] = []
+    total = 0
     for s in wb.sheets():
+        ncols = min(s.ncols, _MAX_COLS)
+        nrows = min(s.nrows, _MAX_LINHAS)
         linhas = []
-        for r in range(s.nrows):
+        for r in range(nrows):
             celulas = []
-            for c in range(s.ncols):
+            for c in range(ncols):
                 tipo = s.cell_type(r, c)
                 valor = s.cell_value(r, c)
                 if tipo == xlrd.XL_CELL_DATE:
                     valor = xldate_as_datetime(valor, wb.datemode).date()
                 elif tipo == xlrd.XL_CELL_NUMBER and valor == int(valor):
                     valor = int(valor)
+                if valor not in (None, ""):        # só conteúdo conta pro teto
+                    total += 1
                 celulas.append(valor)
             linhas.append(celulas)
+        if total > _MAX_CELULAS:
+            raise ValueError("planilha grande demais")
         abas.append((s.name, linhas))
     return abas
 
@@ -109,8 +121,10 @@ def _abrir_xlsx(conteudo: bytes) -> list[tuple[str, list[list]]]:
     total = 0
     for aba in wb.worksheets:
         linhas = []
-        for linha in aba.iter_rows(values_only=True):
-            total += len(linha)
+        # max_col/max_row limitam a leitura: uma aba com formatação nas 16.384
+        # colunas (inchaço comum de Excel) não é lida inteira nem conta pro teto.
+        for linha in aba.iter_rows(values_only=True, max_row=_MAX_LINHAS, max_col=_MAX_COLS):
+            total += sum(1 for valor in linha if valor is not None)  # só conteúdo
             if total > _MAX_CELULAS:
                 wb.close()
                 raise ValueError("planilha grande demais")
@@ -337,6 +351,11 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                 if v.strip().isdigit():
                     analise.ano_letivo = int(v.strip())
         turma = _extrair_turma(nome_aba, topo)
+        # Aba AUXILIAR (ex.: "COMPARAR COM INEP", "DESENHOS", "Etiqueta"): tem
+        # uma coluna "Nome", mas NENHUM metadado de turma (turno/professor/SED)
+        # do bloco de matrícula. Não é uma turma de verdade — não importar.
+        if not (turma.turno or turma.professor or turma.sed):
+            continue
 
         # Mapa de colunas do cabeçalho.
         colunas: dict[str, int] = {}

@@ -593,3 +593,32 @@ def test_soft_excluido_reativa_por_ra(cliente, db, escola_completa):
     pedros = db.execute(select(func.count()).select_from(Aluno).where(
         Aluno.escola_id == escola_id, Aluno.nome.like("PEDRO%"))).scalar_one()
     assert pedros == 1                            # não duplicou
+
+
+def test_planilha_inchada_e_aba_auxiliar():
+    """(1) Aba com formatação em coluna inteira (max_column gigante) não pode
+    barrar o arquivo com 'planilha grande demais'. (2) Aba com coluna Nome mas
+    SEM metadado de turma (turno/professor/SED) não é importada como turma."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "1º Ano A"
+    _aba(ws, "1º Ano A", "TARDE", "PAULA", 300396614, [
+        [1, 4446, "123.100.026-0", "AGATHA VITORIA MOURA DA SILVA",
+         date(2019, 9, 18), "BRENDA", "RUA X, 178", "JARAGUAZINHO",
+         "12-98109-4185", "", "", "", "F", "PARDA", "SIM"],
+    ])
+    # Inchaço: um valor lá na coluna 16384 (XFD) infla max_column; dado real mínimo.
+    inchada = wb.create_sheet("RM REVISADA")
+    inchada.cell(row=1, column=16384, value="x")
+    # Auxiliar: tem coluna Nome, mas nenhum metadado de turma → deve ser ignorada.
+    aux = wb.create_sheet("COMPARAR COM INEP")
+    aux.append(["Nome"])
+    aux.append(["FULANO DE TAL"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    from app.services.lista_piloto import analisar_matriculas
+    a = analisar_matriculas(buf.getvalue(), "Lista.xlsx")
+    assert [t.nome for t in a.turmas] == ["1º Ano A"]   # só a turma real
+    assert a.total_alunos == 1
+    assert not any("grande demais" in av for av in a.avisos)
