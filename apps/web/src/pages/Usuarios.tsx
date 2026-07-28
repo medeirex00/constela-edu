@@ -99,6 +99,7 @@ function MenuAcoes({
   souEu,
   souGlobal,
   souAdmin,
+  podeGerirTurmas,
   podeRedefinir,
   aoEscolher,
 }: {
@@ -107,6 +108,8 @@ function MenuAcoes({
   souGlobal: boolean;
   /** Ações de GESTÃO (editar, permissões, excluir) — só admin. */
   souAdmin: boolean;
+  /** Vincular turmas ao professor — admin OU coordenador da própria escola. */
+  podeGerirTurmas: boolean;
   /** Matriz da redefinição de senha: admin→todos; coordenador→ele e
    *  professores; professor→só ele. */
   podeRedefinir: boolean;
@@ -127,16 +130,17 @@ function MenuAcoes({
             {!excluido && podeRedefinir && (
               <ItemMenu icone={<KeyRound size={15} />} rotulo="Redefinir senha" onClick={() => escolher("redefinir")} />
             )}
+            {/* Vincular turmas: admin OU coordenador (o professor pode ter várias). */}
+            {!excluido && podeGerirTurmas && usuario.cargo === "professor" && (
+              <ItemMenu
+                icone={<GraduationCap size={15} />}
+                rotulo="Vincular turmas"
+                onClick={() => escolher("turmas")}
+              />
+            )}
             {!excluido && souAdmin && (
               <>
                 <ItemMenu icone={<Pencil size={15} />} rotulo="Editar" onClick={() => escolher("editar")} />
-                {usuario.cargo === "professor" && (
-                  <ItemMenu
-                    icone={<GraduationCap size={15} />}
-                    rotulo="Vincular turmas"
-                    onClick={() => escolher("turmas")}
-                  />
-                )}
                 {!souEu && (
                   <>
                     <ItemMenu
@@ -885,6 +889,7 @@ export default function Usuarios() {
                         souEu={usuario.id === usuarioLogado?.id}
                         souGlobal={souGlobal}
                         souAdmin={souAdmin}
+                        podeGerirTurmas={souAdmin || souCoordenador}
                         podeRedefinir={podeRedefinir(usuario)}
                         aoEscolher={(tipo) => abrir(tipo, usuario)}
                       />

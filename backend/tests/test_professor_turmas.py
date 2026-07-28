@@ -101,7 +101,7 @@ def test_turma_inexistente_e_recusada(cliente, escola_completa):
 
 
 def test_professor_nao_designa_as_proprias_turmas(cliente, escola_completa):
-    """Só admin: um professor não pode se auto-atribuir turmas."""
+    """Professor não pode se auto-atribuir turmas (só admin/coordenador)."""
     escola = escola_completa["escola"]
     turma_a = escola_completa["turma"]
     prof = _prof_user(cliente, escola.id, "Eva Pinto", "eva@escola.com.br")
@@ -109,3 +109,23 @@ def test_professor_nao_designa_as_proprias_turmas(cliente, escola_completa):
     r = cliente.put(_url(escola.id, f"/{prof['id']}/turmas"),
                     json={"turma_ids": [turma_a.id]}, headers=chaves)
     assert r.status_code == 403
+
+
+def test_coordenador_tambem_vincula_turmas(cliente, db, escola_completa):
+    """O COORDENADOR da própria escola também designa turmas ao professor (antes
+    era admin-only). A Secretaria segue barrada por escola_autorizada."""
+    from app.core.security import hash_senha
+    from app.models import Usuario
+
+    escola = escola_completa["escola"]
+    turma_a = escola_completa["turma"]
+    prof = _prof_user(cliente, escola.id, "Paula Vilela", "paula.v@escola.com.br")
+    db.add(Usuario(escola_id=escola.id, nome="Coord Fulana", email="coord.f@escola.com.br",
+                   senha_hash=hash_senha(SENHA), cargo="coordenador"))
+    db.commit()
+
+    chaves = _login(cliente, "coord.f@escola.com.br")
+    r = cliente.put(_url(escola.id, f"/{prof['id']}/turmas"),
+                    json={"turma_ids": [turma_a.id]}, headers=chaves)
+    assert r.status_code == 200, r.text
+    assert r.json()["turma_ids"] == [turma_a.id]

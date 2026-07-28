@@ -411,7 +411,7 @@ def _professor_do_usuario(db: Session, escola_id: int, alvo: Usuario,
 def turmas_do_professor(
     usuario_id: int,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin")),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     """Ids das turmas atualmente designadas ao professor (marca as caixas)."""
@@ -431,12 +431,13 @@ def definir_turmas_do_professor(
     usuario_id: int,
     dados: TurmasDoProfessor,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin")),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     """Designa ao professor EXATAMENTE as turmas enviadas: as que saíram da
     lista ficam sem titular. Uma turma tem um titular por vez, mas um professor
-    pode ter várias. Coordenador/admin já enxergam todas — não precisam disto."""
+    pode ter VÁRIAS turmas. Coordenador da própria escola e admin podem definir;
+    a Secretaria (rede) fica de fora (só leitura, barrada em escola_autorizada)."""
     alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
     if alvo.cargo != "professor":
         raise HTTPException(
