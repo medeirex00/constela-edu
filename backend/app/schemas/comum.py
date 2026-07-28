@@ -81,6 +81,11 @@ class ProfessorCreate(BaseModel):
     observacoes: str | None = None
 
 
+class ProfessorUpdate(BaseModel):
+    """Edita o nome do professor (ex.: completar um apelido vindo da importação)."""
+    nome: str = Field(min_length=2, max_length=200)
+
+
 class ProfessorCompletoIn(BaseModel):
     """Cadastro completo: professor + turma sob responsabilidade + conta de
     acesso (cargo professor) com senha gerada. O e-mail é obrigatório porque

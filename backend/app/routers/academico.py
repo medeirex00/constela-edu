@@ -33,6 +33,7 @@ from app.schemas import (
     ProfessorCompletoIn,
     ProfessorCreate,
     ProfessorOut,
+    ProfessorUpdate,
     TurmaCreate,
     TurmaOut,
     TurmaUpdate,
@@ -1154,6 +1155,29 @@ def criar_professor(
     db.add(professor)
     registrar(db, "professor.criado", escola_id=escola_id, usuario_id=usuario.id,
               entidade="professor", detalhes={"nome": dados.nome})
+    db.commit()
+    db.refresh(professor)
+    return professor
+
+
+@router.patch("/professores/{professor_id}", response_model=ProfessorOut)
+def atualizar_professor(
+    professor_id: int,
+    dados: ProfessorUpdate,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Edita o NOME do professor — ex.: completar um nome que veio só como
+    apelido na importação da Lista Piloto. Não mexe na conta de acesso nem nos
+    vínculos de turma (esses continuam pelo botão de vincular turmas / Usuários)."""
+    professor = db.get(Professor, professor_id)
+    if professor is None or professor.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Professor não encontrado.")
+    professor.nome = dados.nome.strip()
+    registrar(db, "professor.atualizado", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="professor", entidade_id=professor.id,
+              detalhes={"nome": professor.nome})
     db.commit()
     db.refresh(professor)
     return professor

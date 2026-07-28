@@ -195,3 +195,37 @@ def test_falha_de_professor_nao_derruba_import_de_alunos(db, escola_completa, mo
     db.commit()
     assert db.execute(select(func.count()).select_from(Aluno)
                       .where(Aluno.nome == "Aluno Pós-Falha")).scalar() == 1
+
+
+def test_coordenador_edita_nome_do_professor(db, escola_completa):
+    """Coordenador pode COMPLETAR/EDITAR o nome do professor (ex.: apelido da
+    Lista Piloto → nome completo). Professor comum não pode (403)."""
+    from fastapi.testclient import TestClient
+
+    from app.core.security import hash_senha
+    from app.main import app
+
+    escola = escola_completa["escola"]
+    prof = Professor(escola_id=escola.id, nome="CAMILA")
+    db.add(prof)
+    db.add(Usuario(escola_id=escola.id, nome="Coord", email="coord@ed.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="coordenador"))
+    db.add(Usuario(escola_id=escola.id, nome="Prof", email="prof@ed.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="professor"))
+    db.commit()
+
+    def login(email):
+        c = TestClient(app)
+        r = c.post("/api/v1/auth/login", data={"username": email, "password": "s3nh4"})
+        assert r.status_code == 200, r.text
+        c.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+        return c
+
+    rota = f"/api/v1/escolas/{escola.id}/professores/{prof.id}"
+    r = login("coord@ed.local").patch(rota, json={"nome": "Camila Souza Oliveira"})
+    assert r.status_code == 200, r.text
+    assert r.json()["nome"] == "Camila Souza Oliveira"
+    db.refresh(prof)
+    assert prof.nome == "Camila Souza Oliveira"
+    # professor comum é barrado
+    assert login("prof@ed.local").patch(rota, json={"nome": "X"}).status_code == 403

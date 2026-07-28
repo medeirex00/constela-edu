@@ -1,4 +1,4 @@
-import { Copy, School, UserPlus } from "lucide-react";
+import { Check, Copy, Pencil, School, UserPlus, X } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
@@ -154,11 +154,29 @@ export function Professores() {
   const { dados: turmas, recarregar: recarregarTurmas } =
     useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const [modalAberto, setModalAberto] = useState(false);
+  // Edição inline do NOME do professor (ex.: completar um apelido da importação).
+  const [editando, setEditando] = useState<number | null>(null);
+  const [nomeEdit, setNomeEdit] = useState("");
+  const [salvando, setSalvando] = useState(false);
 
   // Refaz as duas buscas após criar um professor (que vincula turma).
   function carregar() {
     recarregarProfessores();
     recarregarTurmas();
+  }
+
+  async function salvarNome(prof: Professor) {
+    const novo = nomeEdit.trim();
+    if (!escolaId || novo.length < 2 || novo === prof.nome) { setEditando(null); return; }
+    setSalvando(true);
+    try {
+      await api(`/escolas/${escolaId}/professores/${prof.id}`,
+        { method: "PATCH", body: JSON.stringify({ nome: novo }) });
+      setEditando(null);
+      recarregarProfessores();
+    } finally {
+      setSalvando(false);
+    }
   }
 
   // Turmas de cada professor (Turma.professor_id → nomes), para a coluna.
@@ -191,16 +209,32 @@ export function Professores() {
                 <th className="px-4 py-2 font-medium">Nome</th>
                 <th className="px-4 py-2 font-medium">E-mail</th>
                 <th className="px-4 py-2 font-medium">Turmas</th>
+                {gestor && <th className="w-16 px-4 py-2" />}
               </tr>
             </thead>
             <tbody>
               {(professores ?? []).map((professor) => (
                 <tr key={professor.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                   <td className="px-4 py-2.5 font-medium">
-                    <span className="inline-flex items-center gap-2">
-                      <School size={14} className="text-zinc-300 dark:text-zinc-600" />
-                      {professor.nome}
-                    </span>
+                    {editando === professor.id ? (
+                      <input
+                        className={`${estiloInput} w-64`}
+                        value={nomeEdit}
+                        autoFocus
+                        minLength={2}
+                        disabled={salvando}
+                        onChange={(e) => setNomeEdit(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") salvarNome(professor);
+                          if (e.key === "Escape") setEditando(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="inline-flex items-center gap-2">
+                        <School size={14} className="text-zinc-300 dark:text-zinc-600" />
+                        {professor.nome}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">{professor.email ?? "—"}</td>
                   <td className="px-4 py-2.5">
@@ -212,6 +246,40 @@ export function Professores() {
                           ))}
                     </span>
                   </td>
+                  {gestor && (
+                    <td className="px-4 py-2.5 text-right">
+                      {editando === professor.id ? (
+                        <span className="inline-flex gap-1">
+                          <button
+                            type="button"
+                            title="Salvar"
+                            disabled={salvando}
+                            onClick={() => salvarNome(professor)}
+                            className="rounded p-1 text-emerald-600 hover:bg-emerald-50 disabled:opacity-40 dark:hover:bg-emerald-500/10"
+                          >
+                            <Check size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Cancelar"
+                            onClick={() => setEditando(null)}
+                            className="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                          >
+                            <X size={16} />
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          title="Editar nome"
+                          onClick={() => { setEditando(professor.id); setNomeEdit(professor.nome); }}
+                          className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

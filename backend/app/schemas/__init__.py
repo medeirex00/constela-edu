@@ -22,6 +22,7 @@ from app.schemas.comum import (
     ProfessorCompletoIn,
     ProfessorCreate,
     ProfessorOut,
+    ProfessorUpdate,
     RankingItemOut,
     RedeCreate,
     RedeEscolasIn,
