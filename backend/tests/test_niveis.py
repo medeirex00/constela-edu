@@ -6,7 +6,7 @@ nova nascer provisionada (antes, escola criada pela tela ficava sem níveis).
 """
 from sqlalchemy import select
 
-from app.models import Escola, NivelDificuldade, ReferenciaNormalizacao
+from app.models import Escola, NivelDificuldade, ReferenciaNormalizacao, Turma
 from app.services import provisionamento
 
 API = "/api/v1"
@@ -88,3 +88,25 @@ def test_semear_config_inicial_provisiona_escola_nova(db):
         select(ReferenciaNormalizacao).where(ReferenciaNormalizacao.escola_id == escola.id)
     ).scalar_one_or_none()
     assert ref is not None and ref.modo == "auto"
+
+
+def test_pontuacao_turma_replica_para_outras_turmas(cliente, db, escola_completa):
+    """Configurar uma turma e replicar a MESMA config para outras (aplicar_em):
+    todas as turmas marcadas recebem o override; cada uma segue editável depois."""
+    escola = escola_completa["escola"]
+    t1 = escola_completa["turma"]                       # 3º Ano A (níveis já semeados)
+    t2 = Turma(escola_id=escola.id, nome="3º Ano B", ano_escolar="3º Ano", ano_letivo=2026)
+    t3 = Turma(escola_id=escola.id, nome="3º Ano C", ano_escolar="3º Ano", ano_letivo=2026)
+    db.add_all([t2, t3])
+    db.commit()
+
+    r = cliente.put(f"{API}/escolas/{escola.id}/configuracoes/pontuacao-turma",
+                    json={"turma_id": t1.id, "pontos": {"AA": 9.0}, "aplicar_em": [t2.id, t3.id]})
+    assert r.status_code == 200, r.text
+    assert set(r.json()["turmas"]) == {t1.id, t2.id, t3.id}
+
+    porturma = {t["turma_id"]: t["pontos"]
+                for t in cliente.get(f"{API}/escolas/{escola.id}/configuracoes/pontuacao-turma").json()["turmas"]}
+    assert porturma[t1.id].get("AA") == 9.0
+    assert porturma[t2.id].get("AA") == 9.0
+    assert porturma[t3.id].get("AA") == 9.0

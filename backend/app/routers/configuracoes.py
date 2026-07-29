@@ -354,6 +354,9 @@ class PontuacaoTurmaUpdate(BaseModel):
     turma_id: int
     # {"AA": 1.0, "M": 2.0, ...} — parcial; código ausente herda o padrão.
     pontos: dict[str, float] = Field(default_factory=dict)
+    # Replicar a MESMA configuração para estas OUTRAS turmas (opcional). Cada uma
+    # continua editável individualmente depois.
+    aplicar_em: list[int] = Field(default_factory=list)
 
 
 def _catalogo_niveis(db: Session, escola_id: int) -> list[dict]:
@@ -410,11 +413,18 @@ def salvar_pontuacao_turma(
     usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    """Salva a tabela de pontos por nível de UMA turma. Guarda só o que difere do
-    padrão (config esparsa); zera a linha se ficar vazia. Recalcula as notas."""
-    turma = db.get(Turma, dados.turma_id)
-    if turma is None or turma.escola_id != escola_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
+    """Salva a tabela de pontos por nível de UMA turma e, opcionalmente, REPLICA a
+    mesma config para outras turmas (aplicar_em) — cada uma continua editável
+    depois. Guarda só o que difere do padrão (config esparsa). UM recálculo no fim."""
+    # Turmas-alvo = a principal + as marcadas para replicar (sem repetir).
+    alvos = list(dict.fromkeys([dados.turma_id, *dados.aplicar_em]))
+    turmas: dict[int, Turma] = {}
+    for tid in alvos:
+        t = db.get(Turma, tid)
+        if t is None or t.escola_id != escola_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
+        turmas[tid] = t
+
     validos = {c["codigo"] for c in _catalogo_niveis(db, escola_id)}
     limpos: dict[str, float] = {}
     for codigo, pontos in (dados.pontos or {}).items():
@@ -425,20 +435,24 @@ def salvar_pontuacao_turma(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Pontos não podem ser negativos.")
         limpos[cod] = round(float(pontos), 2)
 
-    row = db.execute(
-        select(PontuacaoNivelTurma).where(
-            PontuacaoNivelTurma.escola_id == escola_id,
-            PontuacaoNivelTurma.turma_id == dados.turma_id)
-    ).scalar_one_or_none()
-    if row is None:
-        row = PontuacaoNivelTurma(escola_id=escola_id, turma_id=dados.turma_id)
-        db.add(row)
-    row.pontos_por_codigo = limpos
+    for tid in alvos:
+        row = db.execute(
+            select(PontuacaoNivelTurma).where(
+                PontuacaoNivelTurma.escola_id == escola_id,
+                PontuacaoNivelTurma.turma_id == tid)
+        ).scalar_one_or_none()
+        if row is None:
+            row = PontuacaoNivelTurma(escola_id=escola_id, turma_id=tid)
+            db.add(row)
+        row.pontos_por_codigo = dict(limpos)
 
     registrar(db, "pontuacao_turma.alterada", escola_id=escola_id, usuario_id=usuario.id,
               entidade="pontuacao_nivel_turma",
-              detalhes={"turma_id": dados.turma_id, "n_codigos": len(limpos)})
+              detalhes={"turmas": alvos, "n_codigos": len(limpos)})
     db.commit()
-    scoring.recalcular_escola(db, escola_id)
-    return {"mensagem": f"Pontuação da turma {turma.nome} salva. Notas recalculadas.",
-            "turma_id": dados.turma_id, "pontos": limpos}
+    scoring.recalcular_escola(db, escola_id)   # 1 recálculo, mesmo replicando em N turmas
+
+    n = len(alvos)
+    msg = (f"Pontuação aplicada a {n} turmas. Notas recalculadas." if n > 1
+           else f"Pontuação da turma {turmas[dados.turma_id].nome} salva. Notas recalculadas.")
+    return {"mensagem": msg, "turma_id": dados.turma_id, "turmas": alvos, "pontos": limpos}

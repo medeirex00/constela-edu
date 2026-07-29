@@ -356,6 +356,8 @@ export function PontuacaoPorTurma() {
   const [turmaId, setTurmaId] = useState<number | null>(null);
   const [edit, setEdit] = useState<Record<string, number>>({});
   const [aplicarTodos, setAplicarTodos] = useState("");
+  // Replicar esta MESMA config para outras turmas (marcadas antes de salvar).
+  const [replicar, setReplicar] = useState<Set<number>>(new Set());
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
 
@@ -376,6 +378,7 @@ export function PontuacaoPorTurma() {
     const seed: Record<string, number> = {};
     for (const c of dados.catalogo) seed[c.codigo] = turma.pontos[c.codigo] ?? c.pontos_padrao;
     setEdit(seed);
+    setReplicar(new Set());   // troca de turma zera a seleção de replicação
     setMensagem(null);
   }, [turmaId, dados]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -396,6 +399,16 @@ export function PontuacaoPorTurma() {
     );
 
   const alterados = Object.keys(edit).filter((c) => edit[c] !== padrao[c]).length;
+  const outrasTurmas = (dados.turmas ?? []).filter((t) => t.turma_id !== turmaId);
+
+  function alternarReplicar(id: number) {
+    setReplicar((atuais) => {
+      const prox = new Set(atuais);
+      if (prox.has(id)) prox.delete(id);
+      else prox.add(id);
+      return prox;
+    });
+  }
 
   async function salvar() {
     if (!escolaId || turmaId === null) return;
@@ -407,9 +420,12 @@ export function PontuacaoPorTurma() {
     try {
       const r = await api<{ mensagem: string }>(
         `/escolas/${escolaId}/configuracoes/pontuacao-turma`,
-        { method: "PUT", body: JSON.stringify({ turma_id: turmaId, pontos }) },
+        { method: "PUT", body: JSON.stringify({
+          turma_id: turmaId, pontos, aplicar_em: Array.from(replicar),
+        }) },
       );
       setMensagem({ tipo: "ok", texto: r.mensagem });
+      setReplicar(new Set());
       recarregar();
     } catch (e) {
       setMensagem({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível salvar." });
@@ -488,10 +504,54 @@ export function PontuacaoPorTurma() {
         </div>
       </Card>
 
+      {/* Replicar a MESMA config para outras turmas ANTES de salvar. Cada uma
+          continua editável depois (basta trocar no seletor de turma). */}
+      {!somenteLeitura && outrasTurmas.length > 0 && (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium">
+              Aplicar estes mesmos níveis a outras turmas?{" "}
+              <span className="font-normal text-zinc-500 dark:text-zinc-400">(opcional)</span>
+            </p>
+            {replicar.size > 0 && (
+              <button
+                type="button"
+                className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                onClick={() => setReplicar(new Set())}
+              >
+                limpar seleção
+              </button>
+            )}
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3 lg:grid-cols-4">
+            {outrasTurmas.map((t) => (
+              <label key={t.turma_id} className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                  checked={replicar.has(t.turma_id)}
+                  onChange={() => alternarReplicar(t.turma_id)}
+                />
+                <span className="truncate">{t.nome}</span>
+              </label>
+            ))}
+          </div>
+          {replicar.size > 0 && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              A configuração atual vai <strong>sobrescrever</strong> a das {replicar.size} turma(s)
+              marcada(s). Você pode ajustar cada uma depois.
+            </p>
+          )}
+        </Card>
+      )}
+
       {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
       <div className="flex items-center gap-3">
         <Botao onClick={salvar} disabled={salvando || somenteLeitura}>
-          {somenteLeitura ? "Somente leitura" : salvando ? "Salvando e recalculando..." : `Salvar pontuação da turma`}
+          {somenteLeitura ? "Somente leitura"
+            : salvando ? "Salvando e recalculando..."
+            : replicar.size > 0 ? `Salvar e aplicar a ${replicar.size + 1} turmas`
+            : "Salvar pontuação da turma"}
         </Botao>
         <span className="text-sm text-zinc-500 dark:text-zinc-400">
           {alterados > 0 ? `${alterados} nível(is) diferente(s) do padrão.` : "Usando o padrão da escola."}
