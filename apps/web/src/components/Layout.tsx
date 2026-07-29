@@ -530,11 +530,27 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
     });
   }
 
+  // PRIMEIRO ACESSO: enquanto a escola não foi configurada, o único caminho é o
+  // "Comece aqui" — nada de Dashboard, Desempenho, Gestão, Plataformas etc. Não
+  // faz sentido abrir as demais telas antes de conectar Lista Piloto/Elefante/
+  // Matific. Depois que configura, `precisaConfigurar` vira falso e o menu
+  // completo aparece. (Vale só para quem opera a escola: admin/coordenador; a
+  // Secretaria e o professor entram numa escola já preparada.)
+  if (gestor && !secretaria && precisaConfigurar) {
+    return (
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+        <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />
+        <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+          <LinkMenu item={SUPORTE} aoNavegar={aoNavegar} />
+        </div>
+      </nav>
+    );
+  }
+
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
       <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
       {rede && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
-      {gestor && !secretaria && precisaConfigurar && <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
         const aberto = abertos.has(grupo.chave);
