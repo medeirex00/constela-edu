@@ -12,6 +12,8 @@ from app.schemas.comum import (
     FusaoAlunos,
     DificuldadeSerieOut,
     DificuldadeUpdate,
+    ElefanteExtraOut,
+    ElefanteExtraUpdate,
     EscolaCreate,
     EscolaLocalIn,
     EscolaOut,

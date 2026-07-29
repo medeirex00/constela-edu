@@ -22,6 +22,8 @@ from app.models.configuracao import slug_nivel
 from pydantic import BaseModel, Field
 from app.schemas import (
     DificuldadeUpdate,
+    ElefanteExtraOut,
+    ElefanteExtraUpdate,
     NivelCreate,
     NivelOut,
     NivelUpdate,
@@ -148,6 +150,51 @@ def salvar_referencias(
     scoring.recalcular_escola(db, escola_id)
     em_uso, _ = scoring.referencias_em_uso(db, escola_id)
     return ReferenciasOut(modo=row.modo, valores_manuais=row.valores_manuais, valores_em_uso=em_uso)
+
+
+# --- Pontos extras por livro lido na escola (Elefante) ----------------------
+# Config própria (namespace pesos.elefante_extra) — NÃO usa /pesos, que exige
+# soma 100%. A regra de horário (janela do turno) vive no scoring.
+
+@router.get("/elefante-extra", response_model=ElefanteExtraOut)
+def obter_elefante_extra(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+):
+    v = scoring.obter_config(db, escola_id, "pesos.elefante_extra", "valores",
+                             {"ativo": False, "pontos_por_livro": 0.0})
+    return ElefanteExtraOut(ativo=bool(v.get("ativo", False)),
+                            pontos_por_livro=float(v.get("pontos_por_livro", 0) or 0))
+
+
+@router.put("/elefante-extra", response_model=ElefanteExtraOut)
+def salvar_elefante_extra(
+    dados: ElefanteExtraUpdate,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Liga/desliga os pontos extras e define quanto cada livro lido na escola
+    vale. Desligar NÃO apaga nenhuma leitura — só deixa de somar o bônus. Recalcula."""
+    valor = {"ativo": bool(dados.ativo), "pontos_por_livro": round(float(dados.pontos_por_livro), 2)}
+    row = db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == "pesos.elefante_extra",
+            Configuracao.chave == "valores")
+    ).scalar_one_or_none()
+    if row is None:
+        row = Configuracao(escola_id=escola_id, namespace="pesos.elefante_extra",
+                           chave="valores", valor=valor)
+        db.add(row)
+    else:
+        row.valor = valor
+    registrar(db, "elefante_extra.alterado", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="configuracao", detalhes=valor)
+    db.commit()
+    scoring.recalcular_escola(db, escola_id)
+    return ElefanteExtraOut(**valor)
 
 
 # --- Dificuldade por turma/série (PRD §39, §61) -----------------------------

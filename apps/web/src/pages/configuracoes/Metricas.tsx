@@ -254,12 +254,111 @@ const ABAS = [
 ] as const;
 type Aba = (typeof ABAS)[number];
 
+/* -------------------------------------------------------------------------
+ * Pontos Extras (Elefante): bônus por livro lido DENTRO do horário da escola,
+ * definido pelo TURNO da turma. A regra de horário fica no backend (scoring);
+ * aqui só o liga/desliga e o valor por livro.
+ * ----------------------------------------------------------------------- */
+type ElefanteExtra = { ativo: boolean; pontos_por_livro: number };
+
+function PontosExtrasEditor() {
+  const { escolaId, usuario } = useApp();
+  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  const { dados, erro, carregando } = useApi<ElefanteExtra>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/elefante-extra` : null,
+  );
+  const [ativo, setAtivo] = useState(false);
+  const [pontos, setPontos] = useState("1");
+  const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    if (!dados) return;
+    setAtivo(dados.ativo);
+    setPontos(String(dados.pontos_por_livro || 1));
+    setMensagem(null);
+  }, [dados]);
+
+  if (carregando) return <Carregando />;
+  if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
+
+  async function salvar() {
+    if (!escolaId) return;
+    const v = Number(pontos);
+    if (Number.isNaN(v) || v < 0) {
+      setMensagem({ tipo: "erro", texto: "Informe um valor de pontos (0 ou mais)." });
+      return;
+    }
+    setSalvando(true);
+    setMensagem(null);
+    try {
+      await api(`/escolas/${escolaId}/configuracoes/elefante-extra`, {
+        method: "PUT",
+        body: JSON.stringify({ ativo, pontos_por_livro: v }),
+      });
+      setMensagem({ tipo: "ok", texto: "Pontos extras salvos. Todas as notas foram recalculadas." });
+    } catch (e) {
+      setMensagem({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível salvar." });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+        Dá pontos extras por cada livro que o aluno lê <strong>dentro do horário da escola</strong>,
+        conforme o <strong>turno da turma</strong>: Manhã (7h–13h) ou Tarde (13h–18h), de segunda a
+        sexta. Livros lidos fora desse horário — ou em turmas de turno Integral/Noite — contam só a
+        pontuação normal. Usa a data e a hora reais de cada leitura (relatório individual do Elefante).
+      </p>
+
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          className="h-4 w-4 accent-indigo-600"
+          checked={ativo}
+          disabled={somenteLeitura}
+          onChange={(e) => setAtivo(e.target.checked)}
+        />
+        Ativar pontos extras por livros lidos na escola
+      </label>
+
+      <div className={`mt-4 flex items-center gap-3 ${ativo ? "" : "opacity-50"}`}>
+        <label className="text-sm" htmlFor="pontos-extras-livro">Pontos extras por livro:</label>
+        <input
+          id="pontos-extras-livro"
+          type="number"
+          min={0}
+          step="0.5"
+          value={pontos}
+          disabled={!ativo || somenteLeitura}
+          onChange={(e) => setPontos(e.target.value)}
+          className="w-24 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+        />
+      </div>
+
+      <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+        Ligar/desligar <strong>não apaga nenhuma leitura</strong> — só controla se o bônus entra na
+        nota. Os pontos extras somam ao fator “Dificuldade” do Elefante (a nota continua de 0 a 100).
+      </p>
+
+      {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
+      <div className="mt-4 flex justify-end border-t border-zinc-200 pt-4 dark:border-zinc-800">
+        <Botao onClick={salvar} disabled={salvando || somenteLeitura}>
+          {somenteLeitura ? "Somente leitura" : salvando ? "Salvando e recalculando..." : "Salvar"}
+        </Botao>
+      </div>
+    </Card>
+  );
+}
+
 export default function Metricas() {
   const { usuario } = useApp();
   // Secretaria (rede vinculada, não-global): vê os critérios, mas não altera.
   const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
   const [aba, setAba] = useState<Aba>("Matific");
-  const [subAbaElefante, setSubAbaElefante] = useState<"pesos" | "questoes">("pesos");
+  const [subAbaElefante, setSubAbaElefante] = useState<"pesos" | "questoes" | "extras">("pesos");
 
   return (
     <div>
@@ -311,6 +410,7 @@ export default function Metricas() {
               [
                 ["pesos", "Pesos da Nota"],
                 ["questoes", "Questões"],
+                ["extras", "Pontos Extras"],
               ] as const
             ).map(([chave, rotulo]) => (
               <button
@@ -339,12 +439,14 @@ export default function Metricas() {
               }}
               descricao="Como os quatro fatores de leitura compõem a nota do módulo."
             />
-          ) : (
+          ) : subAbaElefante === "questoes" ? (
             <PesosEditor
               namespace="questoes"
               rotulos={{ tentativas: "Tentativas", acertos: "Acertos" }}
               descricao="Dentro do fator Questões, o equilíbrio entre tentar e acertar."
             />
+          ) : (
+            <PontosExtrasEditor />
           )}
         </div>
       )}

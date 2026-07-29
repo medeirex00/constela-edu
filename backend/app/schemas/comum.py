@@ -306,6 +306,17 @@ class DificuldadeUpdate(BaseModel):
     pontos: float = Field(ge=0)
 
 
+class ElefanteExtraOut(BaseModel):
+    """Config dos PONTOS EXTRAS por livro lido na escola (Elefante Letrado)."""
+    ativo: bool
+    pontos_por_livro: float
+
+
+class ElefanteExtraUpdate(BaseModel):
+    ativo: bool
+    pontos_por_livro: float = Field(ge=0, le=1000)
+
+
 class ReferenciasOut(BaseModel):
     modo: str
     valores_manuais: dict

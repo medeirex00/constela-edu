@@ -11,6 +11,7 @@ Princípios (PRD Parte 3):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import time
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -20,6 +21,7 @@ from app.models import (
     Configuracao,
     DificuldadeTurma,
     Escola,
+    Leitura,
     Matricula,
     NivelDificuldade,
     Nota,
@@ -28,6 +30,43 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+
+# Pontos extras "por livro lido NA ESCOLA": a janela de horário é definida pelo
+# TURNO da turma (horário de Brasília, como já vem no relatório individual do
+# Elefante). Manhã 07:00–13:00 e Tarde 13:00–18:00, só de segunda a sexta. O
+# limite das 13h vai para a TARDE. Integral/Noite não têm janela (sem bônus).
+_JANELAS_TURNO: dict[str, tuple[time, time]] = {
+    "manha": (time(7, 0), time(13, 0)),
+    "tarde": (time(13, 0), time(18, 0)),
+}
+
+
+def _bonus_leitura_na_escola(
+    db: Session, escola_id: int, turno_por_aluno: dict[int, str | None],
+    pontos_por_livro: float,
+) -> dict[int, float]:
+    """Pontos extras de cada aluno = `pontos_por_livro` × (livros lidos DENTRO da
+    janela do turno da turma dele, seg–sex). Usa a data+hora real de cada leitura
+    (Leitura.data, do relatório individual do Elefante). Livro sem hora conhecida
+    ou fora da janela não gera extra."""
+    alvos = {aid: _JANELAS_TURNO[t] for aid, t in turno_por_aluno.items()
+             if t in _JANELAS_TURNO}
+    if not alvos or pontos_por_livro <= 0:
+        return {}
+    bonus: dict[int, float] = {}
+    for aluno_id, data in db.execute(
+        select(Leitura.aluno_id, Leitura.data)
+        .where(Leitura.escola_id == escola_id, Leitura.aluno_id.in_(alvos.keys()))
+    ):
+        if data is None:
+            continue
+        quando = data.replace(tzinfo=None) if data.tzinfo is not None else data
+        if quando.weekday() >= 5:                       # só segunda a sexta
+            continue
+        ini, fim = alvos[aluno_id]
+        if ini <= quando.time() < fim:                  # dentro da janela do turno
+            bonus[aluno_id] = bonus.get(aluno_id, 0.0) + pontos_por_livro
+    return {aid: round(b, 2) for aid, b in bonus.items()}
 
 # Valores usados apenas na primeira execução, antes do seed gravar os
 # padrões no banco. Depois disso, a fonte é sempre a tabela `configuracoes`.
@@ -643,6 +682,19 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         return 0
     escola, ano, matriculas, matific, elefante, pontos_dif = contexto
 
+    # Pontos extras por livro lido NA ESCOLA (opcional): soma nos pontos de
+    # dificuldade os livros lidos dentro da janela do turno da turma. Feito ANTES
+    # das referências para a normalização já considerar o bônus. Desligado => 0.
+    extra = obter_config(db, escola_id, "pesos.elefante_extra", "valores",
+                         {"ativo": False, "pontos_por_livro": 0.0})
+    bonus_por_aluno: dict[int, float] = {}
+    if extra.get("ativo") and float(extra.get("pontos_por_livro", 0) or 0) > 0:
+        turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
+        bonus_por_aluno = _bonus_leitura_na_escola(
+            db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
+        for aid, b in bonus_por_aluno.items():
+            pontos_dif[aid] = pontos_dif.get(aid, 0.0) + b
+
     refs, modo, k_vol = _referencias(db, escola_id, matific, elefante, pontos_dif)
 
     p_matific = obter_pesos(db, escola_id, "pesos.matific")
@@ -691,7 +743,8 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                                         else ("maximo" if modo == "auto" else "manual")),
                     "saturacao": dict(k_vol),
                     "matific": {"indicadores": linhas_m, "nota": nota_m},
-                    "elefante": {"indicadores": linhas_e, "questoes": det_q, "nota": nota_e},
+                    "elefante": {"indicadores": linhas_e, "questoes": det_q, "nota": nota_e,
+                                 "bonus_leitura_escola": round(bonus_por_aluno.get(aluno.id, 0.0), 2)},
                     "geral": {"pesos": pct_geral, "nota": nota_geral},
                 },
             )
