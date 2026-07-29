@@ -179,9 +179,10 @@ def test_consolidar_herda_turno_quando_canonica_nao_tem(db, escola_completa):
     assert principal.turno == "tarde"                           # herdou o turno da duplicada
 
 
-def test_professores_diferentes_nao_sao_unidos(db, escola_completa):
-    """Item 7: mesma sala aparente (1|A|T) mas titulares DIFERENTES = grupos
-    distintos → não entram para consolidação."""
+def test_salas_reais_com_professores_diferentes_nao_se_unem(db, escola_completa):
+    """Item 7 preservado: DUAS salas REAIS (ambas com turno no CAMPO) da mesma
+    série·letra e turno, com titulares DIFERENTES, não se unem — são salas
+    distintas de verdade."""
     escola = escola_completa["escola"]
     p1 = Professor(escola_id=escola.id, nome="P1")
     p2 = Professor(escola_id=escola.id, nome="P2")
@@ -190,8 +191,49 @@ def test_professores_diferentes_nao_sao_unidos(db, escola_completa):
     db.add_all([
         Turma(escola_id=escola.id, nome="1ºA", ano_escolar="1ºA",
               ano_letivo=2026, turno="tarde", professor_id=p1.id),
-        Turma(escola_id=escola.id, nome="1 ANO A TARDE (x)", ano_escolar="1º Ano",
-              ano_letivo=2026, professor_id=p2.id),
+        Turma(escola_id=escola.id, nome="1º Ano A", ano_escolar="1º Ano",
+              ano_letivo=2026, turno="tarde", professor_id=p2.id),  # também REAL (campo)
     ])
     db.commit()
     assert not any(x["chave"] == "1|A|T" for x in turmas_dedup.detectar(db, escola.id))
+
+
+def test_shell_integral_funde_na_sala_real(db, escola_completa):
+    """Caso do dono (2º–5º ano, escola SEM integral): o shell do SED
+    "5 ANO B INTEGRAL" — turno só no NOME (campo vazio) e professor NOMINAL —
+    funde na sala REAL "5ºB" (turno no campo), mesmo com 'INTEGRAL' no nome e
+    professor diferente. O turno do nome é ignorado; a sala real é a canônica."""
+    escola = escola_completa["escola"]
+    priscila = Professor(escola_id=escola.id, nome="Priscila")
+    francielli = Professor(escola_id=escola.id, nome="Francielli")
+    db.add_all([priscila, francielli])
+    db.flush()
+    real = Turma(escola_id=escola.id, nome="5ºB", ano_escolar="5ºB",
+                 ano_letivo=2026, turno="manha", professor_id=priscila.id)
+    shell = Turma(escola_id=escola.id, nome="5 ANO B INTEGRAL ANUAL", ano_escolar="5º Ano",
+                  ano_letivo=2026, professor_id=francielli.id)      # turno vazio no CAMPO
+    db.add_all([real, shell])
+    db.commit()
+
+    g = next(x for x in turmas_dedup.detectar(db, escola.id) if x["chave"] == "5|B|M")
+    assert g["canonica"]["id"] == real.id                          # sala real = canônica
+    assert [d["id"] for d in g["duplicadas"]] == [shell.id]         # o shell é a duplicata
+
+
+def test_shell_com_turno_do_nome_contradizendo_o_campo(db, escola_completa):
+    """3º ano do dono: o shell diz 'MANHA' no NOME, mas a sala REAL é 'Tarde'
+    (campo). O turno do nome (ruído) é ignorado — funde na sala real (tarde),
+    não vira um grupo de manhã à parte."""
+    escola = escola_completa["escola"]                             # (fixture tem "3º Ano A")
+    real = Turma(escola_id=escola.id, nome="3ºD", ano_escolar="3ºD",
+                 ano_letivo=2026, turno="Tarde")                    # campo confiável
+    shell = Turma(escola_id=escola.id, nome="3 ANO D MANHA ANUAL (300303347)",
+                  ano_escolar="3º Ano", ano_letivo=2026)            # nome diz MANHA, campo vazio
+    db.add_all([real, shell])
+    db.commit()
+
+    grupos = turmas_dedup.detectar(db, escola.id)
+    assert not any(x["chave"] == "3|D|M" for x in grupos)          # NÃO cria grupo de manhã
+    g = next(x for x in grupos if x["chave"] == "3|D|T")
+    assert g["canonica"]["nome"] == "3ºD"
+    assert [d["nome"] for d in g["duplicadas"]] == ["3 ANO D MANHA ANUAL (300303347)"]

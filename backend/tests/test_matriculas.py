@@ -49,6 +49,30 @@ def test_chave_turma_ignora_ordinal_acento_caixa():
     assert m.chave_turma("1º Ano A") != m.chave_turma("1º Ano B")
 
 
+def test_chave_turma_ignora_turno_do_nome():
+    """O turno embutido no NOME (ruído do SED) NÃO entra na chave — senão a
+    importação recria a duplicata. "2ºA", "2 ANO A INTEGRAL" e "2 ANO A MANHA"
+    são a MESMA sala (a diferença de turno real vive no campo, não no nome)."""
+    base = m.chave_turma("2ºA")
+    assert m.chave_turma("2 ANO A INTEGRAL (300303111)") == base
+    assert m.chave_turma("2 ANO A MANHA ANUAL") == base
+    assert m.chave_turma("2 ANO A TARDE") == base
+    # Série/letra continuam separando salas de verdade.
+    assert m.chave_turma("2 ANO B INTEGRAL") != base
+    assert m.chave_turma("3 ANO A INTEGRAL") != base
+
+
+def test_turno_codigo_do_campo_vs_do_nome():
+    assert m.turno_codigo("Tarde") == "T"
+    assert m.turno_codigo("vespertino") == "T"
+    assert m.turno_codigo("Manhã") == "M"
+    assert m.turno_codigo("") == "" and m.turno_codigo(None) == ""
+    # Do nome (sinal fraco): reconhece o turno nominal, mas é só fallback.
+    assert m.turno_do_nome("2 ANO A INTEGRAL (300303111)") == "I"
+    assert m.turno_do_nome("3 ANO A MANHA ANUAL") == "M"
+    assert m.turno_do_nome("2ºA") == ""          # nome curto não tem turno
+
+
 # --- overlap_turma ---------------------------------------------------------
 
 def test_overlap_turma_ignora_palavras_ubiquas():

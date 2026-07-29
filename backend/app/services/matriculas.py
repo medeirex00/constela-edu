@@ -103,11 +103,42 @@ def chave_canonica(nome: str, ano_escolar: str = "", turno: str | None = None) -
     return f"{ano_num}|{letra}|{_TURNO_COD.get(t, '')}"
 
 
+def turno_codigo(turno: str | None) -> str:
+    """Código do turno a partir do CAMPO `turno` (sinal FORTE/confiável): um de
+    ``M/T/N/I``, ou ``""`` se vazio/desconhecido. Normaliza acento e caixa (o
+    campo real vem "Manhã"/"Tarde") e aceita matutino/vespertino/noturno. É o
+    turno em que a consolidação de turmas deve confiar."""
+    t = normalizar(turno or "").strip()          # tira acento e caixa ("Manhã"→"manha")
+    t = _TURNO_TXT.get(t, t)
+    return _TURNO_COD.get(t, "")
+
+
+def turno_do_nome(nome: str) -> str:
+    """Código do turno INFERIDO do NOME (sinal FRACO): ``M/T/N/I`` ou ``""``. Os
+    nomes administrativos do SED trazem um turno nominal que muitas vezes está
+    ERRADO ("2 ANO A INTEGRAL"/"3 ANO A MANHA" numa escola de tarde), então isto
+    só deve ser usado quando não há turno no campo de nenhuma turma da sala."""
+    base = normalizar(re.sub(r"\(.*?\)", " ", nome or ""))
+    for palavra in base.split():
+        alvo = _TURNO_TXT.get(palavra)
+        if alvo:
+            return _TURNO_COD[alvo]
+    return ""
+
+
 def chave_turma(nome: str) -> str:
-    """Chave de casamento de turma na importação (só o NOME disponível). Delega
-    à `chave_canonica`, colapsando "1 ANO A TARDE ANUAL (cod)" e "1º Ano A" na
-    mesma turma — evita recriar duplicata em importações futuras."""
-    return chave_canonica(nome)
+    """Chave de casamento de turma na IMPORTAÇÃO (só o NOME está disponível). Usa
+    apenas SÉRIE + LETRA — o turno embutido no NOME é RUÍDO não confiável: o SED
+    grava "2 ANO A INTEGRAL"/"3 ANO A MANHA" mesmo quando a sala real é de outro
+    turno, e isso fazia a importação criar uma turma SEPARADA (a duplicata). O
+    turno REAL vive no CAMPO `turno` e é tratado na consolidação (turmas_dedup).
+    Assim "2ºA", "2 ANO A INTEGRAL (cod)" e "2 ANO A MANHA" casam na MESMA turma.
+    Formatos fora do padrão série+letra caem no nome normalizado (não fundem)."""
+    k = chave_canonica(nome)
+    if "|" not in k:
+        return k
+    num, letra, _turno = k.split("|")
+    return f"{num}|{letra}"
 
 
 def overlap_turma(a: frozenset[str] | set[str], b: frozenset[str] | set[str]) -> int:

@@ -53,16 +53,22 @@ def _alunos_ativos(db: Session, turma: Turma) -> int:
     ).scalar() or 0
 
 
-def _grupo_consolidavel(db: Session, ts: list[Turma], ano: int, chave: str) -> dict | None:
+def _grupo_consolidavel(db: Session, ts: list[Turma], ano: int, chave: str,
+                        campo: dict[int, str]) -> dict | None:
     """Monta o descritor de UM grupo de turmas que são a mesma sala. Devolve
-    ``None`` quando não deve ser consolidado (só 1 turma, ou titulares
-    diferentes). Escolhe a canônica por prioridade e lista as duplicadas."""
+    ``None`` quando não deve ser consolidado (só 1 turma, ou titulares REAIS
+    diferentes). Escolhe a canônica por prioridade e lista as duplicadas.
+    ``campo`` = ``{turma_id: código de turno do CAMPO}`` ('' = shell sem turno)."""
     if len(ts) < 2:
         return None
-    # GUARDA (professores diferentes = grupos distintos): se duas turmas do
-    # grupo têm titulares DIFERENTES, não são a mesma sala → não unir.
-    professores = {t.professor_id for t in ts if t.professor_id is not None}
-    if len(professores) >= 2:
+    # GUARDA de professor, mas SÓ entre salas REAIS (com turno no campo): duas
+    # salas reais de titulares diferentes não se unem (item 7). Já os shells
+    # administrativos do SED ("2 ANO A INTEGRAL", turno vazio) trazem professor
+    # NOMINAL/errado e NÃO devem impedir a fusão na sala real — foi o que deixava
+    # "5ºB" (PRISCILA) e "5 ANO B INTEGRAL" (FRANCIELLI) como duplicatas.
+    profs_reais = {t.professor_id for t in ts
+                   if t.professor_id is not None and campo.get(t.id)}
+    if len(profs_reais) >= 2:
         return None
     # PRIORIDADE da turma principal (canônica), nesta ordem:
     #   1) a que TEM professor vinculado;
@@ -88,48 +94,57 @@ def detectar(db: Session, escola_id: int) -> list[dict]:
     ano letivo). Cada grupo traz a canônica sugerida + TODAS as duplicadas — 2,
     3 ou 4 registros da mesma sala são consolidados de uma vez.
 
-    O agrupamento ignora o TURNO de propósito: cópias da mesma sala que vieram
-    SEM turno (ex.: Matific/Elefante gravam "1º Ano A") caem no mesmo grupo das
-    que têm turno ("1ºA" tarde, "1 ANO A TARDE ANUAL"). Só quando há CONFLITO
-    real de turno no grupo — manhã E tarde juntos — é que separamos por turno
-    (são salas distintas; item 7), deixando as cópias sem turno de fora (não dá
-    para saber a qual delas pertencem)."""
+    Turno: o único sinal CONFIÁVEL é o CAMPO `turno` (vem da Lista Piloto). O
+    turno embutido no NOME (SED: "INTEGRAL", "MANHA") é ruído — só é usado como
+    desempate quando NENHUMA turma da sala tem turno no campo. Assim, "2ºA"
+    (tarde) e "2 ANO A INTEGRAL"/"3 ANO A MANHA" (turno só no nome, campo vazio)
+    são reconhecidas como a MESMA sala e fundidas — mesmo numa escola sem turno
+    integral. Só há separação quando existem DOIS turnos REAIS de campo na mesma
+    série·letra (manhã E tarde de verdade)."""
     turmas = db.execute(
         select(Turma).where(Turma.escola_id == escola_id, Turma.status == "ativa")
     ).scalars().all()
 
-    # Base do grupo = (ano_letivo, série, letra) SEM o turno. Guarda junto o
-    # código de turno de cada turma (''=desconhecido) para decidir conflitos.
-    grupos: dict[tuple[int, str, str], list[tuple[Turma, str]]] = {}
+    # Base do grupo = (ano_letivo, série, letra) — SEM turno.
+    grupos: dict[tuple[int, str, str], list[Turma]] = {}
     for t in turmas:
         chave = mat.chave_canonica(t.nome, t.ano_escolar or "", t.turno)
         # Só agrupa o que a chave RECONHECEU (contém "|"): nomes fora do padrão
         # série+letra (Maternal, Pré, EJA, AEE, Multi…) nunca são fundidos.
         if "|" not in chave:
             continue
-        num, letra, tcode = chave.split("|")
-        grupos.setdefault((t.ano_letivo, num, letra), []).append((t, tcode))
+        num, letra, _turno = chave.split("|")
+        grupos.setdefault((t.ano_letivo, num, letra), []).append(t)
 
     resultado: list[dict] = []
-    for (ano, num, letra), ts_turno in grupos.items():
-        turnos = {tc for _, tc in ts_turno if tc}
+    for (ano, num, letra), ts in grupos.items():
+        campo = {t.id: mat.turno_codigo(t.turno) for t in ts}   # turno CONFIÁVEL
+        do_campo = {c for c in campo.values() if c}
+        if do_campo:
+            efetivo = dict(campo)                    # shells (campo '') ficam ''
+            turnos = do_campo
+        else:
+            # Ninguém tem turno no campo → cai para o turno do NOME (fraco).
+            efetivo = {t.id: mat.turno_do_nome(t.nome) for t in ts}
+            turnos = {c for c in efetivo.values() if c}
+
         if len(turnos) >= 2:
             # CONFLITO real de turno (manhã × tarde): salas distintas. Consolida
-            # só DENTRO de cada turno conhecido; as cópias sem turno ficam de
-            # fora (ambíguas — poderiam ser de qualquer um dos turnos).
+            # dentro de cada turno; as sem turno definido (shells) ficam de fora
+            # (ambíguas — poderiam pertencer a qualquer um dos turnos).
             por_turno: dict[str, list[Turma]] = {}
-            for t, tc in ts_turno:
-                if tc:
-                    por_turno.setdefault(tc, []).append(t)
-            for tc, ts in por_turno.items():
-                grupo = _grupo_consolidavel(db, ts, ano, f"{num}|{letra}|{tc}")
+            for t in ts:
+                if efetivo[t.id]:
+                    por_turno.setdefault(efetivo[t.id], []).append(t)
+            for tc, grupo_ts in por_turno.items():
+                grupo = _grupo_consolidavel(db, grupo_ts, ano, f"{num}|{letra}|{tc}", campo)
                 if grupo:
                     resultado.append(grupo)
         else:
-            # 0 ou 1 turno conhecido → mesma sala: funde TODAS as cópias (2, 3,
-            # 4…), inclusive as sem turno, sob o turno conhecido (ou vazio).
-            tc = turnos.pop() if turnos else ""
-            grupo = _grupo_consolidavel(db, [t for t, _ in ts_turno], ano, f"{num}|{letra}|{tc}")
+            # 0 ou 1 turno → mesma sala: funde TODAS as cópias (2, 3, 4…),
+            # inclusive shells, sob o turno conhecido (ou vazio).
+            tc = next(iter(turnos)) if turnos else ""
+            grupo = _grupo_consolidavel(db, ts, ano, f"{num}|{letra}|{tc}", campo)
             if grupo:
                 resultado.append(grupo)
 
