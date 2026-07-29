@@ -4,7 +4,7 @@ Cobre o caso do dono: "1 ANO A TARDE ANUAL (300302821)" e "1ºA" são a MESMA
 sala; a curta é a canônica e os alunos da longa migram para ela.
 """
 from app.core.security import hash_senha
-from app.models import Aluno, Matricula, Turma, Usuario
+from app.models import Aluno, Matricula, Professor, Turma, Usuario
 from app.services import matriculas as mat
 from app.services import turmas_dedup
 
@@ -90,3 +90,45 @@ def test_consolidar_e_bloqueado_para_professor(db, escola_completa):
     r = c.post(f"{API}/escolas/{escola.id}/turmas/duplicadas/corrigir",
                json=[{"canonica_id": curta.id, "duplicada_ids": [longa.id]}])
     assert r.status_code == 403
+
+
+def test_prioridade_professor_vira_canonica(db, escola_completa):
+    """Item 5: a turma COM professor é a principal, mesmo com nome mais longo e
+    menos alunos que a duplicada sem professor."""
+    escola = escola_completa["escola"]
+    prof = Professor(escola_id=escola.id, nome="Prof A")
+    db.add(prof)
+    db.flush()
+    curta = Turma(escola_id=escola.id, nome="1ºA", ano_escolar="1ºA",
+                  ano_letivo=2026, turno="tarde")                 # 2 alunos, SEM professor
+    longa = Turma(escola_id=escola.id, nome="1 ANO A TARDE ANUAL (300302821)",
+                  ano_escolar="1º Ano", ano_letivo=2026, professor_id=prof.id)  # 1 aluno, COM professor
+    db.add_all([curta, longa])
+    db.flush()
+    for nome, t in [("A1", curta), ("A2", curta), ("B1", longa)]:
+        a = Aluno(escola_id=escola.id, nome=nome)
+        db.add(a)
+        db.flush()
+        db.add(Matricula(escola_id=escola.id, aluno_id=a.id, turma_id=t.id, ano_letivo=2026))
+    db.commit()
+
+    g = next(x for x in turmas_dedup.detectar(db, escola.id) if x["chave"] == "1|A|T")
+    assert g["canonica"]["id"] == longa.id     # tem professor → canônica (item 5, prioridade 1)
+
+
+def test_professores_diferentes_nao_sao_unidos(db, escola_completa):
+    """Item 7: mesma sala aparente (1|A|T) mas titulares DIFERENTES = grupos
+    distintos → não entram para consolidação."""
+    escola = escola_completa["escola"]
+    p1 = Professor(escola_id=escola.id, nome="P1")
+    p2 = Professor(escola_id=escola.id, nome="P2")
+    db.add_all([p1, p2])
+    db.flush()
+    db.add_all([
+        Turma(escola_id=escola.id, nome="1ºA", ano_escolar="1ºA",
+              ano_letivo=2026, turno="tarde", professor_id=p1.id),
+        Turma(escola_id=escola.id, nome="1 ANO A TARDE (x)", ano_escolar="1º Ano",
+              ano_letivo=2026, professor_id=p2.id),
+    ])
+    db.commit()
+    assert not any(x["chave"] == "1|A|T" for x in turmas_dedup.detectar(db, escola.id))

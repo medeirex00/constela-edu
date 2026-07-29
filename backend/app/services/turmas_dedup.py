@@ -73,15 +73,27 @@ def detectar(db: Session, escola_id: int) -> list[dict]:
     for (ano, chave), ts in grupos.items():
         if len(ts) < 2:
             continue
-        ts.sort(key=lambda t: _pontuar_nome(t.nome))
+        # GUARDA (professores diferentes = grupos distintos): se duas turmas do
+        # grupo têm titulares DIFERENTES, não são a mesma sala → não unir.
+        professores = {t.professor_id for t in ts if t.professor_id is not None}
+        if len(professores) >= 2:
+            continue
+        # PRIORIDADE da turma principal (canônica), nesta ordem:
+        #   1) a que TEM professor vinculado;
+        #   2) a com MAIS alunos;
+        #   3) o nome mais curto/padronizado (_pontuar_nome);
+        #   4) desempate estável por id.
+        alunos = {t.id: _alunos_ativos(db, t) for t in ts}
+        ts.sort(key=lambda t: (0 if t.professor_id is not None else 1,
+                               -alunos[t.id], *_pontuar_nome(t.nome), t.id))
         canonica, *duplicadas = ts
         resultado.append({
             "chave": chave,
             "ano_letivo": ano,
             "canonica": {"id": canonica.id, "nome": canonica.nome,
-                         "turno": canonica.turno, "alunos": _alunos_ativos(db, canonica)},
+                         "turno": canonica.turno, "alunos": alunos[canonica.id]},
             "duplicadas": [{"id": d.id, "nome": d.nome, "turno": d.turno,
-                            "alunos": _alunos_ativos(db, d)} for d in duplicadas],
+                            "alunos": alunos[d.id]} for d in duplicadas],
         })
     # As com mais duplicatas primeiro (mais "sujas").
     resultado.sort(key=lambda g: len(g["duplicadas"]), reverse=True)
