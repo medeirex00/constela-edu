@@ -116,6 +116,69 @@ def test_prioridade_professor_vira_canonica(db, escola_completa):
     assert g["canonica"]["id"] == longa.id     # tem professor → canônica (item 5, prioridade 1)
 
 
+def test_funde_tres_ou_mais_copias_incluindo_sem_turno(db, escola_completa):
+    """Item 2: 3 registros da MESMA sala — a curta (turno no campo), a longa
+    (turno no nome) e UMA sem turno nenhum (Matific/Elefante gravam "1º Ano A")
+    — entram TODOS no mesmo grupo. Não pode parar depois de fundir 2."""
+    escola = escola_completa["escola"]
+    curta = Turma(escola_id=escola.id, nome="1ºA", ano_escolar="1ºA",
+                  ano_letivo=2026, turno="tarde")
+    longa = Turma(escola_id=escola.id, nome="1 ANO A TARDE ANUAL (300302821)",
+                  ano_escolar="1º Ano", ano_letivo=2026)
+    sem_turno = Turma(escola_id=escola.id, nome="1º Ano A", ano_escolar="1º Ano",
+                      ano_letivo=2026)                         # sem turno (outra origem)
+    db.add_all([curta, longa, sem_turno])
+    db.commit()
+
+    g = next(x for x in turmas_dedup.detectar(db, escola.id) if x["chave"] == "1|A|T")
+    ids = {g["canonica"]["id"], *(d["id"] for d in g["duplicadas"])}
+    assert ids == {curta.id, longa.id, sem_turno.id}         # as TRÊS num só grupo
+    assert len(g["duplicadas"]) == 2
+    assert g["canonica"]["nome"] == "1ºA"                     # a curta é a canônica
+
+
+def test_conflito_de_turno_separa_manha_e_tarde(db, escola_completa):
+    """Item 7: manhã e tarde da MESMA série/letra são salas distintas — o
+    conflito de turno divide em DOIS grupos, cada um fundindo as suas cópias."""
+    escola = escola_completa["escola"]
+    db.add_all([
+        Turma(escola_id=escola.id, nome="1º Ano A Manhã", ano_escolar="1º Ano", ano_letivo=2026),
+        Turma(escola_id=escola.id, nome="1 ANO A MANHA (100)", ano_escolar="1º Ano", ano_letivo=2026),
+        Turma(escola_id=escola.id, nome="1º Ano A Tarde", ano_escolar="1º Ano", ano_letivo=2026),
+        Turma(escola_id=escola.id, nome="1 ANO A TARDE (200)", ano_escolar="1º Ano", ano_letivo=2026),
+    ])
+    db.commit()
+
+    grupos = turmas_dedup.detectar(db, escola.id)
+    manha = next(x for x in grupos if x["chave"] == "1|A|M")
+    tarde = next(x for x in grupos if x["chave"] == "1|A|T")
+    assert len(manha["duplicadas"]) == 1                       # 2 turmas de manhã → 1 duplicada
+    assert len(tarde["duplicadas"]) == 1                       # 2 turmas de tarde → 1 duplicada
+
+
+def test_consolidar_herda_turno_quando_canonica_nao_tem(db, escola_completa):
+    """A sala fundida fica com o turno correto: se a canônica (mais alunos) veio
+    sem turno, herda o turno conhecido de uma das duplicadas."""
+    escola = escola_completa["escola"]
+    principal = Turma(escola_id=escola.id, nome="1º Ano A", ano_escolar="1º Ano",
+                      ano_letivo=2026)                          # sem turno; será canônica
+    outra = Turma(escola_id=escola.id, nome="1 ANO A TARDE (x)", ano_escolar="1º Ano",
+                  ano_letivo=2026, turno="tarde")               # turno no campo
+    db.add_all([principal, outra])
+    db.flush()
+    for nome, t in [("A1", principal), ("A2", principal), ("B1", outra)]:
+        a = Aluno(escola_id=escola.id, nome=nome)
+        db.add(a)
+        db.flush()
+        db.add(Matricula(escola_id=escola.id, aluno_id=a.id, turma_id=t.id, ano_letivo=2026))
+    db.commit()
+
+    turmas_dedup.consolidar(db, escola.id, principal.id, [outra.id])
+    db.commit()
+    db.refresh(principal)
+    assert principal.turno == "tarde"                           # herdou o turno da duplicada
+
+
 def test_professores_diferentes_nao_sao_unidos(db, escola_completa):
     """Item 7: mesma sala aparente (1|A|T) mas titulares DIFERENTES = grupos
     distintos → não entram para consolidação."""
