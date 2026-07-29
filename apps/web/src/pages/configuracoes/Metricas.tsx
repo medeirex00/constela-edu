@@ -248,8 +248,6 @@ function ReferenciasNormalizacao() {
 const ABAS = [
   "Matific",
   "Elefante Letrado",
-  "Níveis de dificuldade",
-  "Dificuldade por Turma",
   "Referências de Normalização",
 ] as const;
 type Aba = (typeof ABAS)[number];
@@ -358,7 +356,8 @@ export default function Metricas() {
   // Secretaria (rede vinculada, não-global): vê os critérios, mas não altera.
   const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
   const [aba, setAba] = useState<Aba>("Matific");
-  const [subAbaElefante, setSubAbaElefante] = useState<"pesos" | "questoes" | "extras">("pesos");
+  const [subAbaElefante, setSubAbaElefante] =
+    useState<"pesos" | "questoes" | "extras" | "niveis" | "dificuldade">("pesos");
 
   return (
     <div>
@@ -404,13 +403,18 @@ export default function Metricas() {
       )}
 
       {aba === "Elefante Letrado" && (
-        <div className="max-w-2xl">
-          <div role="tablist" className="mb-4 inline-flex rounded-lg border border-zinc-300 p-0.5 dark:border-zinc-700">
+        <div>
+          {/* Todas as configurações do Elefante ficam agrupadas aqui: pesos,
+              questões, pontos extras, os níveis de dificuldade e a pontuação
+              de dificuldade por turma. */}
+          <div role="tablist" className="mb-4 inline-flex flex-wrap gap-0.5 rounded-lg border border-zinc-300 p-0.5 dark:border-zinc-700">
             {(
               [
                 ["pesos", "Pesos da Nota"],
                 ["questoes", "Questões"],
                 ["extras", "Pontos Extras"],
+                ["niveis", "Níveis de dificuldade"],
+                ["dificuldade", "Dificuldade por turma"],
               ] as const
             ).map(([chave, rotulo]) => (
               <button
@@ -429,34 +433,40 @@ export default function Metricas() {
             ))}
           </div>
           {subAbaElefante === "pesos" ? (
-            <PesosEditor
-              namespace="elefante"
-              rotulos={{
-                livros: "Livros únicos concluídos",
-                dificuldade: "Dificuldade dos livros",
-                questoes: "Questões",
-                tempo: "Tempo de leitura",
-              }}
-              descricao="Como os quatro fatores de leitura compõem a nota do módulo."
-            />
+            <div className="max-w-2xl">
+              <PesosEditor
+                namespace="elefante"
+                rotulos={{
+                  livros: "Livros únicos concluídos",
+                  dificuldade: "Dificuldade dos livros",
+                  questoes: "Questões",
+                  tempo: "Tempo de leitura",
+                }}
+                descricao="Como os quatro fatores de leitura compõem a nota do módulo."
+              />
+            </div>
           ) : subAbaElefante === "questoes" ? (
-            <PesosEditor
-              namespace="questoes"
-              rotulos={{ tentativas: "Tentativas", acertos: "Acertos" }}
-              descricao="Dentro do fator Questões, o equilíbrio entre tentar e acertar."
-            />
+            <div className="max-w-2xl">
+              <PesosEditor
+                namespace="questoes"
+                rotulos={{ tentativas: "Tentativas", acertos: "Acertos" }}
+                descricao="Dentro do fator Questões, o equilíbrio entre tentar e acertar."
+              />
+            </div>
+          ) : subAbaElefante === "extras" ? (
+            <div className="max-w-2xl">
+              <PontosExtrasEditor />
+            </div>
+          ) : subAbaElefante === "niveis" ? (
+            <div className="max-w-3xl">
+              <EditorNiveis />
+            </div>
           ) : (
-            <PontosExtrasEditor />
+            <PontuacaoPorTurma />
           )}
         </div>
       )}
 
-      {aba === "Níveis de dificuldade" && (
-        <div className="max-w-3xl">
-          <EditorNiveis />
-        </div>
-      )}
-      {aba === "Dificuldade por Turma" && <PontuacaoPorTurma />}
       {aba === "Referências de Normalização" && <ReferenciasNormalizacao />}
     </div>
   );
