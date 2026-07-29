@@ -3,7 +3,7 @@
 Cada turma pode valer pontos diferentes por nível de livro; turmas sem config
 custom herdam o padrão da escola (comportamento preservado).
 """
-from app.models import PontuacaoNivelTurma
+from app.models import PontuacaoNivelTurma, Turma
 from app.services import scoring
 
 
@@ -11,6 +11,34 @@ def _override(db, escola_id, turma_id, pontos):
     db.add(PontuacaoNivelTurma(escola_id=escola_id, turma_id=turma_id,
                                pontos_por_codigo=pontos))
     db.commit()
+
+
+def test_mesmo_nivel_pontua_diferente_por_turma(db, escola_completa):
+    """Lógica do dono: o MESMO nível de livro pode valer pontos DIFERENTES
+    conforme a turma. 'Dificuldade por turma' é a fonte da pontuação FINAL;
+    'Níveis de dificuldade' é só a referência/base (fallback de quem não
+    configurou aquele código). Espelha o exemplo K=10 no 2ºB vs K=6 no 3ºB —
+    aqui com o código "D" (referência/padrão = 4 na escola_completa)."""
+    escola = escola_completa["escola"]
+    turma_a = escola_completa["turma"]                        # já existe (3º Ano A)
+    turma_b = Turma(escola_id=escola.id, nome="3º Ano B", ano_escolar="3º Ano",
+                    ano_letivo=turma_a.ano_letivo, turno="tarde")
+    turma_c = Turma(escola_id=escola.id, nome="3º Ano C", ano_escolar="3º Ano",
+                    ano_letivo=turma_a.ano_letivo, turno="tarde")
+    db.add_all([turma_b, turma_c])
+    db.commit()
+
+    # Dificuldade por turma: mesmo código "D" vale 10 no A e 6 no B; a turma C
+    # não configura nada → cai na REFERÊNCIA dos Níveis (padrão = 4).
+    _override(db, escola.id, turma_a.id, {"D": 10.0})
+    _override(db, escola.id, turma_b.id, {"D": 6.0})
+
+    mapa = scoring._mapa_dificuldade(db, escola.id)
+    livro = {"D": 1}                                          # 1 livro nível D (Elefante)
+    assert scoring._pontos_dificuldade(livro, "3º Ano", mapa, turma_id=turma_a.id) == 10.0
+    assert scoring._pontos_dificuldade(livro, "3º Ano", mapa, turma_id=turma_b.id) == 6.0
+    # Turma sem config → referência/base dos Níveis (NÃO some, NÃO vira a final universal).
+    assert scoring._pontos_dificuldade(livro, "3º Ano", mapa, turma_id=turma_c.id) == 4.0
 
 
 def test_pontos_por_codigo_padrao_e_por_turma(db, escola_completa):
