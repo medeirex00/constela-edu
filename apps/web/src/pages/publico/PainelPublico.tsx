@@ -286,7 +286,7 @@ function AvatarPodio({
   campeao: boolean;
 }) {
   return (
-    <div className={`painel-flutua relative ${campeao ? "h-28 w-28 sm:h-32 sm:w-32" : "h-20 w-20 sm:h-24 sm:w-24"}`}>
+    <div className={`painel-flutua relative ${campeao ? "h-28 w-28 sm:h-32 sm:w-32 xl:h-44 xl:w-44" : "h-20 w-20 sm:h-24 sm:w-24 xl:h-32 xl:w-32"}`}>
       <div
         className="flex h-full w-full items-center justify-center rounded-full ring-4"
         style={{
@@ -299,7 +299,7 @@ function AvatarPodio({
         }}
       >
         <span
-          className={`font-extrabold text-white ${campeao ? "text-4xl sm:text-5xl" : "text-2xl sm:text-3xl"}`}
+          className={`font-extrabold text-white ${campeao ? "text-4xl sm:text-5xl xl:text-7xl" : "text-2xl sm:text-3xl xl:text-5xl"}`}
           style={{ fontFamily: "Poppins, Inter, sans-serif", textShadow: "0 2px 8px rgba(0,0,0,.35)" }}
         >
           {iniciaisDe(nome)}
@@ -380,7 +380,7 @@ function ColunaPodio({
           <AvatarPodio nome={destaque.nome} cor={cor} posicao={posicao} campeao={campeao} />
         ) : (
           <div
-            className={`flex items-center justify-center rounded-full bg-white/5 ${campeao ? "h-28 w-28" : "h-20 w-20"}`}
+            className={`flex items-center justify-center rounded-full bg-white/5 ${campeao ? "h-28 w-28 sm:h-32 sm:w-32 xl:h-44 xl:w-44" : "h-20 w-20 sm:h-24 sm:w-24 xl:h-32 xl:w-32"}`}
           >
             <Icone className="h-8 w-8 text-white/25" />
           </div>
@@ -398,7 +398,7 @@ function ColunaPodio({
                quebram com equilíbrio — nada de letras cortadas na borda). */}
             <p
               className={`mt-2 w-full break-words px-1 font-extrabold leading-[1.12] text-white [text-wrap:balance] ${
-                campeao ? "text-[clamp(1.45rem,2.5vw,2.6rem)]" : "text-[clamp(1.1rem,1.7vw,1.7rem)]"
+                campeao ? "text-[clamp(1.45rem,2.5vw,3.8rem)]" : "text-[clamp(1.1rem,1.7vw,2.6rem)]"
               }`}
               style={{ fontFamily: "Poppins, Inter, sans-serif" }}
             >
@@ -444,7 +444,7 @@ function ColunaPodio({
 /** Pódio: Aluno do DIA no centro (campeão do agora!), Semana 2º, Mês 3º. */
 function SlideDestaques({ destaques }: { destaques: DadosPainel["destaques"] }) {
   return (
-    <div className="mx-auto w-full max-w-7xl">
+    <div className="mx-auto w-full max-w-[min(88rem,92vw)]">
       <div className="grid items-end gap-5 sm:gap-6 lg:grid-cols-3">
         <div className="order-2 lg:order-1">
           <ColunaPodio titulo="Aluno da Semana" icone={Medal} cor={PRATA} posicao={2}
@@ -491,7 +491,7 @@ function LinhaRanking({
         className="absolute inset-y-0 left-0 -z-10 rounded-2xl opacity-[0.10]"
         style={{ width: `${larguraRelativa}%`, background: medalha?.cor ?? "#6B7DE4" }}
       />
-      <span className="flex w-10 shrink-0 items-center justify-center text-2xl sm:w-12">
+      <span className="flex w-10 shrink-0 items-center justify-center text-[clamp(1.4rem,2vw,2.4rem)] sm:w-12 xl:w-16">
         {medalha ? (
           <span aria-label={`${item.posicao}º lugar`}>{medalha.emoji}</span>
         ) : (
@@ -499,14 +499,14 @@ function LinhaRanking({
         )}
       </span>
       <span
-        className={`flex-1 truncate font-semibold text-white text-[clamp(1.05rem,2vw,1.6rem)] ${top3 ? "" : "text-white/90"}`}
+        className={`flex-1 truncate font-semibold text-white text-[clamp(1.05rem,2vw,2.4rem)] ${top3 ? "" : "text-white/90"}`}
         style={{ fontFamily: "Poppins, Inter, sans-serif" }}
       >
         {item.nome}
       </span>
       {item.turma && <ChipTurma className="hidden sm:inline-flex">{item.turma}</ChipTurma>}
       <span
-        className="w-20 shrink-0 text-right font-bold tabular-nums text-white text-[clamp(1.1rem,2vw,1.75rem)] sm:w-28"
+        className="w-20 shrink-0 text-right font-bold tabular-nums text-white text-[clamp(1.1rem,2vw,2.6rem)] sm:w-28 xl:w-36"
         style={top3 ? { color: medalha?.cor } : undefined}
       >
         {nota(valor)}
@@ -535,7 +535,7 @@ function SlideRanking({
   const topo = Math.max(...itens.map((i) => i[campo] ?? 0), 0) || 1;
   const ocultos = itens.length - visiveis;
   return (
-    <div ref={listaRef} className="mx-auto flex w-full max-w-3xl flex-col gap-2.5">
+    <div ref={listaRef} className="mx-auto flex w-full max-w-[min(76rem,92vw)] flex-col gap-2.5">
       {itens.slice(0, visiveis).map((item) => (
         <LinhaRanking
           key={item.aluno_id}
@@ -562,7 +562,7 @@ function SlideMural({ mural, altura }: { mural: DadosPainel["mural"]; altura: nu
   }
   const ocultos = mural.length - visiveis;
   return (
-    <ul ref={listaRef} className="mx-auto grid w-full max-w-3xl gap-3">
+    <ul ref={listaRef} className="mx-auto grid w-full max-w-[min(76rem,92vw)] gap-3">
       {mural.slice(0, visiveis).map((evento, indice) => (
         <li
           key={indice}
@@ -572,7 +572,7 @@ function SlideMural({ mural, altura }: { mural: DadosPainel["mural"]; altura: nu
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-2xl">
             {evento.icone}
           </span>
-          <span className="text-[clamp(1rem,1.8vw,1.4rem)]">{evento.texto}</span>
+          <span className="text-[clamp(1rem,1.8vw,2rem)]">{evento.texto}</span>
         </li>
       ))}
       {ocultos > 0 && (
@@ -789,13 +789,13 @@ export default function PainelPublico() {
       {/* ---------------------------------------------------------- Cabeçalho */}
       <header className="relative flex items-center justify-between gap-4 px-5 py-4 sm:px-8 sm:py-5">
         <div className="flex items-center gap-3 sm:gap-4">
-          <img src="/simbolo-escuro.svg" alt="Constela Edu" width={44} height={44} className="h-9 w-9 sm:h-11 sm:w-11" />
+          <img src="/simbolo-escuro.svg" alt="Constela Edu" width={44} height={44} className="h-9 w-9 sm:h-11 sm:w-11 xl:h-16 xl:w-16" />
           <div className="min-w-0">
             <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-amber-300 sm:text-sm">
               <Trophy className="h-3.5 w-3.5" /> Painel de Conquistas
             </p>
             <h1
-              className="truncate font-extrabold leading-tight text-white text-[clamp(1.25rem,3vw,2.5rem)]"
+              className="truncate font-extrabold leading-tight text-white text-[clamp(1.25rem,3vw,4rem)]"
               style={{ fontFamily: "Poppins, Inter, sans-serif" }}
             >
               {dados.escola.nome}
@@ -841,10 +841,10 @@ export default function PainelPublico() {
           {/* Título sempre visível (fora da área rolável — nunca é cortado). */}
           <div className="mb-3 shrink-0 text-center sm:mb-4">
             <h2
-              className="flex items-center justify-center gap-3 font-extrabold text-white text-[clamp(1.5rem,3vw,2.6rem)]"
+              className="flex items-center justify-center gap-3 font-extrabold text-white text-[clamp(1.5rem,3vw,4rem)]"
               style={{ fontFamily: "Poppins, Inter, sans-serif" }}
             >
-              <meta.icone className="h-7 w-7 shrink-0 sm:h-9 sm:w-9" style={{ color: OURO }} strokeWidth={2.3} />
+              <meta.icone className="h-7 w-7 shrink-0 sm:h-9 sm:w-9 xl:h-14 xl:w-14" style={{ color: OURO }} strokeWidth={2.3} />
               {meta.titulo}
             </h2>
             <p className="mt-1 text-sm text-white/50 sm:text-base">{meta.legenda}</p>
@@ -880,15 +880,15 @@ export default function PainelPublico() {
             { emoji: "📚", rotulo: "Livros lidos", valor: dados.estatisticas.livros },
           ].map((e) => (
             <div key={e.rotulo} className="flex items-center justify-center gap-2.5">
-              <span className="text-xl sm:text-2xl" aria-hidden>{e.emoji}</span>
+              <span className="text-xl sm:text-2xl xl:text-4xl" aria-hidden>{e.emoji}</span>
               <div className="text-left leading-tight">
                 <p
-                  className="font-extrabold tabular-nums text-white text-[clamp(1.1rem,2.2vw,1.8rem)]"
+                  className="font-extrabold tabular-nums text-white text-[clamp(1.1rem,2.2vw,3rem)]"
                   style={{ fontFamily: "Poppins, Inter, sans-serif" }}
                 >
                   {e.valor.toLocaleString("pt-BR")}
                 </p>
-                <p className="text-[clamp(0.6rem,1vw,0.8rem)] font-semibold uppercase tracking-wider text-white/50">
+                <p className="text-[clamp(0.6rem,1vw,1.2rem)] font-semibold uppercase tracking-wider text-white/50">
                   {e.rotulo}
                 </p>
               </div>
@@ -898,7 +898,7 @@ export default function PainelPublico() {
       )}
 
       {/* Dica do dia: motivação discreta, gira com o dia do ano. */}
-      <p className="relative px-6 pb-1 text-center text-[clamp(0.75rem,1.3vw,1rem)] text-white/45">
+      <p className="relative px-6 pb-1 text-center text-[clamp(0.75rem,1.3vw,1.5rem)] text-white/45">
         <Sparkles className="mr-1.5 inline h-3.5 w-3.5 text-amber-300/80" aria-hidden />
         {DICAS[Math.floor((agora.getTime() / 86_400_000)) % DICAS.length]}
       </p>
