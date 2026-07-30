@@ -32,15 +32,15 @@ function LinhaEscola({ pos, escola, topo }: { pos: number; escola: TopEscola; to
     >
       <span aria-hidden className="absolute inset-y-0 left-0 -z-10 rounded-2xl opacity-[0.10]"
         style={{ width: `${largura}%`, background: medalha?.cor ?? "#6B7DE4" }} />
-      <span className="flex w-9 shrink-0 items-center justify-center text-2xl sm:w-11">
+      <span className="flex w-9 shrink-0 items-center justify-center text-[clamp(1.4rem,2vw,2.4rem)] sm:w-11 xl:w-16">
         {medalha ? <span aria-label={`${pos}º lugar`}>{medalha.emoji}</span>
           : <span className="font-bold tabular-nums text-white/45">{pos}º</span>}
       </span>
-      <span className="flex-1 truncate text-[clamp(1rem,1.7vw,1.4rem)] font-semibold text-white"
+      <span className="flex-1 truncate text-[clamp(1rem,1.7vw,2.2rem)] font-semibold text-white"
         style={{ fontFamily: FONTE }}>
         {escola.nome}
       </span>
-      <span className="w-16 shrink-0 text-right text-[clamp(1.05rem,1.7vw,1.5rem)] font-bold tabular-nums text-white sm:w-24"
+      <span className="w-16 shrink-0 text-right text-[clamp(1.05rem,1.7vw,2.4rem)] font-bold tabular-nums text-white sm:w-24 xl:w-36"
         style={top3 ? { color: medalha?.cor } : undefined}>
         {nota(escola.valor)}
       </span>
@@ -55,9 +55,10 @@ function Coluna({ titulo, icone: Icone, escolas }: {
   const topo = Math.max(...escolas.map((e) => e.valor), 0) || 1;
   return (
     <div className="flex-1 rounded-3xl bg-white/[0.05] p-5 ring-1 ring-inset ring-white/10 sm:p-6">
-      <h2 className="mb-4 flex items-center justify-center gap-2.5 text-[clamp(1.2rem,2.4vw,1.9rem)] font-extrabold text-white"
+      <h2 className="mb-4 flex items-center justify-center gap-2.5 text-[clamp(1.2rem,2.4vw,2.8rem)] font-extrabold text-white"
         style={{ fontFamily: FONTE }}>
-        <Icone className="h-7 w-7 shrink-0" style={{ color: OURO }} strokeWidth={2.3} /> {titulo}
+        <Icone className="h-[clamp(1.6rem,2.4vw,2.6rem)] w-[clamp(1.6rem,2.4vw,2.6rem)] shrink-0"
+          style={{ color: OURO }} strokeWidth={2.3} /> {titulo}
       </h2>
       {escolas.length === 0 ? (
         <p className="py-10 text-center text-white/40">Sem dados ainda.</p>
@@ -109,23 +110,24 @@ export default function PainelPublicoRede() {
   }
 
   return (
-    <div className="relative min-h-screen bg-[#0F1626] px-4 py-10 text-white" style={{ minHeight: "100dvh" }}>
+    <div className="relative flex min-h-screen flex-col justify-center bg-[#0F1626] px-4 py-[clamp(1.5rem,4vh,4rem)] text-white" style={{ minHeight: "100dvh" }}>
       <FundoConstela cor="#5B6EE1" />
-      <div className="relative mx-auto max-w-5xl">
+      <div className="relative mx-auto w-full max-w-[min(110rem,94vw)]">
         <header className="mb-8 text-center">
           <div className="mb-3 flex items-center justify-center gap-2.5">
-            <img src="/simbolo-escuro.svg" alt="Constela Edu" width={40} height={40} className="h-9 w-9" />
+            <img src="/simbolo-escuro.svg" alt="Constela Edu" width={40} height={40}
+              className="h-[clamp(2.2rem,3vw,3.5rem)] w-[clamp(2.2rem,3vw,3.5rem)]" />
           </div>
-          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">
+          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-300 sm:tracking-[0.28em]">
             Secretaria de Educação
           </p>
-          <h1 className="mt-1 text-[clamp(1.8rem,4vw,3rem)] font-extrabold text-white" style={{ fontFamily: FONTE }}>
+          <h1 className="mt-1 text-[clamp(1.8rem,4vw,4.5rem)] font-extrabold text-white" style={{ fontFamily: FONTE }}>
             {dados.rede_nome}
           </h1>
           <p className="mt-2 text-white/50">As escolas em destaque da nossa rede</p>
         </header>
 
-        <div className="flex flex-col gap-6 md:flex-row">
+        <div className="flex flex-col gap-6 md:flex-row xl:gap-10">
           <Coluna titulo="Leitura" icone={BookOpen} escolas={dados.top_leitura} />
           <Coluna titulo="Matemática" icone={Calculator} escolas={dados.top_matematica} />
         </div>
