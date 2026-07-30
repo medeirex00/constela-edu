@@ -163,3 +163,45 @@
     animation: none !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Tela de Login — fundo "premium escuro" discreto (gradiente azul muito suave +
+   vinheta + leve iluminação atrás do card), card com profundidade (vidro sutil,
+   borda refinada, sombra macia) e entrada com movimento curto. CSS plano
+   (prefixo "login-") para o Tailwind não purgar, no mesmo padrão do painel.
+   Todo o movimento desliga em prefers-reduced-motion.
+--------------------------------------------------------------------------- */
+.login-bg {
+  background-color: #090c14;
+  /* 1º (topo): vinheta que escurece as bordas; 2º: leve brilho da marca no alto,
+     atrás do card; 3º: elevação azul central. Tudo em opacidade baixa. */
+  background-image:
+    radial-gradient(125% 100% at 50% 42%, transparent 58%, rgba(0, 0, 0, 0.55) 100%),
+    radial-gradient(80% 55% at 50% -6%, rgba(91, 110, 225, 0.14), transparent 55%),
+    radial-gradient(100% 90% at 50% 48%, rgba(27, 42, 74, 0.30), transparent 72%);
+}
+.login-card {
+  background-color: rgba(17, 21, 31, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),   /* fio de luz no topo */
+    0 24px 60px -24px rgba(0, 0, 0, 0.75),        /* profundidade macia */
+    0 0 90px -55px rgba(91, 110, 225, 0.6);       /* halo discreto da marca */
+}
+
+@keyframes login-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes login-surgir {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.login-fade { animation: login-fade 0.5s ease-out both; }
+.login-surgir { animation: login-surgir 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .login-fade,
+  .login-surgir {
+    animation: none !important;
+  }
+}
