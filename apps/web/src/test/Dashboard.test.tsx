@@ -12,7 +12,7 @@ import {
 const URL_DASH = "/escolas/1/dashboard";
 
 describe("Dashboard", () => {
-  it("mostra os indicadores e o Top 10 da escola", async () => {
+  it("mostra os indicadores e o Top 5 da escola", async () => {
     responder("GET", URL_DASH, dashboardFake());
     renderComApp(<Dashboard />);
 
@@ -21,8 +21,8 @@ describe("Dashboard", () => {
     expect(screen.getByText("42")).toBeInTheDocument(); // total_alunos
     expect(screen.getByText("Professores")).toBeInTheDocument();
 
-    // Tabela Top 10.
-    expect(screen.getByText("Top 10 — Ranking Geral")).toBeInTheDocument();
+    // Ranking compacto (Top 5).
+    expect(screen.getByText("Top 5 — Ranking Geral")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ana Beatriz Souza" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "João Pedro Barbosa" })).toBeInTheDocument();
   });
@@ -51,6 +51,6 @@ describe("Dashboard", () => {
     expect(await screen.findByText("Bem-vindo(a) ao Constela Edu")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Comece aqui/ })).toBeInTheDocument();
     // Nada de indicadores nem ranking na tela limpa.
-    expect(screen.queryByText("Top 10 — Ranking Geral")).not.toBeInTheDocument();
+    expect(screen.queryByText("Top 5 — Ranking Geral")).not.toBeInTheDocument();
   });
 });
