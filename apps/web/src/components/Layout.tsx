@@ -741,7 +741,7 @@ export default function Layout() {
       )}
 
       <div className={recolhido ? "" : "lg:pl-60"}>
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-zinc-200 bg-white/80 px-4 py-3 pr-safe pt-safe backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
+        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-zinc-200 bg-white/80 px-4 py-4 pr-safe pt-safe backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80 lg:px-8">
           <button
             aria-label="Abrir menu"
             className="rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800 lg:hidden"
