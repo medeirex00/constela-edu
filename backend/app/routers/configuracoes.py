@@ -8,7 +8,12 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis, exigir_papeis_escola
+from app.core.deps import (
+    escola_autorizada,
+    exigir_admin_global,
+    exigir_papeis,
+    exigir_papeis_escola,
+)
 from app.models import (
     Configuracao,
     DificuldadeTurma,
@@ -294,7 +299,7 @@ def _normalizar_codigos(codigos: list[str] | None) -> list[str]:
 def criar_nivel(
     dados: NivelCreate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # níveis = referência: só admin global edita
     db: Session = Depends(get_db),
 ):
     ordem_max = db.execute(
@@ -324,7 +329,7 @@ def atualizar_nivel(
     nivel_id: int,
     dados: NivelUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # níveis = referência: só admin global edita
     db: Session = Depends(get_db),
 ):
     nivel = db.get(NivelDificuldade, nivel_id)
@@ -352,7 +357,7 @@ def atualizar_nivel(
 def excluir_nivel(
     nivel_id: int,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # níveis = referência: só admin global edita
     db: Session = Depends(get_db),
 ):
     nivel = db.get(NivelDificuldade, nivel_id)
@@ -374,7 +379,7 @@ def excluir_nivel(
 @router.post("/niveis/padrao")
 def restaurar_niveis_padrao(
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # níveis = referência: só admin global edita
     db: Session = Depends(get_db),
 ):
     """Cria os níveis de dificuldade PADRÃO do Elefante Letrado — atalho de 1

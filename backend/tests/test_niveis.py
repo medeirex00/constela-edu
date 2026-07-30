@@ -4,9 +4,12 @@ Cobre o conserto do beco "Cadastre os níveis de dificuldade": criar/editar/
 excluir níveis pela interface, o atalho de níveis padrão e o fato de uma escola
 nova nascer provisionada (antes, escola criada pela tela ficava sem níveis).
 """
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.models import Escola, NivelDificuldade, ReferenciaNormalizacao, Turma
+from app.core.security import hash_senha
+from app.main import app
+from app.models import Escola, NivelDificuldade, ReferenciaNormalizacao, Turma, Usuario
 from app.services import provisionamento
 
 API = "/api/v1"
@@ -18,32 +21,59 @@ def _niveis(cliente, escola_id=1):
     return r.json()["niveis"]
 
 
-def test_criar_editar_e_excluir_nivel(cliente):
+def _cliente_global(db, escola_id=1) -> TestClient:
+    """Cliente autenticado como ADMIN GLOBAL — os níveis são REFERÊNCIA/base da
+    premiação e só ele pode criar/editar/excluir/semear."""
+    db.add(Usuario(escola_id=escola_id, nome="Global", email="global@teste.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="admin", is_global=True))
+    db.commit()
+    c = TestClient(app)
+    tok = c.post(f"{API}/auth/login",
+                 data={"username": "global@teste.local", "password": "s3nh4"}).json()["access_token"]
+    c.headers["Authorization"] = f"Bearer {tok}"
+    return c
+
+
+def test_criar_editar_e_excluir_nivel(cliente, db):
+    gc = _cliente_global(db)                        # só admin global edita níveis
     # cria — códigos são normalizados (maiúsculo, sem espaço, sem repetido)
-    r = cliente.post(f"{API}/escolas/1/configuracoes/niveis",
-                     json={"nome": "Nível 9", "codigos": ["y", "z ", "Z"], "pontos_padrao": 20})
+    r = gc.post(f"{API}/escolas/1/configuracoes/niveis",
+                json={"nome": "Nível 9", "codigos": ["y", "z ", "Z"], "pontos_padrao": 20})
     assert r.status_code == 201, r.text
     novo = r.json()
     assert novo["codigos"] == ["Y", "Z"]
     assert novo["codigo"] == "nivel_9"
     nivel_id = novo["id"]
 
-    assert "Nível 9" in [n["nome"] for n in _niveis(cliente)]
+    assert "Nível 9" in [n["nome"] for n in _niveis(cliente)]   # leitura é de todos
 
     # edita nome e pontos
-    r = cliente.put(f"{API}/escolas/1/configuracoes/niveis/{nivel_id}",
-                    json={"pontos_padrao": 25, "nome": "Nível X"})
+    r = gc.put(f"{API}/escolas/1/configuracoes/niveis/{nivel_id}",
+               json={"pontos_padrao": 25, "nome": "Nível X"})
     assert r.status_code == 200, r.text
     assert r.json()["pontos_padrao"] == 25
     assert r.json()["nome"] == "Nível X"
 
     # exclui
-    r = cliente.delete(f"{API}/escolas/1/configuracoes/niveis/{nivel_id}")
+    r = gc.delete(f"{API}/escolas/1/configuracoes/niveis/{nivel_id}")
     assert r.status_code == 200, r.text
     assert "Nível X" not in [n["nome"] for n in _niveis(cliente)]
 
 
+def test_niveis_sao_somente_leitura_para_nao_global(cliente):
+    """Admin de escola (não global) só VISUALIZA: qualquer escrita = 403."""
+    assert cliente.get(f"{API}/escolas/1/configuracoes/dificuldade").status_code == 200
+    assert cliente.post(f"{API}/escolas/1/configuracoes/niveis",
+                        json={"nome": "X", "codigos": ["Q"], "pontos_padrao": 1}).status_code == 403
+    assert cliente.post(f"{API}/escolas/1/configuracoes/niveis/padrao").status_code == 403
+    existente = _niveis(cliente)[0]["id"]
+    assert cliente.put(f"{API}/escolas/1/configuracoes/niveis/{existente}",
+                       json={"pontos_padrao": 99}).status_code == 403
+    assert cliente.delete(f"{API}/escolas/1/configuracoes/niveis/{existente}").status_code == 403
+
+
 def test_niveis_padrao_desbloqueiam_a_pontuacao_por_turma(cliente, db):
+    gc = _cliente_global(db)
     # esvazia os níveis desta escola -> beco: catálogo de pontuação vazio
     for n in db.execute(
         select(NivelDificuldade).where(NivelDificuldade.escola_id == 1)
@@ -54,8 +84,8 @@ def test_niveis_padrao_desbloqueiam_a_pontuacao_por_turma(cliente, db):
     assert r.status_code == 200
     assert r.json()["catalogo"] == []
 
-    # 1 clique: níveis padrão do Elefante
-    r = cliente.post(f"{API}/escolas/1/configuracoes/niveis/padrao")
+    # 1 clique: níveis padrão do Elefante (admin global)
+    r = gc.post(f"{API}/escolas/1/configuracoes/niveis/padrao")
     assert r.status_code == 200, r.text
     assert r.json()["criados"] == len(provisionamento.NIVEIS_PADRAO)
 
@@ -65,9 +95,10 @@ def test_niveis_padrao_desbloqueiam_a_pontuacao_por_turma(cliente, db):
     assert "AA" in codigos and "Z" in codigos
 
 
-def test_niveis_padrao_nao_duplica_se_ja_existem(cliente):
+def test_niveis_padrao_nao_duplica_se_ja_existem(cliente, db):
+    gc = _cliente_global(db)
     antes = len(_niveis(cliente))
-    r = cliente.post(f"{API}/escolas/1/configuracoes/niveis/padrao")
+    r = gc.post(f"{API}/escolas/1/configuracoes/niveis/padrao")
     assert r.status_code == 200
     assert r.json()["criados"] == 0
     assert len(_niveis(cliente)) == antes

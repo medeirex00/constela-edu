@@ -9,7 +9,7 @@
  *   • AvisoSemNiveis      — estado "sem faixas" com atalho de 1 clique para os
  *                           níveis padrão (fim do beco "cadastre na aba anterior").
  * ----------------------------------------------------------------------- */
-import { GripVertical, Plus, Trash2 } from "lucide-react";
+import { GripVertical, Info, Lock, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Botao, Card, Carregando, Mensagem, estiloInput } from "../../components/ui";
@@ -38,7 +38,9 @@ function parseCodigos(texto: string): string[] {
  * ----------------------------------------------------------------------- */
 export function AvisoSemNiveis({ aoCriar }: { aoCriar?: () => void }) {
   const { escolaId, usuario } = useApp();
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // Níveis de dificuldade são REFERÊNCIA/base da premiação: só o administrador
+  // geral (global) cria/edita. Coordenador/escola/Secretaria só visualizam.
+  const somenteLeitura = !usuario?.is_global;
   const [criando, setCriando] = useState(false);
   const [erro, setErro] = useState("");
 
@@ -87,7 +89,10 @@ type LinhaNivel = { id: number; nome: string; codigos: string; pontos: string };
 
 export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
   const { escolaId, usuario } = useApp();
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // Só o administrador geral (global) edita os níveis — para todos os demais
+  // (coordenador, escola, Secretaria) a tela é somente leitura. O backend também
+  // exige admin global nas rotas de escrita de níveis.
+  const somenteLeitura = !usuario?.is_global;
   const { dados, erro, carregando, recarregar } = useApi<{ niveis: Nivel[] }>(
     escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
   );
@@ -193,10 +198,25 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
 
   return (
     <div className="space-y-4">
+      {/* Legenda: deixa claro que estes são valores de REFERÊNCIA (base) da
+          premiação — não a pontuação final — e que a edição é do admin geral. */}
+      <div className="flex items-start gap-2.5 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 dark:border-indigo-500/25 dark:bg-indigo-500/10 dark:text-indigo-100">
+        <Info size={16} className="mt-0.5 shrink-0" />
+        <p>
+          Estes números são valores de <strong>referência</strong> (base) para a premiação:
+          representam a <strong>faixa de pontos</strong> de cada nível de dificuldade — do mínimo ao
+          máximo. Eles <strong>não são a pontuação final</strong> que o aluno recebe; servem de base
+          para você configurar a pontuação real em <strong>Dificuldade por turma</strong>.
+          <span className="mt-1.5 flex items-center gap-1.5 font-medium">
+            <Lock size={13} /> A edição destes valores é exclusiva do administrador geral.
+          </span>
+        </p>
+      </div>
+
       <p className="text-sm text-zinc-500 dark:text-zinc-400">
-        Cadastre as faixas de dificuldade dos livros. Cada faixa reúne os códigos de nível (ex.:
-        <span className="mx-1 font-mono">AA, BB</span>) e define quantos pontos cada livro vale.
-        É o primeiro passo — depois você pontua por turma.
+        Cada faixa (Pré-Leitor, Nível 1, Nível 2…) reúne os códigos de nível dos livros (ex.:
+        <span className="mx-1 font-mono">AA, BB</span>) e define quantos pontos cada livro daquela
+        faixa vale como referência.
       </p>
 
       {linhas.length === 0 && !novo ? (
