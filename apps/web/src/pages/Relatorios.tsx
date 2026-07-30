@@ -1,5 +1,5 @@
 /** Relatórios (PRD §86–§103): exportação CSV/Excel/PDF e certificados. */
-import { Award, FileDown, FileSpreadsheet, FileText } from "lucide-react";
+import { Award, BookOpen, Calculator, FileDown, FileSpreadsheet, FileText } from "lucide-react";
 import { useState } from "react";
 
 import { Botao, Campo, Card, Mensagem, PageHeader, estiloInput } from "../components/ui";
@@ -88,7 +88,10 @@ export default function Relatorios() {
         <h2 className="mb-3 text-sm font-semibold">Certificados</h2>
         <Card className="p-5">
           <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-            Certificado individual em PDF com nome, turma, nota geral e posição no ranking (PRD §99).
+            Escolha o aluno e emita o certificado em PDF de alta resolução. Todos os campos
+            (instituição, nome do aluno, bimestre e data) são preenchidos <strong>automaticamente</strong>.
+            O <strong>Geral</strong> traz turma, nota e posição; os de <strong>Elefante Letrado</strong> e
+            <strong> Matific</strong> usam a arte oficial da plataforma.
           </p>
           {erroAlunos && (
             <div className="mb-4"><Mensagem tipo="erro">Não foi possível carregar os alunos: {erroAlunos.message}</Mensagem></div>
@@ -104,12 +107,27 @@ export default function Relatorios() {
                 </select>
               </Campo>
             </div>
-            <Botao
-              disabled={!alunoId || ocupado !== ""}
-              onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}`, "certificado")}
-            >
-              <Award size={15} /> {ocupado === "certificado" ? "Gerando..." : "Emitir certificado"}
-            </Botao>
+            <div className="flex flex-wrap gap-2">
+              <Botao
+                variante="neutro"
+                disabled={!alunoId || ocupado !== ""}
+                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}`, "cert-geral")}
+              >
+                <Award size={15} /> {ocupado === "cert-geral" ? "Gerando..." : "Geral"}
+              </Botao>
+              <Botao
+                disabled={!alunoId || ocupado !== ""}
+                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}?modelo=elefante`, "cert-elefante")}
+              >
+                <BookOpen size={15} /> {ocupado === "cert-elefante" ? "Gerando..." : "Elefante Letrado"}
+              </Botao>
+              <Botao
+                disabled={!alunoId || ocupado !== ""}
+                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}?modelo=matific`, "cert-matific")}
+              >
+                <Calculator size={15} /> {ocupado === "cert-matific" ? "Gerando..." : "Matific"}
+              </Botao>
+            </div>
           </div>
         </Card>
       </div>

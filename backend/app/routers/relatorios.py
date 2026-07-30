@@ -184,11 +184,16 @@ def cartaz_ranking(
 @router.get("/certificados/{aluno_id}")
 def certificado(
     aluno_id: int,
+    modelo: str | None = Query(default=None, pattern="^(elefante|matific)$"),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Certificado individual em PDF (PRD §99). Professor: só dos seus alunos."""
+    """Certificado individual em PDF (PRD §99). Professor: só dos seus alunos.
+
+    `modelo=elefante|matific` usa a ARTE oficial da plataforma (personagens),
+    preenchida automaticamente (instituição, nome, bimestre e data). Sem `modelo`,
+    emite o certificado geral (moldura azul-marinho, com turma e nota)."""
     escola = db.get(Escola, escola_id)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
@@ -207,21 +212,33 @@ def certificado(
                            Nota.ano_letivo == escola.ano_letivo_ativo)
     ).scalar_one_or_none()
 
-    conteudo = svc.gerar_certificado(
-        escola_nome=escola.nome,
-        cor=svc.cor_primaria(db, escola_id),
-        aluno_nome=aluno.nome,
-        turma=matricula[1].nome if matricula else "",
-        posicao=nota.posicao if nota else None,
-        nota_geral=nota.nota_geral if nota else 0.0,
-        ano_letivo=escola.ano_letivo_ativo,
-        logos=svc.logos_da_escola(db, escola_id),
-    )
+    def _geral() -> bytes:
+        return svc.gerar_certificado(
+            escola_nome=escola.nome,
+            cor=svc.cor_primaria(db, escola_id),
+            aluno_nome=aluno.nome,
+            turma=matricula[1].nome if matricula else "",
+            posicao=nota.posicao if nota else None,
+            nota_geral=nota.nota_geral if nota else 0.0,
+            ano_letivo=escola.ano_letivo_ativo,
+            logos=svc.logos_da_escola(db, escola_id),
+        )
+
+    if modelo in ("elefante", "matific"):
+        try:
+            conteudo = svc.gerar_certificado_plataforma(escola.nome, aluno.nome, modelo)
+        except Exception:  # noqa: BLE001 — sem Chromium/erro de render: cai no geral
+            conteudo = _geral()
+    else:
+        conteudo = _geral()
+
     registrar(db, "certificado.emitido", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="aluno", entidade_id=aluno_id)
+              entidade="aluno", entidade_id=aluno_id,
+              detalhes={"modelo": modelo or "geral"})
     db.commit()
+    nome_arq = f"certificado_{modelo or 'geral'}_{aluno_id}.pdf"
     return Response(
         content=conteudo,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="certificado_{aluno_id}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{nome_arq}"'},
     )

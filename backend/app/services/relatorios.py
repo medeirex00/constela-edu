@@ -456,6 +456,120 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
     return pdf
 
 
+# ---------------------------------------------------------------------------
+# Certificado POR PLATAFORMA (Elefante Letrado / Matific) — arte oficial como
+# fundo A4 e campos preenchidos AUTOMATICAMENTE (instituição, nome, bimestre,
+# data). Um único mecanismo, genérico para as duas plataformas: muda só a arte.
+# ---------------------------------------------------------------------------
+_MESES = ["", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+          "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+def _bimestre_por_mes(mes: int) -> int:
+    """Bimestre pelo calendário escolar padrão: fev–abr=1, mai–jul=2, ago–set=3,
+    out–dez=4 (jan cai no 1º). Usado quando os dados do relatório não trazem o
+    bimestre — que é o caso hoje; a prioridade é o dado do relatório, senão a
+    data de emissão."""
+    return {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2,
+            8: 3, 9: 3, 10: 4, 11: 4, 12: 4}[mes]
+
+
+def _tam_fonte_nome(nome: str) -> int:
+    """Corpo do nome que cabe na faixa central entre os traços (encolhe para
+    nomes longos)."""
+    return max(22, min(52, int(570 / (max(len(nome), 1) * 0.62))))
+
+
+# Campos dinâmicos posicionados em % da página (paisagem), calibrados sobre a
+# arte 1492×1054 — as duas plataformas compartilham o MESMO layout.
+_CERT_PLATAFORMA_TEMPLATE = """<style>
+  @page { size: A4 landscape; margin: 0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:297mm; height:210mm; }
+  body { position:relative; overflow:hidden;
+         font-family:'Trebuchet MS','Segoe UI',Arial,sans-serif;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .fundo { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; z-index:0; }
+  .campo { position:absolute; z-index:1; display:flex; align-items:center;
+           justify-content:center; text-align:center; line-height:1; overflow:hidden; }
+  .instituicao { left:28.5%; top:⟦INST⟧%; width:32%; height:4.2%; font-size:20px; color:#333333; }
+  .nome { left:19%; top:⟦NOME⟧%; width:62%; height:10%; background:#ffffff;
+          font-weight:800; color:#16235a; text-transform:uppercase; letter-spacing:.5px; }
+  .bimestre { left:⟦BIML⟧%; top:⟦BIMT⟧%; width:4%; height:3%; font-weight:700; color:#333333; font-size:17px; }
+  .dia { left:⟦DIAL⟧%; top:⟦DT⟧%; width:5%; height:3.4%; color:#333333; font-size:18px; }
+  .mes { left:⟦MESL⟧%; top:⟦DT⟧%; width:14%; height:3.4%; color:#333333; font-size:18px; }
+</style>
+<img class="fundo" src="⟦FUNDO⟧" alt="">
+<div class="campo instituicao">⟦INSTITUICAO⟧</div>
+<div class="campo nome" style="font-size:⟦TAM_NOME⟧px">⟦ALUNO⟧</div>
+<div class="campo bimestre">⟦BIMESTRE⟧</div>
+<div class="campo dia">⟦DIA⟧</div>
+<div class="campo mes">⟦MES⟧</div>
+"""
+
+
+def _html_para_pdf_paisagem(corpo: str) -> bytes:
+    """Renderiza HTML em PDF A4 paisagem via Chromium (Playwright), com fundo
+    impresso (para a arte de fundo aparecer)."""
+    from playwright.sync_api import sync_playwright
+
+    doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
+           f"</head><body>{corpo}</body></html>")
+    with sync_playwright() as p:
+        try:
+            navegador = p.chromium.launch()
+        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
+            navegador = p.chromium.launch(channel="chrome")
+        try:
+            pagina = navegador.new_page()
+            pagina.set_content(doc, wait_until="networkidle")
+            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True, landscape=True)
+        finally:
+            navegador.close()
+    return pdf
+
+
+# Posições dos campos (em % da página) POR arte — as duas plataformas têm o
+# mesmo texto, mas em alturas diferentes; por isso cada uma tem o seu conjunto.
+# Calibradas por renderização (screenshot) sobre a arte 1492×1054.
+_CERT_POS = {
+    "elefante": {"INST": "39.9", "NOME": "45.6", "BIML": "45.8", "BIMT": "61",
+                 "DT": "94.4", "DIAL": "34", "MESL": "45"},
+    "matific":  {"INST": "35.4", "NOME": "42", "BIML": "48.4", "BIMT": "58.4",
+                 "DT": "89.4", "DIAL": "28", "MESL": "39"},
+}
+
+
+def _certificado_plataforma_html(escola_nome: str, aluno_nome: str,
+                                 plataforma: str) -> str:
+    """Monta o HTML do certificado da plataforma com a arte e os campos
+    preenchidos (instituição, nome, bimestre e data de hoje)."""
+    chave = "elefante" if plataforma.lower().startswith("elef") else "matific"
+    fundo = _asset_data_uri(f"certificado-{chave}.png")
+    agora = datetime.now(timezone.utc)
+    html = (_CERT_PLATAFORMA_TEMPLATE
+            .replace("⟦FUNDO⟧", fundo)
+            .replace("⟦TAM_NOME⟧", str(_tam_fonte_nome(aluno_nome)))
+            .replace("⟦INSTITUICAO⟧", _esc_html(escola_nome))
+            .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
+            .replace("⟦BIMESTRE⟧", str(_bimestre_por_mes(agora.month)))
+            .replace("⟦DIA⟧", f"{agora.day:02d}")
+            .replace("⟦MES⟧", _MESES[agora.month]))
+    for token, valor in _CERT_POS[chave].items():
+        html = html.replace(f"⟦{token}⟧", valor)
+    return html
+
+
+def gerar_certificado_plataforma(escola_nome: str, aluno_nome: str,
+                                 plataforma: str) -> bytes:
+    """Certificado de desempenho da PLATAFORMA (Elefante Letrado / Matific): a
+    arte oficial como fundo A4 paisagem, com instituição, nome do aluno, bimestre
+    e data preenchidos automaticamente. Vetor (texto) sobre a arte embutida =
+    pronto para impressão. Genérico para as duas plataformas."""
+    return _html_para_pdf_paisagem(
+        _certificado_plataforma_html(escola_nome, aluno_nome, plataforma))
+
+
 def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
                       turma: str, posicao: int | None, nota_geral: float,
                       ano_letivo: int) -> bytes:
