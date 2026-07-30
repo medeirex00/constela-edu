@@ -46,8 +46,12 @@ function BarraIndice({ valor }: { valor: number }) {
 export default function Insights() {
   const { escolaId } = useApp();
   const [verAlertas, setVerAlertas] = useState(false);
+  // /insights é o endpoint mais pesado (evolução em 4 janelas). Já foi
+  // otimizado no backend, mas escolas grandes ainda podem passar dos 15 s
+  // padrão — damos folga para não cair no timeout (que virava "sem conexão").
   const { dados: dadosInsights, erro, carregando } = useApi<InsightsResposta>(
     escolaId ? `/escolas/${escolaId}/insights` : null,
+    { timeoutMs: 45000 },
   );
 
   // Estado de erro discreto — antes o erro era engolido com arrays vazios.

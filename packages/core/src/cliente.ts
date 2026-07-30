@@ -86,10 +86,19 @@ export const MENSAGEM_SEM_REDE =
 async function buscar(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
-  } catch {
-    // fetch só rejeita por falha de REDE (offline, DNS, CORS, servidor fora) —
-    // um TypeError em inglês. Vira um ApiError(0) traduzido: status 0 sinaliza
-    // "transitório" (a UI pode reconectar em vez de tratar como erro final).
+  } catch (erro) {
+    // Timeout/cancelamento NÃO é falta de internet: um AbortController que
+    // estoura (useApi usa "TimeoutError") ou o cancelamento ao desmontar
+    // ("AbortError") precisa PROPAGAR para o chamador — o useApi mapeia o
+    // timeout para 408 ("A conexão demorou demais") e ignora o abort. Sem esta
+    // ponte, uma requisição lenta era rotulada como "sem internet".
+    if (erro instanceof DOMException
+        && (erro.name === "TimeoutError" || erro.name === "AbortError")) {
+      throw erro;
+    }
+    // Falha de REDE real (offline, DNS, CORS, servidor fora) — um TypeError em
+    // inglês. Vira ApiError(0) traduzido: status 0 sinaliza "transitório" (a UI
+    // pode reconectar em vez de tratar como erro final).
     throw new ApiError(0, MENSAGEM_SEM_REDE);
   }
 }

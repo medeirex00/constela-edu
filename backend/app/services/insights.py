@@ -30,7 +30,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import evolucao
+from app.services import evolucao, scoring
 
 DIAS_SEM_ATIVIDADE = 30
 QUEDA_ACERTOS_PONTOS = 15.0
@@ -66,13 +66,25 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
     mas o ÍNDICE exibido é a posição percentilar — leitura pedagógica de
     distribuição ("onde o aluno está na escola"), não nota competitiva.
     """
+    escola = db.get(Escola, escola_id)
+    # Varreduras CARAS e independentes da janela: carrega UMA vez e injeta nas 4
+    # chamadas de ranking_evolucao abaixo. Sem isto, cada chamada relê os
+    # snapshots (Matific + Elefante) e remonta o mapa de dificuldade — ~12
+    # varreduras pesadas por requisição, o que fazia /insights estourar o
+    # timeout de 15 s do cliente (a origem do "Não foi possível conectar").
+    serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
+    serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+
     engajamento_bruto = {
         item.aluno_id: item.nota_evolucao
-        for item in evolucao.ranking_evolucao(db, escola_id, dias=30)
+        for item in evolucao.ranking_evolucao(
+            db, escola_id, dias=30, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
     }
     crescimento_bruto = {
         item.aluno_id: item.nota_evolucao
-        for item in evolucao.ranking_evolucao(db, escola_id, dias=90)
+        for item in evolucao.ranking_evolucao(
+            db, escola_id, dias=90, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
     }
     # Só quem avançou (>0) entra na régua percentilar; quem não avançou fica 0.
     ativos_30 = sorted(v for v in engajamento_bruto.values() if v > 0)
@@ -82,7 +94,6 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
         valor = bruto.get(aluno_id, 0.0)
         return _percentil_rank(ativos, valor) if valor > 0 else 0.0
 
-    escola = db.get(Escola, escola_id)
     # selectinload(Matricula.aluno): o laço lê matricula.aluno.nome; sem isto,
     # cada aluno dispararia um SELECT lazy (N+1). Carrega todos em 1 consulta.
     matriculas = db.execute(
@@ -94,9 +105,6 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
                Matricula.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
     ).all()
-
-    serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
-    serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
 
     # PERSISTÊNCIA SEMANAL pelo ritmo do PRÓPRIO aluno (decisão de produto):
     # compara o crescimento da SEMANA ATUAL (segunda→agora) com o ritmo semanal
@@ -111,13 +119,13 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
     inicio_base = agora - timedelta(weeks=SEMANAS_BASE_PERSISTENCIA)
     cresc_semana = {
         i.aluno_id: i.nota_evolucao
-        for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_semana,
-                                           fim=agora, serie_m=serie_m, serie_e=serie_e)
+        for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_semana, fim=agora,
+                                           serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
     }
     cresc_base = {
         i.aluno_id: i.nota_evolucao
-        for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_base,
-                                           fim=agora, serie_m=serie_m, serie_e=serie_e)
+        for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_base, fim=agora,
+                                           serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
     }
 
     def _persistencia_semanal(aluno_id: int) -> float:
