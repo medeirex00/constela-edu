@@ -6,8 +6,9 @@ import { BookMarked } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
+import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
-import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
@@ -20,14 +21,18 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
   // TOTAL acumulado por aluno (livros/tempo), sem uma linha por livro com data —
   // então os recortes por semana/mês só têm dados quando há relatório individual.
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "ano_letivo" });
-  const [turmaId, setTurmaId] = useState("");
+  const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   const { dados: turmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
-  // Recalcula a URL quando período/turma mudam; o hook rebusca sozinho.
+  // Recalcula a URL quando período/turma/série mudam; o hook rebusca sozinho.
   const q = periodoParaQuery(periodo);
-  const filtro = turmaId ? `&turma_id=${turmaId}` : "";
+  const filtro = alvo.turma_id
+    ? `&turma_id=${alvo.turma_id}`
+    : alvo.ano_escolar
+      ? `&ano_escolar=${encodeURIComponent(alvo.ano_escolar)}`
+      : "";
   const {
     dados: itens,
     erro,
@@ -49,15 +54,7 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
-        <select
-          aria-label="Filtrar por turma"
-          className={`${estiloInput} w-auto`}
-          value={turmaId}
-          onChange={(e) => setTurmaId(e.target.value)}
-        >
-          <option value="">Todas as turmas</option>
-          {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
-        </select>
+        <FiltroTurmaSerie turmas={turmas ?? []} valor={alvo} onChange={setAlvo} />
       </Card>
 
       <Card>

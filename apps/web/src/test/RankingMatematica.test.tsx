@@ -6,12 +6,19 @@ import {
   responder,
   responderErro,
   screen,
+  turmaFake,
   userEvent,
 } from "./utils";
 
 // A escola atual é id=1 (sessão autenticada por padrão). A tela consulta o
 // Placar do Matific AO VIVO — casa com qualquer query (?periodo=...).
 const URL = "/escolas/1/sync/matific/placar-ao-vivo";
+// Turmas da base — usadas só para mapear o NOME da turma (ao vivo) → série.
+const URL_TURMAS = "/escolas/1/turmas";
+const turmasBaseFake = [
+  turmaFake({ id: 1, nome: "4º Ano B", ano_escolar: "4º Ano" }),
+  turmaFake({ id: 2, nome: "5º Ano C", ano_escolar: "5º Ano" }),
+];
 
 function itemMat(over: Record<string, unknown> = {}) {
   return {
@@ -111,6 +118,7 @@ describe("RankingMatematica (Matific ao vivo)", () => {
 
   it("filtra por turma no cliente (sem nova consulta ao Matific)", async () => {
     const u = userEvent.setup();
+    responder("GET", URL_TURMAS, turmasBaseFake);
     responder("GET", URL, placar([
       itemMat({ aluno_id: 21, nome: "Marina Duarte", turma: "4º Ano B" }),
       itemMat({ posicao: 2, aluno_id: 40, nome: "Sofia Lima", turma: "5º Ano C" }),
@@ -121,7 +129,27 @@ describe("RankingMatematica (Matific ao vivo)", () => {
     expect(await screen.findByRole("link", { name: /Marina Duarte/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
 
-    await u.selectOptions(screen.getByLabelText("Filtrar por turma"), "5º Ano C");
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "turma:5º Ano C");
+
+    expect(screen.getByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Marina Duarte/ })).not.toBeInTheDocument();
+  });
+
+  it("consolida por série no cliente (mapa turma→série da base)", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_TURMAS, turmasBaseFake);
+    responder("GET", URL, placar([
+      itemMat({ aluno_id: 21, nome: "Marina Duarte", turma: "4º Ano B" }),
+      itemMat({ posicao: 2, aluno_id: 40, nome: "Sofia Lima", turma: "5º Ano C" }),
+    ]));
+
+    abrirTela();
+
+    expect(await screen.findByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
+    // A opção de série só aparece depois que /turmas carrega (mapa turma→série).
+    await screen.findByRole("option", { name: /5º Ano \(todas as turmas\)/ });
+
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "serie:5º Ano");
 
     expect(screen.getByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Marina Duarte/ })).not.toBeInTheDocument();

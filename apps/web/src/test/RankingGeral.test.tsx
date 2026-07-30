@@ -118,10 +118,36 @@ describe("RankingGeral", () => {
 
     await screen.findByRole("link", { name: "Ana Beatriz Souza" });
 
-    await u.selectOptions(screen.getByLabelText("Filtrar por turma"), "1");
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "turma:1");
 
     expect(
       await screen.findByRole("link", { name: "Aluno Da Turma A" }),
+    ).toBeInTheDocument();
+  });
+
+  it("consolida por série e busca o ranking com ano_escolar", async () => {
+    responder("GET", URL_TURMAS, [
+      turmaFake({ id: 1, nome: "1º Ano A", ano_escolar: "1º Ano" }),
+      turmaFake({ id: 2, nome: "1º Ano B", ano_escolar: "1º Ano" }),
+    ]);
+    responder("GET", URL_RANKING, (caminho: string) =>
+      caminho.includes("ano_escolar=1%C2%BA+Ano") || caminho.includes("ano_escolar=1%C2%BA%20Ano")
+        ? [rankingItemFake({ aluno_id: 30, nome: "Aluno Da Serie" })]
+        : [rankingItemFake({ aluno_id: 10, nome: "Ana Beatriz Souza" })],
+    );
+
+    const u = userEvent.setup();
+    renderComApp(<RankingGeral />, opcoes);
+
+    await screen.findByRole("link", { name: "Ana Beatriz Souza" });
+
+    await u.selectOptions(
+      screen.getByLabelText("Filtrar por turma ou série"),
+      "serie:1º Ano",
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "Aluno Da Serie" }),
     ).toBeInTheDocument();
   });
 });

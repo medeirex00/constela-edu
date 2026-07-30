@@ -1,10 +1,11 @@
 /** Ranking de Evolução (PRD §72) — independente do Ranking Geral. */
 import { TrendingUp } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
+import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
-import { Badge, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
@@ -29,8 +30,7 @@ interface ItemEvolucao {
 export default function RankingEvolucao({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
-  const [turmaId, setTurmaId] = useState("");
-  const [serie, setSerie] = useState("");
+  const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
   const { dados: turmasDados } = useApi<Turma[]>(
@@ -38,15 +38,10 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
   const turmas = turmasDados ?? [];
 
   const parametros = new URLSearchParams(periodoParaQuery(periodo));
-  if (turmaId) parametros.set("turma_id", turmaId);
-  if (serie) parametros.set("ano_escolar", serie);
+  if (alvo.turma_id) parametros.set("turma_id", alvo.turma_id);
+  if (alvo.ano_escolar) parametros.set("ano_escolar", alvo.ano_escolar);
   const { dados: itens, erro, carregando } = useApi<ItemEvolucao[]>(
     escolaId ? `/escolas/${escolaId}/ranking-evolucao?${parametros}` : null,
-  );
-
-  const series = useMemo(
-    () => Array.from(new Set(turmas.map((turma) => turma.ano_escolar))).sort(),
-    [turmas],
   );
 
   return (
@@ -60,28 +55,7 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
 
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
-        <select
-          aria-label="Filtrar por turma"
-          className={`${estiloInput} w-auto`}
-          value={turmaId}
-          onChange={(evento) => setTurmaId(evento.target.value)}
-        >
-          <option value="">Todas as turmas</option>
-          {turmas.map((turma) => (
-            <option key={turma.id} value={turma.id}>{turma.nome}</option>
-          ))}
-        </select>
-        <select
-          aria-label="Filtrar por série"
-          className={`${estiloInput} w-auto`}
-          value={serie}
-          onChange={(evento) => setSerie(evento.target.value)}
-        >
-          <option value="">Todas as séries</option>
-          {series.map((valor) => (
-            <option key={valor} value={valor}>{valor}</option>
-          ))}
-        </select>
+        <FiltroTurmaSerie turmas={turmas} valor={alvo} onChange={setAlvo} />
       </Card>
 
       <Card>

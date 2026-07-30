@@ -102,8 +102,28 @@ describe("RankingLeitura", () => {
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
 
     // O seletor de turma foi populado com o nome vindo de /turmas.
-    await u.selectOptions(screen.getByLabelText("Filtrar por turma"), "1");
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "turma:1");
 
     expect(await screen.findByRole("link", { name: /Aluno da Turma A/ })).toBeInTheDocument();
+  });
+
+  it("consolida por série enviando ano_escolar na busca", async () => {
+    responder("GET", URL_TURMAS, turmasFake);
+    responder("GET", URL_RANKING, (caminho: string) =>
+      caminho.includes("ano_escolar=3%C2%BA")
+        ? [{
+            posicao: 1, aluno_id: 40, nome: "Aluno da Serie", turma: "3º Ano B",
+            ano_escolar: "3º Ano", livros: 7, pontos: 120, tempo_leitura_min: 30,
+          }]
+        : itensFake,
+    );
+    const u = userEvent.setup();
+    renderComApp(<RankingLeitura />, { rota: "/ranking-leitura" });
+
+    expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
+
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "serie:3º Ano");
+
+    expect(await screen.findByRole("link", { name: /Aluno da Serie/ })).toBeInTheDocument();
   });
 });

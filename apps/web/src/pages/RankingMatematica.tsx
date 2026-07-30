@@ -18,6 +18,7 @@ import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { numero } from "../lib/formato";
+import type { Turma } from "../lib/types";
 
 type PlacarItem = {
   posicao: number;
@@ -39,8 +40,16 @@ type PlacarAoVivo = {
 export default function RankingMatematica({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
-  const [turmaSel, setTurmaSel] = useState("");
+  // Alvo do filtro: "" (todas), "turma:<nome>" (uma turma) ou "serie:<ano_escolar>"
+  // (série consolidada). O placar vem do Matific AO VIVO e é filtrado no cliente,
+  // então guardamos o NOME da turma (não um id) — igual às linhas retornadas.
+  const [alvo, setAlvo] = useState("");
   const [forcarTick, setForcarTick] = useState(0);
+
+  // Turmas da BASE só para mapear turma → série (o placar ao vivo traz a série
+  // crua do Matific, ex. "3"; a base tem o rótulo bonito, ex. "3º Ano").
+  const { dados: turmasBase } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
   const isAno = periodo.preset === "ano_letivo";
   // Personalizado só busca com as duas datas — evita disparar login pela metade.
@@ -72,11 +81,38 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
   const itens: PlacarItem[] = isAno ? (local.dados ?? []) : (live.dados?.itens ?? []);
   const atualizar = () => (isAno ? local.recarregar() : setForcarTick((t) => t + 1));
 
+  // Nome da turma → série (rótulo da base). Best-effort: turma sem correspondência
+  // na base simplesmente não entra em nenhuma série (segue visível em "Todas").
+  const serieDaTurma = useMemo(() => {
+    const mapa = new Map<string, string>();
+    (turmasBase ?? []).forEach((t) => mapa.set(t.nome, t.ano_escolar));
+    return mapa;
+  }, [turmasBase]);
+
+  // Opções de TURMA vêm dos dados ao vivo (como antes — casam sempre com as linhas).
   const turmas = useMemo(
     () => (Array.from(new Set(itens.map((i) => i.turma).filter(Boolean))) as string[]).sort(),
     [itens],
   );
-  const visiveis = turmaSel ? itens.filter((i) => i.turma === turmaSel) : itens;
+  // Séries consolidadas presentes no placar (via mapa da base).
+  const series = useMemo(
+    () => Array.from(new Set(
+      turmas.map((nome) => serieDaTurma.get(nome)).filter(Boolean) as string[],
+    )).sort(),
+    [turmas, serieDaTurma],
+  );
+
+  const visiveis = useMemo(() => {
+    if (alvo.startsWith("turma:")) {
+      const nome = alvo.slice(6);
+      return itens.filter((i) => i.turma === nome);
+    }
+    if (alvo.startsWith("serie:")) {
+      const serie = alvo.slice(6);
+      return itens.filter((i) => serieDaTurma.get(i.turma ?? "") === serie);
+    }
+    return itens;
+  }, [alvo, itens, serieDaTurma]);
 
   const atualizadoEm = !isAno && live.dados?.atualizado_em
     ? new Date(live.dados.atualizado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })
@@ -94,13 +130,24 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
         <SeletorPeriodo valor={periodo} onChange={trocarPeriodo} />
         <select
-          aria-label="Filtrar por turma"
+          aria-label="Filtrar por turma ou série"
           className={`${estiloInput} w-auto`}
-          value={turmaSel}
-          onChange={(e) => setTurmaSel(e.target.value)}
+          value={alvo}
+          onChange={(e) => setAlvo(e.target.value)}
         >
           <option value="">Todas as turmas</option>
-          {turmas.map((t) => <option key={t} value={t}>{t}</option>)}
+          {series.length > 0 && (
+            <optgroup label="Séries — consolidado">
+              {series.map((s) => (
+                <option key={`s-${s}`} value={`serie:${s}`}>{s} (todas as turmas)</option>
+              ))}
+            </optgroup>
+          )}
+          {turmas.length > 0 && (
+            <optgroup label="Turmas">
+              {turmas.map((t) => <option key={`t-${t}`} value={`turma:${t}`}>{t}</option>)}
+            </optgroup>
+          )}
         </select>
         <button
           type="button"

@@ -5,11 +5,12 @@
  * Matific), usando os mesmos pesos configuráveis.
  */
 import { Download } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
-import { Badge, Botao, Card, Carregando, Mensagem, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { Badge, Botao, Card, Carregando, Mensagem, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { apiDownload } from "../lib/api";
@@ -34,8 +35,7 @@ interface ItemPeriodo {
 export default function RankingGeral({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId, usuario } = useApp();
   const [periodo, setPeriodo] = useState<Periodo>({ preset: "ano_letivo" });
-  const [turmaId, setTurmaId] = useState("");
-  const [serie, setSerie] = useState("");
+  const [alvo, setAlvo] = useState<AlvoRanking>({});
   const [baixandoCartaz, setBaixandoCartaz] = useState(false);
   const [erroCartaz, setErroCartaz] = useState("");
 
@@ -51,10 +51,11 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
   const { dados: turmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
 
-  // Filtros comuns às duas classificações.
+  // Filtros comuns às duas classificações: uma turma específica OU uma série
+  // consolidada (todas as turmas do ano) — nunca os dois ao mesmo tempo.
   const parametros = new URLSearchParams();
-  if (turmaId) parametros.set("turma_id", turmaId);
-  if (serie) parametros.set("ano_escolar", serie);
+  if (alvo.turma_id) parametros.set("turma_id", alvo.turma_id);
+  if (alvo.ano_escolar) parametros.set("ano_escolar", alvo.ano_escolar);
 
   // Classificação do período: só o que foi feito dentro do intervalo.
   const queryPeriodo = new URLSearchParams(periodoParaQuery(periodo));
@@ -80,14 +81,9 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
 
   const carregando = porPeriodo ? carregandoPeriodo : carregandoGeral;
 
-  const series = useMemo(
-    () => Array.from(new Set((turmas ?? []).map((turma) => turma.ano_escolar))).sort(),
-    [turmas],
-  );
-
   // O cartaz é sempre da escola inteira; ao mudar período/filtro, um erro antigo
   // do cartaz perde o contexto — limpa para não ficar pendurado na tela.
-  useEffect(() => { setErroCartaz(""); }, [periodo, turmaId, serie]);
+  useEffect(() => { setErroCartaz(""); }, [periodo, alvo]);
 
   // Baixa o cartaz do Ranking Geral (PDF de vitrine, com TODOS os alunos).
   async function baixarCartaz() {
@@ -114,28 +110,7 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
 
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
-        <select
-          aria-label="Filtrar por turma"
-          className={`${estiloInput} w-auto`}
-          value={turmaId}
-          onChange={(evento) => setTurmaId(evento.target.value)}
-        >
-          <option value="">Todas as turmas</option>
-          {(turmas ?? []).map((turma) => (
-            <option key={turma.id} value={turma.id}>{turma.nome}</option>
-          ))}
-        </select>
-        <select
-          aria-label="Filtrar por série"
-          className={`${estiloInput} w-auto`}
-          value={serie}
-          onChange={(evento) => setSerie(evento.target.value)}
-        >
-          <option value="">Todas as séries</option>
-          {series.map((valor) => (
-            <option key={valor} value={valor}>{valor}</option>
-          ))}
-        </select>
+        <FiltroTurmaSerie turmas={turmas ?? []} valor={alvo} onChange={setAlvo} />
         {porPeriodo && (
           <Badge tom="destaque">calculado só com o período selecionado</Badge>
         )}
@@ -145,7 +120,7 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
             // O cartaz é sempre da escola inteira; não depende dos filtros de
             // turma/série (só exige a visão "Ano letivo"). Só desabilita por
             // escola vazia quando NENHUM filtro está aplicado.
-            disabled={baixandoCartaz || porPeriodo || (!turmaId && !serie && (itens ?? []).length === 0)}
+            disabled={baixandoCartaz || porPeriodo || (!alvo.turma_id && !alvo.ano_escolar && (itens ?? []).length === 0)}
             title={porPeriodo
               ? "O cartaz usa o Ranking Geral do ano — selecione “Ano letivo”."
               : "Gera um pôster em PDF com todos os alunos da escola (não usa os filtros de turma/série)"}
