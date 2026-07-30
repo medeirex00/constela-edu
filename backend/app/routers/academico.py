@@ -1256,6 +1256,38 @@ def atualizar_professor(
     return professor
 
 
+@router.delete("/professores/{professor_id}", response_model=dict)
+def excluir_professor(
+    professor_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Remove o professor da equipe da escola. As TURMAS dele NÃO são apagadas —
+    apenas ficam sem titular (professor_id nulo), para você revincular depois. A
+    CONTA DE ACESSO (login) não é tocada aqui: para tirar o acesso, exclua também
+    o usuário na tela de Usuários."""
+    professor = db.get(Professor, professor_id)
+    if professor is None or professor.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Professor não encontrado.")
+    # Solta as turmas antes de excluir (evita quebrar o vínculo e não apaga as
+    # salas — elas só ficam sem titular).
+    turmas = db.execute(
+        select(Turma).where(Turma.professor_id == professor_id)
+    ).scalars().all()
+    for turma in turmas:
+        turma.professor_id = None
+    nome = professor.nome
+    db.delete(professor)
+    registrar(db, "professor.excluido", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="professor", entidade_id=professor_id,
+              detalhes={"nome": nome, "turmas_desvinculadas": len(turmas)})
+    db.commit()
+    return {"mensagem": f"Professor “{nome}” removido."
+                        + (f" {len(turmas)} turma(s) ficaram sem titular."
+                           if turmas else "")}
+
+
 @router.post("/professores/completo", status_code=status.HTTP_201_CREATED)
 def criar_professor_completo(
     dados: ProfessorCompletoIn,

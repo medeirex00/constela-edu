@@ -543,12 +543,18 @@ def padronizar_usuarios_professores(
 def excluir_usuario(
     usuario_id: int,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin")),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
     """Exclusão LÓGICA: a conta é marcada como excluída e perde o acesso,
-    mas histórico, logs, importações e registros vinculados permanecem."""
+    mas histórico, logs, importações e registros vinculados permanecem.
+    Coordenador exclui a própria equipe; contas de administrador (e globais,
+    já barradas em `_usuario_alvo`) só o administrador pode excluir."""
     alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
+    if usuario.cargo != "admin" and not usuario.is_global and alvo.cargo == "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Apenas um administrador pode excluir a conta de "
+                            "outro administrador.")
     if alvo.id == usuario.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Você não pode excluir a própria conta.")

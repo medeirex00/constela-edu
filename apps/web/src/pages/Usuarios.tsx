@@ -101,6 +101,7 @@ function MenuAcoes({
   souAdmin,
   podeGerirTurmas,
   podeRedefinir,
+  podeExcluir,
   aoEscolher,
 }: {
   usuario: Usuario;
@@ -113,6 +114,9 @@ function MenuAcoes({
   /** Matriz da redefinição de senha: admin→todos; coordenador→ele e
    *  professores; professor→só ele. */
   podeRedefinir: boolean;
+  /** Excluir (lógica): admin exclui qualquer conta; coordenador exclui a
+   *  própria equipe (não admins nem globais). */
+  podeExcluir: boolean;
   aoEscolher: (acao: Acao) => void;
 }) {
   const excluido = usuario.status === "excluido";
@@ -153,10 +157,16 @@ function MenuAcoes({
                       rotulo={usuario.status === "ativo" ? "Desativar" : "Reativar"}
                       onClick={() => escolher("situacao")}
                     />
-                    <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
-                    <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir Usuário" destrutiva onClick={() => escolher("excluir")} />
                   </>
                 )}
+              </>
+            )}
+            {/* Excluir (lógica): admin exclui qualquer conta; coordenador exclui
+                a própria equipe (não admins/globais — o backend também barra). */}
+            {!excluido && !souEu && podeExcluir && (
+              <>
+                <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+                <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir Usuário" destrutiva onClick={() => escolher("excluir")} />
               </>
             )}
             {excluido && !souEu && souAdmin && (
@@ -713,6 +723,10 @@ export default function Usuarios() {
   const podeRedefinir = (alvo: Usuario) =>
     souAdmin || alvo.id === usuarioLogado?.id ||
     (souCoordenador && alvo.cargo === "professor");
+  // Excluir (lógica): admin exclui qualquer conta; coordenador exclui a própria
+  // equipe — nunca admins nem contas globais (o backend confirma a regra).
+  const podeExcluir = (alvo: Usuario) =>
+    souAdmin || (souCoordenador && alvo.cargo !== "admin" && !alvo.is_global);
 
   const carregar = useCallback(() => {
     if (!escolaId) return;
@@ -891,6 +905,7 @@ export default function Usuarios() {
                         souAdmin={souAdmin}
                         podeGerirTurmas={souAdmin || souCoordenador}
                         podeRedefinir={podeRedefinir(usuario)}
+                        podeExcluir={podeExcluir(usuario)}
                         aoEscolher={(tipo) => abrir(tipo, usuario)}
                       />
                     </td>

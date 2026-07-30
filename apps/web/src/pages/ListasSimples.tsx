@@ -1,4 +1,4 @@
-import { Check, Copy, Pencil, School, UserPlus, X } from "lucide-react";
+import { Check, Copy, Pencil, School, Trash2, UserPlus, X } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
@@ -165,6 +165,10 @@ export function Professores() {
   const [emailEdit, setEmailEdit] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erroEdicao, setErroEdicao] = useState("");
+  // Exclusão: professor pendente de confirmação + estado do request + aviso.
+  const [excluir, setExcluir] = useState<Professor | null>(null);
+  const [removendo, setRemovendo] = useState(false);
+  const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
 
   function abrirEdicao(prof: Professor) {
     setEditando(prof.id);
@@ -207,6 +211,26 @@ export function Professores() {
     }
   }
 
+  async function confirmarExclusao() {
+    if (!escolaId || !excluir) return;
+    setRemovendo(true);
+    try {
+      const r = await api<{ mensagem?: string }>(
+        `/escolas/${escolaId}/professores/${excluir.id}`, { method: "DELETE" });
+      setAviso({ tipo: "ok", texto: r.mensagem ?? "Professor removido." });
+      setExcluir(null);
+      carregar();                       // refaz professores + turmas
+    } catch (excecao) {
+      setAviso({
+        tipo: "erro",
+        texto: excecao instanceof ApiError ? excecao.message
+          : "Não foi possível concluir a exclusão. Tente de novo.",
+      });
+    } finally {
+      setRemovendo(false);
+    }
+  }
+
   // Turmas de cada professor (Turma.professor_id → nomes), para a coluna.
   const turmasDe = (professorId: number) =>
     (turmas ?? []).filter((t) => t.professor_id === professorId).map((t) => t.nome);
@@ -225,6 +249,9 @@ export function Professores() {
       {erroEdicao && (
         <div className="mb-4"><Mensagem tipo="erro">{erroEdicao}</Mensagem></div>
       )}
+      {aviso && (
+        <div className="mb-4"><Mensagem tipo={aviso.tipo}>{aviso.texto}</Mensagem></div>
+      )}
       <Card>
         {carregando ? (
           <Carregando />
@@ -240,7 +267,7 @@ export function Professores() {
                 <th className="px-4 py-2 font-medium">Nome</th>
                 <th className="px-4 py-2 font-medium">E-mail</th>
                 <th className="px-4 py-2 font-medium">Turmas</th>
-                {podeEditar && <th className="w-16 px-4 py-2" />}
+                {podeEditar && <th className="w-24 px-4 py-2" />}
               </tr>
             </thead>
             <tbody>
@@ -319,14 +346,25 @@ export function Professores() {
                           </button>
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          title="Editar nome e e-mail"
-                          onClick={() => abrirEdicao(professor)}
-                          className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
-                        >
-                          <Pencil size={15} />
-                        </button>
+                        <span className="inline-flex gap-1">
+                          <button
+                            type="button"
+                            title="Editar nome e e-mail"
+                            onClick={() => abrirEdicao(professor)}
+                            className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Excluir professor"
+                            aria-label={`Excluir ${professor.nome}`}
+                            onClick={() => { setAviso(null); setExcluir(professor); }}
+                            className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </span>
                       )}
                     </td>
                   )}
@@ -343,6 +381,33 @@ export function Professores() {
         aoFechar={() => setModalAberto(false)}
         aoCriar={carregar}
       />
+
+      <Modal titulo="Excluir professor" aberto={excluir != null} aoFechar={() => setExcluir(null)}>
+        {excluir && (
+          <div className="space-y-4">
+            <p className="text-sm text-zinc-600 dark:text-zinc-300">
+              Esta ação é{" "}
+              <strong className="text-red-600 dark:text-red-400">irreversível</strong>. O professor{" "}
+              <strong>{excluir.nome}</strong> será removido da equipe. As turmas dele{" "}
+              <strong>não</strong> serão apagadas — apenas ficarão sem titular, para você revincular.
+              A conta de acesso (login) continua em <strong>Usuários</strong>.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Botao variante="neutro" onClick={() => setExcluir(null)} disabled={removendo}>
+                Cancelar
+              </Botao>
+              <button
+                type="button"
+                onClick={confirmarExclusao}
+                disabled={removendo}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={15} /> {removendo ? "Excluindo..." : "Excluir definitivamente"}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
