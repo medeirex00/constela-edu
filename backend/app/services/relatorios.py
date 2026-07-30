@@ -476,8 +476,8 @@ def _bimestre_por_mes(mes: int) -> int:
 
 def _tam_fonte_nome(nome: str) -> int:
     """Corpo do nome que cabe na faixa central entre os traços (encolhe para
-    nomes longos)."""
-    return max(22, min(52, int(570 / (max(len(nome), 1) * 0.62))))
+    nomes longos). Um pouco maior para dar mais destaque ao nome do aluno."""
+    return max(26, min(60, int(600 / (max(len(nome), 1) * 0.56))))
 
 
 # Campos dinâmicos posicionados em % da página (paisagem), calibrados sobre a
@@ -533,9 +533,9 @@ def _html_para_pdf_paisagem(corpo: str) -> bytes:
 # mesmo texto, mas em alturas diferentes; por isso cada uma tem o seu conjunto.
 # Calibradas por renderização (screenshot) sobre a arte 1492×1054.
 _CERT_POS = {
-    "elefante": {"INST": "39.9", "NOME": "45.6", "BIML": "45.8", "BIMT": "61",
+    "elefante": {"INST": "38", "NOME": "45.6", "BIML": "44", "BIMT": "61",
                  "DT": "94.4", "DIAL": "34", "MESL": "45"},
-    "matific":  {"INST": "35.4", "NOME": "42", "BIML": "48.4", "BIMT": "58.4",
+    "matific":  {"INST": "33.6", "NOME": "42", "BIML": "47.8", "BIMT": "58.4",
                  "DT": "89.4", "DIAL": "28", "MESL": "39"},
 }
 

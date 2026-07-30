@@ -14,8 +14,8 @@ def test_bimestre_por_mes():
 
 
 def test_tam_fonte_nome_encolhe_para_nomes_longos():
-    assert svc._tam_fonte_nome("Ana") == 52                      # curto → teto
-    assert svc._tam_fonte_nome("Maria Eduarda Santos Oliveira") < 40  # longo → encolhe
+    assert svc._tam_fonte_nome("Ana") == 60                      # curto → teto
+    assert svc._tam_fonte_nome("Maria Eduarda Santos Oliveira") < 42  # longo → encolhe
 
 
 def test_html_plataforma_preenche_e_resolve_tudo():
