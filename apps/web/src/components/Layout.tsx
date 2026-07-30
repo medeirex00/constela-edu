@@ -1,4 +1,5 @@
 import {
+  Activity,
   ArrowLeftRight,
   Award,
   Bell,
@@ -47,6 +48,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { useApi } from "../hooks/useApi";
+import { useHeartbeat } from "../hooks/useHeartbeat";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
@@ -155,6 +157,8 @@ const GRUPOS: GrupoNav[] = [
       // gerar/ver a própria senha (matriz aplicada no backend).
       { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
       { rotulo: "Escolas", caminho: "/escolas", icone: Building2, gestao: true, global: true },
+      // Monitor de presença em tempo real — exclusivo do admin global.
+      { rotulo: "Sessões Ativas", caminho: "/sessoes", icone: Activity, gestao: true, global: true },
       { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings, gestao: true },
     ],
   },
@@ -677,6 +681,7 @@ export default function Layout() {
     });
   }
   useAtalhosGlobais(); // Ctrl+K pesquisa, Alt+1..0 navegação (web e desktop)
+  useHeartbeat();      // marca presença enquanto o app está aberto (Sessões Ativas)
 
   // Menu aberto no celular: trava o scroll do fundo e fecha no Esc (evita o
   // "scroll fantasma" atrás do drawer no Safari do iPhone).

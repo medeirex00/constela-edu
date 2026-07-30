@@ -40,6 +40,7 @@ const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
 const RedeAvaliacoes = lazy(() => import("./pages/rede/RedeAvaliacoes"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
 const Escolas = lazy(() => import("./pages/Escolas"));
+const SessoesAtivas = lazy(() => import("./pages/SessoesAtivas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
 const Sincronizacao = lazy(() => import("./pages/Sincronizacao"));
 const DiagnosticoElefante = lazy(() => import("./pages/DiagnosticoElefante"));
@@ -184,6 +185,7 @@ export default function App() {
 
           {/* --- Só administrador GLOBAL --- */}
           <Route path="/escolas" element={<RotaGlobal><Escolas /></RotaGlobal>} />
+          <Route path="/sessoes" element={<RotaGlobal><SessoesAtivas /></RotaGlobal>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

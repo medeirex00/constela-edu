@@ -33,6 +33,10 @@ class Usuario(Base):
         ForeignKey("redes.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="ativo")
     ultimo_acesso: Mapped[datetime | None] = mapped_column(default=None)
+    # Última "batida" de presença (heartbeat do app aberto): alimenta o Monitor
+    # de Sessões Ativas — "online" = visto_em recente. Diferente de ultimo_acesso
+    # (que é o último ENTRAR); nulo até o primeiro heartbeat.
+    visto_em: Mapped[datetime | None] = mapped_column(default=None)
     # Incrementado ao redefinir a senha: invalida tokens emitidos antes
     # (o token carrega a versão vigente na emissão). Sem estado de blacklist.
     token_version: Mapped[int] = mapped_column(default=0)
