@@ -278,9 +278,20 @@ class ItemEvolucao:
     posicao: int = 0
 
 
+def _alunos_com_leituras(db: Session, escola_id: int) -> set[int]:
+    """Quem tem QUALQUER leitura individual registrada. Varredura INDEPENDENTE
+    da janela — um chamador que rode várias janelas (o /insights: 30d/90d/semana/
+    base) carrega UMA vez e injeta em `_leituras_no_periodo`/`ranking_evolucao`."""
+    return set(db.execute(
+        select(Leitura.aluno_id).where(Leitura.escola_id == escola_id).distinct()
+    ).scalars().all())
+
+
 def _leituras_no_periodo(db: Session, escola_id: int,
                          inicio: datetime | None,
-                         fim: datetime | None) -> tuple[set[int], dict[int, dict]]:
+                         fim: datetime | None,
+                         alunos_com_leituras: set[int] | None = None,
+                         ) -> tuple[set[int], dict[int, dict]]:
     """Leituras REAIS dentro do período, agregadas por aluno.
 
     Devolve (alunos_com_leituras, dados_no_periodo):
@@ -289,10 +300,12 @@ def _leituras_no_periodo(db: Session, escola_id: int,
       * dados_no_periodo — {aluno_id: {livros, tempo_min, por_nivel}} contando
         somente as leituras cuja DATA cai no intervalo. Um PDF importado hoje
         cobrindo meses não atribui tudo a hoje: cada livro conta no dia em que
-        foi realmente lido."""
-    alunos_com_leituras: set[int] = set(db.execute(
-        select(Leitura.aluno_id).where(Leitura.escola_id == escola_id).distinct()
-    ).scalars().all())
+        foi realmente lido.
+
+    `alunos_com_leituras` (independente da janela) pode ser injetado para não
+    repetir o DISTINCT a cada janela."""
+    if alunos_com_leituras is None:
+        alunos_com_leituras = _alunos_com_leituras(db, escola_id)
 
     consulta = (
         select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min)
@@ -337,6 +350,7 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      serie_m: dict[int, list] | None = None,
                      serie_e: dict[int, list] | None = None,
                      mapa_dif: dict[tuple[str, str], float] | None = None,
+                     alunos_com_leituras: set[int] | None = None,
                      base_no_periodo: bool = False,
                      ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
@@ -347,8 +361,9 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     `serie_m`/`serie_e`/`mapa_dif` são as varreduras CARAS e INDEPENDENTES da
     janela; um chamador que precise de VÁRIAS janelas (o mural: dia/semana/mês)
     pode carregá-las UMA vez e injetá-las aqui, em vez de o serviço relê-las a
-    cada chamada. Só `_leituras_no_periodo` continua por janela (depende do
-    intervalo)."""
+    cada chamada. `alunos_com_leituras` (o DISTINCT de quem tem leitura, também
+    independente da janela) idem. Só a AGREGAÇÃO por janela de
+    `_leituras_no_periodo` continua por chamada (depende do intervalo)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -383,7 +398,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         mapa_dif = scoring._mapa_dificuldade(db, escola_id)
     # Leituras com data REAL: para quem tem relatório individual importado, o
     # ganho de leitura do período vem do que foi DE FATO lido no intervalo.
-    com_leituras, leituras_periodo = _leituras_no_periodo(db, escola_id, inicio, fim)
+    com_leituras, leituras_periodo = _leituras_no_periodo(
+        db, escola_id, inicio, fim, alunos_com_leituras)
 
     # Ganhos por aluno no período (snapshots sintéticos alimentam o motor)
     ganhos_m: dict[int, SimpleNamespace] = {}
@@ -513,6 +529,24 @@ def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int],
     return total
 
 
+def _monta_resumo_turma(turma: Turma, aluno_ids: list[int], notas: list[Nota],
+                        indicadores: dict) -> dict:
+    """Monta o dict de resumo de UMA turma a partir de dados já carregados
+    (matrículas + notas). Sem consulta ao banco — o chamador decide se carrega
+    por turma (`resumo_turma`) ou em lote (`resumo_escola`)."""
+    media_geral = round(sum(n.nota_geral for n in notas) / len(notas), 2) if notas else 0.0
+    media_matific = round(sum(n.nota_matific for n in notas) / len(notas), 2) if notas else 0.0
+    media_elefante = round(sum(n.nota_elefante for n in notas) / len(notas), 2) if notas else 0.0
+    return {
+        "turma": {"id": turma.id, "nome": turma.nome, "ano_escolar": turma.ano_escolar},
+        "total_alunos": len(aluno_ids),
+        "media_geral": media_geral,
+        "media_matific": media_matific,
+        "media_elefante": media_elefante,
+        "indicadores": indicadores,
+    }
+
+
 def resumo_turma(db: Session, escola_id: int, turma_id: int,
                  matific=None, elefante=None) -> dict | None:
     turma = db.get(Turma, turma_id)
@@ -533,18 +567,8 @@ def resumo_turma(db: Session, escola_id: int, turma_id: int,
                            Nota.ano_letivo == escola.ano_letivo_ativo,
                            Nota.aluno_id.in_(aluno_ids or [0]))
     ).scalars().all()
-    media_geral = round(sum(n.nota_geral for n in notas) / len(notas), 2) if notas else 0.0
-    media_matific = round(sum(n.nota_matific for n in notas) / len(notas), 2) if notas else 0.0
-    media_elefante = round(sum(n.nota_elefante for n in notas) / len(notas), 2) if notas else 0.0
-
-    return {
-        "turma": {"id": turma.id, "nome": turma.nome, "ano_escolar": turma.ano_escolar},
-        "total_alunos": len(aluno_ids),
-        "media_geral": media_geral,
-        "media_matific": media_matific,
-        "media_elefante": media_elefante,
-        "indicadores": _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante),
-    }
+    indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante)
+    return _monta_resumo_turma(turma, aluno_ids, notas, indicadores)
 
 
 def resumo_escola(db: Session, escola_id: int) -> dict:
@@ -559,10 +583,40 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
     # cada turma varria a escola inteira duas vezes).
     matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+
+    # Matrículas ativas e notas de TODAS as turmas em DUAS consultas (antes,
+    # resumo_turma disparava 2 por turma — N+1 que crescia com a escola).
+    turma_ids = [t.id for t in turmas]
+    matriculas = db.execute(
+        select(Matricula)
+        .join(Aluno, Matricula.aluno_id == Aluno.id)
+        .where(Matricula.turma_id.in_(turma_ids or [0]),
+               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Aluno.status == "ativo")
+    ).scalars().all()
+    alunos_por_turma: dict[int, list[int]] = {}
+    for m in matriculas:
+        alunos_por_turma.setdefault(m.turma_id, []).append(m.aluno_id)
+
+    todos_ids = [aid for ids in alunos_por_turma.values() for aid in ids]
+    notas_por_aluno: dict[int, Nota] = {
+        n.aluno_id: n
+        for n in db.execute(
+            select(Nota).where(Nota.escola_id == escola_id,
+                               Nota.ano_letivo == escola.ano_letivo_ativo,
+                               Nota.aluno_id.in_(todos_ids or [0]))
+        ).scalars()
+    }
+
+    resumos = []
+    for turma in turmas:
+        aluno_ids = alunos_por_turma.get(turma.id, [])
+        notas = [notas_por_aluno[a] for a in aluno_ids if a in notas_por_aluno]
+        indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante)
+        resumos.append(_monta_resumo_turma(turma, aluno_ids, notas, indicadores))
     return {
         "escola": {"id": escola.id, "nome": escola.nome},
-        "turmas": [resumo_turma(db, escola_id, turma.id, matific, elefante)
-                   for turma in turmas],
+        "turmas": resumos,
     }
 
 

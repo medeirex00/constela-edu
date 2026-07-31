@@ -87,3 +87,23 @@ def test_visto_em_antigo_fica_offline(cliente, db):
 def test_heartbeat_exige_autenticacao():
     c = TestClient(app)
     assert c.post(f"{API}/presenca/heartbeat").status_code == 401
+
+
+def test_totais_contam_no_banco_e_excluido_nao_entra(cliente, db):
+    """`total`/`online` vêm de COUNT no banco (não do tamanho da lista): um
+    usuário EXCLUÍDO não conta, e quem nunca bateu heartbeat fica por último."""
+    gc = _cliente_global(db)
+    assert gc.post(f"{API}/presenca/heartbeat").status_code == 200  # global online
+    # Uma conta excluída não pode aparecer nem contar no total.
+    db.add(Usuario(escola_id=1, nome="Fantasma", email="ex@teste.local",
+                   senha_hash=hash_senha("x"), cargo="professor", status="excluido"))
+    db.commit()
+
+    corpo = gc.get(f"{API}/presenca/sessoes").json()
+    emails = [s["email"] for s in corpo["sessoes"]]
+    assert "ex@teste.local" not in emails                 # excluído fora da lista
+    assert corpo["total"] == len(emails)                  # total = ativos, sem o excluído
+    assert corpo["online"] == 1                            # só o global bateu
+    # Quem nunca foi visto (admin de escola) fica por último; o online no topo.
+    assert corpo["sessoes"][0]["email"] == "global@teste.local"
+    assert corpo["sessoes"][-1]["visto_em"] is None

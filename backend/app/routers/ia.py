@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import ConversaIA, Escola, MensagemIA, Usuario
-from app.services import assistente, insights, permissoes
+from app.services import assistente, evolucao, insights, permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Inteligência Pedagógica"])
@@ -23,9 +23,18 @@ def insights_da_escola(
 ):
     """Índices de engajamento/evolução/persistência + alertas automáticos.
     Professor recebe apenas os alunos das turmas dele."""
+    # Varreduras CARAS e independentes da janela (snapshots Matific/Elefante,
+    # mapa de dificuldade, DISTINCT de leituras): carrega UMA vez e injeta em
+    # AMBOS os serviços. Antes, índices e alertas releiam os snapshots por conta
+    # própria — trabalho duplicado que ajudava /insights a estourar o timeout.
+    serie_m, serie_e, mapa_dif = evolucao.series_e_dificuldade(db, escola_id)
+    alunos_com_leituras = evolucao._alunos_com_leituras(db, escola_id)
     resultado = {
-        "indices": insights.indices_da_escola(db, escola_id),
-        "alertas": insights.alertas_da_escola(db, escola_id),
+        "indices": insights.indices_da_escola(
+            db, escola_id, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
+            alunos_com_leituras=alunos_com_leituras),
+        "alertas": insights.alertas_da_escola(
+            db, escola_id, serie_m=serie_m, serie_e=serie_e),
     }
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:

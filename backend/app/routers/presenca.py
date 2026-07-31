@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -26,6 +26,10 @@ router = APIRouter(prefix="/presenca", tags=["Presença"])
 
 # Janela de tolerância do "online": heartbeat de 30 s + folga p/ 1 batida perdida.
 LIMIAR_ONLINE_SEG = 90
+# Teto de linhas materializadas: o monitor mostra as sessões MAIS RECENTES. Os
+# totais (total/online) vêm de COUNT no banco, então continuam exatos mesmo se a
+# tabela for cortada aqui — o front nunca precisa de todos os inativos de uma vez.
+MAX_SESSOES = 1000
 
 
 class SessaoOut(BaseModel):
@@ -84,11 +88,28 @@ def listar_sessoes(
     de presença. Não expõe senha nem PII de aluno — só quem opera o sistema."""
     agora = datetime.now(timezone.utc)
     corte = agora - timedelta(seconds=LIMIAR_ONLINE_SEG)
+    corte_db = corte.replace(tzinfo=None)  # coluna guardada ingênua (UTC)
 
+    ativos = Usuario.status != "excluido"
+    # Totais direto no banco: exatos mesmo com a tabela cortada em MAX_SESSOES.
+    total = db.execute(
+        select(func.count()).select_from(Usuario).where(ativos)
+    ).scalar_one()
+    online_total = db.execute(
+        select(func.count()).select_from(Usuario)
+        .where(ativos, Usuario.visto_em.is_not(None), Usuario.visto_em >= corte_db)
+    ).scalar_one()
+
+    # Só as sessões MAIS RECENTES (online sempre no topo, pois têm o visto_em mais
+    # alto). Ordena e corta no banco — antes materializava TODOS os usuários e
+    # ordenava em Python. `is_(None)` primeiro garante nulos por último nos dois
+    # bancos (o NULLS LAST do DESC difere entre SQLite e Postgres).
     linhas = db.execute(
         select(Usuario, Escola.nome)
         .outerjoin(Escola, Escola.id == Usuario.escola_id)
-        .where(Usuario.status != "excluido")
+        .where(ativos)
+        .order_by(Usuario.visto_em.is_(None), Usuario.visto_em.desc(), Usuario.nome)
+        .limit(MAX_SESSOES)
     ).all()
 
     sessoes: list[SessaoOut] = []
@@ -110,18 +131,10 @@ def listar_sessoes(
             ultimo_acesso=_utc(u.ultimo_acesso),
         ))
 
-    # Online primeiro; dentro de cada grupo, o mais recentemente visto no topo
-    # (None por último) e, por fim, nome — ordem estável e útil para o gestor.
-    sessoes.sort(key=lambda s: (
-        not s.online,
-        -(s.visto_em.timestamp() if s.visto_em else 0.0),
-        s.nome.lower(),
-    ))
-
     return SessoesOut(
         agora=agora,
         limiar_online_seg=LIMIAR_ONLINE_SEG,
-        total=len(sessoes),
-        online=sum(1 for s in sessoes if s.online),
+        total=total,
+        online=online_total,
         sessoes=sessoes,
     )

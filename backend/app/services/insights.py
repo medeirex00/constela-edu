@@ -59,32 +59,47 @@ def _percentil_rank(ordenados_ativos: list[float], valor: float) -> float:
     return round(100.0 * abaixo / len(ordenados_ativos), 1)
 
 
-def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
+def indices_da_escola(db: Session, escola_id: int,
+                      serie_m: dict[int, list] | None = None,
+                      serie_e: dict[int, list] | None = None,
+                      mapa_dif: dict[tuple[str, str], float] | None = None,
+                      alunos_com_leituras: set[int] | None = None) -> list[dict]:
     """Engajamento, evolução e persistência de cada aluno ativo.
 
     Engajamento/Evolução partem da nota de evolução (régua justa do ranking),
     mas o ÍNDICE exibido é a posição percentilar — leitura pedagógica de
     distribuição ("onde o aluno está na escola"), não nota competitiva.
-    """
+
+    `serie_m`/`serie_e`/`mapa_dif`/`alunos_com_leituras` são varreduras CARAS e
+    independentes da janela; a rota /insights as carrega UMA vez e injeta aqui e
+    em `alertas_da_escola`, evitando reler snapshots/leitura duas vezes."""
     escola = db.get(Escola, escola_id)
-    # Varreduras CARAS e independentes da janela: carrega UMA vez e injeta nas 4
-    # chamadas de ranking_evolucao abaixo. Sem isto, cada chamada relê os
-    # snapshots (Matific + Elefante) e remonta o mapa de dificuldade — ~12
-    # varreduras pesadas por requisição, o que fazia /insights estourar o
-    # timeout de 15 s do cliente (a origem do "Não foi possível conectar").
-    serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
-    serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
-    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    # Varreduras CARAS e independentes da janela: carrega UMA vez (ou reusa as
+    # injetadas pela rota) e injeta nas 4 chamadas de ranking_evolucao abaixo.
+    # Sem isto, cada chamada relê os snapshots (Matific + Elefante), remonta o
+    # mapa de dificuldade e refaz o DISTINCT de leituras — ~16 varreduras
+    # pesadas por requisição, o que fazia /insights estourar o timeout de 15 s
+    # do cliente (a origem do "Não foi possível conectar").
+    if serie_m is None:
+        serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
+    if serie_e is None:
+        serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    if mapa_dif is None:
+        mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    if alunos_com_leituras is None:
+        alunos_com_leituras = evolucao._alunos_com_leituras(db, escola_id)
 
     engajamento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(
-            db, escola_id, dias=30, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
+            db, escola_id, dias=30, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
+            alunos_com_leituras=alunos_com_leituras)
     }
     crescimento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(
-            db, escola_id, dias=90, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
+            db, escola_id, dias=90, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
+            alunos_com_leituras=alunos_com_leituras)
     }
     # Só quem avançou (>0) entra na régua percentilar; quem não avançou fica 0.
     ativos_30 = sorted(v for v in engajamento_bruto.values() if v > 0)
@@ -120,12 +135,14 @@ def indices_da_escola(db: Session, escola_id: int) -> list[dict]:
     cresc_semana = {
         i.aluno_id: i.nota_evolucao
         for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_semana, fim=agora,
-                                           serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
+                                           serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
+                                           alunos_com_leituras=alunos_com_leituras)
     }
     cresc_base = {
         i.aluno_id: i.nota_evolucao
         for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_base, fim=agora,
-                                           serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)
+                                           serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
+                                           alunos_com_leituras=alunos_com_leituras)
     }
 
     def _persistencia_semanal(aluno_id: int) -> float:
