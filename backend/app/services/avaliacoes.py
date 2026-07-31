@@ -484,6 +484,10 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
     'erro' (o painel mostra — não quebra em silêncio). ``baixador`` é injetável
     (default = ``baixar_url``, resolvido em tempo de chamada p/ ser testável)."""
     baixador = baixador or baixar_url
+    # Serializa com outra coleta simultânea da MESMA fonte (scheduler × "coletar
+    # agora"): a 2ª relê os resultados já gravados e ATUALIZA em vez de duplicar.
+    from app.core.database import bloquear_fonte_para_coleta
+    bloquear_fonte_para_coleta(db, fonte.id)
     av = db.get(AvaliacaoExterna, fonte.avaliacao_id)
     m = fonte.mapeamento or {}
     try:

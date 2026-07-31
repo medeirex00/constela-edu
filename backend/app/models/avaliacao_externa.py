@@ -12,7 +12,7 @@ O IDEB é um INDICADOR derivado (desempenho × fluxo), então entra no catálogo
 """
 from datetime import datetime
 
-from sqlalchemy import Float, ForeignKey, Index, String
+from sqlalchemy import Float, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -78,4 +78,13 @@ class ResultadoAvaliacao(Base):
         # Consulta típica: série histórica de um indicador por escola/etapa.
         Index("ix_resultado_escola_avaliacao",
               "escola_id", "avaliacao_id", "etapa", "componente", "edicao"),
+        # Chave NATURAL do fato: impede linhas duplicadas sob coleta concorrente
+        # (scheduler + "coletar agora"). COALESCE trata os NULOS (etapa/componente/
+        # turma que a fonte não fornece) como '' — senão o UNIQUE os veria como
+        # distintos e não barraria a duplicata. Só linhas casadas (escola_id) são
+        # gravadas, então escola_id entra direto.
+        Index("uq_resultado_natural", "avaliacao_id", "edicao", "indicador",
+              "escola_id", text("COALESCE(etapa, '')"),
+              text("COALESCE(componente, '')"), text("COALESCE(turma, '')"),
+              unique=True),
     )

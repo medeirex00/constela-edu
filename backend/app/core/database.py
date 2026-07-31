@@ -77,6 +77,28 @@ def bloquear_escola_para_importacao(db, escola_id: int) -> None:
                    {"ns": _NS_IMPORTACAO, "escola": int(escola_id)})
 
 
+# Namespace dos advisory locks de COLETA de avaliação externa (separado do de
+# importação para não colidirem entre si).
+_NS_COLETA_AVALIACAO = 4712
+
+
+def bloquear_fonte_para_coleta(db, fonte_id: int) -> None:
+    """Serializa coletas concorrentes da MESMA fonte de avaliação externa (o
+    scheduler e o "coletar agora" manual disparam o mesmo ``coletar_fonte``).
+
+    PostgreSQL: ``pg_advisory_xact_lock`` faz a 2ª coleta BLOQUEAR até a 1ª
+    commitar; aí ela relê os resultados já gravados e ATUALIZA em vez de duplicar
+    (o importar_resultados faz SELECT-then-INSERT). Transacional — cai no commit;
+    adquirir ANTES de baixar/importar e sem commit no meio.
+
+    SQLite (dev/testes): no-op — banco de um só escritor. A defesa cross-DB é o
+    índice único ``uq_resultado_natural`` (a 2ª inserção do mesmo fato esbarra)."""
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import text
+        db.execute(text("SELECT pg_advisory_xact_lock(:ns, :fonte)"),
+                   {"ns": _NS_COLETA_AVALIACAO, "fonte": int(fonte_id)})
+
+
 # --------------------------------------------------------------------------
 # Correções de DADOS no início da aplicação.
 #

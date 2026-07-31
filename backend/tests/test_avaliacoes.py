@@ -3,8 +3,10 @@ casando escola por CÓDIGO INEP (idempotente, escopada, só o que a fonte fornec
 """
 import io
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.security import hash_senha
 from app.main import app
@@ -544,3 +546,35 @@ def test_tetos_de_tamanho_cobrem_o_ideb_real():
     real_ideb = 97 * 1024 * 1024
     assert rot._MAX_BYTES >= real_ideb        # upload manual (plano B)
     assert svc._MAX_DOWNLOAD >= real_ideb     # robô baixando sozinho
+
+
+def test_resultado_avaliacao_chave_natural_e_unica(db):
+    """M6 (auditoria): a chave natural do fato (avaliação, edição, indicador,
+    escola, etapa, componente, turma) é ÚNICA — duas coletas concorrentes da
+    mesma fonte não podem duplicar a linha, mesmo com dimensões NULAS."""
+    esc = Escola(nome="Escola INEP", ano_letivo_ativo=2026)
+    av = AvaliacaoExterna(chave="saeb", nome="SAEB")
+    db.add_all([esc, av])
+    db.flush()
+
+    def _res():
+        return ResultadoAvaliacao(
+            avaliacao_id=av.id, edicao=2023, escola_id=esc.id,
+            codigo_inep="12345678", etapa=None, componente=None, turma=None,
+            indicador="proficiencia", valor=250.0, unidade="escala_saeb")
+
+    db.add(_res())
+    db.commit()
+    # Segunda linha idêntica (NULOS incluídos) → barrada pelo índice único.
+    db.add(_res())
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+    # Continua permitindo uma dimensão DIFERENTE (etapa preenchida).
+    db.add(ResultadoAvaliacao(
+        avaliacao_id=av.id, edicao=2023, escola_id=esc.id, codigo_inep="12345678",
+        etapa="5º ano", componente=None, turma=None,
+        indicador="proficiencia", valor=260.0, unidade="escala_saeb"))
+    db.commit()
+    assert db.execute(select(func.count()).select_from(ResultadoAvaliacao)).scalar_one() == 2
