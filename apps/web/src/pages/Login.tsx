@@ -51,13 +51,13 @@ export default function Login() {
         <div className="login-card rounded-2xl p-8 sm:p-10">
           {/* Marca + posicionamento institucional */}
           <div className="flex flex-col items-start">
-            <LogoHorizontal altura={46} />
-            <p className="mt-6 text-[15px] leading-snug text-zinc-400">
+            <LogoHorizontal altura={52} />
+            <p className="mt-7 text-[15px] leading-snug text-zinc-300">
               Transformando dados em reconhecimento escolar.
             </p>
           </div>
 
-          <form onSubmit={enviar} noValidate className="mt-9 space-y-5">
+          <form onSubmit={enviar} noValidate className="mt-10 space-y-6">
             {/* E-mail / usuário */}
             <div className="space-y-2">
               <label htmlFor="login-email" className="block text-sm font-medium text-zinc-300">
@@ -119,7 +119,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={enviando}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-[15px] font-semibold text-white shadow-lg shadow-indigo-950/40 outline-none transition-all duration-200 hover:bg-indigo-500 hover:shadow-xl hover:shadow-indigo-900/40 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70 motion-reduce:transition-none motion-reduce:active:scale-100"
+              className="mt-1 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-[15px] font-semibold text-white shadow-lg shadow-indigo-950/40 outline-none transition-all duration-200 hover:-translate-y-px hover:bg-indigo-500 hover:shadow-xl hover:shadow-indigo-900/50 active:translate-y-0 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:translate-y-0 motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100"
             >
               {enviando ? (
                 <>
@@ -134,7 +134,7 @@ export default function Login() {
         </div>
 
         {/* Rodapé discreto */}
-        <p className="mt-6 text-center text-xs text-zinc-500">
+        <p className="mt-7 text-center text-xs text-zinc-400">
           Plataforma segura&nbsp;·&nbsp;LGPD&nbsp;·&nbsp;Dados protegidos
         </p>
       </main>

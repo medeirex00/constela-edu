@@ -174,11 +174,25 @@
 .login-bg {
   background-color: #090c14;
   /* 1º (topo): vinheta que escurece as bordas; 2º: leve brilho da marca no alto,
-     atrás do card; 3º: elevação azul central. Tudo em opacidade baixa. */
+     atrás do card; 3º: elevação azul central; depois, uma CONSTELAÇÃO discreta —
+     estrelas esparsas (algumas em âmbar/índigo da marca) espalhadas fora do
+     centro, para não competir com o card. Tudo em opacidade baixa. */
   background-image:
     radial-gradient(125% 100% at 50% 42%, transparent 58%, rgba(0, 0, 0, 0.55) 100%),
     radial-gradient(80% 55% at 50% -6%, rgba(91, 110, 225, 0.14), transparent 55%),
-    radial-gradient(100% 90% at 50% 48%, rgba(27, 42, 74, 0.30), transparent 72%);
+    radial-gradient(100% 90% at 50% 48%, rgba(27, 42, 74, 0.30), transparent 72%),
+    radial-gradient(1.5px 1.5px at 15% 18%, rgba(255, 255, 255, 0.55), transparent 60%),
+    radial-gradient(2px 2px at 78% 22%, rgba(255, 255, 255, 0.5), transparent 60%),
+    radial-gradient(1px 1px at 62% 11%, rgba(245, 185, 66, 0.5), transparent 60%),
+    radial-gradient(1.5px 1.5px at 88% 68%, rgba(255, 255, 255, 0.42), transparent 60%),
+    radial-gradient(1px 1px at 26% 63%, rgba(255, 255, 255, 0.4), transparent 60%),
+    radial-gradient(1.5px 1.5px at 8% 80%, rgba(146, 160, 235, 0.5), transparent 60%),
+    radial-gradient(1px 1px at 40% 88%, rgba(255, 255, 255, 0.32), transparent 60%),
+    radial-gradient(1.5px 1.5px at 71% 85%, rgba(255, 255, 255, 0.34), transparent 60%),
+    radial-gradient(2px 2px at 92% 40%, rgba(255, 255, 255, 0.3), transparent 60%),
+    radial-gradient(1px 1px at 33% 30%, rgba(255, 255, 255, 0.28), transparent 60%),
+    radial-gradient(1.5px 1.5px at 18% 44%, rgba(255, 255, 255, 0.3), transparent 60%),
+    radial-gradient(1px 1px at 84% 12%, rgba(255, 255, 255, 0.26), transparent 60%);
 }
 .login-card {
   background-color: rgba(17, 21, 31, 0.72);
