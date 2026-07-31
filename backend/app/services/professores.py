@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import re
-import unicodedata
 from collections import defaultdict
 
 from sqlalchemy import delete, func, select, update
@@ -33,37 +32,17 @@ from app.models import (
     Turma,
     Usuario,
 )
+# Normalização de nome PT-BR compartilhada com a deduplicação de alunos.
+from app.services._nomes import (
+    PARTICULAS as _PARTICULAS,
+    chave_nome as _chave_nome,
+    primeiro_token as _primeiro_token,
+    sem_acento as _sem_acento,
+    tokens as _tokens,
+)
 
 _log = logging.getLogger(__name__)
 _DOMINIO = "professor.constelaedu.com"
-# Partículas que não contam como sobrenome (Sueli Macedo DO Prado → "Prado").
-_PARTICULAS = {"de", "do", "da", "dos", "das", "e"}
-
-
-def _sem_acento(texto: str) -> str:
-    return "".join(c for c in unicodedata.normalize("NFD", texto or "")
-                   if unicodedata.category(c) != "Mn")
-
-
-def _chave_nome(nome: str) -> str:
-    """Chave de identidade do professor: sem acento, caixa e espaços normalizados.
-    Casa 'Antônio Silva' com 'Antonio  SILVA' — a MESMA pessoa entre as fontes."""
-    return _sem_acento(" ".join((nome or "").split())).casefold()
-
-
-def _tokens(nome: str) -> frozenset[str]:
-    """Conjunto de palavras normalizadas (sem partículas) — base da reconciliação
-    nome curto ↔ nome completo ('PAULA' ⊂ 'PAULA BENEDITA VILELA NOGUEIRA')."""
-    return frozenset(
-        _sem_acento(p).casefold()
-        for p in (nome or "").split()
-        if _sem_acento(p).casefold() not in _PARTICULAS and any(c.isalnum() for c in p)
-    )
-
-
-def _primeiro_token(nome: str) -> str:
-    partes = (nome or "").split()
-    return _sem_acento(partes[0]).casefold() if partes else ""
 
 
 def _cap_alnum(palavra: str) -> str:

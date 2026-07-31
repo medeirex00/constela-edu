@@ -28,6 +28,7 @@ from app.schemas import (
     AlunoPerfilOut,
     AlunoUpdate,
     ConsolidarTurmasIn,
+    CorrigirDuplicadosAlunos,
     ExclusaoPermanenteAlunos,
     ExcluirTurmas,
     FusaoAlunos,
@@ -39,7 +40,14 @@ from app.schemas import (
     TurmaOut,
     TurmaUpdate,
 )
-from app.services import periodos, permissoes, scoring, turmas_dedup
+from app.services import (
+    alunos_dedup,
+    alunos_fusao,
+    periodos,
+    permissoes,
+    scoring,
+    turmas_dedup,
+)
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -571,214 +579,64 @@ def fundir_alunos(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Só é possível fundir alunos ativos. Reative o "
                             "cadastro arquivado ou excluído antes de fundir.")
-    manter_nome, remover_nome = manter.nome, remover.nome  # antes de apagar
 
-    # Leituras: reatribui as de livros que o `manter` ainda não tem; as
-    # repetidas (mesmo livro) são descartadas para não violar a unicidade.
-    livros_do_manter = set(db.execute(
-        select(Leitura.livro_id).where(Leitura.aluno_id == manter.id)
-    ).scalars().all())
-    leituras_remover = db.execute(
-        select(Leitura).where(Leitura.aluno_id == remover.id)
-    ).scalars().all()
-    leituras_movidas = descartadas = 0
-    for leitura in leituras_remover:
-        if leitura.livro_id in livros_do_manter:
-            db.delete(leitura)
-            descartadas += 1
-        else:
-            leitura.aluno_id = manter.id
-            livros_do_manter.add(leitura.livro_id)
-            leituras_movidas += 1
-
-    # Snapshots das plataformas: reatribuídos INTEGRALMENTE (é aqui que o
-    # Matific de um cadastro se junta ao Elefante do outro).
-    snaps_matific = db.execute(
-        update(SnapshotMatific).where(SnapshotMatific.aluno_id == remover.id)
-        .values(aluno_id=manter.id)
-    ).rowcount
-    snaps_elefante = db.execute(
-        update(SnapshotElefante).where(SnapshotElefante.aluno_id == remover.id)
-        .values(aluno_id=manter.id)
-    ).rowcount
-
-    # Eventos (linha do tempo) e identidade externa (vínculo UUID do Matific):
-    # SEM esta reatribuição, o `db.delete(remover)` cascatearia (ON DELETE
-    # CASCADE das migrações 0010/0013) e apagaria em SILÊNCIO todo o histórico
-    # de eventos do `remover` E o seu vínculo UUID — e aí a próxima sincronização
-    # voltaria a casar por nome e poderia recriar a duplicata, DESFAZENDO a
-    # fusão. Reatribui preservando as respectivas unicidades.
-    from app.models import EventoAluno, IdentidadeExterna  # noqa: E402
-
-    # Eventos: migra os que o `manter` ainda não tem; descarta os duplicados
-    # (mesma plataforma+chave_natural) para respeitar a UNIQUE de idempotência.
-    chaves_evt_manter = set(db.execute(
-        select(EventoAluno.plataforma, EventoAluno.chave_natural)
-        .where(EventoAluno.aluno_id == manter.id)
-    ).all())
-    eventos_movidos = eventos_descartados = 0
-    for evento in db.execute(
-        select(EventoAluno).where(EventoAluno.aluno_id == remover.id)
-    ).scalars().all():
-        chave = (evento.plataforma, evento.chave_natural)
-        if chave in chaves_evt_manter:
-            db.delete(evento)
-            eventos_descartados += 1
-        else:
-            evento.aluno_id = manter.id
-            chaves_evt_manter.add(chave)
-            eventos_movidos += 1
-
-    # Identidade externa: migra o vínculo de plataformas que o `manter` ainda não
-    # tem; se ambos têm a MESMA plataforma, o vínculo do `manter` prevalece e o
-    # do `remover` é descartado (evita violar a UNIQUE escola+plataforma+id).
-    plats_ident_manter = set(db.execute(
-        select(IdentidadeExterna.plataforma)
-        .where(IdentidadeExterna.aluno_id == manter.id)
-    ).scalars().all())
-    identidades_movidas = identidades_descartadas = 0
-    for ident in db.execute(
-        select(IdentidadeExterna).where(IdentidadeExterna.aluno_id == remover.id)
-    ).scalars().all():
-        if ident.plataforma in plats_ident_manter:
-            db.delete(ident)
-            identidades_descartadas += 1
-        else:
-            ident.aluno_id = manter.id
-            plats_ident_manter.add(ident.plataforma)
-            identidades_movidas += 1
-
-    # Matrículas: move as de anos que o `manter` ainda não tem; nos anos em
-    # que ambos têm, mantém a do `manter` e descarta a do `remover`.
-    anos_do_manter = set(db.execute(
-        select(Matricula.ano_letivo).where(Matricula.aluno_id == manter.id)
-    ).scalars().all())
-    for matricula in db.execute(
-        select(Matricula).where(Matricula.aluno_id == remover.id)
-    ).scalars().all():
-        if matricula.ano_letivo in anos_do_manter:
-            db.delete(matricula)
-        else:
-            matricula.aluno_id = manter.id
-            anos_do_manter.add(matricula.ano_letivo)
-
-    # Notas: mesma lógica das matrículas — migra as de anos que o `manter`
-    # não tem (preserva o histórico) e descarta as de anos em comum. A do ano
-    # ATIVO é reescrita pelo recálculo no fim; as de anos passados NÃO são
-    # recalculadas, por isso precisam ser preservadas por migração.
-    anos_nota_manter = set(db.execute(
-        select(Nota.ano_letivo).where(Nota.aluno_id == manter.id)
-    ).scalars().all())
-    for nota in db.execute(
-        select(Nota).where(Nota.aluno_id == remover.id)
-    ).scalars().all():
-        if nota.ano_letivo in anos_nota_manter:
-            db.delete(nota)
-        else:
-            nota.aluno_id = manter.id
-
-    # Lado Quest: reatribui o que é do aluno para o `manter`. Sem isto, o
-    # `db.delete(remover)` cascatearia (ON DELETE CASCADE, migração 0003) e
-    # apagaria em SILÊNCIO o perfil, a telemetria (tentativas/progresso), a
-    # credencial e os vínculos de responsáveis do `remover`.
-    from app.quest.models import (  # noqa: E402
-        QuestCredencialAluno,
-        QuestPerfil,
-        ResponsavelAluno,
-    )
-
-    quest_perfil_movido = quest_perfil_descartado = 0
-    # Perfil é único por aluno; migrar o registro leva junto TODA a telemetria
-    # (progresso/habilidades/tentativas apontam para perfil_id, que não muda).
-    manter_tem_perfil = db.execute(
-        select(QuestPerfil.id).where(QuestPerfil.aluno_id == manter.id)
-    ).scalar_one_or_none() is not None
-    for perfil in db.execute(
-        select(QuestPerfil).where(QuestPerfil.aluno_id == remover.id)
-    ).scalars().all():
-        if manter_tem_perfil:
-            db.delete(perfil)                 # descarte contado (não silencioso)
-            quest_perfil_descartado += 1
-        else:
-            perfil.aluno_id = manter.id
-            manter_tem_perfil = True
-            quest_perfil_movido += 1
-
-    manter_tem_cred = db.execute(
-        select(QuestCredencialAluno.id)
-        .where(QuestCredencialAluno.aluno_id == manter.id)
-    ).scalar_one_or_none() is not None
-    for cred in db.execute(
-        select(QuestCredencialAluno).where(QuestCredencialAluno.aluno_id == remover.id)
-    ).scalars().all():
-        if manter_tem_cred:
-            db.delete(cred)
-        else:
-            cred.aluno_id = manter.id
-            manter_tem_cred = True
-
-    # Responsáveis: unicidade (usuario_id, aluno_id) — migra o que o `manter`
-    # ainda não tem com aquele responsável; os repetidos são descartados.
-    resp_do_manter = set(db.execute(
-        select(ResponsavelAluno.usuario_id)
-        .where(ResponsavelAluno.aluno_id == manter.id)
-    ).scalars().all())
-    for vinculo in db.execute(
-        select(ResponsavelAluno).where(ResponsavelAluno.aluno_id == remover.id)
-    ).scalars().all():
-        if vinculo.usuario_id in resp_do_manter:
-            db.delete(vinculo)
-        else:
-            vinculo.aluno_id = manter.id
-            resp_do_manter.add(vinculo.usuario_id)
-
-    # Preenche lacunas do `manter` com dados do `remover` (nunca sobrescreve).
-    if not manter.foto_url and remover.foto_url:
-        manter.foto_url = remover.foto_url
-    if manter.numero_chamada is None and remover.numero_chamada is not None:
-        manter.numero_chamada = remover.numero_chamada
-    if manter.data_nascimento is None and remover.data_nascimento is not None:
-        manter.data_nascimento = remover.data_nascimento
-    if not manter.observacoes and remover.observacoes:
-        manter.observacoes = remover.observacoes
-
-    manter_id = manter.id
-    registrar(db, "aluno.fundido", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="aluno", entidade_id=manter_id,
-              detalhes={"mantido": {"id": manter_id, "nome": manter_nome},
-                        "removido": {"id": remover.id, "nome": remover_nome},
-                        "leituras_movidas": leituras_movidas,
-                        "leituras_descartadas": descartadas,
-                        "snapshots_matific": snaps_matific,
-                        "snapshots_elefante": snaps_elefante,
-                        "eventos_movidos": eventos_movidos,
-                        "eventos_descartados": eventos_descartados,
-                        "identidades_movidas": identidades_movidas,
-                        "identidades_descartadas": identidades_descartadas,
-                        "quest_perfil_movido": quest_perfil_movido,
-                        "quest_perfil_descartado": quest_perfil_descartado})
-    # Garante que as reatribuições (UPDATE aluno_id) sejam gravadas ANTES do
-    # DELETE do `remover` — assim o cascade não pega nada que foi movido.
-    db.flush()
-    db.delete(remover)
+    # Núcleo compartilhado com a fusão em lote (Fundir duplicatas): reatribui/
+    # deduplica cada relação, funde a ficha, registra a auditoria (com a foto
+    # pré-fusão) e apaga o `remover`. Não commita nem recalcula — isso é aqui.
+    r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
     db.commit()
-
     _recalcular_escola(db, escola_id)
     return {
-        "mensagem": f"“{remover_nome}” foi fundido em “{manter_nome}”. "
-                    f"{leituras_movidas} leitura(s) e "
-                    f"{snaps_matific + snaps_elefante} registro(s) de plataforma "
-                    "combinados.",
-        "aluno_id": manter_id,
-        "leituras_movidas": leituras_movidas,
-        "leituras_descartadas": descartadas,
-        "eventos_movidos": eventos_movidos,
-        "eventos_descartados": eventos_descartados,
-        "identidades_movidas": identidades_movidas,
-        "identidades_descartadas": identidades_descartadas,
-        "quest_perfil_movido": quest_perfil_movido,
-        "quest_perfil_descartado": quest_perfil_descartado,
+        "mensagem": f"“{r['remover_nome']}” foi fundido em “{r['manter_nome']}”. "
+                    f"{r['leituras_movidas']} leitura(s) e "
+                    f"{r['snapshots_matific'] + r['snapshots_elefante']} "
+                    "registro(s) de plataforma combinados.",
+        **r,
     }
+
+
+@router.get("/alunos/duplicados", response_model=dict)
+def alunos_duplicados(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """PRÉVIA da fusão em lote (read-only): candidatos a aluno duplicado por
+    nível de confiança (nome idêntico/subconjunto/abreviação + MESMA turma).
+    Nada é alterado; o gestor marca quais confirmar. Admin global e coordenador
+    da escola veem; a Secretaria (rede) é barrada na escrita por escola_autorizada."""
+    candidatos = alunos_dedup.plano_deduplicacao(db, escola_id)
+    return {"candidatos": candidatos, "total": len(candidatos),
+            "revisar": sum(1 for c in candidatos if c["confianca"] == "revisar")}
+
+
+@router.post("/alunos/duplicados/corrigir", response_model=dict)
+def corrigir_alunos_duplicados(
+    dados: CorrigirDuplicadosAlunos,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Aplica só as fusões CONFIRMADAS (``loser_ids``), par-a-par, numa única
+    transação — UM commit e UM recálculo de escola no fim. Cada par vira um log
+    ``aluno.fundido`` (com a foto pré-fusão); falhas individuais são reportadas
+    sem abortar o lote. Irreversível → exige confirmação "FUNDIR"."""
+    if dados.confirmacao.strip().upper() != "FUNDIR":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Confirmação inválida. Digite FUNDIR para confirmar.")
+    resultado = alunos_dedup.aplicar_deduplicacao(
+        db, escola_id, dados.loser_ids, usuario.id)
+    registrar(db, "aluno.duplicados_corrigidos", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
+              detalhes={"fusoes": resultado["fundidos"],
+                        "falhas": len(resultado["falhas"])})
+    db.commit()
+    if resultado["fundidos"]:
+        _recalcular_escola(db, escola_id)
+    n = resultado["fundidos"]
+    return {**resultado,
+            "mensagem": (f"{n} fusão(ões) aplicada(s)." if n
+                         else "Nenhuma fusão aplicada.")}
 
 
 # --- Turmas e Professores ---------------------------------------------------

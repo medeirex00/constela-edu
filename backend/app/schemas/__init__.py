@@ -6,6 +6,7 @@ from app.schemas.comum import (
     AlunoPerfilOut,
     AlunoUpdate,
     ConsolidarTurmasIn,
+    CorrigirDuplicadosAlunos,
     DashboardOut,
     ExclusaoPermanenteAlunos,
     ExcluirTurmas,

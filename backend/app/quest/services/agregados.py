@@ -21,9 +21,27 @@ pela catraca. Não existe reader assim hoje.
 """
 from __future__ import annotations
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import Session
 
 from app.quest.models import QuestHabilidade, QuestPerfil, QuestProgresso
+
+
+def contar_agregados_do_perfil(db: Session, escola_id: int,
+                               perfil_id: int) -> dict[str, int]:
+    """Conta quest_progresso e quest_habilidades de UM perfil, DENTRO da escola
+    (join obrigatório em quest_perfis — mantém o reader sob a catraca §11). Usado
+    pela fusão de alunos para registrar/fotografar o volume que o CASCADE apaga
+    quando um perfil duplicado é descartado."""
+    def _conta(modelo) -> int:
+        return int(db.execute(
+            select(func.count()).select_from(modelo)
+            .join(QuestPerfil, modelo.perfil_id == QuestPerfil.id)
+            .where(QuestPerfil.escola_id == escola_id,
+                   modelo.perfil_id == perfil_id)
+        ).scalar_one())
+    return {"progresso": _conta(QuestProgresso),
+            "habilidades": _conta(QuestHabilidade)}
 
 
 def progresso_da_escola(escola_id: int) -> Select:

@@ -213,6 +213,13 @@ class FusaoAlunos(BaseModel):
     confirmacao: str = ""
 
 
+class CorrigirDuplicadosAlunos(BaseModel):
+    """Fusão em LOTE das duplicatas de alunos CONFIRMADAS (os ``loser_ids``
+    marcados na tela). Irreversível → exige confirmação textual "FUNDIR"."""
+    loser_ids: list[int] = Field(default_factory=list)
+    confirmacao: str = ""
+
+
 class ConsolidarTurmasIn(BaseModel):
     """Um grupo de consolidação de turmas duplicadas: a turma CANÔNICA que
     permanece + as DUPLICADAS cujas matrículas migram para ela (e depois são

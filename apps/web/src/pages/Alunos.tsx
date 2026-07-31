@@ -1,8 +1,9 @@
-import { Search, UserPlus } from "lucide-react";
+import { Search, UserPlus, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import AcoesAluno from "../components/AcoesAluno";
+import ModalAlunosDuplicados from "../components/ModalAlunosDuplicados";
 import { Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
@@ -148,11 +149,14 @@ export default function Alunos() {
   // Professor não gerencia alunos: sem menu de ações (editar/arquivar/excluir).
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  // Secretaria (rede vinculada, não-global) acompanha mas não opera a escola.
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
   const [busca, setBusca] = useState("");
   const [buscaAplicada, setBuscaAplicada] = useState("");
   const [turmaId, setTurmaId] = useState<string>("");
   const [pagina, setPagina] = useState(1);
   const [modalNovo, setModalNovo] = useState(false);
+  const [modalDup, setModalDup] = useState(false);
 
   // Turmas para o filtro e o modal de cadastro (array sempre pronto para render).
   const { dados: turmasDados } = useApi<Turma[]>(
@@ -185,9 +189,16 @@ export default function Alunos() {
         titulo="Alunos"
         descricao="Pesquise, filtre e abra o perfil completo de cada aluno."
         acoes={gestor ? (
-          <Botao onClick={() => setModalNovo(true)}>
-            <UserPlus size={15} /> Adicionar aluno
-          </Botao>
+          <div className="flex flex-wrap gap-2">
+            {!secretaria && (
+              <Botao variante="neutro" onClick={() => setModalDup(true)}>
+                <UsersRound size={15} /> Fundir duplicatas
+              </Botao>
+            )}
+            <Botao onClick={() => setModalNovo(true)}>
+              <UserPlus size={15} /> Adicionar aluno
+            </Botao>
+          </div>
         ) : undefined}
       />
 
@@ -286,6 +297,14 @@ export default function Alunos() {
         aoFechar={() => setModalNovo(false)}
         aoCriar={recarregar}
       />
+
+      {modalDup && escolaId && (
+        <ModalAlunosDuplicados
+          escolaId={escolaId}
+          aoFechar={() => setModalDup(false)}
+          aoConcluir={recarregar}
+        />
+      )}
     </div>
   );
 }
