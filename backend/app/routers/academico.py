@@ -1,5 +1,3 @@
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -7,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.tempo import hoje_br
 from app.models import (
     Aluno,
     Escola,
@@ -258,11 +257,11 @@ def historico_leituras(
     try:
         if dia:
             d = periodos._parse_data(dia)
-            ini, fim_dt, rotulo = periodos.resolver("personalizado", date.today(), ano, d, d)
+            ini, fim_dt, rotulo = periodos.resolver("personalizado", hoje_br(), ano, d, d)
             chave = "dia"
         else:
             ini, fim_dt, rotulo = periodos.resolver(
-                periodo, date.today(), ano,
+                periodo, hoje_br(), ano,
                 periodos._parse_data(inicio), periodos._parse_data(fim))
             chave = periodo
     except ValueError as exc:

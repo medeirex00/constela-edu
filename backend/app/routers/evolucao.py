@@ -2,13 +2,12 @@
 
 Endpoints somente-leitura: toda a informação vem dos snapshots imutáveis.
 """
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
+from app.core.tempo import hoje_br
 from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
 from app.services import periodos, permissoes, timeline
@@ -59,7 +58,7 @@ def evolucao_leitura_do_aluno(
     try:
         preset = "personalizado" if (inicio or fim) else "tudo"
         ini, fim_dt, _ = periodos.resolver(
-            preset, date.today(), escola.ano_letivo_ativo,
+            preset, hoje_br(), escola.ano_letivo_ativo,
             periodos._parse_data(inicio), periodos._parse_data(fim))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -92,7 +91,7 @@ def linha_do_tempo_do_aluno(
         escola = db.get(Escola, escola_id)
         try:
             ini, fim_dt, _ = periodos.resolver(
-                "personalizado", date.today(), escola.ano_letivo_ativo,
+                "personalizado", hoje_br(), escola.ano_letivo_ativo,
                 periodos._parse_data(inicio), periodos._parse_data(fim))
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -141,7 +140,7 @@ def ranking_evolucao(
     if periodo or inicio or fim:
         try:
             ini, fim_dt, _ = periodos.resolver(
-                periodo or "personalizado", date.today(), escola.ano_letivo_ativo,
+                periodo or "personalizado", hoje_br(), escola.ano_letivo_ativo,
                 periodos._parse_data(inicio), periodos._parse_data(fim))
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,

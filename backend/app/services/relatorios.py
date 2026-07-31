@@ -12,11 +12,12 @@ import io
 import logging
 import mimetypes
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.core.tempo import agora_br
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, Nota,
                         SnapshotElefante, SnapshotMatific, Turma)
@@ -209,7 +210,7 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
     pdf.cell(0, 6, _latin1(escola_nome))
     pdf.set_font("helvetica", "", 10)
     pdf.set_xy(10, 13)
-    agora = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+    agora = agora_br().strftime("%d/%m/%Y")
     pdf.cell(0, 5, _latin1(f"{titulo} - gerado em {agora}"))
 
     pdf.set_y(28)
@@ -438,7 +439,7 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
             .replace("⟦NOTA⟧", f"{nota_geral:.1f}".replace(".", ","))
             .replace("⟦POSICAO⟧", pos_txt)
             .replace("⟦ANO⟧", str(ano_letivo))
-            .replace("⟦DATA⟧", datetime.now(timezone.utc).strftime("%d/%m/%Y")))
+            .replace("⟦DATA⟧", agora_br().strftime("%d/%m/%Y")))
     doc = f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'></head><body>{html}</body></html>"
 
     with sync_playwright() as p:
@@ -546,7 +547,7 @@ def _certificado_plataforma_html(escola_nome: str, aluno_nome: str,
     preenchidos (instituição, nome, bimestre e data de hoje)."""
     chave = "elefante" if plataforma.lower().startswith("elef") else "matific"
     fundo = _asset_data_uri(f"certificado-{chave}.png")
-    agora = datetime.now(timezone.utc)
+    agora = agora_br()
     html = (_CERT_PLATAFORMA_TEMPLATE
             .replace("⟦FUNDO⟧", fundo)
             .replace("⟦TAM_NOME⟧", str(_tam_fonte_nome(aluno_nome)))
@@ -619,7 +620,7 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
 
     pdf.set_y(150)
     pdf.set_font("helvetica", "", 11)
-    emitido = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+    emitido = agora_br().strftime("%d/%m/%Y")
     pdf.cell(0, 8, f"Emitido em {emitido}", align="C")
 
     pdf.set_y(168)
@@ -832,7 +833,7 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
             .replace("⟦LINHAS⟧", _linhas_cartaz_html(linhas))
             .replace("⟦TILES⟧", tiles_html)
-            .replace("⟦DATA⟧", datetime.now(timezone.utc).strftime("%d/%m/%Y")))
+            .replace("⟦DATA⟧", agora_br().strftime("%d/%m/%Y")))
     doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
            f"</head><body>{html}</body></html>")
 
@@ -1004,7 +1005,7 @@ def _shell_lista_alunos(escola_nome: str, ano_letivo: int, linhas: list[list],
         corpo.append('</tbody></table>')
 
     subtitulo = (f"Cadastro escolar · Ano letivo de {ano_letivo} · "
-                 f"Gerado em {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+                 f"Gerado em {agora_br().strftime('%d/%m/%Y')}")
     intro = ("Relação oficial de estudantes cadastrados no Constela Edu. A situação "
              "corresponde ao status registrado no momento da emissão deste relatório.")
     return _relatorio_shell("Lista de Alunos", escola_nome, subtitulo, tiles,
@@ -1047,7 +1048,7 @@ def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list],
     corpo.append('</tbody></table>')
 
     subtitulo = (f"Acervo de leitura · Ano letivo de {ano_letivo} · "
-                 f"Gerado em {datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+                 f"Gerado em {agora_br().strftime('%d/%m/%Y')}")
     intro = ("Catálogo de livros disponíveis no Constela Edu, com o total de "
              "leituras registradas por título.")
     return _relatorio_shell("Catálogo de Livros", escola_nome, subtitulo, tiles,
@@ -1122,7 +1123,7 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
     corpo.append('</tbody></table>')
 
     subtitulo = (f"Rede de ensino · Gerado em "
-                 f"{datetime.now(timezone.utc).strftime('%d/%m/%Y')}")
+                 f"{agora_br().strftime('%d/%m/%Y')}")
     intro = ("Panorama consolidado da rede: adoção das plataformas, desempenho médio, "
              "equidade entre as escolas e as unidades que requerem atenção. Apenas "
              "dados agregados por escola — sem identificação de estudantes.")

@@ -1,11 +1,10 @@
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.tempo import hoje_br
 from app.models import (
     Aluno,
     Escola,
@@ -101,7 +100,7 @@ def ranking_leitura(
     ano = escola.ano_letivo_ativo
     try:
         ini, fim_dt, _ = periodos.resolver(
-            periodo, date.today(), ano,
+            periodo, hoje_br(), ano,
             periodos._parse_data(inicio), periodos._parse_data(fim))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -209,7 +208,7 @@ def ranking_matematica(
     ano = escola.ano_letivo_ativo
     try:
         ini, fim_dt, _ = periodos.resolver(
-            periodo, date.today(), ano,
+            periodo, hoje_br(), ano,
             periodos._parse_data(inicio), periodos._parse_data(fim))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -285,7 +284,7 @@ def premiacoes(
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(
-            periodo, date.today(), escola.ano_letivo_ativo,
+            periodo, hoje_br(), escola.ano_letivo_ativo,
             periodos._parse_data(inicio), periodos._parse_data(fim))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
