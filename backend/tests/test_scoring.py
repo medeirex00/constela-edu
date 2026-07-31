@@ -101,6 +101,28 @@ def test_pesos_defensivos_sempre_somam_um(db):
     assert abs(sum(pesos.values()) - 1.0) < 1e-9
 
 
+def test_regua_ignora_snapshot_de_aluno_arquivado(db):
+    """A2 (auditoria): o snapshot de um aluno ARQUIVADO não pode entrar na régua
+    de normalização — arquivar (operação rotineira) não deve mexer nas notas dos
+    ativos. `_carregar_contexto` só devolve os snapshots do conjunto pontuado."""
+    escola, turma, importacao, _ = montar_escola(db, modo_referencia="auto")
+    ativo = novo_aluno(db, escola, turma, "Aluno Ativo")
+    arquivado = novo_aluno(db, escola, turma, "Aluno Arquivado")
+    arquivado.status = "arquivado"
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=ativo.id,
+                           importacao_id=importacao.id, atividades=10,
+                           pontuacao_media=3, estrelas=20))
+    # Outlier gigante que puxaria o P90 para cima se contasse.
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=arquivado.id,
+                           importacao_id=importacao.id, atividades=9999,
+                           pontuacao_media=5, estrelas=9999))
+    db.commit()
+
+    _, _, _, matific, elefante, _ = scoring._carregar_contexto(db, escola.id)
+    assert ativo.id in matific
+    assert arquivado.id not in matific   # arquivado fora da régua
+
+
 def test_nota_matific_com_pesos_padrao(db):
     """PRD §33: normaliza, pondera (40/35/25) e soma."""
     escola, turma, importacao, _ = montar_escola(db)

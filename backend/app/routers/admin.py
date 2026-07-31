@@ -290,11 +290,12 @@ def atualizar_usuario(
         alvo.status = dados.status
     if dados.senha is not None:
         alvo.senha_hash = hash_senha(dados.senha)
-        # Invalida as sessões abertas do usuário (tokens antigos param de
-        # valer) — protege conta comprometida. Na PRÓPRIA conta a sessão
-        # continua: trocar a própria senha não pode deslogar o autor na hora.
-        if alvo.id != usuario.id:
-            alvo.token_version = (alvo.token_version or 0) + 1
+        # Trocar a senha invalida TODAS as sessões abertas da conta — inclusive a
+        # PRÓPRIA e um eventual token roubado. Sem isto, "troquei a senha" não
+        # revogava as outras sessões e o invasor mantinha acesso por até 8h.
+        # Quem trocou re-entra com a nova senha (mesmo comportamento da
+        # redefinição por link, que também rotaciona o token_version).
+        alvo.token_version = (alvo.token_version or 0) + 1
         alteracoes["senha"] = "redefinida"
 
     # Nome da ação no log espelha o que de fato aconteceu (PRD §17)

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis
+from app.core.deps import escola_autorizada, exigir_papeis, negar_secretaria
 from app.models import Aluno, Escola, Turma, Usuario
 from app.quest import schemas
 from app.quest.models import QuestCredencialAluno, QuestPerfil
@@ -20,8 +20,14 @@ from app.services import permissoes
 from app.services import relatorios as svc_relatorios
 from app.services.audit import registrar
 
+# Rotas OPERACIONAIS de credencial do aluno (código de login / cartões). O
+# `codigo_login` É a credencial de acesso da criança no Quest (não há senha), e
+# a Secretaria (rede vinculada, não-global) enxerga TODA escola da rede — sem
+# esta trava ela leria/geraria o segredo de login de qualquer criança da rede.
+# A Secretaria acompanha resultados agregados, não opera as escolas → barrada.
 router = APIRouter(prefix="/escolas/{escola_id}/quest",
-                   tags=["Quest — Professor"])
+                   tags=["Quest — Professor"],
+                   dependencies=[Depends(negar_secretaria)])
 
 PODE_GERAR = exigir_papeis("admin", "coordenador", "professor")
 

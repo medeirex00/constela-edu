@@ -1003,11 +1003,33 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
         exatos = [aluno for aluno, nome_plano in indice if nome_plano == alvo]
         if len(exatos) == 1:
             aluno = exatos[0]
-            linha.correspondencia = {
-                "status": "exato", "via": "exato", "aluno_id": aluno.id,
-                "aluno_nome": aluno.nome,
-                "similaridade": 100.0, "alternativas": alternativas,
-            }
+            # Um único homônimo cadastrado NÃO é prova de que é a mesma criança
+            # quando um UUID NOVO do Matific está prestes a ser CRAVADO nele: se o
+            # relatório indica uma turma que claramente NÃO bate com a do aluno
+            # (overlap de tokens < 2), é provavelmente OUTRO homônimo (mesmo nome,
+            # outra turma) ainda não cadastrado — e vincular o UUID aqui o
+            # cristalizaria no aluno errado para sempre. Rebaixa para "provável"
+            # (mesma cautela do ramo de múltiplos homônimos). Só se aplica quando
+            # há UUID a cravar: um nome único sem UUID (ex.: relatório individual
+            # do Elefante, cujo rótulo de turma é ruidoso) continua "exato".
+            turma_rel = linha.dados.get("turma_relatorio")
+            turma_aluno = turma_de.get(aluno.id, "")
+            tem_uuid_novo = bool(str(linha.dados.get("matific_uuid") or "").strip())
+            conflito_turma = bool(
+                tem_uuid_novo and turma_rel and turma_aluno
+                and len(_tokens_turma(turma_rel) & _tokens_turma(turma_aluno)) < 2)
+            if conflito_turma:
+                linha.correspondencia = {
+                    "status": "provavel", "aluno_id": aluno.id,
+                    "aluno_nome": aluno.nome, "similaridade": 100.0,
+                    "alternativas": alternativas,
+                }
+            else:
+                linha.correspondencia = {
+                    "status": "exato", "via": "exato", "aluno_id": aluno.id,
+                    "aluno_nome": aluno.nome,
+                    "similaridade": 100.0, "alternativas": alternativas,
+                }
         elif len(exatos) > 1:
             escolhido = _desempatar_por_turma(
                 exatos, linha.dados.get("turma_relatorio"), turma_de)

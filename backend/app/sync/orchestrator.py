@@ -112,9 +112,14 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     linhas: list[LinhaConfirmacao] = []
     for l in analise.linhas:
         corr = l.correspondencia or {}
-        # Só auto-vincula match confiante (exato/provável). Não-encontrado cai
-        # na turma detectada (mesmo comportamento do auto-import individual).
-        confiante = corr.get("status") in ("exato", "provavel")
+        # A sync é NÃO SUPERVISIONADA (roda sozinha) → só auto-vincula quando a
+        # identidade é CERTA: UUID já vinculado ou nome idêntico (via uuid/exato).
+        # "provável" (fuzzy/abreviado/homônimo por turma) EXIGE confirmação humana
+        # (§52) e aqui viraria misattribution silenciosa — então cai como
+        # não-casado na turma detectada (cria/atualiza sem roubar dados de outra
+        # criança; uma eventual duplicata é resolvível em "Fundir duplicatas").
+        confiante = (corr.get("status") == "exato"
+                     and corr.get("via") in ("uuid", "exato"))
         aluno_id = corr.get("aluno_id") if confiante else None
         turma_nome = analise.turma_detectada if aluno_id is None else None
         if turma_nome:

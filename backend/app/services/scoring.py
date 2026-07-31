@@ -643,8 +643,16 @@ def _carregar_contexto(db: Session, escola_id: int):
         .options(selectinload(Matricula.aluno))  # evita N+1 em matricula.aluno
     ).all()
 
-    matific = _snapshots_atuais(db, escola_id, SnapshotMatific)
-    elefante = _snapshots_atuais(db, escola_id, SnapshotElefante)
+    # Restringe os snapshots ao conjunto PONTUADO (ativos matriculados no ano) —
+    # o mesmo dos `pontos_dif` abaixo. Sem isto, o snapshot de um aluno arquivado/
+    # excluído/não-matriculado entrava na régua de normalização (P90/mediana) sem
+    # ser pontuado: arquivar um aluno (operação rotineira, que dispara recálculo)
+    # mudava as notas e as posições de todos os ativos.
+    ids_pontuados = {m.aluno_id for m, _t in matriculas}
+    matific = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotMatific).items()
+               if aid in ids_pontuados}
+    elefante = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
+                if aid in ids_pontuados}
     mapa_dif = _mapa_dificuldade(db, escola_id)
 
     pontos_dif: dict[int, float] = {}
