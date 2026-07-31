@@ -159,6 +159,35 @@ def test_dificuldade_por_serie_sobrepoe_padrao(db):
     assert linhas["Pontos de dificuldade"]["valor"] == pytest.approx(10.0)
 
 
+def test_pontos_por_codigo_resolve_turma_serie_padrao(db):
+    """A4 (auditoria): as telas de PERÍODO (premiações, aba Leitura, evolução,
+    histórico) resolvem os pontos por código com TURMA > SÉRIE > padrão — a MESMA
+    régua do ranking anual, senão o 'Melhor Leitor' premiava com o padrão."""
+    from app.models import PontuacaoNivelTurma
+    escola, turma, importacao, niveis = montar_escola(db)
+    pre = niveis[0]  # AA/BB, padrão 1.0
+    # SÉRIE: no 1º Ano, AA/BB valem 3.
+    db.add(DificuldadeTurma(escola_id=escola.id, ano_escolar="1º Ano",
+                            nivel_id=pre.id, pontos=3.0))
+    # TURMA-livre: nesta turma, AA vale 5 (sobrepõe a série).
+    db.add(PontuacaoNivelTurma(escola_id=escola.id, turma_id=turma.id,
+                               pontos_por_codigo={"AA": 5.0}))
+    db.commit()
+
+    assert scoring.pontos_por_codigo(db, escola.id)["AA"] == 1.0            # padrão
+    serie = scoring.pontos_por_codigo(db, escola.id, ano_escolar="1º Ano")
+    assert serie["AA"] == 3.0 and serie["BB"] == 3.0                        # série
+    turma_map = scoring.pontos_por_codigo(db, escola.id, turma_id=turma.id,
+                                          ano_escolar="1º Ano")
+    assert turma_map["AA"] == 5.0                                           # turma>série
+    assert turma_map["BB"] == 3.0                                           # BB só série
+
+    mapa = scoring.mapa_pontos_turmas(db, escola.id)
+    assert mapa[None]["AA"] == 1.0                                          # padrão
+    assert mapa[turma.id]["AA"] == 5.0                                      # turma>série
+    assert mapa[turma.id]["BB"] == 3.0                                      # série
+
+
 def test_livro_de_serie_diferente_usa_padrao(db):
     escola, turma, importacao, _ = montar_escola(db)
     aluno = novo_aluno(db, escola, turma, "Sem Override")

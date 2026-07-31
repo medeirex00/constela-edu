@@ -133,3 +133,16 @@ def test_trocar_propria_senha_invalida_sessoes(cliente, db, escola_completa):
     # O token que o `cliente` ainda carrega (versão antiga) deixa de valer.
     r = cliente.get(f"{_base(escola.id)}/usuarios")
     assert r.status_code == 401
+
+
+# --- A5: certificado geral não emite "nota 0,0" para aluno sem Nota -----------
+
+def test_certificado_geral_recusa_aluno_sem_nota(cliente, escola_completa):
+    """Aluno recém-cadastrado (sem Nota calculada) → 422, em vez de um documento
+    oficial afirmando 'nota geral 0,0'."""
+    escola = escola_completa["escola"]
+    aluno = escola_completa["alunos"][0]   # sem snapshot/nota nesta fixture
+    # Sem `modelo` = certificado GERAL (o que estampa a nota).
+    r = cliente.get(f"{_base(escola.id)}/certificados/{aluno.id}")
+    assert r.status_code == 422, r.text
+    assert "nota" in r.json()["detail"].lower()

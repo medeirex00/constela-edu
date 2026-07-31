@@ -320,11 +320,33 @@ def _pontos_dificuldade(
     return round(total, 2)
 
 
-def pontos_por_codigo(db: Session, escola_id: int,
-                      turma_id: int | None = None) -> dict[str, float]:
+def _overrides_serie(db: Session, escola_id: int) -> dict[tuple[str, str], float]:
+    """Override de pontos por SÉRIE (legado): ``{(ano_escolar, CODIGO_UPPER):
+    pontos}`` a partir de DificuldadeTurma. Sobrepõe o padrão da escola; é
+    sobreposto pela config LIVRE por turma. Resolução: TURMA > SÉRIE > padrão."""
+    niveis = {n.id: n for n in db.execute(
+        select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
+    ).scalars()}
+    saida: dict[tuple[str, str], float] = {}
+    for ov in db.execute(
+        select(DificuldadeTurma).where(DificuldadeTurma.escola_id == escola_id)
+    ).scalars():
+        nivel = niveis.get(ov.nivel_id)
+        if nivel is None:
+            continue
+        for codigo in (nivel.codigos or []):
+            if codigo:
+                saida[(ov.ano_escolar, str(codigo).strip().upper())] = float(ov.pontos)
+    return saida
+
+
+def pontos_por_codigo(db: Session, escola_id: int, turma_id: int | None = None,
+                      ano_escolar: str | None = None) -> dict[str, float]:
     """Pontos de dificuldade por CÓDIGO de letra do livro (ex.: {"AA": 1.0,
-    "D": 4.0}). Base do ranking de leitura por período. Com ``turma_id``, aplica a
-    config LIVRE daquela turma sobre o padrão da escola."""
+    "D": 4.0}). Base do ranking de leitura por período. Com ``ano_escolar`` e/ou
+    ``turma_id``, resolve **TURMA > SÉRIE > padrão** — a MESMA régua do ranking
+    anual, para as telas de PERÍODO (premiações, aba Leitura, evolução, histórico)
+    não divergirem do Geral."""
     mapa: dict[str, float] = {}
     for nivel in db.execute(
         select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
@@ -332,20 +354,33 @@ def pontos_por_codigo(db: Session, escola_id: int,
         for codigo in (nivel.codigos or []):
             if codigo:
                 mapa[str(codigo).upper()] = float(nivel.pontos_padrao)
-    if turma_id:
+    if ano_escolar:                       # 2) override por SÉRIE
+        for (serie, cod_up), pontos in _overrides_serie(db, escola_id).items():
+            if serie == ano_escolar and cod_up in mapa:
+                mapa[cod_up] = pontos
+    if turma_id:                          # 1) config LIVRE por TURMA (mais forte)
         mapa.update(_overrides_turma(db, escola_id).get(turma_id, {}))
     return mapa
 
 
 def mapa_pontos_turmas(db: Session, escola_id: int) -> dict:
-    """``{turma_id | None: {CODIGO_UPPER: pontos}}`` — ``None`` = padrão da escola;
-    cada turma customizada tem o seu (padrão + override). Para o ranking por
-    período resolver a pontuação pela turma do aluno numa passada só."""
+    """``{turma_id | None: {CODIGO_UPPER: pontos}}`` resolvido **TURMA > SÉRIE >
+    padrão**. ``None`` = padrão da escola; cada turma já traz a SÉRIE e a config
+    LIVRE aplicadas. Para o ranking/premiação por período resolver a pontuação
+    pela turma do aluno numa passada só (sem N+1)."""
     base = pontos_por_codigo(db, escola_id)
+    overrides_serie = _overrides_serie(db, escola_id)
+    overrides_turma = _overrides_turma(db, escola_id)
+    turmas = db.execute(
+        select(Turma.id, Turma.ano_escolar).where(Turma.escola_id == escola_id)
+    ).all()
     saida: dict = {None: base}
-    for turma_id, override in _overrides_turma(db, escola_id).items():
+    for turma_id, serie in turmas:
         combinado = dict(base)
-        combinado.update(override)
+        for (s, cod_up), pontos in overrides_serie.items():   # SÉRIE
+            if s == serie and cod_up in combinado:
+                combinado[cod_up] = pontos
+        combinado.update(overrides_turma.get(turma_id, {}))   # TURMA-livre (mais forte)
         saida[turma_id] = combinado
     return saida
 

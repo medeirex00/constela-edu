@@ -279,7 +279,15 @@ def historico_leituras(
         consulta = consulta.where(Leitura.data <= fim_dt)
     consulta = consulta.order_by(Leitura.data.desc(), Leitura.id.desc())
 
-    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    # Pontos resolvidos pela TURMA do aluno (TURMA>SÉRIE>padrão) — mesma régua do
+    # ranking anual, não a pontuação padrão da escola.
+    mat = db.execute(
+        select(Turma.id, Turma.ano_escolar)
+        .join(Matricula, Matricula.turma_id == Turma.id)
+        .where(Matricula.aluno_id == aluno.id, Matricula.ano_letivo == ano)
+    ).first()
+    _turma_id, _ano_escolar = (mat[0], mat[1]) if mat else (None, None)
+    pontos_map = scoring.pontos_por_codigo(db, escola_id, _turma_id, _ano_escolar)
     itens = []
     for leitura, livro in db.execute(consulta).all():
         codigo = (livro.nivel_codigo or "").upper()

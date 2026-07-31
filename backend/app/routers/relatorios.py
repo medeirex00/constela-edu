@@ -213,13 +213,22 @@ def certificado(
     ).scalar_one_or_none()
 
     def _geral() -> bytes:
+        # Certificado de MÉRITO: sem nota calculada (aluno recém-cadastrado, import
+        # ainda não recalculado, ou sem dado de plataforma) NÃO se emite — um
+        # documento oficial com brasão afirmando "nota geral 0,0" é constrangedor.
+        if nota is None or (nota.nota_geral or 0.0) <= 0:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Este aluno ainda não tem nota calculada — não dá para emitir o "
+                "certificado geral. Importe/sincronize os dados da escola (e "
+                "aguarde o recálculo) antes de emitir.")
         return svc.gerar_certificado(
             escola_nome=escola.nome,
             cor=svc.cor_primaria(db, escola_id),
             aluno_nome=aluno.nome,
             turma=matricula[1].nome if matricula else "",
-            posicao=nota.posicao if nota else None,
-            nota_geral=nota.nota_geral if nota else 0.0,
+            posicao=nota.posicao,
+            nota_geral=nota.nota_geral,
             ano_letivo=escola.ano_letivo_ativo,
             logos=svc.logos_da_escola(db, escola_id),
         )

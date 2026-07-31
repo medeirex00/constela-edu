@@ -156,7 +156,16 @@ def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
     if fim is not None:
         consulta = consulta.where(Leitura.data <= fim)
 
-    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    # Pontos resolvidos pela TURMA do aluno (TURMA>SÉRIE>padrão) — mesma régua do
+    # ranking anual; sem isto a evolução usava a pontuação padrão da escola.
+    mat = db.execute(
+        select(Turma.id, Turma.ano_escolar)
+        .join(Matricula, Matricula.turma_id == Turma.id)
+        .where(Matricula.aluno_id == aluno_id)
+        .order_by(Matricula.ano_letivo.desc())
+    ).first()
+    turma_id, ano_escolar = (mat[0], mat[1]) if mat else (None, None)
+    pontos_map = scoring.pontos_por_codigo(db, escola_id, turma_id, ano_escolar)
     baldes: dict[tuple, dict] = {}
     for data, codigo, tempo in db.execute(consulta.order_by(Leitura.data)).all():
         chave, rotulo = _bucket_leitura(_sem_fuso(data), granularidade)
@@ -413,7 +422,7 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             questoes_acertos=questoes_a,
         )
         pontos_dif[aluno_id] = scoring._pontos_dificuldade(
-            niveis_ganho, turma.ano_escolar, mapa_dif
+            niveis_ganho, turma.ano_escolar, mapa_dif, turma.id
         )
 
     # Referências JUSTAS sobre os ganhos (mesma régua do Geral): P90 dos ativos

@@ -36,7 +36,7 @@ def _alunos_ativos(db: Session, escola_id: int, ano: int,
                    turma_id: int | None,
                    turma_ids: list[int] | None = None) -> dict[int, dict]:
     consulta = (
-        select(Aluno.id, Aluno.nome, Turma.nome)
+        select(Aluno.id, Aluno.nome, Turma.nome, Turma.id, Turma.ano_escolar)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
         .join(Turma, Matricula.turma_id == Turma.id)
         .where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
@@ -46,8 +46,8 @@ def _alunos_ativos(db: Session, escola_id: int, ano: int,
         consulta = consulta.where(Turma.id == turma_id)
     if turma_ids is not None:  # professor: só as turmas designadas a ele
         consulta = consulta.where(Turma.id.in_(turma_ids))
-    return {aid: {"nome": nome, "turma": turma}
-            for aid, nome, turma in db.execute(consulta).all()}
+    return {aid: {"nome": nome, "turma": turma, "turma_id": tid, "ano_escolar": serie}
+            for aid, nome, turma, tid, serie in db.execute(consulta).all()}
 
 
 def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
@@ -58,7 +58,10 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
     alunos = _alunos_ativos(db, escola_id, ano, turma_id, turma_ids)
 
     # --- Leitura no período (livros, pontos de dificuldade, tempo) ----------
-    pontos_map = scoring.pontos_por_codigo(db, escola_id)
+    # Pontos de dificuldade resolvidos pela TURMA de cada aluno (TURMA>SÉRIE>
+    # padrão) — a MESMA régua do ranking anual, senão o "Melhor Leitor" premiava
+    # com a pontuação padrão e podia coroar a criança errada.
+    mapa_turmas = scoring.mapa_pontos_turmas(db, escola_id)
     livros: dict[int, float] = {}
     pontos: dict[int, float] = {}
     tempo: dict[int, float] = {}
@@ -74,7 +77,8 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
             consulta = consulta.where(Leitura.data <= fim)
         for aid, codigo, minutos in db.execute(consulta).all():
             livros[aid] = livros.get(aid, 0) + 1
-            pontos[aid] = pontos.get(aid, 0.0) + pontos_map.get((codigo or "").upper(), 0.0)
+            mapa_aluno = mapa_turmas.get(alunos[aid]["turma_id"], mapa_turmas[None])
+            pontos[aid] = pontos.get(aid, 0.0) + mapa_aluno.get((codigo or "").upper(), 0.0)
             tempo[aid] = tempo.get(aid, 0) + (minutos or 0)
 
     # --- Ganho no Matific dentro do período (snapshot final − linha de base) -
