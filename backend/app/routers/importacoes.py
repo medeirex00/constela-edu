@@ -36,7 +36,6 @@ from app.services.eventos import chave_evento, ingerir_eventos
 from app.models import (
     Aluno,
     Escola,
-    EventoAluno,
     IdentidadeExterna,
     Importacao,
     Leitura,
@@ -350,6 +349,15 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
                             Turma.ano_letivo == ano,
                             func.lower(Turma.nome) == chave).limit(1)
     ).scalars().first()
+    # Antes de criar: reaproveita uma turma JÁ CADASTRADA que casa por TOKENS
+    # (série+letra) — a MESMA identidade de turma da base (chave_turma) e do move
+    # do Matific. Sem isto, um formato diferente no relatório ("1 ANO B TARDE
+    # ANUAL" vs a base "1º Ano B") não casava pelo nome exato e a sync não
+    # supervisionada criava uma TURMA-FANTASMA paralela (aluno novo numa sala
+    # separada do resto da turma). Só reaproveita quando o casamento é INEQUÍVOCO
+    # (_turma_existente_por_tokens devolve None em empate) — na dúvida, cria.
+    if turma is None:
+        turma = _turma_existente_por_tokens(db, escola_id, ano, nome)
     if turma is None:
         turma, criada = _inserir_turma(
             db, escola_id, ano, nome, _ano_escolar_do_nome(nome) or nome[:20])
