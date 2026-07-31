@@ -24,7 +24,7 @@ interface ResumoEscola {
 
 export default function VisaoEscola() {
   const { escolaId } = useApp();
-  const { rede } = usePerfil();
+  const { rede, secretaria } = usePerfil();
   const { dados: resumo, erro, carregando } = useApi<ResumoEscola>(
     escolaId ? `/escolas/${escolaId}/resumo-escola` : null,
   );
@@ -73,9 +73,15 @@ export default function VisaoEscola() {
                 {resumo.turmas.map((item) => (
                   <tr key={item.turma.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
                     <td className="px-4 py-2.5">
-                      <Link to={`/turmas/${item.turma.id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
-                        {item.turma.nome}
-                      </Link>
+                      {/* Secretaria vê só o agregado por turma — o detalhe da turma
+                          (alunos nominais) é PII e fica bloqueado (404 no backend). */}
+                      {secretaria ? (
+                        <span className="font-medium">{item.turma.nome}</span>
+                      ) : (
+                        <Link to={`/turmas/${item.turma.id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                          {item.turma.nome}
+                        </Link>
+                      )}
                       <span className="ml-2 text-xs text-zinc-400">{item.turma.ano_escolar}</span>
                     </td>
                     <td className="px-4 py-2.5 text-right">{numero(item.total_alunos)}</td>
@@ -95,9 +101,11 @@ export default function VisaoEscola() {
                     <td className="hidden px-4 py-2.5 text-right md:table-cell">{numero(item.indicadores.livros_unicos ?? 0)}</td>
                     <td className="hidden px-4 py-2.5 text-right md:table-cell">{tempoLeitura(item.indicadores.tempo_leitura_min ?? 0)}</td>
                     <td className="px-4 py-2.5 text-right">
-                      <Link to={`/turmas/${item.turma.id}`} className="text-xs text-indigo-600 hover:underline dark:text-indigo-400">
-                        detalhes
-                      </Link>
+                      {!secretaria && (
+                        <Link to={`/turmas/${item.turma.id}`} className="text-xs text-indigo-600 hover:underline dark:text-indigo-400">
+                          detalhes
+                        </Link>
+                      )}
                     </td>
                   </tr>
                 ))}

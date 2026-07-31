@@ -23,8 +23,9 @@ def mural(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Mural da escola: Aluno do Dia/Semana/Mês + eventos recentes (§83).
-    Vitrine da ESCOLA TODA — professor não acessa (gamificação só dos seus)."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    Vitrine da ESCOLA TODA — professor não acessa (gamificação só dos seus).
+    Bloqueado para a Secretaria: destaca NOMES de crianças (PII/LGPD)."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     return svc.mural(db, escola_id)
 
 

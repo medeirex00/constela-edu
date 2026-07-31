@@ -251,7 +251,7 @@ def historico_leituras(
     data/hora, tempo e pontos de dificuldade.
 
     Dado ESPECÍFICO ("quando o aluno leu X livro"): professor não acessa."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = _aluno_da_escola(db, escola_id, aluno_id)
     ano = _ano_ativo(db, escola_id)
     try:
@@ -611,7 +611,9 @@ def alunos_duplicados(
     """PRÉVIA da fusão em lote (read-only): candidatos a aluno duplicado por
     nível de confiança (nome idêntico/subconjunto/abreviação + MESMA turma).
     Nada é alterado; o gestor marca quais confirmar. Admin global e coordenador
-    da escola veem; a Secretaria (rede) é barrada na escrita por escola_autorizada."""
+    da PRÓPRIA escola veem. A Secretaria (rede) é barrada: a prévia lista NOMES
+    de criança (LGPD) — escola_autorizada só nega a ESCRITA, não este GET."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     candidatos = alunos_dedup.plano_deduplicacao(db, escola_id)
     return {"candidatos": candidatos, "total": len(candidatos),
             "revisar": sum(1 for c in candidatos if c["confianca"] == "revisar")}

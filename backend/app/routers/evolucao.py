@@ -25,7 +25,7 @@ def evolucao_do_aluno(
 ):
     """Linha do tempo completa + variação no período (PRD §67–§71).
     Dado detalhado: professor não acessa (vê só posição e pontos)."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -50,7 +50,7 @@ def evolucao_leitura_do_aluno(
     """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
     semana, mês ou bimestre), respeitando o período escolhido.
     Dado detalhado: professor não acessa."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -82,7 +82,7 @@ def linha_do_tempo_do_aluno(
     """Linha do tempo cronológica (evento a evento) do aluno, do mais recente ao
     mais antigo, paginada por cursor. Sem período informado, traz o histórico
     TODO. Dado detalhado: professor restrito não acessa."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -112,7 +112,7 @@ def espelho_do_aluno(
     """Resumo do 'espelho' de dados do aluno (contadores por tipo/plataforma,
     primeira/última atividade, tempo total). Dado detalhado: professor não
     acessa."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -207,7 +207,13 @@ def comparar(
 ):
     """Comparador aluno×aluno, aluno×turma, turma×turma e (ADM da rede)
     escola×escola (PRD §73–§75) — dados detalhados: gestão apenas."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    # O lado 'aluno' expõe PII individual → bloqueado para a Secretaria (LGPD).
+    # turma×turma e escola×escola são AGREGADOS (sem nome de criança): seguem
+    # abertos à gestão, inclusive à Secretaria.
+    if "aluno" in (tipo_a, tipo_b):
+        permissoes.negar_dado_individual(db, escola_id, usuario)
+    else:
+        permissoes.negar_restrito(db, escola_id, usuario)
     # "Escola" como lado é recurso de ADM SUPREMO (rede/global). Um usuário
     # não-global só pode usar a PRÓPRIA escola como lado "escola".
     for tipo, ident in ((tipo_a, id_a), (tipo_b, id_b)):

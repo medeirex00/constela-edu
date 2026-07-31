@@ -123,7 +123,6 @@ for router in (
     plataformas.router,
     evolucao.router,
     gamificacao.router,
-    relatorios.router,
     admin.router,
     sistema.router,
     publico.router,
@@ -140,10 +139,15 @@ for router in (
 # A Secretaria acompanha os resultados da REDE, mas não opera as escolas: fica
 # bloqueada na raiz destes routers (leitura e escrita). Coordenador de escola
 # (sem rede) e admin global passam normalmente.
+#
+# `relatorios` entra aqui pelo mesmo motivo de PII/LGPD: são PDFs de ESCOLA
+# (certificados, lista de alunos, cartaz do ranking) com NOME de criança — a
+# Secretaria vê só o agregado da rede (o boletim consolidado é `/redes/.../boletim`).
 for router in (
     importacoes.router,
     sync_router.router,
     sync_router.router_global,
+    relatorios.router,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX,
                        dependencies=[Depends(negar_secretaria)])

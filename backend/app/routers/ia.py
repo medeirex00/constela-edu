@@ -61,8 +61,9 @@ def perguntar(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Chat com contexto montado no backend — a IA só vê dados desta escola.
-    O contexto é da ESCOLA TODA, então professor não acessa."""
-    permissoes.negar_restrito(db, escola_id, usuario)
+    O contexto é da ESCOLA TODA, então professor não acessa. A Secretaria também
+    não: o contexto inclui dado individual de criança, que a IA poderia revelar."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     try:
         resultado = assistente.perguntar(
             db, escola_id, usuario.id, dados.pergunta, dados.conversa_id
@@ -83,6 +84,9 @@ def listar_conversas(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Histórico de conversas do usuário logado (PRD §160)."""
+    # As respostas do Assistente reidentificam nome+situação de criança; a
+    # Secretaria não acessa (nem as próprias conversas antigas, se virou Secretaria).
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     conversas = db.execute(
         select(ConversaIA)
         .where(ConversaIA.escola_id == escola_id, ConversaIA.usuario_id == usuario.id)
@@ -102,6 +106,7 @@ def mensagens_da_conversa(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    permissoes.negar_dado_individual(db, escola_id, usuario)  # respostas reidentificam PII
     conversa = db.get(ConversaIA, conversa_id)
     if conversa is None or conversa.escola_id != escola_id \
             or conversa.usuario_id != usuario.id:

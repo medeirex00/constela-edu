@@ -29,8 +29,23 @@ def acesso_total(usuario: Usuario) -> bool:
     return bool(usuario.is_global) or usuario.cargo in CARGOS_TOTAIS
 
 
+def e_secretaria(usuario: Usuario) -> bool:
+    """SEDUC/Secretaria: conta vinculada a uma REDE e NÃO global. AGREGA a rede,
+    mas NUNCA enxerga dado individual de criança (LGPD) — só números por escola/
+    rede. É a mesma definição de ``deps._e_secretaria`` (aqui sem importar deps,
+    para evitar ciclo)."""
+    return usuario.rede_id is not None and not usuario.is_global
+
+
 def turmas_permitidas(db: Session, escola_id: int, usuario: Usuario) -> list[int] | None:
     """None = sem restrição. Lista (pode ser vazia) = restrito a essas turmas."""
+    # Secretaria: nenhuma turma de trabalho → as telas INDIVIDUAIS (lista de
+    # alunos, rankings nominais, insights por aluno, ficha) ficam vazias/404. Os
+    # agregados por escola/rede NÃO passam por aqui (usam acesso_total/exigir_rede),
+    # então a visão consolidada continua intacta. Vem ANTES de acesso_total porque
+    # a conta da Secretaria costuma ter cargo 'coordenador'.
+    if e_secretaria(usuario):
+        return []
     if acesso_total(usuario):
         return None
     email = (usuario.email or "").strip().lower()
@@ -64,6 +79,18 @@ def negar_restrito(db: Session, escola_id: int, usuario: Usuario) -> None:
     if not acesso_total(usuario):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Seu perfil não tem acesso a esta área.")
+
+
+def negar_dado_individual(db: Session, escola_id: int, usuario: Usuario) -> None:
+    """403 para professor restrito E para a Secretaria — telas de DADO INDIVIDUAL
+    de criança (ficha/histórico/evolução por aluno, comparador, certificados,
+    mural nominal). A Secretaria AGREGA a rede, mas não vê PII de criança (LGPD);
+    só o gestor da PRÓPRIA escola (admin/coordenador sem rede) e o admin global.
+    Para agregados sem PII (resumo por turma, config), use ``negar_restrito``."""
+    if not acesso_total(usuario) or e_secretaria(usuario):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Seu perfil não tem acesso a dados individuais de alunos.")
 
 
 def exigir_aluno_permitido(db: Session, escola_id: int, ano: int,
