@@ -705,7 +705,7 @@ def obter_aparencia(
         "cor_primaria": valores.get("cor_primaria", "#1B2A4A"),
         "mostrar_fotos": valores.get("mostrar_fotos", True),
         # Logos da cidade DESTA escola (data URIs) para o certificado/relatórios.
-        # Vazios = usa o padrão do piloto (app/marca/) ou só a marca Constela.
+        # Vazios = só a marca Constela (não há logo de cidade embutido).
         "brasao_data_uri": logos.get("brasao_data_uri", ""),
         "prefeitura_data_uri": logos.get("prefeitura_data_uri", ""),
     }

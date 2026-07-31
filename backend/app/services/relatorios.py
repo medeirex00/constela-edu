@@ -277,12 +277,11 @@ _MEDALHA_SVG = (
 )
 
 # ---------------------------------------------------------------------------
-# Logos institucionais (cidade / prefeitura) — OPCIONAIS, por arquivo em
-# app/marca/. Quando existem, entram no cabeçalho dos documentos "de vitrine"
-# (certificado e cartaz do ranking): brasão da cidade à esquerda, marca
-# Constela ao centro, prefeitura à direita — como no exemplo do piloto de
-# Caraguatatuba. Sem os arquivos, aparece só a marca Constela (o produto segue
-# genérico para qualquer escola — é só soltar os PNGs da cidade na pasta).
+# Logos institucionais (cidade / prefeitura) — OPCIONAIS, enviados POR ESCOLA em
+# Configurações → Aparência. Quando existem, entram no cabeçalho dos documentos
+# "de vitrine" (certificado e cartaz do ranking): brasão à esquerda, marca
+# Constela ao centro, prefeitura à direita. NÃO há logo de cidade embutido no
+# software — sem upload da escola, aparece só a marca Constela.
 # ---------------------------------------------------------------------------
 _MARCA_DIR = Path(__file__).resolve().parent.parent / "marca"
 
@@ -303,9 +302,8 @@ def _asset_data_uri(nome: str) -> str:
 
 def logos_da_escola(db: Session, escola_id: int) -> tuple[str, str]:
     """(brasão, prefeitura) DESTA escola como data URIs, se foram enviados em
-    Configurações → Aparência. Strings vazias quando não há — aí os documentos
-    caem para o logo padrão de `app/marca/` (piloto) e, na falta, só a marca
-    Constela. É isto que torna o brasão/prefeitura automáticos por cidade."""
+    Configurações → Aparência. Strings vazias quando não há — nesse caso os
+    documentos saem só com a marca Constela (não existe logo de cidade embutido)."""
     cfg = scoring.obter_config(db, escola_id, "aparencia", "logos", {})
     return (str(cfg.get("brasao_data_uri") or ""),
             str(cfg.get("prefeitura_data_uri") or ""))
@@ -314,17 +312,11 @@ def logos_da_escola(db: Session, escola_id: int) -> tuple[str, str]:
 def _cabecalho_logos(logos: tuple[str, str] | None = None) -> str:
     """Cabeçalho com até 3 logos (brasão · Constela · prefeitura).
 
-    Regra ALL-OR-NOTHING por escola: se a escola enviou QUALQUER logo próprio
-    (Aparência), usa SÓ os dela — nunca completa o que falta com o padrão de
-    OUTRA cidade (evita misturar, ex.: brasão da cidade nova + prefeitura de
-    Caraguá). Só quando a escola não tem NENHUM logo próprio é que caímos para
-    o padrão do piloto em `app/marca/`; e na falta dele, só a marca Constela."""
-    brasao_uri, pref_uri = logos or ("", "")
-    if brasao_uri or pref_uri:
-        brasao, prefeitura = brasao_uri, pref_uri
-    else:
-        brasao = _asset_data_uri("cidade-brasao.png")
-        prefeitura = _asset_data_uri("prefeitura.png")
+    Os logos da CIDADE saem SÓ do que a própria escola enviou em Configurações →
+    Aparência — não há mais logo de cidade embutido no software. Escola sem logo
+    próprio: aparece só a marca Constela (o produto segue genérico para qualquer
+    cidade — cada escola sobe o seu)."""
+    brasao, prefeitura = logos or ("", "")
     esq = f'<img class="logo-cidade" src="{brasao}" alt="Brasão da cidade">' if brasao else ""
     dire = f'<img class="logo-pref" src="{prefeitura}" alt="Prefeitura">' if prefeitura else ""
     return (f'<div class="cabecalho">{esq}'
