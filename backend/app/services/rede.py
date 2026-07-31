@@ -18,7 +18,7 @@ import secrets
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, Matricula, Nota, Rede, Turma
+from app.models import Aluno, Escola, Matricula, Nota, Professor, Rede, Turma
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -87,6 +87,13 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
         .group_by(Nota.escola_id)
     ).all()}
 
+    # (4) professores por escola (mesma contagem do painel da escola).
+    professores = dict(db.execute(
+        select(Professor.escola_id, func.count(Professor.id))
+        .where(Professor.escola_id.in_(ids))
+        .group_by(Professor.escola_id)
+    ).all())
+
     cartoes = []
     for escola in escolas:
         agg = notas.get(escola.id)
@@ -102,6 +109,7 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "status": escola.status,
             "latitude": escola.latitude, "longitude": escola.longitude,
             "total_turmas": int(turmas.get(escola.id, 0)),
+            "total_professores": int(professores.get(escola.id, 0)),
             "total_alunos": total_alunos,
             "alunos_com_dados": com_nota,
             "adocao": adocao,
@@ -120,6 +128,7 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
 
     total_alunos = sum(c["total_alunos"] for c in cartoes)
     total_turmas = sum(c["total_turmas"] for c in cartoes)
+    total_professores = sum(c["total_professores"] for c in cartoes)
     com_dados = sum(c["alunos_com_dados"] for c in cartoes)
 
     # Média da rede PONDERADA por alunos-com-nota (não média de médias, que daria
@@ -152,6 +161,7 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
             "escolas_ativas": sum(1 for c in cartoes if c["status"] == "ativa"),
             "alunos": total_alunos,
             "turmas": total_turmas,
+            "professores": total_professores,
             "alunos_com_dados": com_dados,
             "adocao": round(com_dados / total_alunos * 100, 1) if total_alunos else 0.0,
             "media_geral": media_rede,

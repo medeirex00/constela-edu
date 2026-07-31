@@ -60,6 +60,7 @@ interface DashboardRede {
     escolas_ativas: number;
     alunos: number;
     turmas: number;
+    professores: number;
     alunos_com_dados: number;
     adocao: number;
     media_geral: number;
@@ -284,7 +285,7 @@ function PainelRede({ redeId }: { redeId: number }) {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icone={<Building2 size={16} />} rotulo="Escolas" valor={numero(t.escolas)} detalhe={`${t.escolas_ativas} ativas`} />
-        <StatCard icone={<Users size={16} />} rotulo="Alunos" valor={numero(t.alunos)} detalhe={`${numero(t.turmas)} turmas`} />
+        <StatCard icone={<Users size={16} />} rotulo="Alunos" valor={numero(t.alunos)} detalhe={`${numero(t.turmas)} turmas · ${numero(t.professores)} professores`} />
         <StatCard icone={<GraduationCap size={16} />} rotulo="Adoção" valor={`${nota(t.adocao)}%`} detalhe="alunos com dados" />
         <StatCard
           icone={<TrendingUp size={16} />}

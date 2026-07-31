@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.core.security import hash_senha
 from app.main import app
-from app.models import Aluno, Escola, Matricula, Nota, Rede, Turma, Usuario
+from app.models import Aluno, Escola, Matricula, Nota, Professor, Rede, Turma, Usuario
 
 
 def _login(email: str, senha: str) -> TestClient:
@@ -65,6 +65,29 @@ def test_secretaria_ve_agregado_da_rede_sem_pii(db):
 
     # PRIVACIDADE: a resposta agregada NÃO traz nome de criança.
     assert "Crianca" not in resp.text
+
+
+def test_dashboard_rede_conta_professores(db):
+    """O painel da rede totaliza os professores das escolas (KPI §3)."""
+    rede = Rede(nome="Rede com Profs", status="ativa")
+    db.add(rede)
+    db.flush()
+    esc_a = _escola_com_notas(db, rede.id, "Escola A", [80.0])
+    esc_b = _escola_com_notas(db, rede.id, "Escola B", [70.0])
+    for nome in ("Prof 1", "Prof 2", "Prof 3"):
+        db.add(Professor(escola_id=esc_a.id, nome=nome))
+    db.add(Professor(escola_id=esc_b.id, nome="Prof 4"))
+    db.add(Usuario(nome="Secretaria", email="sec.profs@rede.gov",
+                   senha_hash=hash_senha("s3nh4secretaria"), cargo="coordenador",
+                   rede_id=rede.id))
+    db.commit()
+
+    cliente = _login("sec.profs@rede.gov", "s3nh4secretaria")
+    dash = cliente.get(f"/api/v1/redes/{rede.id}/dashboard").json()
+
+    assert dash["totais"]["professores"] == 4               # 3 + 1 da rede
+    card_a = next(c for c in dash["escolas"] if c["nome"] == "Escola A")
+    assert card_a["total_professores"] == 3
 
 
 def test_isolamento_entre_redes_bloqueia_idor(db):

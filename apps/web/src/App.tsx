@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import { Botao, Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
+import { usePerfil } from "./hooks/usePerfil";
 
 // Code-splitting por rota: cada página vira um chunk próprio, carregado sob
 // demanda. Assim as rotas públicas (/p/:token) e o /login não baixam o app
@@ -86,24 +87,21 @@ function AreaProtegida() {
  *  é mandado de volta ao Dashboard, em vez de abrir a tela com botões de admin
  *  (ex.: importar Lista Piloto). O backend continua sendo a trava real dos dados. */
 function RotaGestao({ children }: { children: React.ReactNode }) {
-  const { usuario } = useApp();
-  const gestor = Boolean(usuario?.is_global)
-    || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const { gestor } = usePerfil();
   return gestor ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 /** Só administrador GLOBAL (gestão de todas as escolas). */
 function RotaGlobal({ children }: { children: React.ReactNode }) {
-  const { usuario } = useApp();
-  return usuario?.is_global ? <>{children}</> : <Navigate to="/" replace />;
+  const { global } = usePerfil();
+  return global ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 /** Só a Secretaria (usuário com rede vinculada) ou o admin global entra em
  *  /rede — o painel municipal com o mapa. Professor/escola cai no Dashboard. */
 function RotaRede({ children }: { children: React.ReactNode }) {
-  const { usuario } = useApp();
-  const temRede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
-  return temRede ? <>{children}</> : <Navigate to="/" replace />;
+  const { rede } = usePerfil();
+  return rede ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 /** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding): a
@@ -111,11 +109,17 @@ function RotaRede({ children }: { children: React.ReactNode }) {
  *  NÃO opera as escolas — é mandada ao Dashboard. Coordenador de escola (sem
  *  rede) e admin global entram. O backend também barra (deps.negar_secretaria). */
 function RotaEscolaOp({ children }: { children: React.ReactNode }) {
-  const { usuario } = useApp();
-  const gestor = Boolean(usuario?.is_global)
-    || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  const { gestor, secretaria } = usePerfil();
   return gestor && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
+}
+
+/** Tela inicial ADAPTÁVEL ao perfil (rota "/"): a SEDUC/Secretaria e o Admin
+ *  Global entram na visão consolidada da REDE (/rede); professor/coordenador/
+ *  admin de escola veem o Dashboard da escola. Reutiliza os painéis existentes
+ *  — não duplica nenhuma tela. */
+function RoteadorInicial() {
+  const { rede } = usePerfil();
+  return rede ? <Navigate to="/rede" replace /> : <Dashboard />;
 }
 
 export default function App() {
@@ -135,7 +139,8 @@ export default function App() {
         <Route path="/rede/p/:token" element={<PainelPublicoRede />} />
         <Route element={<AreaProtegida />}>
           {/* --- Abertas ao professor (dados já filtrados pelas turmas dele) --- */}
-          <Route path="/" element={<Dashboard />} />
+          {/* "/" adapta ao perfil: SEDUC/Admin Global → visão da rede; escola → Dashboard. */}
+          <Route path="/" element={<RoteadorInicial />} />
           <Route path="/ranking" element={<Rankings />} />
           {/* Tela única de Ranking Geral com seletor; rotas antigas viram
               deep-links para a aba correspondente (atalhos/bookmarks seguem). */}

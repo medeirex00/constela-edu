@@ -1,9 +1,11 @@
 /** Visão da escola (PRD §78): comparação entre todas as turmas. */
+import { ChevronLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { usePerfil } from "../hooks/usePerfil";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 
 interface ResumoTurma {
@@ -22,6 +24,7 @@ interface ResumoEscola {
 
 export default function VisaoEscola() {
   const { escolaId } = useApp();
+  const { rede } = usePerfil();
   const { dados: resumo, erro, carregando } = useApi<ResumoEscola>(
     escolaId ? `/escolas/${escolaId}/resumo-escola` : null,
   );
@@ -36,6 +39,14 @@ export default function VisaoEscola() {
 
   return (
     <div>
+      {rede && (
+        <Link
+          to="/rede"
+          className="mb-3 inline-flex items-center gap-1 text-sm text-zinc-500 transition-colors hover:text-indigo-600 dark:hover:text-indigo-400"
+        >
+          <ChevronLeft size={16} /> Voltar para a visão da rede
+        </Link>
+      )}
       <PageHeader
         titulo="Visão da Escola"
         descricao="Comparação entre turmas: médias das notas e totais de cada plataforma."
