@@ -20,6 +20,7 @@ import {
   Mensagem,
   Modal,
   PageHeader,
+  SecaoRecolhivel,
   Vazio,
   estiloInput,
 } from "../../components/ui";
@@ -541,20 +542,21 @@ export default function RedeGestao() {
               </Card>
 
               {/* --- Localização no mapa --- */}
-              <Card className="p-4 lg:col-span-2">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="flex items-center gap-2 text-sm font-semibold">
-                    <MapPin size={16} className="text-indigo-600" /> Localização no mapa
-                  </h2>
-                  <div className="flex flex-wrap gap-2">
+              <SecaoRecolhivel
+                className="lg:col-span-2"
+                icone={<MapPin size={16} className="text-indigo-600" />}
+                titulo="Localização no mapa"
+                acoes={
+                  <>
                     <Botao variante="neutro" onClick={geocodificar} disabled={ocupado || escolasNaRede.length === 0}>
                       <LocateFixed size={14} /> Geocodificar automaticamente
                     </Botao>
                     <Botao onClick={salvarLocalizacoes} disabled={ocupado || escolasNaRede.length === 0}>
                       <Save size={14} /> Salvar localizações
                     </Botao>
-                  </div>
-                </div>
+                  </>
+                }
+              >
                 <p className="mb-2 text-xs text-zinc-500">
                   Preencha o <b>bairro</b> (e a cidade) e clique em <b>Geocodificar</b> — o sistema
                   acha as coordenadas no OpenStreetMap pelo bairro e posiciona os marcadores.
@@ -646,15 +648,15 @@ export default function RedeGestao() {
                     })}
                   </div>
                 )}
-              </Card>
+              </SecaoRecolhivel>
 
               {/* --- Códigos INEP (para casar avaliações oficiais) --- */}
-              <Card className="p-4 lg:col-span-2">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="flex items-center gap-2 text-sm font-semibold">
-                    <ScanLine size={16} className="text-indigo-600" /> Códigos INEP das escolas
-                  </h2>
-                  <div className="flex flex-wrap gap-2">
+              <SecaoRecolhivel
+                className="lg:col-span-2"
+                icone={<ScanLine size={16} className="text-indigo-600" />}
+                titulo="Códigos INEP das escolas"
+                acoes={
+                  <>
                     <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 ${ocupado || escolasNaRede.length === 0 ? "pointer-events-none opacity-50" : ""}`}>
                       <ScanLine size={14} /> Preencher automaticamente
                       <input type="file" accept=".xlsx,.xls,.csv,.zip" className="hidden"
@@ -663,8 +665,9 @@ export default function RedeGestao() {
                     <Botao onClick={salvarInep} disabled={ocupado || escolasNaRede.length === 0}>
                       <Save size={14} /> Salvar códigos
                     </Botao>
-                  </div>
-                </div>
+                  </>
+                }
+              >
                 <p className="mb-2 text-xs text-zinc-500">
                   O código INEP casa cada escola com as avaliações oficiais (IDEB, SAEB). Clique em{" "}
                   <b>Preencher automaticamente</b> e suba o arquivo oficial do INEP — o sistema casa
@@ -718,7 +721,7 @@ export default function RedeGestao() {
                     })}
                   </div>
                 )}
-              </Card>
+              </SecaoRecolhivel>
             </div>
           )}
         </>

@@ -27,7 +27,7 @@ import { useEffect, useMemo, useState } from "react";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import { useNavigate } from "react-router-dom";
 
-import { Botao, Card, Carregando, Mensagem, PageHeader, StatCard, Vazio } from "../../components/ui";
+import { Botao, Card, Carregando, Mensagem, PageHeader, SecaoRecolhivel, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { api, apiDownload } from "../../lib/api";
@@ -296,13 +296,18 @@ function PainelRede({ redeId }: { redeId: number }) {
 
       {/* Escolas em atenção — a lista de AÇÃO da secretaria (o que priorizar). */}
       {dados.atencao.length > 0 && (
-        <Card className="border-amber-200 p-4 dark:border-amber-500/30">
-          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-            <AlertTriangle size={16} className="text-amber-500" /> Escolas que precisam de atenção
-            <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
-              {dados.atencao.length}
-            </span>
-          </h2>
+        <SecaoRecolhivel
+          className="border-amber-200 dark:border-amber-500/30"
+          icone={<AlertTriangle size={16} className="text-amber-500" />}
+          titulo={
+            <>
+              Escolas que precisam de atenção
+              <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+                {dados.atencao.length}
+              </span>
+            </>
+          }
+        >
           <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
             {dados.atencao.map((escola) => (
               <li key={escola.escola_id} className="flex items-center gap-3 py-2">
@@ -316,7 +321,7 @@ function PainelRede({ redeId }: { redeId: number }) {
               </li>
             ))}
           </ul>
-        </Card>
+        </SecaoRecolhivel>
       )}
 
       {/* Equidade: quão distante está a melhor da pior escola. */}

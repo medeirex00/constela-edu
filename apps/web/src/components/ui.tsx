@@ -1,9 +1,68 @@
 /** Componentes básicos reutilizáveis (PRD §25) — a base visual do sistema. */
-import { useEffect } from "react";
+import { useEffect, useId, useState } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div className={`card ${className}`}>{children}</div>;
+}
+
+/**
+ * Seção recolhível/expansível — MESMO padrão visual em todo o sistema. O
+ * cabeçalho (ícone + título + chevron) é um botão que abre/fecha; o conteúdo
+ * anima a altura de forma suave (truque grid-rows 0fr↔1fr, sem medir DOM, 100%
+ * responsivo). `acoes` fica FORA do botão (não recolhe ao clicar). Não altera o
+ * conteúdo interno — só o embrulha num Card recolhível.
+ */
+export function SecaoRecolhivel({
+  titulo,
+  icone,
+  acoes,
+  inicialAberto = true,
+  children,
+  className = "",
+}: {
+  titulo: ReactNode;
+  icone?: ReactNode;
+  acoes?: ReactNode;
+  inicialAberto?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  const [aberto, setAberto] = useState(inicialAberto);
+  const idConteudo = useId();
+  return (
+    <Card className={`p-4 ${className}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setAberto((a) => !a)}
+          aria-expanded={aberto}
+          aria-controls={idConteudo}
+          className="-m-1 flex flex-1 items-center gap-2 rounded-lg p-1 text-left text-sm font-semibold text-zinc-800 transition-colors hover:text-indigo-600 dark:text-zinc-100 dark:hover:text-indigo-400"
+        >
+          {icone}
+          <span className="flex items-center gap-2">{titulo}</span>
+          <ChevronDown
+            size={16}
+            aria-hidden
+            className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-200 ${aberto ? "rotate-180" : ""}`}
+          />
+        </button>
+        {acoes && <div className="flex flex-wrap gap-2">{acoes}</div>}
+      </div>
+      <div
+        id={idConteudo}
+        className={`grid transition-all duration-200 ease-out ${
+          aberto ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="pt-3">{children}</div>
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 export function PageHeader({ titulo, descricao, acoes }: { titulo: string; descricao?: string; acoes?: ReactNode }) {
