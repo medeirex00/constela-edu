@@ -61,7 +61,16 @@ def _totais_plataforma_por_escola(db: Session, ids: list[int], modelo,
     """Soma, por escola, os campos do snapshot ATUAL de cada aluno (o último por
     data_referencia,id — mesma régua do scoring) e conta os alunos ATIVOS na
     plataforma. UMA window query para a rede inteira (não N por escola). Só
-    números BRUTOS agregados: nenhum dado individual de criança."""
+    números BRUTOS agregados: nenhum dado individual de criança.
+
+    RESTRINGE ao MESMO conjunto das contagens de ``_kpis_da_rede`` (aluno ativo
+    E matriculado no ano letivo ATIVO da escola). Sem isso, o snapshot 'preso' de
+    um aluno transferido/arquivado (que persiste — o scoring já o filtra de
+    propósito) inflava os totais e o ``ativos_*`` frente ao total de alunos,
+    chegando a ``ativos_elefante > total_alunos`` no painel da rede/global. O
+    JOIN em Matrícula pode multiplicar a linha do snapshot (aluno em >1 turma),
+    mas a janela por (escola_id, aluno_id) + ``pos == 1`` deduplica: um aluno
+    conta uma vez, sempre pelo snapshot mais recente."""
     if not ids:
         return {}
     numerado = (
@@ -73,7 +82,12 @@ def _totais_plataforma_por_escola(db: Session, ids: list[int], modelo,
                 order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
             ).label("pos"),
         )
-        .where(modelo.escola_id.in_(ids))
+        .join(Aluno, Aluno.id == modelo.aluno_id)
+        .join(Escola, Escola.id == modelo.escola_id)
+        .join(Matricula, (Matricula.aluno_id == modelo.aluno_id)
+              & (Matricula.escola_id == modelo.escola_id)
+              & (Matricula.ano_letivo == Escola.ano_letivo_ativo))
+        .where(modelo.escola_id.in_(ids), Aluno.status == "ativo")
         .subquery()
     )
     colunas = [numerado.c.escola_id, func.count().label("ativos")]

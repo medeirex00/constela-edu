@@ -59,10 +59,14 @@ def _turma_com_alunos(db, escola_id, nome, alunos, professor_id=None):
 def _cenario(db):
     """Uma REDE, uma ESCOLA, duas TURMAS (A com professor, B sem) e três alunos.
 
-    Posição GLOBAL: Ana(90)=1 · Carla(80)=2 · Bruno(70)=3. A turma A do professor
-    tem Ana e Bruno → na visão DELE renumeram para 1 e 2 (a posição global 1/3
-    não faz sentido para quem só enxerga a própria turma). Cria também as três
-    contas de escola/rede (o Admin Global é criado por teste, quando preciso)."""
+    Posição GLOBAL: Ana(90)=1 · Carla(76)=2 · Bruno(70)=4 (o gap na 3 seria um
+    aluno arquivado — posições reais não são contíguas). A turma A do professor
+    tem Ana e Bruno → na visão DELE renumeram para 1 e 2, o que DISCRIMINA da
+    posição global [1, 4] (um teste com [1,2,3] contíguo não pegaria renumeração
+    indevida). Carla vale 76 (≠ média 80 de Ana+Bruno) para que a média restrita
+    do professor (80) DIFIRA da média da escola inteira (78,67) — senão o assert
+    de média passaria mesmo sem restrição. Cria as três contas de escola/rede (o
+    Admin Global é criado por teste, quando preciso)."""
     rede = Rede(nome="Rede Municipal de Caraguatatuba", uf="SP", status="ativa")
     db.add(rede)
     db.flush()
@@ -76,9 +80,9 @@ def _cenario(db):
     db.flush()
     turma_a, alunos_a = _turma_com_alunos(
         db, esc.id, "1º Ano A",
-        [("Ana Souza", 90.0, 1), ("Bruno Lima", 70.0, 3)], professor_id=prof.id)
+        [("Ana Souza", 90.0, 1), ("Bruno Lima", 70.0, 4)], professor_id=prof.id)
     turma_b, alunos_b = _turma_com_alunos(
-        db, esc.id, "1º Ano B", [("Carla Dias", 80.0, 2)])
+        db, esc.id, "1º Ano B", [("Carla Dias", 76.0, 2)])
 
     db.add(Usuario(escola_id=esc.id, nome="Maria Prof", email="prof@esc.local",
                    senha_hash=hash_senha("s3nh4professor"), cargo="professor"))
@@ -99,12 +103,14 @@ def test_professor_ve_apenas_a_propria_turma_renumerada(db):
     c = _cenario(db)
     prof = _login("prof@esc.local", "s3nh4professor")
 
-    # Ranking Geral na perspectiva do professor: só a turma dele, renumerado 1..N.
+    # Ranking Geral na perspectiva do professor: só a turma dele, RENUMERADO 1..N
+    # (posição global de Bruno é 4 → renumerar para 2 discrimina de [1, 4]).
     ranking = prof.get(f"/api/v1/escolas/{c['escola']}/ranking").json()
     assert [r["nome"] for r in ranking] == ["Ana Souza", "Bruno Lima"]  # sem Carla
     assert [r["posicao"] for r in ranking] == [1, 2]                    # renumerado
 
-    # Dashboard da TURMA: só os 2 alunos da turma dele, uma turma, média 80.
+    # Dashboard da TURMA: só os 2 alunos da turma dele, uma turma. A média restrita
+    # (90+70)/2 = 80 DIFERE da média da escola inteira (78,67) → sensível ao escopo.
     dash = prof.get(f"/api/v1/escolas/{c['escola']}/dashboard").json()
     assert dash["total_alunos"] == 2 and dash["total_turmas"] == 1
     assert dash["media_geral"] == 80.0
@@ -124,10 +130,12 @@ def test_coordenador_ve_a_escola_inteira(db):
     c = _cenario(db)
     coord = _login("coord@esc.local", "s3nh4coordena")
 
-    # Ranking Geral da escola inteira, na posição GLOBAL.
+    # Ranking Geral da escola inteira, na posição GLOBAL preservada (NÃO renumera):
+    # posições [1, 2, 4] (o 3 é o gap do arquivado) discriminam de um [1,2,3] que
+    # uma renumeração indevida produziria.
     ranking = coord.get(f"/api/v1/escolas/{c['escola']}/ranking").json()
     assert [r["nome"] for r in ranking] == ["Ana Souza", "Carla Dias", "Bruno Lima"]
-    assert [r["posicao"] for r in ranking] == [1, 2, 3]
+    assert [r["posicao"] for r in ranking] == [1, 2, 4]
 
     # Dashboard da ESCOLA: os 3 alunos, as 2 turmas.
     dash = coord.get(f"/api/v1/escolas/{c['escola']}/dashboard").json()
@@ -203,7 +211,11 @@ def test_admin_global_multirrede_drill_down_e_volta(db):
     assert jg["totais"]["alunos"] == 4
     assert {r["nome"] for r in jg["redes"]} == {
         "Rede Municipal de Caraguatatuba", "Rede Municipal de Ubatuba"}
-    assert all("rede_nome" in e for e in jg["top_escolas"])   # escola sabe a rede
+    # Cada escola do top carrega o nome da SUA rede (não vazio, não trocado).
+    por_escola = {e["nome"]: e["rede_nome"] for e in jg["top_escolas"]}
+    assert por_escola == {
+        "EM JORGE PASSOS": "Rede Municipal de Caraguatatuba",
+        "EM UBATUBA CENTRO": "Rede Municipal de Ubatuba"}
     for nome in ("Ana", "Bruno", "Carla", "Duda"):
         assert nome not in glob.text                          # consolidado sem PII
 
@@ -218,7 +230,8 @@ def test_admin_global_multirrede_drill_down_e_volta(db):
     # e a escola da OUTRA rede também (nada de isolamento para o admin global).
     assert admin.get(f"/api/v1/escolas/{esc2.id}/dashboard").json()["total_alunos"] == 1
 
-    # (d) RETORNA à visão consolidada — stateless: recarregar o global entrega os
-    #     mesmos 2 redes/2 escolas/4 alunos.
+    # (d) A visão consolidada é STATELESS: reconsultar o global entrega sempre os
+    #     mesmos 2 redes/2 escolas/4 alunos (a jornada de UI "voltar para todas as
+    #     redes" — estado do componente — é coberta em web/PanoramaGlobal.test.tsx).
     de_volta = admin.get("/api/v1/redes/panorama-global").json()
     assert de_volta["totais"]["redes"] == 2 and de_volta["totais"]["alunos"] == 4

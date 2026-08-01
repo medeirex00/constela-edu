@@ -133,6 +133,43 @@ def test_dashboard_rede_agrega_plataformas_e_ranking_por_metrica(db):
     assert r and r[0]["nome"] == "Escola X" and r[0]["livros"] == 20
 
 
+def test_totais_da_rede_ignoram_snapshot_de_aluno_transferido(db):
+    """Regressão (revisão adversarial): os totais brutos das plataformas e os
+    ``ativos_*`` só contam alunos ATIVOS e matriculados no ano — igual às demais
+    contagens. Um aluno transferido cujo snapshot ficou 'preso' NÃO pode inflar
+    os números (nem produzir o absurdo ``ativos_elefante > total_alunos``)."""
+    rede = Rede(nome="Rede Transferência", status="ativa")
+    db.add(rede)
+    db.flush()
+    # Escola com UM aluno ativo/matriculado (5 livros) — via helper padrão.
+    esc = _escola_com_notas(db, rede.id, "Escola T", [70.0])
+    imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
+    ativo = db.execute(select(Aluno).where(Aluno.escola_id == esc.id)).scalar_one()
+    db.add(SnapshotElefante(escola_id=esc.id, aluno_id=ativo.id, importacao_id=imp.id,
+                            livros_unicos=5, tempo_leitura_min=30))
+
+    # Aluno que SAIU: status != ativo, SEM matrícula no ano — mas o snapshot
+    # antigo (30 livros) permaneceu no banco.
+    saiu = Aluno(escola_id=esc.id, nome="Foi Embora", status="transferido")
+    db.add(saiu)
+    db.flush()
+    db.add(SnapshotElefante(escola_id=esc.id, aluno_id=saiu.id, importacao_id=imp.id,
+                            livros_unicos=30, tempo_leitura_min=300))
+    db.commit()
+
+    t = svc_rede.dashboard_rede(db, rede.id)["totais"]
+    assert t["alunos"] == 1                       # só o ativo é matriculado
+    assert t["livros"] == 5                        # 30 do transferido NÃO entram
+    assert t["ativos_elefante"] == 1               # conta 1, não 2
+    assert t["ativos_elefante"] <= t["alunos"]     # nunca mais ativos que alunos
+
+    # E o mesmo vale para o Panorama Global (consolida via _kpis_da_rede).
+    g = svc_rede.dashboard_global(db)["totais"]
+    assert g["livros"] == 5 and g["alunos"] == 1
+
+
 def test_metas_da_rede_cadastro_progresso_e_upsert(db):
     """A Secretaria CADASTRA metas da rede; o progresso é calculado sobre o dado
     REAL (média da rede) e conta as escolas que atingiram. Upsert por métrica."""
@@ -187,7 +224,9 @@ def test_panorama_global_do_admin_consolida_todas_as_redes(db):
     assert j["totais"]["redes"] == 2
     assert j["totais"]["escolas"] == 2 and j["totais"]["alunos"] == 3
     assert {r["nome"] for r in j["redes"]} == {"Rede A", "Rede B"}
-    assert all("rede_nome" in e for e in j["top_escolas"])     # top escolas com a rede
+    # Top escolas trazem a rede CORRETA de cada uma (não vazio, não trocado).
+    mapa = {e["nome"]: e["rede_nome"] for e in j["top_escolas"]}
+    assert mapa == {"Escola A1": "Rede A", "Escola B1": "Rede B"}
     assert "Crianca" not in admin.get("/api/v1/redes/panorama-global").text  # sem PII
 
     # A Secretaria (não global) NÃO acessa a visão global.
