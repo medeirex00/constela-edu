@@ -327,138 +327,24 @@ def test_variante_nao_pareia_criancas_diferentes(cliente, db, escola_completa):
     assert [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()] == []
 
 
-# --- Auto-fusão do passivo (dry-run + executar) -----------------------------
+# --- Regressões de SEGURANÇA da detecção (achados da revisão adversarial) ----
+# (A auto-fusão foi removida por insegura; estes garantem que a detecção manual
+#  não colapsa crianças diferentes.)
 
-def _piloto(db, escola_id, nome, turma_id):
-    a = _add_aluno(db, escola_id, nome, turma_id)
-    a.da_lista_piloto = True
-    db.commit()
-    return a
-
-
-def _existe(db, aid) -> bool:
-    return db.execute(select(Aluno.id).where(Aluno.id == aid)
-                      ).scalar_one_or_none() is not None
-
-
-def test_auto_fusao_resolve_o_abraao_e_preserva_lista_piloto(cliente, db, escola_completa):
-    """Passivo do ABRAÃO: Lista Piloto + o stub abreviado do Elefante ("ABRAAO L")
-    na mesma turma → a fusão automática (abreviação, 1 candidato) resolve sozinha e
-    mantém o perfil da Lista Piloto como canônico, com o nome oficial."""
-    escola_id = escola_completa["escola"].id
-    turma_id = escola_completa["turma"].id
-    piloto_id = _piloto(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id).id
-    ab_l_id = _add_aluno(db, escola_id, "ABRAAO L", turma_id).id
-
-    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    assert r.status_code == 200, r.text
-    assert r.json()["fundidos"] == 1
-    assert _existe(db, piloto_id) and not _existe(db, ab_l_id)
-    assert db.get(Aluno, piloto_id).nome == "ABRAÃO LUÍS DIAS"   # nome oficial mantido
-
-
-def test_auto_fusao_nao_funde_identicos_sem_nascimento(cliente, db, escola_completa):
-    """Dois 'Bruno Alves Costa' na mesma turma SEM nascimento = possível gêmeo →
-    NÃO entra na fusão automática; fica para revisão manual."""
-    escola_id = escola_completa["escola"].id
-    turma_id = escola_completa["turma"].id
-    a = _add_aluno(db, escola_id, "Bruno Alves Costa", turma_id)
-    b = _add_aluno(db, escola_id, "Bruno Alves Costa", turma_id)
-
-    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
-    assert dry["resumo"]["grupos_auto"] == 0
-    assert dry["resumo"]["revisar"] >= 1
-
-    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    assert r.json()["fundidos"] == 0
-    assert _existe(db, a.id) and _existe(db, b.id)
-
-
-def test_auto_fusao_dry_run_mostra_grupo_e_conta(cliente, db, escola_completa):
-    escola_id = escola_completa["escola"].id
-    turma_id = escola_completa["turma"].id
-    piloto = _piloto(db, escola_id, "CLARA FERNANDES", turma_id)
-    _add_aluno(db, escola_id, "CLARA F", turma_id)   # abreviação → 1 candidato
-
-    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
-    grupo = next(g for g in dry["grupos"] if g["canonico_id"] == piloto.id)
-    assert grupo["canonico"] == "CLARA FERNANDES"
-    assert [d["nome"] for d in grupo["duplicatas"]] == ["CLARA F"]
-    assert dry["resumo"]["grupos_auto"] >= 1 and dry["resumo"]["fusoes_auto"] >= 1
-
-
-def test_auto_fusao_e_idempotente(cliente, db, escola_completa):
-    escola_id = escola_completa["escola"].id
-    turma_id = escola_completa["turma"].id
-    _piloto(db, escola_id, "DIEGO SANTOS", turma_id)
-    _add_aluno(db, escola_id, "DIEGO S", turma_id)
-
-    r1 = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                      json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    assert r1.json()["fundidos"] == 1
-    r2 = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                      json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    assert r2.json()["fundidos"] == 0        # nada a refundir
-
-
-def test_auto_fusao_registra_no_log(cliente, db, escola_completa):
-    from app.models import LogAuditoria
-    escola_id = escola_completa["escola"].id
-    turma_id = escola_completa["turma"].id
-    _piloto(db, escola_id, "ELISA MORAES", turma_id)
-    _add_aluno(db, escola_id, "ELISA M", turma_id)
-
-    cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                 json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    log = db.execute(select(LogAuditoria).where(
-        LogAuditoria.acao == "aluno.fusao_automatica")).scalars().first()
-    assert log is not None and log.detalhes["fusoes"] == 1
-
-
-def test_auto_fusao_exige_confirmacao(cliente, db, escola_completa):
-    escola_id = escola_completa["escola"].id
-    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                     json={"loser_ids": [], "confirmacao": "x"})
-    assert r.status_code == 400
-
-
-# --- Regressões de SEGURANÇA da auto-fusão (achados da revisão adversarial) ---
-
-def test_auto_fusao_nunca_funde_nomes_proximos_diferentes(cliente, db, escola_completa):
-    """Achado adversarial [1]: 'ANA LUIZA' × 'ANA LUCIA' (e MARIA/MARTA) são
-    crianças DIFERENTES cuja similaridade cai no mesmo limiar de LUÍS/LUIZ. NUNCA
-    podem ser auto-fundidas — variante é só revisão manual."""
-    escola_id = escola_completa["escola"].id
-    turma_id = escola_completa["turma"].id
-    a = _add_aluno(db, escola_id, "ANA LUIZA", turma_id)
-    b = _add_aluno(db, escola_id, "ANA LUCIA", turma_id)
-
-    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
-    assert dry["resumo"]["grupos_auto"] == 0
-    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    assert r.json()["fundidos"] == 0
-    assert _existe(db, a.id) and _existe(db, b.id)     # as duas crianças permanecem
-
-
-def test_auto_fusao_nao_colapsa_homonimos_no_stub(cliente, db, escola_completa):
+def test_homonimos_com_stub_nao_sao_sugeridos(cliente, db, escola_completa):
     """Achado adversarial [2]: dois homônimos 'MARIA EDUARDA SANTOS' + um stub
-    'MARIA EDUARDA' → 2 candidatos (ambíguo) → NÃO auto-funde (o stub não pode ser
-    colado num dos homônimos por acaso)."""
+    'MARIA EDUARDA' → 2 alunos candidatos (ambíguo) → o stub NÃO é sugerido (não
+    pode ser colado num dos homônimos por acaso)."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    h1 = _add_aluno(db, escola_id, "MARIA EDUARDA SANTOS", turma_id)
-    h2 = _add_aluno(db, escola_id, "MARIA EDUARDA SANTOS", turma_id)
-    stub = _add_aluno(db, escola_id, "MARIA EDUARDA", turma_id)
+    _add_aluno(db, escola_id, "MARIA EDUARDA SANTOS", turma_id)
+    _add_aluno(db, escola_id, "MARIA EDUARDA SANTOS", turma_id)
+    _add_aluno(db, escola_id, "MARIA EDUARDA", turma_id)
 
-    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
-    assert dry["resumo"]["grupos_auto"] == 0           # ambíguo → nada automático
-    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
-                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
-    assert r.json()["fundidos"] == 0
-    assert _existe(db, h1.id) and _existe(db, h2.id) and _existe(db, stub.id)
+    corpo = _duplicados(cliente, escola_id)
+    # O stub abreviado ambíguo NÃO vira sugestão de subconjunto/abreviação.
+    assert [c for c in corpo["candidatos"]
+            if c["apagar"] == "MARIA EDUARDA" and c["motivo"] in ("subconjunto", "abreviacao")] == []
 
 
 def test_deteccao_preserva_perfil_da_lista_piloto_mesmo_curto(cliente, db, escola_completa):

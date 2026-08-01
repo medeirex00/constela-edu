@@ -7,7 +7,7 @@
  * (mais conservador — a regra do dono é: pior fundir errado do que deixar
  * duplicado). Antes de aplicar, uma confirmação clara e explícita.
  */
-import { AlertTriangle, Sparkles, UsersRound } from "lucide-react";
+import { AlertTriangle, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
@@ -35,13 +35,6 @@ interface PreviaAlunos {
   candidatos: CandidatoAluno[];
   total: number;
   revisar: number;
-}
-interface PlanoAuto {
-  resumo: { total_alunos: number; grupos_auto: number; fusoes_auto: number; revisar: number };
-  grupos: {
-    canonico_id: number; canonico: string; turma: string;
-    duplicatas: { loser_id: number; nome: string }[];
-  }[];
 }
 interface ResultadoFusao {
   fundidos: number;
@@ -80,55 +73,27 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   aoConcluir: () => void;
 }) {
   const [previa, setPrevia] = useState<PreviaAlunos | null>(null);
-  const [autoPlano, setAutoPlano] = useState<PlanoAuto | null>(null);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [resultado, setResultado] = useState<ResultadoFusao | null>(null);
   const [confirmando, setConfirmando] = useState(false);
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
-  const [resolvendoAuto, setResolvendoAuto] = useState(false);
-  const [autoMsg, setAutoMsg] = useState("");
-
-  async function carregar() {
-    // A prévia da fusão AUTOMÁTICA (alta confiança) + a lista de revisão manual.
-    const [auto, manual] = await Promise.all([
-      api<PlanoAuto>(`/escolas/${escolaId}/alunos/duplicados/auto`),
-      api<PreviaAlunos>(`/escolas/${escolaId}/alunos/duplicados`),
-    ]);
-    setAutoPlano(auto);
-    setPrevia(manual);
-    // "alta" já vem marcada; "revisar" DESMARCADA (o gestor confirma).
-    setSelecionados(new Set(
-      manual.candidatos.filter((c) => c.confianca === "alta").map((c) => c.loser_id)));
-  }
 
   useEffect(() => {
     let vivo = true;
-    carregar().catch((e) => {
-      if (vivo) setErro(e instanceof ApiError ? e.message : "Não foi possível carregar.");
-    });
+    api<PreviaAlunos>(`/escolas/${escolaId}/alunos/duplicados`)
+      .then((r) => {
+        if (!vivo) return;
+        setPrevia(r);
+        // "alta" já vem marcada; "revisar" DESMARCADA (o gestor confirma).
+        setSelecionados(new Set(
+          r.candidatos.filter((c) => c.confianca === "alta").map((c) => c.loser_id)));
+      })
+      .catch((e) => {
+        if (vivo) setErro(e instanceof ApiError ? e.message : "Não foi possível carregar.");
+      });
     return () => { vivo = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [escolaId]);
-
-  /** Resolve automaticamente TODOS os grupos de alta confiança (1 candidato
-   *  plausível) numa tacada — sem selecionar par a par. Recarrega a prévia. */
-  async function resolverAutomaticos() {
-    setResolvendoAuto(true);
-    setErro("");
-    try {
-      const r = await api<ResultadoFusao>(
-        `/escolas/${escolaId}/alunos/duplicados/auto`,
-        { method: "POST", body: JSON.stringify({ loser_ids: [], confirmacao: "FUNDIR" }) });
-      aoConcluir();          // recarrega a lista de alunos por trás
-      await carregar();      // atualiza a prévia (agora só sobram os ambíguos)
-      setAutoMsg(`${r.fundidos} duplicata(s) resolvida(s) automaticamente.`);
-    } catch (e) {
-      setErro(e instanceof ApiError ? e.message : "Não foi possível resolver automaticamente.");
-    } finally {
-      setResolvendoAuto(false);
-    }
-  }
 
   function alternar(id: number) {
     setConfirmando(false);
@@ -210,39 +175,11 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
       ) : previa === null && !erro ? (
         <div className="mt-2"><Carregando /></div>
       ) : previa && previa.total === 0 ? (
-        <>
-          {autoMsg && <Mensagem tipo="ok">{autoMsg}</Mensagem>}
-          <Vazio titulo="Nenhuma duplicata para revisar"
-                 descricao="Não há mais casos ambíguos. Os de alta confiança já foram resolvidos automaticamente." />
-        </>
+        <Vazio titulo="Nenhuma duplicata encontrada"
+               descricao="Não achei alunos duplicados (mesmo nome/começo de nome na mesma turma)." />
       ) : (
         // --- Prévia + confirmação ---
         <>
-          {autoMsg && <Mensagem tipo="ok">{autoMsg}</Mensagem>}
-
-          {/* Fusão AUTOMÁTICA dos casos de alta confiança (1 candidato plausível) —
-              um clique resolve todos, sem selecionar par a par. */}
-          {autoPlano && autoPlano.resumo.grupos_auto > 0 && (
-            <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 dark:border-emerald-500/40 dark:bg-emerald-500/10">
-              <p className="text-sm text-emerald-800 dark:text-emerald-200">
-                🟢 <strong>{autoPlano.resumo.fusoes_auto}</strong> duplicata(s) de{" "}
-                <strong>alta confiança</strong> (único candidato plausível) podem ser
-                resolvidas automaticamente.
-                {autoPlano.resumo.revisar > 0 && (
-                  <> Restam <strong>{autoPlano.resumo.revisar}</strong> caso(s) ambíguo(s)
-                  para revisão manual abaixo.</>
-                )}
-              </p>
-              <div className="mt-2">
-                <Botao onClick={resolverAutomaticos} disabled={resolvendoAuto}>
-                  <Sparkles size={15} />
-                  {resolvendoAuto ? "Resolvendo..."
-                    : `Resolver ${autoPlano.resumo.fusoes_auto} automaticamente`}
-                </Botao>
-              </div>
-            </div>
-          )}
-
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Encontrei <strong>{previa?.total}</strong> possível(is) duplicata(s).
             Marque as que são a <strong>mesma criança</strong> — vou manter o cadastro

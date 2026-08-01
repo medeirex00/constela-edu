@@ -178,9 +178,9 @@ def _candidatos(db: Session, escola_id: int
                          and not _conflito_forte(a, b)
                          and variante_ortografica(tokens_nome(a.nome), tokens_nome(b.nome))]
             # SÓ sugere quando há UM único parceiro variante (ambíguo → não sugere).
-            # E NUNCA é auto-fundido (variante ∉ _MOTIVOS_AUTO): similaridade de nome
-            # não distingue "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (crianças
-            # diferentes) — ambos caem no mesmo limiar. Fica sempre para revisão.
+            # E é SEMPRE revisão manual (nunca automático): similaridade de nome não
+            # distingue "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (crianças
+            # diferentes) — ambos caem no mesmo limiar. Só um humano decide.
             if len(parceiros) != 1:
                 continue
             survivor = _melhor_perfil(parceiros[0], a)
@@ -315,77 +315,12 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
     return {"fundidos": fundidos, "falhas": falhas, "detalhes": detalhes}
 
 
-# ---------------------------------------------------------------------------
-# AUTO-FUSÃO do passivo histórico (regra do dono: 1 candidato plausível → funde
-# sozinho; 2+ → revisão manual; 0 → nada). Dry-run + executar, com auditoria.
-# ---------------------------------------------------------------------------
-
-# Motivo SEGURO para auto-fundir: SÓ a abreviação posicional com UM único
-# candidato — o padrão inequívoco do stub de plataforma ("ABRAAO L" tem a inicial
-# 'L' prefixando o 2º nome do ÚNICO aluno completo da turma). Deliberadamente NÃO
-# inclui:
-#   * "variante" (LUÍS/LUIZ): similaridade de nome não separa a mesma criança de
-#     duas crianças de nomes próximos (MARIA/MARTA, LUIZA/LUCIA) — só revisão;
-#   * "subconjunto" ("MARIA SILVA" ⊂ "MARIA EDUARDA DA SILVA"): subconjunto de
-#     tokens é sinal fraco, pode ser outra criança — só revisão;
-#   * "nome_identico" mesmo com nascimento igual: gêmeos podem colidir nome+data.
-# Todos esses continuam DETECTADOS (aparecem para revisão manual), só não são
-# fundidos sozinhos.
-_MOTIVOS_AUTO = frozenset({"abreviacao"})
-
-
-def _auto_fusavel(confianca: str, motivo: str) -> bool:
-    """Este par pode ser fundido AUTOMATICAMENTE (sem revisão humana)? Só a
-    abreviação posicional inequívoca (1 candidato). O resto é revisão manual."""
-    return motivo in _MOTIVOS_AUTO
-
-
-def plano_auto_fusao(db: Session, escola_id: int) -> dict:
-    """DRY-RUN (read-only): o que a fusão automática FARIA. Agrupa por aluno
-    canônico (survivor) os casos de alta confiança e conta os que ficam para
-    revisão manual. Nada é alterado."""
-    escola = db.get(Escola, escola_id)
-    if escola is None:
-        return {"resumo": {"total_alunos": 0, "grupos_auto": 0, "fusoes_auto": 0,
-                           "revisar": 0}, "grupos": []}
-    total = db.execute(
-        select(func.count()).select_from(Aluno)
-        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")).scalar_one()
-
-    grupos: dict[int, dict] = {}
-    revisar_losers: set[int] = set()
-    for loser, survivor, confianca, motivo, turma in _candidatos(db, escola_id):
-        if _auto_fusavel(confianca, motivo):
-            g = grupos.setdefault(survivor.id, {
-                "canonico_id": survivor.id, "canonico": survivor.nome,
-                "turma": turma, "confianca": "alta",
-                "motivo": "único candidato plausível na mesma escola e turma",
-                "duplicatas": []})
-            g["duplicatas"].append({"loser_id": loser.id, "nome": loser.nome})
-        else:
-            revisar_losers.add(loser.id)
-
-    return {
-        "resumo": {
-            "total_alunos": int(total),
-            "grupos_auto": len(grupos),
-            "fusoes_auto": sum(len(g["duplicatas"]) for g in grupos.values()),
-            "revisar": len(revisar_losers),
-        },
-        "grupos": list(grupos.values()),
-    }
-
-
-def executar_auto_fusao(db: Session, escola_id: int, usuario_id: int) -> dict:
-    """EXECUTA a fusão automática dos casos de alta confiança (abreviação com 1
-    candidato). Reusa ``aplicar_deduplicacao`` (savepoint por par, preserva TODOS
-    os dados via fundir_par, leque funde numa tacada, cadeia ambígua é recusada).
-
-    UMA passada só — o que a prévia (``plano_auto_fusao``) mostra é EXATAMENTE o
-    que executa (contrato "simulação = execução"). Idempotente: os perdedores
-    somem, rodar de novo não refunde nada. NÃO commita — o endpoint faz isso e
-    recalcula a escola uma vez."""
-    auto_ids = [loser.id
-                for loser, _s, confianca, motivo, _t in _candidatos(db, escola_id)
-                if _auto_fusavel(confianca, motivo)]
-    return aplicar_deduplicacao(db, escola_id, auto_ids, usuario_id)
+# NOTA (revisão adversarial, 2 rodadas): a AUTO-FUSÃO do passivo foi REMOVIDA por
+# não ser segura. Todo sinal automático pode fundir CRIANÇAS DIFERENTES:
+#   * nome idêntico → gêmeos/homônimos; * variante (LUÍS/LUIZ) → indistinguível de
+#   MARIA/MARTA; * abreviação ("ABRAÃO L") → o dono real da inicial pode não estar
+#   no roster, então "1 candidato" é artefato de roster incompleto, não prova.
+# Como a fusão DELETA registros (irreversível), o passivo é resolvido SÓ pela
+# ferramenta MANUAL (detecção inteligente + "Selecionar todos" + avisos ⚠), onde
+# um humano confirma. A regra do dono ("nunca fundir crianças diferentes") vence a
+# conveniência da automação.
