@@ -15,11 +15,21 @@ import "@fontsource/poppins/700.css";
 import App from "./App";
 import { LimiteErro } from "./components/LimiteErro";
 import { AppProvider } from "./context/AppContext";
+import { recuperarDeChunkObsoleto } from "./lib/atualizacao";
 import "./index.css";
 
 // Service worker (PWA): torna o app instalável no celular e no computador,
 // com o app shell disponível offline. autoUpdate troca a versão em segundo plano.
 registerSW({ immediate: true });
+
+// Deploy novo + shell antigo em cache = chunk lazy (ex.: o Dashboard) some e o
+// import dinâmico falha. O Vite emite `vite:preloadError`; aqui limpamos o
+// cache do PWA e recarregamos para o build novo, em vez de deixar a tela em
+// branco/no LimiteErro para todos os perfis.
+window.addEventListener("vite:preloadError", (evento: Event) => {
+  evento.preventDefault();
+  recuperarDeChunkObsoleto();
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
