@@ -437,10 +437,14 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
                Matricula.ano_letivo == ano, Aluno.status == "ativo")
     ).scalars():
         tk = svc.tokens_nome(aluno.nome)
+        # Só sinais ESTRUTURAIS seguros: nome exato normalizado ou abreviação
+        # POSICIONAL ("ABRAAO L" ⊂ "ABRAÃO LUÍS DIAS"). NÃO usa variante de grafia
+        # (LUÍS/LUIZ) para AUTO-vincular: similaridade não separa a mesma criança
+        # de duas de nomes próximos (MARIA/MARTA) — esse caso vira aluno novo e
+        # aparece na revisão manual de duplicatas, nunca vínculo automático errado.
         if (svc.normalizar_nome(aluno.nome) == alvo
                 or svc.casa_abreviado_posicional(tokens_linha, tk)
-                or svc.casa_abreviado_posicional(tk, tokens_linha)
-                or svc.variante_ortografica(tokens_linha, tk)):
+                or svc.casa_abreviado_posicional(tk, tokens_linha)):
             candidatos.append(aluno)
     unicos = {a.id: a for a in candidatos}
     if len(unicos) == 1:

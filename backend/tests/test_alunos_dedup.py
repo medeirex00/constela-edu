@@ -287,17 +287,16 @@ def test_detecta_variante_em_turmas_fantasma_da_mesma_sala(cliente, db, escola_c
 
 
 def test_leque_triplicado_funde_tudo_no_perfil_da_lista_piloto(cliente, db, escola_completa):
-    """O aluno TRIPLICADO da Debora Pilon: a ficha da Lista Piloto + a variação de
-    acento (Elefante) + a variação ortográfica (Matific), TODAS apontando para o
-    perfil da Lista Piloto (leque A→S, B→S). "Selecionar todos" funde as duas de
-    uma vez e sobra só o perfil principal."""
+    """LEQUE: o perfil da Lista Piloto + duas fichas de MESMO nome (import repetido)
+    na mesma turma, todas apontando para o piloto (A→S, B→S). "Selecionar todos"
+    funde as duas de uma vez (manual) e sobra só o perfil principal."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
     piloto = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)   # 1º id (LP)
     piloto.da_lista_piloto = True
     db.commit()
-    dup1 = _add_aluno(db, escola_id, "ABRAAO LUIS DIAS", turma_id)     # acento (Elefante)
-    dup2 = _add_aluno(db, escola_id, "ABRAAO LUIZ DIAS", turma_id)     # ortográfica (Matific)
+    dup1 = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)     # ficha repetida
+    dup2 = _add_aluno(db, escola_id, "ABRAAO LUIS DIAS", turma_id)     # variação de acento
 
     corpo = _duplicados(cliente, escola_id)
     pares = [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
@@ -343,21 +342,19 @@ def _existe(db, aid) -> bool:
 
 
 def test_auto_fusao_resolve_o_abraao_e_preserva_lista_piloto(cliente, db, escola_completa):
-    """Passivo do ABRAÃO: Lista Piloto + abreviação (Elefante) + variante (Matific),
-    todas na mesma turma → a fusão automática resolve TUDO numa chamada (com
-    cascata) e mantém o perfil da Lista Piloto como canônico."""
+    """Passivo do ABRAÃO: Lista Piloto + o stub abreviado do Elefante ("ABRAAO L")
+    na mesma turma → a fusão automática (abreviação, 1 candidato) resolve sozinha e
+    mantém o perfil da Lista Piloto como canônico, com o nome oficial."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
     piloto_id = _piloto(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id).id
     ab_l_id = _add_aluno(db, escola_id, "ABRAAO L", turma_id).id
-    ab_z_id = _add_aluno(db, escola_id, "ABRAAO LUIZ DIAS", turma_id).id
 
     r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
                      json={"loser_ids": [], "confirmacao": "FUNDIR"})
     assert r.status_code == 200, r.text
-    assert r.json()["fundidos"] == 2
-    assert _existe(db, piloto_id)
-    assert not _existe(db, ab_l_id) and not _existe(db, ab_z_id)
+    assert r.json()["fundidos"] == 1
+    assert _existe(db, piloto_id) and not _existe(db, ab_l_id)
     assert db.get(Aluno, piloto_id).nome == "ABRAÃO LUÍS DIAS"   # nome oficial mantido
 
 
@@ -425,3 +422,58 @@ def test_auto_fusao_exige_confirmacao(cliente, db, escola_completa):
     r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
                      json={"loser_ids": [], "confirmacao": "x"})
     assert r.status_code == 400
+
+
+# --- Regressões de SEGURANÇA da auto-fusão (achados da revisão adversarial) ---
+
+def test_auto_fusao_nunca_funde_nomes_proximos_diferentes(cliente, db, escola_completa):
+    """Achado adversarial [1]: 'ANA LUIZA' × 'ANA LUCIA' (e MARIA/MARTA) são
+    crianças DIFERENTES cuja similaridade cai no mesmo limiar de LUÍS/LUIZ. NUNCA
+    podem ser auto-fundidas — variante é só revisão manual."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    a = _add_aluno(db, escola_id, "ANA LUIZA", turma_id)
+    b = _add_aluno(db, escola_id, "ANA LUCIA", turma_id)
+
+    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
+    assert dry["resumo"]["grupos_auto"] == 0
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    assert r.json()["fundidos"] == 0
+    assert _existe(db, a.id) and _existe(db, b.id)     # as duas crianças permanecem
+
+
+def test_auto_fusao_nao_colapsa_homonimos_no_stub(cliente, db, escola_completa):
+    """Achado adversarial [2]: dois homônimos 'MARIA EDUARDA SANTOS' + um stub
+    'MARIA EDUARDA' → 2 candidatos (ambíguo) → NÃO auto-funde (o stub não pode ser
+    colado num dos homônimos por acaso)."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    h1 = _add_aluno(db, escola_id, "MARIA EDUARDA SANTOS", turma_id)
+    h2 = _add_aluno(db, escola_id, "MARIA EDUARDA SANTOS", turma_id)
+    stub = _add_aluno(db, escola_id, "MARIA EDUARDA", turma_id)
+
+    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
+    assert dry["resumo"]["grupos_auto"] == 0           # ambíguo → nada automático
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    assert r.json()["fundidos"] == 0
+    assert _existe(db, h1.id) and _existe(db, h2.id) and _existe(db, stub.id)
+
+
+def test_deteccao_preserva_perfil_da_lista_piloto_mesmo_curto(cliente, db, escola_completa):
+    """Achado adversarial [3]: quando o perfil da Lista Piloto tem o nome MAIS
+    CURTO ('MARIA SILVA') e há uma ficha de plataforma mais longa ('MARIA EDUARDA
+    DA SILVA'), o survivor deve ser o PILOTO (nunca deletá-lo, nome oficial mantido)."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto = _add_aluno(db, escola_id, "MARIA SILVA", turma_id)
+    piloto.da_lista_piloto = True
+    db.commit()
+    longa = _add_aluno(db, escola_id, "MARIA EDUARDA DA SILVA", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if "MARIA" in c["apagar"].upper()]
+    assert len(pares) == 1
+    assert pares[0]["manter_id"] == piloto.id          # piloto sobrevive
+    assert pares[0]["loser_id"] == longa.id            # a ficha longa é a que sai

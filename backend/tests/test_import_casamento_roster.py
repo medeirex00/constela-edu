@@ -58,16 +58,19 @@ def test_elefante_abreviado_vincula_ao_aluno_da_lista_piloto(db):
     assert _conta_alunos(db, esc.id) == antes                 # NENHUM aluno novo
 
 
-def test_matific_variante_ortografica_vincula(db):
+def test_matific_variante_ortografica_NAO_vincula_automaticamente(db):
+    """SEGURANÇA (revisão adversarial): variação de grafia (LUIZ vs LUÍS) NÃO
+    vincula sozinha no import — similaridade de nome não separa a mesma criança de
+    duas de nomes próximos (MARIA/MARTA). "ABRAAO LUIZ DIAS" vira um cadastro novo
+    e aparece na revisão manual de duplicatas (nunca vínculo automático errado)."""
     esc, turma, abraao = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
-    # Matific manda "ABRAAO LUIZ DIAS" (LUIZ≈LUÍS) → variante → vincula.
     r = _resolver_aluno(db, esc.id, 2026,
                         _linha("ABRAAO LUIZ DIAS", "4 ANO C INTEGRAL"),
                         [], {}, {})
-    assert r is not None and r.id == abraao.id
-    assert _conta_alunos(db, esc.id) == antes
+    assert r is not None and r.id != abraao.id            # cadastro NOVO, não vínculo
+    assert _conta_alunos(db, esc.id) == antes + 1
 
 
 def test_ambiguo_entre_criancas_diferentes_nao_funde(db):

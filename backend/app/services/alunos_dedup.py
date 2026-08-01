@@ -19,7 +19,6 @@ confirma cada par (checkbox) e a fusão em si é ``alunos_fusao.fundir_par``.
 from __future__ import annotations
 
 from collections import defaultdict
-from functools import reduce
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -149,11 +148,18 @@ def _candidatos(db: Session, escola_id: int
                          if q.id != a.id and mesma_turma(a, q)
                          and _expande(a.nome, q.nome)
                          and not _conflito_forte(a, q)]
-            tokens_exp = {tokens(q.nome) for q in expansoes}
-            if len(tokens_exp) == 1:      # exatamente UM nome mais completo
-                survivor = min(expansoes, key=lambda q: (not q.da_lista_piloto, q.id))
-                motivo = "subconjunto" if tk < tokens(survivor.nome) else "abreviacao"
-                pares.append((a, survivor, "revisar", motivo, turma_de[a.id][1]))
+            # AMBIGUIDADE conta ALUNOS candidatos, não conjuntos de tokens: dois
+            # homônimos/gêmeos ("MARIA EDUARDA SANTOS" ×2) têm o MESMO token-set e
+            # colapsariam num só — aí o stub curto seria colado no aluno errado.
+            # Só é inequívoco quando existe UM ÚNICO aluno mais completo.
+            if len(expansoes) == 1:
+                alvo = expansoes[0]                    # o nome mais completo (a ⊂ alvo)
+                # O perfil da LISTA PILOTO sempre sobrevive (nunca é deletado, nome
+                # oficial mantido) — mesmo sendo o nome mais curto.
+                survivor = _melhor_perfil(a, alvo)
+                loser = alvo if survivor.id == a.id else a
+                motivo = "subconjunto" if tk < tokens(alvo.nome) else "abreviacao"
+                pares.append((loser, survivor, "revisar", motivo, turma_de[loser.id][1]))
 
         # VARIAÇÃO ORTOGRÁFICA (LUÍS/LUIZ): nomes DIFERENTES mas quase iguais na
         # mesma turma normalizada, sem conflito de identidade. É o que a comparação
@@ -171,9 +177,13 @@ def _candidatos(db: Session, escola_id: int
                          if b.id != a.id and mesma_turma(a, b)
                          and not _conflito_forte(a, b)
                          and variante_ortografica(tokens_nome(a.nome), tokens_nome(b.nome))]
-            if not parceiros:
+            # SÓ sugere quando há UM único parceiro variante (ambíguo → não sugere).
+            # E NUNCA é auto-fundido (variante ∉ _MOTIVOS_AUTO): similaridade de nome
+            # não distingue "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (crianças
+            # diferentes) — ambos caem no mesmo limiar. Fica sempre para revisão.
+            if len(parceiros) != 1:
                 continue
-            survivor = reduce(_melhor_perfil, parceiros + [a])
+            survivor = _melhor_perfil(parceiros[0], a)
             if survivor.id == a.id:
                 continue                              # `a` é o melhor → não é loser
             pares.append((a, survivor, "revisar", "variante", turma_de[a.id][1]))
@@ -310,18 +320,24 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
 # sozinho; 2+ → revisão manual; 0 → nada). Dry-run + executar, com auditoria.
 # ---------------------------------------------------------------------------
 
-# Motivos que representam UM candidato plausível e inequívoco (o motor só sugere
-# esses quando há exatamente 1 correspondente na turma) → seguros p/ auto-fundir.
-_MOTIVOS_AUTO = frozenset({"abreviacao", "subconjunto", "variante"})
+# Motivo SEGURO para auto-fundir: SÓ a abreviação posicional com UM único
+# candidato — o padrão inequívoco do stub de plataforma ("ABRAAO L" tem a inicial
+# 'L' prefixando o 2º nome do ÚNICO aluno completo da turma). Deliberadamente NÃO
+# inclui:
+#   * "variante" (LUÍS/LUIZ): similaridade de nome não separa a mesma criança de
+#     duas crianças de nomes próximos (MARIA/MARTA, LUIZA/LUCIA) — só revisão;
+#   * "subconjunto" ("MARIA SILVA" ⊂ "MARIA EDUARDA DA SILVA"): subconjunto de
+#     tokens é sinal fraco, pode ser outra criança — só revisão;
+#   * "nome_identico" mesmo com nascimento igual: gêmeos podem colidir nome+data.
+# Todos esses continuam DETECTADOS (aparecem para revisão manual), só não são
+# fundidos sozinhos.
+_MOTIVOS_AUTO = frozenset({"abreviacao"})
 
 
 def _auto_fusavel(confianca: str, motivo: str) -> bool:
-    """Este par pode ser fundido AUTOMATICAMENTE (sem revisão humana)?
-    Sim quando é um único candidato plausível: abreviação/subconjunto/variante
-    (o motor só os sugere quando há 1 correspondente na turma), OU nome idêntico
-    com nascimento CONCORDANTE ('alta'). Nome idêntico SEM nascimento fica de
-    fora (pode ser gêmeo/homônimo) → revisão manual."""
-    return motivo in _MOTIVOS_AUTO or confianca == "alta"
+    """Este par pode ser fundido AUTOMATICAMENTE (sem revisão humana)? Só a
+    abreviação posicional inequívoca (1 candidato). O resto é revisão manual."""
+    return motivo in _MOTIVOS_AUTO
 
 
 def plano_auto_fusao(db: Session, escola_id: int) -> dict:
@@ -361,26 +377,15 @@ def plano_auto_fusao(db: Session, escola_id: int) -> dict:
 
 
 def executar_auto_fusao(db: Session, escola_id: int, usuario_id: int) -> dict:
-    """EXECUTA a fusão automática dos casos de alta confiança (1 candidato
-    plausível). Reusa ``aplicar_deduplicacao`` (savepoint por par, preserva TODOS
+    """EXECUTA a fusão automática dos casos de alta confiança (abreviação com 1
+    candidato). Reusa ``aplicar_deduplicacao`` (savepoint por par, preserva TODOS
     os dados via fundir_par, leque funde numa tacada, cadeia ambígua é recusada).
 
-    ITERA (até estabilizar): resolver uma ficha pode DESTRAVAR outra — ex.: com
-    "ABRAAO L" ambíguo entre LUÍS e LUIZ, ao fundir LUIZ→LUÍS o "ABRAAO L" passa a
-    ter 1 só candidato e funde na passada seguinte. Idempotente: os perdedores
-    somem, então quando não há mais nada a fundir, para. NÃO commita — o endpoint
-    faz isso e recalcula a escola uma vez."""
-    total = {"fundidos": 0, "falhas": [], "detalhes": []}
-    for _ in range(6):                 # teto de segurança (nunca laço infinito)
-        auto_ids = [loser.id
-                    for loser, _s, confianca, motivo, _t in _candidatos(db, escola_id)
-                    if _auto_fusavel(confianca, motivo)]
-        if not auto_ids:
-            break
-        r = aplicar_deduplicacao(db, escola_id, auto_ids, usuario_id)
-        total["fundidos"] += r["fundidos"]
-        total["detalhes"].extend(r["detalhes"])
-        total["falhas"] = r["falhas"]  # só as falhas da última passada importam
-        if r["fundidos"] == 0:         # nada progrediu (só cadeias recusadas) → para
-            break
-    return total
+    UMA passada só — o que a prévia (``plano_auto_fusao``) mostra é EXATAMENTE o
+    que executa (contrato "simulação = execução"). Idempotente: os perdedores
+    somem, rodar de novo não refunde nada. NÃO commita — o endpoint faz isso e
+    recalcula a escola uma vez."""
+    auto_ids = [loser.id
+                for loser, _s, confianca, motivo, _t in _candidatos(db, escola_id)
+                if _auto_fusavel(confianca, motivo)]
+    return aplicar_deduplicacao(db, escola_id, auto_ids, usuario_id)
