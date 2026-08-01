@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections import defaultdict
 from functools import reduce
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -193,30 +193,50 @@ def _melhor_perfil(a: Aluno, b: Aluno) -> Aluno:
     return a if a.id <= b.id else b
 
 
-def _impacto(db: Session, aluno: Aluno) -> dict:
-    """Resumo do que será MOVIDO do duplicado para o principal — para o gestor
-    ver o peso de cada fusão antes de confirmar."""
-    def conta(modelo) -> int:
-        return len(db.execute(
-            select(modelo.id).where(modelo.aluno_id == aluno.id)).scalars().all())
+_VAZIO = {"leituras": 0, "snapshots_matific": 0, "snapshots_elefante": 0,
+          "eventos": 0, "notas": 0, "plataformas": []}
 
-    plataformas = db.execute(
-        select(IdentidadeExterna.plataforma)
-        .where(IdentidadeExterna.aluno_id == aluno.id)
-    ).scalars().all()
-    return {
-        "leituras": conta(Leitura),
-        "snapshots_matific": conta(SnapshotMatific),
-        "snapshots_elefante": conta(SnapshotElefante),
-        "eventos": conta(EventoAluno),
-        "notas": conta(Nota),
-        "plataformas": sorted(set(plataformas)),
-    }
+
+def _impactos_em_lote(db: Session, aluno_ids: list[int]) -> dict[int, dict]:
+    """Resumo do que será MOVIDO de CADA duplicado, calculado em POUCAS queries
+    (um GROUP BY por modelo) — não uma dúzia por candidato. Sem isto, numa escola
+    grande (Debora Pilon) a prévia fazia centenas de consultas e a tela de Fundir
+    Duplicatas travava/estourava."""
+    if not aluno_ids:
+        return {}
+    ids = set(aluno_ids)
+
+    def contar(modelo) -> dict[int, int]:
+        return {aid: n for aid, n in db.execute(
+            select(modelo.aluno_id, func.count())
+            .where(modelo.aluno_id.in_(ids)).group_by(modelo.aluno_id)).all()}
+
+    leituras = contar(Leitura)
+    smat = contar(SnapshotMatific)
+    sele = contar(SnapshotElefante)
+    eventos = contar(EventoAluno)
+    notas = contar(Nota)
+    plats: dict[int, set[str]] = defaultdict(set)
+    for aid, plat in db.execute(
+        select(IdentidadeExterna.aluno_id, IdentidadeExterna.plataforma)
+        .where(IdentidadeExterna.aluno_id.in_(ids))).all():
+        plats[aid].add(plat)
+
+    return {aid: {
+        "leituras": leituras.get(aid, 0),
+        "snapshots_matific": smat.get(aid, 0),
+        "snapshots_elefante": sele.get(aid, 0),
+        "eventos": eventos.get(aid, 0),
+        "notas": notas.get(aid, 0),
+        "plataformas": sorted(plats.get(aid, set())),
+    } for aid in ids}
 
 
 def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     """PRÉVIA (read-only): uma linha por candidato — qual cadastro sai, em qual
     fica, a turma, a confiança/motivo e o resumo de impacto. Nada é alterado."""
+    candidatos = _candidatos(db, escola_id)
+    impactos = _impactos_em_lote(db, [loser.id for loser, *_ in candidatos])
     return [
         {
             "loser_id": loser.id,
@@ -226,9 +246,9 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             "turma": turma,
             "confianca": confianca,     # "alta" | "revisar"
             "motivo": motivo,
-            "impacto": _impacto(db, loser),
+            "impacto": impactos.get(loser.id, _VAZIO),
         }
-        for loser, survivor, confianca, motivo, turma in _candidatos(db, escola_id)
+        for loser, survivor, confianca, motivo, turma in candidatos
     ]
 
 

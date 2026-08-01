@@ -229,6 +229,36 @@ def test_professor_nao_acessa(db, escola_completa):
                    json={"loser_ids": [], "confirmacao": "FUNDIR"}).status_code == 403
 
 
+def test_previa_em_lote_nao_faz_n_mais_1_de_queries(db, escola_completa):
+    """Regressão de performance (Debora Pilon travava): a prévia calcula o impacto
+    de TODOS os candidatos em poucas queries (GROUP BY), não ~6 por candidato."""
+    from sqlalchemy import event
+    from app.services import alunos_dedup
+
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    for i in range(30):                      # 30 pares de nome idêntico
+        _add_aluno(db, escola_id, f"Fulano{i} Sobrenome Teste", turma_id)
+        _add_aluno(db, escola_id, f"Fulano{i} Sobrenome Teste", turma_id)
+
+    contador = {"n": 0}
+    bind = db.get_bind()
+
+    def _conta(*_a, **_k):
+        contador["n"] += 1
+
+    event.listen(bind, "before_cursor_execute", _conta)
+    try:
+        plano = alunos_dedup.plano_deduplicacao(db, escola_id)
+    finally:
+        event.remove(bind, "before_cursor_execute", _conta)
+
+    assert len(plano) >= 30
+    assert plano[0]["impacto"] is not None
+    # Constante (não proporcional aos 30 candidatos: seriam ~180 no N+1).
+    assert contador["n"] < 20, f"queries demais: {contador['n']}"
+
+
 def _turma(db, escola_id, nome) -> Turma:
     t = Turma(escola_id=escola_id, nome=nome, ano_escolar="4º Ano", ano_letivo=2026)
     db.add(t)
