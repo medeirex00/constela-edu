@@ -371,26 +371,6 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
   );
 }
 
-function SeletorEscola({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id: number) => void }) {
-  const ordenadas = useMemo(
-    () => [...escolas].sort((a, b) => a.nome.localeCompare(b.nome)),
-    [escolas],
-  );
-  return (
-    <select
-      aria-label="Selecionar escola"
-      className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-900"
-      value=""
-      onChange={(ev) => { const id = Number(ev.target.value); if (id) aoAbrir(id); }}
-    >
-      <option value="">🏛️ Toda a Rede Municipal</option>
-      {ordenadas.map((e) => (
-        <option key={e.escola_id} value={e.escola_id}>{e.nome}</option>
-      ))}
-    </select>
-  );
-}
-
 interface MetaProgresso {
   id: number;
   metrica: string;
@@ -611,7 +591,10 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
 
   const abrirEscola = (escolaId: number) => {
     selecionarEscola(escolaId); // troca a escola ativa (o backend autoriza: é da rede)
-    navegar("/escola"); // Visão da Escola lê a escola ativa do contexto
+    // No Dashboard (análise), trocar a escola já muda o CONTEXTO: o próprio
+    // Dashboard passa a mostrar o panorama daquela escola (sem sair da tela). Na
+    // aba Secretaria (admin), abre a Visão da Escola.
+    if (modo === "secretaria") navegar("/escola");
   };
 
   const escolasFiltradas = useMemo(() => {
@@ -636,7 +619,8 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
           : "Acompanhe o desempenho, o engajamento e a evolução das escolas da rede."}
         acoes={
           <div className="flex flex-wrap items-center gap-2">
-            <SeletorEscola escolas={dados.escolas} aoAbrir={abrirEscola} />
+            {/* O seletor de contexto (Toda a Rede ↔ escola) agora é ÚNICO e vive
+                na barra superior — nada de seletor duplicado aqui. */}
             {modo === "secretaria" && (
               <>
                 <Botao variante="neutro" onClick={() => navegar("/rede/avaliacoes")}>
@@ -856,6 +840,113 @@ function EnvolucroRede({ children }: { children: (redeId: number) => ReactNode }
  *  do Dashboard quando o usuário é de rede. */
 export function PanoramaRede() {
   return <EnvolucroRede>{(redeId) => <PainelRede redeId={redeId} modo="analise" />}</EnvolucroRede>;
+}
+
+/** Panorama de UMA escola da rede, no contexto da Secretaria — mostrado no
+ *  Dashboard quando o seletor do topo aponta para uma escola específica. Usa o
+ *  cartão AGREGADO da escola (mesmos números do painel da rede): só totais por
+ *  escola, NUNCA PII individual de criança. O título vira "Panorama Geral da
+ *  <Escola>" e há o atalho de volta para "Toda a Rede Municipal". */
+export function PanoramaEscolaDaRede({ escolaId }: { escolaId: number }) {
+  return (
+    <EnvolucroRede>
+      {(redeId) => <ConteudoEscolaDaRede redeId={redeId} escolaId={escolaId} />}
+    </EnvolucroRede>
+  );
+}
+
+function ConteudoEscolaDaRede({ redeId, escolaId }: { redeId: number; escolaId: number }) {
+  const { dados, erro, carregando } = useApi<DashboardRede>(`/redes/${redeId}/dashboard`);
+  const { selecionarEscola } = useApp();
+  const voltar = () => selecionarEscola(null);
+
+  if (carregando && !dados) return <Carregando texto="Carregando a escola..." />;
+  if (erro && !dados) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
+  if (!dados) return null;
+
+  const e = dados.escolas.find((x) => x.escola_id === escolaId);
+  if (!e) {
+    // Escola fora da rede/contexto inválido: oferece voltar ao consolidado.
+    return (
+      <div className="space-y-4">
+        <VoltarRede aoVoltar={voltar} />
+        <Vazio titulo="Escola não encontrada nesta rede"
+               descricao="Selecione 'Toda a Rede Municipal' ou outra escola no seletor do topo." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <VoltarRede aoVoltar={voltar} />
+      <PageHeader
+        titulo={`Panorama Geral da ${e.nome}`}
+        descricao="Indicadores desta escola no ano letivo atual. Selecione 'Toda a Rede Municipal' no topo para o consolidado."
+      />
+
+      {e.precisa_atencao && e.motivo_atencao && (
+        <Card className="flex items-center gap-2 border-amber-200 p-3 text-sm dark:border-amber-500/30">
+          <AlertTriangle size={16} className="shrink-0 text-amber-500" />
+          <span className="text-amber-700 dark:text-amber-300">{e.motivo_atencao}</span>
+        </Card>
+      )}
+
+      {/* Indicadores principais da ESCOLA (agregados, sem PII). */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard icone={<Users size={16} />} rotulo="Alunos" valor={numero(e.total_alunos)} detalhe={`${numero(e.total_turmas)} turmas`} />
+        <StatCard icone={<GraduationCap size={16} />} rotulo="Professores" valor={numero(e.total_professores)} detalhe="nesta escola" />
+        <StatCard icone={<TrendingUp size={16} />} rotulo="Média geral" valor={nota(e.media_geral)} detalhe={`Matific ${nota(e.media_matific)} · Elefante ${nota(e.media_elefante)}`} />
+        <StatCard icone={<GraduationCap size={16} />} rotulo="Adoção" valor={`${nota(e.adocao)}%`} detalhe="alunos com dados" />
+      </div>
+
+      {/* Plataformas — só os KPIs da escola (sem ranking entre escolas aqui). */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="p-4">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <BookOpen size={16} className="text-emerald-600" /> Leitura — Elefante Letrado
+          </h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <KpiEscola rotulo="Livros lidos" valor={numero(e.livros)} />
+            <KpiEscola rotulo="Por aluno" valor={nota(e.livros_por_aluno)} />
+            <KpiEscola rotulo="Alunos ativos" valor={numero(e.ativos_elefante)} />
+            <KpiEscola rotulo="Tempo" valor={tempoLeitura(e.tempo_leitura_min)} />
+          </div>
+        </Card>
+        <Card className="p-4">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <Calculator size={16} className="text-indigo-600" /> Matemática — Matific
+          </h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <KpiEscola rotulo="Estrelas" valor={numero(e.estrelas)} />
+            <KpiEscola rotulo="Atividades" valor={numero(e.atividades)} />
+            <KpiEscola rotulo="Alunos ativos" valor={numero(e.ativos_matific)} />
+            <KpiEscola rotulo="Média" valor={nota(e.media_matific)} />
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function VoltarRede({ aoVoltar }: { aoVoltar: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={aoVoltar}
+      className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+    >
+      <ChevronLeft size={16} /> Toda a Rede Municipal
+    </button>
+  );
+}
+
+function KpiEscola({ rotulo, valor }: { rotulo: string; valor: string }) {
+  return (
+    <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/40">
+      <p className="text-lg font-bold tabular-nums">{valor}</p>
+      <p className="text-[11px] uppercase tracking-wide text-zinc-500">{rotulo}</p>
+    </div>
+  );
 }
 
 /** Aba SECRETARIA (/rede) — administrativo (avaliações, boletim, gerenciar redes,

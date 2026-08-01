@@ -7,13 +7,13 @@
  * fluxo de verdade — contexto, hooks, navegação — e só precisa declarar os
  * endpoints específicos da sua tela.
  */
-import { type ReactElement, type ReactNode } from "react";
+import { type ReactElement, type ReactNode, useEffect } from "react";
 
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import { AppProvider } from "../context/AppContext";
+import { AppProvider, useApp } from "../context/AppContext";
 import type { Dashboard, Escola, RankingItem, Turma, Usuario } from "../lib/types";
 import { guardarToken, responder } from "../lib/__mocks__/api";
 
@@ -115,6 +115,20 @@ export interface OpcoesRender {
   usuario?: Usuario;
   /** Escolas da sessão (quando autenticado). A 1ª vira a escola atual. */
   escolas?: Escola[];
+  /** Fixa a escola do CONTEXTO após a sessão abrir. Útil para a Secretaria, que
+   *  entra em "Toda a Rede" (escolaId nulo): ao testar uma tela por-escola dela,
+   *  selecione explicitamente a escola. */
+  escolaSelecionada?: number;
+}
+
+/** Aplica uma escola ao contexto assim que a sessão termina de abrir (o usuário
+ *  já está carregado). Só para testes que precisam de uma escola específica. */
+function AplicarEscola({ id, children }: { id: number; children: ReactNode }) {
+  const { usuario, selecionarEscola } = useApp();
+  useEffect(() => {
+    if (usuario) selecionarEscola(id);
+  }, [usuario, id, selecionarEscola]);
+  return <>{children}</>;
 }
 
 /** Injeta token + escola e responde /auth/me e /escolas (sessão pronta). */
@@ -135,7 +149,10 @@ function Provedores({ children, rota }: { children: ReactNode; rota: string }) {
 
 /** Renderiza `ui` com AppProvider + Router. Autenticado por padrão. */
 export function renderComApp(ui: ReactElement, opcoes: OpcoesRender = {}) {
-  const { rota = "/", autenticado = true, usuario, escolas } = opcoes;
+  const { rota = "/", autenticado = true, usuario, escolas, escolaSelecionada } = opcoes;
   if (autenticado) autenticar(usuario ?? usuarioFake(), escolas ?? [escolaFake()]);
-  return render(<Provedores rota={rota}>{ui}</Provedores>);
+  const conteudo = escolaSelecionada != null
+    ? <AplicarEscola id={escolaSelecionada}>{ui}</AplicarEscola>
+    : ui;
+  return render(<Provedores rota={rota}>{conteudo}</Provedores>);
 }

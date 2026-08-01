@@ -25,7 +25,9 @@ interface AppContexto {
   tentarReconectar: () => void;
   entrar: (email: string, senha: string) => Promise<void>;
   sair: () => void;
-  selecionarEscola: (id: number) => void;
+  // `null` = contexto de REDE INTEIRA ("Toda a Rede Municipal"), usado pela
+  // Secretaria: o Dashboard mostra o consolidado da rede em vez de uma escola.
+  selecionarEscola: (id: number | null) => void;
   alternarTema: () => void;
   recarregarEscolas: () => Promise<void>;
 }
@@ -61,7 +63,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ]);
     setUsuario(eu);
     setEscolas(lista);
+    // A Secretaria (rede vinculada, não-global) ENTRA no contexto "Toda a Rede
+    // Municipal" (escolaId = null): o Dashboard abre no consolidado da rede, e
+    // ela escolhe uma escola pelo seletor do topo. Os demais perfis mantêm a
+    // escola salva (ou a primeira da lista) como sempre.
+    const ehSecretaria = eu.rede_id != null && !eu.is_global;
     setEscolaId((anterior) => {
+      if (ehSecretaria) return null;
       const valido = anterior !== null && lista.some((escola) => escola.id === anterior);
       const escolhido = valido ? anterior : lista[0]?.id ?? null;
       if (escolhido !== null) localStorage.setItem("sgpe_escola", String(escolhido));
@@ -123,10 +131,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.location.href = "/login";
   }, []);
 
-  const selecionarEscola = useCallback((id: number) => {
-    // Ao trocar a escola, todo o sistema passa a exibir os dados dela (PRD §20)
+  const selecionarEscola = useCallback((id: number | null) => {
+    // Ao trocar a escola, todo o sistema passa a exibir os dados dela (PRD §20).
+    // `null` = "Toda a Rede Municipal": limpa a escola salva para não reabrir
+    // numa escola específica.
     setEscolaId(id);
-    localStorage.setItem("sgpe_escola", String(id));
+    if (id === null) localStorage.removeItem("sgpe_escola");
+    else localStorage.setItem("sgpe_escola", String(id));
   }, []);
 
   const alternarTema = useCallback(() => {

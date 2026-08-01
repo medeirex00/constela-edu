@@ -50,7 +50,9 @@ describe("Secretaria é somente leitura", () => {
 
   it("Professores: Secretaria não vê 'Adicionar professor' nem o lápis", async () => {
     semearProfessores();
-    renderComApp(<Professores />, { usuario: secretaria });
+    // A Secretaria entra em "Toda a Rede"; para ver uma tela POR ESCOLA ela
+    // seleciona a escola no contexto (escolaSelecionada).
+    renderComApp(<Professores />, { usuario: secretaria, escolaSelecionada: 1 });
     expect(await screen.findByText("Prof Ana")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Adicionar professor/ })).toBeNull();
     expect(screen.queryByTitle("Editar nome e e-mail")).toBeNull();

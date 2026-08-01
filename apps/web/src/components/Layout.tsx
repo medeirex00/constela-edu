@@ -660,6 +660,9 @@ const CHAVE_RECOLHIDO = "constela_menu_recolhido";
 
 export default function Layout() {
   const { usuario, escolas, escolaId, selecionarEscola, tema, alternarTema, sair } = useApp();
+  // Secretaria (rede vinculada, não-global): o seletor do topo é o CONTEXTO da
+  // visualização — "Toda a Rede Municipal" (padrão) ou uma escola específica.
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
   const [menuAberto, setMenuAberto] = useState(false);
   // Barra lateral recolhida (desktop): o conteúdo ocupa a tela toda. A escolha
   // fica salva no navegador para valer nas próximas visitas.
@@ -773,16 +776,25 @@ export default function Layout() {
 
           <PesquisaGlobal />
 
-          {/* Troca rápida de escola disponível em todas as telas */}
-          {escolas.length > 0 && (
+          {/* Seletor de CONTEXTO (todas as telas). Para a Secretaria é o switcher
+              global: "Toda a Rede Municipal" (padrão) + as escolas da rede — o
+              Dashboard inteiro acompanha o que estiver selecionado. Para os
+              demais perfis é a troca rápida de escola de sempre. */}
+          {(secretaria || escolas.length > 0) && (
             <label className="ml-auto flex items-center gap-2 text-sm">
-              <ArrowLeftRight size={14} className="text-zinc-400" />
+              {secretaria
+                ? <Landmark size={14} className="text-zinc-400" />
+                : <ArrowLeftRight size={14} className="text-zinc-400" />}
               <select
-                aria-label="Escola selecionada"
+                aria-label={secretaria ? "Contexto de visualização" : "Escola selecionada"}
                 className="max-w-[180px] rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 sm:max-w-none"
                 value={escolaId ?? ""}
-                onChange={(evento) => selecionarEscola(Number(evento.target.value))}
+                onChange={(evento) => {
+                  const v = evento.target.value;
+                  selecionarEscola(v === "" ? null : Number(v));
+                }}
               >
+                {secretaria && <option value="">🏛️ Toda a Rede Municipal</option>}
                 {escolas.map((escola) => (
                   <option key={escola.id} value={escola.id}>
                     {escola.nome}

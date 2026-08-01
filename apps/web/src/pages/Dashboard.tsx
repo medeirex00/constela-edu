@@ -30,6 +30,8 @@ import type { Dashboard as DadosDashboard } from "../lib/types";
 // coordenador (que nunca os veem).
 const PanoramaRede = lazy(() =>
   import("./rede/RedeDashboard").then((m) => ({ default: m.PanoramaRede })));
+const PanoramaEscolaDaRede = lazy(() =>
+  import("./rede/RedeDashboard").then((m) => ({ default: m.PanoramaEscolaDaRede })));
 const PanoramaGlobal = lazy(() =>
   import("./rede/RedeDashboard").then((m) => ({ default: m.PanoramaGlobal })));
 
@@ -366,6 +368,7 @@ function TopRanking({ top }: { top: DadosDashboard["top10"] }) {
  */
 export default function Dashboard() {
   const { global, secretaria } = usePerfil();
+  const { escolaId } = useApp();
   // Admin Global → consolidação de TODAS as redes; SEDUC/Secretaria → sua rede;
   // professor/coordenador/admin de escola → Dashboard da escola (abaixo, inalterado).
   if (global) {
@@ -376,9 +379,13 @@ export default function Dashboard() {
     );
   }
   if (secretaria) {
+    // O seletor de contexto do topo controla o Dashboard: "Toda a Rede Municipal"
+    // (escolaId nulo) → consolidado da rede; uma escola → panorama daquela escola.
     return (
-      <Suspense fallback={<Carregando texto="Carregando o panorama da rede..." />}>
-        <PanoramaRede />
+      <Suspense fallback={<Carregando texto="Carregando o panorama..." />}>
+        {escolaId == null
+          ? <PanoramaRede />
+          : <PanoramaEscolaDaRede escolaId={escolaId} />}
       </Suspense>
     );
   }
