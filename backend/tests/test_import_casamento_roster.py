@@ -13,9 +13,10 @@ from app.models import Aluno, Escola, Matricula, Turma, Usuario
 from app.routers.importacoes import _resolver_aluno
 
 
-def _linha(nome, turma_nome):
+def _linha(nome, turma_nome, dados=None):
     return SimpleNamespace(nome=nome, aluno_id=None, criar_em_turma_id=None,
-                           criar_em_turma_nome=turma_nome, numero_chamada=None)
+                           criar_em_turma_nome=turma_nome, numero_chamada=None,
+                           dados=dados or {})
 
 
 def _cenario(db):
@@ -98,6 +99,26 @@ def test_aluno_genuinamente_novo_e_criado(db):
                         _linha("BEATRIZ CAMPOS SOUZA", "4ºC"), [], {}, {})
     assert r is not None and r.nome == "BEATRIZ CAMPOS SOUZA"
     assert _conta_alunos(db, esc.id) == antes + 1             # criou o novo
+
+
+def test_casar_no_roster_vincula_uuid_do_matific(db):
+    """Ao casar 'ABRAAO L' (Matific, com UUID) ao aluno da Lista Piloto, o UUID é
+    VINCULADO — a próxima sync casa direto por UUID (convergência), sem redepender
+    do nome."""
+    from app.models import IdentidadeExterna
+    esc, turma, abraao = _cenario(db)
+
+    r = _resolver_aluno(db, esc.id, 2026,
+                        _linha("ABRAAO L", "4 ANO C INTEGRAL (300303525)",
+                               dados={"matific_uuid": "uuid-abraao-123"}),
+                        [], {}, {})
+    db.flush()
+    assert r.id == abraao.id
+    vinc = db.execute(select(IdentidadeExterna).where(
+        IdentidadeExterna.escola_id == esc.id,
+        IdentidadeExterna.plataforma == "matific",
+        IdentidadeExterna.id_externo == "uuid-abraao-123")).scalars().first()
+    assert vinc is not None and vinc.aluno_id == abraao.id
 
 
 def test_reimport_do_mesmo_relatorio_e_idempotente(db):

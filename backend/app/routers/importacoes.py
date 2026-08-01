@@ -489,6 +489,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         # (ambíguo) NÃO cria (fica para revisão, nunca funde nomes parecidos).
         casado, confianca = _casar_no_roster(db, escola_id, ano, linha.nome, turma)
         if confianca == "alta" and casado is not None:
+            # Vincula o UUID do Matific AGORA (casamento preciso): a próxima sync
+            # casa direto por UUID (idempotência/convergência), sem redepender do
+            # nome. Idempotente e não rouba UUID já vinculado (savepoint na unique).
+            uuid = str((getattr(linha, "dados", None) or {}).get("matific_uuid") or "").strip()
+            if uuid:
+                _vincular_identidade(db, escola_id, casado.id, "matific", uuid)
             if criados is not None:
                 criados[chave] = casado
             return casado
