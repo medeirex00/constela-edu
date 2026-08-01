@@ -412,25 +412,6 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     return None
 
 
-def _variante_ortografica(a_tokens: list[str], b_tokens: list[str]) -> bool:
-    """Os dois nomes são a MESMA pessoa escrita com pequena variação ortográfica?
-    Mesmo nº de tokens, mesmo 1º nome, e os tokens que diferem são MUITO próximos
-    (ex.: LUÍS↔LUIZ, ratio 0.75) — NÃO aceita troca real de nome (LUÍS↔LUCAS,
-    ratio 0.44). É estrito de propósito: separa variante de homônimo diferente."""
-    if len(a_tokens) != len(b_tokens) or not a_tokens:
-        return False
-    if a_tokens[0] != b_tokens[0]:
-        return False
-    diferentes = 0
-    for ta, tb in zip(a_tokens, b_tokens):
-        if ta == tb:
-            continue
-        if svc._similaridade(ta, tb) < 0.7:      # token trocado de verdade
-            return False
-        diferentes += 1
-    return 1 <= diferentes <= 2
-
-
 def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
                      turma: Turma) -> tuple[Aluno | None, str]:
     """Casa a linha de plataforma (Elefante/Matific) contra o ROSTER da turma
@@ -459,7 +440,7 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
         if (svc.normalizar_nome(aluno.nome) == alvo
                 or svc.casa_abreviado_posicional(tokens_linha, tk)
                 or svc.casa_abreviado_posicional(tk, tokens_linha)
-                or _variante_ortografica(tokens_linha, tk)):
+                or svc.variante_ortografica(tokens_linha, tk)):
             candidatos.append(aluno)
     unicos = {a.id: a for a in candidatos}
     if len(unicos) == 1:

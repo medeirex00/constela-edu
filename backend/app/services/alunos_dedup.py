@@ -19,6 +19,7 @@ confirma cada par (checkbox) e a fusão em si é ``alunos_fusao.fundir_par``.
 from __future__ import annotations
 
 from collections import defaultdict
+from functools import reduce
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,7 +38,12 @@ from app.models import (
 )
 from app.services import alunos_fusao
 from app.services._nomes import primeiro_token, tokens
-from app.services.importacao import casa_abreviado_posicional, tokens_nome
+from app.services.importacao import (
+    casa_abreviado_posicional,
+    tokens_nome,
+    variante_ortografica,
+)
+from app.services.matriculas import chave_turma_norm
 
 
 def _expande(curto: str, completo: str) -> bool:
@@ -108,15 +114,20 @@ def _candidatos(db: Session, escola_id: int
         grupos[primeiro_token(a.nome)].append(a)
 
     def mesma_turma(x: Aluno, y: Aluno) -> bool:
-        return turma_de[x.id][0] == turma_de[y.id][0]
+        # Compara a turma NORMALIZADA (série+letra), não o turma_id: as duplicatas
+        # da importação antiga ficam em turmas-fantasma distintas ("4ºC" vs
+        # "4 ANO C INTEGRAL (300303525)") que são a MESMA sala — sem isto, os
+        # cadastros do mesmo aluno nunca eram sequer comparados.
+        return chave_turma_norm(turma_de[x.id][1]) == chave_turma_norm(turma_de[y.id][1])
 
     pares: list[tuple[Aluno, Aluno, str, str, str]] = []
     for primeiro, grupo in grupos.items():
         if not primeiro or len(grupo) < 2:
             continue
-        # Titular de cada NOME (conjunto de tokens) = o de MENOR id.
+        # Titular de cada NOME (conjunto de tokens) = o da LISTA PILOTO (perfil
+        # principal); sem piloto, o de MENOR id (mais antigo).
         titular_por_tokens: dict[frozenset, Aluno] = {}
-        for a in sorted(grupo, key=lambda x: x.id):
+        for a in sorted(grupo, key=lambda x: (not x.da_lista_piloto, x.id)):
             titular_por_tokens.setdefault(tokens(a.nome), a)
 
         for a in grupo:
@@ -140,10 +151,46 @@ def _candidatos(db: Session, escola_id: int
                          and not _conflito_forte(a, q)]
             tokens_exp = {tokens(q.nome) for q in expansoes}
             if len(tokens_exp) == 1:      # exatamente UM nome mais completo
-                survivor = min(expansoes, key=lambda q: q.id)
+                survivor = min(expansoes, key=lambda q: (not q.da_lista_piloto, q.id))
                 motivo = "subconjunto" if tk < tokens(survivor.nome) else "abreviacao"
                 pares.append((a, survivor, "revisar", motivo, turma_de[a.id][1]))
+
+        # VARIAÇÃO ORTOGRÁFICA (LUÍS/LUIZ): nomes DIFERENTES mas quase iguais na
+        # mesma turma normalizada, sem conflito de identidade. É o que a comparação
+        # por token-set EXATO deixava passar. "revisar" (nunca pré-marca): estrito
+        # o bastante para NÃO parear crianças diferentes (LUÍS×LUCAS → ratio baixo).
+        # Cada aluno aponta para o MELHOR parceiro (piloto > completo > antigo), não
+        # para todos: assim 3 fichas do mesmo aluno viram um LEQUE (todas → o piloto),
+        # nunca uma cadeia entre duplicatas.
+        ja_losers = {l.id for l, _s, *_ in pares}
+        ordenado = sorted(grupo, key=lambda x: x.id)
+        for a in ordenado:
+            if a.id in ja_losers:
+                continue                              # já sai por outro par
+            parceiros = [b for b in ordenado
+                         if b.id != a.id and mesma_turma(a, b)
+                         and not _conflito_forte(a, b)
+                         and variante_ortografica(tokens_nome(a.nome), tokens_nome(b.nome))]
+            if not parceiros:
+                continue
+            survivor = reduce(_melhor_perfil, parceiros + [a])
+            if survivor.id == a.id:
+                continue                              # `a` é o melhor → não é loser
+            pares.append((a, survivor, "revisar", "variante", turma_de[a.id][1]))
+            ja_losers.add(a.id)
     return pares
+
+
+def _melhor_perfil(a: Aluno, b: Aluno) -> Aluno:
+    """Qual dos dois é o perfil PRINCIPAL (survivor): o da Lista Piloto vence
+    (fonte da verdade do cadastro); senão o de nome mais completo; empate, menor
+    id (mais antigo)."""
+    if a.da_lista_piloto != b.da_lista_piloto:
+        return a if a.da_lista_piloto else b
+    ta, tb = len(tokens(a.nome)), len(tokens(b.nome))
+    if ta != tb:
+        return a if ta > tb else b
+    return a if a.id <= b.id else b
 
 
 def _impacto(db: Session, aluno: Aluno) -> dict:
@@ -196,9 +243,13 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
                     for loser, survivor, *_ in _candidatos(db, escola_id)
                     if loser.id in escolhidos]
 
-    # CADEIA: um cadastro que aparece dos DOIS lados entre os pares escolhidos
-    # (survivor de um par e loser de outro) fundiria em cascata e poderia colapsar
-    # 3 cadastros num só. Recusa e reporta — o gestor resolve um par por vez.
+    # LEQUE vs CADEIA. Um aluno TRIPLICADO cujas fichas apontam TODAS para o mesmo
+    # perfil principal (A→S, B→S — o caso Debora Pilon, com o survivor da Lista
+    # Piloto escolhido por _melhor_perfil) é um LEQUE e funde numa tacada só. Já a
+    # CADEIA genuína (A→B, B→C: um cadastro é survivor de um par E loser de outro)
+    # tem um nó AMBÍGUO no meio (pode ser gêmeo/homônimo) — recusa e reporta, para
+    # nunca colapsar crianças diferentes sem revisão. É a régua "precisão acima de
+    # tudo": o leque (seguro) passa; a cadeia (ambígua) espera revisão.
     losers_sel = {l for l, _s in selecionados}
     survivors_sel = {s for _l, s in selecionados}
 

@@ -227,3 +227,72 @@ def test_professor_nao_acessa(db, escola_completa):
     assert pc.get(f"{_base(escola_id)}/alunos/duplicados").status_code == 403
     assert pc.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
                    json={"loser_ids": [], "confirmacao": "FUNDIR"}).status_code == 403
+
+
+def _turma(db, escola_id, nome) -> Turma:
+    t = Turma(escola_id=escola_id, nome=nome, ano_escolar="4º Ano", ano_letivo=2026)
+    db.add(t)
+    db.commit()
+    return t
+
+
+def test_detecta_variante_em_turmas_fantasma_da_mesma_sala(cliente, db, escola_completa):
+    """Passivo Debora Pilon: ABRAÃO LUÍS DIAS (Lista Piloto, turma '4ºC') e
+    ABRAAO LUIZ DIAS (importado numa turma-fantasma '4 ANO C INTEGRAL (300303525)').
+    São a MESMA sala (chave canônica '4|C') e nomes variantes → detecta 'revisar',
+    survivor = o da Lista Piloto (mesmo estando em turmas com id diferente)."""
+    escola_id = escola_completa["escola"].id
+    t_boa = _turma(db, escola_id, "4ºC")
+    t_fantasma = _turma(db, escola_id, "4 ANO C INTEGRAL (300303525)")
+    luis = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", t_boa.id)
+    luis.da_lista_piloto = True
+    db.commit()
+    luiz = _add_aluno(db, escola_id, "ABRAAO LUIZ DIAS", t_fantasma.id)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
+    assert len(pares) == 1
+    assert pares[0]["loser_id"] == luiz.id and pares[0]["manter_id"] == luis.id
+    assert pares[0]["confianca"] == "revisar" and pares[0]["motivo"] == "variante"
+
+
+def test_leque_triplicado_funde_tudo_no_perfil_da_lista_piloto(cliente, db, escola_completa):
+    """O aluno TRIPLICADO da Debora Pilon: a ficha da Lista Piloto + a variação de
+    acento (Elefante) + a variação ortográfica (Matific), TODAS apontando para o
+    perfil da Lista Piloto (leque A→S, B→S). "Selecionar todos" funde as duas de
+    uma vez e sobra só o perfil principal."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)   # 1º id (LP)
+    piloto.da_lista_piloto = True
+    db.commit()
+    dup1 = _add_aluno(db, escola_id, "ABRAAO LUIS DIAS", turma_id)     # acento (Elefante)
+    dup2 = _add_aluno(db, escola_id, "ABRAAO LUIZ DIAS", turma_id)     # ortográfica (Matific)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
+    assert {p["manter_id"] for p in pares} == {piloto.id}      # tudo aponta p/ o LP
+    losers = [p["loser_id"] for p in pares]
+    assert set(losers) == {dup1.id, dup2.id}
+
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
+                     json={"loser_ids": losers, "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+    assert r.json()["fundidos"] == 2 and r.json()["falhas"] == []
+
+    def existe(aid):
+        return db.execute(select(Aluno.id).where(Aluno.id == aid)
+                          ).scalar_one_or_none() is not None
+    assert existe(piloto.id) and not existe(dup1.id) and not existe(dup2.id)
+
+
+def test_variante_nao_pareia_criancas_diferentes(cliente, db, escola_completa):
+    """ABRAÃO LUÍS DIAS × ABRAÃO LUCAS DIAS na MESMA turma são crianças DIFERENTES
+    (LUÍS/LUCAS não é variante ortográfica) → NUNCA sugere."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)
+    _add_aluno(db, escola_id, "ABRAÃO LUCAS DIAS", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    assert [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()] == []

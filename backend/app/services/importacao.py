@@ -875,6 +875,25 @@ def casa_abreviado_posicional(antigo: list[str], completo: list[str]) -> bool:
     return len(completo) > len(antigo) or len(antigo[-1]) == 1
 
 
+def variante_ortografica(a_tokens: list[str], b_tokens: list[str]) -> bool:
+    """Os dois nomes são a MESMA pessoa escrita com pequena variação ortográfica?
+    Mesmo nº de tokens, mesmo 1º nome, e os tokens que diferem são MUITO próximos
+    (ex.: LUÍS↔LUIZ, ratio 0.75) — NÃO aceita troca real de nome (LUÍS↔LUCAS,
+    ratio 0.44). Estrito de propósito: separa variante de homônimo diferente."""
+    if len(a_tokens) != len(b_tokens) or not a_tokens:
+        return False
+    if a_tokens[0] != b_tokens[0]:
+        return False
+    diferentes = 0
+    for ta, tb in zip(a_tokens, b_tokens):
+        if ta == tb:
+            continue
+        if _similaridade(ta, tb) < 0.7:          # token trocado de verdade
+            return False
+        diferentes += 1
+    return 1 <= diferentes <= 2
+
+
 def _desempatar_por_turma(candidatos: list, turma_relatorio: str | None,
                           turma_de: dict[int, str]):
     """Entre homônimos, escolhe o aluno cuja turma bate com a do relatório.
