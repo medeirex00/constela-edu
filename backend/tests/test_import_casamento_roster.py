@@ -121,6 +121,24 @@ def test_casar_no_roster_vincula_uuid_do_matific(db):
     assert vinc is not None and vinc.aluno_id == abraao.id
 
 
+def test_vinculacao_automatica_fica_no_log_de_auditoria(db):
+    """Regra §17: toda vinculação automática registra o motivo (de onde veio, em
+    qual aluno canônico casou, turma, confiança) — auditoria/depuração."""
+    from app.models import LogAuditoria
+    esc, turma, abraao = _cenario(db)
+
+    _resolver_aluno(db, esc.id, 2026,
+                    _linha("ABRAAO L", "4 ANO C INTEGRAL (300303525)"), [], {}, {})
+    db.flush()
+    log = db.execute(select(LogAuditoria).where(
+        LogAuditoria.acao == "aluno.vinculado_auto",
+        LogAuditoria.entidade_id == abraao.id)).scalars().first()
+    assert log is not None
+    assert log.detalhes["origem"] == "ABRAAO L"
+    assert log.detalhes["aluno"] == "ABRAÃO LUÍS DIAS"
+    assert log.detalhes["confianca"] == "alta" and log.detalhes["candidatos"] == 1
+
+
 def test_reimport_do_mesmo_relatorio_e_idempotente(db):
     esc, turma, abraao = _cenario(db)
     antes = _conta_alunos(db, esc.id)

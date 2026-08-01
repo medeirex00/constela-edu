@@ -495,6 +495,17 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             uuid = str((getattr(linha, "dados", None) or {}).get("matific_uuid") or "").strip()
             if uuid:
                 _vincular_identidade(db, escola_id, casado.id, "matific", uuid)
+            # AUDITORIA (regra §17): registra a decisão automática — de onde veio,
+            # em qual aluno canônico casou, a turma e por quê. Só o casamento fuzzy
+            # (abreviação/variante) passa por aqui — o nome exato já foi resolvido
+            # antes; e depois do 1º link o UUID assume, então não vira log repetido.
+            if svc.normalizar_nome(casado.nome) != svc.normalizar_nome(linha.nome):
+                registrar(db, "aluno.vinculado_auto", escola_id=escola_id,
+                          entidade="aluno", entidade_id=casado.id,
+                          detalhes={"origem": linha.nome, "aluno": casado.nome,
+                                    "turma": turma.nome, "confianca": "alta",
+                                    "candidatos": 1,
+                                    "motivo": "único candidato plausível na mesma turma"})
             if criados is not None:
                 criados[chave] = casado
             return casado
