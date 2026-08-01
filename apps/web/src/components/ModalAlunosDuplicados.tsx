@@ -105,6 +105,20 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
     });
   }
 
+  /** Marca (ou desmarca) TODOS os pares de uma lista de uma vez — o "selecionar
+   *  todos" que evita clicar um a um numa escola com muitas duplicatas. */
+  function marcarVarios(ids: number[], marcar: boolean) {
+    setConfirmando(false);
+    setSelecionados((atual) => {
+      const nova = new Set(atual);
+      for (const id of ids) {
+        if (marcar) nova.add(id);
+        else nova.delete(id);
+      }
+      return nova;
+    });
+  }
+
   async function fundir() {
     setOcupado(true);
     setErro("");
@@ -174,11 +188,23 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
           </p>
 
           <div className="mt-3 max-h-72 space-y-3 overflow-y-auto pr-1">
-            {grupos.filter((g) => g.itens.length > 0).map((grupo) => (
+            {grupos.filter((g) => g.itens.length > 0).map((grupo) => {
+              const ids = grupo.itens.map((c) => c.loser_id);
+              const todosMarcados = ids.every((id) => selecionados.has(id));
+              return (
               <div key={grupo.chave}>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                  {grupo.rotulo} ({grupo.itens.length})
-                </p>
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                    {grupo.rotulo} ({grupo.itens.length})
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => marcarVarios(ids, !todosMarcados)}
+                    className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    {todosMarcados ? "Desmarcar todos" : "Selecionar todos"}
+                  </button>
+                </div>
                 <div className="space-y-1.5">
                   {grupo.itens.map((c) => {
                     const marcado = selecionados.has(c.loser_id);
@@ -218,7 +244,8 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                   })}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}

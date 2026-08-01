@@ -79,4 +79,25 @@ describe("ModalAlunosDuplicados", () => {
     expect(enviado!.confirmacao).toBe("FUNDIR");
     expect([...enviado!.loser_ids].sort()).toEqual([10, 20]);
   });
+
+  it("'Selecionar todos' marca o grupo inteiro de uma vez", async () => {
+    responder("GET", URL_PREVIA, previa());
+    const u = userEvent.setup();
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    await screen.findByText("Akemi Carolina Vieira");
+    // No grupo "revisar", o par vem DESMARCADO por padrão.
+    const revisar = (screen.getAllByRole("checkbox") as HTMLInputElement[])[1];
+    expect(revisar.checked).toBe(false);
+
+    // O botão "Selecionar todos" do grupo revisar (o último) marca-o de uma vez.
+    const marcar = screen.getAllByRole("button", { name: /Selecionar todos/ });
+    await u.click(marcar[marcar.length - 1]);   // grupo "revisar"
+    expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(true);
+    // Vira "Desmarcar todos" (o último) e limpa de volta.
+    const desmarcar = screen.getAllByRole("button", { name: /Desmarcar todos/ });
+    await u.click(desmarcar[desmarcar.length - 1]);
+    expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(false);
+  });
 });
