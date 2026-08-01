@@ -5,14 +5,20 @@
  * apenas embutida aqui sem o próprio cabeçalho. A opção fica sincronizada na URL
  * (`?ver=leitura`), o que mantém os atalhos e links diretos funcionando.
  */
+import { lazy, Suspense } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { PageHeader } from "../components/ui";
+import { Carregando, PageHeader } from "../components/ui";
+import { usePerfil } from "../hooks/usePerfil";
 import RankingEscolar from "./RankingEscolar";
 import RankingEvolucao from "./RankingEvolucao";
 import RankingGeral from "./RankingGeral";
 import RankingLeitura from "./RankingLeitura";
 import RankingMatematica from "./RankingMatematica";
+
+// Ranking de ESCOLAS (perfis de rede). Lazy: puxa o chunk do painel da rede.
+const RankingRede = lazy(() =>
+  import("./rede/RedeDashboard").then((m) => ({ default: m.RankingRede })));
 
 // Uma aba por FONTE de dados: Geral (consolidado), Elefante Letrado (leitura),
 // Matific (matemática), Evolução e Escolar (dados escolares — em construção).
@@ -31,6 +37,27 @@ function ehVisao(valor: string | null): valor is Visao {
 }
 
 export default function Rankings() {
+  const { rede } = usePerfil();
+  // Perfis de REDE (Secretaria/Admin Global): o Ranking Geral é o ranking de
+  // ESCOLAS por indicador (agregado). Os rankings NOMINAIS de aluno abaixo ficam
+  // vazios de propósito para a rede (bloqueio de PII) — então nem os mostramos.
+  if (rede) {
+    return (
+      <div>
+        <PageHeader
+          titulo="Ranking Geral da Rede"
+          descricao="Ranking das escolas da rede por indicador — dados agregados, sem ranking individual de alunos."
+        />
+        <Suspense fallback={<Carregando texto="Carregando o ranking da rede..." />}>
+          <RankingRede />
+        </Suspense>
+      </div>
+    );
+  }
+  return <RankingsEscola />;
+}
+
+function RankingsEscola() {
   const [params, setParams] = useSearchParams();
   // A URL é a ÚNICA fonte da verdade: `visao` é derivada de `?ver=` a cada
   // render. Assim atalhos/deep-links que mudam só a query (Alt+2/Alt+3, o link

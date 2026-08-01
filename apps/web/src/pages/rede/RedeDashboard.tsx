@@ -862,3 +862,100 @@ export function PanoramaRede() {
 export default function RedeDashboard() {
   return <EnvolucroRede>{(redeId) => <PainelRede redeId={redeId} modo="secretaria" />}</EnvolucroRede>;
 }
+
+function ConteudoRankingRede({ redeId }: { redeId: number }) {
+  const { dados, erro, carregando } = useApi<DashboardRede>(`/redes/${redeId}/dashboard`);
+  const { selecionarEscola } = useApp();
+  const navegar = useNavigate();
+  const [metrica, setMetrica] = useState(0);
+  const m = METRICAS_TOP[metrica];
+  const ranked = useMemo(
+    () => [...(dados?.escolas ?? [])]
+      .filter((e) => e.alunos_com_dados > 0)
+      .sort((a, b) => (b[m.chave] as number) - (a[m.chave] as number)),
+    [dados, m.chave],
+  );
+  if (carregando && !dados) return <Carregando texto="Carregando o ranking..." />;
+  if (erro && !dados) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
+  if (!dados) return null;
+  const abrir = (id: number) => { selecionarEscola(id); navegar("/escola"); };
+
+  return (
+    <div className="space-y-4">
+      <div
+        role="tablist"
+        aria-label="Indicador do ranking"
+        className="inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
+      >
+        {METRICAS_TOP.map((opt, i) => (
+          <button
+            key={opt.rotulo}
+            type="button"
+            role="tab"
+            aria-selected={i === metrica}
+            onClick={() => setMetrica(i)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              i === metrica
+                ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
+                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            {opt.rotulo}
+          </button>
+        ))}
+      </div>
+      <Card className="p-4">
+        {ranked.length === 0 ? (
+          <Vazio titulo="Sem dados ainda"
+                 descricao="Nenhuma escola da rede tem dados no ano letivo ativo." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  <th className="px-3 py-2 font-medium">#</th>
+                  <th className="px-3 py-2 font-medium">Escola</th>
+                  <th className="px-3 py-2 text-right font-medium">{m.rotulo}</th>
+                  <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Geral</th>
+                  <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Leitura</th>
+                  <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Matific</th>
+                  <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Engaj.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ranked.map((e, i) => (
+                  <tr key={e.escola_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                    <td className="px-3 py-2 text-center">
+                      {MEDALHAS[i] ?? <span className="text-xs font-bold text-zinc-400">{i + 1}</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => abrir(e.escola_id)}
+                        className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400"
+                      >
+                        {e.nome}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold">{nota(e[m.chave] as number)}{m.sufixo ?? ""}</td>
+                    <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(e.media_geral)}</td>
+                    <td className="hidden px-3 py-2 text-right md:table-cell">{nota(e.media_elefante)}</td>
+                    <td className="hidden px-3 py-2 text-right md:table-cell">{nota(e.media_matific)}</td>
+                    <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(e.adocao)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/** Ranking Geral para perfis de REDE (Secretaria/Admin Global): ranking de
+ *  ESCOLAS por indicador — agregado, SEM dados individuais de aluno (o ranking
+ *  nominal de crianças fica bloqueado por PII). */
+export function RankingRede() {
+  return <EnvolucroRede>{(redeId) => <ConteudoRankingRede redeId={redeId} />}</EnvolucroRede>;
+}
