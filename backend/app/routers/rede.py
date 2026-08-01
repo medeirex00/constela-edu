@@ -329,11 +329,14 @@ def dashboard(
 def ranking(
     rede_id: int = Depends(exigir_rede),
     limite: int = Query(default=50, ge=1, le=200),
+    metrica: str = Query(
+        default="geral",
+        pattern="^(geral|leitura|matematica|matific|elefante|engajamento|livros|estrelas)$"),
     db: Session = Depends(get_db),
 ):
     """Ranking municipal POR ESCOLA (privacidade: não expõe ranking individual de
-    crianças entre escolas). Ordena por média geral e adoção."""
-    return svc_rede.ranking_escolas(db, rede_id, limite=limite)
+    crianças entre escolas). A SEDUC escolhe o critério em ``metrica``."""
+    return svc_rede.ranking_escolas(db, rede_id, limite=limite, metrica=metrica)
 
 
 @router.get("/{rede_id}/avaliacoes/opcoes")

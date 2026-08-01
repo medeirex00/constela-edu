@@ -18,7 +18,17 @@ import secrets
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, Matricula, Nota, Professor, Rede, Turma
+from app.models import (
+    Aluno,
+    Escola,
+    Matricula,
+    Nota,
+    Professor,
+    Rede,
+    SnapshotElefante,
+    SnapshotMatific,
+    Turma,
+)
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -45,10 +55,39 @@ def _motivo_atencao(total_alunos: int, com_dados: int, adocao: float,
     return None
 
 
+def _totais_plataforma_por_escola(db: Session, ids: list[int], modelo,
+                                  campos: list[str]) -> dict[int, dict]:
+    """Soma, por escola, os campos do snapshot ATUAL de cada aluno (o último por
+    data_referencia,id — mesma régua do scoring) e conta os alunos ATIVOS na
+    plataforma. UMA window query para a rede inteira (não N por escola). Só
+    números BRUTOS agregados: nenhum dado individual de criança."""
+    if not ids:
+        return {}
+    numerado = (
+        select(
+            modelo.escola_id.label("escola_id"),
+            *[getattr(modelo, c).label(c) for c in campos],
+            func.row_number().over(
+                partition_by=(modelo.escola_id, modelo.aluno_id),
+                order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
+            ).label("pos"),
+        )
+        .where(modelo.escola_id.in_(ids))
+        .subquery()
+    )
+    colunas = [numerado.c.escola_id, func.count().label("ativos")]
+    colunas += [func.coalesce(func.sum(getattr(numerado.c, c)), 0).label(c) for c in campos]
+    linhas = db.execute(
+        select(*colunas).where(numerado.c.pos == 1).group_by(numerado.c.escola_id)
+    ).all()
+    return {linha.escola_id: dict(linha._mapping) for linha in linhas}
+
+
 def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
-    """Cartão resumido de CADA escola da rede (contagens + médias do ano letivo
-    ativo da própria escola), em 3 consultas agregadas. ``adocao`` = % de alunos
-    ativos com nota (proxy de engajamento). Escolas sem dados entram com zeros."""
+    """Cartão resumido de CADA escola da rede (contagens + médias + totais brutos
+    das plataformas do ano letivo ativo da própria escola), agregado no banco.
+    ``adocao`` = % de alunos ativos com nota (proxy de engajamento). Escolas sem
+    dados entram com zeros. NUNCA expõe PII: só agregados por escola."""
     escolas = escolas_da_rede(db, rede_id)
     if not escolas:
         return []
@@ -94,6 +133,12 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
         .group_by(Professor.escola_id)
     ).all())
 
+    # (5) totais BRUTOS das plataformas por escola (snapshot atual de cada aluno):
+    # livros/tempo do Elefante e atividades/estrelas do Matific + alunos ativos.
+    mat = _totais_plataforma_por_escola(db, ids, SnapshotMatific, ["atividades", "estrelas"])
+    ele = _totais_plataforma_por_escola(db, ids, SnapshotElefante,
+                                        ["livros_unicos", "tempo_leitura_min"])
+
     cartoes = []
     for escola in escolas:
         agg = notas.get(escola.id)
@@ -104,6 +149,9 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
         adocao = round(com_nota / total_alunos * 100, 1) if total_alunos else 0.0
         media_geral = val(2)
         motivo = _motivo_atencao(total_alunos, com_nota, adocao, media_geral)
+        m, e = mat.get(escola.id), ele.get(escola.id)
+        livros = int(e["livros_unicos"]) if e else 0
+        ativos_ele = int(e["ativos"]) if e else 0
         cartoes.append({
             "escola_id": escola.id, "nome": escola.nome, "cidade": escola.cidade,
             "status": escola.status,
@@ -114,6 +162,14 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "alunos_com_dados": com_nota,
             "adocao": adocao,
             "media_geral": media_geral, "media_matific": val(3), "media_elefante": val(4),
+            # Totais brutos das plataformas (para as seções Elefante/Matific da rede).
+            "livros": livros,
+            "tempo_leitura_min": int(e["tempo_leitura_min"]) if e else 0,
+            "atividades": int(m["atividades"]) if m else 0,
+            "estrelas": int(m["estrelas"]) if m else 0,
+            "ativos_matific": int(m["ativos"]) if m else 0,
+            "ativos_elefante": ativos_ele,
+            "livros_por_aluno": round(livros / ativos_ele, 1) if ativos_ele else 0.0,
             "precisa_atencao": motivo is not None,
             "motivo_atencao": motivo,
         })
@@ -154,6 +210,13 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
     for posicao, cartao in enumerate(cartoes, start=1):
         cartao["posicao"] = posicao
 
+    # Totais brutos das plataformas na rede + alunos ativos (soma dos cartões).
+    total_livros = sum(c["livros"] for c in cartoes)
+    total_atividades = sum(c["atividades"] for c in cartoes)
+    ativos_elefante = sum(c["ativos_elefante"] for c in cartoes)
+    # A melhor escola COM dados (o pódio do ranking geral) — atalho para o KPI.
+    melhor = next((c for c in cartoes if c["alunos_com_dados"] > 0), None)
+
     return {
         "rede_id": rede_id,
         "totais": {
@@ -168,6 +231,16 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
             "media_matific": _ponderada("media_matific"),
             "media_elefante": _ponderada("media_elefante"),
             "escolas_em_atencao": sum(1 for c in cartoes if c["precisa_atencao"]),
+            # Totais das plataformas na rede inteira (seções Elefante/Matific).
+            "livros": total_livros,
+            "tempo_leitura_min": sum(c["tempo_leitura_min"] for c in cartoes),
+            "atividades": total_atividades,
+            "estrelas": sum(c["estrelas"] for c in cartoes),
+            "ativos_matific": sum(c["ativos_matific"] for c in cartoes),
+            "ativos_elefante": ativos_elefante,
+            "livros_por_aluno": round(total_livros / ativos_elefante, 1) if ativos_elefante else 0.0,
+            "melhor_escola": {"nome": melhor["nome"], "media_geral": melhor["media_geral"]}
+            if melhor else None,
         },
         "equidade": equidade,
         "escolas": cartoes,
@@ -176,12 +249,29 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
     }
 
 
-def ranking_escolas(db: Session, rede_id: int, limite: int = 50) -> list[dict]:
+# Métricas de ordenação do ranking de escolas (SEDUC escolhe o critério). Só
+# agregados por escola — nunca ranking individual entre escolas (privacidade).
+METRICAS_RANKING = {
+    "geral": "media_geral",
+    "leitura": "media_elefante",
+    "elefante": "media_elefante",
+    "matematica": "media_matific",
+    "matific": "media_matific",
+    "engajamento": "adocao",
+    "livros": "livros",
+    "estrelas": "estrelas",
+}
+
+
+def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
+                    metrica: str = "geral") -> list[dict]:
     """Ranking MUNICIPAL por escola (não expõe ranking individual de crianças
-    entre escolas — decisão de privacidade). Ordena por média geral, desempata
-    por adoção e nome; só escolas com dados entram."""
+    entre escolas — decisão de privacidade). A SEDUC escolhe o CRITÉRIO
+    (``metrica``: geral/leitura/matematica/matific/elefante/engajamento/livros/
+    estrelas); desempata por adoção e nome. Só escolas com dados entram."""
+    chave = METRICAS_RANKING.get(metrica, "media_geral")
     cartoes = [c for c in _kpis_da_rede(db, rede_id) if c["alunos_com_dados"] > 0]
-    cartoes.sort(key=lambda c: (-c["media_geral"], -c["adocao"], c["nome"].casefold()))
+    cartoes.sort(key=lambda c: (-c[chave], -c["adocao"], c["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
         cartao["posicao"] = posicao
     return cartoes[:limite]

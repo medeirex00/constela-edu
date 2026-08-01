@@ -2,9 +2,24 @@
 redes (IDOR) e nunca expõe PII de criança (só cartão por escola)."""
 from fastapi.testclient import TestClient
 
+from sqlalchemy import select
+
 from app.core.security import hash_senha
 from app.main import app
-from app.models import Aluno, Escola, Matricula, Nota, Professor, Rede, Turma, Usuario
+from app.models import (
+    Aluno,
+    Escola,
+    Importacao,
+    Matricula,
+    Nota,
+    Professor,
+    Rede,
+    SnapshotElefante,
+    SnapshotMatific,
+    Turma,
+    Usuario,
+)
+from app.services import rede as svc_rede
 
 
 def _login(email: str, senha: str) -> TestClient:
@@ -88,6 +103,34 @@ def test_dashboard_rede_conta_professores(db):
     assert dash["totais"]["professores"] == 4               # 3 + 1 da rede
     card_a = next(c for c in dash["escolas"] if c["nome"] == "Escola A")
     assert card_a["total_professores"] == 3
+
+
+def test_dashboard_rede_agrega_plataformas_e_ranking_por_metrica(db):
+    """A rede totaliza livros/atividades/estrelas dos snapshots ATUAIS + alunos
+    ativos; o ranking aceita o critério (métrica). Só agregados, sem PII."""
+    rede = Rede(nome="Rede Plataformas", status="ativa")
+    db.add(rede)
+    db.flush()
+    esc = _escola_com_notas(db, rede.id, "Escola X", [80.0, 60.0])   # 2 alunos com nota
+    imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
+    for aluno in db.execute(select(Aluno).where(Aluno.escola_id == esc.id)).scalars():
+        db.add(SnapshotElefante(escola_id=esc.id, aluno_id=aluno.id, importacao_id=imp.id,
+                                livros_unicos=10, tempo_leitura_min=60))
+        db.add(SnapshotMatific(escola_id=esc.id, aluno_id=aluno.id, importacao_id=imp.id,
+                               atividades=20, estrelas=5))
+    db.commit()
+
+    t = svc_rede.dashboard_rede(db, rede.id)["totais"]
+    assert t["livros"] == 20 and t["atividades"] == 40 and t["estrelas"] == 10
+    assert t["ativos_elefante"] == 2 and t["ativos_matific"] == 2
+    assert t["livros_por_aluno"] == 10.0
+    assert t["melhor_escola"] and t["melhor_escola"]["nome"] == "Escola X"
+
+    # Ranking por métrica (leitura = média do Elefante) não quebra e traz a escola.
+    r = svc_rede.ranking_escolas(db, rede.id, metrica="leitura")
+    assert r and r[0]["nome"] == "Escola X" and r[0]["livros"] == 20
 
 
 def test_isolamento_entre_redes_bloqueia_idor(db):
