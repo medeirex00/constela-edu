@@ -4,7 +4,16 @@ import ModalAlunosDuplicados from "../components/ModalAlunosDuplicados";
 import { renderComApp, responder, screen, userEvent } from "./utils";
 
 const URL_PREVIA = "/escolas/1/alunos/duplicados";
+const URL_AUTO = "/escolas/1/alunos/duplicados/auto";
 const URL_CORRIGIR = "/escolas/1/alunos/duplicados/corrigir";
+
+function planoAuto(over: Partial<ReturnType<typeof _plano>> = {}) {
+  return { ..._plano(), ...over };
+}
+function _plano() {
+  return { resumo: { total_alunos: 30, grupos_auto: 0, fusoes_auto: 0, revisar: 1 },
+           grupos: [] as unknown[] };
+}
 
 function previa() {
   return {
@@ -39,6 +48,7 @@ const noop = () => {};
 describe("ModalAlunosDuplicados", () => {
   it("marca alta por padrão e deixa 'revisar' desmarcada", async () => {
     responder("GET", URL_PREVIA, previa());
+    responder("GET", URL_AUTO, planoAuto());
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
@@ -53,6 +63,7 @@ describe("ModalAlunosDuplicados", () => {
 
   it("exige confirmação e envia loser_ids + FUNDIR", async () => {
     responder("GET", URL_PREVIA, previa());
+    responder("GET", URL_AUTO, planoAuto());
     let enviado: { loser_ids: number[]; confirmacao: string } | null = null;
     responder("POST", URL_CORRIGIR, (_caminho, opcoes) => {
       enviado = JSON.parse((opcoes as RequestInit).body as string);
@@ -82,6 +93,7 @@ describe("ModalAlunosDuplicados", () => {
 
   it("'Selecionar todos' marca o grupo inteiro de uma vez", async () => {
     responder("GET", URL_PREVIA, previa());
+    responder("GET", URL_AUTO, planoAuto());
     const u = userEvent.setup();
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
@@ -99,5 +111,29 @@ describe("ModalAlunosDuplicados", () => {
     const desmarcar = screen.getAllByRole("button", { name: /Desmarcar todos/ });
     await u.click(desmarcar[desmarcar.length - 1]);
     expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(false);
+  });
+
+  it("'Resolver automaticamente' funde os de alta confiança num clique", async () => {
+    responder("GET", URL_PREVIA, previa());
+    responder("GET", URL_AUTO, planoAuto({
+      resumo: { total_alunos: 30, grupos_auto: 1, fusoes_auto: 2, revisar: 1 },
+      grupos: [{ canonico_id: 11, canonico: "ABRAÃO LUÍS DIAS", turma: "4ºC",
+                 duplicatas: [{ loser_id: 10, nome: "ABRAAO L" }] }],
+    }));
+    let enviado: { confirmacao: string } | null = null;
+    responder("POST", URL_AUTO, (_c, opcoes) => {
+      enviado = JSON.parse((opcoes as RequestInit).body as string);
+      return { fundidos: 2, falhas: [], mensagem: "2 resolvida(s)." };
+    });
+
+    const u = userEvent.setup();
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    const botao = await screen.findByRole("button", { name: /Resolver 2 automaticamente/ });
+    await u.click(botao);
+
+    expect(enviado!.confirmacao).toBe("FUNDIR");
+    expect(await screen.findByText(/resolvida\(s\) automaticamente/)).toBeInTheDocument();
   });
 });

@@ -648,6 +648,49 @@ def corrigir_alunos_duplicados(
                          else "Nenhuma fusão aplicada.")}
 
 
+@router.get("/alunos/duplicados/auto", response_model=dict)
+def previa_auto_fusao(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """DRY-RUN da fusão AUTOMÁTICA (read-only): quantos grupos de alta confiança
+    (1 candidato plausível) seriam fundidos sozinhos e quantos ficam para revisão
+    manual. Nada é alterado — é a simulação antes de executar."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
+    return alunos_dedup.plano_auto_fusao(db, escola_id)
+
+
+@router.post("/alunos/duplicados/auto", response_model=dict)
+def executar_auto_fusao_endpoint(
+    dados: CorrigirDuplicadosAlunos,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """EXECUTA a fusão automática dos casos de ALTA confiança (1 candidato
+    plausível): abreviação/variante/subconjunto + nome idêntico com nascimento.
+    Os ambíguos (2+ candidatos) e os idênticos-sem-nascimento NÃO entram — ficam
+    para revisão manual. Preserva todos os dados (fundir_par), é transacional (UM
+    commit) e idempotente. Irreversível → exige confirmação 'FUNDIR'."""
+    if dados.confirmacao.strip().upper() != "FUNDIR":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Confirmação inválida. Digite FUNDIR para confirmar.")
+    resultado = alunos_dedup.executar_auto_fusao(db, escola_id, usuario.id)
+    registrar(db, "aluno.fusao_automatica", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
+              detalhes={"fusoes": resultado["fundidos"],
+                        "falhas": len(resultado["falhas"]),
+                        "motivo": "grupos de 1 candidato plausível (alta confiança)"})
+    db.commit()
+    if resultado["fundidos"]:
+        _recalcular_escola(db, escola_id)
+    n = resultado["fundidos"]
+    return {**resultado,
+            "mensagem": (f"{n} duplicata(s) resolvida(s) automaticamente." if n
+                         else "Nada a resolver automaticamente.")}
+
+
 # --- Turmas e Professores ---------------------------------------------------
 
 def _validar_professor(db: Session, escola_id: int, professor_id: int | None) -> None:

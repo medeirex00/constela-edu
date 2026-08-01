@@ -303,3 +303,84 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
                            "motivo": "erro ao fundir (dados inconsistentes)"})
 
     return {"fundidos": fundidos, "falhas": falhas, "detalhes": detalhes}
+
+
+# ---------------------------------------------------------------------------
+# AUTO-FUSÃO do passivo histórico (regra do dono: 1 candidato plausível → funde
+# sozinho; 2+ → revisão manual; 0 → nada). Dry-run + executar, com auditoria.
+# ---------------------------------------------------------------------------
+
+# Motivos que representam UM candidato plausível e inequívoco (o motor só sugere
+# esses quando há exatamente 1 correspondente na turma) → seguros p/ auto-fundir.
+_MOTIVOS_AUTO = frozenset({"abreviacao", "subconjunto", "variante"})
+
+
+def _auto_fusavel(confianca: str, motivo: str) -> bool:
+    """Este par pode ser fundido AUTOMATICAMENTE (sem revisão humana)?
+    Sim quando é um único candidato plausível: abreviação/subconjunto/variante
+    (o motor só os sugere quando há 1 correspondente na turma), OU nome idêntico
+    com nascimento CONCORDANTE ('alta'). Nome idêntico SEM nascimento fica de
+    fora (pode ser gêmeo/homônimo) → revisão manual."""
+    return motivo in _MOTIVOS_AUTO or confianca == "alta"
+
+
+def plano_auto_fusao(db: Session, escola_id: int) -> dict:
+    """DRY-RUN (read-only): o que a fusão automática FARIA. Agrupa por aluno
+    canônico (survivor) os casos de alta confiança e conta os que ficam para
+    revisão manual. Nada é alterado."""
+    escola = db.get(Escola, escola_id)
+    if escola is None:
+        return {"resumo": {"total_alunos": 0, "grupos_auto": 0, "fusoes_auto": 0,
+                           "revisar": 0}, "grupos": []}
+    total = db.execute(
+        select(func.count()).select_from(Aluno)
+        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")).scalar_one()
+
+    grupos: dict[int, dict] = {}
+    revisar_losers: set[int] = set()
+    for loser, survivor, confianca, motivo, turma in _candidatos(db, escola_id):
+        if _auto_fusavel(confianca, motivo):
+            g = grupos.setdefault(survivor.id, {
+                "canonico_id": survivor.id, "canonico": survivor.nome,
+                "turma": turma, "confianca": "alta",
+                "motivo": "único candidato plausível na mesma escola e turma",
+                "duplicatas": []})
+            g["duplicatas"].append({"loser_id": loser.id, "nome": loser.nome})
+        else:
+            revisar_losers.add(loser.id)
+
+    return {
+        "resumo": {
+            "total_alunos": int(total),
+            "grupos_auto": len(grupos),
+            "fusoes_auto": sum(len(g["duplicatas"]) for g in grupos.values()),
+            "revisar": len(revisar_losers),
+        },
+        "grupos": list(grupos.values()),
+    }
+
+
+def executar_auto_fusao(db: Session, escola_id: int, usuario_id: int) -> dict:
+    """EXECUTA a fusão automática dos casos de alta confiança (1 candidato
+    plausível). Reusa ``aplicar_deduplicacao`` (savepoint por par, preserva TODOS
+    os dados via fundir_par, leque funde numa tacada, cadeia ambígua é recusada).
+
+    ITERA (até estabilizar): resolver uma ficha pode DESTRAVAR outra — ex.: com
+    "ABRAAO L" ambíguo entre LUÍS e LUIZ, ao fundir LUIZ→LUÍS o "ABRAAO L" passa a
+    ter 1 só candidato e funde na passada seguinte. Idempotente: os perdedores
+    somem, então quando não há mais nada a fundir, para. NÃO commita — o endpoint
+    faz isso e recalcula a escola uma vez."""
+    total = {"fundidos": 0, "falhas": [], "detalhes": []}
+    for _ in range(6):                 # teto de segurança (nunca laço infinito)
+        auto_ids = [loser.id
+                    for loser, _s, confianca, motivo, _t in _candidatos(db, escola_id)
+                    if _auto_fusavel(confianca, motivo)]
+        if not auto_ids:
+            break
+        r = aplicar_deduplicacao(db, escola_id, auto_ids, usuario_id)
+        total["fundidos"] += r["fundidos"]
+        total["detalhes"].extend(r["detalhes"])
+        total["falhas"] = r["falhas"]  # só as falhas da última passada importam
+        if r["fundidos"] == 0:         # nada progrediu (só cadeias recusadas) → para
+            break
+    return total

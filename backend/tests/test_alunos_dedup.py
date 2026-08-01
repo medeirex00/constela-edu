@@ -326,3 +326,102 @@ def test_variante_nao_pareia_criancas_diferentes(cliente, db, escola_completa):
 
     corpo = _duplicados(cliente, escola_id)
     assert [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()] == []
+
+
+# --- Auto-fusão do passivo (dry-run + executar) -----------------------------
+
+def _piloto(db, escola_id, nome, turma_id):
+    a = _add_aluno(db, escola_id, nome, turma_id)
+    a.da_lista_piloto = True
+    db.commit()
+    return a
+
+
+def _existe(db, aid) -> bool:
+    return db.execute(select(Aluno.id).where(Aluno.id == aid)
+                      ).scalar_one_or_none() is not None
+
+
+def test_auto_fusao_resolve_o_abraao_e_preserva_lista_piloto(cliente, db, escola_completa):
+    """Passivo do ABRAÃO: Lista Piloto + abreviação (Elefante) + variante (Matific),
+    todas na mesma turma → a fusão automática resolve TUDO numa chamada (com
+    cascata) e mantém o perfil da Lista Piloto como canônico."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto_id = _piloto(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id).id
+    ab_l_id = _add_aluno(db, escola_id, "ABRAAO L", turma_id).id
+    ab_z_id = _add_aluno(db, escola_id, "ABRAAO LUIZ DIAS", turma_id).id
+
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+    assert r.json()["fundidos"] == 2
+    assert _existe(db, piloto_id)
+    assert not _existe(db, ab_l_id) and not _existe(db, ab_z_id)
+    assert db.get(Aluno, piloto_id).nome == "ABRAÃO LUÍS DIAS"   # nome oficial mantido
+
+
+def test_auto_fusao_nao_funde_identicos_sem_nascimento(cliente, db, escola_completa):
+    """Dois 'Bruno Alves Costa' na mesma turma SEM nascimento = possível gêmeo →
+    NÃO entra na fusão automática; fica para revisão manual."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    a = _add_aluno(db, escola_id, "Bruno Alves Costa", turma_id)
+    b = _add_aluno(db, escola_id, "Bruno Alves Costa", turma_id)
+
+    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
+    assert dry["resumo"]["grupos_auto"] == 0
+    assert dry["resumo"]["revisar"] >= 1
+
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                     json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    assert r.json()["fundidos"] == 0
+    assert _existe(db, a.id) and _existe(db, b.id)
+
+
+def test_auto_fusao_dry_run_mostra_grupo_e_conta(cliente, db, escola_completa):
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto = _piloto(db, escola_id, "CLARA FERNANDES", turma_id)
+    _add_aluno(db, escola_id, "CLARA F", turma_id)   # abreviação → 1 candidato
+
+    dry = cliente.get(f"{_base(escola_id)}/alunos/duplicados/auto").json()
+    grupo = next(g for g in dry["grupos"] if g["canonico_id"] == piloto.id)
+    assert grupo["canonico"] == "CLARA FERNANDES"
+    assert [d["nome"] for d in grupo["duplicatas"]] == ["CLARA F"]
+    assert dry["resumo"]["grupos_auto"] >= 1 and dry["resumo"]["fusoes_auto"] >= 1
+
+
+def test_auto_fusao_e_idempotente(cliente, db, escola_completa):
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    _piloto(db, escola_id, "DIEGO SANTOS", turma_id)
+    _add_aluno(db, escola_id, "DIEGO S", turma_id)
+
+    r1 = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                      json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    assert r1.json()["fundidos"] == 1
+    r2 = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                      json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    assert r2.json()["fundidos"] == 0        # nada a refundir
+
+
+def test_auto_fusao_registra_no_log(cliente, db, escola_completa):
+    from app.models import LogAuditoria
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    _piloto(db, escola_id, "ELISA MORAES", turma_id)
+    _add_aluno(db, escola_id, "ELISA M", turma_id)
+
+    cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                 json={"loser_ids": [], "confirmacao": "FUNDIR"})
+    log = db.execute(select(LogAuditoria).where(
+        LogAuditoria.acao == "aluno.fusao_automatica")).scalars().first()
+    assert log is not None and log.detalhes["fusoes"] == 1
+
+
+def test_auto_fusao_exige_confirmacao(cliente, db, escola_completa):
+    escola_id = escola_completa["escola"].id
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/auto",
+                     json={"loser_ids": [], "confirmacao": "x"})
+    assert r.status_code == 400
