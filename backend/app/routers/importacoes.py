@@ -412,6 +412,63 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     return None
 
 
+def _variante_ortografica(a_tokens: list[str], b_tokens: list[str]) -> bool:
+    """Os dois nomes são a MESMA pessoa escrita com pequena variação ortográfica?
+    Mesmo nº de tokens, mesmo 1º nome, e os tokens que diferem são MUITO próximos
+    (ex.: LUÍS↔LUIZ, ratio 0.75) — NÃO aceita troca real de nome (LUÍS↔LUCAS,
+    ratio 0.44). É estrito de propósito: separa variante de homônimo diferente."""
+    if len(a_tokens) != len(b_tokens) or not a_tokens:
+        return False
+    if a_tokens[0] != b_tokens[0]:
+        return False
+    diferentes = 0
+    for ta, tb in zip(a_tokens, b_tokens):
+        if ta == tb:
+            continue
+        if svc._similaridade(ta, tb) < 0.7:      # token trocado de verdade
+            return False
+        diferentes += 1
+    return 1 <= diferentes <= 2
+
+
+def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
+                     turma: Turma) -> tuple[Aluno | None, str]:
+    """Casa a linha de plataforma (Elefante/Matific) contra o ROSTER da turma
+    canônica ANTES de criar — o núcleo de "1 aluno = 1 perfil". Devolve
+    (aluno, confianca):
+      * "alta"  → candidato ÚNICO e inequívoco (nome exato, abreviação posicional
+        ou variante ortográfica) na MESMA turma → vincula automaticamente;
+      * "media" → MAIS de um candidato compatível (ex.: "ABRAAO L" que serve a
+        ABRAÃO LUÍS e ABRAÃO LUCAS) → NÃO cria (fica para revisão, nunca funde
+        cego);
+      * "baixa" → nenhum candidato → cria novo.
+    Só usa sinais PRECISOS (nunca similaridade de nome inteiro solta), então não
+    funde crianças diferentes de nome parecido. Busca na turma JÁ resolvida
+    (canônica, pós-P1), preferindo os alunos da Lista Piloto."""
+    tokens_linha = svc.tokens_nome(nome)
+    if not tokens_linha:
+        return None, "baixa"
+    alvo = svc.normalizar_nome(nome)
+    candidatos: list[Aluno] = []
+    for aluno in db.execute(
+        select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
+        .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma.id,
+               Matricula.ano_letivo == ano, Aluno.status == "ativo")
+    ).scalars():
+        tk = svc.tokens_nome(aluno.nome)
+        if (svc.normalizar_nome(aluno.nome) == alvo
+                or svc.casa_abreviado_posicional(tokens_linha, tk)
+                or svc.casa_abreviado_posicional(tk, tokens_linha)
+                or _variante_ortografica(tokens_linha, tk)):
+            candidatos.append(aluno)
+    unicos = {a.id: a for a in candidatos}
+    if len(unicos) == 1:
+        return next(iter(unicos.values())), "alta"
+    if len(unicos) > 1:
+        return None, "media"          # ambíguo → nunca funde cego; vai p/ revisão
+    return None, "baixa"
+
+
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
                     criados: dict | None = None,
                     turmas_novas: dict | None = None) -> Aluno | None:
@@ -445,6 +502,21 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             if criados is not None:
                 criados[chave] = existente
             return existente
+        # ANTES de criar: casa contra o roster da turma (nome abreviado/variação
+        # ortográfica). É o que evita os 3 "ABRAÃO" — Elefante/Matific vinculam ao
+        # aluno da Lista Piloto em vez de criar um novo. Alta vincula; média
+        # (ambíguo) NÃO cria (fica para revisão, nunca funde nomes parecidos).
+        casado, confianca = _casar_no_roster(db, escola_id, ano, linha.nome, turma)
+        if confianca == "alta" and casado is not None:
+            if criados is not None:
+                criados[chave] = casado
+            return casado
+        if confianca == "media":
+            avisos.append(
+                f"“{linha.nome}” parece um aluno já cadastrado na turma {turma.nome} "
+                "(nomes muito próximos), mas há mais de um candidato — NÃO foi criado "
+                "para evitar duplicata. Confira em Alunos › Fundir duplicatas.")
+            return None
         aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
         db.add(aluno)
         db.flush()
