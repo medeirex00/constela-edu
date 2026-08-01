@@ -402,6 +402,14 @@ class RedePublicoIn(BaseModel):
     ativo: bool
 
 
+class MetaRedeIn(BaseModel):
+    """Cadastro/edição de uma meta da rede para um indicador consolidado. UMA por
+    (rede, métrica) — redefinir a mesma métrica sobrescreve o alvo."""
+    metrica: str = Field(pattern="^(media_geral|media_elefante|media_matific|adocao|livros|atividades)$")
+    alvo: float = Field(gt=0)
+    descricao: str | None = Field(default=None, max_length=200)
+
+
 class EscolaLocalIn(BaseModel):
     """Localização da escola (para o mapa da Secretaria) — cidade/UF, bairro/
     endereço (geocodificação), coordenadas — e o código INEP (para casar

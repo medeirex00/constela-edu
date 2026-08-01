@@ -390,18 +390,152 @@ function SeletorEscola({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir:
   );
 }
 
-function MetasRede() {
+interface MetaProgresso {
+  id: number;
+  metrica: string;
+  rotulo: string;
+  sufixo: string;
+  alvo: number;
+  atual: number;
+  progresso: number;
+  atingida: boolean;
+  descricao: string | null;
+  escolas_atingiram: number | null;
+  escolas_total: number | null;
+}
+
+const METRICAS_META_UI = [
+  { metrica: "media_geral", rotulo: "Média geral da rede" },
+  { metrica: "media_elefante", rotulo: "Leitura (Elefante Letrado)" },
+  { metrica: "media_matific", rotulo: "Matemática (Matific)" },
+  { metrica: "adocao", rotulo: "Engajamento (adoção %)" },
+  { metrica: "livros", rotulo: "Livros lidos na rede" },
+  { metrica: "atividades", rotulo: "Atividades Matific na rede" },
+];
+
+/** Metas da rede com PROGRESSO real (aba Dashboard). Sem meta = convite. */
+function MetasRede({ redeId }: { redeId: number }) {
+  const { dados: metas } = useApi<MetaProgresso[]>(`/redes/${redeId}/metas`);
   return (
     <Card className="p-4">
-      <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
         <Target size={16} className="text-indigo-600" /> Metas da rede
       </h2>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">
-        O acompanhamento de metas (leitura, matemática, cumprimento por escola) precisa
-        de metas <b>cadastradas</b> — hoje o sistema ainda não tem esse cadastro. Assim que
-        as metas forem definidas, o progresso aparece aqui automaticamente, com dado real
-        (nada de porcentagem fictícia).
+      {!metas || metas.length === 0 ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          Nenhuma meta definida ainda. Defina as metas da rede na aba <b>Secretaria</b> —
+          o progresso (dado real, sem número fictício) aparece aqui.
+        </p>
+      ) : (
+        <div className="space-y-3.5">
+          {metas.map((m) => (
+            <div key={m.id}>
+              <div className="mb-1 flex items-center justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate font-medium">
+                  {m.descricao || m.rotulo}
+                  {m.atingida && (
+                    <span className="ml-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">✓ atingida</span>
+                  )}
+                </span>
+                <span className="shrink-0 tabular-nums text-zinc-500">
+                  {nota(m.atual)}{m.sufixo} / {nota(m.alvo)}{m.sufixo}
+                </span>
+              </div>
+              <div className="h-2.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                <div
+                  className={`h-full rounded-full transition-all ${m.atingida ? "bg-emerald-500" : "bg-indigo-500"}`}
+                  style={{ width: `${m.progresso}%` }}
+                />
+              </div>
+              <div className="mt-0.5 flex justify-between text-xs text-zinc-400">
+                <span className="tabular-nums">{nota(m.progresso)}%</span>
+                {m.escolas_total != null && (
+                  <span>{m.escolas_atingiram} de {m.escolas_total} escolas atingiram</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Cadastro de metas da rede (aba Secretaria) — definir alvo por indicador. */
+function GestaoMetas({ redeId }: { redeId: number }) {
+  const { dados: metas, recarregar } = useApi<MetaProgresso[]>(`/redes/${redeId}/metas`);
+  const [metrica, setMetrica] = useState("media_geral");
+  const [alvo, setAlvo] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  async function salvar() {
+    const valor = Number(alvo);
+    if (!valor || valor <= 0) return;
+    setSalvando(true);
+    try {
+      await api(`/redes/${redeId}/metas`, {
+        method: "PUT",
+        body: JSON.stringify({ metrica, alvo: valor }),
+      });
+      setAlvo("");
+      recarregar();
+    } finally {
+      setSalvando(false);
+    }
+  }
+  async function remover(met: string) {
+    await api(`/redes/${redeId}/metas/${met}`, { method: "DELETE" });
+    recarregar();
+  }
+
+  return (
+    <Card className="p-4">
+      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold">
+        <Target size={16} className="text-indigo-600" /> Metas da rede
+      </h2>
+      <p className="mb-3 text-xs text-zinc-500">
+        Defina o alvo de cada indicador. O progresso é calculado com o dado real e aparece no Dashboard.
       </p>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <select
+          aria-label="Indicador da meta"
+          value={metrica}
+          onChange={(e) => setMetrica(e.target.value)}
+          className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        >
+          {METRICAS_META_UI.map((o) => (
+            <option key={o.metrica} value={o.metrica}>{o.rotulo}</option>
+          ))}
+        </select>
+        <input
+          type="number"
+          min="0"
+          step="0.1"
+          value={alvo}
+          onChange={(e) => setAlvo(e.target.value)}
+          placeholder="alvo"
+          aria-label="Valor-alvo da meta"
+          className="w-28 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        />
+        <Botao onClick={salvar} disabled={salvando || !alvo}>Salvar meta</Botao>
+      </div>
+      {metas && metas.length > 0 && (
+        <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+          {metas.map((m) => (
+            <li key={m.id} className="flex items-center gap-3 py-2 text-sm">
+              <span className="flex-1 truncate">{m.rotulo}</span>
+              <span className="tabular-nums font-semibold">{nota(m.alvo)}{m.sufixo}</span>
+              <button
+                type="button"
+                onClick={() => remover(m.metrica)}
+                className="text-xs text-red-500 hover:underline"
+              >
+                remover
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }
@@ -632,14 +766,17 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         </span>
       </Card>
 
-      {/* Metas da rede — área preparada; sem cadastro de metas ainda (sem número fictício). */}
-      <MetasRede />
+      {/* Metas da rede — progresso REAL (alvo cadastrado na aba Secretaria). */}
+      <MetasRede redeId={redeId} />
       </>
       )}
 
       {/* --- SECRETARIA (aba Secretaria): funções administrativas + mapa/navegação. --- */}
       {modo === "secretaria" && (
       <>
+      {/* Cadastro de metas da rede (o progresso aparece no Dashboard). */}
+      <GestaoMetas redeId={redeId} />
+
       <VitrinePublica redeId={redeId} />
 
       <div className="grid gap-6 lg:grid-cols-3">

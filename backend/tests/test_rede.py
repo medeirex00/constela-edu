@@ -133,6 +133,40 @@ def test_dashboard_rede_agrega_plataformas_e_ranking_por_metrica(db):
     assert r and r[0]["nome"] == "Escola X" and r[0]["livros"] == 20
 
 
+def test_metas_da_rede_cadastro_progresso_e_upsert(db):
+    """A Secretaria CADASTRA metas da rede; o progresso é calculado sobre o dado
+    REAL (média da rede) e conta as escolas que atingiram. Upsert por métrica."""
+    rede = Rede(nome="Rede Metas", status="ativa")
+    db.add(rede)
+    db.flush()
+    _escola_com_notas(db, rede.id, "Escola M", [80.0, 60.0])   # média da escola = 70
+    db.add(Usuario(nome="Secretaria", email="sec.metas@rede.gov",
+                   senha_hash=hash_senha("s3nh4secretaria"), cargo="coordenador",
+                   rede_id=rede.id))
+    db.commit()
+    cliente = _login("sec.metas@rede.gov", "s3nh4secretaria")
+
+    # Define meta de média geral 50 → a rede está em ~70 → atingida.
+    r = cliente.put(f"/api/v1/redes/{rede.id}/metas",
+                    json={"metrica": "media_geral", "alvo": 50})
+    assert r.status_code == 200, r.text
+    m = next(x for x in r.json() if x["metrica"] == "media_geral")
+    assert m["alvo"] == 50.0 and m["atual"] == 70.0
+    assert m["progresso"] == 100.0 and m["atingida"] is True
+    assert m["escolas_atingiram"] == 1 and m["escolas_total"] == 1
+
+    # Upsert: redefinir a MESMA métrica sobrescreve (não duplica) — e agora 70 < 90.
+    cliente.put(f"/api/v1/redes/{rede.id}/metas",
+                json={"metrica": "media_geral", "alvo": 90})
+    metas = cliente.get(f"/api/v1/redes/{rede.id}/metas").json()
+    iguais = [x for x in metas if x["metrica"] == "media_geral"]
+    assert len(iguais) == 1 and iguais[0]["alvo"] == 90.0 and iguais[0]["atingida"] is False
+
+    # Remover.
+    assert cliente.delete(f"/api/v1/redes/{rede.id}/metas/media_geral").status_code == 200
+    assert cliente.get(f"/api/v1/redes/{rede.id}/metas").json() == []
+
+
 def test_isolamento_entre_redes_bloqueia_idor(db):
     r1 = Rede(nome="Rede A", status="ativa")
     r2 = Rede(nome="Rede B", status="ativa")

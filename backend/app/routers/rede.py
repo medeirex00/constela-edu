@@ -18,6 +18,7 @@ from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
 from app.models import Escola, Rede, Usuario
 from app.schemas import (
     EscolaLocalIn,
+    MetaRedeIn,
     RedeCreate,
     RedeEscolasIn,
     RedeOut,
@@ -337,6 +338,47 @@ def ranking(
     """Ranking municipal POR ESCOLA (privacidade: não expõe ranking individual de
     crianças entre escolas). A SEDUC escolhe o critério em ``metrica``."""
     return svc_rede.ranking_escolas(db, rede_id, limite=limite, metrica=metrica)
+
+
+@router.get("/{rede_id}/metas")
+def listar_metas(
+    rede_id: int = Depends(exigir_rede),
+    db: Session = Depends(get_db),
+):
+    """Metas da rede + PROGRESSO real (valor atual da rede / alvo). Sem meta
+    cadastrada, devolve lista vazia — a UI mostra o convite para definir."""
+    return svc_rede.metas_com_progresso(db, rede_id)
+
+
+@router.put("/{rede_id}/metas")
+def definir_meta(
+    dados: MetaRedeIn,
+    rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Cadastra/atualiza uma meta da rede (upsert por métrica). Ação de quem tem a
+    rede (Secretaria) ou o admin global — como a vitrine pública."""
+    svc_rede.definir_meta(db, rede_id, dados.metrica, dados.alvo, dados.descricao)
+    registrar(db, "rede.meta_definida", usuario_id=usuario.id, entidade="rede",
+              entidade_id=rede_id, detalhes={"metrica": dados.metrica, "alvo": dados.alvo})
+    db.commit()
+    return svc_rede.metas_com_progresso(db, rede_id)
+
+
+@router.delete("/{rede_id}/metas/{metrica}")
+def remover_meta(
+    metrica: str,
+    rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Remove a meta de uma métrica da rede."""
+    svc_rede.remover_meta(db, rede_id, metrica)
+    registrar(db, "rede.meta_removida", usuario_id=usuario.id, entidade="rede",
+              entidade_id=rede_id, detalhes={"metrica": metrica})
+    db.commit()
+    return svc_rede.metas_com_progresso(db, rede_id)
 
 
 @router.get("/{rede_id}/avaliacoes/opcoes")

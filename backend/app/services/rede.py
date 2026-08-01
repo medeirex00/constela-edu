@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import secrets
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     Aluno,
     Escola,
     Matricula,
+    MetaRede,
     Nota,
     Professor,
     Rede,
@@ -275,6 +276,85 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
         cartao["posicao"] = posicao
     return cartoes[:limite]
+
+
+# ---------------------------------------------------------------------------
+# METAS da rede (§9) — a Secretaria CADASTRA o alvo de um indicador; o progresso
+# é sempre calculado sobre os totais REAIS (nunca número fictício).
+# ---------------------------------------------------------------------------
+
+# Indicadores que aceitam meta: rótulo, sufixo e se dá para comparar POR ESCOLA
+# (média/adoção sim; totais da rede não — uma escola não bate um total municipal).
+METRICAS_META: dict[str, dict] = {
+    "media_geral": {"rotulo": "Média geral da rede", "sufixo": "", "por_escola": True},
+    "media_elefante": {"rotulo": "Leitura (Elefante Letrado)", "sufixo": "", "por_escola": True},
+    "media_matific": {"rotulo": "Matemática (Matific)", "sufixo": "", "por_escola": True},
+    "adocao": {"rotulo": "Engajamento (adoção)", "sufixo": "%", "por_escola": True},
+    "livros": {"rotulo": "Livros lidos na rede", "sufixo": "", "por_escola": False},
+    "atividades": {"rotulo": "Atividades Matific na rede", "sufixo": "", "por_escola": False},
+}
+
+
+def listar_metas(db: Session, rede_id: int) -> list[dict]:
+    metas = db.execute(
+        select(MetaRede).where(MetaRede.rede_id == rede_id).order_by(MetaRede.metrica)
+    ).scalars().all()
+    return [{"id": m.id, "metrica": m.metrica, "alvo": m.alvo, "descricao": m.descricao}
+            for m in metas]
+
+
+def definir_meta(db: Session, rede_id: int, metrica: str, alvo: float,
+                 descricao: str | None = None) -> MetaRede:
+    """Upsert: UMA meta por (rede, métrica) — redefinir sobrescreve o alvo."""
+    if metrica not in METRICAS_META:
+        raise ValueError("Métrica de meta inválida.")
+    meta = db.execute(select(MetaRede).where(
+        MetaRede.rede_id == rede_id, MetaRede.metrica == metrica)).scalars().first()
+    if meta is None:
+        meta = MetaRede(rede_id=rede_id, metrica=metrica, alvo=alvo, descricao=descricao)
+        db.add(meta)
+    else:
+        meta.alvo = alvo
+        meta.descricao = descricao
+    return meta
+
+
+def remover_meta(db: Session, rede_id: int, metrica: str) -> None:
+    db.execute(delete(MetaRede).where(
+        MetaRede.rede_id == rede_id, MetaRede.metrica == metrica))
+
+
+def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) -> list[dict]:
+    """Metas cadastradas + progresso REAL: valor ATUAL da rede / alvo (limitado a
+    100%) + quantas escolas COM dados já atingiram (só para métricas comparáveis
+    por escola). Sem meta cadastrada → lista vazia (a UI mostra o convite)."""
+    metas = db.execute(
+        select(MetaRede).where(MetaRede.rede_id == rede_id).order_by(MetaRede.metrica)
+    ).scalars().all()
+    if not metas:
+        return []
+    if dados is None:
+        dados = dashboard_rede(db, rede_id)
+    totais = dados["totais"]
+    com_dados = [c for c in dados["escolas"] if c["alunos_com_dados"] > 0]
+    saida = []
+    for m in metas:
+        cfg = METRICAS_META.get(m.metrica)
+        if cfg is None:
+            continue
+        atual = float(totais.get(m.metrica, 0) or 0)
+        progresso = round(min(100.0, atual / m.alvo * 100), 1) if m.alvo else 0.0
+        item = {
+            "id": m.id, "metrica": m.metrica, "rotulo": cfg["rotulo"],
+            "sufixo": cfg["sufixo"], "alvo": round(m.alvo, 1), "atual": round(atual, 1),
+            "progresso": progresso, "atingida": atual >= m.alvo, "descricao": m.descricao,
+            "escolas_atingiram": None, "escolas_total": None,
+        }
+        if cfg["por_escola"] and com_dados:
+            item["escolas_atingiram"] = sum(1 for c in com_dados if c.get(m.metrica, 0) >= m.alvo)
+            item["escolas_total"] = len(com_dados)
+        saida.append(item)
+    return saida
 
 
 # ---------------------------------------------------------------------------

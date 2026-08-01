@@ -29,6 +29,7 @@ from app.schemas.comum import (
     ProfessorCreate,
     ProfessorOut,
     ProfessorUpdate,
+    MetaRedeIn,
     RankingItemOut,
     RedeCreate,
     RedeEscolasIn,

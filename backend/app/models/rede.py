@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String
+from sqlalchemy import Float, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -32,4 +32,26 @@ class Rede(Base):
     # — NUNCA nome de criança. Nulo = desligado. Trocar o token invalida o link.
     token_publico: Mapped[str | None] = mapped_column(String(64), unique=True,
                                                       index=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(default=agora)
+
+
+class MetaRede(Base):
+    """Meta (objetivo) da rede para um INDICADOR consolidado — o que a Secretaria
+    quer que a rede alcance. O progresso é calculado sobre os dados REAIS (totais
+    da rede / cartões por escola); a meta em si é o único dado 'cadastrado'. Uma
+    meta por (rede, métrica) — redefinir sobrescreve o alvo anterior.
+    """
+
+    __tablename__ = "metas_rede"
+    __table_args__ = (
+        Index("uq_meta_rede_metrica", "rede_id", "metrica", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rede_id: Mapped[int] = mapped_column(
+        ForeignKey("redes.id", ondelete="CASCADE"), index=True)
+    # media_geral | media_elefante | media_matific | adocao | livros | atividades
+    metrica: Mapped[str] = mapped_column(String(30))
+    alvo: Mapped[float] = mapped_column(Float)   # valor-alvo do indicador
+    descricao: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(default=agora)
