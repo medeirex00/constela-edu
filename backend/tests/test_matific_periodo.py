@@ -9,7 +9,7 @@ intervalo impresso na capa. A importação:
   * reimportar o mesmo período recalcula sobre a mesma base (não dobra);
   * importar um mês antigo (backfill) não rebaixa o estado atual.
 """
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 from sqlalchemy import select
 
@@ -343,16 +343,28 @@ def test_acumulado_dentro_do_intervalo_nao_derruba_o_estado(
         cliente, db, escola_completa):
     """Migração do fluxo antigo: o acumulado all-time foi importado DENTRO do
     mês corrente; o leaderboard do mesmo mês chega depois. O total não pode
-    despencar para os valores do mês (era 500→30 antes do piso)."""
+    despencar para os valores do mês (era 500→30 antes do piso). O período é o
+    MÊS ATUAL derivado do relógio — antes eram datas fixas de jul/2026, o que
+    fazia o teste falhar quando rodado fora daquele mês."""
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
     _confirmar(cliente, escola_id, ana.id,
                {"atividades": 500, "pontuacao_media": 4.5, "estrelas": 900},
-               com_periodo=False)                      # datado AGORA (jul/2026)
+               com_periodo=False)                      # datado AGORA (mês corrente)
 
+    # O período é o MÊS do acumulado — derivado da DATA que o import atribuiu ao
+    # snapshot (não de um relógio à parte). Antes, datas fixas de jul/2026 +
+    # a virada de fuso (23h em Brasília = dia seguinte em UTC) faziam o teste
+    # falhar na última noite do mês.
+    from app.services.scoring import _snapshots_atuais
+    ref = _snapshots_atuais(db, escola_id, SnapshotMatific)[ana.id].data_referencia
+    mes_inicio = ref.date().replace(day=1)
+    prox_mes = (mes_inicio.replace(year=mes_inicio.year + 1, month=1)
+                if mes_inicio.month == 12
+                else mes_inicio.replace(month=mes_inicio.month + 1))
     corpo = {
         "plataforma": "matific", "formato": "resumo", "tipo": "pdf",
-        "periodo_inicio": "2026-07-01", "periodo_fim": "2026-08-01",
+        "periodo_inicio": mes_inicio.isoformat(), "periodo_fim": prox_mes.isoformat(),
         "linhas": [{"nome": "Ana B", "aluno_id": ana.id,
                     "dados": {"atividades": 30, "pontuacao_media": 3.0,
                               "estrelas": 90}}],
@@ -362,15 +374,15 @@ def test_acumulado_dentro_do_intervalo_nao_derruba_o_estado(
     assert resposta.status_code == 200, resposta.text
     assert any("preservado" in a for a in resposta.json()["avisos"])
 
-    from app.services.scoring import _snapshots_atuais
     atual = _snapshots_atuais(db, escola_id, SnapshotMatific)[ana.id]
     assert (atual.atividades, atual.estrelas) == (500, 900)  # nada despencou
 
-    # E o delta de JULHO é exatamente o ganho do relatório (30/90), porque o
-    # snapshot-base da véspera vale (novo − ganhos), não zero.
+    # E o delta do MÊS CORRENTE é exatamente o ganho do relatório (30/90),
+    # porque o snapshot-base da véspera vale (novo − ganhos), não zero.
     snaps = _snapshots(db, ana.id)
-    atual_j, base_j = _janela(snaps, datetime(2026, 7, 1),
-                              datetime(2026, 7, 31, 23, 59, 59),
+    atual_j, base_j = _janela(snaps,
+                              datetime.combine(mes_inicio, time.min),
+                              datetime.combine(prox_mes, time.min) - timedelta(seconds=1),
                               base_no_periodo=True)
     assert atual_j.atividades - base_j.atividades == 30
     assert atual_j.estrelas - base_j.estrelas == 90
