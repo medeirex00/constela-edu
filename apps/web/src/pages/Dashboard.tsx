@@ -25,10 +25,13 @@ import { usePerfil } from "../hooks/usePerfil";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 import type { Dashboard as DadosDashboard } from "../lib/types";
 
-// Panorama da REDE (perfis SEDUC/Admin Global). Lazy: puxa o Leaflet do mapa —
-// mantém o chunk do Dashboard leve para o professor/coordenador (que nunca o veem).
+// Panorama da REDE (SEDUC) e o GLOBAL de todas as redes (Admin Global). Lazy:
+// puxam o Leaflet do mapa — mantém o chunk do Dashboard leve para o professor/
+// coordenador (que nunca os veem).
 const PanoramaRede = lazy(() =>
   import("./rede/RedeDashboard").then((m) => ({ default: m.PanoramaRede })));
+const PanoramaGlobal = lazy(() =>
+  import("./rede/RedeDashboard").then((m) => ({ default: m.PanoramaGlobal })));
 
 /* --- Inteligência (mesmos dados da aba Insights, reaproveitados) ----------- */
 interface IndiceAluno {
@@ -362,13 +365,24 @@ function TopRanking({ top }: { top: DadosDashboard["top10"] }) {
  *     INALTERADO). A aba Secretaria (/rede) fica só com o administrativo.
  */
 export default function Dashboard() {
-  const { rede } = usePerfil();
-  if (!rede) return <DashboardEscola />;
-  return (
-    <Suspense fallback={<Carregando texto="Carregando o panorama da rede..." />}>
-      <PanoramaRede />
-    </Suspense>
-  );
+  const { global, secretaria } = usePerfil();
+  // Admin Global → consolidação de TODAS as redes; SEDUC/Secretaria → sua rede;
+  // professor/coordenador/admin de escola → Dashboard da escola (abaixo, inalterado).
+  if (global) {
+    return (
+      <Suspense fallback={<Carregando texto="Carregando o panorama global..." />}>
+        <PanoramaGlobal />
+      </Suspense>
+    );
+  }
+  if (secretaria) {
+    return (
+      <Suspense fallback={<Carregando texto="Carregando o panorama da rede..." />}>
+        <PanoramaRede />
+      </Suspense>
+    );
+  }
+  return <DashboardEscola />;
 }
 
 function DashboardEscola() {

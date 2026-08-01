@@ -15,6 +15,7 @@ import {
   BookOpen,
   Building2,
   Calculator,
+  ChevronLeft,
   FileDown,
   Globe,
   GraduationCap,
@@ -958,4 +959,213 @@ function ConteudoRankingRede({ redeId }: { redeId: number }) {
  *  nominal de crianças fica bloqueado por PII). */
 export function RankingRede() {
   return <EnvolucroRede>{(redeId) => <ConteudoRankingRede redeId={redeId} />}</EnvolucroRede>;
+}
+
+/* ========================================================================== */
+/* Admin Global — visão consolidada de TODAS as redes (uma camada acima da     */
+/* Secretaria). Só agregado por rede/escola, sem PII.                          */
+/* ========================================================================== */
+
+interface RedeCartao {
+  rede_id: number;
+  nome: string;
+  uf: string | null;
+  status: string;
+  escolas: number;
+  alunos: number;
+  turmas: number;
+  professores: number;
+  alunos_com_dados: number;
+  adocao: number;
+  media_geral: number;
+  media_matific: number;
+  media_elefante: number;
+  livros: number;
+  atividades: number;
+  estrelas: number;
+  escolas_em_atencao: number;
+  posicao?: number;
+}
+
+interface DashboardGlobal {
+  totais: {
+    redes: number;
+    escolas: number;
+    alunos: number;
+    turmas: number;
+    professores: number;
+    livros: number;
+    atividades: number;
+    estrelas: number;
+    media_geral: number;
+    media_matific: number;
+    media_elefante: number;
+    escolas_em_atencao: number;
+  };
+  redes: RedeCartao[];
+  top_escolas: (EscolaCartao & { rede_id: number; rede_nome: string })[];
+}
+
+function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) {
+  const { dados, erro, carregando } = useApi<DashboardGlobal>("/redes/panorama-global");
+  const { selecionarEscola } = useApp();
+  const navegar = useNavigate();
+  const [metrica, setMetrica] = useState(0);
+  const m = METRICAS_TOP[metrica];
+  const redesRanked = useMemo(
+    () => [...(dados?.redes ?? [])].sort((a, b) => (b[m.chave as keyof RedeCartao] as number) - (a[m.chave as keyof RedeCartao] as number)),
+    [dados, m.chave],
+  );
+  if (carregando && !dados) return <Carregando texto="Carregando as redes..." />;
+  if (erro && !dados) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
+  if (!dados) return null;
+  const t = dados.totais;
+  const abrirEscola = (id: number) => { selecionarEscola(id); navegar("/escola"); };
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        titulo="Panorama Global — Todas as Redes"
+        descricao="Visão consolidada de todas as redes às quais você tem acesso. Selecione uma rede para aprofundar."
+        acoes={
+          <select
+            aria-label="Selecionar rede"
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-900"
+            value=""
+            onChange={(e) => { const id = Number(e.target.value); if (id) aoAbrirRede(id); }}
+          >
+            <option value="">🌎 Todas as redes</option>
+            {[...dados.redes].sort((a, b) => a.nome.localeCompare(b.nome)).map((r) => (
+              <option key={r.rede_id} value={r.rede_id}>{r.nome}</option>
+            ))}
+          </select>
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard icone={<Globe size={16} />} rotulo="Redes" valor={numero(t.redes)} detalhe={`${numero(t.escolas)} escolas`} />
+        <StatCard icone={<Users size={16} />} rotulo="Alunos" valor={numero(t.alunos)} detalhe={`${numero(t.turmas)} turmas`} />
+        <StatCard icone={<GraduationCap size={16} />} rotulo="Professores" valor={numero(t.professores)} detalhe="em todas as redes" />
+        <StatCard icone={<TrendingUp size={16} />} rotulo="Média geral" valor={nota(t.media_geral)} detalhe={`Matific ${nota(t.media_matific)} · Elefante ${nota(t.media_elefante)}`} />
+        <StatCard icone={<BookOpen size={16} />} rotulo="Livros lidos" valor={numero(t.livros)} detalhe="em todas as redes" />
+        <StatCard icone={<Star size={16} />} rotulo="Atividades Matific" valor={numero(t.atividades)} detalhe={`${numero(t.estrelas)} estrelas`} />
+        <StatCard icone={<Building2 size={16} />} rotulo="Escolas" valor={numero(t.escolas)} detalhe="na rede toda" />
+        <StatCard icone={<AlertTriangle size={16} className="text-amber-500" />} rotulo="Escolas em atenção" valor={numero(t.escolas_em_atencao)} detalhe="precisam de acompanhamento" />
+      </div>
+
+      {/* Comparação / ranking entre redes por indicador. */}
+      <Card className="p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <BarChart3 size={16} className="text-indigo-600" /> Comparação entre redes
+          </h2>
+          <div className="flex flex-wrap gap-1">
+            {METRICAS_TOP.map((opt, i) => (
+              <button
+                key={opt.rotulo}
+                type="button"
+                onClick={() => setMetrica(i)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  i === metrica
+                    ? "bg-indigo-600 text-white"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                }`}
+              >
+                {opt.rotulo}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm tabular-nums">
+            <thead>
+              <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                <th className="px-3 py-2 font-medium">#</th>
+                <th className="px-3 py-2 font-medium">Rede</th>
+                <th className="px-3 py-2 text-right font-medium">Escolas</th>
+                <th className="px-3 py-2 text-right font-medium">Alunos</th>
+                <th className="px-3 py-2 text-right font-medium">{m.rotulo}</th>
+                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Leitura</th>
+                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Matific</th>
+                <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Engaj.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {redesRanked.map((r, i) => (
+                <tr key={r.rede_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                  <td className="px-3 py-2 text-center">
+                    {MEDALHAS[i] ?? <span className="text-xs font-bold text-zinc-400">{i + 1}</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    <button type="button" onClick={() => aoAbrirRede(r.rede_id)}
+                            className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                      {r.nome}{r.uf ? ` · ${r.uf}` : ""}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2 text-right">{numero(r.escolas)}</td>
+                  <td className="px-3 py-2 text-right">{numero(r.alunos)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{nota(r[m.chave as keyof RedeCartao] as number)}{m.sufixo ?? ""}</td>
+                  <td className="hidden px-3 py-2 text-right md:table-cell">{nota(r.media_elefante)}</td>
+                  <td className="hidden px-3 py-2 text-right md:table-cell">{nota(r.media_matific)}</td>
+                  <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(r.adocao)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Melhores escolas de TODAS as redes (com o nome da rede). */}
+      <Card className="p-4">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <Trophy size={16} className="text-amber-500" /> Top escolas de todas as redes
+        </h2>
+        {dados.top_escolas.length === 0 ? (
+          <p className="py-4 text-center text-sm text-zinc-500">Sem dados ainda.</p>
+        ) : (
+          <ol className="space-y-0.5">
+            {dados.top_escolas.map((e, i) => (
+              <li key={`${e.rede_id}-${e.escola_id}`}>
+                <button
+                  type="button"
+                  onClick={() => abrirEscola(e.escola_id)}
+                  className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                >
+                  <span className="w-6 text-center text-base">
+                    {MEDALHAS[i] ?? <span className="text-xs font-bold text-zinc-400">{i + 1}</span>}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {e.nome}
+                    <span className="ml-1.5 text-xs font-normal text-zinc-400">· {e.rede_nome}</span>
+                  </span>
+                  <span className="text-sm font-bold tabular-nums">{nota(e.media_geral)}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/** Dashboard do ADMIN GLOBAL: consolidação de TODAS as redes, com drill-down
+ *  para uma rede (o panorama daquela rede) e de volta. */
+export function PanoramaGlobal() {
+  const [redeSel, setRedeSel] = useState<number | null>(null);
+  if (redeSel != null) {
+    return (
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setRedeSel(null)}
+          className="inline-flex items-center gap-1 text-sm text-zinc-500 transition-colors hover:text-indigo-600 dark:hover:text-indigo-400"
+        >
+          <ChevronLeft size={16} /> Voltar para todas as redes
+        </button>
+        <PainelRede redeId={redeSel} modo="analise" />
+      </div>
+    );
+  }
+  return <ConteudoGlobal aoAbrirRede={setRedeSel} />;
 }

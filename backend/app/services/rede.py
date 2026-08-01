@@ -279,6 +279,80 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
 
 
 # ---------------------------------------------------------------------------
+# Visão GLOBAL do Admin Global — consolida TODAS as redes (uma camada acima da
+# Secretaria, que vê só a própria rede). Só agregados por escola/rede, sem PII.
+# ---------------------------------------------------------------------------
+
+def dashboard_global(db: Session) -> dict:
+    """Panorama consolidado de TODAS as redes (Admin Global): totais globais,
+    cartão por REDE (para comparar/ranquear redes) e as melhores escolas de toda
+    a base com o nome da rede. Reusa ``_kpis_da_rede`` por rede — só agregado."""
+    redes = db.execute(select(Rede).order_by(Rede.nome)).scalars().all()
+    cartoes_rede: list[dict] = []
+    todas_escolas: list[dict] = []
+    for rede in redes:
+        cartoes = _kpis_da_rede(db, rede.id)
+        alunos = sum(c["total_alunos"] for c in cartoes)
+        com_dados = sum(c["alunos_com_dados"] for c in cartoes)
+
+        def _pond(chave: str, _cartoes=cartoes, _com=com_dados) -> float:
+            if not _com:
+                return 0.0
+            return round(sum(c[chave] * c["alunos_com_dados"] for c in _cartoes) / _com, 1)
+
+        cartoes_rede.append({
+            "rede_id": rede.id, "nome": rede.nome, "uf": rede.uf, "status": rede.status,
+            "escolas": len(cartoes),
+            "alunos": alunos, "turmas": sum(c["total_turmas"] for c in cartoes),
+            "professores": sum(c["total_professores"] for c in cartoes),
+            "alunos_com_dados": com_dados,
+            "adocao": round(com_dados / alunos * 100, 1) if alunos else 0.0,
+            "media_geral": _pond("media_geral"),
+            "media_matific": _pond("media_matific"),
+            "media_elefante": _pond("media_elefante"),
+            "livros": sum(c["livros"] for c in cartoes),
+            "atividades": sum(c["atividades"] for c in cartoes),
+            "estrelas": sum(c["estrelas"] for c in cartoes),
+            "escolas_em_atencao": sum(1 for c in cartoes if c["precisa_atencao"]),
+        })
+        for c in cartoes:
+            todas_escolas.append({**c, "rede_id": rede.id, "rede_nome": rede.nome})
+
+    total_com_dados = sum(r["alunos_com_dados"] for r in cartoes_rede)
+
+    def _pond_global(chave: str) -> float:
+        if not total_com_dados:
+            return 0.0
+        return round(sum(r[chave] * r["alunos_com_dados"] for r in cartoes_rede) / total_com_dados, 1)
+
+    cartoes_rede.sort(key=lambda r: (-r["media_geral"], r["nome"].casefold()))
+    for posicao, cartao in enumerate(cartoes_rede, start=1):
+        cartao["posicao"] = posicao
+    top = [e for e in todas_escolas if e["alunos_com_dados"] > 0]
+    top.sort(key=lambda e: (-e["media_geral"], e["nome"].casefold()))
+
+    return {
+        "totais": {
+            "redes": len(cartoes_rede),
+            "escolas": sum(r["escolas"] for r in cartoes_rede),
+            "alunos": sum(r["alunos"] for r in cartoes_rede),
+            "turmas": sum(r["turmas"] for r in cartoes_rede),
+            "professores": sum(r["professores"] for r in cartoes_rede),
+            "livros": sum(r["livros"] for r in cartoes_rede),
+            "atividades": sum(r["atividades"] for r in cartoes_rede),
+            "estrelas": sum(r["estrelas"] for r in cartoes_rede),
+            "alunos_com_dados": total_com_dados,
+            "media_geral": _pond_global("media_geral"),
+            "media_matific": _pond_global("media_matific"),
+            "media_elefante": _pond_global("media_elefante"),
+            "escolas_em_atencao": sum(r["escolas_em_atencao"] for r in cartoes_rede),
+        },
+        "redes": cartoes_rede,
+        "top_escolas": top[:10],
+    }
+
+
+# ---------------------------------------------------------------------------
 # METAS da rede (§9) — a Secretaria CADASTRA o alvo de um indicador; o progresso
 # é sempre calculado sobre os totais REAIS (nunca número fictício).
 # ---------------------------------------------------------------------------

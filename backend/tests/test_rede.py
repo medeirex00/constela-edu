@@ -167,6 +167,34 @@ def test_metas_da_rede_cadastro_progresso_e_upsert(db):
     assert cliente.get(f"/api/v1/redes/{rede.id}/metas").json() == []
 
 
+def test_panorama_global_do_admin_consolida_todas_as_redes(db):
+    """Admin Global vê a consolidação de TODAS as redes; a Secretaria (não global)
+    é barrada (é uma camada acima dela). Só agregado, sem PII."""
+    r1 = Rede(nome="Rede A", status="ativa")
+    r2 = Rede(nome="Rede B", status="ativa")
+    db.add_all([r1, r2])
+    db.flush()
+    _escola_com_notas(db, r1.id, "Escola A1", [80.0])          # 1 aluno
+    _escola_com_notas(db, r2.id, "Escola B1", [60.0, 60.0])    # 2 alunos
+    db.add(Usuario(nome="Admin Global", email="adminglobal@x.gov",
+                   senha_hash=hash_senha("s3nh4global"), cargo="admin", is_global=True))
+    db.add(Usuario(nome="Secretaria A", email="sec.a@x.gov",
+                   senha_hash=hash_senha("s3nh4secretaria"), cargo="coordenador", rede_id=r1.id))
+    db.commit()
+
+    admin = _login("adminglobal@x.gov", "s3nh4global")
+    j = admin.get("/api/v1/redes/panorama-global").json()
+    assert j["totais"]["redes"] == 2
+    assert j["totais"]["escolas"] == 2 and j["totais"]["alunos"] == 3
+    assert {r["nome"] for r in j["redes"]} == {"Rede A", "Rede B"}
+    assert all("rede_nome" in e for e in j["top_escolas"])     # top escolas com a rede
+    assert "Crianca" not in admin.get("/api/v1/redes/panorama-global").text  # sem PII
+
+    # A Secretaria (não global) NÃO acessa a visão global.
+    sec = _login("sec.a@x.gov", "s3nh4secretaria")
+    assert sec.get("/api/v1/redes/panorama-global").status_code == 403
+
+
 def test_isolamento_entre_redes_bloqueia_idor(db):
     r1 = Rede(nome="Rede A", status="ativa")
     r2 = Rede(nome="Rede B", status="ativa")

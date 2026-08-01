@@ -340,6 +340,17 @@ def ranking(
     return svc_rede.ranking_escolas(db, rede_id, limite=limite, metrica=metrica)
 
 
+@router.get("/panorama-global")
+def panorama_global(
+    _: Usuario = Depends(exigir_admin_global),
+    db: Session = Depends(get_db),
+):
+    """Visão consolidada de TODAS as redes (Admin Global) — uma camada acima da
+    Secretaria (que vê só a própria rede). Totais globais + cartão por rede +
+    melhores escolas de toda a base. Só agregado, sem PII de criança."""
+    return svc_rede.dashboard_global(db)
+
+
 @router.get("/{rede_id}/metas")
 def listar_metas(
     rede_id: int = Depends(exigir_rede),
