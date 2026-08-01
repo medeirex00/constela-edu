@@ -113,15 +113,6 @@ function RotaEscolaOp({ children }: { children: React.ReactNode }) {
   return gestor && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
 }
 
-/** Tela inicial ADAPTÁVEL ao perfil (rota "/"): a SEDUC/Secretaria e o Admin
- *  Global entram na visão consolidada da REDE (/rede); professor/coordenador/
- *  admin de escola veem o Dashboard da escola. Reutiliza os painéis existentes
- *  — não duplica nenhuma tela. */
-function RoteadorInicial() {
-  const { rede } = usePerfil();
-  return rede ? <Navigate to="/rede" replace /> : <Dashboard />;
-}
-
 export default function App() {
   return (
     // Um único limite de Suspense cobre o carregamento dos chunks de rota.
@@ -139,8 +130,9 @@ export default function App() {
         <Route path="/rede/p/:token" element={<PainelPublicoRede />} />
         <Route element={<AreaProtegida />}>
           {/* --- Abertas ao professor (dados já filtrados pelas turmas dele) --- */}
-          {/* "/" adapta ao perfil: SEDUC/Admin Global → visão da rede; escola → Dashboard. */}
-          <Route path="/" element={<RoteadorInicial />} />
+          {/* "/" (Dashboard) adapta o CONTEÚDO ao perfil internamente: rede →
+              panorama consolidado; escola → Dashboard da escola. */}
+          <Route path="/" element={<Dashboard />} />
           <Route path="/ranking" element={<Rankings />} />
           {/* Tela única de Ranking Geral com seletor; rotas antigas viram
               deep-links para a aba correspondente (atalhos/bookmarks seguem). */}

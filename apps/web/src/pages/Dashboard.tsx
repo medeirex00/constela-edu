@@ -15,14 +15,20 @@ import {
   Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { Botao, Card, Vazio } from "../components/ui";
+import { Botao, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { usePerfil } from "../hooks/usePerfil";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 import type { Dashboard as DadosDashboard } from "../lib/types";
+
+// Panorama da REDE (perfis SEDUC/Admin Global). Lazy: puxa o Leaflet do mapa —
+// mantém o chunk do Dashboard leve para o professor/coordenador (que nunca o veem).
+const PanoramaRede = lazy(() =>
+  import("./rede/RedeDashboard").then((m) => ({ default: m.PanoramaRede })));
 
 /* --- Inteligência (mesmos dados da aba Insights, reaproveitados) ----------- */
 interface IndiceAluno {
@@ -349,7 +355,23 @@ function TopRanking({ top }: { top: DadosDashboard["top10"] }) {
 /* Página                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Dashboard = aba ÚNICA para todos os perfis; o CONTEÚDO muda pelo perfil:
+ *   - SEDUC/Secretaria e Admin Global → panorama consolidado da REDE inteira;
+ *   - professor/coordenador/admin de escola → Dashboard da ESCOLA (abaixo,
+ *     INALTERADO). A aba Secretaria (/rede) fica só com o administrativo.
+ */
 export default function Dashboard() {
+  const { rede } = usePerfil();
+  if (!rede) return <DashboardEscola />;
+  return (
+    <Suspense fallback={<Carregando texto="Carregando o panorama da rede..." />}>
+      <PanoramaRede />
+    </Suspense>
+  );
+}
+
+function DashboardEscola() {
   const { escolaId, escolas, selecionarEscola, usuario } = useApp();
   const { dados, erro, carregando } = useApi<DadosDashboard>(
     escolaId ? `/escolas/${escolaId}/dashboard` : null);

@@ -454,7 +454,7 @@ function VitrinePublica({ redeId }: { redeId: number }) {
   );
 }
 
-function PainelRede({ redeId }: { redeId: number }) {
+function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secretaria" }) {
   const { usuario, selecionarEscola } = useApp();
   const navegar = useNavigate();
   const { dados, erro, carregando } = useApi<DashboardRede>(`/redes/${redeId}/dashboard`);
@@ -495,27 +495,36 @@ function PainelRede({ redeId }: { redeId: number }) {
   return (
     <div className="space-y-6">
       <PageHeader
-        titulo="Panorama Geral da Rede Municipal"
-        descricao="Acompanhe o desempenho, o engajamento e a evolução das escolas da rede."
+        titulo={modo === "secretaria" ? "Secretaria de Educação" : "Panorama Geral da Rede Municipal"}
+        descricao={modo === "secretaria"
+          ? "Área administrativa da rede: gestão de escolas, avaliações externas, boletim e vitrine pública."
+          : "Acompanhe o desempenho, o engajamento e a evolução das escolas da rede."}
         acoes={
           <div className="flex flex-wrap items-center gap-2">
             <SeletorEscola escolas={dados.escolas} aoAbrir={abrirEscola} />
-            <Botao variante="neutro" onClick={() => navegar("/rede/avaliacoes")}>
-              <LineChart size={15} /> Avaliações externas
-            </Botao>
-            <Botao variante="neutro" onClick={baixarBoletim} disabled={baixando}>
-              <FileDown size={15} /> {baixando ? "Gerando..." : "Baixar boletim (PDF)"}
-            </Botao>
-            {usuario?.is_global && (
-              <Botao variante="neutro" onClick={() => navegar("/rede/gerenciar")}>
-                <Settings2 size={15} /> Gerenciar redes
-              </Botao>
+            {modo === "secretaria" && (
+              <>
+                <Botao variante="neutro" onClick={() => navegar("/rede/avaliacoes")}>
+                  <LineChart size={15} /> Avaliações externas
+                </Botao>
+                <Botao variante="neutro" onClick={baixarBoletim} disabled={baixando}>
+                  <FileDown size={15} /> {baixando ? "Gerando..." : "Baixar boletim (PDF)"}
+                </Botao>
+                {usuario?.is_global && (
+                  <Botao variante="neutro" onClick={() => navegar("/rede/gerenciar")}>
+                    <Settings2 size={15} /> Gerenciar redes
+                  </Botao>
+                )}
+              </>
             )}
           </div>
         }
       />
       {boletimErro && <Mensagem tipo="erro">{boletimErro}</Mensagem>}
 
+      {/* --- ANÁLISE (aba Dashboard): panorama estratégico da rede inteira. --- */}
+      {modo === "analise" && (
+      <>
       {/* Visão geral da rede — indicadores consolidados de TODAS as escolas. */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icone={<Building2 size={16} />} rotulo="Escolas" valor={numero(t.escolas)} detalhe={`${t.escolas_ativas} ativas`} />
@@ -625,7 +634,12 @@ function PainelRede({ redeId }: { redeId: number }) {
 
       {/* Metas da rede — área preparada; sem cadastro de metas ainda (sem número fictício). */}
       <MetasRede />
+      </>
+      )}
 
+      {/* --- SECRETARIA (aba Secretaria): funções administrativas + mapa/navegação. --- */}
+      {modo === "secretaria" && (
+      <>
       <VitrinePublica redeId={redeId} />
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -657,15 +671,18 @@ function PainelRede({ redeId }: { redeId: number }) {
           </div>
         </Card>
       </div>
+      </>
+      )}
     </div>
   );
 }
 
-export default function RedeDashboard() {
+/** Resolve a rede visível do usuário (sua rede, ou a 1ª que o admin global vê) e
+ *  entrega o redeId; trata carregamento e o caso "sem rede". Compartilhado pela
+ *  aba Dashboard (panorama) e pela aba Secretaria (administrativo). */
+function EnvolucroRede({ children }: { children: (redeId: number) => ReactNode }) {
   const { usuario } = useApp();
   const navegar = useNavigate();
-  // Usuário de rede → sua rede. Admin global sem rede definida → usa a 1ª rede
-  // que ele puder ver (o backend já escopa /redes).
   const redeDoUsuario = usuario?.rede_id ?? null;
   const { dados: redes, carregando } = useApi<{ id: number; nome: string }[]>(
     redeDoUsuario == null ? "/redes" : null,
@@ -680,7 +697,7 @@ export default function RedeDashboard() {
         <Vazio
           titulo="Nenhuma rede disponível"
           descricao={usuario?.is_global
-            ? "Ainda não há redes cadastradas. Crie a primeira para habilitar o painel da Secretaria."
+            ? "Ainda não há redes cadastradas. Crie a primeira para habilitar o painel da rede."
             : "Sua conta não está vinculada a uma rede/Secretaria."}
         />
         {usuario?.is_global && (
@@ -693,5 +710,18 @@ export default function RedeDashboard() {
       </div>
     );
   }
-  return <PainelRede redeId={redeId} />;
+  return <>{children(redeId)}</>;
+}
+
+/** Panorama ANALÍTICO da rede — renderizado DENTRO da aba Dashboard para os
+ *  perfis de rede (SEDUC/Admin Global). Não é uma tela separada: é o conteúdo
+ *  do Dashboard quando o usuário é de rede. */
+export function PanoramaRede() {
+  return <EnvolucroRede>{(redeId) => <PainelRede redeId={redeId} modo="analise" />}</EnvolucroRede>;
+}
+
+/** Aba SECRETARIA (/rede) — administrativo (avaliações, boletim, gerenciar redes,
+ *  vitrine pública, mapa). O panorama de análise vive no Dashboard, não aqui. */
+export default function RedeDashboard() {
+  return <EnvolucroRede>{(redeId) => <PainelRede redeId={redeId} modo="secretaria" />}</EnvolucroRede>;
 }
