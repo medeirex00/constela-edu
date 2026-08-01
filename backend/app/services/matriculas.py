@@ -103,6 +103,41 @@ def chave_canonica(nome: str, ano_escolar: str = "", turno: str | None = None) -
     return f"{ano_num}|{letra}|{_TURNO_COD.get(t, '')}"
 
 
+def codigo_externo_do_nome(nome: str) -> str:
+    """Extrai o código da sala entre parênteses do nome do relatório (nº SED/
+    Censo): "4 ANO C INTEGRAL (300303525)" → "300303525". "" se não houver."""
+    m = re.search(r"\((\d{3,})\)", nome or "")
+    return m.group(1) if m else ""
+
+
+def _espacar_serie_letra(nome: str) -> str:
+    """Separa a série da letra quando vierem GRUDADAS ("1A"→"1 A", "4C"→"4 C"),
+    para o compacto casar no mesmo padrão série+letra. Só afeta dígito seguido de
+    UMA letra imediatamente (o código externo entre () não é tocado aqui)."""
+    return re.sub(r"(\d)([A-Za-z])", r"\1 \2", nome or "")
+
+
+def chave_turma_norm(nome: str) -> str:
+    """chave_turma tolerante ao compacto "1A" (via _espacar_serie_letra)."""
+    return chave_turma(_espacar_serie_letra(nome))
+
+
+def nome_turma_exibicao(nome: str, ano_escolar: str = "", turno: str | None = None) -> str:
+    """Nome VISÍVEL, curto e normalizado da turma: "1 ANO A TARDE ANUAL
+    (300302821)" → "1ºA"; "4ºC" → "4ºC"; "4 C" → "4ºC"; "1A" → "1ºA". Formatos
+    sem série+letra (Maternal, Pré, EJA, AEE, Multisseriado) caem no nome limpo
+    (sem o código, espaços colapsados, Capitalizado) — nunca são forçados a um
+    padrão que não têm. O código externo NUNCA entra aqui (vai para
+    Turma.codigo_externo)."""
+    k = chave_canonica(_espacar_serie_letra(nome), ano_escolar, turno)
+    if "|" in k:
+        num, letra, _t = k.split("|")
+        if num and letra:
+            return f"{num}º{letra}"                 # letra já vem em CAIXA ALTA
+    limpo = re.sub(r"\s+", " ", re.sub(r"\(.*?\)", " ", nome or "")).strip()
+    return limpo.title() or (nome or "").strip()
+
+
 def turno_codigo(turno: str | None) -> str:
     """Código do turno a partir do CAMPO `turno` (sinal FORTE/confiável): um de
     ``M/T/N/I``, ou ``""`` se vazio/desconhecido. Normaliza acento e caixa (o

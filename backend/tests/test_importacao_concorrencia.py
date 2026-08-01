@@ -138,7 +138,7 @@ def test_confirmar_trava_escola_antes_de_resolver(cliente, db, escola_completa,
     criadas = db.execute(
         select(func.count()).select_from(Turma)
         .where(Turma.escola_id == escola_id,
-               func.lower(Turma.nome) == "8 ano c manha anual")).scalar_one()
+               Turma.nome == "8ºC")).scalar_one()   # nome normalizado
     assert criadas == 1
 
 

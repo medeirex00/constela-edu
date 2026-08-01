@@ -213,24 +213,25 @@ def test_confirmar_cria_turma_pelo_nome_do_relatorio(cliente, db, escola_complet
     assert r.status_code == 200, r.text
     assert any("criada automaticamente" in a for a in r.json()["avisos"])
 
+    # O nome é gravado NORMALIZADO ("5ºB"), não o cru do relatório.
     turmas = db.execute(select(Turma).where(
         Turma.escola_id == escola_id,
-        Turma.nome == "5 ANO B MANHA ANUAL")).scalars().all()
+        Turma.nome == "5ºB")).scalars().all()
     assert len(turmas) == 1                       # criada UMA vez, não duas
     assert turmas[0].ano_escolar == "5º Ano"      # série derivada do nome
     matriculados = db.execute(select(Matricula).where(
         Matricula.turma_id == turmas[0].id)).scalars().all()
     assert len(matriculados) == 2
 
-    # Reimportar com o mesmo nome NÃO duplica a turma (acha a existente).
+    # Reimportar em OUTRO formato da mesma sala NÃO duplica (casa pela canônica).
     corpo["linhas"] = [{"nome": "Aluno Novo Tres", "dados": {"livros_unicos": 2},
-                        "criar_em_turma_nome": "5 ano b manha anual"}]  # caixa difere
+                        "criar_em_turma_nome": "5º ano b"}]  # formato difere
     r2 = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/confirmar", json=corpo)
     assert r2.status_code == 200
     db.expire_all()
     turmas = db.execute(select(Turma).where(
         Turma.escola_id == escola_id,
-        Turma.nome.ilike("5 ANO B MANHA ANUAL"))).scalars().all()
+        Turma.nome == "5ºB")).scalars().all()
     assert len(turmas) == 1
 
 

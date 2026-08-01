@@ -37,6 +37,11 @@ class Turma(Base):
     professor_id: Mapped[int | None] = mapped_column(
         ForeignKey("professores.id", ondelete="SET NULL"))
     turno: Mapped[str | None] = mapped_column(String(20))    # manha|tarde|noite|integral
+    # Código da sala na fonte externa (nº SED/Censo entre parênteses no relatório,
+    # ex.: "4 ANO C INTEGRAL (300303525)" → "300303525"). Fica FORA do nome visível
+    # e é a chave de dedup/idempotência mais forte no import: reimportar casa por
+    # este código antes de qualquer heurística de nome.
+    codigo_externo: Mapped[str | None] = mapped_column(String(40), index=True)
     capacidade_maxima: Mapped[int | None] = mapped_column(default=None)
     observacoes: Mapped[str | None] = mapped_column(String(2000))
     # "ativa" | "arquivada" — arquivar preserva o histórico sem poluir os filtros

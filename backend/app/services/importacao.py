@@ -827,8 +827,14 @@ _RE_ABREVIADO = re.compile(r"^(\w{2,})\s+(\w)\.?$")
 
 
 def _tokens_turma(texto: str) -> set[str]:
-    """Tokens comparáveis de nome de turma: "5º Ano B" ≈ "5 ANO B MANHA"."""
-    plano = normalizar_nome(re.sub(r"[ºª°]", "", texto or ""))
+    """Tokens comparáveis de nome de turma: "5º Ano B" ≈ "5 ANO B MANHA".
+
+    O ordinal (º/ª/°) é trocado por ESPAÇO (não removido): sem isso "4ºC" colava
+    em "4c" (um token só) e NUNCA sobrepunha "4 ANO C INTEGRAL" ({4,ano,c,...}) —
+    o overlap dava 0 e a importação criava uma turma-fantasma paralela (e rebaixava
+    o casamento do aluno certo). Alinhado com matriculas.chave_canonica, que já
+    troca º por espaço."""
+    plano = normalizar_nome(re.sub(r"[ºª°]", " ", texto or ""))
     return {t for t in plano.split() if t}
 
 

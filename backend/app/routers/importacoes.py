@@ -310,7 +310,8 @@ def _ano_escolar_do_nome(nome: str) -> str:
 
 def _inserir_turma(db: Session, escola_id: int, ano: int, nome: str,
                    ano_escolar: str, *, turno: str | None = None,
-                   observacoes: str | None = None) -> tuple[Turma, bool]:
+                   observacoes: str | None = None,
+                   codigo_externo: str | None = None) -> tuple[Turma, bool]:
     """Cria a turma isolando a colisão do índice único uq_turma_escola_ano_nome
     num savepoint: se uma importação concorrente já criou a MESMA turma (mesmo
     escola+ano+nome), devolve a existente em vez de estourar 500 — mesmo padrão
@@ -319,7 +320,7 @@ def _inserir_turma(db: Session, escola_id: int, ano: int, nome: str,
         with db.begin_nested():
             turma = Turma(escola_id=escola_id, nome=nome, ano_letivo=ano,
                           ano_escolar=ano_escolar, turno=turno,
-                          observacoes=observacoes)
+                          observacoes=observacoes, codigo_externo=codigo_externo or None)
             db.add(turma)
             db.flush()
         return turma, True
@@ -336,37 +337,59 @@ def _inserir_turma(db: Session, escola_id: int, ano: int, nome: str,
 
 def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
                      avisos: list[str], turmas_novas: dict) -> Turma | None:
-    """Acha (case-insensitive) ou CRIA a turma com o nome lido do relatório —
-    o primeiro import da escola funciona sem cadastrar turmas antes."""
-    nome = (nome or "").strip()
-    if not nome:
+    """Acha ou CRIA a turma do relatório, SEMPRE pela identidade CANÔNICA (a mesma
+    do caminho da Lista Piloto), nunca pelo nome cru. Ordem de casamento:
+      1) código externo (SED/Censo entre parênteses) — idempotência mais forte;
+      2) chave canônica série+letra (chave_turma_norm) contra TODAS as turmas da
+         escola/ano — "4 ANO C INTEGRAL (300303525)" reaproveita "4ºC";
+      3) na dúvida (formato sem série+letra: Maternal/Pré/EJA), cria.
+    Ao criar, grava o NOME NORMALIZADO ("4ºC") e o código externo FORA do nome.
+    O cache do lote é indexado pela chave canônica, então variantes da mesma sala
+    no mesmo arquivo colapsam."""
+    nome_cru = (nome or "").strip()
+    if not nome_cru:
         return None
-    chave = nome.casefold()
+    codigo = matriculas.codigo_externo_do_nome(nome_cru)
+    chave = matriculas.chave_turma_norm(nome_cru)
     if chave in turmas_novas:
-        return turmas_novas[chave]
-    turma = db.execute(
-        select(Turma).where(Turma.escola_id == escola_id,
-                            Turma.ano_letivo == ano,
-                            func.lower(Turma.nome) == chave).limit(1)
-    ).scalars().first()
-    # Antes de criar: reaproveita uma turma JÁ CADASTRADA que casa por TOKENS
-    # (série+letra) — a MESMA identidade de turma da base (chave_turma) e do move
-    # do Matific. Sem isto, um formato diferente no relatório ("1 ANO B TARDE
-    # ANUAL" vs a base "1º Ano B") não casava pelo nome exato e a sync não
-    # supervisionada criava uma TURMA-FANTASMA paralela (aluno novo numa sala
-    # separada do resto da turma). Só reaproveita quando o casamento é INEQUÍVOCO
-    # (_turma_existente_por_tokens devolve None em empate) — na dúvida, cria.
+        turma = turmas_novas[chave]
+        if codigo and not turma.codigo_externo:   # completa o código em reencontros
+            turma.codigo_externo = codigo
+        return turma
+
+    turma: Turma | None = None
+    if codigo:
+        turma = db.execute(
+            select(Turma).where(Turma.escola_id == escola_id,
+                                Turma.ano_letivo == ano,
+                                Turma.codigo_externo == codigo).limit(1)
+        ).scalars().first()
     if turma is None:
-        turma = _turma_existente_por_tokens(db, escola_id, ano, nome)
+        # Casa pela chave canônica (série+letra) contra as turmas já cadastradas —
+        # resolve o furo do formato ("4ºC" vs "4 ANO C INTEGRAL (cod)") que o nome
+        # exato/overlap frágil deixava passar. (Roda 1x por sala distinta: o cache
+        # por chave abaixo evita repetir a varredura para cada aluno da turma.)
+        for t in db.execute(
+            select(Turma).where(Turma.escola_id == escola_id,
+                                Turma.ano_letivo == ano)).scalars():
+            if matriculas.chave_turma_norm(t.nome) == chave:
+                turma = t
+                break
     if turma is None:
+        nome_norm = matriculas.nome_turma_exibicao(nome_cru)
         turma, criada = _inserir_turma(
-            db, escola_id, ano, nome, _ano_escolar_do_nome(nome) or nome[:20])
+            db, escola_id, ano, nome_norm,
+            _ano_escolar_do_nome(nome_cru) or _ano_escolar_do_nome(nome_norm) or nome_norm[:20],
+            codigo_externo=codigo or None)
         if criada:
             registrar(db, "turma.criada", escola_id=escola_id, entidade="turma",
                       entidade_id=turma.id,
-                      detalhes={"nome": nome, "origem": "importacao"})
+                      detalhes={"nome": nome_norm, "codigo_externo": codigo or None,
+                                "origem": "importacao"})
             avisos.append(
-                f"Turma “{nome}” criada automaticamente a partir do relatório.")
+                f"Turma “{nome_norm}” criada automaticamente a partir do relatório.")
+    elif codigo and not turma.codigo_externo:
+        turma.codigo_externo = codigo             # idempotência p/ próximas syncs
     turmas_novas[chave] = turma
     return turma
 
@@ -1331,10 +1354,13 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int,
         if turma is None:
             turma, criada = _inserir_turma(
                 db, escola_id, ano, t.nome, t.ano_escolar, turno=t.turno,
-                observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None))
+                observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None),
+                codigo_externo=(t.sed or None))
             turmas_por_nome[chave] = turma
             if criada:
                 criadas += 1
+        elif t.sed and not turma.codigo_externo:
+            turma.codigo_externo = t.sed          # completa o código em reimports
         # Cria a conta de login de cada professor da turma (idempotente) e
         # vincula o titular para o RBAC. O SAVEPOINT garante que QUALQUER falha
         # aqui desfaça só o professor — nunca polui a transação nem derruba a
