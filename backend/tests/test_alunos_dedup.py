@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.core.security import hash_senha
 from app.main import app
-from app.models import Aluno, Matricula, Turma, Usuario
+from app.models import Aluno, IdentidadeExterna, Matricula, Turma, Usuario
 
 API = "/api/v1"
 
@@ -127,31 +127,143 @@ def test_nascimento_diferente_veta_a_sugestao(cliente, db, escola_completa):
     assert [c for c in corpo["candidatos"] if c["apagar"] == "Bruno Alves Costa"] == []
 
 
-def test_cadeia_e_recusada_sem_colapsar_tres(cliente, db, escola_completa):
-    """A='Maria Silva', B='Maria Silva' (gêmeo), C='Maria Silva Souza' na mesma
-    turma: A→C e B→A formam uma CADEIA. Selecionar ambos NÃO pode colapsar as três
-    crianças — os pares em cadeia são recusados e reportados."""
+def _existe(db, aluno_id: int) -> bool:
+    return db.execute(
+        select(Aluno.id).where(Aluno.id == aluno_id)).scalar_one_or_none() is not None
+
+
+def test_cadeia_com_nome_identico_fica_para_revisao_manual(cliente, db, escola_completa):
+    """PROTEÇÃO (achado adversarial): uma cadeia que contém DOIS registros de nome
+    IDÊNTICO ('Maria Silva' ×2) + um mais completo pode conter gêmeos/homônimos —
+    NÃO colapsa automaticamente (a ligação de nome idêntico só um humano confirma);
+    vai para revisão e os três permanecem."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    a = _add_aluno(db, escola_id, "Maria Silva", turma_id)
-    b = _add_aluno(db, escola_id, "Maria Silva", turma_id)
-    c = _add_aluno(db, escola_id, "Maria Silva Souza", turma_id)
+    aid = _add_aluno(db, escola_id, "Maria Silva", turma_id).id
+    bid = _add_aluno(db, escola_id, "Maria Silva", turma_id).id
+    cid = _add_aluno(db, escola_id, "Maria Silva Souza", turma_id).id
 
     corpo = _duplicados(cliente, escola_id)
     losers = [cand["loser_id"] for cand in corpo["candidatos"]]
-    assert a.id in losers and b.id in losers
-
     r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
                      json={"loser_ids": losers, "confirmacao": "FUNDIR"})
     assert r.status_code == 200, r.text
     assert r.json()["fundidos"] == 0
-    assert len(r.json()["falhas"]) >= 1
+    assert any("ambíguo" in f["motivo"] for f in r.json()["falhas"])
+    assert _existe(db, aid) and _existe(db, bid) and _existe(db, cid)
 
-    # As três crianças permanecem — nada colapsou.
-    def existe(aluno_id: int) -> bool:
-        return db.execute(
-            select(Aluno.id).where(Aluno.id == aluno_id)).scalar_one_or_none() is not None
-    assert existe(a.id) and existe(b.id) and existe(c.id)
+
+def test_cadeia_nome_identico_de_plataformas_diferentes_colapsa(cliente, db, escola_completa):
+    """Decisão do dono: dois 'Maria Silva' de plataformas DIFERENTES (Matific +
+    Elefante) são a MESMA criança (1 conta por plataforma) + 'Maria Silva Souza'
+    (mais completa) → a cadeia COLAPSA num perfil só, na confirmação do gestor."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    aid = _add_aluno(db, escola_id, "Maria Silva", turma_id).id
+    bid = _add_aluno(db, escola_id, "Maria Silva", turma_id).id
+    cid = _add_aluno(db, escola_id, "Maria Silva Souza", turma_id).id
+    db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=aid,
+                             plataforma="matific", id_externo="uuid-a"))
+    db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=bid,
+                             plataforma="elefante", id_externo="ele-b"))
+    db.commit()
+
+    corpo = _duplicados(cliente, escola_id)
+    losers = [c["loser_id"] for c in corpo["candidatos"] if "MARIA" in c["apagar"].upper()]
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
+                     json={"loser_ids": losers, "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+    assert r.json()["fundidos"] == 2 and r.json()["falhas"] == []
+    assert _existe(db, cid) and not _existe(db, aid) and not _existe(db, bid)
+
+
+def test_leque_com_conflito_entre_co_losers_e_recusado(cliente, db, escola_completa):
+    """PROTEÇÃO (achado adversarial): num LEQUE, dois 'MARIA SILVA' com NASCIMENTO
+    divergente (crianças provadamente diferentes) apontando para o mesmo piloto NÃO
+    colapsam — o veto de conflito vale entre os co-losers, não só contra o survivor."""
+    from datetime import date
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    s = _add_aluno(db, escola_id, "MARIA SILVA", turma_id)        # piloto, sem nascimento
+    s.da_lista_piloto = True
+    db.commit()
+    aid = _add_aluno(db, escola_id, "MARIA SILVA", turma_id,
+                     nascimento=date(2015, 3, 1)).id
+    bid = _add_aluno(db, escola_id, "MARIA SILVA", turma_id,
+                     nascimento=date(2016, 8, 20)).id
+
+    corpo = _duplicados(cliente, escola_id)
+    losers = [c["loser_id"] for c in corpo["candidatos"] if c["apagar"].upper() == "MARIA SILVA"]
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
+                     json={"loser_ids": losers, "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+    assert r.json()["fundidos"] == 0                    # conflito de nascimento → não funde
+    assert _existe(db, s.id) and _existe(db, aid) and _existe(db, bid)
+
+
+def test_variante_de_grafia_nao_e_arrastada_na_fusao(cliente, db, escola_completa):
+    """SEGURANÇA: a variante de grafia (fuzzy) NUNCA é fundida automaticamente, nem
+    quando há um grupo. 'ABRAÃO LUÍS' —subconjunto→ 'ABRAÃO LUÍS DIAS' fundem (mesmo
+    aluno); 'ABRAÃO LUIZ' (variante de grafia) fica SEPARADO, para revisão manual."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    xid = _add_aluno(db, escola_id, "ABRAÃO LUIZ", turma_id).id       # variante grafia
+    yid = _add_aluno(db, escola_id, "ABRAÃO LUÍS", turma_id).id       # abreviação de z
+    zid = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id).id  # mais completo
+
+    corpo = _duplicados(cliente, escola_id)
+    losers = [c["loser_id"] for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
+    r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
+                     json={"loser_ids": losers, "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+    # y→z fundem (mesmo aluno); a variante x continua separada (não foi arrastada).
+    assert _existe(db, xid) and _existe(db, zid) and not _existe(db, yid)
+
+
+# --- _colapsavel: a régua de segurança da resolução de cadeias (unitário) ----
+
+def _membro(id=0, piloto=False, nasc=None, chamada=None, ra=""):
+    from types import SimpleNamespace
+    return SimpleNamespace(id=id, da_lista_piloto=piloto, data_nascimento=nasc,
+                           numero_chamada=chamada, ficha=({"ra": ra} if ra else {}))
+
+
+def test_colapsavel_cadeia_estrutural_e_nome_identico():
+    from app.services.alunos_dedup import _colapsavel
+    membros = [_membro(1), _membro(2), _membro(3)]
+    # Cadeia ESTRUTURAL (só abreviação/subconjunto) → colapsa.
+    assert _colapsavel([(None, None, "abreviacao"),
+                        (None, None, "subconjunto")], membros, {}, True) is True
+    a, b = _membro(1), _membro(2)
+    # CADEIA por NOME IDÊNTICO sem plataforma conhecida → NÃO colapsa (possível gêmeo).
+    assert _colapsavel([(a, b, "nome_identico")], [a, b], {}, True) is False
+    # CADEIA por NOME IDÊNTICO com plataformas DIFERENTES (Matific × Elefante) → colapsa.
+    assert _colapsavel([(a, b, "nome_identico")], [a, b],
+                       {1: frozenset({"matific"}), 2: frozenset({"elefante"})}, True) is True
+    # CADEIA por NOME IDÊNTICO na MESMA plataforma (2 contas Matific) → NÃO colapsa.
+    assert _colapsavel([(a, b, "nome_identico")], [a, b],
+                       {1: frozenset({"matific"}), 2: frozenset({"matific"})}, True) is False
+
+
+def test_colapsavel_vetos_duros_valem_para_leque_tambem():
+    """Achado adversarial: os vetos duros (variante / 2+ piloto / conflito) valem
+    para LEQUE também (eh_cadeia=False), não só cadeia — senão dois co-losers com nº
+    de chamada divergente (crianças diferentes) colapsariam num leque."""
+    from datetime import date
+    from app.services.alunos_dedup import _colapsavel
+    # variante de grafia (fuzzy) → recusa (leque)
+    assert _colapsavel([(None, None, "variante")], [_membro(1), _membro(2)], {}, False) is False
+    # 2+ da Lista Piloto → recusa (leque)
+    assert _colapsavel([(None, None, "subconjunto")],
+                       [_membro(1, piloto=True), _membro(2, piloto=True)], {}, False) is False
+    # CONFLITO entre CO-LOSERS (nº de chamada 7 × 15) → recusa MESMO em leque.
+    membros = [_membro(1, chamada=7), _membro(2, chamada=15), _membro(3)]
+    assert _colapsavel([(None, None, "nome_identico"),
+                        (None, None, "nome_identico")], membros, {}, False) is False
+    # conflito de nascimento entre co-losers → recusa (leque)
+    assert _colapsavel([(None, None, "subconjunto"), (None, None, "subconjunto")],
+                       [_membro(1, nasc=date(2015, 1, 1)),
+                        _membro(2, nasc=date(2016, 1, 1)), _membro(3)], {}, False) is False
 
 
 def test_abreviacao_posicional_e_revisar(cliente, db, escola_completa):

@@ -19,6 +19,8 @@ confirma cada par (checkbox) e a fusão em si é ``alunos_fusao.fundir_par``.
 from __future__ import annotations
 
 from collections import defaultdict
+from functools import reduce
+from itertools import combinations
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -293,55 +295,147 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     ]
 
 
+def _plataformas_dos(db: Session, ids: set[int]) -> dict[int, frozenset[str]]:
+    """aluno_id → conjunto de plataformas de onde ele tem dado (identidade externa,
+    snapshot Matific/Elefante, leitura). Usado para saber se duas fichas de MESMO
+    nome vêm de plataformas DIFERENTES (1 conta por plataforma = mesma criança)."""
+    if not ids:
+        return {}
+    plats: dict[int, set[str]] = defaultdict(set)
+    for aid, plat in db.execute(
+        select(IdentidadeExterna.aluno_id, IdentidadeExterna.plataforma)
+        .where(IdentidadeExterna.aluno_id.in_(ids))).all():
+        plats[aid].add(plat)
+    for modelo, nome in ((SnapshotMatific, "matific"), (SnapshotElefante, "elefante"),
+                         (Leitura, "elefante")):
+        for (aid,) in db.execute(
+            select(modelo.aluno_id).where(modelo.aluno_id.in_(ids)).distinct()).all():
+            plats[aid].add(nome)
+    return {aid: frozenset(p) for aid, p in plats.items()}
+
+
+def _colapsavel(edges: list[tuple], membros: list[Aluno],
+                plataformas: dict[int, frozenset[str]], eh_cadeia: bool) -> bool:
+    """Um COMPONENTE de 3+ fichas (LEQUE ou CADEIA) é seguro para colapsar num único
+    perfil canônico? A régua é "1 criança com cópias de importação vs. crianças
+    DIFERENTES".
+    NÃO colapsa (fica para revisão manual) quando há sinal de crianças distintas:
+      * VARIANTE de grafia (LUÍS/LUIZ é indistinguível de MARIA/MARTA — fuzzy);
+      * 2+ membros da LISTA PILOTO — a lista é a matrícula OFICIAL, então 2 registros
+        nela = 2 crianças matriculadas de verdade (gêmeos/homônimos reais);
+      * CONFLITO forte (nascimento/RA/nº de chamada divergente);
+      * NOME IDÊNTICO cujos dois registros NÃO vêm de plataformas diferentes: dois
+        nomes iguais sem outro sinal são indistinguíveis de gêmeos. Só é seguro quando
+        as cópias são de plataformas DISTINTAS (ex.: uma do Matific, outra do
+        Elefante) — 1 conta por plataforma = a MESMA criança (decisão do dono)."""
+    # VETOS DUROS (valem para LEQUE e CADEIA — qualquer colapso de 3+ fichas): um
+    # grupo com variante de grafia, 2+ da Lista Piloto, ou QUALQUER par de membros
+    # com conflito forte (nascimento/RA/nº de chamada divergente — inclusive entre
+    # co-losers, que a detecção não compara) é crianças diferentes → não colapsa.
+    if any(motivo == "variante" for _l, _s, motivo in edges):
+        return False
+    if sum(1 for a in membros if a.da_lista_piloto) >= 2:
+        return False
+    if any(_conflito_forte(a, b) for a, b in combinations(membros, 2)):
+        return False
+    # Heurística de nome idêntico SÓ em cadeia: exige plataformas distintas (1 conta
+    # por plataforma = mesma criança). No leque legítimo o survivor é o piloto (sem
+    # plataforma), então esta regra não se aplica — os vetos duros acima já bastam.
+    if eh_cadeia:
+        for loser, survivor, motivo in edges:
+            if motivo == "nome_identico":
+                pa = plataformas.get(loser.id, frozenset())
+                pb = plataformas.get(survivor.id, frozenset())
+                if not (pa and pb and pa.isdisjoint(pb)):
+                    return False    # mesma plataforma / sem plataforma → possível gêmeo
+    return True
+
+
 def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
                          usuario_id: int) -> dict:
-    """APLICA só as fusões CONFIRMADAS (``loser_ids``). Recomputa os candidatos
-    no servidor (fonte da verdade — o cliente só manda ids), funde par-a-par via
-    ``alunos_fusao.fundir_par`` e reporta as falhas individuais SEM abortar o
-    lote. NÃO commita nem recalcula — o endpoint faz isso UMA vez no fim."""
+    """APLICA só as fusões CONFIRMADAS (``loser_ids``). Recomputa os candidatos no
+    servidor (fonte da verdade — o cliente só manda ids), agrupa em COMPONENTES
+    conexos e funde cada componente num único perfil canônico. NÃO commita nem
+    recalcula — o endpoint faz isso UMA vez no fim.
+
+    LEQUE, CADEIA SEGURA e CADEIA AMBÍGUA:
+      * LEQUE (A→S, B→S) → funde no S (como sempre).
+      * CADEIA ESTRUTURAL (A→B→C só por abreviação/subconjunto, sem conflito) → é o
+        MESMO aluno em várias formas abreviadas: colapsa TODAS no perfil mais
+        completo automaticamente (resolve o "una um par por vez" sem trabalho manual).
+      * CADEIA AMBÍGUA (tem nome idêntico=gêmeo, variante de grafia, ou conflito de
+        identidade no meio) → NÃO colapsa; reporta para revisão manual (nunca funde
+        crianças diferentes sem um humano decidir par a par)."""
     escolhidos = set(loser_ids or [])
-    selecionados = [(loser.id, survivor.id)
-                    for loser, survivor, *_ in _candidatos(db, escola_id)
+    selecionados = [(loser, survivor, motivo)
+                    for loser, survivor, _conf, motivo, _turma in _candidatos(db, escola_id)
                     if loser.id in escolhidos]
 
-    # LEQUE vs CADEIA. Um aluno TRIPLICADO cujas fichas apontam TODAS para o mesmo
-    # perfil principal (A→S, B→S — o caso Debora Pilon, com o survivor da Lista
-    # Piloto escolhido por _melhor_perfil) é um LEQUE e funde numa tacada só. Já a
-    # CADEIA genuína (A→B, B→C: um cadastro é survivor de um par E loser de outro)
-    # tem um nó AMBÍGUO no meio (pode ser gêmeo/homônimo) — recusa e reporta, para
-    # nunca colapsar crianças diferentes sem revisão. É a régua "precisão acima de
-    # tudo": o leque (seguro) passa; a cadeia (ambígua) espera revisão.
-    losers_sel = {l for l, _s in selecionados}
-    survivors_sel = {s for _l, s in selecionados}
+    # COMPONENTES conexos (une loser↔survivor): cada componente é 1 aluno real (se
+    # colapsável) ou um nó ambíguo (se cadeia insegura).
+    pai: dict[int, int] = {}
+
+    def raiz(x: int) -> int:
+        pai.setdefault(x, x)
+        while pai[x] != x:
+            pai[x] = pai[pai[x]]
+            x = pai[x]
+        return x
+
+    def unir(a: int, b: int) -> None:
+        pai[raiz(a)] = raiz(b)
+
+    for loser, survivor, _m in selecionados:
+        unir(loser.id, survivor.id)
+
+    edges_por_comp: dict[int, list[tuple]] = defaultdict(list)
+    membros_por_comp: dict[int, set[int]] = defaultdict(set)
+    for loser, survivor, motivo in selecionados:
+        r = raiz(loser.id)
+        edges_por_comp[r].append((loser, survivor, motivo))
+        membros_por_comp[r].update((loser.id, survivor.id))
+
+    todos_ids = {i for ids in membros_por_comp.values() for i in ids}
+    plataformas = _plataformas_dos(db, todos_ids)   # p/ decidir nome-idêntico em cadeia
 
     fundidos = 0
     falhas: list[dict] = []
     detalhes: list[dict] = []
-    for loser_id, survivor_id in selecionados:
-        if survivor_id in losers_sel or loser_id in survivors_sel:
-            falhas.append({"loser_id": loser_id,
-                           "motivo": "faz parte de uma cadeia de fusões — una um par por vez"})
+    for r, edges in edges_por_comp.items():
+        membros = [db.get(Aluno, i) for i in membros_por_comp[r]]
+        if any(a is None or a.escola_id != escola_id or a.status != "ativo"
+               for a in membros) or len(membros) < 2:
+            for loser, _s, _m in edges:
+                falhas.append({"loser_id": loser.id,
+                               "motivo": "cadastro indisponível (já fundido?)"})
             continue
-        remover = db.get(Aluno, loser_id)
-        manter = db.get(Aluno, survivor_id)
-        if (remover is None or manter is None or remover.id == manter.id
-                or remover.escola_id != escola_id or manter.escola_id != escola_id
-                or remover.status != "ativo" or manter.status != "ativo"):
-            falhas.append({"loser_id": loser_id,
-                           "motivo": "cadastro indisponível (já fundido?)"})
+
+        losers = {loser.id for loser, _s, _m in edges}
+        survivors = {survivor.id for _l, survivor, _m in edges}
+        eh_cadeia = bool(losers & survivors)        # algum nó é survivor E loser
+        # Todo colapso de 3+ fichas (LEQUE ou CADEIA) passa pelos vetos: um par
+        # simples (2 membros) já foi validado pela detecção (que veta conflito).
+        if len(membros) >= 3 and not _colapsavel(edges, membros, plataformas, eh_cadeia):
+            for loser, _s, _m in edges:
+                falhas.append({"loser_id": loser.id,
+                               "motivo": "grupo ambíguo (nome idêntico/variante/conflito) — revise manualmente"})
             continue
-        # SAVEPOINT por par: uma fusão que estoure (dado inconsistente) desfaz SÓ
-        # a si mesma e o lote segue — cumpre o contrato "falhas sem abortar o lote"
-        # (o commit final fica com o endpoint).
-        try:
-            with db.begin_nested():
-                r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario_id)
-            fundidos += 1
-            detalhes.append({"manter_id": survivor_id, "manter": r["manter_nome"],
-                             "removido": r["remover_nome"]})
-        except Exception:   # noqa: BLE001 — isola a falha do par, não derruba o lote
-            falhas.append({"loser_id": loser_id,
-                           "motivo": "erro ao fundir (dados inconsistentes)"})
+
+        # Colapsa TODOS os membros no perfil canônico (Lista Piloto > nome mais
+        # completo > menor id) — transforma a cadeia num leque e funde par a par.
+        canonico = reduce(_melhor_perfil, membros)
+        for m in membros:
+            if m.id == canonico.id:
+                continue
+            try:
+                with db.begin_nested():   # isola a falha do par; o lote segue
+                    res = alunos_fusao.fundir_par(db, escola_id, canonico, m, usuario_id)
+                fundidos += 1
+                detalhes.append({"manter_id": canonico.id, "manter": res["manter_nome"],
+                                 "removido": res["remover_nome"]})
+            except Exception:   # noqa: BLE001
+                falhas.append({"loser_id": m.id,
+                               "motivo": "erro ao fundir (dados inconsistentes)"})
 
     return {"fundidos": fundidos, "falhas": falhas, "detalhes": detalhes}
 
