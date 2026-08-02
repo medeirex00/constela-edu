@@ -2,10 +2,14 @@
  * "Fundir duplicatas" de alunos — detecção automática + revisão + fusão em lote.
  *
  * Nada funde sozinho: o sistema PROPÕE pares (nome idêntico/subconjunto/
- * abreviação, sempre da MESMA turma) e o gestor confirma cada um por caixa de
- * seleção. As de alta confiança vêm marcadas; as de "revisar" vêm DESMARCADAS
- * (mais conservador — a regra do dono é: pior fundir errado do que deixar
- * duplicado). Antes de aplicar, uma confirmação clara e explícita.
+ * abreviação, sempre da MESMA turma) e o gestor confirma por caixa de seleção.
+ * Três faixas para o gestor não precisar olhar centenas uma a uma:
+ *   🟢 alta      — cópia de plataforma do MESMO aluno da lista → vem MARCADA;
+ *   🟡 provável  — abreviação de um único aluno da lista → DESMARCADA, mas o
+ *                  "Selecionar todos" une o grupo num clique (confira a lista);
+ *   🔴 revisar   — nome parecido/gêmeo → DESMARCADA, com aviso ⚠ (olho a olho).
+ * A regra do dono continua: pior fundir errado do que deixar duplicado — por
+ * isso só a 🟢 é pré-marcada e há uma confirmação explícita antes de aplicar.
  */
 import { AlertTriangle, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -21,19 +25,22 @@ interface Impacto {
   notas: number;
   plataformas: string[];
 }
+type Confianca = "alta" | "provavel" | "revisar";
 interface CandidatoAluno {
   loser_id: number;
   manter_id: number;
   apagar: string;
   manter: string;
   turma: string;
-  confianca: "alta" | "revisar";
+  confianca: Confianca;
   motivo: "nome_identico" | "subconjunto" | "abreviacao" | "variante";
   impacto: Impacto;
 }
 interface PreviaAlunos {
   candidatos: CandidatoAluno[];
   total: number;
+  alta?: number;
+  provavel?: number;
   revisar: number;
 }
 interface ResultadoFusao {
@@ -140,13 +147,29 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
     }
   }
 
-  const grupos: { chave: "alta" | "revisar"; rotulo: string; itens: CandidatoAluno[] }[] = [
+  const conta = (c: Confianca) =>
+    previa?.candidatos.filter((x) => x.confianca === c).length ?? 0;
+  const contaAlta = conta("alta");
+  const contaProvavel = conta("provavel");
+  const contaRevisar = conta("revisar");
+
+  const grupos: { chave: Confianca; rotulo: string; dica: string; itens: CandidatoAluno[] }[] = [
     {
-      chave: "alta", rotulo: "🟢 Alta confiança",
+      chave: "alta",
+      rotulo: "🟢 Alta confiança — versão de plataforma do mesmo aluno",
+      dica: "Já vêm marcadas. É a ficha do Matific/Elefante do mesmo aluno da sua lista.",
       itens: previa?.candidatos.filter((c) => c.confianca === "alta") ?? [],
     },
     {
-      chave: "revisar", rotulo: "🟡 Revisar — pode ser outra criança",
+      chave: "provavel",
+      rotulo: "🟡 Provável — abreviação de um aluno da sua lista",
+      dica: "Use “Selecionar todos” para unir o grupo de uma vez — confira antes se sua Lista Piloto está completa.",
+      itens: previa?.candidatos.filter((c) => c.confianca === "provavel") ?? [],
+    },
+    {
+      chave: "revisar",
+      rotulo: "🔴 Revisar uma a uma — pode ser outra criança",
+      dica: "Nomes parecidos ou gêmeos. Marque só as que você confirma serem a mesma criança.",
       itens: previa?.candidatos.filter((c) => c.confianca === "revisar") ?? [],
     },
   ];
@@ -182,9 +205,12 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
         <>
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Encontrei <strong>{previa?.total}</strong> possível(is) duplicata(s).
-            Marque as que são a <strong>mesma criança</strong> — vou manter o cadastro
-            com o nome mais completo e juntar nele todos os dados (Matific, Elefante,
-            leituras, histórico), sem perder nada.
+            Você <strong>não precisa</strong> olhar uma a uma: as 🟢 <strong>{contaAlta}</strong> de
+            alta confiança já vêm marcadas, as 🟡 <strong>{contaProvavel}</strong> prováveis
+            você une em lote com um clique em “Selecionar todos”, e só as 🔴{" "}
+            <strong>{contaRevisar}</strong> pedem conferência uma a uma. Ao unir, mantenho o
+            cadastro principal e junto nele todos os dados (Matific, Elefante, leituras,
+            histórico), sem perder nada.
           </p>
 
           <div className="mt-3 max-h-72 space-y-3 overflow-y-auto pr-1">
@@ -193,14 +219,17 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
               const todosMarcados = ids.every((id) => selecionados.has(id));
               return (
               <div key={grupo.chave}>
-                <div className="mb-1 flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    {grupo.rotulo} ({grupo.itens.length})
-                  </p>
+                <div className="mb-1 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                      {grupo.rotulo} ({grupo.itens.length})
+                    </p>
+                    <p className="text-xs text-zinc-400 dark:text-zinc-500">{grupo.dica}</p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => marcarVarios(ids, !todosMarcados)}
-                    className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    className="shrink-0 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                   >
                     {todosMarcados ? "Desmarcar todos" : "Selecionar todos"}
                   </button>

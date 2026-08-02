@@ -8,7 +8,9 @@ const URL_CORRIGIR = "/escolas/1/alunos/duplicados/corrigir";
 
 function previa() {
   return {
-    total: 2,
+    total: 3,
+    alta: 1,
+    provavel: 1,
     revisar: 1,
     candidatos: [
       {
@@ -24,10 +26,19 @@ function previa() {
         loser_id: 20, manter_id: 21,
         apagar: "Akemi Carolina Vieira",
         manter: "Akemi Carolina Vieira Gomes Kariya",
-        turma: "4º C", confianca: "revisar", motivo: "subconjunto",
+        turma: "4º C", confianca: "provavel", motivo: "subconjunto",
         impacto: {
           leituras: 0, snapshots_matific: 0, snapshots_elefante: 1,
           eventos: 0, notas: 0, plataformas: ["elefante"],
+        },
+      },
+      {
+        loser_id: 30, manter_id: 31,
+        apagar: "Ana B", manter: "Ana Beatriz Souza",
+        turma: "4º C", confianca: "revisar", motivo: "abreviacao",
+        impacto: {
+          leituras: 0, snapshots_matific: 1, snapshots_elefante: 0,
+          eventos: 0, notas: 0, plataformas: ["matific"],
         },
       },
     ],
@@ -37,17 +48,18 @@ function previa() {
 const noop = () => {};
 
 describe("ModalAlunosDuplicados", () => {
-  it("marca alta por padrão e deixa 'revisar' desmarcada", async () => {
+  it("pré-marca só a 'alta'; 'provável' e 'revisar' vêm desmarcadas", async () => {
     responder("GET", URL_PREVIA, previa());
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
     expect(await screen.findByText("Akemi Carolina Vieira")).toBeInTheDocument();
     const caixas = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    // Ordem: grupo alta (Bruno) antes do grupo revisar (Akemi).
+    // Ordem dos grupos: 🟢 alta (Bruno) → 🟡 provável (Akemi) → 🔴 revisar (Ana B).
     expect(caixas[0].checked).toBe(true);   // alta pré-marcada
-    expect(caixas[1].checked).toBe(false);  // revisar desmarcada
-    // Alerta de "revisar" visível (o "confira:" só existe na linha do par).
+    expect(caixas[1].checked).toBe(false);  // provável NÃO pré-marcada
+    expect(caixas[2].checked).toBe(false);  // revisar NÃO pré-marcada
+    // O aviso "confira: pode ser outra criança" só existe na faixa 🔴 revisar.
     expect(screen.getByText(/confira:/)).toBeInTheDocument();
   });
 
@@ -64,7 +76,7 @@ describe("ModalAlunosDuplicados", () => {
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
     await screen.findByText("Akemi Carolina Vieira");
-    // Marca também a de "revisar".
+    // Marca também a 🟡 provável (Akemi) — a 🟢 alta (Bruno) já vem marcada.
     await u.click((screen.getAllByRole("checkbox") as HTMLInputElement[])[1]);
 
     // 1º clique → pede confirmação (não envia ainda).
@@ -80,22 +92,22 @@ describe("ModalAlunosDuplicados", () => {
     expect([...enviado!.loser_ids].sort()).toEqual([10, 20]);
   });
 
-  it("'Selecionar todos' marca o grupo inteiro de uma vez", async () => {
+  it("'Selecionar todos' une a faixa 🟡 provável num clique", async () => {
     responder("GET", URL_PREVIA, previa());
     const u = userEvent.setup();
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
     await screen.findByText("Akemi Carolina Vieira");
-    // No grupo "revisar", o par vem DESMARCADO por padrão.
-    const revisar = (screen.getAllByRole("checkbox") as HTMLInputElement[])[1];
-    expect(revisar.checked).toBe(false);
+    // A faixa 🟡 provável (Akemi = caixa[1]) vem DESMARCADA por padrão.
+    expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(false);
 
-    // O botão "Selecionar todos" do grupo revisar (o último) marca-o de uma vez.
+    // A 🟢 alta já vem marcada (botão "Desmarcar todos"); os "Selecionar todos"
+    // são das faixas 🟡 provável (1º) e 🔴 revisar (2º). O 1º une a provável.
     const marcar = screen.getAllByRole("button", { name: /Selecionar todos/ });
-    await u.click(marcar[marcar.length - 1]);   // grupo "revisar"
+    await u.click(marcar[0]);   // faixa 🟡 provável
     expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(true);
-    // Vira "Desmarcar todos" (o último) e limpa de volta.
+    // Vira "Desmarcar todos" e limpa de volta (o último = a provável recém-marcada).
     const desmarcar = screen.getAllByRole("button", { name: /Desmarcar todos/ });
     await u.click(desmarcar[desmarcar.length - 1]);
     expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(false);

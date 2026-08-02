@@ -1,12 +1,15 @@
 """Detecção e fusão em LOTE de alunos duplicados (Fundir duplicatas).
 
-Cobre os níveis de confiança (regra do dono: precisão acima de tudo):
-  * nome curto ⊂ nome completo, MESMA turma → "revisar" (caso Akemi real);
-  * nome idêntico + mesma turma → "alta";
-  * abreviação posicional ("Agatha V" → "Agatha Vitoria…") → "revisar";
-  * turma DIFERENTE → nunca sugere;
-  * ambíguo (curto cabe em DOIS nomes completos) → nunca sugere;
-e a aplicação em lote (só os confirmados), a confirmação obrigatória e a
+Cobre os níveis de confiança (regra do dono: precisão acima de tudo). São TRÊS
+faixas para o gestor não olhar centenas uma a uma:
+  * 🟢 "alta" (pré-marcada): nome idêntico com nascimento igual, OU cópia de
+    PLATAFORMA (nome completo) de um aluno da LISTA PILOTO;
+  * 🟡 "provável" (lote com conferência): abreviação/subconjunto de UM único
+    aluno da Lista Piloto (o stub curto do Matific/Elefante);
+  * 🔴 "revisar" (uma a uma): sem âncora na lista, variante de grafia, nome
+    idêntico sem corroboração, stub truncado ("ANA B") → pode ser outra criança.
+Turma DIFERENTE ou ambíguo (curto cabe em DOIS completos) → nunca sugere. Também
+cobre a aplicação em lote (só os confirmados), a confirmação obrigatória e a
 permissão (professor não pode).
 """
 from datetime import date
@@ -363,3 +366,75 @@ def test_deteccao_preserva_perfil_da_lista_piloto_mesmo_curto(cliente, db, escol
     assert len(pares) == 1
     assert pares[0]["manter_id"] == piloto.id          # piloto sobrevive
     assert pares[0]["loser_id"] == longa.id            # a ficha longa é a que sai
+
+
+# --- As TRÊS faixas de confiança (reduzir a revisão manual com segurança) -----
+
+def test_copia_de_plataforma_de_aluno_da_lista_e_alta(cliente, db, escola_completa):
+    """Cópia de PLATAFORMA (não-piloto) com o MESMO nome COMPLETO de um aluno da
+    Lista Piloto, mesma turma, sem nascimento → 🟢 'alta' (aprova em lote): é a
+    ficha do Matific/Elefante do mesmo aluno da lista, não um gêmeo."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto = _add_aluno(db, escola_id, "Bruno Alves Costa", turma_id)
+    piloto.da_lista_piloto = True
+    db.commit()
+    stub = _add_aluno(db, escola_id, "Bruno Alves Costa", turma_id)   # ficha de plataforma
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if c["apagar"] == "Bruno Alves Costa"]
+    assert len(pares) == 1
+    assert pares[0]["loser_id"] == stub.id and pares[0]["manter_id"] == piloto.id
+    assert pares[0]["confianca"] == "alta"
+    assert corpo["alta"] >= 1
+
+
+def test_abreviacao_de_aluno_da_lista_e_provavel(cliente, db, escola_completa):
+    """Stub curto do Matific ('Agatha V', não-piloto) que abrevia UM único aluno
+    da Lista Piloto ('Agatha Vitoria Moura') → 🟡 'provável' (une em lote com
+    conferência, NÃO pré-marcada)."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto = _add_aluno(db, escola_id, "Agatha Vitoria Moura", turma_id)
+    piloto.da_lista_piloto = True
+    db.commit()
+    stub = _add_aluno(db, escola_id, "Agatha V", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if c["apagar"] == "Agatha V"]
+    assert len(pares) == 1
+    assert pares[0]["loser_id"] == stub.id and pares[0]["manter_id"] == piloto.id
+    assert pares[0]["confianca"] == "provavel"
+    assert pares[0]["motivo"] == "abreviacao"
+    assert corpo["provavel"] >= 1
+
+
+def test_sem_ancora_na_lista_nao_vira_provavel_nem_alta(cliente, db, escola_completa):
+    """Abreviação/subconjunto SEM nenhum aluno da Lista Piloto no par continua
+    🔴 'revisar' — sem a âncora oficial não dá para aprovar em lote."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    _add_aluno(db, escola_id, "Akemi Carolina Vieira", turma_id)          # nenhum é piloto
+    _add_aluno(db, escola_id, "Akemi Carolina Vieira Gomes Kariya", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if c["apagar"].startswith("Akemi")]
+    assert len(pares) == 1
+    assert pares[0]["confianca"] == "revisar"
+
+
+def test_stub_truncado_identico_ao_piloto_fica_revisar(cliente, db, escola_completa):
+    """Guarda do nome COMPLETO: um stub truncado 'ANA B' idêntico a um 'ANA B' da
+    Lista Piloto NÃO vira 'alta' (dois 'ANA B' podem ser Ana Beatriz × Ana Bianca).
+    Como a inicial solta não é nome completo → 🔴 'revisar' (o dono confere)."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    piloto = _add_aluno(db, escola_id, "ANA B", turma_id)
+    piloto.da_lista_piloto = True
+    db.commit()
+    _add_aluno(db, escola_id, "ANA B", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if c["apagar"] == "ANA B"]
+    assert len(pares) == 1
+    assert pares[0]["confianca"] == "revisar"

@@ -79,6 +79,15 @@ def _dob_concordante(a: Aluno, b: Aluno) -> bool:
                and a.data_nascimento == b.data_nascimento)
 
 
+def _nome_completo(nome: str) -> bool:
+    """Nome de fato COMPLETO — dois tokens ou mais e SEM inicial solta ('ANA B',
+    'MARIA E'). Um stub truncado do Matific/Elefante NÃO é nome completo: dois
+    'ANA B' idênticos podem ser crianças diferentes (Ana Beatriz × Ana Bianca),
+    então não entram na faixa pré-marcada."""
+    tk = tokens(nome)
+    return len(tk) >= 2 and all(len(t) > 1 for t in tk)
+
+
 def _turmas_ativas(db: Session, escola_id: int, ano: int) -> dict[int, tuple[int, str]]:
     """aluno_id → (turma_id, turma_nome) no ano letivo ativo (1 por aluno)."""
     linhas = db.execute(
@@ -93,8 +102,9 @@ def _turmas_ativas(db: Session, escola_id: int, ano: int) -> dict[int, tuple[int
 def _candidatos(db: Session, escola_id: int
                 ) -> list[tuple[Aluno, Aluno, str, str, str]]:
     """Pares (loser, survivor, confianca, motivo, turma_nome) da MESMA turma.
-    ``confianca`` ∈ {"alta","revisar"}; ``motivo`` ∈ {"nome_identico",
-    "subconjunto","abreviacao"}. survivor = o nome mais completo (empate: menor id)."""
+    ``confianca`` ∈ {"alta","provavel","revisar"} (🟢 aprova em lote / 🟡 lote com
+    conferência / 🔴 uma a uma); ``motivo`` ∈ {"nome_identico","subconjunto",
+    "abreviacao","variante"}. survivor = perfil principal (piloto > nome completo)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -138,7 +148,17 @@ def _candidatos(db: Session, escola_id: int
                 # exige nascimento igual nos dois (corrobora); senão "revisar"
                 # (não pré-marcada) — pode ser homônimo/gêmeo de verdade.
                 if mesma_turma(a, titular) and not _conflito_forte(a, titular):
-                    conf = "alta" if _dob_concordante(a, titular) else "revisar"
+                    # 🟢 "alta" (pré-marcada, aprova em lote) quando é claramente
+                    # a MESMA criança: nascimento igual corrobora, OU é a cópia de
+                    # PLATAFORMA (a, não-piloto) de um aluno da LISTA PILOTO
+                    # (titular) com nome COMPLETO — não um stub truncado
+                    # ("ANA B"=="ANA B", que pode ser outra criança). Senão,
+                    # 🔴 "revisar" (gêmeo/homônimo de verdade → o dono confere).
+                    copia_de_piloto = (titular.da_lista_piloto
+                                       and not a.da_lista_piloto
+                                       and _nome_completo(a.nome))
+                    conf = ("alta" if (_dob_concordante(a, titular) or copia_de_piloto)
+                            else "revisar")
                     pares.append((a, titular, conf, "nome_identico",
                                   turma_de[a.id][1]))
                 continue
@@ -159,7 +179,15 @@ def _candidatos(db: Session, escola_id: int
                 survivor = _melhor_perfil(a, alvo)
                 loser = alvo if survivor.id == a.id else a
                 motivo = "subconjunto" if tk < tokens(alvo.nome) else "abreviacao"
-                pares.append((loser, survivor, "revisar", motivo, turma_de[loser.id][1]))
+                # 🟡 "provável" (NÃO pré-marcada; um clique em "Selecionar todos"
+                # une o grupo): o stub curto (loser, não-piloto) é a abreviação de
+                # UM único aluno da LISTA PILOTO (survivor). Seguro para aprovar em
+                # lote SE a lista estiver completa — por isso não pré-marca e avisa.
+                # Sem âncora na lista (ninguém é piloto) → 🔴 "revisar" a uma.
+                conf = ("provavel"
+                        if (survivor.da_lista_piloto and not loser.da_lista_piloto)
+                        else "revisar")
+                pares.append((loser, survivor, conf, motivo, turma_de[loser.id][1]))
 
         # VARIAÇÃO ORTOGRÁFICA (LUÍS/LUIZ): nomes DIFERENTES mas quase iguais na
         # mesma turma normalizada, sem conflito de identidade. É o que a comparação
@@ -254,7 +282,7 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             "apagar": loser.nome,
             "manter": survivor.nome,
             "turma": turma,
-            "confianca": confianca,     # "alta" | "revisar"
+            "confianca": confianca,     # "alta" | "provavel" | "revisar"
             "motivo": motivo,
             "impacto": impactos.get(loser.id, _VAZIO),
         }

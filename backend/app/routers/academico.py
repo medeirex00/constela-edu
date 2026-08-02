@@ -616,6 +616,8 @@ def alunos_duplicados(
     permissoes.negar_dado_individual(db, escola_id, usuario)
     candidatos = alunos_dedup.plano_deduplicacao(db, escola_id)
     return {"candidatos": candidatos, "total": len(candidatos),
+            "alta": sum(1 for c in candidatos if c["confianca"] == "alta"),
+            "provavel": sum(1 for c in candidatos if c["confianca"] == "provavel"),
             "revisar": sum(1 for c in candidatos if c["confianca"] == "revisar")}
 
 
