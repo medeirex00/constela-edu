@@ -57,7 +57,7 @@ from app.schemas import (
     MatriculaTurmaOut,
 )
 from app.services import importacao as svc
-from app.services import lista_piloto, matriculas, perfis_pdf, planilhas
+from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
 from app.services import professores, push, scoring
 from app.services.audit import registrar
 
@@ -425,19 +425,24 @@ def _data_iso(valor):
         return None
 
 
-def _conflito_identidade(aluno: Aluno, numero_chamada: int | None,
-                         nascimento, ra: str | None) -> bool:
-    """Sinais que PROVAM ser criança DIFERENTE (mesmo veto do dedup manual,
-    ``alunos_dedup._conflito_forte``): nascimento, RA ou nº de chamada preenchidos
-    NA LINHA e NO cadastro e DIVERGENTES. Veta o auto-vínculo — nunca casa duas
-    crianças que um identificador forte prova serem distintas."""
-    if (numero_chamada is not None and aluno.numero_chamada is not None
-            and aluno.numero_chamada != numero_chamada):
-        return True
-    if nascimento and aluno.data_nascimento and aluno.data_nascimento != nascimento:
-        return True
-    ra_aluno = str((aluno.ficha or {}).get("ra", "")).strip()
-    return bool(ra and ra_aluno and ra_aluno != str(ra).strip())
+def _roster_identidades(db: Session, escola_id: int, ano: int, turma_id: int
+                        ) -> tuple[list[matching.Identidade], dict[int, Aluno]]:
+    """Alunos ativos matriculados na turma/ano como ``Identidade`` (para o motor) +
+    mapa id→Aluno (para devolver o objeto ao vincular)."""
+    ids: list[matching.Identidade] = []
+    por_id: dict[int, Aluno] = {}
+    for aluno in db.execute(
+        select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
+        .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
+               Matricula.ano_letivo == ano, Aluno.status == "ativo")
+    ).scalars():
+        por_id[aluno.id] = aluno
+        ids.append(matching.Identidade(
+            id=aluno.id, nome=aluno.nome, chamada=aluno.numero_chamada,
+            nascimento=aluno.data_nascimento,
+            ra=str((aluno.ficha or {}).get("ra", "")),
+            da_lista_piloto=aluno.da_lista_piloto))
+    return ids, por_id
 
 
 def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
@@ -445,65 +450,28 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
                      nascimento=None, ra: str | None = None
                      ) -> tuple[Aluno | None, str]:
     """Casa a linha de plataforma (Elefante/Matific) contra o ROSTER da turma
-    canônica ANTES de criar — o núcleo de "1 aluno = 1 perfil". Conta os
-    CANDIDATOS PLAUSÍVEIS na MESMA turma e decide (spec do dono §14):
-      * "alta"  → UM único candidato FORTE (nome exato; abreviação com inicial em
-        qualquer posição, "M. EDUARDA"/"ABRAAO L"; truncamento "MARIA EDU") e
-        nenhum outro aluno plausível → vincula automático;
-      * "media" → 2+ plausíveis (ambíguo, ex.: "MARIA E" com Maria Eduarda E Maria
-        Elisa) OU nome PARCIAL/subconjunto ("MARIA SILVA"/"JOAO SANTOS", que pode
-        ser outra criança) → NÃO cria (vai p/ revisão; nunca funde cego);
-      * "baixa" → nenhum candidato FORTE nem parcial → cria novo (inclui variante de
-        grafia LUÍS/LUIZ: cria o cadastro e a detecção o surfaça p/ fusão MANUAL).
-    VETO de identidade (igual ao dedup manual): um aluno com nascimento, RA ou nº de
-    chamada preenchidos NOS DOIS e DIVERGENTES é criança comprovadamente diferente —
-    nunca vira candidato. Nº de chamada IGUAL é âncora positiva: um aluno plausível
-    com a mesma chamada desfaz o empate. Nome PARCIAL/subconjunto ("JOAO SANTOS" ⊂
-    "JOAO SANTOS OLIVEIRA") NÃO auto-vincula (pode ser outro João Santos com dono
-    real ausente do roster) — vira "media" (revisão). Variante de grafia idem (cai em
-    "baixa": cria e a detecção surfaça p/ fusão manual). Abreviação/inicial ("ABRAAO
-    L", "M. EDUARDA") é o caso que o dono pediu: 1 candidato → auto-vincula."""
-    tokens_linha = svc.tokens_nome(nome)
-    if not tokens_linha:
+    canônica ANTES de criar — o núcleo de "1 aluno = 1 perfil". Delega ao MOTOR
+    ÚNICO (``matching.classificar_linha``, o mesmo da prévia/detecção) e traduz o
+    status para a confiança do import:
+      * VINCULADO → "alta"  (auto-vincula: nome exato/abreviação com 1 candidato, ou
+        identificador forte — chamada/RA/nascimento/UUID — corroborando);
+      * REVISAR   → "media" (2+ candidatos, nome parcial, variante/typo de grafia →
+        NÃO cria; vai p/ revisão manual);
+      * BLOQUEADO/NOVO → "baixa" (cria novo — bloqueado = nome casa mas identidade
+        prova ser outra criança; novo = ninguém plausível)."""
+    if not svc.tokens_nome(nome):
         return None, "baixa"
-    alvo = svc.normalizar_nome(nome)
-    set_linha = set(tokens_linha)
-    fortes: dict[int, Aluno] = {}     # exato/abreviação → pode auto-vincular
-    parciais: dict[int, Aluno] = {}   # subconjunto de tokens → só revisão (ambíguo)
-    por_chamada: Aluno | None = None
-    for aluno in db.execute(
-        select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
-        .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma.id,
-               Matricula.ano_letivo == ano, Aluno.status == "ativo")
-    ).scalars():
-        if _conflito_identidade(aluno, numero_chamada, nascimento, ra):
-            continue                  # nascimento/RA/chamada divergente = outra criança
-        tk = svc.tokens_nome(aluno.nome)
-        set_al = set(tk)
-        if (numero_chamada is not None and aluno.numero_chamada is not None
-                and aluno.numero_chamada == numero_chamada):
-            por_chamada = aluno
-        # FORTE (auto-vincula): nome exato; abreviação com inicial em qualquer
-        # posição ("M. EDUARDA"/"ABRAAO L"); truncamento ("MARIA EDU").
-        if (svc.normalizar_nome(aluno.nome) == alvo
-                or svc.casa_abreviado(tokens_linha, tk)
-                or svc.casa_abreviado(tk, tokens_linha)):
-            fortes[aluno.id] = aluno
-        # PARCIAL (só revisão): subconjunto de tokens ("MARIA SILVA" ⊂ "MARIA
-        # EDUARDA SILVA", "MARIA"). Sozinho não é prova (sobrenome comum, dono
-        # ausente) — não auto-vincula.
-        elif set_linha < set_al or set_al < set_linha:
-            parciais[aluno.id] = aluno
-    # Âncora por nº de chamada: um aluno plausível com a MESMA chamada é a criança
-    # certa (a chamada identifica dentro da turma) → vincula mesmo se parcial/ambíguo.
-    if por_chamada is not None and (por_chamada.id in fortes or por_chamada.id in parciais):
-        return por_chamada, "alta"
-    plausiveis = set(fortes) | set(parciais)
-    if len(fortes) == 1 and len(plausiveis) == 1:
-        return next(iter(fortes.values())), "alta"
-    if len(plausiveis) >= 1:
-        # 2+ candidatos (ambíguo) OU só parcial (sobrenome comum) → revisão, sem dup.
-        return None, "media"
+    linha = matching.Identidade(nome=nome, chamada=numero_chamada,
+                                nascimento=nascimento, ra=ra or "")
+    roster, por_id = _roster_identidades(db, escola_id, ano, turma.id)
+    res = matching.classificar_linha(linha, roster)
+    if res.status == matching.VINCULADO and res.aluno_id in por_id:
+        return por_id[res.aluno_id], "alta"
+    if res.status == matching.REVISAR and len(res.candidatos) >= 2:
+        return None, "media"          # AMBÍGUO (2+ candidatos) → não cria órfão; revisão
+    # 1 candidato fraco/parcial (variante/typo/nome parcial) → CRIA e a detecção o
+    # surfaça como "possível duplicata" p/ fusão manual (ponto 1 do dono); BLOQUEADO
+    # (identidade divergente) e NOVO também criam.
     return None, "baixa"
 
 

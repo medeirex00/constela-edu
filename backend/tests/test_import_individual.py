@@ -300,8 +300,10 @@ def test_homonimos_nao_casam_automaticamente(db, escola_completa):
     sem_turma = svc.LinhaImportacao(numero=2, nome="JOÃO SILVA", dados={})
     svc.casar_nomes(db, escola.id, [com_turma, sem_turma])
 
-    # com a turma do relatório: escolhe o João da 3B (mas exige confirmação)
-    assert com_turma.correspondencia["status"] == "provavel"
+    # com a turma do relatório: o motor único procura no roster da turma 3B, onde há
+    # UM único João (o joao_b) → vincula (spec do dono: 1 candidato na MESMA turma =
+    # alta confiança). O homônimo da 3A não é candidato NESTA turma.
+    assert com_turma.correspondencia["status"] == "vinculado"
     assert com_turma.correspondencia["aluno_id"] == joao_b.id
     # sem turma: NÃO casa automaticamente — o usuário escolhe entre os homônimos
     assert sem_turma.correspondencia["status"] == "nao_encontrado"

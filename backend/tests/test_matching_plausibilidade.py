@@ -9,10 +9,13 @@ não-destrutivo. Variante de grafia (LUÍS/LUIZ) NÃO auto-vincula (fuzzy → ca
 """
 from types import SimpleNamespace
 
+from datetime import date
+
 from sqlalchemy import func, select
 
 from app.models import Aluno, Escola, Matricula, Turma
 from app.routers.importacoes import _casar_no_roster, _resolver_aluno
+from app.services import importacao as svc
 from app.services.importacao import casa_abreviado, tokens_nome
 
 
@@ -130,21 +133,28 @@ def test_maria_e_duas_candidatas_e_ambiguo(db):
     assert conf == "media" and aluno is None
 
 
-def test_nome_parcial_subconjunto_vai_para_revisao(db):
+def test_nome_parcial_subconjunto_nao_auto_vincula(db):
     """SEGURANÇA (revisão adversarial): nome PARCIAL por subconjunto ('MARIA SILVA'
     ⊂ 'MARIA EDUARDA SILVA', ou 'JOAO SANTOS' ⊂ 'JOAO SANTOS OLIVEIRA') NÃO
-    auto-vincula — sobrenome comum + dono real ausente do roster poderia colar na
-    criança errada. Vai para "media" (revisão), sem criar duplicata."""
+    auto-vincula (sobrenome comum + dono real ausente poderia colar na criança
+    errada). Com 1 candidato, NÃO retorna "alta": cria (baixa) e a detecção o surfaça
+    como possível duplicata p/ fusão manual — nunca vínculo automático."""
     esc, turma = _escola_turma(db)
     _matricular(db, esc, turma, "MARIA EDUARDA SILVA")       # token faltando no MEIO
     _matricular(db, esc, turma, "JOAO SANTOS OLIVEIRA")      # token faltando no FIM
     db.commit()
-    # Subconjunto do MEIO ("MARIA SILVA" ⊂ "MARIA EDUARDA SILVA").
+    for parcial in ("MARIA SILVA", "JOAO SANTOS"):
+        aluno, conf = _casar_no_roster(db, esc.id, 2026, parcial, turma)
+        assert conf != "alta" and aluno is None            # nunca auto-vincula
+
+
+def test_nome_parcial_ambiguo_segura_sem_criar(db):
+    """Nome parcial que casa DUAS crianças (ambíguo) → 'media' (não cria órfão)."""
+    esc, turma = _escola_turma(db)
+    _matricular(db, esc, turma, "MARIA EDUARDA SILVA")
+    _matricular(db, esc, turma, "MARIA SILVA SANTOS")       # 2 candidatas p/ "MARIA SILVA"
+    db.commit()
     aluno, conf = _casar_no_roster(db, esc.id, 2026, "MARIA SILVA", turma)
-    assert conf == "media" and aluno is None
-    # Subconjunto-PREFIXO ("JOAO SANTOS" ⊂ "JOAO SANTOS OLIVEIRA") — o furo que a
-    # revisão adversarial pegou: também precisa ir para revisão, não auto-vínculo.
-    aluno, conf = _casar_no_roster(db, esc.id, 2026, "JOAO SANTOS", turma)
     assert conf == "media" and aluno is None
 
 
@@ -182,6 +192,48 @@ def test_nenhum_candidato_plausivel_cria_novo(db):
                         _linha("RICARDO GOMES LEAL", "5ºA"), [], {}, {})
     assert r is not None and r.nome == "RICARDO GOMES LEAL"
     assert _conta(db, esc.id) == antes + 1
+
+
+def test_previa_usa_o_mesmo_motor_da_confirmacao(db):
+    """PONTO 2: a PRÉVIA (casar_nomes) passa pelo MESMO motor que a confirmação.
+    'M. EDUARDA' (que a busca difusa marcaria 'nao_encontrado') com turma no
+    relatório e uma única Maria plausível → prévia mostra 'vinculado' (= o que a
+    confirmação fará), nunca 'aluno novo'."""
+    esc, turma = _escola_turma(db)
+    _matricular(db, esc, turma, "MARIA EDUARDA SILVA")
+    db.commit()
+    linhas = [svc.LinhaImportacao(numero=1, nome="M. EDUARDA",
+                                  dados={"turma_relatorio": "5ºA"})]
+    svc.casar_nomes(db, esc.id, linhas)
+    assert linhas[0].correspondencia["status"] == "vinculado"
+
+
+def test_previa_typo_mostra_possivel_duplicata_sem_pre_selecionar(db):
+    """PONTO 1+2: typo no 1º nome (GABRYEL/GABRIEL) na mesma turma → 'revisar'
+    (possível duplicata) na PRÉVIA — NÃO 'provavel' (que pré-selecionaria e viraria
+    vínculo por um clique). Grafia parecida nunca vincula sozinha."""
+    esc, turma = _escola_turma(db)
+    _matricular(db, esc, turma, "GABRIEL SILVA")
+    db.commit()
+    linhas = [svc.LinhaImportacao(numero=1, nome="GABRYEL SILVA",
+                                  dados={"turma_relatorio": "5ºA"})]
+    svc.casar_nomes(db, esc.id, linhas)
+    assert linhas[0].correspondencia["status"] == "revisar"
+    assert linhas[0].correspondencia["aluno_id"] is not None      # sugere o candidato
+
+
+def test_previa_bloqueado_por_conflito_de_identidade(db):
+    """PONTO 2: nome casa (M. EDUARDA → MARIA EDUARDA) mas o nascimento diverge →
+    prévia mostra 'bloqueado' (não vincula; cria como criança diferente)."""
+    esc, turma = _escola_turma(db)
+    m = _matricular(db, esc, turma, "MARIA EDUARDA SILVA")
+    m.data_nascimento = date(2016, 5, 1)
+    db.commit()
+    linhas = [svc.LinhaImportacao(numero=1, nome="M. EDUARDA",
+                                  dados={"turma_relatorio": "5ºA",
+                                         "data_nascimento": "2017-09-20"})]
+    svc.casar_nomes(db, esc.id, linhas)
+    assert linhas[0].correspondencia["status"] == "bloqueado"
 
 
 def test_inicial_primeiro_nome_reimport_idempotente(db):

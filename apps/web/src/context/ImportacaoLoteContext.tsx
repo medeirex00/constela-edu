@@ -69,13 +69,17 @@ function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Tur
       detalhe: "Nenhum registro de leitura válido neste arquivo.",
     };
   }
-  if (corresp?.aluno_id && (corresp.status === "exato" || corresp.status === "provavel")) {
-    const baixa = corresp.status === "provavel";
+  // Só a ALTA confiança do motor ("vinculado") e o nome EXATO único auto-importam
+  // no lote. "revisar"/"provavel" (possível duplicata) e "bloqueado" caem em criar
+  // e passam pelo motor seguro na confirmação — grafia/similaridade parecida nunca
+  // vira vínculo automático (a detecção surfaça depois p/ fusão manual).
+  if (corresp?.aluno_id
+      && (corresp.status === "vinculado" || corresp.status === "exato")) {
     return {
-      ...base, status: baixa ? "alerta" : "ok", origem, totalLivros,
+      ...base, status: "ok", origem, totalLivros,
       alunoNome: corresp.aluno_nome ?? nome, turmaNome,
       acao: { tipo: "importar", alunoId: corresp.aluno_id },
-      detalhe: baixa ? `Correspondência provável (${corresp.similaridade ?? "?"}%). Confira o aluno.` : "",
+      detalhe: "",
     };
   }
   if (turmaId) {

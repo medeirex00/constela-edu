@@ -256,7 +256,11 @@ export default function Importacoes() {
         gruposIniciais.map((g): Acao => {
           if (g.todasComErro) return { tipo: "ignorar" };
           const c = g.correspondencia;
-          if (c?.aluno_id && (c.status === "exato" || c.status === "provavel")) {
+          // Só a ALTA confiança do motor ("vinculado") e o nome EXATO único
+          // pré-selecionam o vínculo. "revisar"/"provavel" (possível duplicata) e
+          // "bloqueado" caem em criar (o gestor decide) e passam pelo motor seguro na
+          // confirmação — grafia/similaridade parecida NUNCA vira vínculo por 1 clique.
+          if (c?.aluno_id && (c.status === "vinculado" || c.status === "exato")) {
             return { tipo: "importar", alunoId: c.aluno_id, alunoNome: c.aluno_nome ?? g.nome };
           }
           // Aluno novo: cria na turma DO PRÓPRIO ALUNO — o relatório geral do
@@ -433,17 +437,27 @@ export default function Importacoes() {
     };
   }
 
-  const tomCorrespondencia = { exato: "ok", provavel: "alerta", nao_encontrado: "neutro" } as const;
+  const tomCorrespondencia = {
+    vinculado: "ok", exato: "ok",
+    revisar: "alerta", provavel: "alerta", bloqueado: "destaque",
+    nao_encontrado: "neutro",
+  } as const;
   const rotuloCorrespondencia = {
-    exato: "Encontrado",
-    provavel: "Confirme o aluno",
-    nao_encontrado: "Aluno novo",
+    vinculado: "Vinculado automaticamente",
+    exato: "Vinculado automaticamente",
+    revisar: "Possível duplicata — requer revisão",
+    provavel: "Possível duplicata — requer revisão",
+    bloqueado: "Bloqueado por conflito de identidade",
+    nao_encontrado: "Novo aluno",
   } as const;
 
   // Estatísticas (por grupo) para os controles e a contagem final.
   const gruposValidos = grupos.filter((g) => !g.todasComErro);
+  // "Novos" = tudo que NÃO será vinculado automaticamente (cria por padrão):
+  // aluno novo, bloqueado por conflito e possível duplicata não confirmada.
+  const CRIAM = new Set(["nao_encontrado", "bloqueado", "revisar"]);
   const naoEncontrados = grupos.filter(
-    (g) => !g.todasComErro && g.correspondencia?.status === "nao_encontrado",
+    (g) => !g.todasComErro && CRIAM.has(g.correspondencia?.status ?? ""),
   );
   const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
   const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
@@ -716,9 +730,12 @@ export default function Importacoes() {
                               <Badge tom={tomCorrespondencia[correspondencia.status]}>
                                 {rotuloCorrespondencia[correspondencia.status]}
                               </Badge>
-                              {correspondencia.status === "provavel" && (
+                              {correspondencia.aluno_nome
+                               && correspondencia.status !== "nao_encontrado"
+                               && correspondencia.status !== "bloqueado" && (
                                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                                  {correspondencia.aluno_nome} ({correspondencia.similaridade}%)
+                                  → {correspondencia.aluno_nome}
+                                  {correspondencia.similaridade ? ` (${correspondencia.similaridade}%)` : ""}
                                 </p>
                               )}
                             </div>

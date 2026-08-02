@@ -153,12 +153,53 @@ describe("Importacoes", () => {
     // Prévia renderizada com o aluno e a correspondência encontrada.
     expect(await screen.findByText("Prévia da importação")).toBeInTheDocument();
     expect(screen.getByText("Ana Beatriz Souza")).toBeInTheDocument();
-    expect(screen.getByText("Encontrado")).toBeInTheDocument();
+    expect(screen.getByText("Vinculado automaticamente")).toBeInTheDocument();
 
     // Confirma e vê a mensagem de sucesso da gravação.
     await u.click(screen.getByRole("button", { name: "Sim, importar" }));
     expect(
       await screen.findByText("Importação concluída com sucesso."),
+    ).toBeInTheDocument();
+  });
+
+  async function previaComCorrespondencia(corr: Analise["linhas"][number]["correspondencia"]) {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = analiseFake();
+    analise.linhas[0].correspondencia = corr;
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana B 42");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    return u;
+  }
+
+  it("'possível duplicata' (revisar) NÃO vem pré-selecionada como vínculo", async () => {
+    await previaComCorrespondencia({
+      status: "revisar", aluno_id: 10, aluno_nome: "Ana Beatriz Souza",
+      similaridade: 90, motivo: "typo",
+      alternativas: [{ aluno_id: 10, nome: "Ana Beatriz Souza",
+                       turma: "3º Ano A", similaridade: 90 }],
+    });
+    expect(screen.getByText("Possível duplicata — requer revisão")).toBeInTheDocument();
+    // Segurança: o destino NÃO vem no aluno (grafia parecida nunca vira vínculo por
+    // 1 clique) — fica em "Criar aluno novo…" até o gestor escolher.
+    const destino = screen.getByRole("combobox",
+      { name: /Destino de/ }) as HTMLSelectElement;
+    expect(destino.value).toBe("criar");
+  });
+
+  it("'bloqueado por conflito' aparece com o rótulo certo", async () => {
+    await previaComCorrespondencia({
+      status: "bloqueado", aluno_id: null, aluno_nome: null,
+      similaridade: null, alternativas: [],
+    });
+    expect(
+      screen.getByText("Bloqueado por conflito de identidade"),
     ).toBeInTheDocument();
   });
 });

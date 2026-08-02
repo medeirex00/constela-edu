@@ -256,10 +256,16 @@ export interface AlunoGestao {
 // --- Fase 2: importações e plataformas ---------------------------------------
 
 export interface Correspondencia {
-  status: "exato" | "provavel" | "nao_encontrado";
+  // Motor único (prévia = confirmação): "vinculado" (vincula automático),
+  // "revisar" (possível duplicata — o gestor decide), "bloqueado" (conflito de
+  // identidade). "exato"/"provavel"/"nao_encontrado" = casamento por nome (fallback
+  // fora da turma) mantidos por compatibilidade.
+  status: "vinculado" | "revisar" | "bloqueado"
+    | "exato" | "provavel" | "nao_encontrado";
   aluno_id: number | null;
   aluno_nome: string | null;
   similaridade: number | null;
+  motivo?: string;   // uuid|identificador|exato|abreviacao|parcial|variante|typo|conflito
   alternativas: { aluno_id: number; nome: string; turma?: string; similaridade: number }[];
 }
 

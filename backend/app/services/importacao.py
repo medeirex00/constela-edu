@@ -37,7 +37,7 @@ from difflib import SequenceMatcher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, IdentidadeExterna, Matricula, Turma
+from app.models import Aluno, Escola, IdentidadeExterna, Matricula, Turma
 
 # --------------------------------------------------------------------------
 # Normalização de texto e números
@@ -1115,3 +1115,93 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao]) -> N
             }
         else:
             linha.correspondencia = {"status": "nao_encontrado", "alternativas": alternativas}
+
+    _prever_pelo_motor(db, escola_id, linhas)
+
+
+def _prever_pelo_motor(db: Session, escola_id: int,
+                       linhas: list[LinhaImportacao]) -> None:
+    """PRÉVIA = CONFIRMAÇÃO: para cada linha que sobrou como "nao_encontrado" (ou o
+    "provavel" da busca difusa) mas tem turma no relatório, roda o MESMO motor único
+    (``matching.classificar_linha``) no MESMO roster que a confirmação usará — alunos
+    ATIVOS matriculados na turma canônica no ANO LETIVO ATIVO, chaveados por
+    ``chave_turma_norm`` do NOME da turma (idêntico a ``_roster_identidades`` do
+    confirmar). Assim a prévia mostra exatamente o que a confirmação fará. Traduz:
+      * VINCULADO (só quando a entrada era "nao_encontrado") → "vinculado";
+      * "provavel" difuso ou REVISAR → "revisar" (o gestor decide; NÃO pré-seleciona
+        — grafia/homônimo nunca vira vínculo por 1 clique);
+      * BLOQUEADO → "bloqueado"; NOVO (de "nao_encontrado") → mantém "nao_encontrado"."""
+    from app.services import matching
+    from app.services.matriculas import chave_turma_norm, parse_nascimento
+
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo if escola else 0
+    roster_por_turma: dict[str, list[matching.Identidade]] = {}
+    for aluno, turma_nome in db.execute(
+        select(Aluno, Turma.nome).join(Matricula, Matricula.aluno_id == Aluno.id)
+        .join(Turma, Turma.id == Matricula.turma_id)
+        .where(Aluno.escola_id == escola_id, Matricula.ano_letivo == ano,
+               Aluno.status == "ativo")
+    ).all():
+        chave = chave_turma_norm(turma_nome)
+        if not chave:
+            continue
+        roster_por_turma.setdefault(chave, []).append(matching.Identidade(
+            id=aluno.id, nome=aluno.nome, chamada=aluno.numero_chamada,
+            nascimento=aluno.data_nascimento,
+            ra=str((aluno.ficha or {}).get("ra", "")),
+            da_lista_piloto=aluno.da_lista_piloto))
+
+    for linha in linhas:
+        corr = linha.correspondencia or {}
+        entrada = corr.get("status")
+        if entrada not in ("nao_encontrado", "provavel"):
+            continue
+        chave = chave_turma_norm(str(linha.dados.get("turma_relatorio") or ""))
+        roster = roster_por_turma.get(chave)
+        if not roster:
+            # Sem roster da turma o motor não pode confirmar nada. Um "provavel" da
+            # busca DIFUSA (similaridade de string, cega a homônimo em outra turma)
+            # NÃO pode ficar pré-selecionado → rebaixa para "revisar" (o gestor
+            # decide). "nao_encontrado" fica como está (cria).
+            if entrada == "provavel":
+                linha.correspondencia = {**corr, "status": "revisar"}
+            continue
+        bruto = str(linha.dados.get("numero_chamada") or linha.dados.get("chamada") or "").strip()
+        nasc = str(linha.dados.get("data_nascimento") or linha.dados.get("nascimento") or "")[:10]
+        ids = matching.Identidade(
+            nome=linha.nome,
+            chamada=int(bruto) if bruto.isdigit() else None,
+            nascimento=parse_nascimento(nasc or None),
+            ra=str(linha.dados.get("ra") or "").strip())
+        res = matching.classificar_linha(ids, roster)
+        por_id_local = {r.id: r for r in roster}
+        alvo = por_id_local.get(res.aluno_id)
+        alts = [{"aluno_id": cid, "nome": por_id_local[cid].nome, "similaridade": 90.0}
+                for cid in res.candidatos if cid in por_id_local]
+        # PRÉVIA = CONFIRMAÇÃO: o mesmo motor turma-scoped que o confirmar roda. O
+        # veredito vale para nao_encontrado E provavel (o "candidato" da busca difusa
+        # é irrelevante — o que importa é o roster da TURMA reportada, a chave do dono).
+        if res.status == matching.BLOQUEADO:
+            linha.correspondencia = {"status": "bloqueado",
+                                     "alternativas": corr.get("alternativas", [])}
+        elif res.status == matching.VINCULADO and alvo is not None:
+            # Match ESTRUTURAL (exato/abreviação) único NA TURMA reportada → vincula
+            # (spec do dono: 1 candidato plausível na turma = alta confiança). Grafia/
+            # typo nunca chega aqui (o motor os classifica REVISAR, não VINCULADO).
+            linha.correspondencia = {
+                "status": "vinculado", "via": "motor", "aluno_id": res.aluno_id,
+                "aluno_nome": alvo.nome, "similaridade": 100.0, "motivo": res.motivo,
+                "alternativas": alts or [{"aluno_id": alvo.id, "nome": alvo.nome,
+                                          "similaridade": 100.0}]}
+        elif res.status == matching.REVISAR and alvo is not None:
+            # Possível duplicata (grafia/typo/parcial/2+ candidatos) → revisão manual,
+            # NUNCA pré-selecionado.
+            linha.correspondencia = {
+                "status": "revisar", "aluno_id": res.aluno_id, "aluno_nome": alvo.nome,
+                "similaridade": 90.0, "motivo": res.motivo, "alternativas": alts}
+        elif entrada == "provavel":
+            # Motor não achou candidato na turma reportada, mas era palpite DIFUSO
+            # (talvez de outra turma) → rebaixa para "revisar", nunca pré-selecionado.
+            linha.correspondencia = {**corr, "status": "revisar"}
+        # entrada "nao_encontrado" + NOVO → mantém "nao_encontrado" (cria)

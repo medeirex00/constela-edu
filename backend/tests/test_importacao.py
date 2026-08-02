@@ -91,10 +91,13 @@ def test_casamento_exato_ignora_acentos_e_caixa(db, escola_completa):
     assert linhas[0].correspondencia["aluno_nome"] == "Ana Beatriz Souza"
 
 
-def test_nome_parecido_vira_provavel_e_exige_confirmacao(db, escola_completa):
+def test_nome_parecido_vira_revisar_e_exige_confirmacao(db, escola_completa):
+    """Nome PARECIDO por similaridade de string (sem turma p/ o motor confirmar) →
+    "revisar" (possível duplicata, exige revisão manual) — NÃO "provavel"
+    pré-selecionado: grafia parecida nunca vira vínculo por 1 clique."""
     linhas = [svc.LinhaImportacao(numero=1, nome="Ana Beatris Sousa", dados={})]
     svc.casar_nomes(db, escola_completa["escola"].id, linhas)
-    assert linhas[0].correspondencia["status"] == "provavel"
+    assert linhas[0].correspondencia["status"] == "revisar"
     assert linhas[0].correspondencia["similaridade"] < 100.0
 
 

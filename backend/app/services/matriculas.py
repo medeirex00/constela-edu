@@ -191,10 +191,10 @@ def nomes_compativeis(a: str, b: str) -> bool:
     ta, tb = svc.tokens_nome(a), svc.tokens_nome(b)
     if not ta or not tb:
         return True
+    if svc.casa_abreviado(ta, tb) or svc.casa_abreviado(tb, ta):
+        return True                       # abreviação/inicial/truncamento (motor único)
     if ta[0] != tb[0]:
         return False
-    if svc.casa_abreviado_posicional(ta, tb) or svc.casa_abreviado_posicional(tb, ta):
-        return True
     return svc._similaridade(normalizar(a), normalizar(b)) >= 0.6
 
 
@@ -227,9 +227,16 @@ def candidatos_abreviados(linha: LinhaMatricula, ctx: ContextoCasamento) -> list
     tokens = svc.tokens_nome(linha.nome)
     if len(tokens) < 2:
         return []
+    # Olha o balde do 1º token E o da 1ª LETRA: um stub com inicial no primeiro nome
+    # ("M. EDUARDA") fica indexado em "m", não em "maria" — sem isto a Lista Piloto
+    # nunca casaria a inicial do 1º nome (motor único: casa_abreviado cobre).
+    candidatos_pool = {
+        c.id: c for c in (*ctx.pool_por_primeiro.get(tokens[0], ()),
+                          *ctx.pool_por_primeiro.get(tokens[0][:1], ()))
+    }
     achados: list[AlunoRef] = []
-    for antigo in ctx.pool_por_primeiro.get(tokens[0], ()):
-        if not svc.casa_abreviado_posicional(svc.tokens_nome(antigo.nome), tokens):
+    for antigo in candidatos_pool.values():
+        if not svc.casa_abreviado(svc.tokens_nome(antigo.nome), tokens):
             continue
         # Precisa bater com ALGUMA turma real do aluno (série+letra), não com a
         # união de turmas de anos diferentes.

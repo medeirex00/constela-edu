@@ -37,11 +37,8 @@ from app.models import (
 )
 from app.services import alunos_fusao
 from app.services._nomes import primeiro_token, tokens
-from app.services.importacao import (
-    casa_abreviado,
-    tokens_nome,
-    variante_ortografica,
-)
+from app.services.importacao import casa_abreviado, tokens_nome
+from app.services.matching import plausivel
 from app.services.matriculas import chave_turma_norm
 
 
@@ -197,13 +194,14 @@ def _candidatos(db: Session, escola_id: int
                         else "revisar")
                 pares.append((loser, survivor, conf, motivo, turma_de[loser.id][1]))
 
-        # VARIAÇÃO ORTOGRÁFICA (LUÍS/LUIZ): nomes DIFERENTES mas quase iguais na
-        # mesma turma normalizada, sem conflito de identidade. É o que a comparação
-        # por token-set EXATO deixava passar. "revisar" (nunca pré-marca): estrito
-        # o bastante para NÃO parear crianças diferentes (LUÍS×LUCAS → ratio baixo).
-        # Cada aluno aponta para o MELHOR parceiro (piloto > completo > antigo), não
-        # para todos: assim 3 fichas do mesmo aluno viram um LEQUE (todas → o piloto),
-        # nunca uma cadeia entre duplicatas.
+        # VARIAÇÃO DE GRAFIA / TYPO: nomes DIFERENTES mas quase iguais na mesma turma
+        # normalizada, sem conflito de identidade — o motor único marca 'fraco'
+        # (variante LUÍS/LUIZ E erro de digitação GABRYEL/GABRIEL, inclusive no 1º
+        # nome). É o que a comparação por token-set EXATO deixava passar. SEMPRE
+        # "revisar" (nunca pré-marca, nunca funde sozinho): similaridade não distingue
+        # "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (diferentes) — só um humano
+        # decide. Cada aluno aponta para o MELHOR parceiro (piloto > completo >
+        # antigo): 3 fichas do mesmo aluno viram um LEQUE, nunca uma cadeia.
         ja_losers = {l.id for l, _s, *_ in pares}
         ordenado = sorted(grupo, key=lambda x: x.id)
         for a in ordenado:
@@ -212,11 +210,8 @@ def _candidatos(db: Session, escola_id: int
             parceiros = [b for b in ordenado
                          if b.id != a.id and mesma_turma(a, b)
                          and not _conflito_forte(a, b)
-                         and variante_ortografica(tokens_nome(a.nome), tokens_nome(b.nome))]
-            # SÓ sugere quando há UM único parceiro variante (ambíguo → não sugere).
-            # E é SEMPRE revisão manual (nunca automático): similaridade de nome não
-            # distingue "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (crianças
-            # diferentes) — ambos caem no mesmo limiar. Só um humano decide.
+                         and plausivel(a.nome, b.nome) == "fraco"]
+            # SÓ sugere quando há UM único parceiro de grafia (ambíguo → não sugere).
             if len(parceiros) != 1:
                 continue
             survivor = _melhor_perfil(parceiros[0], a)
