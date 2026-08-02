@@ -38,7 +38,7 @@ from app.models import (
 from app.services import alunos_fusao
 from app.services._nomes import primeiro_token, tokens
 from app.services.importacao import (
-    casa_abreviado_posicional,
+    casa_abreviado,
     tokens_nome,
     variante_ortografica,
 )
@@ -47,14 +47,15 @@ from app.services.matriculas import chave_turma_norm
 
 def _expande(curto: str, completo: str) -> bool:
     """``completo`` é uma forma MAIS completa de ``curto`` (mesma pessoa)?
-    Cobre dois padrões de duplicata do Matific/Elefante:
+    Cobre os padrões de duplicata do Matific/Elefante:
       * subconjunto ESTRITO de tokens ('Maria Silva' ⊂ 'Maria Eduarda Silva');
-      * abreviação POSICIONAL ('Agatha V' → 'Agatha Vitoria …'), sem casar
-        'Eloa S' com 'Eloa … Silva' (o matcher já rejeita subsequência)."""
+      * abreviação POSICIONAL com inicial em qualquer posição ('Agatha V' →
+        'Agatha Vitoria …', 'M. Eduarda' → 'Maria Eduarda …', 'Maria Edu' →
+        'Maria Eduarda …'), sem casar 'Eloa S' com 'Eloa … Silva' (posicional)."""
     tc, tk = tokens(curto), tokens(completo)
     if tc and tc < tk:
         return True
-    return casa_abreviado_posicional(tokens_nome(curto), tokens_nome(completo))
+    return casa_abreviado(tokens_nome(curto), tokens_nome(completo))
 
 
 def _conflito_forte(a: Aluno, b: Aluno) -> bool:
@@ -118,20 +119,27 @@ def _candidatos(db: Session, escola_id: int
     # (evita sugerir fusão sem o sinal mais forte).
     membros = [a for a in alunos if a.id in turma_de]
 
-    grupos: dict[str, list[Aluno]] = defaultdict(list)
+    # Chave canônica da turma memoizada por aluno (1x, não por par): as duplicatas
+    # da importação antiga ficam em turmas-fantasma distintas ("4ºC" vs "4 ANO C
+    # INTEGRAL (300303525)") que são a MESMA sala — comparar por chave normalizada
+    # (série+letra) as reúne. Calcular aqui evita recomputar o regex a cada par.
+    chave_de: dict[int, str] = {a.id: chave_turma_norm(turma_de[a.id][1]) for a in membros}
+
+    # Agrupa por (PRIMEIRA LETRA do 1º nome, TURMA canônica): a 1ª letra põe o stub
+    # com inicial ("M. EDUARDA") no mesmo balde que "MARIA EDUARDA SILVA" (com token
+    # inteiro nunca eram comparados); a turma mantém o balde PEQUENO (só a mesma
+    # sala), evitando o custo O(n²) por letra numa escola grande. Casamentos só
+    # acontecem dentro da mesma sala, então nada é perdido.
+    grupos: dict[tuple[str, str], list[Aluno]] = defaultdict(list)
     for a in membros:
-        grupos[primeiro_token(a.nome)].append(a)
+        grupos[(primeiro_token(a.nome)[:1], chave_de[a.id])].append(a)
 
     def mesma_turma(x: Aluno, y: Aluno) -> bool:
-        # Compara a turma NORMALIZADA (série+letra), não o turma_id: as duplicatas
-        # da importação antiga ficam em turmas-fantasma distintas ("4ºC" vs
-        # "4 ANO C INTEGRAL (300303525)") que são a MESMA sala — sem isto, os
-        # cadastros do mesmo aluno nunca eram sequer comparados.
-        return chave_turma_norm(turma_de[x.id][1]) == chave_turma_norm(turma_de[y.id][1])
+        return chave_de[x.id] == chave_de[y.id]
 
     pares: list[tuple[Aluno, Aluno, str, str, str]] = []
-    for primeiro, grupo in grupos.items():
-        if not primeiro or len(grupo) < 2:
+    for (letra, _turma), grupo in grupos.items():
+        if not letra or len(grupo) < 2:
             continue
         # Titular de cada NOME (conjunto de tokens) = o da LISTA PILOTO (perfil
         # principal); sem piloto, o de MENOR id (mais antigo).

@@ -423,6 +423,38 @@ def test_sem_ancora_na_lista_nao_vira_provavel_nem_alta(cliente, db, escola_comp
     assert pares[0]["confianca"] == "revisar"
 
 
+def test_detecta_inicial_no_primeiro_nome(cliente, db, escola_completa):
+    """Passivo com inicial no PRIMEIRO nome: 'M. EDUARDA' (plataforma) e 'MARIA
+    EDUARDA SILVA' (Lista Piloto) na mesma turma. Antes caíam em baldes diferentes
+    ('m' vs 'maria') e NUNCA eram comparados; agrupando pela 1ª LETRA, a duplicata
+    aparece, com o piloto como survivor."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    maria = _add_aluno(db, escola_id, "MARIA EDUARDA SILVA", turma_id)
+    maria.da_lista_piloto = True
+    db.commit()
+    stub = _add_aluno(db, escola_id, "M. EDUARDA", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    pares = [c for c in corpo["candidatos"] if c["apagar"] == "M. EDUARDA"]
+    assert len(pares) == 1
+    assert pares[0]["manter_id"] == maria.id and pares[0]["loser_id"] == stub.id
+
+
+def test_inicial_ambigua_no_primeiro_nome_nao_sugere(cliente, db, escola_completa):
+    """'M. EDUARDA' com DUAS candidatas (Maria Eduarda e Marina Eduarda) → ambíguo
+    → não sugere (nunca cola no aluno errado)."""
+    escola_id = escola_completa["escola"].id
+    turma_id = escola_completa["turma"].id
+    _add_aluno(db, escola_id, "MARIA EDUARDA SILVA", turma_id)
+    _add_aluno(db, escola_id, "MARINA EDUARDA SOUZA", turma_id)
+    db.commit()
+    _add_aluno(db, escola_id, "M. EDUARDA", turma_id)
+
+    corpo = _duplicados(cliente, escola_id)
+    assert [c for c in corpo["candidatos"] if c["apagar"] == "M. EDUARDA"] == []
+
+
 def test_stub_truncado_identico_ao_piloto_fica_revisar(cliente, db, escola_completa):
     """Guarda do nome COMPLETO: um stub truncado 'ANA B' idêntico a um 'ANA B' da
     Lista Piloto NÃO vira 'alta' (dois 'ANA B' podem ser Ana Beatriz × Ana Bianca).

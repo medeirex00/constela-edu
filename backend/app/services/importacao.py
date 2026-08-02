@@ -844,7 +844,15 @@ def tokens_turma(texto: str) -> set[str]:
 
 
 def tokens_nome(nome: str) -> list[str]:
-    return [t for t in normalizar_nome(nome or "").split() if t]
+    """Tokens normalizados, SEM pontuação por token: "M. EDUARDA" → ["m","eduarda"]
+    (o ponto da inicial abreviada não pode virar parte do token, senão "m." nunca
+    casaria o prefixo de "maria")."""
+    saida: list[str] = []
+    for t in normalizar_nome(nome or "").split():
+        limpo = "".join(c for c in t if c.isalnum())
+        if limpo:
+            saida.append(limpo)
+    return saida
 
 
 def casa_abreviado_posicional(antigo: list[str], completo: list[str]) -> bool:
@@ -873,6 +881,37 @@ def casa_abreviado_posicional(antigo: list[str], completo: list[str]) -> bool:
         elif tok != completo[i]:              # token cheio: idêntico por posição
             return False
     return len(completo) > len(antigo) or len(antigo[-1]) == 1
+
+
+def casa_abreviado(curto: list[str], longo: list[str]) -> bool:
+    """`curto` é uma abreviação POSICIONAL de `longo` (mesma pessoa)? Generaliza
+    ``casa_abreviado_posicional`` para os casos que faltavam na spec do dono:
+      • inicial no PRIMEIRO nome ("M. EDUARDA" → "MARIA EDUARDA SILVA");
+      • truncamento de token cheio ("MARIA EDU" → "MARIA EDUARDA …");
+      • inicial em qualquer posição ("ABRAAO L" → "ABRAÃO LUÍS DIAS").
+    Continua POSICIONAL (curto[i] alinha com longo[i]) — nunca subsequência solta —
+    e exige uma ÂNCORA: pelo menos um token cheio IDÊNTICO por posição. Sem âncora
+    ("M S" → "MARIA SILVA", só iniciais) NÃO casa: seria loose demais e casaria
+    crianças diferentes. `longo` precisa ser mais informativo (nome idêntico segue
+    pelo caminho exato)."""
+    if len(curto) < 2 or len(curto) > len(longo):
+        return False
+    cheios_iguais = 0                             # âncora: token cheio idêntico
+    abreviados = 0                                # inicial ou truncamento (abreviação real)
+    for i in range(len(curto)):
+        c, l = curto[i], longo[i]
+        if c == l:
+            cheios_iguais += 1
+        elif l.startswith(c):                     # inicial (1 char) OU truncamento (>=2)
+            abreviados += 1
+        else:
+            return False
+    # Precisa de ÂNCORA (>=1 token cheio idêntico) E de ao menos UMA abreviação real.
+    # Um PREFIXO puro de tokens cheios ("JOAO SANTOS" ⊂ "JOAO SANTOS OLIVEIRA") NÃO é
+    # abreviação — é nome parcial; sem `abreviados>=1` ele cai no ramo de subconjunto
+    # (→ "media"/revisão), nunca em auto-vínculo (o dono real do sobrenome que falta
+    # pode estar fora do roster).
+    return cheios_iguais >= 1 and abreviados >= 1
 
 
 def variante_ortografica(a_tokens: list[str], b_tokens: list[str]) -> bool:
