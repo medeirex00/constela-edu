@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import ModalAlunosDuplicados from "../components/ModalAlunosDuplicados";
-import { renderComApp, responder, screen, userEvent } from "./utils";
+import { ApiError, renderComApp, responder, screen, userEvent } from "./utils";
 
 const URL_PREVIA = "/escolas/1/alunos/duplicados";
 const URL_CORRIGIR = "/escolas/1/alunos/duplicados/corrigir";
@@ -146,5 +146,69 @@ describe("ModalAlunosDuplicados", () => {
     const desmarcar = screen.getAllByRole("button", { name: /Desmarcar todos/ });
     await u.click(desmarcar[desmarcar.length - 1]);
     expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(false);
+  });
+
+  const imp = {
+    leituras: 0, snapshots_matific: 1, snapshots_elefante: 0,
+    eventos: 0, notas: 0, plataformas: ["matific"],
+  };
+  const alta = (loser_id: number, manter_id: number, nome: string) => ({
+    loser_id, manter_id, apagar: nome, manter: `${nome} Completo`,
+    turma: "4º C", confianca: "alta", motivo: "nome_identico", impacto: imp,
+  });
+
+  it("envia em lotes de TAM_LOTE sem partir um leque e soma os resultados", async () => {
+    // 19 pares independentes + 1 LEQUE (dois losers → o MESMO manter) = 21 alta.
+    const independentes = Array.from({ length: 19 }, (_, i) =>
+      alta(100 + i, 500 + i, `Aluno${i}`));
+    const leque = [alta(300, 400, "Gemeo A"), alta(301, 400, "Gemeo B")];
+    responder("GET", URL_PREVIA, {
+      total: 21, alta: 21, provavel: 0, revisar: 0,
+      candidatos: [...independentes, ...leque],
+    });
+    const posts: number[][] = [];
+    responder("POST", URL_CORRIGIR, (_c, opcoes) => {
+      const body = JSON.parse((opcoes as RequestInit).body as string);
+      posts.push(body.loser_ids);
+      return { fundidos: body.loser_ids.length, falhas: [], mensagem: "" };
+    });
+
+    const u = userEvent.setup();
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    await u.click(await screen.findByRole("button", { name: /Unir 21 selecionada/ }));
+    await u.click(screen.getByRole("button", { name: /Confirmar fusão/ }));
+
+    expect(await screen.findByText(/21 aluno\(s\) unificado/)).toBeInTheDocument();
+    // Dois POSTs: o 1º com 19, o 2º com o leque INTEIRO (nunca partido no meio).
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toHaveLength(19);
+    expect([...posts[1]].sort((a, b) => a - b)).toEqual([300, 301]);
+  });
+
+  it("falha no meio → reporta o parcial já salvo (não perde o que entrou)", async () => {
+    const candidatos = Array.from({ length: 45 }, (_, i) =>
+      alta(1 + i, 1000 + i, `Aluno${i}`));   // 45 independentes → lotes de 20/20/5
+    responder("GET", URL_PREVIA, {
+      total: 45, alta: 45, provavel: 0, revisar: 0, candidatos,
+    });
+    let chamada = 0;
+    responder("POST", URL_CORRIGIR, (_c, opcoes) => {
+      chamada += 1;
+      if (chamada === 2) return new ApiError(500, "Servidor caiu");   // 2º lote falha
+      const body = JSON.parse((opcoes as RequestInit).body as string);
+      return { fundidos: body.loser_ids.length, falhas: [], mensagem: "" };
+    });
+
+    const u = userEvent.setup();
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    await u.click(await screen.findByRole("button", { name: /Unir 45 selecionada/ }));
+    await u.click(screen.getByRole("button", { name: /Confirmar fusão/ }));
+
+    // O 1º lote (20) commitou antes da falha: o parcial é reportado, não perdido.
+    expect(await screen.findByText(/20 já foram unidas/)).toBeInTheDocument();
   });
 });

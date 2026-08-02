@@ -54,6 +54,11 @@ const NOME_PLATAFORMA: Record<string, string> = {
   elefante: "Elefante Letrado",
 };
 
+// Fusões por requisição. Fundir centenas num único POST estourava o tempo do
+// gateway; lotes pequenos que commitam sozinhos evitam o timeout e salvam o
+// progresso mesmo se a conexão cair no meio.
+const TAM_LOTE = 20;
+
 /** Resumo do que será movido do duplicado para o principal. */
 function resumoImpacto(i: Impacto): string {
   const partes: string[] = [];
@@ -85,6 +90,7 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   const [confirmando, setConfirmando] = useState(false);
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
+  const [progresso, setProgresso] = useState<{ feitos: number; total: number } | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -126,24 +132,90 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
     });
   }
 
+  /** Agrupa os loser_ids selecionados em COMPONENTES conexos (un par liga seu
+   *  loser ao seu manter). Fundir 300+ num único POST estourava o tempo do
+   *  gateway ("Não foi possível conectar") — então enviamos em lotes pequenos que
+   *  commitam sozinhos. Mas um lote NUNCA pode partir uma cadeia/leque: a proteção
+   *  de cadeia do servidor (recusa A→B→C) só funciona se ele vir o componente
+   *  inteiro num mesmo POST. Por isso o corte é por componente, nunca no meio. */
+  function lotesPorComponente(tam: number): number[][] {
+    const porLoser = new Map((previa?.candidatos ?? []).map((c) => [c.loser_id, c]));
+    const pai = new Map<number, number>();
+    const raiz = (x: number): number => {
+      let r = x;
+      while (pai.get(r) !== r) r = pai.get(r) as number;
+      return r;
+    };
+    const unir = (a: number, b: number) => {
+      if (!pai.has(a)) pai.set(a, a);
+      if (!pai.has(b)) pai.set(b, b);
+      pai.set(raiz(a), raiz(b));
+    };
+    const sel = [...selecionados].filter((id) => porLoser.has(id));
+    for (const id of sel) {
+      const c = porLoser.get(id) as CandidatoAluno;
+      unir(c.loser_id, c.manter_id);   // liga loser↔manter (cadeia e leque)
+    }
+    const porRaiz = new Map<number, number[]>();
+    for (const id of sel) {
+      const r = raiz(id);
+      (porRaiz.get(r) ?? porRaiz.set(r, []).get(r)!).push(id);
+    }
+    // Empacota COMPONENTES inteiros em lotes de até `tam` (um componente maior que
+    // `tam` — raro, um leque grande — vai sozinho, sem ser partido).
+    const lotes: number[][] = [];
+    let atual: number[] = [];
+    for (const comp of porRaiz.values()) {
+      if (atual.length && atual.length + comp.length > tam) {
+        lotes.push(atual);
+        atual = [];
+      }
+      atual.push(...comp);
+    }
+    if (atual.length) lotes.push(atual);
+    return lotes;
+  }
+
   async function fundir() {
     setOcupado(true);
     setErro("");
+    const lotes = lotesPorComponente(TAM_LOTE);
+    const total = lotes.reduce((n, l) => n + l.length, 0);
+    let fundidos = 0;
+    const falhas: ResultadoFusao["falhas"] = [];
+    let feitos = 0;
+    setProgresso({ feitos: 0, total });
     try {
-      const r = await api<ResultadoFusao>(
-        `/escolas/${escolaId}/alunos/duplicados/corrigir`,
-        {
-          method: "POST",
-          body: JSON.stringify({ loser_ids: [...selecionados], confirmacao: "FUNDIR" }),
-        },
-      );
-      setResultado(r);
+      for (const lote of lotes) {
+        const r = await api<ResultadoFusao>(
+          `/escolas/${escolaId}/alunos/duplicados/corrigir`,
+          {
+            method: "POST",
+            body: JSON.stringify({ loser_ids: lote, confirmacao: "FUNDIR" }),
+          },
+        );
+        fundidos += r.fundidos;
+        falhas.push(...r.falhas);
+        feitos += lote.length;
+        setProgresso({ feitos, total });
+      }
+      setResultado({
+        fundidos, falhas,
+        mensagem: `${fundidos} fusão(ões) aplicada(s).`,
+      });
       aoConcluir();   // recarrega a lista de alunos por trás
     } catch (e) {
-      setErro(e instanceof ApiError ? e.message : "Não foi possível fundir.");
+      // Cada lote commita sozinho: o que já entrou está SALVO. Reporta o parcial e
+      // orienta a recarregar e continuar (a detecção reencontra só o que sobrou).
+      const base = e instanceof ApiError ? e.message : "Não foi possível fundir.";
+      setErro(fundidos > 0
+        ? `${base} Mas ${fundidos} já foram unidas com sucesso — feche, recarregue a tela e repita para o restante.`
+        : `${base} Nenhuma foi unida. Tente de novo (a tela envia em lotes menores agora).`);
       setConfirmando(false);
+      if (fundidos > 0) aoConcluir();
     } finally {
       setOcupado(false);
+      setProgresso(null);
     }
   }
 
@@ -341,14 +413,37 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                   Isto vai fundir <strong>{selecionados.size}</strong> par(es) de cadastros
                   num único aluno cada. Os dados são consolidados no principal.
                   <strong> Esta ação é irreversível.</strong>
+                  {selecionados.size > TAM_LOTE && (
+                    <span className="mt-1 block text-xs font-normal">
+                      Vou enviar em lotes de {TAM_LOTE} para não travar — pode levar alguns
+                      segundos. Não feche a janela.
+                    </span>
+                  )}
                 </span>
               </p>
+              {ocupado && progresso && (
+                <div className="mt-3">
+                  <div className="mb-1 flex justify-between text-xs text-red-700 dark:text-red-300">
+                    <span>Unindo…</span>
+                    <span>{progresso.feitos} de {progresso.total}</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-red-200 dark:bg-red-500/20">
+                    <div
+                      className="h-full rounded-full bg-red-600 transition-all"
+                      style={{ width: `${progresso.total ? (progresso.feitos / progresso.total) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
               <div className="mt-3 flex justify-end gap-2">
                 <Botao variante="neutro" onClick={() => setConfirmando(false)} disabled={ocupado}>
                   Voltar
                 </Botao>
                 <Botao className="!bg-red-600 hover:!bg-red-500" onClick={fundir} disabled={ocupado}>
-                  <UsersRound size={15} /> {ocupado ? "Fundindo..." : "Confirmar fusão"}
+                  <UsersRound size={15} />{" "}
+                  {ocupado
+                    ? (progresso ? `Unindo ${progresso.feitos}/${progresso.total}…` : "Fundindo…")
+                    : "Confirmar fusão"}
                 </Botao>
               </div>
             </div>
