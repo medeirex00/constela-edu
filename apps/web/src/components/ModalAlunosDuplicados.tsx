@@ -153,26 +153,67 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   const contaProvavel = conta("provavel");
   const contaRevisar = conta("revisar");
 
-  const grupos: { chave: Confianca; rotulo: string; dica: string; itens: CandidatoAluno[] }[] = [
+  // Grupos gerados dinamicamente. A faixa 🔴 "revisar" é SUB-DIVIDIDA por motivo
+  // só para ORGANIZAR a leitura (casos parecidos juntos) — mas SEM "Selecionar
+  // todos": cada par 🔴 exige decisão individual (o backend diz que a semelhança
+  // de nome "não distingue LUÍS/LUIZ de MARIA/MARTA — só um humano decide"). O
+  // atalho de lote (`lote: true`) fica só em 🟢 (já marcada) e 🟡 (ancorada num
+  // único aluno da Lista Piloto). Nada 🔴 vem pré-marcado. O último filtro é um
+  // CATCH-ALL: garante que nenhum "revisar" de motivo novo/desconhecido suma da
+  // tela. Isto é só apresentação: não muda o que o backend sugere.
+  const cands = previa?.candidatos ?? [];
+  const MOTIVOS_REV = ["variante", "nome_identico", "subconjunto", "abreviacao"];
+  const especifica: {
+    chave: string; rotulo: string; dica: string; lote: boolean;
+    filtro: (c: CandidatoAluno) => boolean;
+  }[] = [
     {
       chave: "alta",
       rotulo: "🟢 Alta confiança — versão de plataforma do mesmo aluno",
       dica: "Já vêm marcadas. É a ficha do Matific/Elefante do mesmo aluno da sua lista.",
-      itens: previa?.candidatos.filter((c) => c.confianca === "alta") ?? [],
+      lote: true,
+      filtro: (c) => c.confianca === "alta",
     },
     {
       chave: "provavel",
       rotulo: "🟡 Provável — abreviação de um aluno da sua lista",
-      dica: "Use “Selecionar todos” para unir o grupo de uma vez — confira antes se sua Lista Piloto está completa.",
-      itens: previa?.candidatos.filter((c) => c.confianca === "provavel") ?? [],
+      dica: "O jeito rápido: clique em “Selecionar todos” e una o grupo de uma vez (confira antes se sua Lista Piloto está completa).",
+      lote: true,
+      filtro: (c) => c.confianca === "provavel",
     },
     {
-      chave: "revisar",
-      rotulo: "🔴 Revisar uma a uma — pode ser outra criança",
-      dica: "Nomes parecidos ou gêmeos. Marque só as que você confirma serem a mesma criança.",
-      itens: previa?.candidatos.filter((c) => c.confianca === "revisar") ?? [],
+      chave: "rev-variante",
+      rotulo: "🔴 Variação de grafia — confira par a par",
+      dica: "São os MAIS arriscados: “LUÍS/LUIZ” é a mesma criança, mas “MARIA/MARTA” são crianças diferentes e se parecem igual. Leia cada par e marque só os que você confirma serem a mesma pessoa.",
+      lote: false,
+      filtro: (c) => c.confianca === "revisar" && c.motivo === "variante",
+    },
+    {
+      chave: "rev-identico",
+      rotulo: "🔴 Nome idêntico — pode ser gêmeo/homônimo",
+      dica: "Mesmo nome exato, sem nascimento para corroborar. Confira nº de chamada/nascimento e marque só os confirmados.",
+      lote: false,
+      filtro: (c) => c.confianca === "revisar" && c.motivo === "nome_identico",
+    },
+    {
+      chave: "rev-abreviacao",
+      rotulo: "🔴 Abreviação sem correspondência na sua lista",
+      dica: "Um nome curto que não achei na Lista Piloto. Confira quem é o cadastro certo e marque só os confirmados.",
+      lote: false,
+      filtro: (c) => c.confianca === "revisar"
+        && (c.motivo === "subconjunto" || c.motivo === "abreviacao"),
+    },
+    {
+      chave: "rev-outros",
+      rotulo: "🔴 Outros — conferir um a um",
+      dica: "Casos que não se encaixam nas categorias acima. Confira cada par antes de marcar.",
+      lote: false,
+      filtro: (c) => c.confianca === "revisar" && !MOTIVOS_REV.includes(c.motivo),
     },
   ];
+  const grupos = especifica
+    .map((g) => ({ ...g, itens: cands.filter(g.filtro) }))
+    .filter((g) => g.itens.length > 0);
 
   return (
     <Modal titulo="Fundir duplicatas de alunos" aberto aoFechar={aoFechar}>
@@ -204,14 +245,25 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
         // --- Prévia + confirmação ---
         <>
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
-            Encontrei <strong>{previa?.total}</strong> possível(is) duplicata(s).
-            Você <strong>não precisa</strong> olhar uma a uma: as 🟢 <strong>{contaAlta}</strong> de
-            alta confiança já vêm marcadas, as 🟡 <strong>{contaProvavel}</strong> prováveis
-            você une em lote com um clique em “Selecionar todos”, e só as 🔴{" "}
-            <strong>{contaRevisar}</strong> pedem conferência uma a uma. Ao unir, mantenho o
-            cadastro principal e junto nele todos os dados (Matific, Elefante, leituras,
-            histórico), sem perder nada.
+            Encontrei <strong>{previa?.total}</strong> possível(is) duplicata(s).{" "}
+            {contaAlta > 0 && (
+              <>As 🟢 <strong>{contaAlta}</strong> de alta confiança já vêm marcadas. </>
+            )}
+            As 🟡 <strong>{contaProvavel}</strong> prováveis você une <strong>em lote</strong>{" "}
+            com um clique em “Selecionar todos” — é o seu atalho grande. As 🔴{" "}
+            <strong>{contaRevisar}</strong> você <strong>confere par a par</strong> (organizei
+            por tipo pra ficar mais rápido de ler). Ao unir, mantenho o cadastro principal e
+            junto nele todos os dados (Matific, Elefante, leituras, histórico), sem perder nada.
           </p>
+          {contaAlta === 0 && contaProvavel > 0 && (
+            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+              🟢 está vazia porque nada foi pré-marcado com segurança suficiente: o
+              Matific/Elefante costumam guardar o nome <strong>abreviado</strong> (“ANA J”,
+              “ABRAAO L”) e não trazem data de nascimento — e eu só pré-marco quando há um nome
+              completo idêntico <em>ou</em> nascimento igual para corroborar. No seu caso, os
+              pares seguros caem todos na 🟡 (abreviação que bate com um único aluno da lista).
+            </p>
+          )}
 
           <div className="mt-3 max-h-72 space-y-3 overflow-y-auto pr-1">
             {grupos.filter((g) => g.itens.length > 0).map((grupo) => {
@@ -226,13 +278,15 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                     </p>
                     <p className="text-xs text-zinc-400 dark:text-zinc-500">{grupo.dica}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => marcarVarios(ids, !todosMarcados)}
-                    className="shrink-0 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                  >
-                    {todosMarcados ? "Desmarcar todos" : "Selecionar todos"}
-                  </button>
+                  {grupo.lote && (
+                    <button
+                      type="button"
+                      onClick={() => marcarVarios(ids, !todosMarcados)}
+                      className="shrink-0 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      {todosMarcados ? "Desmarcar todos" : "Selecionar todos"}
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   {grupo.itens.map((c) => {

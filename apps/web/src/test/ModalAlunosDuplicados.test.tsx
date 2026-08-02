@@ -92,6 +92,41 @@ describe("ModalAlunosDuplicados", () => {
     expect([...enviado!.loser_ids].sort()).toEqual([10, 20]);
   });
 
+  it("sub-divide a faixa 🔴 por motivo, SEM 'Selecionar todos' (par a par)", async () => {
+    const imp = {
+      leituras: 0, snapshots_matific: 1, snapshots_elefante: 0,
+      eventos: 0, notas: 0, plataformas: ["matific"],
+    };
+    responder("GET", URL_PREVIA, {
+      total: 4, alta: 0, provavel: 0, revisar: 4,
+      candidatos: [
+        { loser_id: 1, manter_id: 2, apagar: "Luiz Dias", manter: "Luís Dias",
+          turma: "4º C", confianca: "revisar", motivo: "variante", impacto: imp },
+        { loser_id: 3, manter_id: 4, apagar: "Bruno Alves", manter: "Bruno Alves",
+          turma: "4º C", confianca: "revisar", motivo: "nome_identico", impacto: imp },
+        { loser_id: 5, manter_id: 6, apagar: "Ana B", manter: "Ana Beatriz",
+          turma: "4º C", confianca: "revisar", motivo: "abreviacao", impacto: imp },
+        // motivo desconhecido → cai no CATCH-ALL "Outros" (não pode sumir da tela).
+        { loser_id: 7, manter_id: 8, apagar: "Caio X", manter: "Caio Y",
+          turma: "4º C", confianca: "revisar", motivo: "futuro_desconhecido", impacto: imp },
+      ],
+    });
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    // Cada motivo em seu sub-grupo — incluindo o catch-all "Outros".
+    expect(await screen.findByText(/Variação de grafia/)).toBeInTheDocument();
+    expect(screen.getByText(/Nome idêntico/)).toBeInTheDocument();
+    expect(screen.getByText(/Abreviação sem correspondência/)).toBeInTheDocument();
+    expect(screen.getByText(/Outros — conferir um a um/)).toBeInTheDocument();
+    // O motivo desconhecido NÃO some: seus 4 pares aparecem, um checkbox cada.
+    const caixas = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    expect(caixas).toHaveLength(4);
+    expect(caixas.every((c) => !c.checked)).toBe(true);
+    // Faixas 🔴 NÃO têm atalho de lote — decisão par a par (regra de segurança).
+    expect(screen.queryByRole("button", { name: /Selecionar todos/ })).toBeNull();
+  });
+
   it("'Selecionar todos' une a faixa 🟡 provável num clique", async () => {
     responder("GET", URL_PREVIA, previa());
     const u = userEvent.setup();
