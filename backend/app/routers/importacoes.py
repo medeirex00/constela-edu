@@ -395,20 +395,31 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
 
 
 def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
-                              turma_id: int, nome: str) -> Aluno | None:
+                              turma_id: int, nome: str, numero_chamada: int | None = None,
+                              nascimento=None, ra: str | None = None) -> Aluno | None:
     """Aluno já matriculado nesta turma/ano cujo nome normalizado casa. Torna o
     /confirmar idempotente sob a trava por escola: um reenvio sobreposto do MESMO
     relatório (double-click, retry de proxy/mobile) reaproveita em vez de recriar
     — alunos não têm unique constraint (dois homônimos reais são legítimos), então
-    a defesa é este re-casamento contra o banco (mesma filosofia do /matriculas)."""
+    a defesa é este re-casamento contra o banco (mesma filosofia do /matriculas).
+    VETO de identidade: se o cadastro de mesmo nome tem nascimento/RA/nº de chamada
+    DIVERGENTE da linha, é OUTRA criança (gêmeo/homônimo) — não reusa (senão o caso
+    "conflito de identidade" cairia num vínculo silencioso pelo nome exato)."""
     alvo = svc.normalizar_nome(nome)
+    linha_ident = matching.Identidade(chamada=numero_chamada, nascimento=nascimento,
+                                      ra=ra or "")
     for aluno in db.execute(
         select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
         .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
                Matricula.ano_letivo == ano)
     ).scalars():
-        if svc.normalizar_nome(aluno.nome) == alvo:
-            return aluno
+        if svc.normalizar_nome(aluno.nome) != alvo:
+            continue
+        if matching.conflito_identidade(linha_ident, matching.Identidade(
+                chamada=aluno.numero_chamada, nascimento=aluno.data_nascimento,
+                ra=str((aluno.ficha or {}).get("ra", "")))):
+            continue                  # mesmo nome, identidade prova ser outra criança
+        return aluno
     return None
 
 
@@ -496,14 +507,26 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                                  avisos, turmas_novas if turmas_novas is not None else {})
 
     if turma is not None:
+        # Identidade da linha (chamada/RA/nascimento) — usada tanto no guard de
+        # idempotência quanto no casamento do roster (veto de identidade coeso).
+        dados = getattr(linha, "dados", None) or {}
+        chamada = getattr(linha, "numero_chamada", None)
+        if chamada is None:
+            bruto = str(dados.get("numero_chamada") or dados.get("chamada") or "").strip()
+            chamada = int(bruto) if bruto.isdigit() else None
+        ra_linha = str(dados.get("ra") or "").strip() or None
+        nasc_linha = _data_iso(dados.get("data_nascimento") or dados.get("nascimento"))
         # Cria o aluno UMA vez por (nome, turma): no relatório individual há
         # centenas de linhas (uma por livro) para o mesmo aluno — sem isto,
         # cada livro criaria um aluno duplicado.
         chave = (svc.normalizar_nome(linha.nome), turma.id)
         if criados is not None and chave in criados:
             return criados[chave]
-        # Reaproveita quem já está na turma (idempotência sob a trava por escola).
-        existente = _aluno_existente_na_turma(db, escola_id, ano, turma.id, linha.nome)
+        # Reaproveita quem já está na turma (idempotência), MAS não reusa um cadastro
+        # de mesmo nome cuja identidade (nascimento/RA/chamada) prova ser outra
+        # criança — senão o caso de CONFLITO viraria vínculo silencioso pelo nome.
+        existente = _aluno_existente_na_turma(db, escola_id, ano, turma.id, linha.nome,
+                                              chamada, nasc_linha, ra_linha)
         if existente is not None:
             if criados is not None:
                 criados[chave] = existente
@@ -512,13 +535,6 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         # ortográfica). É o que evita os 3 "ABRAÃO" — Elefante/Matific vinculam ao
         # aluno da Lista Piloto em vez de criar um novo. Alta vincula; média
         # (ambíguo) NÃO cria (fica para revisão, nunca funde nomes parecidos).
-        dados = getattr(linha, "dados", None) or {}
-        chamada = getattr(linha, "numero_chamada", None)
-        if chamada is None:
-            bruto = str(dados.get("numero_chamada") or dados.get("chamada") or "").strip()
-            chamada = int(bruto) if bruto.isdigit() else None
-        ra_linha = str(dados.get("ra") or "").strip() or None
-        nasc_linha = _data_iso(dados.get("data_nascimento") or dados.get("nascimento"))
         casado, confianca = _casar_no_roster(db, escola_id, ano, linha.nome, turma,
                                              chamada, nasc_linha, ra_linha)
         if confianca == "alta" and casado is not None:

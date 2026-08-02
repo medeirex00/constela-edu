@@ -1155,7 +1155,7 @@ def _prever_pelo_motor(db: Session, escola_id: int,
     for linha in linhas:
         corr = linha.correspondencia or {}
         entrada = corr.get("status")
-        if entrada not in ("nao_encontrado", "provavel"):
+        if entrada not in ("nao_encontrado", "provavel", "exato"):
             continue
         chave = chave_turma_norm(str(linha.dados.get("turma_relatorio") or ""))
         roster = roster_por_turma.get(chave)
@@ -1163,7 +1163,7 @@ def _prever_pelo_motor(db: Session, escola_id: int,
             # Sem roster da turma o motor não pode confirmar nada. Um "provavel" da
             # busca DIFUSA (similaridade de string, cega a homônimo em outra turma)
             # NÃO pode ficar pré-selecionado → rebaixa para "revisar" (o gestor
-            # decide). "nao_encontrado" fica como está (cria).
+            # decide). "nao_encontrado"/"exato" ficam como estão.
             if entrada == "provavel":
                 linha.correspondencia = {**corr, "status": "revisar"}
             continue
@@ -1179,6 +1179,15 @@ def _prever_pelo_motor(db: Session, escola_id: int,
         alvo = por_id_local.get(res.aluno_id)
         alts = [{"aluno_id": cid, "nome": por_id_local[cid].nome, "similaridade": 90.0}
                 for cid in res.candidatos if cid in por_id_local]
+        if entrada == "exato":
+            # Nome EXATO só é REBAIXADO por CONFLITO de identidade comprovado
+            # (nascimento/RA/chamada divergente com o aluno da turma) → "bloqueado".
+            # Sem conflito, mantém "exato" (não desfaz o casamento por nome exato nem
+            # o rótulo de turma ruidoso do relatório individual do Elefante).
+            if res.status == matching.BLOQUEADO:
+                linha.correspondencia = {"status": "bloqueado",
+                                         "alternativas": corr.get("alternativas", [])}
+            continue
         # PRÉVIA = CONFIRMAÇÃO: o mesmo motor turma-scoped que o confirmar roda. O
         # veredito vale para nao_encontrado E provavel (o "candidato" da busca difusa
         # é irrelevante — o que importa é o roster da TURMA reportada, a chave do dono).
