@@ -28,6 +28,7 @@ const Professores = lazy(() =>
 const Livros = lazy(() => import("./pages/Livros"));
 const Login = lazy(() => import("./pages/Login"));
 const Matific = lazy(() => import("./pages/Matific"));
+const MinhaConta = lazy(() => import("./pages/MinhaConta"));
 const PainelPublicoConfig = lazy(() => import("./pages/PainelPublicoConfig"));
 const PerfilAluno = lazy(() => import("./pages/PerfilAluno"));
 const Premiacoes = lazy(() => import("./pages/Premiacoes"));
@@ -149,6 +150,10 @@ export default function App() {
           <Route path="/relatorios" element={<Relatorios />} />
           {/* Usuários: professor entra mas o backend só devolve a própria conta. */}
           <Route path="/usuarios" element={<Usuarios />} />
+          {/* Minha conta (autoatendimento): QUALQUER autenticado vê a própria
+              conta (reusa /auth/me). Sem guard de gestão — é o caminho da
+              Secretaria/professor para os próprios dados, sem tocar /usuarios. */}
+          <Route path="/minha-conta" element={<MinhaConta />} />
 
           {/* --- Secretaria (rede) ou admin global: painel municipal + mapa --- */}
           <Route path="/rede" element={<RotaRede><RedeDashboard /></RotaRede>} />

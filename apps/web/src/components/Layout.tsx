@@ -925,18 +925,13 @@ function rotuloPerfil(u: { is_global?: boolean; rede_id?: number | null; cargo?:
 }
 
 /** Menu do usuário (avatar → conta + sair). Reúne identidade, atalho para a
- *  própria conta e logout num só lugar (PRD §11). Para o PROFESSOR é o único
- *  caminho até /usuarios (a própria conta), já que essa tela saiu da sidebar
- *  dele — o backend sempre limita o que cada papel enxerga em /usuarios. */
+ *  própria conta e logout num só lugar (PRD §11). O atalho aponta para
+ *  /minha-conta (autoatendimento, reusa /auth/me) — funciona para QUALQUER
+ *  perfil, inclusive a Secretaria, que não tem escola e não abre /usuarios. */
 function MenuUsuario() {
   const { usuario, sair } = useApp();
   const [aberto, setAberto] = useState(false);
   const caixa = useRef<HTMLDivElement | null>(null);
-  const gestor = Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
-  // Admin/coordenador gerenciam a lista de usuários; professor/secretaria veem
-  // só a própria conta (o backend filtra) — daí o rótulo diferente.
-  const rotuloConta = gestor && !secretaria ? "Usuários e acessos" : "Minha conta";
 
   useEffect(() => {
     function fechar(evento: MouseEvent) {
@@ -977,14 +972,17 @@ function MenuUsuario() {
             <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{rotuloPerfil(usuario)}</p>
           </div>
           <div className="p-1">
+            {/* Autoatendimento: SÓ a própria conta (/minha-conta, reusa /auth/me),
+                para qualquer perfil — inclusive Secretaria. A GESTÃO de usuários
+                (/usuarios) segue na sidebar, exclusiva de coordenador/admin. */}
             <NavLink
-              to="/usuarios"
+              to="/minha-conta"
               role="menuitem"
               onClick={() => setAberto(false)}
               className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
               <UserCog size={16} className="shrink-0 text-zinc-400" />
-              <span className="truncate">{rotuloConta}</span>
+              <span className="truncate">Minha conta</span>
             </NavLink>
             <button
               type="button"
