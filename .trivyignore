@@ -37,3 +37,24 @@ CVE-2026-54283
 # no pip-audit. Baixo risco no nosso uso: assinamos JWT com HS256 (não RSA/ECDSA),
 # então o caminho de decodificação ASN.1 vulnerável não é exercido.
 CVE-2026-30922
+
+# --- node-tar (transitivo da ÁRVORE DO EXPO: @expo/cli -> tar@6.2.1) ---
+# Path traversal / arbitrary file write. É ferramenta de BUILD do app MOBILE — NÃO
+# vai para o web nem para o backend de produção (constelaedu.com). O fix é o
+# node-tar 7.x, que exige o upgrade MAJOR do Expo SDK (52->57), quebrante,
+# conduzido pelo Dependabot — a MESMA política das HIGH do Expo já aceitas em
+# security.yml (npm audit). Nas builds do @expo/cli os tars vêm do CDN oficial do
+# Expo (confiáveis), então o vetor (extrair um tar malicioso) não se aplica.
+# IDs em CVE e GHSA para casar com qualquer forma que o Trivy reporte.
+CVE-2026-24842
+CVE-2026-23745
+CVE-2026-26960
+CVE-2026-29786
+CVE-2026-31802
+CVE-2026-23950
+GHSA-34x7-hfp2-rc4v
+GHSA-8qq5-rm4j-mr97
+GHSA-83g3-92jg-28cx
+GHSA-qffp-2rhf-9h96
+GHSA-9ppj-qmqm-q256
+GHSA-r6q2-hw4h-h46w

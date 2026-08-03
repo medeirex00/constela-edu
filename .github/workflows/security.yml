@@ -9,11 +9,13 @@
 #   - pip-audit: reprova em QUALQUER vulnerabilidade das dependências Python de
 #     runtime, exceto uma allowlist explícita e justificada (frameworks que fixam
 #     a versão, ou CVEs sem correção). É o gate Python mais estrito.
-#   - npm audit: reprova em CRITICAL (produção) e REPORTA high/moderate. HIGH NÃO
-#     bloqueia DE PROPÓSITO: as HIGH de hoje estão TODAS na árvore do Expo (tar,
-#     @xmldom/xmldom, @expo/cli…) e a maioria só se corrige com o upgrade MAJOR do
-#     Expo (52→57, `npm audit fix --force`) — bloquear reprovaria todo build sem
-#     uma correção não-quebrante. O Dependabot conduz o upgrade coordenado do SDK.
+#   - npm audit: reprova em CRITICAL de produção, EXCETO o node-tar da árvore do
+#     Expo (allowlist explícito no step, por ID de pacote). HIGH NÃO bloqueia DE
+#     PROPÓSITO: as HIGH de hoje estão TODAS na árvore do Expo (tar, @xmldom/xmldom,
+#     @expo/cli…) e só se corrigem com o upgrade MAJOR do Expo (52→57,
+#     `npm audit fix --force`) — bloquear reprovaria todo build sem correção não-
+#     quebrante. O node-tar virou CRITICAL (mesma árvore, mesmo fix major), então
+#     entra no mesmo allowlist. O Dependabot conduz o upgrade coordenado do SDK.
 #   - Trivy IMAGENS (backend + web = artefatos de produção, com dados de
 #     crianças): reprova em HIGH+CRITICAL COM correção disponível
 #     (--ignore-unfixed). Só falha quando há patch a aplicar (rebuild da base) —
@@ -75,8 +77,19 @@ jobs:
           cache: npm
       - name: Instalar workspaces
         run: npm ci --no-audit --no-fund --legacy-peer-deps
-      - name: Reprova em CRITICAL (produção)
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Reprova em CRITICAL (produção) — allowlist do node-tar (Expo)
+        run: |
+          # O node-tar CRITICAL (path traversal) é transitivo da ÁRVORE DO EXPO
+          # (@expo/cli, ferramenta de build do app MOBILE) — NÃO vai para o web nem
+          # para o backend de produção. O fix é o node-tar 7.x, que exige o upgrade
+          # MAJOR do Expo SDK (52->57), quebrante, conduzido pelo Dependabot — a
+          # MESMA política das HIGH do Expo já aceitas aqui. Reprova em QUALQUER
+          # OUTRO critical de produção (o filtro só isenta advisories do pacote tar).
+          npm audit --omit=dev --json > audit.json || true
+          outros=$(jq '[.vulnerabilities[].via[] | objects
+            | select(.severity=="critical" and .name != "tar")] | length' audit.json)
+          echo "Criticals de produção fora do allowlist (node-tar/Expo): $outros"
+          test "$outros" -eq 0
       - name: Relatório de high/moderate (informativo — Dependabot conduz)
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
