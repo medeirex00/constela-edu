@@ -11,18 +11,18 @@
   "dependencies": {
     "@constela/core": "*",
     "@constela/quest-core": "*",
-    "@fontsource/baloo-2": "^5.1.0",
-    "@fontsource/nunito": "^5.1.0",
+    "@fontsource/baloo-2": "^5.3.0",
+    "@fontsource/nunito": "^5.3.0",
     "@react-three/drei": "^9.114.0",
     "@react-three/fiber": "^8.17.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.160.1"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@types/three": "^0.160.0",
+    "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "^5.7.2",
     "vite": "^7.1.5",
