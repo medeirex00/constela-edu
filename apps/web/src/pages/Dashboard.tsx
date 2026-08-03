@@ -230,7 +230,9 @@ function Inteligencia({ intel, carregando }: { intel: Insights | null; carregand
         )}
       </Card>
 
-      {/* Precisa de atenção */}
+      {/* Precisa de atenção — cada item é ACIONÁVEL: leva ao perfil do aluno,
+          onde dá para ver a linha do tempo e agir (PRD §15). O alerta já traz o
+          aluno_id, então o link reusa dado que já existe — nada novo no backend. */}
       <Card className="flex flex-col p-5">
         <span className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">
           <AlertTriangle size={16} className="text-amber-500" /> Precisa de atenção
@@ -244,13 +246,26 @@ function Inteligencia({ intel, carregando }: { intel: Insights | null; carregand
             <CheckCircle2 size={16} /> Nenhuma situação crítica identificada no momento.
           </p>
         ) : (
-          <ul className="space-y-2.5">
+          <ul className="-mx-2 space-y-0.5">
             {alertas.map((a, i) => (
-              <li key={`${a.aluno_id}-${i}`} className="flex items-start gap-2.5 text-sm">
-                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                  a.gravidade === "alta" ? "bg-red-500" : a.gravidade === "media" ? "bg-amber-500" : "bg-zinc-400"
-                }`} />
-                <span className="text-zinc-600 dark:text-zinc-300">{a.texto}</span>
+              <li key={`${a.aluno_id}-${i}`}>
+                <Link
+                  to={`/alunos/${a.aluno_id}`}
+                  className="group flex items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                >
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                    a.gravidade === "alta" ? "bg-red-500" : a.gravidade === "media" ? "bg-amber-500" : "bg-zinc-400"
+                  }`} />
+                  <span className="min-w-0 flex-1 text-zinc-600 dark:text-zinc-300">
+                    {a.texto}
+                    {a.turma && <span className="ml-1 text-xs text-zinc-400">· {a.turma}</span>}
+                  </span>
+                  <ArrowRight
+                    size={15}
+                    className="mt-0.5 shrink-0 text-zinc-300 opacity-0 transition-opacity group-hover:opacity-100 dark:text-zinc-600"
+                    aria-hidden
+                  />
+                </Link>
               </li>
             ))}
           </ul>

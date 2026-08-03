@@ -35,6 +35,7 @@ import { useNavigate } from "react-router-dom";
 
 import { Botao, Card, Carregando, Mensagem, PageHeader, SecaoRecolhivel, StatCard, Vazio } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
+import { useAncora } from "../../hooks/useAncora";
 import { useApi } from "../../hooks/useApi";
 import { api, apiDownload } from "../../lib/api";
 import { corPorMedia } from "../../lib/cores";
@@ -576,6 +577,9 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
   const [filtro, setFiltro] = useState("");
   const [baixando, setBaixando] = useState(false);
   const [boletimErro, setBoletimErro] = useState("");
+  // Itens do menu da Secretaria apontam para seções desta tela (ex.: /rede#mapa,
+  // /#leitura). Reancora quando os dados chegam (o conteúdo monta após o fetch).
+  useAncora(dados);
 
   async function baixarBoletim() {
     setBaixando(true);
@@ -626,9 +630,11 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
                 <Botao variante="neutro" onClick={() => navegar("/rede/avaliacoes")}>
                   <LineChart size={15} /> Avaliações externas
                 </Botao>
-                <Botao variante="neutro" onClick={baixarBoletim} disabled={baixando}>
-                  <FileDown size={15} /> {baixando ? "Gerando..." : "Baixar boletim (PDF)"}
-                </Botao>
+                <span id="boletim" className="scroll-mt-24">
+                  <Botao variante="neutro" onClick={baixarBoletim} disabled={baixando}>
+                    <FileDown size={15} /> {baixando ? "Gerando..." : "Baixar boletim (PDF)"}
+                  </Botao>
+                </span>
                 {usuario?.is_global && (
                   <Botao variante="neutro" onClick={() => navegar("/rede/gerenciar")}>
                     <Settings2 size={15} /> Gerenciar redes
@@ -699,8 +705,11 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {/* Top escolas — a SEDUC escolhe o critério (geral/leitura/matemática/engajamento). */}
       <TopEscolas escolas={dados.escolas} aoAbrir={abrirEscola} />
 
-      {/* Panorama por plataforma: leitura (Elefante) e matemática (Matific). */}
+      {/* Panorama por plataforma: leitura (Elefante) e matemática (Matific).
+          `id`s são âncoras dos itens "Indicadores de Leitura/Matemática" do
+          menu da Secretaria (ver useAncora). */}
       <div className="grid gap-6 lg:grid-cols-2">
+        <div id="leitura" className="scroll-mt-24">
         <SecaoPlataforma
           titulo="Leitura — Elefante Letrado"
           icone={<BookOpen size={16} className="text-emerald-600" />}
@@ -716,6 +725,8 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
           formatoTop={(v) => `${numero(v)} livros`}
           aoAbrir={abrirEscola}
         />
+        </div>
+        <div id="matematica" className="scroll-mt-24">
         <SecaoPlataforma
           titulo="Matemática — Matific"
           icone={<Calculator size={16} className="text-indigo-600" />}
@@ -731,10 +742,13 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
           formatoTop={(v) => `${numero(v)} ⭐`}
           aoAbrir={abrirEscola}
         />
+        </div>
       </div>
 
-      {/* Comparativo entre escolas (tabela por indicador). */}
-      <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} />
+      {/* Comparativo entre escolas (tabela por indicador) — âncora "Escolas". */}
+      <div id="escolas" className="scroll-mt-24">
+        <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} />
+      </div>
 
       {/* Equidade: quão distante está a melhor da pior escola. */}
       <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-4 text-sm">
@@ -759,12 +773,17 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {/* --- SECRETARIA (aba Secretaria): funções administrativas + mapa/navegação. --- */}
       {modo === "secretaria" && (
       <>
-      {/* Cadastro de metas da rede (o progresso aparece no Dashboard). */}
-      <GestaoMetas redeId={redeId} />
+      {/* Cadastro de metas da rede (o progresso aparece no Dashboard). Âncoras
+          dos itens "Metas da Rede", "Vitrine Pública" e "Mapa da Rede". */}
+      <div id="metas" className="scroll-mt-24">
+        <GestaoMetas redeId={redeId} />
+      </div>
 
-      <VitrinePublica redeId={redeId} />
+      <div id="vitrine" className="scroll-mt-24">
+        <VitrinePublica redeId={redeId} />
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div id="mapa" className="grid gap-6 scroll-mt-24 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
             <MapPin size={16} className="text-indigo-600" /> Distribuição geográfica

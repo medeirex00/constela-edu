@@ -10,6 +10,8 @@ import {
   Building2,
   Calculator,
   ChevronDown,
+  ChevronRight,
+  Download,
   ExternalLink,
   FileText,
   FlaskConical,
@@ -20,6 +22,7 @@ import {
   LayoutDashboard,
   LifeBuoy,
   LogOut,
+  MapPin,
   Medal,
   Menu,
   MonitorPlay,
@@ -34,6 +37,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
+  Target,
+  TrendingUp,
   Trophy,
   Upload,
   UserCog,
@@ -43,7 +48,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
@@ -97,107 +102,186 @@ const SUPORTE: ItemNav = {
   externo: true,
 };
 
-// Menu agrupado (accordion): reduz o excesso de itens visíveis sem esconder
-// nenhuma funcionalidade. Cada grupo abre/fecha; o da rota atual abre sozinho.
-// Itens com `gestao: true` são exclusivos de admin/coordenador — o professor
-// vê apenas o que toca as turmas dele (o backend também bloqueia tudo isto).
-const GRUPOS: GrupoNav[] = [
-  {
-    chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [
-      { rotulo: "Premiações", caminho: "/premiacoes", icone: Award },
-      // Ranking Geral agora reúne Geral/Leitura/Matemática/Evolução num seletor
-      // interno (a própria tela troca o conteúdo, sem abas separadas).
-      { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
-      { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows, gestao: true },
-    ],
-  },
-  {
-    chave: "gestao", rotulo: "Gestão Escolar", icone: Users, itens: [
-      { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2, gestao: true },
-      { rotulo: "Alunos", caminho: "/alunos", icone: GraduationCap },
-      { rotulo: "Turmas", caminho: "/turmas", icone: Users, gestao: true },
-      { rotulo: "Professores", caminho: "/professores", icone: School, gestao: true },
-    ],
-  },
-  {
-    chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [
-      { rotulo: "Matific", caminho: "/matific", icone: Calculator, gestao: true },
-      { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen, gestao: true },
-      { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen, gestao: true },
-      { rotulo: "Importações", caminho: "/importacoes", icone: Upload, gestao: true, escolaOp: true },
-      { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw, gestao: true, escolaOp: true },
-      { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar, gestao: true, escolaOp: true },
-    ],
-  },
-  {
-    chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [
-      { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true, gestao: true },
-      { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
-    ],
-  },
-  {
-    chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [
-      { rotulo: "Insights", caminho: "/insights", icone: Lightbulb },
-      { rotulo: "Assistente", caminho: "/assistente", icone: Bot, gestao: true },
-      { rotulo: "Simulador", caminho: "/simulador", icone: FlaskConical, gestao: true },
-    ],
-  },
-  {
-    chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [
-      // O professor TAMBÉM exporta — mas só o ranking e a lista de alunos das
-      // turmas dele (o backend filtra por turmas_permitidas).
-      { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
-      { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay, gestao: true },
-    ],
-  },
-  {
-    chave: "config", rotulo: "Configurações", icone: Settings, itens: [
-      { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal, gestao: true },
-      // Sem `gestao`: o professor também entra — vê SÓ a própria conta, para
-      // gerar/ver a própria senha (matriz aplicada no backend).
-      { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
-      { rotulo: "Escolas", caminho: "/escolas", icone: Building2, gestao: true, global: true },
-      // Monitor de presença em tempo real — exclusivo do admin global.
-      { rotulo: "Sessões Ativas", caminho: "/sessoes", icone: Activity, gestao: true, global: true },
-      { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings, gestao: true },
-    ],
-  },
-];
+// ── Catálogo de itens de menu ────────────────────────────────────────────
+// Cada item aponta para uma ROTA que já existe. As sidebars por perfil (logo
+// abaixo) apenas ESCOLHEM e ORGANIZAM estes itens conforme a função de cada
+// papel — nenhuma permissão nova nasce aqui. O backend continua sendo o portão
+// real de cada rota (deps.py): reorganizar o menu não expõe nada, só arruma o
+// que aquele perfil já podia abrir. Trocar de perfil troca a ESTRUTURA inteira
+// (grupos, ordem, rótulos), não só a visibilidade de um botão.
+const IT = {
+  premiacoes: { rotulo: "Premiações", caminho: "/premiacoes", icone: Award },
+  // Ranking Geral reúne Geral/Leitura/Matemática/Evolução num seletor interno.
+  ranking: { rotulo: "Ranking Geral", caminho: "/ranking", icone: Trophy },
+  rankingProf: { rotulo: "Ranking", caminho: "/ranking", icone: Trophy },
+  comparador: { rotulo: "Comparador", caminho: "/comparador", icone: GitCompareArrows },
+  insights: { rotulo: "Insights", caminho: "/insights", icone: Lightbulb },
+  assistente: { rotulo: "Assistente", caminho: "/assistente", icone: Bot },
+  simulador: { rotulo: "Simulador", caminho: "/simulador", icone: FlaskConical },
+  visaoEscola: { rotulo: "Visão da Escola", caminho: "/escola", icone: Building2 },
+  alunos: { rotulo: "Alunos", caminho: "/alunos", icone: GraduationCap },
+  meusAlunos: { rotulo: "Meus Alunos", caminho: "/alunos", icone: GraduationCap },
+  turmas: { rotulo: "Turmas", caminho: "/turmas", icone: Users },
+  professores: { rotulo: "Professores", caminho: "/professores", icone: School },
+  usuarios: { rotulo: "Usuários", caminho: "/usuarios", icone: UserCog },
+  matific: { rotulo: "Matific", caminho: "/matific", icone: Calculator },
+  elefante: { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen },
+  livros: { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen },
+  importacoes: { rotulo: "Importações", caminho: "/importacoes", icone: Upload },
+  sincronizacao: { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw },
+  diagnostico: { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar },
+  conquistas: { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
+  bibliotecaConquistas: { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
+  relatorios: { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
+  meusRelatorios: { rotulo: "Meus Relatórios", caminho: "/relatorios", icone: FileText },
+  painelPublico: { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay },
+  metricas: { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal },
+  configuracoes: { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings },
+  escolas: { rotulo: "Escolas", caminho: "/escolas", icone: Building2 },
+  sessoes: { rotulo: "Sessões Ativas", caminho: "/sessoes", icone: Activity },
+  redeGerenciar: { rotulo: "Gerenciar Rede", caminho: "/rede/gerenciar", icone: Blocks },
+  avaliacoesRede: { rotulo: "Avaliações Externas", caminho: "/rede/avaliacoes", icone: FileText },
+  // --- Itens da Secretaria (visão AGREGADA da rede, sem PII individual) ---
+  // Rotas próprias já existentes:
+  painelRede: { rotulo: "Painel da Rede", caminho: "/rede", icone: Landmark, exato: true },
+  rankingEscolas: { rotulo: "Ranking de Escolas", caminho: "/ranking", icone: Trophy },
+  avaliacoesOficiais: { rotulo: "Avaliações Oficiais", caminho: "/rede/avaliacoes", icone: FileText, exato: true },
+  // Seções de telas existentes (âncoras — ver useAncora). Cada uma abre uma
+  // parte AGREGADA por escola/rede; nenhuma chega a ficha individual de criança.
+  escolasRede: { rotulo: "Escolas", caminho: "/#escolas", icone: Building2 },
+  mapaRede: { rotulo: "Mapa da Rede", caminho: "/rede#mapa", icone: MapPin },
+  indicadoresLeitura: { rotulo: "Indicadores de Leitura", caminho: "/#leitura", icone: BookOpen },
+  indicadoresMatematica: { rotulo: "Indicadores de Matemática", caminho: "/#matematica", icone: Calculator },
+  metasRede: { rotulo: "Metas da Rede", caminho: "/rede#metas", icone: Target },
+  evolucaoRede: { rotulo: "Evolução da Rede", caminho: "/rede/avaliacoes#evolucao", icone: TrendingUp },
+  vitrinePublica: { rotulo: "Vitrine Pública", caminho: "/rede#vitrine", icone: MonitorPlay },
+  boletimRede: { rotulo: "Boletim da Rede", caminho: "/rede#boletim", icone: Download },
+} satisfies Record<string, ItemNav>;
 
-/** Grupos visíveis para o papel do usuário (itens de gestão saem para o
- *  professor; itens globais só para o admin global; grupos vazios somem). */
-function gruposVisiveis(gestor: boolean, global: boolean, secretaria = false): GrupoNav[] {
-  return GRUPOS
-    .map((g) => ({
-      ...g,
-      itens: g.itens.filter((i) =>
-        (gestor || !i.gestao) && (global || !i.global) && !(secretaria && i.escolaOp)),
-    }))
-    .filter((g) => g.itens.length > 0);
+/** Perfil resumido do usuário — decide QUAL sidebar montar. */
+interface Perfil {
+  /** Admin global (is_global): opera todo o ecossistema. */
+  global: boolean;
+  /** Secretaria (rede vinculada, não-global): visão agregada da rede. */
+  secretaria: boolean;
+  /** Gestão (admin/coordenador/global) — o professor é `false` aqui. */
+  gestor: boolean;
 }
 
-/** Todos os itens de menu que o usuário PODE abrir (Dashboard + grupos
- *  visíveis), achatados — base da busca por páginas. */
-function itensNavVisiveis(gestor: boolean, global: boolean, rede: boolean, secretaria = false): ItemNav[] {
+/** Rótulo do Dashboard conforme o perfil — mesma rota "/", foco diferente. */
+function rotuloDashboard(p: Perfil): string {
+  if (p.global) return "Visão Global";
+  if (p.secretaria) return "Panorama da Rede";
+  if (p.gestor) return "Dashboard";
+  return "Meu Dashboard";
+}
+
+/** Sidebar DEDICADA por perfil: a mesma lista de rotas que aquele papel já
+ *  podia abrir, mas agrupada, ordenada e nomeada para o trabalho dele. Nenhum
+ *  item aqui abre algo que o backend não autorize para o papel — as travas de
+ *  rota (App.tsx) e o backend (deps.py) seguem intactos. */
+function sidebarDoPerfil(p: Perfil): GrupoNav[] {
+  // 👑 Admin Global — saúde do ecossistema + todas as ferramentas de escola.
+  if (p.global) return [
+    { chave: "estrutura", rotulo: "Estrutura", icone: Building2, itens: [IT.redeGerenciar, IT.escolas, IT.usuarios] },
+    { chave: "monitoramento", rotulo: "Monitoramento", icone: Activity, itens: [IT.sessoes] },
+    { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.premiacoes, IT.ranking, IT.comparador] },
+    { chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [IT.insights, IT.assistente, IT.simulador] },
+    { chave: "gestao", rotulo: "Gestão Escolar", icone: Users, itens: [IT.visaoEscola, IT.alunos, IT.turmas, IT.professores] },
+    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.diagnostico] },
+    { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
+    { chave: "conteudo", rotulo: "Avaliações", icone: FileText, itens: [IT.avaliacoesRede] },
+    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
+    { chave: "sistema", rotulo: "Sistema", icone: Settings, itens: [IT.metricas, IT.configuracoes] },
+  ];
+  // 🏛️ Secretaria — GESTÃO E ACOMPANHAMENTO AGREGADO da rede. Vê indicadores,
+  // rankings, comparações e metas por escola/rede; NUNCA ficha individual de
+  // criança (o backend blinda: turmas_permitidas=[], negar_dado_individual,
+  // negar_secretaria — ver test_rbac_secretaria.py). Itens com âncora (#) abrem
+  // uma seção agregada de uma tela existente.
+  if (p.secretaria) return [
+    { chave: "rede", rotulo: "Rede Municipal", icone: Landmark, itens: [
+      IT.painelRede, IT.escolasRede, IT.rankingEscolas, IT.mapaRede,
+    ] },
+    { chave: "indicadores", rotulo: "Indicadores e Metas", icone: TrendingUp, itens: [
+      IT.indicadoresLeitura, IT.indicadoresMatematica, IT.metasRede, IT.evolucaoRede,
+    ] },
+    { chave: "transparencia", rotulo: "Avaliações e Transparência", icone: FileText, itens: [
+      IT.avaliacoesOficiais, IT.vitrinePublica, IT.boletimRede,
+    ] },
+  ];
+  // 🏫 Coordenador — administra a própria escola de ponta a ponta.
+  if (p.gestor) return [
+    { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.premiacoes, IT.ranking, IT.comparador] },
+    { chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [IT.insights, IT.assistente, IT.simulador] },
+    { chave: "escola", rotulo: "Minha Escola", icone: School, itens: [IT.visaoEscola, IT.alunos, IT.turmas, IT.professores, IT.usuarios] },
+    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.diagnostico] },
+    { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
+    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
+    { chave: "config", rotulo: "Configurações", icone: Settings, itens: [IT.metricas, IT.configuracoes] },
+  ];
+  // 👩‍🏫 Professor — só as turmas dele (o backend filtra por turmas_permitidas).
   return [
-    DASHBOARD,
-    ...(rede ? [SECRETARIA] : []),
-    ...(gestor && !secretaria ? [COMECAR] : []),
-    ...gruposVisiveis(gestor, global, secretaria).flatMap((g) => g.itens),
+    { chave: "turmas", rotulo: "Minhas Turmas", icone: GraduationCap, itens: [IT.meusAlunos] },
+    { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.rankingProf, IT.premiacoes, IT.insights] },
+    { chave: "reconhecimento", rotulo: "Reconhecimento", icone: Medal, itens: [IT.bibliotecaConquistas] },
+    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.meusRelatorios] },
+  ];
+}
+
+/** Todos os itens de menu que o usuário PODE abrir (Dashboard + sidebar do
+ *  perfil), achatados — base da busca por páginas. */
+function itensNavVisiveis(p: Perfil): ItemNav[] {
+  return [
+    { ...DASHBOARD, rotulo: rotuloDashboard(p) },
+    ...(p.global ? [SECRETARIA] : []),
+    ...(p.gestor && !p.secretaria ? [COMECAR] : []),
+    ...sidebarDoPerfil(p).flatMap((g) => g.itens),
   ];
 }
 
 const CHAVE_MENU = "constela_menu_abertos";
 
-/** Grupo que contém a rota atual (para destacar e abrir automaticamente). */
-function grupoDaRota(pathname: string): string | null {
-  for (const grupo of GRUPOS) {
-    const bate = grupo.itens.some(
-      (it) => pathname === it.caminho || (it.caminho !== "/" && pathname.startsWith(it.caminho + "/")),
-    );
+/** Grupo (da sidebar do perfil) que contém a rota atual — para destacar e
+ *  abrir automaticamente o accordion certo. */
+function grupoDaRota(grupos: GrupoNav[], pathname: string): string | null {
+  for (const grupo of grupos) {
+    const bate = grupo.itens.some((it) => {
+      // Âncoras (#) nunca casam pelo pathname (que não tem hash) — o grupo abre
+      // pelo item de rota irmão. `exato` casa só na igualdade (senão /rede
+      // "engoliria" /rede/avaliacoes).
+      const base = it.caminho.split("#")[0];
+      if (!base) return false;
+      if (it.exato) return pathname === base;
+      return pathname === base || (base !== "/" && pathname.startsWith(base + "/"));
+    });
     if (bate) return grupo.chave;
   }
   return null;
+}
+
+// Títulos de rotas que não estão (com esse nome) no catálogo de itens — usados
+// na trilha/contexto do topo (PRD §11).
+const TITULOS_ESPECIAIS: Record<string, string> = {
+  "/": "Início",
+  "/comecar": "Comece aqui",
+  "/rede": "Painel da Rede",
+  "/rede/gerenciar": "Gerenciar Rede",
+  "/rede/avaliacoes": "Avaliações Externas",
+  "/usuarios": "Usuários e acessos",
+};
+
+/** Título legível da rota atual (para a trilha do topo). Casa primeiro o
+ *  caminho EXATO — assim /conquistas/biblioteca não vira "Conquistas" — e só
+ *  depois cai nos detalhes (perfil de aluno, turma) e no prefixo. */
+function tituloDaRota(pathname: string): string {
+  if (TITULOS_ESPECIAIS[pathname]) return TITULOS_ESPECIAIS[pathname];
+  const exato = Object.values(IT).find((i) => i.caminho === pathname);
+  if (exato) return exato.rotulo;
+  if (pathname.startsWith("/alunos/")) return "Perfil do aluno";
+  if (pathname.startsWith("/turmas/")) return "Detalhe da turma";
+  const prefixo = Object.values(IT).find((i) => pathname.startsWith(i.caminho + "/"));
+  return prefixo?.rotulo ?? "";
 }
 
 function carregarAbertos(): Set<string> {
@@ -241,7 +325,6 @@ function PesquisaGlobal() {
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const global = Boolean(usuario?.is_global);
-  const rede = global || usuario?.rede_id != null;
   // Secretaria = tem rede vinculada e NÃO é admin global: some das operações de escola.
   const secretaria = !global && usuario?.rede_id != null;
 
@@ -268,7 +351,7 @@ function PesquisaGlobal() {
 
   // Páginas do menu que casam com o texto (só as que o cargo pode abrir).
   const alvo = normalizar(consulta);
-  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis(gestor, global, rede, secretaria)
+  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis({ global, secretaria, gestor })
     .filter((item) => normalizar(item.rotulo).includes(alvo))
     .slice(0, 6)
     .map((item) => ({
@@ -475,6 +558,21 @@ function LinkMenu({ item, aoNavegar, subitem }: {
       </a>
     );
   }
+  // Âncora (ex.: /rede#mapa): navega para a tela e rola até a seção (useAncora).
+  // Usa Link simples — sem estado "ativo", que senão acenderia em todos os itens
+  // que compartilham a mesma rota base (todos os /rede#...).
+  if (item.caminho.includes("#")) {
+    return (
+      <Link
+        to={item.caminho}
+        onClick={aoNavegar}
+        className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
+      >
+        <item.icone size={subitem ? 15 : 16} strokeWidth={2} className="shrink-0" />
+        <span className="truncate">{item.rotulo}</span>
+      </Link>
+    );
+  }
   return (
     <NavLink
       to={item.caminho}
@@ -503,11 +601,12 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const rede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
   // Secretaria = tem rede vinculada e NÃO é admin global.
   const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  const perfil: Perfil = { global: Boolean(usuario?.is_global), secretaria, gestor };
   // "Comece aqui" só aparece enquanto a escola não foi configurada; depois da
   // config inicial ele some (novas importações passam a ser por "Importações").
   const { precisaConfigurar } = useOnboarding();
-  const grupos = gruposVisiveis(gestor, Boolean(usuario?.is_global), secretaria);
-  const ativo = grupoDaRota(pathname);
+  const grupos = sidebarDoPerfil(perfil);
+  const ativo = grupoDaRota(grupos, pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
     const iniciais = carregarAbertos();
     if (ativo) iniciais.add(ativo); // o grupo da rota atual já nasce aberto
@@ -553,8 +652,10 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
 
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-      <LinkMenu item={DASHBOARD} aoNavegar={aoNavegar} />
-      {rede && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
+      <LinkMenu item={{ ...DASHBOARD, rotulo: rotuloDashboard(perfil) }} aoNavegar={aoNavegar} />
+      {/* O admin/global chega ao painel da rede pelo item de topo; a Secretaria
+          tem "Painel da Rede" dentro do grupo Rede Municipal (não duplica). */}
+      {rede && !secretaria && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
         const aberto = abertos.has(grupo.chave);
@@ -613,6 +714,78 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   );
 }
 
+/** Um item na barra recolhida (só ícone, nome no tooltip). */
+function IconeMenu({ item, atalho }: { item: ItemNav; atalho?: () => void }) {
+  const classe = "flex justify-center rounded-lg p-2.5 transition-colors";
+  const inativo = "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100";
+  if (item.externo) {
+    return (
+      <a
+        href={item.caminho}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={item.rotulo}
+        aria-label={item.rotulo}
+        onClick={atalho}
+        className={`${classe} ${inativo}`}
+      >
+        <item.icone size={18} strokeWidth={2} />
+      </a>
+    );
+  }
+  if (item.caminho.includes("#")) {
+    return (
+      <Link to={item.caminho} title={item.rotulo} aria-label={item.rotulo} onClick={atalho} className={`${classe} ${inativo}`}>
+        <item.icone size={18} strokeWidth={2} />
+      </Link>
+    );
+  }
+  return (
+    <NavLink
+      to={item.caminho}
+      end={item.exato}
+      title={item.rotulo}
+      aria-label={item.rotulo}
+      onClick={atalho}
+      className={({ isActive }) =>
+        `${classe} ${isActive
+          ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"}`
+      }
+    >
+      <item.icone size={18} strokeWidth={2} />
+    </NavLink>
+  );
+}
+
+/** Navegação RECOLHIDA (só ícones, desktop) — PRD §14. Achata a sidebar do
+ *  perfil numa lista de ícones: todos os destinos que o perfil já podia abrir
+ *  seguem a um clique, com o nome no tooltip. Sem grupos/accordion (não cabem
+ *  na barra estreita), mas nada some — é só a versão compacta do mesmo menu. */
+function NavegacaoRail() {
+  const { usuario } = useApp();
+  const perfil: Perfil = {
+    global: Boolean(usuario?.is_global),
+    secretaria: !usuario?.is_global && usuario?.rede_id != null,
+    gestor: Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? ""),
+  };
+  const itens: ItemNav[] = [
+    { ...DASHBOARD, rotulo: rotuloDashboard(perfil) },
+    ...(perfil.global ? [SECRETARIA] : []),
+    ...sidebarDoPerfil(perfil).flatMap((g) => g.itens),
+  ];
+  return (
+    <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
+      {itens.map((item) => (
+        <IconeMenu key={item.caminho} item={item} />
+      ))}
+      <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+        <IconeMenu item={SUPORTE} />
+      </div>
+    </nav>
+  );
+}
+
 function Marca({ aoNavegar }: { aoNavegar?: () => void }) {
   return (
     <div className="border-b border-zinc-200 dark:border-zinc-800">
@@ -656,10 +829,142 @@ function IndicadorImportacao() {
   );
 }
 
+/** Trilha/contexto no topo (PRD §11): "onde estou". Começa no Dashboard do
+ *  perfil e mostra a página atual. Só no desktop — no celular o próprio título
+ *  da página (dentro do conteúdo) já orienta, e o topo é curto. */
+function Trilha() {
+  const { pathname } = useLocation();
+  const { usuario } = useApp();
+  const perfil: Perfil = {
+    global: Boolean(usuario?.is_global),
+    secretaria: !usuario?.is_global && usuario?.rede_id != null,
+    gestor: Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? ""),
+  };
+  const titulo = tituloDaRota(pathname);
+  const naHome = pathname === "/";
+  return (
+    <nav aria-label="Trilha de navegação" className="hidden min-w-0 items-center gap-1.5 text-sm lg:flex">
+      <NavLink
+        to="/"
+        className={({ isActive }) =>
+          `shrink-0 ${isActive
+            ? "font-medium text-zinc-800 dark:text-zinc-200"
+            : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`
+        }
+      >
+        {rotuloDashboard(perfil)}
+      </NavLink>
+      {!naHome && titulo && (
+        <>
+          <ChevronRight size={14} className="shrink-0 text-zinc-300 dark:text-zinc-600" aria-hidden />
+          <span className="truncate font-medium text-zinc-800 dark:text-zinc-200">{titulo}</span>
+        </>
+      )}
+    </nav>
+  );
+}
+
+/** Iniciais do nome (para o avatar): 1ª letra do primeiro e do último nome. */
+function iniciais(nome?: string): string {
+  const partes = (nome ?? "").trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return "?";
+  const primeira = partes[0][0] ?? "";
+  const ultima = partes.length > 1 ? partes[partes.length - 1][0] ?? "" : "";
+  return (primeira + ultima).toUpperCase();
+}
+
+/** Nome amigável do perfil (cabeçalho do menu do usuário). */
+function rotuloPerfil(u: { is_global?: boolean; rede_id?: number | null; cargo?: string } | null | undefined): string {
+  if (!u) return "";
+  if (u.is_global) return "Admin Global";
+  if (u.rede_id != null) return "Secretaria";
+  if (u.cargo === "coordenador") return "Coordenação";
+  if (u.cargo === "admin") return "Administração";
+  return "Professor(a)";
+}
+
+/** Menu do usuário (avatar → conta + sair). Reúne identidade, atalho para a
+ *  própria conta e logout num só lugar (PRD §11). Para o PROFESSOR é o único
+ *  caminho até /usuarios (a própria conta), já que essa tela saiu da sidebar
+ *  dele — o backend sempre limita o que cada papel enxerga em /usuarios. */
+function MenuUsuario() {
+  const { usuario, sair } = useApp();
+  const [aberto, setAberto] = useState(false);
+  const caixa = useRef<HTMLDivElement | null>(null);
+  const gestor = Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  // Admin/coordenador gerenciam a lista de usuários; professor/secretaria veem
+  // só a própria conta (o backend filtra) — daí o rótulo diferente.
+  const rotuloConta = gestor && !secretaria ? "Usuários e acessos" : "Minha conta";
+
+  useEffect(() => {
+    function fechar(evento: MouseEvent) {
+      if (caixa.current && !caixa.current.contains(evento.target as Node)) setAberto(false);
+    }
+    document.addEventListener("mousedown", fechar);
+    return () => document.removeEventListener("mousedown", fechar);
+  }, []);
+
+  return (
+    <div className="relative" ref={caixa}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={aberto}
+        aria-label="Menu do usuário"
+        onClick={() => setAberto((a) => !a)}
+        className="flex items-center gap-2 rounded-lg p-1 pr-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+      >
+        <span className="grid h-8 w-8 place-items-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
+          {iniciais(usuario?.nome)}
+        </span>
+        <span className="hidden max-w-[140px] truncate sm:block">{usuario?.nome}</span>
+        <ChevronDown
+          size={14}
+          className={`hidden shrink-0 text-zinc-400 transition-transform sm:block ${aberto ? "rotate-180" : ""}`}
+          aria-hidden
+        />
+      </button>
+
+      {aberto && (
+        <div
+          role="menu"
+          className="absolute right-0 z-40 mt-2 w-60 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+        >
+          <div className="border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+            <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{usuario?.nome}</p>
+            <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{rotuloPerfil(usuario)}</p>
+          </div>
+          <div className="p-1">
+            <NavLink
+              to="/usuarios"
+              role="menuitem"
+              onClick={() => setAberto(false)}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              <UserCog size={16} className="shrink-0 text-zinc-400" />
+              <span className="truncate">{rotuloConta}</span>
+            </NavLink>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setAberto(false); sair(); }}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+            >
+              <LogOut size={16} className="shrink-0" />
+              <span>Sair</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const CHAVE_RECOLHIDO = "constela_menu_recolhido";
 
 export default function Layout() {
-  const { usuario, escolas, escolaId, selecionarEscola, tema, alternarTema, sair } = useApp();
+  const { usuario, escolas, escolaId, selecionarEscola, tema, alternarTema } = useApp();
   // Secretaria (rede vinculada, não-global): o seletor do topo é o CONTEXTO da
   // visualização — "Toda a Rede Municipal" (padrão) ou uma escola específica.
   const secretaria = !usuario?.is_global && usuario?.rede_id != null;
@@ -704,24 +1009,39 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen">
-      {/* Sidebar fixa (desktop) — recolhível para dar a tela toda ao conteúdo */}
+      {/* Sidebar fixa (desktop) — recolhível para SÓ ÍCONES (PRD §14): a barra
+          fica estreita mas todos os destinos continuam a um clique, com o nome
+          no tooltip; não some a navegação, só encolhe. */}
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-zinc-200 bg-white pl-safe dark:border-zinc-800 dark:bg-zinc-900 ${
-          recolhido ? "" : "lg:flex"
+        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-zinc-200 bg-white pl-safe transition-[width] duration-200 dark:border-zinc-800 dark:bg-zinc-900 lg:flex ${
+          recolhido ? "w-16" : "w-60"
         }`}
       >
-        <div className="flex items-center justify-between pr-2">
-          <Marca />
-          <button
-            aria-label="Recolher menu"
-            title="Recolher menu"
-            className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
-            onClick={alternarRecolhido}
-          >
-            <PanelLeftClose size={17} />
-          </button>
-        </div>
-        <Navegacao />
+        {recolhido ? (
+          <div className="flex justify-center py-3">
+            <button
+              aria-label="Expandir menu"
+              title="Expandir menu"
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+              onClick={alternarRecolhido}
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between pr-2">
+            <Marca />
+            <button
+              aria-label="Recolher menu"
+              title="Recolher menu"
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+              onClick={alternarRecolhido}
+            >
+              <PanelLeftClose size={17} />
+            </button>
+          </div>
+        )}
+        {recolhido ? <NavegacaoRail /> : <Navegacao />}
       </aside>
 
       {/* Sidebar deslizante (celular/tablet) — botões reais, resposta imediata ao toque (PRD §9) */}
@@ -748,7 +1068,7 @@ export default function Layout() {
         </div>
       )}
 
-      <div className={recolhido ? "" : "lg:pl-60"}>
+      <div className={recolhido ? "lg:pl-16" : "lg:pl-60"}>
         {/* Respiro no topo: base de 1.5rem + a área segura do notch (o antigo
             `pt-safe` zerava o topo em telas sem notch, colando a barra de
             pesquisa/header no topo). Só o topo muda; a base (pb) segue igual. */}
@@ -763,16 +1083,7 @@ export default function Layout() {
           >
             <Menu size={18} />
           </button>
-          {recolhido && (
-            <button
-              aria-label="Mostrar menu"
-              title="Mostrar menu"
-              className="hidden rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800 lg:block"
-              onClick={alternarRecolhido}
-            >
-              <PanelLeftOpen size={18} />
-            </button>
-          )}
+          <Trilha />
 
           <PesquisaGlobal />
 
@@ -814,17 +1125,7 @@ export default function Layout() {
             {tema === "claro" ? <Moon size={17} /> : <Sun size={17} />}
           </button>
 
-          <div className="hidden items-center gap-2 sm:flex">
-            <span className="text-sm text-zinc-500 dark:text-zinc-400">{usuario?.nome}</span>
-          </div>
-          <button
-            aria-label="Sair do sistema"
-            title="Sair"
-            className="rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-            onClick={sair}
-          >
-            <LogOut size={17} />
-          </button>
+          <MenuUsuario />
         </header>
 
         <main className="mx-auto max-w-6xl px-4 py-6 lg:px-8 lg:py-8">

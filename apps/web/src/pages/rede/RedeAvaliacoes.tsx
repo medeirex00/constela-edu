@@ -33,6 +33,7 @@ import {
   estiloInput,
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
+import { useAncora } from "../../hooks/useAncora";
 import { useApi } from "../../hooks/useApi";
 import { ApiError, api, apiUpload } from "../../lib/api";
 import { nota } from "../../lib/formato";
@@ -157,6 +158,8 @@ function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
       + (serie.componente ? `&componente=${encodeURIComponent(serie.componente)}` : "")
     : null;
   const { dados, carregando, erro } = useApi<Correlacao>(url);
+  // Item "Evolução da Rede" do menu da Secretaria aponta para /rede/avaliacoes#evolucao.
+  useAncora(dados);
 
   async function removerSerie() {
     if (!serie || ed == null) return;
@@ -222,7 +225,7 @@ function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
               </p>
               <Dispersao pontos={dados.pontos} rotuloX={METRICAS[dados.metrica]} rotuloY={dados.nome} />
             </div>
-            <div>
+            <div id="evolucao" className="scroll-mt-24">
               <h3 className="mb-1 text-sm font-semibold">Evolução da rede (média por edição)</h3>
               <p className="mb-2 text-xs text-zinc-500">Média das escolas em {dados.nome}.</p>
               <Evolucao pontos={dados.evolucao} />
