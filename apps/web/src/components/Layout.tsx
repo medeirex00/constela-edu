@@ -11,7 +11,6 @@ import {
   Calculator,
   ChevronDown,
   ChevronRight,
-  Download,
   ExternalLink,
   FileText,
   FlaskConical,
@@ -22,7 +21,6 @@ import {
   LayoutDashboard,
   LifeBuoy,
   LogOut,
-  MapPin,
   Medal,
   Menu,
   MonitorPlay,
@@ -37,8 +35,6 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
-  Target,
-  TrendingUp,
   Trophy,
   Upload,
   UserCog,
@@ -48,7 +44,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
@@ -142,20 +138,12 @@ const IT = {
   redeGerenciar: { rotulo: "Gerenciar Rede", caminho: "/rede/gerenciar", icone: Blocks },
   avaliacoesRede: { rotulo: "Avaliações Externas", caminho: "/rede/avaliacoes", icone: FileText },
   // --- Itens da Secretaria (visão AGREGADA da rede, sem PII individual) ---
-  // Rotas próprias já existentes:
+  // A Secretaria navega por DUAS telas apenas: o Panorama (visão geral) e o
+  // Painel da Rede (centro de comando com mapa, metas, vitrine, avaliações e
+  // boletim). As demais seções vivem DENTRO dessas duas telas — sem atalhos
+  // duplicados na sidebar.
+  panoramaRede: { rotulo: "Panorama da Rede", caminho: "/", icone: LayoutDashboard, exato: true },
   painelRede: { rotulo: "Painel da Rede", caminho: "/rede", icone: Landmark, exato: true },
-  rankingEscolas: { rotulo: "Ranking de Escolas", caminho: "/ranking", icone: Trophy },
-  avaliacoesOficiais: { rotulo: "Avaliações Oficiais", caminho: "/rede/avaliacoes", icone: FileText, exato: true },
-  // Seções de telas existentes (âncoras — ver useAncora). Cada uma abre uma
-  // parte AGREGADA por escola/rede; nenhuma chega a ficha individual de criança.
-  escolasRede: { rotulo: "Escolas", caminho: "/#escolas", icone: Building2 },
-  mapaRede: { rotulo: "Mapa da Rede", caminho: "/rede#mapa", icone: MapPin },
-  indicadoresLeitura: { rotulo: "Indicadores de Leitura", caminho: "/#leitura", icone: BookOpen },
-  indicadoresMatematica: { rotulo: "Indicadores de Matemática", caminho: "/#matematica", icone: Calculator },
-  metasRede: { rotulo: "Metas da Rede", caminho: "/rede#metas", icone: Target },
-  evolucaoRede: { rotulo: "Evolução da Rede", caminho: "/rede/avaliacoes#evolucao", icone: TrendingUp },
-  vitrinePublica: { rotulo: "Vitrine Pública", caminho: "/rede#vitrine", icone: MonitorPlay },
-  boletimRede: { rotulo: "Boletim da Rede", caminho: "/rede#boletim", icone: Download },
 } satisfies Record<string, ItemNav>;
 
 /** Perfil resumido do usuário — decide QUAL sidebar montar. */
@@ -194,21 +182,14 @@ function sidebarDoPerfil(p: Perfil): GrupoNav[] {
     { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
     { chave: "sistema", rotulo: "Sistema", icone: Settings, itens: [IT.metricas, IT.configuracoes] },
   ];
-  // 🏛️ Secretaria — GESTÃO E ACOMPANHAMENTO AGREGADO da rede. Vê indicadores,
-  // rankings, comparações e metas por escola/rede; NUNCA ficha individual de
-  // criança (o backend blinda: turmas_permitidas=[], negar_dado_individual,
-  // negar_secretaria — ver test_rbac_secretaria.py). Itens com âncora (#) abrem
-  // uma seção agregada de uma tela existente.
+  // 🏛️ Secretaria — navegação ENXUTA: o Painel da Rede é o centro de comando
+  // (mapa, metas, vitrine, avaliações, boletim vivem lá dentro) e o Panorama é a
+  // visão geral. Sem atalhos duplicados — tudo o que existia como item aqui já
+  // está acessível dentro dessas duas telas (ver relatório). Permissões e
+  // blindagem de PII inalteradas (backend: turmas_permitidas=[], etc.).
   if (p.secretaria) return [
-    { chave: "rede", rotulo: "Rede Municipal", icone: Landmark, itens: [
-      IT.painelRede, IT.escolasRede, IT.rankingEscolas, IT.mapaRede,
-    ] },
-    { chave: "indicadores", rotulo: "Indicadores e Metas", icone: TrendingUp, itens: [
-      IT.indicadoresLeitura, IT.indicadoresMatematica, IT.metasRede, IT.evolucaoRede,
-    ] },
-    { chave: "transparencia", rotulo: "Avaliações e Transparência", icone: FileText, itens: [
-      IT.avaliacoesOficiais, IT.vitrinePublica, IT.boletimRede,
-    ] },
+    { chave: "principal", rotulo: "Principal", icone: LayoutDashboard, itens: [IT.panoramaRede] },
+    { chave: "rede", rotulo: "Rede Municipal", icone: Landmark, itens: [IT.painelRede] },
   ];
   // 🏫 Coordenador — administra a própria escola de ponta a ponta.
   if (p.gestor) return [
@@ -232,12 +213,14 @@ function sidebarDoPerfil(p: Perfil): GrupoNav[] {
 /** Todos os itens de menu que o usuário PODE abrir (Dashboard + sidebar do
  *  perfil), achatados — base da busca por páginas. */
 function itensNavVisiveis(p: Perfil): ItemNav[] {
-  return [
+  const todos = [
     { ...DASHBOARD, rotulo: rotuloDashboard(p) },
     ...(p.global ? [SECRETARIA] : []),
     ...(p.gestor && !p.secretaria ? [COMECAR] : []),
     ...sidebarDoPerfil(p).flatMap((g) => g.itens),
   ];
+  // Remove rotas repetidas (ex.: Panorama da Rede está no topo e no grupo).
+  return todos.filter((it, i) => todos.findIndex((x) => x.caminho === it.caminho) === i);
 }
 
 const CHAVE_MENU = "constela_menu_abertos";
@@ -558,21 +541,6 @@ function LinkMenu({ item, aoNavegar, subitem }: {
       </a>
     );
   }
-  // Âncora (ex.: /rede#mapa): navega para a tela e rola até a seção (useAncora).
-  // Usa Link simples — sem estado "ativo", que senão acenderia em todos os itens
-  // que compartilham a mesma rota base (todos os /rede#...).
-  if (item.caminho.includes("#")) {
-    return (
-      <Link
-        to={item.caminho}
-        onClick={aoNavegar}
-        className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
-      >
-        <item.icone size={subitem ? 15 : 16} strokeWidth={2} className="shrink-0" />
-        <span className="truncate">{item.rotulo}</span>
-      </Link>
-    );
-  }
   return (
     <NavLink
       to={item.caminho}
@@ -652,9 +620,9 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
 
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-      <LinkMenu item={{ ...DASHBOARD, rotulo: rotuloDashboard(perfil) }} aoNavegar={aoNavegar} />
-      {/* O admin/global chega ao painel da rede pelo item de topo; a Secretaria
-          tem "Painel da Rede" dentro do grupo Rede Municipal (não duplica). */}
+      {/* A Secretaria tem "Panorama da Rede" e "Painel da Rede" nos grupos
+          (Principal / Rede Municipal); os demais perfis usam o item de topo. */}
+      {!secretaria && <LinkMenu item={{ ...DASHBOARD, rotulo: rotuloDashboard(perfil) }} aoNavegar={aoNavegar} />}
       {rede && !secretaria && <LinkMenu item={SECRETARIA} aoNavegar={aoNavegar} />}
 
       {grupos.map((grupo) => {
@@ -733,13 +701,6 @@ function IconeMenu({ item, atalho }: { item: ItemNav; atalho?: () => void }) {
       </a>
     );
   }
-  if (item.caminho.includes("#")) {
-    return (
-      <Link to={item.caminho} title={item.rotulo} aria-label={item.rotulo} onClick={atalho} className={`${classe} ${inativo}`}>
-        <item.icone size={18} strokeWidth={2} />
-      </Link>
-    );
-  }
   return (
     <NavLink
       to={item.caminho}
@@ -769,11 +730,13 @@ function NavegacaoRail() {
     secretaria: !usuario?.is_global && usuario?.rede_id != null,
     gestor: Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? ""),
   };
-  const itens: ItemNav[] = [
+  const bruto: ItemNav[] = [
     { ...DASHBOARD, rotulo: rotuloDashboard(perfil) },
     ...(perfil.global ? [SECRETARIA] : []),
     ...sidebarDoPerfil(perfil).flatMap((g) => g.itens),
   ];
+  // Sem rotas repetidas (ex.: Panorama da Rede no topo e no grupo Principal).
+  const itens = bruto.filter((it, i) => bruto.findIndex((x) => x.caminho === it.caminho) === i);
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
       {itens.map((item) => (
