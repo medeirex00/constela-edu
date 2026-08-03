@@ -19,6 +19,7 @@ from app.models.escola import Escola
 from app.models.ia import ConversaIA, MensagemIA
 from app.models.rede import MetaRede, Rede
 from app.models.nota import LogAuditoria, Nota
+from app.models.notificacao import Notificacao
 from app.models.plataformas import (
     EventoAluno,
     Importacao,
@@ -60,6 +61,7 @@ __all__ = [
     "LogAuditoria",
     "Matricula",
     "NivelDificuldade",
+    "Notificacao",
     "PontuacaoNivelTurma",
     "Nota",
     "Professor",

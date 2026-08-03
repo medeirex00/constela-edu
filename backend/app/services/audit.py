@@ -23,4 +23,11 @@ def registrar(
             detalhes=detalhes or {},
         )
     )
+    # Notificação acionável por perfil (Fase 2): para os eventos conhecidos,
+    # materializa 1 aviso com a rota da tela de ação. Import local evita ciclo
+    # (notificacoes importa models/permissoes, não audit). No-op para as demais
+    # ações. Fica na MESMA sessão → commit atômico com a operação principal.
+    from app.services import notificacoes as _notif
+    _notif.emitir_da_auditoria(db, acao, escola_id, autor_id=usuario_id,
+                               entidade=entidade, entidade_id=entidade_id)
     # commit fica a cargo da operação principal, mantendo atomicidade

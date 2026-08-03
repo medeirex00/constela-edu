@@ -49,6 +49,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { useApi } from "../hooks/useApi";
+import { api } from "../lib/api";
 import { useHeartbeat } from "../hooks/useHeartbeat";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { useAtalhosGlobais } from "../lib/atalhos";
@@ -462,19 +463,47 @@ function PesquisaGlobal() {
 
 interface Notificacao {
   id: number;
-  texto: string;
+  tipo: string;
+  severidade: string;
+  titulo: string;
+  rota: string | null;
   autor: string | null;
   data: string;
+  lida: boolean;
 }
 
-/** Notificações (PRD §22): últimos acontecimentos relevantes da escola. */
+/** Notificações acionáveis por perfil (Fase 2). O sino mostra um BADGE de
+ *  não-lidas (buscado em segundo plano) e cada aviso LEVA à tela de ação. O
+ *  feed é escolhido pelo perfil no servidor (professor: suas turmas; Secretaria:
+ *  agregado da rede, sem PII) — o front só consome a rota que o backend mandou. */
 function Notificacoes() {
-  const { escolaId } = useApp();
+  const navegar = useNavigate();
   const [aberto, setAberto] = useState(false);
-  const { dados } = useApi<Notificacao[]>(
-    aberto && escolaId ? `/escolas/${escolaId}/notificacoes` : null);
-  const itens = dados ?? [];
+  const [naoLidas, setNaoLidas] = useState(0);
+  const [itens, setItens] = useState<Notificacao[]>([]);
+  const [carregando, setCarregando] = useState(false);
   const caixa = useRef<HTMLDivElement | null>(null);
+
+  // Badge: busca o contador em segundo plano (~60s), independente do popover
+  // (mesma cadência leve do heartbeat; nunca bate com a aba oculta).
+  useEffect(() => {
+    let vivo = true;
+    const buscar = () => {
+      if (document.visibilityState === "hidden") return;
+      api<{ nao_lidas: number }>("/notificacoes/contador")
+        .then((r) => { if (vivo) setNaoLidas(r.nao_lidas); })
+        .catch(() => {});
+    };
+    buscar();
+    const timer = window.setInterval(buscar, 60_000);
+    const aoVisivel = () => { if (document.visibilityState === "visible") buscar(); };
+    document.addEventListener("visibilitychange", aoVisivel);
+    return () => {
+      vivo = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", aoVisivel);
+    };
+  }, []);
 
   useEffect(() => {
     function fechar(evento: MouseEvent) {
@@ -484,30 +513,79 @@ function Notificacoes() {
     return () => document.removeEventListener("mousedown", fechar);
   }, []);
 
+  async function alternar() {
+    const abrindo = !aberto;
+    setAberto(abrindo);
+    if (!abrindo) return;
+    setCarregando(true);
+    try {
+      const lista = await api<Notificacao[]>("/notificacoes");
+      setItens(lista);
+      if (lista.some((n) => !n.lida)) {
+        await api("/notificacoes/marcar-lidas", { method: "POST" }).catch(() => {});
+      }
+      setNaoLidas(0); // abrir = visto tudo
+    } catch {
+      setItens([]);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  function irPara(item: Notificacao) {
+    setAberto(false);
+    if (item.rota) navegar(item.rota);
+  }
+
   return (
     <div ref={caixa} className="relative">
       <button
-        aria-label="Notificações"
-        className="rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        onClick={() => setAberto((atual) => !atual)}
+        aria-label={naoLidas > 0 ? `Notificações (${naoLidas} não lidas)` : "Notificações"}
+        className="relative rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        onClick={alternar}
       >
         <Bell size={17} />
+        {naoLidas > 0 && (
+          <span className="absolute right-0.5 top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold leading-none text-white">
+            {naoLidas > 9 ? "9+" : naoLidas}
+          </span>
+        )}
       </button>
       {aberto && (
         <div className="absolute right-0 top-full z-40 mt-1 w-80 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           <p className="border-b border-zinc-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:border-zinc-800">
             Notificações
           </p>
-          {itens.length === 0 ? (
+          {carregando ? (
+            <p className="px-3 py-3 text-sm text-zinc-400">Carregando…</p>
+          ) : itens.length === 0 ? (
             <p className="px-3 py-3 text-sm text-zinc-400">Nenhuma novidade por enquanto.</p>
           ) : (
             <ul className="max-h-80 overflow-y-auto">
               {itens.map((item) => (
-                <li key={item.id} className="border-b border-zinc-100 px-3 py-2 last:border-0 dark:border-zinc-800/60">
-                  <p className="text-sm">{item.texto}</p>
-                  <p className="text-xs text-zinc-400">
-                    {item.autor ? `${item.autor} · ` : ""}{dataHora(item.data)}
-                  </p>
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => irPara(item)}
+                    disabled={!item.rota}
+                    className={`flex w-full items-start gap-2.5 border-b border-zinc-100 px-3 py-2 text-left last:border-0 dark:border-zinc-800/60 ${
+                      item.rota ? "hover:bg-zinc-50 dark:hover:bg-zinc-800/50" : "cursor-default"
+                    }`}
+                  >
+                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                      item.severidade === "critico" ? "bg-red-500"
+                        : item.severidade === "aviso" ? "bg-amber-500" : "bg-indigo-400"
+                    }`} />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-sm ${item.lida ? "" : "font-medium"}`}>{item.titulo}</span>
+                      <span className="block text-xs text-zinc-400">
+                        {item.autor ? `${item.autor} · ` : ""}{dataHora(item.data)}
+                      </span>
+                    </span>
+                    {item.rota && (
+                      <ChevronRight size={14} className="mt-0.5 shrink-0 text-zinc-300 dark:text-zinc-600" aria-hidden />
+                    )}
+                  </button>
                 </li>
               ))}
             </ul>
