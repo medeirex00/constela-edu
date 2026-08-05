@@ -63,6 +63,10 @@ interface EscolaCartao {
   ativos_matific: number;
   ativos_elefante: number;
   livros_por_aluno: number;
+  // Per capita por MATRÍCULA (÷ total de alunos) — critério de ranking JUSTO entre
+  // escolas de tamanhos diferentes (não favorece a escola grande pelo volume bruto).
+  livros_por_matricula: number;
+  estrelas_por_matricula: number;
   precisa_atencao: boolean;
   motivo_atencao: string | null;
   posicao?: number;
@@ -206,6 +210,10 @@ const METRICAS_TOP: { chave: keyof EscolaCartao; rotulo: string; sufixo?: string
   { chave: "media_elefante", rotulo: "Leitura" },
   { chave: "media_matific", rotulo: "Matemática" },
   { chave: "adocao", rotulo: "Engajamento", sufixo: "%" },
+  // Per capita (÷ matrícula): comparação JUSTA entre escolas de tamanhos diferentes
+  // — a escola pequena com muita leitura por aluno sobe, não some sob o volume bruto.
+  { chave: "livros_por_matricula", rotulo: "Livros/aluno" },
+  { chave: "estrelas_por_matricula", rotulo: "Estrelas/aluno" },
 ];
 
 function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id: number) => void }) {

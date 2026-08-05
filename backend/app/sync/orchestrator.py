@@ -112,12 +112,14 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     linhas: list[LinhaConfirmacao] = []
     for l in analise.linhas:
         corr = l.correspondencia or {}
-        # A sync é NÃO SUPERVISIONADA (roda sozinha) → só auto-vincula quando a
-        # identidade é CERTA: UUID já vinculado ou nome idêntico (via uuid/exato).
-        # "provável" (fuzzy/abreviado/homônimo por turma) EXIGE confirmação humana
-        # (§52) e aqui viraria misattribution silenciosa — então cai como
-        # não-casado na turma detectada (cria/atualiza sem roubar dados de outra
-        # criança; uma eventual duplicata é resolvível em "Fundir duplicatas").
+        # A sync é NÃO SUPERVISIONADA. Este gate só decide se JÁ fixa o aluno_id
+        # (casamento CERTO: UUID/nome idêntico) e pula a re-checagem. Se não for
+        # "certo", a linha segue como não-casada para _resolver_aluno → _casar_no_roster,
+        # que re-roda o MOTOR ÚNICO no roster da turma e decide lá: vincula SÓ em alta
+        # confiança (nome exato/abreviação, variação de grafia SEGURA de nome do MEIO,
+        # ou identificador forte corroborando); ambíguo (2+), variação insegura
+        # (sobrenome/1º nome) ou homônimo → cria/revisa, NUNCA rouba dados de outra
+        # criança. Uma eventual duplicata é resolvível em "Fundir duplicatas".
         confiante = (corr.get("status") == "exato"
                      and corr.get("via") in ("uuid", "exato"))
         aluno_id = corr.get("aluno_id") if confiante else None
@@ -140,6 +142,9 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
         linhas=linhas,
         recalcular=recalcular,
         sincronizar_turma=True,   # sync automática: pode mover de turma (com segurança)
+        permitir_criar_turma=False,  # gate anti-turma-fantasma (item 4): a sync NUNCA
+                                     # cria turma fora do cadastro a partir do rótulo da
+                                     # plataforma — turma desconhecida vira aviso/pendência.
     )
 
     ator = _resolver_ator(db, escola.id, usuario_id)

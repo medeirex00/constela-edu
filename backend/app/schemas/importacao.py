@@ -79,6 +79,11 @@ class ImportacaoConfirm(BaseModel):
     # aluno quando a turma do Matific muda. Só o orquestrador liga isto — o
     # upload manual pela tela NUNCA move turma sozinho.
     sincronizar_turma: bool = False
+    # Permite CRIAR turma que não existe no cadastro a partir do rótulo da
+    # plataforma. Default True = importação MANUAL (opt-in explícito do gestor). A
+    # sincronização automática passa False (gate anti-turma-fantasma): turma
+    # desconhecida NÃO é criada, vira aviso; só a Lista Piloto e o manual criam.
+    permitir_criar_turma: bool = True
 
 
 class ImportacaoOut(ORMModel):

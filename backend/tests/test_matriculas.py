@@ -140,6 +140,31 @@ def test_candidatos_recusa_subsequencia_nao_posicional():
     assert m.candidatos_abreviados(_linha("ELOA VITORIA DA SILVA MARADEI"), ctx) == []
 
 
+def test_candidatos_casa_variante_segura_de_nome_do_meio():
+    """Unificação (2026-08-04): a Lista Piloto agora reconhece variação de grafia
+    SEGURA (LUÍS↔LUIZ, nome do meio, pontas idênticas) — a MESMA lógica dos imports
+    de plataforma (matching.vincula_por_nome_unico). Fecha a duplicata quando a
+    Piloto é importada DEPOIS do stub da plataforma."""
+    ctx = _pool(_ref(1, "ABRAAO LUIZ DIAS"))
+    cands = m.candidatos_abreviados(_linha("ABRAÃO LUÍS DIAS"), ctx)
+    assert [c.id for c in cands] == [1]
+
+
+def test_candidatos_recusa_variante_no_sobrenome():
+    """SEGURANÇA unificada: variação no SOBRENOME (SOUZA/SOUSA, último token) NÃO
+    casa — famílias diferentes. Vai a novo/revisão, igual ao motor de plataforma."""
+    ctx = _pool(_ref(1, "GABRIEL PEDRO SOUSA"))
+    assert m.candidatos_abreviados(_linha("GABRIEL PEDRO SOUZA"), ctx) == []
+
+
+def test_candidatos_veta_variante_com_nascimento_divergente():
+    """Veto de identidade UNIFICADO: mesma variação segura, mas nascimento divergente
+    → outra criança (gêmeo/homônimo) → NÃO casa."""
+    ctx = _pool(_ref(1, "ABRAAO LUIZ DIAS", nasc=date(2017, 5, 1)))
+    linha = _linha("ABRAÃO LUÍS DIAS", nasc=date(2018, 9, 20))
+    assert m.candidatos_abreviados(linha, ctx) == []
+
+
 # --- casar_abreviados (unicidade bipartida) --------------------------------
 
 def test_casar_um_para_um_inequivoco():

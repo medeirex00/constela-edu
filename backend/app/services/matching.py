@@ -15,10 +15,11 @@ Camadas:
   * ``classificar_linha`` → status "vinculado" | "revisar" | "novo" | "bloqueado"
     para os fluxos linha-contra-roster (imports + prévia + confirmação).
 
-Regra de ouro: automação máxima nos casos de ALTA confiança (nome exato/abreviação
-com 1 único candidato, ou identificador forte corroborando), REVISÃO manual nos
-ambíguos (2+ candidatos, nome parcial, variante/typo de grafia) e NENHUM vínculo
-automático quando há risco relevante de confundir duas crianças.
+Regra de ouro: automação máxima nos casos de ALTA confiança (nome exato/abreviação,
+ou variação de grafia SEGURA — num token do MEIO, com 1º nome e sobrenome idênticos —
+com 1 único candidato na turma, ou identificador forte corroborando), REVISÃO manual
+nos ambíguos (2+ candidatos, nome parcial, ou variação no sobrenome/1º nome) e NENHUM
+vínculo quando o veto de identidade prova ser outra criança.
 """
 from __future__ import annotations
 
@@ -58,6 +59,21 @@ def typo_forte(a: list[str], b: list[str]) -> bool:
     return _similaridade(ta, tb) >= 0.8
 
 
+def _variante_segura_para_vincular(nome_a: str, nome_b: str) -> bool:
+    """Uma variação de grafia (plausivel='fraco') é segura para AUTO-VÍNCULO de
+    candidato ÚNICO? SÓ quando o 1º nome E o último sobrenome são IDÊNTICOS e a
+    divergência está num token do MEIO (nome com >=3 tokens). Aí é, na prática, a
+    MESMA pessoa: ABRAÃO LUÍS/LUIZ DIAS, AGATHA EMANUELE/EMANUELLE ... OLIVEIRA.
+    Variação no SOBRENOME (SOUZA/SOUSA), no 1º nome ou no gênero (BRUNO/BRUNA,
+    GABRYEL/GABRIEL) e nomes de <=2 tokens distinguem crianças DIFERENTES de
+    altíssima frequência no Brasil → vão para REVISÃO, nunca auto-vínculo (achado do
+    red-team adversarial 2026-08-04; preserva 'nunca fundir crianças diferentes')."""
+    ta, tb = tokens_nome(nome_a), tokens_nome(nome_b)
+    if len(ta) != len(tb) or len(ta) < 3:
+        return False
+    return ta[0] == tb[0] and ta[-1] == tb[-1]
+
+
 def plausivel(nome_a: str, nome_b: str) -> str | None:
     """Podem ser a MESMA pessoa por NOME? 'forte' (exato/abreviação — pode
     auto-vincular), 'parcial' (subconjunto/nome parcial — só revisão), 'fraco'
@@ -75,6 +91,24 @@ def plausivel(nome_a: str, nome_b: str) -> str | None:
     if variante_ortografica(ta, tb) or typo_forte(ta, tb):
         return "fraco"                                   # variante/typo de grafia
     return None
+
+
+def vincula_por_nome_unico(nome_a: str, nome_b: str) -> bool:
+    """Critério ÚNICO de AUTO-VÍNCULO por NOME quando há 1 único candidato plausível
+    na turma — COMPARTILHADO por ``classificar_linha`` (imports Elefante/Matific,
+    prévia, sync) e pelo casamento da Lista Piloto (``matriculas.candidatos_abreviados``).
+    Assim a decisão "este registro é o mesmo aluno?" é a MESMA, independentemente da
+    origem dos dados. True para nome exato/abreviação (forte: MARIA E ↔ MARIA EDUARDA)
+    e para variação de grafia SEGURA (fraco no nome do MEIO, pontas idênticas:
+    LUÍS↔LUIZ). False para variação insegura (sobrenome/1º nome: SOUZA/SOUSA,
+    BRUNO/BRUNA), nome PARCIAL (subconjunto) e nomes diferentes — vão a revisão/novo
+    em TODOS os fluxos."""
+    v = plausivel(nome_a, nome_b)
+    if v == "forte":
+        return True
+    if v == "fraco":
+        return _variante_segura_para_vincular(nome_a, nome_b)
+    return False
 
 
 @dataclass(frozen=True)
@@ -158,13 +192,17 @@ def classificar_linha(linha: Identidade, roster: list[Identidade]) -> Resultado:
       1) UUID/id externo em comum → VINCULADO (identidade definitiva);
       2) identificador forte corroborando (chamada/RA/nascimento igual) um candidato
          plausível NÃO-fraco → VINCULADO;
-      3) 1 único candidato FORTE (exato/abreviação) e nenhum outro plausível →
-         VINCULADO;
-      4) algum candidato plausível (2+, ou parcial, ou variante/typo) → REVISAR;
+      3) 1 único candidato FORTE (exato/abreviação), OU FRACO de variação SEGURA
+         (variante/typo num token do MEIO, com 1º nome e sobrenome idênticos), e
+         nenhum outro plausível → VINCULADO (decisão do dono 2026-08-04);
+      4) 2+ candidatos, OU 1 candidato PARCIAL (subconjunto), OU variação de grafia
+         NÃO-segura (sobrenome/1º nome, ex.: SOUZA/SOUSA, BRUNO/BRUNA) → REVISAR;
       5) o nome casava mas TODOS foram vetados por identidade divergente → BLOQUEADO;
       6) nada → NOVO.
-    Nunca vincula automaticamente por nome parcial nem por variante/typo de grafia
-    (só sob corroboração por identificador forte, e mesmo assim só forte/parcial)."""
+    Nunca vincula por nome PARCIAL (subconjunto), por variação no SOBRENOME ou no
+    1º nome/gênero, nem quando há 2+ candidatos — tudo isso vai a REVISAR. Variante/
+    typo de candidato ÚNICO auto-vincula APENAS na variação SEGURA de nome do meio
+    (pontas idênticas), a pedido do dono e sem fundir crianças diferentes."""
     fortes: dict[int, Identidade] = {}
     parciais: dict[int, Identidade] = {}
     fracos: dict[int, Identidade] = {}
@@ -183,21 +221,39 @@ def classificar_linha(linha: Identidade, roster: list[Identidade]) -> Resultado:
             continue
         (fortes if v == "forte" else parciais if v == "parcial" else fracos)[c.id] = c
 
-    # (2) Corroboração por identificador forte — só promove forte/parcial (nunca
-    # typo/variante: grafia parecida nunca vira vínculo automático, mesmo com
-    # chamada igual — é sugestão de revisão, decisão do dono). Para nome PARCIAL o
-    # nascimento NÃO corrobora (aniversário não é único → poderia juntar 2 crianças).
+    # (2) Corroboração por identificador FORTE (chamada/RA/UUID; nascimento só p/ nome
+    # forte, pois aniversário não é único). O identificador desempata a identidade →
+    # vincula até nome PARCIAL ou variação de grafia "insegura" (o mesmo RA/chamada/
+    # UUID prova ser a MESMA criança). Gêmeos/homônimos com identificador DIVERGENTE já
+    # saíram pelo veto (bloqueado_por_conflito) antes desta contagem.
     for c in fortes.values():
         if corrobora_identidade(linha, c):
             return Resultado(VINCULADO, c.id, "identificador", (c.id,))  # type: ignore[arg-type]
     for c in parciais.values():
         if corrobora_identidade(linha, c, incluir_nascimento=False):
             return Resultado(VINCULADO, c.id, "identificador", (c.id,))  # type: ignore[arg-type]
+    for c in fracos.values():
+        if corrobora_identidade(linha, c, incluir_nascimento=False):
+            return Resultado(VINCULADO, c.id, "identificador", (c.id,))  # type: ignore[arg-type]
 
     plausiveis: dict[int, Identidade] = {**fortes, **parciais, **fracos}
-    if len(fortes) == 1 and len(plausiveis) == 1:
-        cid = next(iter(fortes))
-        return Resultado(VINCULADO, cid, _motivo_nome(linha.nome, fortes[cid].nome), (cid,))
+    # 1 ÚNICO candidato plausível na MESMA turma → VINCULA — decisão do dono
+    # (2026-08-04): fechar na ORIGEM os duplicados de grafia (ABRAÃO LUÍS×LUIZ, AGATHA
+    # EMANUELE×EMANUELLE) sem gerar ficha para fundir depois. MAS com dois guard-rails
+    # (red-team 2026-08-04, preserva "nunca fundir crianças diferentes"):
+    #  - PARCIAL (subconjunto: "ANA"→"ANA JULIA") → REVISAR (cair um nome inteiro é
+    #    ambíguo: sobrenome comum / dono ausente);
+    #  - FRACO só vincula se a variação for SEGURA (nome do MEIO, pontas idênticas);
+    #    variação no sobrenome/1º nome (SOUZA/SOUSA, BRUNO/BRUNA) → REVISAR.
+    # Gêmeos/homônimos com identificador divergente já saíram pelo veto acima.
+    unico = next(iter(plausiveis)) if len(plausiveis) == 1 else None
+    if unico is not None and vincula_por_nome_unico(linha.nome, plausiveis[unico].nome):
+        # Critério ÚNICO de vínculo por nome — o MESMO da Lista Piloto (matriculas):
+        # forte (exato/abreviação) ou variação SEGURA de nome do meio. PARCIAL e
+        # variação insegura (sobrenome/1º nome, ex.: SOUZA/SOUSA, BRUNO/BRUNA) devolvem
+        # False e caem no REVISAR abaixo — preserva "nunca fundir crianças diferentes".
+        return Resultado(VINCULADO, unico,
+                         _motivo_nome(linha.nome, plausiveis[unico].nome), (unico,))
     if plausiveis:
         alvo = _melhor(plausiveis)
         return Resultado(REVISAR, alvo, _motivo_nome(linha.nome, plausiveis[alvo].nome),

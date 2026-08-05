@@ -222,30 +222,44 @@ def casa_forte(linha: LinhaMatricula, ctx: ContextoCasamento) -> bool:
 
 
 def candidatos_abreviados(linha: LinhaMatricula, ctx: ContextoCasamento) -> list[AlunoRef]:
-    """Cadastros do pool cujo nome ABREVIADO posicional bate com esta linha,
-    na MESMA turma (overlap série+letra) e sem nascimento divergente."""
+    """Cadastros do pool que o MOTOR ÚNICO reconhece como a MESMA pessoa desta linha
+    da Lista Piloto — o MESMO critério dos imports de plataforma
+    (``matching.vincula_por_nome_unico``): nome exato/abreviação (MARIA E ↔ MARIA
+    EDUARDA) OU variação de grafia SEGURA (LUÍS↔LUIZ, no nome do meio, pontas
+    idênticas), na MESMA turma (overlap série+letra), sem conflito de identidade
+    (nascimento/RA divergente). Variação insegura (sobrenome/1º nome: SOUZA/SOUSA,
+    BRUNO/BRUNA) e nome parcial NÃO entram — vão a novo/revisão, igual aos demais
+    fluxos. A unicidade 1:1 (1 candidato = vincula, 2+ = revisão) fica em
+    ``casar_abreviados``. Antes usava só ``casa_abreviado`` (abreviação) e vetava só
+    por nascimento; agora é a lógica ÚNICA de vínculo, independente da origem."""
+    from app.services import matching
     tokens = svc.tokens_nome(linha.nome)
     if len(tokens) < 2:
         return []
     # Olha o balde do 1º token E o da 1ª LETRA: um stub com inicial no primeiro nome
-    # ("M. EDUARDA") fica indexado em "m", não em "maria" — sem isto a Lista Piloto
-    # nunca casaria a inicial do 1º nome (motor único: casa_abreviado cobre).
+    # ("M. EDUARDA") fica indexado em "m", não em "maria".
     candidatos_pool = {
         c.id: c for c in (*ctx.pool_por_primeiro.get(tokens[0], ()),
                           *ctx.pool_por_primeiro.get(tokens[0][:1], ()))
     }
+    linha_ident = matching.Identidade(nome=linha.nome, nascimento=linha.nascimento,
+                                      ra=linha.ra or "")
     achados: list[AlunoRef] = []
     for antigo in candidatos_pool.values():
-        if not svc.casa_abreviado(svc.tokens_nome(antigo.nome), tokens):
+        if not matching.vincula_por_nome_unico(linha.nome, antigo.nome):
             continue
         # Precisa bater com ALGUMA turma real do aluno (série+letra), não com a
         # união de turmas de anos diferentes.
         if not any(overlap_turma(linha.turma_tokens, ts) >= 2
                    for ts in antigo.turmas_tokens):
             continue
-        if (linha.nascimento and antigo.data_nascimento
-                and linha.nascimento != antigo.data_nascimento):
-            continue                      # veto por nascimento divergente
+        # Veto de identidade UNIFICADO (nascimento/RA/chamada divergentes = outra
+        # criança). O pool costuma ser stub sem RA/chamada → na prática veta por
+        # nascimento, o dado que a Lista Piloto traz.
+        if matching.conflito_identidade(
+                linha_ident,
+                matching.Identidade(nome=antigo.nome, nascimento=antigo.data_nascimento)):
+            continue
         achados.append(antigo)
     return achados
 

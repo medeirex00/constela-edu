@@ -41,6 +41,17 @@ CATALOGO = {
                "descricao": "Avaliação de rendimento da rede estadual de São Paulo."},
     "crianca_alfabetizada": {"nome": "Criança Alfabetizada", "tipo": "avaliacao", "orgao": "INEP / CAEd",
                              "descricao": "Avaliação de alfabetização (2º ano do EF)."},
+    # CAEd como FONTE/tipo próprio (decisão do dono 2026-08-04): as avaliações do CAEd
+    # entram como avaliações SEPARADAS, sem alterar "Criança Alfabetizada" (que segue
+    # como está). Ainda SEM preset de import de 1 clique — o mapeamento de colunas
+    # será travado com o ARQUIVO OFICIAL de cada avaliação (não inventar formato); a
+    # tela já permite importar por mapeamento manual quando o arquivo existir.
+    "caed_fluencia": {"nome": "CAEd — Fluência Leitora", "tipo": "avaliacao", "orgao": "CAEd",
+                      "descricao": "Fluência leitora aplicada pelo CAEd. Mapeamento de "
+                                   "importação a configurar com o arquivo oficial."},
+    "caed_diagnostica": {"nome": "CAEd — Avaliação Diagnóstica", "tipo": "avaliacao", "orgao": "CAEd",
+                         "descricao": "Avaliação diagnóstica do CAEd. Mapeamento de "
+                                      "importação a configurar com o arquivo oficial."},
 }
 
 

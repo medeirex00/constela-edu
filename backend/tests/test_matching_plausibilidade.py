@@ -208,10 +208,11 @@ def test_previa_usa_o_mesmo_motor_da_confirmacao(db):
     assert linhas[0].correspondencia["status"] == "vinculado"
 
 
-def test_previa_typo_mostra_possivel_duplicata_sem_pre_selecionar(db):
-    """PONTO 1+2: typo no 1º nome (GABRYEL/GABRIEL) na mesma turma → 'revisar'
-    (possível duplicata) na PRÉVIA — NÃO 'provavel' (que pré-selecionaria e viraria
-    vínculo por um clique). Grafia parecida nunca vincula sozinha."""
+def test_previa_typo_primeiro_nome_mostra_revisar(db):
+    """Variação no 1º NOME (GABRYEL/GABRIEL, 2 tokens) NÃO é variação SEGURA →
+    'revisar' na PRÉVIA (não pré-seleciona). Protege crianças diferentes de 1º nome/
+    gênero (guard-rail do red-team 2026-08-04). A variação SEGURA de nome do MEIO
+    (ABRAÃO LUÍS/LUIZ) é que vira 'vinculado'."""
     esc, turma = _escola_turma(db)
     _matricular(db, esc, turma, "GABRIEL SILVA")
     db.commit()

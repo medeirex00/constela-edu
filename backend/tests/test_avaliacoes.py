@@ -142,6 +142,19 @@ def test_catalogo_endpoint(db, escola_completa, cliente):
     assert ideb["tipo"] == "indicador"
 
 
+def test_catalogo_inclui_caed_como_fonte_propria(db, escola_completa, cliente):
+    """Item 2: CAEd é uma FONTE/tipo própria (orgao='CAEd') com avaliações separadas,
+    sem alterar 'Criança Alfabetizada' (que segue 'INEP / CAEd')."""
+    dados = cliente.get("/api/v1/avaliacoes").json()
+    por_chave = {a["chave"]: a for a in dados}
+    assert por_chave["caed_fluencia"]["orgao"] == "CAEd"
+    assert por_chave["caed_diagnostica"]["orgao"] == "CAEd"
+    assert por_chave["caed_fluencia"]["tipo"] == "avaliacao"
+    # 'Criança Alfabetizada' permanece intocada.
+    assert por_chave["crianca_alfabetizada"]["orgao"] == "INEP / CAEd"
+    assert por_chave["crianca_alfabetizada"]["nome"] == "Criança Alfabetizada"
+
+
 def test_importar_endpoint_escopa_pela_escola_do_admin(db, escola_completa, cliente):
     # O admin de teste é da escola (não global): só casa a PRÓPRIA escola.
     escola = escola_completa["escola"]

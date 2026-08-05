@@ -167,6 +167,7 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
         m, e = mat.get(escola.id), ele.get(escola.id)
         livros = int(e["livros_unicos"]) if e else 0
         ativos_ele = int(e["ativos"]) if e else 0
+        estrelas = int(m["estrelas"]) if m else 0
         cartoes.append({
             "escola_id": escola.id, "nome": escola.nome, "cidade": escola.cidade,
             "status": escola.status,
@@ -181,10 +182,16 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "livros": livros,
             "tempo_leitura_min": int(e["tempo_leitura_min"]) if e else 0,
             "atividades": int(m["atividades"]) if m else 0,
-            "estrelas": int(m["estrelas"]) if m else 0,
+            "estrelas": estrelas,
             "ativos_matific": int(m["ativos"]) if m else 0,
             "ativos_elefante": ativos_ele,
             "livros_por_aluno": round(livros / ativos_ele, 1) if ativos_ele else 0.0,
+            # Per capita por MATRÍCULA (÷ total de alunos da escola) — critério de
+            # ranking JUSTO entre escolas de tamanhos diferentes: combina adoção e
+            # intensidade e NÃO favorece a escola grande pelo volume bruto (item 1).
+            # É a conta do dono: 19.122÷200≈95,6 supera 24.000÷600=40.
+            "livros_por_matricula": round(livros / total_alunos, 1) if total_alunos else 0.0,
+            "estrelas_por_matricula": round(estrelas / total_alunos, 1) if total_alunos else 0.0,
             "precisa_atencao": motivo is not None,
             "motivo_atencao": motivo,
         })
@@ -275,6 +282,10 @@ METRICAS_RANKING = {
     "engajamento": "adocao",
     "livros": "livros",
     "estrelas": "estrelas",
+    # Critérios PER CAPITA (÷ matrícula) — comparação JUSTA entre escolas de
+    # tamanhos diferentes (item 1): não favorecem a escola grande pelo volume bruto.
+    "livros_aluno": "livros_por_matricula",
+    "estrelas_aluno": "estrelas_por_matricula",
 }
 
 

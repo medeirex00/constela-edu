@@ -48,7 +48,7 @@ interface Correlacao {
   componente: string | null; edicao: number; metrica: string;
   pontos: PontoCorr[]; n: number; pearson: number | null; evolucao: EvolPonto[];
 }
-interface CatalogoItem { chave: string; nome: string; tipo: string; descricao: string | null }
+interface CatalogoItem { chave: string; nome: string; tipo: string; orgao: string | null; descricao: string | null }
 interface Analise { linhas_lidas: number; n_colunas: number; primeiras_linhas: string[][] }
 interface Mapeamento {
   linha_dados: number; col_inep: number; col_valor: number;
@@ -416,8 +416,24 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Campo rotulo="Avaliação">
+              {/* Agrupado por ÓRGÃO (INEP, CAEd, SEDUC-SP…): o CAEd aparece como
+                  categoria própria, pronta para receber Fluência Leitora, Diagnóstica
+                  e outras avaliações da plataforma. */}
               <select className={estiloInput} value={avaliacao} onChange={(e) => trocarAvaliacao(e.target.value)}>
-                {catalogo.map((a) => <option key={a.chave} value={a.chave}>{a.nome}</option>)}
+                {Object.entries(
+                  catalogo.reduce<Record<string, CatalogoItem[]>>((acc, a) => {
+                    const org = a.orgao || "Outros";
+                    if (!acc[org]) acc[org] = [];
+                    acc[org].push(a);
+                    return acc;
+                  }, {}),
+                ).map(([org, itens]) => (
+                  <optgroup key={org} label={org}>
+                    {itens.map((a) => (
+                      <option key={a.chave} value={a.chave}>{a.nome}</option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             </Campo>
             <Campo rotulo="Edição (ano)">

@@ -62,9 +62,11 @@ def test_sync_provavel_nao_autovincula_e_cria_novo(db, escola_completa, monkeypa
 
 
 def test_sync_homonimo_ambiguo_nao_atribui_a_crianca_errada(db, escola_completa, monkeypatch):
-    """LACUNA B: dois homônimos REAIS em turmas diferentes + relatório numa turma
-    que não casa com nenhuma → a sync não atribui a nenhum dos dois; cria um
-    terceiro registro (resolvível em "Fundir"), sem roubar dados da criança certa."""
+    """LACUNA B: dois homônimos REAIS em turmas diferentes + relatório numa TERCEIRA
+    turma (que EXISTE no cadastro) onde nenhum deles está → a sync não atribui a
+    nenhum dos dois; cria um terceiro registro (resolvível em "Fundir"), sem roubar
+    dados da criança certa. (Se a turma do relatório NÃO existisse, o gate do item 4
+    a barraria e nada seria importado — ver test_turma_fantasma_gate.)"""
     escola = escola_completa["escola"]
     ano = escola.ano_letivo_ativo
     joao_a = escola_completa["alunos"][1]  # "João Pedro Barbosa" em "3º Ano A"
@@ -77,11 +79,17 @@ def test_sync_homonimo_ambiguo_nao_atribui_a_crianca_errada(db, escola_completa,
     db.add(joao_b)
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=joao_b.id, turma_id=turma_b.id, ano_letivo=ano))
+    # A turma do relatório (5º Ano C) EXISTE no cadastro, mas é uma TERCEIRA turma
+    # onde nenhum homônimo está — o gate anti-turma-fantasma (item 4) não barra
+    # (a turma existe); o que se prova aqui é a NÃO-atribuição à criança errada.
+    turma_c = Turma(escola_id=escola.id, nome="5º Ano C", ano_escolar="5º Ano", ano_letivo=ano)
+    db.add(turma_c)
     db.commit()
     originais = {joao_a.id, joao_b.id}
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
-    # Turma "5 ANO C" não casa com "3º Ano A" nem "4º Ano B" → desempate impossível.
+    # Relatório na 5º Ano C: nenhum homônimo está nela → não atribui a nenhum; cria
+    # um terceiro registro na 5º Ano C, sem roubar dados de joao_a nem joao_b.
     arq = _arquivo_elefante("5 ANO C", "João Pedro Barbosa")
     orchestrator.aplicar_arquivo(db, escola, arq, usuario_id=None,
                                  recalcular=False, contexto=_contexto(escola.id))

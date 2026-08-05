@@ -1195,9 +1195,9 @@ def _prever_pelo_motor(db: Session, escola_id: int,
             linha.correspondencia = {"status": "bloqueado",
                                      "alternativas": corr.get("alternativas", [])}
         elif res.status == matching.VINCULADO and alvo is not None:
-            # Match ESTRUTURAL (exato/abreviação) único NA TURMA reportada → vincula
-            # (spec do dono: 1 candidato plausível na turma = alta confiança). Grafia/
-            # typo nunca chega aqui (o motor os classifica REVISAR, não VINCULADO).
+            # 1 candidato único na turma reportada (nome exato/abreviação OU variante/
+            # typo de grafia) → vincula (spec do dono 2026-08-04). Grafia de candidato
+            # único agora chega aqui como VINCULADO; parcial/2+ continuam em REVISAR.
             linha.correspondencia = {
                 "status": "vinculado", "via": "motor", "aluno_id": res.aluno_id,
                 "aluno_nome": alvo.nome, "similaridade": 100.0, "motivo": res.motivo,

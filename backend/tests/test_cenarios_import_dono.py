@@ -97,6 +97,9 @@ def test_oito_cenarios_do_dono(db):
     print("\n\n========= TESTE DOS 8 CENARIOS (ambiente seguro) =========")
     print(f"{'CENARIO':<34}{'PREVIA':<13}{'-> CONFIRMACAO'}")
     print("-" * 90)
+    # Cenário 5 (typo no 1º nome GABRYEL/GABRIEL, 2 tokens) → REVISAR: variação de 1º
+    # nome não é "segura" p/ auto-vínculo (guard-rail do red-team 2026-08-04). A
+    # variação SEGURA de nome do meio (ex.: ABRAÃO LUÍS/LUIZ) é que vincula.
     esperado = ["vinculado_exato", "vinculado", "vinculado", "vinculado",
                 "revisar", "revisar", "bloqueado"]
     for (rotulo, nome, dados), linha, exp in zip(cenarios, linhas, esperado):

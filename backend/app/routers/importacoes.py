@@ -336,7 +336,8 @@ def _inserir_turma(db: Session, escola_id: int, ano: int, nome: str,
 
 
 def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
-                     avisos: list[str], turmas_novas: dict) -> Turma | None:
+                     avisos: list[str], turmas_novas: dict,
+                     permitir_criar: bool = True) -> Turma | None:
     """Acha ou CRIA a turma do relatório, SEMPRE pela identidade CANÔNICA (a mesma
     do caminho da Lista Piloto), nunca pelo nome cru. Ordem de casamento:
       1) código externo (SED/Censo entre parênteses) — idempotência mais forte;
@@ -345,7 +346,10 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
       3) na dúvida (formato sem série+letra: Maternal/Pré/EJA), cria.
     Ao criar, grava o NOME NORMALIZADO ("4ºC") e o código externo FORA do nome.
     O cache do lote é indexado pela chave canônica, então variantes da mesma sala
-    no mesmo arquivo colapsam."""
+    no mesmo arquivo colapsam.
+    ``permitir_criar=False`` (sincronização automática) NÃO cria turma que não exista
+    no cadastro — só reaproveita a canônica; turma desconhecida vira aviso p/ análise
+    (gate anti-turma-fantasma). A Lista Piloto e o import manual (opt-in) passam True."""
     nome_cru = (nome or "").strip()
     if not nome_cru:
         return None
@@ -376,6 +380,17 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
                 turma = t
                 break
     if turma is None:
+        if not permitir_criar:
+            # GATE anti-turma-fantasma (item 4): a turma do relatório da plataforma
+            # NÃO existe no cadastro da escola e este fluxo (sincronização automática)
+            # não pode inventar turma. Não cria; avisa p/ análise. A Lista Piloto
+            # (fonte oficial) e o import manual com opt-in continuam podendo criar.
+            avisos.append(
+                f"A turma “{matriculas.nome_turma_exibicao(nome_cru)}” do relatório "
+                "não existe no cadastro desta escola — nenhum aluno foi criado nela "
+                "(sincronização automática não cria turmas). Cadastre-a pela Lista "
+                "Piloto ou associe manualmente.")
+            return None
         nome_norm = matriculas.nome_turma_exibicao(nome_cru)
         turma, criada = _inserir_turma(
             db, escola_id, ano, nome_norm,
@@ -408,6 +423,7 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     alvo = svc.normalizar_nome(nome)
     linha_ident = matching.Identidade(chamada=numero_chamada, nascimento=nascimento,
                                       ra=ra or "")
+    achados: list[Aluno] = []
     for aluno in db.execute(
         select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
         .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
@@ -419,8 +435,12 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
                 chamada=aluno.numero_chamada, nascimento=aluno.data_nascimento,
                 ra=str((aluno.ficha or {}).get("ra", "")))):
             continue                  # mesmo nome, identidade prova ser outra criança
-        return aluno
-    return None
+        achados.append(aluno)
+    # 1 match não-conflitante → reusa (idempotência de reenvio do MESMO relatório).
+    # 2+ (HOMÔNIMOS reais na turma, sem identificador que os desempate) → AMBÍGUO:
+    # não reusa nenhum às cegas; devolve None para o casamento pelo motor decidir
+    # (2+ candidatos → revisão, nunca atribui os dados à criança errada).
+    return achados[0] if len(achados) == 1 else None
 
 
 def _data_iso(valor):
@@ -464,12 +484,13 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
     canônica ANTES de criar — o núcleo de "1 aluno = 1 perfil". Delega ao MOTOR
     ÚNICO (``matching.classificar_linha``, o mesmo da prévia/detecção) e traduz o
     status para a confiança do import:
-      * VINCULADO → "alta"  (auto-vincula: nome exato/abreviação com 1 candidato, ou
-        identificador forte — chamada/RA/nascimento/UUID — corroborando);
-      * REVISAR   → "media" (2+ candidatos, nome parcial, variante/typo de grafia →
-        NÃO cria; vai p/ revisão manual);
-      * BLOQUEADO/NOVO → "baixa" (cria novo — bloqueado = nome casa mas identidade
-        prova ser outra criança; novo = ninguém plausível)."""
+      * VINCULADO → "alta"  (auto-vincula: nome exato/abreviação OU variante/typo de
+        grafia com 1 único candidato na turma, ou identificador forte — chamada/RA/
+        nascimento/UUID — corroborando);
+      * REVISAR   → "media" (2+ candidatos ambíguos → NÃO cria; vai p/ revisão);
+      * BLOQUEADO/NOVO/parcial-único → "baixa" (cria novo — bloqueado = nome casa mas
+        identidade prova ser outra criança; novo = ninguém plausível; parcial único =
+        subconjunto ambíguo, cria e a detecção surfaça p/ fusão manual)."""
     if not svc.tokens_nome(nome):
         return None, "baixa"
     linha = matching.Identidade(nome=nome, chamada=numero_chamada,
@@ -480,15 +501,17 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
         return por_id[res.aluno_id], "alta"
     if res.status == matching.REVISAR and len(res.candidatos) >= 2:
         return None, "media"          # AMBÍGUO (2+ candidatos) → não cria órfão; revisão
-    # 1 candidato fraco/parcial (variante/typo/nome parcial) → CRIA e a detecção o
-    # surfaça como "possível duplicata" p/ fusão manual (ponto 1 do dono); BLOQUEADO
-    # (identidade divergente) e NOVO também criam.
+    # Chega aqui: NOVO, BLOQUEADO, ou REVISAR de candidato ÚNICO PARCIAL (subconjunto).
+    # Variante/typo de candidato único NÃO cai mais aqui — o motor agora o classifica
+    # VINCULADO (tratado acima como "alta", fim das duplicatas de grafia). Parcial
+    # único ainda cria (ambíguo, sem âncora): a detecção passiva surfaça p/ fusão.
     return None, "baixa"
 
 
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
                     criados: dict | None = None,
-                    turmas_novas: dict | None = None) -> Aluno | None:
+                    turmas_novas: dict | None = None,
+                    permitir_criar_turma: bool = True) -> Aluno | None:
     if linha.aluno_id is not None:
         aluno = db.get(Aluno, linha.aluno_id)
         if aluno is None or aluno.escola_id != escola_id:
@@ -504,7 +527,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             return None
     elif getattr(linha, "criar_em_turma_nome", None):
         turma = _turma_pelo_nome(db, escola_id, ano, linha.criar_em_turma_nome,
-                                 avisos, turmas_novas if turmas_novas is not None else {})
+                                 avisos, turmas_novas if turmas_novas is not None else {},
+                                 permitir_criar=permitir_criar_turma)
+        if turma is None and not permitir_criar_turma:
+            # Turma inexistente na sincronização automática → _turma_pelo_nome já
+            # avisou com clareza; não cria aluno órfão numa turma-fantasma.
+            return None
 
     if turma is not None:
         # Identidade da linha (chamada/RA/nascimento) — usada tanto no guard de
@@ -1152,7 +1180,9 @@ def confirmar(
     turmas_novas: dict = {}                     # turma criada pelo nome: 1x só
     for linha in dados.linhas:
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
-                                avisos, criados, turmas_novas)
+                                avisos, criados, turmas_novas,
+                                permitir_criar_turma=getattr(
+                                    dados, "permitir_criar_turma", True))
         if aluno is None:
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)

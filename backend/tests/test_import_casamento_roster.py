@@ -58,19 +58,43 @@ def test_elefante_abreviado_vincula_ao_aluno_da_lista_piloto(db):
     assert _conta_alunos(db, esc.id) == antes                 # NENHUM aluno novo
 
 
-def test_matific_variante_ortografica_NAO_vincula_automaticamente(db):
-    """SEGURANÇA (revisão adversarial): variação de grafia (LUIZ vs LUÍS) NÃO
-    vincula sozinha no import — similaridade de nome não separa a mesma criança de
-    duas de nomes próximos (MARIA/MARTA). "ABRAAO LUIZ DIAS" vira um cadastro novo
-    e aparece na revisão manual de duplicatas (nunca vínculo automático errado)."""
+def test_matific_variante_ortografica_vincula_candidato_unico(db):
+    """Decisão do dono (2026-08-04): variação de grafia (LUIZ vs LUÍS) com 1 ÚNICO
+    candidato na turma VINCULA na ORIGEM — não cria a 2ª ficha para o dono fundir
+    depois. "ABRAAO LUIZ DIAS" casa com o único "ABRAÃO LUÍS DIAS" da turma. A régua
+    de segurança (nunca fundir crianças diferentes) fica na AMBIGUIDADE (2+ candidatos,
+    ver test_ambiguo_entre_criancas_diferentes_nao_funde) e no veto de identidade."""
     esc, turma, abraao = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
     r = _resolver_aluno(db, esc.id, 2026,
                         _linha("ABRAAO LUIZ DIAS", "4 ANO C INTEGRAL"),
                         [], {}, {})
-    assert r is not None and r.id != abraao.id            # cadastro NOVO, não vínculo
-    assert _conta_alunos(db, esc.id) == antes + 1
+    assert r is not None and r.id == abraao.id            # VINCULA ao existente
+    assert _conta_alunos(db, esc.id) == antes             # nenhum aluno novo criado
+
+
+def test_dois_homonimos_na_turma_vao_para_revisao(db):
+    """Dois 'JOÃO PEDRO BARBOSA' reais na MESMA turma (sem identificador que os
+    desempate) + import homônimo → AMBÍGUO: o guard de idempotência NÃO atribui a
+    nenhum às cegas; vai para revisão, sem criar nem roubar dados da criança errada."""
+    esc, turma, _ = _cenario(db)
+    for _ in range(2):
+        j = Aluno(escola_id=esc.id, nome="JOÃO PEDRO BARBOSA", status="ativo",
+                  da_lista_piloto=True)
+        db.add(j)
+        db.flush()
+        db.add(Matricula(escola_id=esc.id, aluno_id=j.id, turma_id=turma.id,
+                         ano_letivo=2026))
+    db.commit()
+    antes = _conta_alunos(db, esc.id)
+    avisos: list[str] = []
+    r = _resolver_aluno(db, esc.id, 2026,
+                        _linha("JOAO PEDRO BARBOSA", "4 ANO C INTEGRAL"),
+                        avisos, {}, {})
+    assert r is None                                      # não atribui nem cria
+    assert _conta_alunos(db, esc.id) == antes             # nenhum aluno novo
+    assert avisos                                         # vai para revisão (avisa)
 
 
 def test_ambiguo_entre_criancas_diferentes_nao_funde(db):

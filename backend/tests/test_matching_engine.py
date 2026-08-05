@@ -86,18 +86,48 @@ def test_parcial_unico_vai_para_revisao():
     assert r.status == REVISAR and r.aluno_id == 1 and r.motivo == "parcial"
 
 
-def test_typo_unico_vai_para_revisao_nunca_vincula():
-    roster = [ident("GABRIEL SILVA", _id=1)]
-    r = classificar_linha(ident("GABRYEL SILVA"), roster)
-    assert r.status == REVISAR and r.aluno_id == 1 and r.motivo == "typo"
+def test_variante_segura_nome_do_meio_vincula():
+    """Caso real (Débora Pilon): variação no NOME DO MEIO com 1º nome e sobrenome
+    idênticos (ABRAÃO LUÍS/LUIZ DIAS), 1 único candidato → VINCULA na origem, sem
+    criar 2ª ficha. É a decisão do dono (2026-08-04)."""
+    roster = [ident("ABRAÃO LUÍS DIAS", _id=1), ident("BEATRIZ SOUZA", _id=2)]
+    r = classificar_linha(ident("ABRAAO LUIZ DIAS"), roster)
+    assert r.status == VINCULADO and r.aluno_id == 1
 
 
-def test_typo_com_chamada_igual_ainda_e_revisao():
-    """Grafia parecida NUNCA vira vínculo automático, mesmo com chamada igual —
-    é sugestão de revisão (decisão do dono)."""
+def test_variante_no_sobrenome_vai_para_revisao():
+    """SEGURANÇA (red-team 2026-08-04): variação no SOBRENOME (GABRIEL SOUZA/SOUSA)
+    NÃO auto-vincula, mesmo com 1 único candidato — Souza e Sousa são famílias
+    DIFERENTES, comuns no Brasil. Vai a REVISAR."""
+    roster = [ident("GABRIEL SOUSA", _id=1)]
+    r = classificar_linha(ident("GABRIEL SOUZA"), roster)
+    assert r.status == REVISAR and r.aluno_id == 1
+
+
+def test_variante_primeiro_nome_ou_genero_vai_para_revisao():
+    """SEGURANÇA (red-team 2026-08-04): variação no 1º nome/gênero (BRUNO/BRUNA SILVA,
+    GABRYEL/GABRIEL) NÃO auto-vincula — distingue crianças diferentes. Vai a REVISAR."""
+    r1 = classificar_linha(ident("BRUNO SILVA"), [ident("BRUNA SILVA", _id=1)])
+    assert r1.status == REVISAR and r1.aluno_id == 1
+    r2 = classificar_linha(ident("GABRYEL SILVA"), [ident("GABRIEL SILVA", _id=2)])
+    assert r2.status == REVISAR and r2.aluno_id == 2
+
+
+def test_variante_insegura_com_chamada_igual_vincula_por_identificador():
+    """Variação de grafia mesmo INSEGURA + nº de chamada IGUAL (único na turma) →
+    vincula: o identificador prova ser a mesma criança, desempata a grafia."""
     roster = [ident("GABRIEL SILVA", _id=1, chamada=7)]
     r = classificar_linha(ident("GABRYEL SILVA", chamada=7), roster)
-    assert r.status == REVISAR
+    assert r.status == VINCULADO and r.aluno_id == 1
+
+
+def test_variante_dois_candidatos_vai_para_revisao():
+    """A régua de segurança continua na AMBIGUIDADE: 'ANA LUZIA' casa como variante
+    de 'ANA LUIZA' E de 'ANA LUCIA' → 2 candidatos → REVISAR (nunca auto-funde
+    crianças diferentes)."""
+    roster = [ident("ANA LUIZA SOUZA", _id=1), ident("ANA LUCIA SOUZA", _id=2)]
+    r = classificar_linha(ident("ANA LUZIA SOUZA"), roster)
+    assert r.status == REVISAR and set(r.candidatos) == {1, 2}
 
 
 def test_uuid_em_comum_vincula_direto():
