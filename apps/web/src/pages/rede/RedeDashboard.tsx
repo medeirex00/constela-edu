@@ -39,71 +39,16 @@ import { useApi } from "../../hooks/useApi";
 import { api, apiDownload } from "../../lib/api";
 import { corPorMedia } from "../../lib/cores";
 import { nota, numero, tempoLeitura } from "../../lib/formato";
+import {
+  EnvolucroRede,
+  MEDALHAS,
+  type DashboardRede,
+  type EscolaCartao,
+} from "./comum";
 
-interface EscolaCartao {
-  escola_id: number;
-  nome: string;
-  cidade: string | null;
-  status: string;
-  latitude: number | null;
-  longitude: number | null;
-  total_turmas: number;
-  total_professores: number;
-  total_alunos: number;
-  alunos_com_dados: number;
-  adocao: number;
-  media_geral: number;
-  media_matific: number;
-  media_elefante: number;
-  // Totais brutos das plataformas (snapshot atual de cada aluno).
-  livros: number;
-  tempo_leitura_min: number;
-  atividades: number;
-  estrelas: number;
-  ativos_matific: number;
-  ativos_elefante: number;
-  livros_por_aluno: number;
-  // Per capita por MATRÍCULA (÷ total de alunos) — critério de ranking JUSTO entre
-  // escolas de tamanhos diferentes (não favorece a escola grande pelo volume bruto).
-  livros_por_matricula: number;
-  estrelas_por_matricula: number;
-  precisa_atencao: boolean;
-  motivo_atencao: string | null;
-  posicao?: number;
-}
-
-interface DashboardRede {
-  rede_id: number;
-  totais: {
-    escolas: number;
-    escolas_ativas: number;
-    alunos: number;
-    turmas: number;
-    professores: number;
-    alunos_com_dados: number;
-    adocao: number;
-    media_geral: number;
-    media_matific: number;
-    media_elefante: number;
-    escolas_em_atencao: number;
-    livros: number;
-    tempo_leitura_min: number;
-    atividades: number;
-    estrelas: number;
-    ativos_matific: number;
-    ativos_elefante: number;
-    livros_por_aluno: number;
-    melhor_escola: { nome: string; media_geral: number } | null;
-  };
-  equidade: {
-    gap_media: number;
-    escola_maior_media: number;
-    escola_menor_media: number;
-    escolas_abaixo_da_media: number;
-  };
-  escolas: EscolaCartao[];
-  atencao: EscolaCartao[];
-}
+// Re-export para compatibilidade dos consumidores que já importavam daqui.
+export { EnvolucroRede, MEDALHAS };
+export type { DashboardRede, EscolaCartao };
 
 function iconeEscola(cartao: EscolaCartao): L.DivIcon {
   const cor = corPorMedia(cartao.media_geral);
@@ -201,14 +146,16 @@ function LinhaEscola({ escola, aoAbrir }: { escola: EscolaCartao; aoAbrir: (id: 
   );
 }
 
-const MEDALHAS = ["🥇", "🥈", "🥉"];
-
-// Critérios do "Top escolas" — a SEDUC alterna e o ranking reordena (dados já
+// Critérios do "Top 5 escolas" — a SEDUC alterna e o ranking reordena (dados já
 // vêm por escola no payload, então reordena no cliente, sem nova chamada).
-const METRICAS_TOP: { chave: keyof EscolaCartao; rotulo: string; sufixo?: string }[] = [
-  { chave: "media_geral", rotulo: "Geral" },
-  { chave: "media_elefante", rotulo: "Leitura" },
-  { chave: "media_matific", rotulo: "Matemática" },
+// O padrão é o ÍNDICE GERAL (0–1000), que é proporcional ao tamanho da escola;
+// `indice` só diz como formatar (inteiro 0–1000 vs. decimal 0–100).
+const METRICAS_TOP: {
+  chave: keyof EscolaCartao; rotulo: string; sufixo?: string; indice?: boolean;
+}[] = [
+  { chave: "pontuacao_geral", rotulo: "Índice Geral", indice: true },
+  { chave: "pontuacao_leitura", rotulo: "Leitura", indice: true },
+  { chave: "pontuacao_matematica", rotulo: "Matemática", indice: true },
   { chave: "adocao", rotulo: "Engajamento", sufixo: "%" },
   // Per capita (÷ matrícula): comparação JUSTA entre escolas de tamanhos diferentes
   // — a escola pequena com muita leitura por aluno sobe, não some sob o volume bruto.
@@ -216,21 +163,42 @@ const METRICAS_TOP: { chave: keyof EscolaCartao; rotulo: string; sufixo?: string
   { chave: "estrelas_por_matricula", rotulo: "Estrelas/aluno" },
 ];
 
+// Critérios da comparação entre REDES (Admin Global). O cartão de REDE não tem
+// os índices per capita (que são por ESCOLA, normalizados dentro de cada rede),
+// então esta lista é própria — usar METRICAS_TOP aqui renderizaria `undefined`.
+const METRICAS_REDE: { chave: keyof RedeCartao; rotulo: string; sufixo?: string }[] = [
+  { chave: "media_geral", rotulo: "Geral" },
+  { chave: "media_elefante", rotulo: "Leitura" },
+  { chave: "media_matific", rotulo: "Matemática" },
+  { chave: "adocao", rotulo: "Engajamento", sufixo: "%" },
+];
+
+/** RESUMO do Ranking da Rede: as 5 melhores escolas por ÍNDICE GERAL (0–1000,
+ *  proporcional ao tamanho da escola) + atalho para o ranking completo. O
+ *  seletor de critério continua disponível para uma espiada rápida por
+ *  dimensão; o detalhamento (indicadores reais por aba) vive em /rede/ranking. */
 function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id: number) => void }) {
+  const navegar = useNavigate();
   const [metrica, setMetrica] = useState(0);
   const m = METRICAS_TOP[metrica];
+  // Indicador AUSENTE não pode derrubar o painel: um bundle servido pelo cache do
+  // PWA pode ser mais novo/velho que a API (já causou a regressão do Dashboard).
+  const val = (e: EscolaCartao) => Number(e[m.chave] ?? 0);
   const top = useMemo(
     () => [...escolas]
       .filter((e) => e.alunos_com_dados > 0)
-      .sort((a, b) => (b[m.chave] as number) - (a[m.chave] as number))
+      .sort((a, b) => val(b) - val(a)
+        || b.adocao - a.adocao
+        || a.nome.localeCompare(b.nome, "pt-BR"))
       .slice(0, 5),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `val` deriva de m.chave
     [escolas, m.chave],
   );
   return (
     <Card className="p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <Trophy size={16} className="text-amber-500" /> Top escolas da rede
+          <Trophy size={16} className="text-amber-500" /> Top 5 escolas da rede
         </h2>
         <div className="flex flex-wrap gap-1">
           {METRICAS_TOP.map((opt, i) => (
@@ -252,25 +220,46 @@ function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (i
       {top.length === 0 ? (
         <p className="py-4 text-center text-sm text-zinc-500">Sem dados ainda.</p>
       ) : (
-        <ol className="space-y-0.5">
-          {top.map((e, i) => (
-            <li key={e.escola_id}>
-              <button
-                type="button"
-                onClick={() => aoAbrir(e.escola_id)}
-                className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
-              >
-                <span className="w-6 text-center text-base">
-                  {MEDALHAS[i] ?? <span className="text-xs font-bold text-zinc-400">{i + 1}</span>}
-                </span>
-                <span className="flex-1 truncate text-sm font-medium">{e.nome}</span>
-                <span className="text-sm font-bold tabular-nums">
-                  {nota(e[m.chave] as number)}{m.sufixo ?? ""}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ol>
+        <>
+          <table className="w-full text-sm tabular-nums">
+            <thead>
+              <tr className="border-b border-zinc-200 text-left text-[11px] uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                <th scope="col" className="px-2 py-1.5 font-medium">Pos.</th>
+                <th scope="col" className="px-2 py-1.5 font-medium">Escola</th>
+                <th scope="col" className="px-2 py-1.5 text-right font-medium">{m.rotulo}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {top.map((e, i) => (
+                <tr key={e.escola_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
+                  <td className="px-2 py-2 text-center">
+                    {MEDALHAS[i] ?? <span className="text-xs font-bold text-zinc-400">{i + 1}º</span>}
+                  </td>
+                  <td className="px-2 py-2">
+                    <button
+                      type="button"
+                      onClick={() => aoAbrir(e.escola_id)}
+                      className="truncate text-left font-medium hover:text-indigo-600 dark:hover:text-indigo-400"
+                    >
+                      {e.nome}
+                    </button>
+                  </td>
+                  <td className="px-2 py-2 text-right text-base font-bold text-indigo-700 tabular-nums dark:text-indigo-300">
+                    {m.indice ? numero(Math.round(val(e))) : nota(val(e))}
+                    {m.sufixo ?? ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button
+            type="button"
+            onClick={() => navegar("/rede/ranking")}
+            className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+          >
+            Ver ranking completo <span aria-hidden>→</span>
+          </button>
+        </>
       )}
     </Card>
   );
@@ -810,39 +799,6 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
 /** Resolve a rede visível do usuário (sua rede, ou a 1ª que o admin global vê) e
  *  entrega o redeId; trata carregamento e o caso "sem rede". Compartilhado pela
  *  aba Dashboard (panorama) e pela aba Secretaria (administrativo). */
-function EnvolucroRede({ children }: { children: (redeId: number) => ReactNode }) {
-  const { usuario } = useApp();
-  const navegar = useNavigate();
-  const redeDoUsuario = usuario?.rede_id ?? null;
-  const { dados: redes, carregando } = useApi<{ id: number; nome: string }[]>(
-    redeDoUsuario == null ? "/redes" : null,
-  );
-  const redeId = redeDoUsuario ?? redes?.[0]?.id ?? null;
-
-  if (redeId == null) {
-    if (carregando) return <Carregando texto="Carregando as redes..." />;
-    // Admin global sem nenhuma rede: oferece criar a primeira (bootstrap).
-    return (
-      <div className="space-y-4">
-        <Vazio
-          titulo="Nenhuma rede disponível"
-          descricao={usuario?.is_global
-            ? "Ainda não há redes cadastradas. Crie a primeira para habilitar o painel da rede."
-            : "Sua conta não está vinculada a uma rede/Secretaria."}
-        />
-        {usuario?.is_global && (
-          <div className="flex justify-center">
-            <Botao onClick={() => navegar("/rede/gerenciar")}>
-              <Settings2 size={15} /> Gerenciar redes
-            </Botao>
-          </div>
-        )}
-      </div>
-    );
-  }
-  return <>{children(redeId)}</>;
-}
-
 /** Panorama ANALÍTICO da rede — renderizado DENTRO da aba Dashboard para os
  *  perfis de rede (SEDUC/Admin Global). Não é uma tela separada: é o conteúdo
  *  do Dashboard quando o usuário é de rede. */
@@ -963,102 +919,9 @@ export default function RedeDashboard() {
   return <EnvolucroRede>{(redeId) => <PainelRede redeId={redeId} modo="secretaria" />}</EnvolucroRede>;
 }
 
-function ConteudoRankingRede({ redeId }: { redeId: number }) {
-  const { dados, erro, carregando } = useApi<DashboardRede>(`/redes/${redeId}/dashboard`);
-  const { selecionarEscola } = useApp();
-  const navegar = useNavigate();
-  const [metrica, setMetrica] = useState(0);
-  const m = METRICAS_TOP[metrica];
-  const ranked = useMemo(
-    () => [...(dados?.escolas ?? [])]
-      .filter((e) => e.alunos_com_dados > 0)
-      .sort((a, b) => (b[m.chave] as number) - (a[m.chave] as number)),
-    [dados, m.chave],
-  );
-  if (carregando && !dados) return <Carregando texto="Carregando o ranking..." />;
-  if (erro && !dados) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
-  if (!dados) return null;
-  const abrir = (id: number) => { selecionarEscola(id); navegar("/escola"); };
-
-  return (
-    <div className="space-y-4">
-      <div
-        role="tablist"
-        aria-label="Indicador do ranking"
-        className="inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
-      >
-        {METRICAS_TOP.map((opt, i) => (
-          <button
-            key={opt.rotulo}
-            type="button"
-            role="tab"
-            aria-selected={i === metrica}
-            onClick={() => setMetrica(i)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              i === metrica
-                ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
-                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-            }`}
-          >
-            {opt.rotulo}
-          </button>
-        ))}
-      </div>
-      <Card className="p-4">
-        {ranked.length === 0 ? (
-          <Vazio titulo="Sem dados ainda"
-                 descricao="Nenhuma escola da rede tem dados no ano letivo ativo." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm tabular-nums">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-3 py-2 font-medium">#</th>
-                  <th className="px-3 py-2 font-medium">Escola</th>
-                  <th className="px-3 py-2 text-right font-medium">{m.rotulo}</th>
-                  <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Geral</th>
-                  <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Leitura</th>
-                  <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Matific</th>
-                  <th className="hidden px-3 py-2 text-right font-medium sm:table-cell">Engaj.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ranked.map((e, i) => (
-                  <tr key={e.escola_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-3 py-2 text-center">
-                      {MEDALHAS[i] ?? <span className="text-xs font-bold text-zinc-400">{i + 1}</span>}
-                    </td>
-                    <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        onClick={() => abrir(e.escola_id)}
-                        className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400"
-                      >
-                        {e.nome}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-right font-semibold">{nota(e[m.chave] as number)}{m.sufixo ?? ""}</td>
-                    <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(e.media_geral)}</td>
-                    <td className="hidden px-3 py-2 text-right md:table-cell">{nota(e.media_elefante)}</td>
-                    <td className="hidden px-3 py-2 text-right md:table-cell">{nota(e.media_matific)}</td>
-                    <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(e.adocao)}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-    </div>
-  );
-}
-
-/** Ranking Geral para perfis de REDE (Secretaria/Admin Global): ranking de
- *  ESCOLAS por indicador — agregado, SEM dados individuais de aluno (o ranking
- *  nominal de crianças fica bloqueado por PII). */
-export function RankingRede() {
-  return <EnvolucroRede>{(redeId) => <ConteudoRankingRede redeId={redeId} />}</EnvolucroRede>;
-}
+/* O Ranking da Rede (tabela completa por aba) vive em `./RankingRede.tsx` — uma
+ * ÚNICA implementação, usada tanto pela rota dedicada /rede/ranking quanto pelo
+ * atalho antigo /ranking (Rankings.tsx). Aqui ficou só o RESUMO (Top 5). */
 
 /* ========================================================================== */
 /* Admin Global — visão consolidada de TODAS as redes (uma camada acima da     */
@@ -1110,9 +973,10 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
   const { selecionarEscola } = useApp();
   const navegar = useNavigate();
   const [metrica, setMetrica] = useState(0);
-  const m = METRICAS_TOP[metrica];
+  const m = METRICAS_REDE[metrica];
   const redesRanked = useMemo(
-    () => [...(dados?.redes ?? [])].sort((a, b) => (b[m.chave as keyof RedeCartao] as number) - (a[m.chave as keyof RedeCartao] as number)),
+    () => [...(dados?.redes ?? [])]
+      .sort((a, b) => Number(b[m.chave] ?? 0) - Number(a[m.chave] ?? 0)),
     [dados, m.chave],
   );
   if (carregando && !dados) return <Carregando texto="Carregando as redes..." />;
@@ -1159,7 +1023,7 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
             <BarChart3 size={16} className="text-indigo-600" /> Comparação entre redes
           </h2>
           <div className="flex flex-wrap gap-1">
-            {METRICAS_TOP.map((opt, i) => (
+            {METRICAS_REDE.map((opt, i) => (
               <button
                 key={opt.rotulo}
                 type="button"
@@ -1203,7 +1067,7 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
                   </td>
                   <td className="px-3 py-2 text-right">{numero(r.escolas)}</td>
                   <td className="px-3 py-2 text-right">{numero(r.alunos)}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{nota(r[m.chave as keyof RedeCartao] as number)}{m.sufixo ?? ""}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{nota(Number(r[m.chave] ?? 0))}{m.sufixo ?? ""}</td>
                   <td className="hidden px-3 py-2 text-right md:table-cell">{nota(r.media_elefante)}</td>
                   <td className="hidden px-3 py-2 text-right md:table-cell">{nota(r.media_matific)}</td>
                   <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(r.adocao)}%</td>

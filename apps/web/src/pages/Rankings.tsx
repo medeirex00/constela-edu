@@ -16,9 +16,9 @@ import RankingGeral from "./RankingGeral";
 import RankingLeitura from "./RankingLeitura";
 import RankingMatematica from "./RankingMatematica";
 
-// Ranking de ESCOLAS (perfis de rede). Lazy: puxa o chunk do painel da rede.
-const RankingRede = lazy(() =>
-  import("./rede/RedeDashboard").then((m) => ({ default: m.RankingRede })));
+// Ranking de ESCOLAS (perfis de rede) — a MESMA página dedicada de /rede/ranking
+// (uma só implementação; esta rota é o atalho antigo).
+const RankingRede = lazy(() => import("./rede/RankingRede"));
 
 // Uma aba por FONTE de dados: Geral (consolidado), Elefante Letrado (leitura),
 // Matific (matemática), Evolução e Escolar (dados escolares — em construção).
@@ -42,16 +42,11 @@ export default function Rankings() {
   // ESCOLAS por indicador (agregado). Os rankings NOMINAIS de aluno abaixo ficam
   // vazios de propósito para a rede (bloqueio de PII) — então nem os mostramos.
   if (rede) {
+    // A página já traz o próprio cabeçalho (🏆 Ranking da Rede).
     return (
-      <div>
-        <PageHeader
-          titulo="Ranking Geral da Rede"
-          descricao="Ranking das escolas da rede por indicador — dados agregados, sem ranking individual de alunos."
-        />
-        <Suspense fallback={<Carregando texto="Carregando o ranking da rede..." />}>
-          <RankingRede />
-        </Suspense>
-      </div>
+      <Suspense fallback={<Carregando texto="Carregando o ranking da rede..." />}>
+        <RankingRede />
+      </Suspense>
     );
   }
   return <RankingsEscola />;

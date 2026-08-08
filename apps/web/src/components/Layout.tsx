@@ -252,6 +252,9 @@ const TITULOS_ESPECIAIS: Record<string, string> = {
   "/rede": "Painel da Rede",
   "/rede/gerenciar": "Gerenciar Rede",
   "/rede/avaliacoes": "Avaliações Externas",
+  // Drill-down do Panorama (botão "Ver ranking completo"), não item de sidebar —
+  // a navegação da Secretaria segue enxuta por decisão do dono.
+  "/rede/ranking": "Ranking da Rede",
   "/usuarios": "Usuários e acessos",
 };
 

@@ -332,7 +332,9 @@ def ranking(
     limite: int = Query(default=50, ge=1, le=200),
     metrica: str = Query(
         default="geral",
-        pattern="^(geral|leitura|matematica|matific|elefante|engajamento|livros|estrelas)$"),
+        pattern="^(geral|leitura|matematica|matific|elefante|engajamento|livros|estrelas"
+                "|livros_aluno|estrelas_aluno|atividades_aluno"
+                "|indice_geral|indice_leitura|indice_matematica)$"),
     db: Session = Depends(get_db),
 ):
     """Ranking municipal POR ESCOLA (privacidade: não expõe ranking individual de

@@ -37,6 +37,11 @@ function escolaCartao(over: Record<string, unknown> = {}) {
     media_matific: 70, media_elefante: 65, livros: 40, tempo_leitura_min: 100,
     atividades: 500, estrelas: 2000, ativos_matific: 15, ativos_elefante: 15,
     livros_por_aluno: 2.7, precisa_atencao: false, motivo_atencao: null, posicao: 1,
+    // Per capita + índice da rede (0–1000) — o que o Top 5 e o Ranking da Rede usam.
+    livros_por_matricula: 2.7, estrelas_por_matricula: 133.3,
+    atividades_por_matricula: 33.3, tempo_por_matricula_min: 6.7,
+    pontuacao_leitura: 1000, pontuacao_matematica: 1000, pontuacao_geral: 1000,
+    dimensoes_pontuadas: ["leitura", "matematica"],
     ...over,
   };
 }
