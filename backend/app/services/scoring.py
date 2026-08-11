@@ -188,13 +188,46 @@ def obter_config(db: Session, escola_id: int, namespace: str, chave: str, padrao
     return row.valor if row is not None else padrao
 
 
+def _pesos_dos_modulos_contratados(db: Session, escola_id: int,
+                                   valores: dict) -> dict:
+    """Mantém em ``pesos.geral`` só as plataformas dos módulos CONTRATADOS.
+
+    Sem isto, uma rede que assinou apenas a Leitura teria ``nota_geral =
+    0,5·elefante + 0,5·0`` — metade da nota, por um produto que ela nem contratou
+    (o mesmo "teto de 50" que corrigimos nas médias da escola, agora no ALUNO).
+    Como ``obter_pesos`` divide pela soma logo abaixo, remover a chave já
+    REDISTRIBUI o peso: só Leitura ⇒ {elefante: 1,0}. Com os dois módulos nada
+    muda (50/50), então o comportamento atual é preservado bit a bit.
+
+    Só age em ``pesos.geral`` (a combinação ENTRE plataformas). Os pesos DENTRO
+    de cada plataforma (livros/dificuldade/questões, atividades/média/estrelas)
+    não têm relação com contratação e ficam intocados."""
+    from app.services import modulos as svc_modulos
+
+    escola = db.get(Escola, escola_id)
+    contratados = svc_modulos.modulos_da_escola(db, escola)
+    permitidas = {p for chave in contratados
+                  for p in svc_modulos.CATALOGO[chave]["plataformas"]}
+    filtrados = {k: v for k, v in valores.items() if k in permitidas}
+    # Nenhuma plataforma contratada (config exótica): mantém o original em vez de
+    # zerar a nota de todo mundo — degradação segura.
+    return filtrados or valores
+
+
 def obter_pesos(db: Session, escola_id: int, namespace: str) -> dict[str, float]:
     """Retorna os pesos como frações (0–1), já normalizados defensivamente.
 
     A interface impede salvar pesos cuja soma difere de 100 (PRD §33),
     mas o motor ainda divide pela soma para nunca produzir notas > 100.
+
+    Em ``pesos.geral``, as plataformas de módulos NÃO contratados saem da conta e
+    o peso é redistribuído entre as contratadas (ver
+    ``_pesos_dos_modulos_contratados``) — a fórmula, as referências (P90/mediana)
+    e a saturação seguem exatamente as mesmas.
     """
     valores = obter_config(db, escola_id, namespace, "valores", PESOS_PADRAO[namespace])
+    if namespace == "pesos.geral":
+        valores = _pesos_dos_modulos_contratados(db, escola_id, valores)
     total = sum(float(v) for v in valores.values())
     if total <= 0:
         return {k: 0.0 for k in valores}
@@ -747,7 +780,15 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
     pct_matific = obter_pesos_brutos(db, escola_id, "pesos.matific")
     pct_elefante = obter_pesos_brutos(db, escola_id, "pesos.elefante")
     pct_questoes = obter_pesos_brutos(db, escola_id, "pesos.questoes")
-    pct_geral = obter_pesos_brutos(db, escola_id, "pesos.geral")
+    # A EXPLICAÇÃO da Nota Geral é DERIVADA dos pesos efetivamente usados
+    # (`p_geral`), não lida de novo da configuração. Assim ela não tem como
+    # divergir da conta: as parcelas exibidas somam 100% e reproduzem a nota.
+    # Sem isto, uma rede que só assinou a Leitura gravaria "Matific 100 × 50% +
+    # Elefante 70 × 50% = 70" — equação que não fecha, justamente na tela de
+    # auditoria da nota (PRD §45). Com os dois módulos e pesos somando 100 (o
+    # estado de toda rede hoje) o valor gravado é idêntico ao de antes.
+    pct_geral = {chave: round(fracao * 100, 2) for chave, fracao in p_geral.items()
+                 if fracao > 0}
 
     resultados: list[ResultadoAluno] = []
     for matricula, turma in matriculas:

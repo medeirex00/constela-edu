@@ -31,6 +31,13 @@ def _login(email: str, senha: str) -> TestClient:
 
 
 def _escola_com_notas(db, rede_id, nome, notas_gerais):
+    """Escola cujos alunos têm nota E snapshot das duas plataformas.
+
+    O snapshot é obrigatório para o cenário ser POSSÍVEL: no motor, um aluno sem
+    snapshot tem todos os componentes zerados (livros/tempo/questões/dificuldade
+    saem do snapshot), logo nota > 0 sem snapshot não existe em produção. As
+    médias da escola contam só quem tem dado da plataforma (services/rede.py).
+    """
     esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
@@ -38,13 +45,20 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais):
                   ano_letivo=2026, status="ativa")
     db.add(turma)
     db.flush()
+    imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
     for i, ng in enumerate(notas_gerais):
         a = Aluno(escola_id=esc.id, nome=f"Crianca {nome} {i}")
         db.add(a)
         db.flush()
         db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
+                                livros_unicos=5, tempo_leitura_min=60))
+        db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
+                               atividades=20, estrelas=100))
         db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
-                    nota_geral=ng, posicao=i + 1))
+                    nota_geral=ng, nota_elefante=ng, nota_matific=ng, posicao=i + 1))
     return esc
 
 
@@ -443,7 +457,16 @@ def _escola_publico(db, rede_id, nome, matific, elefante):
     a = Aluno(escola_id=esc.id, nome=f"Aluno {nome}")
     db.add(a)
     db.flush()
+    imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
     db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+    # Snapshots: sem eles o aluno não tem "dado da plataforma" e fica fora da
+    # média de desempenho (que agora mede só quem usa).
+    db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
+                            livros_unicos=5, tempo_leitura_min=60))
+    db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
+                           atividades=20, estrelas=100))
     db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
                 nota_geral=(matific + elefante) / 2, nota_matific=matific,
                 nota_elefante=elefante, posicao=1))

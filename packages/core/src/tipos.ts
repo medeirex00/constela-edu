@@ -13,6 +13,10 @@ export interface Usuario {
   status?: string;
   ultimo_acesso?: string | null;
   created_at?: string | null;
+  /** MÓDULOS contratados que valem para este usuário (SaaS): "leitura",
+   *  "matematica", … Vem de /auth/me e do login; a interface se monta a partir
+   *  dele (ver hooks/useModulos). Ausente = payload antigo ⇒ tudo ligado. */
+  modulos?: string[];
 }
 
 export interface Escola {

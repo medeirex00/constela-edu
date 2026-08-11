@@ -17,7 +17,7 @@ from app.models.configuracao import (
 from app.models.dispositivo import DispositivoMovel
 from app.models.escola import Escola
 from app.models.ia import ConversaIA, MensagemIA
-from app.models.rede import MetaRede, Rede
+from app.models.rede import MetaRede, ModuloRede, Rede
 from app.models.nota import LogAuditoria, Nota
 from app.models.notificacao import Notificacao
 from app.models.plataformas import (
@@ -54,6 +54,7 @@ __all__ = [
     "Escola",
     "Rede",
     "MetaRede",
+    "ModuloRede",
     "Importacao",
     "SyncMarcador",
     "Leitura",

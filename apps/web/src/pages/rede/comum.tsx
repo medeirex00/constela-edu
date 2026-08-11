@@ -27,11 +27,21 @@ export interface EscolaCartao {
   total_turmas: number;
   total_professores: number;
   total_alunos: number;
-  alunos_com_dados: number;
-  adocao: number;
+  // DESEMPENHO (0–100): média SÓ dos alunos que têm dado da plataforma — ausência
+  // de dado não vira zero. `media_geral` é a média das dimensões disponíveis.
   media_geral: number;
   media_matific: number;
   media_elefante: number;
+  dimensoes_com_dados: string[];
+  alunos_com_nota_elefante: number;
+  alunos_com_nota_matific: number;
+  // ENGAJAMENTO/COBERTURA: quantos alunos de fato usam (conceito SEPARADO).
+  alunos_com_dados: number;
+  adocao: number;
+  adocao_elefante: number;
+  adocao_matific: number;
+  /** Módulos contratados pela rede desta escola (SaaS). */
+  modulos?: string[];
   // Totais brutos das plataformas (snapshot atual de cada aluno).
   livros: number;
   tempo_leitura_min: number;
@@ -60,6 +70,8 @@ export interface EscolaCartao {
 
 export interface DashboardRede {
   rede_id: number;
+  /** Módulos CONTRATADOS pela rede — a interface se adapta a partir daqui. */
+  modulos?: string[];
   totais: {
     escolas: number;
     escolas_ativas: number;

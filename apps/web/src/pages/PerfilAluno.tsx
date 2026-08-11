@@ -228,7 +228,23 @@ export default function PerfilAluno() {
   if (!perfil) return <Vazio titulo="Aluno não encontrado" />;
 
   const { aluno, detalhes } = perfil;
-  const pesosGerais = detalhes.geral?.pesos ?? {};
+  // As parcelas da Nota Geral saem do que o MOTOR de fato usou (detalhes.geral.
+  // pesos), não de uma lista fixa de plataformas: numa rede que só contratou a
+  // Leitura, a conta é "Elefante 70 × 100% = 70" — escrever "Matific × 0% +
+  // Elefante × 50%" mostraria uma equação que não fecha com a própria nota.
+  const pesosGerais: Record<string, number> = detalhes.geral?.pesos ?? {};
+  const ROTULO_PLATAFORMA: Record<string, string> = {
+    matific: "Matific",
+    elefante: "Elefante",
+  };
+  const parcelasGerais = Object.entries(pesosGerais)
+    .filter(([, peso]) => Number(peso) > 0)
+    .map(([chave, peso]) => ({
+      chave,
+      rotulo: ROTULO_PLATAFORMA[chave] ?? chave,
+      peso: Number(peso),
+      valor: chave === "matific" ? perfil.nota_matific : perfil.nota_elefante,
+    }));
 
   return (
     <div className="space-y-6">
@@ -442,12 +458,17 @@ export default function PerfilAluno() {
         {detalhes.elefante && (
           <TabelaCalculo titulo="Elefante Letrado" linhas={detalhes.elefante.indicadores} notaFinal={detalhes.elefante.nota} />
         )}
-        {detalhes.geral && (
+        {detalhes.geral && parcelasGerais.length > 0 && (
           <Card className="p-4 text-sm">
             <p className="font-medium">Nota Geral</p>
             <p className="mt-1 tabular-nums text-zinc-600 dark:text-zinc-300">
-              Matific {nota(perfil.nota_matific)} × {pesosGerais.matific ?? 0}% + Elefante{" "}
-              {nota(perfil.nota_elefante)} × {pesosGerais.elefante ?? 0}% ={" "}
+              {parcelasGerais.map((p, i) => (
+                <span key={p.chave}>
+                  {i > 0 && " + "}
+                  {p.rotulo} {nota(p.valor)} × {p.peso}%
+                </span>
+              ))}
+              {" = "}
               <span className="font-semibold text-zinc-900 dark:text-zinc-100">{nota(perfil.nota_geral)}</span>
             </p>
           </Card>

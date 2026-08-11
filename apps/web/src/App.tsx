@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import { Botao, Carregando } from "./components/ui";
 import { useApp } from "./context/AppContext";
 import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
+import { useModulos } from "./hooks/useModulos";
 import { usePerfil } from "./hooks/usePerfil";
 
 // Code-splitting por rota: cada página vira um chunk próprio, carregado sob
@@ -115,6 +116,14 @@ function RotaEscolaOp({ children }: { children: React.ReactNode }) {
   return gestor && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+/** Tela de um MÓDULO contratado (SaaS): quem não assinou o produto é mandado ao
+ *  Dashboard em vez de ver uma tela vazia de algo que não faz parte do plano.
+ *  O backend também recusa (deps.exigir_modulo) — aqui é só a camada de UX. */
+function RotaModulo({ modulo, children }: { modulo: string; children: React.ReactNode }) {
+  const { tem } = useModulos();
+  return tem(modulo) ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 export default function App() {
   return (
     // Um único limite de Suspense cobre o carregamento dos chunks de rota.
@@ -170,20 +179,24 @@ export default function App() {
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
           <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />
           <Route path="/escola" element={<RotaGestao><VisaoEscola /></RotaGestao>} />
-          <Route path="/alunos/:id/evolucao" element={<RotaGestao><EvolucaoAluno /></RotaGestao>} />
+          {/* Evolução por aluno: coordenador/admin veem qualquer aluno; o
+              professor vê os das turmas dele — o backend (exigir_aluno_permitido)
+              é quem escopa (404 fora do alcance). Sem guard de gestão aqui. */}
+          <Route path="/alunos/:id/evolucao" element={<EvolucaoAluno />} />
           <Route path="/turmas" element={<RotaGestao><Turmas /></RotaGestao>} />
           <Route path="/turmas/:id" element={<RotaGestao><TurmaDetalhe /></RotaGestao>} />
           <Route path="/professores" element={<RotaGestao><Professores /></RotaGestao>} />
           <Route path="/metricas" element={<RotaGestao><Metricas /></RotaGestao>} />
           <Route path="/configuracoes" element={<RotaGestao><Configuracoes /></RotaGestao>} />
           <Route path="/configuracoes/conquistas" element={<RotaGestao><ConfigConquistas /></RotaGestao>} />
-          <Route path="/matific" element={<RotaGestao><Matific /></RotaGestao>} />
-          <Route path="/elefante" element={<RotaGestao><Elefante /></RotaGestao>} />
-          <Route path="/livros" element={<RotaGestao><Livros /></RotaGestao>} />
+          {/* Telas de PRODUTO: só existem para a rede que contratou o módulo. */}
+          <Route path="/matific" element={<RotaGestao><RotaModulo modulo="matematica"><Matific /></RotaModulo></RotaGestao>} />
+          <Route path="/elefante" element={<RotaGestao><RotaModulo modulo="leitura"><Elefante /></RotaModulo></RotaGestao>} />
+          <Route path="/livros" element={<RotaGestao><RotaModulo modulo="leitura"><Livros /></RotaModulo></RotaGestao>} />
           <Route path="/comecar" element={<RotaEscolaOp><Comecar /></RotaEscolaOp>} />
           <Route path="/importacoes" element={<RotaEscolaOp><Importacoes /></RotaEscolaOp>} />
           <Route path="/sincronizacao" element={<RotaEscolaOp><Sincronizacao /></RotaEscolaOp>} />
-          <Route path="/diagnostico-elefante" element={<RotaEscolaOp><DiagnosticoElefante /></RotaEscolaOp>} />
+          <Route path="/diagnostico-elefante" element={<RotaEscolaOp><RotaModulo modulo="leitura"><DiagnosticoElefante /></RotaModulo></RotaEscolaOp>} />
           <Route path="/conquistas" element={<RotaGestao><Conquistas /></RotaGestao>} />
           <Route path="/assistente" element={<RotaGestao><Assistente /></RotaGestao>} />
           <Route path="/painel-publico" element={<RotaGestao><PainelPublicoConfig /></RotaGestao>} />

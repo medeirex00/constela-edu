@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Float, ForeignKey, Index, String
+from sqlalchemy import Boolean, Float, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -33,6 +33,42 @@ class Rede(Base):
     token_publico: Mapped[str | None] = mapped_column(String(64), unique=True,
                                                       index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)
+
+
+class ModuloRede(Base):
+    """Módulo CONTRATADO por uma rede (modelo SaaS): a rede assina Leitura
+    (Elefante Letrado), Matemática (Matific) ou os dois — e o que não foi
+    contratado não existe para ela, nem na tela nem na API.
+
+    ESPARSA de propósito: só há linha quando alguém mexeu no módulo. A regra é
+    **ausência de linha = LIGADO**, para que a introdução desta tabela não mude o
+    comportamento de nenhuma rede já cadastrada (a migração é puramente aditiva e
+    não precisa de backfill). Desligar é sempre um registro EXPLÍCITO.
+
+    O vocabulário de módulos vive no CATÁLOGO em código
+    (``app/services/modulos.py``), não no banco: acrescentar "Avaliações" ou
+    "Quest" no futuro é uma entrada no catálogo, sem migração. Aqui fica só o
+    estado contratado por rede.
+
+    NÃO confundir com:
+      * ``Rede.status`` (ativa/inativa) — é vida ou morte do cliente inteiro;
+      * ``SincronizacaoConfig.ativo`` — é "agenda de coleta ligada" por escola;
+      * "sem dados" — módulo contratado que ainda não recebeu importação segue
+        contratado, e a interface mostra estado vazio (não some).
+    """
+
+    __tablename__ = "modulos_rede"
+    __table_args__ = (
+        Index("uq_modulo_rede", "rede_id", "modulo", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rede_id: Mapped[int] = mapped_column(
+        ForeignKey("redes.id", ondelete="CASCADE"), index=True)
+    # Chave do catálogo (app/services/modulos.py): "leitura" | "matematica" | ...
+    modulo: Mapped[str] = mapped_column(String(30))
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
 
 
 class MetaRede(Base):

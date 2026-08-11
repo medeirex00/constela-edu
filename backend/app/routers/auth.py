@@ -106,13 +106,24 @@ def login(
 
     return LoginOut(
         access_token=criar_token(usuario.id, usuario.token_version),
-        usuario=UsuarioOut.model_validate(usuario),
+        usuario=_com_modulos(db, usuario),
     )
 
 
+def _com_modulos(db: Session, usuario: Usuario) -> UsuarioOut:
+    """UsuarioOut + os módulos contratados que valem para ele — o frontend monta
+    menu/abas/telas a partir disto, sem uma chamada extra no boot."""
+    from app.services import modulos as svc_modulos
+
+    saida = UsuarioOut.model_validate(usuario)
+    saida.modulos = sorted(svc_modulos.modulos_do_usuario(db, usuario))
+    return saida
+
+
 @router.get("/me", response_model=UsuarioOut)
-def me(usuario: Usuario = Depends(get_usuario_atual)):
-    return usuario
+def me(usuario: Usuario = Depends(get_usuario_atual),
+       db: Session = Depends(get_db)):
+    return _com_modulos(db, usuario)
 
 
 # --- Redefinição de senha por token (público: a pessoa não consegue entrar) ---

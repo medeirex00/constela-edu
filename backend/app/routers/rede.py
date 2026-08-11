@@ -29,6 +29,7 @@ from app.schemas import (
 from app.services import avaliacoes as svc_avaliacoes
 from app.services import casamento_inep as svc_inep
 from app.services import geocodificacao as svc_geo
+from app.services import modulos as svc_modulos
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
@@ -142,6 +143,55 @@ def atualizar_rede(
     db.commit()
     db.refresh(rede)
     return rede
+
+
+@router.get("/{rede_id}/modulos")
+def listar_modulos(
+    rede_id: int = Depends(exigir_rede),
+    db: Session = Depends(get_db),
+):
+    """Catálogo de módulos COM o estado de contratação da rede. Visível também à
+    Secretaria (ela precisa saber o próprio plano para montar a interface); só o
+    admin global ALTERA (PUT abaixo)."""
+    return svc_modulos.catalogo_da_rede(db, rede_id)
+
+
+@router.put("/{rede_id}/modulos")
+def definir_modulos(
+    rede_id: int,
+    dados: dict[str, bool],
+    usuario: Usuario = Depends(exigir_admin_global),
+    db: Session = Depends(get_db),
+):
+    """Liga/desliga os módulos contratados da rede (Admin Global).
+
+    Recebe ``{"leitura": true, "matematica": false}``. Efeito imediato: a rede
+    passa a operar só com os módulos ligados — médias, ranking, adoção e
+    interface. Fica na trilha de auditoria (é uma mudança contratual).
+
+    **Recalcula as notas das escolas da rede** no mesmo pedido: ``pesos.geral``
+    depende do contrato, então a nota GRAVADA de cada aluno precisa passar a
+    refletir só o que foi contratado (rede só de Leitura ⇒ ``geral = leitura``).
+    O retorno traz ``recalculo`` com o que foi refeito e o que falhou; a
+    operação é idempotente, então reenviar o mesmo corpo refaz com segurança o
+    que ficou para trás (ver ``services/modulos.aplicar_contrato``)."""
+    if db.get(Rede, rede_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    desconhecidos = set(dados) - set(svc_modulos.CATALOGO)
+    if desconhecidos:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"Módulo(s) desconhecido(s): {', '.join(sorted(desconhecidos))}.")
+    # Rede sem NENHUM módulo é um estado que o produto não sabe explicar: o
+    # contrato diria "nada contratado", mas `pesos.geral` cairia no fallback de
+    # segurança (mantém os pesos originais em vez de zerar a nota de todo mundo)
+    # e o aluno continuaria recebendo nota das duas plataformas. Barramos aqui,
+    # que é onde a intenção ainda é do operador e dá para explicar.
+    if not svc_modulos.resultado_do_contrato(db, rede_id, dados):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "A rede precisa de pelo menos um módulo contratado. "
+            "Para encerrar o uso, desative a rede em vez de remover os módulos.")
+    return svc_modulos.aplicar_contrato(db, rede_id, dados, usuario_id=usuario.id)
 
 
 @router.put("/{rede_id}/escolas")

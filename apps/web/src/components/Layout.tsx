@@ -49,6 +49,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { api } from "../lib/api";
 import { useHeartbeat } from "../hooks/useHeartbeat";
 import { useOnboarding } from "../hooks/useOnboarding";
@@ -169,7 +170,34 @@ function rotuloDashboard(p: Perfil): string {
  *  podia abrir, mas agrupada, ordenada e nomeada para o trabalho dele. Nenhum
  *  item aqui abre algo que o backend não autorize para o papel — as travas de
  *  rota (App.tsx) e o backend (deps.py) seguem intactos. */
-function sidebarDoPerfil(p: Perfil): GrupoNav[] {
+/** Itens que só existem quando a rede CONTRATOU o módulo (SaaS). O que não está
+ *  aqui vale para qualquer plano (ex.: Importações e Sincronização servem às
+ *  duas plataformas). Módulo novo no futuro = mais uma entrada. */
+const TODOS_MODULOS = ["leitura", "matematica"];
+
+const MODULO_DO_ITEM: Record<string, string> = {
+  "/matific": "matematica",
+  "/elefante": "leitura",
+  "/livros": "leitura",              // acervo do Elefante
+  "/diagnostico-elefante": "leitura",
+};
+
+/** Remove do menu o que a rede não contratou e descarta grupos que ficaram
+ *  vazios — ponto de corte ÚNICO: o accordion, a barra só-ícones e a busca
+ *  global consomem daqui e herdam o filtro de graça. */
+function filtrarPorModulos(grupos: GrupoNav[], modulos: string[]): GrupoNav[] {
+  return grupos
+    .map((g) => ({
+      ...g,
+      itens: g.itens.filter((i) => {
+        const exigido = MODULO_DO_ITEM[i.caminho];
+        return !exigido || modulos.includes(exigido);
+      }),
+    }))
+    .filter((g) => g.itens.length > 0);
+}
+
+function gruposDoPerfil(p: Perfil): GrupoNav[] {
   // 👑 Admin Global — saúde do ecossistema + todas as ferramentas de escola.
   if (p.global) return [
     { chave: "estrutura", rotulo: "Estrutura", icone: Building2, itens: [IT.redeGerenciar, IT.escolas, IT.usuarios] },
@@ -211,14 +239,21 @@ function sidebarDoPerfil(p: Perfil): GrupoNav[] {
   ];
 }
 
+/** Sidebar do perfil JÁ FILTRADA pelos módulos contratados da rede. Sem
+ *  `modulos` (chamada legada/teste) assume tudo ligado — o comportamento
+ *  pré-SaaS. */
+function sidebarDoPerfil(p: Perfil, modulos: string[] = TODOS_MODULOS): GrupoNav[] {
+  return filtrarPorModulos(gruposDoPerfil(p), modulos);
+}
+
 /** Todos os itens de menu que o usuário PODE abrir (Dashboard + sidebar do
  *  perfil), achatados — base da busca por páginas. */
-function itensNavVisiveis(p: Perfil): ItemNav[] {
+function itensNavVisiveis(p: Perfil, modulos: string[] = TODOS_MODULOS): ItemNav[] {
   const todos = [
     { ...DASHBOARD, rotulo: rotuloDashboard(p) },
     ...(p.global ? [SECRETARIA] : []),
     ...(p.gestor && !p.secretaria ? [COMECAR] : []),
-    ...sidebarDoPerfil(p).flatMap((g) => g.itens),
+    ...sidebarDoPerfil(p, modulos).flatMap((g) => g.itens),
   ];
   // Remove rotas repetidas (ex.: Panorama da Rede está no topo e no grupo).
   return todos.filter((it, i) => todos.findIndex((x) => x.caminho === it.caminho) === i);
@@ -303,6 +338,7 @@ interface Opcao {
  *  filtra os alunos pelas turmas do professor). Navegável pelo teclado. */
 function PesquisaGlobal() {
   const { escolaId, usuario } = useApp();
+  const { modulos: modulosBusca } = useModulos();
   const navegar = useNavigate();
   const [termo, setTermo] = useState("");
   const [aberto, setAberto] = useState(false);
@@ -338,7 +374,7 @@ function PesquisaGlobal() {
 
   // Páginas do menu que casam com o texto (só as que o cargo pode abrir).
   const alvo = normalizar(consulta);
-  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis({ global, secretaria, gestor })
+  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis({ global, secretaria, gestor }, modulosBusca)
     .filter((item) => normalizar(item.rotulo).includes(alvo))
     .slice(0, 6)
     .map((item) => ({
@@ -654,7 +690,8 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   // "Comece aqui" só aparece enquanto a escola não foi configurada; depois da
   // config inicial ele some (novas importações passam a ser por "Importações").
   const { precisaConfigurar } = useOnboarding();
-  const grupos = sidebarDoPerfil(perfil);
+  const { modulos } = useModulos();
+  const grupos = sidebarDoPerfil(perfil, modulos);
   const ativo = grupoDaRota(grupos, pathname);
   const [abertos, setAbertos] = useState<Set<string>>(() => {
     const iniciais = carregarAbertos();
@@ -806,6 +843,7 @@ function IconeMenu({ item, atalho }: { item: ItemNav; atalho?: () => void }) {
  *  na barra estreita), mas nada some — é só a versão compacta do mesmo menu. */
 function NavegacaoRail() {
   const { usuario } = useApp();
+  const { modulos: modulosRail } = useModulos();
   const perfil: Perfil = {
     global: Boolean(usuario?.is_global),
     secretaria: !usuario?.is_global && usuario?.rede_id != null,
@@ -814,7 +852,7 @@ function NavegacaoRail() {
   const bruto: ItemNav[] = [
     { ...DASHBOARD, rotulo: rotuloDashboard(perfil) },
     ...(perfil.global ? [SECRETARIA] : []),
-    ...sidebarDoPerfil(perfil).flatMap((g) => g.itens),
+    ...sidebarDoPerfil(perfil, modulosRail).flatMap((g) => g.itens),
   ];
   // Sem rotas repetidas (ex.: Panorama da Rede no topo e no grupo Principal).
   const itens = bruto.filter((it, i) => bruto.findIndex((x) => x.caminho === it.caminho) === i);

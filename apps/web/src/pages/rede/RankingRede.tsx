@@ -37,6 +37,8 @@ interface Coluna {
 
 interface Aba {
   chave: ChaveAba;
+  /** Módulo exigido; ausente = vale para qualquer plano. */
+  modulo?: string;
   rotulo: string;
   icone: typeof Trophy;
   /** Métrica que ORDENA o ranking desta aba (desc). */
@@ -72,6 +74,7 @@ const ABAS: Aba[] = [
   },
   {
     chave: "leitura",
+    modulo: "leitura",
     rotulo: "Leitura",
     icone: BookOpen,
     ordenar: (e) => num(e.livros_por_matricula),
@@ -90,6 +93,7 @@ const ABAS: Aba[] = [
   },
   {
     chave: "matematica",
+    modulo: "matematica",
     rotulo: "Matemática",
     icone: Calculator,
     ordenar: (e) => num(e.estrelas_por_matricula),
@@ -113,17 +117,21 @@ const ABAS: Aba[] = [
     icone: Users,
     ordenar: (e) => num(e.adocao),
     explicacao:
-      "Mostra se os alunos estão de fato usando as plataformas. Ordenado por "
-      + "PARTICIPAÇÃO (% de alunos com dados). Os números por aluno indicam a "
-      + "intensidade de uso de quem participa.",
+      "Mostra QUANTOS alunos usam as plataformas — é adoção, não desempenho. "
+      + "Ordenado por PARTICIPAÇÃO (alunos com dado de alguma plataforma ÷ alunos "
+      + "da escola). Uma escola pode ter desempenho alto e adoção baixa: são "
+      + "coisas diferentes, e cada uma pede uma ação diferente.",
     colunas: [
       { rotulo: "Alunos", valor: (e) => inteiro(e.total_alunos), ocultarAte: "sm" },
       { rotulo: "Com dados", valor: (e) => inteiro(e.alunos_com_dados), ocultarAte: "sm",
-        dica: "Alunos que já têm dados de alguma plataforma no ano letivo." },
+        dica: "Alunos com dado real de alguma plataforma (não é contagem de notas)." },
       { rotulo: "Participação", curto: "Particip.", valor: (e) => `${dec(e.adocao)}%`, destaque: true,
-        dica: "Alunos com dados ÷ alunos da escola." },
-      { rotulo: "Livros/aluno", valor: (e) => dec(e.livros_por_matricula), ocultarAte: "md" },
-      { rotulo: "Ativ./aluno", valor: (e) => dec(e.atividades_por_matricula), ocultarAte: "lg" },
+        dica: "Alunos com dado de alguma plataforma ÷ alunos da escola." },
+      { rotulo: "Adoção Elefante", curto: "Elef.", valor: (e) => `${dec(e.adocao_elefante)}%`, ocultarAte: "md",
+        dica: "Alunos com dado do Elefante ÷ alunos da escola." },
+      { rotulo: "Adoção Matific", curto: "Matific", valor: (e) => `${dec(e.adocao_matific)}%`, ocultarAte: "md",
+        dica: "Alunos com dado do Matific ÷ alunos da escola." },
+      { rotulo: "Livros/aluno", valor: (e) => dec(e.livros_por_matricula), ocultarAte: "lg" },
     ],
   },
 ];
@@ -160,7 +168,9 @@ function Formula({ children }: { children: React.ReactNode }) {
  * O exemplo é calculado com o "melhor da rede" REAL dos dados carregados, então
  * a Secretaria consegue conferir a conta contra a própria tabela.
  */
-function ComoFunciona({ aba, escolas }: { aba: Aba; escolas: EscolaCartao[] }) {
+function ComoFunciona({ aba, escolas, modulos }: { aba: Aba; escolas: EscolaCartao[]; modulos: string[] }) {
+  const temLeitura = modulos.includes("leitura");
+  const temMatematica = modulos.includes("matematica");
   const [aberto, setAberto] = useState(false);
   const melhorLeitura = Math.max(0, ...escolas.map((e) => num(e.livros_por_matricula)));
   const melhorMat = Math.max(0, ...escolas.map((e) => num(e.estrelas_por_matricula)));
@@ -182,13 +192,24 @@ function ComoFunciona({ aba, escolas }: { aba: Aba; escolas: EscolaCartao[] }) {
       </button>
       {aberto && (
         <div className="mt-2 max-w-2xl space-y-3 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3.5 text-sm text-zinc-700 dark:border-indigo-500/20 dark:bg-indigo-500/5 dark:text-zinc-200">
+          <p className="rounded-md bg-white/60 p-2 text-xs dark:bg-zinc-900/50">
+            O sistema mostra <b>duas medidas diferentes</b>, e vale não confundir:<br />
+            <b>① Índice da rede (0–1000)</b> — ordena este ranking. Compara as escolas
+            entre si, proporcionalmente ao tamanho de cada uma.<br />
+            <b>② Notas de desempenho (0–100)</b> — as médias de Leitura/Matemática que
+            aparecem no Panorama. Medem <b>quão bem vão os alunos que usam</b> a plataforma.
+          </p>
+
+          <p className="pt-1 font-semibold text-indigo-700 dark:text-indigo-300">
+            ① Índice da rede (0–1000) — ordena o ranking
+          </p>
           <p>
             O ranking compara desempenho <b>proporcional ao tamanho da escola</b>, para que
             uma escola grande não fique à frente só por ter mais alunos. Toda pontuação vai
             de <b>0 a 1000</b>, em que <b>1000 é a melhor escola da rede</b> naquele indicador.
           </p>
 
-          <div>
+          {temLeitura && <div>
             <p className="font-semibold">📚 Leitura (Elefante Letrado)</p>
             <p className="mt-1">1. Primeiro, o indicador proporcional:</p>
             <Formula>Livros por aluno = Total de livros lidos ÷ Nº de alunos da escola</Formula>
@@ -201,9 +222,9 @@ function ComoFunciona({ aba, escolas }: { aba: Aba; escolas: EscolaCartao[] }) {
               {melhorLeitura > 0 && <> — hoje <b>{dec(melhorLeitura)} livros/aluno</b></>}.
               Quem tem esse valor marca 1000; metade dele marca 500.
             </p>
-          </div>
+          </div>}
 
-          <div>
+          {temMatematica && <div>
             <p className="font-semibold">🔢 Matemática (Matific)</p>
             <p className="mt-1">Mesma lógica, com o indicador da plataforma:</p>
             <Formula>Estrelas por aluno = Total de estrelas ÷ Nº de alunos da escola</Formula>
@@ -216,7 +237,7 @@ function ComoFunciona({ aba, escolas }: { aba: Aba; escolas: EscolaCartao[] }) {
               estrelas por aluno
               {melhorMat > 0 && <> (melhor da rede hoje: <b>{dec(melhorMat)}/aluno</b>)</>}.
             </p>
-          </div>
+          </div>}
 
           <div>
             <p className="font-semibold">🏆 Índice Geral</p>
@@ -229,8 +250,78 @@ function ComoFunciona({ aba, escolas }: { aba: Aba; escolas: EscolaCartao[] }) {
             </p>
           </div>
 
+          <p className="border-t border-indigo-200/60 pt-2.5 font-semibold text-indigo-700 dark:border-indigo-500/20 dark:text-indigo-300">
+            ② Notas de desempenho (0–100) — as médias do Panorama
+          </p>
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">
+            Estas notas medem <b>o desempenho de quem usa</b> a plataforma. Aluno sem dado
+            NÃO entra como zero — ele simplesmente não é contado (quantos usam é a
+            <b> adoção</b>, mostrada à parte).
+          </p>
+
+          {temLeitura && <div>
+            <p className="font-semibold">📚 Nota de Leitura (0–100)</p>
+            <p className="mt-1">Cada indicador do Elefante vira 0–100 comparando o aluno com os colegas da própria escola:</p>
+            <Formula>
+              volume (livros, tempo, tentativas): mín(100 ; [v ÷ (v+k)] ÷ [R ÷ (R+k)] × 100)
+            </Formula>
+            <Formula>qualidade (acertos, dificuldade): mín(100 ; v ÷ R × 100)</Formula>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              <b>R</b> = referência da escola (o <b>percentil 90</b> dos alunos que usam —
+              escola pequena usa o maior valor). <b>k</b> = a <b>mediana</b>, que dá
+              “retornos decrescentes” ao volume: dobrar a quantidade não dobra a nota.
+            </p>
+            <p className="mt-1.5">Os indicadores entram com os pesos configurados:</p>
+            <Formula>
+              Nota do aluno = 35%·livros + 30%·dificuldade + 30%·questões + 5%·tempo
+            </Formula>
+            <Formula>questões = 30%·tentativas + 70%·acertos</Formula>
+            <Formula>Nota de Leitura da escola = média das notas dos alunos COM dado do Elefante</Formula>
+          </div>}
+
+          {temMatematica && <div>
+            <p className="font-semibold">🔢 Nota de Matemática (0–100)</p>
+            <p className="mt-1">Mesma normalização (P90 da escola, saturação no volume), com os indicadores do Matific:</p>
+            <Formula>
+              Nota do aluno = 40%·atividades + 35%·pontuação média + 25%·estrelas
+            </Formula>
+            <Formula>Nota de Matemática da escola = média das notas dos alunos COM dado do Matific</Formula>
+          </div>}
+
           <div>
-            <p className="font-semibold">📊 Exemplo prático</p>
+            <p className="font-semibold">🏆 Média Geral (0–100)</p>
+            <Formula>Média Geral = (Nota de Leitura + Nota de Matemática) ÷ 2</Formula>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              Com <b>uma só</b> plataforma, a média usa <b>a dimensão disponível</b> — a
+              ausência não vira zero. Ex.: Leitura 75 e Matemática sem dados ⇒ Geral = <b>75</b>
+              (e não 37,5).{!temMatematica && <> Esta rede contratou <b>apenas a Leitura</b>,
+              então a Geral é a própria nota de Leitura.</>}
+              {!temLeitura && <> Esta rede contratou <b>apenas a Matemática</b>, então a Geral
+              é a própria nota de Matemática.</>}
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold">📊 Exemplo prático (notas 0–100)</p>
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+              Escola com <b>200 alunos</b>:
+            </p>
+            <Formula>150 alunos usam o Elefante, média deles 78 → Nota de Leitura = 78</Formula>
+            <Formula>160 alunos usam o Matific, média deles 82 → Nota de Matemática = 82</Formula>
+            <Formula>Média Geral = (78 + 82) ÷ 2 = 80</Formula>
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+              E a <b>adoção</b>, separada do desempenho:
+            </p>
+            <Formula>Adoção Elefante = 150 ÷ 200 = 75%   ·   Adoção Matific = 160 ÷ 200 = 80%</Formula>
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              Leitura: <b>80 é desempenho</b>; <b>75%/80% é participação</b>. Os 50 alunos
+              que ainda não usam o Elefante não derrubam a nota — aparecem na adoção, que é
+              onde a ação da Secretaria muda (ampliar uso ≠ melhorar desempenho).
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold">📊 Exemplo prático (índice 0–1000)</p>
             <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
               Uma escola com <b>200 alunos</b>, <b>35.000 livros</b> e <b>40.000 estrelas</b>,
               usando a régua atual desta rede:
@@ -269,7 +360,15 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
   const { selecionarEscola } = useApp();
   const navegar = useNavigate();
   const [abaIdx, setAbaIdx] = useState(0);
-  const aba = ABAS[abaIdx];
+
+  // MÓDULOS CONTRATADOS: aba, coluna e explicação de produto não contratado não
+  // existem para esta rede (≠ "sem dados", que existe e mostra vazio).
+  const mods = dados?.modulos ?? ["leitura", "matematica"];
+  const abas = useMemo(
+    () => ABAS.filter((a) => !a.modulo || mods.includes(a.modulo)),
+    [mods.join("|")],
+  );
+  const aba = abas[Math.min(abaIdx, abas.length - 1)] ?? ABAS[0];
 
   const ranked = useMemo(
     () => [...(dados?.escolas ?? [])]
@@ -302,7 +401,7 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
           aria-label="Categoria do ranking"
           className="inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
         >
-          {ABAS.map((opt, i) => {
+          {abas.map((opt, i) => {
             const Icone = opt.icone;
             return (
               <button
@@ -322,7 +421,7 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
             );
           })}
         </div>
-        <ComoFunciona aba={aba} escolas={dados.escolas ?? []} />
+        <ComoFunciona aba={aba} escolas={dados.escolas ?? []} modulos={mods} />
       </div>
 
       <Card className="p-4">

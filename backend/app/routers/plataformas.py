@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.deps import exigir_modulo_da_escola
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import (
     Aluno,
@@ -84,7 +85,8 @@ def _importacao_manual(db, escola_id, usuario_id, plataforma) -> Importacao:
 
 # --- Matific (PRD §55) --------------------------------------------------------
 
-@router.get("/matific", response_model=list[MatificAlunoOut])
+@router.get("/matific", response_model=list[MatificAlunoOut],
+            dependencies=[Depends(exigir_modulo_da_escola("matematica"))])
 def modulo_matific(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
@@ -106,7 +108,8 @@ def modulo_matific(
     ]
 
 
-@router.put("/matific/{aluno_id}", response_model=MatificAlunoOut)
+@router.put("/matific/{aluno_id}", response_model=MatificAlunoOut,
+            dependencies=[Depends(exigir_modulo_da_escola("matematica"))])
 def editar_matific(
     aluno_id: int,
     dados: MatificEdicao,
@@ -150,7 +153,8 @@ def editar_matific(
 
 # --- Elefante Letrado (PRD §56) -------------------------------------------------
 
-@router.get("/elefante", response_model=list[ElefanteAlunoOut])
+@router.get("/elefante", response_model=list[ElefanteAlunoOut],
+            dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def modulo_elefante(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
@@ -174,7 +178,8 @@ def modulo_elefante(
     ]
 
 
-@router.put("/elefante/{aluno_id}", response_model=ElefanteAlunoOut)
+@router.put("/elefante/{aluno_id}", response_model=ElefanteAlunoOut,
+            dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def editar_elefante(
     aluno_id: int,
     dados: ElefanteEdicao,
@@ -229,7 +234,8 @@ def editar_elefante(
     )
 
 
-@router.put("/elefante/{aluno_id}/niveis", response_model=ElefanteAlunoOut)
+@router.put("/elefante/{aluno_id}/niveis", response_model=ElefanteAlunoOut,
+            dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def informar_niveis_leitura(
     aluno_id: int,
     dados: NiveisLeituraEdicao,
@@ -302,7 +308,8 @@ def _pontos_por_codigo(db: Session, escola_id: int) -> dict[str, float]:
     return pontos
 
 
-@router.get("/livros", response_model=dict)
+@router.get("/livros", response_model=dict,
+            dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def listar_livros(
     escola_id: int = Depends(escola_autorizada),
     busca: str | None = Query(default=None),
@@ -346,7 +353,8 @@ def listar_livros(
     return {"total": total, "pagina": pagina, "por_pagina": por_pagina, "itens": itens}
 
 
-@router.post("/livros", response_model=LivroOut, status_code=status.HTTP_201_CREATED)
+@router.post("/livros", response_model=LivroOut, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def criar_livro(
     dados: LivroCreate,
     escola_id: int = Depends(escola_autorizada),
@@ -405,7 +413,8 @@ def atualizar_livro(
     return saida
 
 
-@router.delete("/livros/{livro_id}")
+@router.delete("/livros/{livro_id}",
+               dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def excluir_livro(
     livro_id: int,
     escola_id: int = Depends(escola_autorizada),

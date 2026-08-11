@@ -27,6 +27,10 @@ function cartao(over: Record<string, unknown> = {}) {
     atividades_por_matricula: 0, tempo_por_matricula_min: 0,
     pontuacao_leitura: 0, pontuacao_matematica: 0, pontuacao_geral: 0,
     dimensoes_pontuadas: ["leitura", "matematica"],
+    // Desempenho (0–100) e cobertura são conceitos SEPARADOS no payload.
+    dimensoes_com_dados: ["leitura", "matematica"],
+    alunos_com_nota_elefante: 100, alunos_com_nota_matific: 100,
+    adocao_elefante: 100, adocao_matific: 100,
     precisa_atencao: false, motivo_atencao: null,
     ...over,
   };
@@ -143,6 +147,42 @@ describe("Ranking da Rede", () => {
     expect(screen.getByText("875 pontos")).toBeInTheDocument();
     const jorge = DUAS_ESCOLAS.escolas.find((e) => e.nome.includes("Jorge Passos"))!;
     expect(jorge.pontuacao_leitura).toBe(875);          // conferência contra o backend
+  });
+
+  it("explica as notas 0–100 e separa desempenho de adoção", async () => {
+    responder("GET", "/redes/1/dashboard", DUAS_ESCOLAS);
+    renderComApp(<RankingDaRede />, { usuario: secretaria });
+    await screen.findByText("🏆 Ranking da Rede");
+    await userEvent.click(screen.getByRole("button", { name: /Como funciona o ranking/i }));
+
+    // As duas escalas ficam explicitamente distinguidas (aparecem no resumo do
+    // topo e como cabeçalho da própria seção, por isso getAllByText).
+    expect(screen.getAllByText(/Índice da rede \(0–1000\)/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Notas de desempenho \(0–100\)/i).length).toBeGreaterThan(0);
+
+    // Fórmula REAL do motor (pesos + normalização P90/saturação).
+    expect(screen.getByText(/35%·livros \+ 30%·dificuldade \+ 30%·questões \+ 5%·tempo/i)).toBeInTheDocument();
+    expect(screen.getByText(/40%·atividades \+ 35%·pontuação média \+ 25%·estrelas/i)).toBeInTheDocument();
+    expect(screen.getByText(/questões = 30%·tentativas \+ 70%·acertos/i)).toBeInTheDocument();
+    expect(screen.getByText(/percentil 90/i)).toBeInTheDocument();
+
+    // A regra que corrige o teto de 50 (dimensão ausente NÃO vira zero).
+    expect(screen.getByText(/média das notas dos alunos COM dado do Elefante/i)).toBeInTheDocument();
+    expect(screen.getByText(/a ausência não vira zero/i)).toBeInTheDocument();
+
+    // Exemplo do dono: 78 / 82 → 80, com adoção 75% e 80% ao lado.
+    expect(screen.getByText(/Média Geral = \(78 \+ 82\) ÷ 2 = 80/i)).toBeInTheDocument();
+    expect(screen.getByText(/Adoção Elefante = 150 ÷ 200 = 75%/i)).toBeInTheDocument();
+  });
+
+  it("aba Engajamento mostra adoção por plataforma (não desempenho)", async () => {
+    responder("GET", "/redes/1/dashboard", DUAS_ESCOLAS);
+    renderComApp(<RankingDaRede />, { usuario: secretaria });
+    await screen.findByText("🏆 Ranking da Rede");
+    await userEvent.click(screen.getByRole("tab", { name: /Engajamento/i }));
+
+    expect(screen.getByRole("columnheader", { name: /Adoção Elefante/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Adoção Matific/i })).toBeInTheDocument();
   });
 
   it("estado vazio: rede sem dados não quebra a tela", async () => {

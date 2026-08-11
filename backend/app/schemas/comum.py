@@ -28,6 +28,10 @@ class UsuarioOut(ORMModel):
     status: str = "ativo"
     ultimo_acesso: datetime | None = None
     created_at: datetime | None = None
+    # Módulos CONTRATADOS que valem para este usuário (SaaS). Preenchido em
+    # /auth/me e no login; é a fonte que o frontend usa para montar menu, abas e
+    # telas. Vazio-por-default só em listagens de usuários, onde não se aplica.
+    modulos: list[str] = []
 
 
 class LoginOut(BaseModel):

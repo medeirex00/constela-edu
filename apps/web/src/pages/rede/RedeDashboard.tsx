@@ -605,6 +605,11 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
   if (!dados) return null;
 
   const t = dados.totais;
+  // MÓDULOS CONTRATADOS pela rede exibida (vem do payload — o admin global pode
+  // estar vendo uma rede diferente da dele, então não uso o hook do usuário).
+  const mods = dados.modulos ?? ["leitura", "matematica"];
+  const temLeitura = mods.includes("leitura");
+  const temMatematica = mods.includes("matematica");
   const eq = dados.equidade;
 
   return (
@@ -696,9 +701,11 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {/* Top escolas — a SEDUC escolhe o critério (geral/leitura/matemática/engajamento). */}
       <TopEscolas escolas={dados.escolas} aoAbrir={abrirEscola} />
 
-      {/* Panorama por plataforma: leitura (Elefante) e matemática (Matific). */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <SecaoPlataforma
+      {/* Panorama por plataforma — só dos MÓDULOS CONTRATADOS pela rede. O que
+          não faz parte do plano não aparece (nem zerado); com um módulo só, o
+          card ocupa a largura inteira em vez de deixar buraco. */}
+      <div className={`grid gap-6 ${temLeitura && temMatematica ? "lg:grid-cols-2" : ""}`}>
+        {temLeitura && <SecaoPlataforma
           titulo="Leitura — Elefante Letrado"
           icone={<BookOpen size={16} className="text-emerald-600" />}
           kpis={[
@@ -712,8 +719,8 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
           rotuloTop="livros lidos"
           formatoTop={(v) => `${numero(v)} livros`}
           aoAbrir={abrirEscola}
-        />
-        <SecaoPlataforma
+        />}
+        {temMatematica && <SecaoPlataforma
           titulo="Matemática — Matific"
           icone={<Calculator size={16} className="text-indigo-600" />}
           kpis={[
@@ -727,7 +734,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
           rotuloTop="estrelas"
           formatoTop={(v) => `${numero(v)} ⭐`}
           aoAbrir={abrirEscola}
-        />
+        />}
       </div>
 
       {/* Comparativo entre escolas (tabela por indicador). */}

@@ -9,6 +9,7 @@ import { lazy, Suspense } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { Carregando, PageHeader } from "../components/ui";
+import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
 import RankingEscolar from "./RankingEscolar";
 import RankingEvolucao from "./RankingEvolucao";
@@ -54,6 +55,10 @@ export default function Rankings() {
 
 function RankingsEscola() {
   const [params, setParams] = useSearchParams();
+  // Abas de PRODUTO só existem para quem contratou o módulo (SaaS).
+  const { tem } = useModulos();
+  const visoes = VISOES.filter((v) =>
+    (v.chave !== "leitura" || tem("leitura")) && (v.chave !== "matematica" || tem("matematica")));
   // A URL é a ÚNICA fonte da verdade: `visao` é derivada de `?ver=` a cada
   // render. Assim atalhos/deep-links que mudam só a query (Alt+2/Alt+3, o link
   // "Ranking Geral" da barra) trocam a aba mesmo com a tela já montada — o React
@@ -82,7 +87,7 @@ function RankingsEscola() {
         aria-label="Tipo de ranking"
         className="mb-4 inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
       >
-        {VISOES.map((v) => (
+        {visoes.map((v) => (
           <button
             key={v.chave}
             type="button"
@@ -101,8 +106,8 @@ function RankingsEscola() {
       </div>
 
       {visao === "geral" && <RankingGeral embutido />}
-      {visao === "leitura" && <RankingLeitura embutido />}
-      {visao === "matematica" && <RankingMatematica embutido />}
+      {visao === "leitura" && tem("leitura") && <RankingLeitura embutido />}
+      {visao === "matematica" && tem("matematica") && <RankingMatematica embutido />}
       {visao === "evolucao" && <RankingEvolucao embutido />}
       {visao === "escolar" && <RankingEscolar embutido />}
     </div>

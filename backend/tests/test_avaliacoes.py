@@ -10,8 +10,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.security import hash_senha
 from app.main import app
-from app.models import (Aluno, AvaliacaoExterna, Escola, Matricula, Nota, Rede,
-                        ResultadoAvaliacao, Turma, Usuario)
+from app.models import (Aluno, AvaliacaoExterna, Escola, Importacao, Matricula,
+                        Nota, Rede, ResultadoAvaliacao, SnapshotElefante,
+                        SnapshotMatific, Turma, Usuario)
 from app.services import avaliacoes as svc
 
 
@@ -236,11 +237,19 @@ def _escola_engajada(db, rede_id, nome, inep, media):
     turma = Turma(escola_id=e.id, nome="1A", ano_escolar="1º Ano", ano_letivo=2026,
                   status="ativa")
     db.add(turma); db.flush()
+    imp = Importacao(escola_id=e.id, plataforma="seed", tipo="seed")
+    db.add(imp); db.flush()
     for i in range(3):
         a = Aluno(escola_id=e.id, nome=f"Aluno {nome} {i}"); db.add(a); db.flush()
         db.add(Matricula(escola_id=e.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        # Snapshot = "tem dado da plataforma": sem ele o aluno não entra na média
+        # de desempenho da escola (services/rede.py) e a correlação fica sem ponto.
+        db.add(SnapshotElefante(escola_id=e.id, aluno_id=a.id, importacao_id=imp.id,
+                                livros_unicos=5, tempo_leitura_min=60))
+        db.add(SnapshotMatific(escola_id=e.id, aluno_id=a.id, importacao_id=imp.id,
+                               atividades=20, estrelas=100))
         db.add(Nota(escola_id=e.id, aluno_id=a.id, ano_letivo=2026, nota_geral=media,
-                    posicao=i + 1))
+                    nota_elefante=media, nota_matific=media, posicao=i + 1))
     return e
 
 

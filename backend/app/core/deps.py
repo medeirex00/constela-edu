@@ -96,6 +96,43 @@ def exigir_papeis_escola(*papeis: str):
     return dependencia
 
 
+def exigir_modulo(modulo: str):
+    """Barra o acesso quando a rede do usuário NÃO contratou o módulo (SaaS).
+
+    É a trava de SERVIDOR do modelo de módulos: a interface esconde o que não foi
+    contratado, mas a API precisa recusar sozinha — senão bastaria digitar a URL.
+    Aplicada no registro do router (``include_router(dependencies=[...])``), no
+    mesmo molde de ``negar_secretaria``.
+
+    Regras de resolução (ver ``services/modulos``): ausência de configuração =
+    contratado; escola sem rede = tudo contratado; admin global vê o catálogo
+    inteiro (ele administra todas as redes)."""
+    def dependencia(usuario: Usuario = Depends(get_usuario_atual),
+                    db: Session = Depends(get_db)) -> Usuario:
+        from app.services import modulos as svc_modulos
+        svc_modulos.exigir(svc_modulos.modulos_do_usuario(db, usuario), modulo)
+        return usuario
+
+    return dependencia
+
+
+def exigir_modulo_da_escola(modulo: str):
+    """Como ``exigir_modulo``, mas resolve pela ESCOLA da rota (``escola_id``).
+
+    Necessária porque o admin global — que passa em ``exigir_modulo`` — opera
+    escolas de QUALQUER rede: o módulo tem de ser o da rede DAQUELA escola, não o
+    catálogo inteiro. Usada nas rotas ``/escolas/{escola_id}/...`` específicas de
+    uma plataforma."""
+    def dependencia(escola_id: int = Path(...),
+                    db: Session = Depends(get_db)) -> int:
+        from app.services import modulos as svc_modulos
+        escola = db.get(Escola, escola_id)
+        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), modulo)
+        return escola_id
+
+    return dependencia
+
+
 def exigir_admin_global(usuario: Usuario = Depends(get_usuario_atual)) -> Usuario:
     """Ações que abrangem todas as escolas (criar escola, exclusão permanente)."""
     if not usuario.is_global:

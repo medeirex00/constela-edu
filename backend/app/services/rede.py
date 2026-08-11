@@ -30,7 +30,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import scoring
+from app.services import modulos, scoring
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -99,6 +99,64 @@ def _totais_plataforma_por_escola(db: Session, ids: list[int], modelo,
     return {linha.escola_id: dict(linha._mapping) for linha in linhas}
 
 
+def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
+                           ) -> dict[int, tuple[int, float]]:
+    """Média da nota de UMA plataforma, SOMENTE sobre os alunos que têm dado dela.
+
+    O motor cria uma linha em ``notas`` para TODO aluno matriculado (ele precisa
+    disso para o ranking interno), inclusive quem nunca usou a plataforma — e
+    esse aluno fica com nota 0. Se a média da escola incluísse esses zeros, ela
+    mediria *desempenho × cobertura*, e não desempenho: uma escola ótima com
+    metade dos alunos fora da plataforma parecia ruim (o caso "42/54" do dono).
+
+    O corte é pela EXISTÊNCIA de snapshot, nunca por ``nota > 0``: um aluno que
+    usa a plataforma e ainda leu 0 livros é um zero LEGÍTIMO e deve pesar na
+    média; quem não usa é ausência de dado e fica fora da conta.
+
+    Devolve ``{escola_id: (alunos_com_dado, media)}``.
+    """
+    if not ids:
+        return {}
+    tem_dado = (
+        select(modelo.id)
+        .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id)
+        .exists()
+    )
+    linhas = db.execute(
+        select(Nota.escola_id, func.count(Nota.id), func.avg(coluna))
+        .join(Aluno, Aluno.id == Nota.aluno_id)
+        .join(Escola, Escola.id == Nota.escola_id)
+        .where(Nota.escola_id.in_(ids),
+               Nota.ano_letivo == Escola.ano_letivo_ativo,
+               Aluno.status == "ativo",
+               tem_dado)
+        .group_by(Nota.escola_id)
+    ).all()
+    return {linha[0]: (int(linha[1] or 0), float(linha[2] or 0.0)) for linha in linhas}
+
+
+def _alunos_com_qualquer_dado(db: Session, ids: list[int]) -> dict[int, int]:
+    """Alunos DISTINTOS com dado de ALGUMA plataforma, por escola — o numerador
+    honesto da cobertura. (A contagem antiga usava linhas de ``notas``, que
+    existem para todo matriculado, então a "adoção" dava ~100% sempre.)"""
+    if not ids:
+        return {}
+    total: dict[int, set[int]] = {}
+    for modelo in (SnapshotElefante, SnapshotMatific):
+        for escola_id, aluno_id in db.execute(
+            select(modelo.escola_id, modelo.aluno_id)
+            .join(Aluno, Aluno.id == modelo.aluno_id)
+            .join(Escola, Escola.id == modelo.escola_id)
+            .join(Matricula, (Matricula.aluno_id == modelo.aluno_id)
+                  & (Matricula.escola_id == modelo.escola_id)
+                  & (Matricula.ano_letivo == Escola.ano_letivo_ativo))
+            .where(modelo.escola_id.in_(ids), Aluno.status == "ativo")
+            .distinct()
+        ).all():
+            total.setdefault(escola_id, set()).add(aluno_id)
+    return {escola_id: len(alunos) for escola_id, alunos in total.items()}
+
+
 def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
     """Cartão resumido de CADA escola da rede (contagens + médias + totais brutos
     das plataformas do ano letivo ativo da própria escola), agregado no banco.
@@ -130,17 +188,22 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
         .group_by(Matricula.escola_id)
     ).all())
 
-    # (3) contagem + médias das notas por escola (agregado no banco).
-    notas = {r[0]: r for r in db.execute(
-        select(Nota.escola_id, func.count(Nota.id), func.avg(Nota.nota_geral),
-               func.avg(Nota.nota_matific), func.avg(Nota.nota_elefante))
-        .join(Aluno, Aluno.id == Nota.aluno_id)
-        .join(Escola, Escola.id == Nota.escola_id)
-        .where(Nota.escola_id.in_(ids),
-               Nota.ano_letivo == Escola.ano_letivo_ativo,
-               Aluno.status == "ativo")
-        .group_by(Nota.escola_id)
-    ).all()}
+    # MÓDULOS CONTRATADOS pela rede (SaaS). O que não foi contratado não entra em
+    # média, ranking nem adoção — e NÃO é a mesma coisa que "sem dados": módulo
+    # contratado sem importação continua valendo e aparece vazio na tela.
+    contratados = modulos.modulos_da_rede(db, rede_id)
+    tem_mod_leitura = "leitura" in contratados
+    tem_mod_matematica = "matematica" in contratados
+
+    # (3) DESEMPENHO por plataforma — média só sobre quem TEM dado dela (ver
+    # _medias_por_plataforma). Separa desempenho de cobertura: a média responde
+    # "quem usa, vai bem?" e a adoção responde "quantos usam?".
+    med_ele = (_medias_por_plataforma(db, ids, SnapshotElefante, Nota.nota_elefante)
+               if tem_mod_leitura else {})
+    med_mat = (_medias_por_plataforma(db, ids, SnapshotMatific, Nota.nota_matific)
+               if tem_mod_matematica else {})
+    # COBERTURA: alunos distintos com dado de alguma plataforma (numerador real).
+    com_dados_por_escola = _alunos_com_qualquer_dado(db, ids)
 
     # (4) professores por escola (mesma contagem do painel da escola).
     professores = dict(db.execute(
@@ -157,14 +220,22 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
 
     cartoes = []
     for escola in escolas:
-        agg = notas.get(escola.id)
-        com_nota = int((agg[1] if agg else 0) or 0)
-        val = ((lambda i: round(float(agg[i]), 1)) if (agg and com_nota)
-               else (lambda i: 0.0))
         total_alunos = int(alunos.get(escola.id, 0))
-        adocao = round(com_nota / total_alunos * 100, 1) if total_alunos else 0.0
-        media_geral = val(2)
-        motivo = _motivo_atencao(total_alunos, com_nota, adocao, media_geral)
+        # DESEMPENHO: média de quem TEM dado da plataforma (ausência ≠ zero).
+        n_ele, media_elefante = med_ele.get(escola.id, (0, 0.0))
+        n_mat, media_matific = med_mat.get(escola.id, (0, 0.0))
+        media_elefante = round(media_elefante, 1)
+        media_matific = round(media_matific, 1)
+        # A geral é a média das DIMENSÕES DISPONÍVEIS (não a média das notas
+        # gerais dos alunos): assim a escola que usa só uma plataforma não é
+        # dividida por dois — a ausência sai da conta em vez de valer zero.
+        disponiveis = [m for m, n in ((media_elefante, n_ele), (media_matific, n_mat)) if n]
+        media_geral = round(sum(disponiveis) / len(disponiveis), 1) if disponiveis else 0.0
+        dimensoes_com_dados = [nome for nome, n in (("leitura", n_ele), ("matematica", n_mat)) if n]
+        # COBERTURA: quantos alunos de fato usam (o que a "adoção" sempre quis dizer).
+        com_dados = int(com_dados_por_escola.get(escola.id, 0))
+        adocao = round(com_dados / total_alunos * 100, 1) if total_alunos else 0.0
+        motivo = _motivo_atencao(total_alunos, com_dados, adocao, media_geral)
         m, e = mat.get(escola.id), ele.get(escola.id)
         livros = int(e["livros_unicos"]) if e else 0
         ativos_ele = int(e["ativos"]) if e else 0
@@ -178,9 +249,16 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "total_turmas": int(turmas.get(escola.id, 0)),
             "total_professores": int(professores.get(escola.id, 0)),
             "total_alunos": total_alunos,
-            "alunos_com_dados": com_nota,
+            # DESEMPENHO (0–100) — só de quem tem dado da plataforma.
+            "media_geral": media_geral,
+            "media_matific": media_matific,
+            "media_elefante": media_elefante,
+            "dimensoes_com_dados": dimensoes_com_dados,
+            "alunos_com_nota_elefante": n_ele,
+            "alunos_com_nota_matific": n_mat,
+            # ENGAJAMENTO / COBERTURA — quantos usam (conceito SEPARADO do acima).
+            "alunos_com_dados": com_dados,
             "adocao": adocao,
-            "media_geral": media_geral, "media_matific": val(3), "media_elefante": val(4),
             # Totais brutos das plataformas (para as seções Elefante/Matific da rede).
             "livros": livros,
             "tempo_leitura_min": tempo_min,
@@ -188,6 +266,14 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "estrelas": estrelas,
             "ativos_matific": int(m["ativos"]) if m else 0,
             "ativos_elefante": ativos_ele,
+            # Adoção POR PLATAFORMA: a leitura mais acionável para a Secretaria
+            # ("53% usam o Elefante, 80% usam o Matific") — separada do desempenho.
+            "adocao_elefante": round(ativos_ele / total_alunos * 100, 1) if total_alunos else 0.0,
+            "adocao_matific": (round(int(m["ativos"]) / total_alunos * 100, 1)
+                               if (m and total_alunos) else 0.0),
+            # Módulos CONTRATADOS pela rede — a interface usa isto para não
+            # renderizar (nem como zero) o que não faz parte do plano.
+            "modulos": sorted(contratados),
             "livros_por_aluno": round(livros / ativos_ele, 1) if ativos_ele else 0.0,
             # Per capita por MATRÍCULA (÷ total de alunos da escola) — critério de
             # ranking JUSTO entre escolas de tamanhos diferentes: combina adoção e
@@ -253,10 +339,12 @@ def _pontuar_escolas(cartoes: list[dict]) -> None:
     melhor_leitura = max((c["livros_por_matricula"] for c in cartoes), default=0.0)
     melhor_matematica = max((c["estrelas_por_matricula"] for c in cartoes), default=0.0)
     for c in cartoes:
-        # "Tem dados" = a escola tem algum aluno com snapshot daquela plataforma.
-        # Sem isso, um zero de "não usa a plataforma" viraria nota de desempenho.
-        tem_leitura = c["ativos_elefante"] > 0
-        tem_matematica = c["ativos_matific"] > 0
+        # Pontua a dimensão que é CONTRATADA **e** tem dados. São dois cortes
+        # diferentes: módulo fora do plano nem existe para a rede; módulo
+        # contratado sem importação existe, mas ainda não tem o que pontuar.
+        mods = c.get("modulos") or list(modulos.TODOS)
+        tem_leitura = c["ativos_elefante"] > 0 and "leitura" in mods
+        tem_matematica = c["ativos_matific"] > 0 and "matematica" in mods
         c["pontuacao_leitura"] = (
             _indice_da_rede(c["livros_por_matricula"], melhor_leitura) if tem_leitura else 0.0)
         c["pontuacao_matematica"] = (
@@ -311,6 +399,9 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
 
     return {
         "rede_id": rede_id,
+        # Módulos contratados — a interface inteira (cards, abas, rankings,
+        # explicador) se adapta a partir daqui.
+        "modulos": sorted(modulos.modulos_da_rede(db, rede_id)),
         "totais": {
             "escolas": len(cartoes),
             "escolas_ativas": sum(1 for c in cartoes if c["status"] == "ativa"),

@@ -3,6 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.deps import exigir_modulo_da_escola
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import (
@@ -82,7 +83,8 @@ def ranking_geral(
     return itens
 
 
-@router.get("/ranking/leitura", response_model=list[dict])
+@router.get("/ranking/leitura", response_model=list[dict],
+            dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
 def ranking_leitura(
     escola_id: int = Depends(escola_autorizada),
     periodo: str = Query(default="tudo"),
@@ -186,7 +188,8 @@ def ranking_leitura(
     return itens
 
 
-@router.get("/ranking/matematica", response_model=list[dict])
+@router.get("/ranking/matematica", response_model=list[dict],
+            dependencies=[Depends(exigir_modulo_da_escola("matematica"))])
 def ranking_matematica(
     escola_id: int = Depends(escola_autorizada),
     periodo: str = Query(default="tudo"),

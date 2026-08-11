@@ -20,10 +20,13 @@ from app.main import app
 from app.models import (
     Aluno,
     Escola,
+    Importacao,
     Matricula,
     Nota,
     Professor,
     Rede,
+    SnapshotElefante,
+    SnapshotMatific,
     Turma,
     Usuario,
 )
@@ -43,6 +46,9 @@ def _turma_com_alunos(db, escola_id, nome, alunos, professor_id=None):
                   ano_letivo=2026, status="ativa", professor_id=professor_id)
     db.add(turma)
     db.flush()
+    imp = Importacao(escola_id=escola_id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
     ids = []
     for nome_aluno, nota_geral, posicao in alunos:
         a = Aluno(escola_id=escola_id, nome=nome_aluno, status="ativo")
@@ -50,8 +56,15 @@ def _turma_com_alunos(db, escola_id, nome, alunos, professor_id=None):
         db.flush()
         db.add(Matricula(escola_id=escola_id, aluno_id=a.id, turma_id=turma.id,
                          ano_letivo=2026))
+        # Snapshots das duas plataformas: sem eles o aluno não tem "dado" e fica
+        # fora da média de desempenho da escola (que agora mede só quem usa).
+        db.add(SnapshotElefante(escola_id=escola_id, aluno_id=a.id, importacao_id=imp.id,
+                                livros_unicos=5, tempo_leitura_min=60))
+        db.add(SnapshotMatific(escola_id=escola_id, aluno_id=a.id, importacao_id=imp.id,
+                               atividades=20, estrelas=100))
         db.add(Nota(escola_id=escola_id, aluno_id=a.id, ano_letivo=2026,
-                    nota_geral=nota_geral, posicao=posicao))
+                    nota_geral=nota_geral, nota_elefante=nota_geral,
+                    nota_matific=nota_geral, posicao=posicao))
         ids.append(a.id)
     return turma, ids
 

@@ -183,7 +183,11 @@ def simular(
     pct_matific = scoring.obter_pesos_brutos(db, escola_id, "pesos.matific")
     pct_elefante = scoring.obter_pesos_brutos(db, escola_id, "pesos.elefante")
     pct_questoes = scoring.obter_pesos_brutos(db, escola_id, "pesos.questoes")
-    pct_geral = scoring.obter_pesos_brutos(db, escola_id, "pesos.geral")
+    # Mesma regra do recálculo (scoring.recalcular_escola): a explicação da Nota
+    # Geral é DERIVADA dos pesos efetivamente usados, senão o simulador mostra
+    # uma conta que não fecha numa rede de um módulo só.
+    pct_geral = {chave: round(fracao * 100, 2) for chave, fracao in p_geral.items()
+                 if fracao > 0}
 
     nota_m, linhas_m = scoring.calcular_matific(snap_m, refs, p_matific, pct_matific, k_vol)
     nota_e, linhas_e, det_q = scoring.calcular_elefante(

@@ -7,7 +7,7 @@
  * Sem isto, a rede só existia por seed. A segurança real é no backend
  * (todas as rotas exigem admin global); esta tela é só a interface.
  */
-import { ArrowRight, Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users } from "lucide-react";
+import { ArrowRight, Blocks, Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -120,6 +120,158 @@ function casarEscola(escolas: EscolaItem[], nome: string): EscolaItem | null {
   // Ainda empatado: só aceita igualdade exata de tokens.
   const ex = cand.filter((c) => c.t.length === alvo.length && c.shared === alvo.length);
   return ex.length === 1 ? ex[0].e : null;
+}
+
+
+/** MÓDULOS CONTRATADOS pela rede (SaaS). Ligar/desligar muda a rede inteira na
+ *  hora: médias, ranking, adoção e interface. O backend é quem manda — a API
+ *  recusa módulo não contratado mesmo se alguém digitar a URL. */
+type RespostaContrato = {
+  recalculo: {
+    escolas: number;
+    alunos: number;
+    falhas: { escola_id: number; nome: string; erro: string }[];
+  };
+};
+
+export function ModulosDaRede({ redeId }: { redeId: number }) {
+  const { dados, erro, carregando, recarregar } =
+    useApi<{ chave: string; nome: string; produto: string; icone: string; ativo: boolean }[]>(
+      `/redes/${redeId}/modulos`);
+  const [salvando, setSalvando] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  // Último pedido enviado — o botão "Tentar novamente" reenvia exatamente ele.
+  // Como o PUT é idempotente, reenviar só refaz o recálculo que ficou para trás.
+  const [pendente, setPendente] = useState<Record<string, boolean> | null>(null);
+
+  // Trava SÍNCRONA contra envio duplicado. `salvando` é estado do React e só
+  // vale no render seguinte: dois cliques no mesmo tick veem os dois `null` e
+  // disparam dois PUTs. O ref fecha essa janela no ato.
+  const enviando = useRef(false);
+
+  // Aviso e pedido pendente pertencem a UMA rede. Trocar de rede tem de zerá-los
+  // — senão o "Tentar novamente" de um erro da rede A dispararia o PUT contra a
+  // rede B, recalculando uma rede que ninguém pediu. O chamador ainda passa
+  // `key={redeId}` (remonta de vez); isto aqui torna o componente correto
+  // sozinho, para qualquer chamador.
+  useEffect(() => {
+    setAviso(null);
+    setPendente(null);
+  }, [redeId]);
+
+  async function alternar(chave: string, ativo: boolean) {
+    await enviar({ [chave]: ativo }, chave);
+  }
+
+  async function enviar(pedido: Record<string, boolean>, chave: string) {
+    if (enviando.current) return;
+    enviando.current = true;
+    setSalvando(chave);
+    setAviso(null);
+    try {
+      const r = await api<RespostaContrato>(`/redes/${redeId}/modulos`,
+        { method: "PUT", body: JSON.stringify(pedido) });
+      const { escolas, alunos, falhas } = r.recalculo;
+      if (falhas.length) {
+        // O CONTRATO foi gravado (é a fonte da verdade); o que faltou foi
+        // atualizar as notas de algumas escolas. Dizemos exatamente quais.
+        setPendente(pedido);
+        setAviso({
+          tipo: "erro",
+          texto: `Plano salvo, mas as notas de ${falhas.length} escola(s) não foram recalculadas: `
+            + `${falhas.map((f) => f.nome).join(", ")}. Use "Tentar novamente" — nada é duplicado.`,
+        });
+      } else {
+        setPendente(null);
+        setAviso({
+          tipo: "ok",
+          texto: `Plano atualizado e notas recalculadas: ${escolas} escola(s), ${alunos} aluno(s). `
+            + "A rede já opera com o novo plano.",
+        });
+      }
+      recarregar();
+    } catch (e) {
+      // NÃO dá para afirmar "falha ao salvar": o contrato é gravado ANTES do
+      // recálculo, então um erro aqui (timeout do gateway, queda de rede depois
+      // do commit) pode ter deixado o plano já aplicado no servidor. Recarrega o
+      // estado real — os checkboxes passam a mostrar a verdade — e a mensagem
+      // diz o que de fato se sabe.
+      setPendente(pedido);
+      setAviso({
+        tipo: "erro",
+        texto: `${e instanceof ApiError ? e.message : "A conexão falhou."} `
+          + "Não foi possível confirmar o resultado: o plano PODE já ter sido aplicado. "
+          + "Recarregamos o estado atual — se as notas estiverem atrasadas, use "
+          + '"Tentar novamente" (nada é duplicado).',
+      });
+      recarregar();
+    } finally {
+      enviando.current = false;
+      setSalvando(null);
+    }
+  }
+
+  if (carregando && !dados) return <Carregando texto="Carregando os módulos..." />;
+  if (erro && !dados) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
+
+  const ativos = (dados ?? []).filter((m) => m.ativo).length;
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-zinc-500">
+        O que a rede <b>contratou</b>. O módulo desligado desaparece por completo para
+        ela — menu, indicadores, ranking e API. Não confundir com <b>sem dados</b>:
+        módulo contratado que ainda não recebeu importação continua aparecendo, vazio.
+      </p>
+      {aviso && (
+        <Mensagem tipo={aviso.tipo}>
+          {aviso.texto}
+          {pendente && (
+            <button
+              type="button"
+              className="ml-2 font-semibold underline underline-offset-2 disabled:opacity-50"
+              disabled={salvando !== null}
+              onClick={() => enviar(pendente, Object.keys(pendente)[0] ?? "")}
+            >
+              Tentar novamente
+            </button>
+          )}
+        </Mensagem>
+      )}
+      {ativos === 0 && (
+        <Mensagem tipo="erro">
+          Nenhum módulo contratado: a rede fica sem indicadores. Ligue pelo menos um.
+        </Mensagem>
+      )}
+      <div className="space-y-2">
+        {(dados ?? []).map((m) => (
+          <label
+            key={m.chave}
+            className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">
+                {m.icone} {m.nome}
+              </span>
+              <span className="block text-xs text-zinc-500">{m.produto}</span>
+            </span>
+            <span className="flex items-center gap-2">
+              <span className={`text-xs font-medium ${m.ativo ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-400"}`}>
+                {m.ativo ? "Contratado" : "Não contratado"}
+              </span>
+              <input
+                type="checkbox"
+                className="h-5 w-5 accent-indigo-600"
+                aria-label={`${m.nome} contratado`}
+                checked={m.ativo}
+                disabled={salvando !== null}
+                onChange={(e) => alternar(m.chave, e.target.checked)}
+              />
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function RedeGestao() {
@@ -542,6 +694,16 @@ export default function RedeGestao() {
               </Card>
 
               {/* --- Localização no mapa --- */}
+              <SecaoRecolhivel
+                icone={<Blocks size={16} className="text-indigo-600" />}
+                titulo="Módulos contratados"
+              >
+                {/* `key` obriga a remontagem ao trocar de rede: sem ela o aviso
+                    e o pedido pendente de UMA rede sobreviviam na tela, e o
+                    "Tentar novamente" disparava o PUT contra a rede NOVA. */}
+                <ModulosDaRede key={redeSel!} redeId={redeSel!} />
+              </SecaoRecolhivel>
+
               <SecaoRecolhivel
                 className="lg:col-span-2"
                 icone={<MapPin size={16} className="text-indigo-600" />}
