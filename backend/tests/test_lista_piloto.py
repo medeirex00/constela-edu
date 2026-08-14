@@ -462,18 +462,32 @@ def test_casa_antigo_abreviado_recebe_nome_completo_e_preserva_uploads(cliente, 
     assert ev is not None and ev.detalhes["nome_antigo"] == "AGATHA V"
 
 
-def test_ambiguidade_cria_novo_e_avisa(cliente, db, escola_completa):
+def test_ambiguidade_vai_para_revisao_e_nao_cria(cliente, db, escola_completa):
+    """REGRA ATUALIZADA (P0 2026-08-11, 4ª causa raiz): ambíguo NÃO cria mais.
+
+    Antes, dois candidatos ("AGATHA V" × 2) faziam a Lista Piloto abrir uma
+    TERCEIRA ficha e avisar "use Fundir alunos" — ou seja, o import gerava de
+    propósito a duplicata que alguém teria de limpar à mão. Agora vale a mesma
+    regra dos outros fluxos: correspondência insegura → REVISÃO, sem criar e sem
+    alterar ninguém. (Criar era o desfecho pior: some do radar e vira ficha
+    fantasma; a revisão fica visível no aviso e no log de auditoria.)"""
     escola_id = escola_completa["escola"].id
     turma = _turma(db, escola_id, "1º Ano A", "1º Ano")
     a1 = _antigo(db, escola_id, "AGATHA V", turma)
     a2 = _antigo(db, escola_id, "AGATHA V", turma)
+    antes = db.execute(select(func.count()).select_from(Aluno).where(
+        Aluno.escola_id == escola_id)).scalar_one()
     conteudo = _planilha_turma("1º Ano A", [
         _linha("AGATHA VITORIA MOURA DA SILVA", "111.111.111-1", date(2019, 9, 18))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
-    assert r.json()["alunos_criados"] == 1        # ambíguo → cria novo
-    assert any("Fundir alunos" in av for av in r.json()["avisos"])
+    assert r.json()["alunos_criados"] == 0        # ambíguo → NÃO cria
+    assert r.json()["alunos_em_revisao"] == 1
+    assert any("NÃO é segura" in av and "Fundir duplicatas" in av
+               for av in r.json()["avisos"])
     db.expire_all()
+    assert db.execute(select(func.count()).select_from(Aluno).where(
+        Aluno.escola_id == escola_id)).scalar_one() == antes
     assert db.get(Aluno, a1.id).nome == "AGATHA V"   # antigos intactos
     assert db.get(Aluno, a2.id).nome == "AGATHA V"
 
@@ -519,7 +533,17 @@ def test_turma_divergente_nao_casa(cliente, db, escola_completa):
     assert db.get(Aluno, antigo.id).nome == "AGATHA V"
 
 
-def test_sem_upload_fora_do_pool_cria_novo(cliente, db, escola_completa):
+def test_cadastro_sem_upload_tambem_e_reconhecido(cliente, db, escola_completa):
+    """REGRA ATUALIZADA (P0 2026-08-11, 4ª causa raiz): quem decide identidade é o
+    roster da SALA, não a origem do cadastro.
+
+    Antes, o casamento por abreviação só olhava um POOL restrito a cadastros com
+    upload de Matific/Elefante; um "AGATHA V" digitado à mão (ou vindo de qualquer
+    outra origem) ficava invisível e a Lista Piloto abria uma segunda ficha para a
+    MESMA criança. A restrição do pool não protegia nada — só escondia candidatos
+    do motor. Agora é 1 aluno = 1 perfil independentemente de como o cadastro
+    nasceu; o que impede fusão indevida continua sendo o veto de identidade
+    (ver ``test_veto_nascimento_nao_casa``) e a turma (``test_turma_divergente``)."""
     escola_id = escola_completa["escola"].id
     turma = _turma(db, escola_id, "1º Ano A", "1º Ano")
     antigo = _antigo(db, escola_id, "AGATHA V", turma, com_upload=False)
@@ -527,9 +551,11 @@ def test_sem_upload_fora_do_pool_cria_novo(cliente, db, escola_completa):
         _linha("AGATHA VITORIA MOURA DA SILVA", "111.111.111-1", date(2019, 9, 18))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
-    assert r.json()["alunos_criados"] == 1        # sem upload → fora do pool
+    assert r.json()["alunos_criados"] == 0        # reconheceu o cadastro existente
     db.expire_all()
-    assert db.get(Aluno, antigo.id).nome == "AGATHA V"
+    assert db.get(Aluno, antigo.id).nome == "AGATHA VITORIA MOURA DA SILVA"
+    assert db.execute(select(func.count()).select_from(Aluno).where(
+        Aluno.escola_id == escola_id, Aluno.nome.like("AGATHA%"))).scalar_one() == 1
 
 
 def test_placeholder_ra_nao_colapsa_alunos_distintos(cliente, db, escola_completa):

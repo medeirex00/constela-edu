@@ -38,27 +38,34 @@ def _arquivo_elefante(course_name: str, student_name: str) -> ArquivoObtido:
         content_type=orchestrator.CT_ELEFANTE_API, formato_hint="resumo")
 
 
-def test_sync_provavel_nao_autovincula_e_cria_novo(db, escola_completa, monkeypatch):
+def test_sync_provavel_nao_autovincula_nem_cria(db, escola_completa, monkeypatch):
     """LACUNA A: um match apenas 'provável' (variação fuzzy do nome) NÃO é
-    auto-vinculado ao aluno real na sync automática — vira um novo registro."""
+    auto-vinculado ao aluno real na sync automática.
+
+    REGRA NOVA (P0 das duplicatas): também NÃO vira um registro novo. Antes, a
+    sync criava a segunda ficha e contava com a fusão manual depois — era a fonte
+    da fila de fusões. Correspondência insegura agora vai para REVISÃO: nada é
+    vinculado e nada é criado."""
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
+    antes = db.execute(select(Aluno).where(
+        Aluno.escola_id == escola.id)).scalars().all()
 
     # "Ana Beatriz de Souza" ≈ "Ana Beatriz Souza": fuzzy ≥0.80 → 'provável' (via=None).
     arq = _arquivo_elefante("3 ANO A", "Ana Beatriz de Souza")
     orchestrator.aplicar_arquivo(db, escola, arq, usuario_id=None,
                                  recalcular=False, contexto=_contexto(escola.id))
 
-    # A Ana REAL não recebeu o snapshot (nada de misattribution silenciosa).
+    # A Ana REAL não recebeu o snapshot (nada de misattribution silenciosa)…
     assert db.execute(select(SnapshotElefante).where(
         SnapshotElefante.aluno_id == ana.id)).scalars().first() is None
-    # O dado foi para um registro NOVO (duplicata resolvível em "Fundir").
-    snaps = db.execute(select(SnapshotElefante).where(
-        SnapshotElefante.escola_id == escola.id)).scalars().all()
-    assert len(snaps) == 1 and snaps[0].aluno_id != ana.id
-    novo = db.get(Aluno, snaps[0].aluno_id)
-    assert novo.nome == "Ana Beatriz de Souza"
+    # …e nenhuma segunda ficha foi aberta para ela.
+    depois = db.execute(select(Aluno).where(
+        Aluno.escola_id == escola.id)).scalars().all()
+    assert len(depois) == len(antes), "sync criou duplicata num match inseguro"
+    assert db.execute(select(SnapshotElefante).where(
+        SnapshotElefante.escola_id == escola.id)).scalars().all() == []
 
 
 def test_sync_homonimo_ambiguo_nao_atribui_a_crianca_errada(db, escola_completa, monkeypatch):

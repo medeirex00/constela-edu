@@ -3,7 +3,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import (
@@ -132,6 +132,10 @@ def criar_aluno(
     db: Session = Depends(get_db),
 ):
     ano = _ano_ativo(db, escola_id)
+    # Mesma trava das importações: serializa a criação de alunos da MESMA escola,
+    # senão dois cadastros simultâneos leem "não existe" e criam os dois. É
+    # transacional (cai no commit) e no-op no SQLite.
+    bloquear_escola_para_importacao(db, escola_id)
     turma = db.get(Turma, dados.turma_id)
     if turma is None or turma.escola_id != escola_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
@@ -142,6 +146,44 @@ def criar_aluno(
     ficha = {chave: str(valor).strip()[:300]
              for chave, valor in (dados.ficha or {}).items()
              if chave in ROTULOS_FICHA and str(valor).strip()}
+
+    # PORTA ÚNICA DE IDENTIDADE: o cadastro manual era o último caminho que criava
+    # aluno sem perguntar "essa pessoa já existe?". Passa pela MESMA resolução das
+    # importações. Homônimo REAL continua podendo ser cadastrado: o veto por
+    # identidade (nº de chamada / nascimento / RA divergentes) faz o candidato não
+    # casar, e aí a criação segue normalmente.
+    from app.routers import importacoes as imp
+    ra_informado = str(ficha.get("ra", "")).strip() or None
+    ja = imp._aluno_existente_na_turma(db, escola_id, ano, turma.id, dados.nome,
+                                       dados.numero_chamada, dados.data_nascimento,
+                                       ra_informado)
+    confianca = "baixa"
+    if ja is None:
+        ja, confianca = imp._casar_no_roster(db, escola_id, ano, dados.nome, turma,
+                                             dados.numero_chamada,
+                                             dados.data_nascimento, ra_informado)
+    if ja is not None:
+        registrar(db, "aluno.criacao_recusada", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="aluno", entidade_id=ja.id,
+                  detalhes={"nome": dados.nome, "decisao": "EXACT_MATCH",
+                            "motivo": "aluno_ja_cadastrado_na_turma"})
+        db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"“{ja.nome}” já está cadastrado nesta turma. Use o cadastro existente. "
+            "Se for outra criança de mesmo nome, informe o nº de chamada ou a data "
+            "de nascimento para diferenciar.")
+    if confianca == "media":
+        registrar(db, "aluno.criacao_recusada", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="aluno", entidade_id=None,
+                  detalhes={"nome": dados.nome, "decisao": "REVIEW_REQUIRED",
+                            "motivo": "correspondencia_insegura"})
+        db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"“{dados.nome}” é muito parecido com um aluno já cadastrado nesta turma. "
+            "Confira a lista da turma antes de cadastrar. Se for outra criança, informe "
+            "o nº de chamada ou a data de nascimento para diferenciar.")
 
     aluno = Aluno(
         escola_id=escola_id,

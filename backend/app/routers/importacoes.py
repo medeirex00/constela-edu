@@ -10,7 +10,7 @@ import re
 import shutil
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time as hora_zero, timedelta, timezone
 from pathlib import Path
 
@@ -409,6 +409,16 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
     return turma
 
 
+def _ra_forte(valor) -> str:
+    """RA utilizável como IDENTIDADE, normalizado (``lista_piloto.ra_util``): tira
+    pontuação/caixa e devolve "" para placeholders ('0', 'S/RA'...). Usado nos DOIS
+    lados de toda comparação — se um lado viesse cru ("123.100.026-0") e o outro
+    normalizado ("1231000260"), o motor leria RAs "divergentes" e vetaria o
+    casamento da MESMA criança (duplicata), e dois placeholders "0" iguais
+    "corroborariam" crianças diferentes."""
+    return lista_piloto.ra_util(valor)
+
+
 def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
                               turma_id: int, nome: str, numero_chamada: int | None = None,
                               nascimento=None, ra: str | None = None) -> Aluno | None:
@@ -422,7 +432,7 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     "conflito de identidade" cairia num vínculo silencioso pelo nome exato)."""
     alvo = svc.normalizar_nome(nome)
     linha_ident = matching.Identidade(chamada=numero_chamada, nascimento=nascimento,
-                                      ra=ra or "")
+                                      ra=_ra_forte(ra))
     achados: list[Aluno] = []
     for aluno in db.execute(
         select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
@@ -433,7 +443,7 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
             continue
         if matching.conflito_identidade(linha_ident, matching.Identidade(
                 chamada=aluno.numero_chamada, nascimento=aluno.data_nascimento,
-                ra=str((aluno.ficha or {}).get("ra", "")))):
+                ra=_ra_forte((aluno.ficha or {}).get("ra")))):
             continue                  # mesmo nome, identidade prova ser outra criança
         achados.append(aluno)
     # 1 match não-conflitante → reusa (idempotência de reenvio do MESMO relatório).
@@ -458,22 +468,39 @@ def _data_iso(valor):
 
 def _roster_identidades(db: Session, escola_id: int, ano: int, turma_id: int
                         ) -> tuple[list[matching.Identidade], dict[int, Aluno]]:
-    """Alunos ativos matriculados na turma/ano como ``Identidade`` (para o motor) +
-    mapa id→Aluno (para devolver o objeto ao vincular)."""
+    """Alunos matriculados na turma/ano como ``Identidade`` (para o motor) + mapa
+    id→Aluno (para devolver o objeto ao vincular).
+
+    NÃO filtra por ``status``. "Saiu da lista atual" (``fora_lista_piloto``) e
+    "foi arquivado" NÃO são "não existe": a pessoa continua no banco e continua
+    sendo uma identidade válida. Filtrar aqui era a 2ª causa raiz das duplicatas
+    — bastava a criança cair da Lista Piloto (o que ``_marcar_fora_da_lista`` faz
+    sozinho a cada confirmação) para a importação seguinte da plataforma não a
+    encontrar e abrir uma segunda ficha, calada.
+
+    Resolver IDENTIDADE e decidir MATRÍCULA são coisas separadas: reconhecer o
+    aluno aqui não reativa ninguém — quem estava arquivado segue arquivado."""
     ids: list[matching.Identidade] = []
     por_id: dict[int, Aluno] = {}
     for aluno in db.execute(
         select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
         .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
-               Matricula.ano_letivo == ano, Aluno.status == "ativo")
+               Matricula.ano_letivo == ano, Aluno.status != "excluido")
     ).scalars():
         por_id[aluno.id] = aluno
-        ids.append(matching.Identidade(
-            id=aluno.id, nome=aluno.nome, chamada=aluno.numero_chamada,
-            nascimento=aluno.data_nascimento,
-            ra=str((aluno.ficha or {}).get("ra", "")),
-            da_lista_piloto=aluno.da_lista_piloto))
+        ids.append(_identidade_do_aluno(aluno))
     return ids, por_id
+
+
+def _identidade_do_aluno(aluno: Aluno) -> matching.Identidade:
+    """Aluno do banco → ``matching.Identidade`` (a moeda do motor único). Um só
+    lugar monta isto, para que TODOS os fluxos comparem os mesmos campos com a
+    mesma normalização (RA por ``_ra_forte``)."""
+    return matching.Identidade(
+        id=aluno.id, nome=aluno.nome, chamada=aluno.numero_chamada,
+        nascimento=aluno.data_nascimento,
+        ra=_ra_forte((aluno.ficha or {}).get("ra")),
+        da_lista_piloto=bool(aluno.da_lista_piloto))
 
 
 def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
@@ -487,24 +514,28 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
       * VINCULADO → "alta"  (auto-vincula: nome exato/abreviação OU variante/typo de
         grafia com 1 único candidato na turma, ou identificador forte — chamada/RA/
         nascimento/UUID — corroborando);
-      * REVISAR   → "media" (2+ candidatos ambíguos → NÃO cria; vai p/ revisão);
-      * BLOQUEADO/NOVO/parcial-único → "baixa" (cria novo — bloqueado = nome casa mas
-        identidade prova ser outra criança; novo = ninguém plausível; parcial único =
-        subconjunto ambíguo, cria e a detecção surfaça p/ fusão manual)."""
+      * REVISAR   → "media" (correspondência INSEGURA → NÃO cria; vai p/ revisão),
+        com QUALQUER número de candidatos;
+      * BLOQUEADO/NOVO → "baixa" (cria novo — bloqueado = nome casa mas a identidade
+        prova ser outra criança; novo = ninguém plausível).
+
+    "REVISAR significa REVISAR": antes, um REVISAR de candidato ÚNICO (parcial /
+    subconjunto de nome) escapava pelo `len(candidatos) >= 2` e virava "baixa" —
+    o import criava a ficha e contava com a fusão manual depois. Era a 1ª causa
+    raiz das duplicatas. Confiança BAIXA agora significa "o motor não achou
+    ninguém plausível", nunca "não deu para decidir"."""
     if not svc.tokens_nome(nome):
         return None, "baixa"
     linha = matching.Identidade(nome=nome, chamada=numero_chamada,
-                                nascimento=nascimento, ra=ra or "")
+                                nascimento=nascimento, ra=_ra_forte(ra))
     roster, por_id = _roster_identidades(db, escola_id, ano, turma.id)
     res = matching.classificar_linha(linha, roster)
     if res.status == matching.VINCULADO and res.aluno_id in por_id:
         return por_id[res.aluno_id], "alta"
-    if res.status == matching.REVISAR and len(res.candidatos) >= 2:
-        return None, "media"          # AMBÍGUO (2+ candidatos) → não cria órfão; revisão
-    # Chega aqui: NOVO, BLOQUEADO, ou REVISAR de candidato ÚNICO PARCIAL (subconjunto).
-    # Variante/typo de candidato único NÃO cai mais aqui — o motor agora o classifica
-    # VINCULADO (tratado acima como "alta", fim das duplicatas de grafia). Parcial
-    # único ainda cria (ambíguo, sem âncora): a detecção passiva surfaça p/ fusão.
+    if res.status == matching.REVISAR:
+        return None, "media"          # INSEGURO (1, 2 ou N candidatos) → revisão
+    # Chega aqui só: NOVO (ninguém plausível) ou BLOQUEADO (identidade prova ser
+    # outra criança). Nos dois, criar uma ficha nova é a decisão CORRETA.
     return None, "baixa"
 
 
@@ -587,11 +618,24 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                 criados[chave] = casado
             return casado
         if confianca == "media":
+            # REVISÃO: o motor viu correspondência, mas nenhuma SEGURA. Não criar
+            # é o ponto inteiro da correção — criar aqui é o que gerava a fila de
+            # fusão manual. Fica auditado para se saber depois por que não criou.
+            registrar(db, "aluno.revisao_necessaria", escola_id=escola_id,
+                      entidade="aluno", entidade_id=None,
+                      detalhes={"origem": linha.nome, "turma": turma.nome,
+                                "decisao": "REVIEW_REQUIRED",
+                                "motivo": "correspondencia_insegura"})
             avisos.append(
                 f"“{linha.nome}” parece um aluno já cadastrado na turma {turma.nome} "
-                "(nomes muito próximos), mas há mais de um candidato — NÃO foi criado "
-                "para evitar duplicata. Confira em Alunos › Fundir duplicatas.")
+                "(nomes muito próximos), mas a correspondência não é segura — NÃO foi "
+                "criado, para evitar duplicata. Confira em Alunos › Fundir duplicatas.")
             return None
+        registrar(db, "aluno.criado_auto", escola_id=escola_id, entidade="aluno",
+                  entidade_id=None,
+                  detalhes={"origem": linha.nome, "turma": turma.nome,
+                            "decisao": "NEW_STUDENT",
+                            "motivo": "nenhum candidato plausivel na turma"})
         aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
         db.add(aluno)
         db.flush()
@@ -1336,8 +1380,6 @@ async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tup
 # isoladamente e reutilizados pela análise e pela confirmação). Aliases locais:
 _norm = matriculas.normalizar
 _chave_turma = matriculas.chave_turma
-_overlap_turma = matriculas.overlap_turma
-_nomes_compativeis = matriculas.nomes_compativeis
 
 
 @router.post("/matriculas/analisar", response_model=MatriculasAnaliseOut)
@@ -1416,73 +1458,67 @@ async def analisar_matriculas(
 @dataclass
 class _EstadoEscola:
     """Estado atual da escola pré-carregado (poucas consultas, tudo em memória)."""
-    alunos_por_id: dict[int, Aluno]
-    por_ra: dict[str, Aluno]                       # ORM — usado na persistência
+    alunos_por_id: dict[int, Aluno]                # ORM — usado na persistência
     matricula_ano: dict[int, Matricula | None]
-    por_nome_turma: dict[tuple[str, int], Aluno]   # ORM — usado na persistência
-    ctx: matriculas.ContextoCasamento              # plano — usado no casamento
+    ctx: matriculas.ContextoCasamento              # índices do MOTOR ÚNICO
+
+    def registrar(self, aluno: Aluno, chave_sala: str | None = None) -> None:
+        """Reflete no índice do motor o aluno recém-criado/alterado — as linhas
+        SEGUINTES do mesmo arquivo passam a enxergá-lo."""
+        self.alunos_por_id[aluno.id] = aluno
+        self.ctx.registrar(_identidade_do_aluno(aluno), chave_sala)
 
 
 def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
-    """Lê o estado da escola e monta os índices do casamento (impuro: só DB)."""
+    """Lê o estado da escola e monta os índices de IDENTIDADE (impuro: só DB).
+
+    São três índices, e nenhum deles é um "motor" próprio — todos alimentam o
+    ``matching`` (ver ``matriculas.resolver_linha``):
+      * RA → aluno, escola inteira, INCLUSIVE excluído (RA é identificador forte:
+        reativa em vez de duplicar);
+      * roster por SALA (chave série+letra, ano ativo) — o roster que o motor
+        recebe, idêntico ao dos imports de plataforma. Indexar por chave de SALA
+        (e não por ``turma_id``) faz o aluno criado pelo Matific numa linha de
+        turma paralela ("1 ANO A MANHA (300…)") ser candidato da linha da Lista
+        Piloto ("1ºA") — era por aí que a duplicata entrava;
+      * nome → alunos da escola, para reconhecer MUDANÇA DE SALA.
+    """
     # order_by garante escolha determinística de por_ra quando há RA repetido.
     alunos_todos = db.execute(
         select(Aluno).where(Aluno.escola_id == escola_id)
         .order_by(Aluno.id)).scalars().all()
     alunos_por_id = {a.id: a for a in alunos_todos}
-    ativos = [a for a in alunos_todos if a.status != "excluido"]
-
-    # RA casa até com excluído (reativa em vez de duplicar); nome/abreviado, não.
-    por_ra: dict[str, Aluno] = {}
-    for a in alunos_todos:
-        ra = lista_piloto.ra_util((a.ficha or {}).get("ra"))
-        if ra:
-            por_ra.setdefault(ra, a)
 
     matricula_ano: dict[int, Matricula | None] = {
         m.aluno_id: m for m in db.execute(
             select(Matricula).where(Matricula.escola_id == escola_id,
                                     Matricula.ano_letivo == ano)).scalars()
     }
-    por_nome_turma: dict[tuple[str, int], Aluno] = {}
-    for m in matricula_ano.values():
-        alvo = alunos_por_id.get(m.aluno_id)
-        if alvo is not None and alvo.status != "excluido":
-            por_nome_turma[(_norm(alvo.nome), m.turma_id)] = alvo
+    chave_da_turma: dict[int, str] = {
+        t.id: _chave_turma(t.nome) for t in db.execute(
+            select(Turma).where(Turma.escola_id == escola_id)).scalars()
+    }
+    # Sala ATUAL de cada aluno: a do ano ativo; quem não tem matrícula no ano
+    # herda a da matrícula mais recente (aluno de anos anteriores sendo
+    # rematriculado na MESMA sala continua sendo a mesma pessoa).
+    sala_de: dict[int, str] = {}
+    for aid, tid, _ano_m in db.execute(
+        select(Matricula.aluno_id, Matricula.turma_id, Matricula.ano_letivo)
+        .where(Matricula.escola_id == escola_id)
+        .order_by(Matricula.ano_letivo)).all():
+        sala_de[aid] = chave_da_turma.get(tid, "")
+    for aid, m in matricula_ano.items():
+        if m is not None:
+            sala_de[aid] = chave_da_turma.get(m.turma_id, "")
 
-    # Turmas de cada aluno, de QUALQUER ano — UMA lista de tokens POR turma (não
-    # a união): unir tokens de turmas diferentes fabricaria overlap com uma sala
-    # em que o aluno nunca esteve.
-    turma_tokens_de: dict[int, list[frozenset[str]]] = {}
-    for aid, tnome in db.execute(
-        select(Matricula.aluno_id, Turma.nome)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .where(Matricula.escola_id == escola_id)).all():
-        turma_tokens_de.setdefault(aid, []).append(frozenset(svc.tokens_turma(tnome)))
-
-    # POOL de candidatos a receber o nome completo: SÓ cadastros com upload
-    # (Matific/Elefante) e sem RA — é o escopo do recurso.
-    com_upload: set[int] = set()
-    for tabela in (SnapshotMatific, SnapshotElefante, Leitura):
-        for (aid,) in db.execute(
-            select(tabela.aluno_id).where(tabela.escola_id == escola_id).distinct()):
-            com_upload.add(aid)
-    pool: dict[str, list[matriculas.AlunoRef]] = {}
-    for a in ativos:
-        if a.id in com_upload and not lista_piloto.ra_util((a.ficha or {}).get("ra")):
-            toks = svc.tokens_nome(a.nome)
-            if len(toks) >= 2:
-                pool.setdefault(toks[0], []).append(matriculas.AlunoRef(
-                    id=a.id, nome=a.nome, data_nascimento=a.data_nascimento,
-                    turmas_tokens=tuple(turma_tokens_de.get(a.id, []))))
-
-    ctx = matriculas.ContextoCasamento(
-        por_ra={ra: matriculas.AlunoRef(a.id, a.nome) for ra, a in por_ra.items()},
-        por_nome_turma={k: matriculas.AlunoRef(a.id, a.nome)
-                        for k, a in por_nome_turma.items()},
-        pool_por_primeiro={tok: tuple(refs) for tok, refs in pool.items()},
-    )
-    return _EstadoEscola(alunos_por_id, por_ra, matricula_ano, por_nome_turma, ctx)
+    ctx = matriculas.ContextoCasamento()
+    for a in alunos_todos:
+        ident = _identidade_do_aluno(a)
+        if a.status == "excluido":
+            ctx.registrar_ra(ident)     # só o RA identifica um excluído
+            continue
+        ctx.registrar(ident, sala_de.get(a.id))
+    return _EstadoEscola(alunos_por_id, matricula_ano, ctx)
 
 
 def _resolver_turmas(db: Session, escola_id: int, ano: int,
@@ -1524,40 +1560,74 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int,
     return resolvidas, criadas, profs_criados
 
 
-def _linhas_para_casamento(linhas: list[tuple[Turma, object]]) -> list[matriculas.LinhaMatricula]:
-    """Adapta (Turma ORM, aluno parseado) → LinhaMatricula plana p/ o casamento."""
-    return [
-        matriculas.LinhaMatricula(
-            nome=parsed.nome,
-            ra=lista_piloto.ra_util(parsed.ficha.get("ra")),
-            nascimento=matriculas.parse_nascimento(parsed.data_nascimento),
-            turma_id=turma.id,
-            turma_tokens=frozenset(svc.tokens_turma(turma.nome)))
-        for turma, parsed in linhas
-    ]
+def _linha_matricula(turma: Turma, parsed) -> matriculas.LinhaMatricula:
+    """Adapta (Turma ORM, aluno parseado) → LinhaMatricula plana p/ a resolução."""
+    return matriculas.LinhaMatricula(
+        nome=parsed.nome,
+        ra=_ra_forte(parsed.ficha.get("ra")),
+        nascimento=matriculas.parse_nascimento(parsed.data_nascimento),
+        turma_id=turma.id,
+        chave_sala=_chave_turma(turma.nome),
+        chamada=parsed.numero_chamada)
+
+
+@dataclass
+class _Resultado:
+    criados: int = 0
+    atualizados: int = 0
+    vinculados: int = 0
+    em_revisao: int = 0
+    vistos: set[int] = field(default_factory=set)
+    avisos: list[str] = field(default_factory=list)
 
 
 def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
-                      linhas: list[tuple[Turma, object]], casamentos: dict[int, int],
-                      estado: _EstadoEscola) -> tuple[int, int, int, set[int]]:
-    """FASE 2: grava na ORDEM do arquivo (preserva a 1ª ocorrência de cada aluno).
-    Cria os novos e atualiza os casados (por RA, nome+turma ou abreviação). Impuro.
-    Devolve (criados, atualizados, vinculados, vistos) — ``vistos`` são os ids de
-    TODOS os alunos presentes nesta importação (base da reconciliação)."""
-    criados = atualizados = vinculados = 0
-    ja_alocado: set[int] = set()
-    for idx, (turma, parsed) in enumerate(linhas):
-        ra = lista_piloto.ra_util(parsed.ficha.get("ra"))
-        existente = estado.por_ra.get(ra) if ra else None
-        if existente is not None and not _nomes_compativeis(parsed.nome, existente.nome):
-            existente = None  # RA colide mas nome é de outra pessoa (placeholder)
-        if existente is None:
-            existente = estado.por_nome_turma.get((_norm(parsed.nome), turma.id))
-        if existente is None:
-            existente = estado.alunos_por_id.get(casamentos.get(idx))  # abreviado
-        nasc = matriculas.parse_nascimento(parsed.data_nascimento)
+                      linhas: list[tuple[Turma, object]],
+                      estado: _EstadoEscola) -> _Resultado:
+    """Grava na ORDEM do arquivo (preserva a 1ª ocorrência de cada aluno).
 
-        if existente is None:
+    IDENTIDADE é decidida pela PORTA ÚNICA (``matriculas.resolver_linha`` →
+    ``matching``); aqui só se aplica a decisão e se cuida da MATRÍCULA, que é outra
+    coisa: mudar de turma não faz de ninguém uma pessoa nova, e reconhecer quem é
+    NÃO reativa ninguém (a reativação vem de constar na lista, logo abaixo).
+
+    Antes desta função havia um 2º motor de identidade (índices de RA/nome-exato+
+    turma/abreviado-posicional e um ``Aluno(...)`` direto quando os três falhavam):
+    variação de grafia sem RA virava uma 2ª ficha, calada. Agora existem só três
+    desfechos — REUSAR, REVISAR (não cria, não altera, avisa) e CRIAR."""
+    res = _Resultado()
+    ja_alocado: set[int] = set()
+    planas = [_linha_matricula(turma, parsed) for turma, parsed in linhas]
+    # Unicidade 1:1 do LOTE: um cadastro abreviado que serve a DUAS linhas não
+    # pode ser entregue à primeira do arquivo (seria um chute que gruda os dados
+    # de uma criança na ficha da outra) — as duas vão para revisão.
+    disputados = matriculas.candidatos_disputados(planas, estado.ctx)
+    for (turma, parsed), linha in zip(linhas, planas):
+        decisao = matriculas.arbitrar_disputa(
+            matriculas.resolver_linha(linha, estado.ctx), disputados)
+
+        if decisao.acao == matriculas.REVISAR:
+            # NÃO cria e NÃO altera: correspondência insegura/ambígua. Os candidatos
+            # entram em `vistos` para a reconciliação não marcá-los "fora da lista"
+            # (a linha diz que alguém DAQUELE grupo está na lista — só não se sabe
+            # quem), e o gestor decide em Alunos › Fundir duplicatas.
+            res.em_revisao += 1
+            res.vistos.update(decisao.candidatos)
+            nomes = ", ".join(sorted(
+                estado.alunos_por_id[i].nome for i in decisao.candidatos
+                if i in estado.alunos_por_id)) or "cadastro já existente"
+            res.avisos.append(matriculas.aviso_revisao(parsed.nome, turma.nome, nomes))
+            registrar(db, "aluno.revisao_necessaria", escola_id=escola_id,
+                      usuario_id=usuario.id, entidade="aluno",
+                      entidade_id=decisao.aluno_id,
+                      detalhes={"origem": parsed.nome, "turma": turma.nome,
+                                "decisao": "REVIEW_REQUIRED", "motivo": decisao.motivo,
+                                "candidatos": list(decisao.candidatos),
+                                "fonte": "importacao_matriculas"})
+            continue
+
+        nasc = matriculas.parse_nascimento(parsed.data_nascimento)
+        if decisao.acao == matriculas.CRIAR:
             aluno = Aluno(escola_id=escola_id, nome=parsed.nome, status="ativo",
                           numero_chamada=parsed.numero_chamada,
                           data_nascimento=nasc, ficha=dict(parsed.ficha),
@@ -1566,52 +1636,68 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             db.flush()
             db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
                              turma_id=turma.id, ano_letivo=ano))
-            criados += 1
-            if ra:
-                estado.por_ra[ra] = aluno
-            estado.por_nome_turma[(_norm(aluno.nome), turma.id)] = aluno
+            res.criados += 1
+            registrar(db, "aluno.criado_auto", escola_id=escola_id,
+                      usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"origem": parsed.nome, "turma": turma.nome,
+                                "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
+                                "fonte": "importacao_matriculas"})
             estado.matricula_ano[aluno.id] = None
             ja_alocado.add(aluno.id)
-        else:
-            nome_antigo = existente.nome
-            # O Excel é a fonte da verdade da identidade: nome completo vence.
+            res.vistos.add(aluno.id)
+            estado.registrar(aluno, linha.chave_sala)
+            continue
+
+        existente = estado.alunos_por_id[decisao.aluno_id]   # REUSAR
+        nome_antigo = existente.nome
+        # O Excel é a fonte da verdade do nome — exceto para ENCURTAR: uma linha
+        # abreviada ("MARIA E. SILVA") não pode apagar o nome completo já
+        # cadastrado, senão a própria importação degrada a identidade e a
+        # criança fica irreconhecível na vez seguinte.
+        if not matriculas.nome_menos_informativo(parsed.nome, existente.nome):
             existente.nome = parsed.nome
-            existente.da_lista_piloto = True   # consta na lista → membro do piloto
-            if nasc and existente.data_nascimento is None:
-                existente.data_nascimento = nasc
-            if parsed.ficha:
-                existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
-            if existente.status != "ativo":
-                # Consta na lista atual → reativa (inclusive quem estava
-                # "fora_lista_piloto" numa importação anterior).
-                existente.status = "ativo"
-            # nº de chamada e matrícula pertencem à 1ª turma em que aparece.
-            if existente.id not in ja_alocado:
-                if parsed.numero_chamada is not None:
-                    existente.numero_chamada = parsed.numero_chamada
-                mat = estado.matricula_ano.get(existente.id)
-                if mat is None and existente.id not in estado.matricula_ano:
-                    db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
-                                     turma_id=turma.id, ano_letivo=ano))
-                    estado.matricula_ano[existente.id] = None
-                elif mat is not None and mat.turma_id != turma.id:
-                    mat.turma_id = turma.id   # a planilha é a fonte da verdade
-                ja_alocado.add(existente.id)
-                if ra:
-                    estado.por_ra.setdefault(ra, existente)
-                estado.por_nome_turma[(_norm(existente.nome), turma.id)] = existente
-                # Auditoria: todo vínculo que TROCA a identidade fica rastreável.
-                if _norm(nome_antigo) != _norm(parsed.nome):
-                    vinculados += 1
-                    registrar(db, "aluno.identidade_vinculada", escola_id=escola_id,
-                              usuario_id=usuario.id, entidade="aluno",
-                              entidade_id=existente.id,
-                              detalhes={"nome_antigo": nome_antigo,
-                                        "nome_novo": parsed.nome, "ra": ra or None,
-                                        "origem": "importacao_matriculas"})
-                # Conta o aluno DISTINTO uma vez (não a cada turma em que aparece).
-                atualizados += 1
-    return criados, atualizados, vinculados, ja_alocado
+        existente.da_lista_piloto = True   # consta na lista → membro do piloto
+        if nasc and existente.data_nascimento is None:
+            existente.data_nascimento = nasc
+        if parsed.ficha:
+            existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
+        if existente.status != "ativo":
+            # Consta na lista atual → reativa (inclusive quem estava
+            # "fora_lista_piloto" numa importação anterior).
+            existente.status = "ativo"
+        res.vistos.add(existente.id)
+        # nº de chamada e matrícula pertencem à 1ª turma em que aparece.
+        if existente.id not in ja_alocado:
+            if parsed.numero_chamada is not None:
+                existente.numero_chamada = parsed.numero_chamada
+            mat = estado.matricula_ano.get(existente.id)
+            if mat is None and existente.id not in estado.matricula_ano:
+                db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
+                                 turma_id=turma.id, ano_letivo=ano))
+                estado.matricula_ano[existente.id] = None
+            elif mat is not None and mat.turma_id != turma.id:
+                mat.turma_id = turma.id   # a planilha é a fonte da verdade
+            ja_alocado.add(existente.id)
+            # Auditoria: todo vínculo que TROCA a identidade fica rastreável.
+            # Compara com o nome REALMENTE gravado (a linha pode ter sido
+            # recusada por encurtar) — o log nunca anuncia uma troca que não houve.
+            if _norm(nome_antigo) != _norm(existente.nome):
+                res.vinculados += 1
+                registrar(db, "aluno.identidade_vinculada", escola_id=escola_id,
+                          usuario_id=usuario.id, entidade="aluno",
+                          entidade_id=existente.id,
+                          detalhes={"nome_antigo": nome_antigo,
+                                    "nome_novo": existente.nome,
+                                    "origem_linha": parsed.nome,
+                                    "ra": linha.ra or None,
+                                    "motivo": decisao.motivo,
+                                    "origem": "importacao_matriculas"})
+            # Conta o aluno DISTINTO uma vez (não a cada turma em que aparece).
+            res.atualizados += 1
+            estado.registrar(existente, linha.chave_sala)
+        else:
+            estado.registrar(existente)    # 2ª turma: identidade sim, sala não
+    return res
 
 
 def _marcar_fora_da_lista(db: Session, escola_id: int, ano: int, usuario: Usuario,
@@ -1657,10 +1743,11 @@ async def confirmar_matriculas(
     db: Session = Depends(get_db),
 ):
     """Cria as turmas que faltam e matricula os alunos (ano letivo ativo),
-    gravando nº de chamada, nascimento e a ficha cadastral. Reimportar
-    atualiza os existentes (casa por RA, senão por nome + turma) — não
-    duplica. Orquestra: analisar → carregar estado → criar turmas → casar
-    (puro) → persistir → recalcular."""
+    gravando nº de chamada, nascimento e a ficha cadastral. Reimportar não
+    duplica: a identidade sai da PORTA ÚNICA (``matriculas.resolver_linha`` →
+    ``services.matching``), que reusa quando é seguro, manda para revisão quando
+    é inseguro e só cria quando não há candidato. Orquestra: analisar → travar a
+    escola → carregar estado → criar turmas → persistir → recalcular."""
     conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
     analise = await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
     if not analise.turmas:
@@ -1682,21 +1769,19 @@ async def confirmar_matriculas(
     linhas = [(resolvidas[i], parsed)
               for i, t in enumerate(analise.turmas) for parsed in t.alunos]
 
-    # FASE 1 — casamento abreviado posicional (PURO, em memória).
-    casamentos, avisos_casamento = matriculas.casar_abreviados(
-        _linhas_para_casamento(linhas), estado.ctx)
-    avisos.extend(avisos_casamento)
+    # FASE 1 — identidade + matrícula, linha a linha, pela PORTA ÚNICA.
+    persistido = _persistir_linhas(db, escola_id, ano, usuario, linhas, estado)
+    alunos_criados = persistido.criados
+    alunos_atualizados = persistido.atualizados
+    alunos_vinculados = persistido.vinculados
+    avisos.extend(persistido.avisos)
 
-    # FASE 2 — gravação na ordem do arquivo.
-    alunos_criados, alunos_atualizados, alunos_vinculados, vistos = _persistir_linhas(
-        db, escola_id, ano, usuario, linhas, casamentos, estado)
-
-    # FASE 3 — reconciliação incremental: quem saiu da lista vira "fora da lista
+    # FASE 2 — reconciliação incremental: quem saiu da lista vira "fora da lista
     # piloto" (nunca apagado). Escopo = SÓ as turmas enviadas neste arquivo, para
     # que subir uma turma só não afete as demais. Idempotente.
     turmas_import = {t.id for t in resolvidas}
     alunos_fora_lista = _marcar_fora_da_lista(
-        db, escola_id, ano, usuario, estado, vistos, turmas_import)
+        db, escola_id, ano, usuario, estado, persistido.vistos, turmas_import)
 
     registrar(db, "matriculas.importadas", escola_id=escola_id, usuario_id=usuario.id,
               entidade="escola", entidade_id=escola_id,
@@ -1705,6 +1790,7 @@ async def confirmar_matriculas(
                         "alunos_criados": alunos_criados,
                         "alunos_atualizados": alunos_atualizados,
                         "alunos_vinculados": alunos_vinculados,
+                        "alunos_em_revisao": persistido.em_revisao,
                         "alunos_fora_lista": alunos_fora_lista})
     db.commit()
 
@@ -1722,12 +1808,18 @@ async def confirmar_matriculas(
                   "foram marcados como “fora da lista piloto” — continuam "
                   "cadastrados (nada foi apagado); reative, transfira ou arquive "
                   "quando quiser.")
+    if persistido.em_revisao:
+        extra += (f" {persistido.em_revisao} linha(s) ficaram para REVISÃO: parecem "
+                  "ser alunos já cadastrados, mas a correspondência não é segura — "
+                  "nada foi criado nelas (senão viraria ficha duplicada). Veja os "
+                  "avisos abaixo.")
     return MatriculasResultadoOut(
         mensagem=(f"{turmas_criadas} turma(s) criada(s), {alunos_criados} aluno(s) "
                   f"cadastrado(s) e {alunos_atualizados} atualizado(s)." + extra),
         turmas_criadas=turmas_criadas, alunos_criados=alunos_criados,
         alunos_atualizados=alunos_atualizados,
         alunos_fora_lista=alunos_fora_lista,
+        alunos_em_revisao=persistido.em_revisao,
         professores_criados=profs_criados, avisos=avisos,
     )
 

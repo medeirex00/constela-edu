@@ -115,7 +115,7 @@ def test_ambiguo_entre_criancas_diferentes_nao_funde(db):
                         _linha("ABRAAO L", "4 ANO C INTEGRAL"), avisos, {}, {})
     assert r is None
     assert _conta_alunos(db, esc.id) == antes                 # nada criado nem fundido
-    assert any("mais de um candidato" in a for a in avisos)
+    assert any("não é segura" in a for a in avisos)
 
 
 def test_aluno_genuinamente_novo_e_criado(db):

@@ -2,21 +2,30 @@
 
 Aqui vive a lógica DIFÍCIL — casar cada linha da planilha com os cadastros já
 existentes — sem SQLAlchemy, sem I/O e sem efeitos colaterais: recebe dados
-simples (nomes, RA, tokens de turma, datas) e devolve DECISÕES. Assim a parte
-que concentra a complexidade ciclomática (RA × nome-exato × abreviação
-posicional, unicidade bipartida, vetos por turma/nascimento) fica testável
-isoladamente.
+simples (nomes, RA, chave de sala, datas) e devolve DECISÕES. Assim a parte que
+concentra a complexidade ciclomática (RA × roster da sala × mudança de sala ×
+vetos de identidade) fica testável isoladamente.
 
 O router (`routers/importacoes.py`) faz só a cola impura: carrega o estado do
-banco para estas estruturas, chama estas funções e aplica o resultado.
+banco para estas estruturas, chama ``resolver_linha`` e aplica o resultado.
+
+PORTA ÚNICA (correção da 4ª causa raiz das duplicatas, 2026-08-11): a Lista
+Piloto tinha um SEGUNDO motor de identidade — índices próprios (RA, nome EXATO
++ turma, "abreviado posicional" contra um pool restrito a cadastros de upload) e
+um ramo que criava a ficha quando os três falhavam. Quem chegasse com variação
+de grafia e sem RA virava uma segunda ficha, calada. Agora a decisão é do MOTOR
+ÚNICO (``services.matching``), o mesmo dos imports de plataforma, do cadastro
+manual e da detecção de duplicatas: reusa quando é seguro, manda para REVISÃO
+quando é inseguro/ambíguo (não cria) e só cria quando não há candidato.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 from app.services import importacao as svc
+from app.services import matching
 
 # Tokens que aparecem em QUALQUER turma e não discriminam uma da outra — ficam
 # de fora do overlap, senão "1º Ano A" e "4º Ano A" pareceriam a mesma sala
@@ -32,34 +41,20 @@ _STOP_TURMA = frozenset({
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class AlunoRef:
-    """Visão mínima de um aluno JÁ existente, para o casamento em memória."""
-    id: int
-    nome: str
-    data_nascimento: date | None = None
-    # Tokens de cada turma do aluno (de QUALQUER ano) — para o overlap de sala.
-    turmas_tokens: tuple[frozenset[str], ...] = ()
-
-
-@dataclass(frozen=True)
 class LinhaMatricula:
-    """Uma linha da planilha já resolvida à sua turma (do ano ativo)."""
+    """Uma linha da planilha já resolvida à sua turma (do ano ativo).
+
+    ``chave_sala`` é a identidade CANÔNICA da sala (``chave_turma``: série+letra),
+    não o id da turma: a MESMA sala pode ter mais de uma linha em ``turmas``
+    (o Matific/Elefante cria "1 ANO A MANHA (300…)" e a Lista Piloto, "1ºA"), e
+    identidade de aluno não pode depender de qual das linhas de turma o registro
+    caiu."""
     nome: str
     ra: str | None            # RA já normalizado (ra_util); None se ausente
     nascimento: date | None
     turma_id: int
-    turma_tokens: frozenset[str]
-
-
-@dataclass(frozen=True)
-class ContextoCasamento:
-    """Índices do estado da escola consultados pelo casamento (só leitura)."""
-    # RA normalizado → aluno (para casar por RA, o mais forte).
-    por_ra: dict[str, AlunoRef] = field(default_factory=dict)
-    # (nome normalizado, turma_id) → aluno já matriculado naquela turma no ano.
-    por_nome_turma: dict[tuple[str, int], AlunoRef] = field(default_factory=dict)
-    # 1º token do nome → candidatos do POOL (cadastros de upload, sem RA).
-    pool_por_primeiro: dict[str, tuple[AlunoRef, ...]] = field(default_factory=dict)
+    chave_sala: str
+    chamada: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +177,20 @@ def overlap_turma(a: frozenset[str] | set[str], b: frozenset[str] | set[str]) ->
     return len((set(a) & set(b)) - _STOP_TURMA)
 
 
+def nome_menos_informativo(novo: str, atual: str) -> bool:
+    """O nome `novo` é uma versão ENCURTADA do `atual` (abreviação posicional ou
+    subconjunto de tokens)? "MARIA E. SILVA" contra "MARIA EDUARDA SILVA" → True.
+
+    A planilha é a fonte da verdade do nome, mas NUNCA para encurtar: gravar a
+    abreviação por cima do nome completo degrada a identidade e enfraquece o
+    casamento das importações seguintes — é assim que a MESMA criança volta a
+    ficar irreconhecível e ganha uma segunda ficha depois."""
+    tn, ta = svc.tokens_nome(novo), svc.tokens_nome(atual)
+    if not tn or not ta or set(tn) == set(ta):
+        return False
+    return svc.casa_abreviado(tn, ta) or set(tn) < set(ta)
+
+
 def nomes_compativeis(a: str, b: str) -> bool:
     """Dois nomes podem ser a MESMA pessoa? Veto ao casar por RA: se o RA colide
     mas os nomes são claramente de pessoas diferentes (RA placeholder), não
@@ -212,93 +221,182 @@ def parse_nascimento(iso: str | None) -> date | None:
 # Casamento (o coração)
 # ---------------------------------------------------------------------------
 
-def casa_forte(linha: LinhaMatricula, ctx: ContextoCasamento) -> bool:
-    """A linha já casa por RA (com nome compatível) ou por nome-exato na turma?
-    Quando SIM, não entra no casamento abreviado (que é o caminho ambíguo)."""
-    if (linha.ra and linha.ra in ctx.por_ra
-            and nomes_compativeis(linha.nome, ctx.por_ra[linha.ra].nome)):
-        return True
-    return (normalizar(linha.nome), linha.turma_id) in ctx.por_nome_turma
+# Decisão devolvida por ``resolver_linha`` — o MESMO vocabulário das outras
+# portas de identidade (alta/média/baixa do ``_casar_no_roster``), sem sinônimos.
+REUSAR = "reusar"       # correspondência SEGURA → reaproveita a ficha existente
+REVISAR = "revisar"     # INSEGURA/ambígua → NÃO cria, NÃO altera: vai para revisão
+CRIAR = "criar"         # ninguém plausível (ou identidade prova ser outra criança)
 
 
-def candidatos_abreviados(linha: LinhaMatricula, ctx: ContextoCasamento) -> list[AlunoRef]:
-    """Cadastros do pool que o MOTOR ÚNICO reconhece como a MESMA pessoa desta linha
-    da Lista Piloto — o MESMO critério dos imports de plataforma
-    (``matching.vincula_por_nome_unico``): nome exato/abreviação (MARIA E ↔ MARIA
-    EDUARDA) OU variação de grafia SEGURA (LUÍS↔LUIZ, no nome do meio, pontas
-    idênticas), na MESMA turma (overlap série+letra), sem conflito de identidade
-    (nascimento/RA divergente). Variação insegura (sobrenome/1º nome: SOUZA/SOUSA,
-    BRUNO/BRUNA) e nome parcial NÃO entram — vão a novo/revisão, igual aos demais
-    fluxos. A unicidade 1:1 (1 candidato = vincula, 2+ = revisão) fica em
-    ``casar_abreviados``. Antes usava só ``casa_abreviado`` (abreviação) e vetava só
-    por nascimento; agora é a lógica ÚNICA de vínculo, independente da origem."""
-    from app.services import matching
-    tokens = svc.tokens_nome(linha.nome)
-    if len(tokens) < 2:
-        return []
-    # Olha o balde do 1º token E o da 1ª LETRA: um stub com inicial no primeiro nome
-    # ("M. EDUARDA") fica indexado em "m", não em "maria".
-    candidatos_pool = {
-        c.id: c for c in (*ctx.pool_por_primeiro.get(tokens[0], ()),
-                          *ctx.pool_por_primeiro.get(tokens[0][:1], ()))
-    }
-    linha_ident = matching.Identidade(nome=linha.nome, nascimento=linha.nascimento,
-                                      ra=linha.ra or "")
-    achados: list[AlunoRef] = []
-    for antigo in candidatos_pool.values():
-        if not matching.vincula_por_nome_unico(linha.nome, antigo.nome):
-            continue
-        # Precisa bater com ALGUMA turma real do aluno (série+letra), não com a
-        # união de turmas de anos diferentes.
-        if not any(overlap_turma(linha.turma_tokens, ts) >= 2
-                   for ts in antigo.turmas_tokens):
-            continue
-        # Veto de identidade UNIFICADO (nascimento/RA/chamada divergentes = outra
-        # criança). O pool costuma ser stub sem RA/chamada → na prática veta por
-        # nascimento, o dado que a Lista Piloto traz.
-        if matching.conflito_identidade(
-                linha_ident,
-                matching.Identidade(nome=antigo.nome, nascimento=antigo.data_nascimento)):
-            continue
-        achados.append(antigo)
-    return achados
+@dataclass(frozen=True)
+class Decisao:
+    acao: str                          # REUSAR | REVISAR | CRIAR
+    aluno_id: int | None = None        # quem reusar (ou o melhor candidato da revisão)
+    motivo: str = ""                   # ra|uuid|identificador|exato|abreviacao|…
+    candidatos: tuple[int, ...] = ()   # todos os plausíveis (para o aviso/auditoria)
 
 
-def aviso_ambiguidade(nome_linha: str, nomes_candidatos: str) -> str:
-    return (f"“{nome_linha}” pode ser o mesmo aluno de: {nomes_candidatos} "
-            "(cadastro(s) de importação anterior). Criado como novo — confira "
-            "em Alunos e use “Fundir alunos” se for a mesma pessoa.")
+@dataclass
+class ContextoCasamento:
+    """Índices VIVOS do estado da escola (o casamento lê; a persistência
+    ``registrar``-a de volta a cada linha gravada).
 
-
-def casar_abreviados(
-    linhas: list[LinhaMatricula], ctx: ContextoCasamento,
-) -> tuple[dict[int, int], list[str]]:
-    """Resolve o casamento abreviado de TODO o lote com unicidade BIPARTIDA.
-
-    Devolve (casamentos, avisos):
-      * casamentos: índice da linha → id do aluno existente, SÓ quando 1:1
-        inequívoco (a linha tem um único candidato E esse candidato não
-        abrevia nenhuma outra linha do lote);
-      * avisos: mensagem por linha ambígua (vira aluno novo).
+    São índices de IDENTIDADE, não de matrícula:
+      * ``por_ra``      — RA normalizado → aluno da escola INTEIRA (inclusive
+        arquivado/excluído: RA é identificador forte, reativa em vez de duplicar);
+      * roster por SALA — quem está na sala (série+letra) do ano ativo; é o roster
+        que o motor único recebe, o mesmo dos imports de plataforma;
+      * índice por NOME — a escola inteira, para reconhecer MUDANÇA DE SALA
+        (trocar de turma não faz de ninguém uma pessoa nova).
     """
-    candidatos_por_idx: dict[int, list[AlunoRef]] = {}
-    usos_por_aluno: dict[int, list[int]] = {}   # aluno_id → índices que o citam
-    for idx, linha in enumerate(linhas):
-        if casa_forte(linha, ctx):
-            continue
-        cands = candidatos_abreviados(linha, ctx)
-        if not cands:
-            continue
-        candidatos_por_idx[idx] = cands
-        for c in cands:
-            usos_por_aluno.setdefault(c.id, []).append(idx)
+    por_ra: dict[str, matching.Identidade] = field(default_factory=dict)
+    _por_sala: dict[str, dict[int, matching.Identidade]] = field(default_factory=dict)
+    _por_nome: dict[str, dict[int, matching.Identidade]] = field(default_factory=dict)
+    _sala_de: dict[int, str] = field(default_factory=dict)
+    _nome_de: dict[int, str] = field(default_factory=dict)
 
-    casamentos: dict[int, int] = {}
-    avisos: list[str] = []
-    for idx, cands in candidatos_por_idx.items():
-        if len(cands) == 1 and len(usos_por_aluno[cands[0].id]) == 1:
-            casamentos[idx] = cands[0].id
-        else:
-            nomes = ", ".join(sorted({c.nome for c in cands}))
-            avisos.append(aviso_ambiguidade(linhas[idx].nome, nomes))
-    return casamentos, avisos
+    def registrar(self, ident: matching.Identidade, chave_sala: str | None = None) -> None:
+        """Insere/atualiza um aluno nos índices (idempotente por id). Chamar depois
+        de criar OU de alterar (nome/chamada/sala) mantém as linhas seguintes do
+        MESMO arquivo enxergando o estado real — é o que impede a 2ª linha de abrir
+        uma 2ª ficha do aluno que a 1ª acabou de gravar."""
+        if ident.id is None:
+            return
+        aid = ident.id
+        sala_nova = chave_sala if chave_sala is not None else self._sala_de.get(aid)
+        sala_velha = self._sala_de.get(aid)
+        if sala_velha is not None and sala_velha != sala_nova:
+            self._por_sala.get(sala_velha, {}).pop(aid, None)
+        if sala_nova is not None:
+            self._por_sala.setdefault(sala_nova, {})[aid] = ident
+            self._sala_de[aid] = sala_nova
+        nome_novo = normalizar(ident.nome)
+        nome_velho = self._nome_de.get(aid)
+        if nome_velho is not None and nome_velho != nome_novo:
+            self._por_nome.get(nome_velho, {}).pop(aid, None)
+        self._por_nome.setdefault(nome_novo, {})[aid] = ident
+        self._nome_de[aid] = nome_novo
+        if ident.ra:
+            self.por_ra.setdefault(ident.ra, ident)
+
+    def registrar_ra(self, ident: matching.Identidade) -> None:
+        """Só o RA (usado por quem NÃO é candidato por nome — aluno excluído):
+        o RA continua identificando (reativa), o nome não."""
+        if ident.id is not None and ident.ra:
+            self.por_ra.setdefault(ident.ra, ident)
+
+    def roster(self, chave_sala: str) -> list[matching.Identidade]:
+        return list(self._por_sala.get(chave_sala, {}).values())
+
+    def sala_de(self, aluno_id: int) -> str | None:
+        return self._sala_de.get(aluno_id)
+
+    def mesmo_nome(self, nome: str) -> list[matching.Identidade]:
+        return list(self._por_nome.get(normalizar(nome), {}).values())
+
+
+def _sem_chamada(ident: matching.Identidade) -> matching.Identidade:
+    """Cópia sem o nº de chamada. Chamada é numeração DA SALA: comparar a de salas
+    diferentes não prova nem refuta nada (todo 1º da chamada de toda turma seria
+    'a mesma criança', e todo aluno que muda de sala 'outra criança')."""
+    return replace(ident, chamada=None)
+
+
+def _identidade_da_linha(linha: LinhaMatricula) -> matching.Identidade:
+    return matching.Identidade(nome=linha.nome, chamada=linha.chamada,
+                               nascimento=linha.nascimento, ra=linha.ra or "")
+
+
+def resolver_linha(linha: LinhaMatricula, ctx: ContextoCasamento) -> Decisao:
+    """PORTA ÚNICA de identidade da Lista Piloto. Ordem (mais forte primeiro):
+
+    1. **RA** — identificador forte e único na escola inteira (vale até para quem
+       está arquivado/excluído: reativa em vez de duplicar). Vetado por
+       ``nomes_compativeis`` quando o RA colide mas o nome é de outra pessoa
+       (RA placeholder digitado pela secretaria).
+    2. **Roster da SALA** pelo MOTOR ÚNICO (``matching.classificar_linha``) — o
+       mesmo cálculo do Elefante/Matific/cadastro manual: exato, abreviação,
+       variante segura, corroboração por identificador, veto por identidade,
+       2+ candidatos → revisão.
+    3. **Mudança de sala** — nome EXATAMENTE igual em outra sala da escola. Aqui a
+       chamada não conta (é numeração da sala) e exige-se prova de identidade
+       (nascimento/RA/UUID iguais) para reusar; sem prova, ou com 2+ homônimos em
+       outras salas, vai para REVISÃO (nunca funde duas crianças às cegas).
+    4. Nada plausível → CRIAR.
+    """
+    ident = _identidade_da_linha(linha)
+    if linha.ra:
+        alvo = ctx.por_ra.get(linha.ra)
+        if alvo is not None and alvo.id is not None and nomes_compativeis(linha.nome, alvo.nome):
+            return Decisao(REUSAR, alvo.id, "ra", (alvo.id,))
+
+    res = matching.classificar_linha(ident, ctx.roster(linha.chave_sala))
+    if res.status == matching.VINCULADO and res.aluno_id is not None:
+        return Decisao(REUSAR, res.aluno_id, res.motivo, res.candidatos)
+    if res.status == matching.REVISAR:
+        return Decisao(REVISAR, res.aluno_id, res.motivo, res.candidatos)
+
+    # (3) MUDANÇA DE SALA — a matrícula muda, a pessoa não. Só nome idêntico:
+    # abreviação/variante em OUTRA sala é evidência fraca demais para atravessar
+    # a fronteira da turma (ver ``test_turma_divergente_nao_casa``).
+    fora: list[matching.Identidade] = [
+        c for c in ctx.mesmo_nome(linha.nome)
+        if c.id is not None and ctx.sala_de(c.id) != linha.chave_sala
+        and not matching.conflito_identidade(_sem_chamada(ident), _sem_chamada(c))
+    ]
+    if len(fora) == 1:
+        alvo = fora[0]
+        if matching.corrobora_identidade(_sem_chamada(ident), _sem_chamada(alvo)):
+            return Decisao(REUSAR, alvo.id, "mudanca_de_sala", (alvo.id,))
+        return Decisao(REVISAR, alvo.id, "mudanca_de_sala_sem_prova", (alvo.id,))
+    if len(fora) > 1:
+        return Decisao(REVISAR, matching.melhor_candidato({c.id: c for c in fora}),
+                       "homonimos_em_outras_salas",
+                       tuple(sorted(c.id for c in fora)))  # type: ignore[arg-type]
+    return Decisao(CRIAR, None, res.motivo or "novo")
+
+
+# Motivos de REUSAR decididos SÓ pela semelhança do NOME — nenhum identificador
+# forte (RA/UUID/chamada/nascimento) confirmou. São os únicos em que DUAS linhas
+# diferentes do mesmo arquivo podem disputar o MESMO cadastro.
+_MOTIVOS_SO_NOME = frozenset({"abreviacao", "variante", "typo"})
+
+
+def candidatos_disputados(linhas: list[LinhaMatricula],
+                          ctx: ContextoCasamento) -> set[int]:
+    """UNICIDADE 1:1 DO LOTE (só leitura, contra o estado INICIAL do arquivo).
+
+    ``resolver_linha`` decide uma linha de cada vez e não enxerga as outras. Sem
+    esta pré-passagem, um cadastro abreviado que serve a DUAS linhas ("AGATHA V"
+    para "AGATHA VITORIA MOURA" e "AGATHA VALENTINA LIMA") é entregue à PRIMEIRA
+    do arquivo — um cara-ou-coroa que gruda os dados de plataforma de uma criança
+    na ficha da outra. Aqui só se DETECTA a disputa; quem a resolve é
+    ``arbitrar_disputa``, mandando as linhas envolvidas para revisão.
+
+    Só conta a disputa por NOME: duas linhas com o MESMO RA (ou o mesmo aluno em
+    duas turmas do arquivo) são a mesma criança e não são disputa nenhuma."""
+    reivindicado: dict[int, set[str]] = {}
+    for linha in linhas:
+        d = resolver_linha(linha, ctx)
+        if d.acao == REUSAR and d.aluno_id is not None and d.motivo in _MOTIVOS_SO_NOME:
+            reivindicado.setdefault(d.aluno_id, set()).add(normalizar(linha.nome))
+    return {aid for aid, nomes in reivindicado.items() if len(nomes) > 1}
+
+
+def arbitrar_disputa(decisao: Decisao, disputados: set[int]) -> Decisao:
+    """Converte em REVISÃO o REUSAR de um cadastro DISPUTADO por várias linhas.
+    Nada é criado nem alterado — é a mesma regra do resto do P0: correspondência
+    insegura vai para o gestor, nunca para um chute."""
+    if (decisao.acao == REUSAR and decisao.aluno_id in disputados
+            and decisao.motivo in _MOTIVOS_SO_NOME):
+        return replace(decisao, acao=REVISAR, motivo="disputado_por_varias_linhas")
+    return decisao
+
+
+def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:
+    return (f"“{nome_linha}” (turma {turma}) parece ser o mesmo aluno de: "
+            f"{nomes_candidatos} — mas a correspondência NÃO é segura. Nada foi "
+            "criado nem alterado nesta linha, para não abrir uma segunda ficha da "
+            "mesma criança nem misturar duas crianças diferentes. Resolva em "
+            "Alunos › Fundir duplicatas; se forem pessoas diferentes, preencha RA "
+            "ou data de nascimento distintos na planilha e reimporte.")

@@ -96,7 +96,7 @@ def plausivel(nome_a: str, nome_b: str) -> str | None:
 def vincula_por_nome_unico(nome_a: str, nome_b: str) -> bool:
     """Critério ÚNICO de AUTO-VÍNCULO por NOME quando há 1 único candidato plausível
     na turma — COMPARTILHADO por ``classificar_linha`` (imports Elefante/Matific,
-    prévia, sync) e pelo casamento da Lista Piloto (``matriculas.candidatos_abreviados``).
+    prévia, sync) e pelo casamento da Lista Piloto (``matriculas.resolver_linha``).
     Assim a decisão "este registro é o mesmo aluno?" é a MESMA, independentemente da
     origem dos dados. True para nome exato/abreviação (forte: MARIA E ↔ MARIA EDUARDA)
     e para variação de grafia SEGURA (fraco no nome do MEIO, pontas idênticas:
@@ -131,13 +131,27 @@ def _norm_ra(ra: str | None) -> str:
 def conflito_identidade(a: Identidade, b: Identidade) -> bool:
     """Sinais que PROVAM ser crianças DIFERENTES: nascimento, RA ou nº de chamada
     preenchidos NOS DOIS e DIVERGENTES. (UUID nunca veta — a mesma pessoa pode ter
-    UUIDs de plataformas diferentes.)"""
-    if a.chamada is not None and b.chamada is not None and a.chamada != b.chamada:
-        return True
+    UUIDs de plataformas diferentes.)
+
+    O nº de chamada é o sinal mais FRACO dos três: é uma posição na lista da sala,
+    não um identificador da criança — a secretaria renumera a turma toda quando
+    alguém sai, entra ou troca de sala. Por isso ele só prova "outra criança"
+    quando NENHUM identificador ESTÁVEL (nascimento, RA, UUID) diz o contrário;
+    com o mesmo nome e o mesmo nascimento/RA, chamada diferente é renumeração, e
+    tratá-la como veto abriria uma 2ª ficha da mesma criança a cada reimportação
+    da Lista Piloto (2026-08-11)."""
     if a.nascimento and b.nascimento and a.nascimento != b.nascimento:
         return True
     ra_a, ra_b = _norm_ra(a.ra), _norm_ra(b.ra)
-    return bool(ra_a and ra_b and ra_a != ra_b)
+    if ra_a and ra_b and ra_a != ra_b:
+        return True
+    if a.chamada is not None and b.chamada is not None and a.chamada != b.chamada:
+        estavel_igual = (
+            bool(a.nascimento and b.nascimento and a.nascimento == b.nascimento)
+            or bool(ra_a and ra_b and ra_a == ra_b)
+            or bool(a.uuids and b.uuids and (a.uuids & b.uuids)))
+        return not estavel_igual
+    return False
 
 
 def corrobora_identidade(a: Identidade, b: Identidade, *, incluir_nascimento: bool = True) -> bool:
@@ -178,7 +192,7 @@ def _motivo_nome(linha_nome: str, cand_nome: str) -> str:
     return "typo"
 
 
-def _melhor(cands: dict[int, Identidade]) -> int:
+def melhor_candidato(cands: dict[int, Identidade]) -> int:
     """Melhor sugestão para revisão: o da Lista Piloto vence; senão o de menor id."""
     return sorted(cands.values(), key=lambda c: (not c.da_lista_piloto, c.id or 0))[0].id  # type: ignore[return-value]
 
@@ -255,7 +269,7 @@ def classificar_linha(linha: Identidade, roster: list[Identidade]) -> Resultado:
         return Resultado(VINCULADO, unico,
                          _motivo_nome(linha.nome, plausiveis[unico].nome), (unico,))
     if plausiveis:
-        alvo = _melhor(plausiveis)
+        alvo = melhor_candidato(plausiveis)
         return Resultado(REVISAR, alvo, _motivo_nome(linha.nome, plausiveis[alvo].nome),
                          tuple(plausiveis))
     if bloqueado_por_conflito:
