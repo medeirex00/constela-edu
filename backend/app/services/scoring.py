@@ -16,6 +16,7 @@ from datetime import time
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.database import bloquear_escola_para_recalculo
 from app.models import (
     Aluno,
     Configuracao,
@@ -753,6 +754,12 @@ def contexto_normalizacao(
 
 def recalcular_escola(db: Session, escola_id: int) -> int:
     """Recalcula todas as notas e o ranking da escola. Retorna nº de alunos."""
+    # PRIMEIRA linha, antes de QUALQUER leitura que entre no cálculo: daqui até
+    # o `db.commit()` do fim, esta escola é só desta transação. Sem isso, dois
+    # recálculos sobrepostos leem o mesmo estado e gravam um por cima do outro
+    # — 500 por uq_nota_aluno_ano quando inserem, e nota errada em silêncio
+    # quando atualizam. Transacional: cai sozinha no commit (no-op no SQLite).
+    bloquear_escola_para_recalculo(db, escola_id)
     contexto = _carregar_contexto(db, escola_id)
     if contexto is None:
         return 0

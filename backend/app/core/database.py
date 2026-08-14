@@ -99,6 +99,49 @@ def bloquear_fonte_para_coleta(db, fonte_id: int) -> None:
                    {"ns": _NS_COLETA_AVALIACAO, "fonte": int(fonte_id)})
 
 
+# Namespace dos advisory locks do RECÁLCULO de notas (separado dos de
+# importação e coleta — travas distintas não podem se bloquear entre si).
+_NS_RECALCULO = 4713
+
+
+def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
+    """Serializa recálculos concorrentes da MESMA escola.
+
+    ``scoring.recalcular_escola`` faz SELECT-then-INSERT em ``notas``: lê o
+    ranking inteiro, calcula em memória e grava uma linha por aluno. Dois
+    recálculos sobrepostos da mesma escola (importação terminando + mudança de
+    peso, /recalcular clicado duas vezes, sync automática junto do gestor) leem
+    o MESMO estado e gravam um por cima do outro. As três consequências:
+
+      * ``notas`` vazia → os dois INSERTem e ``uq_nota_aluno_ano`` estoura
+        (UniqueViolation → HTTP 500 na cara do gestor);
+      * ordens de ranking diferentes → DEADLOCK, porque a ordem dos INSERTs é a
+        ordem do ranking;
+      * ``notas`` já existente → os dois UPDATEam, sem erro nenhum, e vence
+        quem gravar por último — que pode ser justamente quem LEU o estado mais
+        velho. Corrupção silenciosa: é o dano real, o 500 é só o sintoma.
+
+    PostgreSQL: ``pg_advisory_xact_lock`` faz o 2º recálculo BLOQUEAR até o 1º
+    commitar; aí ele relê o estado já gravado e recalcula em cima dele — quem
+    grava por último leu por último. É transacional (cai sozinho no commit do
+    fim do recálculo), então deve ser adquirido ANTES de qualquer leitura que
+    participe do cálculo e sem commit no meio.
+
+    HIERARQUIA (regra de ouro contra deadlock ENTRE travas): nunca adquirir
+    esta segurando ``_NS_IMPORTACAO`` (4711). Todos os chamadores de
+    ``recalcular_escola`` comitam antes de chamá-lo — inclusive os dois
+    endpoints de importação, que soltam 4711 no commit e só então recalculam.
+    ``tests/test_recalculo_concorrencia.py`` guarda essa ordem.
+
+    SQLite (dev/testes): no-op — banco de um único escritor; produção é
+    Postgres. A defesa cross-DB é a própria ``uq_nota_aluno_ano``, que impede a
+    duplicata virar permanente (ao custo do 500 que esta trava elimina)."""
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import text
+        db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
+                   {"ns": _NS_RECALCULO, "escola": int(escola_id)})
+
+
 # --------------------------------------------------------------------------
 # Correções de DADOS no início da aplicação.
 #

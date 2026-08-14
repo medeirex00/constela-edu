@@ -21,6 +21,14 @@ from app.models import (
 from app.services import scoring
 
 
+def pytest_configure(config):
+    """Marcador dos testes que exigem PostgreSQL de verdade (corrida entre
+    transações — o SQLite de um escritor só esconderia). Pulam sozinhos sem
+    ``TEST_DATABASE_URL_PG``; rodar só eles: ``pytest -m postgres``."""
+    config.addinivalue_line(
+        "markers", "postgres: exige PostgreSQL real (TEST_DATABASE_URL_PG)")
+
+
 @pytest.fixture(autouse=True)
 def _reset_estado_global():
     """Zera estado global em memória (singletons por processo) antes de cada
