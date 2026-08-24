@@ -64,9 +64,13 @@ interface Fonte {
   ultimo_resumo: Record<string, unknown> | null;
 }
 
+// O eixo X padrão é o ÍNDICE per capita (0–1000), comparável entre escolas. A
+// média 0–100 continua disponível, mas é normalizada contra o P90 da própria
+// escola: cruzar o SAEB com ela media homogeneidade interna, não engajamento.
 const METRICAS: Record<string, string> = {
-  media_geral: "Média geral (engajamento)",
+  pontuacao_geral: "Índice da rede (0–1000, comparável)",
   adocao: "Adoção (%)",
+  media_geral: "Média interna (0–100, não comparável)",
 };
 const rotuloSerie = (s: SerieOpcao) =>
   [s.nome, s.indicador, s.etapa, s.componente].filter(Boolean).join(" · ");
@@ -144,7 +148,7 @@ function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
 }) {
   const [idx, setIdx] = useState(0);
   const [edicao, setEdicao] = useState<number | null>(null);
-  const [metrica, setMetrica] = useState("media_geral");
+  const [metrica, setMetrica] = useState("pontuacao_geral");
   const [removendo, setRemovendo] = useState(false);
   const [msgRemover, setMsgRemover] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const serie = opcoes[idx];

@@ -127,7 +127,7 @@ describe("Ranking da Rede", () => {
     expect(screen.getByText(/Estrelas por aluno = Total de estrelas ÷ Nº de alunos/i)).toBeInTheDocument();
     expect(screen.getByText(/Pontuação de Matemática = mín\(1000 ; Estrelas por aluno ÷ Melhor da rede × 1000\)/i)).toBeInTheDocument();
     expect(screen.getByText(/Índice Geral = \(Pontuação de Leitura \+ Pontuação de Matemática\) ÷ 2/i)).toBeInTheDocument();
-    // A ressalva da dimensão ausente (comportamento real de _pontuar_escolas).
+    // A ressalva da dimensão ausente (comportamento de rede._pontuar_por_percapita).
     expect(screen.getByText(/apenas a dimensão disponível/i)).toBeInTheDocument();
     // E o Matific é atividades/estrelas, não "questões".
     expect(screen.getByText(/não\s*“questões”/i)).toBeInTheDocument();

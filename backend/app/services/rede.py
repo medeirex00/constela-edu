@@ -34,7 +34,13 @@ from app.services import modulos, scoring
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
-MEDIA_BAIXA = 30.0       # média geral da escola abaixo disto = desempenho baixo
+# Desempenho baixo é medido no ÍNDICE DA REDE (0–1000, per capita, régua = melhor
+# escola do município), NÃO na média 0–100 do motor: aquela é normalizada contra o
+# P90 da PRÓPRIA escola, então mede a forma da distribuição interna e não o nível
+# — a escola onde todos leem pouco e igual pontuava ACIMA da que lê muito com uma
+# cauda parada, e a escola que mais lia no município caía na lista de atenção.
+# 300 de 1000 = menos de um terço do desempenho per capita da melhor escola.
+INDICE_BAIXO = 300.0
 
 
 def escolas_da_rede(db: Session, rede_id: int) -> list[Escola]:
@@ -44,16 +50,21 @@ def escolas_da_rede(db: Session, rede_id: int) -> list[Escola]:
 
 
 def _motivo_atencao(total_alunos: int, com_dados: int, adocao: float,
-                    media_geral: float) -> str | None:
-    """Por que a escola precisa de atenção — ou None se está saudável."""
+                    pontuacao_geral: float) -> str | None:
+    """Por que a escola precisa de atenção — ou None se está saudável.
+
+    A ordem importa: falta de aluno e falta de dado vêm ANTES do desempenho,
+    para que índice 0 por AUSÊNCIA nunca seja lido como desempenho ruim.
+    """
     if total_alunos == 0:
         return "Sem alunos matriculados no ano letivo."
     if com_dados == 0:
         return "Nenhum aluno com dados das plataformas ainda."
     if adocao < ADOCAO_BAIXA:
         return f"Baixa adoção: só {adocao:.0f}% dos alunos têm dados."
-    if 0 < media_geral < MEDIA_BAIXA:
-        return f"Desempenho baixo: média geral {media_geral:.0f}."
+    if 0 < pontuacao_geral < INDICE_BAIXO:
+        return (f"Desempenho baixo frente à rede: índice {pontuacao_geral:.0f} "
+                f"de 1000 (1000 = melhor escola da rede).")
     return None
 
 
@@ -235,7 +246,6 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
         # COBERTURA: quantos alunos de fato usam (o que a "adoção" sempre quis dizer).
         com_dados = int(com_dados_por_escola.get(escola.id, 0))
         adocao = round(com_dados / total_alunos * 100, 1) if total_alunos else 0.0
-        motivo = _motivo_atencao(total_alunos, com_dados, adocao, media_geral)
         m, e = mat.get(escola.id), ele.get(escola.id)
         livros = int(e["livros_unicos"]) if e else 0
         ativos_ele = int(e["ativos"]) if e else 0
@@ -283,10 +293,16 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "estrelas_por_matricula": round(estrelas / total_alunos, 1) if total_alunos else 0.0,
             "atividades_por_matricula": round(atividades / total_alunos, 1) if total_alunos else 0.0,
             "tempo_por_matricula_min": round(tempo_min / total_alunos, 1) if total_alunos else 0.0,
-            "precisa_atencao": motivo is not None,
-            "motivo_atencao": motivo,
         })
-    _pontuar_escolas(cartoes)
+    # O índice comparável é resolvido com a COORTE inteira em mãos (a régua é a
+    # melhor escola da rede), e só então o alerta de atenção — que agora depende
+    # dele — pode ser decidido. Por isso os dois passos vêm depois do laço.
+    _pontuar_por_percapita(cartoes)
+    for cartao in cartoes:
+        motivo = _motivo_atencao(cartao["total_alunos"], cartao["alunos_com_dados"],
+                                 cartao["adocao"], cartao["pontuacao_geral"])
+        cartao["precisa_atencao"] = motivo is not None
+        cartao["motivo_atencao"] = motivo
     return cartoes
 
 
@@ -317,9 +333,9 @@ def _indice_da_rede(valor: float, melhor: float) -> float:
     return round(scoring.normalizar(valor, melhor) * ESCALA_INDICE, 1)
 
 
-def _pontuar_escolas(cartoes: list[dict]) -> None:
-    """Acrescenta a cada cartão o índice da rede por DIMENSÃO (leitura/matemática)
-    e o geral, IN PLACE. As dimensões são conceitos distintos e cada uma tem o seu
+def _pontuar_por_percapita(cartoes: list[dict], sufixo: str = "") -> None:
+    """Acrescenta a cada cartão o índice por DIMENSÃO (leitura/matemática) e o
+    geral, IN PLACE. As dimensões são conceitos distintos e cada uma tem o seu
     indicador per capita como base:
 
       * leitura     → livros por aluno   (o critério principal do ranking de leitura)
@@ -330,10 +346,14 @@ def _pontuar_escolas(cartoes: list[dict]) -> None:
     reflete desempenho, e ``dimensoes_pontuadas`` diz quais entraram na conta
     (a interface mostra isso, para a Secretaria saber o que está comparando).
 
-    ESCOPO: o índice é relativo À REDE recebida. Comparar índices de escolas de
-    REDES diferentes não é válido (cada uma foi normalizada contra a melhor da
-    sua rede) — por isso o painel global ranqueia escolas por ``media_geral``,
-    não por este índice."""
+    ESCOPO = a COORTE recebida, e a régua é o melhor cartão dela. A função não
+    sabe (nem precisa saber) se os cartões são escolas de uma rede, escolas de
+    TODAS as redes ou redes inteiras: o que ela exige é ``livros_por_matricula``
+    / ``estrelas_por_matricula`` (per capita, é o que torna unidades de tamanhos
+    diferentes comparáveis) e as contagens de ativos. Comparar índices de
+    coortes DIFERENTES não é válido — por isso o painel global pontua as escolas
+    de novo, com escopo global, em ``sufixo="_global"``, em vez de reaproveitar
+    o índice de rede."""
     if not cartoes:
         return
     melhor_leitura = max((c["livros_por_matricula"] for c in cartoes), default=0.0)
@@ -345,15 +365,19 @@ def _pontuar_escolas(cartoes: list[dict]) -> None:
         mods = c.get("modulos") or list(modulos.TODOS)
         tem_leitura = c["ativos_elefante"] > 0 and "leitura" in mods
         tem_matematica = c["ativos_matific"] > 0 and "matematica" in mods
-        c["pontuacao_leitura"] = (
-            _indice_da_rede(c["livros_por_matricula"], melhor_leitura) if tem_leitura else 0.0)
-        c["pontuacao_matematica"] = (
-            _indice_da_rede(c["estrelas_por_matricula"], melhor_matematica) if tem_matematica else 0.0)
-        disponiveis = [p for p, tem in ((c["pontuacao_leitura"], tem_leitura),
-                                        (c["pontuacao_matematica"], tem_matematica)) if tem]
-        c["pontuacao_geral"] = round(sum(disponiveis) / len(disponiveis), 1) if disponiveis else 0.0
-        c["dimensoes_pontuadas"] = [nome for nome, tem in (("leitura", tem_leitura),
-                                                           ("matematica", tem_matematica)) if tem]
+        leitura = (_indice_da_rede(c["livros_por_matricula"], melhor_leitura)
+                   if tem_leitura else 0.0)
+        matematica = (_indice_da_rede(c["estrelas_por_matricula"], melhor_matematica)
+                      if tem_matematica else 0.0)
+        c["pontuacao_leitura" + sufixo] = leitura
+        c["pontuacao_matematica" + sufixo] = matematica
+        disponiveis = [p for p, tem in ((leitura, tem_leitura),
+                                        (matematica, tem_matematica)) if tem]
+        c["pontuacao_geral" + sufixo] = (
+            round(sum(disponiveis) / len(disponiveis), 1) if disponiveis else 0.0)
+        c["dimensoes_pontuadas" + sufixo] = [
+            nome for nome, tem in (("leitura", tem_leitura),
+                                   ("matematica", tem_matematica)) if tem]
 
 
 def dashboard_rede(db: Session, rede_id: int) -> dict:
@@ -375,18 +399,35 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
         return round(sum(c[chave] * c["alunos_com_dados"] for c in cartoes) / com_dados, 1)
 
     media_rede = _ponderada("media_geral")
+    indice_rede = _ponderada("pontuacao_geral")
     com_nota = [c for c in cartoes if c["alunos_com_dados"] > 0]
     medias = [c["media_geral"] for c in com_nota]
+    indices = [c["pontuacao_geral"] for c in com_nota]
     equidade = {
-        # Diferença entre a melhor e a pior escola COM dados (quanto maior, mais
-        # desigual a rede) — o número que a secretaria usa para direcionar apoio.
+        # EQUIDADE é comparação ENTRE escolas, então a distância tem de ser
+        # medida na régua COMPARÁVEL (índice per capita 0–1000). É o que a tela e
+        # o boletim mostram. Medida em `media_geral` (normalizada dentro de cada
+        # escola), ela apontava para o lado errado: a rede parecia mais desigual
+        # quanto mais escolas tivessem dispersão interna, e não quanto maior
+        # fosse a diferença real de leitura entre elas.
+        "gap_indice": round(max(indices) - min(indices), 1) if len(indices) >= 2 else 0.0,
+        "escola_maior_indice": round(max(indices), 1) if indices else 0.0,
+        "escola_menor_indice": round(min(indices), 1) if indices else 0.0,
+        "escolas_abaixo_do_indice_medio": sum(1 for i in indices if i < indice_rede),
+        # Mantidas para não quebrar consumidores antigos e porque a dispersão das
+        # médias internas ainda informa algo (o quanto as escolas variam por
+        # dentro) — mas NÃO são comparáveis entre escolas. Não governam nada.
         "gap_media": round(max(medias) - min(medias), 1) if len(medias) >= 2 else 0.0,
         "escola_maior_media": round(max(medias), 1) if medias else 0.0,
         "escola_menor_media": round(min(medias), 1) if medias else 0.0,
         "escolas_abaixo_da_media": sum(1 for m in medias if m < media_rede),
     }
 
-    cartoes.sort(key=lambda c: (-c["media_geral"], c["nome"].casefold()))
+    # ORDEM e POSIÇÃO do painel: o índice per capita, que é o único número
+    # comparável entre escolas de tamanhos diferentes. Desempata por adoção e
+    # nome (determinístico), a mesma régua de `ranking_escolas`.
+    cartoes.sort(key=lambda c: (-c["pontuacao_geral"], -c["adocao"],
+                                c["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes, start=1):
         cartao["posicao"] = posicao
 
@@ -410,9 +451,15 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
             "professores": total_professores,
             "alunos_com_dados": com_dados,
             "adocao": round(com_dados / total_alunos * 100, 1) if total_alunos else 0.0,
+            # DESEMPENHO (0–100): média das notas de quem TEM dado da plataforma.
+            # Continua sendo o retrato honesto de desempenho da rede — só não
+            # serve para COMPARAR escolas entre si (é o que o índice faz).
             "media_geral": media_rede,
             "media_matific": _ponderada("media_matific"),
             "media_elefante": _ponderada("media_elefante"),
+            # ÍNDICE (0–1000) da rede: média ponderada do índice das escolas — a
+            # métrica comparável, usada nas metas e no boletim.
+            "pontuacao_geral": indice_rede,
             "escolas_em_atencao": sum(1 for c in cartoes if c["precisa_atencao"]),
             # Totais das plataformas na rede inteira (seções Elefante/Matific).
             "livros": total_livros,
@@ -422,7 +469,12 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
             "ativos_matific": sum(c["ativos_matific"] for c in cartoes),
             "ativos_elefante": ativos_elefante,
             "livros_por_aluno": round(total_livros / ativos_elefante, 1) if ativos_elefante else 0.0,
-            "melhor_escola": {"nome": melhor["nome"], "media_geral": melhor["media_geral"]}
+            # "Melhor escola" é uma COMPARAÇÃO: quem lidera é quem tem o maior
+            # índice per capita (a lista já vem ordenada por ele). A média
+            # interna vai junto, como leitura complementar.
+            "melhor_escola": {"nome": melhor["nome"],
+                              "pontuacao_geral": melhor["pontuacao_geral"],
+                              "media_geral": melhor["media_geral"]}
             if melhor else None,
         },
         "equidade": equidade,
@@ -435,10 +487,17 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
 # Métricas de ordenação do ranking de escolas (SEDUC escolhe o critério). Só
 # agregados por escola — nunca ranking individual entre escolas (privacidade).
 METRICAS_RANKING = {
-    "geral": "media_geral",
-    "leitura": "media_elefante",
+    # Critérios por DIMENSÃO = índice per capita, COMPARÁVEL entre escolas. São
+    # os que a Secretaria usa para ranquear (antes apontavam para as médias
+    # 0–100, normalizadas dentro de cada escola: ordenar por elas premiava
+    # homogeneidade interna e rebaixava a escola que mais lê do município).
+    "geral": "pontuacao_geral",
+    "leitura": "pontuacao_leitura",
+    "matematica": "pontuacao_matematica",
+    # Critérios por PLATAFORMA = as médias 0–100 do motor. Ficam disponíveis como
+    # opção explícita ("como vai quem usa o Elefante nesta escola?"), mas são
+    # régua INTERNA de cada escola — não comparam escolas.
     "elefante": "media_elefante",
-    "matematica": "media_matific",
     "matific": "media_matific",
     "engajamento": "adocao",
     "livros": "livros",
@@ -450,9 +509,8 @@ METRICAS_RANKING = {
     "estrelas_aluno": "estrelas_por_matricula",
     "atividades_aluno": "atividades_por_matricula",
     # ÍNDICES da rede (0–1000, régua = melhor escola sobre o indicador per capita).
-    # As chaves legadas acima (geral/leitura/matematica = médias 0–100 do motor)
-    # continuam válidas para não quebrar consumidores antigos, mas NÃO são
-    # comparáveis entre escolas (cada escola é normalizada na própria curva).
+    # Nomes explícitos das mesmas métricas de "geral"/"leitura"/"matematica",
+    # mantidos porque as abas do Ranking da Rede já apontam para eles.
     "indice_geral": "pontuacao_geral",
     "indice_leitura": "pontuacao_leitura",
     "indice_matematica": "pontuacao_matematica",
@@ -470,7 +528,7 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
     (Leitura — livros ÷ alunos, o critério principal), ``estrelas_aluno``
     (Matemática) e ``engajamento`` (participação). Todas per capita ou índice, de
     modo que a escola GRANDE não sobe só por ter mais alunos."""
-    chave = METRICAS_RANKING.get(metrica, "media_geral")
+    chave = METRICAS_RANKING.get(metrica, "pontuacao_geral")
     cartoes = [c for c in _kpis_da_rede(db, rede_id) if c["alunos_com_dados"] > 0]
     cartoes.sort(key=lambda c: (-c[chave], -c["adocao"], c["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
@@ -500,6 +558,8 @@ def dashboard_global(db: Session) -> dict:
                 return 0.0
             return round(sum(c[chave] * c["alunos_com_dados"] for c in _cartoes) / _com, 1)
 
+        livros = sum(c["livros"] for c in cartoes)
+        estrelas = sum(c["estrelas"] for c in cartoes)
         cartoes_rede.append({
             "rede_id": rede.id, "nome": rede.nome, "uf": rede.uf, "status": rede.status,
             "escolas": len(cartoes),
@@ -510,10 +570,19 @@ def dashboard_global(db: Session) -> dict:
             "media_geral": _pond("media_geral"),
             "media_matific": _pond("media_matific"),
             "media_elefante": _pond("media_elefante"),
-            "livros": sum(c["livros"] for c in cartoes),
+            "livros": livros,
             "atividades": sum(c["atividades"] for c in cartoes),
-            "estrelas": sum(c["estrelas"] for c in cartoes),
+            "estrelas": estrelas,
             "escolas_em_atencao": sum(1 for c in cartoes if c["precisa_atencao"]),
+            # Per capita da REDE + ativos/módulos: é o que `_pontuar_por_percapita`
+            # consome. Assim a comparação ENTRE REDES usa o mesmo motor e o mesmo
+            # conceito das escolas (nenhuma segunda lógica), em vez da média
+            # 0–100, que é régua interna de cada escola e não compara nada.
+            "ativos_elefante": sum(c["ativos_elefante"] for c in cartoes),
+            "ativos_matific": sum(c["ativos_matific"] for c in cartoes),
+            "modulos": sorted(modulos.modulos_da_rede(db, rede.id)),
+            "livros_por_matricula": round(livros / alunos, 1) if alunos else 0.0,
+            "estrelas_por_matricula": round(estrelas / alunos, 1) if alunos else 0.0,
         })
         for c in cartoes:
             todas_escolas.append({**c, "rede_id": rede.id, "rede_nome": rede.nome})
@@ -525,11 +594,18 @@ def dashboard_global(db: Session) -> dict:
             return 0.0
         return round(sum(r[chave] * r["alunos_com_dados"] for r in cartoes_rede) / total_com_dados, 1)
 
-    cartoes_rede.sort(key=lambda r: (-r["media_geral"], r["nome"].casefold()))
+    # Comparação ENTRE REDES: índice per capita na coorte "todas as redes".
+    _pontuar_por_percapita(cartoes_rede)
+    cartoes_rede.sort(key=lambda r: (-r["pontuacao_geral"], r["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes_rede, start=1):
         cartao["posicao"] = posicao
+    # Melhores escolas de TODAS as redes: o índice DE REDE de cada uma não serve
+    # aqui (cada escola foi normalizada contra a melhor da SUA rede, então um
+    # 1000 de um município de 3 escolas empataria com o 1000 de uma capital).
+    # Pontua-se de novo, com a coorte global, em chaves próprias.
     top = [e for e in todas_escolas if e["alunos_com_dados"] > 0]
-    top.sort(key=lambda e: (-e["media_geral"], e["nome"].casefold()))
+    _pontuar_por_percapita(top, sufixo="_global")
+    top.sort(key=lambda e: (-e["pontuacao_geral_global"], e["nome"].casefold()))
 
     return {
         "totais": {
@@ -545,6 +621,7 @@ def dashboard_global(db: Session) -> dict:
             "media_geral": _pond_global("media_geral"),
             "media_matific": _pond_global("media_matific"),
             "media_elefante": _pond_global("media_elefante"),
+            "pontuacao_geral": _pond_global("pontuacao_geral"),
             "escolas_em_atencao": sum(r["escolas_em_atencao"] for r in cartoes_rede),
         },
         "redes": cartoes_rede,
@@ -557,15 +634,28 @@ def dashboard_global(db: Session) -> dict:
 # é sempre calculado sobre os totais REAIS (nunca número fictício).
 # ---------------------------------------------------------------------------
 
-# Indicadores que aceitam meta: rótulo, sufixo e se dá para comparar POR ESCOLA
-# (média/adoção sim; totais da rede não — uma escola não bate um total municipal).
+# Indicadores que aceitam meta. ``por_escola`` = o indicador existe no cartão de
+# cada escola (totais municipais não: uma escola não bate um total da rede).
+# ``comparavel`` = o valor de uma escola pode ser confrontado com o de outra pelo
+# MESMO alvo. As médias 0–100 são normalizadas dentro de cada escola, então
+# "3 de 5 escolas atingiram média 70" mede homogeneidade interna, não conquista —
+# por isso elas continuam valendo como meta DA REDE (o progresso agregado é
+# legítimo) mas não produzem mais contagem por escola.
 METRICAS_META: dict[str, dict] = {
-    "media_geral": {"rotulo": "Média geral da rede", "sufixo": "", "por_escola": True},
-    "media_elefante": {"rotulo": "Leitura (Elefante Letrado)", "sufixo": "", "por_escola": True},
-    "media_matific": {"rotulo": "Matemática (Matific)", "sufixo": "", "por_escola": True},
-    "adocao": {"rotulo": "Engajamento (adoção)", "sufixo": "%", "por_escola": True},
-    "livros": {"rotulo": "Livros lidos na rede", "sufixo": "", "por_escola": False},
-    "atividades": {"rotulo": "Atividades Matific na rede", "sufixo": "", "por_escola": False},
+    "pontuacao_geral": {"rotulo": "Índice da rede (0–1000)", "sufixo": "",
+                        "por_escola": True, "comparavel": True},
+    "adocao": {"rotulo": "Engajamento (adoção)", "sufixo": "%",
+               "por_escola": True, "comparavel": True},
+    "media_geral": {"rotulo": "Média geral da rede", "sufixo": "",
+                    "por_escola": True, "comparavel": False},
+    "media_elefante": {"rotulo": "Leitura (Elefante Letrado)", "sufixo": "",
+                       "por_escola": True, "comparavel": False},
+    "media_matific": {"rotulo": "Matemática (Matific)", "sufixo": "",
+                      "por_escola": True, "comparavel": False},
+    "livros": {"rotulo": "Livros lidos na rede", "sufixo": "",
+               "por_escola": False, "comparavel": False},
+    "atividades": {"rotulo": "Atividades Matific na rede", "sufixo": "",
+                   "por_escola": False, "comparavel": False},
 }
 
 
@@ -622,9 +712,13 @@ def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) ->
             "id": m.id, "metrica": m.metrica, "rotulo": cfg["rotulo"],
             "sufixo": cfg["sufixo"], "alvo": round(m.alvo, 1), "atual": round(atual, 1),
             "progresso": progresso, "atingida": atual >= m.alvo, "descricao": m.descricao,
+            "comparavel": cfg["comparavel"],
             "escolas_atingiram": None, "escolas_total": None,
         }
-        if cfg["por_escola"] and com_dados:
+        # A contagem "X de Y escolas atingiram" só existe para métrica
+        # COMPARÁVEL: com a média 0–100 (régua interna de cada escola) ela era um
+        # número inválido publicado ao lado de um número válido.
+        if cfg["por_escola"] and cfg["comparavel"] and com_dados:
             item["escolas_atingiram"] = sum(1 for c in com_dados if c.get(m.metrica, 0) >= m.alvo)
             item["escolas_total"] = len(com_dados)
         saida.append(item)
@@ -647,14 +741,22 @@ def _top_escolas(cartoes: list[dict], chave: str, limite: int = 5) -> list[dict]
 
 
 def painel_publico_rede(db: Session, rede_id: int) -> dict:
-    """Dados da vitrine pública: top 5 escolas em LEITURA (Elefante) e em
-    MATEMÁTICA (Matific). Só agregado por escola — sem PII de criança."""
+    """Dados da vitrine pública: top 5 escolas em LEITURA e em MATEMÁTICA. Só
+    agregado por escola — sem PII de criança.
+
+    O critério é PER CAPITA (livros ÷ alunos, estrelas ÷ alunos), o mesmo do
+    Ranking da Rede. Ordenar pelas médias 0–100 do motor coroaria em praça
+    pública a escola de distribuição mais homogênea — que pode ser justamente a
+    que menos lê —, porque aquela régua é o P90 de cada escola contra ela mesma.
+    A unidade vai junto para o telão dizer o que o número significa."""
     rede = db.get(Rede, rede_id)
     cartoes = _kpis_da_rede(db, rede_id)
     return {
         "rede_nome": rede.nome if rede else "",
-        "top_leitura": _top_escolas(cartoes, "media_elefante"),
-        "top_matematica": _top_escolas(cartoes, "media_matific"),
+        "top_leitura": _top_escolas(cartoes, "livros_por_matricula"),
+        "top_matematica": _top_escolas(cartoes, "estrelas_por_matricula"),
+        "unidade_leitura": "livros por aluno",
+        "unidade_matematica": "estrelas por aluno",
     }
 
 

@@ -6,3 +6,12 @@ export function corPorMedia(media: number): string {
   if (media >= 33) return "#f59e0b"; // amber-500
   return "#f87171"; // red-400
 }
+
+/** Cor por faixa do ÍNDICE DA REDE (escala 0–1000, per capita — a métrica
+ *  comparável entre escolas). Mesmas faixas de `corPorMedia`, só reescaladas,
+ *  para o mapa e o ranking da Secretaria pintarem pelo número que ordena a
+ *  lista: pintar pela média 0–100 deixava a escola que mais lê do município
+ *  vermelha no mapa enquanto ela liderava o ranking. */
+export function corPorIndice(indice: number): string {
+  return corPorMedia((Number(indice) || 0) / 10);
+}

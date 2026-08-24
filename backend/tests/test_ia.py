@@ -513,14 +513,21 @@ def test_medio1_pseudonimizacao_ignora_caixa(db, escola_completa, monkeypatch):
 
 # --- Correção de dados: conta do dono vira global -----------------------------------
 
-def test_promover_admin_global_idempotente(db, escola_completa):
+def test_promover_admin_global_idempotente(db, escola_completa, monkeypatch):
+    """O e-mail do dono vem de ADMIN_GLOBAL_EMAIL (nunca do código — C-05): o
+    teste passa a declará-lo, como o ambiente faz. O que ele guarda continua
+    sendo o mesmo: promove uma vez e repetir não tem efeito colateral.
+    O caso "sem a variável declarada, ninguém é promovido" está em
+    tests/test_seguranca_privilegios.py."""
+    from app.core.config import settings
     from app.core.database import _promover_admin_global
     from app.core.security import hash_senha
     from app.models import Usuario
 
+    monkeypatch.setattr(settings, "ADMIN_GLOBAL_EMAIL", "dono@exemplo.com")
     escola = escola_completa["escola"]
     dono = Usuario(escola_id=escola.id, nome="Dono",
-                   email="EduMedeiros1405@gmail.com",   # caixa diferente de propósito
+                   email="Dono@Exemplo.com",   # caixa diferente de propósito
                    senha_hash=hash_senha("s3nh4abc"), cargo="admin")
     db.add(dono)
     db.commit()

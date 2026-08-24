@@ -13,6 +13,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+from app.services.audit import registrar
 
 
 def _base(escola_id: int) -> str:
@@ -171,7 +172,15 @@ def test_exclusao_permanente_remove_todos_os_vinculos(cliente, db, escola_comple
 def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, db, escola_completa):
     """Direito ao esquecimento: ao excluir o aluno em definitivo, o nome civil
     do menor é anonimizado também nas entradas ANTERIORES do log (ex.: edição),
-    não só omitido na entrada da exclusão."""
+    não só omitido na entrada da exclusão.
+
+    A verificação é feita SEM o filtro ``entidade``/``entidade_id`` (C-07): a
+    versão anterior deste teste consultava com o mesmo filtro do código que
+    estava sendo testado, então só inspecionava as linhas que o anonimizador
+    garantidamente tocava — era tautológico e não podia falhar no caso real
+    (importação grava ``entidade_id=None``, e ``IN`` nunca casa NULL).
+    A cobertura ampla das 5 formas que a produção grava está em
+    ``test_esquecimento_nome_menor.py``."""
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
     ana_id, ana_nome = ana.id, ana.nome
@@ -179,22 +188,23 @@ def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, db, escol
     # Uma edição gera um log com o nome do aluno em detalhes.
     cliente.patch(f"{_base(escola_id)}/alunos/{ana_id}",
                   json={"observacoes": "anotação"})
-    logs_antes = db.execute(
-        select(LogAuditoria).where(LogAuditoria.entidade == "aluno",
-                                   LogAuditoria.entidade_id == ana_id)).scalars().all()
-    assert any(ana_nome in str(l.detalhes) for l in logs_antes), \
-        "pré-condição: algum log anterior cita o nome"
+    # E o caminho de importação grava SEM entidade_id — o que escapava.
+    registrar(db, "aluno.criado_auto", escola_id=escola_id, entidade="aluno",
+              entidade_id=None, detalhes={"origem": ana_nome, "turma": "3º Ano A"})
+    db.commit()
+
+    todos_os_logs = select(LogAuditoria).where(LogAuditoria.escola_id == escola_id)
+    logs_antes = db.execute(todos_os_logs).scalars().all()
+    assert sum(ana_nome in str(l.detalhes) for l in logs_antes) >= 2, \
+        "pré-condição: o nome aparece com e sem entidade_id"
 
     r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
                      json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
-    logs_depois = db.execute(
-        select(LogAuditoria).where(LogAuditoria.entidade == "aluno",
-                                   LogAuditoria.entidade_id == ana_id)).scalars().all()
-    # Nenhuma entrada do aluno excluído ainda contém o nome civil em claro.
-    for log in logs_depois:
+    # Nenhuma entrada da escola — de qualquer entidade — cita o nome do menor.
+    for log in db.execute(todos_os_logs).scalars():
         assert ana_nome not in str(log.detalhes), log.acao
 
 

@@ -235,6 +235,40 @@ def obter_pesos(db: Session, escola_id: int, namespace: str) -> dict[str, float]
     return {k: float(v) / total for k, v in valores.items()}
 
 
+def pesos_geral_do_aluno(pesos_geral: dict[str, float],
+                         dimensoes_com_dados: set[str]) -> dict[str, float]:
+    """Renormaliza ``pesos.geral`` sobre as plataformas em que o ALUNO tem dado.
+
+    É a MESMA regra que a escola já aplicava — "só quem tem dado da plataforma
+    entra na média" (``rede._medias_por_plataforma``) —, agora no nível do aluno.
+    Sem isto a ausência de dado entra na média ponderada como ZERO e cria um
+    TETO DE 50 para quem usa uma plataforma só: a criança que leu 30 livros
+    (nota_elefante 100) ficava com 50 e perdia posição, prêmio e certificado para
+    quem leu 10 e também usou o Matific. O Ranking Geral passava a ordenar por
+    ADESÃO, não por desempenho.
+
+    Relação com ``_pesos_dos_modulos_contratados``: são DOIS cortes diferentes,
+    em cascata, e nenhum duplica o outro —
+      1. CONTRATO (rede/escola): o que a rede assinou. Já vem aplicado em
+         ``pesos_geral``, que é a ENTRADA desta função.
+      2. DADO (aluno): dentro do que foi contratado, o que ESTA criança usa.
+    Uma dimensão contratada e sem dado do aluno sai da conta, e o peso é
+    redistribuído PROPORCIONALMENTE entre as que sobraram (a divisão pela soma é
+    a mesma primitiva de ``obter_pesos``). Com as duas plataformas disponíveis
+    nada muda (50/50), então a nota de quem usa as duas é preservada bit a bit.
+
+    Degradação segura: aluno sem NENHUMA dimensão disponível — ou cuja única
+    dimensão com dado não é contratada — mantém os pesos de entrada. A nota é 0
+    dos dois lados de qualquer jeito, e a explicação continua somando 100%. É o
+    mesmo idioma do ``filtrados or valores`` do corte por módulo.
+    """
+    filtrados = {k: v for k, v in pesos_geral.items() if k in dimensoes_com_dados}
+    total = sum(filtrados.values())
+    if not filtrados or total <= 0:
+        return dict(pesos_geral)
+    return {k: v / total for k, v in filtrados.items()}
+
+
 def obter_pesos_brutos(db: Session, escola_id: int, namespace: str) -> dict[str, float]:
     return dict(obter_config(db, escola_id, namespace, "valores", PESOS_PADRAO[namespace]))
 
@@ -787,15 +821,13 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
     pct_matific = obter_pesos_brutos(db, escola_id, "pesos.matific")
     pct_elefante = obter_pesos_brutos(db, escola_id, "pesos.elefante")
     pct_questoes = obter_pesos_brutos(db, escola_id, "pesos.questoes")
-    # A EXPLICAÇÃO da Nota Geral é DERIVADA dos pesos efetivamente usados
-    # (`p_geral`), não lida de novo da configuração. Assim ela não tem como
-    # divergir da conta: as parcelas exibidas somam 100% e reproduzem a nota.
-    # Sem isto, uma rede que só assinou a Leitura gravaria "Matific 100 × 50% +
-    # Elefante 70 × 50% = 70" — equação que não fecha, justamente na tela de
-    # auditoria da nota (PRD §45). Com os dois módulos e pesos somando 100 (o
-    # estado de toda rede hoje) o valor gravado é idêntico ao de antes.
-    pct_geral = {chave: round(fracao * 100, 2) for chave, fracao in p_geral.items()
-                 if fracao > 0}
+    # A EXPLICAÇÃO da Nota Geral é DERIVADA dos pesos efetivamente usados, não
+    # lida de novo da configuração. Assim ela não tem como divergir da conta: as
+    # parcelas exibidas somam 100% e reproduzem a nota. Sem isto, uma rede que só
+    # assinou a Leitura gravaria "Matific 100 × 50% + Elefante 70 × 50% = 70" —
+    # equação que não fecha, justamente na tela de auditoria da nota (PRD §45).
+    # Os pesos são resolvidos POR ALUNO (abaixo), porque a renormalização por
+    # dimensão disponível depende de quais plataformas aquela criança usa.
 
     resultados: list[ResultadoAluno] = []
     for matricula, turma in matriculas:
@@ -808,8 +840,22 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
             snap_e, pontos_dif[aluno.id], refs, p_elefante, pct_elefante,
             p_questoes, pct_questoes, k_vol,
         )
+        # DIMENSÕES DISPONÍVEIS do aluno: o corte é pela EXISTÊNCIA do snapshot
+        # (mesma régua de `rede._medias_por_plataforma`), NUNCA por `nota > 0` —
+        # quem abriu a plataforma e ainda leu 0 livros é um zero LEGÍTIMO e tem
+        # de pesar. O `or nota > 0` cobre só a nota que nasceu de OUTRA fonte que
+        # não o snapshot (o bônus de leitura na escola entra em `pontos_dif`):
+        # serve para nunca DESCARTAR uma nota positiva, jamais para excluir um
+        # zero de quem usa a plataforma.
+        dimensoes = {nome for nome, tem in (
+            ("matific", snap_m is not None or nota_m > 0),
+            ("elefante", snap_e is not None or nota_e > 0)) if tem}
+        p_geral_aluno = pesos_geral_do_aluno(p_geral, dimensoes)
+        pct_geral = {chave: round(fracao * 100, 2)
+                     for chave, fracao in p_geral_aluno.items() if fracao > 0}
         nota_geral = round(
-            nota_m * p_geral.get("matific", 0) + nota_e * p_geral.get("elefante", 0), 2
+            nota_m * p_geral_aluno.get("matific", 0)
+            + nota_e * p_geral_aluno.get("elefante", 0), 2
         )
 
         tentativas = snap_e.questoes_tentativas if snap_e else 0
@@ -836,7 +882,11 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                     "matific": {"indicadores": linhas_m, "nota": nota_m},
                     "elefante": {"indicadores": linhas_e, "questoes": det_q, "nota": nota_e,
                                  "bonus_leitura_escola": round(bonus_por_aluno.get(aluno.id, 0.0), 2)},
-                    "geral": {"pesos": pct_geral, "nota": nota_geral},
+                    # `dimensoes_com_dados` deixa a renormalização auditável: a
+                    # tela de explicação mostra a conta com os pesos de fato
+                    # usados, e aqui fica registrado POR QUE eles são esses.
+                    "geral": {"pesos": pct_geral, "nota": nota_geral,
+                              "dimensoes_com_dados": sorted(dimensoes)},
                 },
             )
         )

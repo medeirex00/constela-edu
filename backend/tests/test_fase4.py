@@ -350,7 +350,10 @@ def test_backup_e_restauracao_roundtrip(cliente, db, escola_completa):
     baixado = cliente.get(f"/api/v1/escolas/{escola.id}/backup")
     assert baixado.status_code == 200
     dados = json.loads(baixado.content)
-    assert dados["versao"] == 1
+    # Versão vem da constante: o formato pode evoluir (v2 passou a carregar
+    # identidades externas e eventos — C-06); o que este teste prova é o
+    # roundtrip, não um número literal.
+    assert dados["versao"] == svc_backup.VERSAO_BACKUP
     assert len(dados["tabelas"]["alunos"]) == 3
     assert len(dados["tabelas"]["leituras"]) == 1
 

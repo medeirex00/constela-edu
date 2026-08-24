@@ -31,9 +31,14 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("constela.admin")
 TAMANHO_MAXIMO_BACKUP = 25 * 1024 * 1024  # 25 MB
 
-from app.core.config import settings
+from app.core.config import email_reservado_ao_dono, settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.deps import (
+    escola_autorizada,
+    exigir_papeis,
+    get_usuario_atual,
+    negar_secretaria,
+)
 from app.core.security import (
     gerar_token_reset,
     hash_senha,
@@ -58,7 +63,18 @@ from app.services import professores as prof_svc
 from app.services import scoring
 from app.services.audit import registrar
 
-router = APIRouter(prefix="/escolas/{escola_id}", tags=["Administração"])
+# A Secretaria (rede vinculada, não-global) é barrada na RAIZ deste router —
+# leitura e escrita, hoje e em qualquer rota que venha a ser acrescentada aqui.
+# Motivo: `escola_autorizada` libera GET em QUALQUER escola da rede para ela e
+# `exigir_papeis("admin")` só olha o cargo — então `GET /backup` entregava o
+# JSON completo da escola (nome civil, data_nascimento e `observacoes`, campo
+# livre onde entram laudos) de crianças de qualquer escola do município. Esta
+# era a ÚNICA rota de PII de escola fora de `negar_secretaria`; administrar
+# usuários, aparência e backup de uma escola é operação DA ESCOLA (mesma régua
+# de importacoes/sync/relatorios em main.py). A dependência fica no PRÓPRIO
+# router — não no include — para não se perder num futuro re-registro.
+router = APIRouter(prefix="/escolas/{escola_id}", tags=["Administração"],
+                   dependencies=[Depends(negar_secretaria)])
 
 # Sem "visitante": quem não é gestão/professor acessa apenas o painel PÚBLICO
 # (link/QR compartilhado pelo admin ou coordenador — ex.: telão da escola).
@@ -163,16 +179,31 @@ def _usuario_alvo(db: Session, escola_id: int, usuario_id: int,
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Somente administradores globais podem gerenciar "
                             "contas globais.")
+    # Conta de REDE (Secretaria) hospedada nesta escola: a promoção em
+    # `/redes/{id}/usuarios` mantém o `escola_id` de origem, então a conta
+    # institucional do município ficava dentro da lista de usuários de UMA
+    # escola. Sem esta condição, o administrador local trocava a senha dela
+    # (ou gerava link de redefinição, ou a excluía) e passava a LER dashboard,
+    # ranking e boletim de TODAS as escolas do município — exatamente o
+    # isolamento que `exigir_rede` existe para impedir. Mesma régua de
+    # `is_global`: alcance maior que o do ator só o admin global administra.
+    if alvo.rede_id is not None and not ator.is_global:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Esta conta pertence à Secretaria da rede — "
+                            "somente administradores globais podem gerenciá-la.")
     return alvo
 
 
 def _e_ultimo_admin_ativo(db: Session, escola_id: int, alvo: Usuario) -> bool:
     """O alvo é o único admin ativo da escola? (proteção contra lockout)
 
-    Contas globais ficam fora da conta: elas administram todas as escolas
-    e não substituem o administrador local da escola.
+    Contas globais E contas de REDE (Secretaria) ficam fora da conta: ambas
+    têm alcance maior que a escola e não substituem o administrador local —
+    contar a Secretaria como "o outro admin" deixaria a escola sem nenhum
+    gestor capaz de operá-la (a Secretaria não escreve em escola nenhuma).
     """
-    if alvo.cargo != "admin" or alvo.status != "ativo" or alvo.is_global:
+    if (alvo.cargo != "admin" or alvo.status != "ativo"
+            or alvo.is_global or alvo.rede_id is not None):
         return False
     ativos = db.execute(
         select(func.count()).select_from(Usuario).where(
@@ -180,6 +211,7 @@ def _e_ultimo_admin_ativo(db: Session, escola_id: int, alvo: Usuario) -> bool:
             Usuario.cargo == "admin",
             Usuario.status == "ativo",
             Usuario.is_global.is_(False),
+            Usuario.rede_id.is_(None),
         )
     ).scalar_one()
     return ativos <= 1
@@ -219,6 +251,13 @@ def criar_usuario(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"Cargos válidos: {', '.join(sorted(CARGOS))}.")
     email = dados.email.lower().strip()
+    # A conta do DONO da plataforma (ADMIN_GLOBAL_EMAIL) é promovida a
+    # `is_global` no boot: criá-la a partir de UMA escola seria reivindicar o
+    # acesso a todas as redes com uma senha escolhida pelo atacante.
+    if email_reservado_ao_dono(email) and not usuario.is_global:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Este e-mail é reservado à administração da "
+                            "plataforma.")
     if db.execute(select(Usuario).where(Usuario.email == email)).scalar_one_or_none():
         raise HTTPException(status.HTTP_409_CONFLICT, "Já existe um usuário com este e-mail.")
     if dados.username and _username_em_uso(db, dados.username):
@@ -668,6 +707,16 @@ async def restaurar_backup(
 
     try:
         contagem = svc_backup.restaurar(db, escola_id, dados)
+    except svc_backup.RestauracaoBloqueada as bloqueio:
+        # C-06: a operação destruiria dado que o arquivo não repõe (perfis do
+        # Quest, responsáveis, ou tabelas ausentes num backup antigo). Recusar é
+        # o comportamento correto — nada foi apagado. 409 e não 400: o arquivo
+        # está íntegro; o conflito é com o estado atual da escola.
+        db.rollback()
+        registrar(db, "backup.restauracao_bloqueada", escola_id=escola_id,
+                  usuario_id=usuario.id, detalhes={"perdas": bloqueio.perdas})
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(bloqueio))
     except (ValueError, TypeError) as erro:
         db.rollback()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(erro))

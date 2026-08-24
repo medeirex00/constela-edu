@@ -30,13 +30,18 @@ def _login(email: str, senha: str) -> TestClient:
     return cliente
 
 
-def _escola_com_notas(db, rede_id, nome, notas_gerais):
+def _escola_com_notas(db, rede_id, nome, notas_gerais, *, livros_cada=5,
+                      estrelas_cada=100):
     """Escola cujos alunos têm nota E snapshot das duas plataformas.
 
     O snapshot é obrigatório para o cenário ser POSSÍVEL: no motor, um aluno sem
     snapshot tem todos os componentes zerados (livros/tempo/questões/dificuldade
     saem do snapshot), logo nota > 0 sem snapshot não existe em produção. As
     médias da escola contam só quem tem dado da plataforma (services/rede.py).
+
+    ``livros_cada``/``estrelas_cada`` definem o VOLUME por aluno — a base do
+    índice per capita, que é a métrica comparável entre escolas (C-02). As
+    ``notas_gerais`` continuam alimentando as médias 0–100 (régua interna).
     """
     esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
     db.add(esc)
@@ -54,9 +59,9 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais):
         db.flush()
         db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                                livros_unicos=5, tempo_leitura_min=60))
+                                livros_unicos=livros_cada, tempo_leitura_min=60))
         db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                               atividades=20, estrelas=100))
+                               atividades=20, estrelas=estrelas_cada))
         db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
                     nota_geral=ng, nota_elefante=ng, nota_matific=ng, posicao=i + 1))
     return esc
@@ -66,8 +71,15 @@ def test_secretaria_ve_agregado_da_rede_sem_pii(db):
     rede = Rede(nome="Rede Municipal de Caraguatatuba", uf="SP", status="ativa")
     db.add(rede)
     db.flush()
-    _escola_com_notas(db, rede.id, "Escola Boa", [80.0, 70.0, 90.0])   # média 80
-    _escola_com_notas(db, rede.id, "Escola Fraca", [20.0])             # média 20 → atenção
+    # A "escola em atenção" precisa ser fraca no que a rede COMPARA: leitura e
+    # matemática POR ALUNO. Antes, o cenário fabricava só uma `media_geral` 20
+    # (0–100, régua interna da escola) — e era exatamente esse número não
+    # comparável que disparava o alerta (C-02): a escola cujos alunos leem
+    # tanto quanto os da "Escola Boa" era rotulada como problema.
+    _escola_com_notas(db, rede.id, "Escola Boa", [80.0, 70.0, 90.0],
+                      livros_cada=5, estrelas_cada=100)                # 5 livros/aluno
+    _escola_com_notas(db, rede.id, "Escola Fraca", [20.0],
+                      livros_cada=1, estrelas_cada=5)                  # 1 livro/aluno
     db.add(Usuario(nome="Secretaria", email="sec@rede.gov",
                    senha_hash=hash_senha("s3nh4secretaria"), cargo="coordenador",
                    rede_id=rede.id))
@@ -84,8 +96,10 @@ def test_secretaria_ve_agregado_da_rede_sem_pii(db):
     assert dash["totais"]["escolas"] == 2
     assert dash["totais"]["alunos"] == 4
     assert {c["nome"] for c in dash["escolas"]} == {"Escola Boa", "Escola Fraca"}
-    # Equidade: diferença entre a melhor (80) e a pior (20) escola.
-    assert dash["equidade"]["gap_media"] == 60.0
+    # Equidade: a distância é medida no índice COMPARÁVEL (per capita, 0–1000) —
+    # `gap_media` continua no payload, mas não é comparável entre escolas.
+    assert dash["equidade"]["escola_maior_indice"] == 1000.0
+    assert dash["equidade"]["gap_indice"] > 0
     # Escola em atenção sinalizada, com motivo.
     assert [c["nome"] for c in dash["atencao"]] == ["Escola Fraca"]
     assert dash["totais"]["escolas_em_atencao"] == 1
@@ -204,7 +218,23 @@ def test_metas_da_rede_cadastro_progresso_e_upsert(db):
     m = next(x for x in r.json() if x["metrica"] == "media_geral")
     assert m["alvo"] == 50.0 and m["atual"] == 70.0
     assert m["progresso"] == 100.0 and m["atingida"] is True
-    assert m["escolas_atingiram"] == 1 and m["escolas_total"] == 1
+    # A meta DA REDE continua válida (o progresso agregado é desempenho real),
+    # mas a contagem "X de Y escolas atingiram" NÃO: a média 0–100 é normalizada
+    # dentro de cada escola, então confrontá-la com um alvo fixo entre escolas
+    # media homogeneidade interna, não conquista (C-02). Antes, este teste
+    # travava justamente a publicação desse número inválido.
+    assert m["comparavel"] is False
+    assert m["escolas_atingiram"] is None and m["escolas_total"] is None
+
+    # A contagem por escola existe para a métrica COMPARÁVEL (índice per capita).
+    r = cliente.put(f"/api/v1/redes/{rede.id}/metas",
+                    json={"metrica": "pontuacao_geral", "alvo": 500})
+    assert r.status_code == 200, r.text
+    indice = next(x for x in r.json() if x["metrica"] == "pontuacao_geral")
+    assert indice["comparavel"] is True
+    assert indice["escolas_atingiram"] == 1 and indice["escolas_total"] == 1
+    assert cliente.delete(
+        f"/api/v1/redes/{rede.id}/metas/pontuacao_geral").status_code == 200
 
     # Upsert: redefinir a MESMA métrica sobrescreve (não duplica) — e agora 70 < 90.
     cliente.put(f"/api/v1/redes/{rede.id}/metas",
@@ -446,7 +476,14 @@ def test_boletim_endpoint_pdf_e_isolamento(db, monkeypatch):
 
 # --- Painel público da rede (top 5 escolas, sem PII) ------------------------
 
-def _escola_publico(db, rede_id, nome, matific, elefante):
+def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=100):
+    """Escola de UM aluno para a vitrine pública.
+
+    ``matific``/``elefante`` são as médias 0–100 (régua INTERNA de cada escola);
+    ``livros``/``estrelas`` são o volume por aluno, que é o que a vitrine ordena
+    desde a correção do C-02 — ordenar pela média coroaria publicamente a escola
+    de distribuição mais homogênea, que pode ser a que menos lê.
+    """
     esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
@@ -464,9 +501,9 @@ def _escola_publico(db, rede_id, nome, matific, elefante):
     # Snapshots: sem eles o aluno não tem "dado da plataforma" e fica fora da
     # média de desempenho (que agora mede só quem usa).
     db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                            livros_unicos=5, tempo_leitura_min=60))
+                            livros_unicos=livros, tempo_leitura_min=60))
     db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                           atividades=20, estrelas=100))
+                           atividades=20, estrelas=estrelas))
     db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
                 nota_geral=(matific + elefante) / 2, nota_matific=matific,
                 nota_elefante=elefante, posicao=1))
@@ -478,19 +515,37 @@ def test_painel_publico_top5_sem_pii(db):
     rede = Rede(nome="Rede Pública", status="ativa")
     db.add(rede)
     db.flush()
-    for i, (m, e) in enumerate([(90, 50), (80, 60), (70, 70), (60, 80), (50, 90), (40, 40)]):
-        _escola_publico(db, rede.id, f"EM {i}", m, e)
+    # (média matific, média elefante, estrelas/aluno, livros/aluno) — as médias
+    # 0–100 vão na ordem INVERSA do volume de propósito: é o cenário do C-02, em
+    # que a escola de média mais alta é a que menos produz por aluno.
+    for i, (m, e, estrelas, livros) in enumerate([
+            (90, 90, 10, 1), (80, 80, 20, 2), (70, 70, 30, 3),
+            (60, 60, 40, 4), (50, 50, 50, 5), (40, 40, 60, 6)]):
+        _escola_publico(db, rede.id, f"EM {i}", m, e, livros=livros, estrelas=estrelas)
     db.commit()
 
     p = svc_rede.painel_publico_rede(db, rede.id)
     assert p["rede_nome"] == "Rede Pública"
     assert len(p["top_matematica"]) == 5 and len(p["top_leitura"]) == 5
-    assert p["top_matematica"][0]["valor"] == 90.0   # maior média Matific
-    assert p["top_leitura"][0]["valor"] == 90.0       # maior média Elefante
-    # PRIVACIDADE: só nome de ESCOLA + valor — nada de aluno/criança.
+    # A vitrine destaca quem mais produz POR ALUNO — não quem tem a média
+    # interna mais alta (que aqui é justamente a escola que menos lê).
+    assert p["top_leitura"][0]["nome"] == "EM 5" and p["top_leitura"][0]["valor"] == 6.0
+    assert p["top_matematica"][0]["nome"] == "EM 5"
+    assert p["top_matematica"][0]["valor"] == 60.0
+    assert p["unidade_leitura"] == "livros por aluno"
+    assert p["unidade_matematica"] == "estrelas por aluno"
+    # PRIVACIDADE: só nome de ESCOLA + valor — nenhum dado de criança. A prova é
+    # o NOME de cada aluno do banco não aparecer e a linha não ter outro campo
+    # além de nome/valor (busca por substring virou frágil quando a unidade
+    # passou a ser escrita: "livros por aluno" contém a palavra "aluno").
     import json
+
+    from app.models import Aluno as ModeloAluno
     texto = json.dumps(p, ensure_ascii=False).lower()
-    assert "aluno" not in texto and "crianca" not in texto
+    for nome_aluno in db.execute(select(ModeloAluno.nome)).scalars():
+        assert nome_aluno.lower() not in texto
+    for linha in p["top_leitura"] + p["top_matematica"]:
+        assert set(linha) == {"nome", "valor"}
 
 
 def test_painel_publico_token_liga_desliga_e_endpoint(db):
@@ -511,7 +566,7 @@ def test_painel_publico_token_liga_desliga_e_endpoint(db):
     pub = publico.get(f"/api/v1/publico/rede/{token}")
     assert pub.status_code == 200
     assert pub.json()["rede_nome"] == "Rede Token"
-    assert pub.json()["top_matematica"][0]["valor"] == 80.0
+    assert pub.json()["top_matematica"][0]["valor"] == 100.0   # estrelas ÷ alunos
 
     # Desligar invalida o link; token aleatório também é 404.
     root.put(f"/api/v1/redes/{rede.id}/publico", json={"ativo": False})

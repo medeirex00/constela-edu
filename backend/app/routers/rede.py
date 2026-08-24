@@ -289,7 +289,17 @@ def definir_usuarios(
 ):
     """Define QUEM é a Secretaria desta rede. Idempotente: os usuários da lista
     recebem o rede_id; os que estavam na rede e saíram voltam a ficar sem rede.
-    Ignora ids inexistentes."""
+    Ignora ids inexistentes. Exclusivo do admin global.
+
+    A conta promovida MANTÉM o `escola_id` de origem — é o contexto de escola
+    dela e apagá-lo mudaria dado de contas já existentes em produção. A
+    consequência de segurança disso (o administrador daquela escola enxergava a
+    conta institucional do município na lista de usuários e podia trocar a
+    senha dela, sequestrando a leitura da rede inteira) é fechada em
+    `admin._usuario_alvo`, que recusa qualquer alvo com `rede_id` para ator não
+    global — e o router de administração inteiro nega a Secretaria
+    (`deps.negar_secretaria`), independentemente do cargo dela.
+    """
     rede = db.get(Rede, rede_id)
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
@@ -462,7 +472,10 @@ def avaliacoes_correlacao(
     edicao: int = Query(...),
     etapa: str | None = Query(default=None),
     componente: str | None = Query(default=None),
-    metrica: str = Query(default="media_geral"),
+    # Padrão = índice per capita (comparável entre escolas). `media_geral` segue
+    # aceita como opção explícita, mas não é comparável (régua interna da escola).
+    metrica: str = Query(default="pontuacao_geral",
+                         pattern="^(pontuacao_geral|media_geral|adocao)$"),
     db: Session = Depends(get_db),
 ):
     """Cruza, por escola, a avaliação oficial × o engajamento nas plataformas:

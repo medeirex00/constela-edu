@@ -3,6 +3,7 @@
 Todos os valores podem ser sobrescritos por variáveis de ambiente ou
 por um arquivo .env na raiz do backend. Nenhum segredo fica no código.
 """
+import re
 import secrets
 import warnings
 from pathlib import Path
@@ -14,6 +15,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent  # /backend
 PROJECT_ROOT = BASE_DIR.parent                            # raiz do monorepo
 
 SECRET_KEY_INSEGURA = "TROQUE-ESTA-CHAVE-EM-PRODUCAO"
+
+# Um único endereço, sem espaço/vírgula/curinga — só para VALIDAR configuração
+# (não é validação de e-mail de usuário, que passa pelo EmailStr do Pydantic).
+_RE_EMAIL_SIMPLES = re.compile(r"[^@\s,;*]+@[^@\s,;*]+\.[^@\s,;*]+")
 
 
 class Settings(BaseSettings):
@@ -61,6 +66,15 @@ class Settings(BaseSettings):
     # padrão: só liga com DOCS_HABILITADOS=true no ambiente de desenvolvimento.
     DOCS_HABILITADOS: bool = False
 
+    # Conta do DONO da plataforma (acesso global a TODAS as redes). VAZIO por
+    # padrão e SEM default no código: um ambiente novo — município novo,
+    # staging, homologação, restauração de desastre — nunca nasce com uma conta
+    # administrativa implícita que alguém possa reivindicar criando um usuário
+    # com aquele e-mail (era o furo do e-mail cravado em database.py).
+    # Vazio = `_promover_admin_global` não faz NADA (fail-closed). Declarado =
+    # o e-mail vira RESERVADO: rotas de escola não podem criar conta com ele.
+    ADMIN_GLOBAL_EMAIL: str = ""
+
     @property
     def em_producao(self) -> bool:
         return self.ENV.lower() in ("producao", "production", "prod")
@@ -90,6 +104,25 @@ class Settings(BaseSettings):
                 "Em produção, defina DATABASE_URL para um banco persistente "
                 "(ex.: postgresql+psycopg://...). O SQLite padrão é efêmero."
             )
+        # ADMIN_GLOBAL_EMAIL, quando declarado, concede is_global — o maior
+        # privilégio do sistema. Um valor malformado (lista, curinga, espaço)
+        # jamais casaria com uma conta e a promoção falharia EM SILÊNCIO: em
+        # produção é melhor recusar a subir (mesma régua do SECRET_KEY).
+        email_dono = (self.ADMIN_GLOBAL_EMAIL or "").strip().lower()
+        if email_dono and not _RE_EMAIL_SIMPLES.fullmatch(email_dono):
+            if self.em_producao:
+                raise RuntimeError(
+                    "ADMIN_GLOBAL_EMAIL inválido: informe UM endereço de "
+                    "e-mail (sem listas, curingas ou espaços) ou deixe a "
+                    "variável vazia."
+                )
+            warnings.warn(
+                "ADMIN_GLOBAL_EMAIL inválido — ignorado (nenhuma conta será "
+                "promovida a administrador global).",
+                stacklevel=2,
+            )
+            email_dono = ""
+        object.__setattr__(self, "ADMIN_GLOBAL_EMAIL", email_dono)
         return self
 
     UPLOADS_DIR: Path = PROJECT_ROOT / "uploads"
@@ -189,3 +222,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def email_reservado_ao_dono(email: str | None) -> bool:
+    """O e-mail é o da conta do DONO declarada em ``ADMIN_GLOBAL_EMAIL``?
+
+    Existe para fechar a REIVINDICAÇÃO da conta do dono: quem administra UMA
+    escola não pode criar um usuário com esse e-mail e esperar a promoção a
+    ``is_global`` no próximo boot. Sem a variável declarada devolve sempre
+    False — nada é reservado, porque nada é promovido.
+    """
+    reservado = (settings.ADMIN_GLOBAL_EMAIL or "").strip().lower()
+    return bool(reservado) and (email or "").strip().lower() == reservado

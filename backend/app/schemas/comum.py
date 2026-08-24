@@ -409,7 +409,9 @@ class RedePublicoIn(BaseModel):
 class MetaRedeIn(BaseModel):
     """Cadastro/edição de uma meta da rede para um indicador consolidado. UMA por
     (rede, métrica) — redefinir a mesma métrica sobrescreve o alvo."""
-    metrica: str = Field(pattern="^(media_geral|media_elefante|media_matific|adocao|livros|atividades)$")
+    metrica: str = Field(
+        pattern="^(pontuacao_geral|adocao|media_geral|media_elefante|media_matific"
+                "|livros|atividades)$")
     alvo: float = Field(gt=0)
     descricao: str | None = Field(default=None, max_length=200)
 

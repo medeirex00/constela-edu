@@ -37,7 +37,7 @@ import { Botao, Card, Carregando, Mensagem, PageHeader, SecaoRecolhivel, StatCar
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { api, apiDownload } from "../../lib/api";
-import { corPorMedia } from "../../lib/cores";
+import { corPorIndice } from "../../lib/cores";
 import { nota, numero, tempoLeitura } from "../../lib/formato";
 import {
   EnvolucroRede,
@@ -51,7 +51,10 @@ export { EnvolucroRede, MEDALHAS };
 export type { DashboardRede, EscolaCartao };
 
 function iconeEscola(cartao: EscolaCartao): L.DivIcon {
-  const cor = corPorMedia(cartao.media_geral);
+  // Pinta pelo ÍNDICE (0–1000, per capita) — o mesmo número que ordena o
+  // ranking. Pela média 0–100 (régua interna de cada escola), o mapa contradizia
+  // a lista: a escola que mais lê por aluno aparecia vermelha em 1º lugar.
+  const cor = corPorIndice(cartao.pontuacao_geral);
   return L.divIcon({
     className: "",
     html: `<div style="width:22px;height:22px;border-radius:50%;background:${cor};
@@ -111,7 +114,7 @@ function MapaRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id:
                   {escola.total_alunos} alunos · {escola.total_turmas} turmas
                 </p>
                 <p className="text-xs">
-                  Média geral <b>{nota(escola.media_geral)}</b> · adoção {nota(escola.adocao)}%
+                  Índice <b>{numero(Math.round(escola.pontuacao_geral ?? 0))}</b>/1000 · adoção {nota(escola.adocao)}%
                 </p>
                 <button
                   className="mt-1 text-xs font-semibold text-indigo-600 hover:underline"
@@ -135,13 +138,16 @@ function LinhaEscola({ escola, aoAbrir }: { escola: EscolaCartao; aoAbrir: (id: 
       className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
     >
       <span className="w-6 text-center text-sm font-bold tabular-nums text-zinc-400">{escola.posicao ?? "–"}</span>
-      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: corPorMedia(escola.media_geral) }} />
+      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: corPorIndice(escola.pontuacao_geral) }} />
       <span className="flex-1 truncate text-sm font-medium">
         {escola.nome}
         {escola.precisa_atencao && <AlertTriangle size={13} className="ml-1 inline text-amber-500" />}
       </span>
       <span className="hidden text-xs text-zinc-500 sm:block">{escola.total_alunos} al.</span>
-      <span className="w-14 text-right text-sm font-bold tabular-nums">{nota(escola.media_geral)}</span>
+      {/* O número mostrado é o que ORDENA a lista: o índice per capita. */}
+      <span className="w-14 text-right text-sm font-bold tabular-nums" title="Índice da rede (0–1000)">
+        {numero(Math.round(escola.pontuacao_geral ?? 0))}
+      </span>
     </button>
   );
 }
@@ -163,14 +169,19 @@ const METRICAS_TOP: {
   { chave: "estrelas_por_matricula", rotulo: "Estrelas/aluno" },
 ];
 
-// Critérios da comparação entre REDES (Admin Global). O cartão de REDE não tem
-// os índices per capita (que são por ESCOLA, normalizados dentro de cada rede),
-// então esta lista é própria — usar METRICAS_TOP aqui renderizaria `undefined`.
-const METRICAS_REDE: { chave: keyof RedeCartao; rotulo: string; sufixo?: string }[] = [
-  { chave: "media_geral", rotulo: "Geral" },
-  { chave: "media_elefante", rotulo: "Leitura" },
-  { chave: "media_matific", rotulo: "Matemática" },
+// Critérios da comparação entre REDES (Admin Global). Lista própria porque o
+// cartão de REDE tem um subconjunto diferente de campos — usar METRICAS_TOP aqui
+// renderizaria `undefined` (ex.: adocao_elefante não existe por rede).
+const METRICAS_REDE: {
+  chave: keyof RedeCartao; rotulo: string; sufixo?: string; indice?: boolean;
+}[] = [
+  // O padrão é o ÍNDICE per capita (comparável entre redes de tamanhos
+  // diferentes). As médias 0–100 seguem disponíveis, mas são régua interna de
+  // cada escola — ordenar redes por elas premiava homogeneidade, não nível.
+  { chave: "pontuacao_geral", rotulo: "Índice Geral", indice: true },
+  { chave: "livros_por_matricula", rotulo: "Livros/aluno" },
   { chave: "adocao", rotulo: "Engajamento", sufixo: "%" },
+  { chave: "media_geral", rotulo: "Média interna" },
 ];
 
 /** RESUMO do Ranking da Rede: as 5 melhores escolas por ÍNDICE GERAL (0–1000,
@@ -322,8 +333,13 @@ function SecaoPlataforma({
 }
 
 function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id: number) => void }) {
+  // Ordena pelo ÍNDICE per capita — a única métrica comparável entre escolas de
+  // tamanhos diferentes. As médias 0–100 seguem na tabela, mas rotuladas como o
+  // que são: desempenho INTERNO de cada escola (régua = os próprios alunos dela).
   const linhas = useMemo(
-    () => [...escolas].filter((e) => e.alunos_com_dados > 0).sort((a, b) => b.media_geral - a.media_geral),
+    () => [...escolas]
+      .filter((e) => e.alunos_com_dados > 0)
+      .sort((a, b) => Number(b.pontuacao_geral ?? 0) - Number(a.pontuacao_geral ?? 0)),
     [escolas],
   );
   if (linhas.length === 0) return null;
@@ -337,6 +353,9 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
           <thead>
             <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
               <th className="px-3 py-2 font-medium">Escola</th>
+              <th className="px-3 py-2 text-right font-medium" title="Desempenho por aluno na régua da rede — 1000 é a melhor escola">
+                Índice
+              </th>
               <th className="px-3 py-2 text-right font-medium">Geral</th>
               <th className="px-3 py-2 text-right font-medium">Leitura</th>
               <th className="px-3 py-2 text-right font-medium">Matific</th>
@@ -355,7 +374,8 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
                     {e.nome}
                   </button>
                 </td>
-                <td className="px-3 py-2 text-right font-semibold">{nota(e.media_geral)}</td>
+                <td className="px-3 py-2 text-right font-semibold">{numero(Math.round(e.pontuacao_geral ?? 0))}</td>
+                <td className="px-3 py-2 text-right">{nota(e.media_geral)}</td>
                 <td className="px-3 py-2 text-right">{nota(e.media_elefante)}</td>
                 <td className="px-3 py-2 text-right">{nota(e.media_matific)}</td>
                 <td className="px-3 py-2 text-right">{nota(e.adocao)}%</td>
@@ -364,6 +384,13 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
           </tbody>
         </table>
       </div>
+      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <b>Índice</b> (0–1000): desempenho por aluno na régua da rede — 1000 é a melhor
+        escola do município. É o número comparável entre escolas e o que ordena esta tabela.
+        <b> Geral · Leitura · Matific</b> (0–100): desempenho interno de cada escola,
+        calculado contra os próprios alunos dela — bom para acompanhar a escola no tempo,
+        não para compará-la com outra.
+      </p>
     </Card>
   );
 }
@@ -380,13 +407,17 @@ interface MetaProgresso {
   descricao: string | null;
   escolas_atingiram: number | null;
   escolas_total: number | null;
+  /** A métrica compara escolas entre si? Só as comparáveis produzem a contagem
+   *  "X de Y escolas atingiram" (a média 0–100 é régua interna de cada escola). */
+  comparavel?: boolean;
 }
 
 const METRICAS_META_UI = [
+  { metrica: "pontuacao_geral", rotulo: "Índice da rede (0–1000)" },
+  { metrica: "adocao", rotulo: "Engajamento (adoção %)" },
   { metrica: "media_geral", rotulo: "Média geral da rede" },
   { metrica: "media_elefante", rotulo: "Leitura (Elefante Letrado)" },
   { metrica: "media_matific", rotulo: "Matemática (Matific)" },
-  { metrica: "adocao", rotulo: "Engajamento (adoção %)" },
   { metrica: "livros", rotulo: "Livros lidos na rede" },
   { metrica: "atividades", rotulo: "Atividades Matific na rede" },
 ];
@@ -425,11 +456,16 @@ function MetasRede({ redeId }: { redeId: number }) {
                   style={{ width: `${m.progresso}%` }}
                 />
               </div>
-              <div className="mt-0.5 flex justify-between text-xs text-zinc-400">
-                <span className="tabular-nums">{nota(m.progresso)}%</span>
-                {m.escolas_total != null && (
+              <div className="mt-0.5 flex justify-between gap-2 text-xs text-zinc-400">
+                <span className="shrink-0 tabular-nums">{nota(m.progresso)}%</span>
+                {m.escolas_total != null ? (
                   <span>{m.escolas_atingiram} de {m.escolas_total} escolas atingiram</span>
-                )}
+                ) : m.comparavel === false ? (
+                  // Sem a contagem por escola, e dizendo por quê: confrontar a
+                  // média 0–100 de escolas diferentes com o mesmo alvo compara
+                  // réguas distintas (cada escola é normalizada contra si mesma).
+                  <span className="truncate text-right">progresso da rede · não comparável entre escolas</span>
+                ) : null}
               </div>
             </div>
           ))}
@@ -442,7 +478,7 @@ function MetasRede({ redeId }: { redeId: number }) {
 /** Cadastro de metas da rede (aba Secretaria) — definir alvo por indicador. */
 function GestaoMetas({ redeId }: { redeId: number }) {
   const { dados: metas, recarregar } = useApi<MetaProgresso[]>(`/redes/${redeId}/metas`);
-  const [metrica, setMetrica] = useState("media_geral");
+  const [metrica, setMetrica] = useState("pontuacao_geral");
   const [alvo, setAlvo] = useState("");
   const [salvando, setSalvando] = useState(false);
 
@@ -654,7 +690,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         <StatCard
           icone={<Trophy size={16} className="text-amber-500" />}
           rotulo="Melhor escola"
-          valor={t.melhor_escola ? nota(t.melhor_escola.media_geral) : "–"}
+          valor={t.melhor_escola ? numero(Math.round(t.melhor_escola.pontuacao_geral ?? 0)) : "–"}
           detalhe={t.melhor_escola?.nome ?? "sem dados"}
         />
         <StatCard icone={<BookOpen size={16} />} rotulo="Livros lidos" valor={numero(t.livros)} detalhe={`${nota(t.livros_por_aluno)} por aluno`} />
@@ -740,18 +776,22 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {/* Comparativo entre escolas (tabela por indicador). */}
       <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} />
 
-      {/* Equidade: quão distante está a melhor da pior escola. */}
+      {/* Equidade: quão distante está a melhor da pior escola — medida no ÍNDICE
+          per capita, o único número comparável entre escolas. Na média 0–100 ela
+          respondia à dispersão INTERNA de cada escola, não à distância real. */}
       <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-4 text-sm">
         <span className="flex items-center gap-2 font-semibold">
           <Scale size={16} className="text-indigo-600" /> Equidade da rede
         </span>
         <span className="text-zinc-600 dark:text-zinc-300">
           Diferença entre a melhor e a pior escola:{" "}
-          <b className="tabular-nums">{nota(eq.gap_media)}</b> pontos
-          <span className="text-zinc-400"> ({nota(eq.escola_menor_media)} → {nota(eq.escola_maior_media)})</span>
+          <b className="tabular-nums">{numero(Math.round(eq.gap_indice ?? 0))}</b> pontos de índice
+          <span className="text-zinc-400">
+            {" "}({numero(Math.round(eq.escola_menor_indice ?? 0))} → {numero(Math.round(eq.escola_maior_indice ?? 0))} de 1000)
+          </span>
         </span>
         <span className="text-zinc-600 dark:text-zinc-300">
-          <b className="tabular-nums">{eq.escolas_abaixo_da_media}</b> escola(s) abaixo da média da rede
+          <b className="tabular-nums">{eq.escolas_abaixo_do_indice_medio ?? 0}</b> escola(s) abaixo do índice médio da rede
         </span>
       </Card>
 
@@ -953,6 +993,11 @@ interface RedeCartao {
   atividades: number;
   estrelas: number;
   escolas_em_atencao: number;
+  // Comparação ENTRE REDES: per capita + índice 0–1000 na coorte "todas as
+  // redes" (mesmo motor das escolas, outro escopo).
+  livros_por_matricula: number;
+  estrelas_por_matricula: number;
+  pontuacao_geral: number;
   posicao?: number;
 }
 
@@ -1074,7 +1119,10 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
                   </td>
                   <td className="px-3 py-2 text-right">{numero(r.escolas)}</td>
                   <td className="px-3 py-2 text-right">{numero(r.alunos)}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{nota(Number(r[m.chave] ?? 0))}{m.sufixo ?? ""}</td>
+                  <td className="px-3 py-2 text-right font-semibold">
+                    {m.indice ? numero(Math.round(Number(r[m.chave] ?? 0))) : nota(Number(r[m.chave] ?? 0))}
+                    {m.sufixo ?? ""}
+                  </td>
                   <td className="hidden px-3 py-2 text-right md:table-cell">{nota(r.media_elefante)}</td>
                   <td className="hidden px-3 py-2 text-right md:table-cell">{nota(r.media_matific)}</td>
                   <td className="hidden px-3 py-2 text-right sm:table-cell">{nota(r.adocao)}%</td>
@@ -1108,7 +1156,12 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
                     {e.nome}
                     <span className="ml-1.5 text-xs font-normal text-zinc-400">· {e.rede_nome}</span>
                   </span>
-                  <span className="text-sm font-bold tabular-nums">{nota(e.media_geral)}</span>
+                  {/* Índice de escopo GLOBAL: o índice DE REDE de cada escola foi
+                      normalizado contra a melhor da própria rede, então comparar
+                      escolas de redes diferentes por ele seria inválido. */}
+                  <span className="text-sm font-bold tabular-nums" title="Índice entre todas as redes (0–1000)">
+                    {numero(Math.round(e.pontuacao_geral_global ?? 0))}
+                  </span>
                 </button>
               </li>
             ))}

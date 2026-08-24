@@ -15,7 +15,17 @@ import { ApiError } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
 interface TopEscola { nome: string; valor: number }
-interface PainelPublico { rede_nome: string; top_leitura: TopEscola[]; top_matematica: TopEscola[] }
+interface PainelPublico {
+  rede_nome: string;
+  top_leitura: TopEscola[];
+  top_matematica: TopEscola[];
+  // O que o número significa. A vitrine ordena por PER CAPITA (livros ÷ alunos,
+  // estrelas ÷ alunos) — comparável entre escolas de tamanhos diferentes. Pela
+  // média 0–100 (régua interna de cada escola), o município coroaria em praça
+  // pública a escola de distribuição mais homogênea, que pode ser a que menos lê.
+  unidade_leitura?: string;
+  unidade_matematica?: string;
+}
 
 const FONTE = "Poppins, Inter, sans-serif";
 
@@ -49,8 +59,8 @@ function LinhaEscola({ pos, escola, topo }: { pos: number; escola: TopEscola; to
 }
 
 /** Coluna de uma matéria (Leitura/Matemática) com as 5 melhores escolas. */
-function Coluna({ titulo, icone: Icone, escolas }: {
-  titulo: string; icone: LucideIcon; escolas: TopEscola[];
+function Coluna({ titulo, icone: Icone, escolas, unidade }: {
+  titulo: string; icone: LucideIcon; escolas: TopEscola[]; unidade?: string;
 }) {
   const topo = Math.max(...escolas.map((e) => e.valor), 0) || 1;
   return (
@@ -60,6 +70,11 @@ function Coluna({ titulo, icone: Icone, escolas }: {
         <Icone className="h-[clamp(1.6rem,2.4vw,2.6rem)] w-[clamp(1.6rem,2.4vw,2.6rem)] shrink-0"
           style={{ color: OURO }} strokeWidth={2.3} /> {titulo}
       </h2>
+      {unidade && (
+        <p className="-mt-2 mb-4 text-center text-[clamp(.75rem,1vw,1.1rem)] uppercase tracking-[0.16em] text-white/40">
+          {unidade}
+        </p>
+      )}
       {escolas.length === 0 ? (
         <p className="py-10 text-center text-white/40">Sem dados ainda.</p>
       ) : (
@@ -128,8 +143,10 @@ export default function PainelPublicoRede() {
         </header>
 
         <div className="flex flex-col gap-6 md:flex-row xl:gap-10">
-          <Coluna titulo="Leitura" icone={BookOpen} escolas={dados.top_leitura} />
-          <Coluna titulo="Matemática" icone={Calculator} escolas={dados.top_matematica} />
+          <Coluna titulo="Leitura" icone={BookOpen} escolas={dados.top_leitura}
+            unidade={dados.unidade_leitura} />
+          <Coluna titulo="Matemática" icone={Calculator} escolas={dados.top_matematica}
+            unidade={dados.unidade_matematica} />
         </div>
 
         <footer className="mt-10 flex items-center justify-center gap-2 text-center text-xs text-white/40">

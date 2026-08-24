@@ -352,15 +352,20 @@ def _pearson(pares: list[tuple[float, float]]) -> float | None:
 
 def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicador: str,
                     edicao: int, etapa: str | None = None, componente: str | None = None,
-                    metrica: str = "media_geral") -> dict:
+                    metrica: str = "pontuacao_geral") -> dict:
     """Cruza, por ESCOLA da rede, o valor da avaliação (edição escolhida) com o
-    ENGAJAMENTO nas plataformas (média_geral ou adoção). Devolve os pontos do
-    gráfico de dispersão, a correlação de Pearson e a EVOLUÇÃO histórica (média da
-    rede por edição). NUNCA afirma causalidade — a tela deixa isso explícito."""
+    ENGAJAMENTO nas plataformas. Devolve os pontos do gráfico de dispersão, a
+    correlação de Pearson e a EVOLUÇÃO histórica (média da rede por edição).
+    NUNCA afirma causalidade — a tela deixa isso explícito.
+
+    O eixo X padrão é ``pontuacao_geral`` (índice per capita 0–1000, comparável
+    entre escolas). Com ``media_geral`` — normalizada contra o P90 de cada escola
+    — a dispersão cruzava o SAEB com um número que mede a homogeneidade interna
+    da escola, e o Pearson resultante não significava o que a tela dizia."""
     from app.services import rede as svc_rede  # engajamento por escola (reuso)
 
-    if metrica not in ("media_geral", "adocao"):
-        metrica = "media_geral"
+    if metrica not in ("pontuacao_geral", "media_geral", "adocao"):
+        metrica = "pontuacao_geral"
     av = obter_avaliacao(db, avaliacao_chave)
     engaj = {c["escola_id"]: c for c in svc_rede._kpis_da_rede(db, rede_id)}
     ids = _escolas_da_rede_ids(db, rede_id)

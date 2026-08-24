@@ -1,8 +1,11 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import email_reservado_ao_dono
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.core.tempo import hoje_br
@@ -478,38 +481,151 @@ def acoes_em_alunos(
     return {"mensagem": mensagem, "afetados": len(ids)}
 
 
+# Chaves em que a produção grava NOME DE PESSOA no ``detalhes`` da auditoria.
+# Levantadas dos ``registrar(...)`` reais: ``nome`` (aluno.criado/atualizado/
+# criacao_recusada/fora_lista_piloto, e aninhado em aluno.fundido →
+# mantido/removido/foto_pre_fusao), ``origem``/``origem_linha`` (o nome como
+# veio da PLANILHA — que difere do nome da base, por isso houve casamento
+# aproximado), ``aluno`` (aluno.vinculado_auto) e ``nome_antigo``/``nome_novo``
+# (aluno.identidade_vinculada). Tudo o mais em ``detalhes`` é código, contagem
+# ou id — o que mantém a trilha útil depois da redação.
+_CHAVES_COM_NOME_DE_PESSOA = frozenset({
+    "nome", "nome_antigo", "nome_novo", "nome_exibicao", "apelido",
+    "aluno", "origem", "origem_linha",
+})
+
+# ``origem`` é sobrecarregada: às vezes é o nome cru da planilha
+# (aluno.criado_auto/revisao_necessaria/vinculado_auto), às vezes é a PROCEDÊNCIA
+# do dado — "importacao", "importacao_matriculas", "matific". Por isso a redação
+# por chave exige parentesco com o nome do excluído (ver ``_parece_nome_do_alvo``):
+# procedência não compartilha nenhum pedaço do nome e sobrevive intacta.
+_PARTICULAS_DE_NOME = frozenset({"de", "da", "do", "dos", "das", "e"})
+
+_MARCA_REMOVIDO = "[removido]"
+
+
 def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
                               aluno_ids: list[int], nomes: set[str]) -> None:
     """Redige o nome civil das entradas ANTERIORES do log de auditoria que se
-    referem ao aluno excluído (LGPD/esquecimento).
+    referem ao aluno excluído (LGPD/direito ao esquecimento).
 
-    Escopo: entradas cujo ``entidade_id`` é o próprio aluno (criação, edição,
-    fusão em que ele foi o mantido). O ``entidade_id`` permanece como referência
-    ANÔNIMA (o registro do "quê/quando/por quem" é preservado para auditoria);
-    apenas o nome em texto claro é trocado por ``"[removido]"``."""
+    Anonimiza, NÃO apaga: o "quê/quando/por quem/sobre qual registro" — e o
+    porquê técnico (decisão, motivo, turma, RA) — continuam intactos; só o nome
+    de pessoa vira ``"[removido]"``. O ``entidade_id`` fica como referência
+    anônima. ``logs_auditoria`` é permanente por design (``models/nota.py``).
+
+    A varredura é por ESCOLA, sem filtrar ``entidade``/``entidade_id`` (C-07):
+    o caminho de importação — que é o normal — grava ``entidade_id=None``, e
+    ``IN (...)`` nunca casa NULL, então filtrar ali deixava para trás
+    justamente as entradas mais comuns. Dois critérios de redação, combinados:
+
+    1. **por VALOR** — qualquer string, em qualquer chave ou dentro de lista,
+       cujo nome normalizado (sem acento/caixa/espaço repetido) seja o de um
+       aluno excluído. Pega "ABRAAO LOPES ROCHA" gravado para "Abraão Lopes
+       Rocha", e o nome solto dentro de lista;
+    2. **por CHAVE semântica** — nas entradas que comprovadamente falam do
+       aluno excluído (``entidade == "aluno"`` e ``entidade_id`` dele), uma
+       chave de nome cai também com grafia que a normalização não alcança
+       (abreviação: "ANA B. SOUZA" para "Ana Beatriz Souza"), desde que o valor
+       tenha parentesco com o nome do excluído.
+
+    O critério 2 é restrito às entradas do próprio aluno de propósito: aplicá-lo
+    a todas apagaria o nome de crianças que continuam matriculadas — a
+    sobre-redação destrói a auditoria de quem não pediu esquecimento.
+
+    TROCA ASSUMIDA (homônimo adulto): o critério 1 vale para a escola inteira,
+    então a entrada de um professor com o MESMO nome do aluno excluído também é
+    redigida. Os dados não permitem distinguir as duas strings, e a entrada do
+    professor continua identificada por ``entidade``/``entidade_id`` — perder o
+    nome de um adulto homônimo é preferível a manter o de um menor.
+    """
     from app.models import LogAuditoria  # noqa: E402
-    nomes_limpos = {n for n in nomes if n and n.strip()}
+    from app.services.importacao import normalizar_nome  # noqa: E402
 
-    def _redigir(valor):
+    def _tokens(texto: str) -> set[str]:
+        return {parte.strip(".") for parte in normalizar_nome(texto).split()
+                if len(parte.strip(".")) > 1
+                and parte.strip(".") not in _PARTICULAS_DE_NOME}
+
+    alvos = {normalizar_nome(n) for n in nomes if n and n.strip()}
+    if not alvos:
+        return
+    tokens_alvo = set().union(*(_tokens(n) for n in nomes if n and n.strip()))
+    ids_alvo = set(aluno_ids)
+    # Nomes com 2+ partes são específicos o bastante para serem procurados
+    # DENTRO de um texto maior sem risco de falso positivo. Um nome de uma
+    # palavra só ("Ana") não entra aqui: casaria "Susana", "Ananias".
+    alvos_em_texto = {a for a in alvos if len(_tokens(a)) >= 2}
+
+    def _e_nome_de_alvo(valor: str) -> bool:
+        if not valor.strip():
+            return False
+        normalizado = normalizar_nome(valor)
+        if normalizado in alvos:
+            return True
+        # Nome citado no meio de uma frase (ex.: um aviso guardado em detalhes).
+        # Hoje nenhuma ação grava assim; a checagem impede que uma ação nova
+        # reabra o vazamento sem ninguém perceber. Com FRONTEIRA DE PALAVRA:
+        # sem ela, apagar "Ana Souza" redigiria "Mariana Souza Silva", que é
+        # outra criança — busca crua por substring produz colisão de verdade.
+        return any(re.search(rf"\b{re.escape(alvo)}\b", normalizado)
+                   for alvo in alvos_em_texto)
+
+    def _parece_nome_do_alvo(valor: str) -> bool:
+        """Compartilha algum pedaço do nome do excluído — o que separa o nome
+        abreviado ("ANA B. SOUZA") de uma procedência ("importacao_matriculas",
+        "matific"), que não tem nenhum token em comum."""
+        return bool(_tokens(valor) & tokens_alvo)
+
+    def _redigir(valor, *, por_chave: bool):
+        """``por_chave``: a entrada é comprovadamente do aluno excluído."""
         if isinstance(valor, dict):
-            return {chave: ("[removido]" if chave == "nome" else _redigir(v))
-                    for chave, v in valor.items()}
+            return {
+                chave: (
+                    _MARCA_REMOVIDO
+                    if isinstance(item, str)
+                    and chave in _CHAVES_COM_NOME_DE_PESSOA
+                    and (_e_nome_de_alvo(item)
+                         or (por_chave and _parece_nome_do_alvo(item)))
+                    else _redigir(item, por_chave=por_chave)
+                )
+                for chave, item in valor.items()
+            }
         if isinstance(valor, list):
-            return [_redigir(v) for v in valor]
-        if isinstance(valor, str) and valor in nomes_limpos:
-            return "[removido]"
+            return [_redigir(item, por_chave=por_chave) for item in valor]
+        if isinstance(valor, str) and _e_nome_de_alvo(valor):
+            return _MARCA_REMOVIDO
         return valor
 
+    # ``logs_auditoria`` é permanente e cresce para sempre; a varredura é da
+    # escola inteira. ``yield_per`` transmite em lotes em vez de materializar
+    # tudo de uma vez (a exclusão permanente é rara, mas não pode explodir a
+    # memória de uma escola com histórico longo).
     logs = db.execute(
-        select(LogAuditoria).where(
-            LogAuditoria.escola_id == escola_id,
-            LogAuditoria.entidade == "aluno",
-            LogAuditoria.entidade_id.in_(aluno_ids),
-        )
-    ).scalars().all()
+        select(LogAuditoria).where(LogAuditoria.escola_id == escola_id)
+        .execution_options(yield_per=500)
+    ).scalars()
     for log in logs:
-        if log.detalhes:
-            log.detalhes = _redigir(log.detalhes)  # reatribui → dirty tracking
+        if not log.detalhes:
+            continue
+        do_aluno = log.entidade == "aluno" and log.entidade_id in ids_alvo
+        redigido = _redigir(log.detalhes, por_chave=do_aluno)
+        if redigido != log.detalhes:
+            log.detalhes = redigido  # reatribui → dirty tracking
+
+
+def _apagar_avisos_do_aluno(db: Session, escola_id: int,
+                            aluno_ids: list[int]) -> None:
+    """Remove os avisos que apontam para a criança excluída.
+
+    ``Notificacao.aluno_id`` é um int solto (sem FK, logo sem cascade): sem
+    isto o aviso sobrevive apontando para quem pediu para ser esquecido — e,
+    como o banco reaproveita IDs de linhas apagadas, passaria a apontar para
+    OUTRA criança, aparecendo no mural do professor errado. Aviso é estado
+    derivado (renasce do próximo evento), não é a trilha de auditoria."""
+    from app.models import Notificacao  # noqa: E402
+    db.execute(delete(Notificacao).where(Notificacao.escola_id == escola_id,
+                                         Notificacao.aluno_id.in_(aluno_ids)))
 
 
 def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
@@ -543,6 +659,8 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     # (criação/edição/fusão/importação) — sem isso o nome civil do menor
     # persistiria para sempre no histórico de auditoria.
     _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()))
+    # Avisos que apontam para a criança não têm FK e não somem no cascade.
+    _apagar_avisos_do_aluno(db, escola_id, ids)
     db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
 
     # LGPD: esquecimento das conversas da IA que citem o nome COMPLETO de algum
@@ -1228,6 +1346,13 @@ def criar_professor_completo(
 
     acesso = None
     if dados.criar_acesso:
+        # Mesma reserva de `admin.criar_usuario`: a conta do DONO da plataforma
+        # (ADMIN_GLOBAL_EMAIL) é promovida a `is_global` no boot — criá-la por
+        # uma rota de ESCOLA seria reivindicar o acesso a todas as redes.
+        if email_reservado_ao_dono(email) and not usuario.is_global:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "Este e-mail é reservado à administração da "
+                                "plataforma.")
         ja_existe = db.execute(
             select(Usuario).where(func.lower(Usuario.email) == email)
         ).scalar_one_or_none()

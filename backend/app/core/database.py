@@ -153,13 +153,25 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
 
 # Conta do DONO do sistema: acesso global (todas as escolas). Idempotente —
 # só escreve quando ainda não é global.
-_EMAIL_ADMIN_GLOBAL = "edumedeiros1405@gmail.com"
-
-
+#
+# O e-mail vem SEMPRE de configuração explícita (ADMIN_GLOBAL_EMAIL) e NUNCA do
+# código. Cravá-lo aqui transformava cada ambiente NOVO — município novo,
+# staging, homologação, restauração de desastre — numa conta administrativa
+# reivindicável: bastava um admin de UMA escola criar um usuário com aquele
+# e-mail e esperar o próximo boot para virar administrador global de todas as
+# redes. Sem a variável declarada, este ajuste é um NO-OP (fail-closed).
 def _promover_admin_global(motor=None) -> None:
-    """Garante o acesso global do dono do sistema (idempotente)."""
+    """Garante o acesso global do dono do sistema (idempotente).
+
+    Só age quando ``ADMIN_GLOBAL_EMAIL`` está declarado no ambiente; nesse caso
+    o mesmo e-mail fica RESERVADO contra criação por rotas de escola
+    (``config.email_reservado_ao_dono``), fechando a reivindicação da conta.
+    """
     from sqlalchemy import inspect, text
 
+    email = (settings.ADMIN_GLOBAL_EMAIL or "").strip().lower()
+    if not email:
+        return
     motor = motor or engine
     if "usuarios" not in inspect(motor).get_table_names():
         return
@@ -167,7 +179,7 @@ def _promover_admin_global(motor=None) -> None:
         conexao.execute(
             text("UPDATE usuarios SET is_global = :sim "
                  "WHERE lower(email) = :email AND is_global = :nao"),
-            {"sim": True, "nao": False, "email": _EMAIL_ADMIN_GLOBAL})
+            {"sim": True, "nao": False, "email": email})
 
 
 def _backfill_codigo_niveis(motor=None) -> None:

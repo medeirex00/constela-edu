@@ -1058,10 +1058,16 @@ def _shell_catalogo(escola_nome: str, ano_letivo: int, linhas: list[list],
 def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
     """Cabeçalho + linhas do ranking de escolas — base da reserva fpdf e do CSV,
     para o boletim nunca divergir do painel."""
-    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Matific", "Elefante", "Geral"]
+    # A coluna que ORDENA a tabela é o Índice (per capita, comparável entre
+    # escolas) — sem ela, a Secretaria leria "1º lugar com Geral 25,8" acima de
+    # "2º lugar com Geral 100" e concluiria que o boletim está quebrado. As
+    # médias 0–100 continuam, como desempenho INTERNO de cada escola.
+    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Índice", "Matific",
+                 "Elefante", "Geral"]
     linhas = [
         [e.get("posicao", ""), e["nome"], e["total_alunos"], e["adocao"],
-         e["media_matific"], e["media_elefante"], e["media_geral"]]
+         e.get("pontuacao_geral", 0), e["media_matific"], e["media_elefante"],
+         e["media_geral"]]
         for e in dados.get("escolas", [])
     ]
     return cabecalho, linhas
@@ -1078,12 +1084,17 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
         (_fmt_nota(t.get("media_geral")), "média geral"),
     ]
 
-    corpo = ['<h2 class="secao">Equidade entre escolas</h2>']
+    # Equidade no ÍNDICE (0–1000, per capita): é o único número comparável entre
+    # escolas. Medida nas médias 0–100 ela respondia à dispersão interna de cada
+    # escola, não à distância real entre elas.
+    corpo = ['<h2 class="secao">Equidade entre escolas '
+             '<span style="font-weight:400;font-size:.7em">'
+             '(índice 0–1000 · 1000 = melhor escola da rede)</span></h2>']
     corpo.append(_report_tiles([
-        (_fmt_nota(eq.get("gap_media")), "diferença melhor↔pior"),
-        (_fmt_nota(eq.get("escola_maior_media")), "melhor escola"),
-        (_fmt_nota(eq.get("escola_menor_media")), "pior escola"),
-        (str(eq.get("escolas_abaixo_da_media", 0)), "abaixo da média"),
+        (_fmt_nota(eq.get("gap_indice")), "diferença melhor↔pior"),
+        (_fmt_nota(eq.get("escola_maior_indice")), "melhor escola"),
+        (_fmt_nota(eq.get("escola_menor_indice")), "pior escola"),
+        (str(eq.get("escolas_abaixo_do_indice_medio", 0)), "abaixo do índice médio"),
     ]))
 
     atencao = dados.get("atencao", [])
@@ -1101,7 +1112,7 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
     corpo.append('<h2 class="secao">Ranking das escolas</h2>')
     corpo.append('<table class="tab"><thead><tr>'
                  '<th>#</th><th class="esq">Escola</th><th>Alunos</th><th>Adoção</th>'
-                 '<th>Matific</th><th>Elefante</th><th>Geral</th>'
+                 '<th>Índice</th><th>Matific</th><th>Elefante</th><th>Geral</th>'
                  '</tr></thead><tbody>')
     for e in dados.get("escolas", []):
         corpo.append(
@@ -1109,10 +1120,19 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
             f'<td class="esq nome">{_esc_html(e["nome"])}</td>'
             f'<td>{_esc_html(str(e["total_alunos"]))}</td>'
             f'<td>{_fmt_nota(e["adocao"])}%</td>'
+            f'<td><b>{_fmt_nota(e.get("pontuacao_geral", 0))}</b></td>'
             f'<td>{_fmt_nota(e["media_matific"])}</td>'
             f'<td>{_fmt_nota(e["media_elefante"])}</td>'
-            f'<td><b>{_fmt_nota(e["media_geral"])}</b></td></tr>')
+            f'<td>{_fmt_nota(e["media_geral"])}</td></tr>')
     corpo.append('</tbody></table>')
+    corpo.append(
+        '<p style="font-size:.72em;color:#5b6474;margin-top:.4em">'
+        '<b>Índice</b> (0–1000): desempenho POR ALUNO na régua da rede — 1000 é a '
+        'melhor escola do município. É o número que ordena esta tabela e o único '
+        'comparável entre escolas de tamanhos diferentes. '
+        '<b>Matific · Elefante · Geral</b> (0–100): desempenho INTERNO de cada '
+        'escola, calculado contra os próprios alunos dela — servem para acompanhar '
+        'a escola ao longo do tempo, não para compará-la com outra.</p>')
 
     subtitulo = (f"Rede de ensino · Gerado em "
                  f"{agora_br().strftime('%d/%m/%Y')}")

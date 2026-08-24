@@ -63,6 +63,10 @@ export interface EscolaCartao {
   pontuacao_matematica: number;
   pontuacao_geral: number;
   dimensoes_pontuadas: string[];
+  // Só no Panorama Global: o mesmo índice recalculado com a coorte TODAS AS
+  // REDES. O índice de rede acima não serve para comparar escolas de redes
+  // diferentes (cada uma foi normalizada contra a melhor da própria rede).
+  pontuacao_geral_global?: number;
   precisa_atencao: boolean;
   motivo_atencao: string | null;
   posicao?: number;
@@ -83,6 +87,8 @@ export interface DashboardRede {
     media_geral: number;
     media_matific: number;
     media_elefante: number;
+    /** Índice 0–1000 da rede (média ponderada do índice das escolas). */
+    pontuacao_geral: number;
     escolas_em_atencao: number;
     livros: number;
     tempo_leitura_min: number;
@@ -91,9 +97,16 @@ export interface DashboardRede {
     ativos_matific: number;
     ativos_elefante: number;
     livros_por_aluno: number;
-    melhor_escola: { nome: string; media_geral: number } | null;
+    melhor_escola: { nome: string; pontuacao_geral: number; media_geral: number } | null;
   };
   equidade: {
+    // EQUIDADE é comparação ENTRE escolas: os campos `*_indice` (0–1000, per
+    // capita) são os que a tela mostra. Os `*_media` (0–100) continuam no
+    // payload, mas são régua INTERNA de cada escola e não comparam nada.
+    gap_indice: number;
+    escola_maior_indice: number;
+    escola_menor_indice: number;
+    escolas_abaixo_do_indice_medio: number;
     gap_media: number;
     escola_maior_media: number;
     escola_menor_media: number;

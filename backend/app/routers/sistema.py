@@ -185,7 +185,11 @@ def simular(
     pct_questoes = scoring.obter_pesos_brutos(db, escola_id, "pesos.questoes")
     # Mesma regra do recálculo (scoring.recalcular_escola): a explicação da Nota
     # Geral é DERIVADA dos pesos efetivamente usados, senão o simulador mostra
-    # uma conta que não fecha numa rede de um módulo só.
+    # uma conta que não fecha numa rede de um módulo só. O aluno HIPOTÉTICO tem
+    # as duas dimensões informadas (quem simula digita os dois blocos), então a
+    # renormalização por dimensão disponível é no-op aqui — mas passa pela mesma
+    # função, para o simulador nunca voltar a ter uma cópia própria da fórmula.
+    p_geral = scoring.pesos_geral_do_aluno(p_geral, {"matific", "elefante"})
     pct_geral = {chave: round(fracao * 100, 2) for chave, fracao in p_geral.items()
                  if fracao > 0}
 
