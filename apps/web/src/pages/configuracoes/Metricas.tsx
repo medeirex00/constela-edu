@@ -351,6 +351,143 @@ function PontosExtrasEditor() {
   );
 }
 
+/* -------------------------------------------------------------------------
+ * Régua de pontuação da escola: PADRÃO CONSTELA (régua institucional fixa) ×
+ * PERSONALIZADO (a config desta tela). A escolha governa SÓ o scoring/ranking
+ * INTERNO da escola — o ranking da REDE usa sempre a régua institucional. É o
+ * primeiro controle da página porque decide se o resto tem efeito no ranking
+ * interno. Backend: GET/PUT /configuracoes/perfil-scoring (dispara recálculo).
+ * ----------------------------------------------------------------------- */
+type PerfilScoring = { modo: "institucional" | "personalizado" };
+
+function PerfilScoringEditor() {
+  const { escolaId, usuario } = useApp();
+  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  const { dados, erro, carregando, recarregar } = useApi<PerfilScoring>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/perfil-scoring` : null,
+  );
+  const [modo, setModo] = useState<"institucional" | "personalizado">("institucional");
+  const [salvando, setSalvando] = useState(false);
+  const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+
+  useEffect(() => {
+    if (dados) {
+      setModo(dados.modo);
+      setMensagem(null);
+    }
+  }, [dados]);
+
+  if (carregando) return <Carregando />;
+  if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
+
+  async function escolher(novo: "institucional" | "personalizado") {
+    if (!escolaId || novo === modo || somenteLeitura) return;
+    const anterior = modo;
+    setModo(novo);
+    setSalvando(true);
+    setMensagem(null);
+    try {
+      await api(`/escolas/${escolaId}/configuracoes/perfil-scoring`, {
+        method: "PUT",
+        body: JSON.stringify({ modo: novo }),
+      });
+      setMensagem({
+        tipo: "ok",
+        texto:
+          novo === "personalizado"
+            ? "Régua personalizada ativada. O ranking INTERNO da escola foi recalculado com a configuração desta escola. O ranking da rede continua usando a régua institucional."
+            : "Régua Padrão Constela ativada. O ranking interno voltou a usar a régua institucional.",
+      });
+    } catch (e) {
+      setModo(anterior);
+      setMensagem({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível salvar." });
+      recarregar();
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  const opcoes = [
+    {
+      valor: "institucional" as const,
+      titulo: "Régua Padrão Constela",
+      descricao:
+        "A configuração padrão usa a régua institucional da Constela (dificuldade A3 + pesos padrão). É o estado inicial de toda escola.",
+    },
+    {
+      valor: "personalizado" as const,
+      titulo: "Personalizado",
+      descricao:
+        "A configuração personalizada altera apenas o scoring e o ranking INTERNO desta escola. O ranking da rede utiliza sempre a régua institucional da Constela.",
+    },
+  ];
+
+  return (
+    <Card className="p-5">
+      <h2 className="mb-1 text-sm font-semibold">Régua de pontuação da escola</h2>
+      <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+        Define a régua usada no ranking <strong>interno</strong> desta escola. O ranking da{" "}
+        <strong>rede</strong> é sempre padronizado (régua institucional) e não muda com esta escolha.
+      </p>
+
+      <div className="space-y-2" role="radiogroup" aria-label="Régua de pontuação da escola">
+        {opcoes.map((op) => {
+          const ativo = modo === op.valor;
+          return (
+            <label
+              key={op.valor}
+              className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition-colors ${
+                ativo
+                  ? "border-indigo-500 bg-indigo-50 dark:border-indigo-500/60 dark:bg-indigo-500/10"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
+              } ${somenteLeitura || salvando ? "cursor-not-allowed opacity-70" : ""}`}
+            >
+              <input
+                type="radio"
+                name="perfil-scoring"
+                className="mt-1 h-4 w-4 accent-indigo-600"
+                checked={ativo}
+                disabled={somenteLeitura || salvando}
+                onChange={() => escolher(op.valor)}
+              />
+              <span>
+                <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                  {op.titulo}
+                  {op.valor === "institucional" && (
+                    <>
+                      {" "}
+                      <Badge tom="destaque">Padrão</Badge>
+                    </>
+                  )}
+                </span>
+                <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
+                  {op.descricao}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      {modo === "institucional" && !somenteLeitura && (
+        <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+          No modo Padrão, as configurações de pesos, dificuldade e normalização abaixo{" "}
+          <strong>não afetam o ranking interno</strong> — ative “Personalizado” para usá-las.
+        </p>
+      )}
+
+      {mensagem && (
+        <div className="mt-3">
+          <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>
+        </div>
+      )}
+      {salvando && (
+        <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">Salvando e recalculando…</p>
+      )}
+    </Card>
+  );
+}
+
 export default function Metricas() {
   const { usuario } = useApp();
   // Secretaria (rede vinculada, não-global): vê os critérios, mas não altera.
@@ -372,6 +509,10 @@ export default function Metricas() {
           administrador geral podem alterar os critérios de avaliação.
         </div>
       )}
+
+      <div className="mb-6 max-w-2xl">
+        <PerfilScoringEditor />
+      </div>
 
       <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
         {ABAS.map((nome) => (

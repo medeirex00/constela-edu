@@ -7,9 +7,36 @@ Princípios (PRD Parte 3):
     permitindo auditoria total ("Como esta nota foi calculada", PRD §45).
   * O recálculo é integral e automático (PRD §43): qualquer importação ou
     mudança de configuração dispara `recalcular_escola`.
+
+DESEMPENHO POR DIMENSÃO (`docs/spec-arquitetura-2.md`)
+------------------------------------------------------
+O desempenho do aluno é medido e ordenado POR DIMENSÃO — Leitura (Elefante) e
+Matemática (Matific) — e não existe mais ordem única entre dimensões diferentes.
+Três invariantes deste arquivo sustentam isso, e nenhum deles pode ser
+enfraquecido sem quebrar a arquitetura inteira:
+
+  1. ISOLAMENTO. `nota_elefante` é função exclusiva de `SnapshotElefante` (+ os
+     pontos de dificuldade, que saem dele) e `nota_matific`, de
+     `SnapshotMatific` — inclusive nas RÉGUAS de normalização, cujo tamanho de
+     amostra é contado por dimensão (`_referencias`, `DIMENSAO_DO_INDICADOR`).
+     Abrir a 2ª plataforma não move a nota da 1ª nem por um centésimo.
+  2. AUSÊNCIA NÃO É ZERO. Sem snapshot da plataforma, a dimensão é `aferido:
+     false` e fica FORA da ordenação dela — não entra com 0,0.
+  3. SNAPSHOT ZERADO ≠ AUSÊNCIA. Quem abriu a plataforma e ainda não produziu
+     entra, em último, com 0,00. O discriminante é a EXISTÊNCIA do snapshot,
+     NUNCA `nota > 0`.
+
+`nota_geral` e `posicao` (a ordem única) continuam sendo gravadas como LEGADO /
+COMPATIBILIDADE, para não quebrar em silêncio as vitrines e os clientes ainda
+não migrados. Elas **NÃO são fonte oficial de ranking, de premiação nem de
+nenhuma decisão de negócio** — para isso existe a dimensão. Nada novo deve
+passar a lê-las: a regra é travada por `tests/test_legado_nota_geral.py`
+(inventário + varredura + sabotagem) e o caminho de saída está em
+`docs/plano-retirada-nota-geral.md`.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import time
 
@@ -78,6 +105,46 @@ PESOS_PADRAO = {
     "pesos.geral": {"matific": 50.0, "elefante": 50.0},
 }
 
+# ---------------------------------------------------------------------------
+# PERFIL INSTITUCIONAL — a régua OFICIAL da rede (fixa, não editável)
+# ---------------------------------------------------------------------------
+# A separação institucional × escola nasce daqui. Este perfil é uma CONSTANTE de
+# código: dificuldade A3 (`exp(0,103·pos)`), pesos padrão e normalização linear
+# P90. É com ele que as notas `*_institucional` são calculadas e o ranking da
+# rede é montado — nenhum coordenador o alcança. O perfil da ESCOLA (pesos e
+# dificuldade em `configuracoes`/`niveis_dificuldade`) só vale no contexto
+# INTERNO dela, e só quando ela escolhe "personalizado".
+#
+# NÃO é "editar NIVEIS_PADRAO global": NIVEIS_PADRAO segue sendo o SEED editável
+# da escola; A3_INSTITUCIONAL é uma régua paralela e imutável, usada por um
+# caminho de cálculo explícito (perfil institucional), nunca lida da config.
+
+# Ordem canônica dos níveis do Elefante (AA=0 … Z=29). Posição = dificuldade.
+NIVEIS_ORDENADOS = ("AA", "BB", "CC", "DD", "A", "B", "C", "D", "E", "F", "G",
+                    "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
+                    "T", "U", "V", "W", "X", "Y", "Z")
+POS_DO_NIVEL = {codigo: i for i, codigo in enumerate(NIVEIS_ORDENADOS)}
+
+# Coeficiente da A3 (decidido a partir dos dados reais do catálogo do Elefante:
+# span AA→Z ≈ 19,8x, alinhado à régua histórica de 16x, monótono, sem a inversão
+# DD>A do wordCount cru). NÃO alterar sem nova análise + aprovação.
+A3_COEFICIENTE = 0.103
+
+
+def peso_a3(codigo: str) -> float:
+    """Peso institucional de dificuldade de um nível AA–Z: ``exp(0,103·pos)``.
+    Nível fora da escala AA–Z (dado sujo) → 0, como no mapa por faixa da escola."""
+    pos = POS_DO_NIVEL.get(str(codigo).strip().upper())
+    return round(math.exp(A3_COEFICIENTE * pos), 6) if pos is not None else 0.0
+
+
+# Mapa de dificuldade no formato que `_pontos_dificuldade` consome, com a A3 em
+# ``__padrao__`` e SEM overrides por série/turma (a régua da rede é uma só).
+A3_MAPA_DIFICULDADE: dict = {
+    "__padrao__": {codigo: peso_a3(codigo) for codigo in NIVEIS_ORDENADOS},
+    "__turma__": {},
+}
+
 CRITERIOS_DESEMPATE_PADRAO = [
     "nota_elefante",
     "nota_matific",
@@ -86,6 +153,19 @@ CRITERIOS_DESEMPATE_PADRAO = [
     "pct_acertos",
     "nome",
 ]
+
+# Desempate de um ranking DE DIMENSÃO: só indicadores DAQUELA dimensão (spec
+# §2.2). O padrão antigo começa em `nota_elefante` e segue para `nota_matific` —
+# num ranking de Leitura isso faria a medalha de leitura ser decidida pela
+# matemática, reintroduzindo DENTRO da dimensão o defeito que a arquitetura
+# elimina ENTRE dimensões. Configurável por escola em
+# ``desempate.criterios_leitura`` / ``desempate.criterios_matematica``.
+CRITERIOS_DESEMPATE_DIMENSAO: dict[str, list[str]] = {
+    "leitura": ["nota_elefante", "pontos_dificuldade", "livros_unicos",
+                "pct_acertos", "nome"],
+    "matematica": ["nota_matific", "estrelas", "atividades", "pontuacao_media",
+                   "nome"],
+}
 
 
 def normalizar(valor: float, referencia: float) -> float:
@@ -112,6 +192,27 @@ INDICADORES_VOLUME = {"atividades", "estrelas", "livros", "tempo", "tentativas"}
 # Estatística robusta (P90/mediana) só é confiável com amostra suficiente;
 # abaixo disso a escola cai na escala simples por máximo (comportamento antigo).
 MIN_ALUNOS_ROBUSTO = 8
+
+# DIMENSÃO de cada indicador. Existe para uma garantia estrutural (Arquitetura 2,
+# item 6): a nota de LEITURA só pode nascer de dado do Elefante e a de MATEMÁTICA
+# só de dado do Matific — **inclusive na régua de normalização**. Toda decisão de
+# `_referencias` que dependa do TAMANHO DA AMOSTRA é tomada por dimensão, usando
+# este mapa; sem ele, a amostra de uma plataforma decidia a régua da outra.
+DIMENSAO_DO_INDICADOR: dict[str, str] = {
+    "atividades": "matific",
+    "media": "matific",
+    "estrelas": "matific",
+    "livros": "elefante",
+    "pontos_dificuldade": "elefante",
+    "tentativas": "elefante",
+    "acertos": "elefante",
+    "tempo": "elefante",
+}
+
+# Dimensão (vocabulário do produto e do catálogo de módulos) → plataforma (nome
+# técnico do dado, o mesmo dos snapshots). Fonte única: quem quiser saber "de
+# onde sai a nota de Leitura" olha aqui, não um `if` espalhado.
+DIMENSOES: dict[str, str] = {"leitura": "elefante", "matematica": "matific"}
 
 
 def normalizar_saturado(valor: float, referencia: float, k: float) -> float:
@@ -157,6 +258,14 @@ def referencias_robustas(
     topo ficar disputado lá também (um único gigante não vira a régua de todos).
     Amostra pequena (< ``MIN_ALUNOS_ROBUSTO``) recai no máximo, sem saturação.
     Retorna ``(referencias, k_por_indicador)``.
+
+    CONTRATO DE USO (a garantia de isolamento depende de quem chama): ``n_alunos``
+    é o MAIOR tamanho entre TODAS as listas recebidas. Chamar esta função com
+    indicadores das DUAS dimensões de uma vez faz a coorte de uma ligar o modo
+    robusto da outra — o mesmo canal entre dimensões que ``_referencias`` fecha
+    com ``DIMENSAO_DO_INDICADOR``. Por isso **chame uma vez por dimensão**, só
+    com os indicadores dela e só com os valores dos alunos AFERIDOS nela, como
+    faz ``evolucao._referencias_por_dimensao`` (o único chamador de produção).
     """
     n_alunos = max((len(v) for v in listas.values()), default=0)
     usar_robusto = n_alunos >= MIN_ALUNOS_ROBUSTO
@@ -238,6 +347,14 @@ def obter_pesos(db: Session, escola_id: int, namespace: str) -> dict[str, float]
 def pesos_geral_do_aluno(pesos_geral: dict[str, float],
                          dimensoes_com_dados: set[str]) -> dict[str, float]:
     """Renormaliza ``pesos.geral`` sobre as plataformas em que o ALUNO tem dado.
+
+    NOVO PAPEL (Arquitetura 2): a RENORMALIZAÇÃO desta função serve apenas à
+    ``nota_geral``, que virou LEGADO e não ordena mais nada. O que ficou
+    ESSENCIAL — e carrega mais peso do que antes — é o conjunto de entrada
+    ``dimensoes_com_dados``: é ele que decide quem entra no ranking de cada
+    dimensão, o ``aferido`` de cada dimensão e a adoção do aluno (|D| / |P|).
+    Sem ele, "sem snapshot" e "snapshot zerado" voltam a ser a mesma coisa e a
+    arquitetura inteira cai junto. Não reverter.
 
     É a MESMA regra que a escola já aplicava — "só quem tem dado da plataforma
     entra na média" (``rede._medias_por_plataforma``) —, agora no nível do aluno.
@@ -537,6 +654,52 @@ CHAVES_REFERENCIA = [
 ]
 
 
+def _referencias_auto(
+    matific: dict[int, SnapshotMatific],
+    elefante: dict[int, SnapshotElefante],
+    pontos_dificuldade: dict[int, float],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Referências AUTO (P90 + k=mediana) e nada mais — PURO, sem tocar em
+    ``configuracoes``/``ReferenciaNormalizacao``. É o coração da régua robusta,
+    compartilhado por dois chamadores: ``_referencias`` (que pode sobrescrever
+    com o modo MANUAL da escola) e o perfil INSTITUCIONAL (que usa este resultado
+    direto, sem modo manual — a rede tem uma régua só). Retorna ``(refs, k_vol)``.
+
+    ISOLAMENTO ENTRE DIMENSÕES: cada lista sai dos snapshots de UMA plataforma e a
+    amostra que decide robusto×máximo é contada POR DIMENSÃO (``n_por_dimensao``),
+    então abrir a 2ª plataforma nunca move a nota da 1ª."""
+    listas = {
+        "atividades": [s.atividades for s in matific.values()],
+        "media": [s.pontuacao_media for s in matific.values()],
+        "estrelas": [s.estrelas for s in matific.values()],
+        "livros": [s.livros_unicos for s in elefante.values()],
+        # `pontos_dificuldade` tem uma entrada por aluno PONTUADO (inclusive quem
+        # não tem snapshot do Elefante, com 0). Os zeros são descartados de
+        # `ativos` logo abaixo, então a régua continua saindo só de quem lê — e a
+        # amostra que liga o modo robusto é `len(elefante)`, não o tamanho desta
+        # lista, justamente para a matrícula de um aluno sem leitura não decidi-la.
+        "pontos_dificuldade": list(pontos_dificuldade.values()),
+        "tentativas": [s.questoes_tentativas for s in elefante.values()],
+        "acertos": [s.questoes_acertos for s in elefante.values()],
+        "tempo": [s.tempo_leitura_min for s in elefante.values()],
+    }
+    n_por_dimensao = {"matific": len(matific), "elefante": len(elefante)}
+    refs: dict[str, float] = {}
+    k_vol: dict[str, float] = {}
+    for indicador, valores in listas.items():
+        chave = "max_" + indicador
+        ativos = [x for x in valores if x and x > 0]
+        usar_robusto = (n_por_dimensao[DIMENSAO_DO_INDICADOR[indicador]]
+                        >= MIN_ALUNOS_ROBUSTO)
+        if usar_robusto and len(ativos) >= 2:
+            refs[chave] = _percentil(ativos, 0.90)        # régua robusta (top 10%)
+            if indicador in INDICADORES_VOLUME:
+                k_vol[indicador] = _percentil(ativos, 0.50)  # meia-saturação = mediana
+        else:
+            refs[chave] = max(valores, default=0)          # poucos dados → escala simples
+    return refs, k_vol
+
+
 def _referencias(
     db: Session,
     escola_id: int,
@@ -553,31 +716,15 @@ def _referencias(
     (escala simples, sem saturação). Modo MANUAL: valores do admin, LINEARES
     (sem saturação — previsível), com chaves ausentes caindo no auto.
     Retorna ``(referencias, modo, k_por_indicador)``; ``k`` vazio = sem saturação.
-    """
-    listas = {
-        "atividades": [s.atividades for s in matific.values()],
-        "media": [s.pontuacao_media for s in matific.values()],
-        "estrelas": [s.estrelas for s in matific.values()],
-        "livros": [s.livros_unicos for s in elefante.values()],
-        "pontos_dificuldade": list(pontos_dificuldade.values()),
-        "tentativas": [s.questoes_tentativas for s in elefante.values()],
-        "acertos": [s.questoes_acertos for s in elefante.values()],
-        "tempo": [s.tempo_leitura_min for s in elefante.values()],
-    }
-    n_alunos = max(len(matific), len(elefante))
-    usar_robusto = n_alunos >= MIN_ALUNOS_ROBUSTO
 
-    auto: dict[str, float] = {}
-    k_vol: dict[str, float] = {}
-    for indicador, valores in listas.items():
-        chave = "max_" + indicador
-        ativos = [x for x in valores if x and x > 0]
-        if usar_robusto and len(ativos) >= 2:
-            auto[chave] = _percentil(ativos, 0.90)        # régua robusta (top 10%)
-            if indicador in INDICADORES_VOLUME:
-                k_vol[indicador] = _percentil(ativos, 0.50)  # meia-saturação = mediana
-        else:
-            auto[chave] = max(valores, default=0)          # poucos dados → escala simples
+    ISOLAMENTO ENTRE DIMENSÕES (garantia estrutural da Arquitetura 2): cada
+    lista abaixo é montada a partir dos snapshots de UMA plataforma só, e o
+    tamanho da amostra que decide o modo (robusto × máximo) é contado **por
+    dimensão**. Assim ``nota_elefante`` é função exclusiva de dado do Elefante e
+    ``nota_matific``, de dado do Matific — abrir a segunda plataforma não move a
+    nota da primeira nem por um centésimo.
+    """
+    auto, k_vol = _referencias_auto(matific, elefante, pontos_dificuldade)
 
     ref_row = db.execute(
         select(ReferenciaNormalizacao).where(
@@ -705,10 +852,28 @@ class ResultadoAluno:
     livros_unicos: int = 0
     atividades: int = 0
     pct_acertos: float = 0.0
+    # Indicadores dos desempates LOCAIS de cada dimensão (§2.2): sem eles o
+    # desempate da Leitura teria de cair na nota de Matemática, que é o defeito
+    # que a arquitetura elimina — dentro da dimensão, inclusive.
+    pontos_dificuldade: float = 0.0
+    estrelas: int = 0
+    pontuacao_media: float = 0.0
+    # Estado por DIMENSÃO ("leitura"/"matematica"): aferido, posição na dimensão
+    # e os dados brutos que sustentam a nota.
+    aferido: dict = field(default_factory=dict)
+    posicao_dimensao: dict = field(default_factory=dict)
+    dados_dimensao: dict = field(default_factory=dict)
+    snapshot_em: dict = field(default_factory=dict)
     detalhes: dict = field(default_factory=dict)
 
 
 def _chave_ordenacao(resultado: ResultadoAluno, criterios: list[str]):
+    """LEGADO — a ordem única (``Nota.posicao``), ancorada em ``nota_geral``.
+
+    Continua existindo só enquanto as vitrines (certificado, cartaz, telão, Top
+    10) não forem convertidas para ordem por dimensão. Nada novo deve usá-la;
+    a ordenação oficial é ``_chave_ordenacao_dimensao``.
+    """
     chave: list = [-resultado.nota_geral]
     for criterio in criterios:
         if criterio == "nome":
@@ -718,6 +883,24 @@ def _chave_ordenacao(resultado: ResultadoAluno, criterios: list[str]):
     # Desempate final DETERMINÍSTICO: dois alunos DISTINTOS homônimos e com todas
     # as métricas iguais não podem trocar de posição entre recálculos sucessivos
     # (aluno.id é único e estável).
+    chave.append(resultado.aluno.id)
+    return tuple(chave)
+
+
+def _chave_ordenacao_dimensao(resultado: ResultadoAluno, criterios: list[str]):
+    """Chave de ordenação DENTRO de uma dimensão — 100% local a ela.
+
+    Diferente de ``_chave_ordenacao``, não há âncora em ``nota_geral``: o
+    primeiro critério já É a nota da dimensão. Termina no mesmo desempate
+    determinístico (nome + ``aluno.id``), para que dois homônimos empatados em
+    tudo não troquem de posição entre recálculos.
+    """
+    chave: list = []
+    for criterio in criterios:
+        if criterio == "nome":
+            chave.append(resultado.aluno.nome.casefold())
+        else:
+            chave.append(-float(getattr(resultado, criterio, 0) or 0))
     chave.append(resultado.aluno.id)
     return tuple(chave)
 
@@ -768,6 +951,12 @@ def _carregar_contexto(db: Session, escola_id: int):
     return escola, ano, matriculas, matific, elefante, pontos_dif
 
 
+def _data_iso(snapshot) -> str | None:
+    """``data_referencia`` do snapshot atual em ISO (só a data), ou ``None``."""
+    data = getattr(snapshot, "data_referencia", None)
+    return data.date().isoformat() if data is not None else None
+
+
 def referencias_em_uso(db: Session, escola_id: int) -> tuple[dict, str]:
     """Referências efetivas (tela REFERÊNCIAS DE NORMALIZAÇÃO, PRD §62)."""
     refs, modo, _ = contexto_normalizacao(db, escola_id)
@@ -786,6 +975,176 @@ def contexto_normalizacao(
     return _referencias(db, escola_id, matific, elefante, pontos_dif)
 
 
+COMPOSICAO_ATUAL = "por_dimensao_v1"
+
+
+def dimensoes_contratadas(db: Session, escola) -> list[str]:
+    """Dimensões que a rede da escola CONTRATOU, na ordem do catálogo.
+
+    Primeiro degrau da cascata CONTRATO → DADO (a mesma de
+    ``_pesos_dos_modulos_contratados``): o que a rede não assinou não tem nota,
+    não tem ranking e não entra no denominador da adoção. Contrato exótico sem
+    nenhum módulo cai em "todas" — a mesma degradação segura do ``filtrados or
+    valores``, para nunca zerar a escola inteira por uma configuração estranha.
+    """
+    from app.services import modulos as svc_modulos
+
+    contratados = svc_modulos.modulos_da_escola(db, escola)
+    return [dim for dim in DIMENSOES if dim in contratados] or list(DIMENSOES)
+
+
+def _ordenar_por_dimensao(db: Session, escola_id: int, escola,
+                          resultados: list[ResultadoAluno]) -> dict[str, int]:
+    """Carimba, em cada resultado, a POSIÇÃO dentro de cada dimensão contratada
+    e escreve o bloco ``detalhes.dimensoes`` (+ ``adocao`` e ``composicao``).
+
+    Regras que este bloco materializa (spec §1.2, §2):
+      * só entra na ordenação de ``d`` quem é AFERIDO em ``d`` — existe snapshot
+        atual daquela plataforma. Ausência vira ESTADO (`aferido: false`, nota
+        `null`, posição `null`), nunca o valor zero;
+      * snapshot zerado ENTRA, em último, com 0,00 — é "usa e ainda não
+        produziu", um zero legítimo;
+      * o desempate é LOCAL à dimensão (§2.2): a medalha de Leitura não pode ser
+        decidida pela nota de Matemática;
+      * ``n_aferidos`` viaja junto com a posição porque é o denominador dela —
+        sem ele, "3º" numa dimensão e "3º" na outra parecem comparáveis.
+
+    Devolve ``{dimensao: n_aferidos}``.
+    """
+    contratadas = dimensoes_contratadas(db, escola)
+    n_aferidos: dict[str, int] = {}
+
+    for dimensao in DIMENSOES:
+        if dimensao not in contratadas:
+            # Módulo não contratado: a dimensão não existe para esta escola.
+            # Ninguém é "não aferido" num produto que a rede não comprou.
+            for resultado in resultados:
+                resultado.aferido[dimensao] = False
+                resultado.posicao_dimensao[dimensao] = None
+            n_aferidos[dimensao] = 0
+            continue
+        criterios = obter_config(db, escola_id, "desempate",
+                                 f"criterios_{dimensao}",
+                                 CRITERIOS_DESEMPATE_DIMENSAO[dimensao])
+        aferidos = [r for r in resultados if r.aferido.get(dimensao)]
+        aferidos.sort(key=lambda r: _chave_ordenacao_dimensao(r, criterios))
+        for posicao, resultado in enumerate(aferidos, start=1):
+            resultado.posicao_dimensao[dimensao] = posicao
+        n_aferidos[dimensao] = len(aferidos)
+
+    for resultado in resultados:
+        com_dados = [d for d in contratadas if resultado.aferido.get(d)]
+        resultado.detalhes["dimensoes"] = {
+            dimensao: {
+                "plataforma": DIMENSOES[dimensao],
+                "contratada": dimensao in contratadas,
+                "aferido": bool(resultado.aferido.get(dimensao)),
+                # Nota `null` (e não 0,0) quando não aferido: é o que a tela
+                # renderiza como `—`. O 0,0 fica reservado ao zero legítimo.
+                "nota": (resultado.nota_elefante if dimensao == "leitura"
+                         else resultado.nota_matific
+                         ) if resultado.aferido.get(dimensao) else None,
+                "posicao": resultado.posicao_dimensao.get(dimensao),
+                "n_aferidos": n_aferidos[dimensao],
+                "snapshot_em": resultado.snapshot_em.get(dimensao),
+                "dados": (resultado.dados_dimensao.get(dimensao, {})
+                          if resultado.aferido.get(dimensao) else {}),
+            }
+            for dimensao in DIMENSOES
+        }
+        # ADOÇÃO DO ALUNO = |D| / |P| (§3.2): cobertura, jamais intensidade —
+        # e jamais somada, multiplicada ou promediada com desempenho.
+        resultado.detalhes["adocao"] = {
+            "contratadas": list(contratadas),
+            "com_dados": com_dados,
+            "pct": round(len(com_dados) / len(contratadas) * 100, 2)
+            if contratadas else 0.0,
+        }
+        # Carimbo de REGRA: escola sem ele é escola que ainda não foi
+        # recalculada nesta arquitetura (recálculo em lote tolera falha por
+        # escola). Mesmo idioma do `referencia_tipo`.
+        resultado.detalhes["composicao"] = COMPOSICAO_ATUAL
+    return n_aferidos
+
+
+# ---------------------------------------------------------------------------
+# Perfil de scoring: INSTITUCIONAL (régua da rede) × ESCOLA (contexto interno)
+# ---------------------------------------------------------------------------
+
+PERFIL_SCORING_NS = "scoring.perfil"
+
+
+def _scoring_personalizado(db: Session, escola_id: int) -> bool:
+    """A escola optou por PERSONALIZAR o próprio scoring interno?
+
+    Default = NÃO → "padrão Constela", em que o note interno da escola É a régua
+    institucional. Este flag governa APENAS o contexto interno (ranking/competição
+    da própria escola); a régua da rede é sempre institucional, independentemente
+    dele. Guardado como um valor simples em ``configuracoes`` (namespace
+    ``scoring.perfil``, chave ``modo``: ``institucional`` | ``personalizado``)."""
+    valor = obter_config(db, escola_id, PERFIL_SCORING_NS, "modo", "institucional")
+    return str(valor).strip().lower() == "personalizado"
+
+
+def _pesos_institucionais(namespace: str) -> tuple[dict[str, float], dict[str, float]]:
+    """``(frações normalizadas, percentuais brutos)`` de um namespace de pesos no
+    perfil INSTITUCIONAL — fixos (``PESOS_PADRAO``), sem ler config de escola."""
+    pct = PESOS_PADRAO[namespace]
+    total = sum(float(v) for v in pct.values()) or 1.0
+    return {k: float(v) / total for k, v in pct.items()}, dict(pct)
+
+
+def _pesos_geral_institucional(db: Session, escola_id: int) -> dict[str, float]:
+    """``pesos.geral`` institucional (50/50) com o CONTRATO DE MÓDULOS aplicado.
+    O contrato é decisão da REDE/Admin (não do coordenador), então entra na régua
+    institucional; a escolha local de pesos, não. Frações normalizadas."""
+    valores = _pesos_dos_modulos_contratados(db, escola_id, PESOS_PADRAO["pesos.geral"])
+    total = sum(float(v) for v in valores.values()) or 1.0
+    return {k: float(v) / total for k, v in valores.items()}
+
+
+def _insumos_institucionais(matriculas, matific, elefante):
+    """Insumos do cálculo POR PLATAFORMA no perfil institucional:
+    ``(pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante, pct_elefante,
+    p_questoes, pct_questoes)``.
+
+    Tudo derivado só dos SNAPSHOTS (contagens da plataforma) e de constantes de
+    código: dificuldade A3 fixa (sem bônus de leitura na escola, sem overrides por
+    série/turma — a rede tem uma régua só) e referências AUTO (P90/mediana, sem
+    modo manual). É a garantia estrutural da separação: nenhuma configuração local
+    entra aqui, então o resultado é idêntico entre escolas com os mesmos dados."""
+    pontos_dif: dict[int, float] = {}
+    for matricula, turma in matriculas:
+        snap_e = elefante.get(matricula.aluno_id)
+        pontos_dif[matricula.aluno_id] = _pontos_dificuldade(
+            snap_e.livros_por_nivel if snap_e else {}, turma.ano_escolar,
+            A3_MAPA_DIFICULDADE)
+    refs, k_vol = _referencias_auto(matific, elefante, pontos_dif)
+    p_matific, pct_matific = _pesos_institucionais("pesos.matific")
+    p_elefante, pct_elefante = _pesos_institucionais("pesos.elefante")
+    p_questoes, pct_questoes = _pesos_institucionais("pesos.questoes")
+    return (pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante,
+            pct_elefante, p_questoes, pct_questoes)
+
+
+def _notas_institucionais(matriculas, matific, elefante) -> dict[int, tuple[float, float]]:
+    """Nota institucional por aluno = ``(nota_matific, nota_elefante)`` com o
+    perfil fixo. É o que a REDE consome (colunas ``*_institucional``). Usado para
+    a escola PERSONALIZADA, cuja nota local diverge da institucional; na escola
+    padrão a própria nota local já é institucional e este cálculo é dispensado."""
+    (pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante, pct_elefante,
+     p_questoes, pct_questoes) = _insumos_institucionais(matriculas, matific, elefante)
+    notas: dict[int, tuple[float, float]] = {}
+    for matricula, _turma in matriculas:
+        aid = matricula.aluno_id
+        nota_m, _ = calcular_matific(matific.get(aid), refs, p_matific, pct_matific, k_vol)
+        nota_e, _, _ = calcular_elefante(
+            elefante.get(aid), pontos_dif[aid], refs, p_elefante, pct_elefante,
+            p_questoes, pct_questoes, k_vol)
+        notas[aid] = (nota_m, nota_e)
+    return notas
+
+
 def recalcular_escola(db: Session, escola_id: int) -> int:
     """Recalcula todas as notas e o ranking da escola. Retorna nº de alunos."""
     # PRIMEIRA linha, antes de QUALQUER leitura que entre no cálculo: daqui até
@@ -799,28 +1158,47 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         return 0
     escola, ano, matriculas, matific, elefante, pontos_dif = contexto
 
-    # Pontos extras por livro lido NA ESCOLA (opcional): soma nos pontos de
-    # dificuldade os livros lidos dentro da janela do turno da turma. Feito ANTES
-    # das referências para a normalização já considerar o bônus. Desligado => 0.
-    extra = obter_config(db, escola_id, "pesos.elefante_extra", "valores",
-                         {"ativo": False, "pontos_por_livro": 0.0})
-    bonus_por_aluno: dict[int, float] = {}
-    if extra.get("ativo") and float(extra.get("pontos_por_livro", 0) or 0) > 0:
-        turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
-        bonus_por_aluno = _bonus_leitura_na_escola(
-            db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
-        for aid, b in bonus_por_aluno.items():
-            pontos_dif[aid] = pontos_dif.get(aid, 0.0) + b
+    # ===================================================================
+    # PERFIL DE SCORING deste recálculo (contexto INTERNO da escola).
+    # Padrão Constela  → o note interno É a régua institucional (A3 + pesos
+    #                    padrão + auto/linear P90). Ignora a config local.
+    # Personalizado    → usa a config da escola (pesos/dificuldade/normalização
+    #                    + bônus de leitura na escola). Vale SÓ aqui — a rede
+    #                    lê sempre as colunas `*_institucional`, nunca estas.
+    # ===================================================================
+    personalizado = _scoring_personalizado(db, escola_id)
+    if personalizado:
+        # Pontos extras por livro lido NA ESCOLA (opcional): soma nos pontos de
+        # dificuldade os livros lidos dentro da janela do turno da turma. Feito
+        # ANTES das referências para a normalização já considerar o bônus.
+        extra = obter_config(db, escola_id, "pesos.elefante_extra", "valores",
+                             {"ativo": False, "pontos_por_livro": 0.0})
+        bonus_por_aluno: dict[int, float] = {}
+        if extra.get("ativo") and float(extra.get("pontos_por_livro", 0) or 0) > 0:
+            turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
+            bonus_por_aluno = _bonus_leitura_na_escola(
+                db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
+            for aid, b in bonus_por_aluno.items():
+                pontos_dif[aid] = pontos_dif.get(aid, 0.0) + b
 
-    refs, modo, k_vol = _referencias(db, escola_id, matific, elefante, pontos_dif)
+        refs, modo, k_vol = _referencias(db, escola_id, matific, elefante, pontos_dif)
 
-    p_matific = obter_pesos(db, escola_id, "pesos.matific")
-    p_elefante = obter_pesos(db, escola_id, "pesos.elefante")
-    p_questoes = obter_pesos(db, escola_id, "pesos.questoes")
-    p_geral = obter_pesos(db, escola_id, "pesos.geral")
-    pct_matific = obter_pesos_brutos(db, escola_id, "pesos.matific")
-    pct_elefante = obter_pesos_brutos(db, escola_id, "pesos.elefante")
-    pct_questoes = obter_pesos_brutos(db, escola_id, "pesos.questoes")
+        p_matific = obter_pesos(db, escola_id, "pesos.matific")
+        p_elefante = obter_pesos(db, escola_id, "pesos.elefante")
+        p_questoes = obter_pesos(db, escola_id, "pesos.questoes")
+        p_geral = obter_pesos(db, escola_id, "pesos.geral")
+        pct_matific = obter_pesos_brutos(db, escola_id, "pesos.matific")
+        pct_elefante = obter_pesos_brutos(db, escola_id, "pesos.elefante")
+        pct_questoes = obter_pesos_brutos(db, escola_id, "pesos.questoes")
+    else:
+        # PADRÃO: mesmos insumos do perfil institucional, para nota/posição/
+        # detalhes locais baterem EXATAMENTE com as colunas `*_institucional`.
+        bonus_por_aluno = {}
+        (pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante,
+         pct_elefante, p_questoes, pct_questoes) = _insumos_institucionais(
+            matriculas, matific, elefante)
+        modo = "auto"
+        p_geral = _pesos_geral_institucional(db, escola_id)
     # A EXPLICAÇÃO da Nota Geral é DERIVADA dos pesos efetivamente usados, não
     # lida de novo da configuração. Assim ela não tem como divergir da conta: as
     # parcelas exibidas somam 100% e reproduzem a nota. Sem isto, uma rede que só
@@ -871,6 +1249,34 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                 livros_unicos=snap_e.livros_unicos if snap_e else 0,
                 atividades=snap_m.atividades if snap_m else 0,
                 pct_acertos=round(acertos / tentativas * 100, 2) if tentativas else 0.0,
+                pontos_dificuldade=pontos_dif[aluno.id],
+                estrelas=snap_m.estrelas if snap_m else 0,
+                pontuacao_media=snap_m.pontuacao_media if snap_m else 0.0,
+                # AFERIDO por dimensão = a MESMA noção de "dimensão com dado" do
+                # C-01, traduzida para o vocabulário do produto. Uma definição só
+                # no motor: se mudar aqui, muda no ranking, na adoção e na lista
+                # de "ainda não aferidos" ao mesmo tempo.
+                aferido={dim: plat in dimensoes for dim, plat in DIMENSOES.items()},
+                dados_dimensao={
+                    "leitura": {
+                        "livros_unicos": snap_e.livros_unicos if snap_e else 0,
+                        "tempo_leitura_min": snap_e.tempo_leitura_min if snap_e else 0,
+                        "questoes_tentativas": tentativas,
+                        "questoes_acertos": acertos,
+                        "pontos_dificuldade": pontos_dif[aluno.id],
+                    },
+                    "matematica": {
+                        "atividades": snap_m.atividades if snap_m else 0,
+                        "estrelas": snap_m.estrelas if snap_m else 0,
+                        "pontuacao_media": snap_m.pontuacao_media if snap_m else 0.0,
+                    },
+                },
+                # A data do snapshot ATUAL é o que separa "nota baixa" de "nota
+                # velha" — existe no banco desde sempre e nunca chegou a nenhuma
+                # tela de aluno.
+                snapshot_em={
+                    "leitura": _data_iso(snap_e), "matematica": _data_iso(snap_m),
+                },
                 detalhes={
                     "modo_normalizacao": modo,
                     "referencias": refs,
@@ -885,12 +1291,33 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                     # `dimensoes_com_dados` deixa a renormalização auditável: a
                     # tela de explicação mostra a conta com os pesos de fato
                     # usados, e aqui fica registrado POR QUE eles são esses.
+                    # LEGADO (ver `_ordenar_por_dimensao`): esta é a única conta
+                    # do motor que cruza dimensões e não ordena mais nada.
                     "geral": {"pesos": pct_geral, "nota": nota_geral,
-                              "dimensoes_com_dados": sorted(dimensoes)},
+                              "dimensoes_com_dados": sorted(dimensoes),
+                              "legado": True},
                 },
             )
         )
 
+    # NOTA INSTITUCIONAL (régua fixa da rede), por aluno. Na escola PADRÃO a
+    # nota local já É a institucional — reusa direto, sem recalcular. Na escola
+    # PERSONALIZADA a local diverge, então computa a institucional à parte. Esta
+    # é a ÚNICA nota que a rede pode ler; a `resultado.nota_*` (local) fica no
+    # contexto interno da escola.
+    if personalizado:
+        notas_inst = _notas_institucionais(matriculas, matific, elefante)
+    else:
+        notas_inst = {r.aluno.id: (r.nota_matific, r.nota_elefante)
+                      for r in resultados}
+
+    # ORDEM OFICIAL: uma por DIMENSÃO, só entre os aferidos dela (spec §2).
+    _ordenar_por_dimensao(db, escola_id, escola, resultados)
+
+    # ORDEM LEGADO (`Nota.posicao`, ancorada em `nota_geral`): continua sendo
+    # gravada enquanto certificado, cartaz, telão e Top 10 não migrarem para a
+    # ordem por dimensão — são vitrines que exigem ordem única e dependem de
+    # decisão de produto. Nada NOVO deve passar a lê-la.
     criterios = obter_config(
         db, escola_id, "desempate", "criterios", CRITERIOS_DESEMPATE_PADRAO
     )
@@ -909,8 +1336,16 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
             db.add(nota_row)
         nota_row.nota_matific = resultado.nota_matific
         nota_row.nota_elefante = resultado.nota_elefante
+        # Colunas INSTITUCIONAIS — a régua da rede, imune à config local.
+        nm_inst, ne_inst = notas_inst.get(resultado.aluno.id, (0.0, 0.0))
+        nota_row.nota_matific_institucional = nm_inst
+        nota_row.nota_elefante_institucional = ne_inst
         nota_row.nota_geral = resultado.nota_geral
         nota_row.posicao = posicao
+        nota_row.aferido_leitura = bool(resultado.aferido.get("leitura"))
+        nota_row.aferido_matematica = bool(resultado.aferido.get("matematica"))
+        nota_row.posicao_leitura = resultado.posicao_dimensao.get("leitura")
+        nota_row.posicao_matematica = resultado.posicao_dimensao.get("matematica")
         nota_row.detalhes = resultado.detalhes
 
     db.commit()

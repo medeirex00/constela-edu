@@ -124,6 +124,19 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
     usa a plataforma e ainda leu 0 livros é um zero LEGÍTIMO e deve pesar na
     média; quem não usa é ausência de dado e fica fora da conta.
 
+    E o conjunto é o dos MATRICULADOS no ano letivo ativo — o mesmo de
+    ``total_alunos``, de ``_alunos_com_qualquer_dado`` e de
+    ``_totais_plataforma_por_escola``. ``notas`` NÃO é apagada quando o aluno
+    perde a matrícula (o recálculo só grava por cima das linhas do conjunto
+    pontuado), então a nota órfã de quem foi desvinculado — ao excluir uma turma
+    antiga, ao ser movido de escola — continuava entrando na média e no
+    denominador ``alunos_com_nota_*``. Era o MESMO furo que
+    ``_totais_plataforma_por_escola`` já fecha com a matrícula, e produzia dois
+    sintomas: a média puxada pelo dado de quem não está mais na escola e
+    ``alunos_com_nota_elefante > total_alunos`` no cartão. EXISTS (e não JOIN)
+    porque o aluno pode ter matrícula em mais de uma turma: o JOIN duplicaria a
+    linha da nota e distorceria a contagem e a média.
+
     Devolve ``{escola_id: (alunos_com_dado, media)}``.
     """
     if not ids:
@@ -133,6 +146,13 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
         .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id)
         .exists()
     )
+    matriculado = (
+        select(Matricula.id)
+        .where(Matricula.escola_id == Nota.escola_id,
+               Matricula.aluno_id == Nota.aluno_id,
+               Matricula.ano_letivo == Escola.ano_letivo_ativo)
+        .exists()
+    )
     linhas = db.execute(
         select(Nota.escola_id, func.count(Nota.id), func.avg(coluna))
         .join(Aluno, Aluno.id == Nota.aluno_id)
@@ -140,6 +160,7 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
         .where(Nota.escola_id.in_(ids),
                Nota.ano_letivo == Escola.ano_letivo_ativo,
                Aluno.status == "ativo",
+               matriculado,
                tem_dado)
         .group_by(Nota.escola_id)
     ).all()
@@ -209,9 +230,18 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
     # (3) DESEMPENHO por plataforma — média só sobre quem TEM dado dela (ver
     # _medias_por_plataforma). Separa desempenho de cobertura: a média responde
     # "quem usa, vai bem?" e a adoção responde "quantos usam?".
-    med_ele = (_medias_por_plataforma(db, ids, SnapshotElefante, Nota.nota_elefante)
+    #
+    # RÉGUA INSTITUCIONAL (separação institucional × escola): a rede lê SEMPRE as
+    # colunas `nota_*_institucional` — calculadas com o perfil fixo do Constela
+    # (A3 + pesos padrão + linear P90), imunes a qualquer configuração local. Ler
+    # `Nota.nota_elefante`/`nota_matific` (a nota LOCAL da escola) aqui deixaria um
+    # coordenador manipular a posição da escola no ranking da rede mudando os
+    # próprios pesos/dificuldade. Travado por test_scoring_institucional.py.
+    med_ele = (_medias_por_plataforma(db, ids, SnapshotElefante,
+                                      Nota.nota_elefante_institucional)
                if tem_mod_leitura else {})
-    med_mat = (_medias_por_plataforma(db, ids, SnapshotMatific, Nota.nota_matific)
+    med_mat = (_medias_por_plataforma(db, ids, SnapshotMatific,
+                                      Nota.nota_matific_institucional)
                if tem_mod_matematica else {})
     # COBERTURA: alunos distintos com dado de alguma plataforma (numerador real).
     com_dados_por_escola = _alunos_com_qualquer_dado(db, ids)
@@ -353,18 +383,35 @@ def _pontuar_por_percapita(cartoes: list[dict], sufixo: str = "") -> None:
     diferentes comparáveis) e as contagens de ativos. Comparar índices de
     coortes DIFERENTES não é válido — por isso o painel global pontua as escolas
     de novo, com escopo global, em ``sufixo="_global"``, em vez de reaproveitar
-    o índice de rede."""
+    o índice de rede.
+
+    A RÉGUA de cada dimensão sai SÓ da coorte daquela dimensão — os cartões que
+    de fato entram na pontuação dela (contratada **e** com dados). Um cartão de
+    fora não pode definir a régua de quem está dentro: no painel global a coorte
+    mistura redes com CONTRATOS diferentes, e uma rede que não assinou a Leitura
+    (mas tem dado antigo do Elefante em banco) puxava ``melhor_leitura`` para
+    cima e rebaixava o índice de Leitura de todas as redes que assinaram — sem
+    aparecer em ranking nenhum. É o mesmo princípio de ``scoring._referencias`` e
+    de ``_carregar_contexto``: a referência sai do conjunto PONTUADO, nunca de
+    quem está fora dele. Dentro de UMA rede o contrato é o mesmo para todas as
+    escolas e quem não tem dado tem per capita 0, então a régua não muda —
+    nenhum número do painel municipal se move."""
     if not cartoes:
         return
-    melhor_leitura = max((c["livros_por_matricula"] for c in cartoes), default=0.0)
-    melhor_matematica = max((c["estrelas_por_matricula"] for c in cartoes), default=0.0)
+
+    def _na_coorte(c: dict, dimensao: str, ativos: str) -> bool:
+        """O cartão entra na pontuação (e, portanto, na régua) desta dimensão?
+        São dois cortes: módulo fora do plano nem existe; módulo contratado sem
+        importação existe, mas ainda não tem o que pontuar."""
+        return c[ativos] > 0 and dimensao in (c.get("modulos") or list(modulos.TODOS))
+
+    melhor_leitura = max((c["livros_por_matricula"] for c in cartoes
+                          if _na_coorte(c, "leitura", "ativos_elefante")), default=0.0)
+    melhor_matematica = max((c["estrelas_por_matricula"] for c in cartoes
+                             if _na_coorte(c, "matematica", "ativos_matific")), default=0.0)
     for c in cartoes:
-        # Pontua a dimensão que é CONTRATADA **e** tem dados. São dois cortes
-        # diferentes: módulo fora do plano nem existe para a rede; módulo
-        # contratado sem importação existe, mas ainda não tem o que pontuar.
-        mods = c.get("modulos") or list(modulos.TODOS)
-        tem_leitura = c["ativos_elefante"] > 0 and "leitura" in mods
-        tem_matematica = c["ativos_matific"] > 0 and "matematica" in mods
+        tem_leitura = _na_coorte(c, "leitura", "ativos_elefante")
+        tem_matematica = _na_coorte(c, "matematica", "ativos_matific")
         leitura = (_indice_da_rede(c["livros_por_matricula"], melhor_leitura)
                    if tem_leitura else 0.0)
         matematica = (_indice_da_rede(c["estrelas_por_matricula"], melhor_matematica)
@@ -393,10 +440,20 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
 
     # Média da rede PONDERADA por alunos-com-nota (não média de médias, que daria
     # peso igual a uma escola de 10 e uma de 500 alunos).
-    def _ponderada(chave: str) -> float:
-        if not com_dados:
+    #
+    # O PESO é o DENOMINADOR DAQUELA MÉTRICA (Arquitetura 2, spec §1.2 — ausência
+    # não é zero, também na rede). Para as médias POR DIMENSÃO o denominador é o
+    # número de alunos aferidos NAQUELA dimensão, não "alunos com dado de alguma
+    # plataforma": com o peso genérico, a escola que não usa o Elefante entrava na
+    # média de LEITURA da rede com `media_elefante = 0` e puxava o número para
+    # baixo — o mesmo "ausência vira zero" que a arquitetura elimina no aluno,
+    # reaparecendo um nível acima. `media_geral` e `pontuacao_geral` seguem com o
+    # peso genérico porque o denominador delas É "alunos com algum dado".
+    def _ponderada(chave: str, peso: str = "alunos_com_dados") -> float:
+        total = sum(c[peso] for c in cartoes)
+        if not total:
             return 0.0
-        return round(sum(c[chave] * c["alunos_com_dados"] for c in cartoes) / com_dados, 1)
+        return round(sum(c[chave] * c[peso] for c in cartoes) / total, 1)
 
     media_rede = _ponderada("media_geral")
     indice_rede = _ponderada("pontuacao_geral")
@@ -455,8 +512,9 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
             # Continua sendo o retrato honesto de desempenho da rede — só não
             # serve para COMPARAR escolas entre si (é o que o índice faz).
             "media_geral": media_rede,
-            "media_matific": _ponderada("media_matific"),
-            "media_elefante": _ponderada("media_elefante"),
+            # Peso = alunos aferidos NAQUELA dimensão (ver `_ponderada`).
+            "media_matific": _ponderada("media_matific", "alunos_com_nota_matific"),
+            "media_elefante": _ponderada("media_elefante", "alunos_com_nota_elefante"),
             # ÍNDICE (0–1000) da rede: média ponderada do índice das escolas — a
             # métrica comparável, usada nas metas e no boletim.
             "pontuacao_geral": indice_rede,
@@ -516,6 +574,29 @@ METRICAS_RANKING = {
     "indice_matematica": "pontuacao_matematica",
 }
 
+# DIMENSÃO de cada métrica de ranking — e, por consequência, qual COBERTURA
+# desempata quando duas escolas empatam nela.
+#
+# O desempate de um ranking DE DIMENSÃO tem de ser LOCAL a ela. É a mesma regra
+# que `scoring.CRITERIOS_DESEMPATE_DIMENSAO` já fixou no nível do ALUNO ("num
+# ranking de Leitura, deixar a nota de Matemática desempatar faria a medalha de
+# leitura ser decidida pela matemática"), aplicada um nível acima. O desempate
+# genérico é `adocao` = % de alunos com dado de ALGUMA plataforma: num empate de
+# índice de LEITURA entre duas escolas, quem passava na frente era a que usa
+# mais o **Matific** — a matemática decidindo a colocação de leitura na tela que
+# a Secretaria usa para premiar. Métrica de dimensão desempata pela adoção
+# DAQUELA plataforma; métrica de união (`geral`, `engajamento`) segue com a
+# adoção geral, que é o denominador dela.
+DIMENSAO_DA_METRICA: dict[str, str] = {
+    "leitura": "leitura", "indice_leitura": "leitura", "elefante": "leitura",
+    "livros": "leitura", "livros_aluno": "leitura",
+    "matematica": "matematica", "indice_matematica": "matematica",
+    "matific": "matematica", "estrelas": "matematica",
+    "estrelas_aluno": "matematica", "atividades_aluno": "matematica",
+}
+DESEMPATE_DA_DIMENSAO: dict[str, str] = {"leitura": "adocao_elefante",
+                                         "matematica": "adocao_matific"}
+
 
 def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
                     metrica: str = "geral") -> list[dict]:
@@ -527,10 +608,15 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
     As abas do Ranking da Rede usam: ``indice_geral`` (Geral), ``livros_aluno``
     (Leitura — livros ÷ alunos, o critério principal), ``estrelas_aluno``
     (Matemática) e ``engajamento`` (participação). Todas per capita ou índice, de
-    modo que a escola GRANDE não sobe só por ter mais alunos."""
+    modo que a escola GRANDE não sobe só por ter mais alunos.
+
+    O DESEMPATE é local à dimensão da métrica (ver ``DIMENSAO_DA_METRICA``): num
+    ranking de Leitura, a cobertura que desempata é a do Elefante, nunca a
+    adoção de alguma plataforma qualquer."""
     chave = METRICAS_RANKING.get(metrica, "pontuacao_geral")
+    desempate = DESEMPATE_DA_DIMENSAO.get(DIMENSAO_DA_METRICA.get(metrica), "adocao")
     cartoes = [c for c in _kpis_da_rede(db, rede_id) if c["alunos_com_dados"] > 0]
-    cartoes.sort(key=lambda c: (-c[chave], -c["adocao"], c["nome"].casefold()))
+    cartoes.sort(key=lambda c: (-c[chave], -c[desempate], c["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
         cartao["posicao"] = posicao
     return cartoes[:limite]
@@ -553,13 +639,20 @@ def dashboard_global(db: Session) -> dict:
         alunos = sum(c["total_alunos"] for c in cartoes)
         com_dados = sum(c["alunos_com_dados"] for c in cartoes)
 
-        def _pond(chave: str, _cartoes=cartoes, _com=com_dados) -> float:
-            if not _com:
+        # Mesmo peso-por-denominador de `dashboard_rede._ponderada`: a média de
+        # LEITURA da rede pesa pelos alunos aferidos EM LEITURA. Sem isso, uma
+        # escola que não usa o Elefante entra na média de leitura com zero.
+        def _pond(chave: str, peso: str = "alunos_com_dados",
+                  _cartoes=cartoes) -> float:
+            total = sum(c[peso] for c in _cartoes)
+            if not total:
                 return 0.0
-            return round(sum(c[chave] * c["alunos_com_dados"] for c in _cartoes) / _com, 1)
+            return round(sum(c[chave] * c[peso] for c in _cartoes) / total, 1)
 
         livros = sum(c["livros"] for c in cartoes)
         estrelas = sum(c["estrelas"] for c in cartoes)
+        aferidos_ele = sum(c["alunos_com_nota_elefante"] for c in cartoes)
+        aferidos_mat = sum(c["alunos_com_nota_matific"] for c in cartoes)
         cartoes_rede.append({
             "rede_id": rede.id, "nome": rede.nome, "uf": rede.uf, "status": rede.status,
             "escolas": len(cartoes),
@@ -568,8 +661,12 @@ def dashboard_global(db: Session) -> dict:
             "alunos_com_dados": com_dados,
             "adocao": round(com_dados / alunos * 100, 1) if alunos else 0.0,
             "media_geral": _pond("media_geral"),
-            "media_matific": _pond("media_matific"),
-            "media_elefante": _pond("media_elefante"),
+            "media_matific": _pond("media_matific", "alunos_com_nota_matific"),
+            "media_elefante": _pond("media_elefante", "alunos_com_nota_elefante"),
+            # Denominadores POR DIMENSÃO da rede — o peso das médias no nível
+            # global (`_pond_global`) e o "de quantos alunos" de cada média.
+            "alunos_com_nota_elefante": aferidos_ele,
+            "alunos_com_nota_matific": aferidos_mat,
             "livros": livros,
             "atividades": sum(c["atividades"] for c in cartoes),
             "estrelas": estrelas,
@@ -589,10 +686,11 @@ def dashboard_global(db: Session) -> dict:
 
     total_com_dados = sum(r["alunos_com_dados"] for r in cartoes_rede)
 
-    def _pond_global(chave: str) -> float:
-        if not total_com_dados:
+    def _pond_global(chave: str, peso: str = "alunos_com_dados") -> float:
+        total = sum(r[peso] for r in cartoes_rede)
+        if not total:
             return 0.0
-        return round(sum(r[chave] * r["alunos_com_dados"] for r in cartoes_rede) / total_com_dados, 1)
+        return round(sum(r[chave] * r[peso] for r in cartoes_rede) / total, 1)
 
     # Comparação ENTRE REDES: índice per capita na coorte "todas as redes".
     _pontuar_por_percapita(cartoes_rede)
@@ -619,8 +717,8 @@ def dashboard_global(db: Session) -> dict:
             "estrelas": sum(r["estrelas"] for r in cartoes_rede),
             "alunos_com_dados": total_com_dados,
             "media_geral": _pond_global("media_geral"),
-            "media_matific": _pond_global("media_matific"),
-            "media_elefante": _pond_global("media_elefante"),
+            "media_matific": _pond_global("media_matific", "alunos_com_nota_matific"),
+            "media_elefante": _pond_global("media_elefante", "alunos_com_nota_elefante"),
             "pontuacao_geral": _pond_global("pontuacao_geral"),
             "escolas_em_atencao": sum(r["escolas_em_atencao"] for r in cartoes_rede),
         },
@@ -688,6 +786,23 @@ def remover_meta(db: Session, rede_id: int, metrica: str) -> None:
         MetaRede.rede_id == rede_id, MetaRede.metrica == metrica))
 
 
+# Peso (= denominador) de cada meta que é MÉDIA DE DESEMPENHO. É o mesmo peso
+# com que `dashboard_rede._ponderada` calcula o total da rede: se ele é zero, o
+# "atual" não é um desempenho zero — é a ausência de medição.
+_PESO_DA_META = {
+    "media_elefante": "alunos_com_nota_elefante",
+    "media_matific": "alunos_com_nota_matific",
+    "media_geral": "alunos_com_dados",
+}
+
+
+def _meta_medida(metrica: str, cartoes: list[dict]) -> bool:
+    """A métrica tem população aferida na rede hoje? Contagens, adoção e índice
+    per capita não passam por aqui: neles o zero é um fato sobre as matrículas."""
+    peso = _PESO_DA_META.get(metrica)
+    return True if peso is None else sum(c.get(peso, 0) for c in cartoes) > 0
+
+
 def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) -> list[dict]:
     """Metas cadastradas + progresso REAL: valor ATUAL da rede / alvo (limitado a
     100%) + quantas escolas COM dados já atingiram (só para métricas comparáveis
@@ -713,6 +828,15 @@ def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) ->
             "sufixo": cfg["sufixo"], "alvo": round(m.alvo, 1), "atual": round(atual, 1),
             "progresso": progresso, "atingida": atual >= m.alvo, "descricao": m.descricao,
             "comparavel": cfg["comparavel"],
+            # O indicador FOI MEDIDO? As médias 0–100 são DESEMPENHO: sem
+            # ninguém aferido, `_ponderada` devolve 0.0 por falta de peso (não
+            # porque a rede tirou zero), e a linha da meta exibia "0,0 / 70,0"
+            # ao lado de um cartão que, no mesmo painel, já mostra "—" para o
+            # mesmo número. Ausência não é zero também aqui — e o campo é
+            # ADITIVO: quem não o lê continua vendo exatamente o que via.
+            # As demais métricas (índice, adoção, contagens) têm zero legítimo:
+            # "nenhuma escola usa" é um fato medido sobre as matrículas.
+            "medida": _meta_medida(m.metrica, dados["escolas"]),
             "escolas_atingiram": None, "escolas_total": None,
         }
         # A contagem "X de Y escolas atingiram" só existe para métrica

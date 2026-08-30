@@ -43,6 +43,66 @@ from app.services.audit import registrar
 router = APIRouter(prefix="/escolas/{escola_id}/configuracoes", tags=["Configurações"])
 
 NAMESPACES_PESOS = {"matific", "elefante", "questoes", "geral"}
+MODOS_PERFIL_SCORING = {"institucional", "personalizado"}
+
+
+# --- Perfil de scoring: institucional (rede) × personalizado (interno) -------
+
+class PerfilScoringOut(BaseModel):
+    modo: str  # "institucional" | "personalizado"
+
+
+class PerfilScoringIn(BaseModel):
+    modo: str = Field(description='"institucional" (padrão Constela) ou "personalizado"')
+
+
+@router.get("/perfil-scoring", response_model=PerfilScoringOut)
+def obter_perfil_scoring(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+):
+    """Régua do ranking INTERNO da escola: ``institucional`` (padrão Constela) ou
+    ``personalizado`` (config da própria escola). NÃO afeta o ranking da rede."""
+    modo = scoring.obter_config(db, escola_id, scoring.PERFIL_SCORING_NS, "modo",
+                                "institucional")
+    return PerfilScoringOut(modo=str(modo))
+
+
+@router.put("/perfil-scoring", response_model=PerfilScoringOut)
+def definir_perfil_scoring(
+    dados: PerfilScoringIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Escolhe a régua do ranking INTERNO da escola. IMPORTANTE: personalizar NÃO
+    muda a posição da escola no ranking da REDE — esse usa sempre a régua
+    institucional (colunas ``nota_*_institucional``). Dispara recálculo."""
+    modo = str(dados.modo).strip().lower()
+    if modo not in MODOS_PERFIL_SCORING:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            'modo deve ser "institucional" ou "personalizado".')
+    row = db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == scoring.PERFIL_SCORING_NS,
+            Configuracao.chave == "modo",
+        )
+    ).scalar_one_or_none()
+    anterior = str(row.valor) if row else "institucional"
+    if row is None:
+        row = Configuracao(escola_id=escola_id, namespace=scoring.PERFIL_SCORING_NS,
+                           chave="modo", valor=modo)
+        db.add(row)
+    else:
+        row.valor = modo
+    registrar(db, "pesos.alterados", escola_id=escola_id, usuario_id=usuario.id,
+              entidade="configuracao",
+              detalhes={"perfil_scoring": {"de": anterior, "para": modo}})
+    db.commit()
+    scoring.recalcular_escola(db, escola_id)
+    return PerfilScoringOut(modo=modo)
 
 
 # --- Pesos (PRD §29, §59, §60) ----------------------------------------------

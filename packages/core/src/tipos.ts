@@ -76,6 +76,38 @@ export interface Professor {
   observacoes: string | null;
 }
 
+/** As duas dimensões de desempenho (Arquitetura 2). Cada uma é medida na sua
+ *  própria plataforma e NÃO é comparável com a outra: não existe ordem única
+ *  entre elas. */
+export type Dimensao = "leitura" | "matematica";
+
+/** Desempenho do aluno em UMA dimensão.
+ *
+ *  `aferido: false` significa AUSÊNCIA de dado — `nota` e `posicao` vêm `null`
+ *  e a tela mostra "—". Nunca 0: o zero fica reservado ao zero LEGÍTIMO (tem
+ *  snapshot, ainda não produziu), que vem com `aferido: true` e `nota: 0`. */
+export interface DesempenhoDimensao {
+  dimensao: Dimensao | string;
+  plataforma: string;
+  contratada: boolean;
+  aferido: boolean;
+  nota: number | null;
+  posicao: number | null;
+  /** Denominador da posição ("8º de 21 aferidos em Leitura"). */
+  n_aferidos: number;
+  /** Data do snapshot que sustenta a nota — distingue nota baixa de nota velha. */
+  snapshot_em: string | null;
+  /** Indicadores brutos da própria dimensão (livros/tempo ou atividades/estrelas). */
+  dados: Record<string, number>;
+}
+
+/** Cobertura do aluno: |D| / |P|. Fica AO LADO do desempenho, nunca somada. */
+export interface AdocaoAluno {
+  contratadas: string[];
+  com_dados: string[];
+  pct: number;
+}
+
 export interface RankingItem {
   posicao: number;
   aluno_id: number;
@@ -84,7 +116,74 @@ export interface RankingItem {
   ano_escolar: string | null;
   nota_matific: number;
   nota_elefante: number;
+  /** LEGADO: composição entre dimensões. Não ordena mais nada. */
   nota_geral: number;
+  /** DISCRIMINANTE das duas notas acima: `nota_matific`/`nota_elefante` chegam
+   *  `0.0` tanto para quem NÃO tem snapshot da plataforma quanto para quem tem
+   *  e ainda não produziu — e a lista legada (sem `?dimensao=`) traz os dois
+   *  misturados, porque ela não corta por aferido.
+   *
+   *  Sem estes dois campos, o Top 10 do painel (web e app) não tem como mostrar
+   *  "—" para o primeiro caso: ele exibe "0,0" e afirma que a criança foi
+   *  medida em matemática quando ela nunca abriu o Matific.
+   *
+   *  `routers/rankings.py::_ranking` carimba os dois em TODO item, inclusive na
+   *  rota legada, a partir das colunas `Nota.aferido_*` (existência do snapshot,
+   *  nunca `nota > 0`). São opcionais só por compatibilidade: contra um servidor
+   *  ANTERIOR ao carimbo eles vêm `undefined`, e `notaDaMateria` mantém o
+   *  comportamento de exibir o número em vez de inventar uma ausência. */
+  aferido_leitura?: boolean | null;
+  aferido_matematica?: boolean | null;
+  // --- Preenchidos quando a rota é chamada com `?dimensao=` ------------------
+  dimensao?: Dimensao | string | null;
+  /** Nota DAQUELA dimensão. Quem não é aferido não entra na lista. */
+  nota?: number | null;
+  aferido?: boolean | null;
+  n_aferidos?: number | null;
+  dados?: Record<string, number>;
+  snapshot_em?: string | null;
+  /** Cobertura do aluno (0–100), ao lado do desempenho — nunca somada a ele. */
+  adocao?: number | null;
+  /** TURNO da turma do aluno (`Turma.turno` cru: manha|tarde|noite|integral|null).
+   *  Preenchido no ranking de leitura POR TURNO; a série (`ano_escolar`) segue
+   *  sendo só informação exibida ao lado — nunca entra na nota. */
+  turno?: string | null;
+}
+
+/** Um turno e o ranking de leitura dos alunos DAQUELE turno — a competição
+ *  escolar oficial, dividida por `Turma.turno` (descoberto do banco). Dentro de
+ *  cada turno competem TODOS os alunos do 1º ao 5º ano juntos, pela mesma
+ *  `nota_elefante` (régua única da escola). A posição reinicia em 1 por turno. */
+export interface RankingTurno {
+  turno: string | null;
+  turno_rotulo: string;
+  total: number;
+  alunos: RankingItem[];
+}
+
+/** Aluno SEM dado numa dimensão — visão OPERACIONAL, não competitiva: sem nota
+ *  e sem posição de propósito. */
+export interface AlunoNaoAferido {
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  ano_escolar: string | null;
+}
+
+export interface DimensaoNaoAferida {
+  dimensao: string;
+  plataforma: string;
+  n_aferidos: number;
+  total: number;
+  alunos: AlunoNaoAferido[];
+}
+
+export interface NaoAferidos {
+  contratadas: string[];
+  total_alunos: number;
+  dimensoes: DimensaoNaoAferida[];
+  /** Sem dado em NENHUMA dimensão contratada: adoção 0%. */
+  sem_nenhuma: AlunoNaoAferido[];
 }
 
 export interface Dashboard {
@@ -95,7 +194,18 @@ export interface Dashboard {
   total_atividades: number;
   total_livros: number;
   tempo_leitura_min: number;
+  /** Desempenho por DIMENSÃO — cada média só sobre quem TEM dado da plataforma,
+   *  com o seu próprio denominador ao lado. */
+  media_leitura?: number;
+  alunos_com_dado_leitura?: number;
+  media_matematica?: number;
+  alunos_com_dado_matematica?: number;
+  /** Média das dimensões COM DADO. Mantida por compatibilidade; não ordena. */
   media_geral: number;
+  /** Cobertura: % com dado de ALGUMA plataforma contratada. */
+  alcance?: number;
+  /** Quantos não têm dado de nenhuma — a lista de ação da coordenação. */
+  nao_aferidos?: number;
   top10: RankingItem[];
 }
 
@@ -128,13 +238,18 @@ export interface PerfilAluno {
   aluno: Aluno;
   nota_matific: number;
   nota_elefante: number;
+  /** LEGADO: composição entre dimensões — `dimensoes` é a fonte oficial. */
   nota_geral: number;
   posicao: number | null;
+  /** Desempenho por dimensão contratada (a verdade oficial) + a cobertura. */
+  dimensoes?: DesempenhoDimensao[];
+  adocao?: AdocaoAluno | null;
   detalhes: {
     modo_normalizacao?: string;
     matific?: { indicadores: LinhaCalculo[]; nota: number };
     elefante?: { indicadores: LinhaCalculo[]; nota: number };
-    geral?: { pesos: Record<string, number>; nota: number };
+    /** LEGADO: a equação que compunha as dimensões. `legado: true` no motor. */
+    geral?: { pesos: Record<string, number>; nota: number; legado?: boolean };
   };
   calculada_em: string | null;
   leitura_niveis?: LeituraNiveis | null;
@@ -253,8 +368,16 @@ export interface AlunoGestao {
   turma: string | null;
   ano_escolar: string | null;
   created_at: string | null;
+  /** LEGADO (composição entre dimensões): não ordena mais nada. */
   nota_geral: number | null;
   posicao: number | null;
+  /** Por DIMENSÃO — `null` quando não aferido (a tela mostra "—"), nunca 0. */
+  nota_leitura?: number | null;
+  nota_matematica?: number | null;
+  aferido_leitura?: boolean;
+  aferido_matematica?: boolean;
+  posicao_leitura?: number | null;
+  posicao_matematica?: number | null;
 }
 
 // --- Fase 2: importações e plataformas ---------------------------------------
@@ -377,7 +500,12 @@ export interface ItemEvolucaoResumo {
   aluno_id: number;
   nome: string;
   turma: string;
+  /** LEGADO: a ordem única de crescimento. */
   nota_evolucao: number;
+  /** Crescimento por DIMENSÃO na janela — `null` = não aferido nela. */
+  notas?: Partial<Record<Dimensao, number | null>>;
+  posicao_dimensao?: Partial<Record<Dimensao, number | null>>;
+  n_aferidos?: Partial<Record<Dimensao, number>>;
 }
 
 export interface AlertaPedagogico {
@@ -401,7 +529,12 @@ export interface EventoMural {
 export interface PacoteSincronizacao {
   gerado_em: string;
   dashboard: Dashboard;
+  /** LEGADO: ordem única por nota geral. */
   ranking: RankingItem[];
+  /** Uma lista POR MATÉRIA contratada — só os alunos aferidos em cada uma.
+   *  Viaja junto para que o app OFFLINE nunca precise compor nota nenhuma
+   *  localmente (compor entre matérias é o que a Arquitetura 2 elimina). */
+  ranking_por_dimensao?: Partial<Record<Dimensao, RankingItem[]>>;
   evolucao: ItemEvolucaoResumo[];
   alertas: AlertaPedagogico[];
   mural: EventoMural[];

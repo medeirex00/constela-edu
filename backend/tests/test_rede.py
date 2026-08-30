@@ -62,8 +62,14 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais, *, livros_cada=5,
                                 livros_unicos=livros_cada, tempo_leitura_min=60))
         db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                atividades=20, estrelas=estrelas_cada))
+        # A rede lê SEMPRE as colunas institucionais (separação institucional ×
+        # escola). Como o teste semeia a Nota direto (sem recalcular_escola), é
+        # aqui que a institucional precisa nascer com o MESMO valor da local —
+        # senão a média da rede leria 0.0 (CAUSA A).
         db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
-                    nota_geral=ng, nota_elefante=ng, nota_matific=ng, posicao=i + 1))
+                    nota_geral=ng, nota_elefante=ng, nota_matific=ng,
+                    nota_elefante_institucional=ng, nota_matific_institucional=ng,
+                    posicao=i + 1))
     return esc
 
 

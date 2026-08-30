@@ -34,6 +34,15 @@ def montar_escola(db, modo_referencia="manual"):
     db.add(escola)
     db.flush()
 
+    # Este helper monta uma escola com régua CONFIGURÁVEL (pesos custom, níveis
+    # de dificuldade próprios e normalização "manual"). Após a separação
+    # institucional × escola, o modo PADRÃO ignora essa config local e usa o
+    # perfil institucional (A3 + pesos padrão + auto/P90). Marcamos a escola como
+    # PERSONALIZADA para restaurar EXATAMENTE o comportamento antigo, que é o que
+    # estes testes exercitam (a config local governa a nota interna da escola).
+    db.add(Configuracao(escola_id=escola.id, namespace="scoring.perfil",
+                        chave="modo", valor="personalizado"))
+
     for namespace, valores in scoring.PESOS_PADRAO.items():
         db.add(Configuracao(escola_id=escola.id, namespace=namespace,
                             chave="valores", valor=valores))

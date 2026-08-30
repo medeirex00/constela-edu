@@ -6,6 +6,7 @@ import { BookMarked } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
+import { CompeticaoLeituraTurno } from "../components/CompeticaoLeituraTurno";
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
@@ -48,9 +49,23 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
       {!embutido && (
         <PageHeader
           titulo="Ranking de Leitura"
-          descricao="Livros, pontos de dificuldade e tempo de leitura somados apenas no período escolhido."
+          descricao="A competição escolar oficial (nota 0–100) é dividida por turno; abaixo, o ranking por período (pontos)."
         />
       )}
+
+      {/* COMPETIÇÃO OFICIAL: nota 0–100 por turno (régua única da escola). */}
+      <div className="mb-6">
+        <CompeticaoLeituraTurno />
+      </div>
+
+      {/* RANKING POR PERÍODO (temporal, pontos brutos) — preservado como estava. */}
+      <h2 className="mb-2 mt-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+        Ranking por período (pontos)
+      </h2>
+      <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+        Melhor leitor da semana/mês/bimestre — soma de livros, pontos de dificuldade e
+        tempo apenas no período escolhido. Não é a competição escolar oficial acima.
+      </p>
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />

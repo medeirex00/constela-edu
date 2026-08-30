@@ -62,8 +62,12 @@ def _escola(db, rede_id, nome, alunos, *, notas_ele=None, notas_mat=None):
             db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                    atividades=20, estrelas=100))
         # O motor grava Nota para TODO matriculado — inclusive quem não usa (0).
+        # A rede lê as colunas `*_institucional`: semeamos com o MESMO valor local
+        # (o teste quer testar esse desempenho; sem recalcular_escola elas nascem 0).
         db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
                     nota_elefante=ne or 0.0, nota_matific=nm or 0.0,
+                    nota_elefante_institucional=ne or 0.0,
+                    nota_matific_institucional=nm or 0.0,
                     nota_geral=((ne or 0.0) + (nm or 0.0)) / 2, posicao=i + 1))
     return esc
 
@@ -189,7 +193,9 @@ def test_f_aluno_duplicado_nao_infla_cobertura_nem_media(db):
     db.add(SnapshotElefante(escola_id=esc.id, aluno_id=dup.id, importacao_id=imp.id,
                             livros_unicos=5, tempo_leitura_min=60))
     db.add(Nota(escola_id=esc.id, aluno_id=dup.id, ano_letivo=2026,
-                nota_elefante=20.0, nota_matific=0.0, nota_geral=10.0, posicao=11))
+                nota_elefante=20.0, nota_matific=0.0,
+                nota_elefante_institucional=20.0, nota_matific_institucional=0.0,
+                nota_geral=10.0, posicao=11))
     db.commit()
 
     c = _cartao(db, rede.id, "Escola F")

@@ -23,7 +23,7 @@ import pytest
 from sqlalchemy import event, func, select
 
 from app.core import database as core_db
-from app.models import Nota, SnapshotElefante, SnapshotMatific
+from app.models import Configuracao, Nota, SnapshotElefante, SnapshotMatific
 from app.services import scoring
 
 # Tabelas cujo SELECT ALIMENTA o cálculo: se algum destes for lido antes da
@@ -302,6 +302,15 @@ def test_formula_inalterada(db, escola_completa):
     mútua: não pode mexer em peso, normalização, nota nem desempate. Se este
     teste ficar vermelho, a fórmula mudou — não é regressão de concorrência."""
     escola_id = _semear_snapshots(db, escola_completa)
+    # A escola de teste usa uma régua CUSTOM (NivelDificuldade próprio no fixture:
+    # AA=1.0, D=4.0) e estes valores foram CONGELADOS com essa régua. No padrão
+    # Constela a nota LOCAL passou a ser a institucional (dificuldade A3), que
+    # ignora o NivelDificuldade custom. Marcar a escola como PERSONALIZADA faz o
+    # cálculo local seguir idêntico ao congelado — é o guard da FÓRMULA (não da
+    # separação institucional×escola), então preserva-se a config original.
+    db.add(Configuracao(escola_id=escola_id, namespace=scoring.PERFIL_SCORING_NS,
+                        chave="modo", valor="personalizado"))
+    db.commit()
     scoring.recalcular_escola(db, escola_id)
 
     por_nome = {

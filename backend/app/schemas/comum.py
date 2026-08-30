@@ -180,6 +180,42 @@ class AlunoUpdate(BaseModel):
     observacoes: str | None = Field(default=None, max_length=1000)
 
 
+class DimensaoAlunoOut(BaseModel):
+    """Desempenho do aluno em UMA dimensão (Leitura / Matemática).
+
+    Arquitetura 2 (`docs/spec-arquitetura-2.md` §1.1): a dimensão é a unidade de
+    verdade do desempenho. As quatro informações viajam SEMPRE juntas — nota,
+    posição, denominador e quantidade de dados —, porque nenhuma delas se
+    interpreta sozinha ("3º" sem `n_aferidos` parece comparável entre dimensões,
+    e não é).
+
+    `aferido=False` significa AUSÊNCIA de snapshot: `nota` e `posicao` vêm
+    `None` (a tela mostra `—`), jamais 0,0. O zero fica reservado ao zero
+    LEGÍTIMO (tem snapshot, ainda não produziu), que vem com `aferido=True`.
+    """
+    dimensao: str
+    plataforma: str
+    contratada: bool = True
+    aferido: bool = False
+    nota: float | None = None
+    posicao: int | None = None
+    n_aferidos: int = 0
+    # Data do snapshot que sustenta a nota — é o que distingue "nota baixa" de
+    # "nota velha"; existia no banco e não chegava a nenhuma tela de aluno.
+    snapshot_em: str | None = None
+    # Indicadores brutos da própria dimensão (livros/tempo/questões ou
+    # atividades/estrelas/média).
+    dados: dict = {}
+
+
+class AdocaoAlunoOut(BaseModel):
+    """Cobertura do aluno: |D| / |P| (§3.2). Fica AO LADO do desempenho —
+    nunca somada, multiplicada ou promediada com ele (§3.4)."""
+    contratadas: list[str] = []
+    com_dados: list[str] = []
+    pct: float = 0.0
+
+
 class AlunoGestaoOut(ORMModel):
     """Aluno com nota e data de cadastro — usado no painel de gestão da turma."""
     id: int
@@ -190,8 +226,17 @@ class AlunoGestaoOut(ORMModel):
     turma: str | None = None
     ano_escolar: str | None = None
     created_at: datetime | None = None
+    # LEGADO (composição entre dimensões): não ordena mais nada. Preservado
+    # enquanto os clientes não migrados ainda o leem.
     nota_geral: float | None = None
     posicao: int | None = None
+    # Desempenho por DIMENSÃO — a verdade oficial. `None` = não aferido (`—`).
+    nota_leitura: float | None = None
+    nota_matematica: float | None = None
+    aferido_leitura: bool = False
+    aferido_matematica: bool = False
+    posicao_leitura: int | None = None
+    posicao_matematica: int | None = None
 
 
 class AcaoAlunos(BaseModel):
@@ -260,8 +305,13 @@ class AlunoPerfilOut(BaseModel):
     aluno: AlunoOut
     nota_matific: float
     nota_elefante: float
+    # LEGADO: a composição entre dimensões. Não ordena mais nada e não é a
+    # fonte oficial — `dimensoes` é. Preservado enquanto os clientes migram.
     nota_geral: float
     posicao: int | None
+    # Desempenho por DIMENSÃO (a verdade oficial) + a cobertura ao lado.
+    dimensoes: list[DimensaoAlunoOut] = []
+    adocao: AdocaoAlunoOut | None = None
     detalhes: dict
     calculada_em: datetime | None
     leitura_niveis: LeituraNiveisOut | None = None
@@ -342,6 +392,14 @@ class ReferenciasUpdate(BaseModel):
 # --- Ranking e Dashboard ----------------------------------------------------
 
 class RankingItemOut(BaseModel):
+    """Item de ranking de aluno.
+
+    Serve às DUAS formas: o ranking por DIMENSÃO (Leitura / Matemática — a
+    ordenação oficial da Arquitetura 2) e o Ranking Geral LEGADO, ainda
+    consumido pelas vitrines e pelos clientes não migrados. Os campos por
+    dimensão vêm nulos quando a rota é chamada sem `?dimensao=`, então o
+    contrato antigo continua válido bit a bit.
+    """
     posicao: int
     aluno_id: int
     nome: str
@@ -349,7 +407,80 @@ class RankingItemOut(BaseModel):
     ano_escolar: str | None
     nota_matific: float
     nota_elefante: float
+    # LEGADO: composição entre dimensões; não ordena mais nada.
     nota_geral: float
+    # Discriminante de AFERIÇÃO por dimensão — carimbado SEMPRE, inclusive na
+    # rota LEGADA (sem `?dimensao=`). O Top 5 do painel (web e app) imprime
+    # `nota_elefante · nota_matific` lado a lado: sem estes dois campos o
+    # cliente não tem como separar "não usa o Matific" (ausência: `—`) de "usa
+    # e tirou 0,0" (zero legítimo), e a criança que só lê aparecia como
+    # "72,0 · 0,0" na tela mais visível do produto. `notaDaMateria`
+    # (packages/core) já renderiza o `—` a partir deles.
+    # `None` = servidor antigo/cliente que não recebeu o carimbo — nesse caso o
+    # cliente mantém o comportamento anterior em vez de inventar uma ausência.
+    aferido_leitura: bool | None = None
+    aferido_matematica: bool | None = None
+    # --- Por dimensão (preenchidos só quando a rota recebe `?dimensao=`) ------
+    dimensao: str | None = None
+    # A nota DAQUELA dimensão. Nunca 0,0 por ausência: quem não é aferido não
+    # entra na lista (aparece na visão de "ainda não aferidos").
+    nota: float | None = None
+    aferido: bool | None = None
+    # Denominador da posição — "8º de 21 aferidos em Leitura". Sem ele, um "3º"
+    # numa dimensão e um "3º" na outra parecem comparáveis, e não são.
+    n_aferidos: int | None = None
+    # Indicadores brutos DAQUELA dimensão (livros/tempo/questões ou
+    # atividades/estrelas/média) + a data do snapshot que sustenta a nota.
+    dados: dict = {}
+    snapshot_em: str | None = None
+    # Cobertura do aluno (|D| / |P| × 100): quantas das dimensões contratadas
+    # ele de fato usa. Fica AO LADO do desempenho, nunca somada a ele.
+    adocao: float | None = None
+    # TURNO da turma do aluno (`Turma.turno` cru: manha|tarde|noite|integral|None).
+    # Preenchido só no ranking de leitura POR TURNO; a série (`ano_escolar`) segue
+    # sendo só informação exibida ao lado — nunca entra na nota.
+    turno: str | None = None
+
+
+class RankingTurnoOut(BaseModel):
+    """Um turno e o ranking de leitura dos alunos DAQUELE turno.
+
+    A competição escolar de leitura é dividida por ``Turma.turno`` (descoberto do
+    banco, nunca hardcoded): dentro de cada turno competem TODOS os alunos ativos
+    do 1º ao 5º ano juntos, ordenados pela MESMA ``nota_elefante`` (régua única da
+    escola). A posição reinicia em 1 a cada turno."""
+    turno: str | None            # valor cru de Turma.turno (None = turma sem turno)
+    turno_rotulo: str            # rótulo de apresentação ("Manhã", "Tarde", ...)
+    total: int
+    alunos: list["RankingItemOut"]
+
+
+class AlunoNaoAferidoOut(BaseModel):
+    """Aluno SEM dado numa dimensão — visão operacional, não competitiva.
+
+    Sem nota e sem posição de propósito: quem nunca foi alcançado não é o pior
+    da escola, é a criança que a coordenação precisa ver.
+    """
+    aluno_id: int
+    nome: str
+    turma: str | None
+    ano_escolar: str | None
+
+
+class DimensaoNaoAferidaOut(BaseModel):
+    dimensao: str
+    plataforma: str
+    n_aferidos: int
+    total: int
+    alunos: list[AlunoNaoAferidoOut]
+
+
+class NaoAferidosOut(BaseModel):
+    contratadas: list[str]
+    total_alunos: int
+    dimensoes: list[DimensaoNaoAferidaOut]
+    # Sem dado em NENHUMA dimensão contratada: adoção 0%, `—` em toda parte.
+    sem_nenhuma: list[AlunoNaoAferidoOut]
 
 
 class DashboardOut(BaseModel):
@@ -360,7 +491,19 @@ class DashboardOut(BaseModel):
     total_atividades: int
     total_livros: int
     tempo_leitura_min: int
+    # Desempenho por DIMENSÃO — cada média sobre os alunos QUE TÊM dado daquela
+    # plataforma, com o seu próprio denominador ao lado.
+    media_leitura: float = 0.0
+    alunos_com_dado_leitura: int = 0
+    media_matematica: float = 0.0
+    alunos_com_dado_matematica: int = 0
+    # Média das dimensões COM DADO (a mesma régua do cartão da escola no painel
+    # da rede). Mantida por compatibilidade; não ordena nada.
     media_geral: float
+    # Cobertura: % de alunos com dado de ALGUMA plataforma contratada, e quantos
+    # não têm dado de nenhuma (a lista de ação da coordenação).
+    alcance: float = 0.0
+    nao_aferidos: int = 0
     top10: list[RankingItemOut]
 
 

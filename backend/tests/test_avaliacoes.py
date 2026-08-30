@@ -248,8 +248,13 @@ def _escola_engajada(db, rede_id, nome, inep, media):
                                 livros_unicos=5, tempo_leitura_min=60))
         db.add(SnapshotMatific(escola_id=e.id, aluno_id=a.id, importacao_id=imp.id,
                                atividades=20, estrelas=100))
+        # A rede lê as colunas *_institucional (perfil fixo do Constela); ao semear
+        # a Nota direto (sem recalcular_escola) precisamos preenchê-las com o mesmo
+        # valor, senão nascem 0.0 e a média/engajamento da rede dá zero.
         db.add(Nota(escola_id=e.id, aluno_id=a.id, ano_letivo=2026, nota_geral=media,
-                    nota_elefante=media, nota_matific=media, posicao=i + 1))
+                    nota_elefante=media, nota_matific=media,
+                    nota_elefante_institucional=media, nota_matific_institucional=media,
+                    posicao=i + 1))
     return e
 
 
