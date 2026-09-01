@@ -133,19 +133,32 @@ def test_maria_e_duas_candidatas_e_ambiguo(db):
     assert conf == "media" and aluno is None
 
 
-def test_nome_parcial_subconjunto_nao_auto_vincula(db):
-    """SEGURANÇA (revisão adversarial): nome PARCIAL por subconjunto ('MARIA SILVA'
-    ⊂ 'MARIA EDUARDA SILVA', ou 'JOAO SANTOS' ⊂ 'JOAO SANTOS OLIVEIRA') NÃO
-    auto-vincula (sobrenome comum + dono real ausente poderia colar na criança
-    errada). Com 1 candidato, NÃO retorna "alta": cria (baixa) e a detecção o surfaça
-    como possível duplicata p/ fusão manual — nunca vínculo automático."""
+def test_nome_parcial_subconjunto_no_import_de_plataforma_vincula(db):
+    """MUDANÇA (decisão do dono 2026-08-31, "aplicar mas validar antes"): no import de
+    PLATAFORMA (Matific/Elefante) a planilha só contém alunos MATRICULADOS, então nome
+    PARCIAL por subconjunto ('MARIA SILVA' ⊂ 'MARIA EDUARDA SILVA', 'JOAO SANTOS' ⊂
+    'JOAO SANTOS OLIVEIRA') com 1 ÚNICO candidato na turma é ATRIBUIÇÃO determinística
+    ao dono — ANTES ia a revisão e o snapshot da dimensão nunca era criado (bug
+    HELOISA/TAUFIK: dimensão 0). O guard-rail "nunca fundir crianças diferentes" fica
+    na AMBIGUIDADE (2+ candidatos → media, ver test_nome_parcial_ambiguo_segura_sem_criar)
+    e no veto de identidade. Fica no log como correspondencia='parcial' p/ validar/
+    reverter. A criação de roster da Lista Piloto NÃO recebe este opt-in (segue
+    conservadora — ver test_import_dimensao_zero.py::...so_vincula_com_opt_in...)."""
     esc, turma = _escola_turma(db)
-    _matricular(db, esc, turma, "MARIA EDUARDA SILVA")       # token faltando no MEIO
-    _matricular(db, esc, turma, "JOAO SANTOS OLIVEIRA")      # token faltando no FIM
+    maria = _matricular(db, esc, turma, "MARIA EDUARDA SILVA")   # token faltando no MEIO
+    joao = _matricular(db, esc, turma, "JOAO SANTOS OLIVEIRA")   # token faltando no FIM
     db.commit()
-    for parcial in ("MARIA SILVA", "JOAO SANTOS"):
-        aluno, conf = _casar_no_roster(db, esc.id, 2026, parcial, turma)
-        assert conf != "alta" and aluno is None            # nunca auto-vincula
+    # PLATAFORMA (opt-in): subconjunto de candidato único vincula ao dono
+    aluno, conf = _casar_no_roster(db, esc.id, 2026, "MARIA SILVA", turma,
+                                   permitir_subconjunto_unico=True)
+    assert conf == "alta" and aluno is not None and aluno.id == maria.id
+    aluno, conf = _casar_no_roster(db, esc.id, 2026, "JOAO SANTOS", turma,
+                                   permitir_subconjunto_unico=True)
+    assert conf == "alta" and aluno is not None and aluno.id == joao.id
+    # PADRÃO (cadastro manual / Lista Piloto, SEM o opt-in): subconjunto NÃO vincula
+    # → "media" (revisão). É a fronteira: só a plataforma é permissiva.
+    aluno, conf = _casar_no_roster(db, esc.id, 2026, "MARIA SILVA", turma)
+    assert conf == "media" and aluno is None
 
 
 def test_nome_parcial_ambiguo_segura_sem_criar(db):

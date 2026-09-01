@@ -197,7 +197,8 @@ def melhor_candidato(cands: dict[int, Identidade]) -> int:
     return sorted(cands.values(), key=lambda c: (not c.da_lista_piloto, c.id or 0))[0].id  # type: ignore[return-value]
 
 
-def classificar_linha(linha: Identidade, roster: list[Identidade]) -> Resultado:
+def classificar_linha(linha: Identidade, roster: list[Identidade],
+                      *, permitir_subconjunto_unico: bool = False) -> Resultado:
     """Classifica UMA linha importada contra o ROSTER de candidatos (alunos da mesma
     escola/turma). É o mesmo cálculo na PRÉVIA e na CONFIRMAÇÃO — a prévia mostra
     exatamente o que a confirmação fará.
@@ -209,14 +210,26 @@ def classificar_linha(linha: Identidade, roster: list[Identidade]) -> Resultado:
       3) 1 único candidato FORTE (exato/abreviação), OU FRACO de variação SEGURA
          (variante/typo num token do MEIO, com 1º nome e sobrenome idênticos), e
          nenhum outro plausível → VINCULADO (decisão do dono 2026-08-04);
-      4) 2+ candidatos, OU 1 candidato PARCIAL (subconjunto), OU variação de grafia
+      3b) SÓ com ``permitir_subconjunto_unico`` (export de PLATAFORMA): 1 único
+         candidato PARCIAL (subconjunto) → VINCULADO (ver abaixo);
+      4) 2+ candidatos, OU 1 candidato PARCIAL sem o opt-in, OU variação de grafia
          NÃO-segura (sobrenome/1º nome, ex.: SOUZA/SOUSA, BRUNO/BRUNA) → REVISAR;
       5) o nome casava mas TODOS foram vetados por identidade divergente → BLOQUEADO;
       6) nada → NOVO.
-    Nunca vincula por nome PARCIAL (subconjunto), por variação no SOBRENOME ou no
-    1º nome/gênero, nem quando há 2+ candidatos — tudo isso vai a REVISAR. Variante/
-    typo de candidato ÚNICO auto-vincula APENAS na variação SEGURA de nome do meio
-    (pontas idênticas), a pedido do dono e sem fundir crianças diferentes."""
+    Por padrão nunca vincula por nome PARCIAL (subconjunto), por variação no SOBRENOME
+    ou no 1º nome/gênero, nem quando há 2+ candidatos — tudo isso vai a REVISAR.
+    Variante/typo de candidato ÚNICO auto-vincula APENAS na variação SEGURA de nome do
+    meio (pontas idênticas), a pedido do dono e sem fundir crianças diferentes.
+
+    ``permitir_subconjunto_unico`` (ligado SÓ no import/sync de PLATAFORMA
+    Matific/Elefante, NUNCA na criação de roster da Lista Piloto): a planilha da
+    plataforma só contém alunos MATRICULADOS, então casar é ATRIBUIR a linha ao seu
+    dono no roster, não criar identidade nova. Com 1 ÚNICO candidato plausível na
+    turma, um nome SUBCONJUNTO ("HELOISA FIDELIX" ⊂ "HELOISA DE SOUZA FIDELIX") não
+    tem a quem mais pertencer — o veto "dono ausente" do PARCIAL não se aplica (o dono
+    ESTÁ na escola). Ambiguidade (2+ candidatos) e variação de grafia insegura
+    (SOUZA/SOUSA, BRUNO/BRUNA) continuam em REVISAR — o guard-rail "nunca fundir
+    crianças diferentes" fica intacto (essas manifestam-se como 2+ candidatos)."""
     fortes: dict[int, Identidade] = {}
     parciais: dict[int, Identidade] = {}
     fracos: dict[int, Identidade] = {}
@@ -261,11 +274,18 @@ def classificar_linha(linha: Identidade, roster: list[Identidade]) -> Resultado:
     #    variação no sobrenome/1º nome (SOUZA/SOUSA, BRUNO/BRUNA) → REVISAR.
     # Gêmeos/homônimos com identificador divergente já saíram pelo veto acima.
     unico = next(iter(plausiveis)) if len(plausiveis) == 1 else None
-    if unico is not None and vincula_por_nome_unico(linha.nome, plausiveis[unico].nome):
+    if unico is not None and (
         # Critério ÚNICO de vínculo por nome — o MESMO da Lista Piloto (matriculas):
         # forte (exato/abreviação) ou variação SEGURA de nome do meio. PARCIAL e
         # variação insegura (sobrenome/1º nome, ex.: SOUZA/SOUSA, BRUNO/BRUNA) devolvem
         # False e caem no REVISAR abaixo — preserva "nunca fundir crianças diferentes".
+        vincula_por_nome_unico(linha.nome, plausiveis[unico].nome)
+        # (3b) SÓ no export de PLATAFORMA: 1 candidato PARCIAL (subconjunto) na turma
+        # é atribuição determinística ao dono matriculado, não fusão (ver docstring).
+        # NÃO cobre variação de grafia insegura (fica em REVISAR).
+        or (permitir_subconjunto_unico
+            and unico in parciais)
+    ):
         return Resultado(VINCULADO, unico,
                          _motivo_nome(linha.nome, plausiveis[unico].nome), (unico,))
     if plausiveis:

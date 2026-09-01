@@ -505,7 +505,8 @@ def _identidade_do_aluno(aluno: Aluno) -> matching.Identidade:
 
 def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
                      turma: Turma, numero_chamada: int | None = None,
-                     nascimento=None, ra: str | None = None
+                     nascimento=None, ra: str | None = None,
+                     *, permitir_subconjunto_unico: bool = False
                      ) -> tuple[Aluno | None, str]:
     """Casa a linha de plataforma (Elefante/Matific) contra o ROSTER da turma
     canônica ANTES de criar — o núcleo de "1 aluno = 1 perfil". Delega ao MOTOR
@@ -529,7 +530,13 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
     linha = matching.Identidade(nome=nome, chamada=numero_chamada,
                                 nascimento=nascimento, ra=_ra_forte(ra))
     roster, por_id = _roster_identidades(db, escola_id, ano, turma.id)
-    res = matching.classificar_linha(linha, roster)
+    # `permitir_subconjunto_unico` (ligado SÓ pelo import de PLATAFORMA, ver
+    # _resolver_aluno; NUNCA no cadastro manual/roster): a planilha da plataforma só
+    # traz alunos matriculados → 1 único candidato PARCIAL (nome subconjunto) na turma
+    # é atribuição determinística ao dono, não fusão (ver classificar_linha).
+    # Ambiguidade e grafia insegura seguem em revisão.
+    res = matching.classificar_linha(
+        linha, roster, permitir_subconjunto_unico=permitir_subconjunto_unico)
     if res.status == matching.VINCULADO and res.aluno_id in por_id:
         return por_id[res.aluno_id], "alta"
     if res.status == matching.REVISAR:
@@ -594,8 +601,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         # ortográfica). É o que evita os 3 "ABRAÃO" — Elefante/Matific vinculam ao
         # aluno da Lista Piloto em vez de criar um novo. Alta vincula; média
         # (ambíguo) NÃO cria (fica para revisão, nunca funde nomes parecidos).
+        # Import de PLATAFORMA (Matific/Elefante): habilita o vínculo por SUBCONJUNTO
+        # de candidato único (o cadastro manual em academico.py NÃO passa isto e segue
+        # conservador — subconjunto vai a revisão, nunca bloqueia um homônimo novo).
         casado, confianca = _casar_no_roster(db, escola_id, ano, linha.nome, turma,
-                                             chamada, nasc_linha, ra_linha)
+                                             chamada, nasc_linha, ra_linha,
+                                             permitir_subconjunto_unico=True)
         if confianca == "alta" and casado is not None:
             # Vincula o UUID do Matific AGORA (casamento preciso): a próxima sync
             # casa direto por UUID (idempotência/convergência), sem redepender do
@@ -608,11 +619,17 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             # (abreviação/variante) passa por aqui — o nome exato já foi resolvido
             # antes; e depois do 1º link o UUID assume, então não vira log repetido.
             if svc.normalizar_nome(casado.nome) != svc.normalizar_nome(linha.nome):
+                # `correspondencia` = TIPO do casamento por nome (exato/abreviacao/
+                # parcial/variante/typo). "parcial" (subconjunto) é o vínculo novo do
+                # import de plataforma — fica marcado para o dono validar/reverter a
+                # lista de subconjunto (diagnostico_dimensao_zero --subconjunto).
                 registrar(db, "aluno.vinculado_auto", escola_id=escola_id,
                           entidade="aluno", entidade_id=casado.id,
                           detalhes={"origem": linha.nome, "aluno": casado.nome,
                                     "turma": turma.nome, "confianca": "alta",
                                     "candidatos": 1,
+                                    "correspondencia": matching._motivo_nome(
+                                        linha.nome, casado.nome),
                                     "motivo": "único candidato plausível na mesma turma"})
             if criados is not None:
                 criados[chave] = casado

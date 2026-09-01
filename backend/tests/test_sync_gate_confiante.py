@@ -39,21 +39,27 @@ def _arquivo_elefante(course_name: str, student_name: str) -> ArquivoObtido:
 
 
 def test_sync_provavel_nao_autovincula_nem_cria(db, escola_completa, monkeypatch):
-    """LACUNA A: um match apenas 'provável' (variação fuzzy do nome) NÃO é
-    auto-vinculado ao aluno real na sync automática.
+    """LACUNA A: um match apenas 'provável' por VARIAÇÃO DE GRAFIA INSEGURA (sobrenome:
+    SOUZA/SOUSA) NÃO é auto-vinculado ao aluno real na sync automática.
 
     REGRA NOVA (P0 das duplicatas): também NÃO vira um registro novo. Antes, a
     sync criava a segunda ficha e contava com a fusão manual depois — era a fonte
     da fila de fusões. Correspondência insegura agora vai para REVISÃO: nada é
-    vinculado e nada é criado."""
+    vinculado e nada é criado.
+
+    NOTA (2026-08-31): o opt-in de plataforma vincula SUBCONJUNTO de candidato único
+    ('Ana Beatriz de Souza' ⊂ 'Ana Beatriz Souza') — decisão do dono, ver
+    test_import_dimensao_zero.py. Aqui usamos uma variação de grafia no SOBRENOME
+    (SOUSA/SOUZA), que NÃO é subconjunto e continua em REVISÃO — o guard-rail intacto."""
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
     antes = db.execute(select(Aluno).where(
         Aluno.escola_id == escola.id)).scalars().all()
 
-    # "Ana Beatriz de Souza" ≈ "Ana Beatriz Souza": fuzzy ≥0.80 → 'provável' (via=None).
-    arq = _arquivo_elefante("3 ANO A", "Ana Beatriz de Souza")
+    # "Ana Beatriz Sousa" ≈ "Ana Beatriz Souza": fuzzy ≥0.80 → 'provável' (via=None);
+    # variação de grafia INSEGURA no sobrenome → REVISÃO (não é subconjunto).
+    arq = _arquivo_elefante("3 ANO A", "Ana Beatriz Sousa")
     orchestrator.aplicar_arquivo(db, escola, arq, usuario_id=None,
                                  recalcular=False, contexto=_contexto(escola.id))
 

@@ -1124,13 +1124,18 @@ def _prever_pelo_motor(db: Session, escola_id: int,
     """PRÉVIA = CONFIRMAÇÃO: para cada linha que sobrou como "nao_encontrado" (ou o
     "provavel" da busca difusa) mas tem turma no relatório, roda o MESMO motor único
     (``matching.classificar_linha``) no MESMO roster que a confirmação usará — alunos
-    ATIVOS matriculados na turma canônica no ANO LETIVO ATIVO, chaveados por
-    ``chave_turma_norm`` do NOME da turma (idêntico a ``_roster_identidades`` do
-    confirmar). Assim a prévia mostra exatamente o que a confirmação fará. Traduz:
+    NÃO-EXCLUÍDOS matriculados na turma canônica no ANO LETIVO ATIVO, chaveados por
+    ``chave_turma_norm`` do NOME da turma. O roster é montado com o MESMO filtro
+    (``status != "excluido"``, inclui arquivados) e a MESMA ``Identidade`` do confirmar
+    (``_roster_identidades``/``_identidade_do_aluno``: RA por ``_ra_forte``) — senão um
+    homônimo/parcial ARQUIVADO na turma faria a prévia ver 1 candidato (vínculo) e o
+    confirmar ver 2 (revisão), quebrando a igualdade. Assim a prévia mostra exatamente
+    o que a confirmação fará. Traduz:
       * VINCULADO (só quando a entrada era "nao_encontrado") → "vinculado";
       * "provavel" difuso ou REVISAR → "revisar" (o gestor decide; NÃO pré-seleciona
         — grafia/homônimo nunca vira vínculo por 1 clique);
       * BLOQUEADO → "bloqueado"; NOVO (de "nao_encontrado") → mantém "nao_encontrado"."""
+    from app.routers.importacoes import _identidade_do_aluno
     from app.services import matching
     from app.services.matriculas import chave_turma_norm, parse_nascimento
 
@@ -1141,16 +1146,14 @@ def _prever_pelo_motor(db: Session, escola_id: int,
         select(Aluno, Turma.nome).join(Matricula, Matricula.aluno_id == Aluno.id)
         .join(Turma, Turma.id == Matricula.turma_id)
         .where(Aluno.escola_id == escola_id, Matricula.ano_letivo == ano,
-               Aluno.status == "ativo")
+               Aluno.status != "excluido")
     ).all():
         chave = chave_turma_norm(turma_nome)
         if not chave:
             continue
-        roster_por_turma.setdefault(chave, []).append(matching.Identidade(
-            id=aluno.id, nome=aluno.nome, chamada=aluno.numero_chamada,
-            nascimento=aluno.data_nascimento,
-            ra=str((aluno.ficha or {}).get("ra", "")),
-            da_lista_piloto=aluno.da_lista_piloto))
+        # MESMA Identidade do confirmar (uma só fonte: _identidade_do_aluno) — RA por
+        # _ra_forte, para prévia e confirmação classificarem idêntico.
+        roster_por_turma.setdefault(chave, []).append(_identidade_do_aluno(aluno))
 
     for linha in linhas:
         corr = linha.correspondencia or {}
@@ -1174,7 +1177,8 @@ def _prever_pelo_motor(db: Session, escola_id: int,
             chamada=int(bruto) if bruto.isdigit() else None,
             nascimento=parse_nascimento(nasc or None),
             ra=str(linha.dados.get("ra") or "").strip())
-        res = matching.classificar_linha(ids, roster)
+        # Preview == confirmação: mesmo opt-in de plataforma (subconjunto único vincula).
+        res = matching.classificar_linha(ids, roster, permitir_subconjunto_unico=True)
         por_id_local = {r.id: r for r in roster}
         alvo = por_id_local.get(res.aluno_id)
         alts = [{"aluno_id": cid, "nome": por_id_local[cid].nome, "similaridade": 90.0}
