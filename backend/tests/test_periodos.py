@@ -177,26 +177,27 @@ def _importar_matific(cliente, escola_id, aluno, atividades, data_ref):
     assert r.status_code == 200, r.text
 
 
-def test_destaque_matific_conta_so_o_ganho_no_periodo(cliente, escola_completa):
-    """O acumulado histórico do Matific não pode ser atribuído ao período: só o
-    GANHO dentro do intervalo pontua (achado da auditoria adversarial)."""
+def test_melhor_matematica_usa_a_nota_do_estado_no_periodo(cliente, escola_completa):
+    """DECISÃO DO DONO (2026-09-01): "Melhor Matemática" premia o melhor DESEMPENHO
+    — a ``nota_matific`` OFICIAL (0–100) do ESTADO no fim da janela — e não a
+    quantidade de atividades (volume). Todo aluno com snapshot na janela concorre
+    pela nota (a régua é a da escola, read-only, sem tocar o scoring). A justiça
+    "só o GANHO do período" continua valendo no RANKING de Evolução — ver
+    test_ranking_evolucao_respeita_o_periodo abaixo."""
     escola_id = escola_completa["escola"].id
     ana, joao, sofia = escola_completa["alunos"]
-    # Ana: 100 antes de julho, 130 em julho → ganho real = 30.
     _importar_matific(cliente, escola_id, ana, 100, "2026-06-20T00:00:00")
     _importar_matific(cliente, escola_id, ana, 130, "2026-07-25T00:00:00")
-    # João: único snapshot EM CIMA do início (2026-07-01 00:00) com 200 acumuladas
-    # de antes → ganho no período deve ser 0 (fronteira vira base).
     _importar_matific(cliente, escola_id, joao, 200, "2026-07-01T00:00:00")
-    # Sofia: único snapshot no meio de julho com 350 acumuladas (sem baseline) → 0.
     _importar_matific(cliente, escola_id, sofia, 350, "2026-07-15T00:00:00")
 
     r = cliente.get(f"{_base(escola_id)}/premiacoes"
                     "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
-    dm = {c["chave"]: c["podio"] for c in r["categorias"]}["destaque_matific"]
-    # Só Ana pontua (ganho 30); João e Sofia com 0 ficam fora do pódio.
-    assert len(dm) == 1
-    assert dm[0]["nome"] == ana.nome and dm[0]["valor"] == 30.0
+    mm = {c["chave"]: c["podio"] for c in r["categorias"]}["melhor_matematica"]
+    # Mesma média/estrelas → a nota ordena pelo estado de atividades: Sofia(350) >
+    # João(200) > Ana(130). O valor é NOTA (0–100), não contagem de atividades.
+    assert [p["nome"] for p in mm] == [sofia.nome, joao.nome, ana.nome]
+    assert 0 < mm[0]["valor"] <= 100
 
 
 def test_ranking_evolucao_respeita_o_periodo(cliente, escola_completa):

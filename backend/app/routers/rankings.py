@@ -29,7 +29,7 @@ from app.schemas import (
     RankingTurnoOut,
 )
 from app.services import modulos as svc_modulos
-from app.services import periodos, permissoes, premiacoes as svc_premiacoes, scoring
+from app.services import periodos, permissoes, premiacoes as svc_premiacoes, scoring, turnos
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Ranking e Dashboard"])
@@ -44,27 +44,11 @@ _COLUNAS_DIMENSAO = {
 }
 
 
-# Rótulo e ordem de APRESENTAÇÃO dos turnos. NÃO define QUAIS turnos existem —
-# isso vem sempre do banco (`Turma.turno`). Só formata e ordena os que
-# aparecerem; turno desconhecido cai no title-case do valor cru e `None` (turma
-# sem turno cadastrado) vai por último. Nada de turma/série hardcoded aqui.
-_ROTULO_TURNO = {"manha": "Manhã", "tarde": "Tarde", "noite": "Noite",
-                 "integral": "Integral"}
-_ORDEM_TURNO = {"manha": 0, "tarde": 1, "noite": 2, "integral": 3}
-
-
-def _rotulo_turno(turno: str | None) -> str:
-    if turno is None:
-        return "Sem turno"
-    return _ROTULO_TURNO.get(turno, turno.replace("_", " ").strip().title() or turno)
-
-
-def _ordem_turno(turno: str | None) -> tuple:
-    """Chave de ordenação estável dos turnos na apresentação (conhecidos na ordem
-    pedagógica, desconhecidos em ordem alfabética, `None` por último)."""
-    if turno is None:
-        return (2, 0, "")
-    return (0, _ORDEM_TURNO.get(turno, 99), turno)
+# Rótulo e ordem de APRESENTAÇÃO dos turnos vêm da fonte ÚNICA compartilhada
+# (`services.turnos`), reusada pelas premiações por turno. Aliases internos para
+# não mexer nos call-sites deste módulo.
+_rotulo_turno = turnos.rotulo_turno
+_ordem_turno = turnos.ordem_turno
 
 
 def _exigir_dimensao(db: Session, escola_id: int, dimensao: str) -> None:
@@ -578,12 +562,15 @@ def premiacoes(
     inicio: str | None = Query(default=None),
     fim: str | None = Query(default=None),
     turma_id: int | None = Query(default=None),
+    turnos: bool = Query(default=False,
+                         description="Quebra os pódios por Turma.turno (só na visão todas as turmas)."),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Vencedores de cada categoria de premiação, calculados EXCLUSIVAMENTE com
-    os dados do período escolhido (melhor leitor, mais livros, mais tempo,
-    destaque no Matific)."""
+    os dados do período escolhido (melhor leitor, melhor matemática, mais livros,
+    mais tempo). Com ``?turnos=true`` e sem ``turma_id``, devolve também os pódios
+    quebrados por TURNO (`turnos: [{turno, turno_rotulo, categorias}]`)."""
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(
@@ -594,7 +581,8 @@ def premiacoes(
                             "Data inválida (use AAAA-MM-DD).") from exc
     dados = svc_premiacoes.premiacoes(
         db, escola_id, ini, fim_dt, turma_id,
-        turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
+        turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
+        por_turno=turnos)
     dados["periodo"] = {"chave": periodo, "rotulo": rotulo,
                         "inicio": ini.isoformat() if ini else None,
                         "fim": fim_dt.isoformat() if fim_dt else None}
