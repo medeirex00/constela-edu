@@ -8,10 +8,17 @@ import { api, ApiError, baseDaApi, obterToken } from "@constela/core";
 import type {
   AcessoAluno,
   Avatar,
+  ConferirResultado,
+  ConquistasDoAluno,
+  MissaoJogavel,
+  MissaoResumo,
+  MundoResumo,
   PerfilQuest,
   PersonagemBase,
   Preferencias,
   Quem,
+  RespostaEnvio,
+  Resultado,
   SessaoQuest,
 } from "./tipos";
 
@@ -78,6 +85,12 @@ export function meuPerfil(): Promise<PerfilQuest> {
   return api<PerfilQuest>("/quest/perfil");
 }
 
+/** Conquistas de aprendizado do PRÓPRIO aluno. O backend resolve o aluno pela
+ *  SESSÃO (nunca por id do cliente) e é a fonte da verdade — o app só lê. */
+export function minhasConquistas(): Promise<ConquistasDoAluno> {
+  return api<ConquistasDoAluno>("/quest/conquistas");
+}
+
 export function coresDoTraje(): Promise<string[]> {
   return api<string[]>("/quest/perfil/cores");
 }
@@ -126,6 +139,52 @@ export function trocarPreferencias(
   return api<PerfilQuest>("/quest/perfil/preferencias", {
     method: "PATCH",
     body: JSON.stringify(mudancas),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Jogo — loop jogável (rotas autenticadas — papel aluno)
+// ---------------------------------------------------------------------------
+
+/** Matérias (planetas) com conteúdo para a série do aluno, com progresso. */
+export function mundosDisponiveis(): Promise<MundoResumo[]> {
+  return api<MundoResumo[]>("/quest/jogar/mundos");
+}
+
+/** Trilho de missões publicadas do planeta, para a série do aluno. */
+export function missoesDoPlaneta(mundoSlug: string): Promise<MissaoResumo[]> {
+  return api<MissaoResumo[]>(`/quest/jogar/mundos/${mundoSlug}/missoes`);
+}
+
+/** Feedback imediato de uma questão (acerto/erro + explicação). Não pontua. */
+export function conferirResposta(
+  desafioId: number,
+  resposta: string,
+): Promise<ConferirResultado> {
+  return api<ConferirResultado>("/quest/jogar/conferir", {
+    method: "POST",
+    body: JSON.stringify({ desafio_id: desafioId, resposta }),
+  });
+}
+
+/** Abre a missão: as questões SEM gabarito. */
+export function abrirMissao(missaoId: number): Promise<MissaoJogavel> {
+  return api<MissaoJogavel>(`/quest/jogar/missoes/${missaoId}`);
+}
+
+/** Envia as respostas; o servidor corrige e devolve XP/estrela + perfil novo. */
+export function responderMissao(
+  missaoId: number,
+  respostas: RespostaEnvio[],
+  tempoSeg?: number,
+): Promise<Resultado> {
+  return api<Resultado>("/quest/jogar/tentativas", {
+    method: "POST",
+    body: JSON.stringify({
+      missao_id: missaoId,
+      respostas,
+      tempo_seg: tempoSeg,
+    }),
   });
 }
 

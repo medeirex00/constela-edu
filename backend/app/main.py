@@ -17,6 +17,7 @@ from app.core import observabilidade as obs
 from app.core.database import engine, garantir_dados_base, get_db
 from app.core.deps import negar_secretaria
 from app.quest.routers import auth as quest_auth
+from app.quest.routers import conquistas as quest_conquistas
 from app.quest.routers import perfil as quest_perfil
 from app.quest.routers import professor as quest_professor
 from app.sync import router as sync_router
@@ -134,6 +135,7 @@ for router in (
     quest_auth.router,
     quest_perfil.router,
     quest_professor.router,
+    quest_conquistas.router,
 ):
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 

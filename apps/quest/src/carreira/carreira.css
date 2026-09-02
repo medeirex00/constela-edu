@@ -70,6 +70,30 @@
 }
 .conquista-desc { font-size: 12px; color: var(--ink-soft); font-weight: 700; }
 
+/* Conquistas de APRENDIZADO: estado (✓) e barra de progresso das em andamento. */
+.conquistas-carregando {
+  text-align: center; padding: 18px 12px;
+  color: var(--ink-soft); font-weight: 700; font-size: 14px;
+}
+.conquista-status.ok {
+  display: inline-block; margin-top: 8px;
+  font-family: var(--font-display); font-size: 12px; color: var(--violet);
+}
+.conquista-progresso { margin-top: 10px; }
+.conquista-progresso .barra {
+  height: 10px; border-radius: 999px;
+  background: var(--line); overflow: hidden;
+}
+.conquista-progresso .barra-cheia {
+  height: 100%; border-radius: 999px;
+  background: var(--sun); transition: width .3s ease;
+}
+.conquista-progresso-txt {
+  display: block; margin-top: 5px;
+  font-size: 12px; font-weight: 800; color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
 .historico-vazio {
   text-align: center;
   padding: 24px 16px;

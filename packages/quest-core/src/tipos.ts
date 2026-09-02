@@ -88,3 +88,115 @@ export interface AstronautaConhecido {
   nome: string;
   cor: string;
 }
+
+// ---------------------------------------------------------------------------
+// Jogo — loop jogável (Fase 1). Espelha os schemas de backend/app/quest.
+// O gabarito NUNCA chega ao cliente; a explicação só vem depois de responder.
+// ---------------------------------------------------------------------------
+
+/** Card de matéria (planeta) no Lobby, com o progresso da série do aluno. */
+export interface MundoResumo {
+  slug: string;
+  nome: string;
+  icone: string | null;
+  total_missoes: number;
+  concluidas: number;
+  estrelas: number;
+  proxima_missao_id: number | null;
+}
+
+/** Item do trilho de missões de um planeta (Lobby). */
+export interface MissaoResumo {
+  missao_id: number;
+  nome: string;
+  icone: string | null;
+  xp_base: number;
+  ordem: number;
+  estrelas: number;     // melhor do próprio aluno (0–3)
+  concluida: boolean;
+  /** Progressão: true enquanto a missão anterior da trilha não foi concluída. */
+  bloqueada: boolean;
+}
+
+/** Uma alternativa do quiz. */
+export interface Opcao {
+  id: string;
+  texto: string;
+  midia?: Record<string, unknown> | null;
+}
+
+/** Um desafio jogável — sem gabarito nem explicação. */
+export interface DesafioJogavel {
+  desafio_id: number;
+  ordem: number;
+  mecanica: string;
+  dificuldade: number;
+  bncc_codigo: string | null;
+  enunciado: string;
+  opcoes: Opcao[];
+  midia?: Record<string, unknown> | null;
+}
+
+export interface MissaoJogavel {
+  missao_id: number;
+  nome: string;
+  xp_base: number;
+  versao: number;
+  desafios: DesafioJogavel[];
+}
+
+/** Uma resposta que o cliente envia (só o id da opção escolhida). */
+export interface RespostaEnvio {
+  desafio_id: number;
+  resposta: string;
+}
+
+export interface Correcao {
+  desafio_id: number;
+  correta: boolean;
+  explicacao?: { texto?: string } | null;
+}
+
+/** Feedback imediato de UMA questão (acerto/erro) — não revela o gabarito. */
+export interface ConferirResultado {
+  correta: boolean;
+  explicacao?: { texto?: string } | null;
+}
+
+/** Resultado da tentativa — correção + recompensa creditada + perfil novo. */
+export interface Resultado {
+  acertos: number;
+  total: number;
+  pct: number;
+  estrelas: number;       // creditadas nesta jogada (0 em replay)
+  xp_ganho: number;       // creditado ao total (0 em replay)
+  moedas_ganhas: number;
+  primeira_vez: boolean;
+  correcoes: Correcao[];
+  perfil: PerfilQuest;
+}
+
+/** Uma conquista de APRENDIZADO do aluno (derivada dos snapshots Matific/
+ *  Elefante — o backend é a fonte da verdade; nada é concedido no cliente). */
+export interface ConquistaAluno {
+  codigo: string;
+  nome: string;
+  icone: string;
+  descricao: string;
+  criterio: string;       // frase pronta ("Leia 100 livros")
+  limite: number;         // alvo do indicador (ex.: 100 livros)
+  progresso: number;      // valor atual do indicador
+  pct: number;            // 0..100 quando aplicável
+  faltam: number;
+  atingida: boolean;      // desbloqueada?
+  data: string | null;    // ISO quando desbloqueada
+  unidade: string;
+}
+
+/** Payload de GET /quest/conquistas — SÓ as conquistas do próprio aluno. */
+export interface ConquistasDoAluno {
+  aluno_id: number;
+  nivel: number;
+  xp: number;
+  conquistas: ConquistaAluno[];
+}
