@@ -437,7 +437,7 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     for aluno in db.execute(
         select(Aluno).join(Matricula, Matricula.aluno_id == Aluno.id)
         .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
-               Matricula.ano_letivo == ano)
+               Matricula.ano_letivo == ano, Aluno.status != "excluido")
     ).scalars():
         if svc.normalizar_nome(aluno.nome) != alvo:
             continue

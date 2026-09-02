@@ -13,6 +13,7 @@ thread do worker — o conector não toca o banco; só o ``log`` toca, sequencia
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,8 @@ from app.models.sincronizacao import (
 from app.sync import connectors, vault
 from app.sync import orchestrator
 from app.sync.interfaces import Contexto, ErroConector
+
+logger = logging.getLogger("constela.sync")
 
 
 def _agora() -> datetime:
@@ -445,6 +448,11 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         _tratar_falha(db, execucao, contexto, exc.codigo, str(exc),
                       recuperavel=exc.recuperavel)
     except Exception as exc:  # noqa: BLE001 — qualquer falha inesperada é logada
+        # Traceback completo vai para o log da aplicação/Sentry (diagnóstico),
+        # enquanto a mensagem PERSISTIDA no SincronizacaoLog fica genérica por
+        # LGPD (não retém dados da escola/aluno na linha visível ao gestor).
+        logger.exception("Falha inesperada na sync (escola %s, plataforma %s)",
+                         execucao.escola_id, execucao.plataforma)
         _tratar_falha(db, execucao, contexto, "erro_inesperado",
                       f"Falha inesperada: {type(exc).__name__}", recuperavel=True)
 
