@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 import { CompeticaoLeituraTurno } from "../components/CompeticaoLeituraTurno";
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
-import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import { Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
@@ -37,6 +37,7 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
     dados: itens,
     erro,
     carregando,
+    recarregar,
   } = useApi<RankingLeituraItem[]>(
     escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}${filtro}` : null,
   );
@@ -75,7 +76,8 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
         {carregando ? (
           <Carregando />
         ) : erro ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message}
+                 acao={<Botao variante="neutro" onClick={recarregar}>Tentar de novo</Botao>} />
         ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Nenhuma leitura no período"
                  descricao="Sincronize o Elefante Letrado (ou importe o relatório) e use “Todo o histórico” para ver o total acumulado por aluno." />

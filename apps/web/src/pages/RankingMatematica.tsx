@@ -224,7 +224,7 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{item.turma ?? "—"}</td>
                     <td className="px-4 py-2.5 text-right font-semibold">⭐ {numero(item.estrelas)}</td>
                     <td className="px-4 py-2.5 text-right">{numero(item.atividades)}</td>
-                    <td className="hidden px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400 sm:table-cell">{item.pontuacao_media.toFixed(2)}</td>
+                    <td className="hidden px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400 sm:table-cell">{item.pontuacao_media.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   </tr>
                 ))}
               </tbody>

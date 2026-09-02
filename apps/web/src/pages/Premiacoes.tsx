@@ -12,7 +12,7 @@
  * Turma.turno pelo backend, nunca hardcoded).
  */
 import { Award, TrendingUp, Trophy } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
@@ -194,6 +194,17 @@ export default function Premiacoes() {
     ? turnos.find((g) => chaveTurno(g.turno) === chaveTurno(turnoSel.turno))
     : null;
   const categorias = grupoTurno?.categorias ?? dados?.categorias ?? [];
+
+  // Turno órfão: se o usuário tinha um turno selecionado e, ao trocar o período,
+  // esse turno deixa de existir no recorte, volta para "Todas". Sem isto os
+  // pódios cairiam no fallback (todos os turnos) sem destacar aba nenhuma e a
+  // Melhor Evolução ainda filtraria por um turno inexistente (retornando vazio).
+  useEffect(() => {
+    if (turnoSel && turnos.length > 0
+        && !turnos.some((g) => chaveTurno(g.turno) === chaveTurno(turnoSel.turno))) {
+      setTurnoSel(null);
+    }
+  }, [turnoSel, turnos]);
 
   return (
     <div>

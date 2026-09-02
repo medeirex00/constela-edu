@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
-import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import { Badge, Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
@@ -39,7 +39,7 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
   const parametros = new URLSearchParams(periodoParaQuery(periodo));
   if (alvo.turma_id) parametros.set("turma_id", alvo.turma_id);
   if (alvo.ano_escolar) parametros.set("ano_escolar", alvo.ano_escolar);
-  const { dados: itens, erro, carregando } = useApi<ItemEvolucao[]>(
+  const { dados: itens, erro, carregando, recarregar } = useApi<ItemEvolucao[]>(
     escolaId ? `/escolas/${escolaId}/ranking-evolucao?${parametros}` : null,
   );
 
@@ -61,7 +61,8 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
         {carregando ? (
           <Carregando />
         ) : erro ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
+          <Vazio titulo="Não foi possível carregar" descricao={erro.message}
+                 acao={<Botao variante="neutro" onClick={recarregar}>Tentar de novo</Botao>} />
         ) : (itens ?? []).length === 0 ? (
           <Vazio titulo="Sem dados no período" descricao="Importe novos relatórios para medir a evolução." />
         ) : (

@@ -64,7 +64,12 @@ function RankingsEscola() {
   // "Ranking Geral" da barra) trocam a aba mesmo com a tela já montada — o React
   // Router NÃO remonta a rota quando muda apenas a query string.
   const ver = params.get("ver");
-  const visao: Visao = ehVisao(ver) ? ver : "geral";
+  // A visão precisa EXISTIR nas abas disponíveis (módulo contratado). Um
+  // deep-link ?ver=leitura para uma escola sem o módulo cairia numa tela em
+  // branco (aba filtrada de `visoes` + bloco de conteúdo com tem()=false):
+  // volta para "geral" em vez de renderizar nada.
+  const visao: Visao =
+    ehVisao(ver) && visoes.some((v) => v.chave === ver) ? ver : "geral";
 
   function trocar(nova: Visao) {
     // Reflete a escolha na URL (deep-link/atalho) sem empilhar histórico; o
