@@ -5,14 +5,20 @@ comparação entre o último snapshot anterior ao período (linha de base) e o
 snapshot mais recente. Nenhum dado novo é gravado aqui — apenas leitura.
 
 O Ranking de Evolução reaproveita o próprio motor de cálculo aplicado aos
-GANHOS do período: os mesmos pesos configuráveis, a mesma normalização
-0–100 (referência = maior ganho da escola). Indicadores não cumulativos
-(pontuação média) entram pela variação positiva — quem manteve não perde,
-quem cresceu pontua.
+GANHOS do período: os mesmos pesos configuráveis e a mesma normalização 0–100,
+com a régua resolvida DENTRO de cada dimensão (P90 dos ativos daquela coorte,
+ou o máximo quando ela é pequena). Indicadores não cumulativos (pontuação
+média) entram pela variação positiva — quem manteve não perde, quem cresceu
+pontua.
+
+ARQUITETURA 2: aqui, como no Ranking Geral, não existe ordem única entre
+matérias diferentes. Cada dimensão tem a sua nota de crescimento, a sua régua e
+a sua posição; quem não tem dado da plataforma sai da ordenação daquela
+dimensão — sem virar zero e sem sumir da tela. Ver `ranking_evolucao`.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -266,6 +272,28 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int) -> di
 # ---------------------------------------------------------------------------
 # Ranking de Evolução (PRD §72 — independente do Ranking Geral)
 # ---------------------------------------------------------------------------
+# ARQUITETURA 2 — a Evolução também é POR DIMENSÃO (spec §7, Aprovação 7A).
+#
+# Antes, `nota_evolucao` era `nota_m·w_m + nota_e·w_e` com os pesos BRUTOS: o
+# corte por DADO DO ALUNO (o C-01) nunca chegou aqui, e por isso o TETO DE 50
+# sobrevivia nesta tela — a criança que cresceu só na leitura levava metade do
+# ganho por uma dimensão que ela pode nem usar. Agora cada dimensão tem a sua
+# nota, a sua régua e a sua ordem, e a composição sobrevive apenas como LEGADO
+# (ver `nota_evolucao` em `ItemEvolucao`), já com o C-01 aplicado.
+
+# Dimensão (vocabulário do produto) → plataforma (nome técnico do dado). Reusa
+# a FONTE ÚNICA do motor em vez de repetir o mapa aqui.
+DIMENSOES = scoring.DIMENSOES
+
+# Desempate LOCAL de cada ranking de evolução (spec §2.2): só GANHOS daquela
+# dimensão. O mesmo princípio de `scoring.CRITERIOS_DESEMPATE_DIMENSAO`, aqui
+# sobre o crescimento do período — a medalha de "quem mais cresceu na leitura"
+# não pode ser decidida por estrelas de matemática.
+CRITERIOS_DESEMPATE_EVOLUCAO: dict[str, tuple[str, ...]] = {
+    "leitura": ("pontos_dificuldade", "livros", "tempo_leitura_min"),
+    "matematica": ("estrelas", "atividades"),
+}
+
 
 @dataclass
 class ItemEvolucao:
@@ -273,9 +301,27 @@ class ItemEvolucao:
     nome: str
     turma: str
     ano_escolar: str
+    # LEGADO — a ordem ÚNICA de crescimento, composta entre dimensões.
+    # Continua sendo calculada porque o telão público, o mural, o /insights, a
+    # sincronização mobile, o assistente e três telas web ainda consomem UM
+    # número (spec §7.3). O que MORREU foi a regra antiga: os pesos brutos deram
+    # lugar a `scoring.pesos_geral_do_aluno` sobre as dimensões AFERIDAS na
+    # janela, isto é, o C-01 finalmente chegou à Evolução e o teto de 50 acabou.
+    # Critério de saída (o mesmo de `Nota.nota_geral`): quando telão, mural,
+    # insights, mobile e web lerem `notas[dimensao]`, este campo para de existir.
     nota_evolucao: float
     ganhos: dict
     posicao: int = 0
+    # --- Por DIMENSÃO (a leitura OFICIAL) ------------------------------------
+    # Chaves: "leitura" / "matematica".
+    # `notas[d]` é `None` — nunca 0,0 — quando o aluno NÃO é aferido em `d`:
+    # ausência é ESTADO, e a tela mostra "—". O 0,0 fica reservado a quem tem
+    # dado da plataforma e não cresceu no período (zero legítimo).
+    notas: dict = field(default_factory=dict)
+    aferido: dict = field(default_factory=dict)
+    posicao_dimensao: dict = field(default_factory=dict)
+    n_aferidos: dict = field(default_factory=dict)
+    contratadas: tuple[str, ...] = ()
 
 
 def _alunos_com_leituras(db: Session, escola_id: int) -> set[int]:
@@ -342,11 +388,42 @@ def series_e_dificuldade(
     return serie_m, serie_e, mapa_dif
 
 
+def _referencias_por_dimensao(
+    listas_por_dimensao: dict[str, dict[str, list[float]]],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Régua de normalização resolvida DENTRO de cada dimensão.
+
+    `scoring.referencias_robustas` decide "modo robusto (P90 + saturação) ×
+    escala simples por máximo" pelo TAMANHO DA AMOSTRA que recebe — e recebia,
+    numa chamada só, os indicadores das DUAS dimensões. Como o tamanho era
+    ``max(len(...))`` sobre todas as listas, a coorte do Matific ligava a régua
+    dos indicadores de LEITURA (e vice-versa): importar matemática mexia na nota
+    de evolução em leitura de quem nunca abriu o Matific. É exatamente o canal
+    que o motor já fechou em `scoring._referencias` (ver
+    `scoring.DIMENSAO_DO_INDICADOR`), e que sobrevivia aqui.
+
+    Correção: UMA chamada por dimensão, cada uma recebendo só os indicadores
+    daquela dimensão e só os valores dos alunos AFERIDOS nela. Assim a amostra
+    que decide a régua de Leitura é a coorte do Elefante, e a de Matemática, a
+    do Matific. Os dicionários voltam fundidos porque `calcular_elefante` e
+    `calcular_matific` leem cada um as suas chaves (`max_livros`, `max_estrelas`
+    …) — as chaves de dimensões diferentes nunca colidem.
+    """
+    refs: dict[str, float] = {}
+    k_vol: dict[str, float] = {}
+    for listas in listas_por_dimensao.values():
+        refs_d, k_d = scoring.referencias_robustas(listas)
+        refs.update(refs_d)
+        k_vol.update(k_d)
+    return refs, k_vol
+
+
 def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,
                      dias: int | None = None,
                      turma_ids: list[int] | None = None,
+                     turno: str | None = None,
                      serie_m: dict[int, list] | None = None,
                      serie_e: dict[int, list] | None = None,
                      mapa_dif: dict[tuple[str, str], float] | None = None,
@@ -355,6 +432,24 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
+
+    POR DIMENSÃO (Arquitetura 2, spec §7 / Aprovação 7A). Cada item traz:
+
+      * ``notas["leitura"]`` / ``notas["matematica"]`` — o crescimento medido
+        DENTRO da dimensão, e ``None`` quando o aluno não é aferido nela;
+      * ``aferido[d]`` — a mesma noção do C-01, aplicada à janela: existe
+        snapshot da PLATAFORMA de ``d`` até ``fim`` (para leitura, também conta
+        leitura individual datada, que é a fonte fina do próprio Elefante) E o
+        módulo é contratado. Ausência é ESTADO, nunca zero;
+      * ``posicao_dimensao[d]`` / ``n_aferidos[d]`` — a ordem local de cada
+        dimensão e o denominador dela.
+
+    Sub-decisão da spec §7.2 resolvida como **(a) TER SNAPSHOT**, nunca (b) ter
+    crescido: quem usa a plataforma e não cresceu entra com 0,00 e fica em
+    último (zero LEGÍTIMO, a mesma filosofia do Ranking Geral); quem não tem
+    dado sai da lista daquela dimensão. (b) premiaria estagnar — bastava não
+    crescer para sumir do denominador — e apagaria a diferença entre "não usa" e
+    "usou e não avançou", que é a informação que o professor precisa.
 
     `dias` é um atalho retrocompatível: sem `inicio`, usa os últimos N dias.
 
@@ -384,6 +479,12 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    # Filtro de TURNO (eixo ortogonal ao período): `None` = não filtra (todos);
+    # `""` = turmas SEM turno cadastrado ("Sem turno"); senão o turno exato. Os
+    # valores vêm de Turma.turno (do banco), nunca hardcoded.
+    if turno is not None:
+        consulta = consulta.where(
+            Turma.turno.is_(None) if turno == "" else Turma.turno == turno)
     if turma_ids is not None:  # professor: só as turmas designadas a ele
         consulta = consulta.where(Turma.id.in_(turma_ids))
     consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
@@ -401,10 +502,17 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     com_leituras, leituras_periodo = _leituras_no_periodo(
         db, escola_id, inicio, fim, alunos_com_leituras)
 
+    # CONTRATO (1º degrau da cascata contrato → dado): dimensão que a rede não
+    # assinou não tem nota, não tem ranking e ninguém é "não aferido" nela.
+    contratadas = tuple(scoring.dimensoes_contratadas(db, escola))
+
     # Ganhos por aluno no período (snapshots sintéticos alimentam o motor)
     ganhos_m: dict[int, SimpleNamespace] = {}
     ganhos_e: dict[int, SimpleNamespace] = {}
     pontos_dif: dict[int, float] = {}
+    # AFERIDO na janela, por dimensão — sub-decisão (a) da spec §7.2: existe
+    # dado DA PLATAFORMA daquela dimensão até `fim`. Nunca "cresceu > 0".
+    aferido: dict[int, dict[str, bool]] = {}
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
         atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim,
@@ -440,20 +548,42 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         pontos_dif[aluno_id] = scoring._pontos_dificuldade(
             niveis_ganho, turma.ano_escolar, mapa_dif, turma.id
         )
+        # MATEMÁTICA é aferida por snapshot do Matific até `fim` (`atual_m`).
+        # LEITURA, por snapshot do Elefante OU por leitura individual datada —
+        # as duas são dado do MESMO produto (o relatório individual é a fonte
+        # fina que este ranking já prefere, logo acima). Nenhum dado de uma
+        # plataforma marca a dimensão da outra: a garantia estrutural vale aqui
+        # tanto quanto no motor.
+        aferido[aluno_id] = {
+            "matematica": ("matematica" in contratadas) and atual_m is not None,
+            "leitura": ("leitura" in contratadas)
+            and (atual_e is not None or aluno_id in com_leituras),
+        }
 
     # Referências JUSTAS sobre os ganhos (mesma régua do Geral): P90 dos ativos
     # + saturação de volume (k=mediana). Um único aluno-gigante deixa de ser a
     # régua de todos — o topo fica disputado; quem mais cresceu segue na frente.
-    # Turma pequena recai no máximo (comportamento antigo), via a própria helper.
-    refs, k_vol = scoring.referencias_robustas({
-        "atividades": [g.atividades for g in ganhos_m.values()],
-        "media": [g.pontuacao_media for g in ganhos_m.values()],
-        "estrelas": [g.estrelas for g in ganhos_m.values()],
-        "livros": [g.livros_unicos for g in ganhos_e.values()],
-        "pontos_dificuldade": list(pontos_dif.values()),
-        "tentativas": [g.questoes_tentativas for g in ganhos_e.values()],
-        "acertos": [g.questoes_acertos for g in ganhos_e.values()],
-        "tempo": [g.tempo_leitura_min for g in ganhos_e.values()],
+    # Coorte pequena recai no máximo (comportamento antigo), via a própria
+    # helper — e a coorte é a DA DIMENSÃO (só os aferidos nela), não a escola
+    # inteira: sem isso, matricular alunos sem plataforma nenhuma já mudava a
+    # régua, e a amostra de uma dimensão decidia a régua da outra
+    # (`_referencias_por_dimensao`).
+    aferidos_de = {
+        d: [aid for aid in ganhos_m if aferido[aid][d]] for d in DIMENSOES
+    }
+    refs, k_vol = _referencias_por_dimensao({
+        "matematica": {
+            "atividades": [ganhos_m[a].atividades for a in aferidos_de["matematica"]],
+            "media": [ganhos_m[a].pontuacao_media for a in aferidos_de["matematica"]],
+            "estrelas": [ganhos_m[a].estrelas for a in aferidos_de["matematica"]],
+        },
+        "leitura": {
+            "livros": [ganhos_e[a].livros_unicos for a in aferidos_de["leitura"]],
+            "pontos_dificuldade": [pontos_dif[a] for a in aferidos_de["leitura"]],
+            "tentativas": [ganhos_e[a].questoes_tentativas for a in aferidos_de["leitura"]],
+            "acertos": [ganhos_e[a].questoes_acertos for a in aferidos_de["leitura"]],
+            "tempo": [ganhos_e[a].tempo_leitura_min for a in aferidos_de["leitura"]],
+        },
     })
 
     p_matific = scoring.obter_pesos(db, escola_id, "pesos.matific")
@@ -473,23 +603,76 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             ganhos_e[aluno_id], pontos_dif[aluno_id], refs,
             p_elefante, pct_elefante, p_questoes, pct_questoes, k_vol,
         )
-        nota = round(nota_m * p_geral.get("matific", 0) + nota_e * p_geral.get("elefante", 0), 2)
+        marcas = aferido[aluno_id]
+        # LEGADO — a nota única. O que mudou: os pesos deixam de ser BRUTOS.
+        # `pesos_geral_do_aluno` renormaliza sobre as dimensões em que ESTE aluno
+        # tem dado na janela (o C-01, que nunca havia chegado à Evolução). Quem
+        # cresceu só na leitura sai de 0,5·nota_e para nota_e — o teto de 50
+        # desta tela acaba aqui. Quem tem as duas continua 50/50, bit a bit.
+        pesos_aluno = scoring.pesos_geral_do_aluno(
+            p_geral, {DIMENSOES[d] for d, tem in marcas.items() if tem})
+        nota = round(nota_m * pesos_aluno.get("matific", 0)
+                     + nota_e * pesos_aluno.get("elefante", 0), 2)
         ganhos = {
             "atividades": ganhos_m[aluno_id].atividades,
             "estrelas": ganhos_m[aluno_id].estrelas,
             "livros": ganhos_e[aluno_id].livros_unicos,
             "tempo_leitura_min": ganhos_e[aluno_id].tempo_leitura_min,
             "acertos": ganhos_e[aluno_id].questoes_acertos,
+            # Qualidade da leitura no período (nível dos livros lidos): é o
+            # primeiro desempate da dimensão Leitura, então precisa viajar junto.
+            "pontos_dificuldade": round(pontos_dif[aluno_id], 2),
         }
         itens.append(ItemEvolucao(
             aluno_id=aluno_id, nome=matricula.aluno.nome, turma=turma.nome,
             ano_escolar=turma.ano_escolar, nota_evolucao=nota, ganhos=ganhos,
+            # Nota `None` quando não aferido — a tela mostra "—". 0,00 fica
+            # reservado a quem tem a plataforma e não cresceu (zero legítimo).
+            notas={"leitura": nota_e if marcas["leitura"] else None,
+                   "matematica": nota_m if marcas["matematica"] else None},
+            aferido=dict(marcas), contratadas=contratadas,
         ))
 
-    itens.sort(key=lambda item: (-item.nota_evolucao, item.nome.casefold()))
+    _ordenar_evolucao_por_dimensao(itens, contratadas)
+
+    # LEGADO — a ordem ÚNICA de crescimento (a que o telão, o mural e o
+    # /insights ainda consomem). `aluno_id` fecha a chave para que dois
+    # homônimos empatados em tudo não troquem de posição entre execuções.
+    itens.sort(key=lambda item: (-item.nota_evolucao, item.nome.casefold(),
+                                 item.aluno_id))
     for posicao, item in enumerate(itens, start=1):
         item.posicao = posicao
     return itens
+
+
+def _ordenar_evolucao_por_dimensao(itens: list[ItemEvolucao],
+                                   contratadas: tuple[str, ...]) -> None:
+    """Carimba `posicao_dimensao` e `n_aferidos` de cada dimensão contratada.
+
+    Só entra na ordem de ``d`` quem é AFERIDO em ``d``; o desempate é LOCAL
+    (`CRITERIOS_DESEMPATE_EVOLUCAO`) e termina em nome + `aluno_id`, para a
+    posição ser estável entre execuções. `n_aferidos` viaja junto porque é o
+    DENOMINADOR da posição: sem ele, um "3º em Leitura" e um "3º em Matemática"
+    parecem comparáveis, e não são.
+    """
+    for dimensao in DIMENSOES:
+        if dimensao not in contratadas:
+            for item in itens:
+                item.posicao_dimensao[dimensao] = None
+                item.n_aferidos[dimensao] = 0
+            continue
+        criterios = CRITERIOS_DESEMPATE_EVOLUCAO[dimensao]
+        elegiveis = [item for item in itens if item.aferido.get(dimensao)]
+        elegiveis.sort(key=lambda item: (
+            -(item.notas.get(dimensao) or 0.0),
+            *[-float(item.ganhos.get(c, 0) or 0) for c in criterios],
+            item.nome.casefold(), item.aluno_id,
+        ))
+        for posicao, item in enumerate(elegiveis, start=1):
+            item.posicao_dimensao[dimensao] = posicao
+        for item in itens:
+            item.posicao_dimensao.setdefault(dimensao, None)
+            item.n_aferidos[dimensao] = len(elegiveis)
 
 
 # ---------------------------------------------------------------------------
@@ -529,20 +712,104 @@ def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int],
     return total
 
 
+def _media_da_dimensao(notas: list[Nota], campo: str, aferidos: set[int],
+                       casas: int = 2) -> tuple[int, float]:
+    """(n, média) de uma dimensão — SOMENTE sobre os alunos aferidos nela.
+
+    O corte é a EXISTÊNCIA do snapshot da plataforma, **nunca** ``nota > 0``:
+
+      * sem snapshot    → ausência: fica FORA (nunca houve o que medir);
+      * snapshot zerado → zero LEGÍTIMO: entra e pesa ("usa e não produziu").
+
+    Trocar o corte por ``nota > 0`` juntaria os dois estados e maquiaria a
+    turma — é o erro que `rede.py` proíbe com todas as letras.
+
+    ``casas`` existe porque o arredondamento faz parte da régua: números de
+    ESCOLA saem com 1 casa em todo o produto (cartão da rede, dashboard), e
+    "o mesmo número" só é o mesmo se for arredondado igual.
+    """
+    valores = [float(getattr(n, campo)) for n in notas if n.aluno_id in aferidos]
+    if not valores:
+        return 0, 0.0
+    return len(valores), round(sum(valores) / len(valores), casas)
+
+
 def _monta_resumo_turma(turma: Turma, aluno_ids: list[int], notas: list[Nota],
-                        indicadores: dict) -> dict:
+                        indicadores: dict, aferidos: dict[str, set[int]],
+                        contratadas: list[str]) -> dict:
     """Monta o dict de resumo de UMA turma a partir de dados já carregados
-    (matrículas + notas). Sem consulta ao banco — o chamador decide se carrega
-    por turma (`resumo_turma`) ou em lote (`resumo_escola`)."""
-    media_geral = round(sum(n.nota_geral for n in notas) / len(notas), 2) if notas else 0.0
-    media_matific = round(sum(n.nota_matific for n in notas) / len(notas), 2) if notas else 0.0
-    media_elefante = round(sum(n.nota_elefante for n in notas) / len(notas), 2) if notas else 0.0
+    (matrículas + notas + quem tem snapshot de cada plataforma). Sem consulta ao
+    banco — o chamador decide se carrega por turma (`resumo_turma`) ou em lote
+    (`resumo_escola`).
+
+    DESEMPENHO POR DIMENSÃO (Arquitetura 2, spec §4.2). Antes, as três médias
+    eram ``sum(...) / len(notas)`` sobre TODAS as linhas de nota da turma — os
+    zeros de quem não tem snapshot entravam na conta. Uma turma boa com metade
+    dos alunos ainda sem Matific parecia pior do que uma turma fraca com todos
+    cadastrados: o número media desempenho × COBERTURA, duas coisas diferentes.
+    É o mesmo defeito que `rede._medias_por_plataforma` já corrigira no nível da
+    ESCOLA e que nunca havia descido para a turma.
+
+    Agora cada dimensão tem a sua média (só sobre os aferidos dela) e o seu
+    denominador `n_*`, e a COBERTURA aparece ao lado, com nome próprio:
+    `adocao_*` por dimensão, `adocao` (média das contratadas) e `alcance` (tem
+    dado de ALGUMA contratada). Desempenho e cobertura nunca se misturam num
+    número só.
+
+    `media_geral` sobrevive como a média das DIMENSÕES COM DADO — a mesma régua
+    do cartão da escola no painel da rede e do dashboard da escola. Não é
+    composição nova: é o número que as telas de turma já consomem
+    (`TurmaDetalhe`, a barra de comparação de `VisaoEscola`), agora calculado
+    com a régua certa. Virar "uma barra por dimensão" na tela é decisão de
+    produto (§ Aprovação 5), não conversão mecânica.
+    """
+    n_leitura, media_elefante = _media_da_dimensao(
+        notas, "nota_elefante", aferidos["leitura"]) if "leitura" in contratadas else (0, 0.0)
+    n_matematica, media_matific = _media_da_dimensao(
+        notas, "nota_matific", aferidos["matematica"]) if "matematica" in contratadas else (0, 0.0)
+    disponiveis = [m for m, n in ((media_elefante, n_leitura),
+                                  (media_matific, n_matematica)) if n]
+    media_geral = round(sum(disponiveis) / len(disponiveis), 2) if disponiveis else 0.0
+
+    total = len(aluno_ids)
+    com_algum = len({a for a in aluno_ids
+                     for d in contratadas if a in aferidos[d]})
+    n_por_dimensao = {"leitura": n_leitura, "matematica": n_matematica}
+    # COBERTURA sai da COORTE (matriculados ∩ tem snapshot da plataforma) — a
+    # mesma população de `alcance` e de `rede.adocao_elefante`, e nunca a
+    # população do CACHE de notas. `n_leitura` conta quem tem snapshot **e** já
+    # tem linha em `notas`: ele é o denominador da MÉDIA (só se pode promediar
+    # nota que existe), mas usá-lo como numerador da ADOÇÃO faz a cobertura
+    # depender de o motor já ter rodado. Numa escola importada e ainda não
+    # recalculada a turma reportava, na mesma resposta, `alcance = 100 %` com
+    # `adocao_leitura = 0 %` e `nao_aferidos = 0` — três números que não podem
+    # ser verdade juntos. Depois do recálculo os dois conjuntos coincidem, então
+    # em operação normal nenhum número se move.
+    cobertura = {d: sum(1 for a in aluno_ids if a in aferidos[d])
+                 for d in contratadas}
+    adocoes = {d: round(cobertura[d] / total * 100, 1) if total else 0.0
+               for d in contratadas}
     return {
         "turma": {"id": turma.id, "nome": turma.nome, "ano_escolar": turma.ano_escolar},
-        "total_alunos": len(aluno_ids),
+        "total_alunos": total,
+        # Derivada das dimensões com dado (não é média de `nota_geral`).
         "media_geral": media_geral,
+        # Chaves históricas (o web lê estas) — agora só sobre os aferidos.
         "media_matific": media_matific,
         "media_elefante": media_elefante,
+        # Vocabulário da Arquitetura 2, com o denominador ao lado de cada média.
+        "media_leitura": media_elefante,
+        "n_leitura": n_leitura,
+        "media_matematica": media_matific,
+        "n_matematica": n_matematica,
+        "contratadas": list(contratadas),
+        "dimensoes_com_dados": [d for d in contratadas if n_por_dimensao[d]],
+        # COBERTURA — ao lado do desempenho, jamais somada a ele.
+        "adocao_leitura": adocoes.get("leitura", 0.0),
+        "adocao_matematica": adocoes.get("matematica", 0.0),
+        "adocao": round(sum(adocoes.values()) / len(adocoes), 1) if adocoes else 0.0,
+        "alcance": round(com_algum / total * 100, 1) if total else 0.0,
+        "nao_aferidos": total - com_algum,
         "indicadores": indicadores,
     }
 
@@ -567,8 +834,19 @@ def resumo_turma(db: Session, escola_id: int, turma_id: int,
                            Nota.ano_letivo == escola.ano_letivo_ativo,
                            Nota.aluno_id.in_(aluno_ids or [0]))
     ).scalars().all()
+    # Uma carga só dos snapshots, usada pelos indicadores E pelo corte de
+    # aferido — o discriminante é a EXISTÊNCIA do snapshot (a definição), não a
+    # coluna `Nota.aferido_*` (o cache carimbado pelo recálculo). Enquanto uma
+    # escola não é recalculada, o número certo é o do dado.
+    if matific is None:
+        matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+    if elefante is None:
+        elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante)
-    return _monta_resumo_turma(turma, aluno_ids, notas, indicadores)
+    return _monta_resumo_turma(
+        turma, aluno_ids, notas, indicadores,
+        {"leitura": set(elefante), "matematica": set(matific)},
+        scoring.dimensoes_contratadas(db, escola))
 
 
 def resumo_escola(db: Session, escola_id: int) -> dict:
@@ -608,12 +886,15 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
         ).scalars()
     }
 
+    aferidos = {"leitura": set(elefante), "matematica": set(matific)}
+    contratadas = scoring.dimensoes_contratadas(db, escola)
     resumos = []
     for turma in turmas:
         aluno_ids = alunos_por_turma.get(turma.id, [])
         notas = [notas_por_aluno[a] for a in aluno_ids if a in notas_por_aluno]
         indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante)
-        resumos.append(_monta_resumo_turma(turma, aluno_ids, notas, indicadores))
+        resumos.append(_monta_resumo_turma(turma, aluno_ids, notas, indicadores,
+                                           aferidos, contratadas))
     return {
         "escola": {"id": escola.id, "nome": escola.nome},
         "turmas": resumos,
@@ -624,6 +905,31 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
 # Comparadores (PRD §73–§75)
 # ---------------------------------------------------------------------------
 
+def _bloco_dimensoes(contratadas: list[str], aferido: dict[str, bool],
+                     notas: dict[str, float | None],
+                     posicoes: dict[str, int | None] | None = None,
+                     n_aferidos: dict[str, int] | None = None) -> dict:
+    """Bloco `dimensoes` comum aos três lados do comparador.
+
+    Mesmo formato de `scoring._ordenar_por_dimensao`: nota `None` (e não 0,0)
+    quando não há dado, `contratada` explícita, e o denominador ao lado. Sem
+    isto, comparar um aluno com uma turma poria lado a lado um zero de ausência
+    e uma média já cortada por aferido — dois números com a mesma cara e
+    significados diferentes.
+    """
+    return {
+        dimensao: {
+            "plataforma": DIMENSOES[dimensao],
+            "contratada": dimensao in contratadas,
+            "aferido": bool(aferido.get(dimensao)),
+            "nota": notas.get(dimensao) if aferido.get(dimensao) else None,
+            "posicao": (posicoes or {}).get(dimensao),
+            "n_aferidos": (n_aferidos or {}).get(dimensao),
+        }
+        for dimensao in DIMENSOES
+    }
+
+
 def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
@@ -633,11 +939,35 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
         select(Nota).where(Nota.aluno_id == aluno_id,
                            Nota.ano_letivo == escola.ano_letivo_ativo)
     ).scalar_one_or_none()
+    matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+    elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    aferido = {"leitura": aluno_id in elefante, "matematica": aluno_id in matific}
+    # DENOMINADOR da posição do aluno, na mesma fonte que o perfil dele usa
+    # (`dimensoes.bloco` → `detalhes.dimensoes[d].n_aferidos`, carimbado pelo
+    # motor). Sem ele o comparador exibia "3º" pelado, e "3º" numa matéria ao
+    # lado de "3º" na outra parece comparável — é exatamente o que o
+    # denominador existe para impedir (spec §2). Zero consulta a mais: o número
+    # já viaja dentro da linha de `notas` que acabou de ser lida. Os lados
+    # TURMA e ESCOLA já mandavam o deles.
+    detalhes_dim = ((nota.detalhes or {}).get("dimensoes") or {}) if nota else {}
+    n_aferidos = {d: (detalhes_dim.get(d) or {}).get("n_aferidos")
+                  for d in DIMENSOES}
     return {
         "tipo": "aluno",
         "id": aluno.id,
         "nome": aluno.nome,
-        "indicadores": _indicadores_atuais(db, escola_id, [aluno_id]),
+        "indicadores": _indicadores_atuais(db, escola_id, [aluno_id], matific, elefante),
+        # Estado por dimensão: sem dado é `null`, não 0,0 — é o que impede a
+        # tela de mostrar "0,0 em Matemática" para quem nunca abriu o Matific.
+        "dimensoes": _bloco_dimensoes(
+            scoring.dimensoes_contratadas(db, escola), aferido,
+            {"leitura": nota.nota_elefante if nota else None,
+             "matematica": nota.nota_matific if nota else None},
+            {"leitura": nota.posicao_leitura if nota else None,
+             "matematica": nota.posicao_matematica if nota else None},
+            n_aferidos=n_aferidos),
+        # LEGADO: as chaves antigas, preservadas bit a bit para os clientes que
+        # ainda as leem. `geral` e `posicao` são a ordem única (§ Aprovação 2).
         "notas": {
             "matific": nota.nota_matific if nota else 0.0,
             "elefante": nota.nota_elefante if nota else 0.0,
@@ -657,6 +987,15 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int) -> dict | None:
         "nome": resumo["turma"]["nome"],
         "total_alunos": resumo["total_alunos"],
         "indicadores": resumo["indicadores"],
+        "dimensoes": _bloco_dimensoes(
+            resumo["contratadas"],
+            {d: bool(resumo["n_" + d]) for d in DIMENSOES},
+            {"leitura": resumo["media_leitura"],
+             "matematica": resumo["media_matematica"]},
+            n_aferidos={"leitura": resumo["n_leitura"],
+                        "matematica": resumo["n_matematica"]}),
+        "adocao": resumo["adocao"],
+        "alcance": resumo["alcance"],
         "notas": {
             "matific": resumo["media_matific"],
             "elefante": resumo["media_elefante"],
@@ -667,9 +1006,24 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int) -> dict | None:
 
 
 def _lado_escola(db: Session, escola_id: int) -> dict | None:
-    """A escola inteira como um lado do comparador: médias das notas de todos os
-    alunos ativos + soma dos indicadores (mesma regra das turmas). O `escola_id`
-    é o da escola A COMPARAR (pode ser outra, para ADM da rede)."""
+    """A escola inteira como um lado do comparador: desempenho POR DIMENSÃO de
+    todos os alunos ativos + soma dos indicadores (mesma regra das turmas). O
+    `escola_id` é o da escola A COMPARAR (pode ser outra, para ADM da rede).
+
+    Antes, as três médias eram ``sum(...) / len(notas)`` sobre TODAS as notas —
+    os zeros de quem não tem snapshot entravam. A MESMA escola exibia um número
+    aqui, outro no dashboard dela e outro no cartão do painel da rede; a
+    divergência era defeito, não opção. Agora os três usam a régua única: cada
+    dimensão só sobre quem tem dado dela, e a "geral" é a média das dimensões
+    COM DADO — nunca a média das notas gerais dos alunos.
+
+    O CONJUNTO é o dos MATRICULADOS no ano ativo (`aluno_ids`) — o mesmo que
+    `total_alunos`, `alcance` e o motor usam. `notas` não é apagada quando o
+    aluno perde a matrícula, então a nota órfã de quem foi desvinculado entrava
+    nas médias e no denominador de cada dimensão, e o lado "escola" do
+    comparador divergia do dashboard da mesma escola. Mesma régua de
+    `resumo_turma`/`resumo_escola`, que já filtram por matrícula.
+    """
     escola = db.get(Escola, escola_id)
     if escola is None:
         return None
@@ -684,19 +1038,46 @@ def _lado_escola(db: Session, escola_id: int) -> dict | None:
         select(Nota).join(Aluno, Nota.aluno_id == Aluno.id)
         .where(Nota.escola_id == escola_id,
                Nota.ano_letivo == escola.ano_letivo_ativo,
-               Aluno.status == "ativo")
+               Aluno.status == "ativo",
+               Nota.aluno_id.in_(aluno_ids or [0]))
     ).scalars().all()
-    n = len(notas) or 1
+    # Uma carga só: os indicadores e o corte de aferido saem dos MESMOS
+    # snapshots (a existência do snapshot é a definição de aferido).
+    matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+    elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+    # 1 casa: é a régua de ESCOLA do produto inteiro (`rede._kpis_da_rede` e
+    # `rankings._desempenho_da_escola`). Com 2 casas aqui, a mesma escola voltaria
+    # a exibir números que não batem — que é justamente o defeito corrigido.
+    n_leitura, media_elefante = (
+        _media_da_dimensao(notas, "nota_elefante", set(elefante), casas=1)
+        if "leitura" in contratadas else (0, 0.0))
+    n_matematica, media_matific = (
+        _media_da_dimensao(notas, "nota_matific", set(matific), casas=1)
+        if "matematica" in contratadas else (0, 0.0))
+    disponiveis = [m for m, q in ((media_elefante, n_leitura),
+                                  (media_matific, n_matematica)) if q]
+    media_geral = round(sum(disponiveis) / len(disponiveis), 1) if disponiveis else 0.0
+    aferidos = {"leitura": set(elefante), "matematica": set(matific)}
+    com_algum = len({a for a in aluno_ids
+                     for d in contratadas if a in aferidos[d]})
+    total = len(aluno_ids)
     return {
         "tipo": "escola",
         "id": escola.id,
         "nome": escola.nome,
-        "total_alunos": len(aluno_ids),
-        "indicadores": _indicadores_atuais(db, escola_id, aluno_ids),
+        "total_alunos": total,
+        "indicadores": _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante),
+        "dimensoes": _bloco_dimensoes(
+            contratadas,
+            {"leitura": bool(n_leitura), "matematica": bool(n_matematica)},
+            {"leitura": media_elefante, "matematica": media_matific},
+            n_aferidos={"leitura": n_leitura, "matematica": n_matematica}),
+        "alcance": round(com_algum / total * 100, 1) if total else 0.0,
         "notas": {
-            "matific": round(sum(x.nota_matific for x in notas) / n, 2),
-            "elefante": round(sum(x.nota_elefante for x in notas) / n, 2),
-            "geral": round(sum(x.nota_geral for x in notas) / n, 2),
+            "matific": media_matific,
+            "elefante": media_elefante,
+            "geral": media_geral,
             "posicao": None,
         },
     }

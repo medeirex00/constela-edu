@@ -352,10 +352,21 @@ export interface CategoriaPremiacao {
   podio: PodioItem[];
 }
 
+/** Pódios de premiação de um TURNO (Turma.turno), com o rótulo vindo do backend. */
+export interface PremiacoesTurno {
+  turno: string | null;
+  turno_rotulo: string;
+  total: number;
+  categorias: CategoriaPremiacao[];
+}
+
 /** Premiações da escola calculadas exclusivamente no período escolhido. */
 export interface Premiacoes {
   periodo: { chave: string; rotulo: string; inicio: string | null; fim: string | null };
   categorias: CategoriaPremiacao[];
+  /** Presente com `?turnos=true` (visão "todas as turmas"): os mesmos pódios
+   *  quebrados por TURNO. O front mostra as abas de turno só quando há mais de um. */
+  turnos?: PremiacoesTurno[];
 }
 
 /** Aluno no painel de gestão da turma — com nota, posição e data de cadastro. */

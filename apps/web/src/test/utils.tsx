@@ -13,6 +13,7 @@ import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
+import type { Periodo } from "../components/SeletorPeriodo";
 import { AppProvider, useApp } from "../context/AppContext";
 import type { Dashboard, Escola, RankingItem, Turma, Usuario } from "../lib/types";
 import { guardarToken, responder } from "../lib/__mocks__/api";
@@ -95,6 +96,15 @@ export function dashboardFake(over: Partial<Dashboard> = {}): Dashboard {
     total_atividades: 128,
     total_livros: 64,
     tempo_leitura_min: 900,
+    // Desempenho por DIMENSÃO: cada média sobre quem TEM dado da plataforma
+    // dela, com o denominador ao lado. `media_geral` é legado (média das
+    // dimensões com dado) e não ordena mais nada.
+    media_leitura: 80.2,
+    alunos_com_dado_leitura: 30,
+    media_matematica: 76.8,
+    alunos_com_dado_matematica: 18,
+    alcance: 83.3,
+    nao_aferidos: 7,
     media_geral: 78.5,
     top10: [
       rankingItemFake(),
@@ -119,6 +129,10 @@ export interface OpcoesRender {
    *  entra em "Toda a Rede" (escolaId nulo): ao testar uma tela por-escola dela,
    *  selecione explicitamente a escola. */
   escolaSelecionada?: number;
+  /** Semeia o PERÍODO global (AppContext lê `sgpe_periodo` no mount). O padrão do
+   *  contexto é "ano_letivo"; passe, por ex., `{ preset: "mes" }` para testar as
+   *  telas que dependem de um sub-período (Matific ao vivo). */
+  periodo?: Periodo;
 }
 
 /** Aplica uma escola ao contexto assim que a sessão termina de abrir (o usuário
@@ -149,7 +163,8 @@ function Provedores({ children, rota }: { children: ReactNode; rota: string }) {
 
 /** Renderiza `ui` com AppProvider + Router. Autenticado por padrão. */
 export function renderComApp(ui: ReactElement, opcoes: OpcoesRender = {}) {
-  const { rota = "/", autenticado = true, usuario, escolas, escolaSelecionada } = opcoes;
+  const { rota = "/", autenticado = true, usuario, escolas, escolaSelecionada, periodo } = opcoes;
+  if (periodo) localStorage.setItem("sgpe_periodo", JSON.stringify(periodo));
   if (autenticado) autenticar(usuario ?? usuarioFake(), escolas ?? [escolaFake()]);
   const conteudo = escolaSelecionada != null
     ? <AplicarEscola id={escolaSelecionada}>{ui}</AplicarEscola>

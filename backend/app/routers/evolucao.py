@@ -10,6 +10,7 @@ from app.core.deps import escola_autorizada, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
+from app.services import modulos as svc_modulos
 from app.services import periodos, permissoes, timeline
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
@@ -24,11 +25,15 @@ def evolucao_do_aluno(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Linha do tempo completa + variação no período (PRD §67–§71).
-    Dado detalhado: professor não acessa (vê só posição e pontos)."""
-    permissoes.negar_dado_individual(db, escola_id, usuario)
+    Coordenador/admin veem qualquer aluno da escola; o PROFESSOR vê a evolução
+    dos alunos das TURMAS DELE (404 fora do escopo); a Secretaria não vê dado
+    individual (404)."""
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    escola = db.get(Escola, escola_id)
+    permissoes.exigir_aluno_permitido(
+        db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
     return {
         "aluno_id": aluno_id,
         "nome": aluno.nome,
@@ -49,12 +54,14 @@ def evolucao_leitura_do_aluno(
 ):
     """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
     semana, mês ou bimestre), respeitando o período escolhido.
-    Dado detalhado: professor não acessa."""
-    permissoes.negar_dado_individual(db, escola_id, usuario)
+    Coordenador/admin: qualquer aluno da escola; PROFESSOR: os alunos das turmas
+    dele (404 fora do escopo); Secretaria: 404 (sem dado individual)."""
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     escola = db.get(Escola, escola_id)
+    permissoes.exigir_aluno_permitido(
+        db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
     try:
         preset = "personalizado" if (inicio or fim) else "tudo"
         ini, fim_dt, _ = periodos.resolver(
@@ -128,13 +135,39 @@ def ranking_evolucao(
     fim: str | None = Query(default=None),
     turma_id: int | None = Query(default=None),
     ano_escolar: str | None = Query(default=None),
+    turno: str | None = Query(
+        default=None,
+        description="Filtra por Turma.turno (eixo ORTOGONAL ao período). Ausente = "
+                    "todos; vazio (turno=) = 'Sem turno'; senão o turno exato."),
+    dimensao: str | None = Query(
+        default=None,
+        description="leitura | matematica. Ausente = ordem única (legado)."),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Ranking independente do geral: quem mais cresceu no período (PRD §72).
-    Aceita um preset/intervalo (periodo/inicio/fim) ou os últimos N `dias`."""
+    Aceita um preset/intervalo (periodo/inicio/fim) ou os últimos N `dias`.
+
+    Com ``?dimensao=leitura`` ou ``?dimensao=matematica`` devolve o crescimento
+    DENTRO daquela dimensão — a leitura oficial da Arquitetura 2 —, com somente
+    os alunos AFERIDOS nela (têm dado da plataforma na janela) e ordenados pela
+    nota da própria dimensão. Quem não tem dado não entra com zero: sai da
+    lista, e `dimensoes` de cada item continua dizendo o estado dele.
+
+    Sem ``dimensao``, devolve a ordem ÚNICA (legado), que o telão público, o
+    mural e o /insights ainda consomem — já com o C-01 aplicado, sem o teto
+    de 50 que existia nesta tela.
+    """
     escola = db.get(Escola, escola_id)
+    if dimensao is not None:
+        if dimensao not in svc.DIMENSOES:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Dimensão inválida. Use uma de: {', '.join(svc.DIMENSOES)}.")
+        # 403 (e não 404) para módulo não contratado: mesma régua das demais
+        # rotas por dimensão — some o produto, não a existência da rota.
+        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
     ini = None
     fim_dt = None
     if periodo or inicio or fim:
@@ -146,22 +179,45 @@ def ranking_evolucao(
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Data inválida (use AAAA-MM-DD).") from exc
         dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar,
+                                     turno=turno,
                                      turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
                                      base_no_periodo=True)
     else:
         dados = svc.ranking_evolucao(db, escola_id, turma_id=turma_id,
-                                     ano_escolar=ano_escolar, dias=dias,
+                                     ano_escolar=ano_escolar, dias=dias, turno=turno,
                                      turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
                                      base_no_periodo=True)
+    if dimensao:
+        dados = sorted((i for i in dados if i.aferido.get(dimensao)),
+                       key=lambda i: i.posicao_dimensao[dimensao])
     return [
         {
-            "posicao": item.posicao,
+            # Com `?dimensao=`, a posição exibida é a DAQUELA dimensão (o
+            # denominador vem em `n_aferidos`); sem ela, a ordem única legada.
+            "posicao": item.posicao_dimensao[dimensao] if dimensao else item.posicao,
             "aluno_id": item.aluno_id,
             "nome": item.nome,
             "turma": item.turma,
             "ano_escolar": item.ano_escolar,
+            # LEGADO — a nota única de crescimento.
             "nota_evolucao": item.nota_evolucao,
             "ganhos": item.ganhos,
+            "dimensao": dimensao,
+            "nota": item.notas.get(dimensao) if dimensao else None,
+            "n_aferidos": item.n_aferidos.get(dimensao) if dimensao else None,
+            # Estado por dimensão SEMPRE presente: `nota: null` (nunca 0,0)
+            # quando o aluno não tem dado daquela plataforma na janela.
+            "dimensoes": {
+                d: {
+                    "plataforma": svc.DIMENSOES[d],
+                    "contratada": d in item.contratadas,
+                    "aferido": bool(item.aferido.get(d)),
+                    "nota": item.notas.get(d),
+                    "posicao": item.posicao_dimensao.get(d),
+                    "n_aferidos": item.n_aferidos.get(d, 0),
+                }
+                for d in svc.DIMENSOES
+            },
         }
         for item in dados
     ]
