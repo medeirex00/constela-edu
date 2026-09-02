@@ -46,8 +46,13 @@ function placar(itens: Record<string, unknown>[], over: Record<string, unknown> 
   };
 }
 
+// Estas telas exercitam o Matific AO VIVO, que só é consultado num SUB-período.
+// O período global padrão agora é "ano_letivo" (banco local) — semeamos "mes"
+// para cair no caminho ao vivo que os testes cobrem.
 const abrirTela = () =>
-  renderComApp(<RankingMatematica />, { rota: "/ranking-matematica" });
+  renderComApp(<RankingMatematica />, {
+    rota: "/ranking-matematica", periodo: { preset: "mes" },
+  });
 
 describe("RankingMatematica (Matific ao vivo)", () => {
   it("mostra o ranking consultado do Matific no período", async () => {

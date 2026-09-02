@@ -8,7 +8,7 @@ import { Link } from "react-router-dom";
 
 import { CompeticaoLeituraTurno } from "../components/CompeticaoLeituraTurno";
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
-import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
@@ -17,11 +17,10 @@ import { numero, tempoLeitura } from "../lib/formato";
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
 export default function RankingLeitura({ embutido = false }: { embutido?: boolean } = {}) {
-  const { escolaId } = useApp();
-  // "Todo o histórico" por padrão: a sincronização do Elefante Letrado traz o
-  // TOTAL acumulado por aluno (livros/tempo), sem uma linha por livro com data —
-  // então os recortes por semana/mês só têm dados quando há relatório individual.
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "ano_letivo" });
+  const { escolaId, periodo, definirPeriodo } = useApp();
+  // Período TEMPORAL vem do contexto global (segue o usuário entre as abas). O
+  // Elefante traz o TOTAL acumulado por aluno; recortes por semana/mês só têm
+  // dados quando há relatório individual datado.
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   const { dados: turmas } = useApi<Turma[]>(
@@ -68,7 +67,7 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
       </p>
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
-        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
+        <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
         <FiltroTurmaSerie turmas={turmas ?? []} valor={alvo} onChange={setAlvo} />
       </Card>
 

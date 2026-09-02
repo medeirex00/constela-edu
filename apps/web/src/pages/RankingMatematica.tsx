@@ -38,8 +38,7 @@ type PlacarAoVivo = {
 };
 
 export default function RankingMatematica({ embutido = false }: { embutido?: boolean } = {}) {
-  const { escolaId } = useApp();
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
+  const { escolaId, periodo, definirPeriodo } = useApp();
   // Alvo do filtro: "" (todas), "turma:<nome>" (uma turma) ou "serie:<ano_escolar>"
   // (série consolidada). O placar vem do Matific AO VIVO e é filtrado no cliente,
   // então guardamos o NOME da turma (não um id) — igual às linhas retornadas.
@@ -61,7 +60,7 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
   // que dispararia uma busca forcada indevida do período novo).
   const trocarPeriodo = (p: Periodo) => {
     setForcarTick(0);
-    setPeriodo(p);
+    definirPeriodo(p);   // período é global (segue o usuário entre as abas)
   };
 
   // ANO LETIVO: banco local (sincronização diária). Sub-períodos: Matific ao vivo.

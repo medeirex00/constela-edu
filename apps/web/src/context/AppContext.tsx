@@ -7,10 +7,33 @@ import {
   type ReactNode,
 } from "react";
 
+import type { Periodo } from "../components/SeletorPeriodo";
 import { ApiError, api, guardarToken, limparToken, loginRequest, obterToken } from "../lib/api";
 import type { Escola, Usuario } from "../lib/types";
 
 type Tema = "claro" | "escuro";
+
+// Período TEMPORAL global (intervalo de datas). É um contexto único para que a
+// escolha do usuário ("01/08 → 20/08", "Este mês", "Ano letivo") ACOMPANHE a
+// navegação entre Ranking Geral, Leitura, Matemática, Evolução e Premiações —
+// antes cada página tinha seu próprio useState e o filtro "resetava" ao trocar
+// de aba (a aba é remontada pela URL `?ver=`). NÃO confundir com TURNO (manhã/
+// tarde/noite), que é outro eixo e vive nos componentes de turno.
+const CHAVE_PERIODO = "sgpe_periodo";
+const PERIODO_PADRAO: Periodo = { preset: "ano_letivo" };
+
+function periodoInicial(): Periodo {
+  try {
+    const salvo = localStorage.getItem(CHAVE_PERIODO);
+    if (salvo) {
+      const p = JSON.parse(salvo) as Periodo;
+      if (p && typeof p.preset === "string") return p;
+    }
+  } catch {
+    // localStorage indisponível/corrompido → cai no padrão
+  }
+  return PERIODO_PADRAO;
+}
 
 interface AppContexto {
   usuario: Usuario | null;
@@ -30,6 +53,10 @@ interface AppContexto {
   selecionarEscola: (id: number | null) => void;
   alternarTema: () => void;
   recarregarEscolas: () => Promise<void>;
+  // Período TEMPORAL global (ver nota acima) — lido por todas as telas com
+  // filtro de data; persiste ao navegar e ao recarregar (localStorage).
+  periodo: Periodo;
+  definirPeriodo: (p: Periodo) => void;
 }
 
 const Contexto = createContext<AppContexto | null>(null);
@@ -48,6 +75,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return salvo ? Number(salvo) : null;
   });
   const [tema, setTema] = useState<Tema>(temaInicial);
+  const [periodo, setPeriodo] = useState<Periodo>(periodoInicial);
   const [carregando, setCarregando] = useState(true);
   const [falhaSessao, setFalhaSessao] = useState(false);
 
@@ -144,6 +172,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTema((atual) => (atual === "claro" ? "escuro" : "claro"));
   }, []);
 
+  const definirPeriodo = useCallback((p: Periodo) => {
+    setPeriodo(p);
+    try {
+      localStorage.setItem(CHAVE_PERIODO, JSON.stringify(p));
+    } catch {
+      // sem localStorage: mantém só em memória (segue valendo na navegação)
+    }
+  }, []);
+
   const recarregarEscolas = useCallback(async () => {
     setEscolas(await api<Escola[]>("/escolas"));
   }, []);
@@ -166,6 +203,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         selecionarEscola,
         alternarTema,
         recarregarEscolas,
+        periodo,
+        definirPeriodo,
       }}
     >
       {children}

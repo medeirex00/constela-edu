@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
-import { SeletorPeriodo, periodoParaQuery, type Periodo } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
 import { Badge, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
@@ -28,8 +28,7 @@ interface ItemEvolucao {
 }
 
 export default function RankingEvolucao({ embutido = false }: { embutido?: boolean } = {}) {
-  const { escolaId } = useApp();
-  const [periodo, setPeriodo] = useState<Periodo>({ preset: "mes" });
+  const { escolaId, periodo, definirPeriodo } = useApp();
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
@@ -54,7 +53,7 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
       )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
-        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
+        <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
         <FiltroTurmaSerie turmas={turmas} valor={alvo} onChange={setAlvo} />
       </Card>
 

@@ -60,7 +60,7 @@ describe("Rankings (tela única com seletor)", () => {
       ],
     });
 
-    renderComApp(<Rankings />, { rota: "/ranking?ver=matematica" });
+    renderComApp(<Rankings />, { rota: "/ranking?ver=matematica", periodo: { preset: "mes" } });
 
     expect(screen.getByRole("tab", { name: "Matific" })).toHaveAttribute(
       "aria-selected", "true");
