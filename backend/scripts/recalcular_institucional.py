@@ -42,7 +42,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
 from app.models import Escola  # noqa: E402
-from app.services import scoring  # noqa: E402
+from app.services import rede, scoring  # noqa: E402
 
 
 def main() -> int:
@@ -50,6 +50,9 @@ def main() -> int:
     parser.add_argument("--rede", type=int, default=None, help="recalcular só as escolas desta rede")
     parser.add_argument("--escola", type=int, default=None, help="recalcular só esta escola")
     parser.add_argument("--dry-run", action="store_true", help="apenas listar, sem recalcular")
+    parser.add_argument("--pendentes", action="store_true",
+                        help="só escolas com alguma Nota do ano ativo SEM o carimbo institucional "
+                             "(linhas anteriores à régua vigente — a rede não as agrega)")
     args = parser.parse_args()
 
     db = SessionLocal()
@@ -59,6 +62,10 @@ def main() -> int:
             consulta = consulta.where(Escola.id == args.escola)
         elif args.rede is not None:
             consulta = consulta.where(Escola.rede_id == args.rede)
+        if args.pendentes:
+            # IDEMPOTENTE: depois de recalculada, a escola some desta seleção.
+            pendentes = rede.escolas_com_notas_pendentes(db)
+            consulta = consulta.where(Escola.id.in_(pendentes or [-1]))
         escolas = db.execute(consulta).all()
 
         print(f"Escolas a recalcular: {len(escolas)}"

@@ -35,6 +35,7 @@ from app.models import (
 from app.routers.rankings import montar_dashboard
 from app.services import evolucao as svc_evolucao
 from app.services import rede as svc_rede
+from app.services import scoring
 
 ANO = 2026
 
@@ -80,7 +81,7 @@ def _escola(db, rede_id, nome, alunos, *, notas_ele=None, notas_mat=None):
         if nm is not None:
             db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                    atividades=20, estrelas=100))
-        db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=ANO,
+        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=ANO,
                     nota_elefante=ne or 0.0, nota_matific=nm or 0.0,
                     # A rede lê as colunas institucionais; seedando Nota direto
                     # (sem recalcular_escola) elas nasceriam 0.0. Espelhamos o

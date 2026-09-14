@@ -14,6 +14,7 @@ from app.models import (Aluno, AvaliacaoExterna, Escola, Importacao, Matricula,
                         Nota, Rede, ResultadoAvaliacao, SnapshotElefante,
                         SnapshotMatific, Turma, Usuario)
 from app.services import avaliacoes as svc
+from app.services import scoring
 
 
 def _csv(linhas: list[list[str]]) -> bytes:
@@ -251,7 +252,7 @@ def _escola_engajada(db, rede_id, nome, inep, media):
         # A rede lê as colunas *_institucional (perfil fixo do Constela); ao semear
         # a Nota direto (sem recalcular_escola) precisamos preenchê-las com o mesmo
         # valor, senão nascem 0.0 e a média/engajamento da rede dá zero.
-        db.add(Nota(escola_id=e.id, aluno_id=a.id, ano_letivo=2026, nota_geral=media,
+        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=e.id, aluno_id=a.id, ano_letivo=2026, nota_geral=media,
                     nota_elefante=media, nota_matific=media,
                     nota_elefante_institucional=media, nota_matific_institucional=media,
                     posicao=i + 1))

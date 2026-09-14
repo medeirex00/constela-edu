@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     Aluno,
     Escola,
+    Leitura,
     Matricula,
     MetaRede,
     Nota,
@@ -30,6 +31,50 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+
+# CARIMBO institucional (JSON path, visível em SQL no SQLite e no Postgres): só a
+# Nota gravada por `scoring.recalcular_escola` com a régua vigente o carrega.
+# Linhas anteriores (migração 0028: colunas `*_institucional` com default 0,0 e
+# SEM backfill) não têm carimbo — a rede NÃO as agrega como zero: ficam
+# "pendentes de recálculo" até `scripts.recalcular_institucional --pendentes`.
+_CARIMBO_INSTITUCIONAL = Nota.detalhes["regua_institucional"]["versao_dificuldade"].as_string()
+
+
+def _matriculado_no_ano_ativo():
+    return (
+        select(Matricula.id)
+        .where(Matricula.escola_id == Nota.escola_id,
+               Matricula.aluno_id == Nota.aluno_id,
+               Matricula.ano_letivo == Escola.ano_letivo_ativo)
+        .exists()
+    )
+
+
+def _pendentes_recalculo(db: Session, ids: list[int]) -> dict[int, int]:
+    """``{escola_id: nº de notas do ano ativo SEM carimbo institucional}`` entre
+    os alunos ativos matriculados — o que a rede deixa FORA da média (ausência
+    de cálculo, não zero) até o recálculo institucional."""
+    if not ids:
+        return {}
+    linhas = db.execute(
+        select(Nota.escola_id, func.count(Nota.id))
+        .join(Aluno, Aluno.id == Nota.aluno_id)
+        .join(Escola, Escola.id == Nota.escola_id)
+        .where(Nota.escola_id.in_(ids),
+               Nota.ano_letivo == Escola.ano_letivo_ativo,
+               Aluno.status == "ativo",
+               _matriculado_no_ano_ativo(),
+               _CARIMBO_INSTITUCIONAL.is_(None))
+        .group_by(Nota.escola_id)
+    ).all()
+    return {linha[0]: int(linha[1] or 0) for linha in linhas}
+
+
+def escolas_com_notas_pendentes(db: Session) -> list[int]:
+    """Escolas com alguma Nota do ano ativo sem carimbo institucional (para o
+    recálculo pós-deploy ser seletivo e idempotente)."""
+    ids = [e for (e,) in db.execute(select(Escola.id)).all()]
+    return sorted(_pendentes_recalculo(db, ids))
 from app.services import modulos, scoring
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
@@ -146,13 +191,15 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
         .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id)
         .exists()
     )
-    matriculado = (
-        select(Matricula.id)
-        .where(Matricula.escola_id == Nota.escola_id,
-               Matricula.aluno_id == Nota.aluno_id,
-               Matricula.ano_letivo == Escola.ano_letivo_ativo)
-        .exists()
-    )
+    if modelo is SnapshotElefante:
+        # Leitura ITEMIZADA também é dado do Elefante (aluno sem snapshot mas com
+        # relatório individual/sync é aferido pelo motor — e entra aqui também).
+        tem_dado = tem_dado | (
+            select(Leitura.id)
+            .where(Leitura.escola_id == Nota.escola_id, Leitura.aluno_id == Nota.aluno_id)
+            .exists()
+        )
+    matriculado = _matriculado_no_ano_ativo()
     linhas = db.execute(
         select(Nota.escola_id, func.count(Nota.id), func.avg(coluna))
         .join(Aluno, Aluno.id == Nota.aluno_id)
@@ -161,7 +208,9 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
                Nota.ano_letivo == Escola.ano_letivo_ativo,
                Aluno.status == "ativo",
                matriculado,
-               tem_dado)
+               tem_dado,
+               # só notas CALCULADAS pelo motor vigente (nunca o default 0,0)
+               _CARIMBO_INSTITUCIONAL.isnot(None))
         .group_by(Nota.escola_id)
     ).all()
     return {linha[0]: (int(linha[1] or 0), float(linha[2] or 0.0)) for linha in linhas}
@@ -243,6 +292,8 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
     med_mat = (_medias_por_plataforma(db, ids, SnapshotMatific,
                                       Nota.nota_matific_institucional)
                if tem_mod_matematica else {})
+    # Notas ainda sem carimbo institucional (fora da média, não "zero").
+    pendentes = _pendentes_recalculo(db, ids)
     # COBERTURA: alunos distintos com dado de alguma plataforma (numerador real).
     com_dados_por_escola = _alunos_com_qualquer_dado(db, ids)
 
@@ -296,6 +347,9 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "dimensoes_com_dados": dimensoes_com_dados,
             "alunos_com_nota_elefante": n_ele,
             "alunos_com_nota_matific": n_mat,
+            # Notas do ano ativo ainda SEM recálculo institucional (não entram na
+            # média; > 0 = rodar `scripts.recalcular_institucional --pendentes`).
+            "notas_pendentes_recalculo": int(pendentes.get(escola.id, 0)),
             # ENGAJAMENTO / COBERTURA — quantos usam (conceito SEPARADO do acima).
             "alunos_com_dados": com_dados,
             "adocao": adocao,

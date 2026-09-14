@@ -20,6 +20,7 @@ from app.models import (
     Usuario,
 )
 from app.services import rede as svc_rede
+from app.services import scoring
 
 
 def _login(email: str, senha: str) -> TestClient:
@@ -66,7 +67,7 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais, *, livros_cada=5,
         # escola). Como o teste semeia a Nota direto (sem recalcular_escola), é
         # aqui que a institucional precisa nascer com o MESMO valor da local —
         # senão a média da rede leria 0.0 (CAUSA A).
-        db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
+        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
                     nota_geral=ng, nota_elefante=ng, nota_matific=ng,
                     nota_elefante_institucional=ng, nota_matific_institucional=ng,
                     posicao=i + 1))
@@ -510,7 +511,7 @@ def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=
                             livros_unicos=livros, tempo_leitura_min=60))
     db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                            atividades=20, estrelas=estrelas))
-    db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
+    db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
                 nota_geral=(matific + elefante) / 2, nota_matific=matific,
                 nota_elefante=elefante, posicao=1))
     return esc
