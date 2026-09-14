@@ -572,28 +572,42 @@ def mapa_pontos_turmas(db: Session, escola_id: int) -> dict:
 
 def distribuicao_niveis(
     db: Session, escola_id: int, livros_por_nivel: dict, ano_escolar: str = "",
-    turma_id: int | None = None,
+    turma_id: int | None = None, aluno_id: int | None = None,
 ) -> dict:
     """Distribuição dos livros de um aluno pelas FAIXAS de dificuldade.
 
-    Para relatórios/gráficos: por faixa devolve quantidade, pontos por livro
-    (respeitando a config LIVRE da turma, senão o override da série, senão o
-    padrão), pontos ganhos e percentual; além do total de livros, dos pontos de
+    Para relatórios/gráficos: por faixa devolve quantidade, pontos por livro,
+    pontos ganhos e percentual; além do total de livros, dos pontos de
     dificuldade e da faixa predominante. Funciona com livros por faixa ou por
     código de letra.
+
+    Os pontos saem da FONTE ÚNICA (``dificuldade_livro.regra_da_escola``): na
+    regra v1 global cada livro itemizado do aluno (``aluno_id``) vale o seu
+    próprio valor e ``pontos_por_livro`` é a média da faixa; na régua legada
+    (perfil personalizado) vale a config LIVRE da turma, senão o override da
+    série, senão o padrão — exatamente como antes.
     """
     from app.models.configuracao import slug_nivel
+    from app.services import dificuldade_livro as _dl
 
     niveis = db.execute(
         select(NivelDificuldade)
         .where(NivelDificuldade.escola_id == escola_id)
         .order_by(NivelDificuldade.ordem)
     ).scalars().all()
-    mapa = _mapa_dificuldade(db, escola_id)
-    padrao: dict[str, float] = mapa.get("__padrao__", {})  # type: ignore[assignment]
-    por_turma: dict[str, float] = (
-        mapa.get("__turma__", {}).get(turma_id, {}) if turma_id else {})
     dados = livros_por_nivel or {}
+    regra = _dl.regra_da_escola(db, escola_id)
+    v1 = regra.versao == _dl.VERSAO_VIGENTE
+    if v1:
+        leituras = (_dl.leituras_por_aluno(db, escola_id, {aluno_id}).get(aluno_id)
+                    if aluno_id else None)
+        por_chave = regra.pontos_por_chave(dados, ano_escolar, turma_id, leituras)
+    else:
+        mapa = regra._mapa
+        padrao: dict[str, float] = mapa.get("__padrao__", {})  # type: ignore[assignment]
+        por_turma: dict[str, float] = (
+            mapa.get("__turma__", {}).get(turma_id, {}) if turma_id else {})
+        por_chave = {}
 
     faixas = []
     total_livros = 0
@@ -602,15 +616,20 @@ def distribuicao_niveis(
         slug = nivel.codigo or slug_nivel(nivel.nome)
         chaves = _chaves_do_nivel(nivel)
         quantidade = sum(int(dados.get(c, 0) or 0) for c in chaves)
-        # Config LIVRE da turma (representada pela 1ª letra da faixa com override)
-        # tem prioridade sobre a série e o padrão.
-        override_turma = next(
-            (por_turma[str(c).upper()] for c in chaves if str(c).upper() in por_turma),
-            None)
-        pontos_unidade = float(
-            override_turma if override_turma is not None
-            else mapa.get((ano_escolar, slug), padrao.get(slug, nivel.pontos_padrao)))
-        pontos = round(quantidade * pontos_unidade, 2)
+        if v1:
+            pontos = round(sum(float(por_chave.get(c, 0.0)) for c in chaves), 2)
+            pontos_unidade = (round(pontos / quantidade, 4) if quantidade
+                              else regra.valor_tipico(chaves[0], ano_escolar))
+        else:
+            # Config LIVRE da turma (representada pela 1ª letra da faixa com
+            # override) tem prioridade sobre a série e o padrão.
+            override_turma = next(
+                (por_turma[str(c).upper()] for c in chaves if str(c).upper() in por_turma),
+                None)
+            pontos_unidade = float(
+                override_turma if override_turma is not None
+                else mapa.get((ano_escolar, slug), padrao.get(slug, nivel.pontos_padrao)))
+            pontos = round(quantidade * pontos_unidade, 2)
         faixas.append({
             "codigo": slug,
             "nome": nivel.nome,
@@ -621,6 +640,9 @@ def distribuicao_niveis(
         })
         total_livros += quantidade
         pontos_total += pontos
+    if v1:
+        # Chaves fora das faixas cadastradas (ex.: tier Z+) ainda pontuam no total.
+        pontos_total = round(sum(por_chave.values()), 2)
 
     for faixa in faixas:
         faixa["percentual"] = (round(faixa["quantidade"] / total_livros * 100, 1)
@@ -939,14 +961,22 @@ def _carregar_contexto(db: Session, escola_id: int):
                if aid in ids_pontuados}
     elefante = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
                 if aid in ids_pontuados}
-    mapa_dif = _mapa_dificuldade(db, escola_id)
 
+    # DIFICULDADE pela FONTE ÚNICA (services/dificuldade_livro): v1 global por
+    # livro (A3 × ajuste intrínseco × série) — ou a régua legada por faixa quando
+    # a escola está no perfil personalizado. As leituras ITEMIZADAS (título) da
+    # escola vêm numa query só, para cada livro valer o seu próprio valor; o
+    # restante da contagem do snapshot vale o típico do nível.
+    from app.services import dificuldade_livro as _dl
+    regra = _dl.regra_da_escola(db, escola_id)
+    leituras = (_dl.leituras_por_aluno(db, escola_id, ids_pontuados)
+                if regra.versao == _dl.VERSAO_VIGENTE else {})
     pontos_dif: dict[int, float] = {}
     for matricula, turma in matriculas:
         snap = elefante.get(matricula.aluno_id)
-        pontos_dif[matricula.aluno_id] = _pontos_dificuldade(
-            snap.livros_por_nivel if snap else {}, turma.ano_escolar, mapa_dif,
-            turma_id=turma.id,
+        pontos_dif[matricula.aluno_id] = regra.pontos_aluno(
+            snap.livros_por_nivel if snap else {}, turma.ano_escolar,
+            turma_id=turma.id, leituras=leituras.get(matricula.aluno_id),
         )
     return escola, ano, matriculas, matific, elefante, pontos_dif
 
@@ -1103,22 +1133,30 @@ def _pesos_geral_institucional(db: Session, escola_id: int) -> dict[str, float]:
     return {k: float(v) / total for k, v in valores.items()}
 
 
-def _insumos_institucionais(matriculas, matific, elefante):
+def _insumos_institucionais(matriculas, matific, elefante, pontos_dif=None,
+                            leituras_por_aluno=None):
     """Insumos do cálculo POR PLATAFORMA no perfil institucional:
     ``(pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante, pct_elefante,
     p_questoes, pct_questoes)``.
 
-    Tudo derivado só dos SNAPSHOTS (contagens da plataforma) e de constantes de
-    código: dificuldade A3 fixa (sem bônus de leitura na escola, sem overrides por
-    série/turma — a rede tem uma régua só) e referências AUTO (P90/mediana, sem
-    modo manual). É a garantia estrutural da separação: nenhuma configuração local
-    entra aqui, então o resultado é idêntico entre escolas com os mesmos dados."""
-    pontos_dif: dict[int, float] = {}
-    for matricula, turma in matriculas:
-        snap_e = elefante.get(matricula.aluno_id)
-        pontos_dif[matricula.aluno_id] = _pontos_dificuldade(
-            snap_e.livros_por_nivel if snap_e else {}, turma.ano_escolar,
-            A3_MAPA_DIFICULDADE)
+    Tudo derivado só dos dados da PLATAFORMA (snapshots + leituras itemizadas) e
+    de constantes de código: dificuldade pela regra GLOBAL v1 (A3 × ajuste
+    intrínseco do livro × série — ``dificuldade_livro``; sem bônus de leitura na
+    escola, sem overrides por faixa/turma — a rede tem uma régua só) e referências
+    AUTO (P90/mediana, sem modo manual). É a garantia estrutural da separação:
+    nenhuma configuração local entra aqui, então o resultado é idêntico entre
+    escolas com os mesmos dados. ``pontos_dif`` pré-calculado pela mesma regra
+    (escola padrão) é reusado; senão é calculado aqui com ``leituras_por_aluno``."""
+    if pontos_dif is None:
+        from app.services import dificuldade_livro as _dl
+        regra = _dl.regra_institucional()
+        leituras_por_aluno = leituras_por_aluno or {}
+        pontos_dif = {}
+        for matricula, turma in matriculas:
+            snap_e = elefante.get(matricula.aluno_id)
+            pontos_dif[matricula.aluno_id] = regra.pontos_aluno(
+                snap_e.livros_por_nivel if snap_e else {}, turma.ano_escolar,
+                leituras=leituras_por_aluno.get(matricula.aluno_id))
     refs, k_vol = _referencias_auto(matific, elefante, pontos_dif)
     p_matific, pct_matific = _pesos_institucionais("pesos.matific")
     p_elefante, pct_elefante = _pesos_institucionais("pesos.elefante")
@@ -1127,13 +1165,15 @@ def _insumos_institucionais(matriculas, matific, elefante):
             pct_elefante, p_questoes, pct_questoes)
 
 
-def _notas_institucionais(matriculas, matific, elefante) -> dict[int, tuple[float, float]]:
+def _notas_institucionais(matriculas, matific, elefante,
+                          leituras_por_aluno=None) -> dict[int, tuple[float, float]]:
     """Nota institucional por aluno = ``(nota_matific, nota_elefante)`` com o
     perfil fixo. É o que a REDE consome (colunas ``*_institucional``). Usado para
     a escola PERSONALIZADA, cuja nota local diverge da institucional; na escola
     padrão a própria nota local já é institucional e este cálculo é dispensado."""
     (pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante, pct_elefante,
-     p_questoes, pct_questoes) = _insumos_institucionais(matriculas, matific, elefante)
+     p_questoes, pct_questoes) = _insumos_institucionais(
+        matriculas, matific, elefante, leituras_por_aluno=leituras_por_aluno)
     notas: dict[int, tuple[float, float]] = {}
     for matricula, _turma in matriculas:
         aid = matricula.aluno_id
@@ -1193,12 +1233,19 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
     else:
         # PADRÃO: mesmos insumos do perfil institucional, para nota/posição/
         # detalhes locais baterem EXATAMENTE com as colunas `*_institucional`.
+        # `pontos_dif` já veio do contexto pela MESMA regra global v1 (reuso: sem
+        # segunda varredura de leituras).
         bonus_por_aluno = {}
         (pontos_dif, refs, k_vol, p_matific, pct_matific, p_elefante,
          pct_elefante, p_questoes, pct_questoes) = _insumos_institucionais(
-            matriculas, matific, elefante)
+            matriculas, matific, elefante, pontos_dif=pontos_dif)
         modo = "auto"
         p_geral = _pesos_geral_institucional(db, escola_id)
+    # Versão da regra de DIFICULDADE que produziu `pontos_dif` — carimbada em cada
+    # Nota (auditoria: qual fórmula gerou este número). A régua legada por faixa
+    # só existe no perfil personalizado (override autorizado).
+    from app.services import dificuldade_livro as _dl
+    versao_dificuldade = _dl.VERSAO_LEGADA if personalizado else _dl.VERSAO_VIGENTE
     # A EXPLICAÇÃO da Nota Geral é DERIVADA dos pesos efetivamente usados, não
     # lida de novo da configuração. Assim ela não tem como divergir da conta: as
     # parcelas exibidas somam 100% e reproduzem a nota. Sem isto, uma rede que só
@@ -1264,6 +1311,7 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                         "questoes_tentativas": tentativas,
                         "questoes_acertos": acertos,
                         "pontos_dificuldade": pontos_dif[aluno.id],
+                        "versao_dificuldade": versao_dificuldade,
                     },
                     "matematica": {
                         "atividades": snap_m.atividades if snap_m else 0,
@@ -1287,7 +1335,9 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                     "saturacao": dict(k_vol),
                     "matific": {"indicadores": linhas_m, "nota": nota_m},
                     "elefante": {"indicadores": linhas_e, "questoes": det_q, "nota": nota_e,
-                                 "bonus_leitura_escola": round(bonus_por_aluno.get(aluno.id, 0.0), 2)},
+                                 "bonus_leitura_escola": round(bonus_por_aluno.get(aluno.id, 0.0), 2),
+                                 # Regra de dificuldade que gerou `pontos_dificuldade`.
+                                 "dificuldade": {"versao": versao_dificuldade}},
                     # `dimensoes_com_dados` deixa a renormalização auditável: a
                     # tela de explicação mostra a conta com os pesos de fato
                     # usados, e aqui fica registrado POR QUE eles são esses.
@@ -1306,7 +1356,11 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
     # é a ÚNICA nota que a rede pode ler; a `resultado.nota_*` (local) fica no
     # contexto interno da escola.
     if personalizado:
-        notas_inst = _notas_institucionais(matriculas, matific, elefante)
+        # A régua da REDE é a v1 global: precisa das leituras itemizadas (uma query).
+        ids_pontuados = {m.aluno_id for m, _t in matriculas}
+        notas_inst = _notas_institucionais(
+            matriculas, matific, elefante,
+            leituras_por_aluno=_dl.leituras_por_aluno(db, escola_id, ids_pontuados))
     else:
         notas_inst = {r.aluno.id: (r.nota_matific, r.nota_elefante)
                       for r in resultados}

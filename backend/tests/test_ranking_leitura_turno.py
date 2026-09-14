@@ -7,6 +7,7 @@ Regras congeladas que estes testes travam:
   * o turno só forma o grupo; a posição reinicia em 1 a cada turno;
   * turnos são descobertos do banco (nada de turma/série/turno hardcoded).
 """
+import pytest
 from sqlalchemy import select
 
 from app.models import (
@@ -95,25 +96,36 @@ def test_um_turno_1o_ao_5o_juntos_e_series_nao_favorecem(cliente, db, escola_com
     assert {"1º Ano", "3º Ano", "5º Ano"} <= series
 
 
-def test_serie_turma_turno_nao_alteram_a_nota(cliente, db, escola_completa):
-    """(regra 2/3, item 11.3, 11.4) dois alunos com dados de leitura IDÊNTICOS têm
-    a MESMA nota, independentemente de série, turma e turno."""
+def test_turma_e_turno_nao_alteram_a_nota_e_a_serie_so_pelo_fator_global(cliente, db, escola_completa):
+    """(regra 2/3, item 11.3, 11.4 — atualizada pela dificuldade por livro v1)
+    Dois alunos com dados de leitura IDÊNTICOS na MESMA série têm a MESMA nota,
+    independentemente de turma e turno. Entre SÉRIES diferentes a única coisa que
+    muda é a componente de DIFICULDADE, pelo fator GLOBAL de série da regra v1
+    (1º ano 1,40 … 5º ano 1,00): a mesma leitura vale mais para quem está no
+    começo — logo o gêmeo do 1º ano fica com nota MAIOR que o do 5º."""
     esc = escola_completa["escola"]
     imp = _imp(db, esc.id)
     t_a = _turma(db, esc.id, "1A", "1º Ano", "manha")
+    t_a2 = _turma(db, esc.id, "1C", "1º Ano", "tarde")
     t_b = _turma(db, esc.id, "5B", "5º Ano", "tarde")
     dados = {"D": 8, "H": 4}
-    _leitor(db, esc.id, imp, t_a, "Gemeo Manha 1o", dados, tempo=120, tent=20, acert=12)
-    _leitor(db, esc.id, imp, t_b, "Gemeo Tarde 5o", dados, tempo=120, tent=20, acert=12)
+    g1 = _leitor(db, esc.id, imp, t_a, "Gemeo Manha 1o", dados, tempo=120, tent=20, acert=12)
+    g2 = _leitor(db, esc.id, imp, t_a2, "Gemeo Tarde 1o", dados, tempo=120, tent=20, acert=12)
+    g5 = _leitor(db, esc.id, imp, t_b, "Gemeo Tarde 5o", dados, tempo=120, tent=20, acert=12)
     db.commit()
     scoring.recalcular_escola(db, esc.id)
 
-    notas = {n.aluno_id: n.nota_elefante for n in db.execute(
-        select(Nota).where(Nota.escola_id == esc.id)).scalars()
-        if n.nota_elefante > 0}
-    valores = set(round(v, 4) for v in notas.values())
-    # os dois gêmeos (mesmos dados) => mesma nota, apesar de 1º/manhã vs 5º/tarde
-    assert len(valores) == 1, f"séries/turnos diferentes mudaram a nota: {notas}"
+    notas = {n.aluno_id: n for n in db.execute(
+        select(Nota).where(Nota.escola_id == esc.id)).scalars() if n.nota_elefante > 0}
+    n1, n2, n5 = notas[g1.id], notas[g2.id], notas[g5.id]
+    # mesma série, turmas/turnos diferentes => MESMA nota
+    assert round(n1.nota_elefante, 4) == round(n2.nota_elefante, 4)
+    # séries diferentes: só a dificuldade muda, pelo fator global 1,40 vs 1,00
+    dif1 = n1.detalhes["dimensoes"]["leitura"]["dados"]["pontos_dificuldade"]
+    dif5 = n5.detalhes["dimensoes"]["leitura"]["dados"]["pontos_dificuldade"]
+    assert dif1 == pytest.approx(dif5 * 1.40, rel=1e-3)
+    assert n1.nota_elefante > n5.nota_elefante
+    assert n1.detalhes["dimensoes"]["leitura"]["dados"]["versao_dificuldade"] == "elefante_dificuldade_v1"
 
 
 def test_dois_turnos_isolados_e_posicao_reinicia(cliente, db, escola_completa):
