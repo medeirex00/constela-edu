@@ -38,18 +38,97 @@ import json
 import math
 import re
 import unicodedata
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Leitura, Livro
 from app.services import scoring
+from app.services.provisionamento import NIVEIS_PADRAO
 
 VERSAO_VIGENTE = "elefante_dificuldade_v1"
 VERSAO_LEGADA = "escola_legada_v0"   # régua por faixa da escola (perfil personalizado)
+
+# FAIXAS da régua (as mesmas de provisionamento.NIVEIS_PADRAO): letra → slug.
+# Usadas SÓ para CONCILIAR o snapshot agregado (que pode vir por faixa, ex.:
+# {"nivel_5": 2}) com as leituras itemizadas (que vêm por letra, ex.: "Z") — nunca
+# para valorar. Z+ e A+ ficam na faixa vizinha.
+LETRA_PARA_FAIXA: dict[str, str] = {
+    letra.upper(): slug for _nome, slug, letras, _pts in NIVEIS_PADRAO for letra in letras}
+LETRA_PARA_FAIXA.update({"Z+": "nivel_5", "A+": "nivel_1"})
+FAIXA_OUTROS = "__outros__"
+
+
+def faixa_da_chave(chave: str | None, params: dict | None = None) -> str:
+    """Faixa (bucket de conciliação) de uma chave de ``livros_por_nivel``: letra
+    (AA..Z, Z+, A+) → slug da faixa; slug de faixa → ele mesmo; sujo → outros."""
+    bruto = str(chave or "").strip()
+    if not bruto:
+        return FAIXA_OUTROS
+    slug = LETRA_PARA_FAIXA.get(bruto.upper())
+    if slug:
+        return slug
+    if bruto.lower() in (params or PARAMS_V1)["posicoes_faixa"]:
+        return bruto.lower()
+    return FAIXA_OUTROS
+
+
+class LeituraItem(NamedTuple):
+    """Uma leitura ITEMIZADA (linha de ``Leitura`` com o ``Livro``)."""
+    titulo: str
+    nivel: str
+    tempo_min: int = 0
+
+
+@dataclass
+class InsumoElefante:
+    """INSUMO reconciliado do aluno para o motor: o que ``calcular_elefante`` e as
+    referências leem. Snapshot = agregado autoritativo; itemização = evidência
+    detalhada. Quando ambos existem, ``livros`` e ``tempo`` são o MAIOR dos dois
+    (nunca a soma — a mesma leitura não conta duas vezes); só itemização → ela
+    basta para alimentar a nota; só snapshot → snapshot. Nunca é um objeto ORM
+    (mutar um snapshot na sessão do recálculo o gravaria no commit)."""
+    aluno_id: int
+    livros_unicos: int = 0
+    tempo_leitura_min: int = 0
+    questoes_tentativas: int = 0
+    questoes_acertos: int = 0
+    livros_por_nivel: dict | None = None
+    data_referencia: object = None
+    id: int | None = None                 # id do snapshot (quando há)
+    importacao_id: int | None = None
+    itemizadas: int = 0
+    fonte: str = "snapshot"               # snapshot | leituras | snapshot+leituras
+
+
+def reconciliar_insumo(aluno_id: int, snapshot, itens: list | None) -> InsumoElefante | None:
+    """Combina o snapshot atual (ou None) com as leituras itemizadas (ou vazio).
+    Sem nenhum dos dois → None (ausência de dado, não zero)."""
+    itens = list(itens or [])
+    if snapshot is None and not itens:
+        return None
+    n_itens = len(itens)
+    tempo_itens = sum(int(getattr(i, "tempo_min", 0) or (i[2] if len(i) > 2 else 0) or 0)
+                      for i in itens)
+    if snapshot is None:
+        return InsumoElefante(aluno_id=aluno_id, livros_unicos=n_itens,
+                              tempo_leitura_min=tempo_itens, livros_por_nivel={},
+                              itemizadas=n_itens, fonte="leituras")
+    return InsumoElefante(
+        aluno_id=aluno_id,
+        livros_unicos=max(int(snapshot.livros_unicos or 0), n_itens),
+        tempo_leitura_min=max(int(snapshot.tempo_leitura_min or 0), tempo_itens),
+        questoes_tentativas=int(snapshot.questoes_tentativas or 0),
+        questoes_acertos=int(snapshot.questoes_acertos or 0),
+        livros_por_nivel=dict(snapshot.livros_por_nivel or {}),
+        data_referencia=snapshot.data_referencia, id=snapshot.id,
+        importacao_id=snapshot.importacao_id, itemizadas=n_itens,
+        fonte="snapshot+leituras" if n_itens else "snapshot")
 
 # Arquivo de referência (metadados objetivos do catálogo). Versionado em git.
 CAMINHO_CATALOGO = Path(__file__).resolve().parent.parent / "dados" / "catalogo_elefante.json"
@@ -279,28 +358,90 @@ class RegraV1:
 
     def pontos_por_chave(self, livros_por_nivel: dict | None, ano_escolar: str | None = None,
                          turma_id: int | None = None,
-                         leituras: list[tuple[str, str]] | None = None) -> dict[str, float]:
-        """HÍBRIDO por chave de nível: cada livro ITEMIZADO (Leitura com título)
-        vale o seu próprio valor; o RESTANTE da contagem do snapshot naquele
-        nível vale o típico. ``leituras`` = ``[(titulo, nivel), ...]`` do aluno.
-        Contagem menor que os itemizados (snapshot velho) → só os itemizados."""
-        itemizado: dict[str, list[float]] = {}
-        for titulo, nivel in (leituras or []):
-            chave = str(nivel or "").strip().upper()
-            if chave:
-                itemizado.setdefault(chave, []).append(
-                    self.valor_livro(chave, titulo, ano_escolar))
-        saida: dict[str, float] = {}
+                         leituras: list | None = None) -> dict[str, float]:
+        """HÍBRIDO reconciliado: cada livro ITEMIZADO (Leitura com título) vale o
+        seu próprio valor; o RESTANTE da contagem do snapshot vale o típico da
+        chave. Cada livro conta UMA vez — a conciliação não depende de as chaves
+        coincidirem (o snapshot pode vir por FAIXA, ``{"nivel_5": 2}``, e as
+        leituras por LETRA, ``Z``), nem da ordem em que os imports ocorreram:
+
+        1. cada item cobre primeiro a contagem da SUA letra;
+        2. depois a contagem de outra chave da MESMA faixa (letra ≠, faixa igual;
+           chave por faixa);
+        3. o excedente cobre contagens de OUTRAS faixas (renivelamento, faixa
+           divergente) — das mais valiosas para as mais baratas, para nunca
+           inflar: o total contado nunca passa de ``max(Σ snapshot, Σ itens)``.
+
+        ``leituras`` = ``[(titulo, nivel[, tempo]), ...]`` do aluno. Contagem
+        negativa (delta de evolução) passa como está."""
+        # 1) valor de cada item, por letra; e o "pool" de itens por faixa
+        itens_por_letra: dict[str, list[float]] = defaultdict(list)
+        pool_letra: dict[str, int] = defaultdict(int)
+        pool_faixa: dict[str, int] = defaultdict(int)
+        for item in (leituras or []):
+            titulo, nivel = item[0], item[1]
+            letra = str(nivel or "").strip().upper()
+            if not letra:
+                continue
+            itens_por_letra[letra].append(self.valor_livro(letra, titulo, ano_escolar))
+            pool_letra[letra] += 1
+            pool_faixa[faixa_da_chave(letra)] += 1
+
+        # chaves do snapshot, das mais valiosas às mais baratas (cobrir primeiro as
+        # caras deixa o restante valorado no típico mais barato — conservador)
+        contagens: dict[str, int] = {}
         for chave, quantidade in (livros_por_nivel or {}).items():
-            itens = itemizado.pop(str(chave).strip().upper(), [])
             try:
-                n = int(quantidade or 0)
+                contagens[chave] = int(quantidade or 0)
             except (TypeError, ValueError):
-                n = 0
-            restante = max(0, n - len(itens)) if n >= 0 else n   # delta negativo passa
-            saida[chave] = round(sum(itens) + restante * self.valor_tipico(chave, ano_escolar), 4)
-        for chave, itens in itemizado.items():        # lidos com data, sem snapshot
-            saida[chave] = round(sum(itens), 4)
+                contagens[chave] = 0
+        ordem = sorted(contagens, key=lambda k: -(posicao_nivel(k) if posicao_nivel(k) is not None else -1))
+        restante: dict[str, int] = {}
+        # passo 1 — mesma letra
+        for chave in ordem:
+            n = contagens[chave]
+            if n <= 0:
+                restante[chave] = n
+                continue
+            letra = str(chave).strip().upper()
+            cobre = min(n, pool_letra.get(letra, 0))
+            if cobre:
+                pool_letra[letra] -= cobre
+                pool_faixa[faixa_da_chave(letra)] -= cobre
+            restante[chave] = n - cobre
+        # passo 2 — mesma faixa (letra diferente da mesma faixa, ou chave por faixa)
+        for chave in ordem:
+            if restante[chave] <= 0:
+                continue
+            faixa = faixa_da_chave(chave)
+            cobre = min(restante[chave], pool_faixa.get(faixa, 0))
+            if cobre:
+                pool_faixa[faixa] -= cobre
+                restante[chave] -= cobre
+                # consome os itens desta faixa (qualquer letra) no pool por letra
+                for letra in list(pool_letra):
+                    if cobre <= 0:
+                        break
+                    if faixa_da_chave(letra) == faixa and pool_letra[letra] > 0:
+                        c = min(cobre, pool_letra[letra])
+                        pool_letra[letra] -= c
+                        cobre -= c
+        # passo 3 — excedente de itens (faixa sem chave no snapshot / renivelamento)
+        sobra = sum(v for v in pool_faixa.values() if v > 0)
+        for chave in ordem:
+            if sobra <= 0:
+                break
+            if restante[chave] > 0:
+                c = min(restante[chave], sobra)
+                restante[chave] -= c
+                sobra -= c
+
+        # 3) saída: restante do snapshot × típico da chave + itens pela própria letra
+        saida: dict[str, float] = {}
+        for chave in contagens:
+            saida[chave] = round(restante[chave] * self.valor_tipico(chave, ano_escolar), 4)
+        for letra, valores in itens_por_letra.items():
+            saida[letra] = round(saida.get(letra, 0.0) + sum(valores), 4)
         return saida
 
     def pontos_aluno(self, livros_por_nivel: dict | None, ano_escolar: str | None = None,
@@ -362,18 +503,31 @@ def regra_da_escola(db: Session, escola_id: int):
 
 
 def leituras_por_aluno(db: Session, escola_id: int,
-                       aluno_ids: set[int] | None = None) -> dict[int, list[tuple[str, str]]]:
-    """``{aluno_id: [(titulo, nivel), ...]}`` das leituras ITEMIZADAS da escola, em
-    UMA query (nunca por aluno). ``aluno_ids`` restringe em memória."""
-    saida: dict[int, list[tuple[str, str]]] = {}
-    consulta = (select(Leitura.aluno_id, Livro.titulo, Livro.nivel_codigo)
+                       aluno_ids: set[int] | None = None) -> dict[int, list[LeituraItem]]:
+    """``{aluno_id: [LeituraItem(titulo, nivel, tempo_min), ...]}`` das leituras
+    ITEMIZADAS da escola, em UMA query (nunca por aluno). ``aluno_ids`` restringe."""
+    saida: dict[int, list[LeituraItem]] = {}
+    consulta = (select(Leitura.aluno_id, Livro.titulo, Livro.nivel_codigo,
+                       Leitura.tempo_leitura_min)
                 .join(Livro, Leitura.livro_id == Livro.id)
                 .where(Leitura.escola_id == escola_id))
     ids = set(aluno_ids) if aluno_ids is not None else None
     if ids is not None and 0 < len(ids) <= 50:     # poucos alunos: filtra no SQL
         consulta = consulta.where(Leitura.aluno_id.in_(ids))
-    for aluno_id, titulo, nivel in db.execute(consulta).all():
+    for aluno_id, titulo, nivel, tempo in db.execute(consulta).all():
         if ids is not None and aluno_id not in ids:
             continue
-        saida.setdefault(aluno_id, []).append((titulo or "", nivel or ""))
+        saida.setdefault(aluno_id, []).append(
+            LeituraItem(titulo or "", nivel or "", int(tempo or 0)))
+    return saida
+
+
+def insumos_elefante(snapshots: dict, leituras: dict[int, list], aluno_ids) -> dict[int, InsumoElefante]:
+    """``{aluno_id: InsumoElefante}`` reconciliado para o conjunto pontuado: quem
+    tem snapshot e/ou leituras itemizadas. Quem não tem nada fica FORA (ausência)."""
+    saida: dict[int, InsumoElefante] = {}
+    for aid in aluno_ids:
+        insumo = reconciliar_insumo(aid, snapshots.get(aid), leituras.get(aid))
+        if insumo is not None:
+            saida[aid] = insumo
     return saida

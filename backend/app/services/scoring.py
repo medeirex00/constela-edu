@@ -573,6 +573,7 @@ def mapa_pontos_turmas(db: Session, escola_id: int) -> dict:
 def distribuicao_niveis(
     db: Session, escola_id: int, livros_por_nivel: dict, ano_escolar: str = "",
     turma_id: int | None = None, aluno_id: int | None = None,
+    livros_unicos: int | None = None,
 ) -> dict:
     """Distribuição dos livros de um aluno pelas FAIXAS de dificuldade.
 
@@ -657,6 +658,10 @@ def distribuicao_niveis(
         "total_livros": total_livros,
         "pontos_dificuldade": round(pontos_total, 2),
         "faixa_predominante": predominante,
+        # Livros contados no snapshot (`livros_unicos`) mas SEM distribuição por
+        # nível nem leituras itemizadas: a dificuldade é DESCONHECIDA, não zero.
+        "incompleto": bool((livros_unicos or 0) > 0 and pontos_total == 0
+                           and not (v1 and leituras)),
     }
 
 
@@ -969,16 +974,33 @@ def _carregar_contexto(db: Session, escola_id: int):
     # restante da contagem do snapshot vale o típico do nível.
     from app.services import dificuldade_livro as _dl
     regra = _dl.regra_da_escola(db, escola_id)
-    leituras = (_dl.leituras_por_aluno(db, escola_id, ids_pontuados)
-                if regra.versao == _dl.VERSAO_VIGENTE else {})
+    # Leituras ITEMIZADAS (uma query) → INSUMO RECONCILIADO por aluno
+    # (dificuldade_livro.InsumoElefante): livros/tempo = o MAIOR entre snapshot e
+    # itemização (nunca a soma — a mesma leitura não conta duas vezes); quem só
+    # tem leituras também vira insumo (ausência de snapshot não é nota zero);
+    # quem não tem nada fica fora (ausência de dado). Nunca é o objeto ORM.
+    leituras = _dl.leituras_por_aluno(db, escola_id, ids_pontuados)
+    elefante = _dl.insumos_elefante(elefante, leituras, ids_pontuados)
     pontos_dif: dict[int, float] = {}
     for matricula, turma in matriculas:
-        snap = elefante.get(matricula.aluno_id)
+        insumo = elefante.get(matricula.aluno_id)
         pontos_dif[matricula.aluno_id] = regra.pontos_aluno(
-            snap.livros_por_nivel if snap else {}, turma.ano_escolar,
+            insumo.livros_por_nivel if insumo else {}, turma.ano_escolar,
             turma_id=turma.id, leituras=leituras.get(matricula.aluno_id),
         )
     return escola, ano, matriculas, matific, elefante, pontos_dif
+
+
+def carimbo_institucional(personalizado: bool = False) -> dict:
+    """Carimbo gravado em ``Nota.detalhes`` por ``recalcular_escola``: prova que as
+    colunas ``*_institucional`` da linha foram calculadas pelo motor com a régua
+    vigente (a rede só agrega notas carimbadas — ver ``rede._CARIMBO_INSTITUCIONAL``).
+    Determinístico (sem timestamp). Exposto para fixtures de teste que fabricam
+    Notas fora do motor."""
+    from app.services import dificuldade_livro as _dl
+    return {"regua_institucional": {
+        "versao_dificuldade": _dl.VERSAO_VIGENTE,
+        "perfil_local": "personalizado" if personalizado else "institucional"}}
 
 
 def _data_iso(snapshot) -> str | None:
@@ -1337,7 +1359,19 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                     "elefante": {"indicadores": linhas_e, "questoes": det_q, "nota": nota_e,
                                  "bonus_leitura_escola": round(bonus_por_aluno.get(aluno.id, 0.0), 2),
                                  # Regra de dificuldade que gerou `pontos_dificuldade`.
-                                 "dificuldade": {"versao": versao_dificuldade}},
+                                 # `incompleto`: há livros contados mas SEM distribuição
+                                 # por nível nem leituras itemizadas — a dificuldade não é
+                                 # "zero", é DESCONHECIDA (relatório da turma sem colunas
+                                 # de nível); a tela deve dizer isso, não mostrar 0.
+                                 "dificuldade": {
+                                     "versao": versao_dificuldade,
+                                     "incompleto": bool(
+                                         snap_e is not None
+                                         and int(getattr(snap_e, "livros_unicos", 0) or 0) > 0
+                                         and not any((getattr(snap_e, "livros_por_nivel", None) or {}).values())
+                                         and not getattr(snap_e, "itemizadas", 0)),
+                                     "fonte": getattr(snap_e, "fonte", None) if snap_e else None,
+                                 }},
                     # `dimensoes_com_dados` deixa a renormalização auditável: a
                     # tela de explicação mostra a conta com os pesos de fato
                     # usados, e aqui fica registrado POR QUE eles são esses.
@@ -1400,7 +1434,15 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         nota_row.aferido_matematica = bool(resultado.aferido.get("matematica"))
         nota_row.posicao_leitura = resultado.posicao_dimensao.get("leitura")
         nota_row.posicao_matematica = resultado.posicao_dimensao.get("matematica")
-        nota_row.detalhes = resultado.detalhes
+        # CARIMBO INSTITUCIONAL (visível em SQL via JSON path): prova que as
+        # colunas `*_institucional` desta linha foram calculadas por este motor.
+        # A rede só agrega notas carimbadas — uma linha antiga (migração 0028 com
+        # default 0,0 e sem backfill) NÃO vira "zero" na média: fica PENDENTE de
+        # recálculo até `scripts.recalcular_institucional --pendentes`.
+        # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
+        # recalcular duas vezes não pode gerar UPDATE; o instante fica em
+        # `Nota.calculada_em`.)
+        nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
 
     db.commit()
     return len(resultados)
