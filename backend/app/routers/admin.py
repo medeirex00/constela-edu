@@ -686,6 +686,23 @@ def baixar_backup(
     )
 
 
+def _definir_perfil_scoring(db: Session, escola_id: int, modo: str) -> None:
+    """Grava `scoring.perfil/modo` (mesma linha que PUT /perfil-scoring escreve)."""
+    row = db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == scoring.PERFIL_SCORING_NS,
+            Configuracao.chave == "modo",
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        db.add(Configuracao(escola_id=escola_id, namespace=scoring.PERFIL_SCORING_NS,
+                            chave="modo", valor=modo))
+    else:
+        row.valor = modo
+    db.flush()
+
+
 @router.post("/restaurar")
 async def restaurar_backup(
     arquivo: UploadFile = File(...),
@@ -705,6 +722,12 @@ async def restaurar_backup(
     if not isinstance(dados, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
 
+    # GOVERNANÇA: o perfil de scoring (`scoring.perfil`) é decisão do Admin Global
+    # (PUT /perfil-scoring). Um backup restaurado por admin DE ESCOLA não pode
+    # "plantar" `personalizado` (bypass): o valor vigente é preservado e a
+    # tentativa fica auditada. O Admin Global restaura o backup como está.
+    perfil_antes = scoring.obter_config(db, escola_id, scoring.PERFIL_SCORING_NS,
+                                        "modo", "institucional")
     try:
         contagem = svc_backup.restaurar(db, escola_id, dados)
     except svc_backup.RestauracaoBloqueada as bloqueio:
@@ -726,6 +749,15 @@ async def restaurar_backup(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "O arquivo de backup contém dados inconsistentes ou duplicados.")
 
+    if not usuario.is_global:
+        perfil_no_backup = scoring.obter_config(db, escola_id, scoring.PERFIL_SCORING_NS,
+                                                "modo", "institucional")
+        if str(perfil_no_backup) != str(perfil_antes):
+            _definir_perfil_scoring(db, escola_id, str(perfil_antes))
+            registrar(db, "backup.perfil_scoring_preservado", escola_id=escola_id,
+                      usuario_id=usuario.id,
+                      detalhes={"no_backup": perfil_no_backup, "mantido": perfil_antes,
+                                "motivo": "só o Admin Global altera o perfil de scoring"})
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"tabelas": contagem})
     db.commit()

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
-from app.models import Escola, Usuario
+from app.models import Escola, Nota, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
 from app.services import provisionamento
 from app.services.audit import registrar
@@ -78,6 +78,22 @@ def atualizar(
     if not usuario.is_global and usuario.escola_id != escola_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Acesso negado a esta escola.")
     alteracoes = dados.model_dump(exclude_unset=True)
+    novo_ano = alteracoes.get("ano_letivo_ativo")
+    if novo_ano is not None and novo_ano != escola.ano_letivo_ativo:
+        # HISTÓRICO PROTEGIDO: o recálculo grava as Notas do ANO ATIVO com os
+        # snapshots/leituras ATUAIS. Voltar o ano ativo para um ano que já tem
+        # notas reescreveria esse histórico com dados de hoje — recusado para
+        # qualquer perfil. Avançar o ano é decisão da rede: só o Admin Global.
+        if not usuario.is_global:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "Só o administrador global altera o ano letivo ativo.")
+        ultimo_ano_com_notas = db.execute(
+            select(func.max(Nota.ano_letivo)).where(Nota.escola_id == escola_id)).scalar()
+        if ultimo_ano_com_notas is not None and novo_ano < ultimo_ano_com_notas:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Voltar o ano letivo ativo para {novo_ano} reescreveria o histórico de "
+                f"notas de {ultimo_ano_com_notas}. O histórico é protegido.")
     for campo, valor in alteracoes.items():
         setattr(escola, campo, valor)
     registrar(db, "escola.atualizada", escola_id=escola.id, usuario_id=usuario.id,
