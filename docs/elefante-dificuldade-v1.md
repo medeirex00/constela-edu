@@ -212,3 +212,37 @@ Reproduzir: `python scripts/simular_impacto_dificuldade.py [--completo]`.
    o ignora de propósito.
 6. Front-end: telas que mostram "pontos por livro" (catálogo, histórico) passam a exibir o
    valor v1 (catálogo sem série = 5º ano). Nenhum contrato de API mudou; só a magnitude.
+
+## 11. Correções pós-auditoria (2026-09-14)
+
+Auditoria read-only encontrou uma dupla contagem bloqueante e várias causas de "nota zero"
+pré-existentes. Correções aprovadas e implementadas (fórmula, pesos 35/30/30/5 e A3 intactos):
+
+| Prioridade | Problema | Correção | Onde |
+|---|---|---|---|
+| P0 | `pontos_por_chave` somava o snapshot por **faixa** (`nivel_5: 2`) **e** as leituras itemizadas por **letra** (`Z`, `X`) — cada livro contava 2× (80,29 em vez de ~40) | Reconciliação por faixa em 3 passes (mesma letra → mesma faixa → excedente entre faixas); total ≤ max(Σ snapshot, Σ itens); independente da ordem dos imports; determinística | `dificuldade_livro.RegraV1.pontos_por_chave`, `faixa_da_chave`, `LETRA_PARA_FAIXA` |
+| P1 | `nota_elefante_institucional = 0` com `nota_elefante > 0` (migração 0028 sem backfill; a rede lia zero) | A nota recebe o carimbo `detalhes.regua_institucional = {versao_dificuldade, perfil_local}`; a rede só agrega notas carimbadas e expõe `notas_pendentes_recalculo`; `recalcular_institucional.py --pendentes` recalcula só quem falta (idempotente, nunca grava zero) | `scoring.carimbo_institucional`, `rede._CARIMBO_INSTITUCIONAL`, `rede.escolas_com_notas_pendentes` |
+| P2 | `POST /escolas/{id}/restaurar` plantava `scoring.perfil=personalizado` por backup; `PATCH /escolas` mudava `ano_letivo_ativo` para trás | Restore por admin de escola preserva o perfil anterior (auditado); `ano_letivo_ativo` só Admin Global e nunca abaixo do maior ano com notas (409) | `admin.restaurar_backup`, `escolas.atualizar` |
+| P3A | Cursor incremental avançava **antes** do fetch dos livros: falha = livros perdidos para sempre | Cursor só avança para quem **não mudou** ou teve os livros **entregues**; `Contexto.nome_por_sid` | `sync/connectors/elefante.py` |
+| P3B | Recálculo só no último arquivo (`i == len-1`): último "sem_dados" = escola sem recálculo | Nenhum arquivo recalcula; `service` fecha **uma** vez via `_finalizar_importacao` se gravou alguém | `sync/service.py` |
+| P3C | Linha "revisar"/sem vínculo descartada em silêncio | Auditoria + notificação (`aluno.revisao_necessaria`, `importacao.linha_ignorada`) + `ignorados` no resultado; a sync **desfaz o cursor** desses alunos e retenta | `importacoes._resolver_aluno`, `ImportacaoResultadoOut.ignorados`, `service._desfazer_cursor_ignorados` |
+| P3D | `livros_unicos > 0` com `livros_por_nivel = {}` virava dificuldade 0 silenciosa | Aviso explícito no import; o motor carimba `detalhes.elefante.dificuldade.incompleto = True` | `_importar_elefante_resumo(avisos=)`, `scoring.distribuicao_niveis(livros_unicos=)` |
+| P3E | `_int_api` devolvia 0 para campo ausente/renomeado na API interna → zerava snapshots válidos | Campo ausente **não entra** em `dados` (herda o snapshot anterior: "presente vence; ausente herda") + `erros_gerais` com contagem por campo | `services/importacao._int_api(…, ausente=None)`, `analisar_elefante_api` |
+| P3F | Aluno inativo (arquivado/fora da lista) com o mesmo nome noutra turma virava 2ª ficha ativa | Pendência auditada (não cria, não reativa sozinho — arquivar/Lista Piloto são decisões da escola); `excluido` continua não ressuscitando | `_pendencia_inativo_homonimo`, `_avisar_inativo` |
+| P4 | `/ranking/leitura?periodo=tudo` e premiação "tudo" ignoravam o aluno só-snapshot / somavam itens + snapshot | "tudo" usa a **mesma** reconciliação da nota anual (`regra.pontos_aluno(..., leituras=)`) | `rankings.ranking_leitura`, `premiacoes._leitura_no_periodo` |
+| P5 | Aluno com leituras e sem snapshot ficava sem livros/tempo | `InsumoElefante` + `reconciliar_insumo`: `livros = max(snapshot, nº itens)`, `tempo = max(snapshot, Σ tempo)` — nunca soma | `dificuldade_livro.insumos_elefante` |
+| P7 | `serie_numero("Turma 12345") = 12345`; histórico somava valores arredondados; aviso de nível desatualizado; toggle de perfil que o backend bloqueia | Regex exige série marcada; soma exata; texto novo; `Metricas.tsx` só leitura para não-global | `dificuldade_livro._RE_SERIE`, `academico.historico_leituras`, `Metricas.tsx` |
+
+Ferramenta read-only: `python -m scripts.auditar_notas_elefante` (só `DATABASE_URL`; zeros
+corretos × suspeitos, notas sem carimbo, leituras sem snapshot, snapshots sem nível, divergência
+gravada × esperada, contagens por escola e por turma, consistência entre telas).
+
+**Rollout (produção):** deploy → `python -m scripts.recalcular_institucional --pendentes` →
+conferir `notas_pendentes_recalculo == 0` no card da rede → (opcional) auditoria read-only.
+Nenhuma migração nova; nenhum recálculo automático no boot.
+
+**Motor V2 (`app/services/pontuacao/`, workstream paralelo, untracked — não alterado):**
+`contexto.py` mistura `scoring.mapa_pontos_turmas` (preço legado por faixa) com os totais v1
+de `_carregar_contexto` para a coletiva; `test_pontuacao_v2` e `test_sanidade_v2` falham por
+isso. Integração segura quando o V2 for assumido: trocar `mapa_pontos_turmas` por
+`dificuldade_livro.regra_da_escola(db, escola_id).valor_livro(...)` (mesma fonte única).
