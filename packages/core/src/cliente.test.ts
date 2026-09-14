@@ -35,4 +35,22 @@ describe("cliente HTTP: falha de rede vira ApiError(0) em pt-BR", () => {
     expect(erro).toBeInstanceOf(ApiError);
     expect(erro.status).toBe(400);
   });
+
+  it("422 de validação (detail em LISTA, Pydantic) vira mensagem legível, sem o prefixo 'Value error'", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ detail: [
+          { type: "value_error", loc: ["body", "senha"], msg: "Value error, Senha muito comum. Escolha outra.", input: "12345678" },
+          { type: "value_error", loc: ["body", "senha"], msg: "Value error, Senha muito comum. Escolha outra.", input: "12345678" },
+          { type: "missing", loc: ["body", "nome"], msg: "Field required", input: {} },
+        ] }), { status: 422, headers: { "Content-Type": "application/json" } }),
+      ),
+    ) as unknown as typeof fetch;
+
+    const erro = (await api("/qualquer", { method: "POST" }).catch((e) => e)) as ApiError;
+    expect(erro.status).toBe(422);
+    expect(erro.message).toBe("Senha muito comum. Escolha outra. Field required");
+    expect(erro.message).not.toMatch(/value error/i);
+    expect(erro.message).not.toBe("Não foi possível completar a operação.");
+  });
 });

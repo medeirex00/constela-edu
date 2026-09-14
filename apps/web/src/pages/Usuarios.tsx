@@ -41,17 +41,8 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { ApiError, api } from "../lib/api";
+import { CARGOS, rotuloCargo } from "../lib/cargos";
 import type { Turma, Usuario } from "../lib/types";
-
-const CARGOS = [
-  { valor: "admin", rotulo: "Administrador", descricao: "Acesso total: usuários, configurações, importações e exclusões." },
-  { valor: "coordenador", rotulo: "Coordenador", descricao: "Acesso a tudo da escola, exceto usuários e configurações de sistema." },
-  { valor: "professor", rotulo: "Professor", descricao: "Vê apenas as turmas designadas a ele, com dados resumidos." },
-] as const;
-
-function rotuloCargo(valor: string): string {
-  return CARGOS.find((c) => c.valor === valor)?.rotulo ?? valor;
-}
 
 function dataLegivel(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -692,7 +683,7 @@ function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
 // --- Página -------------------------------------------------------------------
 
 export default function Usuarios() {
-  const { escolaId, usuario: usuarioLogado } = useApp();
+  const { escolaId, usuario: usuarioLogado, escolaAtual } = useApp();
   const [usuarios, setUsuarios] = useState<Usuario[] | null>(null);
   const [mostrarExcluidos, setMostrarExcluidos] = useState(false);
   const [erroLista, setErroLista] = useState("");
@@ -793,7 +784,12 @@ export default function Usuarios() {
     <div>
       <PageHeader
         titulo="Usuários"
-        descricao="Contas de acesso desta escola. Toda alteração fica no log de auditoria."
+        descricao={
+          // O Admin Global opera várias escolas: deixa explícito QUAL escola
+          // recebe a conta (o seletor do topo define a escola desta tela).
+          (escolaAtual ? `Contas de acesso de ${escolaAtual.nome}. ` : "Contas de acesso desta escola. ")
+          + "Toda alteração fica no log de auditoria."
+        }
         acoes={
           souAdmin ? (
             <div className="flex flex-wrap gap-2">
@@ -924,7 +920,13 @@ export default function Usuarios() {
             <input className={estiloInput} value={nome} onChange={(e) => setNome(e.target.value)} autoFocus />
           </Campo>
           <Campo rotulo="E-mail">
-            <input type="email" className={estiloInput} value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input
+              type="email"
+              className={estiloInput}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="off"
+            />
           </Campo>
           <Campo rotulo="Nome de usuário (opcional — para entrar sem digitar o e-mail)">
             <input
@@ -932,6 +934,7 @@ export default function Usuarios() {
               placeholder="ex.: maria.souza"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
             />
           </Campo>
           <Campo rotulo="Cargo">
@@ -940,7 +943,15 @@ export default function Usuarios() {
             </select>
           </Campo>
           <Campo rotulo="Senha (mínimo 8 caracteres)">
-            <input type="password" className={estiloInput} value={senha} onChange={(e) => setSenha(e.target.value)} />
+            {/* new-password: é a conta de OUTRA pessoa — o navegador não deve
+                preencher a senha do gestor nem guardar esta no cofre dele. */}
+            <input
+              type="password"
+              className={estiloInput}
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              autoComplete="new-password"
+            />
           </Campo>
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">

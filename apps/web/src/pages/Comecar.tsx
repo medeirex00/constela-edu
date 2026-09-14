@@ -106,8 +106,9 @@ export default function Comecar() {
               </p>
               {usuario?.is_global && (
                 <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                  Precisa cadastrar outra escola? Use a página{" "}
-                  <Link to="/escolas" className="font-medium underline">Escolas</Link>.
+                  Precisa cadastrar outra escola ou criar o primeiro usuário (coordenador) desta?
+                  Use a página <Link to="/escolas" className="font-medium underline">Escolas</Link> —
+                  a seção “Usuários” de cada escola funciona antes de turmas, alunos e Lista Piloto.
                 </p>
               )}
             </div>

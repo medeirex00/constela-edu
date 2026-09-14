@@ -4,9 +4,10 @@
  * (unidades com 1º ao 5º ano). Os nomes vêm curtos (ex.: "DEBORA PILON");
  * é só renomear os que não agradarem.
  */
-import { Building2, Pencil, Power, School } from "lucide-react";
+import { Building2, Pencil, Power, School, UserCog } from "lucide-react";
 import { useState } from "react";
 
+import UsuariosDaEscola from "../components/UsuariosDaEscola";
 import {
   Badge,
   Botao,
@@ -75,6 +76,10 @@ export default function Escolas() {
   const [nome, setNome] = useState("");
   const [renomear, setRenomear] = useState<Escola | null>(null);
   const [confirmarRede, setConfirmarRede] = useState(false);
+  // Escola "aberta": mostra a seção Usuários dela logo abaixo da lista. NÃO
+  // depende de turmas, alunos, Lista Piloto ou integrações — é justamente o
+  // caminho para criar o primeiro coordenador de uma escola recém-cadastrada.
+  const [escolaAberta, setEscolaAberta] = useState<Escola | null>(null);
 
   if (!usuario?.is_global) {
     return <Vazio titulo="Somente o administrador global"
@@ -106,10 +111,14 @@ export default function Escolas() {
     if (nome.trim().length < 2) return;
     setOcupado(true);
     try {
-      await criar({ nome: nome.trim() });
-      setMensagem({ tipo: "ok", texto: `Escola “${nome.trim()}” criada.` });
+      const criada = await criar({ nome: nome.trim() });
+      setMensagem({
+        tipo: "ok",
+        texto: `Escola “${nome.trim()}” criada. Agora adicione o primeiro usuário (coordenador ou diretor) na seção abaixo.`,
+      });
       setNovo(false);
       setNome("");
+      setEscolaAberta(criada);   // passo 2 do onboarding: criar o coordenador
       carregar();
       recarregarEscolas?.();
     } catch (e) {
@@ -150,6 +159,8 @@ export default function Escolas() {
         body: JSON.stringify({ status: novoStatus }),
       });
       setMensagem({ tipo: "ok", texto: `Escola ${novoStatus === "ativa" ? "reativada" : "desativada"}.` });
+      // Desativou a escola aberta: fecha a seção de usuários dela.
+      if (novoStatus === "inativa" && escolaAberta?.id === escola.id) setEscolaAberta(null);
       carregar();
       recarregarEscolas?.();
     } catch (e) {
@@ -220,7 +231,7 @@ export default function Escolas() {
                   <th className="hidden px-4 py-2 font-medium sm:table-cell">Cidade</th>
                   <th className="px-4 py-2 font-medium">Ano letivo</th>
                   <th className="px-4 py-2 font-medium">Situação</th>
-                  <th className="w-12 px-4 py-2"></th>
+                  <th className="w-28 px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
@@ -235,6 +246,19 @@ export default function Escolas() {
                       <Badge tom={escola.status === "ativa" ? "ok" : "neutro"}>{escola.status}</Badge>
                     </td>
                     <td className="px-4 py-2.5 text-right">
+                      <button
+                        aria-label={`Usuários de ${escola.nome}`}
+                        title="Usuários"
+                        aria-pressed={escolaAberta?.id === escola.id}
+                        className={`rounded-md p-1.5 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 ${
+                          escolaAberta?.id === escola.id
+                            ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+                            : "text-zinc-500 dark:text-zinc-400"
+                        }`}
+                        onClick={() => setEscolaAberta(escolaAberta?.id === escola.id ? null : escola)}
+                      >
+                        <UserCog size={15} />
+                      </button>
                       <button
                         aria-label={`Renomear ${escola.nome}`}
                         className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
@@ -258,6 +282,14 @@ export default function Escolas() {
           </div>
         )}
       </Card>
+
+      {/* --- Usuários da escola aberta (antes de turmas/alunos/Lista Piloto) --- */}
+      {escolaAberta && (
+        <UsuariosDaEscola
+          escola={escolas?.find((e) => e.id === escolaAberta.id) ?? escolaAberta}
+          aoFechar={() => setEscolaAberta(null)}
+        />
+      )}
 
       {/* --- Nova escola --- */}
       <Modal titulo="Nova escola" aberto={novo} aoFechar={() => setNovo(false)}>

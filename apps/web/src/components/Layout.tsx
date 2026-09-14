@@ -725,10 +725,25 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   // Matific. Depois que configura, `precisaConfigurar` vira falso e o menu
   // completo aparece. (Vale só para quem opera a escola: admin/coordenador; a
   // Secretaria e o professor entram numa escola já preparada.)
+  //
+  // EXCEÇÃO — Admin Global: a "Estrutura" (Gerenciar Rede, Escolas, Usuários)
+  // não depende da escola selecionada estar configurada. É por ela que o
+  // primeiro usuário (coordenador) de uma escola recém-criada é cadastrado —
+  // ANTES de turmas, alunos e Lista Piloto. Sem isto, selecionar a escola
+  // nova escondia até a página Escolas.
   if (gestor && !secretaria && precisaConfigurar) {
     return (
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         <LinkMenu item={COMECAR} aoNavegar={aoNavegar} />
+        {perfil.global && (
+          <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+            <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">Estrutura</p>
+            {/* Mesmos itens do grupo "estrutura" de gruposDoPerfil — uma fonte só. */}
+            {(gruposDoPerfil(perfil).find((g) => g.chave === "estrutura")?.itens ?? []).map((item) => (
+              <LinkMenu key={item.caminho} item={item} aoNavegar={aoNavegar} />
+            ))}
+          </div>
+        )}
         <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
           <LinkMenu item={SUPORTE} aoNavegar={aoNavegar} />
         </div>

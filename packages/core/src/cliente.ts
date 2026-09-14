@@ -72,6 +72,17 @@ async function extrairDetalhe(resposta: Response, padrao: string): Promise<strin
   try {
     const corpo = await resposta.json();
     if (typeof corpo.detail === "string") return corpo.detail;
+    // 422 de validação (Pydantic): `detail` é uma LISTA de {loc, msg, ...}. Sem
+    // isto, "senha fraca" ou "e-mail inválido" viravam a mensagem genérica e o
+    // gestor não sabia o que corrigir.
+    if (Array.isArray(corpo.detail)) {
+      const mensagens = corpo.detail
+        .map((item: { msg?: unknown }) => (typeof item?.msg === "string" ? item.msg : ""))
+        // Pydantic v2 prefixa "Value error, " nos erros de validador — ruído para quem lê.
+        .map((msg: string) => msg.replace(/^Value error,\s*/i, "").trim())
+        .filter(Boolean);
+      if (mensagens.length) return Array.from(new Set(mensagens)).join(" ");
+    }
   } catch {
     /* corpo não-JSON */
   }
