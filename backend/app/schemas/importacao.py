@@ -105,6 +105,10 @@ class ImportacaoResultadoOut(BaseModel):
     qtd_alunos: int
     qtd_erros: int
     avisos: list[str] = []
+    # Nomes (normalizados) das linhas que NÃO puderam ser vinculadas a um aluno
+    # (correspondência insegura / sem vínculo). Nunca silêncio: a sync desfaz o
+    # cursor desses alunos e retenta; a tela lista a pendência.
+    ignorados: list[str] = []
 
 
 # --- Importação da planilha de matrículas da escola ("Lista Piloto") --------

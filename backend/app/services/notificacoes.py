@@ -37,6 +37,12 @@ NOTIFICAVEIS: dict[str, tuple[str, str, Callable[[int | None], str]]] = {
     "elefante.editado": ("Dados do Elefante Letrado editados manualmente", "info", lambda _: "/elefante"),
     "aluno.criado": ("Novo aluno cadastrado", "info",
                      lambda eid: f"/alunos/{eid}" if eid else "/alunos"),
+    # Importação/sync NÃO pode descartar linha em silêncio: a correspondência
+    # insegura e a linha sem aluno vinculado viram notificação para a escola.
+    "aluno.revisao_necessaria": ("Importação: aluno com correspondência insegura — revisar",
+                                 "aviso", lambda _: "/alunos"),
+    "importacao.linha_ignorada": ("Importação: linha sem aluno vinculado — revisar",
+                                  "aviso", lambda _: "/importacoes"),
 }
 
 

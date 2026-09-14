@@ -594,6 +594,11 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         existente = _aluno_existente_na_turma(db, escola_id, ano, turma.id, linha.nome,
                                               chamada, nasc_linha, ra_linha)
         if existente is not None:
+            if existente.status != "ativo":
+                # Reusa a ficha (sem duplicata), mas NÃO em silêncio: o aluno
+                # inativo fica fora do ranking até alguém reativá-lo em Alunos.
+                _avisar_inativo(db, escola_id, existente, turma, linha.nome, avisos,
+                                motivo="ficha_inativa_na_turma")
             if criados is not None:
                 criados[chave] = existente
             return existente
@@ -648,6 +653,15 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                 "(nomes muito próximos), mas a correspondência não é segura — NÃO foi "
                 "criado, para evitar duplicata. Confira em Alunos › Fundir duplicatas.")
             return None
+        # ANTES de criar: um aluno INATIVO (arquivado / fora da lista piloto) com o
+        # MESMO nome noutra turma é, quase sempre, a mesma criança que mudou de
+        # sala. NÃO cria a 2ª ficha ativa (duplicata) nem reativa sozinho (arquivar
+        # e a Lista Piloto são decisões da escola): vira PENDÊNCIA auditada e a
+        # linha fica de fora — a sync não avança o cursor e retenta; reativar em
+        # Alunos (ou reimportar a Lista Piloto) resolve com o histórico intacto.
+        # "excluido" NUNCA ressuscita (regra de 276381f) → segue para criar.
+        if _pendencia_inativo_homonimo(db, escola_id, linha.nome, turma, avisos):
+            return None
         registrar(db, "aluno.criado_auto", escola_id=escola_id, entidade="aluno",
                   entidade_id=None,
                   detalhes={"origem": linha.nome, "turma": turma.nome,
@@ -661,8 +675,50 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         if criados is not None:
             criados[chave] = aluno
         return aluno
-    avisos.append(f"Linha “{linha.nome}”: sem aluno vinculado — ignorada.")
+    # NÃO é silêncio: fica no log de auditoria (vira notificação para a escola) e
+    # o chamador expõe a linha em `ignorados` (a sync desfaz o cursor e retenta).
+    registrar(db, "importacao.linha_ignorada", escola_id=escola_id, entidade="aluno",
+              entidade_id=None,
+              detalhes={"origem": linha.nome,
+                        "turma": getattr(linha, "criar_em_turma_nome", None),
+                        "motivo": "sem aluno vinculado"})
+    avisos.append(f"Linha “{linha.nome}”: sem aluno vinculado — ignorada "
+                  "(pendência registrada; vincule/cadastre o aluno e reimporte).")
     return None
+
+
+_STATUS_INATIVOS_REVISAO = ("arquivado", "fora_lista_piloto")
+
+
+def _avisar_inativo(db: Session, escola_id: int, aluno: Aluno, turma, origem: str,
+                    avisos: list[str], *, motivo: str) -> None:
+    registrar(db, "aluno.revisao_necessaria", escola_id=escola_id, entidade="aluno",
+              entidade_id=aluno.id,
+              detalhes={"origem": origem, "turma": turma.nome, "status": aluno.status,
+                        "decisao": "REVIEW_REQUIRED", "motivo": motivo})
+    avisos.append(
+        f"“{origem}”: já existe a ficha de {aluno.nome} com status “{aluno.status}” "
+        f"(turma {turma.nome}) — NÃO foi criada uma 2ª ficha. Reative o aluno em "
+        "Alunos (ou reimporte a Lista Piloto) para ele voltar ao ranking; a "
+        "sincronização traz os dados na próxima rodada.")
+
+
+def _pendencia_inativo_homonimo(db: Session, escola_id: int, nome: str, turma,
+                                avisos: list[str]) -> bool:
+    """True se há aluno INATIVO (arquivado/fora da lista piloto) com o MESMO nome
+    normalizado em qualquer turma da escola: registra a pendência (auditoria +
+    notificação + aviso) e a linha NÃO cria aluno. "excluido" não conta."""
+    alvo = svc.normalizar_nome(nome)
+    candidatos = [a for a in db.execute(
+        select(Aluno).where(Aluno.escola_id == escola_id,
+                            Aluno.status.in_(_STATUS_INATIVOS_REVISAO))).scalars()
+        if svc.normalizar_nome(a.nome) == alvo]
+    if not candidatos:
+        return False
+    _avisar_inativo(db, escola_id, candidatos[0], turma, nome, avisos,
+                    motivo=("inativo_homonimo_outra_turma" if len(candidatos) == 1
+                            else "mais_de_um_inativo_homonimo"))
+    return True
 
 
 def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
@@ -914,7 +970,7 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
 
 
 def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia,
-                              anterior=_SEM_PRECARGA):
+                              anterior=_SEM_PRECARGA, avisos: list | None = None):
     # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1).
     if anterior is _SEM_PRECARGA:
         anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
@@ -927,6 +983,14 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
         livros = (sum(_num(v, int) for v in por_nivel.values()) if por_nivel
                   else (anterior.livros_unicos if anterior else 0))
     livros_unicos = _num(livros, int)
+    if avisos is not None and livros_unicos > 0 and not any(
+            _num(v, int) for v in (por_nivel or {}).values()):
+        # Livros contados, distribuição por nível DESCONHECIDA: a dificuldade não
+        # é "zero" — o motor carimba `dificuldade.incompleto` e a tela deve dizer.
+        avisos.append(
+            f"{aluno.nome}: o relatório traz {livros_unicos} livro(s) mas NÃO a "
+            "distribuição por nível — a dificuldade fica desconhecida (não zero) "
+            "até importar o relatório individual ou a sincronização trazer os livros.")
     tempo = _num(dados.get("tempo_leitura_min",
                            anterior.tempo_leitura_min if anterior else 0), int)
     tentativas = _num(dados.get("questoes_tentativas",
@@ -1104,16 +1168,18 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     for codigo in leituras:
         por_nivel[codigo] = por_nivel.get(codigo, 0) + 1
 
-    # Avisa se algum nível de letra não está em nenhuma faixa configurada:
-    # esses livros contam no total, mas não geram pontos de dificuldade nem
-    # aparecem no gráfico por nível até a letra ser incluída em Métricas.
+    # Avisa se algum nível de letra não está em nenhuma faixa cadastrada: na
+    # regra global (v1) toda letra AA–Z/Z+/A+ PONTUA pela régua A3 — a letra só
+    # não aparece no gráfico por faixa (e, no perfil personalizado, não pontua
+    # pela régua da escola) até ser incluída em Métricas.
     # (``codigos_faixa`` já vem carregado uma vez por sincronização.)
     fora = sorted({c for c in por_nivel if c and c.upper() not in codigos_faixa})
     if fora:
         avisos.append(
             f"{aluno.nome}: níveis {', '.join(fora)} não estão em nenhuma faixa "
-            "de dificuldade — os livros contam no total, mas não pontuam por "
-            "dificuldade. Inclua essas letras em Métricas → Dificuldade.")
+            "cadastrada — pontuam pela régua global, mas não aparecem no gráfico "
+            "por faixa (e não pontuam na régua personalizada) até serem incluídos "
+            "em Métricas → Dificuldade.")
     anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
     # O resumo do relatório individual COMPLEMENTA o tempo de leitura de quem
     # ainda não tem snapshot; nunca rebaixa o valor vindo do relatório da turma.
@@ -1239,12 +1305,16 @@ def confirmar(
     resolvidos: dict[int, tuple[Aluno, list]] = {}
     criados: dict[tuple[str, int], Aluno] = {}  # dedup de alunos criados
     turmas_novas: dict = {}                     # turma criada pelo nome: 1x só
+    ignorados: list[str] = []                   # linhas SEM aluno (nunca silêncio)
     for linha in dados.linhas:
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
                                 avisos, criados, turmas_novas,
                                 permitir_criar_turma=getattr(
                                     dados, "permitir_criar_turma", True))
         if aluno is None:
+            chave_ign = svc.normalizar_nome(linha.nome)
+            if chave_ign not in ignorados:
+                ignorados.append(chave_ign)
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)
 
@@ -1307,7 +1377,7 @@ def confirmar(
         else:
             _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                       linhas_aluno[-1].dados, data_referencia,
-                                      anterior=anteriores.get(aluno.id))
+                                      anterior=anteriores.get(aluno.id), avisos=avisos)
 
     if contadores["reimportados"]:
         avisos.append(
@@ -1358,6 +1428,7 @@ def confirmar(
         qtd_alunos=importacao.qtd_alunos,
         qtd_erros=importacao.qtd_erros,
         avisos=avisos,
+        ignorados=ignorados,
     )
 
 

@@ -551,13 +551,14 @@ def detectar_tipo(conteudo: bytes, nome_arquivo: str = "",
     return "texto"
 
 
-def _int_api(v) -> int:
-    """Inteiro tolerante (aceita int/float/str/None) — para os campos numéricos da
-    API interna do Elefante."""
+def _int_api(v, ausente=0):
+    """Inteiro tolerante (aceita int/float/str) — para os campos numéricos da API
+    interna. Ausente/ilegível → ``ausente`` (passe ``None`` quando "não veio" NÃO
+    pode virar 0 e sobrescrever um snapshot válido)."""
     try:
         return int(round(float(v)))
     except (TypeError, ValueError):
-        return 0
+        return ausente
 
 
 def _data_iso_elefante(bruto) -> str:
@@ -630,7 +631,7 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
                 # total do aluno já está no snapshot agregado (ranking "Todo o
                 # histórico"); aqui só entram leituras com data real.
                 continue
-            tempo_seg = _int_api(r.get("totalTimeSpent", r.get("tempo_livro_seg")))
+            tempo_seg = _int_api(r.get("totalTimeSpent", r.get("tempo_livro_seg")), None)
             linhas_l.append(LinhaImportacao(
                 numero=i, nome=nome,
                 dados={
@@ -650,29 +651,43 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
 
     alunos = payload.get("students")
     linhas: list[LinhaImportacao] = []
+    ausentes: dict[str, int] = {}
     for i, al in enumerate(alunos or [], start=1):
         if not isinstance(al, dict):
             continue
         nome = str(al.get("studentName") or "").strip()
         if not nome:
             continue
-        tempo_seg = _int_api(al.get("totalReadTime", al.get("readTime")))
-        linhas.append(LinhaImportacao(
-            numero=i, nome=nome,
-            dados={
-                "livros_unicos": _int_api(al.get("totalBooksRead", al.get("qtdBooksRead"))),
-                "tempo_leitura_min": round(tempo_seg / 60) if tempo_seg else 0,
-                "questoes_tentativas": _int_api(al.get("responses")),
-                "questoes_acertos": _int_api(al.get("approvedResponses")),
-                # Desambigua HOMÔNIMOS na turma certa (mesmo campo que o parser de
-                # PDF usa) — evita casar/duplicar aluno errado.
-                "turma_relatorio": turma,
-            }))
+        # GUARDA DE SANIDADE: campo ausente/renomeado/ilegível na API NÃO vira 0 —
+        # a chave simplesmente não entra em `dados`, e o importador do resumo
+        # HERDA o valor do snapshot anterior ("presente vence; ausente herda").
+        # Sem isto, uma mudança de nome de campo zerava a escola inteira.
+        tempo_seg = _int_api(al.get("totalReadTime", al.get("readTime")), None)
+        campos = {
+            "livros_unicos": _int_api(al.get("totalBooksRead", al.get("qtdBooksRead")), None),
+            "tempo_leitura_min": (round(tempo_seg / 60) if tempo_seg is not None else None),
+            "questoes_tentativas": _int_api(al.get("responses"), None),
+            "questoes_acertos": _int_api(al.get("approvedResponses"), None),
+        }
+        dados = {k: v for k, v in campos.items() if v is not None}
+        for k, v in campos.items():
+            if v is None:
+                ausentes[k] = ausentes.get(k, 0) + 1
+        # Desambigua HOMÔNIMOS na turma certa (mesmo campo que o parser de
+        # PDF usa) — evita casar/duplicar aluno errado.
+        dados["turma_relatorio"] = turma
+        linhas.append(LinhaImportacao(numero=i, nome=nome, dados=dados))
+    erros_gerais = []
+    if ausentes and linhas:
+        erros_gerais.append(
+            "Campos ausentes na resposta da API do Elefante ("
+            + ", ".join(f"{k}: {n} aluno(s)" for k, n in sorted(ausentes.items()))
+            + ") — valores anteriores preservados, nada foi zerado. Verifique o conector.")
     return Analise(
         plataforma=plataforma, formato="resumo", estrategia="api-elefante",
         mensagem_deteccao="Relatório de turma (API interna do Elefante Letrado).",
-        linhas=linhas, turma_detectada=turma, escola_detectada=escola,
-        professor_detectado=professor)
+        linhas=linhas, erros_gerais=erros_gerais, turma_detectada=turma,
+        escola_detectada=escola, professor_detectado=professor)
 
 
 def analisar_matific_api(payload) -> Analise:
@@ -691,6 +706,7 @@ def analisar_matific_api(payload) -> Analise:
     # bookmarklet manda a ESCOLA inteira (turma por aluno). Aceita os dois.
     turma_topo = str(payload.get("turma") or "").strip()
     linhas: list[LinhaImportacao] = []
+    ausentes: dict[str, int] = {}
     for i, a in enumerate(payload.get("alunos") or [], start=1):
         if not isinstance(a, dict):
             continue
@@ -698,22 +714,37 @@ def analisar_matific_api(payload) -> Analise:
         if not nome:
             continue
         turma = turma_topo or str(a.get("turma") or "").strip()
-        estrelas = _int_api(a.get("estrelas"))
-        atividades = _int_api(a.get("atividades"))
-        # "Pontuação média" da tela = estrelas por atividade (0–5). Ex.: 3914/1082=3.62.
-        media = round(estrelas / atividades, 2) if atividades else 0.0
-        linhas.append(LinhaImportacao(
-            numero=i, nome=nome,
-            dados={
-                "atividades": atividades,
-                "estrelas": estrelas,
-                "pontuacao_media": media,
-                # Desambigua homônimos na turma certa (mesmo campo do Excel/PDF).
-                "turma_relatorio": turma,
-                # UUID do aluno no Matific: identidade estável p/ recasar e para
-                # detectar mudança de turma com segurança (não muda de sala p/ sala).
-                "matific_uuid": str(a.get("uuid") or "").strip(),
-            }))
+        # GUARDA DE SANIDADE (mesma do Elefante): campo ausente/ilegível NÃO vira 0
+        # — a chave não entra em `dados` e `_importar_matific` HERDA o snapshot
+        # anterior ("presente vence; ausente herda"). Senão, um campo renomeado
+        # no Placar zerava as estrelas/atividades da escola inteira.
+        estrelas = _int_api(a.get("estrelas"), None)
+        atividades = _int_api(a.get("atividades"), None)
+        dados = {
+            # Desambigua homônimos na turma certa (mesmo campo do Excel/PDF).
+            "turma_relatorio": turma,
+            # UUID do aluno no Matific: identidade estável p/ recasar e para
+            # detectar mudança de turma com segurança (não muda de sala p/ sala).
+            "matific_uuid": str(a.get("uuid") or "").strip(),
+        }
+        if atividades is not None:
+            dados["atividades"] = atividades
+        else:
+            ausentes["atividades"] = ausentes.get("atividades", 0) + 1
+        if estrelas is not None:
+            dados["estrelas"] = estrelas
+        else:
+            ausentes["estrelas"] = ausentes.get("estrelas", 0) + 1
+        if atividades is not None and estrelas is not None:
+            # "Pontuação média" da tela = estrelas por atividade (0–5). Ex.: 3914/1082=3.62.
+            dados["pontuacao_media"] = round(estrelas / atividades, 2) if atividades else 0.0
+        linhas.append(LinhaImportacao(numero=i, nome=nome, dados=dados))
+    erros_gerais = []
+    if ausentes and linhas:
+        erros_gerais.append(
+            "Campos ausentes na resposta do Placar do Matific ("
+            + ", ".join(f"{k}: {n} aluno(s)" for k, n in sorted(ausentes.items()))
+            + ") — valores anteriores preservados, nada foi zerado. Verifique o conector.")
     # Período personalizado (start_date/end_date do Placar) → import POR PERÍODO
     # (premiação por semana/mês). Sem período, cai no import cumulativo.
     pi = str(payload.get("periodo_inicio") or "").strip()
@@ -723,8 +754,8 @@ def analisar_matific_api(payload) -> Analise:
         msg = f"Placar do Matific no período {pi} a {pf} (API interna)."
     return Analise(
         plataforma="matific", formato="resumo", estrategia="api-matific",
-        mensagem_deteccao=msg, linhas=linhas, turma_detectada=turma_topo,
-        escola_detectada="", professor_detectado="",
+        mensagem_deteccao=msg, linhas=linhas, erros_gerais=erros_gerais,
+        turma_detectada=turma_topo, escola_detectada="", professor_detectado="",
         periodo_inicio=pi, periodo_fim=pf)
 
 
