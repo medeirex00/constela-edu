@@ -336,7 +336,10 @@ def historico_leituras(
     _turma_id, _ano_escolar = (mat[0], mat[1]) if mat else (None, None)
     regra = dificuldade_livro.regra_da_escola(db, escola_id)
     itens = []
+    pontos_exatos = 0.0    # soma SEM arredondar (bate com ranking/nota ao centavo)
     for leitura, livro in db.execute(consulta).all():
+        valor = regra.valor_livro(livro.nivel_codigo, livro.titulo, _ano_escolar, _turma_id)
+        pontos_exatos += valor
         itens.append({
             "id": leitura.id,
             "livro": livro.titulo,
@@ -345,12 +348,11 @@ def historico_leituras(
             "plataforma": "elefante",
             "data": leitura.data.isoformat(),
             "tempo_leitura_min": leitura.tempo_leitura_min,
-            "pontos": round(regra.valor_livro(livro.nivel_codigo, livro.titulo,
-                                              _ano_escolar, _turma_id), 2),
+            "pontos": round(valor, 2),
         })
     resumo = {
         "total_livros": len(itens),
-        "pontos": round(sum(i["pontos"] for i in itens), 2),
+        "pontos": round(pontos_exatos, 2),
         "tempo_total_min": sum((i["tempo_leitura_min"] or 0) for i in itens),
     }
     return {

@@ -165,7 +165,16 @@ PARAMS_V1: dict = {
     "fator_serie_padrao": 1.0,   # série fora de 1º–5º (ou desconhecida)
 }
 
-_RE_SERIE = re.compile(r"(\d+)")
+# Série a partir de `Turma.ano_escolar`: "1º Ano", "4º ANO B", "3ª série", "2° ano",
+# "5º", "5", "5B", "Ano 3" — mas NUNCA o primeiro número de um rótulo qualquer
+# ("Turma 12345", "Turma 3", "EJA 2" → None): a série tem de estar marcada como
+# tal (ordinal / "ano" / "série") ou ser o rótulo inteiro.
+_RE_SERIE = re.compile(
+    r"(?<!\d)(\d{1,2})\s*(?:[ºª°]|o\b|a\b)?\s*(?:ano|s[ée]rie)\b"   # 3º Ano / 3a série
+    r"|\b(?:ano|s[ée]rie)\s*(\d{1,2})(?!\d)"                        # Ano 3
+    r"|^\s*(\d{1,2})\s*[ºª°]"                                        # 5º / 5º B
+    r"|^\s*(\d{1,2})\s*(?:[A-Za-z]\b)?\s*$",                        # 5 / 5B / 5 B
+    re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +192,9 @@ def normalizar_titulo(texto: str | None) -> str:
 def serie_numero(ano_escolar: str | None) -> int | None:
     """``"4º Ano B"`` → 4; sem dígito → None."""
     m = _RE_SERIE.search(str(ano_escolar or ""))
-    return int(m.group(1)) if m else None
+    if not m:
+        return None
+    return int(next(g for g in m.groups() if g is not None))
 
 
 def fator_serie(ano_escolar: str | None, params: dict = PARAMS_V1) -> float:

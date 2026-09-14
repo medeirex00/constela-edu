@@ -378,7 +378,7 @@ def _leituras_no_periodo(db: Session, escola_id: int,
 
 def series_e_dificuldade(
     db: Session, escola_id: int,
-) -> tuple[dict[int, list], dict[int, list], dict[tuple[str, str], float]]:
+) -> tuple[dict[int, list], dict[int, list], object]:
     """Pré-carrega, UMA vez, as varreduras CARAS e independentes de janela —
     séries de Matific/Elefante + mapa de dificuldade. Um chamador que faça
     VÁRIAS leituras derivadas no mesmo request (ex.: /sincronizacao mobile:

@@ -362,7 +362,10 @@ type PerfilScoring = { modo: "institucional" | "personalizado" };
 
 function PerfilScoringEditor() {
   const { escolaId, usuario } = useApp();
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // GOVERNANÇA: só o Admin Global escolhe a régua (PUT /perfil-scoring responde
+  // 403 para os demais). A tela mostra a escolha vigente em vez de oferecer um
+  // toggle que falharia ao salvar.
+  const somenteLeitura = !usuario?.is_global;
   const { dados, erro, carregando, recarregar } = useApi<PerfilScoring>(
     escolaId ? `/escolas/${escolaId}/configuracoes/perfil-scoring` : null,
   );
@@ -429,6 +432,12 @@ function PerfilScoringEditor() {
         Define a régua usada no ranking <strong>interno</strong> desta escola. O ranking da{" "}
         <strong>rede</strong> é sempre padronizado (régua institucional) e não muda com esta escolha.
       </p>
+      {somenteLeitura && (
+        <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+          Somente a administração global da Constela pode alterar a régua da escola. Para
+          solicitar uma régua personalizada, fale com o suporte.
+        </p>
+      )}
 
       <div className="space-y-2" role="radiogroup" aria-label="Régua de pontuação da escola">
         {opcoes.map((op) => {
