@@ -332,14 +332,31 @@ def test_ranking_rede_identico_quando_so_config_local_muda(db):
 
 # === endpoint /perfil-scoring: default institucional, troca, validação ========
 
-def test_endpoint_perfil_scoring(cliente, escola_completa):
+def test_endpoint_perfil_scoring(cliente, db, escola_completa):
+    """GOVERNANÇA (dificuldade por livro v1): a regra é GLOBAL; sair dela
+    (perfil personalizado = override autorizado) é ato exclusivo do Admin Global.
+    O admin/coordenador da escola LÊ o perfil, mas não o troca."""
+    from app.core.security import hash_senha
+    from app.models import Usuario
+
     escola_id = escola_completa["escola"].id
     base = f"/api/v1/escolas/{escola_id}/configuracoes/perfil-scoring"
     # Estado inicial: Padrão Constela.
     r = cliente.get(base)
     assert r.status_code == 200, r.text
     assert r.json()["modo"] == "institucional"
-    # Troca para personalizado.
+    # Admin DA ESCOLA (não global) não pode tirar a escola da regra global.
+    assert cliente.put(base, json={"modo": "personalizado"}).status_code == 403
+    assert cliente.get(base).json()["modo"] == "institucional"
+
+    # Admin GLOBAL troca para personalizado.
+    db.add(Usuario(escola_id=escola_id, nome="Root", email="root@teste.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="admin", is_global=True))
+    db.commit()
+    login = cliente.post("/api/v1/auth/login",
+                         data={"username": "root@teste.local", "password": "s3nh4"})
+    assert login.status_code == 200, login.text
+    cliente.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
     r = cliente.put(base, json={"modo": "personalizado"})
     assert r.status_code == 200, r.text
     assert r.json()["modo"] == "personalizado"

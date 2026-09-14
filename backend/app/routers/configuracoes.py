@@ -3,7 +3,7 @@
 Tudo que o motor de cálculo usa é editável por aqui (PRD §5, §29, §58–§62).
 Qualquer alteração dispara recálculo integral (PRD §43) e fica no log.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -37,7 +37,7 @@ from app.schemas import (
     ReferenciasOut,
     ReferenciasUpdate,
 )
-from app.services import provisionamento, scoring
+from app.services import dificuldade_livro, provisionamento, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/configuracoes", tags=["Configurações"])
@@ -73,12 +73,17 @@ def obter_perfil_scoring(
 def definir_perfil_scoring(
     dados: PerfilScoringIn,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),
     db: Session = Depends(get_db),
 ):
     """Escolhe a régua do ranking INTERNO da escola. IMPORTANTE: personalizar NÃO
     muda a posição da escola no ranking da REDE — esse usa sempre a régua
-    institucional (colunas ``nota_*_institucional``). Dispara recálculo."""
+    institucional (colunas ``nota_*_institucional``). Dispara recálculo.
+
+    GOVERNANÇA: a dificuldade por livro (``dificuldade_livro``, v1) é a regra
+    GLOBAL de todas as escolas; o perfil ``personalizado`` é o único override
+    (régua legada por faixa da escola) e é AUTORIZADO só pelo Admin Global —
+    um coordenador não pode tirar a própria escola da regra da rede."""
     modo = str(dados.modo).strip().lower()
     if modo not in MODOS_PERFIL_SCORING:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -103,6 +108,35 @@ def definir_perfil_scoring(
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     return PerfilScoringOut(modo=modo)
+
+
+# --- Dificuldade por LIVRO (regra GLOBAL, somente leitura) ---------------------
+
+@router.get("/dificuldade-livro")
+def dificuldade_livro_vigente(
+    escola_id: int = Depends(escola_autorizada),
+    nivel: str | None = Query(default=None),
+    titulo: str | None = Query(default=None),
+    ano_escolar: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+):
+    """Versão vigente e parâmetros da dificuldade por livro (regra da REDE) e qual
+    regra esta escola usa no contexto interno (``v1`` global ou a legada, se
+    personalizada). Com ``nivel`` (+ ``titulo``, ``ano_escolar``) devolve a
+    DECOMPOSIÇÃO do valor de uma leitura — a explicação para coordenação e
+    professores. Nada aqui é editável: os parâmetros são constantes versionadas."""
+    regra = dificuldade_livro.regra_da_escola(db, escola_id)
+    cat = dificuldade_livro.catalogo()
+    saida = {
+        "versao_vigente": dificuldade_livro.VERSAO_VIGENTE,
+        "regra_da_escola": regra.versao,
+        "parametros": dificuldade_livro.parametros_publicos(),
+        "catalogo": {"n": len(cat), **cat.meta},
+    }
+    if nivel:
+        saida["exemplo"] = regra.explicar(nivel, titulo, ano_escolar)
+    return saida
 
 
 # --- Pesos (PRD §29, §59, §60) ----------------------------------------------
