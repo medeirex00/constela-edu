@@ -923,7 +923,9 @@ class ConectorElefante(ConectorNavegador):
                 # anterior → é buscado; a UNIQUE de Leitura evita duplicar).
                 anteriores = getattr(contexto, "contadores_anteriores", None) or {}
                 novos = getattr(contexto, "contadores_novos", None)
+                nome_por_sid = getattr(contexto, "nome_por_sid", None)
                 sid_nome = {}      # só os alunos que MUDARAM (para buscar livros)
+                totais_vistos: dict[str, int] = {}
                 for al in alunos:
                     if not isinstance(al, dict):
                         continue
@@ -932,13 +934,19 @@ class ConectorElefante(ConectorNavegador):
                     if not s.isdigit() or not nome_al:
                         continue
                     total = int(al.get("totalBooksRead") or al.get("qtdBooksRead") or 0)
-                    if novos is not None:
-                        novos[s] = total
+                    totais_vistos[s] = total
+                    if nome_por_sid is not None:
+                        nome_por_sid[s] = nome_al
                     try:
                         inalterado = int(anteriores.get(s, -1)) == total
                     except (TypeError, ValueError):
                         inalterado = False
-                    if not inalterado:
+                    if inalterado:
+                        # CURSOR mantido só para quem NÃO mudou (livros já
+                        # coletados numa sync anterior que deu certo).
+                        if novos is not None:
+                            novos[s] = total
+                    else:
                         sid_nome[s] = nome_al
                 if sid_nome and not contexto.cancelado():
                     try:
@@ -950,13 +958,16 @@ class ConectorElefante(ConectorNavegador):
                         log("download", "warn",
                             f"[Elefante] turma {cid}: falha nos livros ({str(exc)[:60]}).")
                     leituras: list[dict] = []
+                    entregues: set[str] = set()   # alunos cujos livros CHEGARAM
                     for item in (lote or []):
                         if not isinstance(item, dict):
                             continue
-                        nome_al = sid_nome.get(str(item.get("studentId") or ""), "")
+                        sid = str(item.get("studentId") or "")
+                        nome_al = sid_nome.get(sid, "")
                         livros = item.get("books")
                         if not nome_al or not isinstance(livros, list):
                             continue
+                        entregues.add(sid)
                         for b in livros:
                             if isinstance(b, dict) and b.get("bookTitle"):
                                 leituras.append({
@@ -966,6 +977,14 @@ class ConectorElefante(ConectorNavegador):
                                     "genre": b.get("genre"), "theme": b.get("theme"),
                                     "totalTimeSpent": b.get("totalTimeSpent"),
                                     "lastReadWhen": b.get("lastReadWhen")})
+                    # O CURSOR AVANÇA SÓ APÓS SUCESSO: quem teve os livros entregues
+                    # nesta sync recebe o novo total; quem falhou (lote inteiro
+                    # falhou, ou o aluno veio sem `books`) fica SEM cursor novo → a
+                    # próxima sync o busca de novo. (O serviço ainda desfaz o
+                    # cursor de quem o `confirmar` não conseguiu vincular.)
+                    if novos is not None:
+                        for s in entregues:
+                            novos[s] = totais_vistos[s]
                     if leituras:
                         payload_l = {
                             "courseId": body.get("courseId") or cid,

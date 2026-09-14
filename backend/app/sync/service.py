@@ -350,6 +350,32 @@ def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
     row.valor = atual
 
 
+def _desfazer_cursor_ignorados(contexto: Contexto, ignorados: set[str]) -> None:
+    """Remove de ``contadores_novos`` os alunos cujas linhas ficaram sem vínculo
+    nesta sync (nomes normalizados em ``ignorados``): o merge de
+    ``_salvar_contadores`` mantém o cursor anterior e a próxima sync retenta."""
+    if not ignorados:
+        return
+    from app.services.importacao import normalizar_nome
+
+    nomes = getattr(contexto, "nome_por_sid", None) or {}
+    novos = getattr(contexto, "contadores_novos", None) or {}
+    for sid in [s for s, nome in nomes.items()
+                if normalizar_nome(nome) in ignorados and s in novos]:
+        novos.pop(sid, None)
+
+
+def _recalcular_ao_final(db: Session, escola_id: int, plataforma: str, n_alunos: int) -> None:
+    """Ponto ÚNICO de finalização (o mesmo do /confirmar e do /recalcular)."""
+    from app.routers import importacoes as imp
+
+    nome = "Matific" if plataforma == "matific" else "Elefante Letrado"
+    imp._finalizar_importacao(
+        db, escola_id,
+        corpo=f"{n_alunos} alunos atualizados na {nome} pela sincronização automática. "
+              "As notas já foram recalculadas.")
+
+
 def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecucao:
     """Roda UMA execução do início ao fim. Atualiza status, contadores, logs e
     alertas. Em erro recuperável, re-enfileira com backoff."""
@@ -406,17 +432,28 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         execucao.parser_versao = "perfis_pdf/planilhas"
 
         totais = {"alunos": 0, "erros": 0, "turmas": 0, "arquivos": 0}
-        for i, arquivo in enumerate(arquivos):
-            # Só recalcula no ÚLTIMO arquivo (economia; igual ao lote manual).
-            recalcular = (i == len(arquivos) - 1)
+        ignorados: set[str] = set()
+        for arquivo in arquivos:
+            # Nenhum arquivo recalcula sozinho: o recálculo roda UMA vez ao final,
+            # se algo foi gravado (antes dependia de o último arquivo ser o que
+            # tinha dados — um "sem_dados" no fim deixava a escola sem recálculo).
             res = orchestrator.aplicar_arquivo(
                 db, escola, arquivo, usuario_id=execucao.usuario_id,
-                recalcular=recalcular, contexto=contexto)
+                recalcular=False, contexto=contexto)
             totais["arquivos"] += 1
             if not res.get("sem_dados"):
                 totais["alunos"] += res["qtd_alunos"]
                 totais["erros"] += res["qtd_erros"]
                 totais["turmas"] += res["qtd_turmas"]
+                ignorados.update(res.get("ignorados") or [])
+        # CURSOR só avança para quem foi de fato gravado: linha sem aluno vinculado
+        # (correspondência insegura/ambígua) volta ao cursor anterior → a próxima
+        # sync busca os livros de novo em vez de perdê-los para sempre.
+        _desfazer_cursor_ignorados(contexto_fetch, ignorados)
+        if totais["alunos"] > 0:
+            _recalcular_ao_final(db, escola.id, execucao.plataforma, totais["alunos"])
+            contexto.log("ranking", "info",
+                         f"Notas recalculadas ao final ({totais['alunos']} aluno(s)).")
 
         execucao.qtd_arquivos = totais["arquivos"]
         execucao.qtd_alunos = totais["alunos"]

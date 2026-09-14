@@ -197,5 +197,8 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
         "qtd_turmas": len(turmas_novas),
         "importacao_id": resultado.importacao_id,
         "avisos": resultado.avisos,
+        # Linhas sem aluno vinculado: o serviço NÃO avança o cursor incremental
+        # desses alunos (a próxima sync retenta) e a pendência fica auditada.
+        "ignorados": list(getattr(resultado, "ignorados", None) or []),
         "sem_dados": False,
     }

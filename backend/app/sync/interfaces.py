@@ -105,6 +105,9 @@ class Contexto:
     # é preenchido pelo conector para o serviço persistir ao fim.
     contadores_anteriores: dict = field(default_factory=dict)
     contadores_novos: dict = field(default_factory=dict)
+    # {studentId: nome como veio da plataforma} — permite ao serviço desfazer o
+    # cursor de quem o `confirmar` não vinculou (a próxima sync retenta).
+    nome_por_sid: dict = field(default_factory=dict)
 
 
 class ErroConector(Exception):
