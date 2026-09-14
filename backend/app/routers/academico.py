@@ -258,9 +258,12 @@ def perfil_aluno(
                SnapshotElefante.id.in_(
                    scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)))
     ).scalar_one_or_none()
+    # Mesma regra (e mesma turma) da nota anual; `livros_unicos` permite marcar
+    # `incompleto` (livros contados sem distribuição por nível ≠ dificuldade 0).
     leitura_niveis = scoring.distribuicao_niveis(
         db, escola_id, snap_e.livros_por_nivel if snap_e else {}, ano_escolar,
-        aluno_id=aluno_id)
+        turma_id=matricula[1].id if matricula else None, aluno_id=aluno_id,
+        livros_unicos=snap_e.livros_unicos if snap_e else None)
 
     return AlunoPerfilOut(
         aluno=saida,

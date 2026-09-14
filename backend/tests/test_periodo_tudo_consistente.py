@@ -3,6 +3,9 @@ MESMA reconciliação da nota anual: aluno só-snapshot pontua, aluno com snapsh
 leituras não conta o mesmo livro duas vezes; a soma do histórico é exata (P7)."""
 import pytest
 
+from sqlalchemy import select
+
+from app.models import Nota
 from app.services import dificuldade_livro as dl
 from app.services import premiacoes, scoring
 
@@ -63,3 +66,16 @@ def test_tudo_bate_com_a_nota_anual_para_snapshot_leituras_e_ambos(cliente, db, 
     assert hist["resumo"]["pontos"] == pytest.approx(anual[joao.id], abs=0.01)
     assert hist["resumo"]["pontos"] == round(sum(
         regra.valor_livro("D", t, "3º Ano") for t in ("Livro J1", "Livro J2")), 2)
+
+
+def test_card_do_perfil_marca_incompleto_quando_ha_livros_sem_niveis(cliente, db, escola_completa):
+    """Snapshot com livros contados mas sem distribuição por nível: o card de
+    faixas do perfil e a Nota dizem 'incompleto' — nunca uma dificuldade 0 muda."""
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    _resumo(cliente, escola.id, ana, {}, livros=5)
+    perfil = cliente.get(f"{_base(escola.id)}/alunos/{ana.id}/perfil").json()
+    assert perfil["leitura_niveis"]["incompleto"] is True
+    assert perfil["leitura_niveis"]["pontos_dificuldade"] == 0
+    nota = db.execute(select(Nota).where(Nota.aluno_id == ana.id)).scalar_one()
+    assert nota.detalhes["elefante"]["dificuldade"]["incompleto"] is True

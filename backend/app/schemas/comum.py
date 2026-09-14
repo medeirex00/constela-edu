@@ -299,6 +299,9 @@ class LeituraNiveisOut(BaseModel):
     total_livros: int
     pontos_dificuldade: float
     faixa_predominante: str | None = None
+    # True quando há livros contados mas a distribuição por nível é desconhecida
+    # (resumo sem colunas de nível): a dificuldade é "desconhecida", não zero.
+    incompleto: bool = False
 
 
 class AlunoPerfilOut(BaseModel):
