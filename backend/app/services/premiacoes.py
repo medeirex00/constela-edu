@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Aluno, Escola, Leitura, Livro, Matricula, SnapshotMatific, Turma
-from app.services import scoring
+from app.services import dificuldade_livro, scoring
 from app.services import turnos as svc_turnos
 from app.services.evolucao import _janela, _series_por_aluno
 
@@ -71,16 +71,17 @@ def _alunos_ativos(db: Session, escola_id: int, ano: int,
 def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
                         inicio: datetime | None, fim: datetime | None):
     """Livros, pontos de dificuldade e tempo somados por aluno no intervalo.
-    Pontos resolvidos pela TURMA do aluno (TURMA>SÉRIE>padrão) — a MESMA régua do
-    ranking anual, senão o 'Melhor Leitor' coroaria a criança errada."""
-    mapa_turmas = scoring.mapa_pontos_turmas(db, escola_id)
+    Cada leitura vale o que a FONTE ÚNICA de dificuldade diz (v1 global: nível ×
+    ajuste do livro × série; ou a régua legada da escola personalizada) — a MESMA
+    regra do ranking anual, senão o 'Melhor Leitor' coroaria a criança errada."""
+    regra = dificuldade_livro.regra_da_escola(db, escola_id)
     livros: dict[int, float] = {}
     pontos: dict[int, float] = {}
     tempo: dict[int, float] = {}
     if not alunos:
         return livros, pontos, tempo
     consulta = (
-        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min)
+        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min, Livro.titulo)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id.in_(alunos.keys()))
     )
@@ -88,10 +89,10 @@ def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
         consulta = consulta.where(Leitura.data >= inicio)
     if fim is not None:
         consulta = consulta.where(Leitura.data <= fim)
-    for aid, codigo, minutos in db.execute(consulta).all():
+    for aid, codigo, minutos, titulo in db.execute(consulta).all():
         livros[aid] = livros.get(aid, 0) + 1
-        mapa_aluno = mapa_turmas.get(alunos[aid]["turma_id"], mapa_turmas[None])
-        pontos[aid] = pontos.get(aid, 0.0) + mapa_aluno.get((codigo or "").upper(), 0.0)
+        pontos[aid] = pontos.get(aid, 0.0) + regra.valor_livro(
+            codigo, titulo, alunos[aid]["ano_escolar"], alunos[aid]["turma_id"])
         tempo[aid] = tempo.get(aid, 0) + (minutos or 0)
     return livros, pontos, tempo
 

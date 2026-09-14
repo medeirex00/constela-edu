@@ -36,7 +36,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import scoring
+from app.services import dificuldade_livro, scoring
 
 CAMPOS_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 CAMPOS_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
@@ -153,7 +153,7 @@ def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
     """Séries cronológicas por semana/mês/bimestre: livros lidos, pontos de
     dificuldade, tempo e nível médio (pontos por livro) do período."""
     consulta = (
-        select(Leitura.data, Livro.nivel_codigo, Leitura.tempo_leitura_min)
+        select(Leitura.data, Livro.nivel_codigo, Leitura.tempo_leitura_min, Livro.titulo)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id == aluno_id)
     )
@@ -171,14 +171,14 @@ def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
         .order_by(Matricula.ano_letivo.desc())
     ).first()
     turma_id, ano_escolar = (mat[0], mat[1]) if mat else (None, None)
-    pontos_map = scoring.pontos_por_codigo(db, escola_id, turma_id, ano_escolar)
+    regra = dificuldade_livro.regra_da_escola(db, escola_id)   # fonte única
     baldes: dict[tuple, dict] = {}
-    for data, codigo, tempo in db.execute(consulta.order_by(Leitura.data)).all():
+    for data, codigo, tempo, titulo in db.execute(consulta.order_by(Leitura.data)).all():
         chave, rotulo = _bucket_leitura(_sem_fuso(data), granularidade)
         balde = baldes.setdefault(chave, {"rotulo": rotulo, "livros": 0,
                                           "pontos": 0.0, "tempo_min": 0})
         balde["livros"] += 1
-        balde["pontos"] += pontos_map.get((codigo or "").upper(), 0.0)
+        balde["pontos"] += regra.valor_livro(codigo, titulo, ano_escolar, turma_id)
         balde["tempo_min"] += tempo or 0
 
     series = []
@@ -354,7 +354,7 @@ def _leituras_no_periodo(db: Session, escola_id: int,
         alunos_com_leituras = _alunos_com_leituras(db, escola_id)
 
     consulta = (
-        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min)
+        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min, Livro.titulo)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.escola_id == escola_id)
     )
@@ -364,13 +364,15 @@ def _leituras_no_periodo(db: Session, escola_id: int,
         consulta = consulta.where(Leitura.data <= fim)
 
     dados: dict[int, dict] = {}
-    for aluno_id, codigo, tempo in db.execute(consulta).all():
-        item = dados.setdefault(aluno_id, {"livros": 0, "tempo_min": 0, "por_nivel": {}})
+    for aluno_id, codigo, tempo, titulo in db.execute(consulta).all():
+        item = dados.setdefault(aluno_id, {"livros": 0, "tempo_min": 0, "por_nivel": {},
+                                           "itens": []})
         item["livros"] += 1
         item["tempo_min"] += tempo or 0
         chave = (codigo or "").upper()
         if chave:
             item["por_nivel"][chave] = item["por_nivel"].get(chave, 0) + 1
+            item["itens"].append((titulo or "", chave))   # p/ valor por livro
     return alunos_com_leituras, dados
 
 
@@ -384,7 +386,8 @@ def series_e_dificuldade(
     vez de cada uma reler as tabelas de snapshot (mesma estratégia do mural/M4)."""
     serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
     serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
-    mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    # `mapa_dif` carrega a REGRA de dificuldade da escola (fonte única).
+    mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     return serie_m, serie_e, mapa_dif
 
 
@@ -495,8 +498,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
     if serie_e is None:
         serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
-    if mapa_dif is None:
-        mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    if mapa_dif is None:   # a REGRA de dificuldade (fonte única), injetável
+        mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     # Leituras com data REAL: para quem tem relatório individual importado, o
     # ganho de leitura do período vem do que foi DE FATO lido no intervalo.
     com_leituras, leituras_periodo = _leituras_no_periodo(
@@ -527,13 +530,15 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         # Questões só existem agregadas (snapshot); leitura tem data real.
         questoes_t = _delta(atual_e, base_e, "questoes_tentativas")
         questoes_a = _delta(atual_e, base_e, "questoes_acertos")
+        itens_periodo = None
         if aluno_id in com_leituras:
             # Fonte exata: as leituras individuais datadas dentro do período.
             reais = leituras_periodo.get(aluno_id, {"livros": 0, "tempo_min": 0,
-                                                    "por_nivel": {}})
+                                                    "por_nivel": {}, "itens": []})
             livros = float(reais["livros"])
             tempo = float(reais["tempo_min"])
             niveis_ganho = reais["por_nivel"]
+            itens_periodo = reais.get("itens")     # (título, nível) de cada livro
         else:
             # Aluno acompanhado só pelo relatório da turma: delta de snapshot.
             livros = _delta(atual_e, base_e, "livros_unicos")
@@ -545,9 +550,10 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             questoes_tentativas=questoes_t,
             questoes_acertos=questoes_a,
         )
-        pontos_dif[aluno_id] = scoring._pontos_dificuldade(
-            niveis_ganho, turma.ano_escolar, mapa_dif, turma.id
-        )
+        # Fonte única de dificuldade: livro itemizado vale o seu valor; delta de
+        # snapshot vale o típico do nível.
+        pontos_dif[aluno_id] = mapa_dif.pontos_aluno(
+            niveis_ganho, turma.ano_escolar, turma_id=turma.id, leituras=itens_periodo)
         # MATEMÁTICA é aferida por snapshot do Matific até `fim` (`atual_m`).
         # LEITURA, por snapshot do Elefante OU por leitura individual datada —
         # as duas são dado do MESMO produto (o relatório individual é a fonte

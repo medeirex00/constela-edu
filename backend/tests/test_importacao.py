@@ -404,7 +404,11 @@ def test_catalogo_de_livros_busca_e_protecao_de_exclusao(cliente, db, escola_com
     )
     assert criado.status_code == 201, criado.text
     assert criado.json()["nivel_codigo"] == "D"
-    assert criado.json()["pontos"] == 4.0  # padrão do Nível 2
+    # Pontos pela FONTE ÚNICA de dificuldade (v1: base A3 do nível D = 2,06; no
+    # catálogo, sem série, o valor é o do 5º ano; título fora do catálogo do
+    # Elefante vale o típico do nível).
+    from app.services import dificuldade_livro as dl
+    assert criado.json()["pontos"] == pytest.approx(dl.RegraV1().valor_tipico("D", None), abs=0.01)
 
     busca = cliente.get(f"/api/v1/escolas/{escola_id}/livros", params={"busca": "mapa"})
     assert busca.json()["total"] == 1

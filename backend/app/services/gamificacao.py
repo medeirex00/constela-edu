@@ -20,7 +20,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import evolucao, scoring
+from app.services import dificuldade_livro, evolucao, scoring
 
 # Padrões usados até a escola personalizar (namespace gamificacao.*)
 XP_PADRAO = {
@@ -489,8 +489,8 @@ def mural(db: Session, escola_id: int,
     # Reusa as varreduras injetadas (ex.: /sincronizacao mobile) ou carrega.
     series_m = serie_m if serie_m is not None else evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
     series_e = serie_e if serie_e is not None else evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
-    if mapa_dif is None:
-        mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    if mapa_dif is None:   # a REGRA de dificuldade (fonte única)
+        mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     nomes = dict(db.execute(
         select(Aluno.id, Aluno.nome).where(Aluno.escola_id == escola_id)
     ).all())

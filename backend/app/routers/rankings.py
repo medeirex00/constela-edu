@@ -29,7 +29,8 @@ from app.schemas import (
     RankingTurnoOut,
 )
 from app.services import modulos as svc_modulos
-from app.services import periodos, permissoes, premiacoes as svc_premiacoes, scoring, turnos
+from app.services import (dificuldade_livro, periodos, permissoes,
+                          premiacoes as svc_premiacoes, scoring, turnos)
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Ranking e Dashboard"])
@@ -394,7 +395,7 @@ def ranking_leitura(
 
     consulta = (
         select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min,
-               Aluno.nome, Turma.nome, Turma.ano_escolar, Turma.id)
+               Aluno.nome, Turma.nome, Turma.ano_escolar, Turma.id, Livro.titulo)
         .join(Livro, Leitura.livro_id == Livro.id)
         .join(Aluno, Aluno.id == Leitura.aluno_id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
@@ -413,19 +414,18 @@ def ranking_leitura(
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
 
-    # Pontuação por CÓDIGO resolvida pela TURMA do aluno (config LIVRE por turma):
-    # {turma_id|None: {CODIGO_UPPER: pontos}}. Sem override, cai no padrão (None).
-    mapa_turmas = scoring.mapa_pontos_turmas(db, escola_id)
-    padrao_pontos = mapa_turmas[None]
+    # Valor de CADA leitura pela FONTE ÚNICA de dificuldade (v1 global: nível ×
+    # ajuste do livro × série do aluno; ou a régua legada da escola personalizada)
+    # — a MESMA regra da nota anual e das premiações.
+    regra = dificuldade_livro.regra_da_escola(db, escola_id)
     agg: dict[int, dict] = {}
-    for aluno_id, codigo, tempo, nome, turma_nome, serie, turma_id in db.execute(consulta).all():
+    for aluno_id, codigo, tempo, nome, turma_nome, serie, turma_id, titulo in db.execute(consulta).all():
         item = agg.setdefault(aluno_id, {
             "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
             "ano_escolar": serie, "livros": 0, "pontos": 0.0, "tempo_leitura_min": 0,
         })
         item["livros"] += 1
-        pontos_map = mapa_turmas.get(turma_id, padrao_pontos)
-        item["pontos"] += pontos_map.get((codigo or "").upper(), 0.0)
+        item["pontos"] += regra.valor_livro(codigo, titulo, serie, turma_id)
         item["tempo_leitura_min"] += tempo or 0
 
     # No "Todo o histórico" (sem recorte de datas), inclui o TOTAL acumulado do

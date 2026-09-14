@@ -30,7 +30,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import evolucao, scoring
+from app.services import dificuldade_livro, evolucao, scoring
 
 DIAS_SEM_ATIVIDADE = 30
 QUEDA_ACERTOS_PONTOS = 15.0
@@ -84,8 +84,8 @@ def indices_da_escola(db: Session, escola_id: int,
         serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
     if serie_e is None:
         serie_e = evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
-    if mapa_dif is None:
-        mapa_dif = scoring._mapa_dificuldade(db, escola_id)
+    if mapa_dif is None:   # a REGRA de dificuldade (fonte única)
+        mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     if alunos_com_leituras is None:
         alunos_com_leituras = evolucao._alunos_com_leituras(db, escola_id)
 

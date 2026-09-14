@@ -4,13 +4,23 @@ from datetime import date, datetime
 
 from sqlalchemy import select
 
+import pytest
+
 from app.models import Leitura
+from app.services import dificuldade_livro as dl
 from app.services import periodos
 from app.services.premiacoes import _podio
 
 
 def _base(escola_id: int) -> str:
     return f"/api/v1/escolas/{escola_id}"
+
+
+def _v(nivel: str, serie: str = "3º Ano") -> float:
+    """Valor de um livro TÍPICO do nível para a série (fonte única v1). Os títulos
+    destes testes não estão no catálogo do Elefante → valem o típico do nível.
+    A escola da fixture é padrão (regra global), turma 3º Ano (fator 1,20)."""
+    return dl.RegraV1().valor_tipico(nivel, serie)
 
 
 def _importar_leitura(cliente, escola_id, aluno, livro, nivel, data_iso, tempo=None):
@@ -74,8 +84,8 @@ def test_historico_por_periodo_e_dia(cliente, escola_completa):
     julho = cliente.get(base + "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
     assert julho["resumo"]["total_livros"] == 2
     assert {i["livro"] for i in julho["itens"]} == {"Livro A", "Livro B"}
-    # AA=1 + D=4 = 5 pontos no período
-    assert julho["resumo"]["pontos"] == 5.0
+    # AA(1,20) + D(2,47) = 3,67 pontos no período (regra v1: A3 × série 3º)
+    assert julho["resumo"]["pontos"] == pytest.approx(round(_v("AA") + _v("D"), 2), abs=0.02)
     assert julho["resumo"]["tempo_total_min"] == 25
 
     dia = cliente.get(base + "?dia=2026-07-12").json()
@@ -109,7 +119,7 @@ def test_ranking_leitura_respeita_periodo(cliente, escola_completa):
     assert r[0]["nome"] == ana.nome         # mais pontos no período
     assert r[0]["posicao"] == 1
     assert r[0]["livros"] == 2
-    assert r[0]["pontos"] == 5.0            # AA(1) + D(4)
+    assert r[0]["pontos"] == pytest.approx(_v("AA") + _v("D"), abs=0.02)   # 1,20 + 2,47
     assert r[0]["tempo_leitura_min"] == 30
     joao_row = next(x for x in r if x["nome"] == joao.nome)
     assert joao_row["livros"] == 1          # a leitura de agosto não conta em julho
@@ -131,9 +141,9 @@ def test_evolucao_leitura_por_mes_e_bimestre(cliente, escola_completa):
     jul, ago = por_mes["series"]
     assert jul["rotulo"] == "jul/2026"
     assert jul["livros"] == 2
-    assert jul["pontos"] == 5.0          # AA(1) + D(4)
+    assert jul["pontos"] == pytest.approx(_v("AA") + _v("D"), abs=0.02)   # 1,20 + 2,47
     assert jul["tempo_min"] == 30
-    assert jul["nivel_medio"] == 2.5     # 5 pontos / 2 livros
+    assert jul["nivel_medio"] == pytest.approx((_v("AA") + _v("D")) / 2, abs=0.02)  # pontos/livros
     assert ago["rotulo"] == "ago/2026" and ago["livros"] == 1
 
     # julho e agosto caem no mesmo 4º bimestre → um único balde de 3 livros
@@ -157,10 +167,11 @@ def test_premiacoes_usam_so_o_periodo(cliente, escola_completa):
                     "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
     cats = {c["chave"]: c["podio"] for c in r["categorias"]}
 
-    # Melhor leitor (pontos): Ana AA(1)+D(4)=5 > João D(4)=4; Sofia (agosto) fora.
+    # Melhor leitor (pontos, fonte única v1): Ana AA+D=3,67 > João D=2,47; Sofia (agosto) fora.
     ml = cats["melhor_leitor"]
-    assert ml[0]["nome"] == ana.nome and ml[0]["valor"] == 5.0 and ml[0]["posicao"] == 1
-    assert ml[1]["nome"] == joao.nome and ml[1]["valor"] == 4.0
+    assert ml[0]["nome"] == ana.nome and ml[0]["posicao"] == 1
+    assert ml[0]["valor"] == pytest.approx(_v("AA") + _v("D"), abs=0.02)
+    assert ml[1]["nome"] == joao.nome and ml[1]["valor"] == pytest.approx(_v("D"), abs=0.02)
     assert all(p["nome"] != sofia.nome for p in ml)  # dados de agosto não contam
 
     assert cats["mais_livros"][0]["nome"] == ana.nome and cats["mais_livros"][0]["valor"] == 2

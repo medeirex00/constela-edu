@@ -50,6 +50,7 @@ from app.services import (
     scoring,
     turmas_dedup,
 )
+from app.services import dificuldade_livro
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -258,7 +259,8 @@ def perfil_aluno(
                    scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)))
     ).scalar_one_or_none()
     leitura_niveis = scoring.distribuicao_niveis(
-        db, escola_id, snap_e.livros_por_nivel if snap_e else {}, ano_escolar)
+        db, escola_id, snap_e.livros_por_nivel if snap_e else {}, ano_escolar,
+        aluno_id=aluno_id)
 
     return AlunoPerfilOut(
         aluno=saida,
@@ -324,18 +326,17 @@ def historico_leituras(
         consulta = consulta.where(Leitura.data <= fim_dt)
     consulta = consulta.order_by(Leitura.data.desc(), Leitura.id.desc())
 
-    # Pontos resolvidos pela TURMA do aluno (TURMA>SÉRIE>padrão) — mesma régua do
-    # ranking anual, não a pontuação padrão da escola.
+    # Valor de cada livro pela FONTE ÚNICA de dificuldade (mesma regra do ranking
+    # anual): v1 global por livro × série do aluno, ou a régua legada da escola.
     mat = db.execute(
         select(Turma.id, Turma.ano_escolar)
         .join(Matricula, Matricula.turma_id == Turma.id)
         .where(Matricula.aluno_id == aluno.id, Matricula.ano_letivo == ano)
     ).first()
     _turma_id, _ano_escolar = (mat[0], mat[1]) if mat else (None, None)
-    pontos_map = scoring.pontos_por_codigo(db, escola_id, _turma_id, _ano_escolar)
+    regra = dificuldade_livro.regra_da_escola(db, escola_id)
     itens = []
     for leitura, livro in db.execute(consulta).all():
-        codigo = (livro.nivel_codigo or "").upper()
         itens.append({
             "id": leitura.id,
             "livro": livro.titulo,
@@ -344,7 +345,8 @@ def historico_leituras(
             "plataforma": "elefante",
             "data": leitura.data.isoformat(),
             "tempo_leitura_min": leitura.tempo_leitura_min,
-            "pontos": round(pontos_map.get(codigo, 0.0), 2),
+            "pontos": round(regra.valor_livro(livro.nivel_codigo, livro.titulo,
+                                              _ano_escolar, _turma_id), 2),
         })
     resumo = {
         "total_livros": len(itens),

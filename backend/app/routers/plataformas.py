@@ -34,7 +34,7 @@ from app.schemas import (
     MatificEdicao,
     NiveisLeituraEdicao,
 )
-from app.services import permissoes, scoring
+from app.services import dificuldade_livro, permissoes, scoring
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Plataformas"])
@@ -298,14 +298,11 @@ def informar_niveis_leitura(
 
 # --- Catálogo de Livros (PRD §57) ----------------------------------------------
 
-def _pontos_por_codigo(db: Session, escola_id: int) -> dict[str, float]:
-    pontos: dict[str, float] = {}
-    for nivel in db.execute(
-        select(NivelDificuldade).where(NivelDificuldade.escola_id == escola_id)
-    ).scalars():
-        for codigo in nivel.codigos:
-            pontos[codigo] = float(nivel.pontos_padrao)
-    return pontos
+def _pontos_livro(regra, livro: Livro) -> float:
+    """Valor BASE do livro no catálogo (fonte única de dificuldade). Sem série
+    (o catálogo não é de um aluno), o valor é o do 5º ano (fator 1,0); para um
+    aluno do 1º–4º ano a leitura vale mais (ver histórico/ranking)."""
+    return round(regra.valor_livro(livro.nivel_codigo, livro.titulo, None), 2)
 
 
 @router.get("/livros", response_model=dict,
@@ -342,12 +339,12 @@ def listar_livros(
         .where(Leitura.escola_id == escola_id)
         .group_by(Leitura.livro_id)
     ).all())
-    pontos = _pontos_por_codigo(db, escola_id)
+    regra = dificuldade_livro.regra_da_escola(db, escola_id)
 
     itens = []
     for livro in livros:
         item = LivroOut.model_validate(livro)
-        item.pontos = pontos.get(livro.nivel_codigo, 0.0)
+        item.pontos = _pontos_livro(regra, livro)
         item.leituras = contagem.get(livro.id, 0)
         itens.append(item)
     return {"total": total, "pagina": pagina, "por_pagina": por_pagina, "itens": itens}
@@ -382,7 +379,7 @@ def criar_livro(
     db.commit()
     db.refresh(livro)
     saida = LivroOut.model_validate(livro)
-    saida.pontos = _pontos_por_codigo(db, escola_id).get(livro.nivel_codigo, 0.0)
+    saida.pontos = _pontos_livro(dificuldade_livro.regra_da_escola(db, escola_id), livro)
     return saida
 
 
@@ -409,7 +406,7 @@ def atualizar_livro(
     scoring.recalcular_escola(db, escola_id)
     db.refresh(livro)
     saida = LivroOut.model_validate(livro)
-    saida.pontos = _pontos_por_codigo(db, escola_id).get(livro.nivel_codigo, 0.0)
+    saida.pontos = _pontos_livro(dificuldade_livro.regra_da_escola(db, escola_id), livro)
     return saida
 
 

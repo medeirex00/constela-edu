@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Livro, LogAuditoria, Matricula, Professor, Turma, Usuario
-from app.services import permissoes, scoring
+from app.services import dificuldade_livro, permissoes, scoring
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Sistema"])
 
@@ -173,8 +173,10 @@ def simular(
         questoes_tentativas=dados.questoes_tentativas,
         questoes_acertos=dados.questoes_acertos,
     )
-    mapa = scoring._mapa_dificuldade(db, escola_id)
-    pontos_dif = scoring._pontos_dificuldade(livros_por_nivel, dados.ano_escolar, mapa)
+    # Fonte única de dificuldade (aluno hipotético: sem leituras itemizadas, cada
+    # livro vale o típico do nível × série).
+    pontos_dif = dificuldade_livro.regra_da_escola(db, escola_id).pontos_aluno(
+        livros_por_nivel, dados.ano_escolar)
 
     p_matific = scoring.obter_pesos(db, escola_id, "pesos.matific")
     p_elefante = scoring.obter_pesos(db, escola_id, "pesos.elefante")
