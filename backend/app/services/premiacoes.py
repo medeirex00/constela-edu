@@ -22,7 +22,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, Leitura, Livro, Matricula, SnapshotMatific, Turma
+from app.models import (Aluno, Escola, Leitura, Livro, Matricula, SnapshotElefante,
+                        SnapshotMatific, Turma)
 from app.services import dificuldade_livro, scoring
 from app.services import turnos as svc_turnos
 from app.services.evolucao import _janela, _series_por_aluno
@@ -89,11 +90,28 @@ def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
         consulta = consulta.where(Leitura.data >= inicio)
     if fim is not None:
         consulta = consulta.where(Leitura.data <= fim)
+    itens: dict[int, list] = {}
     for aid, codigo, minutos, titulo in db.execute(consulta).all():
         livros[aid] = livros.get(aid, 0) + 1
         pontos[aid] = pontos.get(aid, 0.0) + regra.valor_livro(
             codigo, titulo, alunos[aid]["ano_escolar"], alunos[aid]["turma_id"])
         tempo[aid] = tempo.get(aid, 0) + (minutos or 0)
+        itens.setdefault(aid, []).append((titulo, codigo))
+    if inicio is None and fim is None:
+        # "Todo o histórico": inclui o AGREGADO do Elefante (snapshot atual) com a
+        # MESMA reconciliação da nota anual e do /ranking/leitura — quem só tem o
+        # relatório da turma não fica com 0; quem tem os dois não conta em dobro.
+        q_snap = (
+            select(SnapshotElefante.aluno_id, SnapshotElefante.livros_unicos,
+                   SnapshotElefante.tempo_leitura_min, SnapshotElefante.livros_por_nivel)
+            .where(SnapshotElefante.id.in_(scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)),
+                   SnapshotElefante.aluno_id.in_(alunos.keys())))
+        for aid, n_livros, minutos, por_nivel in db.execute(q_snap).all():
+            livros[aid] = max(livros.get(aid, 0), int(n_livros or 0))
+            tempo[aid] = max(tempo.get(aid, 0), int(minutos or 0))
+            pontos[aid] = regra.pontos_aluno(por_nivel or {}, alunos[aid]["ano_escolar"],
+                                             turma_id=alunos[aid]["turma_id"],
+                                             leituras=itens.get(aid))
     return livros, pontos, tempo
 
 

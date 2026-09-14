@@ -419,6 +419,7 @@ def ranking_leitura(
     # — a MESMA regra da nota anual e das premiações.
     regra = dificuldade_livro.regra_da_escola(db, escola_id)
     agg: dict[int, dict] = {}
+    itens: dict[int, list] = {}          # leituras itemizadas por aluno (p/ reconciliar no "tudo")
     for aluno_id, codigo, tempo, nome, turma_nome, serie, turma_id, titulo in db.execute(consulta).all():
         item = agg.setdefault(aluno_id, {
             "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
@@ -427,6 +428,7 @@ def ranking_leitura(
         item["livros"] += 1
         item["pontos"] += regra.valor_livro(codigo, titulo, serie, turma_id)
         item["tempo_leitura_min"] += tempo or 0
+        itens.setdefault(aluno_id, []).append((titulo, codigo))
 
     # No "Todo o histórico" (sem recorte de datas), inclui o TOTAL acumulado do
     # Elefante (SnapshotElefante) — que a sincronização por API popula de forma
@@ -440,7 +442,8 @@ def ranking_leitura(
         q_snap = (
             select(SnapshotElefante.aluno_id, SnapshotElefante.livros_unicos,
                    SnapshotElefante.tempo_leitura_min,
-                   Aluno.nome, Turma.nome, Turma.ano_escolar)
+                   Aluno.nome, Turma.nome, Turma.ano_escolar,
+                   SnapshotElefante.livros_por_nivel, Turma.id)
             .where(SnapshotElefante.id.in_(ids_atuais_e))
             .join(Aluno, Aluno.id == SnapshotElefante.aluno_id)
             .join(Matricula, (Matricula.aluno_id == Aluno.id)
@@ -453,7 +456,7 @@ def ranking_leitura(
             q_snap = q_snap.where(Turma.ano_escolar == ano_escolar)
         if permitidas is not None:
             q_snap = q_snap.where(Turma.id.in_(permitidas))
-        for aluno_id, livros, tempo, nome, turma_nome, serie in db.execute(q_snap).all():
+        for aluno_id, livros, tempo, nome, turma_nome, serie, por_nivel, tid in db.execute(q_snap).all():
             item = agg.setdefault(aluno_id, {
                 "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
                 "ano_escolar": serie, "livros": 0, "pontos": 0.0,
@@ -462,6 +465,11 @@ def ranking_leitura(
             # ter menos (só livros datados). Fica o MAIOR — sem dupla contagem.
             item["livros"] = max(item["livros"], int(livros or 0))
             item["tempo_leitura_min"] = max(item["tempo_leitura_min"], int(tempo or 0))
+            # PONTOS pela MESMA reconciliação da nota anual (fonte única): cada
+            # leitura itemizada vale a sua; o restante da contagem do snapshot
+            # vale o típico do nível. Quem só tem o agregado deixa de valer 0.
+            item["pontos"] = regra.pontos_aluno(por_nivel or {}, serie, turma_id=tid,
+                                                leituras=itens.get(aluno_id))
 
     itens = sorted(agg.values(),
                    key=lambda x: (-x["pontos"], -x["livros"],
