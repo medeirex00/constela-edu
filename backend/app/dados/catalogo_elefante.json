@@ -1,0 +1,6028 @@
+{
+ "fonte": "admin.elefanteletrado.com.br — POST /library/elementary-school-search (hasZPlusEnabled/hasAPlusEnabled=true) + GET /library/book?bookId=",
+ "gerado_em": "2026-09-14",
+ "n": 752,
+ "ignorados": {
+  "idioma": 0,
+  "excluido": 0,
+  "sem_nivel_ou_palavras": 0
+ },
+ "livros": [
+  {
+   "id": 8,
+   "title": "Laerte, o Gato Inerte",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 78,
+   "pageCount": 12
+  },
+  {
+   "id": 9,
+   "title": "O que é o que é?",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 70,
+   "pageCount": 10
+  },
+  {
+   "id": 11,
+   "title": "Elefante Gigante",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 57,
+   "pageCount": 10
+  },
+  {
+   "id": 12,
+   "title": "O Circo",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 61,
+   "pageCount": 8
+  },
+  {
+   "id": 14,
+   "title": "O que é, o que é? Nível 2",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 75,
+   "pageCount": 10
+  },
+  {
+   "id": 15,
+   "title": "Os Sons dos Animais",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 57,
+   "pageCount": 11
+  },
+  {
+   "id": 17,
+   "title": "Maco, o Macaco",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 74,
+   "pageCount": 7
+  },
+  {
+   "id": 18,
+   "title": "Caldeirão de Sopão",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 53,
+   "pageCount": 10
+  },
+  {
+   "id": 25,
+   "title": "Conhecendo todo mundo",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 101,
+   "pageCount": 13
+  },
+  {
+   "id": 27,
+   "title": "O que é, o que é? Nível 3",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 106,
+   "pageCount": 12
+  },
+  {
+   "id": 31,
+   "title": "Alfabeto Ilustrado. Letra C",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 32,
+   "title": "Alfabeto Ilustrado. Letra D",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 33,
+   "title": "Alfabeto Ilustrado. Letra E",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 34,
+   "title": "Alfabeto Ilustrado. Letra A",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 35,
+   "title": "Alfabeto Ilustrado. Letra B",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 36,
+   "title": "Alfabeto Ilustrado. Letra F",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 37,
+   "title": "Alfabeto Ilustrado. Letra G",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 14,
+   "pageCount": 15
+  },
+  {
+   "id": 38,
+   "title": "Alfabeto Ilustrado. Letra H",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 13,
+   "pageCount": 15
+  },
+  {
+   "id": 39,
+   "title": "Alfabeto Ilustrado. Letra I",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 40,
+   "title": "Alfabeto Ilustrado. Letra J",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 13,
+   "pageCount": 14
+  },
+  {
+   "id": 41,
+   "title": "Alfabeto Ilustrado. Letra K",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 10,
+   "pageCount": 11
+  },
+  {
+   "id": 42,
+   "title": "Alfabeto Ilustrado. Letra L",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 13,
+   "pageCount": 15
+  },
+  {
+   "id": 43,
+   "title": "Alfabeto Ilustrado. Letra M",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 14,
+   "pageCount": 14
+  },
+  {
+   "id": 44,
+   "title": "Alfabeto Ilustrado. Letra N",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 14
+  },
+  {
+   "id": 45,
+   "title": "Alfabeto Ilustrado. Letra O",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 13,
+   "pageCount": 14
+  },
+  {
+   "id": 46,
+   "title": "Alfabeto Ilustrado. Letra P",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 47,
+   "title": "Alfabeto Ilustrado. Letra Q",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 13
+  },
+  {
+   "id": 48,
+   "title": "Alfabeto Ilustrado. Letra R",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 13,
+   "pageCount": 14
+  },
+  {
+   "id": 49,
+   "title": "Alfabeto Ilustrado. Letra S",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 13
+  },
+  {
+   "id": 50,
+   "title": "Alfabeto Ilustrado. Letra T",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 13,
+   "pageCount": 14
+  },
+  {
+   "id": 51,
+   "title": "Alfabeto Ilustrado. Letra U",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 11,
+   "pageCount": 12
+  },
+  {
+   "id": 52,
+   "title": "Alfabeto Ilustrado. Letra V",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 11,
+   "pageCount": 12
+  },
+  {
+   "id": 53,
+   "title": "Alfabeto Ilustrado. Letra W e X",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 55,
+   "title": "Alfabeto Ilustrado. Letra Y e Z",
+   "levelName": "aa",
+   "levelId": 1,
+   "wordCount": 12,
+   "pageCount": 15
+  },
+  {
+   "id": 57,
+   "title": "A Galinha do Vizinho",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 19,
+   "pageCount": 9
+  },
+  {
+   "id": 58,
+   "title": "A menina de trança",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 36,
+   "pageCount": 8
+  },
+  {
+   "id": 72,
+   "title": "Brincadeiras",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 24,
+   "pageCount": 15
+  },
+  {
+   "id": 83,
+   "title": "Chove Chuva",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 14,
+   "pageCount": 8
+  },
+  {
+   "id": 87,
+   "title": "Eu Conto os Dedos",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 20,
+   "pageCount": 10
+  },
+  {
+   "id": 92,
+   "title": "Meio-dia",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 16,
+   "pageCount": 8
+  },
+  {
+   "id": 93,
+   "title": "Quem Cochicha",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 11,
+   "pageCount": 4
+  },
+  {
+   "id": 94,
+   "title": "Um Dois Feijão Com Arroz",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 22,
+   "pageCount": 10
+  },
+  {
+   "id": 97,
+   "title": "O que é, o que é? Nível 4",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 101,
+   "pageCount": 13
+  },
+  {
+   "id": 107,
+   "title": "Aniversário do Senhor Elefante",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 55,
+   "pageCount": 9
+  },
+  {
+   "id": 111,
+   "title": "Piscina de Plástico",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 45,
+   "pageCount": 8
+  },
+  {
+   "id": 123,
+   "title": "Gira-Gira",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 23,
+   "pageCount": 10
+  },
+  {
+   "id": 1126,
+   "title": "Trava-línguas 3",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 118,
+   "pageCount": 9
+  },
+  {
+   "id": 1131,
+   "title": "As Plantirinhas",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 493,
+   "pageCount": 12
+  },
+  {
+   "id": 1135,
+   "title": "Na Praça Tem",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 28,
+   "pageCount": 11
+  },
+  {
+   "id": 1142,
+   "title": "A Lontra do Contra",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 73,
+   "pageCount": 7
+  },
+  {
+   "id": 1147,
+   "title": "Leva Tempo...",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 113,
+   "pageCount": 12
+  },
+  {
+   "id": 1163,
+   "title": "Trava-línguas 1",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 56,
+   "pageCount": 9
+  },
+  {
+   "id": 1165,
+   "title": "Espertos!",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 93,
+   "pageCount": 8
+  },
+  {
+   "id": 1169,
+   "title": "Quadras Regionais I",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 167,
+   "pageCount": 8
+  },
+  {
+   "id": 1172,
+   "title": "Trava-línguas 2",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 80,
+   "pageCount": 9
+  },
+  {
+   "id": 1186,
+   "title": "Quadras Regionais II",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 151,
+   "pageCount": 8
+  },
+  {
+   "id": 1187,
+   "title": "A galinha Chiquinha",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 568,
+   "pageCount": 20
+  },
+  {
+   "id": 1191,
+   "title": "Quadras Regionais III",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 162,
+   "pageCount": 8
+  },
+  {
+   "id": 1193,
+   "title": "Trava-línguas 4",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 143,
+   "pageCount": 7
+  },
+  {
+   "id": 1198,
+   "title": "Trava-línguas 5",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 174,
+   "pageCount": 8
+  },
+  {
+   "id": 1216,
+   "title": "Telefone sem fio",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 132,
+   "pageCount": 12
+  },
+  {
+   "id": 1227,
+   "title": "O que é? 1",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 19,
+   "pageCount": 9
+  },
+  {
+   "id": 1228,
+   "title": "Astronauta",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 34,
+   "pageCount": 7
+  },
+  {
+   "id": 1230,
+   "title": "Reconto da Dona Baratinha",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 131,
+   "pageCount": 7
+  },
+  {
+   "id": 1234,
+   "title": "Domingo Com Papai",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 219,
+   "pageCount": 16
+  },
+  {
+   "id": 1242,
+   "title": "Curiosidades 12",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 215,
+   "pageCount": 19
+  },
+  {
+   "id": 1258,
+   "title": "Curiosidades 13",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 264,
+   "pageCount": 21
+  },
+  {
+   "id": 1260,
+   "title": "Curiosidades 2",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 107,
+   "pageCount": 12
+  },
+  {
+   "id": 1261,
+   "title": "Enciclopédia dos Dinossauros Gigantes - Parte 1",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 1156,
+   "pageCount": 12
+  },
+  {
+   "id": 1262,
+   "title": "Curiosidades 4",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 121,
+   "pageCount": 12
+  },
+  {
+   "id": 1266,
+   "title": "Frida Kahlo",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 193,
+   "pageCount": 12
+  },
+  {
+   "id": 1286,
+   "title": "Curiosidades 3",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 111,
+   "pageCount": 12
+  },
+  {
+   "id": 1287,
+   "title": "Curiosidades 1",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 75,
+   "pageCount": 12
+  },
+  {
+   "id": 1288,
+   "title": "Curiosidades 5",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 165,
+   "pageCount": 14
+  },
+  {
+   "id": 1294,
+   "title": "Experimentos Científicos com Ar",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2312,
+   "pageCount": 22
+  },
+  {
+   "id": 1295,
+   "title": "Experimentos Científicos com Plantas",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2051,
+   "pageCount": 23
+  },
+  {
+   "id": 1296,
+   "title": "Experimentos Científicos com Água",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2678,
+   "pageCount": 23
+  },
+  {
+   "id": 1297,
+   "title": "Experimentos Científicos com Eletricidade",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 1177,
+   "pageCount": 22
+  },
+  {
+   "id": 1298,
+   "title": "Enciclopédia dos Dinossauros Gigantes - Parte 2",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 1156,
+   "pageCount": 10
+  },
+  {
+   "id": 1299,
+   "title": "Enciclopédia dos Dinossauros Perigosos - Parte 1",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1187,
+   "pageCount": 13
+  },
+  {
+   "id": 1300,
+   "title": "Enciclopédia dos Dinossauros Perigosos - Parte 2",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1101,
+   "pageCount": 11
+  },
+  {
+   "id": 1301,
+   "title": "Enciclopédia dos Dinossauros Os Menores - Parte 1",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 1205,
+   "pageCount": 13
+  },
+  {
+   "id": 1302,
+   "title": "Enciclopédia dos Dinossauros Os Menores - Parte 2",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 1071,
+   "pageCount": 11
+  },
+  {
+   "id": 1303,
+   "title": "Enciclopédia dos Dinossauros Evolução e Escavação",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2242,
+   "pageCount": 23
+  },
+  {
+   "id": 1305,
+   "title": "Curiosidades 18",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 271,
+   "pageCount": 18
+  },
+  {
+   "id": 1306,
+   "title": "Curiosidades 17",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 282,
+   "pageCount": 18
+  },
+  {
+   "id": 1308,
+   "title": "Curiosidades 6",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 183,
+   "pageCount": 15
+  },
+  {
+   "id": 1309,
+   "title": "Curiosidades 7",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 167,
+   "pageCount": 16
+  },
+  {
+   "id": 1310,
+   "title": "Curiosidades 14",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 266,
+   "pageCount": 22
+  },
+  {
+   "id": 1311,
+   "title": "Curiosidades 9",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 256,
+   "pageCount": 19
+  },
+  {
+   "id": 1313,
+   "title": "Curiosidades 10",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 237,
+   "pageCount": 18
+  },
+  {
+   "id": 1314,
+   "title": "Curiosidades 8",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 168,
+   "pageCount": 14
+  },
+  {
+   "id": 1315,
+   "title": "Curiosidades 15",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 320,
+   "pageCount": 20
+  },
+  {
+   "id": 1316,
+   "title": "Curiosidades 16",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 337,
+   "pageCount": 20
+  },
+  {
+   "id": 1317,
+   "title": "Curiosidades 11",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 244,
+   "pageCount": 20
+  },
+  {
+   "id": 1319,
+   "title": "Xeque-mate",
+   "levelName": "A+",
+   "levelId": 199,
+   "wordCount": 965,
+   "pageCount": 18
+  },
+  {
+   "id": 1329,
+   "title": "O que é? 2",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 54,
+   "pageCount": 11
+  },
+  {
+   "id": 1335,
+   "title": "Salve o Povo Nordestino",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 100,
+   "pageCount": 16
+  },
+  {
+   "id": 1336,
+   "title": "Minha amiga Valéria",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 691,
+   "pageCount": 19
+  },
+  {
+   "id": 1356,
+   "title": "Histórias do Mundo-O padeiro e seu vizinho",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 312,
+   "pageCount": 6
+  },
+  {
+   "id": 1357,
+   "title": "Histórias do Mundo-Tuk, o caçador",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 332,
+   "pageCount": 7
+  },
+  {
+   "id": 1360,
+   "title": "Quem faz o quê?",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 566,
+   "pageCount": 12
+  },
+  {
+   "id": 1361,
+   "title": "Pessoas do Mundo-Junko Tabei",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 50,
+   "pageCount": 22
+  },
+  {
+   "id": 1364,
+   "title": "Nasce uma Horta",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 188,
+   "pageCount": 13
+  },
+  {
+   "id": 1365,
+   "title": "Histórias do Mundo-O jarro de ouro",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 571,
+   "pageCount": 7
+  },
+  {
+   "id": 1371,
+   "title": "Informe-se: Na Floresta Tropical",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 276,
+   "pageCount": 7
+  },
+  {
+   "id": 1378,
+   "title": "Histórias do Mundo-O coelho assustado",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 100,
+   "pageCount": 8
+  },
+  {
+   "id": 1390,
+   "title": "Histórias do Mundo-O grande nabo",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 539,
+   "pageCount": 7
+  },
+  {
+   "id": 1396,
+   "title": "Histórias do Mundo-Os três desejos",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 588,
+   "pageCount": 7
+  },
+  {
+   "id": 1413,
+   "title": "Histórias do Mundo-Sapatos velhos, sapatos novos",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 329,
+   "pageCount": 7
+  },
+  {
+   "id": 1415,
+   "title": "Histórias do Mundo-Um pincel mágico",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 1437,
+   "pageCount": 12
+  },
+  {
+   "id": 1418,
+   "title": "Pessoas do Mundo-Dian Fossey",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1024,
+   "pageCount": 24
+  },
+  {
+   "id": 1420,
+   "title": "Informe-se: Hienas",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 591,
+   "pageCount": 10
+  },
+  {
+   "id": 1423,
+   "title": "Histórias do Mundo-O patinho feio",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 680,
+   "pageCount": 7
+  },
+  {
+   "id": 1424,
+   "title": "Histórias do mundo-O sapateiro e os duendes",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 553,
+   "pageCount": 7
+  },
+  {
+   "id": 1426,
+   "title": "Histórias do Mundo-Panela de mingau",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 621,
+   "pageCount": 7
+  },
+  {
+   "id": 1442,
+   "title": "Pessoas do Mundo-Nakahama Manjiro",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1790,
+   "pageCount": 40
+  },
+  {
+   "id": 1444,
+   "title": "Histórias do Mundo-A casa do barulho",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 100,
+   "pageCount": 7
+  },
+  {
+   "id": 1449,
+   "title": "Pessoas do Mundo-Wangari Maathai",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 888,
+   "pageCount": 22
+  },
+  {
+   "id": 1450,
+   "title": "Pessoas do Mundo-Levi Strauss",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 483,
+   "pageCount": 23
+  },
+  {
+   "id": 1452,
+   "title": "Histórias do Mundo-O cabo de guerra",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 612,
+   "pageCount": 7
+  },
+  {
+   "id": 1460,
+   "title": "Informe-se: Os Camelos do Egito",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 447,
+   "pageCount": 9
+  },
+  {
+   "id": 1462,
+   "title": "Informe-se: Direitos para as Baleias-francas",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 291,
+   "pageCount": 9
+  },
+  {
+   "id": 1469,
+   "title": "Pessoas do Mundo-Louis Braille",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 712,
+   "pageCount": 19
+  },
+  {
+   "id": 1473,
+   "title": "Pessoas do Mundo-Fanny Jackson Coppin",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 881,
+   "pageCount": 18
+  },
+  {
+   "id": 1475,
+   "title": "O Arquiteto",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1321,
+   "pageCount": 20
+  },
+  {
+   "id": 1585,
+   "title": "Histórias do Mundo-O bode no canteiro de pimentas",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 571,
+   "pageCount": 7
+  },
+  {
+   "id": 1607,
+   "title": "Informe-se: As Dez Melhores Coisas do Cairo",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1494,
+   "pageCount": 13
+  },
+  {
+   "id": 1608,
+   "title": "A sexta lua do planeta Coron",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2579,
+   "pageCount": 32
+  },
+  {
+   "id": 1609,
+   "title": "Histórias do Mundo-A princesa e o pedinte",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 3326,
+   "pageCount": 28
+  },
+  {
+   "id": 1611,
+   "title": "Pessoas do Mundo-Eugenie Clark",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 50,
+   "pageCount": 25
+  },
+  {
+   "id": 1612,
+   "title": "O maravilhoso Sistema Solar",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 705,
+   "pageCount": 16
+  },
+  {
+   "id": 1614,
+   "title": "Salvando o mico-leão-dourado",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3563,
+   "pageCount": 30
+  },
+  {
+   "id": 1713,
+   "title": "Informe-se: A Cratera de Ngorongoro",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1513,
+   "pageCount": 11
+  },
+  {
+   "id": 1834,
+   "title": "Pessoas do Mundo-Ida Pfeiffer",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1822,
+   "pageCount": 31
+  },
+  {
+   "id": 1836,
+   "title": "Pessoas do Mundo-Sadako Sasaki",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 778,
+   "pageCount": 25
+  },
+  {
+   "id": 1839,
+   "title": "Salvadores de Animais",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1351,
+   "pageCount": 14
+  },
+  {
+   "id": 1849,
+   "title": "Mestre Gato ou O Gato de Botas",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1557,
+   "pageCount": 21
+  },
+  {
+   "id": 1850,
+   "title": "Justo e bacana",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 247,
+   "pageCount": 30
+  },
+  {
+   "id": 1851,
+   "title": "Riquete do Topete",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2303,
+   "pageCount": 25
+  },
+  {
+   "id": 1852,
+   "title": "O Pequeno Polegar",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 3356,
+   "pageCount": 30
+  },
+  {
+   "id": 1853,
+   "title": "A Bela Adormecida no Bosque",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 3069,
+   "pageCount": 32
+  },
+  {
+   "id": 1854,
+   "title": "As Fadas",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 867,
+   "pageCount": 16
+  },
+  {
+   "id": 1855,
+   "title": "A Gata Borralheira ou A sapatilha de vidro",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2194,
+   "pageCount": 26
+  },
+  {
+   "id": 1871,
+   "title": "Informe-se: Na África",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1045,
+   "pageCount": 10
+  },
+  {
+   "id": 1874,
+   "title": "Pessoas do Mundo-Jacques Cousteau",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1717,
+   "pageCount": 37
+  },
+  {
+   "id": 1877,
+   "title": "Informe-se: O Arquivo do Nilo",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3828,
+   "pageCount": 22
+  },
+  {
+   "id": 1887,
+   "title": "Histórias do Mundo-Yan e a garota",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3752,
+   "pageCount": 23
+  },
+  {
+   "id": 1893,
+   "title": "Mook e Dino",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 200,
+   "pageCount": 13
+  },
+  {
+   "id": 1894,
+   "title": "Mook e a Roda",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 200,
+   "pageCount": 13
+  },
+  {
+   "id": 1895,
+   "title": "Mateus e o Monstrophone",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 100,
+   "pageCount": 24
+  },
+  {
+   "id": 1901,
+   "title": "Informe-se: Um Ano na Savana",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3657,
+   "pageCount": 24
+  },
+  {
+   "id": 2002,
+   "title": "Rapunzel",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1490,
+   "pageCount": 23
+  },
+  {
+   "id": 2003,
+   "title": "O Príncipe Sapo",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 918,
+   "pageCount": 17
+  },
+  {
+   "id": 2004,
+   "title": "Cadê a comida que estava aqui?",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 266,
+   "pageCount": 28
+  },
+  {
+   "id": 2005,
+   "title": "Vamos Chamar o Lobo?",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 465,
+   "pageCount": 33
+  },
+  {
+   "id": 2006,
+   "title": "A chave do tamanho",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 41035,
+   "pageCount": 65
+  },
+  {
+   "id": 2008,
+   "title": "O flautista do manto malhado em Hamelin",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1649,
+   "pageCount": 39
+  },
+  {
+   "id": 2010,
+   "title": "Branca de Neve",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2046,
+   "pageCount": 26
+  },
+  {
+   "id": 2011,
+   "title": "Pele de Gato",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 1795,
+   "pageCount": 23
+  },
+  {
+   "id": 2012,
+   "title": "A Família Sujo",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2411,
+   "pageCount": 25
+  },
+  {
+   "id": 2013,
+   "title": "A História de Juvenal e o Dragão",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 100,
+   "pageCount": 24
+  },
+  {
+   "id": 2014,
+   "title": "Maluquinho assombrado",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5732,
+   "pageCount": 59
+  },
+  {
+   "id": 2015,
+   "title": "Maluquinho pelo mundo",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 7379,
+   "pageCount": 59
+  },
+  {
+   "id": 2016,
+   "title": "Maluquinho por Arte",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 6327,
+   "pageCount": 60
+  },
+  {
+   "id": 2017,
+   "title": "Maluquinho por Futebol",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5503,
+   "pageCount": 59
+  },
+  {
+   "id": 2018,
+   "title": "Três vezes Maluquinho",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2034,
+   "pageCount": 34
+  },
+  {
+   "id": 2019,
+   "title": "Almanaque Maluquinho - Esportes radicais",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3848,
+   "pageCount": 35
+  },
+  {
+   "id": 2020,
+   "title": "Almanaque Maluquinho - Bocão e os bichos",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3967,
+   "pageCount": 34
+  },
+  {
+   "id": 2021,
+   "title": "Almanaque Maluquinho – Julieta no mundo da culinária",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 4444,
+   "pageCount": 35
+  },
+  {
+   "id": 2022,
+   "title": "Almanaque Maluquinho - Lúcio e os Livros",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5357,
+   "pageCount": 35
+  },
+  {
+   "id": 2023,
+   "title": "Almanaque Maluquinho - O Japão dos brasileiros",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 4490,
+   "pageCount": 35
+  },
+  {
+   "id": 2024,
+   "title": "Almanaque Maluquinho - O som da Turma",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 4445,
+   "pageCount": 35
+  },
+  {
+   "id": 2025,
+   "title": "Almanaque Maluquinho - Pra que dinheiro?",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4532,
+   "pageCount": 35
+  },
+  {
+   "id": 2026,
+   "title": "Almanaque Maluquinho - Shirley Valéria tá na moda",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4197,
+   "pageCount": 35
+  },
+  {
+   "id": 2027,
+   "title": "Almanaque Maluquinho - Viagens da Carolina",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4197,
+   "pageCount": 35
+  },
+  {
+   "id": 2028,
+   "title": "Alice no Jardim de infância - 1",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 100,
+   "pageCount": 20
+  },
+  {
+   "id": 2029,
+   "title": "Alice no Jardim de infância - 2",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 1939,
+   "pageCount": 19
+  },
+  {
+   "id": 2030,
+   "title": "Alice no jardim de infância - 3",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 1721,
+   "pageCount": 19
+  },
+  {
+   "id": 2031,
+   "title": "Alice no jardim de infância - 4",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 827,
+   "pageCount": 18
+  },
+  {
+   "id": 2032,
+   "title": "As aventuras de Pinóquio 1",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 751,
+   "pageCount": 24
+  },
+  {
+   "id": 2033,
+   "title": "As aventuras de Pinóquio 2",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 1670,
+   "pageCount": 18
+  },
+  {
+   "id": 2034,
+   "title": "As aventuras de Pinóquio 3",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2106,
+   "pageCount": 20
+  },
+  {
+   "id": 2035,
+   "title": "As aventuras de Pinóquio 4",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2614,
+   "pageCount": 24
+  },
+  {
+   "id": 2036,
+   "title": "As aventuras de Pinóquio 5",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2467,
+   "pageCount": 22
+  },
+  {
+   "id": 2037,
+   "title": "As aventuras de Pinóquio 6",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 3390,
+   "pageCount": 30
+  },
+  {
+   "id": 2038,
+   "title": "As aventuras de Pinóquio 7",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 100,
+   "pageCount": 31
+  },
+  {
+   "id": 2039,
+   "title": "A dama e o leão",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1821,
+   "pageCount": 23
+  },
+  {
+   "id": 2040,
+   "title": "As aventuras de Pinóquio 8",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3704,
+   "pageCount": 31
+  },
+  {
+   "id": 2041,
+   "title": "As aventuras de Pinóquio 9",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3006,
+   "pageCount": 26
+  },
+  {
+   "id": 2042,
+   "title": "As aventuras de Pinóquio 10",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3750,
+   "pageCount": 32
+  },
+  {
+   "id": 2043,
+   "title": "As aventuras de Pinóquio 11",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5144,
+   "pageCount": 38
+  },
+  {
+   "id": 2044,
+   "title": "As aventuras de Pinóquio 12",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6152,
+   "pageCount": 45
+  },
+  {
+   "id": 2045,
+   "title": "A moça dos gansos",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1901,
+   "pageCount": 22
+  },
+  {
+   "id": 2046,
+   "title": "O gamo encantado",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1318,
+   "pageCount": 17
+  },
+  {
+   "id": 2047,
+   "title": "O gigante e os três fios de cabelos de ouro",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1909,
+   "pageCount": 22
+  },
+  {
+   "id": 2049,
+   "title": "A Turma do Pererê - 365 dias na Mata do Fundão",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7698,
+   "pageCount": 59
+  },
+  {
+   "id": 2050,
+   "title": "A Turma do Pererê - As manias do Tininim",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7493,
+   "pageCount": 59
+  },
+  {
+   "id": 2051,
+   "title": "A Turma do Pererê - Coisas do coração",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7274,
+   "pageCount": 59
+  },
+  {
+   "id": 2052,
+   "title": "Diário da Julieta 1 – As histórias mais secretas da menina maluquinha",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6474,
+   "pageCount": 57
+  },
+  {
+   "id": 2053,
+   "title": "Diário da Julieta 2 – As histórias mais secretas da Menina Maluquinha",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 7537,
+   "pageCount": 59
+  },
+  {
+   "id": 2054,
+   "title": "Diário da Julieta 3 – O blog de férias da Menina Maluquinha",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 7013,
+   "pageCount": 58
+  },
+  {
+   "id": 2055,
+   "title": "Descobertas da Nina",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 6136,
+   "pageCount": 58
+  },
+  {
+   "id": 2056,
+   "title": "Coisas de Menina",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7569,
+   "pageCount": 58
+  },
+  {
+   "id": 2057,
+   "title": "Histórias da Carolina - A menina sonhadora que quer mudar o mundo",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 6337,
+   "pageCount": 58
+  },
+  {
+   "id": 2059,
+   "title": "Monteiro Lobato em Quadrinhos - Fábulas",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6310,
+   "pageCount": 42
+  },
+  {
+   "id": 2061,
+   "title": "Monteiro Lobato em Quadrinhos - Os doze trabalhos de Hércules",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 9924,
+   "pageCount": 78
+  },
+  {
+   "id": 2062,
+   "title": "Monteiro Lobato em Quadrinhos - Peter Pan",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5233,
+   "pageCount": 50
+  },
+  {
+   "id": 2063,
+   "title": "Monteiro Lobato em Quadrinhos - O Minotauro",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3463,
+   "pageCount": 35
+  },
+  {
+   "id": 2064,
+   "title": "A Princesa Desejosa",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 617,
+   "pageCount": 19
+  },
+  {
+   "id": 2065,
+   "title": "Zoo",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 500,
+   "pageCount": 22
+  },
+  {
+   "id": 2066,
+   "title": "Cuidado que Ronca",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 1223,
+   "pageCount": 39
+  },
+  {
+   "id": 2067,
+   "title": "A História da Garça Encantada",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 100,
+   "pageCount": 24
+  },
+  {
+   "id": 2068,
+   "title": "A História da Princesa do Reino da Pedra Fina",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 100,
+   "pageCount": 25
+  },
+  {
+   "id": 2069,
+   "title": "Dever de casa",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 805,
+   "pageCount": 32
+  },
+  {
+   "id": 2072,
+   "title": "Astro Lábio",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 893,
+   "pageCount": 22
+  },
+  {
+   "id": 2073,
+   "title": "Bamboletras",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1174,
+   "pageCount": 21
+  },
+  {
+   "id": 2074,
+   "title": "Saco de Brinquedos",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 725,
+   "pageCount": 25
+  },
+  {
+   "id": 2075,
+   "title": "Esquisita como eu",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 391,
+   "pageCount": 15
+  },
+  {
+   "id": 2076,
+   "title": "O Pintor de Lembranças",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1313,
+   "pageCount": 25
+  },
+  {
+   "id": 2078,
+   "title": "Monstrotaro",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 729,
+   "pageCount": 22
+  },
+  {
+   "id": 2079,
+   "title": "O Vampiro Argemiro",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1243,
+   "pageCount": 25
+  },
+  {
+   "id": 2080,
+   "title": "Diário de um Guri",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 708,
+   "pageCount": 25
+  },
+  {
+   "id": 2081,
+   "title": "Museu Desmiolado",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2969,
+   "pageCount": 25
+  },
+  {
+   "id": 2084,
+   "title": "Espiões na natureza",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 100,
+   "pageCount": 11
+  },
+  {
+   "id": 2085,
+   "title": "A menina que ia para longe",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1977,
+   "pageCount": 23
+  },
+  {
+   "id": 2086,
+   "title": "E um Rinoceronte Dobrado",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 433,
+   "pageCount": 20
+  },
+  {
+   "id": 2087,
+   "title": "Para entender PAI & MÃE",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3467,
+   "pageCount": 26
+  },
+  {
+   "id": 2088,
+   "title": "Dez casas e um poste que Pedro fez",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 554,
+   "pageCount": 24
+  },
+  {
+   "id": 2089,
+   "title": "Tom",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 217,
+   "pageCount": 23
+  },
+  {
+   "id": 2090,
+   "title": "O mundo de Camila",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6886,
+   "pageCount": 32
+  },
+  {
+   "id": 2091,
+   "title": "Ana vaivém",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 751,
+   "pageCount": 32
+  },
+  {
+   "id": 2093,
+   "title": "Três Contos de Muito Ouro",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1910,
+   "pageCount": 23
+  },
+  {
+   "id": 2094,
+   "title": "Pirlimpimpim3-A pescaria",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 715,
+   "pageCount": 24
+  },
+  {
+   "id": 2095,
+   "title": "Pirlimpimpim-O mês de abril",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 834,
+   "pageCount": 24
+  },
+  {
+   "id": 2096,
+   "title": "Pirlimpimpim6-O pedido de casamento",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1557,
+   "pageCount": 32
+  },
+  {
+   "id": 2097,
+   "title": "Pirlimpimpim7-O noivado de Emília",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 751,
+   "pageCount": 32
+  },
+  {
+   "id": 2098,
+   "title": "Pirlimpimpim2-As jabuticabas",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1292,
+   "pageCount": 23
+  },
+  {
+   "id": 2099,
+   "title": "Pirlimpimpim5-Os sete leitõezinhos",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 720,
+   "pageCount": 24
+  },
+  {
+   "id": 2101,
+   "title": "O sofá que engoliu as crianças",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1056,
+   "pageCount": 31
+  },
+  {
+   "id": 2102,
+   "title": "Se eu não me chamasse Raimundo",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1557,
+   "pageCount": 15
+  },
+  {
+   "id": 2103,
+   "title": "Você é uma figurinha",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1120,
+   "pageCount": 18
+  },
+  {
+   "id": 2104,
+   "title": "O tupi que você fala",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 126,
+   "pageCount": 31
+  },
+  {
+   "id": 2105,
+   "title": "O Corvo e o Dragão",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 751,
+   "pageCount": 31
+  },
+  {
+   "id": 2106,
+   "title": "Pirlimpimpim8-A história de Emília",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1554,
+   "pageCount": 31
+  },
+  {
+   "id": 2107,
+   "title": "Pirlimpimpim1-A pílula falante",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 2071,
+   "pageCount": 39
+  },
+  {
+   "id": 2108,
+   "title": "Pirlimpimpim9-O medo",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2527,
+   "pageCount": 40
+  },
+  {
+   "id": 2109,
+   "title": "O boto do arroto",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 632,
+   "pageCount": 20
+  },
+  {
+   "id": 2111,
+   "title": "Ninguém aprende samba no colégio",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7832,
+   "pageCount": 35
+  },
+  {
+   "id": 2112,
+   "title": "Pra ficar com ela",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 11693,
+   "pageCount": 36
+  },
+  {
+   "id": 2114,
+   "title": "Meu avô tem oito anos",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 18357,
+   "pageCount": 56
+  },
+  {
+   "id": 2115,
+   "title": "A Mulher Gigante",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 100,
+   "pageCount": 17
+  },
+  {
+   "id": 2116,
+   "title": "Inventário de gente",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 567,
+   "pageCount": 16
+  },
+  {
+   "id": 2117,
+   "title": "A fada que tinha ideias - Peça Teatral",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 11224,
+   "pageCount": 62
+  },
+  {
+   "id": 2118,
+   "title": "BrincRIar",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1221,
+   "pageCount": 24
+  },
+  {
+   "id": 2119,
+   "title": "Circo mágico: poemas circenses para gente pequena, média e grande",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 751,
+   "pageCount": 44
+  },
+  {
+   "id": 2120,
+   "title": "Piolho na Rapunzel e outros bichos em versos",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 710,
+   "pageCount": 18
+  },
+  {
+   "id": 2121,
+   "title": "Planeta Caiqueria",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 285,
+   "pageCount": 18
+  },
+  {
+   "id": 2122,
+   "title": "Lobo de estimação",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 1220,
+   "pageCount": 17
+  },
+  {
+   "id": 2123,
+   "title": "a raça perFeita",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 500,
+   "pageCount": 18
+  },
+  {
+   "id": 2124,
+   "title": "Aurora",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 500,
+   "pageCount": 21
+  },
+  {
+   "id": 2127,
+   "title": "O Natal de Natanael",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3410,
+   "pageCount": 14
+  },
+  {
+   "id": 2128,
+   "title": "O caminho do pintor",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1005,
+   "pageCount": 35
+  },
+  {
+   "id": 2130,
+   "title": "Um pé de vento",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 100,
+   "pageCount": 19
+  },
+  {
+   "id": 2131,
+   "title": "Esmeralda",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1119,
+   "pageCount": 18
+  },
+  {
+   "id": 2132,
+   "title": "Bivar – Em busca de um animal que nunca existiu",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 751,
+   "pageCount": 41
+  },
+  {
+   "id": 2133,
+   "title": "Tecelina",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2524,
+   "pageCount": 22
+  },
+  {
+   "id": 2134,
+   "title": "A lua dentro do coco",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 894,
+   "pageCount": 26
+  },
+  {
+   "id": 2143,
+   "title": "Ímpar",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 24909,
+   "pageCount": 123
+  },
+  {
+   "id": 2145,
+   "title": "A coragem das coisas simples",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 3233,
+   "pageCount": 33
+  },
+  {
+   "id": 2146,
+   "title": "Duda 2: a missão",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 34966,
+   "pageCount": 120
+  },
+  {
+   "id": 2147,
+   "title": "Maria Teresa e o Javali",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4421,
+   "pageCount": 31
+  },
+  {
+   "id": 2149,
+   "title": "O garimpeiro do Rio das Garças",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 3326,
+   "pageCount": 59
+  },
+  {
+   "id": 2150,
+   "title": "O Saci",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 19654,
+   "pageCount": 37
+  },
+  {
+   "id": 2151,
+   "title": "A Panela do Menino Maluquinho",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 6488,
+   "pageCount": 58
+  },
+  {
+   "id": 2152,
+   "title": "João Bocó e o ganso de ouro",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 751,
+   "pageCount": 40
+  },
+  {
+   "id": 2153,
+   "title": "Pirlimpimpim4-As formigas-ruivas",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1826,
+   "pageCount": 32
+  },
+  {
+   "id": 2154,
+   "title": "A reforma da natureza",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 19119,
+   "pageCount": 36
+  },
+  {
+   "id": 2157,
+   "title": "Viagem ao céu",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 33068,
+   "pageCount": 57
+  },
+  {
+   "id": 2158,
+   "title": "Peter Pan",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 19184,
+   "pageCount": 43
+  },
+  {
+   "id": 2168,
+   "title": "O Minotauro - Volume 1",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 24041,
+   "pageCount": 45
+  },
+  {
+   "id": 2169,
+   "title": "Dom Quixote das Crianças - Volume 1",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 17582,
+   "pageCount": 37
+  },
+  {
+   "id": 2170,
+   "title": "Dom Quixote das Crianças - Volume 2",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 22186,
+   "pageCount": 44
+  },
+  {
+   "id": 2174,
+   "title": "O Minotauro - Volume 2",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 25182,
+   "pageCount": 44
+  },
+  {
+   "id": 2184,
+   "title": "Fábulas - Volume 1",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 12301,
+   "pageCount": 33
+  },
+  {
+   "id": 2185,
+   "title": "Fábulas - Volume 2",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 12993,
+   "pageCount": 34
+  },
+  {
+   "id": 2186,
+   "title": "Os doze trabalhos de Hércules - Volume 1",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 30125,
+   "pageCount": 57
+  },
+  {
+   "id": 2187,
+   "title": "Os doze trabalhos de Hércules - Volume 2",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 30286,
+   "pageCount": 54
+  },
+  {
+   "id": 2188,
+   "title": "Os doze trabalhos de Hércules - Volume 3",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 30009,
+   "pageCount": 54
+  },
+  {
+   "id": 2189,
+   "title": "Os doze trabalhos de Hércules - Volume 4",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 29914,
+   "pageCount": 56
+  },
+  {
+   "id": 2190,
+   "title": "O Sítio no Descobrimento",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 28286,
+   "pageCount": 80
+  },
+  {
+   "id": 2193,
+   "title": "Um velhote baixote com nariz de gancho e barriga de pote",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 306,
+   "pageCount": 14
+  },
+  {
+   "id": 2194,
+   "title": "Sabe o que Joana sabe?",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 243,
+   "pageCount": 17
+  },
+  {
+   "id": 2195,
+   "title": "Arca de Haicais",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 219,
+   "pageCount": 18
+  },
+  {
+   "id": 2196,
+   "title": "Castelo de areia",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 561,
+   "pageCount": 13
+  },
+  {
+   "id": 2197,
+   "title": "Paulina",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 130,
+   "pageCount": 16
+  },
+  {
+   "id": 2198,
+   "title": "O avião de Alexandre",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 412,
+   "pageCount": 15
+  },
+  {
+   "id": 2199,
+   "title": "Árvores do Brasil: Cada poema no seu galho",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 2637,
+   "pageCount": 26
+  },
+  {
+   "id": 2200,
+   "title": "ABCDinos",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1122,
+   "pageCount": 35
+  },
+  {
+   "id": 2201,
+   "title": "De onde vem o Português?",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 735,
+   "pageCount": 24
+  },
+  {
+   "id": 2202,
+   "title": "Folclore de chuteiras",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4934,
+   "pageCount": 37
+  },
+  {
+   "id": 2203,
+   "title": "Não falta nada",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 609,
+   "pageCount": 17
+  },
+  {
+   "id": 2204,
+   "title": "Belezura marinha: poesia para os animais ameaçados pelo homem",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2385,
+   "pageCount": 24
+  },
+  {
+   "id": 2205,
+   "title": "Fases da lua e outros segredos",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1533,
+   "pageCount": 25
+  },
+  {
+   "id": 2207,
+   "title": "Ulisses",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 751,
+   "pageCount": 28
+  },
+  {
+   "id": 2208,
+   "title": "Formosuras do velho Chico",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1460,
+   "pageCount": 22
+  },
+  {
+   "id": 2209,
+   "title": "Brincar com as palavras",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 671,
+   "pageCount": 26
+  },
+  {
+   "id": 2210,
+   "title": "Passarinhos do Brasil: poemas que voam",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 884,
+   "pageCount": 23
+  },
+  {
+   "id": 2211,
+   "title": "Férias na Antártica",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 8505,
+   "pageCount": 36
+  },
+  {
+   "id": 2213,
+   "title": "Grande assim",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 313,
+   "pageCount": 35
+  },
+  {
+   "id": 2215,
+   "title": "Maluquices musicais e outros poemas",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 1816,
+   "pageCount": 35
+  },
+  {
+   "id": 2216,
+   "title": "Rimas da floresta",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2107,
+   "pageCount": 19
+  },
+  {
+   "id": 2241,
+   "title": "Poemas de brinquedo",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 565,
+   "pageCount": 56
+  },
+  {
+   "id": 2249,
+   "title": "O Corvo e o jarro",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 163,
+   "pageCount": 10
+  },
+  {
+   "id": 2257,
+   "title": "Cabelinho Vermelho e o Lobo Bobo",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 200,
+   "pageCount": 25
+  },
+  {
+   "id": 2258,
+   "title": "Demais",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 13,
+   "pageCount": 13
+  },
+  {
+   "id": 2259,
+   "title": "Mundo Cão",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 200,
+   "pageCount": 25
+  },
+  {
+   "id": 2261,
+   "title": "Chico",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 100,
+   "pageCount": 10
+  },
+  {
+   "id": 2262,
+   "title": "Celina",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 100,
+   "pageCount": 11
+  },
+  {
+   "id": 2263,
+   "title": "Nino e Bela",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 100,
+   "pageCount": 10
+  },
+  {
+   "id": 2266,
+   "title": "Viagem a vapor",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 150,
+   "pageCount": 22
+  },
+  {
+   "id": 2267,
+   "title": "Quatro Jabutis",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 100,
+   "pageCount": 14
+  },
+  {
+   "id": 2268,
+   "title": "Kira",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 100,
+   "pageCount": 14
+  },
+  {
+   "id": 2270,
+   "title": "Guta e a gata",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 100,
+   "pageCount": 12
+  },
+  {
+   "id": 2271,
+   "title": "A lua cheia de...",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 330,
+   "pageCount": 14
+  },
+  {
+   "id": 2272,
+   "title": "O ladrão de comida",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 297,
+   "pageCount": 14
+  },
+  {
+   "id": 2273,
+   "title": "O vaga-lume",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 200,
+   "pageCount": 26
+  },
+  {
+   "id": 2274,
+   "title": "O Elefante caiu",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 100,
+   "pageCount": 18
+  },
+  {
+   "id": 2275,
+   "title": "Três gatos e um peixe",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 213,
+   "pageCount": 14
+  },
+  {
+   "id": 2277,
+   "title": "Sai da toca, amigo!",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 115,
+   "pageCount": 17
+  },
+  {
+   "id": 2282,
+   "title": "Parque com papai",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 95,
+   "pageCount": 17
+  },
+  {
+   "id": 2283,
+   "title": "A galinha Josefina-Cadê o fubá?",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 706,
+   "pageCount": 18
+  },
+  {
+   "id": 2284,
+   "title": "Este não é um livro de princesas",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 186,
+   "pageCount": 22
+  },
+  {
+   "id": 2286,
+   "title": "Monteiro Lobato em Quadrinhos – Dom Quixote das Crianças",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2228,
+   "pageCount": 70
+  },
+  {
+   "id": 2287,
+   "title": "Maluquinho por festas",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 6012,
+   "pageCount": 102
+  },
+  {
+   "id": 2288,
+   "title": "Bicho lógico",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 100,
+   "pageCount": 29
+  },
+  {
+   "id": 2295,
+   "title": "Pedro Malazarte e a Arara Gigante",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6854,
+   "pageCount": 64
+  },
+  {
+   "id": 2298,
+   "title": "A Garça Encantada",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 5353,
+   "pageCount": 46
+  },
+  {
+   "id": 2299,
+   "title": "Juvenal e o dragão",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 3950,
+   "pageCount": 34
+  },
+  {
+   "id": 2300,
+   "title": "A Princesa do Reino da Pedra Fina",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 3995,
+   "pageCount": 34
+  },
+  {
+   "id": 2301,
+   "title": "Nem pensar",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 29515,
+   "pageCount": 158
+  },
+  {
+   "id": 2302,
+   "title": "Cinco Histórias do Bruxo do Cosme Velho",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 6586,
+   "pageCount": 74
+  },
+  {
+   "id": 2303,
+   "title": "O galo cantou",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 72,
+   "pageCount": 27
+  },
+  {
+   "id": 2304,
+   "title": "Chapeuzinho Vermelho",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 579,
+   "pageCount": 63
+  },
+  {
+   "id": 2305,
+   "title": "A tartaruguinha que perdeu o casco",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 402,
+   "pageCount": 63
+  },
+  {
+   "id": 2338,
+   "title": "Reinações de Narizinho 1 -Narizinho Arrebitado",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 751,
+   "pageCount": 40
+  },
+  {
+   "id": 2339,
+   "title": "Reinações de Narizinho 2 -O sítio do Picapau Amarelo",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 12668,
+   "pageCount": 68
+  },
+  {
+   "id": 2340,
+   "title": "Reinações de Narizinho 3 -O marquês de Rabicó",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 4311,
+   "pageCount": 25
+  },
+  {
+   "id": 2341,
+   "title": "Reinações de Narizinho 4 -O casamento de Narizinho",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 6475,
+   "pageCount": 36
+  },
+  {
+   "id": 2342,
+   "title": "Reinações de Narizinho 5 -Aventuras do príncipe",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7002,
+   "pageCount": 40
+  },
+  {
+   "id": 2343,
+   "title": "Reinações de Narizinho 6 -O gato Félix",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 6635,
+   "pageCount": 32
+  },
+  {
+   "id": 2344,
+   "title": "Reinações de Narizinho 7 -Cara de coruja",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 7112,
+   "pageCount": 39
+  },
+  {
+   "id": 2345,
+   "title": "Reinações de Narizinho 8 -O irmão de Pinóquio",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 7829,
+   "pageCount": 42
+  },
+  {
+   "id": 2346,
+   "title": "Reinações de Narizinho 9 -O circo de cavalinhos",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 6838,
+   "pageCount": 37
+  },
+  {
+   "id": 2347,
+   "title": "Reinações de Narizinho 10 -Pena de papagaio",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 6553,
+   "pageCount": 50
+  },
+  {
+   "id": 2348,
+   "title": "Reinações de Narizinho 11 -O pó de pirlimpimpim",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 6553,
+   "pageCount": 37
+  },
+  {
+   "id": 2350,
+   "title": "Indiozinhos",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 35,
+   "pageCount": 8
+  },
+  {
+   "id": 2351,
+   "title": "Balaio",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 68,
+   "pageCount": 10
+  },
+  {
+   "id": 2352,
+   "title": "Boneco de mola",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 104,
+   "pageCount": 21
+  },
+  {
+   "id": 2353,
+   "title": "A barata diz que tem",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 116,
+   "pageCount": 10
+  },
+  {
+   "id": 2354,
+   "title": "Se esta rua...",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 84,
+   "pageCount": 14
+  },
+  {
+   "id": 2355,
+   "title": "A jiboia",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 193,
+   "pageCount": 26
+  },
+  {
+   "id": 2356,
+   "title": "Cadê?",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 63,
+   "pageCount": 22
+  },
+  {
+   "id": 2357,
+   "title": "Dois sapos",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 59,
+   "pageCount": 18
+  },
+  {
+   "id": 2358,
+   "title": "Caranguejo e peixe vivo",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 76,
+   "pageCount": 21
+  },
+  {
+   "id": 2359,
+   "title": "Domingo",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 35,
+   "pageCount": 18
+  },
+  {
+   "id": 2360,
+   "title": "Fui ao mercado",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 100,
+   "pageCount": 18
+  },
+  {
+   "id": 2361,
+   "title": "Uni Duni Tê",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 73,
+   "pageCount": 29
+  },
+  {
+   "id": 2363,
+   "title": "Vamos meditar",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 210,
+   "pageCount": 10
+  },
+  {
+   "id": 2365,
+   "title": "Saco de mafagafos",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1349,
+   "pageCount": 30
+  },
+  {
+   "id": 2368,
+   "title": "Caderno de mistérios 1 - O roubo da obra de Banksy",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 7842,
+   "pageCount": 27
+  },
+  {
+   "id": 2374,
+   "title": "O penico do general",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1600,
+   "pageCount": 18
+  },
+  {
+   "id": 2375,
+   "title": "Diabos, ogros e princesas",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 8598,
+   "pageCount": 33
+  },
+  {
+   "id": 2377,
+   "title": "Caderno de mistérios 2 - O resgate do Museu Nacional",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 5858,
+   "pageCount": 25
+  },
+  {
+   "id": 2378,
+   "title": "Ora bolas",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 252,
+   "pageCount": 29
+  },
+  {
+   "id": 2379,
+   "title": "Poupou",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 175,
+   "pageCount": 18
+  },
+  {
+   "id": 2380,
+   "title": "Pra que serve um dedo?",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 411,
+   "pageCount": 39
+  },
+  {
+   "id": 2381,
+   "title": "Monstros lá de casa",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 537,
+   "pageCount": 49
+  },
+  {
+   "id": 2382,
+   "title": "Azul e vermelho",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 237,
+   "pageCount": 61
+  },
+  {
+   "id": 2383,
+   "title": "Rimas de lá e de cá",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 1206,
+   "pageCount": 43
+  },
+  {
+   "id": 2384,
+   "title": "Quanto dura um rinoceronte?",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 863,
+   "pageCount": 49
+  },
+  {
+   "id": 2385,
+   "title": "Versos para os pais lerem aos filhos em noites de luar",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1032,
+   "pageCount": 62
+  },
+  {
+   "id": 2386,
+   "title": "Avô, conta outra vez",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 622,
+   "pageCount": 46
+  },
+  {
+   "id": 2387,
+   "title": "Xica",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2944,
+   "pageCount": 62
+  },
+  {
+   "id": 2388,
+   "title": "ABCD Espaço",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1588,
+   "pageCount": 67
+  },
+  {
+   "id": 2392,
+   "title": "Ah... nisso eu não tinha pensado!",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1760,
+   "pageCount": 35
+  },
+  {
+   "id": 2394,
+   "title": "Viagem às terras de Portugal",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 3114,
+   "pageCount": 54
+  },
+  {
+   "id": 2395,
+   "title": "Os animais fantásticos",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2459,
+   "pageCount": 46
+  },
+  {
+   "id": 2397,
+   "title": "Lobo Bobo",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 159,
+   "pageCount": 18
+  },
+  {
+   "id": 2398,
+   "title": "A Cigarra e a Formiga",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 110,
+   "pageCount": 13
+  },
+  {
+   "id": 2399,
+   "title": "A Raposa e o Corvo",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 74,
+   "pageCount": 10
+  },
+  {
+   "id": 2400,
+   "title": "A Tartaruga e a Lebre",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 89,
+   "pageCount": 12
+  },
+  {
+   "id": 2401,
+   "title": "O Lobo e a Raposa",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 282,
+   "pageCount": 13
+  },
+  {
+   "id": 2402,
+   "title": "Os Dois Galos",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 155,
+   "pageCount": 11
+  },
+  {
+   "id": 2403,
+   "title": "Gato gato",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 138,
+   "pageCount": 17
+  },
+  {
+   "id": 2404,
+   "title": "Sapo bom de papo",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 117,
+   "pageCount": 33
+  },
+  {
+   "id": 2405,
+   "title": "Porco Oco",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 196,
+   "pageCount": 17
+  },
+  {
+   "id": 2406,
+   "title": "Mazu",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 66,
+   "pageCount": 7
+  },
+  {
+   "id": 2407,
+   "title": "A loja do mestre André",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 139,
+   "pageCount": 10
+  },
+  {
+   "id": 2408,
+   "title": "Abóbora, melão e limão",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 70,
+   "pageCount": 14
+  },
+  {
+   "id": 2409,
+   "title": "Sabiá",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 69,
+   "pageCount": 8
+  },
+  {
+   "id": 2410,
+   "title": "O cravo, a rosa e o alecrim",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 68,
+   "pageCount": 11
+  },
+  {
+   "id": 2416,
+   "title": "Caderno de Mistérios 3 - O mistério das Pirâmides Astecas",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 751,
+   "pageCount": 22
+  },
+  {
+   "id": 2417,
+   "title": "O tesouro iluminado",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 751,
+   "pageCount": 26
+  },
+  {
+   "id": 2418,
+   "title": "Mão dupla",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4982,
+   "pageCount": 55
+  },
+  {
+   "id": 2421,
+   "title": "Caderno de mistérios 4 - O naufrágio do tempo",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 751,
+   "pageCount": 20
+  },
+  {
+   "id": 2423,
+   "title": "Diciodiário",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 9746,
+   "pageCount": 71
+  },
+  {
+   "id": 2432,
+   "title": "A menina que morava no sino",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 25315,
+   "pageCount": 69
+  },
+  {
+   "id": 2434,
+   "title": "As aventuras de Martina",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 100,
+   "pageCount": 19
+  },
+  {
+   "id": 2435,
+   "title": "Dona Gambá e a coisa",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 834,
+   "pageCount": 18
+  },
+  {
+   "id": 2436,
+   "title": "Histórias de (não) era uma vez",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5061,
+   "pageCount": 41
+  },
+  {
+   "id": 2437,
+   "title": "O anjo destrambelhado",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2121,
+   "pageCount": 25
+  },
+  {
+   "id": 2438,
+   "title": "O gato maluquinho",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 100,
+   "pageCount": 20
+  },
+  {
+   "id": 2440,
+   "title": "Três finais de um jacaré",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 614,
+   "pageCount": 18
+  },
+  {
+   "id": 2441,
+   "title": "Quem adivinha?",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 97,
+   "pageCount": 10
+  },
+  {
+   "id": 2442,
+   "title": "Roda, roda, roda",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 100,
+   "pageCount": 17
+  },
+  {
+   "id": 2443,
+   "title": "Ó, meu belo castelo",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 64,
+   "pageCount": 13
+  },
+  {
+   "id": 2444,
+   "title": "Itororó",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 59,
+   "pageCount": 10
+  },
+  {
+   "id": 2445,
+   "title": "A dança das caveiras",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 100,
+   "pageCount": 17
+  },
+  {
+   "id": 2446,
+   "title": "O pequeno príncipe",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 13188,
+   "pageCount": 97
+  },
+  {
+   "id": 2455,
+   "title": "Manual do papo-furado",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 537,
+   "pageCount": 17
+  },
+  {
+   "id": 2456,
+   "title": "A avó amarela",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 999,
+   "pageCount": 25
+  },
+  {
+   "id": 2457,
+   "title": "A galinha e outros bichos inteligentes",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 1433,
+   "pageCount": 28
+  },
+  {
+   "id": 2458,
+   "title": "Conversas de vaga-lumes",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 2578,
+   "pageCount": 29
+  },
+  {
+   "id": 2459,
+   "title": "Eu, ué!",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 348,
+   "pageCount": 20
+  },
+  {
+   "id": 2460,
+   "title": "O coração de plástico",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1349,
+   "pageCount": 21
+  },
+  {
+   "id": 2461,
+   "title": "Fuzarca na arca de Noé",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1324,
+   "pageCount": 17
+  },
+  {
+   "id": 2462,
+   "title": "Onde você mora?",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 86,
+   "pageCount": 16
+  },
+  {
+   "id": 2463,
+   "title": "O sumiço do tatu",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1950,
+   "pageCount": 25
+  },
+  {
+   "id": 2464,
+   "title": "Lia e o feitiço da palavra",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 2035,
+   "pageCount": 23
+  },
+  {
+   "id": 2467,
+   "title": "Caderno de mistérios 5 - O oceano é uma encruzilhada",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 5982,
+   "pageCount": 23
+  },
+  {
+   "id": 2469,
+   "title": "É o Tambor de Crioula!",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 430,
+   "pageCount": 17
+  },
+  {
+   "id": 2470,
+   "title": "A galinha Josefina-Quem arrumou esta mala?",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 596,
+   "pageCount": 17
+  },
+  {
+   "id": 2478,
+   "title": "Ervilina e o Princês ou Deu a louca em Ervilina",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 711,
+   "pageCount": 51
+  },
+  {
+   "id": 2479,
+   "title": "Todos os escritores do mundo têm a cabeça cheia de piolho",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 767,
+   "pageCount": 16
+  },
+  {
+   "id": 2480,
+   "title": "Sabores dos biomas 1-Cerrado",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1383,
+   "pageCount": 14
+  },
+  {
+   "id": 2481,
+   "title": "Sabores dos biomas 2-Caatinga",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1638,
+   "pageCount": 14
+  },
+  {
+   "id": 2483,
+   "title": "Mesma nova história",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 751,
+   "pageCount": 28
+  },
+  {
+   "id": 2485,
+   "title": "Um engarrafamento elétrico",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 8274,
+   "pageCount": 42
+  },
+  {
+   "id": 2486,
+   "title": "Sabores dos biomas 3-Pantanal",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1466,
+   "pageCount": 13
+  },
+  {
+   "id": 2487,
+   "title": "Sabores dos biomas 4-Mata atlântica",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1732,
+   "pageCount": 14
+  },
+  {
+   "id": 2490,
+   "title": "Filho de Peixe",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 43000,
+   "pageCount": 92
+  },
+  {
+   "id": 2492,
+   "title": "Sabores dos biomas 6-Amazônia",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1962,
+   "pageCount": 15
+  },
+  {
+   "id": 2493,
+   "title": "Sabores dos biomas 5-Pampa",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1473,
+   "pageCount": 13
+  },
+  {
+   "id": 2771,
+   "title": "Banco de histórias 1-Gelatina de graça",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 2392,
+   "pageCount": 19
+  },
+  {
+   "id": 2785,
+   "title": "Banco de histórias 3-O dilema dos juros de chocolate",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 2003,
+   "pageCount": 19
+  },
+  {
+   "id": 2786,
+   "title": "Banco de histórias 5-O clube do hamster",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2168,
+   "pageCount": 19
+  },
+  {
+   "id": 2787,
+   "title": "Banco de histórias 4-O sumiço do videogame",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2679,
+   "pageCount": 19
+  },
+  {
+   "id": 2788,
+   "title": "Banco de histórias 2-Uma casa para Borunga",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1950,
+   "pageCount": 19
+  },
+  {
+   "id": 2789,
+   "title": "Ithale - Fábulas de Moçambique",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5402,
+   "pageCount": 45
+  },
+  {
+   "id": 2790,
+   "title": "Festa Junina",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 89,
+   "pageCount": 51
+  },
+  {
+   "id": 2791,
+   "title": "4+4. Estações e lugares",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 125,
+   "pageCount": 51
+  },
+  {
+   "id": 2897,
+   "title": "Pessoas do Mundo-Ruby Bridges",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 649,
+   "pageCount": 19
+  },
+  {
+   "id": 2898,
+   "title": "Pessoas do Mundo-Rosa Parks",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 822,
+   "pageCount": 25
+  },
+  {
+   "id": 2900,
+   "title": "Conversas sobre Amazônia, pessoas e clima",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 11906,
+   "pageCount": 54
+  },
+  {
+   "id": 3213,
+   "title": "Pessoas do Mundo-Thomas Edison",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 847,
+   "pageCount": 26
+  },
+  {
+   "id": 3342,
+   "title": "Conte mais uma vez",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 254,
+   "pageCount": 35
+  },
+  {
+   "id": 3352,
+   "title": "Cartas do futuro",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 9375,
+   "pageCount": 44
+  },
+  {
+   "id": 4600,
+   "title": "Atrás da porta azul",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 15107,
+   "pageCount": 120
+  },
+  {
+   "id": 4615,
+   "title": "Melancia e Coco Mole",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 464,
+   "pageCount": 12
+  },
+  {
+   "id": 4616,
+   "title": "Doutor Botelho",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 821,
+   "pageCount": 14
+  },
+  {
+   "id": 4617,
+   "title": "Como se faz-Dia de Chuva",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 265,
+   "pageCount": 13
+  },
+  {
+   "id": 4618,
+   "title": "Como se faz-Um Banho Colorido",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 260,
+   "pageCount": 13
+  },
+  {
+   "id": 4648,
+   "title": "Arrumação",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 69,
+   "pageCount": 13
+  },
+  {
+   "id": 4649,
+   "title": "Junto ou sozinho?",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 69,
+   "pageCount": 11
+  },
+  {
+   "id": 4650,
+   "title": "Brincar é sempre bom!",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 46,
+   "pageCount": 63
+  },
+  {
+   "id": 4651,
+   "title": "Brinquedos",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 48,
+   "pageCount": 10
+  },
+  {
+   "id": 4652,
+   "title": "Cadê o bicho que estava aqui?",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 100,
+   "pageCount": 7
+  },
+  {
+   "id": 4653,
+   "title": "Festa boa tem...",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 16,
+   "pageCount": 7
+  },
+  {
+   "id": 4654,
+   "title": "Hora de dormir",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 26,
+   "pageCount": 8
+  },
+  {
+   "id": 4655,
+   "title": "Meus lugares no mundo",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 69,
+   "pageCount": 5
+  },
+  {
+   "id": 4656,
+   "title": "Nossos amigos, os sentidos",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 156,
+   "pageCount": 6
+  },
+  {
+   "id": 4657,
+   "title": "O contrário de cada coisa",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 51,
+   "pageCount": 9
+  },
+  {
+   "id": 4658,
+   "title": "O que tem dentro da palavra",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 32,
+   "pageCount": 10
+  },
+  {
+   "id": 4659,
+   "title": "Quer pão quentinho?",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 17,
+   "pageCount": 12
+  },
+  {
+   "id": 4660,
+   "title": "Um corpo com muitas partes",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 92,
+   "pageCount": 8
+  },
+  {
+   "id": 4661,
+   "title": "Vamos brincar de roda?",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 68,
+   "pageCount": 5
+  },
+  {
+   "id": 4662,
+   "title": "Brincando com rimas",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 52,
+   "pageCount": 11
+  },
+  {
+   "id": 4663,
+   "title": "Faz de conta",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 49,
+   "pageCount": 9
+  },
+  {
+   "id": 4664,
+   "title": "Brincando com as palavras",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 72,
+   "pageCount": 9
+  },
+  {
+   "id": 4727,
+   "title": "Histórias do Mundo-A árvore de Udala",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 576,
+   "pageCount": 7
+  },
+  {
+   "id": 4728,
+   "title": "Como se faz-Um presente pra Tia Maria",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 289,
+   "pageCount": 13
+  },
+  {
+   "id": 4729,
+   "title": "Como se faz-A banda",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 242,
+   "pageCount": 13
+  },
+  {
+   "id": 4731,
+   "title": "A casa de cada um",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 105,
+   "pageCount": 21
+  },
+  {
+   "id": 4732,
+   "title": "O amor acontece",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 85,
+   "pageCount": 21
+  },
+  {
+   "id": 4733,
+   "title": "Assim toca a banda",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 127,
+   "pageCount": 21
+  },
+  {
+   "id": 4734,
+   "title": "Como uma princesa",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 171,
+   "pageCount": 7
+  },
+  {
+   "id": 4735,
+   "title": "Dentro de um ovo",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 141,
+   "pageCount": 21
+  },
+  {
+   "id": 4736,
+   "title": "Domingo no parque",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 105,
+   "pageCount": 21
+  },
+  {
+   "id": 4737,
+   "title": "Hoje é aniversário da Isa",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 72,
+   "pageCount": 21
+  },
+  {
+   "id": 4738,
+   "title": "Isa e as estações do ano",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 90,
+   "pageCount": 21
+  },
+  {
+   "id": 4739,
+   "title": "Isa e os insetos",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 88,
+   "pageCount": 21
+  },
+  {
+   "id": 4740,
+   "title": "Isa gosta de brincar",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 85,
+   "pageCount": 21
+  },
+  {
+   "id": 4741,
+   "title": "Isa na casa da vovó",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 78,
+   "pageCount": 21
+  },
+  {
+   "id": 4742,
+   "title": "Isa na fazenda",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 144,
+   "pageCount": 21
+  },
+  {
+   "id": 4743,
+   "title": "Isa na terra dos piratas",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 76,
+   "pageCount": 21
+  },
+  {
+   "id": 4744,
+   "title": "Isa nas alturas",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 91,
+   "pageCount": 21
+  },
+  {
+   "id": 4745,
+   "title": "Isa no fundo do mar",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 150,
+   "pageCount": 21
+  },
+  {
+   "id": 4746,
+   "title": "Isa no quarto escuro",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 100,
+   "pageCount": 21
+  },
+  {
+   "id": 4747,
+   "title": "Isa pode ser quem quiser",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 73,
+   "pageCount": 21
+  },
+  {
+   "id": 4748,
+   "title": "Isa vai à praia",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 91,
+   "pageCount": 21
+  },
+  {
+   "id": 4749,
+   "title": "Meu pai é cabeça",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 92,
+   "pageCount": 21
+  },
+  {
+   "id": 4750,
+   "title": "Mitos e lendas",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 223,
+   "pageCount": 21
+  },
+  {
+   "id": 4751,
+   "title": "Muitas são as flores",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 66,
+   "pageCount": 21
+  },
+  {
+   "id": 4752,
+   "title": "No mundo da lua",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 95,
+   "pageCount": 21
+  },
+  {
+   "id": 4753,
+   "title": "No universo dos animais",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 176,
+   "pageCount": 21
+  },
+  {
+   "id": 4754,
+   "title": "Clube da esquina",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 74,
+   "pageCount": 21
+  },
+  {
+   "id": 4755,
+   "title": "O livro dos esportes",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 118,
+   "pageCount": 21
+  },
+  {
+   "id": 4756,
+   "title": "Os sapatos da mamãe",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 155,
+   "pageCount": 21
+  },
+  {
+   "id": 4757,
+   "title": "Procurando i",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 153,
+   "pageCount": 21
+  },
+  {
+   "id": 4758,
+   "title": "Quando pequenininha",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 112,
+   "pageCount": 21
+  },
+  {
+   "id": 4759,
+   "title": "Respeitável público: o circo",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 74,
+   "pageCount": 21
+  },
+  {
+   "id": 4760,
+   "title": "Todo peixe vive na água",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 112,
+   "pageCount": 21
+  },
+  {
+   "id": 4773,
+   "title": "Uma partida de A a Z",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 496,
+   "pageCount": 31
+  },
+  {
+   "id": 4775,
+   "title": "Histórias do Mundo-Momotaro",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 549,
+   "pageCount": 7
+  },
+  {
+   "id": 4795,
+   "title": "Alexandre, o pequeno 1 - Alexandre não quer ser grande",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5985,
+   "pageCount": 21
+  },
+  {
+   "id": 4796,
+   "title": "Alexandre, o pequeno 2 - Uma escola para Alexandre",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6803,
+   "pageCount": 24
+  },
+  {
+   "id": 4797,
+   "title": "Cada pessoa em muitos lugares",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 93,
+   "pageCount": 9
+  },
+  {
+   "id": 4798,
+   "title": "Cada um tem o seu jeito",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 100,
+   "pageCount": 7
+  },
+  {
+   "id": 4799,
+   "title": "Cadê?",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 32,
+   "pageCount": 9
+  },
+  {
+   "id": 4800,
+   "title": "Quem gosta de quê?",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 92,
+   "pageCount": 9
+  },
+  {
+   "id": 4801,
+   "title": "Coleção Mitologia 1 - A criação do mundo: do Caos nasceu a vida",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 2357,
+   "pageCount": 14
+  },
+  {
+   "id": 4802,
+   "title": "Coleção Mitologia 4 - Hades: o deus do submundo",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 3054,
+   "pageCount": 16
+  },
+  {
+   "id": 4803,
+   "title": "Coleção Mitologia 3 - Hera: a deusa da fertilidade e do casamento",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 3595,
+   "pageCount": 17
+  },
+  {
+   "id": 4804,
+   "title": "Coleção Mitologia 2 - Zeus: o deus dos raios e do trovão",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 2711,
+   "pageCount": 15
+  },
+  {
+   "id": 4805,
+   "title": "Panapaná",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 697,
+   "pageCount": 42
+  },
+  {
+   "id": 4806,
+   "title": "Oh, Senhor do picolé!",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1849,
+   "pageCount": 23
+  },
+  {
+   "id": 4807,
+   "title": "Mais de um",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 104,
+   "pageCount": 27
+  },
+  {
+   "id": 4810,
+   "title": "Alexandre, o pequeno 4 – Alexandre vai ser grande",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 100,
+   "pageCount": 45
+  },
+  {
+   "id": 4811,
+   "title": "Coleção Mitologia 5 - Deméter: a deusa da natureza e da agricultura",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 3766,
+   "pageCount": 17
+  },
+  {
+   "id": 4812,
+   "title": "Alexandre, o pequeno 3 - No Império Persa",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 10989,
+   "pageCount": 36
+  },
+  {
+   "id": 4813,
+   "title": "Por que a dona aranha subiu pela parede?",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 525,
+   "pageCount": 21
+  },
+  {
+   "id": 4814,
+   "title": "O maior motivo do mundo e outras histórias de sim e de não",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 9944,
+   "pageCount": 49
+  },
+  {
+   "id": 4815,
+   "title": "Olá, girafa!",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 240,
+   "pageCount": 13
+  },
+  {
+   "id": 4816,
+   "title": "Teleco e Teco",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 149,
+   "pageCount": 13
+  },
+  {
+   "id": 4817,
+   "title": "Como se faz-Amassa massinha",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 261,
+   "pageCount": 13
+  },
+  {
+   "id": 4818,
+   "title": "Como se faz-Um cavalinho todo meu",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 248,
+   "pageCount": 13
+  },
+  {
+   "id": 4819,
+   "title": "Arrumando o quarto",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 50,
+   "pageCount": 17
+  },
+  {
+   "id": 4820,
+   "title": "Braços",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 20,
+   "pageCount": 5
+  },
+  {
+   "id": 4821,
+   "title": "Onde moro",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 89,
+   "pageCount": 8
+  },
+  {
+   "id": 4822,
+   "title": "Tango no jardim",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 57,
+   "pageCount": 8
+  },
+  {
+   "id": 4830,
+   "title": "Coleção Mitologia 6 - Poseidon: o deus dos mares",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 4315,
+   "pageCount": 19
+  },
+  {
+   "id": 4831,
+   "title": "Coleção Mitologia 7 - Hebe: a deusa da juventude",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 3720,
+   "pageCount": 18
+  },
+  {
+   "id": 4960,
+   "title": "A galinha Josefina-O que será que o vovô esqueceu?",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 600,
+   "pageCount": 43
+  },
+  {
+   "id": 4963,
+   "title": "Coleção Mitologia 8 - Ares: o deus da guerra",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 4620,
+   "pageCount": 19
+  },
+  {
+   "id": 4969,
+   "title": "Coleção Mitologia 9 - Hefestos: o deus do fogo e da indústria",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 4314,
+   "pageCount": 18
+  },
+  {
+   "id": 4970,
+   "title": "Um astronauta em Marte",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4254,
+   "pageCount": 22
+  },
+  {
+   "id": 4971,
+   "title": "Simão, o camaleão",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 178,
+   "pageCount": 10
+  },
+  {
+   "id": 4972,
+   "title": "Coleção Mitologia 10 - Afrodite: a deusa da beleza e do amor",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 7380,
+   "pageCount": 26
+  },
+  {
+   "id": 4978,
+   "title": "O quadrado desastrado",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 469,
+   "pageCount": 35
+  },
+  {
+   "id": 4980,
+   "title": "Coleção Mitologia 11 - Dioniso: o deus das festas e do vinho",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 6258,
+   "pageCount": 23
+  },
+  {
+   "id": 4981,
+   "title": "Palavras despalavradas poeminhas e prosa poética",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 2394,
+   "pageCount": 22
+  },
+  {
+   "id": 4982,
+   "title": "A menina e o monstro",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 4487,
+   "pageCount": 177
+  },
+  {
+   "id": 4985,
+   "title": "Velhas amigas, novos amigos",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2303,
+   "pageCount": 14
+  },
+  {
+   "id": 4986,
+   "title": "Maria",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 100,
+   "pageCount": 9
+  },
+  {
+   "id": 4988,
+   "title": "Daniel e o guarda-chuva",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 822,
+   "pageCount": 13
+  },
+  {
+   "id": 4989,
+   "title": "Balaio de ideias-4-Inverno",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 4553,
+   "pageCount": 40
+  },
+  {
+   "id": 4990,
+   "title": "Balaio de ideias-3-Outono",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 4731,
+   "pageCount": 40
+  },
+  {
+   "id": 4991,
+   "title": "O mercado do senhor Alberto",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 3443,
+   "pageCount": 17
+  },
+  {
+   "id": 4992,
+   "title": "O Parque dos Beija-flores",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 905,
+   "pageCount": 7
+  },
+  {
+   "id": 4993,
+   "title": "Balaio de ideias-2-Verão",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 4559,
+   "pageCount": 40
+  },
+  {
+   "id": 4994,
+   "title": "Balaio de ideias-1-Primavera",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5087,
+   "pageCount": 40
+  },
+  {
+   "id": 4997,
+   "title": "Uma Boa Causa",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1054,
+   "pageCount": 9
+  },
+  {
+   "id": 4998,
+   "title": "Um Garoto Comum",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2745,
+   "pageCount": 18
+  },
+  {
+   "id": 5002,
+   "title": "Coleção Mitologia 12 - Hermes: o deus do comércio e da comunicação",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 5765,
+   "pageCount": 22
+  },
+  {
+   "id": 5112,
+   "title": "Coleção Mitologia 14 - Ártemis: a deusa da caça e da castidade",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 6664,
+   "pageCount": 24
+  },
+  {
+   "id": 5129,
+   "title": "Coleção Mitologia 13 - Apolo: O deus das artes e da profecia",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 6737,
+   "pageCount": 25
+  },
+  {
+   "id": 5151,
+   "title": "Codinome Duda",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 23393,
+   "pageCount": 152
+  },
+  {
+   "id": 5155,
+   "title": "Amazônia das crianças",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 10000,
+   "pageCount": 164
+  },
+  {
+   "id": 5162,
+   "title": "Pessoas do Mundo-Mahatma Gandhi",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1004,
+   "pageCount": 26
+  },
+  {
+   "id": 5371,
+   "title": "A foca festeira",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 23,
+   "pageCount": 11
+  },
+  {
+   "id": 5374,
+   "title": "Pessoas do Mundo-Martin Luther King Jr.",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 562,
+   "pageCount": 16
+  },
+  {
+   "id": 5375,
+   "title": "O assobio do sapo",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 33,
+   "pageCount": 12
+  },
+  {
+   "id": 5376,
+   "title": "O passeio do pato",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 22,
+   "pageCount": 11
+  },
+  {
+   "id": 5377,
+   "title": "O voo da vespa",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 22,
+   "pageCount": 12
+  },
+  {
+   "id": 5378,
+   "title": "O zumbido do zangão",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 30,
+   "pageCount": 12
+  },
+  {
+   "id": 5379,
+   "title": "Pessoas do Mundo-Sojourner Truth",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1242,
+   "pageCount": 22
+  },
+  {
+   "id": 5380,
+   "title": "Palavra tem segredo? Troque a primeira letra!",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 469,
+   "pageCount": 25
+  },
+  {
+   "id": 5382,
+   "title": "Pessoas do Mundo-Amelia Earhart",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2588,
+   "pageCount": 44
+  },
+  {
+   "id": 5384,
+   "title": "Amigo secreto",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 105,
+   "pageCount": 15
+  },
+  {
+   "id": 5386,
+   "title": "Palavra tem segredo? Descubra o animal!",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 568,
+   "pageCount": 27
+  },
+  {
+   "id": 5396,
+   "title": "A buzina do boi",
+   "levelName": "bb",
+   "levelId": 231,
+   "wordCount": 31,
+   "pageCount": 12
+  },
+  {
+   "id": 5398,
+   "title": "Palavra tem segredo? Resolva o mistério!",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 250,
+   "pageCount": 20
+  },
+  {
+   "id": 5402,
+   "title": "Ditos Populares-A mentira tem perna curta",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1248,
+   "pageCount": 20
+  },
+  {
+   "id": 5412,
+   "title": "Pessoas do Mundo-Rebecca Lee Crumpler",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 430,
+   "pageCount": 12
+  },
+  {
+   "id": 5414,
+   "title": "Pessoas do Mundo-Barack Obama",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 292,
+   "pageCount": 12
+  },
+  {
+   "id": 5507,
+   "title": "A lhama quer ser palhaça",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 116,
+   "pageCount": 6
+  },
+  {
+   "id": 5512,
+   "title": "A broa da família grilo",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 85,
+   "pageCount": 5
+  },
+  {
+   "id": 5513,
+   "title": "As flores do planeta dos flamingos",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 99,
+   "pageCount": 7
+  },
+  {
+   "id": 5518,
+   "title": "Pessoas do Mundo-Matthew Henson",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 6318,
+   "pageCount": 56
+  },
+  {
+   "id": 5519,
+   "title": "A risada da rainha",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 40,
+   "pageCount": 8
+  },
+  {
+   "id": 5520,
+   "title": "A dança dos dois duendes",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 55,
+   "pageCount": 12
+  },
+  {
+   "id": 5521,
+   "title": "O lagarto linguarudo",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 46,
+   "pageCount": 9
+  },
+  {
+   "id": 5522,
+   "title": "O tremor na mata",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 59,
+   "pageCount": 9
+  },
+  {
+   "id": 5525,
+   "title": "Coleção Mitologia 15 - Atena: a deusa da sabedoria",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 6477,
+   "pageCount": 24
+  },
+  {
+   "id": 5526,
+   "title": "Pessoas do Mundo-Althea Gibson",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1163,
+   "pageCount": 20
+  },
+  {
+   "id": 5527,
+   "title": "Ditos Populares-Quem não tem cão caça como gato",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1898,
+   "pageCount": 23
+  },
+  {
+   "id": 5528,
+   "title": "Pessoas do Mundo-Roberto Clemente",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2159,
+   "pageCount": 28
+  },
+  {
+   "id": 5529,
+   "title": "Uma arara na feira",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 103,
+   "pageCount": 7
+  },
+  {
+   "id": 5533,
+   "title": "Os três porquinhos",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 400,
+   "pageCount": 31
+  },
+  {
+   "id": 5534,
+   "title": "De bem com a vida",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 409,
+   "pageCount": 26
+  },
+  {
+   "id": 5535,
+   "title": "Berimbau mandou te chamar",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 100,
+   "pageCount": 29
+  },
+  {
+   "id": 5536,
+   "title": "Bagunça no mar",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 590,
+   "pageCount": 27
+  },
+  {
+   "id": 5537,
+   "title": "Nina e o silêncio",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 677,
+   "pageCount": 35
+  },
+  {
+   "id": 5538,
+   "title": "Será que a barata tem?",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 418,
+   "pageCount": 34
+  },
+  {
+   "id": 5539,
+   "title": "Chapeuzinho Vermelho",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 400,
+   "pageCount": 63
+  },
+  {
+   "id": 5544,
+   "title": "Ainda",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 374,
+   "pageCount": 31
+  },
+  {
+   "id": 5545,
+   "title": "Asas",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1621,
+   "pageCount": 41
+  },
+  {
+   "id": 5546,
+   "title": "Castelos de areia",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1221,
+   "pageCount": 47
+  },
+  {
+   "id": 5549,
+   "title": "Bebê-tubarão",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 107,
+   "pageCount": 24
+  },
+  {
+   "id": 5550,
+   "title": "A libélula abilolada",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 357,
+   "pageCount": 27
+  },
+  {
+   "id": 5553,
+   "title": "O dono da verdade",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3420,
+   "pageCount": 47
+  },
+  {
+   "id": 5556,
+   "title": "Toda criança gosta...",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 343,
+   "pageCount": 55
+  },
+  {
+   "id": 5562,
+   "title": "Logo ali",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 267,
+   "pageCount": 35
+  },
+  {
+   "id": 5566,
+   "title": "A cama do ursinho",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 218,
+   "pageCount": 6
+  },
+  {
+   "id": 5567,
+   "title": "A gentileza do jegue",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 80,
+   "pageCount": 7
+  },
+  {
+   "id": 5568,
+   "title": "A visita encharcada",
+   "levelName": "cc",
+   "levelId": 232,
+   "wordCount": 51,
+   "pageCount": 7
+  },
+  {
+   "id": 5569,
+   "title": "Onde está?",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 35,
+   "pageCount": 10
+  },
+  {
+   "id": 5581,
+   "title": "Sagatrissuinorana",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 247,
+   "pageCount": 31
+  },
+  {
+   "id": 5582,
+   "title": "Memória de elefante",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 901,
+   "pageCount": 45
+  },
+  {
+   "id": 5588,
+   "title": "Nove camundongos no Nilo",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 103,
+   "pageCount": 7
+  },
+  {
+   "id": 5608,
+   "title": "Minsk",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 1303,
+   "pageCount": 33
+  },
+  {
+   "id": 5609,
+   "title": "O sapo e o caranguejo",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 81,
+   "pageCount": 9
+  },
+  {
+   "id": 5610,
+   "title": "Quem é esse?",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 24,
+   "pageCount": 20
+  },
+  {
+   "id": 5611,
+   "title": "Dário, o amigo imaginário",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 541,
+   "pageCount": 20
+  },
+  {
+   "id": 5612,
+   "title": "Era uma vez 13 vampiros",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 305,
+   "pageCount": 30
+  },
+  {
+   "id": 5613,
+   "title": "Cadê Cadê | Mamo tu mamo tu",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 47,
+   "pageCount": 19
+  },
+  {
+   "id": 5616,
+   "title": "De João para seis irmãos",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 648,
+   "pageCount": 40
+  },
+  {
+   "id": 5617,
+   "title": "Pertencimento",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 141,
+   "pageCount": 32
+  },
+  {
+   "id": 5618,
+   "title": "Redondeza",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 111,
+   "pageCount": 31
+  },
+  {
+   "id": 5619,
+   "title": "Afete",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 98,
+   "pageCount": 32
+  },
+  {
+   "id": 5620,
+   "title": "Quadrinha da sabiá",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 38,
+   "pageCount": 32
+  },
+  {
+   "id": 5624,
+   "title": "O baldinho invisível",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 585,
+   "pageCount": 32
+  },
+  {
+   "id": 5625,
+   "title": "A vida neste minutinho",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 403,
+   "pageCount": 41
+  },
+  {
+   "id": 5626,
+   "title": "Crianças Virtuosas - Alua Kopstein",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 463,
+   "pageCount": 41
+  },
+  {
+   "id": 5627,
+   "title": "O que se esconde na gente",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1168,
+   "pageCount": 37
+  },
+  {
+   "id": 5635,
+   "title": "Natureza 1, 2, 3...",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 85,
+   "pageCount": 30
+  },
+  {
+   "id": 5655,
+   "title": "O monstro no quarto e mais histórias de sim e de não",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 11077,
+   "pageCount": 85
+  },
+  {
+   "id": 5656,
+   "title": "Cores",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 20,
+   "pageCount": 10
+  },
+  {
+   "id": 5661,
+   "title": "Pode me chamar de Dodô",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 40350,
+   "pageCount": 206
+  },
+  {
+   "id": 5670,
+   "title": "A praça do Maurício",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 2404,
+   "pageCount": 41
+  },
+  {
+   "id": 5671,
+   "title": "Alice no País das Maravilhas",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 24489,
+   "pageCount": 212
+  },
+  {
+   "id": 5672,
+   "title": "Histórias do Mundo-O caso da seda roubada",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 753,
+   "pageCount": 7
+  },
+  {
+   "id": 5673,
+   "title": "Histórias do Mundo-Como o cão passou a viver com as pessoas",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 501,
+   "pageCount": 6
+  },
+  {
+   "id": 5674,
+   "title": "Histórias do Mundo-Cinderela",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 693,
+   "pageCount": 7
+  },
+  {
+   "id": 5675,
+   "title": "Histórias do Mundo-A pequena Floco de Neve",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 631,
+   "pageCount": 7
+  },
+  {
+   "id": 5676,
+   "title": "Histórias do Mundo-A verdadeira recompensa",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 774,
+   "pageCount": 7
+  },
+  {
+   "id": 5678,
+   "title": "Histórias do Mundo-O comerciante desonesto",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 594,
+   "pageCount": 7
+  },
+  {
+   "id": 5679,
+   "title": "Histórias do Mundo-O leopardo e o rato",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 682,
+   "pageCount": 7
+  },
+  {
+   "id": 5680,
+   "title": "Histórias do Mundo-O moinho mágico",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 828,
+   "pageCount": 7
+  },
+  {
+   "id": 5681,
+   "title": "Histórias do Mundo-O pavão e o corvo",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 184,
+   "pageCount": 5
+  },
+  {
+   "id": 5682,
+   "title": "Histórias do Mundo-O barco de papel",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 783,
+   "pageCount": 7
+  },
+  {
+   "id": 5683,
+   "title": "Histórias do Mundo-O presente da cegonha",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 625,
+   "pageCount": 7
+  },
+  {
+   "id": 5684,
+   "title": "A festa dos macacos",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 132,
+   "pageCount": 32
+  },
+  {
+   "id": 5685,
+   "title": "Janeiro brasileiro",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 950,
+   "pageCount": 59
+  },
+  {
+   "id": 5686,
+   "title": "Frutos da imaginação",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 66,
+   "pageCount": 49
+  },
+  {
+   "id": 5687,
+   "title": "Do ovo ao voo: a metamorfose da borboleta-do-manacá / Laços entre fauna e flora brasileiras",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 238,
+   "pageCount": 42
+  },
+  {
+   "id": 5688,
+   "title": "Mãe, quando você pensa em nada é preto ou é branco?",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 400,
+   "pageCount": 35
+  },
+  {
+   "id": 5689,
+   "title": "Azucrino",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 15,
+   "pageCount": 40
+  },
+  {
+   "id": 5690,
+   "title": "A princesa e o dragão",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 19040,
+   "pageCount": 110
+  },
+  {
+   "id": 5691,
+   "title": "Histórias do Mundo-Tudo num dia de trabalho",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 721,
+   "pageCount": 7
+  },
+  {
+   "id": 5692,
+   "title": "Informe-se: Salvem o peixe-boi",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 2547,
+   "pageCount": 20
+  },
+  {
+   "id": 5693,
+   "title": "Histórias do Mundo-Omar e o camelo",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 383,
+   "pageCount": 7
+  },
+  {
+   "id": 5694,
+   "title": "Histórias do Mundo-O tesouro do campo",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 523,
+   "pageCount": 7
+  },
+  {
+   "id": 5695,
+   "title": "Informe-se: Vilarejo a céu aberto",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 1534,
+   "pageCount": 13
+  },
+  {
+   "id": 5696,
+   "title": "Pela estrada afora",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 4744,
+   "pageCount": 67
+  },
+  {
+   "id": 5697,
+   "title": "Contos Encantados para jovens leitores",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 27906,
+   "pageCount": 195
+  },
+  {
+   "id": 5700,
+   "title": "Alice Através do Espelho",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 26638,
+   "pageCount": 215
+  },
+  {
+   "id": 5701,
+   "title": "Contos de crianças do Brasil",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 5000,
+   "pageCount": 160
+  },
+  {
+   "id": 5708,
+   "title": "Informe-se: Havaí",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 818,
+   "pageCount": 9
+  },
+  {
+   "id": 5709,
+   "title": "Informe-se: A pele que você veste",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 960,
+   "pageCount": 11
+  },
+  {
+   "id": 5712,
+   "title": "Rio Menino",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 234,
+   "pageCount": 35
+  },
+  {
+   "id": 5713,
+   "title": "Histórias do Mundo-Os presentes dados pelas árvores",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 510,
+   "pageCount": 7
+  },
+  {
+   "id": 5721,
+   "title": "As formas da água",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 60,
+   "pageCount": 35
+  },
+  {
+   "id": 5722,
+   "title": "Histórias do Mundo-Os irmãos inteligentes",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 755,
+   "pageCount": 7
+  },
+  {
+   "id": 5730,
+   "title": "O almoço do macaco",
+   "levelName": "dd",
+   "levelId": 233,
+   "wordCount": 103,
+   "pageCount": 6
+  },
+  {
+   "id": 5731,
+   "title": "Ditos Populares-Filho de peixe peixinho é",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1191,
+   "pageCount": 18
+  },
+  {
+   "id": 5737,
+   "title": "Palavras pra lá de divertidas",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1139,
+   "pageCount": 22
+  },
+  {
+   "id": 5740,
+   "title": "O mundo, segundo Menina-Manhã",
+   "levelName": "K",
+   "levelId": 12,
+   "wordCount": 232,
+   "pageCount": 27
+  },
+  {
+   "id": 5741,
+   "title": "O Castelo Encantado",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 68915,
+   "pageCount": 338
+  },
+  {
+   "id": 5747,
+   "title": "Os três porquinhos de porcelana",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2711,
+   "pageCount": 31
+  },
+  {
+   "id": 5756,
+   "title": "Peter Pan e Wendy",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 48465,
+   "pageCount": 314
+  },
+  {
+   "id": 5760,
+   "title": "A trapaça da serpente",
+   "levelName": "L",
+   "levelId": 13,
+   "wordCount": 1066,
+   "pageCount": 29
+  },
+  {
+   "id": 5761,
+   "title": "Metade Pai Metade Mundo",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 11214,
+   "pageCount": 103
+  },
+  {
+   "id": 5777,
+   "title": "Histórias Encantadas - Polegarzinha",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3500,
+   "pageCount": 24
+  },
+  {
+   "id": 5842,
+   "title": "Histórias Encantadas - A história do príncipe Ahmed e da fada Paribanou",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 9395,
+   "pageCount": 65
+  },
+  {
+   "id": 5855,
+   "title": "Histórias Encantadas - O Gnomo Amarelo",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 6656,
+   "pageCount": 50
+  },
+  {
+   "id": 5882,
+   "title": "Histórias Encantadas - A Princesa Leve",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 13129,
+   "pageCount": 96
+  },
+  {
+   "id": 5883,
+   "title": "Quem Pode Entrar?",
+   "levelName": "A",
+   "levelId": 2,
+   "wordCount": 27,
+   "pageCount": 9
+  },
+  {
+   "id": 5913,
+   "title": "Eu, Senhor Elefante",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 530,
+   "pageCount": 31
+  },
+  {
+   "id": 5921,
+   "title": "O Colibri e o Leão",
+   "levelName": "C",
+   "levelId": 4,
+   "wordCount": 130,
+   "pageCount": 11
+  },
+  {
+   "id": 5922,
+   "title": "A Moça e o Jarro de Leite",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 168,
+   "pageCount": 10
+  },
+  {
+   "id": 5923,
+   "title": "O Galo e a Raposa",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 217,
+   "pageCount": 11
+  },
+  {
+   "id": 5924,
+   "title": "O Leão e o Mosquito",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 224,
+   "pageCount": 11
+  },
+  {
+   "id": 5925,
+   "title": "A Raposa e a Cegonha",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 269,
+   "pageCount": 12
+  },
+  {
+   "id": 5926,
+   "title": "O Macaco e o Leopardo",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 203,
+   "pageCount": 10
+  },
+  {
+   "id": 5927,
+   "title": "O Rato da Cidade e o Rato do Campo",
+   "levelName": "I",
+   "levelId": 10,
+   "wordCount": 625,
+   "pageCount": 15
+  },
+  {
+   "id": 5928,
+   "title": "O Velho, o Rapaz e o Burro",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 471,
+   "pageCount": 11
+  },
+  {
+   "id": 5929,
+   "title": "O Leão e o Rato",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 247,
+   "pageCount": 13
+  },
+  {
+   "id": 5938,
+   "title": "Pessoas do Mundo-Jesse Owens",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2422,
+   "pageCount": 26
+  },
+  {
+   "id": 5940,
+   "title": "A Terra dos Meninos Pelados",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5447,
+   "pageCount": 69
+  },
+  {
+   "id": 5953,
+   "title": "Ditos Populares-Mais vale um pássaro na mão do que dois voando",
+   "levelName": "M",
+   "levelId": 14,
+   "wordCount": 1317,
+   "pageCount": 17
+  },
+  {
+   "id": 5954,
+   "title": "Ditos Populares-Diz-me com quem andas e direi quem és",
+   "levelName": "N",
+   "levelId": 15,
+   "wordCount": 1399,
+   "pageCount": 17
+  },
+  {
+   "id": 5956,
+   "title": "A Almofada Viajante",
+   "levelName": "F",
+   "levelId": 7,
+   "wordCount": 268,
+   "pageCount": 13
+  },
+  {
+   "id": 5969,
+   "title": "Viagens de Gulliver 1 – Uma viagem a Lilliput",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 22002,
+   "pageCount": 73
+  },
+  {
+   "id": 5970,
+   "title": "Viagens de Gulliver 2 – Uma viagem a Brobdingnag",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 22679,
+   "pageCount": 72
+  },
+  {
+   "id": 5971,
+   "title": "Viagens de Gulliver 3 – Uma viagem a Laputa",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 18091,
+   "pageCount": 65
+  },
+  {
+   "id": 5972,
+   "title": "Viagens de Gulliver 4 – Uma viagem ao país Houyhnhnms",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 21610,
+   "pageCount": 73
+  },
+  {
+   "id": 5974,
+   "title": "Histórias Encantadas - Doze princesas dançarinas",
+   "levelName": "R",
+   "levelId": 19,
+   "wordCount": 3185,
+   "pageCount": 25
+  },
+  {
+   "id": 5977,
+   "title": "Histórias Encantadas - O rei da montanha dourada",
+   "levelName": "P",
+   "levelId": 17,
+   "wordCount": 2023,
+   "pageCount": 22
+  },
+  {
+   "id": 5978,
+   "title": "Histórias Encantadas - A água da vida",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2328,
+   "pageCount": 23
+  },
+  {
+   "id": 5984,
+   "title": "Histórias Encantadas - O pescador e sua esposa",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1747,
+   "pageCount": 20
+  },
+  {
+   "id": 5987,
+   "title": "A história do doutor Dolittle",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 23549,
+   "pageCount": 107
+  },
+  {
+   "id": 5988,
+   "title": "O maravilhoso mágico de Oz",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 37684,
+   "pageCount": 190
+  },
+  {
+   "id": 6031,
+   "title": "Psammead3-A história do amuleto",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 47977,
+   "pageCount": 469
+  },
+  {
+   "id": 6032,
+   "title": "Psammead2-A fênix e o tapete",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 57927,
+   "pageCount": 563
+  },
+  {
+   "id": 6033,
+   "title": "Psammead1-Cinco crianças e um segredo",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 52739,
+   "pageCount": 498
+  },
+  {
+   "id": 6065,
+   "title": "Quem consegue pegar o queijo?",
+   "levelName": "B",
+   "levelId": 3,
+   "wordCount": 93,
+   "pageCount": 12
+  },
+  {
+   "id": 6076,
+   "title": "Histórias Encantadas - A Princesa Magnólia",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 6178,
+   "pageCount": 37
+  },
+  {
+   "id": 6077,
+   "title": "Histórias Encantadas - O Pássaro Dourado",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2528,
+   "pageCount": 21
+  },
+  {
+   "id": 6078,
+   "title": "Uma Boa Casa",
+   "levelName": "D",
+   "levelId": 5,
+   "wordCount": 174,
+   "pageCount": 13
+  },
+  {
+   "id": 6091,
+   "title": "Duda & Cláudia contra os gênios do mal",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 37941,
+   "pageCount": 295
+  },
+  {
+   "id": 6092,
+   "title": "Virou Lenda 1 - China, Etiópia e Japão",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 3581,
+   "pageCount": 44
+  },
+  {
+   "id": 6093,
+   "title": "Virou lenda 2 - África Ocidental, Austrália e Polônia",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 3614,
+   "pageCount": 47
+  },
+  {
+   "id": 6094,
+   "title": "Virou lenda 3 - África Ocidental, América do Norte e Brasil",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 3743,
+   "pageCount": 47
+  },
+  {
+   "id": 6095,
+   "title": "Virou lenda 5 - Índia, Iraque e Japão",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 4960,
+   "pageCount": 55
+  },
+  {
+   "id": 6096,
+   "title": "Virou lenda 4 - Inglaterra, Itália e Rússia",
+   "levelName": "Y",
+   "levelId": 26,
+   "wordCount": 4398,
+   "pageCount": 51
+  },
+  {
+   "id": 6103,
+   "title": "Juntos",
+   "levelName": "W",
+   "levelId": 24,
+   "wordCount": 7502,
+   "pageCount": 39
+  },
+  {
+   "id": 6104,
+   "title": "O Livro da Selva",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 47898,
+   "pageCount": 158
+  },
+  {
+   "id": 6105,
+   "title": "A calça nova do papai",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 721,
+   "pageCount": 16
+  },
+  {
+   "id": 6110,
+   "title": "Aladim e a lâmpada maravilhosa",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 7437,
+   "pageCount": 35
+  },
+  {
+   "id": 6112,
+   "title": "Nossa Gente - Os Italianos",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 3387,
+   "pageCount": 25
+  },
+  {
+   "id": 6113,
+   "title": "Nossa Gente - Os Alemães",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 3875,
+   "pageCount": 25
+  },
+  {
+   "id": 6114,
+   "title": "Nossa Gente - Os Portugueses",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 3093,
+   "pageCount": 24
+  },
+  {
+   "id": 6127,
+   "title": "Nossa Gente - Os Africanos",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 3678,
+   "pageCount": 24
+  },
+  {
+   "id": 6146,
+   "title": "Histórias de Alexandre",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 25614,
+   "pageCount": 154
+  },
+  {
+   "id": 6147,
+   "title": "Bicho poema",
+   "levelName": "J",
+   "levelId": 11,
+   "wordCount": 718,
+   "pageCount": 35
+  },
+  {
+   "id": 6363,
+   "title": "Pessoas do Mundo-Nellie Bly",
+   "levelName": "Q",
+   "levelId": 18,
+   "wordCount": 2579,
+   "pageCount": 25
+  },
+  {
+   "id": 6366,
+   "title": "Seis focas pintadas",
+   "levelName": "G",
+   "levelId": 8,
+   "wordCount": 107,
+   "pageCount": 9
+  },
+  {
+   "id": 6367,
+   "title": "A festa da Pinhata",
+   "levelName": "H",
+   "levelId": 9,
+   "wordCount": 512,
+   "pageCount": 12
+  },
+  {
+   "id": 6405,
+   "title": "Nossa Gente - Os Povos Originários",
+   "levelName": "Z+",
+   "levelId": 30,
+   "wordCount": 2986,
+   "pageCount": 22
+  },
+  {
+   "id": 6406,
+   "title": "Coleção Cenas: O Goleiro Eterno",
+   "levelName": "X",
+   "levelId": 25,
+   "wordCount": 5749,
+   "pageCount": 44
+  },
+  {
+   "id": 6408,
+   "title": "Coleção Cenas: Laranja madurinha, feijão com farinha",
+   "levelName": "Z",
+   "levelId": 27,
+   "wordCount": 13767,
+   "pageCount": 58
+  },
+  {
+   "id": 6435,
+   "title": "Você é amigo?",
+   "levelName": "E",
+   "levelId": 6,
+   "wordCount": 203,
+   "pageCount": 21
+  },
+  {
+   "id": 6626,
+   "title": "Coleção de 1 a 5–Um conto de fadas",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 6961,
+   "pageCount": 29
+  },
+  {
+   "id": 6627,
+   "title": "Coleção de 1 a 5–Dois contos de fadas",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 4094,
+   "pageCount": 27
+  },
+  {
+   "id": 6628,
+   "title": "Coleção de 1 a 5–Três contos de fadas",
+   "levelName": "T",
+   "levelId": 21,
+   "wordCount": 5315,
+   "pageCount": 35
+  },
+  {
+   "id": 6629,
+   "title": "Coleção de 1 a 5–Quatro contos de fadas",
+   "levelName": "U",
+   "levelId": 22,
+   "wordCount": 6886,
+   "pageCount": 43
+  },
+  {
+   "id": 6630,
+   "title": "Coleção de 1 a 5–Cinco contos de fadas",
+   "levelName": "V",
+   "levelId": 23,
+   "wordCount": 6961,
+   "pageCount": 45
+  },
+  {
+   "id": 6631,
+   "title": "Ditos Populares-A pressa é inimiga da perfeição",
+   "levelName": "O",
+   "levelId": 16,
+   "wordCount": 1326,
+   "pageCount": 17
+  },
+  {
+   "id": 6767,
+   "title": "Coleção Cenas: Ídolos e fãs",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 1776,
+   "pageCount": 22
+  },
+  {
+   "id": 6883,
+   "title": "Enquanto o meu cabelo crescia",
+   "levelName": "S",
+   "levelId": 20,
+   "wordCount": 747,
+   "pageCount": 29
+  }
+ ]
+}
