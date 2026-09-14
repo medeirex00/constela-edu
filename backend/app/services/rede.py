@@ -292,8 +292,6 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
     med_mat = (_medias_por_plataforma(db, ids, SnapshotMatific,
                                       Nota.nota_matific_institucional)
                if tem_mod_matematica else {})
-    # Notas ainda sem carimbo institucional (fora da média, não "zero").
-    pendentes = _pendentes_recalculo(db, ids)
     # COBERTURA: alunos distintos com dado de alguma plataforma (numerador real).
     com_dados_por_escola = _alunos_com_qualquer_dado(db, ids)
 
@@ -347,9 +345,6 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
             "dimensoes_com_dados": dimensoes_com_dados,
             "alunos_com_nota_elefante": n_ele,
             "alunos_com_nota_matific": n_mat,
-            # Notas do ano ativo ainda SEM recálculo institucional (não entram na
-            # média; > 0 = rodar `scripts.recalcular_institucional --pendentes`).
-            "notas_pendentes_recalculo": int(pendentes.get(escola.id, 0)),
             # ENGAJAMENTO / COBERTURA — quantos usam (conceito SEPARADO do acima).
             "alunos_com_dados": com_dados,
             "adocao": adocao,
@@ -593,7 +588,18 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
         "escolas": cartoes,
         # Atalho: só as escolas que precisam de atenção (a lista de ação da rede).
         "atencao": [c for c in cartoes if c["precisa_atencao"]],
+        # OPERACIONAL (não é métrica — fica fora dos cartões/totais): notas do
+        # ano ativo ainda SEM o carimbo da régua institucional vigente. Elas
+        # ficam FORA das médias (não entram como zero); total > 0 = rodar
+        # `python -m scripts.recalcular_institucional --pendentes` após o deploy.
+        "recalculo_pendente": _recalculo_pendente(db, [c["escola_id"] for c in cartoes]),
     }
+
+
+def _recalculo_pendente(db: Session, ids: list[int]) -> dict:
+    pendentes = _pendentes_recalculo(db, ids)
+    return {"total": int(sum(pendentes.values())),
+            "por_escola": {str(eid): int(n) for eid, n in sorted(pendentes.items())}}
 
 
 # Métricas de ordenação do ranking de escolas (SEDUC escolhe o critério). Só

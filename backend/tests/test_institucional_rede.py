@@ -1,6 +1,7 @@
 """P1 — a REDE agrega só notas carimbadas com a régua institucional vigente
 (`detalhes.regua_institucional`); notas antigas contam como pendentes de recálculo
-(`notas_pendentes_recalculo`) em vez de entrarem como zero; recálculo idempotente."""
+(`dashboard_rede["recalculo_pendente"]`, bloco operacional fora dos cartões de
+métricas) em vez de entrarem como zero; recálculo idempotente."""
 import json
 
 import pytest
