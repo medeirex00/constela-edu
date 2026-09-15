@@ -58,3 +58,65 @@ describe("Layout — menu durante o primeiro acesso (P8)", () => {
     expect(screen.queryAllByRole("link", { name: "Premiações" })).toHaveLength(0);
   });
 });
+
+/** Escola já configurada (Lista Piloto importada): menu completo do perfil. */
+function escolaConfigurada() {
+  responder("GET", "/escolas/1/sync/status", {
+    escola_id: 1, escola_nome: "Escola Modelo Constela", qtd_alunos: 30, qtd_turmas: 3,
+    plataformas: [], lista_piloto_importada: true, integracao_configurada: true,
+  });
+}
+
+describe("Layout — limpeza do menu por perfil (escola usa, não administra a matemática)", () => {
+  it("coordenador vê Integrações e Pontuação, mas não Importações, Diagnóstico Elefante nem Métricas", async () => {
+    escolaConfigurada();
+    renderComApp(<LayoutReal />, {
+      rota: "/",
+      usuario: usuarioFake({ is_global: false, cargo: "coordenador", nome: "Coordenadora" }),
+      escolas: [escolaFake({ id: 1 })],
+    });
+    expect((await screen.findAllByRole("link", { name: "Integrações" })).length).toBeGreaterThan(0);
+    expect((await screen.findAllByRole("link", { name: "Pontuação" })).length).toBeGreaterThan(0);
+    expect(screen.queryAllByRole("link", { name: "Importações" })).toHaveLength(0);
+    expect(screen.queryAllByRole("link", { name: "Diagnóstico Elefante" })).toHaveLength(0);
+    expect(screen.queryAllByRole("link", { name: "Métricas" })).toHaveLength(0);
+    expect(screen.queryAllByRole("link", { name: "Ranking da Rede" })).toHaveLength(0);
+  });
+
+  it("Admin Global mantém as ferramentas avançadas e ganha Ranking da Rede", async () => {
+    escolaConfigurada();
+    renderComApp(<LayoutReal />, {
+      rota: "/",
+      usuario: usuarioFake({ is_global: true, cargo: "admin", nome: "Root" }),
+      escolas: [escolaFake({ id: 1 })],
+    });
+    for (const nome of ["Integrações", "Importações", "Diagnóstico Elefante", "Métricas", "Ranking da Rede", "Ranking Geral"]) {
+      expect((await screen.findAllByRole("link", { name: nome })).length, nome).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("Layout — trilha do topo por perfil", () => {
+  it("em /metricas a escola vê 'Pontuação' na trilha (o mesmo nome do menu), não 'Métricas'", async () => {
+    escolaConfigurada();
+    renderComApp(<LayoutReal />, {
+      rota: "/metricas",
+      usuario: usuarioFake({ is_global: false, cargo: "coordenador", nome: "Coordenadora" }),
+      escolas: [escolaFake({ id: 1 })],
+    });
+    const trilha = await screen.findByRole("navigation", { name: "Trilha de navegação" });
+    expect(trilha).toHaveTextContent("Pontuação");
+    expect(trilha).not.toHaveTextContent("Métricas");
+  });
+
+  it("em /metricas o Admin Global vê 'Métricas' na trilha", async () => {
+    escolaConfigurada();
+    renderComApp(<LayoutReal />, {
+      rota: "/metricas",
+      usuario: usuarioFake({ is_global: true, cargo: "admin", nome: "Root" }),
+      escolas: [escolaFake({ id: 1 })],
+    });
+    const trilha = await screen.findByRole("navigation", { name: "Trilha de navegação" });
+    expect(trilha).toHaveTextContent("Métricas");
+  });
+});

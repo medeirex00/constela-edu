@@ -39,7 +39,6 @@ const PainelPublicoRede = lazy(() => import("./pages/publico/PainelPublicoRede")
 const PerfilPublico = lazy(() => import("./pages/publico/PerfilPublico"));
 const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
-const RankingRede = lazy(() => import("./pages/rede/RankingRede"));
 const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
 const RedeAvaliacoes = lazy(() => import("./pages/rede/RedeAvaliacoes"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
@@ -174,7 +173,9 @@ export default function App() {
           <Route path="/rede/avaliacoes" element={<RotaRede><RedeAvaliacoes /></RotaRede>} />
           {/* Ranking da Rede: todas as escolas em 4 visões (Geral/Leitura/
               Matemática/Engajamento), comparação PER CAPITA. Agregado por escola. */}
-          <Route path="/rede/ranking" element={<RotaRede><RankingRede /></RotaRede>} />
+          {/* Ranking da Rede: a MESMA tela de Rankings, aberta na categoria Escolas.
+              A Secretaria (sem escola) continua vendo só a página da rede. */}
+          <Route path="/rede/ranking" element={<RotaRede><Rankings /></RotaRede>} />
 
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
           <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />

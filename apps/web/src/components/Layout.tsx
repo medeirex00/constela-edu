@@ -125,8 +125,13 @@ const IT = {
   matific: { rotulo: "Matific", caminho: "/matific", icone: Calculator },
   elefante: { rotulo: "Elefante Letrado", caminho: "/elefante", icone: BookOpen },
   livros: { rotulo: "Catálogo de Livros", caminho: "/livros", icone: BookOpen },
+  // "Importações" (upload manual) e "Diagnóstico Elefante" (sonda técnica da API)
+  // são ferramentas AVANÇADAS: continuam existindo (rotas, permissões e backend
+  // intactos) e ficam no menu do Admin Global; a escola chega nelas por links
+  // dentro de "Integrações" — a tela de status que responde "os dados estão
+  // atualizados?".
   importacoes: { rotulo: "Importações", caminho: "/importacoes", icone: Upload },
-  sincronizacao: { rotulo: "Sincronização automática", caminho: "/sincronizacao", icone: RefreshCw },
+  sincronizacao: { rotulo: "Integrações", caminho: "/sincronizacao", icone: RefreshCw },
   diagnostico: { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar },
   conquistas: { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
   bibliotecaConquistas: { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
@@ -134,6 +139,14 @@ const IT = {
   meusRelatorios: { rotulo: "Meus Relatórios", caminho: "/relatorios", icone: FileText },
   painelPublico: { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay },
   metricas: { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal },
+  // Mesma rota /metricas, outra promessa: para a escola a página é a explicação
+  // "como a pontuação é calculada" (só leitura); os editores da régua ficam com
+  // o Admin Global, que a vê como "Métricas".
+  pontuacao: { rotulo: "Pontuação", caminho: "/metricas", icone: SlidersHorizontal },
+  // Ranking de ESCOLAS (índice per capita da rede) — atalho do Admin Global para
+  // a categoria "Escolas" dos Rankings; o nome acompanha o cabeçalho da página
+  // ("Ranking da Rede"). A Secretaria chega nele pelo Painel da Rede.
+  rankingEscolas: { rotulo: "Ranking da Rede", caminho: "/rede/ranking", icone: Landmark },
   configuracoes: { rotulo: "Configurações Gerais", caminho: "/configuracoes", icone: Settings },
   escolas: { rotulo: "Escolas", caminho: "/escolas", icone: Building2 },
   sessoes: { rotulo: "Sessões Ativas", caminho: "/sessoes", icone: Activity },
@@ -202,7 +215,7 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
   if (p.global) return [
     { chave: "estrutura", rotulo: "Estrutura", icone: Building2, itens: [IT.redeGerenciar, IT.escolas, IT.usuarios] },
     { chave: "monitoramento", rotulo: "Monitoramento", icone: Activity, itens: [IT.sessoes] },
-    { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.premiacoes, IT.ranking, IT.comparador] },
+    { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.premiacoes, IT.ranking, IT.rankingEscolas, IT.comparador] },
     { chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [IT.insights, IT.assistente, IT.simulador] },
     { chave: "gestao", rotulo: "Gestão Escolar", icone: Users, itens: [IT.visaoEscola, IT.alunos, IT.turmas, IT.professores] },
     { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.diagnostico] },
@@ -225,10 +238,15 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.premiacoes, IT.ranking, IT.comparador] },
     { chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [IT.insights, IT.assistente, IT.simulador] },
     { chave: "escola", rotulo: "Minha Escola", icone: School, itens: [IT.visaoEscola, IT.alunos, IT.turmas, IT.professores, IT.usuarios] },
-    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.diagnostico] },
+    // A escola usa o Constela; não administra a matemática interna nem opera a
+    // sonda técnica da API: Importações (upload manual) e Diagnóstico Elefante
+    // saem do menu (rotas e permissões intactas — acessíveis por "Integrações"
+    // e pelo Admin Global); "Integrações" responde "os dados estão atualizados?".
+    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.sincronizacao] },
     { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
     { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
-    { chave: "config", rotulo: "Configurações", icone: Settings, itens: [IT.metricas, IT.configuracoes] },
+    // "Pontuação" = a mesma página /metricas em modo explicativo (só leitura).
+    { chave: "config", rotulo: "Configurações", icone: Settings, itens: [IT.pontuacao, IT.configuracoes] },
   ];
   // 👩‍🏫 Professor — só as turmas dele (o backend filtra por turmas_permitidas).
   return [
@@ -291,6 +309,9 @@ const TITULOS_ESPECIAIS: Record<string, string> = {
   // a navegação da Secretaria segue enxuta por decisão do dono.
   "/rede/ranking": "Ranking da Rede",
   "/usuarios": "Usuários e acessos",
+  "/sincronizacao": "Integrações",
+  "/importacoes": "Importações (avançado)",
+  "/diagnostico-elefante": "Diagnóstico da integração (avançado)",
 };
 
 /** Título legível da rota atual (para a trilha do topo). Casa primeiro o
@@ -937,7 +958,11 @@ function Trilha() {
     secretaria: !usuario?.is_global && usuario?.rede_id != null,
     gestor: Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? ""),
   };
-  const titulo = tituloDaRota(pathname);
+  // /metricas é "Métricas" (editores da régua) para o Admin Global e "Pontuação"
+  // (explicação, só leitura) para a escola — a trilha usa o mesmo nome do menu.
+  const titulo = pathname === "/metricas" && !perfil.global
+    ? IT.pontuacao.rotulo
+    : tituloDaRota(pathname);
   const naHome = pathname === "/";
   return (
     <nav aria-label="Trilha de navegação" className="hidden min-w-0 items-center gap-1.5 text-sm lg:flex">
