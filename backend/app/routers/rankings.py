@@ -66,9 +66,30 @@ def _exigir_dimensao(db: Session, escola_id: int, dimensao: str) -> None:
     svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
 
 
+def _turno_param(turno) -> str | None:
+    """Normaliza o parâmetro ``turno``: só uma STRING filtra. Quem chama a
+    função da rota DIRETAMENTE em Python (testes, consumidores internos) sem
+    passar ``turno`` recebe o sentinela ``Query(None)`` do FastAPI no lugar do
+    default — que jamais pode virar um parâmetro SQL. Qualquer coisa que não
+    seja ``str`` significa "todos"."""
+    return turno if isinstance(turno, str) else None
+
+
+def _aplicar_turno(consulta, turno: str | None):
+    """Filtro de TURNO (eixo ortogonal a turma/série/período) — a MESMA semântica
+    de ``services.evolucao.ranking_evolucao`` e das premiações por turno:
+    ``None`` = não filtra (todos); ``""`` = turmas SEM turno cadastrado
+    ("Sem turno"); senão o turno exato de ``Turma.turno`` (valores do banco,
+    nunca hardcoded). A consulta precisa já ter ``Turma`` no FROM/JOIN."""
+    turno = _turno_param(turno)
+    if turno is None:
+        return consulta
+    return consulta.where(Turma.turno.is_(None) if turno == "" else Turma.turno == turno)
+
+
 def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None,
              limite=None, turma_ids: list[int] | None = None,
-             dimensao: str | None = None):
+             dimensao: str | None = None, turno: str | None = None):
     """Lista de ranking de alunos.
 
     ``dimensao`` ausente = Ranking Geral LEGADO (ordem única por `Nota.posicao`,
@@ -109,6 +130,9 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     if turma_ids is not None:  # professor: só as turmas dele (posição segue geral)
         consulta = consulta.where(Turma.id.in_(turma_ids))
+    # `turno` é kwarg NO FIM da assinatura: consumidores externos (app mobile,
+    # painel público) chamam posicionalmente e não podem mudar de significado.
+    consulta = _aplicar_turno(consulta, turno)
     if limite:
         consulta = consulta.limit(limite)
 
@@ -173,6 +197,10 @@ def ranking_geral(
     dimensao: str | None = Query(
         default=None,
         description="leitura | matematica. Ausente = Ranking Geral (legado)."),
+    turno: str | None = Query(
+        default=None,
+        description="Filtra por Turma.turno. Ausente = todos; '' = sem turno; "
+                    "senão o turno exato (manha, tarde, noite, integral)."),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
@@ -195,22 +223,46 @@ def ranking_geral(
 
     O PROFESSOR vê o ranking na perspectiva DELE: só os alunos das turmas dele,
     renumerados 1..N (a posição global 109/111/… não fazia sentido para uma
-    turma só) — e, por consequência, com o `n_aferidos` do escopo dele."""
+    turma só) — e, por consequência, com o `n_aferidos` do escopo dele.
+
+    Com ``?turno=`` (manha | tarde | noite | integral | '' = sem turno) a lista
+    é recortada pelo turno da turma e, como para o professor, RENUMERADA 1..N
+    dentro do recorte, com `n_aferidos` do conjunto filtrado — o turno define
+    QUEM compete, nunca a nota (régua única da escola). Sem ``turno`` nada muda:
+    a posição continua a carimbada da escola inteira.
+
+    No LEGADO (sem ``dimensao``) recortado (professor e/ou turno), `n_aferidos`
+    também vem carimbado com o tamanho do recorte (o denominador da posição
+    renumerada); sem recorte segue ``None`` (contrato antigo)."""
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
+    turno = _turno_param(turno)
     if dimensao:
         _exigir_dimensao(db, escola_id, dimensao)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     itens = _ranking(db, escola_id, ano, turma_id, ano_escolar,
-                     turma_ids=permitidas, dimensao=dimensao)
-    if permitidas is not None:  # professor: posição RELATIVA aos alunos dele
+                     turma_ids=permitidas, dimensao=dimensao, turno=turno)
+    # Posição RELATIVA ao recorte: professor (só as turmas dele) e/ou turno (só
+    # as turmas daquele turno). Sem recorte vale a posição carimbada da escola.
+    recortado = permitidas is not None or turno is not None
+    if recortado:
         for posicao, item in enumerate(itens, start=1):
             item.posicao = posicao
     if dimensao:
         # Denominador coerente com a posição exibida: global para a gestão
-        # (posição carimbada da escola), do escopo para o professor (renumerado).
-        total = (len(itens) if permitidas is not None
+        # (posição carimbada da escola), do recorte quando renumerado.
+        total = (len(itens) if recortado
                  else _contar_aferidos(db, escola_id, ano, dimensao))
+    elif recortado:
+        # LEGADO recortado (professor e/ou turno): a posição foi renumerada
+        # 1..N dentro do recorte, então o denominador é o tamanho do recorte —
+        # sem ele "2º" não diz "de quantos". O legado lista quem TEM Nota no
+        # ano (inclusive quem ainda não foi aferido em nenhuma dimensão).
+        total = len(itens)
+    else:
+        # LEGADO sem recorte: contrato antigo preservado (`n_aferidos` ausente).
+        total = None
+    if total is not None:
         for item in itens:
             item.n_aferidos = total
     return itens
@@ -289,6 +341,8 @@ def nao_aferidos(
     escola_id: int = Depends(escola_autorizada),
     turma_id: int | None = Query(default=None),
     ano_escolar: str | None = Query(default=None),
+    turno: str | None = Query(default=None,
+                              description="Ausente = todos; '' = sem turno; senão o turno exato."),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
@@ -331,6 +385,7 @@ def nao_aferidos(
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    consulta = _aplicar_turno(consulta, turno)   # mesmo recorte do ranking
     if permitidas is not None:
         consulta = consulta.where(Turma.id.in_(permitidas))
 
@@ -377,6 +432,8 @@ def ranking_leitura(
     fim: str | None = Query(default=None),
     turma_id: int | None = Query(default=None),
     ano_escolar: str | None = Query(default=None),
+    turno: str | None = Query(default=None,
+                              description="Ausente = todos; '' = sem turno; senão o turno exato."),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
@@ -410,6 +467,7 @@ def ranking_leitura(
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    consulta = _aplicar_turno(consulta, turno)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
@@ -454,6 +512,7 @@ def ranking_leitura(
             q_snap = q_snap.where(Turma.id == turma_id)
         if ano_escolar:
             q_snap = q_snap.where(Turma.ano_escolar == ano_escolar)
+        q_snap = _aplicar_turno(q_snap, turno)
         if permitidas is not None:
             q_snap = q_snap.where(Turma.id.in_(permitidas))
         for aluno_id, livros, tempo, nome, turma_nome, serie, por_nivel, tid in db.execute(q_snap).all():
@@ -489,6 +548,8 @@ def ranking_matematica(
     fim: str | None = Query(default=None),
     turma_id: int | None = Query(default=None),
     ano_escolar: str | None = Query(default=None),
+    turno: str | None = Query(default=None,
+                              description="Ausente = todos; '' = sem turno; senão o turno exato."),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
@@ -519,6 +580,7 @@ def ranking_matematica(
         consulta = consulta.where(Turma.id == turma_id)
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
+    consulta = _aplicar_turno(consulta, turno)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
