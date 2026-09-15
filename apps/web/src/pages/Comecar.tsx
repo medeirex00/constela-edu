@@ -197,7 +197,7 @@ export default function Comecar() {
             {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) cadastrados
             {s.integracao_configurada
               ? " e as plataformas conectadas. As atualizações podem rodar automaticamente."
-              : ". Você pode conectar as plataformas quando quiser no painel de sincronização."}
+              : ". Você pode conectar as plataformas quando quiser em Integrações."}
           </p>
           <div className="mt-3 flex flex-wrap justify-center gap-2">
             <Badge tom={s.lista_piloto_importada ? "ok" : "alerta"}>
@@ -209,11 +209,16 @@ export default function Comecar() {
           </div>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
             <Botao onClick={() => navigate("/sincronizacao")}>
-              Abrir painel de sincronização
+              Abrir Integrações
             </Botao>
             <Botao variante="neutro" onClick={() => navigate("/ranking")}>Ver ranking</Botao>
-            <Botao variante="neutro" onClick={() => navigate("/importacoes")}>Importar relatório manual</Botao>
           </div>
+          <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">
+            Se a sincronização não estiver disponível,{" "}
+            <Link to="/importacoes" className="underline underline-offset-2 hover:text-zinc-700 dark:hover:text-zinc-200">
+              envie o relatório manualmente
+            </Link>.
+          </p>
         </Card>
       )}
     </div>

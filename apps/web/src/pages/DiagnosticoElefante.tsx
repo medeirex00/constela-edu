@@ -5,8 +5,9 @@
  * estrutura (tipos/chaves, sem dado de criança) e o que MUDOU desde o último
  * inventário. Nada é público; só admin/coordenador acessa.
  */
-import { AlertTriangle, PlayCircle, Radar, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, PlayCircle, Radar, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -86,7 +87,15 @@ export default function DiagnosticoElefante() {
     <div>
       <PageHeader
         titulo="Diagnóstico da Integração Elefante"
-        descricao="Investiga a API do Elefante usando a sessão autenticada do robô — sem crawler nem F12. Mostra endpoints, parâmetros, períodos, paginação, a estrutura (sem dado de aluno) e o que mudou desde o último diagnóstico."
+        descricao="Ferramenta técnica para verificar se o Constela consegue ler os dados do Elefante Letrado; não é necessária no dia a dia. Investiga a API usando a sessão autenticada do robô e mostra endpoints, parâmetros, períodos, paginação, a estrutura (sem dado de aluno) e o que mudou desde o último diagnóstico."
+        acoes={
+          <Link
+            to="/sincronizacao"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+          >
+            <ArrowLeft size={15} /> Voltar para Integrações
+          </Link>
+        }
       />
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">

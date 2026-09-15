@@ -466,7 +466,7 @@ export default function Importacoes() {
     <div>
       <PageHeader
         titulo="Importações"
-        descricao="Envie o relatório exportado da plataforma (PDF) ou cole o texto. Nada é gravado antes da sua confirmação."
+        descricao="Use quando a sincronização automática não estiver disponível. O caminho normal é Integrações. Envie o relatório exportado da plataforma (PDF) ou cole o texto — nada é gravado antes da sua confirmação."
       />
 
       {!podeImportar && (
@@ -845,7 +845,7 @@ export default function Importacoes() {
                 <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
                   <th className="px-4 py-2 font-medium"><History size={13} className="inline" /> Data</th>
                   <th className="px-4 py-2 font-medium">Plataforma</th>
-                  <th className="px-4 py-2 font-medium">Origem</th>
+                  <th className="px-4 py-2 font-medium">Formato</th>
                   <th className="px-4 py-2 text-right font-medium">Alunos</th>
                   <th className="px-4 py-2 text-right font-medium">Erros</th>
                   <th className="hidden px-4 py-2 font-medium md:table-cell">Por</th>
