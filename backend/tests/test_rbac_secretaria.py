@@ -3,7 +3,9 @@
 A Secretaria acompanha os resultados da REDE, mas NÃO opera as escolas:
 - não pode ALTERAR métricas (mas pode LER);
 - não pode importar, sincronizar nem rodar o diagnóstico Elefante.
-O coordenador de escola (sem rede) e o admin global seguem com escrita normal.
+O coordenador de escola (sem rede) segue com a escrita OPERACIONAL normal
+(alunos, turmas, importação); os PARÂMETROS DA FÓRMULA (pesos etc.) são
+governança e só o Admin Global grava — ver routers/configuracoes.py.
 Fecha o furo de a Secretaria ter cargo "coordenador" e ser tratada como um.
 """
 from fastapi.testclient import TestClient
@@ -46,10 +48,15 @@ def test_secretaria_nao_altera_metricas_mas_le(db, escola_completa):
     sec = _login("sec@rbac.local", "s3nh4")
     corpo = {"pesos": {"matific": 50, "elefante": 50}}
 
-    # ESCRITA: coordenador de escola passa da autorização (não é 403);
-    # Secretaria é barrada com 403.
-    assert coord.put(f"/api/v1/escolas/{eid}/configuracoes/pesos/geral", json=corpo).status_code != 403
+    # ESCRITA de PARÂMETRO DA FÓRMULA: governança — só o Admin Global grava.
+    # O coordenador de escola e a Secretaria recebem 403 (a Secretaria segue
+    # barrada; o coordenador perdeu só o botão de gravar a matemática interna).
+    assert coord.put(f"/api/v1/escolas/{eid}/configuracoes/pesos/geral", json=corpo).status_code == 403
     assert sec.put(f"/api/v1/escolas/{eid}/configuracoes/pesos/geral", json=corpo).status_code == 403
+    # ESCRITA OPERACIONAL da escola: o coordenador passa da autorização (não é
+    # 403); a Secretaria continua barrada — a distinção entre os dois é aqui.
+    assert coord.post(f"/api/v1/escolas/{eid}/alunos", json={"nome": "Aluno Novo"}).status_code != 403
+    assert sec.post(f"/api/v1/escolas/{eid}/alunos", json={"nome": "Aluno Novo"}).status_code == 403
 
     # LEITURA: a Secretaria PODE ver as métricas (não é 403).
     assert sec.get(f"/api/v1/escolas/{eid}/configuracoes/pesos/geral").status_code != 403

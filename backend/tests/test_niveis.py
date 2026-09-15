@@ -131,8 +131,9 @@ def test_pontuacao_turma_replica_para_outras_turmas(cliente, db, escola_completa
     db.add_all([t2, t3])
     db.commit()
 
-    r = cliente.put(f"{API}/escolas/{escola.id}/configuracoes/pontuacao-turma",
-                    json={"turma_id": t1.id, "pontos": {"AA": 9.0}, "aplicar_em": [t2.id, t3.id]})
+    gc = _cliente_global(db)                        # parâmetro oficial: só Admin Global grava
+    r = gc.put(f"{API}/escolas/{escola.id}/configuracoes/pontuacao-turma",
+               json={"turma_id": t1.id, "pontos": {"AA": 9.0}, "aplicar_em": [t2.id, t3.id]})
     assert r.status_code == 200, r.text
     assert set(r.json()["turmas"]) == {t1.id, t2.id, t3.id}
 

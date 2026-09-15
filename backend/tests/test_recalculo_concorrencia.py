@@ -240,8 +240,8 @@ def test_matriculas_confirmar_solta_a_trava_antes_de_recalcular(
     assert vigia_hierarquia["violacoes"] == []
 
 
-def test_recalcular_recebe_transacao_limpa(cliente, db, escola_completa,
-                                           monkeypatch):
+def test_recalcular_recebe_transacao_limpa(cliente, cliente_global, db,
+                                           escola_completa, monkeypatch):
     """Todo chamador comita ANTES de recalcular: a sessão que entra em
     ``recalcular_escola`` não tem escrita pendente. Importa porque a trava é
     transacional — pendências arrastariam a transação (e o lock) para fora do
@@ -258,7 +258,8 @@ def test_recalcular_recebe_transacao_limpa(cliente, db, escola_completa,
     escola_id = escola_completa["escola"].id
     base = f"/api/v1/escolas/{escola_id}"
     # Uma amostra dos caminhos reais que disparam recálculo: o botão explícito,
-    # o fim de uma importação, uma mudança de pesos e uma ação em massa.
+    # o fim de uma importação, uma mudança de pesos (parâmetro oficial — só o
+    # Admin Global grava) e uma ação em massa.
     assert cliente.post(f"{base}/recalcular").status_code == 200
     assert cliente.post(
         f"{base}/importacoes/confirmar",
@@ -266,7 +267,7 @@ def test_recalcular_recebe_transacao_limpa(cliente, db, escola_completa,
               "recalcular": True,
               "linhas": [{"nome": escola_completa["alunos"][0].nome,
                           "dados": {"livros_unicos": 7}}]}).status_code == 200
-    assert cliente.put(
+    assert cliente_global.put(
         f"{base}/configuracoes/pesos/geral",
         json={"valores": {"matific": 40.0, "elefante": 60.0}}).status_code == 200
     assert cliente.post(

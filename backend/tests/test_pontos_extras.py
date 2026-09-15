@@ -50,18 +50,24 @@ def test_bonus_conta_so_leituras_dentro_da_janela_do_turno(db, escola_completa):
     assert scoring._bonus_leitura_na_escola(db, escola.id, {aluno.id: "manha"}, 0.0) == {}
 
 
-def test_config_elefante_extra_liga_e_desliga(cliente, escola_completa):
+def test_config_elefante_extra_liga_e_desliga(cliente, cliente_global, escola_completa):
+    """Ligar/desligar o bônus é PARÂMETRO OFICIAL (governança): só o Admin
+    Global grava; o admin da escola lê (GET 200) e recebe 403 ao gravar."""
     escola = escola_completa["escola"]
     base = f"{API}/escolas/{escola.id}/configuracoes/elefante-extra"
 
     # Padrão: desligado (sem row → default do obter_config).
     assert cliente.get(base).json() == {"ativo": False, "pontos_por_livro": 0.0}
 
-    # Liga (recalcula ao salvar; sem leituras é no-op).
-    r = cliente.put(base, json={"ativo": True, "pontos_por_livro": 2})
+    # Admin DA ESCOLA não grava — e nada muda.
+    assert cliente.put(base, json={"ativo": True, "pontos_por_livro": 2}).status_code == 403
+    assert cliente.get(base).json()["ativo"] is False
+
+    # Liga (Admin Global; recalcula ao salvar; sem leituras é no-op).
+    r = cliente_global.put(base, json={"ativo": True, "pontos_por_livro": 2})
     assert r.status_code == 200, r.text
     assert r.json() == {"ativo": True, "pontos_por_livro": 2.0}
     assert cliente.get(base).json()["ativo"] is True
 
     # Desliga — a flag muda, mas as leituras NÃO são apagadas (só deixa de somar).
-    assert cliente.put(base, json={"ativo": False, "pontos_por_livro": 2}).json()["ativo"] is False
+    assert cliente_global.put(base, json={"ativo": False, "pontos_por_livro": 2}).json()["ativo"] is False

@@ -74,7 +74,9 @@ def test_mapa_pontos_turmas_e_dificuldade(db, escola_completa):
     assert scoring._pontos_dificuldade({"AA": 3}, "3º Ano", mapa_dif) == 3.0
 
 
-def test_api_pontuacao_turma_crud(cliente, db, escola_completa):
+def test_api_pontuacao_turma_crud(cliente, cliente_global, db, escola_completa):
+    """GET é leitura da escola; o PUT é PARÂMETRO OFICIAL (governança): só o
+    Admin Global grava — o admin da escola recebe 403 e nada muda."""
     escola = escola_completa["escola"]
     turma = escola_completa["turma"]
     base = f"/api/v1/escolas/{escola.id}/configuracoes/pontuacao-turma"
@@ -87,9 +89,15 @@ def test_api_pontuacao_turma_crud(cliente, db, escola_completa):
     minha = next(t for t in corpo["turmas"] if t["turma_id"] == turma.id)
     assert minha["pontos"] == {}
 
-    # PUT salva a tabela da turma.
+    # Admin DA ESCOLA não grava (403) e a turma continua sem override.
     r = cliente.put(base, json={"turma_id": turma.id, "pontos": {"AA": 7, "D": 15}})
-    assert r.status_code == 200
+    assert r.status_code == 403, r.text
+    assert next(t for t in cliente.get(base).json()["turmas"]
+                if t["turma_id"] == turma.id)["pontos"] == {}
+
+    # PUT (Admin Global) salva a tabela da turma.
+    r = cliente_global.put(base, json={"turma_id": turma.id, "pontos": {"AA": 7, "D": 15}})
+    assert r.status_code == 200, r.text
     assert r.json()["pontos"] == {"AA": 7.0, "D": 15.0}
 
     # GET reflete + o scoring já enxerga.
@@ -99,5 +107,5 @@ def test_api_pontuacao_turma_crud(cliente, db, escola_completa):
     assert scoring.pontos_por_codigo(db, escola.id, turma.id)["AA"] == 7.0
 
     # Código inexistente → 400.
-    r = cliente.put(base, json={"turma_id": turma.id, "pontos": {"ZZ": 3}})
+    r = cliente_global.put(base, json={"turma_id": turma.id, "pontos": {"ZZ": 3}})
     assert r.status_code == 400

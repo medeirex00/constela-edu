@@ -12,7 +12,6 @@ from app.core.deps import (
     escola_autorizada,
     exigir_admin_global,
     exigir_papeis,
-    exigir_papeis_escola,
 )
 from app.models import (
     Configuracao,
@@ -44,6 +43,22 @@ router = APIRouter(prefix="/escolas/{escola_id}/configuracoes", tags=["Configura
 
 NAMESPACES_PESOS = {"matific", "elefante", "questoes", "geral"}
 MODOS_PERFIL_SCORING = {"institucional", "personalizado"}
+
+# GOVERNANÇA DA FÓRMULA — quem pode ESCREVER parâmetros matemáticos.
+#
+# "A escola usa o Constela; a escola não administra a matemática interna."
+# Pesos, referências de normalização, pontos extras, dificuldade por série e
+# pontuação por turma são PARÂMETROS OFICIAIS do motor. No perfil
+# ``institucional`` (o padrão de toda escola) o motor os IGNORA por completo
+# (``scoring._insumos_institucionais`` usa ``PESOS_PADRAO`` e as referências
+# automáticas); eles só passam a valer no perfil ``personalizado`` — e ligar
+# esse perfil já é decisão exclusiva do Admin Global (``PUT /perfil-scoring``).
+# Deixar a escola editar um parâmetro que não vale (ou que só vale se o Admin
+# Global autorizar) gerava a ilusão de controle e pedidos de suporte. Por isso
+# TODAS as rotas de ESCRITA abaixo exigem ``exigir_admin_global`` — o mesmo
+# critério já aplicado aos níveis (``/niveis``) e ao perfil. As LEITURAS (GET)
+# continuam abertas a admin/coordenador (e à Secretaria): a escola CONSULTA.
+# Nenhum endpoint foi removido — a escola perde só o botão de gravar.
 
 
 # --- Perfil de scoring: institucional (rede) × personalizado (interno) -------
@@ -159,7 +174,7 @@ def salvar_pesos(
     namespace: str,
     dados: PesosUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # parâmetro oficial: só Admin Global
     db: Session = Depends(get_db),
 ):
     if namespace not in NAMESPACES_PESOS:
@@ -224,7 +239,7 @@ def obter_referencias(
 def salvar_referencias(
     dados: ReferenciasUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # parâmetro oficial: só Admin Global
     db: Session = Depends(get_db),
 ):
     invalidas = set(dados.valores_manuais) - set(scoring.CHAVES_REFERENCIA)
@@ -271,7 +286,7 @@ def obter_elefante_extra(
 def salvar_elefante_extra(
     dados: ElefanteExtraUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # parâmetro oficial: só Admin Global
     db: Session = Depends(get_db),
 ):
     """Liga/desliga os pontos extras e define quanto cada livro lido na escola
@@ -340,7 +355,7 @@ def obter_dificuldade(
 def salvar_dificuldade(
     alteracoes: list[DificuldadeUpdate],
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # parâmetro oficial: só Admin Global
     db: Session = Depends(get_db),
 ):
     for alteracao in alteracoes:
@@ -556,7 +571,7 @@ def obter_pontuacao_turma(
 def salvar_pontuacao_turma(
     dados: PontuacaoTurmaUpdate,
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis_escola("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global),  # parâmetro oficial: só Admin Global
     db: Session = Depends(get_db),
 ):
     """Salva a tabela de pontos por nível de UMA turma e, opcionalmente, REPLICA a

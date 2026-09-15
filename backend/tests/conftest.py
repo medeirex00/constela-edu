@@ -134,3 +134,23 @@ def cliente(db, escola_completa):
     token = resposta.json()["access_token"]
     cliente.headers["Authorization"] = f"Bearer {token}"
     return cliente
+
+
+@pytest.fixture()
+def cliente_global(db, escola_completa):
+    """Cliente autenticado como ADMIN GLOBAL (``is_global=True``) vinculado à
+    escola-base. É quem escreve nas rotas de GOVERNANÇA da fórmula (pesos,
+    referências, pontos extras, dificuldade, pontuação por turma, níveis e
+    perfil de scoring) — o admin/coordenador da escola só LÊ."""
+    db.add(Usuario(escola_id=escola_completa["escola"].id, nome="Admin Global",
+                   email="global@constela.local", senha_hash=hash_senha("s3nh4"),
+                   cargo="admin", is_global=True))
+    db.commit()
+    cliente = TestClient(app)
+    resposta = cliente.post(
+        "/api/v1/auth/login",
+        data={"username": "global@constela.local", "password": "s3nh4"},
+    )
+    assert resposta.status_code == 200, resposta.text
+    cliente.headers["Authorization"] = f"Bearer {resposta.json()['access_token']}"
+    return cliente
