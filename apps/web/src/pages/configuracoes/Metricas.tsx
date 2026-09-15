@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import ComoFuncionaPontuacao from "../../components/ComoFuncionaPontuacao";
 import { Badge, Botao, Card, Carregando, Mensagem, PageHeader } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
@@ -22,8 +23,9 @@ export function PesosEditor({
   descricao?: string;
 }) {
   const { escolaId, usuario } = useApp();
-  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // GOVERNANÇA: só o Admin Global altera pesos (PUT /pesos/{ns} responde 403
+  // para os demais). Coordenador, admin de escola e Secretaria só enxergam.
+  const somenteLeitura = !usuario?.is_global;
   const { dados, erro, carregando } = useApi<Pesos>(
     escolaId ? `/escolas/${escolaId}/configuracoes/pesos/${namespace}` : null,
   );
@@ -83,8 +85,9 @@ export function PesosEditor({
                 max={100}
                 step={1}
                 aria-label={rotulos[chave] ?? chave}
-                className="w-full accent-indigo-600"
+                className="w-full accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
                 value={valor}
+                disabled={somenteLeitura}
                 onChange={(evento) =>
                   setValores({ ...valores, [chave]: Number(evento.target.value) })
                 }
@@ -96,8 +99,9 @@ export function PesosEditor({
               max={100}
               step={0.5}
               aria-label={`${rotulos[chave] ?? chave} (valor exato)`}
-              className="w-20 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+              className="w-20 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950"
               value={valor}
+              disabled={somenteLeitura}
               onChange={(evento) =>
                 setValores({ ...valores, [chave]: Number(evento.target.value) })
               }
@@ -133,8 +137,9 @@ const ROTULOS_REFERENCIAS: Record<string, string> = {
 
 function ReferenciasNormalizacao() {
   const { escolaId, usuario } = useApp();
-  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // GOVERNANÇA: só o Admin Global altera as referências (PUT responde 403 para
+  // os demais).
+  const somenteLeitura = !usuario?.is_global;
   const { dados: dadosApi, erro, carregando } = useApi<Referencias>(
     escolaId ? `/escolas/${escolaId}/configuracoes/referencias` : null,
   );
@@ -261,7 +266,9 @@ type ElefanteExtra = { ativo: boolean; pontos_por_livro: number };
 
 function PontosExtrasEditor() {
   const { escolaId, usuario } = useApp();
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // GOVERNANÇA: só o Admin Global altera os pontos extras (PUT responde 403
+  // para os demais).
+  const somenteLeitura = !usuario?.is_global;
   const { dados, erro, carregando } = useApi<ElefanteExtra>(
     escolaId ? `/escolas/${escolaId}/configuracoes/elefante-extra` : null,
   );
@@ -358,9 +365,10 @@ function PontosExtrasEditor() {
  * primeiro controle da página porque decide se o resto tem efeito no ranking
  * interno. Backend: GET/PUT /configuracoes/perfil-scoring (dispara recálculo).
  * ----------------------------------------------------------------------- */
-type PerfilScoring = { modo: "institucional" | "personalizado" };
+type ModoRegua = "institucional" | "personalizado";
+type PerfilScoring = { modo: ModoRegua };
 
-function PerfilScoringEditor() {
+function PerfilScoringEditor({ aoMudar }: { aoMudar?: (modo: ModoRegua | null) => void }) {
   const { escolaId, usuario } = useApp();
   // GOVERNANÇA: só o Admin Global escolhe a régua (PUT /perfil-scoring responde
   // 403 para os demais). A tela mostra a escolha vigente em vez de oferecer um
@@ -378,7 +386,10 @@ function PerfilScoringEditor() {
       setModo(dados.modo);
       setMensagem(null);
     }
-  }, [dados]);
+    // Informa a página da régua VIGENTE (salva), para a explicação "Como
+    // funciona?" não mostrar os pesos institucionais numa régua personalizada.
+    aoMudar?.(dados ? dados.modo : null);
+  }, [dados, erro]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (carregando) return <Carregando />;
   if (erro) return <Mensagem tipo="erro">{erro.message}</Mensagem>;
@@ -394,6 +405,7 @@ function PerfilScoringEditor() {
         method: "PUT",
         body: JSON.stringify({ modo: novo }),
       });
+      aoMudar?.(novo);
       setMensagem({
         tipo: "ok",
         texto:
@@ -497,30 +509,149 @@ function PerfilScoringEditor() {
   );
 }
 
+/* -------------------------------------------------------------------------
+ * Visão da ESCOLA (coordenador, admin de escola e Secretaria): a mesma rota
+ * /metricas vira "Pontuação" — a explicação de como a nota é calculada, SEM
+ * editores. Decisão de produto: a escola usa o Constela; não administra a
+ * matemática interna. No perfil institucional (padrão de toda escola) o motor
+ * ignora as configurações locais; e as rotas de escrita são só do Admin Global.
+ * ----------------------------------------------------------------------- */
+function StatusRegua({
+  escolaId,
+  dados,
+  erro,
+  carregando,
+}: {
+  escolaId: number | null;
+  dados: PerfilScoring | null;
+  erro: unknown;
+  carregando: boolean;
+}) {
+  if (!escolaId) {
+    return (
+      <span className="text-xs text-zinc-500 dark:text-zinc-400">
+        Selecione uma escola no topo para ver a régua em uso.
+      </span>
+    );
+  }
+  if (carregando) {
+    return <span className="text-xs text-zinc-500 dark:text-zinc-400">Verificando a régua em uso...</span>;
+  }
+  if (erro || !dados) {
+    return (
+      <span className="text-xs text-zinc-500 dark:text-zinc-400">
+        Não foi possível verificar a régua em uso agora.
+      </span>
+    );
+  }
+  return dados.modo === "personalizado" ? (
+    <Badge tom="alerta">Régua personalizada, autorizada pela Constela</Badge>
+  ) : (
+    <Badge tom="destaque">Régua Padrão Constela — a mesma para toda a rede</Badge>
+  );
+}
+
+/** Textos que dependem da régua vigente. "Mesma regra para toda a rede" só é
+ *  verdade na régua institucional; na personalizada a escola tem régua própria;
+ *  sem saber a régua (carregando/erro), não afirma nenhuma das duas. */
+function textosDaRegua(modo: ModoRegua | null): { descricao: string; rodape: string } {
+  if (modo === "institucional") {
+    return {
+      descricao:
+        "A escola consulta, acompanha e premia. O cálculo é feito pelo Constela, com a mesma regra para toda a rede.",
+      rodape: "Esta regra vale para toda a rede e só a Constela pode alterá-la.",
+    };
+  }
+  if (modo === "personalizado") {
+    return {
+      descricao:
+        "A escola consulta, acompanha e premia. O cálculo é feito pelo Constela, com uma régua própria configurada para esta escola.",
+      rodape: "Esta régua vale só para esta escola e só a Constela pode alterá-la.",
+    };
+  }
+  return {
+    descricao: "A escola consulta, acompanha e premia. O cálculo é feito pelo Constela.",
+    rodape: "Só a Constela pode alterar a regra de pontuação.",
+  };
+}
+
+function PontuacaoDaEscola() {
+  const { escolaId } = useApp();
+  const perfil = useApi<PerfilScoring>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/perfil-scoring` : null,
+  );
+  const modo = perfil.dados?.modo ?? null;
+  const { descricao, rodape } = textosDaRegua(modo);
+  return (
+    <div>
+      <PageHeader titulo="Pontuação" descricao={descricao} />
+
+      <div className="max-w-3xl space-y-4">
+        <Card className="p-5">
+          <h2 className="text-base font-semibold">Como a pontuação é calculada</h2>
+          <div className="mt-2">
+            <StatusRegua
+              escolaId={escolaId}
+              dados={perfil.dados}
+              erro={perfil.erro}
+              carregando={perfil.carregando}
+            />
+          </div>
+          <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">
+            Os pontos dos livros são calculados automaticamente pelo Constela considerando o nível
+            de leitura, as características do livro e o ano escolar.
+          </p>
+        </Card>
+
+        <ComoFuncionaPontuacao modo={modo} />
+
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">{rodape}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function Metricas() {
   const { usuario } = useApp();
-  // Secretaria (rede vinculada, não-global): vê os critérios, mas não altera.
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  if (!usuario) return <Carregando />;
+  // A escola (coordenador/admin de escola) e a Secretaria veem a mesma
+  // explicação somente leitura; os editores são exclusivos do Admin Global.
+  if (!usuario.is_global) return <PontuacaoDaEscola />;
+  return <MetricasGlobal />;
+}
+
+/* -------------------------------------------------------------------------
+ * Visão do ADMIN GLOBAL: a explicação no topo + os editores da régua
+ * personalizada (pesos, questões, pontos extras, níveis, dificuldade por turma
+ * e referências). No perfil Padrão Constela nada disso afeta as notas.
+ * ----------------------------------------------------------------------- */
+function MetricasGlobal() {
   const [aba, setAba] = useState<Aba>("Matific");
   const [subAbaElefante, setSubAbaElefante] =
     useState<"pesos" | "questoes" | "extras" | "niveis" | "dificuldade">("pesos");
+  // Régua vigente (salva) da escola, informada pelo PerfilScoringEditor.
+  const [modoRegua, setModoRegua] = useState<ModoRegua | null>(null);
 
   return (
     <div>
       <PageHeader
         titulo="Métricas"
-        descricao="Todos os critérios de avaliação são configuráveis. Alterações recalculam as notas automaticamente."
+        descricao="Régua institucional da rede e configurações da régua personalizada. Alterações recalculam as notas automaticamente."
       />
 
-      {somenteLeitura && (
-        <div className="mb-5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-          Você está vendo as métricas em <b>modo leitura</b>. Só o coordenador da escola e o
-          administrador geral podem alterar os critérios de avaliação.
+      <div className="mb-6 max-w-3xl space-y-4">
+        <ComoFuncionaPontuacao modo={modoRegua} />
+        <div
+          role="note"
+          className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
+        >
+          No perfil Padrão Constela estas configurações não afetam as notas; valem só na régua
+          personalizada.
         </div>
-      )}
+      </div>
 
       <div className="mb-6 max-w-2xl">
-        <PerfilScoringEditor />
+        <PerfilScoringEditor aoMudar={setModoRegua} />
       </div>
 
       <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">

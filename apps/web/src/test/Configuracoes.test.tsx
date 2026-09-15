@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import Configuracoes from "../pages/configuracoes/Configuracoes";
-import { api, renderComApp, responder, responderErro, screen, userEvent } from "./utils";
+import { api, renderComApp, responder, responderErro, screen, userEvent, usuarioFake } from "./utils";
 
 // Endpoints disparados no carregamento pela coordenadora (usuário padrão, não-admin):
 // - PesosEditor (namespace "geral") -> GET pesos
@@ -55,18 +55,41 @@ describe("Configurações", () => {
     );
   });
 
-  it("salva os pesos do Ranking Geral (PUT)", async () => {
+  it("Admin Global salva os pesos do Ranking Geral (PUT)", async () => {
+    // GOVERNANÇA: PUT /pesos/{ns} é exclusivo do Admin Global — o editor só
+    // oferece "Salvar pesos" para ele.
     const u = userEvent.setup();
     carregarSucesso();
     responder("PUT", URL_PESOS, { namespace: "geral", valores: { matific: 60, elefante: 40 }, soma: 100 });
-    renderComApp(<Configuracoes />, { rota: "/configuracoes" });
+    renderComApp(<Configuracoes />, {
+      rota: "/configuracoes",
+      usuario: usuarioFake({ is_global: true, cargo: "admin" }),
+    });
 
     const botaoPesos = await screen.findByRole("button", { name: "Salvar pesos" });
+    // Para quem pode salvar, os controles dos pesos ficam editáveis.
+    expect(screen.getByRole("slider", { name: "Matific" })).toBeEnabled();
+    expect(screen.getByRole("spinbutton", { name: "Matific (valor exato)" })).toBeEnabled();
     await u.click(botaoPesos);
 
     expect(
       await screen.findByText("Pesos salvos. Todas as notas foram recalculadas."),
     ).toBeInTheDocument();
+  });
+
+  it("coordenadora vê os pesos do Ranking Geral em somente leitura", async () => {
+    carregarSucesso();
+    renderComApp(<Configuracoes />, { rota: "/configuracoes" });
+
+    const botao = await screen.findByRole("button", { name: "Somente leitura" });
+    expect(botao).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Salvar pesos" })).toBeNull();
+    // Os controles também ficam desabilitados: nada de mexer num valor que
+    // nunca poderá ser salvo.
+    for (const rotulo of ["Matific", "Elefante Letrado"]) {
+      expect(screen.getByRole("slider", { name: rotulo })).toBeDisabled();
+      expect(screen.getByRole("spinbutton", { name: `${rotulo} (valor exato)` })).toBeDisabled();
+    }
   });
 
   it("mostra mensagem de falha quando salvar a escola erra", async () => {

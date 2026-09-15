@@ -23,12 +23,16 @@ import { AvisoSemNiveis, EditorNiveis, PontuacaoPorTurma } from "./configuracoes
 
 // Sub-abas do módulo: os alunos e a configuração de dificuldade (níveis +
 // pontuação por turma) num só lugar — cadastrar os níveis vem ANTES de pontuar.
+// As duas sub-abas de configuração são exclusivas do Admin Global: a escola usa
+// o Constela e não administra a régua (no perfil institucional o motor nem lê
+// esses valores). Para os demais perfis só "Alunos" existe.
 const SUBABAS = [
   ["alunos", "Alunos"],
   ["niveis", "Níveis de dificuldade"],
   ["pontuacao", "Dificuldade por turma"],
 ] as const;
 type SubAba = (typeof SUBABAS)[number][0];
+const SUBABAS_ESCOLA = SUBABAS.filter(([chave]) => chave === "alunos");
 
 function niveisParaTexto(niveis: Record<string, number>): string {
   return Object.entries(niveis)
@@ -55,6 +59,7 @@ function contarFaixa(faixa: Nivel, distribuicao: Record<string, number>): number
 export default function Elefante() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const subabas = usuario?.is_global ? SUBABAS : SUBABAS_ESCOLA;
 
   const {
     dados: linhas,
@@ -158,30 +163,34 @@ export default function Elefante() {
         descricao="Livros por nível de dificuldade, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
       />
 
-      <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
-        {SUBABAS.map(([chave, rotulo]) => (
-          <button
-            key={chave}
-            role="tab"
-            aria-selected={aba === chave}
-            onClick={() => setAba(chave)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-              aba === chave
-                ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
-                : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-            }`}
-          >
-            {rotulo}
-          </button>
-        ))}
-      </div>
+      {/* Com uma única sub-aba (perfis de escola) a barra some — o conteúdo é a
+          própria lista de alunos. */}
+      {subabas.length > 1 && (
+        <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
+          {subabas.map(([chave, rotulo]) => (
+            <button
+              key={chave}
+              role="tab"
+              aria-selected={aba === chave}
+              onClick={() => setAba(chave)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+                aba === chave
+                  ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
+                  : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              }`}
+            >
+              {rotulo}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {aba === "niveis" && (
+      {aba === "niveis" && usuario?.is_global && (
         <div className="max-w-3xl">
           <EditorNiveis aoMudar={recarregarNiveis} />
         </div>
       )}
-      {aba === "pontuacao" && <PontuacaoPorTurma />}
+      {aba === "pontuacao" && usuario?.is_global && <PontuacaoPorTurma />}
 
       {aba === "alunos" && (
         <>
@@ -269,21 +278,23 @@ export default function Elefante() {
         <div className="space-y-3">
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
             Informe quantos livros o aluno concluiu em cada nível. O total e os pontos de
-            dificuldade são calculados automaticamente com os pesos configurados em Métricas.
+            dificuldade são calculados automaticamente pela régua Constela.
           </p>
           {erroNiveis ? (
             <Mensagem tipo="erro">{erroNiveis.message}</Mensagem>
           ) : niveis.length === 0 ? (
             <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
               <AvisoSemNiveis aoCriar={recarregarNiveis} />
-              <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                Ou cadastre manualmente na aba <strong>Níveis de dificuldade</strong>.
-              </p>
+              {usuario?.is_global && (
+                <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+                  Ou cadastre manualmente na aba <strong>Níveis de dificuldade</strong>.
+                </p>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
               {niveis.map((faixa) => (
-                <Campo key={faixa.id} rotulo={`${faixa.nome} (${numero(faixa.pontos_padrao)} pt/livro)`}>
+                <Campo key={faixa.id} rotulo={faixa.nome}>
                   <input
                     type="number"
                     min={0}

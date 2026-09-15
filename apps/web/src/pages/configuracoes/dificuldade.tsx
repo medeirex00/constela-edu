@@ -60,11 +60,19 @@ export function AvisoSemNiveis({ aoCriar }: { aoCriar?: () => void }) {
 
   return (
     <div className="space-y-3 text-sm">
-      <p className="text-zinc-600 dark:text-zinc-300">
-        Nenhum <strong>nível de dificuldade</strong> cadastrado ainda. Os níveis (Pré-Leitor,
-        Nível 1, Nível 2…) definem quantos pontos cada livro vale e são a base da pontuação por
-        turma e do “livros por nível”.
-      </p>
+      {somenteLeitura ? (
+        // A escola não administra a régua: nada de níveis, pontos ou pontuação
+        // por turma — só o que aconteceu e com quem falar.
+        <p className="text-zinc-600 dark:text-zinc-300">
+          A régua desta escola ainda não foi preparada pela Constela. Fale com o suporte.
+        </p>
+      ) : (
+        <p className="text-zinc-600 dark:text-zinc-300">
+          Nenhum <strong>nível de dificuldade</strong> cadastrado ainda. Os níveis (Pré-Leitor,
+          Nível 1, Nível 2…) definem quantos pontos cada livro vale e são a base da pontuação por
+          turma e do “livros por nível”.
+        </p>
+      )}
       {!somenteLeitura && (
         <div>
           <Botao onClick={usarPadrao} disabled={criando}>
@@ -368,8 +376,10 @@ type PontuacaoResp = { catalogo: CatalogoNivel[]; turmas: TurmaPontos[] };
 
 export function PontuacaoPorTurma() {
   const { escolaId, usuario } = useApp();
-  // Secretaria (rede vinculada, não-global) enxerga as métricas, mas não altera.
-  const somenteLeitura = !usuario?.is_global && usuario?.rede_id != null;
+  // GOVERNANÇA: só o Admin Global altera a pontuação por turma (PUT responde
+  // 403 para os demais). A tela só é alcançável por ele, mas a trava fica aqui
+  // para nunca oferecer um botão que falharia ao salvar.
+  const somenteLeitura = !usuario?.is_global;
   const { dados, erro, carregando, recarregar } = useApi<PontuacaoResp>(
     escolaId ? `/escolas/${escolaId}/configuracoes/pontuacao-turma` : null,
   );

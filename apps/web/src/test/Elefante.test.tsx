@@ -8,6 +8,7 @@ import {
   responderErro,
   screen,
   userEvent,
+  usuarioFake,
   waitFor,
 } from "./utils";
 
@@ -61,6 +62,72 @@ describe("Elefante", () => {
     // Livros únicos como inteiro.
     expect(screen.getByText("12")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
+  });
+
+  it("coordenadora não vê as sub-abas de configuração da dificuldade", async () => {
+    // A escola usa o Constela e não administra a régua: "Níveis de dificuldade"
+    // e "Dificuldade por turma" são exclusivas do Admin Global. Com só "Alunos"
+    // restando, a barra de sub-abas some e a lista é o conteúdo da página.
+    responder("GET", URL_ELEFANTE, [alunoFake()]);
+    responder("GET", URL_DIFICULDADE, niveisFake());
+    renderComApp(<Elefante />, { rota: "/elefante" });
+
+    expect(await screen.findByRole("link", { name: "Ana Beatriz Souza" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Níveis de dificuldade" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Dificuldade por turma" })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("Admin Global vê as sub-abas de configuração da dificuldade", async () => {
+    responder("GET", URL_ELEFANTE, [alunoFake()]);
+    responder("GET", URL_DIFICULDADE, niveisFake());
+    renderComApp(<Elefante />, {
+      rota: "/elefante",
+      usuario: usuarioFake({ id: 99, nome: "Admin Constela", is_global: true, cargo: "admin" }),
+    });
+
+    expect(await screen.findByRole("tab", { name: "Níveis de dificuldade" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Dificuldade por turma" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Alunos" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Ana Beatriz Souza" })).toBeInTheDocument();
+  });
+
+  it("coordenadora sem níveis: aviso simples para falar com o suporte, sem citar níveis nem pontuação", async () => {
+    responder("GET", URL_ELEFANTE, [alunoFake()]);
+    responder("GET", URL_DIFICULDADE, { niveis: [] });
+    renderComApp(<Elefante />, { rota: "/elefante" });
+
+    const u = userEvent.setup();
+    await u.click(
+      await screen.findByRole("button", { name: "Informar livros por nível de Ana Beatriz Souza" }),
+    );
+
+    expect(
+      await screen.findByText("A régua desta escola ainda não foi preparada pela Constela. Fale com o suporte."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Nenhum/)).toBeNull();
+    expect(screen.queryByText(/pontuação por turma/)).toBeNull();
+    expect(screen.queryByText(/Pré-Leitor/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Usar níveis padrão/ })).toBeNull();
+    expect(screen.queryByText(/Níveis de dificuldade/)).toBeNull();
+  });
+
+  it("Admin Global sem níveis mantém a explicação e o atalho dos níveis padrão", async () => {
+    responder("GET", URL_ELEFANTE, [alunoFake()]);
+    responder("GET", URL_DIFICULDADE, { niveis: [] });
+    renderComApp(<Elefante />, {
+      rota: "/elefante",
+      usuario: usuarioFake({ id: 99, nome: "Admin Constela", is_global: true, cargo: "admin" }),
+    });
+
+    const u = userEvent.setup();
+    await u.click(
+      await screen.findByRole("button", { name: "Informar livros por nível de Ana Beatriz Souza" }),
+    );
+
+    expect(await screen.findByText(/definem quantos pontos cada livro vale/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Usar níveis padrão do Elefante Letrado" })).toBeInTheDocument();
+    expect(screen.queryByText(/ainda não foi preparada pela Constela/)).toBeNull();
   });
 
   it("mostra estado vazio quando não há alunos", async () => {
@@ -133,7 +200,14 @@ describe("Elefante", () => {
     expect(
       await screen.findByRole("heading", { name: /Livros por nível/ }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Vermelho (1 pt/livro)")).toBeInTheDocument();
+    // O rótulo é só o nome da faixa: os pontos vêm da régua Constela, não de
+    // um "pt/livro" configurado na escola.
+    expect(screen.getByText("Vermelho")).toBeInTheDocument();
+    expect(screen.queryByText(/pt\/livro/)).toBeNull();
+    expect(
+      screen.getByText(/calculados automaticamente pela régua Constela/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/pesos configurados em Métricas/)).toBeNull();
 
     await u.click(screen.getByRole("button", { name: "Salvar e recalcular" }));
 
