@@ -10,25 +10,29 @@
  * outra tela: este é a competição 0–100 oficial.
  */
 import { Trophy } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota as fmtNota } from "../lib/formato";
+import { TURNO_TODOS, chaveTurno as chave } from "../lib/turnos";
 import type { RankingTurno } from "../lib/types";
 import { Card, Carregando, Vazio } from "./ui";
 
 export function CompeticaoLeituraTurno() {
-  const { escolaId } = useApp();
+  const { escolaId, turno: turnoGlobal } = useApp();
   const { dados, erro, carregando } = useApi<RankingTurno[]>(
     escolaId ? `/escolas/${escolaId}/ranking/leitura/turnos` : null,
   );
-  // Turno selecionado. `null` = o usuário ainda NÃO escolheu → mostra o primeiro
-  // grupo. NÃO dá para usar o próprio valor do turno como "não escolhido",
-  // porque `turno` pode ser `null` de verdade (turma sem turno) — usar `null`
-  // como sentinela selecionaria o grupo "Sem turno" por engano.
+  // Turno selecionado AQUI (aba). `null` = o usuário ainda NÃO escolheu → mostra
+  // o turno GLOBAL, se ele for um dos grupos; senão o primeiro grupo. NÃO dá
+  // para usar o próprio valor do turno como "não escolhido", porque `turno`
+  // pode ser `null` de verdade (turma sem turno) — usar `null` como sentinela
+  // selecionaria o grupo "Sem turno" por engano.
   const [sel, setSel] = useState<{ turno: string | null } | null>(null);
+  // Trocar o turno global (seletor da tela) volta a aba para ele.
+  useEffect(() => { setSel(null); }, [turnoGlobal]);
 
   if (carregando) return <Carregando />;
   if (erro) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
@@ -43,16 +47,18 @@ export function CompeticaoLeituraTurno() {
     );
   }
 
-  const chave = (t: string | null) => t ?? "";
+  const doGlobal = turnoGlobal !== TURNO_TODOS
+    ? grupos.find((g) => chave(g.turno) === turnoGlobal) : undefined;
   const atual =
-    (sel && grupos.find((g) => chave(g.turno) === chave(sel.turno))) ?? grupos[0];
+    (sel && grupos.find((g) => chave(g.turno) === chave(sel.turno))) ?? doGlobal ?? grupos[0];
 
   return (
     <div>
       {grupos.length > 1 && (
         <div
           role="tablist"
-          aria-label="Turno"
+          // Nome próprio: "Turno" é o rótulo do seletor GLOBAL na mesma tela.
+          aria-label="Turno da competição"
           className="mb-3 inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
         >
           {grupos.map((g) => (

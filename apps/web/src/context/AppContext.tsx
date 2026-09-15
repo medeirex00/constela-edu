@@ -9,6 +9,7 @@ import {
 
 import type { Periodo } from "../components/SeletorPeriodo";
 import { ApiError, api, guardarToken, limparToken, loginRequest, obterToken } from "../lib/api";
+import { TURNO_TODOS } from "../lib/turnos";
 import type { Escola, Usuario } from "../lib/types";
 
 type Tema = "claro" | "escuro";
@@ -18,7 +19,8 @@ type Tema = "claro" | "escuro";
 // navegação entre Ranking Geral, Leitura, Matemática, Evolução e Premiações —
 // antes cada página tinha seu próprio useState e o filtro "resetava" ao trocar
 // de aba (a aba é remontada pela URL `?ver=`). NÃO confundir com TURNO (manhã/
-// tarde/noite), que é outro eixo e vive nos componentes de turno.
+// tarde/noite), que é OUTRO eixo, com a própria chave de persistência abaixo:
+// trocar o período não mexe no turno, e vice-versa.
 const CHAVE_PERIODO = "sgpe_periodo";
 const PERIODO_PADRAO: Periodo = { preset: "ano_letivo" };
 
@@ -33,6 +35,25 @@ function periodoInicial(): Periodo {
     // localStorage indisponível/corrompido → cai no padrão
   }
   return PERIODO_PADRAO;
+}
+
+// TURNO global (manhã/tarde/noite/integral). Mesma ideia do período: a escolha
+// acompanha o usuário entre Ranking Geral, Leitura, Matemática, Evolução e
+// Premiações e sobrevive ao reload. Valores (ver lib/turnos.ts): "todos" (não
+// filtra), "" (só turmas SEM turno) ou o código do turno. Chave SEPARADA da do
+// período — os dois eixos são independentes.
+const CHAVE_TURNO = "sgpe_turno";
+const TURNO_PADRAO = TURNO_TODOS;
+
+function turnoInicial(): string {
+  try {
+    const salvo = localStorage.getItem(CHAVE_TURNO);
+    // "" é um valor válido ("Sem turno"): só a AUSÊNCIA da chave cai no padrão.
+    if (salvo !== null) return salvo;
+  } catch {
+    // localStorage indisponível → padrão
+  }
+  return TURNO_PADRAO;
 }
 
 interface AppContexto {
@@ -57,6 +78,10 @@ interface AppContexto {
   // filtro de data; persiste ao navegar e ao recarregar (localStorage).
   periodo: Periodo;
   definirPeriodo: (p: Periodo) => void;
+  // TURNO global (ver nota acima): "todos" | "" (sem turno) | código do turno.
+  // Persiste ao navegar e ao recarregar (localStorage, chave própria).
+  turno: string;
+  definirTurno: (t: string) => void;
 }
 
 const Contexto = createContext<AppContexto | null>(null);
@@ -76,6 +101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const [tema, setTema] = useState<Tema>(temaInicial);
   const [periodo, setPeriodo] = useState<Periodo>(periodoInicial);
+  const [turno, setTurno] = useState<string>(turnoInicial);
   const [carregando, setCarregando] = useState(true);
   const [falhaSessao, setFalhaSessao] = useState(false);
 
@@ -181,6 +207,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const definirTurno = useCallback((t: string) => {
+    setTurno(t);
+    try {
+      localStorage.setItem(CHAVE_TURNO, t);
+    } catch {
+      // sem localStorage: mantém só em memória (segue valendo na navegação)
+    }
+  }, []);
+
   const recarregarEscolas = useCallback(async () => {
     setEscolas(await api<Escola[]>("/escolas"));
   }, []);
@@ -205,6 +240,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         recarregarEscolas,
         periodo,
         definirPeriodo,
+        turno,
+        definirTurno,
       }}
     >
       {children}

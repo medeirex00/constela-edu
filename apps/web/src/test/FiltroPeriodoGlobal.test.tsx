@@ -46,9 +46,9 @@ describe("Filtro de período global (lockado)", () => {
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
     await escolherPersonalizado(u);
 
-    // Troca para a aba Elefante Letrado: o SELETOR da nova aba já vem com o
-    // MESMO período (não resetou para ano_letivo).
-    await u.click(screen.getByRole("tab", { name: "Elefante Letrado" }));
+    // Troca para a aba Leitura: o SELETOR da nova aba já vem com o MESMO
+    // período (não resetou para ano_letivo).
+    await u.click(screen.getByRole("tab", { name: "Leitura" }));
     expect(await screen.findByRole("link", { name: /Carla Leitora Silva/ })).toBeInTheDocument();
     const seletorLeitura = await screen.findByLabelText("Período de análise");
     expect((seletorLeitura as HTMLSelectElement).value).toBe("personalizado");
@@ -97,5 +97,7 @@ describe("Filtro de período global (lockado)", () => {
     await u.selectOptions(screen.getByLabelText("Período de análise"), "ano_letivo");
     expect(screen.getByRole("tab", { name: /Manhã/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Tarde/ })).toBeInTheDocument();
+    // E o TURNO global persistido não foi tocado pela troca de período.
+    expect(localStorage.getItem("sgpe_turno")).toBeNull();
   });
 });

@@ -74,7 +74,9 @@ export function turmaFake(over: Partial<Turma> = {}): Turma {
     ano_escolar: "3º Ano",
     ano_letivo: 2026,
     professor_id: null,
-    turno: "manhã",
+    // Código CRU do backend (`Turma.turno`), não o rótulo — é o que o filtro
+    // global de turno compara.
+    turno: "manha",
     capacidade_maxima: 30,
     observacoes: null,
     status: "ativa",
@@ -133,6 +135,10 @@ export interface OpcoesRender {
    *  contexto é "ano_letivo"; passe, por ex., `{ preset: "mes" }` para testar as
    *  telas que dependem de um sub-período (Matific ao vivo). */
   periodo?: Periodo;
+  /** Semeia o TURNO global (AppContext lê `sgpe_turno` no mount): "todos",
+   *  "" (sem turno) ou o código do turno ("manha", "tarde"...). Chave separada
+   *  da do período. */
+  turno?: string;
 }
 
 /** Aplica uma escola ao contexto assim que a sessão termina de abrir (o usuário
@@ -163,8 +169,10 @@ function Provedores({ children, rota }: { children: ReactNode; rota: string }) {
 
 /** Renderiza `ui` com AppProvider + Router. Autenticado por padrão. */
 export function renderComApp(ui: ReactElement, opcoes: OpcoesRender = {}) {
-  const { rota = "/", autenticado = true, usuario, escolas, escolaSelecionada, periodo } = opcoes;
+  const { rota = "/", autenticado = true, usuario, escolas, escolaSelecionada, periodo, turno } = opcoes;
   if (periodo) localStorage.setItem("sgpe_periodo", JSON.stringify(periodo));
+  // "" é valor válido ("Sem turno"): só `undefined` deixa o padrão do contexto.
+  if (turno !== undefined) localStorage.setItem("sgpe_turno", turno);
   if (autenticado) autenticar(usuario ?? usuarioFake(), escolas ?? [escolaFake()]);
   const conteudo = escolaSelecionada != null
     ? <AplicarEscola id={escolaSelecionada}>{ui}</AplicarEscola>

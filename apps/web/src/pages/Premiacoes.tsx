@@ -7,19 +7,35 @@
  * (decisão do dono 2026-09-01). Abaixo, "Melhor Evolução" (Leitura e Matemática)
  * premia quem mais CRESCEU no período (motor de evolução, leitura read-only).
  *
- * Duas dimensões independentes: o PERÍODO temporal (o seletor de datas global) e
- * o TURNO escolar (abas "Todas as turmas" → Manhã/Tarde/…, derivadas de
- * Turma.turno pelo backend, nunca hardcoded).
+ * Duas dimensões independentes e GLOBAIS (seguem o usuário pelos rankings): o
+ * PERÍODO temporal (seletor de datas) e o TURNO escolar (seletor de turno; as
+ * opções vêm de `Turma.turno` da escola, nunca hardcoded). Os pódios por turno
+ * vêm do backend (`?turnos=true`): vencedores calculados só com os alunos do
+ * turno; a régua da Matemática é a da escola inteira (decisão registrada).
+ * Com UMA TURMA selecionada, a turma vence (o turno fica desabilitado, com o
+ * motivo em texto visível ligado ao seletor por `aria-describedby`).
+ *
+ * O backend agrupa por turno TODOS os alunos ativos matriculados no ano letivo
+ * (com ou sem dado no período): um turno sem grupo significa "ninguém
+ * matriculado nesse turno", não "ninguém com dados".
+ *
+ * Dados DO RECORTE ATUAL: `useApi` mantém a resposta anterior enquanto a nova
+ * URL carrega (e há um render com `carregando=false` antes do efeito). O aviso
+ * de turno sem grupo e os cartões de Melhor Evolução só usam uma resposta
+ * carregada PARA a URL atual — senão o pódio de uma turma decidiria o turno da
+ * evolução por um instante (e dispararia consulta com o recorte errado).
  */
 import { Award, TrendingUp, Trophy } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorTurno } from "../components/SeletorTurno";
 import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
+import { TURNO_TODOS, chaveTurno, rotuloTurno, turnoEfetivo, turnoParaQuery } from "../lib/turnos";
 import type { CategoriaPremiacao, Premiacoes as PremiacoesT, Turma } from "../lib/types";
 
 const MEDALHAS = ["🥇", "🥈", "🥉"];
@@ -164,15 +180,10 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
   );
 }
 
-// Chave estável para o turno (null "Sem turno" não pode virar sentinela de "não
-// escolhido" — o mesmo cuidado da Competição de leitura por turno).
-const chaveTurno = (t: string | null) => t ?? "";
-
 export default function Premiacoes() {
-  const { escolaId, periodo, definirPeriodo } = useApp();
+  const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
   const [turmaId, setTurmaId] = useState("");
-  // Turno selecionado: null = "Todas as turmas" (não escolheu um turno).
-  const [turnoSel, setTurnoSel] = useState<{ turno: string | null } | null>(null);
+  const idMotivoTurno = useId();
 
   const { dados: turmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
@@ -181,30 +192,39 @@ export default function Premiacoes() {
   const filtroTurma = turmaId ? `&turma_id=${turmaId}` : "";
   // Só pede a quebra por turno na visão "todas as turmas".
   const pedirTurnos = turmaId ? "" : "&turnos=true";
-  // Evolução respeita EXATAMENTE os mesmos filtros lockados: período + turma +
-  // turno (o turno selecionado nas abas; vazio = "Sem turno"). Sem isto, a
-  // evolução ignoraria período/turno e a tela mostraria recortes divergentes.
-  const { dados, erro, carregando } = useApi<PremiacoesT>(
-    escolaId ? `/escolas/${escolaId}/premiacoes?${q}${filtroTurma}${pedirTurnos}` : null,
-  );
+  const urlPremiacoes = escolaId
+    ? `/escolas/${escolaId}/premiacoes?${q}${filtroTurma}${pedirTurnos}` : null;
+  // URL da última resposta que CHEGOU (ver "Dados DO RECORTE ATUAL" no topo).
+  const [urlCarregada, setUrlCarregada] = useState<string | null>(null);
+  const { dados: ultimaResposta, erro, carregando } = useApi<PremiacoesT>(urlPremiacoes, {
+    aoSucesso: () => setUrlCarregada(urlPremiacoes),
+  });
+  const respostaAtual = urlCarregada === urlPremiacoes;
+  const dados = !carregando && respostaAtual ? ultimaResposta : null;
+  // Resposta antiga na mão e a nova ainda não chegou: é carregamento, não vazio.
+  const aguardando = carregando || (!erro && ultimaResposta != null && !respostaAtual);
 
+  // TURNO global: com uma turma selecionada, a turma vence (o turno não se
+  // aplica). Um turno persistido que não existe nesta escola conta como "todos"
+  // — sem sobrescrever a escolha guardada.
+  const turnoAtivo = turmaId ? TURNO_TODOS : turnoEfetivo(turno, turmas);
   const turnos = (!turmaId && dados?.turnos) || [];
-  // Escopo de categorias exibido: um turno escolhido (e existente) ou "Todas".
-  const grupoTurno = turnoSel
-    ? turnos.find((g) => chaveTurno(g.turno) === chaveTurno(turnoSel.turno))
-    : null;
+  // Escopo de categorias exibido: o grupo do turno escolhido ou "Todos".
+  const grupoTurno = turnoAtivo !== TURNO_TODOS
+    ? turnos.find((g) => chaveTurno(g.turno) === turnoAtivo) : undefined;
+  // Turno escolhido, mas sem nenhum aluno matriculado nele neste ano letivo:
+  // mostra "Todos" e AVISA (não finge que o pódio é do turno), sem mexer no que
+  // está guardado. `dados` já é só a resposta do recorte atual.
+  const turnoSemRecorte = turnoAtivo !== TURNO_TODOS && !!dados && !grupoTurno;
   const categorias = grupoTurno?.categorias ?? dados?.categorias ?? [];
 
-  // Turno órfão: se o usuário tinha um turno selecionado e, ao trocar o período,
-  // esse turno deixa de existir no recorte, volta para "Todas". Sem isto os
-  // pódios cairiam no fallback (todos os turnos) sem destacar aba nenhuma e a
-  // Melhor Evolução ainda filtraria por um turno inexistente (retornando vazio).
-  useEffect(() => {
-    if (turnoSel && turnos.length > 0
-        && !turnos.some((g) => chaveTurno(g.turno) === chaveTurno(turnoSel.turno))) {
-      setTurnoSel(null);
-    }
-  }, [turnoSel, turnos]);
+  // Evolução respeita EXATAMENTE os mesmos filtros lockados: período + turma +
+  // turno (vazio = "Sem turno"). Sem isto, a evolução ignoraria período/turno e
+  // a tela mostraria recortes divergentes. Quando o turno não existe no recorte
+  // (pódios caíram em "Todos"), a evolução também vai sem turno.
+  const filtroTurno = turnoAtivo !== TURNO_TODOS && !turnoSemRecorte
+    ? `&${turnoParaQuery(turnoAtivo)}` : "";
+  const paramsEvol = `&${q}${filtroTurma}${filtroTurno}`;
 
   return (
     <div>
@@ -219,44 +239,40 @@ export default function Premiacoes() {
           aria-label="Filtrar por turma"
           className={`${estiloInput} w-auto`}
           value={turmaId}
-          onChange={(e) => { setTurmaId(e.target.value); setTurnoSel(null); }}
+          onChange={(e) => setTurmaId(e.target.value)}
         >
           <option value="">Todas as turmas</option>
           {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
         </select>
+        <SeletorTurno
+          turmas={turmas ?? []}
+          valor={turmaId ? TURNO_TODOS : turno}
+          onChange={definirTurno}
+          disabled={Boolean(turmaId)}
+          descricaoId={turmaId ? idMotivoTurno : undefined}
+        />
+        {/* Motivo do seletor desabilitado em TEXTO visível (title não chega a
+            leitor de tela nem a toque). */}
+        {turmaId && (
+          <span id={idMotivoTurno} className="text-xs text-zinc-500 dark:text-zinc-400">
+            Com uma turma escolhida, o turno não se aplica.
+          </span>
+        )}
         {dados && (
           <span className="ml-auto inline-flex items-center gap-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300">
             <Trophy size={15} /> {dados.periodo.rotulo}
+            {grupoTurno && <> · {grupoTurno.turno_rotulo} ({grupoTurno.total})</>}
           </span>
         )}
       </Card>
 
-      {/* Abas de TURNO (só na visão "todas as turmas" e quando há mais de um). */}
-      {turnos.length > 1 && (
-        <div role="tablist" aria-label="Turno"
-             className="mb-4 inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60">
-          <button type="button" role="tab" aria-selected={!turnoSel}
-                  onClick={() => setTurnoSel(null)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    !turnoSel ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
-                              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"}`}>
-            Todas
-          </button>
-          {turnos.map((g) => (
-            <button key={chaveTurno(g.turno) || "_sem"} type="button" role="tab"
-                    aria-selected={chaveTurno(grupoTurno?.turno ?? null) === chaveTurno(g.turno) && !!turnoSel}
-                    onClick={() => setTurnoSel({ turno: g.turno })}
-                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                      turnoSel && chaveTurno(grupoTurno?.turno ?? null) === chaveTurno(g.turno)
-                        ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
-                        : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"}`}>
-              {g.turno_rotulo}<span className="ml-1.5 text-xs text-zinc-400">({g.total})</span>
-            </button>
-          ))}
-        </div>
+      {turnoSemRecorte && (
+        <p role="status" className="mb-4 text-sm text-amber-700 dark:text-amber-300">
+          Nenhum aluno matriculado no turno {rotuloTurno(turnoAtivo)} neste ano letivo; mostrando todos os turnos.
+        </p>
       )}
 
-      {carregando ? (
+      {aguardando ? (
         <Carregando />
       ) : erro ? (
         <Vazio titulo="Não foi possível carregar as premiações" descricao={erro.message} />
@@ -275,35 +291,34 @@ export default function Premiacoes() {
             ))}
           </div>
 
-          {/* MELHOR EVOLUÇÃO — quem mais cresceu no período (toda a escola ou a
-              turma filtrada; o motor de evolução ainda não separa por turno). */}
+          {/* MELHOR EVOLUÇÃO — quem mais cresceu no período (mesmo período +
+              turma + turno dos pódios acima). */}
           <h2 className="mb-3 mt-8 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
             Melhor Evolução no período
           </h2>
-          {escolaId && (() => {
-            // Mesmo período + turma + TURNO selecionado que os pódios acima.
-            const filtroTurno = turnoSel
-              ? `&turno=${encodeURIComponent(chaveTurno(turnoSel.turno))}` : "";
-            const paramsEvol = `&${q}${filtroTurma}${filtroTurno}`;
-            return (
-              <div className="grid gap-4 md:grid-cols-2">
-                <CartaoEvolucao
-                  escolaId={escolaId} dimensao="leitura" params={paramsEvol}
-                  titulo="Melhor Evolução — Leitura" icone="📚"
-                  vazio="Sem dados suficientes para medir evolução de leitura no período." />
-                <CartaoEvolucao
-                  escolaId={escolaId} dimensao="matematica" params={paramsEvol}
-                  titulo="Melhor Evolução — Matemática" icone="🧮"
-                  vazio="Sem dados suficientes no período para medir evolução de Matemática." />
-              </div>
-            );
-          })()}
+          {escolaId && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <CartaoEvolucao
+                escolaId={escolaId} dimensao="leitura" params={paramsEvol}
+                titulo="Melhor Evolução — Leitura" icone="📚"
+                vazio="Sem dados suficientes para medir evolução de leitura no período." />
+              <CartaoEvolucao
+                escolaId={escolaId} dimensao="matematica" params={paramsEvol}
+                titulo="Melhor Evolução — Matemática" icone="🧮"
+                vazio="Sem dados suficientes no período para medir evolução de Matemática." />
+            </div>
+          )}
         </>
       )}
 
       <p className="mt-6 flex items-center gap-1.5 text-xs text-zinc-400">
         <Award size={13} /> Melhor Matemática usa a nota oficial (0–100) do período. Evolução mede o crescimento dentro do intervalo, não o acumulado.
       </p>
+      {grupoTurno && (
+        <p className="mt-1 text-xs text-zinc-400">
+          Vencedores calculados só com os alunos do turno selecionado; a régua da Matemática é a da escola inteira.
+        </p>
+      )}
     </div>
   );
 }

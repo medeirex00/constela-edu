@@ -25,18 +25,10 @@ import {
 import { useApp } from "../context/AppContext";
 import { limparCacheApi, useApi } from "../hooks/useApi";
 import { ApiError, api } from "../lib/api";
+// Códigos e rótulos de turno vêm da fonte única do front (lib/turnos.ts) —
+// os mesmos que o filtro global de turno usa nos rankings e premiações.
+import { TURNOS, rotuloTurno } from "../lib/turnos";
 import type { Professor, Turma, TurmaPayload } from "../lib/types";
-
-const TURNOS = [
-  { valor: "manha", rotulo: "Manhã" },
-  { valor: "tarde", rotulo: "Tarde" },
-  { valor: "noite", rotulo: "Noite" },
-  { valor: "integral", rotulo: "Integral" },
-] as const;
-
-function rotuloTurno(valor: string | null): string {
-  return TURNOS.find((t) => t.valor === valor)?.rotulo ?? "—";
-}
 
 // --- Formulário (criar e editar) --------------------------------------------
 
@@ -427,10 +419,9 @@ function CriarVariasTurmas({ escolaId, anoLetivo, existentes, aberto, aoFechar, 
         <Campo rotulo="Turno (opcional, aplicado a todas)">
           <select className={estiloInput} value={turno} onChange={(e) => setTurno(e.target.value)}>
             <option value="">— sem turno definido —</option>
-            <option value="manha">Manhã</option>
-            <option value="tarde">Tarde</option>
-            <option value="noite">Noite</option>
-            <option value="integral">Integral</option>
+            {TURNOS.map((t) => (
+              <option key={t.valor} value={t.valor}>{t.rotulo}</option>
+            ))}
           </select>
         </Campo>
       </div>
@@ -927,7 +918,9 @@ export default function Turmas() {
                       {turma.ano_escolar}
                     </td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">
-                      {rotuloTurno(turma.turno)}
+                      {/* Turma sem turno continua como traço nesta tabela (o
+                          filtro global chama isso de "Sem turno"). */}
+                      {turma.turno ? rotuloTurno(turma.turno) : "—"}
                     </td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">
                       {turma.professor_nome ?? "—"}

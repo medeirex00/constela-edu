@@ -1,45 +1,52 @@
 /**
- * Ranking de Leitura por PERÍODO: livros, pontos de dificuldade e tempo somados
- * apenas no intervalo escolhido (base do "melhor leitor da semana/mês").
+ * Ranking de Leitura — três blocos, do oficial ao operacional:
+ *  1. CLASSIFICAÇÃO OFICIAL (nota 0–100 do ano letivo, só alunos aferidos;
+ *     `components/DesempenhoDimensao`) — respeita turma/série e o turno global;
+ *  2. COMPETIÇÃO POR TURNO (a mesma nota, dividida por `Turma.turno`, rótulos do
+ *     backend) — abre no turno global quando ele existe;
+ *  3. LEITURA NO PERÍODO (pontos): livros, pontos de dificuldade e tempo somados
+ *     apenas no intervalo escolhido (base do "melhor leitor da semana/mês").
  */
 import { BookMarked } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { CompeticaoLeituraTurno } from "../components/CompeticaoLeituraTurno";
+import { DesempenhoDimensao } from "../components/DesempenhoDimensao";
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorTurno } from "../components/SeletorTurno";
 import { Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
 import { numero, tempoLeitura } from "../lib/formato";
+import { aplicarTurno, turnoEfetivo } from "../lib/turnos";
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
 export default function RankingLeitura({ embutido = false }: { embutido?: boolean } = {}) {
-  const { escolaId, periodo, definirPeriodo } = useApp();
-  // Período TEMPORAL vem do contexto global (segue o usuário entre as abas). O
-  // Elefante traz o TOTAL acumulado por aluno; recortes por semana/mês só têm
-  // dados quando há relatório individual datado.
+  const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  // Período TEMPORAL e TURNO vêm do contexto global (seguem o usuário entre as
+  // abas). O Elefante traz o TOTAL acumulado por aluno; recortes por semana/mês
+  // só têm dados quando há relatório individual datado.
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   const { dados: turmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
+  const turnoAtivo = turnoEfetivo(turno, turmas);
 
-  // Recalcula a URL quando período/turma/série mudam; o hook rebusca sozinho.
-  const q = periodoParaQuery(periodo);
-  const filtro = alvo.turma_id
-    ? `&turma_id=${alvo.turma_id}`
-    : alvo.ano_escolar
-      ? `&ano_escolar=${encodeURIComponent(alvo.ano_escolar)}`
-      : "";
+  // Recalcula a URL quando período/turma/série/turno mudam; o hook rebusca sozinho.
+  const q = new URLSearchParams(periodoParaQuery(periodo));
+  if (alvo.turma_id) q.set("turma_id", alvo.turma_id);
+  else if (alvo.ano_escolar) q.set("ano_escolar", alvo.ano_escolar);
+  aplicarTurno(q, turnoAtivo);
   const {
     dados: itens,
     erro,
     carregando,
     recarregar,
   } = useApi<RankingLeituraItem[]>(
-    escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}${filtro}` : null,
+    escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}` : null,
   );
   // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
   const { visiveis, restantes, mostrarMais } = useJanela(itens ?? []);
@@ -49,27 +56,49 @@ export default function RankingLeitura({ embutido = false }: { embutido?: boolea
       {!embutido && (
         <PageHeader
           titulo="Ranking de Leitura"
-          descricao="A competição escolar oficial (nota 0–100) é dividida por turno; abaixo, o ranking por período (pontos)."
+          descricao="Classificação oficial (nota 0–100), competição por turno e, abaixo, a leitura no período em pontos."
         />
       )}
 
-      {/* COMPETIÇÃO OFICIAL: nota 0–100 por turno (régua única da escola). */}
+      {/* Filtros que valem para a classificação oficial E para o período. */}
+      <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
+        <FiltroTurmaSerie turmas={turmas ?? []} valor={alvo} onChange={setAlvo} />
+        <SeletorTurno turmas={turmas ?? []} valor={turno} onChange={definirTurno} />
+      </Card>
+
+      {/* 1. CLASSIFICAÇÃO OFICIAL: só aferidos, nota do ano, não aferidos ao lado. */}
+      <div className="mb-6">
+        <DesempenhoDimensao dimensao="leitura" filtros={{ ...alvo, turno: turnoAtivo }} />
+      </div>
+
+      {/* 2. COMPETIÇÃO POR TURNO: nota 0–100 por turno (régua única da escola). */}
+      <h2 className="mb-1 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+        Competição por turno
+      </h2>
+      <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
+        A mesma nota oficial, com os alunos de cada turno competindo entre si
+        (1º ao 5º ano juntos).
+      </p>
+      {/* A competição NÃO recebe o filtro de turma/série da tela (é sempre o
+          turno inteiro); sem este aviso, parece que o filtro foi ignorado. */}
+      <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+        Sempre todas as turmas de cada turno — o filtro de turma e série acima não se aplica aqui.
+      </p>
       <div className="mb-6">
         <CompeticaoLeituraTurno />
       </div>
 
-      {/* RANKING POR PERÍODO (temporal, pontos brutos) — preservado como estava. */}
-      <h2 className="mb-2 mt-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-        Ranking por período (pontos)
+      {/* 3. LEITURA NO PERÍODO (temporal, pontos brutos) — preservado como estava. */}
+      <h2 className="mb-1 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+        Leitura no período (pontos)
       </h2>
       <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
         Melhor leitor da semana/mês/bimestre — soma de livros, pontos de dificuldade e
-        tempo apenas no período escolhido. Não é a competição escolar oficial acima.
+        tempo apenas no período escolhido. Não é a classificação oficial acima.
       </p>
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
         <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
-        <FiltroTurmaSerie turmas={turmas ?? []} valor={alvo} onChange={setAlvo} />
       </Card>
 
       <Card>

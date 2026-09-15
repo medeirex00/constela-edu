@@ -4,7 +4,8 @@
  *      "Sem turno" (bug real: o estado inicial `null` coincidia com o grupo de
  *      `turno=null`);
  *   2. dentro de um turno aparecem 1º–5º juntos, ordenados pela nota (0–100);
- *   3. o grupo de outro turno não vaza para o ranking exibido.
+ *   3. o grupo de outro turno não vaza para o ranking exibido;
+ *   4. com um TURNO GLOBAL escolhido (que exista nos grupos), ele é a aba inicial.
  */
 import { describe, expect, it } from "vitest";
 
@@ -62,5 +63,27 @@ describe("Competição de leitura por turno", () => {
     // os turnos são abas (rótulos vindos do backend)
     expect(screen.getByRole("tab", { name: /Manhã/ })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Sem turno/ })).toBeTruthy();
+    // O tablist tem nome PRÓPRIO: "Turno" é o rótulo do seletor global na mesma
+    // tela (dois controles com o mesmo nome confundem o leitor de tela).
+    expect(screen.getByRole("tablist", { name: "Turno da competição" })).toBeTruthy();
+    expect(screen.queryByLabelText("Turno")).toBeNull();
+  });
+
+  it("com o turno GLOBAL 'tarde', abre na aba Tarde", async () => {
+    responder("GET", URL, GRUPOS);
+    renderComApp(<CompeticaoLeituraTurno />, { turno: "tarde" });
+
+    expect(await screen.findByText("Ranking de Leitura — Tarde")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Tarde/ })).toHaveAttribute("aria-selected", "true");
+    const texto = (document.body.textContent ?? "").replace(/\s+/g, " ");
+    expect(texto).toContain("Tres Tarde");
+    expect(texto).not.toContain("Cinco Alto");
+  });
+
+  it("turno GLOBAL que não é um dos grupos cai no primeiro (Manhã), não no 'Sem turno'", async () => {
+    responder("GET", URL, GRUPOS);
+    renderComApp(<CompeticaoLeituraTurno />, { turno: "noite" });
+
+    expect(await screen.findByText("Ranking de Leitura — Manhã")).toBeTruthy();
   });
 });

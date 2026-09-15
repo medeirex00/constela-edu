@@ -1,14 +1,17 @@
-/** Ranking de Evolução (PRD §72) — independente do Ranking Geral. */
+/** Ranking de Evolução (PRD §72) — independente do Ranking Geral. Respeita o
+ *  período e o turno GLOBAIS (`?turno=`, que o endpoint já aceita). */
 import { TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { FiltroTurmaSerie, type AlvoRanking } from "../components/FiltroTurmaSerie";
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorTurno } from "../components/SeletorTurno";
 import { Badge, Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
+import { aplicarTurno, turnoEfetivo } from "../lib/turnos";
 import type { Turma } from "../lib/types";
 
 interface ItemEvolucao {
@@ -28,17 +31,19 @@ interface ItemEvolucao {
 }
 
 export default function RankingEvolucao({ embutido = false }: { embutido?: boolean } = {}) {
-  const { escolaId, periodo, definirPeriodo } = useApp();
+  const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
   const { dados: turmasDados } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
   const turmas = turmasDados ?? [];
+  const turnoAtivo = turnoEfetivo(turno, turmasDados);
 
   const parametros = new URLSearchParams(periodoParaQuery(periodo));
   if (alvo.turma_id) parametros.set("turma_id", alvo.turma_id);
   if (alvo.ano_escolar) parametros.set("ano_escolar", alvo.ano_escolar);
+  aplicarTurno(parametros, turnoAtivo);
   const { dados: itens, erro, carregando, recarregar } = useApi<ItemEvolucao[]>(
     escolaId ? `/escolas/${escolaId}/ranking-evolucao?${parametros}` : null,
   );
@@ -55,6 +60,7 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
         <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
         <FiltroTurmaSerie turmas={turmas} valor={alvo} onChange={setAlvo} />
+        <SeletorTurno turmas={turmas} valor={turno} onChange={definirTurno} />
       </Card>
 
       <Card>
