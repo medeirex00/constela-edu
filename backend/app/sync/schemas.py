@@ -89,6 +89,20 @@ class PlataformaStatus(BaseModel):
     # sincronização BEM-SUCEDIDA e se já passou do limite da cadência.
     ultimo_sucesso_em: datetime | None = None
     desatualizada: bool = False
+    # Contagens HONESTAS da cobertura dos dados — cada número é um COUNT do banco,
+    # nada é inferido. Universo: alunos ATIVOS matriculados no ano letivo ativo.
+    # `None` = NÃO DÁ PARA CONTAR (plataforma sem tabela de snapshot ou escola
+    # sem ano letivo ativo) — diferente de `0`, que é "contei e não há ninguém".
+    alunos_com_dados: int | None = None  # com ≥1 snapshot desta plataforma
+    alunos_sem_dados: int | None = None  # sem nenhum snapshot desta plataforma
+    # Só Elefante: snapshot ATUAL com livros_unicos == 0 ("usa e ainda não
+    # produziu" — um zero legítimo, diferente de "sem dado"). Matific: None.
+    alunos_com_zero_registros: int | None = None
+    # Frescor do dado dos alunos PONTUADOS: max(data_referencia) só dos snapshots
+    # de alunos do MESMO universo acima (ativos + matriculados no ano ativo). Um
+    # arquivado ou um aluno de outro ano não pode fazer a integração parecer em
+    # dia. None = sem snapshot no universo (ou não dá para contar).
+    dado_mais_recente_em: datetime | None = None
 
 
 class EscolaStatus(BaseModel):
@@ -101,6 +115,10 @@ class EscolaStatus(BaseModel):
     # Estado do onboarding (fluxo "escola pronta em <5 min").
     lista_piloto_importada: bool = False   # já tem turmas cadastradas?
     integracao_configurada: bool = False   # já salvou ≥1 credencial de plataforma?
+    # Pendências de CORRESPONDÊNCIA dos últimos 30 dias (LogAuditoria com
+    # `aluno.revisao_necessaria` ou `importacao.linha_ignorada`): o que a escola
+    # precisa revisar para a integração ficar íntegra. 0 = nada pendente.
+    pendencias_correspondencia_30d: int = 0
 
 
 class DashboardOut(BaseModel):

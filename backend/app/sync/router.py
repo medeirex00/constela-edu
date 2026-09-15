@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -19,7 +19,16 @@ logger = logging.getLogger("constela.sync")
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
-from app.models import Aluno, Escola, Turma, Usuario
+from app.models import (
+    Aluno,
+    Escola,
+    LogAuditoria,
+    Matricula,
+    SnapshotElefante,
+    SnapshotMatific,
+    Turma,
+    Usuario,
+)
 from app.models.sincronizacao import (
     PlataformaCredencial,
     SincronizacaoAlerta,
@@ -27,7 +36,7 @@ from app.models.sincronizacao import (
     SincronizacaoExecucao,
     SincronizacaoLog,
 )
-from app.services import permissoes
+from app.services import permissoes, scoring
 from app.services.audit import registrar
 from app.sync import aovivo, connectors, diagnostico_elefante, scheduler, service, vault
 from app.sync.interfaces import Contexto, Credenciais, ErroConector, ResultadoValidacao
@@ -70,11 +79,88 @@ def _ultima_execucao(db: Session, escola_id: int, plataforma: str):
 # ---------------------------------------------------------------------------
 # Status por escola
 # ---------------------------------------------------------------------------
+# Contagens HONESTAS da cobertura dos dados (só leitura). A escola diagnostica a
+# PRÓPRIA integração com números que o banco tem de fato: quantos alunos já
+# têm dado de cada plataforma, quantos ainda não têm nenhum, quantos usam o
+# Elefante e ainda não produziram (zero legítimo) e de quando é o dado mais
+# recente. Escola vazia → zeros; nada é estimado.
+_SNAPSHOT_DA_PLATAFORMA = {"elefante": SnapshotElefante, "matific": SnapshotMatific}
+_ACOES_PENDENCIA_CORRESPONDENCIA = ("aluno.revisao_necessaria", "importacao.linha_ignorada")
+_JANELA_PENDENCIAS = timedelta(days=30)
+
+
+def _universo_alunos(escola_id: int, ano: int):
+    """Ids (distintos) dos alunos ATIVOS matriculados no ano letivo ativo — o
+    mesmo universo que o motor pontua e que os rankings exibem."""
+    return (
+        select(Aluno.id)
+        .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
+        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
+        .distinct()
+    )
+
+
+def _contagens_plataforma(db: Session, escola_id: int, ano: int | None,
+                          plataforma: str) -> dict:
+    """Campos de cobertura de UMA plataforma para ``PlataformaStatus``.
+
+    Plataforma sem tabela de snapshot (ou escola sem ano ativo) NÃO DÁ PARA
+    CONTAR: devolve ``None`` — nunca ``0``, que afirmaria "ninguém tem dado".
+    Com o ano definido e o universo vazio, as contagens são ``0`` legítimos."""
+    modelo = _SNAPSHOT_DA_PLATAFORMA.get(plataforma)
+    if modelo is None or ano is None:
+        return {
+            "alunos_com_dados": None,
+            "alunos_sem_dados": None,
+            "alunos_com_zero_registros": None,
+            "dado_mais_recente_em": None,
+        }
+    universo = _universo_alunos(escola_id, ano)
+    total = db.scalar(select(func.count()).select_from(universo.subquery())) or 0
+    com_dados = db.scalar(
+        select(func.count(func.distinct(modelo.aluno_id)))
+        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(universo))) or 0
+    zero_registros = None
+    if modelo is SnapshotElefante:
+        # "Atual" pela MESMA régua do scoring/ranking (fonte única): o snapshot
+        # mais recente por (data_referencia, id) — um backfill antigo com
+        # livros_unicos=0 não pode contar como estado atual.
+        atuais = scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)
+        zero_registros = db.scalar(
+            select(func.count(func.distinct(SnapshotElefante.aluno_id)))
+            .where(SnapshotElefante.id.in_(atuais),
+                   SnapshotElefante.livros_unicos == 0,
+                   SnapshotElefante.aluno_id.in_(universo))) or 0
+    # Frescor do dado dos alunos PONTUADOS: mesmo universo de `com_dados`. Um
+    # snapshot recente de aluno arquivado (ou de outro ano) não pode fazer a
+    # integração parecer em dia para quem de fato entra na nota.
+    mais_recente = db.scalar(
+        select(func.max(modelo.data_referencia))
+        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(universo)))
+    return {
+        "alunos_com_dados": int(com_dados),
+        "alunos_sem_dados": int(max(0, total - com_dados)),
+        "alunos_com_zero_registros": zero_registros,
+        "dado_mais_recente_em": mais_recente,
+    }
+
+
+def _pendencias_correspondencia(db: Session, escola_id: int, agora: datetime) -> int:
+    """Quantas linhas de importação/sincronização ficaram SEM vínculo seguro nos
+    últimos 30 dias (auditoria) — o que a escola precisa revisar."""
+    return int(db.scalar(
+        select(func.count(LogAuditoria.id)).where(
+            LogAuditoria.escola_id == escola_id,
+            LogAuditoria.acao.in_(_ACOES_PENDENCIA_CORRESPONDENCIA),
+            LogAuditoria.created_at >= agora - _JANELA_PENDENCIAS)) or 0)
+
+
 @router.get("/status", response_model=EscolaStatus)
 def status_escola(escola_id: int = Depends(escola_autorizada),
                   usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
                   db: Session = Depends(get_db)):
     escola = db.get(Escola, escola_id)
+    ano_ativo = escola.ano_letivo_ativo if escola else None
     qtd_alunos = db.scalar(select(func.count(Aluno.id)).where(
         Aluno.escola_id == escola_id, Aluno.status == "ativo")) or 0
     qtd_turmas = db.scalar(select(func.count(Turma.id)).where(
@@ -106,7 +192,8 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
             proxima_execucao=conf.proxima_execucao if conf else None,
             ultima_execucao=ExecucaoOut.model_validate(ult) if ult else None,
             ultimo_sucesso_em=service.ultimo_sucesso_em(db, escola_id, con.plataforma),
-            desatualizada=service.esta_desatualizada(db, conf, agora) if conf else False))
+            desatualizada=service.esta_desatualizada(db, conf, agora) if conf else False,
+            **_contagens_plataforma(db, escola_id, ano_ativo, con.plataforma)))
 
     abertos = db.scalar(select(func.count(SincronizacaoAlerta.id)).where(
         SincronizacaoAlerta.escola_id == escola_id,
@@ -115,7 +202,9 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
                         qtd_alunos=qtd_alunos, qtd_turmas=qtd_turmas,
                         plataformas=plataformas, alertas_abertos=abertos,
                         lista_piloto_importada=qtd_turmas > 0,
-                        integracao_configurada=len(creds) > 0)
+                        integracao_configurada=len(creds) > 0,
+                        pendencias_correspondencia_30d=_pendencias_correspondencia(
+                            db, escola_id, agora))
 
 
 # ---------------------------------------------------------------------------
