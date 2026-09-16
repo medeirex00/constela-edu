@@ -58,8 +58,9 @@ from app.schemas import (
 )
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
-from app.services import professores, push, scoring
+from app.services import dificuldade_livro, professores, push, scoring
 from app.services.audit import registrar
+from app.models.base import agora
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
 
@@ -900,8 +901,10 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
         período em andamento não gera data futura que esconderia edições
         manuais feitas depois.
     Reimportar o mesmo período recalcula sobre a mesma base — não soma
-    dobrado. Backfill fora de ordem entre períodos: o mês entra no
-    histórico; reimporte os meses seguintes (em ordem) para o acumulado
+    dobrado — e ATUALIZA NO LUGAR o snapshot já datado no mesmo fim (nunca
+    empilha um segundo ponto com a mesma data: o histórico fica rastreável,
+    um ponto por período). Backfill fora de ordem entre períodos: o mês entra
+    no histórico; reimporte os meses seguintes (em ordem) para o acumulado
     incorporá-lo.
     """
     base = None
@@ -957,12 +960,25 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
                              if ultimo_ate_fim and base_ativ_virtual else 0.0),
         ))
 
-    db.add(SnapshotMatific(
-        escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
-        data_referencia=fim,
-        atividades=novo_ativ, estrelas=novo_estrelas,
-        pontuacao_media=novo_media,
-    ))
+    # Snapshot já datado EXATAMENTE no fim deste período (reimportação): atualiza
+    # o mais recente deles no lugar, com a importação nova como origem. Linhas
+    # duplicadas antigas (de antes desta regra) ficam intactas — nada é apagado.
+    mesmo_fim = None
+    for snap in serie:
+        if _sem_fuso(snap.data_referencia) == fim:
+            mesmo_fim = snap
+    if mesmo_fim is not None:
+        mesmo_fim.atividades = novo_ativ
+        mesmo_fim.estrelas = novo_estrelas
+        mesmo_fim.pontuacao_media = novo_media
+        mesmo_fim.importacao_id = importacao.id
+    else:
+        db.add(SnapshotMatific(
+            escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
+            data_referencia=fim,
+            atividades=novo_ativ, estrelas=novo_estrelas,
+            pontuacao_media=novo_media,
+        ))
     if ja_no_periodo:
         contadores["reimportados"] += 1
     if posteriores:
@@ -1020,15 +1036,303 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
     ))
 
 
-def _catalogo_livros(db, escola_id: int) -> dict:
-    """Livros da escola por título case-insensitive — carregado UMA vez por sync
-    e compartilhado entre todos os alunos (era relido por aluno)."""
-    catalogo: dict[str, Livro] = {}
-    for livro in db.execute(
-        select(Livro).where(Livro.escola_id == escola_id).order_by(Livro.id)
-    ).scalars():
-        catalogo.setdefault(livro.titulo.strip().casefold(), livro)
-    return catalogo
+# Vocabulário OFICIAL de níveis do Elefante (escada A3 AA…Z + tier Z+ e A+). Sem
+# casamento no catálogo oficial, o nível da linha precisa ser um destes.
+_NIVEIS_OFICIAIS = frozenset(scoring.NIVEIS_ORDENADOS) | {"Z+", "A+"}
+
+
+def _id_oficial(valor) -> int | None:
+    """``elefante_id`` da linha como inteiro positivo (a API manda int; uma
+    planilha pode mandar texto numérico). Qualquer outra coisa → None."""
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+    if isinstance(valor, str) and valor.strip().isdigit():
+        valor = int(valor.strip())
+    return valor if isinstance(valor, int) and valor > 0 else None
+
+
+class _AcervoEscola:
+    """Livros da escola indexados pela IDENTIDADE OFICIAL — carregado UMA vez por
+    importação/sincronização e compartilhado entre todos os alunos do lote (era
+    relido por aluno).
+
+    Casamento de uma linha (``resolver``), nesta ordem:
+      1. id oficial vindo da linha (``dados["elefante_id"]``, API do Elefante);
+      2. id resolvido no catálogo oficial por título+nível;
+      3. livro da escola com o mesmo (título normalizado, nível oficial);
+      4. livro da escola com o mesmo título — só se for ÚNICO e sem conflito de
+         nível (homônimos oficiais, ex.: "Cadê?" B e BB ou "Chapeuzinho Vermelho"
+         I e K, são livros DISTINTOS).
+
+    NÍVEL DE REFERÊNCIA da linha (``nivel_ref``): o do CATÁLOGO quando houve
+    casamento real (``meta is not None``); senão o informado pelo RELATÓRIO —
+    que a escola controla (planilha/PDF/corpo do /confirmar) e que NUNCA é
+    autoritativo. Reconciliação de um livro existente (uma vez por importação):
+      * vincula ``elefante_id``/``word_count`` se faltarem — só com id que
+        EXISTE no catálogo oficial (auditoria AGREGADA);
+      * ``nivel_fonte`` = nível de referência (último nível recebido);
+      * COM casamento no catálogo e oficial ≠ efetivo: com
+        ``origem_nivel='admin_global'`` o efetivo é PRESERVADO e a divergência
+        auditada (``livro.nivel_divergente``, só quando ``nivel_fonte`` muda);
+        com ``fonte``/``legado`` o efetivo volta ao oficial
+        (``livro.nivel_oficial_restaurado``, com de/para).
+      * SEM casamento no catálogo: o nível efetivo NUNCA é reescrito (a escola
+        não renivela livro pela planilha) — grava-se apenas ``nivel_fonte`` e a
+        divergência vai para ``livro.nivel_divergente`` com ``no_catalogo``
+        False; o aviso diz "nível informado pelo relatório", jamais "voltou ao
+        nível oficial".
+    Nenhum histórico é apagado: leituras seguem apontando para o mesmo livro.
+    """
+
+    def __init__(self, db, escola_id: int):
+        self.escola_id = escola_id
+        self.oficial = dificuldade_livro.catalogo()
+        self.por_id: dict[int, Livro] = {}
+        self.por_titulo_nivel: dict[tuple[str, str], Livro] = {}
+        self.por_titulo: dict[str, list[Livro]] = {}
+        self._conciliados: set[int] = set()        # id() dos livros já reconciliados
+        self._avisados: set[tuple[str, str]] = set()
+        self.vinculados: list[dict] = []
+        # id da linha → (título da linha, motivo do descarte)
+        self.ids_descartados: dict[int, tuple[str, str]] = {}
+        self.restaurados = 0
+        self.divergentes = 0
+        self.fora_catalogo = 0     # livros SEM casamento no catálogo com nível divergente
+        for livro in db.execute(
+            select(Livro).where(Livro.escola_id == escola_id).order_by(Livro.id)
+        ).scalars():
+            self._indexar(livro)
+
+    def _indexar(self, livro: Livro) -> None:
+        chave = dificuldade_livro.normalizar_titulo(livro.titulo)
+        self.por_titulo_nivel.setdefault((chave, livro.nivel_codigo), livro)
+        self.por_titulo.setdefault(chave, []).append(livro)
+        if livro.elefante_id is not None:
+            self.por_id.setdefault(livro.elefante_id, livro)
+
+    def _reindexar_nivel(self, livro: Livro, nivel_antigo: str) -> None:
+        chave = dificuldade_livro.normalizar_titulo(livro.titulo)
+        if self.por_titulo_nivel.get((chave, nivel_antigo)) is livro:
+            del self.por_titulo_nivel[(chave, nivel_antigo)]
+        self.por_titulo_nivel.setdefault((chave, livro.nivel_codigo), livro)
+
+    @staticmethod
+    def _conflita_id(livro: Livro, eid: int | None) -> bool:
+        return livro.elefante_id is not None and eid is not None and livro.elefante_id != eid
+
+    def _conflita_nivel(self, livro: Livro, chave: str, nivel_oficial: str | None) -> bool:
+        """Título homônimo no catálogo oficial e o livro da escola está em OUTRO
+        nível: são livros diferentes, não casar pelo título."""
+        if not nivel_oficial or len(self.oficial.por_titulo.get(chave) or []) < 2:
+            return False
+        return (livro.nivel_fonte or livro.nivel_codigo) != nivel_oficial
+
+    def resolver(self, titulo: str, nivel_linha: str, eid_linha: int | None):
+        """``(livro da escola | None, id oficial | None, metadados do catálogo |
+        None, nível de referência | None)``. O nível de referência é o do
+        CATÁLOGO quando houve casamento (``meta``); sem casamento é só o nível
+        informado pelo relatório, usado para ACHAR o livro da escola — nunca
+        como "nível oficial". Não altera nada."""
+        chave = dificuldade_livro.normalizar_titulo(titulo)
+        if eid_linha is not None:
+            eid, meta = eid_linha, self.oficial.por_id.get(eid_linha)
+        else:
+            meta = self.oficial.buscar(titulo, nivel_linha)
+            eid = meta.id if meta is not None else None
+        nivel_ref = meta.nivel if meta is not None else (nivel_linha or None)
+        livro = self.por_id.get(eid) if eid is not None else None
+        if livro is None and nivel_ref:
+            candidato = self.por_titulo_nivel.get((chave, nivel_ref))
+            if candidato is not None and not self._conflita_id(candidato, eid):
+                livro = candidato
+        if livro is None:
+            candidatos = [l for l in self.por_titulo.get(chave, [])
+                          if not self._conflita_id(l, eid)]
+            if len(candidatos) == 1 and not self._conflita_nivel(
+                    candidatos[0], chave, nivel_ref):
+                livro = candidatos[0]
+        return livro, eid, meta, nivel_ref
+
+    def _id_da_linha(self, dados: dict, titulo: str, nivel_linha: str) -> int | None:
+        """Id oficial da linha — só vale com casamento de TÍTULO no catálogo.
+
+        O ``elefante_id`` chega pelo corpo do /confirmar (planilha, PDF, JSON
+        montado à mão) ou pela API do Elefante; em ambos os casos ele só
+        identifica este livro quando a entrada do catálogo com esse id tem o
+        MESMO título normalizado da linha. O nível da linha NÃO valida um id (a
+        escola controla o relatório e poderia forjar o par nível+id de outro
+        livro para trocar identidade, wordCount e nível). Id ausente do catálogo
+        também não vincula — vincular um id desconhecido cria duplicata quando o
+        id verdadeiro chega depois. Nos dois casos a linha cai no casamento por
+        título+nível e o descarte vai para o aviso/auditoria da importação."""
+        eid = _id_oficial(dados.get("elefante_id"))
+        if eid is None:
+            return None
+        meta = self.oficial.por_id.get(eid)
+        if meta is None:
+            self.ids_descartados.setdefault(eid, (titulo, "fora_do_catalogo"))
+            return None
+        if (dificuldade_livro.normalizar_titulo(meta.titulo)
+                == dificuldade_livro.normalizar_titulo(titulo)):
+            return eid
+        self.ids_descartados.setdefault(eid, (titulo, "titulo_diferente"))
+        return None
+
+    def livro_da_linha(self, db, importacao, titulo: str, nivel_linha: str,
+                       dados: dict, avisos: list) -> tuple[Livro | None, bool]:
+        """Resolve a linha e devolve ``(livro, rejeitada)``: o livro (existente,
+        reconciliado, ou novo) ou None quando a linha é ignorada; ``rejeitada``
+        marca nível fora do vocabulário (sem leitura e sem evento)."""
+        chave = dificuldade_livro.normalizar_titulo(titulo)
+        livro, eid, meta, nivel_ref = self.resolver(
+            titulo, nivel_linha, self._id_da_linha(dados, titulo, nivel_linha))
+        if livro is not None and meta is None and livro.elefante_id is not None:
+            # Livro da escola JÁ vinculado ao catálogo: o nível oficial é o do id
+            # dele — uma linha sem casamento no catálogo (ex.: planilha com nível
+            # de homônimo) nunca troca o ``nivel_fonte`` pelo nível da linha.
+            meta_livro = self.oficial.por_id.get(livro.elefante_id)
+            if meta_livro is not None:
+                meta, nivel_ref = meta_livro, meta_livro.nivel
+        if meta is None and nivel_linha and nivel_linha not in _NIVEIS_OFICIAIS:
+            if (chave, nivel_linha) not in self._avisados:
+                self._avisados.add((chave, nivel_linha))
+                avisos.append(
+                    f"Livro “{titulo}”: o nível “{nivel_linha}” não existe no Elefante "
+                    "Letrado (AA…Z, Z+, A+) — linha ignorada.")
+            return None, True
+        if meta is not None and nivel_linha and nivel_linha != meta.nivel \
+                and (chave, nivel_linha) not in self._avisados:
+            self._avisados.add((chave, nivel_linha))
+            avisos.append(
+                f"“{titulo}”: o relatório informa o nível {nivel_linha}, mas o nível "
+                f"oficial no catálogo do Elefante é {meta.nivel} — vale o oficial.")
+        if livro is None:
+            if not nivel_ref:
+                avisos.append(f"Livro “{titulo}” é novo e veio sem nível — ignorado.")
+                return None, False
+            # FORA do catálogo oficial o nível é o que o relatório informou: o
+            # livro nasce como ``legado`` (alteração local), não como se viesse
+            # da fonte oficial. Só com casamento real no catálogo é ``fonte``.
+            livro = Livro(escola_id=self.escola_id, titulo=titulo,
+                          nivel_codigo=nivel_ref, nivel_fonte=nivel_ref,
+                          origem_nivel="fonte" if meta is not None else "legado",
+                          elefante_id=eid if meta is not None else None,
+                          word_count=meta.word_count if meta is not None else None,
+                          categoria=dados.get("genero") or None)
+            db.add(livro)
+            self._indexar(livro)       # dedup dentro do lote sem flush por livro
+            self._conciliados.add(id(livro))
+            return livro, False
+        self._conciliar(db, importacao, livro, eid, meta, nivel_ref)
+        return livro, False
+
+    def _conciliar(self, db, importacao, livro: Livro, eid, meta, nivel_ref) -> None:
+        if id(livro) in self._conciliados:
+            return
+        self._conciliados.add(id(livro))
+        if (eid is not None and livro.elefante_id is None
+                and self.oficial.por_id.get(eid) is not None):
+            # Só vincula id que EXISTE no catálogo oficial: um id desconhecido
+            # (outra entidade da API) tomaria a identidade do livro e viraria
+            # duplicata quando o id verdadeiro chegasse.
+            livro.elefante_id = eid
+            self.por_id.setdefault(eid, livro)
+            self.vinculados.append({"livro_id": livro.id, "elefante_id": eid})
+        if meta is not None and livro.word_count is None and livro.elefante_id == meta.id:
+            livro.word_count = meta.word_count
+        if not nivel_ref:
+            return
+        fonte_anterior = livro.nivel_fonte
+        livro.nivel_fonte = nivel_ref
+        if livro.nivel_codigo == nivel_ref:
+            return
+        detalhes = {"titulo": livro.titulo, "elefante_id": livro.elefante_id,
+                    "importacao_id": importacao.id}
+        if meta is None:
+            # SEM casamento no catálogo oficial: o nível veio do RELATÓRIO, que a
+            # escola controla — NUNCA reescreve o nível em uso (seria renivelar o
+            # livro da escola inteira por planilha). Registra a divergência com o
+            # nome honesto; o aviso não fala em "nível oficial".
+            if fonte_anterior != nivel_ref:
+                self.fora_catalogo += 1
+                registrar(db, "livro.nivel_divergente", escola_id=self.escola_id,
+                          usuario_id=importacao.usuario_id, entidade="livro",
+                          entidade_id=livro.id,
+                          detalhes={**detalhes, "no_catalogo": False,
+                                    "nivel_efetivo": livro.nivel_codigo,
+                                    "nivel_relatorio": {"de": fonte_anterior,
+                                                        "para": nivel_ref}})
+            return
+        if livro.origem_nivel == "admin_global":
+            # Correção deliberada do Admin Global: PRESERVADA. Só audita quando a
+            # fonte traz um nível novo (não a cada sincronização).
+            if fonte_anterior != nivel_ref:
+                self.divergentes += 1
+                registrar(db, "livro.nivel_divergente", escola_id=self.escola_id,
+                          usuario_id=importacao.usuario_id, entidade="livro",
+                          entidade_id=livro.id,
+                          detalhes={**detalhes, "no_catalogo": True,
+                                    "nivel_efetivo": livro.nivel_codigo,
+                                    "nivel_fonte": {"de": fonte_anterior,
+                                                    "para": nivel_ref}})
+            return
+        # Alteração local (legado) ou nível antigo da fonte: volta ao oficial —
+        # aqui ``meta`` existe, então este É o nível do catálogo oficial.
+        de, origem = livro.nivel_codigo, livro.origem_nivel
+        livro.nivel_codigo = nivel_ref
+        livro.origem_nivel = "fonte"
+        livro.atualizado_em = agora()
+        self._reindexar_nivel(livro, de)
+        self.restaurados += 1
+        registrar(db, "livro.nivel_oficial_restaurado", escola_id=self.escola_id,
+                  usuario_id=importacao.usuario_id, entidade="livro", entidade_id=livro.id,
+                  detalhes={**detalhes, "de": de, "para": nivel_ref,
+                            "origem_anterior": origem})
+
+    def finalizar(self, db, importacao, avisos: list) -> None:
+        """Auditoria AGREGADA por importação dos vínculos à identidade oficial
+        (uma linha, não uma por livro) e avisos-resumo das reconciliações."""
+        if self.vinculados:
+            registrar(db, "livro.vinculado_catalogo", escola_id=self.escola_id,
+                      usuario_id=importacao.usuario_id, entidade="importacao",
+                      entidade_id=importacao.id,
+                      detalhes={"qtd": len(self.vinculados),
+                                "livros": self.vinculados[:500]})
+        if self.ids_descartados:
+            registrar(db, "livro.id_oficial_inconsistente", escola_id=self.escola_id,
+                      usuario_id=importacao.usuario_id, entidade="importacao",
+                      entidade_id=importacao.id,
+                      detalhes={"qtd": len(self.ids_descartados),
+                                "ids": [{"elefante_id": eid, "titulo_linha": titulo,
+                                         "motivo": motivo}
+                                        for eid, (titulo, motivo) in
+                                        list(self.ids_descartados.items())[:200]]})
+            avisos.append(
+                f"{len(self.ids_descartados)} id(s) de livro do relatório não batem "
+                "com o catálogo oficial (id inexistente ou de outro título) — "
+                "ignorados; esses livros foram casados por título e nível. "
+                "Registrado na auditoria.")
+        if self.restaurados:
+            avisos.append(
+                f"{self.restaurados} livro(s) voltaram ao nível oficial do catálogo do "
+                "Elefante (havia alteração local) — registrado na auditoria.")
+        if self.fora_catalogo:
+            avisos.append(
+                f"{self.fora_catalogo} livro(s) NÃO estão no catálogo oficial do "
+                "Elefante e o nível informado pelo relatório é diferente do nível em "
+                "uso — o nível em uso foi preservado (a escola não renivela livro por "
+                "importação) e a divergência registrada na auditoria.")
+        if self.divergentes:
+            avisos.append(
+                f"{self.divergentes} livro(s) mantêm o nível corrigido pelo Admin "
+                "Global, diferente do nível oficial — divergência registrada na auditoria.")
+
+
+def _catalogo_livros(db, escola_id: int) -> _AcervoEscola:
+    """Acervo da escola indexado pela identidade oficial — UMA vez por sync."""
+    return _AcervoEscola(db, escola_id)
 
 
 def _codigos_faixa_escola(db, escola_id: int) -> set:
@@ -1068,35 +1372,62 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     eram relidos por ALUNO (~190× numa escola de 10 turmas), o que no Postgres de
     rede (Supabase) transformava a coleta do Elefante em ~15 min. Livros criados
     aqui entram no ``catalogo`` compartilhado (dedup também entre alunos do lote).
+
+    IDENTIDADE: cada linha é resolvida pelo ``_AcervoEscola`` (id oficial →
+    catálogo por título+nível → título+nível da escola → título único sem
+    conflito). A deduplicação de releitura é pela IDENTIDADE do livro, não pelo
+    título — homônimos oficiais ("Cadê?" B e BB) são livros distintos e as duas
+    leituras contam. A linha do tempo usa a MESMA resolução.
+
+    NÍVEL CONGELADO: toda leitura nova nasce com ``Leitura.nivel_codigo`` = o
+    nível EFETIVO do livro NESTE momento — que, depois da reconciliação do
+    ``_AcervoEscola``, é o nível OFICIAL do catálogo quando houve casamento (o
+    relatório da escola diverge? vale o oficial), a correção deliberada do Admin
+    Global quando existe (``origem_nivel='admin_global'`` é preservada) ou, só
+    para livro FORA do catálogo, o nível da linha já validado. Junto vai
+    ``catalogo_versao`` = o mesmo carimbo de versão (sha curto do arquivo) que a
+    nota usa. Consequência: renivelar um livro depois NÃO reescreve o passado —
+    a distribuição por nível do aluno usa
+    ``coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)`` e só as leituras
+    anteriores a esta versão (nível nulo) seguem o nível atual do livro.
+
+    ``EventoAluno.nivel_codigo`` NÃO muda de semântica: continua sendo o nível da
+    FONTE no instante do evento (o do livro resolvido; sem livro, o da linha).
+    Como a resolução é a MESMA da leitura, o evento e o nível congelado da
+    leitura nascem coerentes; releituras (§35 não pontua) geram evento e nenhuma
+    leitura, então só o evento guarda aquele instante.
     """
-    vistos: set[str] = set()  # títulos já processados NESTE lote
-    novas: list[Leitura] = []
-    for linha in linhas:
+    vistos: set[int] = set()            # id() dos livros já processados NESTE lote
+    resolvidos: dict[int, Livro] = {}   # nº da linha → livro resolvido (linha do tempo)
+    rejeitadas: set[int] = set()        # nível fora do vocabulário: sem leitura nem evento
+    # (livro, quando, tempo, nível congelado) de cada leitura nova deste aluno.
+    novas: list[tuple] = []
+    # Versão do catálogo VIGENTE nesta importação — carimbo idêntico ao que a
+    # nota grava em ``detalhes.elefante.dificuldade.catalogo``. None sem arquivo.
+    versao_cat = dificuldade_livro.versao_catalogo().get("versao")
+    for indice, linha in enumerate(linhas):
         titulo = str(linha.dados.get("livro", "")).strip()
         nivel = str(linha.dados.get("nivel", "")).strip().upper()
         if not titulo:
             avisos.append(f"Linha {linha.nome}: livro sem título — ignorada.")
             continue
-        chave = titulo.casefold()
-        livro = catalogo.get(chave)
+        livro, rejeitada = catalogo.livro_da_linha(db, importacao, titulo, nivel,
+                                                   linha.dados, avisos)
+        if rejeitada:
+            rejeitadas.add(indice)
         if livro is None:
-            if not nivel:
-                avisos.append(f"Livro “{titulo}” é novo e veio sem nível — ignorado.")
-                continue
-            livro = Livro(escola_id=escola_id, titulo=titulo, nivel_codigo=nivel,
-                          categoria=linha.dados.get("genero") or None)
-            db.add(livro)
-            catalogo[chave] = livro  # dedup dentro do lote sem flush por livro
+            continue
+        resolvidos[indice] = livro
         # Releitura no MESMO relatório (livro repetido): dedup em memória —
         # senão a UniqueConstraint derrubaria a importação (autoflush=False).
-        if chave in vistos:
+        if id(livro) in vistos:
             avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
                           f"{aluno.nome} — contado uma vez (§35).")
             continue
         if livro.id is not None and livro.id in ja_lidos:
             avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
             continue
-        vistos.add(chave)
+        vistos.add(id(livro))
         # Relatórios individuais informam a data e o HORÁRIO reais da conclusão.
         quando = data_referencia
         try:
@@ -1110,8 +1441,11 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         if quando.tzinfo is not None:
             quando = quando.replace(tzinfo=None)
         tempo_livro = linha.dados.get("tempo_livro_min")
+        # O nível é lido AQUI, depois da reconciliação desta linha: é o nível
+        # efetivo do livro no instante em que a leitura passa a existir.
         novas.append((livro, quando,
-                      _num(tempo_livro, int) if tempo_livro is not None else None))
+                      _num(tempo_livro, int) if tempo_livro is not None else None,
+                      livro.nivel_codigo))
 
     # Persiste PRIMEIRO os livros novos (ganham id) e então grava todas as
     # leituras num único INSERT executemany — uma ida ao banco, não N.
@@ -1120,8 +1454,10 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         from sqlalchemy import insert
         db.execute(insert(Leitura), [
             {"escola_id": escola_id, "aluno_id": aluno.id, "livro_id": livro.id,
-             "data": quando, "tempo_leitura_min": tempo}
-            for livro, quando, tempo in novas
+             "data": quando, "tempo_leitura_min": tempo,
+             # NÍVEL CONGELADO + versão do catálogo que o resolveu.
+             "nivel_codigo": nivel or None, "catalogo_versao": versao_cat}
+            for livro, quando, tempo, nivel in novas
         ])
 
     # ESPELHO evento a evento (linha do tempo): 1 EventoAluno por leitura do
@@ -1129,7 +1465,9 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     # própria, diferente das leituras que pontuam o livro uma única vez §35).
     # Idempotente por chave_natural: reimportar o mesmo relatório não duplica.
     eventos: list[dict] = []
-    for linha in linhas:
+    for indice, linha in enumerate(linhas):
+        if indice in rejeitadas:
+            continue  # nível fora do vocabulário oficial: a linha foi ignorada
         titulo = str(linha.dados.get("livro", "")).strip()
         bruto = linha.dados.get("data")
         if not titulo or not bruto:
@@ -1142,8 +1480,13 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
             quando = quando.replace(tzinfo=None)
         tempo_livro = linha.dados.get("tempo_livro_min")
         genero = str(linha.dados.get("genero", "")).strip(" ,")
-        nivel = str(linha.dados.get("nivel", "")).strip().upper()
-        livro = catalogo.get(titulo.casefold())
+        livro = resolvidos.get(indice)   # a MESMA resolução da leitura
+        # Nível da FONTE no instante do evento — semântica INALTERADA (o espelho
+        # registra o que a plataforma mostrava). Vem da MESMA resolução da
+        # leitura, então é o mesmo valor congelado em ``Leitura.nivel_codigo``
+        # para a linha que pontuou; quem PONTUA lê a leitura, não o evento.
+        nivel = (livro.nivel_codigo if livro is not None
+                 else str(linha.dados.get("nivel", "")).strip().upper())
         eventos.append({
             "escola_id": escola_id, "aluno_id": aluno.id,
             "importacao_id": importacao.id, "plataforma": "elefante",
@@ -1158,10 +1501,15 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         })
     ingerir_eventos(db, aluno.id, "elefante", eventos)
 
-    # Snapshot derivado do total de leituras registradas
+    # Snapshot derivado do total de leituras registradas. O nível de CADA
+    # leitura é o CONGELADO (``Leitura.nivel_codigo``, gravado na importação que
+    # a criou); só leitura anterior a esta versão (nível nulo) cai no nível atual
+    # do livro. Assim renivelar um livro depois não muda, sozinha, a
+    # distribuição por nível do aluno numa reimportação.
     leituras = db.execute(
-        select(Livro.nivel_codigo)
-        .join(Leitura, Leitura.livro_id == Livro.id)
+        select(func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo))
+        .select_from(Leitura)
+        .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id == aluno.id)
     ).scalars().all()
     por_nivel: dict[str, int] = {}
@@ -1378,6 +1726,10 @@ def confirmar(
             _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                       linhas_aluno[-1].dados, data_referencia,
                                       anterior=anteriores.get(aluno.id), avisos=avisos)
+
+    if cat_livros is not None:
+        # Auditoria agregada dos vínculos à identidade oficial (1 linha por import).
+        cat_livros.finalizar(db, importacao, avisos)
 
     if contadores["reimportados"]:
         avisos.append(

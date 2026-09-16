@@ -561,6 +561,18 @@ def _int_api(v, ausente=0):
         return ausente
 
 
+def _id_livro_elefante(valor) -> int | None:
+    """``bookId`` da API como inteiro positivo; bool, fração, texto não numérico
+    ou ausente → None (o importador cai no casamento por título+nível)."""
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+    if isinstance(valor, str) and valor.strip().isdigit():
+        valor = int(valor.strip())
+    return valor if isinstance(valor, int) and valor > 0 else None
+
+
 def _data_iso_elefante(bruto) -> str:
     """Normaliza a data/hora do Elefante (``lastReadWhen``) para ISO — o importador
     de leituras faz ``datetime.fromisoformat``. Aceita ISO (com/sem T, com/sem
@@ -632,17 +644,21 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
                 # histórico"); aqui só entram leituras com data real.
                 continue
             tempo_seg = _int_api(r.get("totalTimeSpent", r.get("tempo_livro_seg")), None)
-            linhas_l.append(LinhaImportacao(
-                numero=i, nome=nome,
-                dados={
-                    "livro": titulo,
-                    "nivel": str(r.get("levelName") or r.get("nivel") or "").strip(),
-                    "genero": str(r.get("genre") or r.get("theme") or r.get("genero") or "").strip(),
-                    "data": data_iso,
-                    # tempo do livro em MINUTOS (a API dá segundos em totalTimeSpent).
-                    "tempo_livro_min": round(tempo_seg / 60) if tempo_seg else None,
-                    "turma_relatorio": turma,
-                }))
+            dados_l = {
+                "livro": titulo,
+                "nivel": str(r.get("levelName") or r.get("nivel") or "").strip(),
+                "genero": str(r.get("genre") or r.get("theme") or r.get("genero") or "").strip(),
+                "data": data_iso,
+                # tempo do livro em MINUTOS (a API dá segundos em totalTimeSpent).
+                "tempo_livro_min": round(tempo_seg / 60) if tempo_seg else None,
+                "turma_relatorio": turma,
+            }
+            # IDENTIDADE OFICIAL do livro (bookId do catálogo do Elefante): o
+            # importador casa por ela antes do título. Só inteiro válido entra.
+            elefante_id = _id_livro_elefante(r.get("bookId"))
+            if elefante_id is not None:
+                dados_l["elefante_id"] = elefante_id
+            linhas_l.append(LinhaImportacao(numero=i, nome=nome, dados=dados_l))
         return Analise(
             plataforma=plataforma, formato="leituras", estrategia="api-elefante",
             mensagem_deteccao="Histórico de leitura por aluno (API Elefante Letrado).",

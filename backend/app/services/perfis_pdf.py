@@ -35,6 +35,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from app.services import scoring
 from app.services.importacao import (
     Analise,
     LinhaImportacao,
@@ -45,6 +46,12 @@ from app.services.importacao import (
     _similaridade,
     normalizar_nome,
 )
+
+# Vocabulário OFICIAL de níveis do Elefante (escada A3 AA…Z + tiers Z+ e A+) —
+# o MESMO do importador (``routers/importacoes.py``) e do CRUD do catálogo
+# (``routers/plataformas.py``). O parser do PDF não pode recusar um nível que o
+# resto do sistema aceita: o nível sumiria da linha e a leitura se perderia.
+NIVEIS_OFICIAIS: frozenset[str] = frozenset(scoring.NIVEIS_ORDENADOS) | {"Z+", "A+"}
 
 # --------------------------------------------------------------------------
 # Extração de palavras com posição
@@ -451,8 +458,13 @@ class PerfilElefanteTurma:
 
 
 def _codigo_nivel(bruto: str) -> str:
-    codigo = bruto.strip().upper()
-    if not re.fullmatch(r"[A-Z]{1,2}", codigo):
+    """Código de nível do Elefante lido do PDF, no vocabulário OFICIAL —
+    AA…Z mais os tiers ``Z+`` e ``A+`` (o catálogo tem 24 livros neles). O ``+``
+    pode vir como token separado na coluna ("Z +"), por isso o espaço interno é
+    removido antes de validar. Fora do vocabulário → ValueError, que ``_atribuir``
+    transforma em aviso (o campo fica ausente, a linha não cai)."""
+    codigo = re.sub(r"\s+", "", bruto).upper()
+    if codigo not in NIVEIS_OFICIAIS:
         raise ValueError(f"nível ilegível: {bruto!r}")
     return codigo
 

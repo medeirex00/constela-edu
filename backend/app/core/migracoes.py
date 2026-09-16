@@ -7,12 +7,17 @@ seguro para bancos já existentes.
 
 Estratégia de adoção (preserva 100% dos dados):
 
-* Banco NOVO (sem tabelas) → ``upgrade head`` cria todo o schema.
-* Banco JÁ versionado pelo Alembic → ``upgrade head`` aplica o que faltar.
+* Banco NOVO (sem tabelas) → ``upgrade heads`` cria todo o schema.
+* Banco JÁ versionado pelo Alembic → ``upgrade heads`` aplica o que faltar.
 * Banco EXISTENTE anterior ao Alembic (tem tabelas, mas sem
   ``alembic_version``) → ``stamp`` da revisão base (assume que o schema já é
   o da base — as micro-migrações antigas o mantinham em dia — SEM recriar
-  nada) e, em seguida, ``upgrade head`` para migrações futuras.
+  nada) e, em seguida, ``upgrade heads`` para migrações futuras.
+
+RAMOS: o destino é ``heads`` (plural), não ``head``. Frentes independentes podem
+partir da MESMA revisão (ex.: currículo e catálogo de livros, que tocam tabelas
+diferentes) sem que uma precise esperar a outra entrar no histórico; ``heads``
+aplica todos os ramos existentes, e com um ramo só é idêntico ao antigo ``head``.
 """
 from __future__ import annotations
 
@@ -58,7 +63,7 @@ def aplicar_migracoes(engine: Engine) -> None:
             cfg.attributes["connection"] = conexao
             if pre_alembic:
                 command.stamp(cfg, _REVISAO_BASE)
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, "heads")
             conexao.commit()
         except Exception:
             # Nunca devolver ao pool uma conexão com a checagem desligada:

@@ -486,15 +486,37 @@ export interface ElefanteAluno {
   data_referencia: string | null;
 }
 
+/** Quem definiu o nível EFETIVO de um livro do catálogo: a fonte oficial
+ *  (sincronização/catálogo do Elefante), uma correção do Admin Global ou uma
+ *  linha anterior à governança do catálogo. */
+export type OrigemNivelLivro = "fonte" | "admin_global" | "legado";
+
 export interface Livro {
   id: number;
   titulo: string;
   autor: string | null;
+  /** Nível EFETIVO (o que pontua). */
   nivel_codigo: string;
   categoria: string | null;
   paginas: number | null;
   pontos: number;
   leituras: number;
+  // --- Governança do catálogo oficial (opcionais: payloads antigos não trazem) ---
+  /** Id do livro no catálogo OFICIAL do Elefante (nulo = não vinculado). */
+  elefante_id?: number | null;
+  /** Último nível recebido da fonte oficial. */
+  nivel_fonte?: string | null;
+  /** Nível oficial: o do catálogo pelo id; sem catálogo, o último da fonte. */
+  nivel_oficial?: string | null;
+  word_count?: number | null;
+  origem_nivel?: OrigemNivelLivro | string;
+  atualizado_em?: string | null;
+  /** O id vinculado existe no catálogo oficial do Elefante. */
+  no_catalogo?: boolean;
+  /** Nível efetivo diferente do oficial (ou do último da fonte). */
+  divergente?: boolean;
+  /** O usuário pode corrigir o livro (só o Admin Global). */
+  editavel?: boolean;
 }
 
 export interface PaginaLivros {

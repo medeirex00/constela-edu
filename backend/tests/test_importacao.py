@@ -251,7 +251,8 @@ def test_edicao_manual_matific_preserva_historico(cliente, db, escola_completa):
     )
     resposta = cliente.put(
         f"/api/v1/escolas/{escola_id}/matific/{ana.id}",
-        json={"atividades": 12, "pontuacao_media": 55, "estrelas": 25,
+        # média na escala 0–5 do Matific (a edição manual recusa acima de 5)
+        json={"atividades": 12, "pontuacao_media": 4.5, "estrelas": 25,
               "motivo": "Correção de erro de digitação no relatório"},
     )
     assert resposta.status_code == 200, resposta.text
@@ -396,9 +397,11 @@ def test_recalcular_exige_papel_autorizado(cliente, db, escola_completa):
     assert "alunos" in resposta.json()
 
 
-def test_catalogo_de_livros_busca_e_protecao_de_exclusao(cliente, db, escola_completa):
+def test_catalogo_de_livros_busca_e_protecao_de_exclusao(cliente, cliente_global, db,
+                                                        escola_completa):
+    # Governança do catálogo: só o Admin Global cria/exclui; a escola só LÊ.
     escola_id = escola_completa["escola"].id
-    criado = cliente.post(
+    criado = cliente_global.post(
         f"/api/v1/escolas/{escola_id}/livros",
         json={"titulo": "O Mapa Perdido", "autor": "Rita Campos", "nivel_codigo": "d"},
     )
@@ -419,5 +422,5 @@ def test_catalogo_de_livros_busca_e_protecao_de_exclusao(cliente, db, escola_com
     from app.models import Leitura
     db.add(Leitura(escola_id=escola_id, aluno_id=ana.id, livro_id=livro_id))
     db.commit()
-    exclusao = cliente.delete(f"/api/v1/escolas/{escola_id}/livros/{livro_id}")
+    exclusao = cliente_global.delete(f"/api/v1/escolas/{escola_id}/livros/{livro_id}")
     assert exclusao.status_code == 409

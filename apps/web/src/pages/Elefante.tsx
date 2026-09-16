@@ -34,19 +34,67 @@ const SUBABAS = [
 type SubAba = (typeof SUBABAS)[number][0];
 const SUBABAS_ESCOLA = SUBABAS.filter(([chave]) => chave === "alunos");
 
+/** Vocabulário OFICIAL de níveis do Elefante — o mesmo que o servidor valida. */
+const NIVEIS_OFICIAIS = new Set([
+  "AA", "BB", "CC", "DD", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L",
+  "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Z+", "A+",
+]);
+const CONTAGEM_MAXIMA = 10000;
+const MOTIVO_MINIMO = 5;
+const MSG_MOTIVO = `Informe o motivo do ajuste (pelo menos ${MOTIVO_MINIMO} caracteres) — ele fica no log de auditoria.`;
+
+/** O ajuste manual é a fonte do dado só ENQUANTO a escola não recebe o Elefante
+ *  da plataforma. Assim que o dado oficial chega (integração, importação ou
+ *  sincronização), a manutenção passa a ser do Admin Global — e desligar a
+ *  integração depois não reabre a edição, porque o dado recebido continua
+ *  valendo. A trava é do servidor; aqui o gestor só não é pego de surpresa. */
+const NOTA_AJUSTE_MANUAL =
+  "Este ajuste existe enquanto a escola não recebe o Elefante Letrado da plataforma. " +
+  "Depois que o dado oficial chega, a correção passa a ser do Admin Global — desligar a " +
+  "integração não reabre a edição.";
+
 function niveisParaTexto(niveis: Record<string, number>): string {
   return Object.entries(niveis)
     .map(([codigo, quantidade]) => `${codigo}:${quantidade}`)
     .join(", ");
 }
 
-function textoParaNiveis(texto: string): Record<string, number> {
-  const pares = texto.matchAll(/([A-Za-z]{1,2})\s*[:=]\s*(\d+)/g);
+/** Interpreta "AA:2, D:1, pre_leitor:3". Cada pedaço precisa ser um nível oficial
+ *  (AA…Z, Z+, A+) ou uma faixa cadastrada, com contagem inteira de 0 a 10.000.
+ *  Qualquer pedaço inválido devolve ERRO — nunca uma distribuição parcial ou
+ *  vazia que apagaria os livros do aluno. */
+function textoParaNiveis(
+  texto: string,
+  faixas: string[],
+): { niveis: Record<string, number> } | { erro: string } {
   const niveis: Record<string, number> = {};
-  for (const [, codigo, quantidade] of pares) {
-    niveis[codigo.toUpperCase()] = Number(quantidade);
+  const invalidos: string[] = [];
+  const pedacos = texto.split(/[,;\n]/).map((p) => p.trim()).filter(Boolean);
+  for (const pedaco of pedacos) {
+    const partes = /^([A-Za-z][A-Za-z0-9_]*\+?)\s*[:=]\s*(\d+)$/.exec(pedaco);
+    if (!partes) {
+      invalidos.push(pedaco);
+      continue;
+    }
+    const [, bruto, quantidade] = partes;
+    const letra = bruto.toUpperCase();
+    const faixa = faixas.find((f) => f.toLowerCase() === bruto.toLowerCase());
+    const chave = NIVEIS_OFICIAIS.has(letra) ? letra : faixa;
+    const n = Number(quantidade);
+    if (!chave || n > CONTAGEM_MAXIMA) {
+      invalidos.push(pedaco);
+      continue;
+    }
+    niveis[chave] = (niveis[chave] ?? 0) + n;
   }
-  return niveis;
+  if (invalidos.length > 0) {
+    return {
+      erro:
+        `Texto inválido: ${invalidos.map((p) => `“${p}”`).join(", ")}. Use níveis do Elefante ` +
+        "(AA…Z, Z+, A+) ou faixas cadastradas, no formato AA:2, D:1.",
+    };
+  }
+  return { niveis };
 }
 
 /** Livros de uma faixa a partir da distribuição: valor direto da faixa OU a
@@ -72,6 +120,7 @@ export default function Elefante() {
       escolaId ? `/escolas/${escolaId}/configuracoes/dificuldade` : null,
     );
   const niveis = dadosDificuldade?.niveis ?? [];
+  const codigosFaixa = niveis.map((n) => n.codigo).filter((c): c is string => Boolean(c));
 
   const [aba, setAba] = useState<SubAba>("alunos");
   const [editando, setEditando] = useState<ElefanteAluno | null>(null);
@@ -114,6 +163,23 @@ export default function Elefante() {
 
   async function salvar() {
     if (!escolaId || !editando) return;
+    // Validação ANTES de enviar: texto inválido nunca vira {} no servidor.
+    const interpretado = textoParaNiveis(formulario.niveis_texto, codigosFaixa);
+    if ("erro" in interpretado) {
+      setErro(interpretado.erro);
+      return;
+    }
+    if (
+      Object.keys(interpretado.niveis).length === 0 &&
+      Object.keys(editando.livros_por_nivel ?? {}).length > 0
+    ) {
+      setErro("Informe os livros por nível (ex.: AA:2, D:1) — deixar em branco apagaria a distribuição atual.");
+      return;
+    }
+    if (formulario.motivo.trim().length < MOTIVO_MINIMO) {
+      setErro(MSG_MOTIVO);
+      return;
+    }
     setSalvando(true);
     setErro("");
     try {
@@ -123,13 +189,14 @@ export default function Elefante() {
           tempo_leitura_min: formulario.tempo_leitura_min,
           questoes_tentativas: formulario.questoes_tentativas,
           questoes_acertos: formulario.questoes_acertos,
-          livros_por_nivel: textoParaNiveis(formulario.niveis_texto),
-          motivo: formulario.motivo || null,
+          livros_por_nivel: interpretado.niveis,
+          motivo: formulario.motivo.trim(),
         }),
       });
       setEditando(null);
       recarregarLinhas();
     } catch (excecao) {
+      // Inclui o 403 da governança (integração ativa): a mensagem do servidor aparece.
       setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
     } finally {
       setSalvando(false);
@@ -138,12 +205,16 @@ export default function Elefante() {
 
   async function salvarFaixas() {
     if (!escolaId || !faixasDe) return;
+    if (faixasMotivo.trim().length < MOTIVO_MINIMO) {
+      setErro(MSG_MOTIVO);
+      return;
+    }
     setSalvando(true);
     setErro("");
     try {
       await api(`/escolas/${escolaId}/elefante/${faixasDe.aluno_id}/niveis`, {
         method: "PUT",
-        body: JSON.stringify({ faixas: faixasForm, motivo: faixasMotivo || null }),
+        body: JSON.stringify({ faixas: faixasForm, motivo: faixasMotivo.trim() }),
       });
       setFaixasDe(null);
       recarregarLinhas();
@@ -280,6 +351,7 @@ export default function Elefante() {
             Informe quantos livros o aluno concluiu em cada nível. O total e os pontos de
             dificuldade são calculados automaticamente pela régua Constela.
           </p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{NOTA_AJUSTE_MANUAL}</p>
           {erroNiveis ? (
             <Mensagem tipo="erro">{erroNiveis.message}</Mensagem>
           ) : niveis.length === 0 ? (
@@ -298,11 +370,15 @@ export default function Elefante() {
                   <input
                     type="number"
                     min={0}
+                    max={CONTAGEM_MAXIMA}
                     className={estiloInput}
                     value={faixa.codigo ? faixasForm[faixa.codigo] ?? 0 : 0}
                     onChange={(e) =>
                       faixa.codigo &&
-                      setFaixasForm({ ...faixasForm, [faixa.codigo]: Math.max(0, Number(e.target.value)) })
+                      setFaixasForm({
+                        ...faixasForm,
+                        [faixa.codigo]: Math.min(CONTAGEM_MAXIMA, Math.max(0, Math.trunc(Number(e.target.value) || 0))),
+                      })
                     }
                   />
                 </Campo>
@@ -312,7 +388,7 @@ export default function Elefante() {
           <p className="text-sm font-medium">
             Total: {numero(totalFaixas)} livro{totalFaixas === 1 ? "" : "s"}
           </p>
-          <Campo rotulo="Motivo (fica no log de auditoria)">
+          <Campo rotulo="Motivo (obrigatório — fica no log de auditoria)">
             <input
               className={estiloInput}
               placeholder="Ex.: dados informados pela professora"
@@ -360,13 +436,14 @@ export default function Elefante() {
               />
             </Campo>
           </div>
-          <Campo rotulo="Motivo da edição (fica no log de auditoria)">
+          <Campo rotulo="Motivo da edição (obrigatório — fica no log de auditoria)">
             <input
               className={estiloInput} placeholder="Ex.: correção de erro do relatório"
               value={formulario.motivo}
               onChange={(e) => setFormulario({ ...formulario, motivo: e.target.value })}
             />
           </Campo>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{NOTA_AJUSTE_MANUAL}</p>
           {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">
             <Botao variante="neutro" onClick={() => setEditando(null)} disabled={salvando}>Cancelar</Botao>

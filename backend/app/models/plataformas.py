@@ -150,6 +150,24 @@ class SyncMarcador(Base):
 
 
 class Livro(Base):
+    """Livro do catálogo da escola.
+
+    IDENTIDADE OFICIAL: ``elefante_id`` é o id do livro no catálogo oficial do
+    Elefante Letrado (``dados/catalogo_elefante.json``). Quando existe, é a chave
+    de casamento da sincronização/importação — o título é só um fallback para
+    livros fora do catálogo. ``nivel_codigo`` é o nível EFETIVO (o que pontua);
+    ``nivel_fonte`` é o último nível recebido da fonte oficial, para que uma
+    divergência seja detectável. ``origem_nivel`` diz quem definiu o nível
+    efetivo: ``fonte`` (sincronização/catálogo), ``admin_global`` (correção
+    deliberada) ou ``legado`` (linha anterior a esta governança).
+
+    O default de ``origem_nivel`` é ``legado`` — o valor HONESTO para qualquer
+    livro criado fora dos caminhos governados (restauração de backup anterior a
+    esta governança, script, teste). Quem tem aval para carimbar a origem grava
+    ``fonte``/``admin_global`` EXPLICITAMENTE: a importação/sincronização só com
+    casamento real no catálogo oficial e o CRUD do Admin Global.
+    """
+
     __tablename__ = "livros"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -160,6 +178,12 @@ class Livro(Base):
     categoria: Mapped[str | None] = mapped_column(String(100))
     paginas: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)
+    elefante_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    nivel_fonte: Mapped[str | None] = mapped_column(String(5), default=None)
+    origem_nivel: Mapped[str] = mapped_column(String(20), default="legado",
+                                              server_default="legado")
+    word_count: Mapped[int | None] = mapped_column(default=None)
+    atualizado_em: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class Leitura(Base):
@@ -186,5 +210,12 @@ class Leitura(Base):
     data: Mapped[datetime] = mapped_column(default=agora, index=True)
     # Tempo gasto naquela leitura, em minutos (quando o relatório informa).
     tempo_leitura_min: Mapped[int | None] = mapped_column(default=None)
+    # NÍVEL CONGELADO: o nível EFETIVO do livro no momento em que a leitura foi
+    # registrada, com a versão do catálogo que o resolveu. É o que VALE para
+    # pontuar esta leitura — corrigir o catálogo depois não reescreve o passado
+    # (nem na nota gravada, nem nas telas por período). Nulo = leitura anterior a
+    # esta versão: o valor cai no nível atual do Livro (fallback determinístico).
+    nivel_codigo: Mapped[str | None] = mapped_column(String(5), default=None)
+    catalogo_versao: Mapped[str | None] = mapped_column(String(12), default=None)
 
     livro: Mapped[Livro] = relationship()

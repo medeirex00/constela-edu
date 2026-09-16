@@ -970,13 +970,24 @@ class ConectorElefante(ConectorNavegador):
                         entregues.add(sid)
                         for b in livros:
                             if isinstance(b, dict) and b.get("bookTitle"):
-                                leituras.append({
+                                item_l = {
                                     "nome": nome_al,
                                     "bookTitle": b.get("bookTitle"),
                                     "levelName": b.get("levelName"),
                                     "genre": b.get("genre"), "theme": b.get("theme"),
                                     "totalTimeSpent": b.get("totalTimeSpent"),
-                                    "lastReadWhen": b.get("lastReadWhen")})
+                                    "lastReadWhen": b.get("lastReadWhen")}
+                                # IDENTIDADE OFICIAL do livro (``bookId`` do
+                                # catálogo do Elefante), quando a API a expõe: o
+                                # importador casa por ela antes do título. SÓ
+                                # ``bookId`` — um ``id`` genérico do payload é o
+                                # id do REGISTRO de leitura, não do livro, e
+                                # vincularia o livro ao id errado (duplicata
+                                # quando o bookId verdadeiro chegasse depois).
+                                id_livro = b.get("bookId")
+                                if id_livro is not None:
+                                    item_l["bookId"] = id_livro
+                                leituras.append(item_l)
                     # O CURSOR AVANÇA SÓ APÓS SUCESSO: quem teve os livros entregues
                     # nesta sync recebe o novo total; quem falhou (lote inteiro
                     # falhou, ou o aluno veio sem `books`) fica SEM cursor novo → a

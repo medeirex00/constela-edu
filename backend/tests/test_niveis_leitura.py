@@ -81,7 +81,8 @@ def test_informar_niveis_pela_api(cliente, db, escola_completa):
     ana = escola_completa["alunos"][0]
 
     resposta = cliente.put(_url(escola.id, f"/{ana.id}/niveis"),
-                           json={"faixas": {"pre_leitor": 8, "nivel_2": 3}})
+                           json={"faixas": {"pre_leitor": 8, "nivel_2": 3},
+                                 "motivo": "dados informados pela professora"})
     assert resposta.status_code == 200, resposta.text
     assert resposta.json()["livros_unicos"] == 11
 
@@ -104,7 +105,8 @@ def test_informar_niveis_recusa_faixa_desconhecida(cliente, escola_completa):
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     resposta = cliente.put(_url(escola.id, f"/{ana.id}/niveis"),
-                           json={"faixas": {"nivel_99": 5}})
+                           json={"faixas": {"nivel_99": 5},
+                                 "motivo": "dados informados pela professora"})
     assert resposta.status_code == 400
     assert "desconhecida" in resposta.json()["detail"]
 

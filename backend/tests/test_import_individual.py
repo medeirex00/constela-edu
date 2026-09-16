@@ -336,11 +336,13 @@ def test_nivel_fora_das_faixas_gera_aviso(cliente, db, escola_completa):
     """Nível de letra não configurado avisa que não pontua por dificuldade."""
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
-    # "ZZ" não está em nenhuma faixa da fixture (Pré-Leitor AA/BB, Nível 2 D/E)
+    # "K" é nível OFICIAL, mas não está em nenhuma faixa da fixture (Pré-Leitor
+    # AA/BB, Nível 2 D/E). (Antes usava "ZZ"; pela governança do catálogo um
+    # código fora do vocabulário oficial agora é linha ignorada, com aviso.)
     conf = cliente.post(
         f"/api/v1/escolas/{escola.id}/importacoes/confirmar",
         json={"plataforma": "elefante", "formato": "leituras", "tipo": "pdf",
               "linhas": [{"nome": ana.nome, "aluno_id": ana.id,
-                          "dados": {"livro": "Livro Raro", "nivel": "ZZ"}}]})
+                          "dados": {"livro": "Livro Raro", "nivel": "K"}}]})
     assert conf.status_code == 200, conf.text
-    assert any("ZZ" in a and "faixa" in a for a in conf.json()["avisos"])
+    assert any("níveis K" in a and "faixa" in a for a in conf.json()["avisos"])
