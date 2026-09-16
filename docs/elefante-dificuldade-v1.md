@@ -1,5 +1,11 @@
 # Dificuldade por livro do Elefante Letrado — `elefante_dificuldade_v1`
 
+> **Aviso (2026-09-15):** a versão vigente é **`elefante_dificuldade_v2`** — ver
+> [`elefante-dificuldade-v2.md`](elefante-dificuldade-v2.md). A fórmula e os parâmetros
+> são os mesmos desta v1; a v2 muda a identificação do livro (`elefante_id`), o fallback
+> auditável de wordCount e as guardas numéricas. Este documento fica como registro da
+> calibração (dataset, modelos comparados, fator de série) e das correções P0–P7.
+
 Regra **global** (rede inteira) que dá a cada leitura um valor de dificuldade a partir
 dos **metadados objetivos do livro** e da **série do aluno**. Substitui a camada
 "pontos de dificuldade" do scoring do Elefante; **não** altera `calcular_elefante`,

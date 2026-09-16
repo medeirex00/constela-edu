@@ -78,6 +78,83 @@ def test_rede_nao_agrega_notas_sem_carimbo_como_zero_e_recalculo_as_inclui(clien
     assert db.execute(select(Nota).where(Nota.aluno_id == ana.id)).scalars().one().detalhes == antes
 
 
+def test_nota_com_regua_antiga_e_pendente_sem_mudar_o_que_a_rede_agrega(db, escola_completa):
+    """Nota CALCULADA por uma régua anterior (carimbo v1, vigente v2) é pendente
+    de recálculo — a MESMA regra de `scripts.recalcular_institucional --pendentes`,
+    agora também no painel da rede — mas continua AGREGADA: é número calculado,
+    não ausência de cálculo. Trocar a versão da régua não recalcula nada sozinho."""
+    esc = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    livro = Livro(escola_id=esc.id, titulo="Curiosidades 7", nivel_codigo="D")
+    db.add(livro)
+    db.flush()
+    db.add(Leitura(escola_id=esc.id, aluno_id=ana.id, livro_id=livro.id, tempo_leitura_min=10))
+    db.commit()
+    scoring.recalcular_escola(db, esc.id)
+    medias = svc_rede._medias_por_plataforma
+    antes = medias(db, [esc.id], SnapshotElefante, Nota.nota_elefante_institucional)[esc.id]
+    assert antes[0] == 1 and antes[1] > 0
+    assert svc_rede._pendentes_recalculo(db, [esc.id]) == {}   # carimbo vigente: nada pendente
+
+    nota = db.execute(select(Nota).where(Nota.aluno_id == ana.id)).scalars().one()
+    nota.detalhes = {**nota.detalhes, "regua_institucional": {
+        "versao_dificuldade": dl.VERSAO_V1, "perfil_local": "institucional"}}
+    db.commit()
+
+    # 1) passa a contar como pendente (era invisível: só a falta de carimbo contava)
+    assert svc_rede._pendentes_recalculo(db, [esc.id]) == {esc.id: 1}
+    assert esc.id in svc_rede.escolas_com_notas_pendentes(db)
+    # 2) o AGREGADO não muda — a nota v1 continua entrando na média da rede
+    assert medias(db, [esc.id], SnapshotElefante, Nota.nota_elefante_institucional)[esc.id] == antes
+    # 3) e nada foi recalculado em silêncio
+    db.refresh(nota)
+    assert nota.detalhes["regua_institucional"]["versao_dificuldade"] == dl.VERSAO_V1
+
+    scoring.recalcular_escola(db, esc.id)          # ação EXPLÍCITA do Admin Global
+    assert svc_rede._pendentes_recalculo(db, [esc.id]) == {}   # idempotente
+
+
+def test_dashboard_da_rede_nao_muda_nenhum_numero_quando_a_nota_vira_v1(db, escola_completa):
+    """RECONFERÊNCIA do ajuste 4, no PAINEL inteiro (não só no helper privado).
+
+    Carimbar a nota com uma régua anterior só pode mexer no bloco OPERACIONAL
+    (`recalculo_pendente`). Todo o resto do `dashboard_rede` — cartões, médias,
+    adoção, índice, totais, lista de atenção — tem de sair byte a byte igual: a
+    rede continua agregando a nota v1 (é número calculado, não ausência), e nada
+    é recalculado sozinho."""
+    from app.models import Rede
+
+    esc = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    rede = Rede(nome="Rede de Teste", uf="SP", status="ativa")
+    db.add(rede)
+    db.flush()
+    esc.rede_id = rede.id
+    livro = Livro(escola_id=esc.id, titulo="Curiosidades 8", nivel_codigo="D")
+    db.add(livro)
+    db.flush()
+    db.add(Leitura(escola_id=esc.id, aluno_id=ana.id, livro_id=livro.id, tempo_leitura_min=10))
+    db.commit()
+    scoring.recalcular_escola(db, esc.id)
+
+    antes = svc_rede.dashboard_rede(db, rede.id)
+    assert antes["recalculo_pendente"]["total"] == 0
+
+    nota = db.execute(select(Nota).where(Nota.aluno_id == ana.id)).scalars().one()
+    nota.detalhes = {**nota.detalhes, "regua_institucional": {
+        "versao_dificuldade": dl.VERSAO_V1, "perfil_local": "institucional"}}
+    db.commit()
+    depois = svc_rede.dashboard_rede(db, rede.id)
+
+    # 1) o bloco operacional acusa a régua antiga...
+    assert depois["recalculo_pendente"]["total"] == 1
+    assert depois["recalculo_pendente"]["por_escola"] == {str(esc.id): 1}
+    # 2) ...e TUDO o mais é idêntico (comparação total, não campo a campo escolhido)
+    assert json.dumps({k: v for k, v in depois.items() if k != "recalculo_pendente"},
+                      sort_keys=True, default=str) ==         json.dumps({k: v for k, v in antes.items() if k != "recalculo_pendente"},
+                   sort_keys=True, default=str)
+
+
 def test_rede_conta_aluno_com_leituras_sem_snapshot_como_dado_do_elefante(db, escola_completa):
     esc = escola_completa["escola"]
     ana = escola_completa["alunos"][0]

@@ -148,15 +148,18 @@ def test_hibrido_itemizados_valem_o_proprio_valor_e_o_restante_vale_o_tipico():
         pytest.approx(round(por_chave["Z"] + por_chave["D"], 2), abs=0.01)
 
 
-def test_hibrido_snapshot_velho_usa_so_os_itemizados_e_delta_negativo_passa():
+def test_hibrido_snapshot_velho_usa_so_os_itemizados_e_contagem_negativa_vale_zero():
     regra = dl.RegraV1()
     leituras = [("O Castelo Encantado", "Z"), ("A coragem das coisas simples", "Z")]
     por_chave = regra.pontos_por_chave({"Z": 1}, "5º Ano", leituras=leituras)    # contagem < itens
     assert por_chave["Z"] == pytest.approx(sum(regra.valor_livro("Z", t, "5º Ano") for t, _ in leituras), rel=1e-4)
     sem_snapshot = regra.pontos_por_chave({}, "5º Ano", leituras=[("Domingo", "A")])
     assert sem_snapshot == {"A": pytest.approx(regra.valor_livro("A", "Domingo", "5º Ano"), rel=1e-4)}
-    delta = regra.pontos_por_chave({"D": -2}, "5º Ano")          # evolução: delta de snapshot
-    assert delta["D"] == pytest.approx(-2 * regra.valor_tipico("D", "5º Ano"), rel=1e-4)
+    # Guarda da v2 (regra do dono): contagem negativa vale 0 — um snapshot manual
+    # não subtrai pontos, e a evolução só passa ganhos positivos (_delta_niveis).
+    # Na v1 o delta negativo passava como estava (−2 × típico).
+    delta = regra.pontos_por_chave({"D": -2}, "5º Ano")
+    assert delta == {"D": 0.0}
     assert regra.pontos_por_chave({"nivel_2": 2, "aa": 1}, "1º Ano") == {
         "nivel_2": pytest.approx(2 * regra.valor_tipico("nivel_2", "1º Ano"), rel=1e-4),
         "aa": pytest.approx(1 * regra.valor_tipico("AA", "1º Ano"), rel=1e-4)}
@@ -195,5 +198,6 @@ def test_duas_escolas_com_os_mesmos_dados_recebem_o_mesmo_valor_pela_regra_globa
 
 def test_parametros_publicos_sao_json_serializaveis_e_carimbam_a_versao():
     p = dl.parametros_publicos()
-    assert json.dumps(p) and p["versao"] == dl.VERSAO_VIGENTE == "elefante_dificuldade_v1"
+    # o sentido é "carimba a versão VIGENTE" (hoje a v2): a constante, não o literal
+    assert json.dumps(p) and p["versao"] == dl.VERSAO_VIGENTE
     assert set(p["fator_serie"]) == {"1", "2", "3", "4", "5"} or set(p["fator_serie"]) == {1, 2, 3, 4, 5}

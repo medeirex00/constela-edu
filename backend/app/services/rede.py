@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import secrets
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -33,10 +33,12 @@ from app.models import (
 )
 
 # CARIMBO institucional (JSON path, visível em SQL no SQLite e no Postgres): só a
-# Nota gravada por `scoring.recalcular_escola` com a régua vigente o carrega.
-# Linhas anteriores (migração 0028: colunas `*_institucional` com default 0,0 e
-# SEM backfill) não têm carimbo — a rede NÃO as agrega como zero: ficam
+# Nota gravada por `scoring.recalcular_escola` o carrega, com a VERSÃO da régua
+# usada. Linhas anteriores (migração 0028: colunas `*_institucional` com default
+# 0,0 e SEM backfill) não têm carimbo — a rede NÃO as agrega como zero: ficam
 # "pendentes de recálculo" até `scripts.recalcular_institucional --pendentes`.
+# Carimbo com versão ANTIGA (ex.: v1 quando a vigente é a v2) continua sendo
+# agregado — é número calculado, não ausência —, mas também conta como pendente.
 _CARIMBO_INSTITUCIONAL = Nota.detalhes["regua_institucional"]["versao_dificuldade"].as_string()
 
 
@@ -50,10 +52,28 @@ def _matriculado_no_ano_ativo():
     )
 
 
+def _carimbo_pendente():
+    """Nota que ainda PRECISA de recálculo institucional. Duas situações, a mesma
+    regra de ``scripts.recalcular_institucional --pendentes``:
+
+    1. **sem carimbo** — linha anterior à régua institucional (migração 0028, sem
+       backfill): a rede a deixa FORA da média (ausência de cálculo, não zero);
+    2. **carimbo com versão ≠ da vigente** — foi calculada, é agregada
+       normalmente, mas por uma régua antiga (ex.: v1 com a v2 vigente).
+
+    Em SQL, ``carimbo != 'v2'`` é NULL quando não há carimbo — por isso o ``OR``
+    explícito com ``IS NULL`` (o caso 1 não pode depender do caso 2)."""
+    return or_(_CARIMBO_INSTITUCIONAL.is_(None),
+               _CARIMBO_INSTITUCIONAL != dificuldade_livro.VERSAO_VIGENTE)
+
+
 def _pendentes_recalculo(db: Session, ids: list[int]) -> dict[int, int]:
-    """``{escola_id: nº de notas do ano ativo SEM carimbo institucional}`` entre
-    os alunos ativos matriculados — o que a rede deixa FORA da média (ausência
-    de cálculo, não zero) até o recálculo institucional."""
+    """``{escola_id: nº de notas do ano ativo pendentes de recálculo}`` entre os
+    alunos ativos matriculados (ver ``_carimbo_pendente``).
+
+    Só CONTA: o que a rede agrega não muda por causa disto — as médias continuam
+    lendo qualquer nota carimbada, e trocar a versão da régua não recalcula nada
+    sozinho (só o Admin Global, explicitamente, pelo script)."""
     if not ids:
         return {}
     linhas = db.execute(
@@ -64,18 +84,19 @@ def _pendentes_recalculo(db: Session, ids: list[int]) -> dict[int, int]:
                Nota.ano_letivo == Escola.ano_letivo_ativo,
                Aluno.status == "ativo",
                _matriculado_no_ano_ativo(),
-               _CARIMBO_INSTITUCIONAL.is_(None))
+               _carimbo_pendente())
         .group_by(Nota.escola_id)
     ).all()
     return {linha[0]: int(linha[1] or 0) for linha in linhas}
 
 
 def escolas_com_notas_pendentes(db: Session) -> list[int]:
-    """Escolas com alguma Nota do ano ativo sem carimbo institucional (para o
+    """Escolas com alguma Nota do ano ativo pendente de recálculo — sem carimbo
+    institucional OU carimbada com versão de régua diferente da vigente (para o
     recálculo pós-deploy ser seletivo e idempotente)."""
     ids = [e for (e,) in db.execute(select(Escola.id)).all()]
     return sorted(_pendentes_recalculo(db, ids))
-from app.services import modulos, scoring
+from app.services import dificuldade_livro, modulos, scoring
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -589,9 +610,11 @@ def dashboard_rede(db: Session, rede_id: int) -> dict:
         # Atalho: só as escolas que precisam de atenção (a lista de ação da rede).
         "atencao": [c for c in cartoes if c["precisa_atencao"]],
         # OPERACIONAL (não é métrica — fica fora dos cartões/totais): notas do
-        # ano ativo ainda SEM o carimbo da régua institucional vigente. Elas
-        # ficam FORA das médias (não entram como zero); total > 0 = rodar
-        # `python -m scripts.recalcular_institucional --pendentes` após o deploy.
+        # ano ativo que ainda não passaram pela régua institucional VIGENTE — sem
+        # carimbo (essas ficam FORA das médias, não entram como zero) ou
+        # carimbadas com uma versão anterior da régua (essas são agregadas, mas
+        # pelo número antigo). total > 0 = rodar
+        # `python -m scripts.recalcular_institucional --pendentes`.
         "recalculo_pendente": _recalculo_pendente(db, [c["escola_id"] for c in cartoes]),
     }
 

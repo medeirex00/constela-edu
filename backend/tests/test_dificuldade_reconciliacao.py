@@ -80,8 +80,9 @@ def test_nivel_fora_da_regua_e_delta_negativo(regra):
     # chave suja no snapshot vale 0 e é coberta pelo excedente; o item vale o dele
     assert regra.pontos_aluno({"XYZ": 2}, "5º Ano", leituras=[("Domingo", "A")]) == pytest.approx(
         regra.valor_livro("A", "Domingo", "5º Ano"), abs=0.01)
-    # delta negativo (evolução) passa como está
-    assert regra.pontos_por_chave({"D": -2}, "5º Ano")["D"] == pytest.approx(-2 * regra.valor_tipico("D", "5º Ano"), abs=0.01)
+    # contagem negativa vale 0 (guarda da v2: nenhum valor negativo; a evolução
+    # só repassa ganhos positivos, então nada legítimo chega negativo aqui)
+    assert regra.pontos_por_chave({"D": -2}, "5º Ano")["D"] == pytest.approx(0.0, abs=0.01)
 
 
 def test_itens_alem_da_contagem_e_ordem_das_chaves_nao_importam(regra):

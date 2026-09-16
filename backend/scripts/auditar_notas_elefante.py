@@ -63,6 +63,29 @@ def _sem_niveis(snap) -> bool:
                 and not any(int(v or 0) for v in (snap.livros_por_nivel or {}).values()))
 
 
+def _valor_da_leitura(regra, leitura, livro, ano_escolar, turma_id):
+    """Valor de UMA leitura pela MESMA identificação que os consumidores usam:
+
+    * o livro é identificado pelo **id oficial** (``elefante_id``) antes do
+      título — título renomeado na escola não muda mais o wordCount usado;
+    * o nível que vale é o **congelado na leitura** (``Leitura.nivel_codigo``),
+      caindo no nível atual do livro quando NULO (leitura anterior à 0031) —
+      o mesmo ``coalesce`` do motor.
+
+    Sem isso a auditoria valorava por título+nível ao vivo e acusava divergência
+    contra o próprio motor em livro renomeado ou nível corrigido no catálogo.
+
+    O fallback é por ``is None``, não por "vazio": em SQL, ``coalesce`` só cai no
+    nível do livro quando a coluna é NULA. Nível congelado vazio é congelamento
+    válido (nível desconhecido, 0 ponto) — usar ``or`` aqui faria a auditoria
+    valorar acima do motor e acusar divergência falsa.
+    """
+    congelado = getattr(leitura, "nivel_codigo", None)
+    nivel = livro.nivel_codigo if congelado is None else congelado
+    return regra.valor_livro(nivel, livro.titulo, ano_escolar, turma_id,
+                             elefante_id=livro.elefante_id)
+
+
 def auditar_escola(db, escola, fake_admin, cat):
     eid, ano = escola.id, escola.ano_letivo_ativo
     R = {"escola_id": eid, "escola": escola.nome, "ano": ano}
@@ -123,7 +146,11 @@ def auditar_escola(db, escola, fake_admin, cat):
         c = Counter(norm(livro_por_id[l.livro_id].titulo) for l in ls if l.livro_id in livro_por_id)
         dup_leit_titulo += sum(1 for v in c.values() if v > 1)
     dup_snaps = [g for g in Counter((s.aluno_id, s.data_referencia) for s in snaps).items() if g[1] > 1]
-    fora_catalogo = [l for l in livros if cat.buscar(l.titulo, l.nivel_codigo) is None]
+    # IDENTIDADE oficial primeiro (como a regra resolve): livro com elefante_id no
+    # catálogo está DENTRO dele, mesmo com o título renomeado na escola.
+    fora_catalogo = [l for l in livros
+                     if cat.buscar_por_id(l.elefante_id) is None
+                     and cat.buscar(l.titulo, l.nivel_codigo) is None]
     ult = {}
     for s in snaps:
         if s.aluno_id not in ult or s.id > ult[s.aluno_id].id:
@@ -292,8 +319,7 @@ def auditar_escola(db, escola, fake_admin, cat):
             perfil = scoring.distribuicao_niveis(
                 db, eid, s.livros_por_nivel if s else {}, t.ano_escolar if t else "",
                 aluno_id=aid, livros_unicos=(s.livros_unicos if s else 0))["pontos_dificuldade"]
-            hist = round(sum(regra.valor_livro(livro_por_id[l.livro_id].nivel_codigo,
-                                               livro_por_id[l.livro_id].titulo,
+            hist = round(sum(_valor_da_leitura(regra, l, livro_por_id[l.livro_id],
                                                t.ano_escolar if t else None, t.id if t else None)
                              for l in leit_por_aluno.get(aid, []) if l.livro_id in livro_por_id), 2)
             evo = round(sum(x["pontos"] for x in evolucao.evolucao_leitura(db, eid, aid, "mes")["series"]), 2)
