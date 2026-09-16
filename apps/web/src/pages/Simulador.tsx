@@ -9,12 +9,53 @@ import { api } from "../lib/api";
 import { nota } from "../lib/formato";
 import type { LinhaCalculo, Turma } from "../lib/types";
 
+/** Vocabulário OFICIAL de níveis do Elefante — o mesmo que o servidor valida e o
+ *  mesmo de Elefante.tsx (ainda duplicado nas duas telas; ver pendências). */
+const NIVEIS_OFICIAIS = new Set([
+  "AA", "BB", "CC", "DD", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L",
+  "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Z+", "A+",
+]);
+
+/** Interpreta "AA:2, Z+:3". Cada pedaço precisa ser um nível oficial (AA…Z, Z+,
+ *  A+) com contagem inteira; qualquer pedaço inválido devolve ERRO.
+ *
+ *  A regex anterior (`/([A-Za-z]{1,2})\s*[:=]\s*(\d+)/`) descartava Z+ e A+ em
+ *  silêncio e transformava "pre_leitor" no nível inexistente "OR": o simulador
+ *  calculava uma distribuição que ninguém digitou, e a nota saía menor sem
+ *  aviso nenhum. Errar em voz alta é melhor do que simular outro aluno. */
+function textoParaNiveis(texto: string): { niveis: Record<string, number> } | { erro: string } {
+  const niveis: Record<string, number> = {};
+  const invalidos: string[] = [];
+  for (const pedaco of texto.split(/[,;\n]/).map((p) => p.trim()).filter(Boolean)) {
+    const partes = /^([A-Za-z][A-Za-z0-9_]*\+?)\s*[:=]\s*(\d+)$/.exec(pedaco);
+    const codigo = partes ? partes[1].toUpperCase() : "";
+    if (!partes || !NIVEIS_OFICIAIS.has(codigo)) {
+      invalidos.push(pedaco);
+      continue;
+    }
+    niveis[codigo] = (niveis[codigo] ?? 0) + Number(partes[2]);
+  }
+  if (invalidos.length > 0) {
+    return {
+      erro:
+        `Texto inválido: ${invalidos.map((p) => `“${p}”`).join(", ")}. Use níveis do Elefante ` +
+        "(AA…Z, Z+, A+) no formato AA:2, D:1.",
+    };
+  }
+  return { niveis };
+}
+
 interface Resultado {
+  /** Régua que produziu esta simulação: a institucional da rede (padrão) ou a
+   *  personalizada desta escola. No perfil institucional o motor IGNORA a
+   *  configuração local de pesos/referências — e o simulador também. */
+  perfil?: "institucional" | "personalizado";
   modo_normalizacao: string;
   pontos_dificuldade: number;
   matific: { indicadores: LinhaCalculo[]; nota: number };
   elefante: { indicadores: LinhaCalculo[]; nota: number };
-  geral: { pesos: Record<string, number>; nota: number };
+  /** LEGADO: a composição entre matérias. `legado: true` vem do backend. */
+  geral: { pesos: Record<string, number>; nota: number; legado?: boolean };
 }
 
 export default function Simulador() {
@@ -24,7 +65,7 @@ export default function Simulador() {
   const [formulario, setFormulario] = useState({
     ano_escolar: "",
     atividades: 20,
-    pontuacao_media: 75,
+    pontuacao_media: 4,
     estrelas: 100,
     niveis_texto: "AA:2, D:1",
     tempo_leitura_min: 120,
@@ -45,13 +86,17 @@ export default function Simulador() {
 
   async function simular() {
     if (!escolaId || !formulario.ano_escolar) return;
+    // Distribuição inválida não vira simulação: mostra o erro e NÃO chama a API
+    // (simular com os níveis que sobraram seria simular outro aluno).
+    const analise = textoParaNiveis(formulario.niveis_texto);
+    if ("erro" in analise) {
+      setErro(analise.erro);
+      setResultado(null);
+      return;
+    }
     setOcupado(true);
     setErro("");
     try {
-      const niveis: Record<string, number> = {};
-      for (const [, codigo, quantidade] of formulario.niveis_texto.matchAll(/([A-Za-z]{1,2})\s*[:=]\s*(\d+)/g)) {
-        niveis[codigo.toUpperCase()] = Number(quantidade);
-      }
       setResultado(
         await api<Resultado>(`/escolas/${escolaId}/simulador`, {
           method: "POST",
@@ -60,7 +105,7 @@ export default function Simulador() {
             atividades: formulario.atividades,
             pontuacao_media: formulario.pontuacao_media,
             estrelas: formulario.estrelas,
-            livros_por_nivel: niveis,
+            livros_por_nivel: analise.niveis,
             tempo_leitura_min: formulario.tempo_leitura_min,
             questoes_tentativas: formulario.questoes_tentativas,
             questoes_acertos: formulario.questoes_acertos,
@@ -79,11 +124,11 @@ export default function Simulador() {
     }
   }
 
-  function numeroCampo(rotulo: string, chave: keyof typeof formulario, max?: number) {
+  function numeroCampo(rotulo: string, chave: keyof typeof formulario, max?: number, step?: string) {
     return (
       <Campo rotulo={rotulo}>
         <input
-          type="number" min={0} max={max} className={estiloInput}
+          type="number" min={0} max={max} step={step} className={estiloInput}
           value={formulario[chave] as number}
           onChange={(e) => setFormulario({ ...formulario, [chave]: Number(e.target.value) })}
         />
@@ -95,7 +140,7 @@ export default function Simulador() {
     <div>
       <PageHeader
         titulo="Simulador de Pontuação"
-        descricao="Calcule a nota de um aluno hipotético com os pesos e referências ATUAIS da escola. Nada é gravado."
+        descricao="Calcule a nota de um aluno hipotético com a MESMA régua que o motor aplica nesta escola. Nada é gravado."
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -108,7 +153,7 @@ export default function Simulador() {
               </select>
             </Campo>
             {numeroCampo("Atividades (Matific)", "atividades")}
-            {numeroCampo("Pontuação média", "pontuacao_media", 100)}
+            {numeroCampo("Pontuação média (0 a 5)", "pontuacao_media", 5, "0.1")}
             {numeroCampo("Estrelas", "estrelas")}
             <div className="col-span-2">
               <Campo rotulo="Livros por nível (ex.: AA:2, D:1)">
@@ -162,7 +207,16 @@ export default function Simulador() {
                     </li>
                   ))}
                 </ul>
+                {/* QUAL régua produziu estes números. No perfil institucional
+                    (padrão) o motor ignora a configuração local de pesos e
+                    referências — dizer "os pesos da escola" seria falso. */}
                 <p className="mt-3 text-xs text-zinc-400">
+                  Régua:{" "}
+                  {resultado.perfil === "personalizado"
+                    ? "personalizada desta escola, autorizada pela Constela"
+                    : "Régua Padrão Constela — a mesma para toda a rede (a configuração local de pesos e referências não entra nesta conta)"}
+                </p>
+                <p className="mt-1 text-xs text-zinc-400">
                   Pontos de dificuldade: {nota(resultado.pontos_dificuldade)} · Normalização:{" "}
                   {resultado.modo_normalizacao === "auto" ? "automática" : "manual"}
                 </p>

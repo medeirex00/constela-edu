@@ -137,7 +137,10 @@ def notificacoes(
 class SimulacaoIn(BaseModel):
     ano_escolar: str = Field(min_length=1, max_length=30)
     atividades: int = Field(default=0, ge=0)
-    pontuacao_media: float = Field(default=0, ge=0, le=100)
+    # Escala do MATIFIC (0–5, a mesma do snapshot importado). Aceitar até 100
+    # deixava simular um aluno impossível — e a nota sairia de uma régua que
+    # nenhum aluno real alcança.
+    pontuacao_media: float = Field(default=0, ge=0, le=5)
     estrelas: int = Field(default=0, ge=0)
     livros_por_nivel: dict[str, int] = {}
     tempo_leitura_min: int = Field(default=0, ge=0)
@@ -152,11 +155,22 @@ def simular(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Calcula a nota de um aluno hipotético com as regras ATUAIS da escola.
+    """Calcula a nota de um aluno hipotético com as regras que o MOTOR usa de fato.
 
     Nada é gravado: serve para testar o efeito de pesos e referências (§44).
+
+    Cada insumo vem da MESMA fonte que ``scoring.recalcular_escola`` consulta,
+    respeitando o perfil de scoring da escola — no perfil institucional (padrão)
+    a configuração local de pesos/referências/faixas é IGNORADA pelo motor, então
+    o simulador também a ignora; só no perfil ``personalizado`` ela vale:
+      * pesos       → ``scoring.pesos_efetivos`` (todos os namespaces);
+      * referências → ``scoring.contexto_normalizacao``;
+      * dificuldade → ``dificuldade_livro.regra_da_escola``.
+    Sem isto o simulador lia a config local enquanto a nota oficial (premiação,
+    ranking) saía da régua institucional — o mesmo aluno com dois números.
     """
     permissoes.negar_restrito(db, escola_id, usuario)  # config do motor: só gestão
+    perfil = "personalizado" if scoring._scoring_personalizado(db, escola_id) else "institucional"
     refs, modo, k_vol = scoring.contexto_normalizacao(db, escola_id)
     if not refs:
         refs = {chave: 0 for chave in scoring.CHAVES_REFERENCIA}
@@ -178,13 +192,12 @@ def simular(
     pontos_dif = dificuldade_livro.regra_da_escola(db, escola_id).pontos_aluno(
         livros_por_nivel, dados.ano_escolar)
 
-    p_matific = scoring.obter_pesos(db, escola_id, "pesos.matific")
-    p_elefante = scoring.obter_pesos(db, escola_id, "pesos.elefante")
-    p_questoes = scoring.obter_pesos(db, escola_id, "pesos.questoes")
-    p_geral = scoring.obter_pesos(db, escola_id, "pesos.geral")
-    pct_matific = scoring.obter_pesos_brutos(db, escola_id, "pesos.matific")
-    pct_elefante = scoring.obter_pesos_brutos(db, escola_id, "pesos.elefante")
-    pct_questoes = scoring.obter_pesos_brutos(db, escola_id, "pesos.questoes")
+    # Pesos EFETIVOS (fonte única): institucionais fixos no perfil padrão, config
+    # local só no perfil personalizado — exatamente o que o recálculo usa.
+    p_matific, pct_matific = scoring.pesos_efetivos(db, escola_id, "pesos.matific")
+    p_elefante, pct_elefante = scoring.pesos_efetivos(db, escola_id, "pesos.elefante")
+    p_questoes, pct_questoes = scoring.pesos_efetivos(db, escola_id, "pesos.questoes")
+    p_geral, _ = scoring.pesos_efetivos(db, escola_id, "pesos.geral")
     # Mesma regra do recálculo (scoring.recalcular_escola): a explicação da Nota
     # Geral é DERIVADA dos pesos efetivamente usados, senão o simulador mostra
     # uma conta que não fecha numa rede de um módulo só. O aluno HIPOTÉTICO tem
@@ -203,6 +216,9 @@ def simular(
         nota_m * p_geral.get("matific", 0) + nota_e * p_geral.get("elefante", 0), 2
     )
     return {
+        # Qual régua produziu esta simulação: "institucional" (a da rede, fixa)
+        # ou "personalizado" (config local autorizada pelo Admin Global).
+        "perfil": perfil,
         "modo_normalizacao": modo,
         "referencias": refs,
         "pontos_dificuldade": pontos_dif,

@@ -96,6 +96,31 @@ def _bonus_leitura_na_escola(
             bonus[aluno_id] = bonus.get(aluno_id, 0.0) + pontos_por_livro
     return {aid: round(b, 2) for aid, b in bonus.items()}
 
+
+def pontos_dif_com_bonus(db: Session, escola_id: int, matriculas,
+                         pontos_dif: dict[int, float],
+                         ) -> tuple[dict[int, float], dict[int, float]]:
+    """``(pontos_dif + bônus, bônus por aluno)`` no perfil PERSONALIZADO.
+
+    FONTE ÚNICA do bônus "livro lido NA ESCOLA": o motor (``recalcular_escola``) e
+    o simulador (``contexto_normalizacao``) somam o MESMO valor ANTES de calcular
+    as referências. Sem isso o simulador normalizava a dificuldade por uma régua
+    que não conhecia o bônus e devolvia outra nota de Leitura para o mesmo aluno —
+    a segunda fórmula que o simulador existe para não ter. Bônus desligado (ou
+    pontos ≤ 0) devolve os pontos como estavam. Não muta o dicionário recebido."""
+    extra = obter_config(db, escola_id, "pesos.elefante_extra", "valores",
+                         {"ativo": False, "pontos_por_livro": 0.0})
+    if not extra.get("ativo") or float(extra.get("pontos_por_livro", 0) or 0) <= 0:
+        return dict(pontos_dif), {}
+    turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
+    bonus_por_aluno = _bonus_leitura_na_escola(
+        db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
+    somados = dict(pontos_dif)
+    for aid, b in bonus_por_aluno.items():
+        somados[aid] = somados.get(aid, 0.0) + b
+    return somados, bonus_por_aluno
+
+
 # Valores usados apenas na primeira execução, antes do seed gravar os
 # padrões no banco. Depois disso, a fonte é sempre a tabela `configuracoes`.
 PESOS_PADRAO = {
@@ -168,15 +193,57 @@ CRITERIOS_DESEMPATE_DIMENSAO: dict[str, list[str]] = {
 }
 
 
+def _finito(valor) -> float | None:
+    """``float`` finito ou None (None, bool, texto não numérico, NaN, ±infinito).
+    Guarda numérica da normalização: nada que não seja número finito entra na conta."""
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numero if math.isfinite(numero) else None
+
+
+def _entrada_nao_negativa(valor):
+    """Entrada de indicador/referência como número FINITO ≥ 0, preservando o tipo
+    quando já é válido (``12`` continua ``12`` nos detalhes da Nota). Negativo,
+    NaN, infinito, None ou não numérico → 0."""
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        # `_finito` (e não `math.isfinite` direto) porque um INTEIRO fora do
+        # alcance do float — `10**400`, que o JSON aceita — faz `math.isfinite`
+        # levantar OverflowError no meio do cálculo da nota. Aqui ele é entrada
+        # suja como qualquer outra: 0. Valor válido continua saindo INTACTO.
+        numero = _finito(valor)
+        if numero is not None and numero >= 0:
+            return valor
+        return 0.0 if isinstance(valor, float) else 0
+    numero = _finito(valor)
+    return numero if numero is not None and numero >= 0 else 0
+
+
+def _nota_0_100(nota) -> float:
+    """Nota final sempre finita em [0, 100] (arredondada a 2 casas)."""
+    numero = _finito(nota)
+    if numero is None:
+        return 0.0
+    return round(min(100.0, max(0.0, numero)), 2)
+
+
 def normalizar(valor: float, referencia: float) -> float:
     """Converte um valor bruto para a escala 0–100 usando a referência.
 
-    Referência ausente ou zero resulta em 0 (nada a comparar ainda).
-    O teto é 100 mesmo que um aluno ultrapasse a referência manual.
+    Referência ausente, zero, negativa ou não finita resulta em 0 (nada a
+    comparar ainda); valor ≤ 0 ou não finito também dá 0. O teto é 100 mesmo que
+    um aluno ultrapasse a referência manual. Resultado sempre em [0, 100].
     """
-    if not referencia or referencia <= 0:
+    ref = _finito(referencia)
+    if ref is None or ref <= 0:
         return 0.0
-    return round(min(100.0, (float(valor) / float(referencia)) * 100.0), 2)
+    v = _finito(valor)
+    if v is None or v <= 0:
+        return 0.0
+    return _nota_0_100(min(100.0, (v / ref) * 100.0))
 
 
 # ---------------------------------------------------------------------------
@@ -220,22 +287,45 @@ def normalizar_saturado(valor: float, referencia: float, k: float) -> float:
 
     Curva de saturação hiperbólica ``x/(x+k)``: cresce rápido no começo e satura
     depois. ``k`` é a meia-saturação (mediana da escola) — no valor ``k`` a curva
-    entrega metade do teto. ``k<=0`` ou referência inválida recai no linear.
+    entrega metade do teto. ``k`` ausente/não finito/``<=0`` recai no linear;
+    referência ou valor inválido (≤0, não finito) dá 0.
     Preserva ordem (monótona) e teto 100; comprime distâncias entre volumes altos.
     """
-    if not referencia or referencia <= 0:
+    # GUARDAS: referência ausente/≤0/não finita ou valor ≤0/não finito → 0; k
+    # ausente, não finito ou ≤0 → linear. Resultado sempre em [0, 100].
+    ref = _finito(referencia)
+    if ref is None or ref <= 0:
         return 0.0
-    if not k or k <= 0:
-        return normalizar(valor, referencia)
-    f_ref = referencia / (referencia + k)
-    if f_ref <= 0:
+    v = _finito(valor)
+    if v is None or v <= 0:
         return 0.0
-    return round(min(100.0, (float(valor) / (float(valor) + k)) / f_ref * 100.0), 2)
+    k_f = _finito(k)
+    if k_f is None or k_f <= 0:
+        return normalizar(v, ref)
+    if v >= ref:
+        return 100.0          # curva monótona: na referência ou acima, teto
+    try:
+        f_ref = ref / (ref + k_f)
+        resultado = (v / (v + k_f)) / f_ref * 100.0
+    except ZeroDivisionError:
+        resultado = math.nan
+    if not math.isfinite(resultado):
+        # Magnitudes astronômicas (a soma estoura ou a fração some): a mesma
+        # curva com os três termos reescalados pelo maior; se ainda degenerar, o
+        # limite de k muito maior que a referência é o linear.
+        escala = max(ref, k_f)
+        v_e, ref_e, k_e = v / escala, ref / escala, k_f / escala
+        f_ref_e = ref_e / (ref_e + k_e)
+        if f_ref_e <= 0 or not math.isfinite(f_ref_e):
+            return normalizar(v, ref)
+        resultado = (v_e / (v_e + k_e)) / f_ref_e * 100.0
+    return _nota_0_100(min(100.0, resultado))
 
 
 def _percentil(valores: list[float], p: float) -> float:
     """Percentil ``p`` (0–1) por interpolação linear. Lista vazia → 0."""
-    v = sorted(float(x) for x in valores)
+    # GUARDA: valores não finitos (NaN, ±infinito, None, texto) são ignorados.
+    v = sorted(x for x in (_finito(bruto) for bruto in valores) if x is not None)
     if not v:
         return 0.0
     if len(v) == 1:
@@ -246,6 +336,26 @@ def _percentil(valores: list[float], p: float) -> float:
     if baixo + 1 < len(v):
         return v[baixo] + (v[baixo + 1] - v[baixo]) * frac
     return v[-1]
+
+
+def _ativos_finitos(valores) -> list[float]:
+    """Valores ATIVOS da régua robusta: só números finitos > 0."""
+    return [x for x in (_finito(bruto) for bruto in valores) if x is not None and x > 0]
+
+
+def _maximo_finito(valores):
+    """Régua simples (amostra pequena): o MAIOR valor finito ≥ 0 — o próprio
+    elemento, como ``max`` fazia (``30`` continua ``30``); nenhum → 0."""
+    melhor, melhor_num = None, 0.0
+    for bruto in valores:
+        numero = _finito(bruto)
+        if numero is None or numero < 0:
+            continue
+        if melhor is None or numero > melhor_num:
+            melhor, melhor_num = bruto, numero
+    if melhor is None:
+        return 0
+    return melhor if isinstance(melhor, (int, float)) else melhor_num
 
 
 def referencias_robustas(
@@ -273,13 +383,15 @@ def referencias_robustas(
     k_vol: dict[str, float] = {}
     for indicador, valores in listas.items():
         chave = "max_" + indicador
-        ativos = [x for x in valores if x and x > 0]
+        # GUARDA: ativos = só finitos > 0; no fallback do máximo, só finitos ≥ 0.
+        # A amostra que liga o modo robusto (``n_alunos``) não muda.
+        ativos = _ativos_finitos(valores)
         if usar_robusto and len(ativos) >= 2:
             refs[chave] = _percentil(ativos, 0.90)
             if indicador in INDICADORES_VOLUME:
                 k_vol[indicador] = _percentil(ativos, 0.50)
         else:
-            refs[chave] = max(valores, default=0)
+            refs[chave] = _maximo_finito(valores)
     return refs, k_vol
 
 
@@ -715,7 +827,8 @@ def _referencias_auto(
     k_vol: dict[str, float] = {}
     for indicador, valores in listas.items():
         chave = "max_" + indicador
-        ativos = [x for x in valores if x and x > 0]
+        # GUARDA: ativos = só finitos > 0; máximo só entre finitos ≥ 0 (padrão 0).
+        ativos = _ativos_finitos(valores)
         usar_robusto = (n_por_dimensao[DIMENSAO_DO_INDICADOR[indicador]]
                         >= MIN_ALUNOS_ROBUSTO)
         if usar_robusto and len(ativos) >= 2:
@@ -723,7 +836,7 @@ def _referencias_auto(
             if indicador in INDICADORES_VOLUME:
                 k_vol[indicador] = _percentil(ativos, 0.50)  # meia-saturação = mediana
         else:
-            refs[chave] = max(valores, default=0)          # poucos dados → escala simples
+            refs[chave] = _maximo_finito(valores)          # poucos dados → escala simples
     return refs, k_vol
 
 
@@ -785,13 +898,15 @@ def _norm(indicador: str, valor: float, referencia: float,
 def _linha(nome: str, indicador: str, valor: float, referencia: float,
            peso_pct: float, k_vol: dict[str, float] | None) -> dict:
     norm = _norm(indicador, valor, referencia, k_vol)
+    # GUARDA: peso não finito não vira NaN nos detalhes (JSON inválido).
+    peso_seguro = peso_pct if _finito(peso_pct) is not None else 0
     return {
         "indicador": nome,
         "valor": valor,
         "referencia": referencia,
         "normalizado": norm,
-        "peso": peso_pct,
-        "contribuicao": round(norm * peso_pct / 100.0, 2),
+        "peso": peso_seguro,
+        "contribuicao": round(norm * peso_seguro / 100.0, 2),
     }
 
 
@@ -802,21 +917,27 @@ def calcular_matific(
     pesos_pct: dict[str, float],
     k_vol: dict[str, float] | None = None,
 ) -> tuple[float, list[dict]]:
-    atividades = snapshot.atividades if snapshot else 0
-    media = snapshot.pontuacao_media if snapshot else 0.0
-    estrelas = snapshot.estrelas if snapshot else 0
+    # GUARDAS: entradas e referências como números finitos ≥ 0; referência
+    # inexistente vale 0 (nota 0 no indicador, nunca KeyError); nota em [0, 100].
+    atividades = _entrada_nao_negativa(snapshot.atividades) if snapshot else 0
+    media = _entrada_nao_negativa(snapshot.pontuacao_media) if snapshot else 0.0
+    estrelas = _entrada_nao_negativa(snapshot.estrelas) if snapshot else 0
+    refs = refs or {}
+    ref_atividades = _entrada_nao_negativa(refs.get("max_atividades", 0.0))
+    ref_media = _entrada_nao_negativa(refs.get("max_media", 0.0))
+    ref_estrelas = _entrada_nao_negativa(refs.get("max_estrelas", 0.0))
 
     linhas = [
-        _linha("Atividades finalizadas", "atividades", atividades, refs["max_atividades"], pesos_pct.get("atividades", 0), k_vol),
-        _linha("Pontuação média", "media", media, refs["max_media"], pesos_pct.get("media", 0), k_vol),
-        _linha("Estrelas", "estrelas", estrelas, refs["max_estrelas"], pesos_pct.get("estrelas", 0), k_vol),
+        _linha("Atividades finalizadas", "atividades", atividades, ref_atividades, pesos_pct.get("atividades", 0), k_vol),
+        _linha("Pontuação média", "media", media, ref_media, pesos_pct.get("media", 0), k_vol),
+        _linha("Estrelas", "estrelas", estrelas, ref_estrelas, pesos_pct.get("estrelas", 0), k_vol),
     ]
     nota = (
-        _norm("atividades", atividades, refs["max_atividades"], k_vol) * pesos.get("atividades", 0)
-        + _norm("media", media, refs["max_media"], k_vol) * pesos.get("media", 0)
-        + _norm("estrelas", estrelas, refs["max_estrelas"], k_vol) * pesos.get("estrelas", 0)
+        _norm("atividades", atividades, ref_atividades, k_vol) * pesos.get("atividades", 0)
+        + _norm("media", media, ref_media, k_vol) * pesos.get("media", 0)
+        + _norm("estrelas", estrelas, ref_estrelas, k_vol) * pesos.get("estrelas", 0)
     )
-    return round(nota, 2), linhas
+    return _nota_0_100(nota), linhas
 
 
 def calcular_elefante(
@@ -829,39 +950,47 @@ def calcular_elefante(
     pesos_questoes_pct: dict[str, float],
     k_vol: dict[str, float] | None = None,
 ) -> tuple[float, list[dict], dict]:
-    livros = snapshot.livros_unicos if snapshot else 0
-    tempo = snapshot.tempo_leitura_min if snapshot else 0
-    tentativas = snapshot.questoes_tentativas if snapshot else 0
-    acertos = snapshot.questoes_acertos if snapshot else 0
+    # GUARDAS: entradas e referências como números finitos ≥ 0; referência
+    # inexistente vale 0 (nunca KeyError); sub-nota e nota finais em [0, 100].
+    livros = _entrada_nao_negativa(snapshot.livros_unicos) if snapshot else 0
+    tempo = _entrada_nao_negativa(snapshot.tempo_leitura_min) if snapshot else 0
+    tentativas = _entrada_nao_negativa(snapshot.questoes_tentativas) if snapshot else 0
+    acertos = _entrada_nao_negativa(snapshot.questoes_acertos) if snapshot else 0
+    pontos_dificuldade = _entrada_nao_negativa(pontos_dificuldade)
+    refs = refs or {}
+    ref_livros = _entrada_nao_negativa(refs.get("max_livros", 0.0))
+    ref_dificuldade = _entrada_nao_negativa(refs.get("max_pontos_dificuldade", 0.0))
+    ref_tentativas = _entrada_nao_negativa(refs.get("max_tentativas", 0.0))
+    ref_acertos = _entrada_nao_negativa(refs.get("max_acertos", 0.0))
+    ref_tempo = _entrada_nao_negativa(refs.get("max_tempo", 0.0))
 
     # Sub-nota de questões: tentativas (volume → satura) + acertos (qualidade →
     # linear), PRD §36. Assim tentar muito não infla; acertar é que conta.
-    n_tentativas = _norm("tentativas", tentativas, refs["max_tentativas"], k_vol)
-    n_acertos = normalizar(acertos, refs["max_acertos"])
-    nota_questoes = round(
+    n_tentativas = _norm("tentativas", tentativas, ref_tentativas, k_vol)
+    n_acertos = normalizar(acertos, ref_acertos)
+    nota_questoes = _nota_0_100(
         n_tentativas * pesos_questoes.get("tentativas", 0)
-        + n_acertos * pesos_questoes.get("acertos", 0),
-        2,
+        + n_acertos * pesos_questoes.get("acertos", 0)
     )
     detalhe_questoes = {
-        "tentativas": {"valor": tentativas, "referencia": refs["max_tentativas"], "normalizado": n_tentativas, "peso": pesos_questoes_pct.get("tentativas", 0)},
-        "acertos": {"valor": acertos, "referencia": refs["max_acertos"], "normalizado": n_acertos, "peso": pesos_questoes_pct.get("acertos", 0)},
+        "tentativas": {"valor": tentativas, "referencia": ref_tentativas, "normalizado": n_tentativas, "peso": pesos_questoes_pct.get("tentativas", 0)},
+        "acertos": {"valor": acertos, "referencia": ref_acertos, "normalizado": n_acertos, "peso": pesos_questoes_pct.get("acertos", 0)},
         "sub_nota": nota_questoes,
     }
 
     linhas = [
-        _linha("Livros únicos concluídos", "livros", livros, refs["max_livros"], pesos_pct.get("livros", 0), k_vol),
-        _linha("Pontos de dificuldade", "pontos_dificuldade", pontos_dificuldade, refs["max_pontos_dificuldade"], pesos_pct.get("dificuldade", 0), k_vol),
+        _linha("Livros únicos concluídos", "livros", livros, ref_livros, pesos_pct.get("livros", 0), k_vol),
+        _linha("Pontos de dificuldade", "pontos_dificuldade", pontos_dificuldade, ref_dificuldade, pesos_pct.get("dificuldade", 0), k_vol),
         _linha("Questões (tentativas + acertos)", "questoes", nota_questoes, 100.0, pesos_pct.get("questoes", 0), None),
-        _linha("Tempo de leitura (min)", "tempo", tempo, refs["max_tempo"], pesos_pct.get("tempo", 0), k_vol),
+        _linha("Tempo de leitura (min)", "tempo", tempo, ref_tempo, pesos_pct.get("tempo", 0), k_vol),
     ]
     nota = (
-        _norm("livros", livros, refs["max_livros"], k_vol) * pesos.get("livros", 0)
-        + normalizar(pontos_dificuldade, refs["max_pontos_dificuldade"]) * pesos.get("dificuldade", 0)
+        _norm("livros", livros, ref_livros, k_vol) * pesos.get("livros", 0)
+        + normalizar(pontos_dificuldade, ref_dificuldade) * pesos.get("dificuldade", 0)
         + nota_questoes * pesos.get("questoes", 0)
-        + _norm("tempo", tempo, refs["max_tempo"], k_vol) * pesos.get("tempo", 0)
+        + _norm("tempo", tempo, ref_tempo, k_vol) * pesos.get("tempo", 0)
     )
-    return round(nota, 2), linhas, detalhe_questoes
+    return _nota_0_100(nota), linhas, detalhe_questoes
 
 
 # ---------------------------------------------------------------------------
@@ -1023,7 +1152,18 @@ def contexto_normalizacao(
     contexto = _carregar_contexto(db, escola_id)
     if contexto is None:
         return {}, "auto", {}
-    _, _, _, matific, elefante, pontos_dif = contexto
+    _, _, matriculas, matific, elefante, pontos_dif = contexto
+    if not _scoring_personalizado(db, escola_id):
+        # Perfil institucional: a MESMA régua de `recalcular_escola` (auto P90,
+        # sem modo manual local) — senão o simulador mostrava uma nota que o
+        # motor nunca calcularia para esta escola. O bônus de leitura na escola
+        # não existe neste perfil (só no personalizado, abaixo).
+        refs, k_vol = _referencias_auto(matific, elefante, pontos_dif)
+        return refs, "auto", k_vol
+    # Personalizado: o MESMO bônus que `recalcular_escola` soma em `pontos_dif`
+    # ANTES das referências. Sem esta linha a referência de dificuldade do
+    # simulador (e a nota de Leitura que ele mostra) ficava menor que a oficial.
+    pontos_dif, _ = pontos_dif_com_bonus(db, escola_id, matriculas, pontos_dif)
     return _referencias(db, escola_id, matific, elefante, pontos_dif)
 
 
@@ -1155,6 +1295,26 @@ def _pesos_geral_institucional(db: Session, escola_id: int) -> dict[str, float]:
     return {k: float(v) / total for k, v in valores.items()}
 
 
+def pesos_efetivos(db: Session, escola_id: int,
+                   namespace: str) -> tuple[dict[str, float], dict[str, float]]:
+    """``(frações normalizadas, percentuais brutos)`` dos pesos que o MOTOR usa de
+    fato para esta escola — a FONTE ÚNICA para quem precisa reproduzir a nota
+    (simulador, evolução, premiações).
+
+    Perfil institucional (padrão): os pesos FIXOS da rede (``PESOS_PADRAO``, com o
+    contrato de módulos em ``pesos.geral``), ignorando qualquer configuração local
+    — exatamente como ``recalcular_escola``. Perfil ``personalizado`` (liberado só
+    pelo Admin Global): a configuração da escola. Sem isto, uma tela lia a config
+    local enquanto a nota oficial usava a régua institucional, e o mesmo aluno
+    aparecia com números diferentes em lugares diferentes."""
+    if _scoring_personalizado(db, escola_id):
+        return obter_pesos(db, escola_id, namespace), obter_pesos_brutos(db, escola_id, namespace)
+    if namespace == "pesos.geral":
+        fracoes = _pesos_geral_institucional(db, escola_id)
+        return fracoes, {k: round(v * 100.0, 4) for k, v in fracoes.items()}
+    return _pesos_institucionais(namespace)
+
+
 def _insumos_institucionais(matriculas, matific, elefante, pontos_dif=None,
                             leituras_por_aluno=None):
     """Insumos do cálculo POR PLATAFORMA no perfil institucional:
@@ -1232,16 +1392,11 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
     if personalizado:
         # Pontos extras por livro lido NA ESCOLA (opcional): soma nos pontos de
         # dificuldade os livros lidos dentro da janela do turno da turma. Feito
-        # ANTES das referências para a normalização já considerar o bônus.
-        extra = obter_config(db, escola_id, "pesos.elefante_extra", "valores",
-                             {"ativo": False, "pontos_por_livro": 0.0})
-        bonus_por_aluno: dict[int, float] = {}
-        if extra.get("ativo") and float(extra.get("pontos_por_livro", 0) or 0) > 0:
-            turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
-            bonus_por_aluno = _bonus_leitura_na_escola(
-                db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
-            for aid, b in bonus_por_aluno.items():
-                pontos_dif[aid] = pontos_dif.get(aid, 0.0) + b
+        # ANTES das referências para a normalização já considerar o bônus — pela
+        # MESMA função que o simulador chama (`pontos_dif_com_bonus`), senão a
+        # régua do simulador nasce sem o bônus e o mesmo aluno tem duas notas.
+        pontos_dif, bonus_por_aluno = pontos_dif_com_bonus(
+            db, escola_id, matriculas, pontos_dif)
 
         refs, modo, k_vol = _referencias(db, escola_id, matific, elefante, pontos_dif)
 
@@ -1300,9 +1455,13 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         p_geral_aluno = pesos_geral_do_aluno(p_geral, dimensoes)
         pct_geral = {chave: round(fracao * 100, 2)
                      for chave, fracao in p_geral_aluno.items() if fracao > 0}
-        nota_geral = round(
+        # MESMA guarda das notas por dimensão (`_nota_0_100`): nota finita em
+        # [0, 100]. Valor válido não muda (pesos somam 1 e as notas já estão em
+        # [0, 100]); o que ela impede é um peso negativo gravado por engano na
+        # configuração virar nota NEGATIVA na coluna legada (e na ordem legada).
+        nota_geral = _nota_0_100(
             nota_m * p_geral_aluno.get("matific", 0)
-            + nota_e * p_geral_aluno.get("elefante", 0), 2
+            + nota_e * p_geral_aluno.get("elefante", 0)
         )
 
         tentativas = snap_e.questoes_tentativas if snap_e else 0
@@ -1365,6 +1524,10 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
                                  # de nível); a tela deve dizer isso, não mostrar 0.
                                  "dificuldade": {
                                      "versao": versao_dificuldade,
+                                     # Extrato do catálogo (sha256/12 + nº de livros) que
+                                     # deu o wordCount — a coluna institucional o usa
+                                     # também no perfil personalizado. Determinístico.
+                                     "catalogo": _dl.versao_catalogo(),
                                      "incompleto": bool(
                                          snap_e is not None
                                          and int(getattr(snap_e, "livros_unicos", 0) or 0) > 0
