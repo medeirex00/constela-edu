@@ -2,10 +2,12 @@
  * Premiações da escola por PERÍODO.
  *
  * Categorias (Melhor Leitor, Melhor Matemática, Mais Livros, Mais Tempo) com o
- * pódio calculado EXCLUSIVAMENTE no intervalo escolhido. "Melhor Matemática" usa
- * a nota_matific OFICIAL (0–100) do período — NÃO a quantidade de atividades
- * (decisão do dono 2026-09-01). Abaixo, "Melhor Evolução" (Leitura e Matemática)
- * premia quem mais CRESCEU no período (motor de evolução, leitura read-only).
+ * pódio calculado EXCLUSIVAMENTE no intervalo escolhido. "Melhor Matemática" é a
+ * média ajustada de estrelas por atividade feita DENTRO do período, com a régua
+ * da escola inteira (decisão do dono 2026-09-15). O índice chega PRONTO do
+ * backend: a tela só formata (2 casas + unidade), nunca recalcula. Abaixo,
+ * "Melhor Evolução" (Leitura e Matemática) premia quem mais CRESCEU no período
+ * (motor de evolução, leitura read-only) — só entra no pódio quem cresceu (> 0).
  *
  * Duas dimensões independentes e GLOBAIS (seguem o usuário pelos rankings): o
  * PERÍODO temporal (seletor de datas) e o TURNO escolar (seletor de turno; as
@@ -24,6 +26,14 @@
  * de turno sem grupo e os cartões de Melhor Evolução só usam uma resposta
  * carregada PARA a URL atual — senão o pódio de uma turma decidiria o turno da
  * evolução por um instante (e dispararia consulta com o recorte errado).
+ *
+ * PERÍODO PEDIDO × JANELA USADA: a Matemática é recortada pelo ANO LETIVO, e o
+ * backend devolve em `regua_matematica` o `modo` e as datas efetivamente usadas.
+ * Quando a janela difere do período do cabeçalho, a tela mostra qual intervalo
+ * entrou na conta; e um pódio vazio explica o MOTIVO pelo modo (fora do ano
+ * letivo, datas invertidas, sem atividade), em vez de afirmar sempre que
+ * ninguém fez atividade — o que era falso justamente quando o dado existia e
+ * foi descartado pelo filtro de ano. Nada aqui recalcula: só lê e formata.
  */
 import { Award, TrendingUp, Trophy } from "lucide-react";
 import { useId, useState } from "react";
@@ -39,15 +49,76 @@ import { TURNO_TODOS, chaveTurno, rotuloTurno, turnoEfetivo, turnoParaQuery } fr
 import type { CategoriaPremiacao, Premiacoes as PremiacoesT, Turma } from "../lib/types";
 
 const MEDALHAS = ["🥇", "🥈", "🥉"];
+const UNIDADE_MATEMATICA = "estrelas/atividade";
+
+/** Régua da "Melhor Matemática": a janela REALMENTE usada pelo backend.
+ *  Ainda não está em packages/core (ver pendências), por isso é tipada aqui e
+ *  intersectada na resposta. */
+type ModoRegua = "periodo" | "situacao_atual" | "fora_do_ano_letivo" | "periodo_invalido";
+
+interface ReguaMatematica {
+  modo: ModoRegua;
+  ano_letivo: number;
+  inicio_efetivo: string | null;
+  fim_efetivo: string | null;
+}
+
+type RespostaPremiacoes = PremiacoesT & { regua_matematica?: ReguaMatematica };
+
+/** "2026-01-31T23:59:59.999999" → "31/01/2026". Sem passar por `Date`: a data
+ *  vem na hora local da escola e converter fuso deslocaria o dia. */
+function soData(iso: string | null | undefined): string | null {
+  const partes = (iso ?? "").split("T")[0].split("-");
+  return partes.length === 3 && partes[0].length === 4
+    ? `${partes[2]}/${partes[1]}/${partes[0]}`
+    : null;
+}
+
+/** A janela usada na Matemática difere do período pedido? Devolve o texto a
+ *  exibir, ou null quando o cabeçalho já conta a verdade. */
+function janelaDivergente(dados: RespostaPremiacoes): string | null {
+  const regua = dados.regua_matematica;
+  if (!regua) return null;
+  // "Todo o histórico" não recorta período: vale o acumulado do ano letivo.
+  if (regua.modo === "situacao_atual") {
+    return `Matemática: acumulado do ano letivo ${regua.ano_letivo}, sem recorte de período`;
+  }
+  // Sem janela (fora do ano letivo / datas invertidas): o motivo vai no card vazio.
+  if (regua.modo !== "periodo") return null;
+  const inicio = soData(regua.inicio_efetivo);
+  const fim = soData(regua.fim_efetivo);
+  if (!inicio || !fim) return null;
+  if (inicio === soData(dados.periodo.inicio) && fim === soData(dados.periodo.fim)) return null;
+  return `Matemática: ${inicio} a ${fim} (ano letivo ${regua.ano_letivo})`;
+}
+
+/** Por que o pódio de Matemática está vazio — derivado do modo, nunca fixo. */
+function textoVazioMatematica(regua?: ReguaMatematica): string {
+  switch (regua?.modo) {
+    case "fora_do_ano_letivo":
+      return `O período escolhido está fora do ano letivo ${regua.ano_letivo}: a Matemática só `
+        + "considera dados do ano letivo, então não há janela a apurar.";
+    case "periodo_invalido":
+      return "A data inicial é posterior à final — corrija o período para apurar a Matemática.";
+    case "situacao_atual":
+      return `Nenhum aluno com atividade do Matific no ano letivo ${regua.ano_letivo}.`;
+    default:
+      return "Nenhuma atividade do Matific feita dentro do período.";
+  }
+}
 
 function formatarValor(valor: number, unidade: string): string {
   if (unidade === "min") return tempoLeitura(valor);
-  if (unidade === "nota") return fmtNota(valor); // 0–100
+  if (unidade === UNIDADE_MATEMATICA) {
+    // Só exibição: o índice (0 a 5) já vem calculado pelo backend.
+    const texto = valor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${texto} ${unidade}`;
+  }
   return `${numero(valor)} ${unidade}`;
 }
 
-function CartaoCategoria({ categoria, vazioTexto }: {
-  categoria: CategoriaPremiacao; vazioTexto?: string;
+function CartaoCategoria({ categoria, vazioTexto, legenda }: {
+  categoria: CategoriaPremiacao; vazioTexto?: string; legenda?: string;
 }) {
   const [campeao, ...resto] = categoria.podio;
   return (
@@ -57,6 +128,7 @@ function CartaoCategoria({ categoria, vazioTexto }: {
         <div>
           <h3 className="text-sm font-semibold">{categoria.titulo}</h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">{categoria.descricao}</p>
+          {legenda && <p className="mt-0.5 text-[11px] text-zinc-400">{legenda}</p>}
         </div>
       </div>
 
@@ -124,7 +196,9 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
   const { dados, erro, carregando } = useApi<EvolucaoItem[]>(
     `/escolas/${escolaId}/ranking-evolucao?dimensao=${dimensao}${params}`,
   );
-  const podio = (dados ?? []).slice(0, 5);
+  // Pódio de EVOLUÇÃO só com quem cresceu (nota > 0) — o zero legítimo de quem
+  // usa a plataforma e não avançou fica na lista da API, não no pódio.
+  const podio = (dados ?? []).filter((item) => (item.nota ?? 0) > 0).slice(0, 5);
   const [campeao, ...resto] = podio;
   return (
     <Card className="flex flex-col p-5">
@@ -196,7 +270,7 @@ export default function Premiacoes() {
     ? `/escolas/${escolaId}/premiacoes?${q}${filtroTurma}${pedirTurnos}` : null;
   // URL da última resposta que CHEGOU (ver "Dados DO RECORTE ATUAL" no topo).
   const [urlCarregada, setUrlCarregada] = useState<string | null>(null);
-  const { dados: ultimaResposta, erro, carregando } = useApi<PremiacoesT>(urlPremiacoes, {
+  const { dados: ultimaResposta, erro, carregando } = useApi<RespostaPremiacoes>(urlPremiacoes, {
     aoSucesso: () => setUrlCarregada(urlPremiacoes),
   });
   const respostaAtual = urlCarregada === urlPremiacoes;
@@ -225,6 +299,10 @@ export default function Premiacoes() {
   const filtroTurno = turnoAtivo !== TURNO_TODOS && !turnoSemRecorte
     ? `&${turnoParaQuery(turnoAtivo)}` : "";
   const paramsEvol = `&${q}${filtroTurma}${filtroTurno}`;
+
+  // Régua da Matemática: o período do cabeçalho pode não ser o intervalo usado.
+  const regua = dados?.regua_matematica;
+  const avisoJanela = dados ? janelaDivergente(dados) : null;
 
   return (
     <div>
@@ -266,6 +344,12 @@ export default function Premiacoes() {
         )}
       </Card>
 
+      {avisoJanela && (
+        <p role="note" className="mb-4 text-sm text-amber-700 dark:text-amber-300">
+          O período mostrado não é o intervalo usado na Matemática. {avisoJanela}.
+        </p>
+      )}
+
       {turnoSemRecorte && (
         <p role="status" className="mb-4 text-sm text-amber-700 dark:text-amber-300">
           Nenhum aluno matriculado no turno {rotuloTurno(turnoAtivo)} neste ano letivo; mostrando todos os turnos.
@@ -285,7 +369,10 @@ export default function Premiacoes() {
               <CartaoCategoria
                 key={categoria.chave} categoria={categoria}
                 vazioTexto={categoria.chave === "melhor_matematica"
-                  ? "Sem snapshots do Matific no período (importe/sincronize para premiar por nota)."
+                  ? textoVazioMatematica(regua)
+                  : undefined}
+                legenda={categoria.chave === "melhor_matematica"
+                  ? "Média ajustada de estrelas por atividade no período (0 a 5)"
                   : undefined}
               />
             ))}
@@ -311,8 +398,18 @@ export default function Premiacoes() {
         </>
       )}
 
-      <p className="mt-6 flex items-center gap-1.5 text-xs text-zinc-400">
-        <Award size={13} /> Melhor Matemática usa a nota oficial (0–100) do período. Evolução mede o crescimento dentro do intervalo, não o acumulado.
+      <p className="mt-6 flex items-start gap-1.5 text-xs text-zinc-400">
+        <Award size={13} className="mt-0.5 shrink-0" />
+        <span>
+          Melhor Matemática divide as estrelas do período pelas atividades do período somadas a atividades extras sem estrela (20% da mediana de atividades da escola).
+          {" "}A régua é a da escola inteira, em qualquer filtro, e{" "}
+          {regua?.modo === "situacao_atual"
+            ? `vale o acumulado do ano letivo ${regua.ano_letivo} — “Todo o histórico” não recorta período.`
+            : regua
+              ? `só entram atividades feitas dentro do período, sempre recortado pelo ano letivo ${regua.ano_letivo}.`
+              : "só entram atividades feitas dentro do período."}
+          {" "}Evolução mede o crescimento dentro do intervalo, não o acumulado.
+        </span>
       </p>
       {grupoTurno && (
         <p className="mt-1 text-xs text-zinc-400">

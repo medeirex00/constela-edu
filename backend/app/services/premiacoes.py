@@ -1,53 +1,71 @@
 """Premiações por PERÍODO (PRD — premiações da escola).
 
 Calcula os vencedores de cada categoria usando EXCLUSIVAMENTE os dados do
-intervalo escolhido — leituras (com data real, Fase 1) e desempenho no Matific
-(snapshot do fim da janela). Premiações justas: quem só importou dados fora do
-intervalo não pontua.
+intervalo escolhido — leituras (com data real, Fase 1) e o GANHO do Matific
+dentro do período. Premiações justas: quem só tem dados fora do intervalo não
+pontua, e o período mostrado é o período calculado.
 
-Camada de PREMIAÇÃO — NÃO altera o scoring oficial. A "melhor matemática" usa a
-``nota_matific`` OFICIAL (0–100) calculada READ-ONLY pelo motor sobre o estado do
-período (decisão do dono 2026-09-01): antes premiava só a QUANTIDADE de
-atividades (volume), que não representa o melhor desempenho.
+Camada de PREMIAÇÃO — NÃO altera o scoring oficial (pesos, A3, P90, notas).
+
+"MELHOR MATEMÁTICA" — DECISÃO DO DONO (2026-09-15), que substitui a de
+2026-09-01 (nota oficial do estado do período):
+
+  * vale só o que foi feito DENTRO do período, medido por snapshots do ANO
+    LETIVO (um acumulado de dez/2025 nunca vira "setembro/2026");
+  * o critério é a MÉDIA AJUSTADA DE ESTRELAS POR ATIVIDADE: estrelas do
+    período ÷ (atividades do período + 20% da mediana de atividades da coorte),
+    escala 0 a 5 — a regra inteira mora em ``services.matific_destaque``;
+  * a régua (a mediana) é a da ESCOLA INTEIRA: a coorte completa de alunos ativos
+    matriculados no ano letivo. Turma, professor e turno só decidem QUEM APARECE
+    no pódio; a nota de cada criança é a mesma em qualquer recorte.
 
 Turno (manhã/tarde/noite) é o eixo do PERÍODO ESCOLAR, ORTOGONAL ao PERÍODO
 TEMPORAL (datas). Com ``por_turno`` os pódios saem quebrados por ``Turma.turno``,
-mas a régua (P90 do Matific) é a da escola INTEIRA — senão cada turno teria uma
-escala diferente e as notas deixariam de ser comparáveis.
+reusando os valores já calculados sobre a escola inteira.
 """
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, SnapshotElefante,
                         SnapshotMatific, Turma)
-from app.services import dificuldade_livro, scoring
+from app.services import dificuldade_livro, matific_destaque, scoring
 from app.services import turnos as svc_turnos
-from app.services.evolucao import _janela, _series_por_aluno
+from app.services.evolucao import _series_por_aluno
 
 
 def _podio(valores: dict[int, float], alunos: dict[int, dict], limite: int = 5,
-           desempate: dict[int, tuple] | None = None) -> list[dict]:
-    """Top N (só quem tem valor > 0), ordenado por valor. ``desempate`` opcional
-    é uma cascata secundária por aluno (ex.: estrelas→atividades→média no
-    Matific); sem ele, desempata pelo nome (determinístico e estável)."""
-    itens = [
-        {"aluno_id": aid, "nome": alunos[aid]["nome"], "turma": alunos[aid]["turma"],
-         "valor": round(float(valor), 2)}
-        for aid, valor in valores.items()
-        if aid in alunos and valor and valor > 0
+           desempate: dict[int, tuple] | None = None,
+           extras: dict[int, dict] | None = None) -> list[dict]:
+    """Top N (só quem tem valor > 0), ordenado pelo valor BRUTO.
+
+    O arredondamento (2 casas) é só de exibição: ordenar pelo arredondado
+    empataria 3,964 com 3,961 e entregaria a medalha ao desempate. ``desempate``
+    opcional é uma cascata secundária por aluno (ex.: estrelas → atividades no
+    Matific); depois vem o nome (casefold) e o ``aluno_id``, para a ordem ser
+    determinística e estável. ``extras`` acrescenta campos de auditoria ao item."""
+    candidatos = [
+        (aid, float(valor)) for aid, valor in valores.items()
+        if aid in alunos and valor is not None and valor > 0
     ]
-    itens.sort(key=lambda x: (
-        -x["valor"],
-        *(tuple(-v for v in desempate[x["aluno_id"]]) if desempate else ()),
-        x["nome"].casefold(),
+    candidatos.sort(key=lambda par: (
+        -par[1],
+        *(tuple(-v for v in desempate.get(par[0], ())) if desempate else ()),
+        alunos[par[0]]["nome"].casefold(),
+        par[0],
     ))
-    for posicao, item in enumerate(itens[:limite], start=1):
-        item["posicao"] = posicao
-    return itens[:limite]
+    podio: list[dict] = []
+    for posicao, (aid, valor) in enumerate(candidatos[:limite], start=1):
+        item = {"aluno_id": aid, "nome": alunos[aid]["nome"],
+                "turma": alunos[aid]["turma"], "valor": round(valor, 2),
+                "posicao": posicao}
+        if extras and aid in extras:
+            item.update(extras[aid])
+        podio.append(item)
+    return podio
 
 
 def _alunos_ativos(db: Session, escola_id: int, ano: int,
@@ -69,20 +87,37 @@ def _alunos_ativos(db: Session, escola_id: int, ano: int,
             for aid, nome, turma, tid, serie, turno in db.execute(consulta).all()}
 
 
+def _recorte(coorte: dict[int, dict], turma_id: int | None,
+             turma_ids: list[int] | None) -> dict[int, dict]:
+    """Quem APARECE nos pódios: o mesmo corte que ``_alunos_ativos`` faria no
+    banco (turma escolhida e, para o professor, só as turmas dele), aplicado
+    sobre a coorte já carregada — a régua continua sendo a da escola inteira."""
+    permitidas = set(turma_ids) if turma_ids is not None else None
+    return {aid: info for aid, info in coorte.items()
+            if (not turma_id or info["turma_id"] == turma_id)
+            and (permitidas is None or info["turma_id"] in permitidas)}
+
+
 def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
                         inicio: datetime | None, fim: datetime | None):
     """Livros, pontos de dificuldade e tempo somados por aluno no intervalo.
     Cada leitura vale o que a FONTE ÚNICA de dificuldade diz (v1 global: nível ×
     ajuste do livro × série; ou a régua legada da escola personalizada) — a MESMA
-    regra do ranking anual, senão o 'Melhor Leitor' coroaria a criança errada."""
+    regra do ranking anual, senão o 'Melhor Leitor' coroaria a criança errada.
+    Valores BRUTOS por aluno (sem régua da coorte): o recorte não os altera."""
     regra = dificuldade_livro.regra_da_escola(db, escola_id)
     livros: dict[int, float] = {}
     pontos: dict[int, float] = {}
     tempo: dict[int, float] = {}
     if not alunos:
         return livros, pontos, tempo
+    # NÍVEL CONGELADO da leitura; nulo (leitura anterior a esta versão) cai no
+    # nível ATUAL do livro. Mesma ``coalesce`` do motor e do /ranking/leitura:
+    # renivelar um livro não muda o pódio de um período já encerrado.
+    nivel_efetivo = func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
     consulta = (
-        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min, Livro.titulo)
+        select(Leitura.aluno_id, nivel_efetivo, Leitura.tempo_leitura_min,
+               Livro.titulo, Livro.elefante_id)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id.in_(alunos.keys()))
     )
@@ -91,12 +126,14 @@ def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
     if fim is not None:
         consulta = consulta.where(Leitura.data <= fim)
     itens: dict[int, list] = {}
-    for aid, codigo, minutos, titulo in db.execute(consulta).all():
+    for aid, codigo, minutos, titulo, elefante_id in db.execute(consulta).all():
         livros[aid] = livros.get(aid, 0) + 1
+        # Identidade oficial do livro (id do catálogo do Elefante) antes do título.
         pontos[aid] = pontos.get(aid, 0.0) + regra.valor_livro(
-            codigo, titulo, alunos[aid]["ano_escolar"], alunos[aid]["turma_id"])
+            codigo, titulo, alunos[aid]["ano_escolar"], alunos[aid]["turma_id"],
+            elefante_id=elefante_id)
         tempo[aid] = tempo.get(aid, 0) + (minutos or 0)
-        itens.setdefault(aid, []).append((titulo, codigo))
+        itens.setdefault(aid, []).append((titulo, codigo, 0, elefante_id))
     if inicio is None and fim is None:
         # "Todo o histórico": inclui o AGREGADO do Elefante (snapshot atual) com a
         # MESMA reconciliação da nota anual e do /ranking/leitura — quem só tem o
@@ -115,52 +152,87 @@ def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
     return livros, pontos, tempo
 
 
-def _notas_matific_periodo(db: Session, escola_id: int, aluno_ids,
-                           inicio: datetime | None, fim: datetime | None) -> dict[int, dict]:
-    """``nota_matific`` OFICIAL (0–100) do ESTADO no fim da janela, calculada
-    READ-ONLY pelo motor (mesma régua P90 do scoring). NÃO grava nada e NÃO altera
-    pesos/normalização. Régua da escola inteira (aluno_ids = todos os ativos), para
-    as notas serem comparáveis mesmo quando o pódio depois é filtrado por turno.
-    Só entra quem tem snapshot na janela (senão a dimensão é ausência, não 0)."""
+def _iso(momento: datetime | None) -> str | None:
+    return momento.isoformat() if momento is not None else None
+
+
+def _matematica_no_periodo(db: Session, escola_id: int, coorte: dict[int, dict],
+                           inicio: datetime | None, fim: datetime | None,
+                           ano_letivo: int) -> tuple[dict[int, dict], dict]:
+    """Índice da "Melhor Matemática" de cada aluno + a régua usada.
+
+    ``coorte`` é a ESCOLA INTEIRA (todos os ativos matriculados no ano letivo): é
+    dela que sai a mediana ``k``, e por isso o índice de uma criança não muda
+    quando o pódio é filtrado por turma, professor ou turno. Só entra quem tem
+    snapshot do Matific no período (ausência não é zero) e pelo menos uma
+    atividade no período (sem atividade não há média a medir). NÃO grava nada e
+    NÃO toca o scoring. Toda a aritmética está em ``matific_destaque``."""
     series = _series_por_aluno(db, escola_id, SnapshotMatific)
-    estados: dict[int, SnapshotMatific] = {}
-    for aid in aluno_ids:
-        atual, _ = _janela(series.get(aid, []), inicio, fim, base_no_periodo=True)
-        if atual is not None:
-            estados[aid] = atual
-    if not estados:
-        return {}
-    # Régua P90 do Matific direto pelo motor oficial (read-only) — uma única
-    # dimensão (matemática), então chamamos scoring.referencias_robustas sem
-    # depender do helper por-dimensão da Arquitetura 2. NÃO altera scoring.
-    refs, k_vol = scoring.referencias_robustas({
-        "atividades": [s.atividades for s in estados.values()],
-        "media": [s.pontuacao_media for s in estados.values()],
-        "estrelas": [s.estrelas for s in estados.values()],
-    })
-    pesos = scoring.obter_pesos(db, escola_id, "pesos.matific")
-    pesos_pct = scoring.obter_pesos_brutos(db, escola_id, "pesos.matific")
-    notas: dict[int, dict] = {}
-    for aid, s in estados.items():
-        nota, _ = scoring.calcular_matific(s, refs, pesos, pesos_pct, k_vol)
-        notas[aid] = {"nota": nota, "estrelas": s.estrelas,
-                      "atividades": s.atividades, "media": s.pontuacao_media}
-    return notas
+    ganhos: dict[int, matific_destaque.GanhoMatific] = {}
+    for aid in coorte:
+        ganho = matific_destaque.ganho_no_periodo(
+            series.get(aid, []), inicio, fim, ano_letivo)
+        if ganho is not None:
+            ganhos[aid] = ganho
+    regua, indices = matific_destaque.indices_da_coorte(ganhos)
+
+    todo_historico = inicio is None and fim is None
+    janela = (None if todo_historico
+              else matific_destaque.janela_efetiva(inicio, fim, ano_letivo))
+    # Personalizado com as datas trocadas (início depois do fim): não há janela,
+    # mas o motivo não é o ano letivo — o rótulo não pode mentir sobre isso.
+    invertido = (inicio is not None and fim is not None
+                 and inicio.replace(tzinfo=None) > fim.replace(tzinfo=None))
+    if todo_historico:
+        modo = "situacao_atual"
+    elif janela is not None:
+        modo = "periodo"
+    else:
+        modo = "periodo_invalido" if invertido else "fora_do_ano_letivo"
+    k = regua.k_mediana_atividades
+    descricao_regua = {
+        "coorte": "escola",
+        "k_mediana_atividades": round(k, 4) if k is not None else None,
+        "zeros_extras": (round(regua.zeros_extras, 4)
+                         if regua.zeros_extras is not None else None),
+        "alunos_com_atividade": regua.alunos_com_atividade,
+        "ano_letivo": ano_letivo,
+        # Datas EFETIVAMENTE usadas: o período ∩ ano letivo. "Todo o histórico"
+        # não recorta período (vale o último snapshot do ano letivo); um período
+        # que não toca o ano letivo, ou com as datas trocadas, não tem janela —
+        # em todos esses casos, sem datas.
+        "modo": modo,
+        "inicio_efetivo": _iso(janela[0]) if janela else None,
+        "fim_efetivo": _iso(janela[1]) if janela else None,
+    }
+    matematica = {
+        aid: {"indice": valor,
+              "estrelas": ganhos[aid].estrelas,
+              "atividades": ganhos[aid].atividades,
+              "data_base": _iso(ganhos[aid].data_base),
+              "data_atual": _iso(ganhos[aid].data_atual)}
+        for aid, valor in indices.items()
+    }
+    return matematica, descricao_regua
 
 
 def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict,
-                matific: dict[int, dict]) -> list[dict]:
-    """Os 4 pódios para um conjunto de alunos (a escola toda ou um turno)."""
-    notas_m = {aid: d["nota"] for aid, d in matific.items()}
-    desempate_m = {aid: (d["estrelas"], d["atividades"], d["media"])
-                   for aid, d in matific.items()}
+                matematica: dict[int, dict]) -> list[dict]:
+    """Os 4 pódios para um conjunto de alunos (o recorte, ou um turno dele)."""
+    indices = {aid: d["indice"] for aid, d in matematica.items()}
+    # Desempate da Matemática: estrelas do período → atividades do período → nome.
+    desempate_m = {aid: (d["estrelas"], d["atividades"]) for aid, d in matematica.items()}
+    auditoria_m = {aid: {"estrelas": d["estrelas"], "atividades": d["atividades"],
+                         "data_base": d["data_base"], "data_atual": d["data_atual"]}
+                   for aid, d in matematica.items()}
     return [
         {"chave": "melhor_leitor", "titulo": "Melhor Leitor", "icone": "🏆",
          "descricao": "Mais pontos de dificuldade no período", "unidade": "pontos",
          "podio": _podio(pontos, alunos)},
         {"chave": "melhor_matematica", "titulo": "Melhor Matemática", "icone": "🧮",
-         "descricao": "Maior nota oficial de Matemática (0–100) no período",
-         "unidade": "nota", "podio": _podio(notas_m, alunos, desempate=desempate_m)},
+         "descricao": "Maior média ajustada de estrelas por atividade no período",
+         "unidade": "estrelas/atividade",
+         "podio": _podio(indices, alunos, desempate=desempate_m, extras=auditoria_m)},
         {"chave": "mais_livros", "titulo": "Mais Livros Lidos", "icone": "📚",
          "descricao": "Maior quantidade de livros no período", "unidade": "livros",
          "podio": _podio(livros, alunos)},
@@ -176,14 +248,18 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
                por_turno: bool = False) -> dict:
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
-    alunos = _alunos_ativos(db, escola_id, ano, turma_id, turma_ids)
+    # COORTE COMPLETA da escola (sem turma nem professor): é a base da régua.
+    coorte = _alunos_ativos(db, escola_id, ano, None)
+    # RECORTE: quem aparece nos pódios.
+    alunos = _recorte(coorte, turma_id, turma_ids)
 
     livros, pontos, tempo = _leitura_no_periodo(db, escola_id, alunos, inicio, fim)
-    # Régua do Matific calculada sobre a escola INTEIRA (todos os alunos do escopo)
-    # uma vez — comparável entre turnos.
-    matific = _notas_matific_periodo(db, escola_id, alunos.keys(), inicio, fim)
+    matematica, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
 
-    resultado: dict = {"categorias": _categorias(alunos, livros, pontos, tempo, matific)}
+    resultado: dict = {
+        "categorias": _categorias(alunos, livros, pontos, tempo, matematica),
+        "regua_matematica": regua,
+    }
 
     # Quebra por TURNO (só na visão "todas as turmas"): agrupa os MESMOS dados já
     # calculados por Turma.turno, sem recomputar a régua. Turnos vêm do banco.
@@ -194,7 +270,7 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
         resultado["turnos"] = [
             {"turno": turno, "turno_rotulo": svc_turnos.rotulo_turno(turno),
              "total": len(sub),
-             "categorias": _categorias(sub, livros, pontos, tempo, matific)}
+             "categorias": _categorias(sub, livros, pontos, tempo, matematica)}
             for turno, sub in sorted(grupos.items(), key=lambda kv: svc_turnos.ordem_turno(kv[0]))
         ]
     return resultado

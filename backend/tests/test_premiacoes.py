@@ -1,13 +1,16 @@
 """Premiações por período — a camada de PREMIAÇÃO (NÃO o scoring oficial).
 
 Trava as decisões desta fase:
-  * "Melhor Matemática" ordena pela ``nota_matific`` OFICIAL do período (qualidade
-    + volume), NÃO por quantidade de atividades (volume puro);
+  * "Melhor Matemática" ordena pela MÉDIA AJUSTADA DE ESTRELAS POR ATIVIDADE
+    feita no período (decisão do dono 2026-09-15, que substituiu a nota oficial
+    do estado), NÃO por quantidade de atividades (volume puro);
   * quebra por TURNO (``Turma.turno``, vindo do banco) não mistura alunos de
     turnos diferentes;
   * o PERÍODO temporal muda os dados (snapshot depois do fim não conta);
   * sem snapshot no período → o aluno não entra no pódio de Matemática (ausência,
-    não zero); desempate estável.
+    não zero); desempate estável;
+  * só conta o GANHO observado no período: por isso os cenários de Matemática
+    gravam uma BASE antes da janela (`_cresceu`).
 NADA aqui altera pesos/A3/P90/normalização (só lê o motor read-only).
 """
 from datetime import datetime
@@ -20,6 +23,7 @@ from app.services import premiacoes, provisionamento
 
 JAN = datetime(2026, 8, 10)          # dentro da janela padrão do teste
 FORA = datetime(2026, 9, 15)         # depois do fim da janela
+BASE = datetime(2026, 7, 20)         # antes do início da janela (ponto de partida)
 
 
 def _cenario(db):
@@ -56,30 +60,40 @@ def _snap(db, esc, imp, aluno, atividades, estrelas, media, quando=JAN):
                            estrelas=estrelas, pontuacao_media=media))
 
 
+def _cresceu(db, esc, imp, aluno, atividades, estrelas, media, quando=JAN):
+    """Base zerada ANTES da janela + estado em ``quando``: o ganho do período é
+    exatamente (atividades, estrelas). Desde 2026-09-15 só o que foi feito DENTRO
+    do período conta — um snapshot solitário na janela não prova atividade."""
+    _snap(db, esc, imp, aluno, 0, 0, 0.0, quando=BASE)
+    _snap(db, esc, imp, aluno, atividades, estrelas, media, quando=quando)
+
+
 def _podio(dados, chave):
     cat = next(c for c in dados["categorias"] if c["chave"] == chave)
     return cat["podio"]
 
 
 # ---------------------------------------------------------------------------
-# 1) CRITÉRIO: melhor matemática = nota_matific, não quantidade de atividades
+# 1) CRITÉRIO: média ajustada de estrelas por atividade, não quantidade
 # ---------------------------------------------------------------------------
-def test_melhor_matematica_usa_nota_oficial_nao_so_atividades(db):
+def test_melhor_matematica_usa_media_ajustada_nao_so_atividades(db):
     esc, imp, turmas = _cenario(db)
-    # VOLUME: muitas atividades, mas pouca qualidade (média baixa, poucas estrelas
-    # por atividade). GANHARIA no critério antigo (só atividades).
+    # VOLUME: muitas atividades, poucas estrelas por atividade. GANHARIA no
+    # critério antigo (só atividades).
     volume = _aluno(db, esc, turmas["manha"], "Volumoso Volume")
-    _snap(db, esc, imp, volume, atividades=100, estrelas=100, media=1.0)
-    # QUALIDADE: menos atividades, mas média e estrelas altas → melhor nota oficial.
+    _cresceu(db, esc, imp, volume, atividades=100, estrelas=100, media=1.0)
+    # QUALIDADE: menos atividades, muitas estrelas por atividade.
     qualidade = _aluno(db, esc, turmas["manha"], "Quali Dade")
-    _snap(db, esc, imp, qualidade, atividades=50, estrelas=200, media=4.0)
+    _cresceu(db, esc, imp, qualidade, atividades=50, estrelas=200, media=4.0)
     db.commit()
 
     dados = premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))
-    podio = _podio(dados, "melhor_matematica")
+    categoria = next(c for c in dados["categorias"] if c["chave"] == "melhor_matematica")
+    assert categoria["unidade"] == "estrelas/atividade"
+    podio = categoria["podio"]
     assert [p["nome"] for p in podio[:2]] == ["Quali Dade", "Volumoso Volume"]
-    # é NOTA (0–100), não contagem de atividades
-    assert podio[0]["valor"] <= 100 and podio[0]["valor"] > podio[1]["valor"]
+    # Escala 0 a 5 (estrelas por atividade), não contagem de atividades nem nota 0–100.
+    assert podio[0]["valor"] <= 5 and podio[0]["valor"] > podio[1]["valor"]
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +102,9 @@ def test_melhor_matematica_usa_nota_oficial_nao_so_atividades(db):
 def test_premiacao_por_turno_nao_mistura_alunos(db):
     esc, imp, turmas = _cenario(db)
     manha = _aluno(db, esc, turmas["manha"], "Ana Manha")
-    _snap(db, esc, imp, manha, 40, 120, 3.0)
+    _cresceu(db, esc, imp, manha, 40, 120, 3.0)
     tarde = _aluno(db, esc, turmas["tarde"], "Bruno Tarde")
-    _snap(db, esc, imp, tarde, 30, 90, 3.0)
+    _cresceu(db, esc, imp, tarde, 30, 90, 3.0)
     db.commit()
 
     dados = premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31),
@@ -125,7 +139,7 @@ def test_um_unico_turno_devolve_so_um_grupo(db):
 def test_periodo_muda_os_dados_snapshot_depois_do_fim_nao_conta(db):
     esc, imp, turmas = _cenario(db)
     fut = _aluno(db, esc, turmas["manha"], "Futuro Aluno")
-    _snap(db, esc, imp, fut, 60, 180, 3.5, quando=FORA)  # 15/09
+    _cresceu(db, esc, imp, fut, 60, 180, 3.5, quando=FORA)  # base 20/07, estado 15/09
     db.commit()
     # Janela que termina em 31/08 → o snapshot de 15/09 ainda não existe → fora.
     ago = premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))
@@ -141,7 +155,7 @@ def test_periodo_muda_os_dados_snapshot_depois_do_fim_nao_conta(db):
 def test_sem_snapshot_nao_entra_no_podio_de_matematica(db):
     esc, imp, turmas = _cenario(db)
     com = _aluno(db, esc, turmas["manha"], "Com Snapshot")
-    _snap(db, esc, imp, com, 30, 90, 3.0)
+    _cresceu(db, esc, imp, com, 30, 90, 3.0)
     _aluno(db, esc, turmas["manha"], "Sem Snapshot")  # sem SnapshotMatific
     db.commit()
     dados = premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))
@@ -151,11 +165,11 @@ def test_sem_snapshot_nao_entra_no_podio_de_matematica(db):
 
 def test_desempate_estavel_por_nome_em_notas_iguais(db):
     esc, imp, turmas = _cenario(db)
-    # Mesmos números → mesma nota → desempate por estrelas/atividades/média (iguais)
+    # Mesmos números → mesmo índice → desempate por estrelas/atividades (iguais)
     # e por fim NOME (alfabético, estável).
     for nome in ["Zulmira Z", "Amanda A"]:
         a = _aluno(db, esc, turmas["manha"], nome)
-        _snap(db, esc, imp, a, 50, 150, 3.0)
+        _cresceu(db, esc, imp, a, 50, 150, 3.0)
     db.commit()
     dados = premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))
     nomes = [p["nome"] for p in _podio(dados, "melhor_matematica")]

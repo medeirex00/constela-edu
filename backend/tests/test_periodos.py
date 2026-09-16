@@ -178,37 +178,45 @@ def test_premiacoes_usam_so_o_periodo(cliente, escola_completa):
     assert cats["mais_tempo"][0]["nome"] == joao.nome and cats["mais_tempo"][0]["valor"] == 40
 
 
-def _importar_matific(cliente, escola_id, aluno, atividades, data_ref):
+def _importar_matific(cliente, escola_id, aluno, atividades, data_ref, estrelas=10):
     r = cliente.post(f"{_base(escola_id)}/importacoes/confirmar", json={
         "plataforma": "matific", "formato": "resumo", "tipo": "texto",
         "data_referencia": data_ref,
         "linhas": [{"nome": aluno.nome,
-                    "dados": {"atividades": atividades, "pontuacao_media": 3.0, "estrelas": 10},
+                    "dados": {"atividades": atividades, "pontuacao_media": 3.0,
+                              "estrelas": estrelas},
                     "aluno_id": aluno.id}]})
     assert r.status_code == 200, r.text
 
 
-def test_melhor_matematica_usa_a_nota_do_estado_no_periodo(cliente, escola_completa):
-    """DECISÃO DO DONO (2026-09-01): "Melhor Matemática" premia o melhor DESEMPENHO
-    — a ``nota_matific`` OFICIAL (0–100) do ESTADO no fim da janela — e não a
-    quantidade de atividades (volume). Todo aluno com snapshot na janela concorre
-    pela nota (a régua é a da escola, read-only, sem tocar o scoring). A justiça
-    "só o GANHO do período" continua valendo no RANKING de Evolução — ver
-    test_ranking_evolucao_respeita_o_periodo abaixo."""
+def test_melhor_matematica_usa_so_o_ganho_do_periodo(cliente, escola_completa):
+    """DECISÃO DO DONO (2026-09-15), que SUBSTITUI a de 2026-09-01 (a nota oficial
+    0–100 do ESTADO no fim da janela, que este teste travava antes): "Melhor
+    Matemática" premia a MÉDIA AJUSTADA DE ESTRELAS POR ATIVIDADE feita DENTRO do
+    período — estrelas ÷ (atividades + 20% da mediana de atividades da escola).
+    O acumulado anterior nunca vira mérito do período: um único snapshot dentro
+    da janela, sem base anterior, não prova atividade nenhuma no intervalo."""
     escola_id = escola_completa["escola"].id
     ana, joao, sofia = escola_completa["alunos"]
-    _importar_matific(cliente, escola_id, ana, 100, "2026-06-20T00:00:00")
-    _importar_matific(cliente, escola_id, ana, 130, "2026-07-25T00:00:00")
-    _importar_matific(cliente, escola_id, joao, 200, "2026-07-01T00:00:00")
-    _importar_matific(cliente, escola_id, sofia, 350, "2026-07-15T00:00:00")
+    # Ana: base em junho, estado em julho → +30 atividades, +120 estrelas.
+    _importar_matific(cliente, escola_id, ana, 100, "2026-06-20T00:00:00", estrelas=300)
+    _importar_matific(cliente, escola_id, ana, 130, "2026-07-25T00:00:00", estrelas=420)
+    # João: só um acumulado grande dentro da janela → nenhum ganho observado.
+    _importar_matific(cliente, escola_id, joao, 200, "2026-07-01T00:00:00", estrelas=800)
+    # Sofia: dois registros no mês → +10 atividades, +40 estrelas.
+    _importar_matific(cliente, escola_id, sofia, 350, "2026-07-10T00:00:00", estrelas=1400)
+    _importar_matific(cliente, escola_id, sofia, 360, "2026-07-30T00:00:00", estrelas=1440)
 
     r = cliente.get(f"{_base(escola_id)}/premiacoes"
                     "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
     mm = {c["chave"]: c["podio"] for c in r["categorias"]}["melhor_matematica"]
-    # Mesma média/estrelas → a nota ordena pelo estado de atividades: Sofia(350) >
-    # João(200) > Ana(130). O valor é NOTA (0–100), não contagem de atividades.
-    assert [p["nome"] for p in mm] == [sofia.nome, joao.nome, ana.nome]
-    assert 0 < mm[0]["valor"] <= 100
+    assert [p["nome"] for p in mm] == [ana.nome, sofia.nome]     # João fora
+    # k = mediana(30, 10) = 20 → 4 atividades extras com zero estrela.
+    assert r["regua_matematica"]["k_mediana_atividades"] == 20
+    assert r["regua_matematica"]["coorte"] == "escola"
+    assert mm[0]["valor"] == pytest.approx(round(120 / 34, 2))
+    assert mm[1]["valor"] == pytest.approx(round(40 / 14, 2))
+    assert all(0 < p["valor"] <= 5 for p in mm)                  # escala 0 a 5
 
 
 def test_ranking_evolucao_respeita_o_periodo(cliente, escola_completa):

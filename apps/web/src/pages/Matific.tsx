@@ -20,6 +20,10 @@ import { api } from "../lib/api";
 import { dataHora, nota, numero } from "../lib/formato";
 import type { MatificAluno } from "../lib/types";
 
+/** Escala da média do Matific (a mesma do Placar da Escola) — o servidor recusa
+ *  acima disso (`MatificEdicao.pontuacao_media`, ge=0 le=5). */
+const MEDIA_MAXIMA = 5;
+
 /**
  * Modal de edição isolado: o estado do formulário vive AQUI, não no componente
  * da tabela. Assim, digitar re-renderiza só o modal — e não a tabela inteira
@@ -39,6 +43,8 @@ function ModalEditarMatific({
   aoSalvo: () => void;
 }) {
   const [form, setForm] = useState({ atividades: 0, estrelas: 0, pontuacao_media: 0, motivo: "" });
+  // Média COMO ESTAVA ao abrir: é o que distingue "não mexi nisso" de "digitei".
+  const [mediaOriginal, setMediaOriginal] = useState(0);
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
 
@@ -50,18 +56,39 @@ function ModalEditarMatific({
         pontuacao_media: linha.pontuacao_media,
         motivo: "",
       });
+      setMediaOriginal(linha.pontuacao_media);
       setErro("");
     }
   }, [linha]);
 
+  const mediaMudou = form.pontuacao_media !== mediaOriginal;
+  // Registro antigo fora da escala atual (edição gravada quando o limite era
+  // 100, ou base de demonstração): reenviá-lo daria 422 e travaria a correção
+  // de atividades/estrelas.
+  const mediaForaDaEscala = mediaOriginal > MEDIA_MAXIMA;
+
   async function salvar() {
     if (!escolaId || !linha) return;
+    // Barra no cliente, em português: o 422 do servidor chega em inglês e sem
+    // dizer qual é a escala.
+    if (mediaMudou && (form.pontuacao_media < 0 || form.pontuacao_media > MEDIA_MAXIMA)) {
+      setErro(`A média do Matific vai de 0 a ${MEDIA_MAXIMA} (a mesma escala do Placar da Escola).`);
+      return;
+    }
     setSalvando(true);
     setErro("");
     try {
       await api(`/escolas/${escolaId}/matific/${linha.aluno_id}`, {
         method: "PUT",
-        body: JSON.stringify({ ...form, motivo: form.motivo || null }),
+        body: JSON.stringify({
+          atividades: form.atividades,
+          estrelas: form.estrelas,
+          motivo: form.motivo || null,
+          // A média só viaja quando foi EDITADA: ausente, o servidor preserva a
+          // gravada. É o que mantém editável um registro fora da escala, sem
+          // obrigar ninguém a inventar um número de 0 a 5 no lugar do medido.
+          ...(mediaMudou ? { pontuacao_media: form.pontuacao_media } : {}),
+        }),
       });
       aoSalvo();
     } catch (excecao) {
@@ -86,11 +113,19 @@ function ModalEditarMatific({
             onChange={(e) => setForm({ ...form, estrelas: Number(e.target.value) })}
           />
         </Campo>
-        <Campo rotulo="Pontuação média (0–100)">
+        <Campo rotulo="Pontuação média (0 a 5)">
           <input
-            type="number" min={0} max={100} step="0.1" className={estiloInput} value={form.pontuacao_media}
+            type="number" min={0} max={MEDIA_MAXIMA} step="0.1" className={estiloInput}
+            value={form.pontuacao_media}
             onChange={(e) => setForm({ ...form, pontuacao_media: Number(e.target.value) })}
           />
+          {mediaForaDaEscala && (
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+              Este registro tem média {nota(mediaOriginal)}, fora da escala atual (0 a {MEDIA_MAXIMA}).
+              Deixe como está para preservar o valor medido, ou digite um número de 0 a {MEDIA_MAXIMA}
+              {" "}para corrigi-lo.
+            </p>
+          )}
         </Campo>
         <Campo rotulo="Motivo da edição (fica no log de auditoria)">
           <input
