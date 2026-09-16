@@ -50,9 +50,11 @@ def test_restaurar_backup_nao_planta_perfil_personalizado_para_admin_de_escola(c
     modelo.update({"_id": max(c["_id"] for c in configs) + 1, "namespace": scoring.PERFIL_SCORING_NS,
                    "chave": "modo", "valor": "personalizado"})
     configs.append(modelo)
+    # admin DA ESCOLA não restaura (a restauração substitui livros, leituras e
+    # parâmetros de pontuação): 403 e o perfil fica como estava
     r = cliente.post(f"{_base(esc.id)}/restaurar",
                      files={"arquivo": ("backup.json", json.dumps(dados).encode("utf-8"), "application/json")})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 403, r.text
     assert cliente.get(f"{_base(esc.id)}/configuracoes/perfil-scoring").json()["modo"] == "institucional"
     assert not scoring._scoring_personalizado(db, esc.id)
     # e o Admin Global restaura o backup como está

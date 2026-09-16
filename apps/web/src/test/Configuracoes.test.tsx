@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import Configuracoes from "../pages/configuracoes/Configuracoes";
-import { api, renderComApp, responder, responderErro, screen, userEvent, usuarioFake } from "./utils";
+import {
+  api,
+  apiDownload,
+  apiUpload,
+  renderComApp,
+  responder,
+  responderErro,
+  screen,
+  userEvent,
+  usuarioFake,
+} from "./utils";
 
 // Endpoints disparados no carregamento pela coordenadora (usuário padrão, não-admin):
 // - PesosEditor (namespace "geral") -> GET pesos
@@ -113,5 +123,52 @@ describe("Configurações", () => {
     renderComApp(<Configuracoes />, { rota: "/configuracoes" });
 
     expect(await screen.findByText("Falha ao carregar pesos")).toBeInTheDocument();
+  });
+
+  // GOVERNANÇA: restaurar backup substitui livros, leituras, faixas, pesos e
+  // parâmetros de pontuação — exclusivo do Admin Global (o backend dá 403 aos
+  // demais). Baixar o backup continua com o admin da escola.
+  it("admin da escola baixa o backup, mas não vê a ação de restaurar", async () => {
+    const u = userEvent.setup();
+    carregarSucesso();
+    renderComApp(<Configuracoes />, {
+      rota: "/configuracoes",
+      usuario: usuarioFake({ cargo: "admin", is_global: false }),
+    });
+
+    const baixar = await screen.findByRole("button", { name: /Baixar backup/ });
+    expect(screen.queryByRole("button", { name: /Restaurar de um arquivo/ })).toBeNull();
+    expect(screen.getByText(/só o Admin Global pode fazer isso/)).toBeInTheDocument();
+
+    await u.click(baixar);
+    expect(apiDownload).toHaveBeenCalledWith("/escolas/1/backup");
+  });
+
+  it("Admin Global vê a ação de restaurar e restaura de um arquivo", async () => {
+    const u = userEvent.setup();
+    carregarSucesso();
+    responder("UPLOAD", "/escolas/1/restaurar", {
+      mensagem: "Backup restaurado: 12 registros. Notas recalculadas.",
+    });
+    const confirmar = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { container } = renderComApp(<Configuracoes />, {
+      rota: "/configuracoes",
+      usuario: usuarioFake({ cargo: "admin", is_global: true }),
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /Restaurar de um arquivo/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/só o Admin Global pode fazer isso/)).toBeNull();
+
+    const entrada = container.querySelector<HTMLInputElement>('input[type="file"][accept=".json"]');
+    expect(entrada).not.toBeNull();
+    await u.upload(entrada!, new File(["{}"], "backup.json", { type: "application/json" }));
+
+    expect(
+      await screen.findByText("Backup restaurado: 12 registros. Notas recalculadas."),
+    ).toBeInTheDocument();
+    expect(apiUpload).toHaveBeenCalledWith("/escolas/1/restaurar", expect.any(FormData));
+    confirmar.mockRestore();
   });
 });

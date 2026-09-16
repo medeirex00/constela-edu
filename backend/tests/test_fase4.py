@@ -18,13 +18,13 @@ def _dados_basicos(db, escola_completa):
     db.flush()
     db.add_all([
         SnapshotMatific(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
-                        atividades=60, estrelas=250, pontuacao_media=88),
+                        atividades=60, estrelas=250, pontuacao_media=4.4),
         SnapshotElefante(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
                          livros_unicos=12, tempo_leitura_min=650,
                          questoes_tentativas=30, questoes_acertos=27,
                          livros_por_nivel={"AA": 8, "D": 4}),
         SnapshotMatific(escola_id=escola.id, aluno_id=joao.id, importacao_id=importacao.id,
-                        atividades=5, estrelas=12, pontuacao_media=60),
+                        atividades=5, estrelas=12, pontuacao_media=3.0),
     ])
     db.commit()
     return importacao
@@ -336,7 +336,7 @@ def test_usuario_comum_nao_gerencia_usuarios(cliente, db, escola_completa):
 
 # --- Backup e restauração ---------------------------------------------------------
 
-def test_backup_e_restauracao_roundtrip(cliente, db, escola_completa):
+def test_backup_e_restauracao_roundtrip(cliente, cliente_global, db, escola_completa):
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     importacao = _dados_basicos(db, escola_completa)
@@ -358,7 +358,8 @@ def test_backup_e_restauracao_roundtrip(cliente, db, escola_completa):
     assert len(dados["tabelas"]["leituras"]) == 1
 
     # Restaura por cima (substituição completa, IDs remapeados)
-    resposta = cliente.post(
+    # Restaurar substitui livros, leituras e parâmetros: só o Admin Global.
+    resposta = cliente_global.post(
         f"/api/v1/escolas/{escola.id}/restaurar",
         files={"arquivo": ("backup.json", baixado.content, "application/json")},
     )
@@ -375,9 +376,10 @@ def test_backup_e_restauracao_roundtrip(cliente, db, escola_completa):
     assert db.query(Livro).filter_by(id=leituras[0].livro_id).one().titulo == "Livro do Backup"
 
 
-def test_restaurar_arquivo_invalido_nao_apaga_nada(cliente, db, escola_completa):
+def test_restaurar_arquivo_invalido_nao_apaga_nada(cliente_global, db, escola_completa):
     escola = escola_completa["escola"]
-    resposta = cliente.post(
+    # Restaurar substitui livros, leituras e parâmetros: só o Admin Global.
+    resposta = cliente_global.post(
         f"/api/v1/escolas/{escola.id}/restaurar",
         files={"arquivo": ("backup.json", b"{nao json", "application/json")},
     )
@@ -421,7 +423,7 @@ def test_simulador_usa_regras_atuais_sem_gravar(cliente, db, escola_completa):
 
     resposta = cliente.post(
         f"/api/v1/escolas/{escola.id}/simulador",
-        json={"ano_escolar": "3º Ano", "atividades": 60, "pontuacao_media": 88,
+        json={"ano_escolar": "3º Ano", "atividades": 60, "pontuacao_media": 4.4,
               "estrelas": 250, "livros_por_nivel": {"AA": 8, "D": 4},
               "tempo_leitura_min": 650, "questoes_tentativas": 30,
               "questoes_acertos": 27},

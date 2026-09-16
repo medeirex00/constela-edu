@@ -202,7 +202,7 @@ def test_portao_nao_depende_de_import_alheio_para_enxergar_o_quest():
 
 # --- 2. Roundtrip: o que está no backup volta idêntico -------------------------
 
-def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, db, escola_completa):
+def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, cliente_global, db, escola_completa):
     """O caso que reabria o P0: o mapa UUID↔aluno tem de sobreviver ao restore.
 
     Antes da correção este teste falhava em ``IdentidadeExterna 1 → 0``.
@@ -214,9 +214,9 @@ def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, db, es
     baixado = cliente.get(f"{_base(escola.id)}/backup")
     assert baixado.status_code == 200
 
-    resposta = cliente.post(f"{_base(escola.id)}/restaurar",
-                            files={"arquivo": ("backup.json", baixado.content,
-                                               "application/json")})
+    resposta = cliente_global.post(f"{_base(escola.id)}/restaurar",
+                                   files={"arquivo": ("backup.json", baixado.content,
+                                                      "application/json")})
     assert resposta.status_code == 200, resposta.text
 
     db.expire_all()
@@ -249,7 +249,7 @@ def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, db, es
     assert marcadores[0].historico_completo is True
 
 
-def test_roundtrip_preserva_todas_as_tabelas_do_modelos(cliente, db, escola_completa):
+def test_roundtrip_preserva_todas_as_tabelas_do_modelos(cliente, cliente_global, db, escola_completa):
     """Backup completo → restore completo: nenhuma tabela do MODELOS encolhe."""
     escola = escola_completa["escola"]
     _dados_do_aluno(db, escola, escola_completa["alunos"][0])
@@ -266,9 +266,9 @@ def test_roundtrip_preserva_todas_as_tabelas_do_modelos(cliente, db, escola_comp
     assert antes["alunos"] == 3 and antes["identidades_externas"] == 1
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    resposta = cliente.post(f"{_base(escola.id)}/restaurar",
-                            files={"arquivo": ("backup.json", baixado.content,
-                                               "application/json")})
+    resposta = cliente_global.post(f"{_base(escola.id)}/restaurar",
+                                   files={"arquivo": ("backup.json", baixado.content,
+                                                      "application/json")})
     assert resposta.status_code == 200, resposta.text
 
     db.expire_all()
@@ -290,7 +290,7 @@ def test_backup_exporta_toda_tabela_do_modelos(cliente, db, escola_completa):
 
 # --- 3. Recusa: o que não está no backup nunca é destruído em silêncio ---------
 
-def test_restaurar_recusa_quando_ha_dado_do_quest(cliente, db, escola_completa):
+def test_restaurar_recusa_quando_ha_dado_do_quest(cliente, cliente_global, db, escola_completa):
     """Cenário exato da auditoria: perfil Quest (XP 4200, nível 7) + credencial.
 
     Antes: apagados em silêncio, com mensagem de sucesso. Agora: 409 e nada
@@ -302,9 +302,9 @@ def test_restaurar_recusa_quando_ha_dado_do_quest(cliente, db, escola_completa):
     _quest_do_aluno(db, escola, ana)
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    resposta = cliente.post(f"{_base(escola.id)}/restaurar",
-                            files={"arquivo": ("backup.json", baixado.content,
-                                               "application/json")})
+    resposta = cliente_global.post(f"{_base(escola.id)}/restaurar",
+                                   files={"arquivo": ("backup.json", baixado.content,
+                                                      "application/json")})
 
     assert resposta.status_code == 409, resposta.text
     # A mensagem fala a língua do gestor (não nomes de tabela) e diz o que
@@ -324,7 +324,7 @@ def test_restaurar_recusa_quando_ha_dado_do_quest(cliente, db, escola_completa):
     assert len(db.execute(select(Aluno).where(Aluno.escola_id == escola.id)).scalars().all()) == 3
 
 
-def test_restaurar_recusa_lista_tudo_que_perderia(cliente, db, escola_completa):
+def test_restaurar_recusa_lista_tudo_que_perderia(cliente, cliente_global, db, escola_completa):
     """A mensagem precisa NOMEAR o que seria perdido — o operador decide com
     informação, não com um 'deu erro'."""
     escola = escola_completa["escola"]
@@ -332,9 +332,9 @@ def test_restaurar_recusa_lista_tudo_que_perderia(cliente, db, escola_completa):
     _quest_do_aluno(db, escola, ana)
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    resposta = cliente.post(f"{_base(escola.id)}/restaurar",
-                            files={"arquivo": ("backup.json", baixado.content,
-                                               "application/json")})
+    resposta = cliente_global.post(f"{_base(escola.id)}/restaurar",
+                                   files={"arquivo": ("backup.json", baixado.content,
+                                                      "application/json")})
     assert resposta.status_code == 409
     detalhe = resposta.json()["detail"]
     assert "1" in detalhe                      # a contagem de registros em risco
@@ -350,20 +350,20 @@ def test_restaurar_recusa_lista_tudo_que_perderia(cliente, db, escola_completa):
     assert log.detalhes["perdas"]["quest_perfis"] == 1
 
 
-def test_escola_sem_dado_extra_restaura_normalmente(cliente, db, escola_completa):
+def test_escola_sem_dado_extra_restaura_normalmente(cliente, cliente_global, db, escola_completa):
     """A recusa é por DADO existente, não por tabela existir: escola sem Quest
     restaura como sempre (a proteção não pode virar um bloqueio permanente)."""
     escola = escola_completa["escola"]
     _dados_do_aluno(db, escola, escola_completa["alunos"][0])
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    resposta = cliente.post(f"{_base(escola.id)}/restaurar",
-                            files={"arquivo": ("backup.json", baixado.content,
-                                               "application/json")})
+    resposta = cliente_global.post(f"{_base(escola.id)}/restaurar",
+                                   files={"arquivo": ("backup.json", baixado.content,
+                                                      "application/json")})
     assert resposta.status_code == 200, resposta.text
 
 
-def test_recusa_olha_so_a_escola_do_restore(cliente, db, escola_completa):
+def test_recusa_olha_so_a_escola_do_restore(cliente, cliente_global, db, escola_completa):
     """Dado do Quest de OUTRA escola não pode bloquear esta restauração."""
     from app.core.security import hash_senha
     from app.models import Escola, Usuario
@@ -385,9 +385,9 @@ def test_recusa_olha_so_a_escola_do_restore(cliente, db, escola_completa):
     _quest_do_aluno(db, outra, aluno_outra)
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    resposta = cliente.post(f"{_base(escola.id)}/restaurar",
-                            files={"arquivo": ("backup.json", baixado.content,
-                                               "application/json")})
+    resposta = cliente_global.post(f"{_base(escola.id)}/restaurar",
+                                   files={"arquivo": ("backup.json", baixado.content,
+                                                      "application/json")})
     assert resposta.status_code == 200, resposta.text
     db.expire_all()
     assert db.execute(select(QuestPerfil)
@@ -396,7 +396,7 @@ def test_recusa_olha_so_a_escola_do_restore(cliente, db, escola_completa):
 
 # --- 4. Transacionalidade: erro no meio não deixa a escola destruída ----------
 
-def test_erro_no_meio_da_restauracao_faz_rollback_total(cliente, db, escola_completa):
+def test_erro_no_meio_da_restauracao_faz_rollback_total(cliente, cliente_global, db, escola_completa):
     """Backup com FK quebrada (leitura apontando para livro inexistente): a
     escola tem de continuar EXATAMENTE como estava — nada apagado."""
     escola = escola_completa["escola"]
@@ -405,7 +405,7 @@ def test_erro_no_meio_da_restauracao_faz_rollback_total(cliente, db, escola_comp
     dados = json.loads(cliente.get(f"{_base(escola.id)}/backup").content)
     dados["tabelas"]["leituras"][0]["livro_id"] = 999999   # não existe no arquivo
 
-    resposta = cliente.post(
+    resposta = cliente_global.post(
         f"{_base(escola.id)}/restaurar",
         files={"arquivo": ("backup.json", json.dumps(dados).encode("utf-8"),
                            "application/json")})
@@ -420,11 +420,11 @@ def test_erro_no_meio_da_restauracao_faz_rollback_total(cliente, db, escola_comp
                           .where(EventoAluno.escola_id == escola.id)).scalars().all()) == 1
 
 
-def test_arquivo_de_outra_versao_nao_apaga_nada(cliente, db, escola_completa):
+def test_arquivo_de_outra_versao_nao_apaga_nada(cliente, cliente_global, db, escola_completa):
     escola = escola_completa["escola"]
     _dados_do_aluno(db, escola, escola_completa["alunos"][0])
 
-    resposta = cliente.post(
+    resposta = cliente_global.post(
         f"{_base(escola.id)}/restaurar",
         files={"arquivo": ("backup.json",
                            json.dumps({"versao": 99, "tabelas": {}}).encode("utf-8"),
@@ -437,7 +437,7 @@ def test_arquivo_de_outra_versao_nao_apaga_nada(cliente, db, escola_completa):
                           .where(EventoAluno.escola_id == escola.id)).scalars().all()) == 1
 
 
-def test_backup_antigo_v1_nao_apaga_o_que_nao_carrega(cliente, db, escola_completa):
+def test_backup_antigo_v1_nao_apaga_o_que_nao_carrega(cliente, cliente_global, db, escola_completa):
     """Arquivo da versão 1 (sem identidades/eventos) restaurado sobre uma escola
     que TEM esses dados: a perda seria por OMISSÃO — a tabela é apagada e o
     arquivo insere zero linha. Precisa ser recusada igual."""
@@ -450,7 +450,7 @@ def test_backup_antigo_v1_nao_apaga_o_que_nao_carrega(cliente, db, escola_comple
                           if n not in ("identidades_externas", "eventos_aluno",
                                        "sync_marcadores")}}
 
-    resposta = cliente.post(
+    resposta = cliente_global.post(
         f"{_base(escola.id)}/restaurar",
         files={"arquivo": ("backup.json", json.dumps(antigo).encode("utf-8"),
                            "application/json")})
@@ -464,7 +464,7 @@ def test_backup_antigo_v1_nao_apaga_o_que_nao_carrega(cliente, db, escola_comple
                           .where(EventoAluno.escola_id == escola.id)).scalars().all()) == 1
 
 
-def test_backup_antigo_v1_ainda_restaura_quando_nada_se_perde(cliente, db, escola_completa):
+def test_backup_antigo_v1_ainda_restaura_quando_nada_se_perde(cliente, cliente_global, db, escola_completa):
     """Compatibilidade: quem tem um arquivo v1 e uma escola sem os dados novos
     continua conseguindo restaurar (a recusa é por PERDA, não por versão)."""
     escola = escola_completa["escola"]
@@ -474,7 +474,7 @@ def test_backup_antigo_v1_ainda_restaura_quando_nada_se_perde(cliente, db, escol
                           if n not in ("identidades_externas", "eventos_aluno",
                                        "sync_marcadores")}}
 
-    resposta = cliente.post(
+    resposta = cliente_global.post(
         f"{_base(escola.id)}/restaurar",
         files={"arquivo": ("backup.json", json.dumps(antigo).encode("utf-8"),
                            "application/json")})
@@ -499,7 +499,7 @@ def test_modelos_esta_em_ordem_segura_para_inserir_e_para_apagar():
                 "(inserção) — e, em reversed(), ser apagado antes.")
 
 
-def test_ids_do_arquivo_nao_viram_pk_e_as_fks_sao_remapeadas(cliente, db, escola_completa):
+def test_ids_do_arquivo_nao_viram_pk_e_as_fks_sao_remapeadas(cliente, cliente_global, db, escola_completa):
     """PKs: o ``_id`` gravado no arquivo é só um rótulo para religar as FKs —
     nunca é reusado como chave primária (poderia colidir com outra escola do
     mesmo banco). O que precisa valer é a CONSISTÊNCIA: nenhum filho aponta
@@ -510,9 +510,9 @@ def test_ids_do_arquivo_nao_viram_pk_e_as_fks_sao_remapeadas(cliente, db, escola
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
     arquivo = json.loads(baixado.content)
-    assert cliente.post(f"{_base(escola.id)}/restaurar",
-                        files={"arquivo": ("backup.json", baixado.content,
-                                           "application/json")}).status_code == 200
+    assert cliente_global.post(f"{_base(escola.id)}/restaurar",
+                               files={"arquivo": ("backup.json", baixado.content,
+                                                  "application/json")}).status_code == 200
 
     db.expire_all()
     alunos = db.execute(select(Aluno).where(Aluno.escola_id == escola.id)).scalars().all()
@@ -534,7 +534,7 @@ def test_ids_do_arquivo_nao_viram_pk_e_as_fks_sao_remapeadas(cliente, db, escola
         assert evento.aluno_id in ids_novos
 
 
-def test_restauracao_nao_deixa_aviso_apontando_para_outra_crianca(cliente, db, escola_completa):
+def test_restauracao_nao_deixa_aviso_apontando_para_outra_crianca(cliente, cliente_global, db, escola_completa):
     """``Notificacao.aluno_id`` é int solto (sem FK) e o banco REAPROVEITA os
     IDs apagados — sem limpar, o aviso “Novo aluno cadastrado” do aluno #1
     antigo passa a apontar para o aluno #1 novo, que é outra criança."""
@@ -550,9 +550,9 @@ def test_restauracao_nao_deixa_aviso_apontando_para_outra_crianca(cliente, db, e
     db.commit()
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    assert cliente.post(f"{_base(escola.id)}/restaurar",
-                        files={"arquivo": ("backup.json", baixado.content,
-                                           "application/json")}).status_code == 200
+    assert cliente_global.post(f"{_base(escola.id)}/restaurar",
+                               files={"arquivo": ("backup.json", baixado.content,
+                                                  "application/json")}).status_code == 200
 
     db.expire_all()
     restantes = db.execute(select(Notificacao)
@@ -563,16 +563,16 @@ def test_restauracao_nao_deixa_aviso_apontando_para_outra_crianca(cliente, db, e
     assert any(n.tipo == "backup.gerado" for n in restantes)
 
 
-def test_snapshots_voltam_com_os_valores_exatos(cliente, db, escola_completa):
+def test_snapshots_voltam_com_os_valores_exatos(cliente, cliente_global, db, escola_completa):
     """Snapshots são imutáveis e são a base do scoring: nenhum número pode
     mudar no roundtrip (inclusive o JSON de livros por nível e o float)."""
     escola = escola_completa["escola"]
     _dados_do_aluno(db, escola, escola_completa["alunos"][0])
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
-    assert cliente.post(f"{_base(escola.id)}/restaurar",
-                        files={"arquivo": ("backup.json", baixado.content,
-                                           "application/json")}).status_code == 200
+    assert cliente_global.post(f"{_base(escola.id)}/restaurar",
+                               files={"arquivo": ("backup.json", baixado.content,
+                                                  "application/json")}).status_code == 200
 
     db.expire_all()
     matific = db.execute(select(SnapshotMatific)
@@ -586,7 +586,7 @@ def test_snapshots_voltam_com_os_valores_exatos(cliente, db, escola_completa):
     assert db.get(Importacao, matific.importacao_id).escola_id == escola.id
 
 
-def test_restaurar_backup_de_escola_vazia_sobre_escola_com_dados(cliente, db, escola_completa):
+def test_restaurar_backup_de_escola_vazia_sobre_escola_com_dados(cliente, cliente_global, db, escola_completa):
     """Substituição legítima e completa: o backup vazio é o estado desejado, e
     a operação continua permitida (não viramos um sistema que nunca restaura)."""
     escola = escola_completa["escola"]
@@ -594,7 +594,7 @@ def test_restaurar_backup_de_escola_vazia_sobre_escola_com_dados(cliente, db, es
              "escola": {"nome": escola.nome, "ano_letivo_ativo": 2026},
              "tabelas": {nome: [] for nome, _ in svc_backup.MODELOS}}
 
-    resposta = cliente.post(
+    resposta = cliente_global.post(
         f"{_base(escola.id)}/restaurar",
         files={"arquivo": ("backup.json", json.dumps(vazio).encode("utf-8"),
                            "application/json")})

@@ -201,6 +201,10 @@ function Aparencia() {
 function Backup() {
   const { escolaId, usuario } = useApp();
   const ehAdmin = usuario?.is_global || usuario?.cargo === "admin";
+  // GOVERNANÇA: restaurar SUBSTITUI livros, leituras, faixas, pesos e parâmetros
+  // de pontuação da escola — exclusivo do Admin Global (o backend responde 403
+  // aos demais). Baixar o backup continua com o admin da escola.
+  const podeRestaurar = Boolean(usuario?.is_global);
   const arquivoRef = useRef<HTMLInputElement | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [ocupado, setOcupado] = useState(false);
@@ -254,24 +258,34 @@ function Backup() {
         <Botao onClick={baixar} disabled={ocupado}>
           <Download size={15} /> Baixar backup
         </Botao>
-        <Botao
-          variante="neutro"
-          disabled={ocupado}
-          onClick={() => arquivoRef.current?.click()}
-        >
-          <UploadCloud size={15} /> Restaurar de um arquivo…
-        </Botao>
-        <input
-          ref={arquivoRef}
-          type="file"
-          accept=".json"
-          className="hidden"
-          onChange={(evento) => {
-            const arquivo = evento.target.files?.[0];
-            if (arquivo) restaurar(arquivo);
-          }}
-        />
+        {podeRestaurar && (
+          <>
+            <Botao
+              variante="neutro"
+              disabled={ocupado}
+              onClick={() => arquivoRef.current?.click()}
+            >
+              <UploadCloud size={15} /> Restaurar de um arquivo…
+            </Botao>
+            <input
+              ref={arquivoRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(evento) => {
+                const arquivo = evento.target.files?.[0];
+                if (arquivo) restaurar(arquivo);
+              }}
+            />
+          </>
+        )}
       </div>
+      {!podeRestaurar && (
+        <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+          Restaurar um backup substitui livros, leituras, faixas, pesos e parâmetros
+          de pontuação: só o Admin Global pode fazer isso.
+        </p>
+      )}
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
     </Card>
   );

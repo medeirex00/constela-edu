@@ -7,7 +7,10 @@ Tudo aqui exige papel de administrador. Regras de proteção:
     importações permanecem intactos; a remoção física é exclusiva de
     administradores globais e exige confirmação extra;
   * usuários nunca entram no backup de dados (restaurar um arquivo antigo
-    não pode reverter senhas nem reativar contas desligadas).
+    não pode reverter senhas nem reativar contas desligadas);
+  * RESTAURAR backup é exclusivo do Admin Global (substitui livros, leituras,
+    faixas, pesos e parâmetros de pontuação); baixar continua com o admin da
+    escola.
 """
 import json
 import logging
@@ -35,6 +38,7 @@ from app.core.config import email_reservado_ao_dono, settings
 from app.core.database import get_db
 from app.core.deps import (
     escola_autorizada,
+    exigir_admin_global,
     exigir_papeis,
     get_usuario_atual,
     negar_secretaria,
@@ -686,31 +690,42 @@ def baixar_backup(
     )
 
 
-def _definir_perfil_scoring(db: Session, escola_id: int, modo: str) -> None:
-    """Grava `scoring.perfil/modo` (mesma linha que PUT /perfil-scoring escreve)."""
-    row = db.execute(
-        select(Configuracao).where(
-            Configuracao.escola_id == escola_id,
-            Configuracao.namespace == scoring.PERFIL_SCORING_NS,
-            Configuracao.chave == "modo",
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        db.add(Configuracao(escola_id=escola_id, namespace=scoring.PERFIL_SCORING_NS,
-                            chave="modo", valor=modo))
-    else:
-        row.valor = modo
-    db.flush()
+# Recusa da restauração: quem não é Admin Global precisa entender POR QUE não
+# pode e a quem pedir — "sem permissão" genérico não diz nada ao gestor.
+MSG_RESTAURACAO_SO_ADMIN_GLOBAL = (
+    "A restauração de backup substitui os livros, as leituras, as faixas de "
+    "dificuldade, os pesos e os parâmetros de pontuação da escola pelos do "
+    "arquivo, por isso é exclusiva do Admin Global. Peça a restauração a ele."
+)
+
+
+def exigir_admin_global_para_restaurar(
+    usuario: Usuario = Depends(get_usuario_atual),
+) -> Usuario:
+    """``core.deps.exigir_admin_global`` (a REGRA é a de lá — fonte única), só com
+    a mensagem que explica o que a restauração substitui."""
+    try:
+        return exigir_admin_global(usuario)
+    except HTTPException as negado:
+        raise HTTPException(negado.status_code, MSG_RESTAURACAO_SO_ADMIN_GLOBAL) from None
 
 
 @router.post("/restaurar")
 async def restaurar_backup(
     arquivo: UploadFile = File(...),
     escola_id: int = Depends(escola_autorizada),
-    usuario: Usuario = Depends(exigir_papeis("admin")),
+    usuario: Usuario = Depends(exigir_admin_global_para_restaurar),
     db: Session = Depends(get_db),
 ):
-    """Substitui TODOS os dados pedagógicos da escola pelos do backup."""
+    """Substitui TODOS os dados pedagógicos da escola pelos do backup.
+
+    EXCLUSIVA DO ADMIN GLOBAL: o arquivo carrega livros, leituras, faixas de
+    dificuldade, pesos e parâmetros de pontuação (inclusive o perfil de scoring).
+    Restaurá-lo é trocar a régua que decide nota, ranking e premiação — decisão
+    que não é do admin da escola, do coordenador, do professor nem da Secretaria
+    (esta já barrada na raiz do router). Baixar o backup (GET /backup) continua
+    com o admin da escola.
+    """
     conteudo = await arquivo.read()
     if len(conteudo) > TAMANHO_MAXIMO_BACKUP:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -722,12 +737,11 @@ async def restaurar_backup(
     if not isinstance(dados, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
 
-    # GOVERNANÇA: o perfil de scoring (`scoring.perfil`) é decisão do Admin Global
-    # (PUT /perfil-scoring). Um backup restaurado por admin DE ESCOLA não pode
-    # "plantar" `personalizado` (bypass): o valor vigente é preservado e a
-    # tentativa fica auditada. O Admin Global restaura o backup como está.
-    perfil_antes = scoring.obter_config(db, escola_id, scoring.PERFIL_SCORING_NS,
-                                        "modo", "institucional")
+    # GOVERNANÇA do perfil de scoring (`scoring.perfil`): antes, um admin DE ESCOLA
+    # podia restaurar e esta rota preservava o perfil vigente (o backup não podia
+    # "plantar" `personalizado`). Com a rota exclusiva do Admin Global esse ramo
+    # ficou inalcançável e saiu; o Admin Global restaura o backup como está,
+    # perfil incluído — o mesmo comportamento que ele sempre teve.
     try:
         contagem = svc_backup.restaurar(db, escola_id, dados)
     except svc_backup.RestauracaoBloqueada as bloqueio:
@@ -749,15 +763,6 @@ async def restaurar_backup(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "O arquivo de backup contém dados inconsistentes ou duplicados.")
 
-    if not usuario.is_global:
-        perfil_no_backup = scoring.obter_config(db, escola_id, scoring.PERFIL_SCORING_NS,
-                                                "modo", "institucional")
-        if str(perfil_no_backup) != str(perfil_antes):
-            _definir_perfil_scoring(db, escola_id, str(perfil_antes))
-            registrar(db, "backup.perfil_scoring_preservado", escola_id=escola_id,
-                      usuario_id=usuario.id,
-                      detalhes={"no_backup": perfil_no_backup, "mantido": perfil_antes,
-                                "motivo": "só o Admin Global altera o perfil de scoring"})
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"tabelas": contagem})
     db.commit()
