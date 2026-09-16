@@ -318,8 +318,13 @@ def historico_leituras(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Data inválida (use o formato AAAA-MM-DD).") from exc
 
+    # NÍVEL CONGELADO da leitura; nulo (leitura anterior a esta versão) cai no
+    # nível ATUAL do livro. Mesma ``coalesce`` do motor, do /ranking/leitura, das
+    # premiações e da evolução: o histórico mostra o nível pelo qual a leitura
+    # pontuou, não o que o catálogo passou a dizer depois.
+    nivel_efetivo = func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
     consulta = (
-        select(Leitura, Livro)
+        select(Leitura, Livro, nivel_efetivo)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id == aluno.id)
     )
@@ -340,13 +345,14 @@ def historico_leituras(
     regra = dificuldade_livro.regra_da_escola(db, escola_id)
     itens = []
     pontos_exatos = 0.0    # soma SEM arredondar (bate com ranking/nota ao centavo)
-    for leitura, livro in db.execute(consulta).all():
-        valor = regra.valor_livro(livro.nivel_codigo, livro.titulo, _ano_escolar, _turma_id)
+    for leitura, livro, nivel in db.execute(consulta).all():
+        valor = regra.valor_livro(nivel, livro.titulo, _ano_escolar, _turma_id,
+                                  elefante_id=livro.elefante_id)
         pontos_exatos += valor
         itens.append({
             "id": leitura.id,
             "livro": livro.titulo,
-            "nivel": livro.nivel_codigo,
+            "nivel": nivel,
             "categoria": livro.categoria,
             "plataforma": "elefante",
             "data": leitura.data.isoformat(),

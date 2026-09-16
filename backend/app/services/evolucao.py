@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -36,7 +36,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, scoring
+from app.services import dificuldade_livro, matific_destaque, scoring
 
 CAMPOS_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 CAMPOS_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
@@ -92,7 +92,7 @@ def _delta_niveis(atual, anterior) -> dict[str, int]:
 
 
 def _janela(serie: list, inicio: datetime | None, fim: datetime | None,
-            base_no_periodo: bool = False):
+            base_no_periodo: bool = False, ano_letivo: int | None = None):
     """(atual, base) para medir o GANHO dentro de [inicio, fim].
 
     atual = último snapshot com data_referencia <= fim (respeita o fim do
@@ -105,7 +105,25 @@ def _janela(serie: list, inicio: datetime | None, fim: datetime | None,
         das telas de evolução/mural.
       * base_no_periodo=True: base = 1º snapshot DENTRO do período → só o
         crescimento observado no intervalo conta (o acumulado anterior nunca
-        é atribuído ao período). É o exigido pelas PREMIAÇÕES (justas)."""
+        é atribuído ao período). É o exigido pelas PREMIAÇÕES (justas).
+
+    ``ano_letivo`` (opcional): descarta os snapshots fora do ano letivo ANTES de
+    escolher ``atual`` e ``base`` — para séries de contadores DO ANO (Matific),
+    em que um snapshot de dezembro do ano anterior não é base de nada em
+    janeiro. Sem ele, o comportamento é idêntico ao de sempre.
+
+    EXCEÇÃO do contador DO ANO (só com ``ano_letivo``): quando a janela COMEÇA
+    no início do ano letivo (ou antes dele), não há acumulado anterior a
+    descontar — o contador parte de zero ali —, então ``base`` continua ``None``
+    mesmo com ``base_no_periodo=True``. Sem isso, o 1º snapshot do ano virava
+    base de si mesmo e janeiro, o preset "ano letivo" e quem só tem uma coleta
+    no ano davam ganho 0, divergindo de "todo o histórico" na MESMA janela. Para
+    janelas que começam no meio do ano a regra justa vale integralmente."""
+    ini_ano = None
+    if ano_letivo is not None:
+        ini_ano, fim_ano = matific_destaque.janela_ano_letivo(ano_letivo)
+        serie = [s for s in serie
+                 if ini_ano <= _sem_fuso(s.data_referencia) <= fim_ano]
     atual = None
     for snap in serie:
         if fim is None or _sem_fuso(snap.data_referencia) <= fim:
@@ -117,7 +135,8 @@ def _janela(serie: list, inicio: datetime | None, fim: datetime | None,
         for snap in serie:
             if _sem_fuso(snap.data_referencia) < inicio:
                 base = snap
-        if base is None and base_no_periodo:
+        comeca_no_ano = ini_ano is not None and _sem_fuso(inicio) <= ini_ano
+        if base is None and base_no_periodo and not comeca_no_ano:
             dentro = [s for s in serie
                       if _sem_fuso(s.data_referencia) >= inicio
                       and (fim is None or _sem_fuso(s.data_referencia) <= fim)]
@@ -152,8 +171,13 @@ def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
                      fim: datetime | None = None) -> dict:
     """Séries cronológicas por semana/mês/bimestre: livros lidos, pontos de
     dificuldade, tempo e nível médio (pontos por livro) do período."""
+    # NÍVEL CONGELADO da leitura (nulo = leitura anterior a esta versão → nível
+    # atual do livro): a série histórica do aluno não pode ser reescrita por uma
+    # correção de catálogo feita hoje.
+    nivel_efetivo = func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
     consulta = (
-        select(Leitura.data, Livro.nivel_codigo, Leitura.tempo_leitura_min, Livro.titulo)
+        select(Leitura.data, nivel_efetivo, Leitura.tempo_leitura_min, Livro.titulo,
+               Livro.elefante_id)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id == aluno_id)
     )
@@ -173,12 +197,13 @@ def evolucao_leitura(db: Session, escola_id: int, aluno_id: int,
     turma_id, ano_escolar = (mat[0], mat[1]) if mat else (None, None)
     regra = dificuldade_livro.regra_da_escola(db, escola_id)   # fonte única
     baldes: dict[tuple, dict] = {}
-    for data, codigo, tempo, titulo in db.execute(consulta.order_by(Leitura.data)).all():
+    for data, codigo, tempo, titulo, elefante_id in db.execute(consulta.order_by(Leitura.data)).all():
         chave, rotulo = _bucket_leitura(_sem_fuso(data), granularidade)
         balde = baldes.setdefault(chave, {"rotulo": rotulo, "livros": 0,
                                           "pontos": 0.0, "tempo_min": 0})
         balde["livros"] += 1
-        balde["pontos"] += regra.valor_livro(codigo, titulo, ano_escolar, turma_id)
+        balde["pontos"] += regra.valor_livro(codigo, titulo, ano_escolar, turma_id,
+                                            elefante_id=elefante_id)
         balde["tempo_min"] += tempo or 0
 
     series = []
@@ -353,8 +378,14 @@ def _leituras_no_periodo(db: Session, escola_id: int,
     if alunos_com_leituras is None:
         alunos_com_leituras = _alunos_com_leituras(db, escola_id)
 
+    # NÍVEL CONGELADO da leitura; nulo (leitura anterior a esta versão) cai no
+    # nível ATUAL do livro. Mesma ``coalesce`` do motor, do /ranking/leitura e das
+    # premiações: renivelar um livro não reescreve a evolução já observada — nem
+    # o bucket por nível, nem os pontos do período.
+    nivel_efetivo = func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
     consulta = (
-        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min, Livro.titulo)
+        select(Leitura.aluno_id, nivel_efetivo, Leitura.tempo_leitura_min,
+               Livro.titulo, Livro.elefante_id)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.escola_id == escola_id)
     )
@@ -364,7 +395,7 @@ def _leituras_no_periodo(db: Session, escola_id: int,
         consulta = consulta.where(Leitura.data <= fim)
 
     dados: dict[int, dict] = {}
-    for aluno_id, codigo, tempo, titulo in db.execute(consulta).all():
+    for aluno_id, codigo, tempo, titulo, elefante_id in db.execute(consulta).all():
         item = dados.setdefault(aluno_id, {"livros": 0, "tempo_min": 0, "por_nivel": {},
                                            "itens": []})
         item["livros"] += 1
@@ -372,7 +403,12 @@ def _leituras_no_periodo(db: Session, escola_id: int,
         chave = (codigo or "").upper()
         if chave:
             item["por_nivel"][chave] = item["por_nivel"].get(chave, 0) + 1
-            item["itens"].append((titulo or "", chave))   # p/ valor por livro
+            # (título, nível, tempo, elefante_id) — MESMO formato (e MESMA
+            # identidade do livro) que a nota anual, o /ranking/leitura, as
+            # premiações e o histórico já usam: o id oficial casa antes do
+            # título, senão o mesmo livro valeria números diferentes conforme a
+            # tela (livro renomeado na escola, ou homônimo do catálogo).
+            item["itens"].append((titulo or "", chave, 0, elefante_id))
     return alunos_com_leituras, dados
 
 
@@ -456,6 +492,21 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
 
     `dias` é um atalho retrocompatível: sem `inicio`, usa os últimos N dias.
 
+    RÉGUA DA ESCOLA INTEIRA (decisão do dono, 2026-09-15). Ganhos, aferição e
+    referências (P90/máximo por dimensão) são calculados sobre a COORTE COMPLETA
+    da escola — todos os ativos matriculados no ano letivo. ``turma_id``,
+    ``ano_escolar``, ``turno`` e ``turma_ids`` (professor) só RECORTAM os itens
+    devolvidos: a nota de cada aluno é idêntica com e sem filtro. Antes, o filtro
+    virava uma régua nova (o P90 de uma turma de 5 alunos recaía no máximo dela),
+    e a mesma criança tinha uma nota na turma e outra na escola. A POSIÇÃO segue
+    a semântica de sempre: ``posicao``, ``posicao_dimensao`` e ``n_aferidos`` são
+    numerados DENTRO do recorte (1..N de quem aparece na lista).
+
+    ANO LETIVO: a série do Matific traz contadores DO ANO, então, havendo
+    ``inicio``, a `_janela` dela ignora snapshots fora do ano letivo ativo (um
+    dezembro anterior não é base de janeiro). A do Elefante (contadores de vida
+    inteira) não é recortada.
+
     `serie_m`/`serie_e`/`mapa_dif` são as varreduras CARAS e INDEPENDENTES da
     janela; um chamador que precise de VÁRIAS janelas (o mural: dia/semana/mês)
     pode carregá-las UMA vez e injetá-las aqui, em vez de o serviço relê-las a
@@ -465,9 +516,14 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
+    if turma_ids is not None and not turma_ids:
+        # Sem nenhuma turma permitida (ex.: Secretaria): o recorte é vazio por
+        # definição — não há por que calcular a escola inteira para devolver [].
+        return []
     if inicio is None and dias is not None:
         inicio = (datetime.now(timezone.utc) - timedelta(days=dias)).replace(tzinfo=None)
 
+    # COORTE COMPLETA da escola — base dos ganhos e da régua. Sem filtro aqui.
     consulta = (
         select(Matricula, Turma)
         .join(Turma, Matricula.turma_id == Turma.id)
@@ -478,20 +534,25 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             Aluno.status == "ativo",
         )
     )
-    if turma_id:
-        consulta = consulta.where(Turma.id == turma_id)
-    if ano_escolar:
-        consulta = consulta.where(Turma.ano_escolar == ano_escolar)
-    # Filtro de TURNO (eixo ortogonal ao período): `None` = não filtra (todos);
-    # `""` = turmas SEM turno cadastrado ("Sem turno"); senão o turno exato. Os
-    # valores vêm de Turma.turno (do banco), nunca hardcoded.
-    if turno is not None:
-        consulta = consulta.where(
-            Turma.turno.is_(None) if turno == "" else Turma.turno == turno)
-    if turma_ids is not None:  # professor: só as turmas designadas a ele
-        consulta = consulta.where(Turma.id.in_(turma_ids))
     consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
     matriculas = db.execute(consulta).all()
+
+    permitidas = set(turma_ids) if turma_ids is not None else None
+
+    def _no_recorte(turma: Turma) -> bool:
+        """Quem APARECE na lista. Mesmos cortes que antes eram feitos no SQL:
+        turma e série exatas; TURNO (eixo ortogonal ao período) com `None` = não
+        filtra (todos), `""` = turmas SEM turno cadastrado ("Sem turno"), senão o
+        turno exato (valores de Turma.turno, nunca hardcoded); professor só nas
+        turmas designadas a ele."""
+        if turma_id and turma.id != turma_id:
+            return False
+        if ano_escolar and turma.ano_escolar != ano_escolar:
+            return False
+        if turno is not None and (
+                turma.turno is not None if turno == "" else turma.turno != turno):
+            return False
+        return permitidas is None or turma.id in permitidas
 
     # Varreduras independentes da janela: reusa as injetadas (mural) ou carrega.
     if serie_m is None:
@@ -516,10 +577,13 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     # AFERIDO na janela, por dimensão — sub-decisão (a) da spec §7.2: existe
     # dado DA PLATAFORMA daquela dimensão até `fim`. Nunca "cresceu > 0".
     aferido: dict[int, dict[str, bool]] = {}
+    # Contadores do Matific são DO ANO: com início, só snapshots do ano letivo.
+    ano_matific = escola.ano_letivo_ativo if inicio is not None else None
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
         atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim,
-                                  base_no_periodo=base_no_periodo)
+                                  base_no_periodo=base_no_periodo,
+                                  ano_letivo=ano_matific)
         ganhos_m[aluno_id] = SimpleNamespace(
             atividades=_delta(atual_m, base_m, "atividades"),
             estrelas=_delta(atual_m, base_m, "estrelas"),
@@ -538,7 +602,9 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             livros = float(reais["livros"])
             tempo = float(reais["tempo_min"])
             niveis_ganho = reais["por_nivel"]
-            itens_periodo = reais.get("itens")     # (título, nível) de cada livro
+            # (título, nível, tempo, elefante_id) de cada livro — a mesma
+            # identidade que a nota anual usa (o id oficial casa antes do título).
+            itens_periodo = reais.get("itens")
         else:
             # Aluno acompanhado só pelo relatório da turma: delta de snapshot.
             livros = _delta(atual_e, base_e, "livros_unicos")
@@ -573,7 +639,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     # helper — e a coorte é a DA DIMENSÃO (só os aferidos nela), não a escola
     # inteira: sem isso, matricular alunos sem plataforma nenhuma já mudava a
     # régua, e a amostra de uma dimensão decidia a régua da outra
-    # (`_referencias_por_dimensao`).
+    # (`_referencias_por_dimensao`). Os aferidos são os da ESCOLA INTEIRA
+    # (`matriculas` não tem filtro): o recorte não muda a régua.
     aferidos_de = {
         d: [aid for aid in ganhos_m if aferido[aid][d]] for d in DIMENSOES
     }
@@ -592,16 +659,18 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         },
     })
 
-    p_matific = scoring.obter_pesos(db, escola_id, "pesos.matific")
-    p_elefante = scoring.obter_pesos(db, escola_id, "pesos.elefante")
-    p_questoes = scoring.obter_pesos(db, escola_id, "pesos.questoes")
-    p_geral = scoring.obter_pesos(db, escola_id, "pesos.geral")
-    pct_matific = scoring.obter_pesos_brutos(db, escola_id, "pesos.matific")
-    pct_elefante = scoring.obter_pesos_brutos(db, escola_id, "pesos.elefante")
-    pct_questoes = scoring.obter_pesos_brutos(db, escola_id, "pesos.questoes")
+    # Pesos que o MOTOR usa de fato (institucionais no perfil padrão; config
+    # local só no perfil 'personalizado') — a fonte única, e não a config crua.
+    p_matific, pct_matific = scoring.pesos_efetivos(db, escola_id, "pesos.matific")
+    p_elefante, pct_elefante = scoring.pesos_efetivos(db, escola_id, "pesos.elefante")
+    p_questoes, pct_questoes = scoring.pesos_efetivos(db, escola_id, "pesos.questoes")
+    p_geral, _ = scoring.pesos_efetivos(db, escola_id, "pesos.geral")
 
+    # Só o RECORTE vira item; as notas saem da régua da escola inteira acima.
     itens: list[ItemEvolucao] = []
     for matricula, turma in matriculas:
+        if not _no_recorte(turma):
+            continue
         aluno_id = matricula.aluno_id
         nota_m, _ = scoring.calcular_matific(
             ganhos_m[aluno_id], refs, p_matific, pct_matific, k_vol)

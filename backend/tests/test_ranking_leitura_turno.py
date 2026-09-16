@@ -18,6 +18,7 @@ from app.models import (
     SnapshotElefante,
     Turma,
 )
+from app.services import dificuldade_livro as dl
 from app.services import scoring
 
 API = "/api/v1"
@@ -125,7 +126,8 @@ def test_turma_e_turno_nao_alteram_a_nota_e_a_serie_so_pelo_fator_global(cliente
     dif5 = n5.detalhes["dimensoes"]["leitura"]["dados"]["pontos_dificuldade"]
     assert dif1 == pytest.approx(dif5 * 1.40, rel=1e-3)
     assert n1.nota_elefante > n5.nota_elefante
-    assert n1.detalhes["dimensoes"]["leitura"]["dados"]["versao_dificuldade"] == "elefante_dificuldade_v1"
+    # sentido: a nota carimba a versão VIGENTE da régua (hoje a v2) — a constante
+    assert n1.detalhes["dimensoes"]["leitura"]["dados"]["versao_dificuldade"] == dl.VERSAO_VIGENTE
 
 
 def test_dois_turnos_isolados_e_posicao_reinicia(cliente, db, escola_completa):

@@ -450,9 +450,15 @@ def ranking_leitura(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Data inválida (use AAAA-MM-DD).") from exc
 
+    # NÍVEL CONGELADO da leitura (``Leitura.nivel_codigo``) e, só quando ele é
+    # nulo (leitura anterior a esta versão), o nível ATUAL do livro. Mesma
+    # ``coalesce`` do motor (``dificuldade_livro.leituras_por_aluno``): renivelar
+    # um livro no catálogo não muda o que o aluno já pontuou nesta tela.
+    nivel_efetivo = func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
     consulta = (
-        select(Leitura.aluno_id, Livro.nivel_codigo, Leitura.tempo_leitura_min,
-               Aluno.nome, Turma.nome, Turma.ano_escolar, Turma.id, Livro.titulo)
+        select(Leitura.aluno_id, nivel_efetivo, Leitura.tempo_leitura_min,
+               Aluno.nome, Turma.nome, Turma.ano_escolar, Turma.id, Livro.titulo,
+               Livro.elefante_id)
         .join(Livro, Leitura.livro_id == Livro.id)
         .join(Aluno, Aluno.id == Leitura.aluno_id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
@@ -478,15 +484,18 @@ def ranking_leitura(
     regra = dificuldade_livro.regra_da_escola(db, escola_id)
     agg: dict[int, dict] = {}
     itens: dict[int, list] = {}          # leituras itemizadas por aluno (p/ reconciliar no "tudo")
-    for aluno_id, codigo, tempo, nome, turma_nome, serie, turma_id, titulo in db.execute(consulta).all():
+    for (aluno_id, codigo, tempo, nome, turma_nome, serie, turma_id, titulo,
+         elefante_id) in db.execute(consulta).all():
         item = agg.setdefault(aluno_id, {
             "aluno_id": aluno_id, "nome": nome, "turma": turma_nome,
             "ano_escolar": serie, "livros": 0, "pontos": 0.0, "tempo_leitura_min": 0,
         })
         item["livros"] += 1
-        item["pontos"] += regra.valor_livro(codigo, titulo, serie, turma_id)
+        # Identidade oficial do livro (id do catálogo do Elefante) antes do título.
+        item["pontos"] += regra.valor_livro(codigo, titulo, serie, turma_id,
+                                            elefante_id=elefante_id)
         item["tempo_leitura_min"] += tempo or 0
-        itens.setdefault(aluno_id, []).append((titulo, codigo))
+        itens.setdefault(aluno_id, []).append((titulo, codigo, 0, elefante_id))
 
     # No "Todo o histórico" (sem recorte de datas), inclui o TOTAL acumulado do
     # Elefante (SnapshotElefante) — que a sincronização por API popula de forma
@@ -530,9 +539,12 @@ def ranking_leitura(
             item["pontos"] = regra.pontos_aluno(por_nivel or {}, serie, turma_id=tid,
                                                 leituras=itens.get(aluno_id))
 
+    # Último desempate = id do aluno (convenção de ``premiacoes._podio``): dois
+    # homônimos empatados não podem trocar de posição entre requisições.
     itens = sorted(agg.values(),
                    key=lambda x: (-x["pontos"], -x["livros"],
-                                  -x["tempo_leitura_min"], x["nome"].casefold()))
+                                  -x["tempo_leitura_min"], x["nome"].casefold(),
+                                  x["aluno_id"]))
     for posicao, item in enumerate(itens, start=1):
         item["posicao"] = posicao
         item["pontos"] = round(item["pontos"], 2)
@@ -593,7 +605,17 @@ def ranking_matematica(
             continue
         # base_no_periodo=True: o acumulado anterior ao período nunca é
         # atribuído a ele — mesma regra justa das premiações.
-        atual, base = _janela(serie, ini, fim_dt, base_no_periodo=True)
+        # Contadores do Matific são do ANO: snapshot de outro ano letivo nunca
+        # serve de base NEM de estado — SEMPRE, inclusive em "todo o histórico".
+        # Antes o filtro só valia com início definido, e o preset padrão
+        # (``periodo=tudo``, sem datas) deixava um acumulado de dez/2025 virar o
+        # "estado atual" de 2026; agora o preset padrão passa a valer o último
+        # snapshot DENTRO do ano letivo, exatamente como o "todo o histórico" das
+        # premiações (``matific_destaque.ganho_no_periodo``, que nunca deixou de
+        # receber o ano). Quem só tem dado de outro ano sai do ranking (ausência
+        # no ano, não zero) — era a divergência entre as duas telas.
+        atual, base = _janela(serie, ini, fim_dt, base_no_periodo=True,
+                              ano_letivo=ano)
         if atual is None:
             continue
         estrelas = _delta(atual, base, "estrelas")
@@ -617,9 +639,13 @@ def ranking_matematica(
             "pontuacao_media": media_periodo,
         })
 
-    # Desempate determinístico por nome — a convenção das premiações (_podio).
+    # Desempate determinístico por nome e, por último, pelo ID DO ALUNO — a
+    # convenção das premiações (``premiacoes._podio``). Sem o id, dois homônimos
+    # empatados ficavam à mercê da ordem que o banco devolvesse e podiam trocar
+    # de posição entre duas requisições idênticas.
     itens.sort(key=lambda x: (-x["estrelas"], -x["atividades"],
-                              -x["pontuacao_media"], x["nome"].casefold()))
+                              -x["pontuacao_media"], x["nome"].casefold(),
+                              x["aluno_id"]))
     for posicao, item in enumerate(itens, start=1):
         item["posicao"] = posicao
     return itens
