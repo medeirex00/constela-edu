@@ -49,6 +49,9 @@ _DIMENSOES = (
     ("aferido_matematica", "posicao_matematica", "snapshots_matific", "nota_matific"),
 )
 
+# `true` no PostgreSQL, `1` no SQLite — ver _backfill.
+_VERDADEIRO = sa.bindparam("aferido", value=True, type_=sa.Boolean())
+
 
 def _backfill(conexao) -> None:
     """Preenche as quatro colunas a partir do que JÁ está no banco.
@@ -56,23 +59,28 @@ def _backfill(conexao) -> None:
     Feito em Python (e não num UPDATE ... FROM com window function) para rodar
     igual em SQLite e PostgreSQL: `UPDATE ... FROM` só existe no SQLite ≥ 3.33 e
     a sintaxe do Postgres é outra. O volume é uma linha de `notas` por aluno/ano.
+
+    BOOLEANO SEMPRE COMO PARÂMETRO TIPADO (``_VERDADEIRO``), nunca o literal ``1``:
+    o SQLite aceita ``coluna_booleana = 1``, mas o PostgreSQL recusa inteiro em
+    coluna ``boolean`` (DatatypeMismatch) — foi isso que derrubou o deploy de
+    7bc9d54 no Railway. O parâmetro vira ``true`` no Postgres e ``1`` no SQLite.
     """
     for col_aferido, col_posicao, tabela_snap, col_nota in _DIMENSOES:
         # 1) aferido = EXISTE snapshot daquela plataforma para o aluno (mesma
         #    régua do EXISTS de rede._medias_por_plataforma). Portável.
         conexao.execute(sa.text(
-            f"UPDATE notas SET {col_aferido} = 1 WHERE EXISTS ("
+            f"UPDATE notas SET {col_aferido} = :aferido WHERE EXISTS ("
             f"  SELECT 1 FROM {tabela_snap} s"
             f"  WHERE s.aluno_id = notas.aluno_id AND s.escola_id = notas.escola_id)"
-        ))
+        ).bindparams(_VERDADEIRO))
         # 2) posição = ordem por nota decrescente DENTRO de (escola, ano), só
         #    entre os aferidos. Desempate por aluno_id: determinístico e
         #    estável; o recálculo aplica o desempate local completo depois.
         linhas = conexao.execute(sa.text(
             f"SELECT id, escola_id, ano_letivo, {col_nota} AS nota FROM notas "
-            f"WHERE {col_aferido} = 1 "
+            f"WHERE {col_aferido} = :aferido "
             f"ORDER BY escola_id, ano_letivo, {col_nota} DESC, aluno_id"
-        )).all()
+        ).bindparams(_VERDADEIRO)).all()
         atual, posicao = None, 0
         for linha in linhas:
             chave = (linha.escola_id, linha.ano_letivo)
