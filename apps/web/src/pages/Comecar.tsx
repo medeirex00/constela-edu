@@ -19,6 +19,7 @@ import {
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import AcessoUsuariosDaEscola from "../components/AcessoUsuariosDaEscola";
 import { CredenciaisForm } from "../components/CredenciaisForm";
 import { Badge, Botao, Card, Carregando, Mensagem, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -84,6 +85,9 @@ export default function Comecar() {
         4: false,
       }} />
 
+      {/* Admin Global: Escola → Usuários (1º coordenador) antes da Lista Piloto. */}
+      <AcessoUsuariosDaEscola />
+
       {status.carregando && !s && <Carregando texto="Carregando o estado da escola…" />}
       {status.erro && !s && (
         <Vazio titulo="Não foi possível carregar" descricao={status.erro.message}
@@ -106,9 +110,9 @@ export default function Comecar() {
               </p>
               {usuario?.is_global && (
                 <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                  Precisa cadastrar outra escola ou criar o primeiro usuário (coordenador) desta?
-                  Use a página <Link to="/escolas" className="font-medium underline">Escolas</Link> —
-                  a seção “Usuários” de cada escola funciona antes de turmas, alunos e Lista Piloto.
+                  Precisa cadastrar outra escola? Use a página{" "}
+                  <Link to="/escolas" className="font-medium underline">Escolas</Link>. O primeiro
+                  usuário desta escola (coordenador) é criado em “Usuários”, acima.
                 </p>
               )}
             </div>

@@ -2,6 +2,7 @@
 import { ChevronLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 
+import AcessoUsuariosDaEscola from "../components/AcessoUsuariosDaEscola";
 import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
@@ -51,6 +52,8 @@ export default function VisaoEscola() {
         titulo="Visão da Escola"
         descricao="Comparação entre turmas: médias das notas e totais de cada plataforma."
       />
+      {/* Admin Global: Escola → Usuários, mesmo sem turmas/alunos/Lista Piloto. */}
+      <AcessoUsuariosDaEscola />
       <Card>
         {resumo.turmas.length === 0 ? (
           <Vazio titulo="Nenhuma turma no ano letivo ativo" />

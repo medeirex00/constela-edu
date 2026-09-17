@@ -124,6 +124,38 @@ def test_sem_permissao_nao_cria_usuario_administrativo(cliente, db, escola_compl
     assert cliente.get(f"{API}/escolas/{nova}/usuarios", headers=chaves_global).json() == []
 
 
+def test_detalhe_da_escola_vazia_abre_para_o_admin_global_e_cria_o_coordenador(cliente, db, escola_completa):
+    """Escola → Usuários pelo DETALHE da escola (Comece aqui e Visão da Escola).
+
+    O acesso a Usuários do Admin Global mora dentro dessas duas páginas; as duas
+    precisam carregar numa escola recém-criada — 0 turmas, 0 alunos, Lista Piloto
+    não iniciada, nenhuma integração —, senão o botão some junto com a página.
+    E o fluxo fecha: lista vazia → cria o coordenador → a lista mostra a conta."""
+    chaves = _login(cliente, _global(db)["email"])
+    nova = _escola_vazia(cliente, chaves)
+
+    status = cliente.get(f"{API}/escolas/{nova}/sync/status", headers=chaves)       # Comece aqui
+    assert status.status_code == 200, status.text
+    assert status.json()["lista_piloto_importada"] is False
+    assert status.json()["integracao_configurada"] is False
+    resumo = cliente.get(f"{API}/escolas/{nova}/resumo-escola", headers=chaves)    # Visão da Escola
+    assert resumo.status_code == 200, resumo.text
+    assert resumo.json()["turmas"] == []
+
+    assert cliente.get(f"{API}/escolas/{nova}/usuarios", headers=chaves).json() == []
+    r = cliente.post(f"{API}/escolas/{nova}/usuarios", headers=chaves,
+                     json=_coordenador("primeiro.coord@nova.escola.br"))
+    assert r.status_code == 201, r.text
+    lista = cliente.get(f"{API}/escolas/{nova}/usuarios", headers=chaves).json()
+    assert [(u["email"], u["cargo"], u["escola_id"]) for u in lista] == [
+        ("primeiro.coord@nova.escola.br", "coordenador", nova)]
+
+    # O coordenador criado NÃO passa a gerir usuários (regra existente, intocada).
+    chaves_coord = _login(cliente, "primeiro.coord@nova.escola.br")
+    assert cliente.post(f"{API}/escolas/{nova}/usuarios", headers=chaves_coord,
+                        json=_coordenador("outro@nova.escola.br")).status_code == 403
+
+
 # --- 6: unicidade de e-mail/login continua valendo ---
 
 def test_email_e_login_duplicados_continuam_rejeitados(cliente, db, escola_completa):

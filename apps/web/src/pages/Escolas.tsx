@@ -250,14 +250,14 @@ export default function Escolas() {
                         aria-label={`Usuários de ${escola.nome}`}
                         title="Usuários"
                         aria-pressed={escolaAberta?.id === escola.id}
-                        className={`rounded-md p-1.5 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 ${
+                        className={`inline-flex items-center gap-1 rounded-md p-1.5 align-middle text-xs font-medium transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 ${
                           escolaAberta?.id === escola.id
                             ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
                             : "text-zinc-500 dark:text-zinc-400"
                         }`}
                         onClick={() => setEscolaAberta(escolaAberta?.id === escola.id ? null : escola)}
                       >
-                        <UserCog size={15} />
+                        <UserCog size={15} /> Usuários
                       </button>
                       <button
                         aria-label={`Renomear ${escola.nome}`}
