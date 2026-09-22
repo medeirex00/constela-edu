@@ -112,9 +112,9 @@ def test_orquestrador_matific_api_por_periodo(db, escola_completa, monkeypatch):
     ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
-    payload = {"turma": "3 ANO B (300396804)",
+    payload = {"turma": "3 ANO A (300396804)",
                "periodo_inicio": "2026-07-07", "periodo_fim": "2026-07-14",
-               "alunos": [{"nome": "Ana Beatriz Souza", "turma": "3 ANO B (300396804)",
+               "alunos": [{"nome": "Ana Beatriz Souza", "turma": "3 ANO A (300396804)",
                            "estrelas": 50, "atividades": 20}]}
     arq = ArquivoObtido(
         conteudo=json.dumps(payload).encode("utf-8"), nome_arquivo="matific.json",
@@ -165,7 +165,7 @@ def test_upload_json_matific_pela_api(cliente, escola_completa):
     escola_id = escola_completa["escola"].id
     conteudo = json.dumps({"fonte": "matific-placar", "duration": "this-year", "alunos": [
         {"nome": "Ana Beatriz Souza", "nome_abrev": "Ana B",
-         "turma": "3 ANO B (300396804)", "estrelas": 362, "atividades": 100}]})
+         "turma": "3 ANO A (300396804)", "estrelas": 362, "atividades": 100}]})
     resposta = cliente.post(
         f"/api/v1/escolas/{escola_id}/importacoes/analisar",
         files={"arquivo": ("constela-matific.json", conteudo.encode("utf-8"), "application/json")},
@@ -219,9 +219,9 @@ def test_orquestrador_importa_matific_api_json(db, escola_completa, monkeypatch)
     ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
-    payload = {"turma": "3 ANO B (300396804)", "duration": "this-year", "alunos": [
+    payload = {"turma": "3 ANO A (300396804)", "duration": "this-year", "alunos": [
         {"nome": "Ana Beatriz Souza", "nome_abrev": "Ana B",
-         "uuid": "u1", "turma": "3 ANO B (300396804)", "estrelas": 362, "atividades": 100}]}
+         "uuid": "u1", "turma": "3 ANO A (300396804)", "estrelas": 362, "atividades": 100}]}
     arq = ArquivoObtido(
         conteudo=json.dumps(payload).encode("utf-8"),
         nome_arquivo="matific_3-ano-b.json", plataforma="matific",

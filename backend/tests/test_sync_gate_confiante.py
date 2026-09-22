@@ -101,8 +101,9 @@ def test_sync_homonimo_ambiguo_nao_atribui_a_crianca_errada(db, escola_completa,
     originais = {joao_a.id, joao_b.id}
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
-    # Relatório na 5º Ano C: nenhum homônimo está nela → não atribui a nenhum; cria
-    # um terceiro registro na 5º Ano C, sem roubar dados de joao_a nem joao_b.
+    # Relatório na 5º Ano C: nenhum homônimo está nela → não atribui a nenhum. Porta
+    # única (2026-09-21): homônimos em OUTRAS salas são candidatos — a linha vai
+    # para a fila de revisão (nem rouba dados, nem abre uma 3ª ficha).
     arq = _arquivo_elefante("5 ANO C", "João Pedro Barbosa")
     orchestrator.aplicar_arquivo(db, escola, arq, usuario_id=None,
                                  recalcular=False, contexto=_contexto(escola.id))
@@ -111,7 +112,12 @@ def test_sync_homonimo_ambiguo_nao_atribui_a_crianca_errada(db, escola_completa,
     for aid in originais:
         assert db.execute(select(SnapshotElefante).where(
             SnapshotElefante.aluno_id == aid)).scalars().first() is None
-    # O dado ficou num TERCEIRO registro, com o snapshot.
-    snaps = db.execute(select(SnapshotElefante).where(
-        SnapshotElefante.escola_id == escola.id)).scalars().all()
-    assert len(snaps) == 1 and snaps[0].aluno_id not in originais
+    # Nenhum snapshot, nenhuma ficha nova — a linha está preservada na revisão.
+    from app.models import RevisaoIdentidade
+    assert db.execute(select(SnapshotElefante).where(
+        SnapshotElefante.escola_id == escola.id)).scalars().all() == []
+    assert len(db.execute(select(Aluno).where(
+        Aluno.nome == "João Pedro Barbosa")).scalars().all()) == 2
+    rev = db.execute(select(RevisaoIdentidade)).scalars().one()
+    assert rev.motivo == "homonimo_em_outra_sala"
+    assert {c["aluno_id"] for c in rev.candidatos} == originais

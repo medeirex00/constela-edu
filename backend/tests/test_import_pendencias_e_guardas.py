@@ -8,7 +8,15 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.models import Aluno, LogAuditoria, Matricula, Notificacao, SnapshotElefante, Turma
+from app.models import (
+    Aluno,
+    LogAuditoria,
+    Matricula,
+    Notificacao,
+    RevisaoIdentidade,
+    SnapshotElefante,
+    Turma,
+)
 from app.routers import importacoes as imp
 from app.schemas.importacao import LinhaConfirmacao
 from app.services import importacao as svc
@@ -48,7 +56,13 @@ def test_confirmar_expoe_ignorados_e_registra_pendencia(cliente, db, escola_comp
     assert corpo["ignorados"] == [svc.normalizar_nome("Fulano Sem Vinculo"),
                                   svc.normalizar_nome("Beltrano Da Turma Nova")]
     assert any("Fulano Sem Vinculo" in a and "pendência" in a for a in corpo["avisos"])
-    assert len(_logs(db, escola.id, "importacao.linha_ignorada")) == 1
+    # As DUAS linhas (sem turma; turma fora do cadastro na sync) ficam preservadas
+    # na fila de revisão de identidade — e auditadas como linha sem aluno vinculado.
+    assert len(_logs(db, escola.id, "importacao.linha_ignorada")) == 2
+    assert corpo["qtd_revisoes"] == 2
+    assert {r.motivo for r in db.execute(select(RevisaoIdentidade).where(
+        RevisaoIdentidade.escola_id == escola.id)).scalars()} == {
+        "sem_turma", "turma_nao_cadastrada"}
     assert db.execute(select(Notificacao).where(
         Notificacao.escola_id == escola.id,
         Notificacao.tipo == "importacao.linha_ignorada")).scalars().first() is not None
@@ -114,7 +128,7 @@ def test_api_com_campo_ausente_preserva_snapshot_valido(db, escola_completa, mon
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
     def aplicar(students):
-        payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B"}, "students": students}
+        payload = {"courseSchoolDescriptors": {"courseName": "3 ANO A"}, "students": students}
         arq = ArquivoObtido(conteudo=json.dumps(payload).encode("utf-8"),
                             nome_arquivo="t.json", plataforma="elefante",
                             content_type=orchestrator.CT_ELEFANTE_API, formato_hint="resumo")
@@ -161,21 +175,24 @@ def test_inativo_em_outra_turma_nao_vira_segunda_ficha_ativa(db, escola_completa
     assert db.execute(select(Matricula).where(Matricula.aluno_id == ana.id)).scalar_one().turma_id == turma.id
     assert any(status_ in a and "NÃO foi criada uma 2ª ficha" in a for a in avisos)
     logs = _logs(db, escola.id, "aluno.revisao_necessaria")
-    assert logs and logs[-1].detalhes["motivo"] == "inativo_homonimo_outra_turma"
+    assert logs and logs[-1].detalhes["motivo"] == "homonimo_em_outra_sala"
     assert logs[-1].entidade_id == ana.id
 
 
-def test_inativo_na_mesma_turma_e_reusado_com_aviso(db, escola_completa):
+def test_inativo_na_mesma_turma_vai_para_revisao_sem_duplicata(db, escola_completa):
+    """Porta única (2026-09-21): ficha INATIVA não recebe dado nem ganha 2ª ficha
+    sozinha — a linha fica na fila de revisão até o gestor decidir (resolver para a
+    ficha inativa vale para as próximas importações)."""
     escola, turma = escola_completa["escola"], escola_completa["turma"]
     ana = escola_completa["alunos"][0]
     ana.status = "arquivado"
     db.flush()
     avisos: list[str] = []
     res = imp._resolver_aluno(db, escola.id, 2026, _linha(ana.nome, turma.id), avisos, {}, {})
-    assert res is not None and res.id == ana.id         # ficha reaproveitada (sem duplicata)
-    assert _n_alunos(db, escola.id, ana.nome) == 1
+    assert res is None                                  # não aplica dado à ficha inativa
+    assert _n_alunos(db, escola.id, ana.nome) == 1      # e não abre 2ª ficha
     assert any("arquivado" in a for a in avisos)
-    assert _logs(db, escola.id, "aluno.revisao_necessaria")[-1].detalhes["motivo"] == "ficha_inativa_na_turma"
+    assert _logs(db, escola.id, "aluno.revisao_necessaria")[-1].detalhes["motivo"] == "ficha_inativa"
 
 
 def test_excluido_nao_ressuscita_e_nao_bloqueia_ficha_nova(db, escola_completa):

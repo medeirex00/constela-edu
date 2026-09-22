@@ -10,8 +10,8 @@ import re
 import shutil
 import time
 import uuid
-from dataclasses import dataclass, field
-from datetime import date, datetime, time as hora_zero, timedelta, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, time as hora_zero, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -42,6 +42,7 @@ from app.models import (
     Livro,
     Matricula,
     NivelDificuldade,
+    RevisaoIdentidade,
     SnapshotElefante,
     SnapshotMatific,
     Turma,
@@ -56,6 +57,13 @@ from app.schemas import (
     MatriculasResultadoOut,
     MatriculaTurmaOut,
 )
+from app.schemas.importacao import (
+    DescartarRevisaoIn,
+    ResolucaoRevisaoOut,
+    ResolverRevisaoIn,
+    RevisaoIdentidadeOut,
+)
+from app.services import identidade_aluno as ida
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
 from app.services import dificuldade_livro, professores, push, scoring
@@ -246,9 +254,11 @@ async def analisar(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
     if analise.linhas:
-        svc.casar_nomes(db, escola_id, analise.linhas)
+        # PRÉVIA = CONFIRMAÇÃO: a mesma porta única de identidade do /confirmar.
+        svc.casar_nomes(db, escola_id, analise.linhas, plataforma=analise.plataforma,
+                        turma_padrao=analise.turma_detectada)
 
-    nomes_unicos = {svc.normalizar_nome(l.nome) for l in analise.linhas if l.nome}
+    nomes_unicos = {svc.chave_nome(l.nome) for l in analise.linhas if l.nome}
     return AnaliseOut(
         plataforma=analise.plataforma,
         formato=analise.formato,
@@ -364,33 +374,50 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
 
     turma: Turma | None = None
     if codigo:
-        turma = db.execute(
+        por_codigo = db.execute(
             select(Turma).where(Turma.escola_id == escola_id,
                                 Turma.ano_letivo == ano,
-                                Turma.codigo_externo == codigo).limit(1)
-        ).scalars().first()
+                                Turma.codigo_externo == codigo).order_by(Turma.id)
+        ).scalars().all()
+        if len(por_codigo) == 1:
+            turma = por_codigo[0]
     if turma is None:
         # Casa pela chave canônica (série+letra) contra as turmas já cadastradas —
         # resolve o furo do formato ("4ºC" vs "4 ANO C INTEGRAL (cod)") que o nome
         # exato/overlap frágil deixava passar. (Roda 1x por sala distinta: o cache
         # por chave abaixo evita repetir a varredura para cada aluno da turma.)
-        for t in db.execute(
+        # NUNCA "a primeira que aparecer": com 2+ turmas na mesma sala, só decide
+        # pelo nome idêntico; sem isso, não escolhe (a linha vai para revisão).
+        mesma_sala = [t for t in db.execute(
             select(Turma).where(Turma.escola_id == escola_id,
-                                Turma.ano_letivo == ano)).scalars():
-            if matriculas.chave_turma_norm(t.nome) == chave:
-                turma = t
-                break
+                                Turma.ano_letivo == ano).order_by(Turma.id)).scalars()
+            if matriculas.chave_turma_norm(t.nome) == chave]
+        if len(mesma_sala) == 1:
+            turma = mesma_sala[0]
+        elif len(mesma_sala) > 1:
+            alvos = {nome_cru.casefold(), matriculas.nome_turma_exibicao(nome_cru).casefold()}
+            iguais = [t for t in mesma_sala if t.nome.strip().casefold() in alvos]
+            if len(iguais) != 1:
+                aviso = (f"Mais de uma turma cadastrada corresponde a “{nome_cru}” "
+                         f"({', '.join(t.nome for t in mesma_sala)}) — nenhum aluno foi "
+                         "criado por esta linha; escolha a turma na revisão.")
+                if aviso not in avisos:
+                    avisos.append(aviso)
+                return None
+            turma = iguais[0]
     if turma is None:
         if not permitir_criar:
             # GATE anti-turma-fantasma (item 4): a turma do relatório da plataforma
             # NÃO existe no cadastro da escola e este fluxo (sincronização automática)
             # não pode inventar turma. Não cria; avisa p/ análise. A Lista Piloto
             # (fonte oficial) e o import manual com opt-in continuam podendo criar.
-            avisos.append(
+            aviso = (
                 f"A turma “{matriculas.nome_turma_exibicao(nome_cru)}” do relatório "
                 "não existe no cadastro desta escola — nenhum aluno foi criado nela "
                 "(sincronização automática não cria turmas). Cadastre-a pela Lista "
                 "Piloto ou associe manualmente.")
+            if aviso not in avisos:
+                avisos.append(aviso)
             return None
         nome_norm = matriculas.nome_turma_exibicao(nome_cru)
         turma, criada = _inserir_turma(
@@ -417,7 +444,7 @@ def _ra_forte(valor) -> str:
     normalizado ("1231000260"), o motor leria RAs "divergentes" e vetaria o
     casamento da MESMA criança (duplicata), e dois placeholders "0" iguais
     "corroborariam" crianças diferentes."""
-    return lista_piloto.ra_util(valor)
+    return ida.ra_forte(valor)
 
 
 def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
@@ -431,7 +458,7 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     VETO de identidade: se o cadastro de mesmo nome tem nascimento/RA/nº de chamada
     DIVERGENTE da linha, é OUTRA criança (gêmeo/homônimo) — não reusa (senão o caso
     "conflito de identidade" cairia num vínculo silencioso pelo nome exato)."""
-    alvo = svc.normalizar_nome(nome)
+    alvo = svc.chave_nome(nome)
     linha_ident = matching.Identidade(chamada=numero_chamada, nascimento=nascimento,
                                       ra=_ra_forte(ra))
     achados: list[Aluno] = []
@@ -440,7 +467,7 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
         .where(Aluno.escola_id == escola_id, Matricula.turma_id == turma_id,
                Matricula.ano_letivo == ano, Aluno.status != "excluido")
     ).scalars():
-        if svc.normalizar_nome(aluno.nome) != alvo:
+        if svc.chave_nome(aluno.nome) != alvo:
             continue
         if matching.conflito_identidade(linha_ident, matching.Identidade(
                 chamada=aluno.numero_chamada, nascimento=aluno.data_nascimento,
@@ -452,19 +479,6 @@ def _aluno_existente_na_turma(db: Session, escola_id: int, ano: int,
     # não reusa nenhum às cegas; devolve None para o casamento pelo motor decidir
     # (2+ candidatos → revisão, nunca atribui os dados à criança errada).
     return achados[0] if len(achados) == 1 else None
-
-
-def _data_iso(valor):
-    """Converte uma data de nascimento da linha (ISO 'AAAA-MM-DD' ou já date) em
-    ``date``; qualquer outro formato/vazio → None (o veto por nascimento só age
-    quando a data é confiável)."""
-    if isinstance(valor, date):
-        return valor
-    texto = str(valor or "").strip()[:10]
-    try:
-        return date.fromisoformat(texto) if texto else None
-    except ValueError:
-        return None
 
 
 def _roster_identidades(db: Session, escola_id: int, ano: int, turma_id: int
@@ -497,11 +511,7 @@ def _identidade_do_aluno(aluno: Aluno) -> matching.Identidade:
     """Aluno do banco → ``matching.Identidade`` (a moeda do motor único). Um só
     lugar monta isto, para que TODOS os fluxos comparem os mesmos campos com a
     mesma normalização (RA por ``_ra_forte``)."""
-    return matching.Identidade(
-        id=aluno.id, nome=aluno.nome, chamada=aluno.numero_chamada,
-        nascimento=aluno.data_nascimento,
-        ra=_ra_forte((aluno.ficha or {}).get("ra")),
-        da_lista_piloto=bool(aluno.da_lista_piloto))
+    return ida.identidade_do_aluno(aluno)
 
 
 def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
@@ -550,198 +560,234 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
                     criados: dict | None = None,
                     turmas_novas: dict | None = None,
-                    permitir_criar_turma: bool = True) -> Aluno | None:
-    if linha.aluno_id is not None:
-        aluno = db.get(Aluno, linha.aluno_id)
-        if aluno is None or aluno.escola_id != escola_id:
-            avisos.append(f"Linha “{linha.nome}”: aluno não pertence a esta escola — ignorada.")
-            return None
-        return aluno
+                    permitir_criar_turma: bool = True, *,
+                    plataforma: str | None = None,
+                    ctx: "ida.Contexto | None" = None,
+                    revisoes: "ida.ColetorRevisoes | None" = None,
+                    usuario_id: int | None = None) -> Aluno | None:
+    """Aplica à linha a decisão da PORTA ÚNICA de identidade
+    (``identidade_aluno.decidir``) — a MESMA que a prévia mostrou:
 
-    turma = None
-    if linha.criar_em_turma_id is not None:
-        turma = db.get(Turma, linha.criar_em_turma_id)
-        if turma is None or turma.escola_id != escola_id:
+      * ASSOCIAR → devolve a ficha e grava a identidade externa (UUID do Matific /
+        studentId do Elefante) nela, para a próxima sincronização casar direto;
+      * REVISAR  → NÃO associa e NÃO cria: a linha vai INTEIRA para a fila de
+        revisão (``RevisaoIdentidade``), com candidatos e motivo, e é devolvida em
+        ``ignorados`` (a sync não avança o cursor desse aluno);
+      * CRIAR    → só quando não há candidato algum: cria a ficha na turma da sala
+        (decidida sem chute) e grava a identidade externa já na criação.
+
+    ``ctx``/``revisoes`` vêm do /confirmar (estado carregado 1x, fila gravada no
+    fim); chamado avulso, carrega o próprio estado e grava a revisão na hora."""
+    dados = getattr(linha, "dados", None) or {}
+    if ctx is None:
+        ctx = ida.carregar_contexto(db, escola_id, ano)
+    turmas_novas = turmas_novas if turmas_novas is not None else {}
+
+    turma_explicita = None
+    if linha.aluno_id is None and linha.criar_em_turma_id is not None:
+        turma_explicita = db.get(Turma, linha.criar_em_turma_id)
+        if turma_explicita is None or turma_explicita.escola_id != escola_id:
             avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
             return None
-    elif getattr(linha, "criar_em_turma_nome", None):
-        turma = _turma_pelo_nome(db, escola_id, ano, linha.criar_em_turma_nome,
-                                 avisos, turmas_novas if turmas_novas is not None else {},
-                                 permitir_criar=permitir_criar_turma)
-        if turma is None and not permitir_criar_turma:
-            # Turma inexistente na sincronização automática → _turma_pelo_nome já
-            # avisou com clareza; não cria aluno órfão numa turma-fantasma.
-            return None
+    turma_nome = (turma_explicita.nome if turma_explicita is not None
+                  else getattr(linha, "criar_em_turma_nome", None)
+                  or dados.get("turma_relatorio") or "")
+    ident = ida.linha_de_dados(
+        linha.nome, dados, plataforma=plataforma, turma_nome=str(turma_nome),
+        turma_id=turma_explicita.id if turma_explicita is not None else None,
+        aluno_id=linha.aluno_id)
+    if getattr(linha, "numero_chamada", None) is not None:
+        ident = replace(ident, chamada=linha.numero_chamada)
+    if linha.aluno_id is None and not svc.tokens_nome(linha.nome):
+        avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
+        return None
+    decisao = ida.decidir(ctx, ident)
 
-    if turma is not None:
-        # Identidade da linha (chamada/RA/nascimento) — usada tanto no guard de
-        # idempotência quanto no casamento do roster (veto de identidade coeso).
-        dados = getattr(linha, "dados", None) or {}
-        chamada = getattr(linha, "numero_chamada", None)
-        if chamada is None:
-            bruto = str(dados.get("numero_chamada") or dados.get("chamada") or "").strip()
-            chamada = int(bruto) if bruto.isdigit() else None
-        ra_linha = str(dados.get("ra") or "").strip() or None
-        nasc_linha = _data_iso(dados.get("data_nascimento") or dados.get("nascimento"))
-        # Cria o aluno UMA vez por (nome, turma): no relatório individual há
-        # centenas de linhas (uma por livro) para o mesmo aluno — sem isto,
-        # cada livro criaria um aluno duplicado.
-        chave = (svc.normalizar_nome(linha.nome), turma.id)
-        if criados is not None and chave in criados:
-            return criados[chave]
-        # Reaproveita quem já está na turma (idempotência), MAS não reusa um cadastro
-        # de mesmo nome cuja identidade (nascimento/RA/chamada) prova ser outra
-        # criança — senão o caso de CONFLITO viraria vínculo silencioso pelo nome.
-        existente = _aluno_existente_na_turma(db, escola_id, ano, turma.id, linha.nome,
-                                              chamada, nasc_linha, ra_linha)
-        if existente is not None:
-            if existente.status != "ativo":
-                # Reusa a ficha (sem duplicata), mas NÃO em silêncio: o aluno
-                # inativo fica fora do ranking até alguém reativá-lo em Alunos.
-                _avisar_inativo(db, escola_id, existente, turma, linha.nome, avisos,
-                                motivo="ficha_inativa_na_turma")
-            if criados is not None:
-                criados[chave] = existente
-            return existente
-        # ANTES de criar: casa contra o roster da turma (nome abreviado/variação
-        # ortográfica). É o que evita os 3 "ABRAÃO" — Elefante/Matific vinculam ao
-        # aluno da Lista Piloto em vez de criar um novo. Alta vincula; média
-        # (ambíguo) NÃO cria (fica para revisão, nunca funde nomes parecidos).
-        # Import de PLATAFORMA (Matific/Elefante): habilita o vínculo por SUBCONJUNTO
-        # de candidato único (o cadastro manual em academico.py NÃO passa isto e segue
-        # conservador — subconjunto vai a revisão, nunca bloqueia um homônimo novo).
-        casado, confianca = _casar_no_roster(db, escola_id, ano, linha.nome, turma,
-                                             chamada, nasc_linha, ra_linha,
-                                             permitir_subconjunto_unico=True)
-        if confianca == "alta" and casado is not None:
-            # Vincula o UUID do Matific AGORA (casamento preciso): a próxima sync
-            # casa direto por UUID (idempotência/convergência), sem redepender do
-            # nome. Idempotente e não rouba UUID já vinculado (savepoint na unique).
-            uuid = str((getattr(linha, "dados", None) or {}).get("matific_uuid") or "").strip()
-            if uuid:
-                _vincular_identidade(db, escola_id, casado.id, "matific", uuid)
-            # AUDITORIA (regra §17): registra a decisão automática — de onde veio,
-            # em qual aluno canônico casou, a turma e por quê. Só o casamento fuzzy
-            # (abreviação/variante) passa por aqui — o nome exato já foi resolvido
-            # antes; e depois do 1º link o UUID assume, então não vira log repetido.
-            if svc.normalizar_nome(casado.nome) != svc.normalizar_nome(linha.nome):
-                # `correspondencia` = TIPO do casamento por nome (exato/abreviacao/
-                # parcial/variante/typo). "parcial" (subconjunto) é o vínculo novo do
-                # import de plataforma — fica marcado para o dono validar/reverter a
-                # lista de subconjunto (diagnostico_dimensao_zero --subconjunto).
-                registrar(db, "aluno.vinculado_auto", escola_id=escola_id,
-                          entidade="aluno", entidade_id=casado.id,
-                          detalhes={"origem": linha.nome, "aluno": casado.nome,
-                                    "turma": turma.nome, "confianca": "alta",
-                                    "candidatos": 1,
-                                    "correspondencia": matching._motivo_nome(
-                                        linha.nome, casado.nome),
-                                    "motivo": "único candidato plausível na mesma turma"})
-            if criados is not None:
-                criados[chave] = casado
-            return casado
-        if confianca == "media":
-            # REVISÃO: o motor viu correspondência, mas nenhuma SEGURA. Não criar
-            # é o ponto inteiro da correção — criar aqui é o que gerava a fila de
-            # fusão manual. Fica auditado para se saber depois por que não criou.
-            registrar(db, "aluno.revisao_necessaria", escola_id=escola_id,
-                      entidade="aluno", entidade_id=None,
-                      detalhes={"origem": linha.nome, "turma": turma.nome,
-                                "decisao": "REVIEW_REQUIRED",
-                                "motivo": "correspondencia_insegura"})
-            avisos.append(
-                f"“{linha.nome}” parece um aluno já cadastrado na turma {turma.nome} "
-                "(nomes muito próximos), mas a correspondência não é segura — NÃO foi "
-                "criado, para evitar duplicata. Confira em Alunos › Fundir duplicatas.")
-            return None
-        # ANTES de criar: um aluno INATIVO (arquivado / fora da lista piloto) com o
-        # MESMO nome noutra turma é, quase sempre, a mesma criança que mudou de
-        # sala. NÃO cria a 2ª ficha ativa (duplicata) nem reativa sozinho (arquivar
-        # e a Lista Piloto são decisões da escola): vira PENDÊNCIA auditada e a
-        # linha fica de fora — a sync não avança o cursor e retenta; reativar em
-        # Alunos (ou reimportar a Lista Piloto) resolve com o histórico intacto.
-        # "excluido" NUNCA ressuscita (regra de 276381f) → segue para criar.
-        if _pendencia_inativo_homonimo(db, escola_id, linha.nome, turma, avisos):
-            return None
-        registrar(db, "aluno.criado_auto", escola_id=escola_id, entidade="aluno",
-                  entidade_id=None,
-                  detalhes={"origem": linha.nome, "turma": turma.nome,
-                            "decisao": "NEW_STUDENT",
-                            "motivo": "nenhum candidato plausivel na turma"})
-        aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
-        db.add(aluno)
-        db.flush()
-        db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
-                         turma_id=turma.id, ano_letivo=ano))
+    if decisao.acao == ida.IGNORAR:
+        avisos.append(f"Linha “{linha.nome}”: "
+                      + ("aluno não pertence a esta escola" if decisao.motivo == "aluno_de_outra_escola"
+                         else "a ficha escolhida foi excluída e não recebe dados")
+                      + " — ignorada.")
+        return None
+
+    if decisao.acao == ida.REVISAR:
+        _enfileirar_revisao(db, escola_id, ctx, ident, decisao, dados, avisos,
+                            revisoes, usuario_id)
+        return None
+
+    if decisao.acao == ida.ASSOCIAR:
+        aluno = ctx.alunos[decisao.aluno_id]
+        _vincular_identidade(db, escola_id, aluno.id, ident.plataforma, ident.id_externo,
+                             ctx=ctx, usuario_id=usuario_id)
+        _marcar_via(linha, decisao.via)
+        chave_log = (svc.chave_nome(linha.nome), aluno.id)
+        if (decisao.via not in ("identidade", "exato", "explicito", "ra", "revisao")
+                and (criados is None or chave_log not in criados)):
+            # AUDITORIA (regra §17): vínculo decidido pelo motor sem nome idêntico
+            # (abreviação, parcial estrutural, grafia segura, identificador).
+            turma = ctx.turma_do_aluno(aluno.id)
+            registrar(db, "aluno.vinculado_auto", escola_id=escola_id,
+                      usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"origem": linha.nome, "aluno": aluno.nome,
+                                "turma": turma.nome if turma is not None else turma_nome,
+                                "confianca": "alta", "candidatos": 1,
+                                "correspondencia": decisao.via,
+                                "motivo": "único candidato plausível na mesma sala"})
         if criados is not None:
-            criados[chave] = aluno
+            criados[chave_log] = aluno
         return aluno
-    # NÃO é silêncio: fica no log de auditoria (vira notificação para a escola) e
-    # o chamador expõe a linha em `ignorados` (a sync desfaz o cursor e retenta).
-    registrar(db, "importacao.linha_ignorada", escola_id=escola_id, entidade="aluno",
-              entidade_id=None,
-              detalhes={"origem": linha.nome,
-                        "turma": getattr(linha, "criar_em_turma_nome", None),
-                        "motivo": "sem aluno vinculado"})
-    avisos.append(f"Linha “{linha.nome}”: sem aluno vinculado — ignorada "
-                  "(pendência registrada; vincule/cadastre o aluno e reimporte).")
-    return None
+
+    # CRIAR — nenhum candidato plausível. Turma: a decidida pela porta única; se a
+    # sala ainda não tem turma cadastrada, cria (import manual) ou revisa (sync).
+    turma = ctx.turmas.get(decisao.turma_id) if decisao.turma_id is not None else None
+    if turma is None and decisao.turma_id is not None:
+        turma = db.get(Turma, decisao.turma_id)
+    if turma is None:
+        turma = (_turma_pelo_nome(db, escola_id, ano, str(turma_nome), avisos, turmas_novas,
+                                  permitir_criar=permitir_criar_turma)
+                 if str(turma_nome).strip() else None)
+        if turma is None:
+            # Sem turma onde criar (linha sem turma, ou turma fora do cadastro na
+            # sincronização): a linha NÃO se perde — vai para a revisão.
+            _enfileirar_revisao(db, escola_id, ctx, ident,
+                                replace(decisao, acao=ida.REVISAR,
+                                        motivo=("turma_nao_cadastrada"
+                                                if str(turma_nome).strip() else "sem_turma")),
+                                dados, avisos, revisoes, usuario_id)
+            return None
+        ctx.registrar_turma(turma)
+    aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
+    db.add(aluno)
+    db.flush()
+    db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
+                     turma_id=turma.id, ano_letivo=ano))
+    ctx.registrar_aluno(aluno)
+    ctx.registrar_matricula(aluno.id, turma.id)
+    registrar(db, "aluno.criado_auto", escola_id=escola_id, usuario_id=usuario_id,
+              entidade="aluno", entidade_id=aluno.id,
+              detalhes={"origem": linha.nome, "turma": turma.nome,
+                        "plataforma": ident.plataforma or None,
+                        "decisao": "NEW_STUDENT",
+                        "motivo": ("identidade prova ser outra criança"
+                                   if decisao.vetados
+                                   else "nenhum candidato plausivel")})
+    _vincular_identidade(db, escola_id, aluno.id, ident.plataforma, ident.id_externo,
+                         ctx=ctx, usuario_id=usuario_id)
+    _marcar_via(linha, "criado")
+    if criados is not None:
+        criados[(svc.chave_nome(linha.nome), turma.id)] = aluno
+    return aluno
 
 
-_STATUS_INATIVOS_REVISAO = ("arquivado", "fora_lista_piloto")
+def _marcar_via(linha, via: str) -> None:
+    """Registra na linha COMO o aluno foi identificado (a sincronização só move de
+    turma quem veio pela identidade externa já vinculada)."""
+    try:
+        linha.via = via
+    except (AttributeError, ValueError, TypeError):
+        pass
 
 
-def _avisar_inativo(db: Session, escola_id: int, aluno: Aluno, turma, origem: str,
-                    avisos: list[str], *, motivo: str) -> None:
-    registrar(db, "aluno.revisao_necessaria", escola_id=escola_id, entidade="aluno",
-              entidade_id=aluno.id,
-              detalhes={"origem": origem, "turma": turma.nome, "status": aluno.status,
-                        "decisao": "REVIEW_REQUIRED", "motivo": motivo})
-    avisos.append(
-        f"“{origem}”: já existe a ficha de {aluno.nome} com status “{aluno.status}” "
-        f"(turma {turma.nome}) — NÃO foi criada uma 2ª ficha. Reative o aluno em "
-        "Alunos (ou reimporte a Lista Piloto) para ele voltar ao ranking; a "
-        "sincronização traz os dados na próxima rodada.")
+def _enfileirar_revisao(db: Session, escola_id: int, ctx: "ida.Contexto",
+                        ident: "ida.LinhaIdentidade", decisao: "ida.Decisao",
+                        dados: dict, avisos: list[str],
+                        revisoes: "ida.ColetorRevisoes | None",
+                        usuario_id: int | None) -> None:
+    """A linha NÃO é descartada: entra na fila de revisão com tudo o que é preciso
+    para um gestor decidir depois (nome, identidade externa, turma, candidatos,
+    motivo, dados). Várias linhas do mesmo aluno viram UMA pendência."""
+    avulso = revisoes is None
+    coletor = revisoes if revisoes is not None else ida.ColetorRevisoes()
+    antes = len(coletor.pendencias)
+    coletor.adicionar(ctx, ident, decisao, dados)
+    if len(coletor.pendencias) > antes:
+        texto = ida.MOTIVOS.get(decisao.motivo, decisao.motivo)
+        cands = ida.descrever_candidatos(ctx, decisao.candidatos)
+        if cands:
+            quem = ", ".join(
+                c["nome"] + (f" (ficha “{c['status']}”)" if c["status"] != "ativo" else "")
+                for c in cands)
+            avisos.append(
+                f"“{ident.nome}”: {texto} — {quem}. A correspondência não é segura: NÃO "
+                "foi criada uma 2ª ficha nem os dados foram associados. A linha ficou "
+                "como pendência na fila de revisão de identidade para um gestor "
+                "escolher o aluno.")
+        else:
+            avisos.append(
+                f"“{ident.nome}”: {texto} — nenhum aluno foi associado nem criado. A "
+                "linha ficou como pendência na fila de revisão de identidade para um "
+                "gestor decidir.")
+    if avulso:
+        _gravar_revisoes(db, escola_id, coletor, usuario_id)
 
 
-def _pendencia_inativo_homonimo(db: Session, escola_id: int, nome: str, turma,
-                                avisos: list[str]) -> bool:
-    """True se há aluno INATIVO (arquivado/fora da lista piloto) com o MESMO nome
-    normalizado em qualquer turma da escola: registra a pendência (auditoria +
-    notificação + aviso) e a linha NÃO cria aluno. "excluido" não conta."""
-    alvo = svc.normalizar_nome(nome)
-    candidatos = [a for a in db.execute(
-        select(Aluno).where(Aluno.escola_id == escola_id,
-                            Aluno.status.in_(_STATUS_INATIVOS_REVISAO))).scalars()
-        if svc.normalizar_nome(a.nome) == alvo]
-    if not candidatos:
-        return False
-    _avisar_inativo(db, escola_id, candidatos[0], turma, nome, avisos,
-                    motivo=("inativo_homonimo_outra_turma" if len(candidatos) == 1
-                            else "mais_de_um_inativo_homonimo"))
-    return True
+_MOTIVOS_DE_TURMA = frozenset({"sem_turma", "turma_nao_cadastrada", "turma_ambigua"})
+
+
+def _gravar_revisoes(db: Session, escola_id: int, coletor: "ida.ColetorRevisoes",
+                     usuario_id: int | None) -> list[RevisaoIdentidade]:
+    """Grava/atualiza a fila e audita cada pendência (vira notificação da escola)."""
+    gravadas = coletor.gravar(db, escola_id)
+    for rev in gravadas:
+        cands = [c.get("aluno_id") for c in (rev.candidatos or []) if c.get("aluno_id")]
+        # Problema de TURMA (sem turma, fora do cadastro, ambígua) é "linha sem aluno
+        # vinculado"; o resto é identidade ambígua. As duas contam como pendência.
+        acao = ("importacao.linha_ignorada" if rev.motivo in _MOTIVOS_DE_TURMA
+                else "aluno.revisao_necessaria")
+        registrar(db, acao, escola_id=escola_id,
+                  usuario_id=usuario_id, entidade="aluno",
+                  entidade_id=cands[0] if cands else None,
+                  detalhes={"origem": rev.nome_recebido, "turma": rev.turma_informada,
+                            "plataforma": rev.plataforma, "decisao": "REVIEW_REQUIRED",
+                            "motivo": rev.motivo, "candidatos": cands,
+                            "revisao_id": rev.id, "ocorrencias": rev.ocorrencias})
+    return gravadas
 
 
 def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
-                         plataforma: str, id_externo: str) -> None:
-    """Grava o vínculo aluno ↔ id externo (UUID do Matific). Idempotente e seguro
-    sob concorrência (savepoint na unique). NÃO reatribui um id já vinculado a
-    outro aluno — evita mover o vínculo por engano."""
-    if not id_externo:
-        return
+                         plataforma: str, id_externo: str, *,
+                         ctx: "ida.Contexto | None" = None,
+                         usuario_id: int | None = None) -> bool:
+    """Grava o vínculo aluno ↔ id externo (UUID do Matific / studentId do
+    Elefante). Idempotente e seguro sob concorrência (savepoint na unique).
+
+    NUNCA tira a identidade de outra ficha existente (ativa ou inativa) — isso só
+    acontece por decisão explícita de um gestor na fila de revisão. A única
+    reatribuição automática é a de uma ficha EXCLUÍDA (que não é reutilizada e,
+    portanto, não pode segurar a identidade) — e fica auditada."""
+    if not (plataforma and id_externo):
+        return False
     ja = db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == escola_id,
         IdentidadeExterna.plataforma == plataforma,
         IdentidadeExterna.id_externo == id_externo)).scalars().first()
     if ja is not None:
-        return
+        if ja.aluno_id == aluno_id:
+            return True
+        dono = db.get(Aluno, ja.aluno_id)
+        if dono is not None and dono.status != "excluido":
+            return False
+        antigo = ja.aluno_id
+        ja.aluno_id = aluno_id
+        db.flush()
+        registrar(db, "identidade.reatribuida", escola_id=escola_id,
+                  usuario_id=usuario_id, entidade="aluno", entidade_id=aluno_id,
+                  detalhes={"plataforma": plataforma, "id_externo": id_externo,
+                            "de_aluno_id": antigo, "para_aluno_id": aluno_id,
+                            "motivo": "ficha_anterior_excluida"})
+        if ctx is not None:
+            ctx.vincular(aluno_id, plataforma, id_externo)
+        return True
     try:
         with db.begin_nested():
             db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=aluno_id,
                                      plataforma=plataforma, id_externo=id_externo))
             db.flush()
     except IntegrityError:
-        pass  # corrida: outro processo vinculou primeiro — ok
+        return False  # corrida: outro processo vinculou primeiro — não rouba
+    if ctx is not None:
+        ctx.vincular(aluno_id, plataforma, id_externo)
+    return True
 
 
 def _turma_existente_por_tokens(db: Session, escola_id: int, ano: int,
@@ -776,9 +822,9 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
     MOVE a matrícula quando a turma reportada mudou. Regras de segurança (mexe em
     dado de criança, sem humano no loop):
 
-    * só age em quem casou por UUID (já vinculado) ou nome EXATO — nunca fuzzy;
-    * o UUID é vinculado no 1º encontro (via 'exato') e só a PARTIR daí (via
-      'uuid') a turma pode mudar;
+    * só age em quem foi identificado pela IDENTIDADE EXTERNA já vinculada (via
+      'identidade') — nunca por nome. O UUID é gravado pela confirmação no 1º
+      encontro; só a PARTIR daí a turma pode mudar;
     * identidade de turma é por TOKENS (série+letra), não por string crua — o
       ``klassName`` do Matific ("5 ANO B MANHA ANUAL") NÃO cria uma turma-fantasma
       quando já existe a "5º Ano B";
@@ -794,11 +840,11 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         if not uuid:
             continue
         via = getattr(linha, "via", None)
-        if via not in ("uuid", "exato"):
-            continue  # só identidade confiável (UUID vinculado, ou nome exato)
-        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid)
-        if via != "uuid":
-            continue  # 1ª vez: só vincula o UUID; move só quando ele já é a chave
+        if not via:
+            continue  # não passou pela porta única de identidade: não toca em nada
+        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid)  # idempotente
+        if via != "identidade":
+            continue  # 1ª vez (casou por nome): só vincula; move pela identidade
         turma_nome = str((linha.dados or {}).get("turma_relatorio") or "").strip()
         if not turma_nome:
             continue
@@ -1588,6 +1634,13 @@ def confirmar(
 
     data_referencia = dados.data_referencia or datetime.now(timezone.utc)
     avisos: list[str] = []
+    # O que a fila de revisão guarda para reaplicar a linha depois (mesmo pipeline).
+    contexto_revisao = {
+        "tipo": dados.tipo,
+        "data_referencia": data_referencia.isoformat(),
+        "periodo_inicio": dados.periodo_inicio.isoformat() if dados.periodo_inicio else "",
+        "periodo_fim": dados.periodo_fim.isoformat() if dados.periodo_fim else "",
+    }
 
     # Intervalo do relatório (Matific "Intervalo de datas"): o fim impresso é
     # o limite EXCLUSIVO do leaderboard — o snapshot é datado na véspera
@@ -1654,17 +1707,27 @@ def confirmar(
     criados: dict[tuple[str, int], Aluno] = {}  # dedup de alunos criados
     turmas_novas: dict = {}                     # turma criada pelo nome: 1x só
     ignorados: list[str] = []                   # linhas SEM aluno (nunca silêncio)
+    # PORTA ÚNICA de identidade: estado da escola lido UMA vez (e mantido vivo a
+    # cada aluno criado/identidade gravada) e a fila de revisão desta importação.
+    ctx_identidade = ida.carregar_contexto(db, escola_id, escola.ano_letivo_ativo)
+    coletor = ida.ColetorRevisoes(
+        formato=dados.formato, contexto=contexto_revisao,
+        origem="sincronizacao" if getattr(dados, "sincronizar_turma", False) else "importacao",
+        importacao_id=importacao.id)
     for linha in dados.linhas:
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
                                 avisos, criados, turmas_novas,
                                 permitir_criar_turma=getattr(
-                                    dados, "permitir_criar_turma", True))
+                                    dados, "permitir_criar_turma", True),
+                                plataforma=dados.plataforma, ctx=ctx_identidade,
+                                revisoes=coletor, usuario_id=usuario.id)
         if aluno is None:
-            chave_ign = svc.normalizar_nome(linha.nome)
+            chave_ign = svc.chave_nome(linha.nome)
             if chave_ign not in ignorados:
                 ignorados.append(chave_ign)
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)
+    revisoes_gravadas = _gravar_revisoes(db, escola_id, coletor, usuario.id)
 
     # MUDANÇA AUTOMÁTICA DE TURMA (só na sync automática do Matific): vincula o
     # UUID e move a matrícula de quem trocou de sala. Antes do recálculo para o
@@ -1781,6 +1844,7 @@ def confirmar(
         qtd_erros=importacao.qtd_erros,
         avisos=avisos,
         ignorados=ignorados,
+        qtd_revisoes=len(revisoes_gravadas),
     )
 
 
@@ -1818,7 +1882,7 @@ async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tup
 
 # Os helpers puros de nome/turma migraram para services/matriculas.py (testáveis
 # isoladamente e reutilizados pela análise e pela confirmação). Aliases locais:
-_norm = matriculas.normalizar
+_norm = svc.chave_nome
 _chave_turma = matriculas.chave_turma
 
 
@@ -2042,6 +2106,7 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
     # pode ser entregue à primeira do arquivo (seria um chute que gruda os dados
     # de uma criança na ficha da outra) — as duas vão para revisão.
     disputados = matriculas.candidatos_disputados(planas, estado.ctx)
+    estado.ctx.reivindicados = matriculas.reivindicados_no_arquivo(planas, estado.ctx)
     for (turma, parsed), linha in zip(linhas, planas):
         decisao = matriculas.arbitrar_disputa(
             matriculas.resolver_linha(linha, estado.ctx), disputados)
@@ -2086,9 +2151,11 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             ja_alocado.add(aluno.id)
             res.vistos.add(aluno.id)
             estado.registrar(aluno, linha.chave_sala)
+            estado.ctx.reivindicados.add(aluno.id)
             continue
 
         existente = estado.alunos_por_id[decisao.aluno_id]   # REUSAR
+        estado.ctx.reivindicados.add(existente.id)
         nome_antigo = existente.nome
         # O Excel é a fonte da verdade do nome — exceto para ENCURTAR: uma linha
         # abreviada ("MARIA E. SILVA") não pode apagar o nome completo já
@@ -2265,6 +2332,214 @@ async def confirmar_matriculas(
 
 
 # --- Histórico (PRD §15) ------------------------------------------------------
+
+# --- Fila de revisão de identidade --------------------------------------------
+# A linha ambígua de uma importação/sincronização NÃO é descartada: fica aqui até
+# um gestor decidir EXPLICITAMENTE de quem são os dados. Nada é fundido: resolver
+# escolhe a ficha dona (ou cria uma nova, se o gestor decidir que é outra
+# criança), vincula a identidade externa a ela, aplica os dados guardados pelo
+# pipeline normal de importação e audita. A fusão de fichas duplicadas continua
+# sendo a ação separada de Alunos › Fundir duplicatas.
+
+def _revisao_out(rev: RevisaoIdentidade) -> RevisaoIdentidadeOut:
+    saida = RevisaoIdentidadeOut.model_validate(rev)
+    saida.motivo_texto = ida.MOTIVOS.get(rev.motivo, rev.motivo)
+    return saida
+
+
+def _revisao_da_escola(db: Session, escola_id: int, revisao_id: int) -> RevisaoIdentidade:
+    rev = db.get(RevisaoIdentidade, revisao_id)
+    if rev is None or rev.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Revisão não encontrada.")
+    return rev
+
+
+@router.get("/revisoes", response_model=list[RevisaoIdentidadeOut])
+def listar_revisoes(
+    situacao: str = "pendente",
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Fila de revisão de identidade da escola (padrão: só as pendentes;
+    ``situacao=todas`` inclui resolvidas e descartadas)."""
+    consulta = select(RevisaoIdentidade).where(RevisaoIdentidade.escola_id == escola_id)
+    if situacao != "todas":
+        if situacao not in ("pendente", "resolvida", "descartada"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Situação inválida.")
+        consulta = consulta.where(RevisaoIdentidade.status == situacao)
+    revisoes = db.execute(
+        consulta.order_by(RevisaoIdentidade.atualizada_em.desc(),
+                          RevisaoIdentidade.id.desc()).limit(500)).scalars().all()
+    return [_revisao_out(r) for r in revisoes]
+
+
+def _confirmacao_da_revisao(rev: RevisaoIdentidade, aluno_id: int,
+                            recalcular: bool) -> ImportacaoConfirm | None:
+    """Recompõe a importação original desta pendência, agora com o aluno FIXADO
+    pela decisão do gestor — os dados passam pelo MESMO pipeline do /confirmar."""
+    if not rev.linhas:
+        return None
+    ctx = rev.contexto or {}
+    formato = rev.formato if rev.formato in ("resumo", "leituras") else "resumo"
+    tipo = ctx.get("tipo") if ctx.get("tipo") in ("pdf", "texto", "xlsx") else "texto"
+    return ImportacaoConfirm(
+        plataforma=rev.plataforma, formato=formato, tipo=tipo,
+        data_referencia=ctx.get("data_referencia") or None,
+        periodo_inicio=ctx.get("periodo_inicio") or None,
+        periodo_fim=ctx.get("periodo_fim") or None,
+        linhas=[{"nome": rev.nome_recebido, "dados": d, "aluno_id": aluno_id}
+                for d in rev.linhas],
+        recalcular=recalcular, sincronizar_turma=False, permitir_criar_turma=False)
+
+
+@router.post("/revisoes/{revisao_id}/resolver", response_model=ResolucaoRevisaoOut)
+def resolver_revisao(
+    revisao_id: int,
+    corpo: ResolverRevisaoIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Decisão EXPLÍCITA do gestor sobre uma pendência: ``aluno_id`` (a ficha dona
+    dos dados) OU ``criar_em_turma_id`` (é outra criança: ficha nova nessa turma).
+
+    1. a identidade externa da linha passa a apontar para o aluno escolhido (se
+       estava em outra ficha, é transferida — e isso fica auditado);
+    2. a pendência (e as irmãs da MESMA identidade, ex.: resumo + leituras) é
+       marcada como resolvida, com quem decidiu e quando;
+    3. os dados guardados são aplicados pelo pipeline normal de importação;
+    4. a próxima sincronização casa pela identidade e não recria a duplicata.
+    Nunca funde fichas."""
+    if (corpo.aluno_id is None) == (corpo.criar_em_turma_id is None):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Informe o aluno escolhido OU a turma da ficha nova.")
+    bloquear_escola_para_importacao(db, escola_id)
+    rev = _revisao_da_escola(db, escola_id, revisao_id)
+    if rev.status != "pendente":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Esta revisão já está {rev.status}.")
+    escola = db.get(Escola, escola_id)
+    avisos: list[str] = []
+
+    if corpo.aluno_id is not None:
+        aluno = db.get(Aluno, corpo.aluno_id)
+        if aluno is None or aluno.escola_id != escola_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "O aluno escolhido não pertence a esta escola.")
+        if aluno.status == "excluido":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "A ficha escolhida foi excluída e não recebe dados.")
+        if aluno.status != "ativo":
+            avisos.append(f"{aluno.nome} está com a ficha “{aluno.status}”: os dados "
+                          "foram aplicados, mas ele só volta ao ranking quando for "
+                          "reativado em Alunos.")
+        acao = "associar"
+    else:
+        turma = db.get(Turma, corpo.criar_em_turma_id)
+        if turma is None or turma.escola_id != escola_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida.")
+        aluno = Aluno(escola_id=escola_id, nome=rev.nome_recebido.strip())
+        db.add(aluno)
+        db.flush()
+        db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id, turma_id=turma.id,
+                         ano_letivo=escola.ano_letivo_ativo))
+        registrar(db, "aluno.criado", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="aluno", entidade_id=aluno.id,
+                  detalhes={"origem": "revisao_identidade", "revisao_id": rev.id,
+                            "turma": turma.nome, "plataforma": rev.plataforma})
+        acao = "criar"
+
+    if rev.id_externo:
+        ident = db.execute(select(IdentidadeExterna).where(
+            IdentidadeExterna.escola_id == escola_id,
+            IdentidadeExterna.plataforma == rev.plataforma,
+            IdentidadeExterna.id_externo == rev.id_externo)).scalars().first()
+        if ident is None:
+            db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=aluno.id,
+                                     plataforma=rev.plataforma, id_externo=rev.id_externo))
+        elif ident.aluno_id != aluno.id:
+            antigo = ident.aluno_id
+            ident.aluno_id = aluno.id
+            registrar(db, "identidade.reatribuida", escola_id=escola_id,
+                      usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"plataforma": rev.plataforma, "id_externo": rev.id_externo,
+                                "de_aluno_id": antigo, "para_aluno_id": aluno.id,
+                                "motivo": "revisao_resolvida", "revisao_id": rev.id})
+            avisos.append("A conta da plataforma estava ligada a outra ficha e foi "
+                          "transferida para a ficha escolhida.")
+        db.flush()
+
+    # A mesma identidade pode ter mais de uma pendência (resumo, leituras, períodos
+    # do Matific): a decisão do gestor vale para todas.
+    irmas = db.execute(
+        select(RevisaoIdentidade).where(
+            RevisaoIdentidade.escola_id == escola_id,
+            RevisaoIdentidade.chave_identidade == rev.chave_identidade,
+            RevisaoIdentidade.status == "pendente",
+            RevisaoIdentidade.id != rev.id)
+        .order_by(RevisaoIdentidade.id)).scalars().all()
+    resolvidas = [rev, *irmas]
+    momento = agora()
+    for r in resolvidas:
+        r.status = "resolvida"
+        r.aluno_escolhido_id = aluno.id
+        r.resolvida_por_id = usuario.id
+        r.resolvida_em = momento
+        r.resolucao = {"acao": acao, "aluno_id": aluno.id,
+                       "revisao_origem": rev.id}
+        registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
+                  usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+                  detalhes={"revisao_id": r.id, "plataforma": r.plataforma,
+                            "formato": r.formato, "motivo": r.motivo, "acao": acao,
+                            "nome_recebido": r.nome_recebido,
+                            "candidatos": [c.get("aluno_id") for c in (r.candidatos or [])]})
+    db.flush()
+
+    # Aplica os dados guardados (o /confirmar commita). A última pendência recalcula.
+    importacoes: list[int] = []
+    com_dados = [r for r in resolvidas if r.linhas]
+    if not com_dados:
+        db.commit()
+    for i, r in enumerate(com_dados):
+        conf = _confirmacao_da_revisao(r, aluno.id, recalcular=(i == len(com_dados) - 1))
+        resultado = confirmar(dados=conf, escola_id=escola_id, usuario=usuario, db=db)
+        importacoes.append(resultado.importacao_id)
+        avisos.extend(resultado.avisos)
+    db.refresh(rev)
+    return ResolucaoRevisaoOut(
+        revisao=_revisao_out(rev), aluno_id=aluno.id,
+        revisoes_resolvidas=[r.id for r in resolvidas], importacoes=importacoes,
+        avisos=avisos)
+
+
+@router.post("/revisoes/{revisao_id}/descartar", response_model=RevisaoIdentidadeOut)
+def descartar_revisao(
+    revisao_id: int,
+    corpo: DescartarRevisaoIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """O gestor decide que estes dados NÃO devem ir para ninguém (linha de teste,
+    aluno que não é da escola…). Nada é associado nem criado; fica auditado. Se a
+    mesma linha voltar numa importação futura, abre uma pendência nova."""
+    rev = _revisao_da_escola(db, escola_id, revisao_id)
+    if rev.status != "pendente":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Esta revisão já está {rev.status}.")
+    rev.status = "descartada"
+    rev.resolvida_por_id = usuario.id
+    rev.resolvida_em = agora()
+    rev.resolucao = {"acao": "descartar", "motivo": corpo.motivo.strip()}
+    registrar(db, "identidade.revisao_descartada", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="revisao_identidade", entidade_id=rev.id,
+              detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
+                        "motivo": rev.motivo, "justificativa": corpo.motivo.strip()})
+    db.commit()
+    db.refresh(rev)
+    return _revisao_out(rev)
+
 
 @router.get("", response_model=list[ImportacaoOut])
 def listar(

@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from app.services.importacao import normalizar_nome
+from app.services.importacao import chave_nome, normalizar_nome
 
 # Teto de células COM CONTEÚDO: uma escola tem centenas/milhares de alunos; muito
 # acima disso é planilha inválida ou tentativa de exaustão de memória (uma
@@ -376,7 +376,7 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                 continue
             if aluno is None:
                 continue
-            chave = (ra_util(aluno.ficha.get("ra")) or normalizar_nome(aluno.nome))
+            chave = (ra_util(aluno.ficha.get("ra")) or chave_nome(aluno.nome))
             if chave in vistos:
                 analise.avisos.append(
                     f"{turma.nome}: “{aluno.nome}” aparece mais de uma vez na aba "
@@ -396,7 +396,7 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
     for turma in analise.turmas:
         for aluno in turma.alunos:
             ra = ra_util(aluno.ficha.get("ra"))
-            chave = ("ra", ra) if ra else ("nome", normalizar_nome(aluno.nome))
+            chave = ("ra", ra) if ra else ("nome", chave_nome(aluno.nome))
             grupos.setdefault(chave, []).append((turma.nome, aluno.nome))
     for (tipo, _), ocs in grupos.items():
         turmas_distintas = sorted({t for t, _ in ocs})

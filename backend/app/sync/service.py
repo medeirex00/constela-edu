@@ -356,12 +356,12 @@ def _desfazer_cursor_ignorados(contexto: Contexto, ignorados: set[str]) -> None:
     ``_salvar_contadores`` mantém o cursor anterior e a próxima sync retenta."""
     if not ignorados:
         return
-    from app.services.importacao import normalizar_nome
+    from app.services.importacao import chave_nome
 
     nomes = getattr(contexto, "nome_por_sid", None) or {}
     novos = getattr(contexto, "contadores_novos", None) or {}
     for sid in [s for s, nome in nomes.items()
-                if normalizar_nome(nome) in ignorados and s in novos]:
+                if chave_nome(nome) in ignorados and s in novos]:
         novos.pop(sid, None)
 
 

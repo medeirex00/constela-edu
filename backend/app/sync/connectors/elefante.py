@@ -972,6 +972,10 @@ class ConectorElefante(ConectorNavegador):
                             if isinstance(b, dict) and b.get("bookTitle"):
                                 item_l = {
                                     "nome": nome_al,
+                                    # IDENTIDADE do aluno no Elefante: a
+                                    # confirmação casa por ela antes do nome
+                                    # e a grava no vínculo aluno↔plataforma.
+                                    "studentId": sid,
                                     "bookTitle": b.get("bookTitle"),
                                     "levelName": b.get("levelName"),
                                     "genre": b.get("genre"), "theme": b.get("theme"),

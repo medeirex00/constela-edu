@@ -195,7 +195,7 @@ def nomes_compativeis(a: str, b: str) -> bool:
     """Dois nomes podem ser a MESMA pessoa? Veto ao casar por RA: se o RA colide
     mas os nomes são claramente de pessoas diferentes (RA placeholder), não
     casa. Conservador: na dúvida, considera compatível."""
-    if normalizar(a) == normalizar(b):
+    if svc.chave_nome(a) == svc.chave_nome(b):
         return True
     ta, tb = svc.tokens_nome(a), svc.tokens_nome(b)
     if not ta or not tb:
@@ -254,6 +254,9 @@ class ContextoCasamento:
     _por_nome: dict[str, dict[int, matching.Identidade]] = field(default_factory=dict)
     _sala_de: dict[int, str] = field(default_factory=dict)
     _nome_de: dict[int, str] = field(default_factory=dict)
+    # Fichas que ESTE arquivo já atribuiu a alguma linha (reuso seguro ou criação):
+    # quem já tem dono no arquivo não é a ficha "renumerada" de outra linha.
+    reivindicados: set[int] = field(default_factory=set)
 
     def registrar(self, ident: matching.Identidade, chave_sala: str | None = None) -> None:
         """Insere/atualiza um aluno nos índices (idempotente por id). Chamar depois
@@ -270,7 +273,7 @@ class ContextoCasamento:
         if sala_nova is not None:
             self._por_sala.setdefault(sala_nova, {})[aid] = ident
             self._sala_de[aid] = sala_nova
-        nome_novo = normalizar(ident.nome)
+        nome_novo = svc.chave_nome(ident.nome)
         nome_velho = self._nome_de.get(aid)
         if nome_velho is not None and nome_velho != nome_novo:
             self._por_nome.get(nome_velho, {}).pop(aid, None)
@@ -292,7 +295,7 @@ class ContextoCasamento:
         return self._sala_de.get(aluno_id)
 
     def mesmo_nome(self, nome: str) -> list[matching.Identidade]:
-        return list(self._por_nome.get(normalizar(nome), {}).values())
+        return list(self._por_nome.get(svc.chave_nome(nome), {}).values())
 
 
 def _sem_chamada(ident: matching.Identidade) -> matching.Identidade:
@@ -323,6 +326,17 @@ def resolver_linha(linha: LinhaMatricula, ctx: ContextoCasamento) -> Decisao:
        (nascimento/RA/UUID iguais) para reusar; sem prova, ou com 2+ homônimos em
        outras salas, vai para REVISÃO (nunca funde duas crianças às cegas).
     4. Nada plausível → CRIAR.
+
+    VETO SÓ PELO Nº DE CHAMADA não abre ficha nova: a chamada é numeração da SALA
+    (a secretaria renumera a turma), então um cadastro de nome plausível que só
+    diverge nela é, muito provavelmente, a MESMA criança renumerada. Criar ali
+    fazia a 2ª ficha E deixava a ficha verdadeira fora de ``vistos`` — e a
+    reconciliação a marcava "fora da lista" (a ficha certa sumia do ranking com
+    todos os dados das plataformas). Agora vai para REVISÃO com esses cadastros
+    entre os candidatos (protegidos da reconciliação), salvo quando um
+    identificador forte (RA/nascimento/UUID/chamada igual) corrobora outro — ou
+    quando a ficha vetada JÁ tem dono neste arquivo (``ctx.reivindicados``: outra
+    linha a reusa/criou), e aí é mesmo um segundo homônimo e a criação é correta.
     """
     ident = _identidade_da_linha(linha)
     if linha.ra:
@@ -331,6 +345,12 @@ def resolver_linha(linha: LinhaMatricula, ctx: ContextoCasamento) -> Decisao:
             return Decisao(REUSAR, alvo.id, "ra", (alvo.id,))
 
     res = matching.classificar_linha(ident, ctx.roster(linha.chave_sala))
+    so_chamada = tuple(i for i in res.vetados_so_chamada if i not in ctx.reivindicados)
+    if so_chamada and not (res.status == matching.VINCULADO
+                           and res.motivo in ("identificador", "uuid")):
+        todos = tuple(dict.fromkeys((*res.candidatos, *so_chamada)))
+        return Decisao(REVISAR, res.aluno_id if res.aluno_id is not None else so_chamada[0],
+                       "chamada_divergente", todos)
     if res.status == matching.VINCULADO and res.aluno_id is not None:
         return Decisao(REUSAR, res.aluno_id, res.motivo, res.candidatos)
     if res.status == matching.REVISAR:
@@ -379,8 +399,16 @@ def candidatos_disputados(linhas: list[LinhaMatricula],
     for linha in linhas:
         d = resolver_linha(linha, ctx)
         if d.acao == REUSAR and d.aluno_id is not None and d.motivo in _MOTIVOS_SO_NOME:
-            reivindicado.setdefault(d.aluno_id, set()).add(normalizar(linha.nome))
+            reivindicado.setdefault(d.aluno_id, set()).add(svc.chave_nome(linha.nome))
     return {aid for aid, nomes in reivindicado.items() if len(nomes) > 1}
+
+
+def reivindicados_no_arquivo(linhas: list[LinhaMatricula],
+                             ctx: ContextoCasamento) -> set[int]:
+    """Fichas que alguma linha do arquivo REUSA com segurança (só leitura, contra o
+    estado INICIAL) — ponto de partida de ``ctx.reivindicados``."""
+    return {d.aluno_id for d in (resolver_linha(l, ctx) for l in linhas)
+            if d.acao == REUSAR and d.aluno_id is not None}
 
 
 def arbitrar_disputa(decisao: Decisao, disputados: set[int]) -> Decisao:

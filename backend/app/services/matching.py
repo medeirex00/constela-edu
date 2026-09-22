@@ -23,7 +23,7 @@ vínculo quando o veto de identidade prova ser outra criança.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 from app.services.importacao import (
@@ -111,6 +111,19 @@ def vincula_por_nome_unico(nome_a: str, nome_b: str) -> bool:
     return False
 
 
+def subconjunto_estrutural(nome_a: str, nome_b: str) -> bool:
+    """Um nome é SUBCONJUNTO do outro com as PONTAS iguais — mesmo 1º nome e mesmo
+    último sobrenome, só o MEIO omitido: "HELOISA DE SOUZA FIDELIX" ⊂ "HELOISA DEL
+    GIUDICE DE SOUZA FIDELIX". "JOAO SANTOS" ⊂ "JOAO SANTOS OLIVEIRA" NÃO é: caiu o
+    último sobrenome, e o dono real desse nome pode ser outra criança."""
+    ta, tb = tokens_nome(nome_a), tokens_nome(nome_b)
+    if not ta or not tb or set(ta) == set(tb):
+        return False
+    if not (set(ta) < set(tb) or set(tb) < set(ta)):
+        return False
+    return ta[0] == tb[0] and ta[-1] == tb[-1]
+
+
 @dataclass(frozen=True)
 class Identidade:
     """Identificadores fortes de um aluno/linha — usados para VETAR ou CORROBORAR o
@@ -177,6 +190,12 @@ class Resultado:
     aluno_id: int | None            # candidato escolhido (vinculado) ou sugerido (revisar)
     motivo: str                     # uuid|identificador|exato|abreviacao|parcial|variante|typo|conflito
     candidatos: tuple[int, ...] = ()   # todos os plausíveis (para a revisão)
+    # Nome plausível, mas VETADOS por identidade divergente. ``vetados_so_chamada``
+    # é o subconjunto em que o ÚNICO sinal divergente era o nº de chamada — que é
+    # numeração da SALA (a secretaria renumera), não prova sozinho que é outra
+    # criança. Quem decide o que fazer com eles é o chamador.
+    vetados: tuple[int, ...] = ()
+    vetados_so_chamada: tuple[int, ...] = ()
 
 
 def _motivo_nome(linha_nome: str, cand_nome: str) -> str:
@@ -198,7 +217,8 @@ def melhor_candidato(cands: dict[int, Identidade]) -> int:
 
 
 def classificar_linha(linha: Identidade, roster: list[Identidade],
-                      *, permitir_subconjunto_unico: bool = False) -> Resultado:
+                      *, permitir_subconjunto_unico: bool = False,
+                      vincular_variante: bool = True) -> Resultado:
     """Classifica UMA linha importada contra o ROSTER de candidatos (alunos da mesma
     escola/turma). É o mesmo cálculo na PRÉVIA e na CONFIRMAÇÃO — a prévia mostra
     exatamente o que a confirmação fará.
@@ -229,11 +249,20 @@ def classificar_linha(linha: Identidade, roster: list[Identidade],
     tem a quem mais pertencer — o veto "dono ausente" do PARCIAL não se aplica (o dono
     ESTÁ na escola). Ambiguidade (2+ candidatos) e variação de grafia insegura
     (SOUZA/SOUSA, BRUNO/BRUNA) continuam em REVISAR — o guard-rail "nunca fundir
-    crianças diferentes" fica intacto (essas manifestam-se como 2+ candidatos)."""
+    crianças diferentes" fica intacto (essas manifestam-se como 2+ candidatos).
+    O subconjunto só vale quando ESTRUTURAL (``subconjunto_estrutural``: 1º nome e
+    último sobrenome iguais, só o meio omitido); sem as pontas, vai a REVISAR.
+
+    ``vincular_variante=False`` (import de PLATAFORMA): variação de grafia de
+    candidato único ("RICADO"/"RICARDO") NÃO associa só pelo nome — sem
+    identificador corroborando, vai a REVISAR (nome parecido sozinho não decide de
+    quem é o dado)."""
     fortes: dict[int, Identidade] = {}
     parciais: dict[int, Identidade] = {}
     fracos: dict[int, Identidade] = {}
     bloqueado_por_conflito = False
+    vetados: list[int] = []
+    vetados_so_chamada: list[int] = []
 
     for c in roster:
         if c.id is None:
@@ -245,6 +274,10 @@ def classificar_linha(linha: Identidade, roster: list[Identidade],
             continue
         if conflito_identidade(linha, c):
             bloqueado_por_conflito = True     # nome casa, identidade prova diferente
+            vetados.append(c.id)
+            if not conflito_identidade(replace(linha, chamada=None),
+                                       replace(c, chamada=None)):
+                vetados_so_chamada.append(c.id)   # só o nº de chamada divergia
             continue
         (fortes if v == "forte" else parciais if v == "parcial" else fracos)[c.id] = c
 
@@ -274,24 +307,29 @@ def classificar_linha(linha: Identidade, roster: list[Identidade],
     #    variação no sobrenome/1º nome (SOUZA/SOUSA, BRUNO/BRUNA) → REVISAR.
     # Gêmeos/homônimos com identificador divergente já saíram pelo veto acima.
     unico = next(iter(plausiveis)) if len(plausiveis) == 1 else None
+    extras = {"vetados": tuple(vetados), "vetados_so_chamada": tuple(vetados_so_chamada)}
     if unico is not None and (
         # Critério ÚNICO de vínculo por nome — o MESMO da Lista Piloto (matriculas):
         # forte (exato/abreviação) ou variação SEGURA de nome do meio. PARCIAL e
         # variação insegura (sobrenome/1º nome, ex.: SOUZA/SOUSA, BRUNO/BRUNA) devolvem
         # False e caem no REVISAR abaixo — preserva "nunca fundir crianças diferentes".
-        vincula_por_nome_unico(linha.nome, plausiveis[unico].nome)
+        (vincula_por_nome_unico(linha.nome, plausiveis[unico].nome)
+         if vincular_variante else unico in fortes)
         # (3b) SÓ no export de PLATAFORMA: 1 candidato PARCIAL (subconjunto) na turma
-        # é atribuição determinística ao dono matriculado, não fusão (ver docstring).
+        # é atribuição determinística ao dono matriculado, não fusão (ver docstring)
+        # — e só quando ESTRUTURAL (pontas iguais, apenas o meio omitido).
         # NÃO cobre variação de grafia insegura (fica em REVISAR).
         or (permitir_subconjunto_unico
-            and unico in parciais)
+            and unico in parciais
+            and subconjunto_estrutural(linha.nome, plausiveis[unico].nome))
     ):
         return Resultado(VINCULADO, unico,
-                         _motivo_nome(linha.nome, plausiveis[unico].nome), (unico,))
+                         _motivo_nome(linha.nome, plausiveis[unico].nome), (unico,),
+                         **extras)
     if plausiveis:
         alvo = melhor_candidato(plausiveis)
         return Resultado(REVISAR, alvo, _motivo_nome(linha.nome, plausiveis[alvo].nome),
-                         tuple(plausiveis))
+                         tuple(plausiveis), **extras)
     if bloqueado_por_conflito:
-        return Resultado(BLOQUEADO, None, "conflito", ())
-    return Resultado(NOVO, None, "", ())
+        return Resultado(BLOQUEADO, None, "conflito", (), **extras)
+    return Resultado(NOVO, None, "", (), **extras)

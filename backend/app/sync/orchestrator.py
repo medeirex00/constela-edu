@@ -101,8 +101,7 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                 "sem_dados": True}
 
     contexto.log("validacao", "info",
-                 f"{len(analise.linhas)} linha(s); casando nomes…")
-    svc.casar_nomes(db, escola.id, analise.linhas)
+                 f"{len(analise.linhas)} linha(s); identificando alunos…")
 
     # Arquiva a fonte no MESMO diretório temporário do upload manual (o
     # confirmar move para a pasta definitiva — trilha/§15 LGPD idêntica).
@@ -111,25 +110,17 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     turmas_novas = set()
     linhas: list[LinhaConfirmacao] = []
     for l in analise.linhas:
-        corr = l.correspondencia or {}
-        # A sync é NÃO SUPERVISIONADA. Este gate só decide se JÁ fixa o aluno_id
-        # (casamento CERTO: UUID/nome idêntico) e pula a re-checagem. Se não for
-        # "certo", a linha segue como não-casada para _resolver_aluno → _casar_no_roster,
-        # que re-roda o MOTOR ÚNICO no roster da turma e decide lá: vincula SÓ em alta
-        # confiança (nome exato/abreviação, variação de grafia SEGURA de nome do MEIO,
-        # ou identificador forte corroborando); ambíguo (2+), variação insegura
-        # (sobrenome/1º nome) ou homônimo → cria/revisa, NUNCA rouba dados de outra
-        # criança. Uma eventual duplicata é resolvível em "Fundir duplicatas".
-        confiante = (corr.get("status") == "exato"
-                     and corr.get("via") in ("uuid", "exato"))
-        aluno_id = corr.get("aluno_id") if confiante else None
-        turma_nome = analise.turma_detectada if aluno_id is None else None
+        # A sync é NÃO SUPERVISIONADA e NÃO tem atalho próprio de identidade: toda
+        # linha vai sem aluno fixado para o /confirmar, que aplica a PORTA ÚNICA
+        # (identidade_aluno.decidir — a mesma da prévia): identidade externa
+        # (UUID/studentId) → RA → sala (nome idêntico, candidato único estrutural)
+        # → revisão → criação só sem candidato. Linha ambígua não é descartada:
+        # vai para a fila de revisão de identidade.
+        turma_nome = str((l.dados or {}).get("turma_relatorio") or analise.turma_detectada or "")
         if turma_nome:
             turmas_novas.add(turma_nome)
         linhas.append(LinhaConfirmacao(nome=l.nome, dados=l.dados,
-                                       aluno_id=aluno_id,
-                                       criar_em_turma_nome=turma_nome,
-                                       via=corr.get("via")))
+                                       criar_em_turma_nome=turma_nome or None))
 
     confirm = ImportacaoConfirm(
         plataforma=analise.plataforma or arquivo.plataforma,

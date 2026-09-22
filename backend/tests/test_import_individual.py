@@ -111,9 +111,14 @@ def test_turma_com_hifen_nao_e_truncada():
 
 
 def test_individual_casa_aluno_do_relatorio_geral(cliente, db, escola_completa):
-    """Fluxo real: geral cria o aluno; individual reconhece e importa sozinho."""
+    """Fluxo real: geral cria o aluno; individual reconhece e importa sozinho.
+    A busca é CONTEXTUAL (escola + série + turma): a aluna está na turma que o
+    relatório individual imprime ("9 ANO Z TESTE")."""
     escola = escola_completa["escola"]
-    turma = escola_completa["turma"]
+    turma = Turma(escola_id=escola.id, nome="9 ANO Z TESTE", ano_escolar="9º Ano",
+                  ano_letivo=escola.ano_letivo_ativo)
+    db.add(turma)
+    db.flush()
 
     # 1) o "relatório geral" já cadastrou a aluna (simulado pelo cadastro direto)
     aluna = Aluno(escola_id=escola.id, nome="Maria Clara Teste")
@@ -300,13 +305,13 @@ def test_homonimos_nao_casam_automaticamente(db, escola_completa):
     sem_turma = svc.LinhaImportacao(numero=2, nome="JOÃO SILVA", dados={})
     svc.casar_nomes(db, escola.id, [com_turma, sem_turma])
 
-    # com a turma do relatório: o motor único procura no roster da turma 3B, onde há
-    # UM único João (o joao_b) → vincula (spec do dono: 1 candidato na MESMA turma =
-    # alta confiança). O homônimo da 3A não é candidato NESTA turma.
-    assert com_turma.correspondencia["status"] == "vinculado"
+    # com a turma do relatório: a porta única procura na sala 3B, onde há UM único
+    # João com o nome idêntico (o joao_b) → é o dono. O homônimo da 3A não é
+    # candidato NESTA sala.
+    assert com_turma.correspondencia["status"] == "exato"
     assert com_turma.correspondencia["aluno_id"] == joao_b.id
-    # sem turma: NÃO casa automaticamente — o usuário escolhe entre os homônimos
-    assert sem_turma.correspondencia["status"] == "nao_encontrado"
+    # sem turma: NÃO casa automaticamente — revisão, o gestor escolhe o homônimo
+    assert sem_turma.correspondencia["status"] == "revisar"
     assert len(sem_turma.correspondencia["alternativas"]) == 2
     assert all("turma" in a for a in sem_turma.correspondencia["alternativas"])
 

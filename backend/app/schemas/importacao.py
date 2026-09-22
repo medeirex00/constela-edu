@@ -109,6 +109,55 @@ class ImportacaoResultadoOut(BaseModel):
     # (correspondência insegura / sem vínculo). Nunca silêncio: a sync desfaz o
     # cursor desses alunos e retenta; a tela lista a pendência.
     ignorados: list[str] = []
+    # Pendências abertas/atualizadas na fila de revisão de identidade por esta
+    # importação (linhas preservadas, não associadas nem criadas).
+    qtd_revisoes: int = 0
+
+
+# --- Fila de revisão de identidade --------------------------------------------
+
+class RevisaoIdentidadeOut(ORMModel):
+    id: int
+    plataforma: str
+    formato: str
+    id_externo: str | None = None
+    nome_recebido: str
+    turma_informada: str | None = None
+    turma_id: int | None = None
+    motivo: str
+    motivo_texto: str = ""
+    candidatos: list[dict] = []
+    linhas: list[dict] = []
+    contexto: dict = {}
+    origem: str
+    importacao_id: int | None = None
+    ocorrencias: int
+    status: str
+    aluno_escolhido_id: int | None = None
+    resolvida_por_id: int | None = None
+    resolvida_em: datetime | None = None
+    resolucao: dict | None = None
+    created_at: datetime
+    atualizada_em: datetime
+
+
+class ResolverRevisaoIn(BaseModel):
+    """Decisão EXPLÍCITA do gestor: o aluno dono destes dados (``aluno_id``) OU
+    uma ficha nova numa turma escolhida (``criar_em_turma_id``) — exatamente um."""
+    aluno_id: int | None = None
+    criar_em_turma_id: int | None = None
+
+
+class DescartarRevisaoIn(BaseModel):
+    motivo: str = Field(default="", max_length=300)
+
+
+class ResolucaoRevisaoOut(BaseModel):
+    revisao: RevisaoIdentidadeOut
+    aluno_id: int
+    revisoes_resolvidas: list[int] = []
+    importacoes: list[int] = []
+    avisos: list[str] = []
 
 
 # --- Importação da planilha de matrículas da escola ("Lista Piloto") --------

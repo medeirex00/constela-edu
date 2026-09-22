@@ -280,6 +280,14 @@ def _coletar_http_first(conector, cred, contexto, estado: dict | None,
 # --- Casamento best-effort com o aluno do Constela (link p/ a ficha) ---------
 
 def _norm(nome: str) -> str:
+    # A definição ÚNICA de "mesmo nome" (sem acento/caixa/pontuação) — liga a linha
+    # do Placar à ficha.
+    from app.services.importacao import chave_nome
+    return chave_nome(nome)
+
+
+def _ordem_nome(nome: str) -> str:
+    """Desempate ALFABÉTICO da ordenação do placar (inalterado: não é identidade)."""
     base = unicodedata.normalize("NFKD", nome or "")
     base = "".join(c for c in base if not unicodedata.combining(c))
     return " ".join(base.casefold().split())
@@ -311,7 +319,7 @@ def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int]) -> list[dict
     ordenados = sorted(
         alunos,
         key=lambda a: (-int(a.get("estrelas", 0)), -int(a.get("atividades", 0)),
-                       _norm(a.get("nome", ""))))
+                       _ordem_nome(a.get("nome", ""))))
     itens: list[dict] = []
     for i, a in enumerate(ordenados, 1):
         estrelas = int(a.get("estrelas", 0))

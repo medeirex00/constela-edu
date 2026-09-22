@@ -41,6 +41,7 @@ from app.services.importacao import (
     _atribuir_campo,
     _eh_coluna_nome,
     _fechar_linha,
+    chave_nome,
     normalizar_nome,
 )
 
@@ -224,7 +225,7 @@ def analisar_planilha(conteudo: bytes, plataforma: str | None = None,
     grupos: dict[str, list[LinhaImportacao]] = {}
     ordem: list[str] = []
     for item in brutos:
-        chave = normalizar_nome(item.nome)
+        chave = chave_nome(item.nome)   # a definição ÚNICA de "mesmo nome"
         if chave not in grupos:
             grupos[chave] = []
             ordem.append(chave)

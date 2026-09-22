@@ -195,9 +195,22 @@ def test_chamada_diferente_com_mesmo_nascimento_e_renumeracao_nao_duplicata():
     assert (d.acao, d.aluno_id) == (m.REUSAR, 1)
 
 
-def test_chamada_diferente_sem_nada_estavel_separa_homonimos():
-    """Sem nascimento/RA, o nº de chamada volta a ser o único sinal — e separa."""
+def test_chamada_diferente_sem_nada_estavel_vai_para_revisao():
+    """Sem nascimento/RA, só o nº de chamada diverge: pode ser a MESMA criança
+    renumerada pela secretaria. Criar abria a 2ª ficha e deixava a verdadeira de
+    fora de ``vistos`` (a reconciliação a marcava "fora da lista"). Agora é
+    revisão, com a ficha existente entre os candidatos (protegida)."""
     ctx = _ctx((_ident(1, "JOAO SILVA", chamada=1), "1º Ano A"))
+    d = m.resolver_linha(_linha("JOAO SILVA", chamada=2), ctx)
+    assert d.acao == m.REVISAR and d.candidatos == (1,)
+    assert d.motivo == "chamada_divergente"
+
+
+def test_chamada_diferente_separa_homonimos_quando_a_ficha_ja_tem_dono_no_arquivo():
+    """Se OUTRA linha do mesmo arquivo já é a dona da ficha (chamada 1 = JOÃO 1),
+    a linha de chamada 2 é mesmo um segundo JOÃO SILVA — cria."""
+    ctx = _ctx((_ident(1, "JOAO SILVA", chamada=1), "1º Ano A"))
+    ctx.reivindicados.add(1)
     d = m.resolver_linha(_linha("JOAO SILVA", chamada=2), ctx)
     assert d.acao == m.CRIAR
 

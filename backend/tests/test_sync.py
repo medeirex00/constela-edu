@@ -664,7 +664,7 @@ def test_orquestrador_importa_elefante_api_json(db, escola_completa, monkeypatch
     ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
-    payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B"},
+    payload = {"courseSchoolDescriptors": {"courseName": "3 ANO A"},
                "students": [{"studentId": 1, "studentName": "Ana Beatriz Souza",
                              "totalBooksRead": 42, "totalReadTime": 12000,
                              "responses": 30, "approvedResponses": 25}]}
@@ -699,7 +699,7 @@ def test_orquestrador_importa_elefante_api_leituras_datadas(db, escola_completa,
     ana = escola_completa["alunos"][0]  # "Ana Beatriz Souza"
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
 
-    payload = {"courseSchoolDescriptors": {"courseName": "5 ANO B"},
+    payload = {"courseSchoolDescriptors": {"courseName": "3 ANO A"},
                "leituras": [{"nome": "Ana Beatriz Souza", "bookTitle": "De bem com a vida",
                              "levelName": "F", "genre": "Amizade", "totalTimeSpent": 1088,
                              "lastReadWhen": "2026-06-26T08:59:43"}]}

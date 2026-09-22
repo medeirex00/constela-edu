@@ -122,3 +122,56 @@ class IdentidadeExterna(Base):
     plataforma: Mapped[str] = mapped_column(String(30))      # matific | elefante
     id_externo: Mapped[str] = mapped_column(String(80))       # UUID/id do aluno lá
     created_at: Mapped[datetime] = mapped_column(default=agora)
+
+
+class RevisaoIdentidade(Base):
+    """Linha de importação/sincronização cuja identidade NÃO pôde ser decidida com
+    segurança (``identidade_aluno.decidir`` → REVISAR). Nada foi associado nem
+    criado: a linha fica PRESERVADA aqui — nome recebido, identidade externa,
+    turma informada, candidatos, motivo e os dados da linha — até um gestor
+    escolher explicitamente o aluno (ou descartar). Resolver vincula a identidade
+    externa ao aluno escolhido, aplica os dados e fica auditado; a próxima
+    sincronização casa por essa identidade e não recria a duplicata.
+
+    ``chave`` agrupa a MESMA pendência entre importações (identidade + tipo de
+    dado + período): reimportar atualiza a pendência aberta em vez de empilhar.
+    ``chave_identidade`` é a memória da decisão humana (quem é esta identidade)."""
+
+    __tablename__ = "revisoes_identidade"
+    __table_args__ = (
+        Index("ix_revisoes_identidade_escola_status", "escola_id", "status"),
+        Index("ix_revisoes_identidade_escola_chave", "escola_id", "chave"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    escola_id: Mapped[int] = mapped_column(ForeignKey("escolas.id"), index=True)
+    chave: Mapped[str] = mapped_column(String(400))
+    chave_identidade: Mapped[str] = mapped_column(String(400))
+    plataforma: Mapped[str] = mapped_column(String(30))        # matific | elefante
+    formato: Mapped[str] = mapped_column(String(20), default="")
+    id_externo: Mapped[str | None] = mapped_column(String(80))  # UUID/studentId
+    nome_recebido: Mapped[str] = mapped_column(String(200))
+    turma_informada: Mapped[str | None] = mapped_column(String(200))
+    turma_id: Mapped[int | None] = mapped_column(
+        ForeignKey("turmas.id", ondelete="SET NULL"))
+    motivo: Mapped[str] = mapped_column(String(60))
+    # [{aluno_id, nome, status, turma}] no momento da decisão
+    candidatos: Mapped[list] = mapped_column(JSON, default=list)
+    # dados das linhas (o que seria gravado) — leituras acumulam, resumo é retrato
+    linhas: Mapped[list] = mapped_column(JSON, default=list)
+    # formato/tipo/período/data de referência da importação de origem
+    contexto: Mapped[dict] = mapped_column(JSON, default=dict)
+    origem: Mapped[str] = mapped_column(String(20), default="importacao")
+    importacao_id: Mapped[int | None] = mapped_column(
+        ForeignKey("importacoes.id", ondelete="SET NULL"))
+    ocorrencias: Mapped[int] = mapped_column(default=1)
+    # pendente | resolvida | descartada
+    status: Mapped[str] = mapped_column(String(20), default="pendente")
+    aluno_escolhido_id: Mapped[int | None] = mapped_column(
+        ForeignKey("alunos.id", ondelete="SET NULL"))
+    resolvida_por_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"))
+    resolvida_em: Mapped[datetime | None] = mapped_column(default=None)
+    resolucao: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(default=agora)
+    atualizada_em: Mapped[datetime] = mapped_column(default=agora)

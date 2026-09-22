@@ -260,3 +260,106 @@ def test_0027_backfill_da_0026_ate_heads_no_postgres(engine_postgres):
     tipos = {c["name"]: c["type"] for c in inspect(engine_postgres).get_columns("notas")}
     assert isinstance(tipos["aferido_leitura"], sqltypes.Boolean)
     assert isinstance(tipos["aferido_matematica"], sqltypes.Boolean)
+
+
+# ---------------------------------------------------------------------------
+# 4) 0032 — fila de revisão de identidade (aditiva), SQLite e PostgreSQL
+# ---------------------------------------------------------------------------
+
+REVISAO_0031 = "0031_leitura_nivel_congelado"   # estado de produção antes da 0032
+REVISAO_0032 = "0032_revisoes_identidade"
+
+
+def _migrar(engine, alvo: str, subir: bool = True) -> None:
+    cfg = _config()
+    with engine.begin() as conexao:
+        cfg.attributes["connection"] = conexao
+        (command.upgrade if subir else command.downgrade)(cfg, alvo)
+
+
+def _banco_na_0031(engine) -> dict:
+    _migrar(engine, REVISAO_0031)
+    with engine.begin() as c:
+        meta = MetaData()
+        meta.reflect(bind=c)
+        e = _inserir(c, meta, "escolas", nome="E", ano_letivo_ativo=2026)
+        return {
+            "escola": e,
+            "turma": _inserir(c, meta, "turmas", escola_id=e, nome="5ºA",
+                              ano_escolar="5º Ano", ano_letivo=2026),
+            "aluno": _inserir(c, meta, "alunos", escola_id=e, status="ativo",
+                              nome="HELOISA DEL GIUDICE DE SOUZA FIDELIX"),
+            "importacao": _inserir(c, meta, "importacoes", escola_id=e,
+                                   plataforma="elefante", tipo="texto"),
+        }
+
+
+def _conferir_0032(engine, ids: dict) -> None:
+    _migrar(engine, REVISAO_0032)
+    insp = inspect(engine)
+    assert "revisoes_identidade" in insp.get_table_names()
+    assert {"ix_revisoes_identidade_escola_id", "ix_revisoes_identidade_escola_status",
+            "ix_revisoes_identidade_escola_chave"} <= {
+        i["name"] for i in insp.get_indexes("revisoes_identidade")}
+    ondelete = {fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+                for fk in insp.get_foreign_keys("revisoes_identidade")}
+    assert ondelete["aluno_escolhido_id"] == "SET NULL"
+    assert ondelete["importacao_id"] == "SET NULL"
+    assert ondelete["turma_id"] == "SET NULL"
+    assert ondelete["escola_id"] is None
+
+    # Uma pendência real (JSON de verdade no tipo do banco) sobrevive à exclusão da
+    # ficha escolhida: o histórico da decisão não some com o aluno.
+    with engine.begin() as c:
+        meta = MetaData()
+        meta.reflect(bind=c)
+        tabela = meta.tables["revisoes_identidade"]
+        rid = _inserir(
+            c, meta, "revisoes_identidade", escola_id=ids["escola"],
+            chave="elefante|id:9|resumo||", chave_identidade="elefante|id:9",
+            plataforma="elefante", formato="resumo", id_externo="9",
+            nome_recebido="HELOISA DE SOUZA FIDELIX", turma_id=ids["turma"],
+            motivo="correspondencia_insegura",
+            candidatos=[{"aluno_id": ids["aluno"], "nome": "HELOISA", "status": "ativo"}],
+            linhas=[{"livros_unicos": 3, "elefante_student_id": "9"}],
+            contexto={"tipo": "texto"}, origem="sincronizacao",
+            importacao_id=ids["importacao"], ocorrencias=1, status="resolvida",
+            aluno_escolhido_id=ids["aluno"])
+        linha = c.execute(tabela.select().where(tabela.c.id == rid)).one()
+        assert linha.candidatos[0]["aluno_id"] == ids["aluno"]
+        assert linha.linhas == [{"livros_unicos": 3, "elefante_student_id": "9"}]
+    with engine.connect() as c:
+        if engine.dialect.name == "sqlite":
+            c.exec_driver_sql("PRAGMA foreign_keys=ON")
+        c.execute(text("DELETE FROM alunos WHERE id = :a"), {"a": ids["aluno"]})
+        c.commit()
+    with engine.connect() as c:
+        assert c.execute(text("SELECT aluno_escolhido_id FROM revisoes_identidade "
+                              "WHERE id = :r"), {"r": rid}).scalar_one() is None
+
+    # Downgrade: remove SÓ a tabela nova; o resto do banco fica intacto.
+    _migrar(engine, REVISAO_0031, subir=False)
+    assert "revisoes_identidade" not in inspect(engine).get_table_names()
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM turmas")).scalar_one() == 1
+        assert c.execute(text("SELECT count(*) FROM importacoes")).scalar_one() == 1
+    # Sobe de novo e convive com as demais heads (caminho de produção, idempotente).
+    _migrar(engine, REVISAO_0032)
+    aplicar_migracoes(engine)
+    aplicar_migracoes(engine)
+    heads = set(ScriptDirectory.from_config(_config()).get_heads())
+    with engine.connect() as c:
+        assert {r[0] for r in c.execute(text("SELECT version_num FROM alembic_version"))} == heads
+
+
+def test_0032_revisoes_identidade_sobe_e_desce_no_sqlite(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'revisoes_0032.db'}")
+    try:
+        _conferir_0032(engine, _banco_na_0031(engine))
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.postgres
+def test_0032_revisoes_identidade_sobe_e_desce_no_postgres(engine_postgres):
+    _conferir_0032(engine_postgres, _banco_na_0031(engine_postgres))

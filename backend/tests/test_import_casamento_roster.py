@@ -58,20 +58,24 @@ def test_elefante_abreviado_vincula_ao_aluno_da_lista_piloto(db):
     assert _conta_alunos(db, esc.id) == antes                 # NENHUM aluno novo
 
 
-def test_matific_variante_ortografica_vincula_candidato_unico(db):
-    """Decisão do dono (2026-08-04): variação de grafia (LUIZ vs LUÍS) com 1 ÚNICO
-    candidato na turma VINCULA na ORIGEM — não cria a 2ª ficha para o dono fundir
-    depois. "ABRAAO LUIZ DIAS" casa com o único "ABRAÃO LUÍS DIAS" da turma. A régua
-    de segurança (nunca fundir crianças diferentes) fica na AMBIGUIDADE (2+ candidatos,
-    ver test_ambiguo_entre_criancas_diferentes_nao_funde) e no veto de identidade."""
+def test_matific_variante_ortografica_sem_corroboracao_vai_para_revisao(db):
+    """Porta única de identidade (2026-09-21, substitui a decisão de 2026-08-04 para
+    os imports de PLATAFORMA): variação de grafia (LUIZ vs LUÍS) de candidato único
+    SEM identificador corroborando não associa só pelo nome — vai para a fila de
+    revisão. Continua NÃO criando a 2ª ficha: a linha fica guardada até o gestor
+    escolher o aluno."""
+    from app.models import RevisaoIdentidade
+
     esc, turma, abraao = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
     r = _resolver_aluno(db, esc.id, 2026,
                         _linha("ABRAAO LUIZ DIAS", "4 ANO C INTEGRAL"),
                         [], {}, {})
-    assert r is not None and r.id == abraao.id            # VINCULA ao existente
+    assert r is None                                      # não associa pelo nome
     assert _conta_alunos(db, esc.id) == antes             # nenhum aluno novo criado
+    rev = db.execute(select(RevisaoIdentidade)).scalars().one()
+    assert [c["aluno_id"] for c in rev.candidatos] == [abraao.id]
 
 
 def test_dois_homonimos_na_turma_vao_para_revisao(db):

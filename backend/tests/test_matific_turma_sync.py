@@ -40,7 +40,7 @@ def test_casar_por_uuid_ignora_o_nome(db, escola_completa):
     linha = LinhaImportacao(numero=1, nome="Nome Completamente Diferente",
                             dados={"matific_uuid": "u-ana", "turma_relatorio": "X"})
     casar_nomes(db, escola.id, [linha])
-    assert linha.correspondencia["via"] == "uuid"
+    assert linha.correspondencia["via"] == "identidade"
     assert linha.correspondencia["aluno_id"] == ana.id
 
 
@@ -55,7 +55,7 @@ def test_move_para_turma_existente_casando_por_tokens(db, escola_completa):
                              plataforma="matific", id_externo="u-ana"))
     db.commit()
     # klassName cru do Matific — difere por sufixo de turno/anualidade, mas é a "4º Ano B".
-    resolvidos = {ana.id: (ana, [_linha(ana.nome, ana.id, "uuid", "u-ana",
+    resolvidos = {ana.id: (ana, [_linha(ana.nome, ana.id, "identidade", "u-ana",
                                         "4 ANO B MANHA ANUAL")])}
     avisos: list[str] = []
     n = _sincronizar_turma_matific(db, escola.id, ano, resolvidos, avisos)
@@ -75,7 +75,7 @@ def test_nao_cria_turma_fantasma_quando_nao_casa(db, escola_completa):
                              plataforma="matific", id_externo="u-ana"))
     db.commit()
     antes = db.execute(select(Turma).where(Turma.escola_id == escola.id)).scalars().all()
-    resolvidos = {ana.id: (ana, [_linha(ana.nome, ana.id, "uuid", "u-ana",
+    resolvidos = {ana.id: (ana, [_linha(ana.nome, ana.id, "identidade", "u-ana",
                                         "9 ANO Z NOTURNO")])}   # não existe
     avisos: list[str] = []
     n = _sincronizar_turma_matific(db, escola.id, ano, resolvidos, avisos)

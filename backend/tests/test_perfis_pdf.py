@@ -220,9 +220,10 @@ def test_perfil_estudante_historico_completo():
 # ---------------------------------------------------------------------------
 
 def test_abreviado_unico_vira_provavel(db, escola_completa):
+    # Sem turma, abreviação nunca decide sozinha: revisão, com a sugestão.
     linha = svc.LinhaImportacao(numero=1, nome="ANA B", dados={})
     svc.casar_nomes(db, escola_completa["escola"].id, [linha])
-    assert linha.correspondencia["status"] == "provavel"
+    assert linha.correspondencia["status"] == "revisar"
     assert linha.correspondencia["aluno_nome"] == "Ana Beatriz Souza"
 
 
@@ -244,10 +245,11 @@ def test_abreviado_ambiguo_desempata_pela_turma(db, escola_completa):
     sem_turma = svc.LinhaImportacao(numero=2, nome="ANA B", dados={})
     svc.casar_nomes(db, escola.id, [com_turma, sem_turma])
 
-    assert com_turma.correspondencia["status"] == "provavel"
+    # na sala 5B há UMA única "ANA B…" → abreviação única na sala = a dona
+    assert com_turma.correspondencia["status"] == "vinculado"
     assert com_turma.correspondencia["aluno_nome"] == "Ana Barbosa Lima"
     # sem a pista da turma, a decisão fica com o usuário — nunca é automática
-    assert sem_turma.correspondencia["status"] == "nao_encontrado"
+    assert sem_turma.correspondencia["status"] == "revisar"
     assert len(sem_turma.correspondencia["alternativas"]) == 2
 
 

@@ -209,7 +209,7 @@ def test_preview_igual_confirmacao_com_homonimo_arquivado(db):
     pré-selecionado) e o confirmar via 2 (revisão). Agora os dois montam o MESMO roster
     (mesmo filtro + mesma Identidade) → AMBOS vão a REVISÃO. Trava o requisito 4."""
     from app.models import Matricula as _Matricula
-    from app.services.importacao import LinhaImportacao, _prever_pelo_motor
+    from app.services.importacao import LinhaImportacao, casar_nomes
     esc, turma, heloisa, _ = _cenario(db)                 # HELOISA DE SOUZA FIDELIX (ativo)
     arq = Aluno(escola_id=esc.id, nome="HELOISA FIDELIX SANTOS", status="arquivado")
     db.add(arq)
@@ -226,9 +226,8 @@ def test_preview_igual_confirmacao_com_homonimo_arquivado(db):
     # PRÉVIA: a mesma linha → "revisar" (o roster da prévia agora inclui o arquivado),
     # NUNCA "vinculado" pré-selecionado só na prévia.
     linha = LinhaImportacao(numero=1, nome="HELOISA FIDELIX",
-                            dados={"turma_relatorio": "5 ANO B"},
-                            correspondencia={"status": "nao_encontrado"})
-    _prever_pelo_motor(db, esc.id, [linha])
+                            dados={"turma_relatorio": "5 ANO B"})
+    casar_nomes(db, esc.id, [linha])
     assert linha.correspondencia["status"] == "revisar"
 
 

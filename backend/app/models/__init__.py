@@ -3,6 +3,7 @@ from app.models.academico import (
     IdentidadeExterna,
     Matricula,
     Professor,
+    RevisaoIdentidade,
     Turma,
 )
 from app.models.avaliacao_externa import AvaliacaoExterna, ResultadoAvaliacao
@@ -67,6 +68,7 @@ __all__ = [
     "Nota",
     "Professor",
     "ReferenciaNormalizacao",
+    "RevisaoIdentidade",
     "SnapshotElefante",
     "SnapshotMatific",
     "TokenResetSenha",

@@ -64,10 +64,10 @@ def _linha(nome, **dados):
     return imp.LinhaImportacao(numero=1, nome=nome, dados=dict(dados))
 
 
-def test_exato_unico_com_uuid_e_turma_conflitante_vira_provavel(db, escola_completa):
+def test_exato_unico_com_uuid_e_turma_conflitante_vira_revisao(db, escola_completa):
     """Só existe 'Maria Silva' na 3º Ano A; chega um relatório do Matific com UUID
-    NOVO cuja turma é 2º Ano B → provavelmente OUTRA criança homônima → 'provável'
-    (não crava o UUID no aluno errado)."""
+    NOVO cuja turma é 2º Ano B → provavelmente OUTRA criança homônima → revisão
+    (não crava o UUID no aluno errado; porta única de identidade, 2026-09-21)."""
     escola = escola_completa["escola"]
     l = _linha("Maria Silva", matific_uuid="uuid-novo-123",
                turma_relatorio="2º Ano B")
@@ -80,12 +80,15 @@ def test_exato_unico_com_uuid_e_turma_conflitante_vira_provavel(db, escola_compl
     db.commit()
 
     imp.casar_nomes(db, escola.id, [l])
-    assert l.correspondencia["status"] == "provavel"
+    assert l.correspondencia["status"] == "revisar"
+    assert l.correspondencia["motivo"] == "homonimo_em_outra_sala"
 
 
-def test_exato_unico_sem_uuid_continua_exato(db, escola_completa):
-    """Sem UUID a cravar (ex.: relatório individual do Elefante), o rótulo de
-    turma é ruidoso e NÃO deve rebaixar um nome único — continua 'exato'."""
+def test_exato_unico_de_outra_serie_sem_uuid_vai_para_revisao(db, escola_completa):
+    """Mesmo SEM UUID: o relatório diz 2º Ano B e a única 'Maria Silva' é da 3º Ano
+    A. Homônimo de OUTRA série não casa (era o bug do token "ano") — revisão.
+    (Rótulo de turma SEM série+letra legível continua caindo no nome único da
+    escola — ver test_identidade_revisao.)"""
     escola = escola_completa["escola"]
     aluno = Aluno(escola_id=escola.id, nome="Maria Silva")
     db.add(aluno)
@@ -96,7 +99,7 @@ def test_exato_unico_sem_uuid_continua_exato(db, escola_completa):
 
     l = _linha("Maria Silva", turma_relatorio="2º Ano B")   # sem matific_uuid
     imp.casar_nomes(db, escola.id, [l])
-    assert l.correspondencia["status"] == "exato"
+    assert l.correspondencia["status"] == "revisar"
 
 
 # --- C2: a sync automática só auto-vincula match exato/uuid -------------------

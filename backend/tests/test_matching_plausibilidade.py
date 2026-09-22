@@ -152,9 +152,12 @@ def test_nome_parcial_subconjunto_no_import_de_plataforma_vincula(db):
     aluno, conf = _casar_no_roster(db, esc.id, 2026, "MARIA SILVA", turma,
                                    permitir_subconjunto_unico=True)
     assert conf == "alta" and aluno is not None and aluno.id == maria.id
+    # ...mas só o subconjunto ESTRUTURAL (1º nome e ÚLTIMO sobrenome iguais, porta
+    # única 2026-09-21): perder o último sobrenome ("JOAO SANTOS" ⊂ "JOAO SANTOS
+    # OLIVEIRA") pode ser outra criança → revisão.
     aluno, conf = _casar_no_roster(db, esc.id, 2026, "JOAO SANTOS", turma,
                                    permitir_subconjunto_unico=True)
-    assert conf == "alta" and aluno is not None and aluno.id == joao.id
+    assert conf == "media" and aluno is None and joao.id
     # PADRÃO (cadastro manual / Lista Piloto, SEM o opt-in): subconjunto NÃO vincula
     # → "media" (revisão). É a fronteira: só a plataforma é permissiva.
     aluno, conf = _casar_no_roster(db, esc.id, 2026, "MARIA SILVA", turma)
