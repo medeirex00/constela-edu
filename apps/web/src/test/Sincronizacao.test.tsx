@@ -202,7 +202,7 @@ describe("Integrações — o que a escola vê", () => {
     expect(screen.getAllByRole("link", { name: /Enviar relatório manualmente/ }).length).toBe(2);
   });
 
-  it("pendências de correspondência: texto honesto (sino + cadastro) e link 'Abrir Alunos'", async () => {
+  it("pendências de correspondência: texto honesto e link para Revisões de identidade", async () => {
     mocksIntegracoes({
       pendencias_correspondencia_30d: 4,
       plataformas: [STATUS.plataformas[0], elefanteConectado()],
@@ -212,10 +212,12 @@ describe("Integrações — o que a escola vê", () => {
     expect(await screen.findByText("Atenção: há dados que precisam de verificação.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "4 linha(s) de relatório sem aluno correspondente nos últimos 30 dias. Elas aparecem no sino de notificações; para resolver, confira o cadastro em Alunos.",
+        "Nos últimos 30 dias, 4 linha(s) de relatório ficaram sem aluno correspondente. As que ainda aguardam decisão estão em Revisões de identidade, onde você escolhe o aluno certo.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Abrir Alunos" })).toHaveAttribute("href", "/alunos");
+    expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
+      .toHaveAttribute("href", "/revisoes-identidade");
+    expect(screen.queryByRole("link", { name: "Abrir Alunos" })).toBeNull();
     expect(screen.queryByRole("link", { name: /Pendências de alunos/ })).toBeNull();
     expect(screen.getByRole("link", { name: "Ver importações (avançado)" })).toHaveAttribute("href", "/importacoes");
     // Sem alertas abertos, não oferece "Ver alertas".

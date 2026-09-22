@@ -275,9 +275,9 @@ export default function Sincronizacao() {
                 )}
                 {verificacao.pendencias > 0 && (
                   <li>
-                    {verificacao.pendencias} linha(s) de relatório sem aluno correspondente nos
-                    últimos 30 dias. Elas aparecem no sino de notificações; para resolver, confira o
-                    cadastro em Alunos.
+                    Nos últimos 30 dias, {verificacao.pendencias} linha(s) de relatório ficaram sem
+                    aluno correspondente. As que ainda aguardam decisão estão em Revisões de
+                    identidade, onde você escolhe o aluno certo.
                   </li>
                 )}
                 {verificacao.desatualizadas.length > 0 && (
@@ -290,10 +290,8 @@ export default function Sincronizacao() {
                     Ver alertas
                   </a>
                 )}
-                {/* /alunos não tem filtro de pendências: o link só abre o
-                    cadastro, e o texto acima diz isso sem prometer uma lista. */}
                 {verificacao.pendencias > 0 && (
-                  <Link to="/alunos" className="underline">Abrir Alunos</Link>
+                  <Link to="/revisoes-identidade" className="underline">Ver revisões de identidade</Link>
                 )}
                 <Link to="/importacoes" className="underline">Ver importações (avançado)</Link>
               </div>

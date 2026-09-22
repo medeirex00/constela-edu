@@ -38,6 +38,7 @@ import {
   Trophy,
   Upload,
   UserCog,
+  UserSearch,
   Users,
   X,
 } from "lucide-react";
@@ -132,6 +133,10 @@ const IT = {
   // atualizados?".
   importacoes: { rotulo: "Importações", caminho: "/importacoes", icone: Upload },
   sincronizacao: { rotulo: "Integrações", caminho: "/sincronizacao", icone: RefreshCw },
+  // Fila de linhas de importação/sincronização cuja identidade o backend não
+  // decidiu com segurança: o gestor escolhe o aluno (ou cria/descarta). É a
+  // contraparte humana das "pendências" que Integrações anuncia.
+  revisoes: { rotulo: "Revisões de identidade", caminho: "/revisoes-identidade", icone: UserSearch },
   diagnostico: { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar },
   conquistas: { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
   bibliotecaConquistas: { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
@@ -218,7 +223,7 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.premiacoes, IT.ranking, IT.rankingEscolas, IT.comparador] },
     { chave: "inteligencia", rotulo: "Inteligência", icone: Sparkles, itens: [IT.insights, IT.assistente, IT.simulador] },
     { chave: "gestao", rotulo: "Gestão Escolar", icone: Users, itens: [IT.visaoEscola, IT.alunos, IT.turmas, IT.professores] },
-    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.diagnostico] },
+    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.revisoes, IT.diagnostico] },
     { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
     { chave: "conteudo", rotulo: "Avaliações", icone: FileText, itens: [IT.avaliacoesRede] },
     { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
@@ -242,7 +247,7 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     // sonda técnica da API: Importações (upload manual) e Diagnóstico Elefante
     // saem do menu (rotas e permissões intactas — acessíveis por "Integrações"
     // e pelo Admin Global); "Integrações" responde "os dados estão atualizados?".
-    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.sincronizacao] },
+    { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.sincronizacao, IT.revisoes] },
     { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
     { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
     // "Pontuação" = a mesma página /metricas em modo explicativo (só leitura).

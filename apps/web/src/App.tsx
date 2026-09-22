@@ -42,6 +42,7 @@ const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
 const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
 const RedeAvaliacoes = lazy(() => import("./pages/rede/RedeAvaliacoes"));
 const Relatorios = lazy(() => import("./pages/Relatorios"));
+const RevisoesIdentidade = lazy(() => import("./pages/RevisoesIdentidade"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const SessoesAtivas = lazy(() => import("./pages/SessoesAtivas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
@@ -197,6 +198,7 @@ export default function App() {
           <Route path="/comecar" element={<RotaEscolaOp><Comecar /></RotaEscolaOp>} />
           <Route path="/importacoes" element={<RotaEscolaOp><Importacoes /></RotaEscolaOp>} />
           <Route path="/sincronizacao" element={<RotaEscolaOp><Sincronizacao /></RotaEscolaOp>} />
+          <Route path="/revisoes-identidade" element={<RotaEscolaOp><RevisoesIdentidade /></RotaEscolaOp>} />
           <Route path="/diagnostico-elefante" element={<RotaEscolaOp><RotaModulo modulo="leitura"><DiagnosticoElefante /></RotaModulo></RotaEscolaOp>} />
           <Route path="/conquistas" element={<RotaGestao><Conquistas /></RotaGestao>} />
           <Route path="/assistente" element={<RotaGestao><Assistente /></RotaGestao>} />

@@ -77,6 +77,8 @@ describe("Layout — limpeza do menu por perfil (escola usa, não administra a m
     });
     expect((await screen.findAllByRole("link", { name: "Integrações" })).length).toBeGreaterThan(0);
     expect((await screen.findAllByRole("link", { name: "Pontuação" })).length).toBeGreaterThan(0);
+    // A fila de revisão de identidade é operação da escola: fica ao lado de Integrações.
+    expect((await screen.findAllByRole("link", { name: "Revisões de identidade" })).length).toBeGreaterThan(0);
     expect(screen.queryAllByRole("link", { name: "Importações" })).toHaveLength(0);
     expect(screen.queryAllByRole("link", { name: "Diagnóstico Elefante" })).toHaveLength(0);
     expect(screen.queryAllByRole("link", { name: "Métricas" })).toHaveLength(0);
@@ -90,7 +92,7 @@ describe("Layout — limpeza do menu por perfil (escola usa, não administra a m
       usuario: usuarioFake({ is_global: true, cargo: "admin", nome: "Root" }),
       escolas: [escolaFake({ id: 1 })],
     });
-    for (const nome of ["Integrações", "Importações", "Diagnóstico Elefante", "Métricas", "Ranking da Rede", "Ranking Geral"]) {
+    for (const nome of ["Integrações", "Importações", "Revisões de identidade", "Diagnóstico Elefante", "Métricas", "Ranking da Rede", "Ranking Geral"]) {
       expect((await screen.findAllByRole("link", { name: nome })).length, nome).toBeGreaterThan(0);
     }
   });
