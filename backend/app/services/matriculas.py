@@ -171,6 +171,26 @@ def chave_turma(nome: str) -> str:
     return f"{num}|{letra}"
 
 
+def serie_da_sala(nome: str, ano_escolar: str = "") -> int | None:
+    """SÉRIE (1, 2, 3…) da sala, ou ``None`` quando o rótulo não marca série.
+
+    FONTE ÚNICA da leitura de série no sistema: delega para
+    ``dificuldade_livro.serie_numero``, a mesma que o motor de pontuação usa para
+    o fator de série — para "4º Ano" valer 4 em todo lugar, e "EJA 2", "Turma 3",
+    "Maternal" ou "EF1 - 1º ao 5º" não valerem série nenhuma em lugar nenhum.
+
+    Aceita os dois lados do casamento: o rótulo da turma CADASTRADA
+    (``ano_escolar``, o campo semântico, tentado primeiro) e o nome cru do
+    RELATÓRIO ("4 ANO A INTEGRAL (300309347)" → 4). Sem série marcada devolve
+    ``None`` — quem chama trata isso como "não dá para decidir", nunca como 0."""
+    from app.services.dificuldade_livro import serie_numero
+    for rotulo in (ano_escolar, nome):
+        serie = serie_numero(rotulo) if rotulo else None
+        if serie is not None:
+            return serie
+    return None
+
+
 def overlap_turma(a: frozenset[str] | set[str], b: frozenset[str] | set[str]) -> int:
     """Tokens de turma em comum, ignorando palavras ubíquas — para "1º Ano A"
     casar com "1 ANO A MANHÃ" (série+letra) mas NÃO com "4º Ano A"."""

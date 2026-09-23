@@ -8,7 +8,9 @@ confirmação fará, e a sincronização automática não tem atalho próprio.
 Ordem (mais forte primeiro — ver ``decidir``):
   1. identidade externa (UUID do Matific / studentId do Elefante) já vinculada;
   2. RA;
-  3. sala informada (escola + série + letra, TODAS as turmas da sala): nome
+  3. sala informada (escola + série + letra, TODAS as turmas da sala; quando a
+     escola cadastrou a turma SEM a letra, a sala do relatório é reconhecida pela
+     SÉRIE se houver uma única turma ativa dela — ``Contexto.sala_efetiva``): nome
      idêntico único → chamada/RA/nascimento corroborando → candidato ÚNICO
      estruturalmente plausível (``matching.classificar_linha``);
   4. homônimo EXATO fora da sala (outra turma, outra série) → revisão, nunca
@@ -183,6 +185,9 @@ class Contexto:
     ids_do_aluno: dict[tuple[int, str], set[str]] = field(default_factory=dict)
     turmas: dict[int, Turma] = field(default_factory=dict)
     turmas_da_sala: dict[str, list[int]] = field(default_factory=dict)
+    # Turmas ATIVAS por SÉRIE (4 → [164]). Só para reconhecer a sala do relatório
+    # numa escola que cadastrou a turma sem a letra — ver ``sala_efetiva``.
+    turmas_por_serie: dict[int, list[int]] = field(default_factory=dict)
     alunos_da_sala: dict[str, set[int]] = field(default_factory=dict)
     turma_de: dict[int, int] = field(default_factory=dict)
     por_nome: dict[str, set[int]] = field(default_factory=dict)
@@ -205,11 +210,23 @@ class Contexto:
             self.por_ra.setdefault(ra, set()).add(aluno.id)
 
     def registrar_turma(self, turma: Turma) -> None:
+        from app.services.matriculas import serie_da_sala
         self.turmas[turma.id] = turma
         ids = self.turmas_da_sala.setdefault(chave_sala(turma.nome), [])
         if turma.id not in ids:
             ids.append(turma.id)
             ids.sort()
+        # Índice por série — só turmas ATIVAS (uma turma arquivada não recebe
+        # aluno) e só quando o rótulo marca a série.
+        if getattr(turma, "status", "ativa") != "ativa":
+            return
+        serie = serie_da_sala(turma.nome, getattr(turma, "ano_escolar", "") or "")
+        if serie is None:
+            return
+        da_serie = self.turmas_por_serie.setdefault(serie, [])
+        if turma.id not in da_serie:
+            da_serie.append(turma.id)
+            da_serie.sort()
 
     def registrar_matricula(self, aluno_id: int, turma_id: int) -> None:
         self._memo_escola.clear()
@@ -254,6 +271,55 @@ class Contexto:
     def turma_do_aluno(self, aluno_id: int) -> Turma | None:
         tid = self.turma_de.get(aluno_id)
         return self.turmas.get(tid) if tid is not None else None
+
+    def sala_efetiva(self, chave: str, turma_nome: str = "") -> str:
+        """A sala do CADASTRO que corresponde à sala do RELATÓRIO.
+
+        Devolve ``chave`` INTACTA quando ela já é uma sala cadastrada — o caminho
+        de sempre, para toda escola que cadastra a turma com a letra. Só quando a
+        sala do relatório NÃO existe no cadastro e a escola tem EXATAMENTE UMA
+        turma ATIVA daquela SÉRIE é que a chave vira a dessa turma: é a mesma sala
+        escrita de outro jeito ("4 ANO A INTEGRAL (300309347)" no relatório ×
+        "4º Ano" no cadastro, série única na escola).
+
+        Nunca decide sozinha nada mais: série ilegível ("EJA 2", "Maternal"),
+        série com DUAS ou mais turmas, sala já cadastrada, ou LETRAS que se
+        contradizem (o cadastro diz "4ºA" e o relatório diz "4 ANO B" — os dois
+        lados afirmam a letra e elas divergem, então são salas diferentes)
+        devolvem a chave como veio, e a linha segue exatamente o fluxo de hoje,
+        revisão inclusive. E reconhecer a sala não vincula ninguém: quem decide
+        continua sendo o nome contra o roster DAQUELA sala (nome idêntico,
+        identificador, candidato único), com a mesma proteção contra homônimo."""
+        from app.services.matriculas import serie_da_sala
+        if not chave or chave in self.turmas_da_sala or not turma_nome:
+            return chave
+        serie = serie_da_sala(turma_nome)
+        if serie is None:
+            return chave
+        ids = self.turmas_por_serie.get(serie, [])
+        if len(ids) != 1:                      # nenhuma ou várias: não escolhe
+            return chave
+        chave_cadastrada = chave_sala(self.turmas[ids[0]].nome)
+        letra_relatorio, letra_cadastro = (chave.partition("|")[2],
+                                           chave_cadastrada.partition("|")[2])
+        if letra_relatorio and letra_cadastro and letra_relatorio != letra_cadastro:
+            return chave                       # letras declaradas e divergentes
+        return chave_cadastrada
+
+    def decisao_humana(self, linha: LinhaIdentidade, *chaves: str) -> int | None:
+        """Aluno que um gestor já escolheu para ESTA identidade, procurando em cada
+        chave de sala informada. São duas quando ``sala_efetiva`` reconheceu a sala
+        pela série: a decisão tomada ANTES dessa correção (gravada sob a sala do
+        relatório) continua valendo — nenhuma escolha humana se perde."""
+        vistas: set[str] = set()
+        for chave in chaves:
+            if not chave or chave in vistas:
+                continue
+            vistas.add(chave)
+            aluno_id = self.resolvidas.get(chave_identidade(linha, chave))
+            if aluno_id is not None:
+                return aluno_id
+        return None
 
 
 def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Contexto:
@@ -312,20 +378,23 @@ def chave_pendencia(chave_ident: str, formato: str, periodo_inicio: str = "",
 # ---------------------------------------------------------------------------
 
 def _confirmado_por_humano(ctx: Contexto, linha: LinhaIdentidade, chave: str,
-                           aluno_id: int) -> bool:
-    """Um gestor já resolveu uma revisão desta MESMA identidade para este aluno."""
-    return ctx.resolvidas.get(chave_identidade(linha, chave)) == aluno_id
+                           aluno_id: int, chave_alt: str = "") -> bool:
+    """Um gestor já resolveu uma revisão desta MESMA identidade para este aluno.
+    ``chave_alt`` é a sala do relatório quando ela difere da efetiva (ver
+    ``Contexto.sala_efetiva``): a decisão anterior vale nas duas."""
+    return ctx.decisao_humana(linha, chave, chave_alt) == aluno_id
 
 
 def _para_aluno(ctx: Contexto, linha: LinhaIdentidade, aluno: Aluno, via: str,
-                chave: str, candidatos: tuple[int, ...] = ()) -> Decisao:
+                chave: str, candidatos: tuple[int, ...] = (),
+                chave_alt: str = "") -> Decisao:
     """Um candidato SEGURO foi achado: associa — exceto se a ficha estiver inativa
     (revisão: não se aplica dado a ficha fora do ranking, nem se cria outra) ou se
     ela já tem OUTRA conta nesta plataforma (revisão: pode ser outra criança).
     Ficha inativa escolhida por um gestor numa revisão anterior não volta à fila."""
     cands = candidatos or (aluno.id,)
     if aluno.status in STATUS_INATIVOS and not _confirmado_por_humano(
-            ctx, linha, chave, aluno.id):
+            ctx, linha, chave, aluno.id, chave_alt):
         return Decisao(REVISAR, aluno.id, via, "ficha_inativa", cands, chave_sala=chave)
     if linha.id_externo:
         outras = ctx.ids_do_aluno.get((aluno.id, linha.plataforma), set()) - {linha.id_externo}
@@ -364,8 +433,15 @@ def _turma_para_criar(ctx: Contexto, linha: LinhaIdentidade, chave: str
 
 def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     """A decisão ÚNICA (prévia = confirmação). Só lê ``ctx``."""
+    # A SALA da linha. Turma escolhida explicitamente manda; senão vale a do
+    # relatório, RECONHECIDA no cadastro quando a escola tem uma turma só naquela
+    # série (``sala_efetiva`` — "4 ANO A INTEGRAL (300…)" × "4º Ano"). A chave crua
+    # do relatório segue viva só para não perder decisão humana anterior.
+    chave_relatorio = chave_sala(linha.turma_nome)
     chave = chave_sala(ctx.turmas[linha.turma_id].nome) if (
-        linha.turma_id is not None and linha.turma_id in ctx.turmas) else chave_sala(linha.turma_nome)
+        linha.turma_id is not None and linha.turma_id in ctx.turmas
+    ) else ctx.sala_efetiva(chave_relatorio, linha.turma_nome)
+    chave_alt = chave_relatorio if chave_relatorio != chave else ""
 
     # 0) Escolha EXPLÍCITA de um humano (prévia aceita, alternativa escolhida,
     # revisão resolvida). Vale — salvo se a identidade externa da linha já for de
@@ -394,16 +470,18 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         dono = ctx.ativo(ctx.identidade.get((linha.plataforma, linha.id_externo)))
         if dono is not None:
             if dono.status in STATUS_INATIVOS and not _confirmado_por_humano(
-                    ctx, linha, chave, dono.id):
+                    ctx, linha, chave, dono.id, chave_alt):
                 return Decisao(REVISAR, dono.id, "identidade", "identidade_de_ficha_inativa",
                                (dono.id,), chave_sala=chave)
             return Decisao(ASSOCIAR, dono.id, "identidade", candidatos=(dono.id,),
                            chave_sala=chave)
 
-    # 1b) Decisão humana anterior para esta mesma identidade (revisão resolvida).
-    anterior = ctx.ativo(ctx.resolvidas.get(chave_identidade(linha, chave)))
+    # 1b) Decisão humana anterior para esta mesma identidade (revisão resolvida) —
+    # procurada também sob a sala do RELATÓRIO, para que reconhecer a sala pela
+    # série não apague uma escolha que um gestor já fez.
+    anterior = ctx.ativo(ctx.decisao_humana(linha, chave, chave_alt))
     if anterior is not None:
-        return _para_aluno(ctx, linha, anterior, "revisao", chave)
+        return _para_aluno(ctx, linha, anterior, "revisao", chave, chave_alt=chave_alt)
 
     # 2) RA (identificador forte da escola inteira).
     ra = ra_forte(linha.ra)
@@ -412,7 +490,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         por_ra = [ctx.alunos[i] for i in sorted(ctx.por_ra.get(ra, ()))
                   if nomes_compativeis(linha.nome, ctx.alunos[i].nome)]
         if len(por_ra) == 1:
-            return _para_aluno(ctx, linha, por_ra[0], "ra", chave)
+            return _para_aluno(ctx, linha, por_ra[0], "ra", chave, chave_alt=chave_alt)
         if len(por_ra) > 1:
             ids = tuple(a.id for a in por_ra)
             return Decisao(REVISAR, ids[0], "ra", "ra_repetido", ids, chave_sala=chave)
@@ -434,13 +512,15 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         exatos = [c for c in roster if chave_nome(c.nome) == alvo_nome
                   and not matching.conflito_identidade(ident, c)]
         if len(exatos) == 1:
-            return _para_aluno(ctx, linha, ctx.alunos[exatos[0].id], "exato", chave)
+            return _para_aluno(ctx, linha, ctx.alunos[exatos[0].id], "exato", chave,
+                               chave_alt=chave_alt)
         # 3b) Motor único: chamada/RA/nascimento corroborando, candidato único
         # estruturalmente plausível, ou revisão.
         res = matching.classificar_linha(ident, roster, permitir_subconjunto_unico=True,
                                          vincular_variante=False)
         if res.status == matching.VINCULADO and res.aluno_id in ctx.alunos:
-            return _para_aluno(ctx, linha, ctx.alunos[res.aluno_id], res.motivo, chave)
+            return _para_aluno(ctx, linha, ctx.alunos[res.aluno_id], res.motivo, chave,
+                               chave_alt=chave_alt)
         if res.status == matching.REVISAR:
             motivo = ("candidatos_multiplos" if len(res.candidatos) > 1
                       else "correspondencia_insegura")
@@ -464,7 +544,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     if fora:
         ids = tuple(a.id for a in fora)
         if not sala_conhecida and len(fora) == 1:
-            return _para_aluno(ctx, linha, fora[0], "exato", chave)
+            return _para_aluno(ctx, linha, fora[0], "exato", chave, chave_alt=chave_alt)
         motivo = "homonimo_em_outra_sala" if sala_conhecida else "candidatos_multiplos"
         return Decisao(REVISAR, ids[0], "exato", motivo, ids, chave_sala=chave)
 

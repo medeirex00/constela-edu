@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 
 from app.models import (
     Aluno,
+    Escola,
     IdentidadeExterna,
     LogAuditoria,
     Matricula,
@@ -677,3 +678,227 @@ def test_decisao_e_so_leitura(db, sala):
                                             turma_nome="5ºA"))
     db.flush()
     assert (_n_alunos(db, esc), len(_pendentes(db, esc))) == antes
+
+
+# --- 12. sala do relatório × turma cadastrada SEM letra (série única) --------------
+#
+# Regressão real (escola 17, 2026-09-22): a escola cadastrou "4º Ano" — única turma
+# da série — e o relatório traz "4 ANO A INTEGRAL (300309347)". A sala do relatório
+# ("4|A") não existia no cadastro ("4 ano"), então TODA linha caía em revisão: 139
+# pendências, 0 snapshot, ranking vazio. A sala passa a ser reconhecida pela SÉRIE
+# quando — e só quando — a escola tem UMA turma ativa dela.
+
+def test_serie_da_sala_le_relatorio_e_cadastro():
+    """A leitura de série é a MESMA do motor de dificuldade — e nunca inventa série."""
+    assert matriculas.serie_da_sala("4 ANO A INTEGRAL (300309347)") == 4
+    assert matriculas.serie_da_sala("3 ANO B") == 3
+    assert matriculas.serie_da_sala("4º Ano") == 4
+    assert matriculas.serie_da_sala("", "5º Ano") == 5          # rótulo da turma cadastrada
+    assert matriculas.serie_da_sala("Turma 3") is None
+    assert matriculas.serie_da_sala("EJA 2") is None
+    assert matriculas.serie_da_sala("Maternal") is None
+
+
+def test_sala_do_relatorio_casa_com_a_turma_unica_da_serie(db, escola_completa):
+    """(A) "4 ANO A INTEGRAL (300…)" + única turma "4º Ano" → é a mesma sala."""
+    esc, admin = escola_completa["escola"], escola_completa["admin"]
+    quarto = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    isaac = _aluno(db, esc, quarto, "ISAAC ALMEIDA RODRIGUES")
+    db.commit()
+    antes = _n_alunos(db, esc)
+    linha = _matific("ISAAC A", "4 ANO A INTEGRAL (300309347)", "uuid-isaac")
+
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", isaac.id,
+                                                              "abreviacao")
+
+    r = _confirmar(db, esc, admin, "matific", [linha])
+    assert (r.qtd_alunos, r.qtd_revisoes) == (1, 0) and _n_alunos(db, esc) == antes
+    assert _snap_matific(db, isaac.id) is not None
+    assert _dono(db, esc, "matific", "uuid-isaac") == isaac.id   # UUID fica vinculado
+
+
+def test_sala_com_outra_letra_casa_com_a_turma_unica_da_serie(db, escola_completa):
+    """(B) "2 ANO B" + única turma "2º Ano": a letra do relatório não inventa sala."""
+    esc = escola_completa["escola"]
+    segundo = _turma(db, esc, "2º Ano", ano_escolar="2º Ano")
+    joana = _aluno(db, esc, segundo, "JOANA PEREIRA LIMA")
+    db.commit()
+    [corr] = _previa(db, esc, "matific", [_matific("JOANA PEREIRA LIMA", "2 ANO B", "u-j")])
+    assert (corr["status"], corr["aluno_id"]) == ("exato", joana.id)
+
+
+def test_duas_turmas_da_serie_com_relatorio_distinguivel_usa_a_logica_existente(
+        db, escola_completa):
+    """(C) Havendo duas turmas da série, quem decide é a sala série+letra de sempre."""
+    esc = escola_completa["escola"]
+    sem_letra = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    com_letra = _turma(db, esc, "4ºB", ano_escolar="4º Ano")
+    bruno = _aluno(db, esc, com_letra, "BRUNO TEIXEIRA ALVES")
+    db.commit()
+    [corr] = _previa(db, esc, "matific", [_matific("BRUNO TEIXEIRA ALVES", "4 ANO B", "u-b")])
+    assert (corr["status"], corr["aluno_id"]) == ("exato", bruno.id)
+    assert sem_letra.id != com_letra.id
+
+
+def test_duas_turmas_da_serie_sem_como_distinguir_continua_em_revisao(db, escola_completa):
+    """(D) Duas turmas da série e o relatório não diz qual: revisão, nunca escolher."""
+    esc, admin = escola_completa["escola"], escola_completa["admin"]
+    _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    _turma(db, esc, "4º Ano Tarde", ano_escolar="4º Ano")
+    segundo = _turma(db, esc, "2º Ano", ano_escolar="2º Ano")
+    _aluno(db, esc, segundo, "CARLA SOUZA MELO")
+    db.commit()
+    antes = _n_alunos(db, esc)
+    linha = _matific("CARLA SOUZA MELO", "4 ANO A INTEGRAL", "u-c")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert corr["status"] == "revisar"
+    r = _confirmar(db, esc, admin, "matific", [linha])
+    assert (r.qtd_alunos, r.qtd_revisoes) == (0, 1) and _n_alunos(db, esc) == antes
+
+
+def test_serie_diferente_nunca_casa_pela_turma_unica(db, escola_completa):
+    """(E) O fallback resolve a SALA, não a identidade: aluno de outra série não casa."""
+    esc, admin = escola_completa["escola"], escola_completa["admin"]
+    _turma(db, esc, "4º Ano", ano_escolar="4º Ano")                  # única da série 4
+    quinto = _turma(db, esc, "5º Ano", ano_escolar="5º Ano")
+    pedro = _aluno(db, esc, quinto, "PEDRO HENRIQUE RAMOS")          # está no 5º
+    db.commit()
+    antes = _n_alunos(db, esc)
+    linha = _matific("PEDRO HENRIQUE RAMOS", "4 ANO A INTEGRAL", "u-p")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert corr["status"] == "revisar" and corr["motivo"] == "homonimo_em_outra_sala"
+    r = _confirmar(db, esc, admin, "matific", [linha])
+    assert (r.qtd_alunos, r.qtd_revisoes) == (0, 1) and _n_alunos(db, esc) == antes
+    assert _snap_matific(db, pedro.id) is None
+
+
+def test_identidade_externa_continua_mandando_sobre_a_sala_reconhecida(db, escola_completa):
+    """(F) UUID vinculado decide antes da sala, mesmo com a sala agora reconhecida."""
+    esc = escola_completa["escola"]
+    _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    quinto = _turma(db, esc, "5º Ano", ano_escolar="5º Ano")
+    lia = _aluno(db, esc, quinto, "LIA MARTINS ROCHA")
+    _vincular(db, esc, lia, "matific", "u-lia")
+    db.commit()
+    [corr] = _previa(db, esc, "matific", [_matific("LIA M", "4 ANO A INTEGRAL", "u-lia")])
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("exato", lia.id, "identidade")
+
+
+def test_decisao_humana_anterior_sobrevive_ao_reconhecimento_da_sala(db, escola_completa):
+    """(G) A revisão resolvida sob a sala do RELATÓRIO continua valendo depois que a
+    sala passou a ser reconhecida pela série."""
+    esc = escola_completa["escola"]
+    quarto = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    quinto = _turma(db, esc, "5º Ano", ano_escolar="5º Ano")
+    duda = _aluno(db, esc, quinto, "EDUARDA VIEIRA")        # o gestor escolheu esta ficha
+    linha_ident = ida.LinhaIdentidade(nome="DUDA V", plataforma="matific",
+                                      turma_nome="4 ANO A INTEGRAL")
+    db.add(RevisaoIdentidade(
+        escola_id=esc.id, chave="k", chave_identidade=ida.chave_identidade(
+            linha_ident, matriculas.chave_turma_norm("4 ANO A INTEGRAL")),
+        plataforma="matific", nome_recebido="DUDA V", motivo="nome_casa_em_outra_sala",
+        status="resolvida", aluno_escolhido_id=duda.id))
+    db.commit()
+    ctx = ida.carregar_contexto(db, esc.id)
+    assert ctx.sala_efetiva("4|A", "4 ANO A INTEGRAL") == ida.chave_sala(quarto.nome)
+    d = ida.decidir(ctx, ida.linha_de_dados("DUDA V", {}, plataforma="matific",
+                                            turma_nome="4 ANO A INTEGRAL"))
+    assert (d.acao, d.aluno_id, d.via) == (ida.ASSOCIAR, duda.id, "revisao")
+
+
+def test_homonimos_na_turma_unica_continuam_em_revisao(db, escola_completa):
+    """(H) Reconhecer a sala não enfraquece a proteção contra homônimo."""
+    esc, admin = escola_completa["escola"], escola_completa["admin"]
+    quarto = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    a1 = _aluno(db, esc, quarto, "LUCAS SILVA")
+    a2 = _aluno(db, esc, quarto, "LUCAS SILVA")
+    db.commit()
+    antes = _n_alunos(db, esc)
+    linha = _matific("LUCAS SILVA", "4 ANO A INTEGRAL", "u-l")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert corr["status"] == "revisar"
+    r = _confirmar(db, esc, admin, "matific", [linha])
+    assert (r.qtd_alunos, r.qtd_revisoes) == (0, 1) and _n_alunos(db, esc) == antes
+    cands = {c["aluno_id"] for c in _pendentes(db, esc)[0].candidatos}
+    assert cands == {a1.id, a2.id}
+
+
+def test_turma_unica_de_outra_escola_nunca_e_usada(db, escola_completa):
+    """(I) O contexto é por escola: a turma única da série da vizinha não conta."""
+    esc = escola_completa["escola"]
+    vizinha = Escola(nome="ESCOLA VIZINHA", ano_letivo_ativo=ANO)
+    db.add(vizinha)
+    db.flush()
+    _turma(db, vizinha, "4º Ano", ano_escolar="4º Ano")
+    db.commit()
+    ctx = ida.carregar_contexto(db, esc.id)
+    assert ctx.sala_efetiva("4|A", "4 ANO A INTEGRAL") == "4|A"   # nada muda
+    assert all(t.escola_id == esc.id for t in ctx.turmas.values())
+
+
+def test_turma_arquivada_nao_serve_de_sala_unica(db, escola_completa):
+    """A turma precisa estar ATIVA: uma arquivada não recebe aluno."""
+    esc = escola_completa["escola"]
+    t = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    t.status = "arquivada"
+    db.commit()
+    ctx = ida.carregar_contexto(db, esc.id)
+    assert ctx.sala_efetiva("4|A", "4 ANO A INTEGRAL") == "4|A"
+
+
+def test_fase_e_ano_da_mesma_serie_nao_decidem(db, escola_completa):
+    """Escola 17 real: "1ª Fase" e "1º Ano" contam ambas como série 1 → sem fallback."""
+    esc = escola_completa["escola"]
+    _turma(db, esc, "1ª Fase", ano_escolar="1ª Fase")
+    _turma(db, esc, "1º Ano", ano_escolar="1º Ano")
+    db.commit()
+    ctx = ida.carregar_contexto(db, esc.id)
+    assert ctx.sala_efetiva("1|A", "1 ANO A TARDE ANUAL") == "1|A"
+
+
+def test_aluno_novo_nasce_na_turma_unica_da_serie(db, escola_completa):
+    """Sem candidato algum, a ficha nova nasce na turma única da série — antes isso
+    ia para revisão como 'turma não cadastrada' e nenhum dado entrava."""
+    esc, admin = escola_completa["escola"], escola_completa["admin"]
+    quarto = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
+    db.commit()
+    antes = _n_alunos(db, esc)
+    _confirmar(db, esc, admin, "matific",
+               [_matific("NOEMI CASTRO BRAGA", "4 ANO A INTEGRAL (300309347)", "u-n")])
+    novo = db.execute(select(Aluno).where(Aluno.nome == "NOEMI CASTRO BRAGA")).scalar_one()
+    mat = db.execute(select(Matricula).where(Matricula.aluno_id == novo.id)).scalar_one()
+    assert _n_alunos(db, esc) == antes + 1 and mat.turma_id == quarto.id
+
+
+def test_letras_que_se_contradizem_nao_viram_a_mesma_sala(db, escola_completa):
+    """Guarda: o cadastro declara a letra ("4ºA") e o relatório declara OUTRA
+    ("4 ANO B"). As duas afirmam a sala e discordam — não é a mesma turma, ainda
+    que seja a única da série. Continua revisão, como hoje."""
+    esc, admin = escola_completa["escola"], escola_completa["admin"]
+    quarto_a = _turma(db, esc, "4ºA", ano_escolar="4º Ano")
+    joao = _aluno(db, esc, quarto_a, "JOAO VITOR SANTOS")
+    db.commit()
+    ctx = ida.carregar_contexto(db, esc.id)
+    assert ctx.sala_efetiva("4|B", "4 ANO B INTEGRAL") == "4|B"      # não reinterpreta
+
+    antes = _n_alunos(db, esc)
+    linha = _matific("JOAO VITOR SANTOS", "4 ANO B INTEGRAL", "u-jv")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert corr["status"] == "revisar" and corr["motivo"] == "homonimo_em_outra_sala"
+    r = _confirmar(db, esc, admin, "matific", [linha])
+    assert (r.qtd_alunos, r.qtd_revisoes) == (0, 1) and _n_alunos(db, esc) == antes
+    assert _snap_matific(db, joao.id) is None
+
+
+def test_relatorio_sem_letra_casa_com_a_turma_unica_que_tem_letra(db, escola_completa):
+    """O outro lado da guarda: só o CADASTRO declara a letra ("4ºA") e o relatório
+    vem sem ela ("4 ANO"). Não há contradição — é a única turma da série."""
+    esc = escola_completa["escola"]
+    quarto_a = _turma(db, esc, "4ºA", ano_escolar="4º Ano")
+    tereza = _aluno(db, esc, quarto_a, "TEREZA BATISTA NOGUEIRA")
+    db.commit()
+    ctx = ida.carregar_contexto(db, esc.id)
+    assert ctx.sala_efetiva(ida.chave_sala("4 ANO"), "4 ANO") == ida.chave_sala(quarto_a.nome)
+    [corr] = _previa(db, esc, "matific", [_matific("TEREZA BATISTA NOGUEIRA", "4 ANO", "u-t")])
+    assert (corr["status"], corr["aluno_id"]) == ("exato", tereza.id)
