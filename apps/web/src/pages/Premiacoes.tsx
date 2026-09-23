@@ -41,7 +41,7 @@ import { Link } from "react-router-dom";
 
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
 import { SeletorTurno } from "../components/SeletorTurno";
-import { Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { Card, Carregando, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
@@ -49,6 +49,11 @@ import { TURNO_TODOS, chaveTurno, rotuloTurno, turnoEfetivo, turnoParaQuery } fr
 import type { CategoriaPremiacao, Premiacoes as PremiacoesT, Turma } from "../lib/types";
 
 const MEDALHAS = ["🥇", "🥈", "🥉"];
+/** Quantos alunos o ranking completo traz por vez (e por "Carregar mais"). */
+const PASSO_RANKING = 50;
+/** Teto do `limite` aceito pelo endpoint de premiações (`le=500`). Pedir mais
+ *  do que isso devolveria 422 e a janela mostraria erro no lugar do ranking. */
+const LIMITE_MAXIMO_RANKING = 500;
 const UNIDADE_MATEMATICA = "estrelas/atividade";
 
 /** Régua da "Melhor Matemática": a janela REALMENTE usada pelo backend.
@@ -117,8 +122,9 @@ function formatarValor(valor: number, unidade: string): string {
   return `${numero(valor)} ${unidade}`;
 }
 
-function CartaoCategoria({ categoria, vazioTexto, legenda }: {
+function CartaoCategoria({ categoria, vazioTexto, legenda, aoVerRanking }: {
   categoria: CategoriaPremiacao; vazioTexto?: string; legenda?: string;
+  aoVerRanking?: () => void;
 }) {
   const [campeao, ...resto] = categoria.podio;
   return (
@@ -173,9 +179,204 @@ function CartaoCategoria({ categoria, vazioTexto, legenda }: {
               ))}
             </ul>
           )}
+
+          {/* O cartão é o Top 5; o ranking completo da MESMA premiação (mesma
+              ordem, mesmas posições) abre sob demanda. */}
+          {aoVerRanking && (
+            <button
+              type="button"
+              onClick={aoVerRanking}
+              /* São quatro botões iguais na tela: o rótulo acessível diz de QUAL
+                 premiação é este, para quem navega por leitor de tela. */
+              aria-label={`Ver ranking completo de ${categoria.titulo}`}
+              className="mt-3 self-start text-sm font-medium text-indigo-700 underline-offset-2 hover:underline dark:text-indigo-300"
+            >
+              Ver ranking completo
+              {categoria.total != null && categoria.total > categoria.podio.length
+                && ` (${categoria.total} alunos)`}
+            </button>
+          )}
         </>
       )}
     </Card>
+  );
+}
+
+/** Uma linha do ranking completo, PRONTA para exibir: a posição e o valor já
+ *  vêm decididos por quem produziu a lista (backend). Esta camada não ordena,
+ *  não filtra e não calcula nada. */
+interface LinhaRanking {
+  aluno_id: number;
+  nome: string;
+  turma: string | null;
+  posicao: number;
+  valor: string;
+  destino: string;
+}
+
+/** A JANELA do ranking completo — só apresentação, compartilhada por todas as
+ *  premiações (inclusive as de Evolução). Exibe as linhas na ORDEM recebida,
+ *  com a posição que o ranking carimbou. */
+function ModalRanking({ titulo, icone, descricao, rodape, avisoLimite, linhas, total,
+                        carregando, erro, erroParcial, temMais, aoCarregarMais,
+                        aoTentarDeNovo, aoFechar, vazio }: {
+  titulo: string; icone: string; descricao: string; rodape?: string;
+  /** Aviso de que a janela mostra só o começo do ranking (teto do endpoint). */
+  avisoLimite?: string;
+  linhas: LinhaRanking[];
+  /** Quantos alunos a premiação tem no recorte (quando o backend informa). */
+  total?: number;
+  carregando: boolean;
+  /** Falha na PRIMEIRA carga: não há nada na tela para preservar. */
+  erro: boolean;
+  /** Falha ao carregar MAIS: o que já está na tela continua valendo. */
+  erroParcial?: boolean;
+  temMais: boolean;
+  aoCarregarMais: () => void; aoTentarDeNovo?: () => void;
+  aoFechar: () => void; vazio: string;
+}) {
+  return (
+    <Modal titulo={`${icone} ${titulo}`} aberto aoFechar={aoFechar}>
+      <p className="-mt-2 mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+        {descricao}
+        {total != null && <> · {total} {total === 1 ? "aluno" : "alunos"} no período</>}
+      </p>
+      {carregando && linhas.length === 0 ? (
+        <Carregando />
+      ) : erro ? (
+        <div className="py-6 text-center">
+          <p className="text-sm text-zinc-400">Não foi possível carregar o ranking.</p>
+          {aoTentarDeNovo && (
+            <button type="button" onClick={aoTentarDeNovo} disabled={carregando}
+                    className="mt-2 text-sm font-medium text-indigo-700 underline-offset-2 hover:underline disabled:opacity-60 dark:text-indigo-300">
+              {carregando ? "Carregando..." : "Tentar de novo"}
+            </button>
+          )}
+        </div>
+      ) : linhas.length === 0 ? (
+        <p className="py-6 text-center text-sm text-zinc-400">{vazio}</p>
+      ) : (
+        <>
+          <ol className="space-y-0.5">
+            {linhas.map((item) => (
+              <li key={item.aluno_id}>
+                <Link
+                  to={item.destino}
+                  className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                >
+                  <span className="w-7 shrink-0 text-center">
+                    {MEDALHAS[item.posicao - 1]
+                      ?? <span className="text-xs tabular-nums text-zinc-400">{item.posicao}º</span>}
+                  </span>
+                  {/* Nome e turma empilhados: em tela estreita nada transborda. */}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{item.nome}</span>
+                    {item.turma && (
+                      <span className="block truncate text-xs text-zinc-400">{item.turma}</span>
+                    )}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-zinc-600 dark:text-zinc-300">
+                    {item.valor}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ol>
+          {/* Falhou ao buscar MAIS posições: o que o usuário já estava lendo fica
+              na tela; só o lote novo é que não veio. "Tentar de novo" repete o
+              MESMO pedido (mesmo limite), então nada é pulado nem duplicado. */}
+          {erroParcial ? (
+            <div role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              Não foi possível carregar mais posições.
+              {aoTentarDeNovo && (
+                <button type="button" onClick={aoTentarDeNovo} disabled={carregando}
+                        className="ml-2 font-medium underline underline-offset-2 disabled:opacity-60">
+                  {carregando ? "Carregando..." : "Tentar de novo"}
+                </button>
+              )}
+            </div>
+          ) : temMais && (
+            <button
+              type="button"
+              disabled={carregando}
+              onClick={aoCarregarMais}
+              className="mt-3 w-full rounded-lg border border-zinc-200 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+            >
+              {carregando ? "Carregando..." : "Carregar mais"}
+            </button>
+          )}
+          {/* Teto do endpoint: a lista para antes do fim e a janela DIZ isso —
+              o total real continua no cabeçalho, sem fingir que acabou. */}
+          {avisoLimite && (
+            <p role="note" className="mt-3 text-[11px] text-amber-700 dark:text-amber-300">{avisoLimite}</p>
+          )}
+          {rodape && <p className="mt-3 text-[11px] text-zinc-400">{rodape}</p>}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/** Ranking COMPLETO de uma premiação: a MESMA resposta da aba, pedida com um
+ *  `limite` maior. Nada é reordenado aqui — a posição exibida é a que o backend
+ *  carimbou, e "Carregar mais" só aumenta o limite (a lista nova contém a
+ *  anterior, então nenhum aluno é pulado nem repetido). */
+function ModalRankingCompleto({ categoria, urlBase, turnoChave, aoFechar }: {
+  categoria: CategoriaPremiacao;
+  urlBase: string;
+  /** Turno em exibição na aba (ou null em "Todos"): o ranking respeita o MESMO
+   *  recorte de período, turma e turno já aplicado na tela. */
+  turnoChave: string | null;
+  aoFechar: () => void;
+}) {
+  const [limite, setLimite] = useState(PASSO_RANKING);
+  // Já chegou alguma resposta PARA ESTA janela? É o que separa "falhou a
+  // primeira carga" (nada a preservar) de "falhou o lote novo" (o que está na
+  // tela continua válido). Não dá para deduzir de `dados`, porque a janela abre
+  // já mostrando o pódio que o cartão tinha.
+  const [houveResposta, setHouveResposta] = useState(false);
+  const { dados, erro, carregando, recarregar } = useApi<RespostaPremiacoes>(
+    `${urlBase}&limite=${limite}`, { aoSucesso: () => setHouveResposta(true) });
+  // Turno em exibição: `null` é "sem filtro" e a string VAZIA é o turno
+  // "Sem turno" (turmas com `Turma.turno` nulo). Testar por veracidade
+  // confundiria os dois e a janela mostraria a escola inteira.
+  const lista = (turnoChave != null
+    ? dados?.turnos?.find((g) => chaveTurno(g.turno) === turnoChave)?.categorias
+    : dados?.categorias) ?? [];
+  // Enquanto a resposta maior não chega, mostra o que o cartão já tinha.
+  const completa = lista.find((c) => c.chave === categoria.chave) ?? categoria;
+  const podio = completa.podio;
+  const total = completa.total;
+  // A janela não alcança além do teto da rota: quando a premiação tem mais que
+  // isso, ela mostra o começo do ranking e DIZ que é só o começo.
+  const truncado = total != null && total > LIMITE_MAXIMO_RANKING;
+
+  return (
+    <ModalRanking
+      titulo={categoria.titulo} icone={categoria.icone} descricao={categoria.descricao}
+      avisoLimite={truncado
+        ? `Esta janela mostra as ${LIMITE_MAXIMO_RANKING} primeiras posições.`
+        : undefined}
+      linhas={podio.map((item) => ({
+        aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
+        valor: formatarValor(item.valor, categoria.unidade),
+        destino: `/alunos/${item.aluno_id}`,
+      }))}
+      total={total}
+      carregando={carregando}
+      erro={Boolean(erro) && !houveResposta}
+      erroParcial={Boolean(erro) && houveResposta}
+      /* Há mais ranking a pedir — e o backend ainda aceita o próximo lote. */
+      temMais={(total != null ? podio.length < total : podio.length >= limite)
+               && limite < LIMITE_MAXIMO_RANKING}
+      aoCarregarMais={() => setLimite((atual) =>
+        Math.min(atual + PASSO_RANKING, LIMITE_MAXIMO_RANKING))}
+      /* Repete o MESMO pedido (mesmo limite): a lista volta inteira, do 1º ao
+         último já pedido, sem pular nem duplicar ninguém. */
+      aoTentarDeNovo={recarregar}
+      aoFechar={aoFechar}
+      vazio="Sem dados no período."
+    />
   );
 }
 
@@ -188,6 +389,14 @@ interface EvolucaoItem {
   posicao: number; nota: number | null; n_aferidos: number | null;
 }
 
+/** Pódio de EVOLUÇÃO: só quem cresceu (nota > 0) — o zero legítimo de quem usa a
+ *  plataforma e não avançou fica na lista da API, não no pódio. Decisão de
+ *  produto registrada, aplicada UMA vez: o Top 5 do cartão e o ranking completo
+ *  leem desta mesma lista, na ordem e com a posição que o backend carimbou. */
+function cresceram(itens: EvolucaoItem[] | null | undefined): EvolucaoItem[] {
+  return (itens ?? []).filter((item) => (item.nota ?? 0) > 0);
+}
+
 function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
   escolaId: number; dimensao: "leitura" | "matematica";
   titulo: string; icone: string; params: string; vazio: string;
@@ -196,9 +405,9 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
   const { dados, erro, carregando } = useApi<EvolucaoItem[]>(
     `/escolas/${escolaId}/ranking-evolucao?dimensao=${dimensao}${params}`,
   );
-  // Pódio de EVOLUÇÃO só com quem cresceu (nota > 0) — o zero legítimo de quem
-  // usa a plataforma e não avançou fica na lista da API, não no pódio.
-  const podio = (dados ?? []).filter((item) => (item.nota ?? 0) > 0).slice(0, 5);
+  const [rankingAberto, setRankingAberto] = useState(false);
+  const elegiveis = cresceram(dados);
+  const podio = elegiveis.slice(0, 5);
   const [campeao, ...resto] = podio;
   return (
     <Card className="flex flex-col p-5">
@@ -248,15 +457,66 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
               ))}
             </ul>
           )}
+
+          {/* Mesma experiência das demais premiações: o cartão é o Top 5, o
+              ranking completo abre sob demanda. A lista já veio inteira do
+              endpoint de evolução — nenhuma consulta nova, nenhuma reordenação. */}
+          <button
+            type="button"
+            onClick={() => setRankingAberto(true)}
+            aria-label={`Ver ranking completo de ${titulo}`}
+            className="mt-3 self-start text-sm font-medium text-indigo-700 underline-offset-2 hover:underline dark:text-indigo-300"
+          >
+            Ver ranking completo
+            {elegiveis.length > podio.length && ` (${elegiveis.length} alunos)`}
+          </button>
         </>
       )}
+
+      {rankingAberto && (
+        <ModalRankingEvolucao
+          itens={elegiveis} titulo={titulo} icone={icone}
+          aoFechar={() => setRankingAberto(false)} />
+      )}
     </Card>
+  );
+}
+
+/** Ranking COMPLETO de uma premiação de EVOLUÇÃO. O endpoint por dimensão já
+ *  devolve a lista inteira, ordenada e com a posição de cada aluno carimbada
+ *  pelo motor: aqui só se mostra mais linhas da MESMA lista que o cartão usou
+ *  (nenhuma consulta nova, nenhum cálculo, nenhuma reordenação). */
+function ModalRankingEvolucao({ itens, titulo, icone, aoFechar }: {
+  itens: EvolucaoItem[]; titulo: string; icone: string; aoFechar: () => void;
+}) {
+  const [limite, setLimite] = useState(PASSO_RANKING);
+  const linhas = itens.slice(0, limite);
+  return (
+    <ModalRanking
+      titulo={titulo} icone={icone}
+      descricao="Quem mais CRESCEU no período (não o maior acumulado)"
+      rodape="Só entra quem cresceu no intervalo; o crescimento e a posição vêm do motor de evolução."
+      linhas={linhas.map((item) => ({
+        aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
+        valor: fmtNota(item.nota ?? 0),
+        destino: `/alunos/${item.aluno_id}/evolucao`,
+      }))}
+      total={itens.length}
+      carregando={false}
+      erro={false}
+      temMais={linhas.length < itens.length}
+      aoCarregarMais={() => setLimite((atual) => atual + PASSO_RANKING)}
+      aoFechar={aoFechar}
+      vazio="Sem dados suficientes para medir evolução no período."
+    />
   );
 }
 
 export default function Premiacoes() {
   const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
   const [turmaId, setTurmaId] = useState("");
+  // Premiação cujo ranking completo está aberto (null = só os cartões).
+  const [rankingAberto, setRankingAberto] = useState<CategoriaPremiacao | null>(null);
   const idMotivoTurno = useId();
 
   const { dados: turmas } = useApi<Turma[]>(
@@ -374,6 +634,7 @@ export default function Premiacoes() {
                 legenda={categoria.chave === "melhor_matematica"
                   ? "Média ajustada de estrelas por atividade no período (0 a 5)"
                   : undefined}
+                aoVerRanking={() => setRankingAberto(categoria)}
               />
             ))}
           </div>
@@ -415,6 +676,24 @@ export default function Premiacoes() {
         <p className="mt-1 text-xs text-zinc-400">
           Vencedores calculados só com os alunos do turno selecionado; a régua da Matemática é a da escola inteira.
         </p>
+      )}
+
+      {/* Ranking completo: MESMA URL da aba (período, turma e turno já
+          aplicados), só com um limite maior.
+
+          `key` pela CHAVE DA PREMIAÇÃO: trocar de premiação com a janela aberta
+          remonta o componente, e o ranking novo começa na posição 1 — sem
+          herdar o limite, as linhas nem o erro da premiação anterior. Os
+          filtros da tela (período, turma, turno) continuam valendo, porque
+          vêm de fora. */}
+      {rankingAberto && urlPremiacoes && (
+        <ModalRankingCompleto
+          key={rankingAberto.chave}
+          categoria={rankingAberto}
+          urlBase={urlPremiacoes}
+          turnoChave={grupoTurno ? chaveTurno(grupoTurno.turno) : null}
+          aoFechar={() => setRankingAberto(null)}
+        />
       )}
     </div>
   );

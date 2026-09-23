@@ -349,7 +349,14 @@ export interface CategoriaPremiacao {
   icone: string;
   descricao: string;
   unidade: string;
+  /** O pódio: as primeiras linhas da ordem da premiação. São 5 por padrão e
+   *  mais quando a tela pede o ranking completo (`?limite=N`) — a ordem e as
+   *  posições são sempre as mesmas, vindas do backend. */
   podio: PodioItem[];
+  /** Quantos alunos são premiáveis nesta categoria (valor > 0) no recorte atual.
+   *  É o que diz se ainda há ranking além do que chegou. Opcional para não
+   *  quebrar respostas antigas em cache. */
+  total?: number;
 }
 
 /** Pódios de premiação de um TURNO (Turma.turno), com o rótulo vindo do backend. */

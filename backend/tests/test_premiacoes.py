@@ -15,6 +15,8 @@ NADA aqui altera pesos/A3/P90/normalização (só lê o motor read-only).
 """
 from datetime import datetime
 
+from sqlalchemy import select
+
 from app.core.security import hash_senha
 from app.models import (
     Aluno, Escola, Importacao, Leitura, Livro, Matricula, SnapshotMatific, Turma, Usuario,
@@ -219,3 +221,193 @@ def test_melhor_leitor_preservado_por_periodo(db):
     dados = premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))
     assert [p["nome"] for p in _podio(dados, "melhor_leitor")] == ["Leo Leitor"]
     assert [p["nome"] for p in _podio(dados, "mais_livros")] == ["Leo Leitor"]
+
+
+# ---------------------------------------------------------------------------
+# 8) RANKING COMPLETO: o mesmo pódio com mais linhas (`limite`)
+#
+# O cartão da tela mostra o Top 5; "Ver ranking completo" pede a MESMA premiação
+# com um limite maior. Estes testes travam o que não pode mudar: a ordem, as
+# posições, o desempate e o valor de cada linha são os mesmos — só o tamanho da
+# lista muda. Nenhuma fórmula nova, nenhuma segunda ordenação.
+# ---------------------------------------------------------------------------
+
+def _leitores(db, esc, turma, quantos):
+    """`quantos` leitores com pontos estritamente decrescentes (sem empate).
+
+    Livros DISTINTOS por leitura: releitura do mesmo livro não pontua (§35, e o
+    banco barra por `uq_leitura_unica`)."""
+    livros = []
+    for n in range(quantos):
+        livro = Livro(escola_id=esc.id, titulo=f"Livro {n:02d}", nivel_codigo="Z")
+        db.add(livro)
+        db.flush()
+        livros.append(livro)
+    alunos = []
+    for i in range(quantos):
+        a = _aluno(db, esc, turma, f"Leitor {i:02d}")
+        # O leitor i lê os (quantos - i) primeiros livros: quem vem antes lê mais.
+        for n in range(quantos - i):
+            db.add(Leitura(escola_id=esc.id, aluno_id=a.id, livro_id=livros[n].id,
+                           data=JAN, tempo_leitura_min=10 + n))
+        alunos.append(a)
+    return alunos
+
+
+def _premiar(db, esc, **kw):
+    return premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31), **kw)
+
+
+def test_limite_padrao_continua_sendo_o_top_5(db):
+    """A) O cartão não muda: sem `limite`, cada pódio traz no máximo 5."""
+    esc, imp, turmas = _cenario(db)
+    _leitores(db, esc, turmas["manha"], 12)
+    db.commit()
+
+    dados = _premiar(db, esc)
+    for categoria in dados["categorias"]:
+        assert len(categoria["podio"]) <= 5, categoria["chave"]
+    assert len(_podio(dados, "melhor_leitor")) == 5
+
+
+def test_ranking_completo_estende_o_top_5_sem_mudar_ordem_nem_posicao(db):
+    """C + I) As 5 primeiras linhas do ranking completo são EXATAMENTE o Top 5
+    (mesma ordem, mesmo valor, mesma posição), e a partir da 6ª vêm os demais."""
+    esc, imp, turmas = _cenario(db)
+    _leitores(db, esc, turmas["manha"], 12)
+    db.commit()
+
+    top5 = _podio(_premiar(db, esc), "melhor_leitor")
+    completo = _podio(_premiar(db, esc, limite=50), "melhor_leitor")
+
+    assert completo[:5] == top5                      # prefixo idêntico, campo a campo
+    assert len(completo) == 12                       # todos os premiáveis
+    assert [p["posicao"] for p in completo] == list(range(1, 13))
+    # A posição é a REAL da premiação, não uma renumeração do recorte.
+    assert completo[5]["posicao"] == 6
+    # Ordem decrescente pelo valor, como no Top 5.
+    valores = [p["valor"] for p in completo]
+    assert valores == sorted(valores, reverse=True)
+
+
+def test_total_da_categoria_conta_os_premiaveis(db):
+    """O `total` é quem tem valor > 0 — é ele que diz à tela se há mais ranking."""
+    esc, imp, turmas = _cenario(db)
+    _leitores(db, esc, turmas["manha"], 7)
+    _aluno(db, esc, turmas["manha"], "Sem Leitura Alguma")   # valor 0: não é premiável
+    db.commit()
+
+    dados = _premiar(db, esc)
+    categoria = next(c for c in dados["categorias"] if c["chave"] == "melhor_leitor")
+    assert categoria["total"] == 7 and len(categoria["podio"]) == 5
+    completo = next(c for c in _premiar(db, esc, limite=50)["categorias"]
+                    if c["chave"] == "melhor_leitor")
+    assert completo["total"] == 7 and len(completo["podio"]) == 7
+
+
+def test_carregar_mais_nao_duplica_nem_pula_aluno(db):
+    """H) Cada limite maior devolve um PREFIXO do anterior: nenhum aluno some,
+    nenhum aparece duas vezes, nenhuma posição se repete."""
+    esc, imp, turmas = _cenario(db)
+    _leitores(db, esc, turmas["manha"], 14)
+    db.commit()
+
+    pagina1 = _podio(_premiar(db, esc, limite=5), "melhor_leitor")
+    pagina2 = _podio(_premiar(db, esc, limite=10), "melhor_leitor")
+    pagina3 = _podio(_premiar(db, esc, limite=15), "melhor_leitor")
+
+    assert pagina2[:5] == pagina1 and pagina3[:10] == pagina2
+    ids = [p["aluno_id"] for p in pagina3]
+    assert len(ids) == len(set(ids)) == 14
+    assert [p["posicao"] for p in pagina3] == list(range(1, 15))
+
+
+def test_limite_maior_preserva_o_desempate_da_matematica(db):
+    """G) Empate no índice: a ordem continua sendo estrelas → atividades → nome,
+    com ou sem limite maior."""
+    esc, imp, turmas = _cenario(db)
+    # EMPATE REAL: mesmas atividades e mesmas estrelas no período → mesmo índice,
+    # mesmo desempate de estrelas e de atividades. Quem decide é o nome.
+    zz = _aluno(db, esc, turmas["manha"], "Zz Empatado")
+    _cresceu(db, esc, imp, zz, atividades=10, estrelas=20, media=2.0)
+    aa = _aluno(db, esc, turmas["manha"], "Aa Empatada")
+    _cresceu(db, esc, imp, aa, atividades=10, estrelas=20, media=2.0)
+    # E um terceiro com MAIS estrelas na mesma quantidade de atividades: vence os dois.
+    lider = _aluno(db, esc, turmas["manha"], "Mm Lider")
+    _cresceu(db, esc, imp, lider, atividades=10, estrelas=40, media=4.0)
+    db.commit()
+
+    top5 = _podio(_premiar(db, esc), "melhor_matematica")
+    completo = _podio(_premiar(db, esc, limite=50), "melhor_matematica")
+    assert [p["nome"] for p in top5] == [p["nome"] for p in completo]
+    assert [p["nome"] for p in completo] == ["Mm Lider", "Aa Empatada", "Zz Empatado"]
+    assert completo[1]["valor"] == completo[2]["valor"]   # empate de verdade
+    assert completo[1]["estrelas"] == completo[2]["estrelas"]
+
+
+def test_limite_maior_nao_muda_as_outras_premiacoes(db):
+    """J) Pedir mais linhas de uma premiação não altera as demais: todas as
+    categorias continuam com a mesma ordem e os mesmos valores."""
+    esc, imp, turmas = _cenario(db)
+    alunos = _leitores(db, esc, turmas["manha"], 8)
+    _cresceu(db, esc, imp, alunos[0], atividades=10, estrelas=40, media=4.0)
+    db.commit()
+
+    padrao = {c["chave"]: c["podio"] for c in _premiar(db, esc)["categorias"]}
+    maior = {c["chave"]: c["podio"] for c in _premiar(db, esc, limite=50)["categorias"]}
+    assert set(padrao) == set(maior)
+    for chave, podio in padrao.items():
+        assert maior[chave][:len(podio)] == podio, chave
+
+
+def test_ranking_completo_respeita_periodo_turma_e_turno(db):
+    """E + F) O limite não é um filtro: período, turma e turno continuam valendo
+    exatamente como no Top 5."""
+    esc, imp, turmas = _cenario(db)
+    manha = _leitores(db, esc, turmas["manha"], 6)
+    tarde = _aluno(db, esc, turmas["tarde"], "Tarde Unica")
+    livro = db.execute(select(Livro).where(Livro.escola_id == esc.id)).scalars().first()
+    db.add(Leitura(escola_id=esc.id, aluno_id=tarde.id, livro_id=livro.id,
+                   data=JAN, tempo_leitura_min=5))
+    fora = _aluno(db, esc, turmas["manha"], "Fora Do Periodo")
+    db.add(Leitura(escola_id=esc.id, aluno_id=fora.id, livro_id=livro.id,
+                   data=FORA, tempo_leitura_min=99))
+    db.commit()
+
+    # PERÍODO: quem leu fora da janela não entra, nem com limite alto.
+    completo = _podio(_premiar(db, esc, limite=50), "melhor_leitor")
+    nomes = [p["nome"] for p in completo]
+    assert "Fora Do Periodo" not in nomes and "Tarde Unica" in nomes
+
+    # TURMA: o recorte continua sendo o da turma escolhida.
+    so_manha = _podio(_premiar(db, esc, limite=50, turma_id=turmas["manha"].id), "melhor_leitor")
+    assert "Tarde Unica" not in [p["nome"] for p in so_manha]
+    assert len(so_manha) == len(manha)
+
+    # TURNO: a quebra por turno também estende, sem misturar alunos.
+    por_turno = _premiar(db, esc, limite=50, por_turno=True)
+    grupo_tarde = next(g for g in por_turno["turnos"] if g["turno"] == "tarde")
+    leitor_tarde = next(c for c in grupo_tarde["categorias"] if c["chave"] == "melhor_leitor")
+    assert [p["nome"] for p in leitor_tarde["podio"]] == ["Tarde Unica"]
+    grupo_manha = next(g for g in por_turno["turnos"] if g["turno"] == "manha")
+    leitor_manha = next(c for c in grupo_manha["categorias"] if c["chave"] == "melhor_leitor")
+    assert len(leitor_manha["podio"]) == len(manha)
+
+
+def test_endpoint_aceita_limite_e_mantem_o_padrao_em_5(db, cliente, escola_completa):
+    """B) O endpoint oficial serve as duas visões pela MESMA rota."""
+    escola = escola_completa["escola"]
+    resposta = cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?periodo=tudo")
+    assert resposta.status_code == 200
+    for categoria in resposta.json()["categorias"]:
+        assert len(categoria["podio"]) <= 5 and "total" in categoria
+
+    completo = cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?periodo=tudo&limite=50")
+    assert completo.status_code == 200
+    padrao = {c["chave"]: c["podio"] for c in resposta.json()["categorias"]}
+    for categoria in completo.json()["categorias"]:
+        assert categoria["podio"][:len(padrao[categoria["chave"]])] == padrao[categoria["chave"]]
+
+    # Limite fora da faixa é recusado pela própria rota (nada de lista infinita).
+    assert cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?limite=0").status_code == 422
+    assert cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?limite=5000").status_code == 422

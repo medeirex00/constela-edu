@@ -660,13 +660,21 @@ def premiacoes(
     turma_id: int | None = Query(default=None),
     turnos: bool = Query(default=False,
                          description="Quebra os pódios por Turma.turno (só na visão todas as turmas)."),
+    limite: int = Query(default=5, ge=1, le=500,
+                        description="Quantas linhas por pódio. 5 (padrão) é o cartão da tela; "
+                                    "valores maiores servem o ranking completo da MESMA premiação."),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Vencedores de cada categoria de premiação, calculados EXCLUSIVAMENTE com
     os dados do período escolhido (melhor leitor, melhor matemática, mais livros,
     mais tempo). Com ``?turnos=true`` e sem ``turma_id``, devolve também os pódios
-    quebrados por TURNO (`turnos: [{turno, turno_rotulo, categorias}]`)."""
+    quebrados por TURNO (`turnos: [{turno, turno_rotulo, categorias}]`).
+
+    ``?limite=N`` só aumenta o TAMANHO de cada pódio — mesma coorte, mesma régua,
+    mesma ordem, mesmo desempate e as mesmas posições do Top 5, que continua
+    sendo o prefixo da lista. Cada categoria traz ``total``, o número de alunos
+    premiáveis, para a tela saber se ainda há ranking além do que recebeu."""
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(
@@ -678,7 +686,7 @@ def premiacoes(
     dados = svc_premiacoes.premiacoes(
         db, escola_id, ini, fim_dt, turma_id,
         turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
-        por_turno=turnos)
+        por_turno=turnos, limite=limite)
     dados["periodo"] = {"chave": periodo, "rotulo": rotulo,
                         "inicio": ini.isoformat() if ini else None,
                         "fim": fim_dt.isoformat() if fim_dt else None}

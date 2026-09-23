@@ -37,16 +37,20 @@ from app.services import turnos as svc_turnos
 from app.services.evolucao import _series_por_aluno
 
 
-def _podio(valores: dict[int, float], alunos: dict[int, dict], limite: int = 5,
-           desempate: dict[int, tuple] | None = None,
-           extras: dict[int, dict] | None = None) -> list[dict]:
-    """Top N (só quem tem valor > 0), ordenado pelo valor BRUTO.
+def _ordenar(valores: dict[int, float], alunos: dict[int, dict],
+             desempate: dict[int, tuple] | None = None) -> list[tuple[int, float]]:
+    """A ORDEM da premiação — FONTE ÚNICA. Só quem tem valor > 0, pelo valor
+    BRUTO.
 
     O arredondamento (2 casas) é só de exibição: ordenar pelo arredondado
     empataria 3,964 com 3,961 e entregaria a medalha ao desempate. ``desempate``
     opcional é uma cascata secundária por aluno (ex.: estrelas → atividades no
     Matific); depois vem o nome (casefold) e o ``aluno_id``, para a ordem ser
-    determinística e estável. ``extras`` acrescenta campos de auditoria ao item."""
+    determinística e estável.
+
+    O Top 5 e o ranking completo saem DESTA lista: o ranking é o mesmo pódio com
+    mais linhas, nunca uma segunda ordenação. Mudar o critério é mudar aqui — e
+    só aqui."""
     candidatos = [
         (aid, float(valor)) for aid, valor in valores.items()
         if aid in alunos and valor is not None and valor > 0
@@ -57,15 +61,30 @@ def _podio(valores: dict[int, float], alunos: dict[int, dict], limite: int = 5,
         alunos[par[0]]["nome"].casefold(),
         par[0],
     ))
-    podio: list[dict] = []
-    for posicao, (aid, valor) in enumerate(candidatos[:limite], start=1):
+    return candidatos
+
+
+def _itens(ordenados: list[tuple[int, float]], alunos: dict[int, dict], limite: int,
+           extras: dict[int, dict] | None = None) -> list[dict]:
+    """Os ``limite`` primeiros da ordem, com a POSIÇÃO REAL da premiação (1, 2,
+    3…) — pedir 50 em vez de 5 estende a MESMA lista, sem renumerar nada.
+    ``extras`` acrescenta campos de auditoria ao item."""
+    itens: list[dict] = []
+    for posicao, (aid, valor) in enumerate(ordenados[:limite], start=1):
         item = {"aluno_id": aid, "nome": alunos[aid]["nome"],
                 "turma": alunos[aid]["turma"], "valor": round(valor, 2),
                 "posicao": posicao}
         if extras and aid in extras:
             item.update(extras[aid])
-        podio.append(item)
-    return podio
+        itens.append(item)
+    return itens
+
+
+def _podio(valores: dict[int, float], alunos: dict[int, dict], limite: int = 5,
+           desempate: dict[int, tuple] | None = None,
+           extras: dict[int, dict] | None = None) -> list[dict]:
+    """Top N da premiação: ``_ordenar`` + ``_itens`` (mesma ordem, mesma posição)."""
+    return _itens(_ordenar(valores, alunos, desempate), alunos, limite, extras)
 
 
 def _alunos_ativos(db: Session, escola_id: int, ano: int,
@@ -216,9 +235,25 @@ def _matematica_no_periodo(db: Session, escola_id: int, coorte: dict[int, dict],
     return matematica, descricao_regua
 
 
+def _categoria(chave: str, titulo: str, icone: str, descricao: str, unidade: str,
+               valores: dict, alunos: dict[int, dict], limite: int,
+               desempate: dict[int, tuple] | None = None,
+               extras: dict[int, dict] | None = None) -> dict:
+    """Uma categoria: a ordem calculada UMA vez, o pódio (``limite`` linhas) e o
+    ``total`` de premiáveis — é o total que diz à tela se há ranking além do que
+    ela já tem."""
+    ordenados = _ordenar(valores, alunos, desempate)
+    return {"chave": chave, "titulo": titulo, "icone": icone, "descricao": descricao,
+            "unidade": unidade, "total": len(ordenados),
+            "podio": _itens(ordenados, alunos, limite, extras)}
+
+
 def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict,
-                matematica: dict[int, dict]) -> list[dict]:
-    """Os 4 pódios para um conjunto de alunos (o recorte, ou um turno dele)."""
+                matematica: dict[int, dict], limite: int = 5) -> list[dict]:
+    """Os 4 pódios para um conjunto de alunos (o recorte, ou um turno dele).
+
+    ``limite`` é só QUANTAS linhas voltam: 5 no cartão, mais no ranking completo.
+    A ordem, o desempate e o valor de cada linha não mudam com ele."""
     indices = {aid: d["indice"] for aid, d in matematica.items()}
     # Desempate da Matemática: estrelas do período → atividades do período → nome.
     desempate_m = {aid: (d["estrelas"], d["atividades"]) for aid, d in matematica.items()}
@@ -226,26 +261,30 @@ def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict
                          "data_base": d["data_base"], "data_atual": d["data_atual"]}
                    for aid, d in matematica.items()}
     return [
-        {"chave": "melhor_leitor", "titulo": "Melhor Leitor", "icone": "🏆",
-         "descricao": "Mais pontos de dificuldade no período", "unidade": "pontos",
-         "podio": _podio(pontos, alunos)},
-        {"chave": "melhor_matematica", "titulo": "Melhor Matemática", "icone": "🧮",
-         "descricao": "Maior média ajustada de estrelas por atividade no período",
-         "unidade": "estrelas/atividade",
-         "podio": _podio(indices, alunos, desempate=desempate_m, extras=auditoria_m)},
-        {"chave": "mais_livros", "titulo": "Mais Livros Lidos", "icone": "📚",
-         "descricao": "Maior quantidade de livros no período", "unidade": "livros",
-         "podio": _podio(livros, alunos)},
-        {"chave": "mais_tempo", "titulo": "Mais Tempo de Leitura", "icone": "⏱️",
-         "descricao": "Maior tempo dedicado à leitura", "unidade": "min",
-         "podio": _podio(tempo, alunos)},
+        _categoria("melhor_leitor", "Melhor Leitor", "🏆",
+                   "Mais pontos de dificuldade no período", "pontos",
+                   pontos, alunos, limite),
+        _categoria("melhor_matematica", "Melhor Matemática", "🧮",
+                   "Maior média ajustada de estrelas por atividade no período",
+                   "estrelas/atividade", indices, alunos, limite,
+                   desempate=desempate_m, extras=auditoria_m),
+        _categoria("mais_livros", "Mais Livros Lidos", "📚",
+                   "Maior quantidade de livros no período", "livros",
+                   livros, alunos, limite),
+        _categoria("mais_tempo", "Mais Tempo de Leitura", "⏱️",
+                   "Maior tempo dedicado à leitura", "min",
+                   tempo, alunos, limite),
     ]
 
 
 def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
                fim: datetime | None, turma_id: int | None = None,
                turma_ids: list[int] | None = None,
-               por_turno: bool = False) -> dict:
+               por_turno: bool = False, limite: int = 5) -> dict:
+    """Pódios do período. ``limite`` é QUANTAS linhas cada pódio traz — 5 no
+    cartão da tela, mais quando ela pede o ranking completo daquela premiação.
+    Nada além do tamanho da lista muda: mesma coorte, mesma régua, mesma ordem,
+    mesmo desempate, mesmas posições."""
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
     # COORTE COMPLETA da escola (sem turma nem professor): é a base da régua.
@@ -257,7 +296,7 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
     matematica, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
 
     resultado: dict = {
-        "categorias": _categorias(alunos, livros, pontos, tempo, matematica),
+        "categorias": _categorias(alunos, livros, pontos, tempo, matematica, limite),
         "regua_matematica": regua,
     }
 
@@ -270,7 +309,7 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
         resultado["turnos"] = [
             {"turno": turno, "turno_rotulo": svc_turnos.rotulo_turno(turno),
              "total": len(sub),
-             "categorias": _categorias(sub, livros, pontos, tempo, matematica)}
+             "categorias": _categorias(sub, livros, pontos, tempo, matematica, limite)}
             for turno, sub in sorted(grupos.items(), key=lambda kv: svc_turnos.ordem_turno(kv[0]))
         ]
     return resultado
