@@ -20,13 +20,16 @@ Regras do dono (2026-09-21) cobertas aqui:
 import json
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
+from sqlalchemy.orm import Session as SASession
 
 from app.models import (
     Aluno,
     Escola,
     IdentidadeExterna,
     LogAuditoria,
+    Leitura,
+    Livro,
     Matricula,
     RevisaoIdentidade,
     SnapshotElefante,
@@ -36,6 +39,7 @@ from app.models import (
 from app.routers import importacoes as imp
 from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
 from app.services import identidade_aluno as ida
+from app.services import scoring
 from app.services import importacao as svc
 from app.services import matching, matriculas
 from app.services.alunos_fusao import fundir_par
@@ -902,3 +906,347 @@ def test_relatorio_sem_letra_casa_com_a_turma_unica_que_tem_letra(db, escola_com
     assert ctx.sala_efetiva(ida.chave_sala("4 ANO"), "4 ANO") == ida.chave_sala(quarto_a.nome)
     [corr] = _previa(db, esc, "matific", [_matific("TEREZA BATISTA NOGUEIRA", "4 ANO", "u-t")])
     assert (corr["status"], corr["aluno_id"]) == ("exato", tereza.id)
+
+
+# ---------------------------------------------------------------------------
+# RETRATO SUPERADO + ORDEM DA TRANSAÇÃO no /resolver
+#
+# Uma pendência guarda a linha do dia em que foi aberta. Se uma sincronização
+# posterior já gravou o retrato daquele aluno, reaplicar a linha velha não
+# acrescenta nada e ainda retrodata o histórico. O vínculo de identidade, esse
+# sim, continua valendo sempre.
+#
+# E a ordem importa: aplicar PRIMEIRO, fechar DEPOIS — senão uma falha no meio
+# deixa pendência fechada com dado que nunca entrou, sem caminho de volta.
+# ---------------------------------------------------------------------------
+
+def _pendencia(db, esc, *, plataforma="matific", formato="resumo", id_externo="U-1",
+               nome="ALUNO PARCIAL", turma_informada="5ºA", linhas=None,
+               data_referencia="2026-09-22T16:51:00+00:00", candidatos=None):
+    """Insere uma pendência como o coletor a gravaria, com o contexto CONGELADO
+    sob controle do teste (é a data congelada que o resolver compara)."""
+    chave_ident = f"{plataforma}|id:{id_externo}"
+    contexto = {"tipo": "texto", "periodo_inicio": "", "periodo_fim": ""}
+    if data_referencia is not None:
+        contexto["data_referencia"] = data_referencia
+    rev = RevisaoIdentidade(
+        escola_id=esc.id, chave=f"{chave_ident}|{formato}||",
+        chave_identidade=chave_ident, plataforma=plataforma, formato=formato,
+        id_externo=id_externo, nome_recebido=nome, turma_informada=turma_informada,
+        motivo="nome_casa_em_outra_sala", candidatos=candidatos or [],
+        linhas=linhas or [], contexto=contexto, origem="sincronizacao", status="pendente")
+    db.add(rev)
+    db.flush()
+    db.commit()
+    return rev
+
+
+def _resolver(cliente, esc, rev_id, aluno_id):
+    return cliente.post(
+        f"/api/v1/escolas/{esc.id}/importacoes/revisoes/{rev_id}/resolver",
+        json={"aluno_id": aluno_id})
+
+
+def _snaps_matific(db, aluno_id):
+    return db.execute(select(SnapshotMatific).where(SnapshotMatific.aluno_id == aluno_id)
+                      .order_by(SnapshotMatific.id)).scalars().all()
+
+
+def test_retrato_congelado_mais_antigo_nao_rebaixa_o_estado_atual(db, sala, cliente):
+    """1) O congelado é de ONTEM e a sync já gravou o de HOJE: a identidade é
+    resolvida, e o retrato atual fica como está."""
+    esc, admin, heloisa = sala["escola"], sala["admin"], sala["heloisa"]
+    # O que a sincronização de HOJE já gravou.
+    _confirmar(db, esc, admin, "matific",
+               [_matific("HELOISA DEL GIUDICE DE SOUZA FIDELIX", "5ºA", uuid="U-9",
+                         atividades=139, estrelas=580, aluno_id=heloisa.id)])
+    db.commit()
+    atual = _snaps_matific(db, heloisa.id)[-1]
+    assert (atual.atividades, atual.estrelas) == (139, 580)
+
+    # A pendência congelada ONTEM, com números menores.
+    rev = _pendencia(db, esc, id_externo="U-VELHO", nome="HELOISA D",
+                     linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "U-VELHO",
+                              "atividades": 136, "estrelas": 567, "pontuacao_media": 4.17}])
+
+    resp = _resolver(cliente, esc, rev.id, heloisa.id)
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+
+    # Identidade resolvida…
+    assert _dono(db, esc, "matific", "U-VELHO") == heloisa.id
+    rev = db.get(RevisaoIdentidade, rev.id)
+    assert rev.status == "resolvida" and rev.aluno_escolhido_id == heloisa.id
+    # …e o retrato atual intacto: nenhuma linha nova, nenhum número mexido.
+    snaps = _snaps_matific(db, heloisa.id)
+    assert [(s.atividades, s.estrelas) for s in snaps] == [(139, 580)]
+    assert resp.json()["importacoes"] == []
+    # Fica auditado POR QUE não se reaplicou.
+    assert rev.resolucao["dados_superados"]["motivo"] == "snapshot_mais_recente"
+    assert any("superados pela sincronização" in a for a in resp.json()["avisos"])
+
+
+def test_retrato_do_mesmo_dia_nao_muda_o_atual_no_lugar(db, sala, cliente):
+    """2) Mesmo dia UTC: o pipeline atualizaria o retrato NO LUGAR e o valor novo
+    sumiria sem deixar linha. O guarda impede isso."""
+    esc, admin, taufik = sala["escola"], sala["admin"], sala["taufik"]
+    _confirmar(db, esc, admin, "matific",
+               [_matific("TAUFIK DE OLIVEIRA SANTOS", "5ºA", uuid="T-9",
+                         atividades=200, estrelas=800, aluno_id=taufik.id)])
+    db.commit()
+    atual = _snaps_matific(db, taufik.id)[-1]
+    hoje = atual.data_referencia.replace(hour=3, minute=0).isoformat()
+
+    rev = _pendencia(db, esc, id_externo="T-VELHO", nome="TAUFIK D",
+                     data_referencia=hoje,
+                     linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "T-VELHO",
+                              "atividades": 10, "estrelas": 20, "pontuacao_media": 2.0}])
+
+    assert _resolver(cliente, esc, rev.id, taufik.id).status_code == 200
+    db.expire_all()
+    snaps = _snaps_matific(db, taufik.id)
+    assert [(s.atividades, s.estrelas) for s in snaps] == [(200, 800)]   # nada mutado
+    assert db.get(RevisaoIdentidade, rev.id).resolucao["dados_superados"]["motivo"] \
+        == "mesmo_dia_do_snapshot_atual"
+
+
+def test_retrato_sem_data_de_referencia_nao_vira_estado_atual(db, sala, cliente):
+    """3) Sem data congelada o pipeline gravaria com a data de HOJE, e o número
+    velho viraria o estado atual. É o pior caso: nunca reaplicar."""
+    esc, admin, mathias = sala["escola"], sala["admin"], sala["mathias"]
+    _confirmar(db, esc, admin, "matific",
+               [_matific("MATHIAS RICARDO RODRIGUES MARADEI", "5ºA", uuid="M-9",
+                         atividades=90, estrelas=360, aluno_id=mathias.id)])
+    db.commit()
+
+    rev = _pendencia(db, esc, id_externo="M-VELHO", nome="MATHIAS R",
+                     data_referencia=None,
+                     linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "M-VELHO",
+                              "atividades": 5, "estrelas": 10, "pontuacao_media": 2.0}])
+
+    assert _resolver(cliente, esc, rev.id, mathias.id).status_code == 200
+    db.expire_all()
+    assert [(s.atividades, s.estrelas) for s in _snaps_matific(db, mathias.id)] == [(90, 360)]
+    assert db.get(RevisaoIdentidade, rev.id).resolucao["dados_superados"]["motivo"] \
+        == "data_referencia_ausente"
+
+
+def test_leituras_do_elefante_sempre_se_aplicam_e_sao_idempotentes(db, sala, cliente):
+    """4) Leituras ACUMULAM: o guarda não as filtra. A que já existe não duplica,
+    a que falta entra."""
+    esc, admin, heitor = sala["escola"], sala["admin"], sala["heitor"]
+    # Já gravado: uma leitura.
+    _confirmar(db, esc, admin, "elefante", formato="leituras", linhas=[
+        LinhaConfirmacao(nome="HEITOR DE SOUZA LIMA", aluno_id=heitor.id,
+                         dados={"turma_relatorio": "5ºA", "livro": "O gato",
+                                "nivel": "A", "data": "2026-03-02"})])
+    db.commit()
+    antes = db.scalar(select(func.count()).select_from(Leitura)
+                      .where(Leitura.aluno_id == heitor.id))
+    assert antes == 1
+    # Snapshot do Elefante MAIS NOVO que a pendência — mesmo assim leituras entram.
+    _confirmar(db, esc, admin, "elefante",
+               [_elefante("HEITOR DE SOUZA LIMA", "5ºA", sid=7777, livros=1,
+                          aluno_id=heitor.id)])
+    db.commit()
+
+    rev = _pendencia(db, esc, plataforma="elefante", formato="leituras",
+                     id_externo="7777", nome="HEITOR DE SOUZA LIMA",
+                     linhas=[{"turma_relatorio": "5ºA", "livro": "O gato",
+                              "nivel": "A", "data": "2026-03-02",
+                              "elefante_student_id": "7777"},
+                             {"turma_relatorio": "5ºA", "livro": "A lua nova",
+                              "nivel": "A", "data": "2026-03-03",
+                              "elefante_student_id": "7777"}])
+
+    resp = _resolver(cliente, esc, rev.id, heitor.id)
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    # A que faltava entrou; a repetida não duplicou.
+    titulos = sorted(db.execute(select(Livro.titulo).join(
+        Leitura, Leitura.livro_id == Livro.id)
+        .where(Leitura.aluno_id == heitor.id)).scalars())
+    assert titulos == ["A lua nova", "O gato"]
+    assert db.get(RevisaoIdentidade, rev.id).resolucao.get("dados_superados") is None
+    assert resp.json()["importacoes"]           # passou pelo pipeline de verdade
+
+    # Idempotência: reaplicar o MESMO payload não cria leitura nova.
+    rev2 = _pendencia(db, esc, plataforma="elefante", formato="leituras",
+                      id_externo="7777", nome="HEITOR DE SOUZA LIMA",
+                      linhas=list(rev.linhas))
+    assert _resolver(cliente, esc, rev2.id, heitor.id).status_code == 200
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(Leitura)
+                     .where(Leitura.aluno_id == heitor.id)) == 2
+
+
+def test_irmas_da_mesma_chave_sao_fechadas_so_depois_de_todas_aplicadas(db, sala, cliente):
+    """5) Resumo + leituras da MESMA identidade: as duas se aplicam, e o
+    fechamento acontece depois."""
+    esc, maria = sala["escola"], sala["maria"]
+    linhas_resumo = [{"turma_relatorio": "5ºA", "elefante_student_id": "8888",
+                      "livros_unicos": 9, "tempo_leitura_min": 45,
+                      "questoes_tentativas": 6, "questoes_acertos": 5}]
+    rev_a = _pendencia(db, esc, plataforma="elefante", formato="resumo",
+                       id_externo="8888", nome="MARIA CLARA SOUZA",
+                       linhas=linhas_resumo)
+    rev_b = _pendencia(db, esc, plataforma="elefante", formato="leituras",
+                       id_externo="8888", nome="MARIA CLARA SOUZA",
+                       linhas=[{"turma_relatorio": "5ºA", "livro": "O sol",
+                                "nivel": "A", "data": "2026-03-04",
+                                "elefante_student_id": "8888"}])
+
+    resp = _resolver(cliente, esc, rev_a.id, maria.id)
+    assert resp.status_code == 200, resp.text
+    assert sorted(resp.json()["revisoes_resolvidas"]) == sorted([rev_a.id, rev_b.id])
+    db.expire_all()
+    for r in (rev_a, rev_b):
+        atual = db.get(RevisaoIdentidade, r.id)
+        assert atual.status == "resolvida" and atual.aluno_escolhido_id == maria.id
+    # As duas aplicações aconteceram: snapshot do resumo e a leitura.
+    assert _snap_elefante(db, maria.id).livros_unicos >= 1
+    assert db.scalar(select(func.count()).select_from(Leitura)
+                     .where(Leitura.aluno_id == maria.id)) == 1
+    assert len(resp.json()["importacoes"]) == 2
+
+
+def test_falha_no_meio_faz_rollback_de_tudo(db, sala, cliente, monkeypatch):
+    """6) A 2ª aplicação falha: ROLLBACK completo. Nada da 1ª fica gravado,
+    nenhuma irmã fecha, a identidade não é vinculada, a auditoria não sobra —
+    e a nova tentativa conclui sem ninguém mexer no banco."""
+    esc, joao = sala["escola"], sala["joao"]
+    rev_a = _pendencia(db, esc, plataforma="elefante", formato="resumo",
+                       id_externo="9999", nome="JOÃO VÍTOR ARAÚJO",
+                       linhas=[{"turma_relatorio": "5ºA", "elefante_student_id": "9999",
+                                "livros_unicos": 4, "tempo_leitura_min": 20,
+                                "questoes_tentativas": 3, "questoes_acertos": 2}])
+    rev_b = _pendencia(db, esc, plataforma="elefante", formato="leituras",
+                       id_externo="9999", nome="JOÃO VÍTOR ARAÚJO",
+                       linhas=[{"turma_relatorio": "5ºA", "livro": "A chuva",
+                                "nivel": "A", "data": "2026-03-05",
+                                "elefante_student_id": "9999"}])
+    logs_antes = db.scalar(select(func.count()).select_from(LogAuditoria))
+
+    # A falha entra pelo NÚCLEO sem commit — é ele que o resolver chama agora.
+    real = imp._confirmar_sem_commit
+    chamadas = {"n": 0}
+
+    def nucleo_que_falha_na_segunda(**kw):
+        chamadas["n"] += 1
+        if chamadas["n"] == 2:
+            raise RuntimeError("falha simulada na 2ª aplicação")
+        return real(**kw)
+
+    monkeypatch.setattr(imp, "_confirmar_sem_commit", nucleo_que_falha_na_segunda)
+    assert _resolver(cliente, esc, rev_a.id, joao.id).status_code >= 500
+    monkeypatch.undo()
+    assert chamadas["n"] == 2                      # a 1ª rodou, a 2ª estourou
+
+    # Descarta o que ficou na sessão: o que sobreviver aqui é o que foi COMMITADO.
+    db.rollback()
+    db.expire_all()
+
+    # 1+2) nenhuma das duas aplicações ficou persistida
+    assert _snap_elefante(db, joao.id) is None
+    assert db.scalar(select(func.count()).select_from(Leitura)
+                     .where(Leitura.aluno_id == joao.id)) == 0
+    # 3) nenhuma irmã fechada
+    for r in (rev_a, rev_b):
+        atual = db.get(RevisaoIdentidade, r.id)
+        assert atual.status == "pendente", f"revisão {r.id} não devia ter fechado"
+        assert atual.aluno_escolhido_id is None and atual.resolvida_em is None
+    # 4) identidade não ficou vinculada nem pela metade
+    assert _dono(db, esc, "elefante", "9999") is None
+    # 5) auditoria não sobrou: nenhum log novo foi commitado
+    assert db.scalar(select(func.count()).select_from(LogAuditoria)) == logs_antes
+
+    # 6) nova tentativa conclui normalmente
+    resp = _resolver(cliente, esc, rev_a.id, joao.id)
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert db.get(RevisaoIdentidade, rev_b.id).status == "resolvida"
+    assert _dono(db, esc, "elefante", "9999") == joao.id
+    assert _snap_elefante(db, joao.id) is not None
+    assert db.scalar(select(func.count()).select_from(Leitura)
+                     .where(Leitura.aluno_id == joao.id)) == 1
+
+
+def test_duas_irmas_aplicam_e_fecham_num_unico_commit(db, sala, cliente, monkeypatch):
+    """Sucesso: duas irmãs aplicadas, scoring executado, as duas resolvidas — e
+    UM único commit no fluxo inteiro."""
+    esc, heitor = sala["escola"], sala["heitor"]
+    rev_a = _pendencia(db, esc, plataforma="elefante", formato="resumo",
+                       id_externo="4242", nome="HEITOR DE SOUZA LIMA",
+                       linhas=[{"turma_relatorio": "5ºA", "elefante_student_id": "4242",
+                                "livros_unicos": 6, "tempo_leitura_min": 30,
+                                "questoes_tentativas": 4, "questoes_acertos": 3}])
+    rev_b = _pendencia(db, esc, plataforma="elefante", formato="leituras",
+                       id_externo="4242", nome="HEITOR DE SOUZA LIMA",
+                       linhas=[{"turma_relatorio": "5ºA", "livro": "O vento",
+                                "nivel": "A", "data": "2026-03-06",
+                                "elefante_student_id": "4242"}])
+
+    # A rota roda numa sessão PRÓPRIA (conftest `_get_db`), então contar commits
+    # tem de ser por evento do SQLAlchemy, não pelo objeto `db` do teste.
+    commits = {"n": 0}
+
+    def contar_commit(_sessao):
+        commits["n"] += 1
+
+    recalculos = {"n": 0}
+    recalcular_real = scoring.recalcular_escola
+
+    def contar_recalculo(*a, **kw):
+        recalculos["n"] += 1
+        return recalcular_real(*a, **kw)
+
+    monkeypatch.setattr(scoring, "recalcular_escola", contar_recalculo)
+    event.listen(SASession, "after_commit", contar_commit)
+    try:
+        resp = _resolver(cliente, esc, rev_a.id, heitor.id)
+    finally:
+        event.remove(SASession, "after_commit", contar_commit)
+    monkeypatch.undo()
+
+    assert resp.status_code == 200, resp.text
+    assert sorted(resp.json()["revisoes_resolvidas"]) == sorted([rev_a.id, rev_b.id])
+    assert len(resp.json()["importacoes"]) == 2          # as DUAS aplicadas
+    assert commits["n"] == 1, f"esperado 1 commit, houve {commits['n']}"
+    assert recalculos["n"] == 1                          # scoring rodou, uma vez
+    db.expire_all()
+    for r in (rev_a, rev_b):
+        assert db.get(RevisaoIdentidade, r.id).status == "resolvida"
+    assert _dono(db, esc, "elefante", "4242") == heitor.id
+    assert _snap_elefante(db, heitor.id) is not None
+    assert db.scalar(select(func.count()).select_from(Leitura)
+                     .where(Leitura.aluno_id == heitor.id)) == 1
+
+
+def test_identidade_vale_mesmo_quando_o_retrato_e_superado(db, sala, cliente):
+    """7) O gestor decidiu QUEM é — essa decisão vale inteira, inclusive para a
+    próxima sincronização. O que NÃO acontece é o número velho voltar: nenhum
+    snapshot nasce do payload superado."""
+    esc, admin, heloisa = sala["escola"], sala["admin"], sala["heloisa"]
+    _confirmar(db, esc, admin, "matific",
+               [_matific("HELOISA DEL GIUDICE DE SOUZA FIDELIX", "5ºA", uuid="H-NOVO",
+                         atividades=150, estrelas=600, aluno_id=heloisa.id)])
+    db.commit()
+    snaps_antes = len(_snaps_matific(db, heloisa.id))
+
+    rev = _pendencia(db, esc, id_externo="H-VELHO", nome="HELOISA D",
+                     linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "H-VELHO",
+                              "atividades": 1, "estrelas": 2, "pontuacao_media": 2.0}])
+    assert _resolver(cliente, esc, rev.id, heloisa.id).status_code == 200
+    db.expire_all()
+
+    # NENHUM snapshot nasceu do payload superado.
+    assert len(_snaps_matific(db, heloisa.id)) == snaps_antes
+    assert _snaps_matific(db, heloisa.id)[-1].atividades == 150
+
+    # Mas a identidade decidida VALE: o motor casa por ela sem nova revisão.
+    ctx = ida.carregar_contexto(db, esc.id, ANO)
+    d = ida.decidir(ctx, ida.LinhaIdentidade(nome="HELOISA D", plataforma="matific",
+                                             id_externo="H-VELHO", turma_nome="5ºA"))
+    assert d.acao == ida.ASSOCIAR and d.aluno_id == heloisa.id and d.via == "identidade"
+    # E a decisão fica marcada como "dados superados", para auditoria distinguir.
+    assert db.get(RevisaoIdentidade, rev.id).resolucao["dados_superados"]["motivo"]

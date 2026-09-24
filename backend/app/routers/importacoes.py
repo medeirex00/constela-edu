@@ -1599,14 +1599,23 @@ def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str) -> int:
     público e notifica a escola. Ponto ÚNICO de finalização — usado pelo
     /confirmar (recalcular=true) e pelo /recalcular (fim do lote), para os dois
     nunca divergirem no que fazem ao terminar."""
+    n = scoring.recalcular_escola(db, escola_id)
+    _pos_commit_importacao(db, escola_id, corpo=corpo)
+    return n
+
+
+def _pos_commit_importacao(db: Session, escola_id: int, *, corpo: str) -> None:
+    """Efeitos que NÃO pertencem à transação: cache em memória do processo e push
+    para os aparelhos. Ficam DEPOIS do commit de propósito — notificar antes de
+    a transação fechar avisaria sobre dado que pode nem existir, e o próprio
+    ``notificar_escola`` commita ao limpar token morto (o que abriria a transação
+    do chamador no meio). Não é reversível por rollback: é melhor esforço."""
     from app.routers.publico import invalidar_cache_painel
 
-    n = scoring.recalcular_escola(db, escola_id)
     invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
     push.notificar_escola(
         db, escola_id, titulo="Novos dados no Constela Edu",
         corpo=corpo, dados={"tela": "ranking"})
-    return n
 
 
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
@@ -1616,6 +1625,63 @@ def confirmar(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
+    """Aplica a importação e COMMITA. O trabalho em si está em
+    ``_confirmar_sem_commit``; aqui só se fecha a transação, recalcula quando
+    pedido e dispara os efeitos de pós-commit. Quem precisa de uma transação
+    MAIOR (o ``/resolver`` de revisão, que aplica várias irmãs) chama o núcleo
+    direto e commita uma vez só."""
+    nucleo = _confirmar_sem_commit(dados=dados, escola_id=escola_id,
+                                   usuario=usuario, db=db)
+    db.commit()
+
+    # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
+    # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
+    if dados.recalcular:
+        plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
+        _finalizar_importacao(
+            db, escola_id,
+            corpo=f"{nucleo.qtd_alunos} alunos atualizados na {plataforma_nome}. "
+                  "As notas já foram recalculadas.")
+        mensagem = (f"Importação concluída: {nucleo.qtd_alunos} alunos atualizados. "
+                    "Notas recalculadas automaticamente.")
+    else:
+        mensagem = f"{nucleo.qtd_alunos} aluno(s) importado(s)."
+
+    return ImportacaoResultadoOut(
+        mensagem=mensagem,
+        importacao_id=nucleo.importacao_id,
+        qtd_alunos=nucleo.qtd_alunos,
+        qtd_erros=nucleo.qtd_erros,
+        avisos=nucleo.avisos,
+        ignorados=nucleo.ignorados,
+        qtd_revisoes=nucleo.qtd_revisoes,
+    )
+
+
+@dataclass
+class _NucleoImportacao:
+    """O que o núcleo produziu, ainda NÃO commitado."""
+    importacao_id: int
+    qtd_alunos: int
+    qtd_erros: int
+    avisos: list[str]
+    ignorados: list[dict]
+    qtd_revisoes: int
+
+
+def _confirmar_sem_commit(
+    *,
+    dados: ImportacaoConfirm,
+    escola_id: int,
+    usuario: Usuario,
+    db: Session,
+) -> _NucleoImportacao:
+    """TODO o trabalho do /confirmar, SEM commit e SEM efeito externo.
+
+    É aqui que a importação acontece: identidade, turmas, snapshots, leituras,
+    eventos e a fila de revisão. Nada de ``db.commit()`` — quem chama decide
+    quando fechar. Assim o ``/resolver`` aplica várias pendências irmãs e fecha
+    tudo numa transação única: falhou no meio, nada fica."""
     inicio = time.monotonic()
     from app.models import Escola
 
@@ -1822,23 +1888,9 @@ def confirmar(
               entidade="importacao", entidade_id=importacao.id,
               detalhes={"plataforma": dados.plataforma, "tipo": dados.tipo,
                         "alunos": importacao.qtd_alunos, "qtd_avisos": len(avisos)})
-    db.commit()
-
-    # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
-    # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
-    if dados.recalcular:
-        plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
-        _finalizar_importacao(
-            db, escola_id,
-            corpo=f"{importacao.qtd_alunos} alunos atualizados na {plataforma_nome}. "
-                  "As notas já foram recalculadas.")
-        mensagem = (f"Importação concluída: {importacao.qtd_alunos} alunos atualizados. "
-                    "Notas recalculadas automaticamente.")
-    else:
-        mensagem = f"{importacao.qtd_alunos} aluno(s) importado(s)."
-
-    return ImportacaoResultadoOut(
-        mensagem=mensagem,
+    # `importacao.id` já existe: veio do flush lá de cima, não do commit.
+    db.flush()
+    return _NucleoImportacao(
         importacao_id=importacao.id,
         qtd_alunos=importacao.qtd_alunos,
         qtd_erros=importacao.qtd_erros,
@@ -2393,6 +2445,55 @@ def _confirmacao_da_revisao(rev: RevisaoIdentidade, aluno_id: int,
         recalcular=recalcular, sincronizar_turma=False, permitir_criar_turma=False)
 
 
+def _retrato_superado(db: Session, escola_id: int, aluno_id: int,
+                      rev: RevisaoIdentidade) -> dict | None:
+    """O retrato guardado nesta pendência já foi superado pelo que está gravado?
+
+    Uma pendência guarda a linha do dia em que foi aberta. Se uma sincronização
+    posterior já gravou o retrato daquele aluno, reaplicar a linha velha não
+    acrescenta nada e ainda suja o histórico com um ponto retrodatado. Aqui só se
+    DECIDE isso; quem grava snapshot continua sendo o pipeline de importação, com
+    a mesma semântica de sempre (um relatório histórico pode ser registrado sem
+    virar o estado atual, que é sempre o mais recente por ``data_referencia``).
+
+    Só vale para RETRATO. ``leituras`` do Elefante nunca é filtrado: leituras se
+    ACUMULAM e o pipeline já é idempotente (dedup por livro já lido + unicidade
+    ``aluno_id, livro_id``), então reaplicar só acrescenta o que faltava.
+
+    Devolve ``None`` quando o payload deve ser aplicado, ou um dicionário com o
+    motivo (vai para a auditoria e para ``rev.resolucao``). Não compara CONTADORES
+    e não usa ``max()``: a comparação é de DATA, porque retrato é substituível e
+    quem vale é o mais recente — que já está no banco."""
+    if rev.formato == "leituras":
+        return None
+    modelo = SnapshotMatific if rev.plataforma == "matific" else SnapshotElefante
+    snap = _snapshot_atual(db, escola_id, aluno_id, modelo)
+    if snap is None:
+        return None                      # nada gravado: o congelado é o que há
+    congelada_txt = (rev.contexto or {}).get("data_referencia") or ""
+    atual_txt = snap.data_referencia.isoformat() if snap.data_referencia else None
+    base = {"formato": rev.formato, "plataforma": rev.plataforma,
+            "data_congelada": congelada_txt or None, "data_snapshot_atual": atual_txt}
+    try:
+        congelada = datetime.fromisoformat(congelada_txt) if congelada_txt else None
+    except ValueError:
+        congelada = None
+    if congelada is None:
+        # Sem data, o pipeline gravaria com a data de HOJE e a linha velha viraria
+        # o estado atual. É o pior caso: nunca reaplicar.
+        return {**base, "motivo": "data_referencia_ausente"}
+    atual = _sem_fuso(snap.data_referencia)
+    congelada = _sem_fuso(congelada)
+    if _mesmo_dia(snap.data_referencia, congelada):
+        # Mesmo dia: o pipeline atualizaria o retrato NO LUGAR, e o valor novo
+        # desapareceria sem deixar linha no histórico. É o caso mais perigoso,
+        # por isso é diagnosticado ANTES do simples "mais recente".
+        return {**base, "motivo": "mesmo_dia_do_snapshot_atual"}
+    if atual > congelada:
+        return {**base, "motivo": "snapshot_mais_recente"}
+    return None
+
+
 @router.post("/revisoes/{revisao_id}/resolver", response_model=ResolucaoRevisaoOut)
 def resolver_revisao(
     revisao_id: int,
@@ -2406,9 +2507,13 @@ def resolver_revisao(
 
     1. a identidade externa da linha passa a apontar para o aluno escolhido (se
        estava em outra ficha, é transferida — e isso fica auditado);
-    2. a pendência (e as irmãs da MESMA identidade, ex.: resumo + leituras) é
-       marcada como resolvida, com quem decidiu e quando;
-    3. os dados guardados são aplicados pelo pipeline normal de importação;
+    2. os dados guardados são aplicados pelo pipeline normal de importação —
+       menos o RETRATO já superado por uma sincronização posterior, que fica
+       registrado como tal em vez de ressuscitar números velhos
+       (``_retrato_superado``); ``leituras`` sempre se aplica, porque acumula;
+    3. SÓ ENTÃO a pendência (e as irmãs da MESMA identidade, ex.: resumo +
+       leituras) é marcada como resolvida, com quem decidiu e quando. Falhar no
+       meio deixa tudo pendente e o gestor tenta de novo pela tela;
     4. a próxima sincronização casa pela identidade e não recria a duplicata.
     Nunca funde fichas."""
     if (corpo.aluno_id is None) == (corpo.criar_em_turma_id is None):
@@ -2480,6 +2585,44 @@ def resolver_revisao(
             RevisaoIdentidade.id != rev.id)
         .order_by(RevisaoIdentidade.id)).scalars().all()
     resolvidas = [rev, *irmas]
+
+    # RETRATO SUPERADO: o payload congelado de um resumo pode ser mais ANTIGO que
+    # o que a sincronização já gravou. Aí o que importa é o vínculo de identidade
+    # — ressuscitar a foto velha só sujaria o histórico. Leituras nunca entram
+    # aqui: acumulam e o pipeline deduplica.
+    superadas: dict[int, dict] = {}
+    com_dados: list[RevisaoIdentidade] = []
+    for r in resolvidas:
+        if not r.linhas:
+            continue
+        motivo_superado = _retrato_superado(db, escola_id, aluno.id, r)
+        if motivo_superado is None:
+            com_dados.append(r)
+        else:
+            superadas[r.id] = motivo_superado
+            avisos.append(
+                f"Os dados guardados nesta pendência ({r.plataforma}/{r.formato}) já "
+                "foram superados pela sincronização: só o vínculo de identidade foi "
+                "aplicado, e o retrato atual do aluno ficou como estava.")
+
+    # UMA TRANSAÇÃO SÓ: vincula a identidade, aplica TODAS as irmãs, recalcula e
+    # só então fecha as pendências — tudo no mesmo BEGIN. Por isso se chama o
+    # NÚCLEO do /confirmar (`_confirmar_sem_commit`) e não a rota: a rota commita
+    # a cada chamada, e um erro na 2ª irmã deixaria a 1ª gravada para sempre.
+    # Falhou em qualquer ponto -> ROLLBACK e tudo continua pendente.
+    importacoes: list[int] = []
+    for r in com_dados:
+        conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
+        nucleo = _confirmar_sem_commit(dados=conf, escola_id=escola_id,
+                                       usuario=usuario, db=db)
+        importacoes.append(nucleo.importacao_id)
+        avisos.extend(nucleo.avisos)
+
+    # Recálculo DENTRO da transação (uma vez só, no fim das irmãs, e não a cada
+    # uma): `commit=False` deixa o fechamento para o commit único lá embaixo.
+    if com_dados:
+        scoring.recalcular_escola(db, escola_id, commit=False)
+
     momento = agora()
     for r in resolvidas:
         r.status = "resolvida"
@@ -2488,24 +2631,25 @@ def resolver_revisao(
         r.resolvida_em = momento
         r.resolucao = {"acao": acao, "aluno_id": aluno.id,
                        "revisao_origem": rev.id}
+        if r.id in superadas:
+            r.resolucao["dados_superados"] = superadas[r.id]
         registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
                   detalhes={"revisao_id": r.id, "plataforma": r.plataforma,
                             "formato": r.formato, "motivo": r.motivo, "acao": acao,
                             "nome_recebido": r.nome_recebido,
+                            "dados_superados": superadas.get(r.id),
                             "candidatos": [c.get("aluno_id") for c in (r.candidatos or [])]})
-    db.flush()
+    db.commit()                      # <- ÚNICO commit de todo o fluxo
 
-    # Aplica os dados guardados (o /confirmar commita). A última pendência recalcula.
-    importacoes: list[int] = []
-    com_dados = [r for r in resolvidas if r.linhas]
-    if not com_dados:
-        db.commit()
-    for i, r in enumerate(com_dados):
-        conf = _confirmacao_da_revisao(r, aluno.id, recalcular=(i == len(com_dados) - 1))
-        resultado = confirmar(dados=conf, escola_id=escola_id, usuario=usuario, db=db)
-        importacoes.append(resultado.importacao_id)
-        avisos.extend(resultado.avisos)
+    # DEPOIS do commit: cache do painel e push. Fora da transação de propósito —
+    # avisar a escola sobre dado que ainda pode sofrer rollback seria mentira, e
+    # o próprio push commita ao limpar token morto.
+    if com_dados:
+        _pos_commit_importacao(
+            db, escola_id,
+            corpo=f"{aluno.nome} teve os dados da plataforma atualizados. "
+                  "As notas já foram recalculadas.")
     db.refresh(rev)
     return ResolucaoRevisaoOut(
         revisao=_revisao_out(rev), aluno_id=aluno.id,

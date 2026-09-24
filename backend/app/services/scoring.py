@@ -1367,8 +1367,14 @@ def _notas_institucionais(matriculas, matific, elefante,
     return notas
 
 
-def recalcular_escola(db: Session, escola_id: int) -> int:
-    """Recalcula todas as notas e o ranking da escola. Retorna nº de alunos."""
+def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> int:
+    """Recalcula todas as notas e o ranking da escola. Retorna nº de alunos.
+
+    ``commit=False`` deixa o COMMIT para quem chamou — é o que permite ao
+    ``/resolver`` de revisão aplicar dados, recalcular e fechar a pendência numa
+    transação ÚNICA. A fórmula, a ordem e o que é gravado não mudam: muda só QUEM
+    confirma. Chamador que não passa nada continua com o commit de sempre, e a
+    trava de recálculo cai junto com a transação do chamador."""
     # PRIMEIRA linha, antes de QUALQUER leitura que entre no cálculo: daqui até
     # o `db.commit()` do fim, esta escola é só desta transação. Sem isso, dois
     # recálculos sobrepostos leem o mesmo estado e gravam um por cima do outro
@@ -1607,5 +1613,10 @@ def recalcular_escola(db: Session, escola_id: int) -> int:
         # `Nota.calculada_em`.)
         nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        # Sem commit: garante que o UPDATE/INSERT já foi ao banco (a trava segue
+        # válida) e deixa o fechamento da transação com quem chamou.
+        db.flush()
     return len(resultados)
