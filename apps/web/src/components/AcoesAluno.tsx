@@ -2,12 +2,14 @@
  * Ações de gestão de UM aluno, reutilizáveis em qualquer tela (lista de
  * Alunos, ficha do aluno): menu ⋮ com Visualizar, Editar dados (nome,
  * nº de chamada, nascimento, observações E turma), Arquivar/Reativar,
+ * Marcar como transferido (saiu da escola — o histórico fica preservado),
  * Excluir (reversível) e Excluir permanentemente (dupla confirmação).
  * Usa os endpoints já existentes do painel da turma.
  */
 import {
   Archive,
   Eye,
+  LogOut,
   Merge,
   Pencil,
   RotateCcw,
@@ -49,7 +51,7 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
   const [erroAcao, setErroAcao] = useState("");
   const inativo = aluno.status !== "ativo";
 
-  async function acaoStatus(acao: "arquivar" | "reativar" | "excluir") {
+  async function acaoStatus(acao: "arquivar" | "reativar" | "excluir" | "marcar_transferido") {
     setOcupado(true);
     setErro("");
     setErroAcao("");
@@ -117,8 +119,14 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
                     <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar"
                               onClick={escolher(() => acaoStatus("reativar"))} />
                   ) : (
-                    <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar"
-                              onClick={escolher(() => acaoStatus("arquivar"))} />
+                    <>
+                      <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar"
+                                onClick={escolher(() => acaoStatus("arquivar"))} />
+                      {/* Saiu da escola: some das visões, o histórico fica, e a
+                          reimportação da Lista Piloto não o traz de volta sozinha. */}
+                      <ItemMenu icone={<LogOut size={15} />} rotulo="Marcar como transferido"
+                                onClick={escolher(() => acaoStatus("marcar_transferido"))} />
+                    </>
                   )}
                   <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
                   <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva

@@ -241,9 +241,13 @@ class AlunoGestaoOut(ORMModel):
 
 class AcaoAlunos(BaseModel):
     """Ação em massa (ou individual) sobre alunos: arquivar, reativar, excluir
-    (lógico) ou transferir de turma."""
+    (lógico), marcar como transferido (saiu da escola) ou transferir de turma.
+
+    Cuidado com os dois "transferir": ``transferir`` move o aluno para outra
+    TURMA desta escola; ``marcar_transferido`` registra que ele saiu da ESCOLA."""
     aluno_ids: list[int] = Field(min_length=1)
-    acao: str = Field(pattern="^(arquivar|reativar|excluir|transferir)$")
+    acao: str = Field(
+        pattern="^(arquivar|reativar|excluir|transferir|marcar_transferido)$")
     turma_id: int | None = None  # obrigatório quando acao == "transferir"
 
 

@@ -434,7 +434,8 @@ def atualizar_aluno(
     return saida
 
 
-_STATUS_ACAO = {"arquivar": "arquivado", "reativar": "ativo", "excluir": "excluido"}
+_STATUS_ACAO = {"arquivar": "arquivado", "reativar": "ativo", "excluir": "excluido",
+                "marcar_transferido": "transferido"}
 
 
 @router.post("/alunos/acoes", response_model=dict)
@@ -444,8 +445,14 @@ def acoes_em_alunos(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    """Ações em massa (ou individual): arquivar, reativar, excluir (lógico) e
-    transferir de turma. Ao final recalcula notas/rankings e invalida o cache."""
+    """Ações em massa (ou individual): arquivar, reativar, excluir (lógico),
+    marcar como transferido (saiu da escola) e transferir de turma. Ao final
+    recalcula notas/rankings e invalida o cache.
+
+    Nenhuma delas apaga histórico: matrículas, leituras, eventos e snapshots
+    continuam no banco. O que muda é o status da ficha, e todo filtro de visão
+    usa ``status == "ativo"`` — por isso o aluno some dos rankings sem sumir
+    do banco, e "Reativar" desfaz qualquer uma delas."""
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
     ids = [a.id for a in alunos]
     ano = _ano_ativo(db, escola_id)
@@ -481,7 +488,8 @@ def acoes_em_alunos(
         registrar(db, f"aluno.{dados.acao}", escola_id=escola_id, usuario_id=usuario.id,
                   entidade="aluno", detalhes={"alunos": ids, "status": novo_status})
         rotulos = {"arquivar": "arquivado(s)", "reativar": "reativado(s)",
-                   "excluir": "excluído(s)"}
+                   "excluir": "excluído(s)",
+                   "marcar_transferido": "marcado(s) como transferido(s)"}
         mensagem = f"{len(ids)} aluno(s) {rotulos[dados.acao]}."
         recalcular = True  # muda o conjunto de alunos ativos → rankings mudam
 

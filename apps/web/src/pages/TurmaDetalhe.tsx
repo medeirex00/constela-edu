@@ -16,6 +16,7 @@ import {
   Calculator,
   Clock,
   Eye,
+  LogOut,
   Pencil,
   Rocket,
   RotateCcw,
@@ -69,6 +70,7 @@ const STATUS_BADGE: Record<string, { tom: "neutro" | "alerta"; texto: string }> 
   arquivado: { tom: "neutro", texto: "Arquivado" },
   excluido: { tom: "alerta", texto: "Na lixeira" },
   fora_lista_piloto: { tom: "alerta", texto: "Fora da lista piloto" },
+  transferido: { tom: "neutro", texto: "Transferido" },
 };
 
 type Acao =
@@ -96,7 +98,11 @@ function MenuAcoes({ aluno, aoEscolher }: {
             {inativo ? (
               <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar" onClick={escolher("reativar")} />
             ) : (
-              <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar" onClick={escolher("arquivar")} />
+              <>
+                <ItemMenu icone={<Archive size={15} />} rotulo="Arquivar" onClick={escolher("arquivar")} />
+                <ItemMenu icone={<LogOut size={15} />} rotulo="Marcar como transferido"
+                          onClick={escolher("marcar_transferido")} />
+              </>
             )}
             <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
             <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva onClick={escolher("excluir")} />
@@ -193,12 +199,14 @@ export default function TurmaDetalhe() {
   }
 
   /** Ação de status/transferência (individual ou em massa). */
-  function aplicarAcao(tipo: "arquivar" | "reativar" | "excluir" | "transferir", ids: number[], turmaId?: number) {
+  function aplicarAcao(tipo: "arquivar" | "reativar" | "excluir" | "transferir" | "marcar_transferido",
+                       ids: number[], turmaId?: number) {
     const rotulos = {
       arquivar: "Aluno(s) arquivado(s).",
       reativar: "Aluno(s) reativado(s).",
       excluir: "Aluno(s) excluído(s).",
-      transferir: "Aluno(s) transferido(s).",
+      transferir: "Aluno(s) transferido(s) de turma.",
+      marcar_transferido: "Aluno(s) marcado(s) como transferido(s). O histórico segue preservado.",
     };
     executar(`/escolas/${escolaId}/alunos/acoes`,
       { aluno_ids: ids, acao: tipo, turma_id: turmaId ?? null }, rotulos[tipo]);
@@ -234,7 +242,8 @@ export default function TurmaDetalhe() {
     if (escolha === "excluir") return setAcao({ tipo: "excluir", ids: [aluno.id], rotulo: aluno.nome });
     if (escolha === "permanente") return setAcao({ tipo: "permanente", ids: [aluno.id], rotulo: aluno.nome });
     // arquivar / reativar são reversíveis → aplica direto
-    if (escolha === "arquivar" || escolha === "reativar") aplicarAcao(escolha, [aluno.id]);
+    if (escolha === "arquivar" || escolha === "reativar" || escolha === "marcar_transferido")
+      aplicarAcao(escolha, [aluno.id]);
   }
 
   const lista = alunos ?? [];

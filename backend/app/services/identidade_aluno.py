@@ -47,7 +47,7 @@ REVISAR = "revisar"     # há candidato(s), nenhum seguro: não associa, não cr
 CRIAR = "criar"         # nenhum candidato plausível: ficha nova
 IGNORAR = "ignorar"     # entrada inválida (aluno de outra escola/excluído)
 
-STATUS_INATIVOS = ("arquivado", "fora_lista_piloto")
+STATUS_INATIVOS = ("arquivado", "fora_lista_piloto", "transferido")
 
 # Campo de ``dados`` que carrega o id do aluno em cada plataforma.
 CAMPO_ID_EXTERNO = {"matific": "matific_uuid", "elefante": "elefante_student_id"}

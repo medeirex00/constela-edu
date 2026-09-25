@@ -441,6 +441,19 @@ def arbitrar_disputa(decisao: Decisao, disputados: set[int]) -> Decisao:
     return decisao
 
 
+def aviso_transferido(nome: str, turma: str) -> str:
+    """A planilha traz um aluno que a escola marcou como TRANSFERIDO.
+
+    Continuar na lista é o normal: a planilha costuma manter a linha e anotar a
+    movimentação numa coluna própria, que esta importação não interpreta. Então
+    a linha é aplicada (nome, ficha, turma) mas o status NÃO volta para ativo."""
+    return (f"“{nome}” (turma {turma}) consta na planilha, mas está marcado como "
+            "TRANSFERIDO nesta escola — a importação NÃO o trouxe de volta para a "
+            "população ativa, para não desfazer essa decisão sozinha. Os dados "
+            "dele continuam preservados. Se a criança de fato retornou, use "
+            "Alunos › Reativar; a planilha, por si só, não é prova de retorno.")
+
+
 def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:
     return (f"“{nome_linha}” (turma {turma}) parece ser o mesmo aluno de: "
             f"{nomes_candidatos} — mas a correspondência NÃO é segura. Nada foi "

@@ -2236,7 +2236,15 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             existente.data_nascimento = nasc
         if parsed.ficha:
             existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
-        if existente.status != "ativo":
+        if existente.status == "transferido":
+            # SAIU DA ESCOLA, por decisão de um gestor. Quem saiu normalmente
+            # CONTINUA na planilha — a movimentação fica numa coluna que este
+            # importador não interpreta —, então reativar "porque consta na
+            # lista" desfaria a decisão a cada envio, em silêncio. Aqui a
+            # importação não toca no status e AVISA: se a criança voltou mesmo,
+            # o caminho é Reativar explicitamente, com auditoria.
+            res.avisos.append(matriculas.aviso_transferido(existente.nome, turma.nome))
+        elif existente.status != "ativo":
             # Consta na lista atual → reativa (inclusive quem estava
             # "fora_lista_piloto" numa importação anterior).
             existente.status = "ativo"

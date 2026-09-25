@@ -139,6 +139,7 @@ const STATUS_FICHA: Record<string, { texto: string; tom: "ok" | "alerta" | "neut
   arquivado: { texto: "Ficha arquivada", tom: "alerta" },
   fora_lista_piloto: { texto: "Fora da Lista Piloto", tom: "alerta" },
   excluido: { texto: "Ficha excluída", tom: "neutro" },
+  transferido: { texto: "Transferido (saiu da escola)", tom: "alerta" },
 };
 
 /** O que o gestor precisa decidir em cada motivo (o motivo em si vem do backend). */
