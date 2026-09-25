@@ -473,6 +473,18 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
                     ctx, linha, chave, dono.id, chave_alt):
                 return Decisao(REVISAR, dono.id, "identidade", "identidade_de_ficha_inativa",
                                (dono.id,), chave_sala=chave)
+            # DUAS CONTAS NA MESMA FICHA: a mesma trava que todo caminho por NOME
+            # já aplica (``_para_aluno``) vale também quando se chega pela
+            # identidade. Sem ela, as duas contas viram ASSOCIAR para a MESMA
+            # ficha e o retrato de uma sobrescreve o da outra em silêncio — o
+            # importador guarda só a ÚLTIMA linha do aluno, e a reimportação do
+            # mesmo dia ainda muta o snapshot no lugar. Não há como somar nem
+            # escolher: qual conta é a criança é decisão de gente.
+            outras = ctx.ids_do_aluno.get((dono.id, linha.plataforma), set()) - {linha.id_externo}
+            if outras:
+                return Decisao(REVISAR, dono.id, "identidade",
+                               "outra_identidade_na_plataforma", (dono.id,),
+                               chave_sala=chave)
             return Decisao(ASSOCIAR, dono.id, "identidade", candidatos=(dono.id,),
                            chave_sala=chave)
 

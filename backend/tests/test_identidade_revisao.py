@@ -1223,9 +1223,14 @@ def test_duas_irmas_aplicam_e_fecham_num_unico_commit(db, sala, cliente, monkeyp
 
 
 def test_identidade_vale_mesmo_quando_o_retrato_e_superado(db, sala, cliente):
-    """7) O gestor decidiu QUEM é — essa decisão vale inteira, inclusive para a
-    próxima sincronização. O que NÃO acontece é o número velho voltar: nenhum
-    snapshot nasce do payload superado."""
+    """7) O gestor decidiu QUEM é — a identidade fica vinculada à ficha escolhida
+    e o número velho NÃO volta: nenhum snapshot nasce do payload superado.
+
+    ATUALIZADO (colisão de identidades): resolver esta pendência deixa a ficha com
+    DUAS contas Matific, e a partir daí a próxima sincronização NÃO associa
+    sozinha — ela abre revisão. O gestor decidiu QUEM é a criança; ninguém decidiu
+    QUAIS números valem, e aplicar um dos dois sobrescreveria o outro em silêncio.
+    Era exatamente assim que a ficha da Allyce (139 atividades × 3) perdia dado."""
     esc, admin, heloisa = sala["escola"], sala["admin"], sala["heloisa"]
     _confirmar(db, esc, admin, "matific",
                [_matific("HELOISA DEL GIUDICE DE SOUZA FIDELIX", "5ºA", uuid="H-NOVO",
@@ -1243,10 +1248,20 @@ def test_identidade_vale_mesmo_quando_o_retrato_e_superado(db, sala, cliente):
     assert len(_snaps_matific(db, heloisa.id)) == snaps_antes
     assert _snaps_matific(db, heloisa.id)[-1].atividades == 150
 
-    # Mas a identidade decidida VALE: o motor casa por ela sem nova revisão.
+    # A identidade decidida VALE — o motor sabe de quem ela é (aluno_id certo,
+    # via "identidade", nenhum candidato inventado) — mas não aplica sozinha,
+    # porque a ficha ficou com duas contas da mesma plataforma.
     ctx = ida.carregar_contexto(db, esc.id, ANO)
+    assert ctx.identidade[("matific", "H-VELHO")] == heloisa.id
     d = ida.decidir(ctx, ida.LinhaIdentidade(nome="HELOISA D", plataforma="matific",
                                              id_externo="H-VELHO", turma_nome="5ºA"))
-    assert d.acao == ida.ASSOCIAR and d.aluno_id == heloisa.id and d.via == "identidade"
+    assert d.acao == ida.REVISAR and d.aluno_id == heloisa.id and d.via == "identidade"
+    assert d.motivo == "outra_identidade_na_plataforma"
+    # A conta com UMA identidade só segue associando normalmente.
+    d_ok = ida.decidir(ctx, ida.LinhaIdentidade(nome="TAUFIK DE OLIVEIRA SANTOS",
+                                                plataforma="matific",
+                                                turma_nome="5ºA"))
+    assert d_ok.acao in (ida.ASSOCIAR, ida.REVISAR)   # não é afetada pela colisão
+    assert d_ok.motivo != "outra_identidade_na_plataforma"
     # E a decisão fica marcada como "dados superados", para auditoria distinguir.
     assert db.get(RevisaoIdentidade, rev.id).resolucao["dados_superados"]["motivo"]
