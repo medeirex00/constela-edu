@@ -502,6 +502,44 @@ function Linha({ rotulo, children }: { rotulo: string; children: ReactNode }) {
   );
 }
 
+/** A ficha já tem OUTRA conta da mesma plataforma.
+ *
+ * Aqui vincular não é só "dizer de quem é a linha": é escolher qual das duas
+ * contas vai alimentar a ficha. A sincronização aplica UMA por vez, então a
+ * conta que não for vinculada deixa de aparecer no retrato do aluno — e o
+ * gestor precisa saber disso ANTES de clicar, não depois. Nada é bloqueado: a
+ * decisão continua sendo dele. */
+function AvisoDuasContas({ plataforma }: { plataforma: string }) {
+  return (
+    <div
+      role="note"
+      aria-label="Atenção: duas contas da mesma plataforma"
+      className="mt-3 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100"
+    >
+      <p className="font-semibold">Atenção: esta ficha tem duas contas no {plataforma}.</p>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+        <li>
+          Vincular esta conta faz os dados <strong>dela</strong> valerem para o aluno. Os
+          da outra conta continuam guardados, mas deixam de aparecer no retrato.
+        </li>
+        <li>
+          Confirme na própria plataforma que esta conta é <strong>desta criança</strong> —
+          pelo nome completo e pelo login, não pelo nome abreviado do relatório.
+        </li>
+        <li>
+          Ter mais atividades ou mais estrelas <strong>não</strong> prova que a conta é a
+          certa. Duas contas da mesma criança dividem o trabalho dela entre as duas.
+        </li>
+        <li>
+          Na dúvida, <strong>deixe pendente</strong>. Nada se perde enquanto a revisão
+          estiver aberta, e o ideal é primeiro juntar ou desativar a conta duplicada na
+          plataforma.
+        </li>
+      </ul>
+    </div>
+  );
+}
+
 function Bloco({ titulo, children }: { titulo: string; children: ReactNode }) {
   return (
     <section aria-label={titulo} className="space-y-2">
@@ -630,6 +668,9 @@ function DetalheRevisao({
             <p className="font-medium">Motivo: {rev.motivo_texto || rev.motivo}</p>
             {orientacao && pendente && <p className="mt-1 text-xs">{orientacao}</p>}
           </div>
+          {rev.motivo === "outra_identidade_na_plataforma" && pendente && (
+            <AvisoDuasContas plataforma={NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma} />
+          )}
         </Card>
       </Bloco>
 

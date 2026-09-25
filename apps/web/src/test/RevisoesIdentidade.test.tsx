@@ -630,3 +630,73 @@ describe("Revisões de identidade — detalhe", () => {
     expect(await screen.findByText("Nenhuma pendência")).toBeInTheDocument();
   });
 });
+
+// Duas contas da MESMA plataforma na MESMA ficha: aqui vincular não é só dizer
+// de quem é a linha — é escolher qual conta vai alimentar o aluno. A tela avisa
+// ANTES do clique, sem tirar do gestor a decisão.
+describe("Revisões de identidade — aviso de duas contas na mesma ficha", () => {
+  const duasContas = () =>
+    revisaoFake({
+      motivo: "outra_identidade_na_plataforma",
+      motivo_texto: "o aluno encontrado já tem outra conta nesta plataforma",
+      candidatos: [
+        { aluno_id: 31, nome: "ALLYCE CRISTINA BARBOSA DE ALMEIDA", status: "ativo", turma: "5ºB" },
+      ],
+    });
+
+  it("explica a consequência, o que confirmar e que volume não é prova", async () => {
+    const u = userEvent.setup();
+    filaMock([duasContas()]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const aviso = within(dialogo).getByRole("note", {
+      name: "Atenção: duas contas da mesma plataforma",
+    });
+
+    expect(within(aviso).getByText(/esta ficha tem duas contas no Matific/i)).toBeInTheDocument();
+    // 1. a consequência de vincular
+    expect(within(aviso).getByText(/deixam de aparecer no retrato/i)).toBeInTheDocument();
+    // 2. o que o gestor precisa confirmar, e onde
+    expect(within(aviso).getByText(/pelo nome completo e pelo login/i)).toBeInTheDocument();
+    // 3. volume não é identidade
+    expect(within(aviso).getByText(/Ter mais atividades ou mais estrelas/i)).toBeInTheDocument();
+    expect(within(aviso).getByText(/prova que a conta é a\s*certa/i)).toBeInTheDocument();
+    // 4. na dúvida, deixar pendente
+    expect(within(aviso).getByText(/deixe pendente/i)).toBeInTheDocument();
+  });
+
+  it("não bloqueia a decisão: o botão de vincular continua disponível", async () => {
+    const u = userEvent.setup();
+    filaMock([duasContas()]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    expect(
+      within(dialogo).getByRole("button", {
+        name: "Vincular este aluno: ALLYCE CRISTINA BARBOSA DE ALMEIDA",
+      }),
+    ).toBeEnabled();
+  });
+
+  it("o aviso é só deste motivo — outras revisões não o mostram", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake()]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    expect(
+      within(dialogo).queryByRole("note", { name: "Atenção: duas contas da mesma plataforma" }),
+    ).toBeNull();
+  });
+
+  it("revisão já resolvida não mostra o aviso (não há mais o que decidir)", async () => {
+    const u = userEvent.setup();
+    filaMock([{ ...duasContas(), status: "resolvida", aluno_escolhido_id: 31,
+                resolvida_por_id: 1, resolvida_em: "2026-09-25T09:00:00",
+                resolucao: { acao: "associar", aluno_id: 31, revisao_origem: 7 } }]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await u.selectOptions(await screen.findByLabelText("Situação"), "todas");
+    const dialogo = await abrirDetalhe(u);
+    expect(
+      within(dialogo).queryByRole("note", { name: "Atenção: duas contas da mesma plataforma" }),
+    ).toBeNull();
+  });
+});
