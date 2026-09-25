@@ -352,3 +352,57 @@ def test_15_acao_desconhecida_continua_recusada(cliente, db, escola_completa):
     _confirmar(cliente, escola_id, LISTA)
     clara = _por_nome(db, escola_id, "CLARA MENEZES ROCHA")
     assert _acao(cliente, escola_id, "transferido", [clara.id]).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 6. CARACTERIZAÇÃO: o que acontece quando a identidade JÁ foi decidida por gente
+# ---------------------------------------------------------------------------
+# Descoberto verificando produção, não aqui: o teste 11 cobria só a ficha SEM
+# decisão humana anterior. Quando um gestor já resolveu a pendência daquela
+# identidade, o passo 1 do motor dispensa a trava de ficha inativa (a isenção
+# existe para uma pendência resolvida não reabrir para sempre). Então a linha é
+# ASSOCIADA — o dado entra no histórico da própria criança.
+#
+# Isso é aceitável e está travado aqui de propósito, com as duas metades:
+#   (a) o dado vai para o histórico dela, e
+#   (b) o status NÃO volta para ativo — ela continua fora de toda visão.
+# Transformar isto em REVISAR criaria uma pendência que o gestor não consegue
+# encerrar (descartar não registra escolha, então voltaria a cada sync). Se um
+# dia isso mudar, que seja mudança DELIBERADA de contrato, não surpresa.
+
+def test_16_identidade_ja_decidida_por_gente_associa_mas_nao_reativa(
+        cliente, db, escola_completa):
+    escola_id, clara_id = _cenario(cliente, db, escola_completa)
+    db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=clara_id,
+                             plataforma="matific", id_externo="uuid-clara"))
+    db.commit()
+
+    ctx = ida.carregar_contexto(db, escola_id, ANO)
+    linha = ida.LinhaIdentidade(plataforma="matific", nome="CLARA MENEZES ROCHA",
+                                id_externo="uuid-clara", turma_nome="3º Ano B")
+    # Sem decisão humana registrada, a trava de ficha inativa vale.
+    assert ida.decidir(ctx, linha).acao == ida.REVISAR
+
+    # Com a decisão humana registrada (pendência resolvida escolhendo esta
+    # ficha), o motor associa — e é isso que produção mostrou.
+    rev = RevisaoIdentidade(
+        escola_id=escola_id, chave="matific|id:uuid-clara|resumo||",
+        chave_identidade="matific|id:uuid-clara", plataforma="matific",
+        formato="resumo", id_externo="uuid-clara", nome_recebido="CLARA MENEZES ROCHA",
+        turma_informada="3º Ano B", motivo="ficha_inativa",
+        candidatos=[{"aluno_id": clara_id, "nome": "CLARA MENEZES ROCHA"}],
+        linhas=[], contexto={}, origem="sincronizacao", status="resolvida",
+        aluno_escolhido_id=clara_id)
+    db.add(rev)
+    db.commit()
+
+    ctx = ida.carregar_contexto(db, escola_id, ANO)
+    decisao = ida.decidir(ctx, linha)
+    assert decisao.acao == ida.ASSOCIAR, decisao
+    assert decisao.aluno_id == clara_id
+
+    # E A METADE QUE IMPORTA: associar não devolve ninguém à população ativa.
+    # O único ponto do sistema que escreve status="ativo" é a Lista Piloto, e
+    # lá a trava de "transferido" já barra.
+    db.expire_all()
+    assert db.get(Aluno, clara_id).status == "transferido"
