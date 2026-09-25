@@ -151,6 +151,23 @@ class ResolverRevisaoIn(BaseModel):
     criar_em_turma_id: int | None = None
 
 
+class DefinirIdentidadeEfetivaIn(BaseModel):
+    """CONTA DUPLICADA: qual conta da plataforma vale para este aluno.
+
+    As demais ficam APOSENTADAS — preservadas, mas fora da importação e da
+    pontuação. Decisão interna do Constela; nada muda na plataforma externa."""
+    aluno_id: int
+    id_externo_efetivo: str = Field(min_length=1, max_length=80)
+    aposentar: list[str] = Field(default_factory=list)
+    motivo: str = Field(min_length=3, max_length=300)
+
+
+class ReativarIdentidadeIn(BaseModel):
+    aluno_id: int
+    id_externo: str = Field(min_length=1, max_length=80)
+    motivo: str = Field(min_length=3, max_length=300)
+
+
 class DescartarRevisaoIn(BaseModel):
     motivo: str = Field(default="", max_length=300)
 

@@ -700,3 +700,103 @@ describe("Revisões de identidade — aviso de duas contas na mesma ficha", () =
     ).toBeNull();
   });
 });
+
+// Conta duplicada na MESMA plataforma: a tela mostra as duas contas, deixa
+// escolher qual vale e diz, sem rodeio, que aposentar é decisão do Constela —
+// a conta continua existindo no Matific.
+describe("Revisões de identidade — contas do aluno na plataforma", () => {
+  const CONTAS = "/escolas/1/importacoes/identidades/matific/aluno/31";
+
+  const duasContas = () =>
+    revisaoFake({
+      motivo: "outra_identidade_na_plataforma",
+      motivo_texto: "o aluno encontrado já tem outra conta nesta plataforma",
+      candidatos: [
+        { aluno_id: 31, nome: "ALLYCE CRISTINA BARBOSA DE ALMEIDA", status: "ativo", turma: "5ºB" },
+      ],
+    });
+
+  function contasMock(lista: unknown[]) {
+    responder("GET", CONTAS, lista);
+  }
+
+  it("lista as duas contas com o estado de cada uma e o aviso sobre o Matific", async () => {
+    const u = userEvent.setup();
+    filaMock([duasContas()]);
+    contasMock([
+      { id: 1, id_externo: "conta-A", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+      { id: 2, id_externo: "conta-B", status: "aposentada", created_at: "2026-05-01T10:00:00",
+        aposentada_em: "2026-09-25T09:00:00", aposentada_por: "Admin",
+        motivo_aposentadoria: "conta de teste" },
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const bloco = await within(dialogo).findByRole("region", {
+      name: "Contas do aluno no Matific",
+    });
+
+    expect(within(bloco).getByText("conta-A")).toBeInTheDocument();
+    expect(within(bloco).getByText("Conta em uso")).toBeInTheDocument();
+    expect(within(bloco).getByText("conta-B")).toBeInTheDocument();
+    expect(within(bloco).getByText("Preservada, não contabilizada")).toBeInTheDocument();
+    // o histórico da decisão
+    expect(within(bloco).getByText(/por Admin — conta de teste/)).toBeInTheDocument();
+    // a distinção que não pode se perder
+    expect(within(bloco).getByText(/não desativa nem remove a conta no Matific/i)).toBeInTheDocument();
+  });
+
+  it("escolher a conta principal exige motivo e envia aposentando a outra", async () => {
+    const u = userEvent.setup();
+    filaMock([duasContas()]);
+    contasMock([
+      { id: 1, id_externo: "conta-A", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+      { id: 2, id_externo: "conta-B", status: "efetiva", created_at: "2026-05-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+    ]);
+    responder("POST", "/escolas/1/importacoes/identidades/matific/efetiva", {
+      aluno_id: 31, plataforma: "matific", identidade_efetiva: "conta-A",
+      identidades_aposentadas: ["conta-B"], revisoes_encerradas: [], motivo: "é a que ela usa",
+      observacao: "Decisão interna do Constela.",
+    });
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const bloco = await within(dialogo).findByRole("region", {
+      name: "Contas do aluno no Matific",
+    });
+
+    await u.click(within(bloco).getAllByRole("button", { name: "Usar só esta conta" })[0]);
+    const confirmar = within(bloco).getByRole("button", { name: "Confirmar" });
+    expect(confirmar).toBeDisabled();                 // sem motivo, não envia
+
+    await u.type(within(bloco).getByRole("textbox"), "é a que ela usa");
+    await u.click(within(bloco).getByRole("button", { name: "Confirmar" }));
+
+    await waitFor(() => {
+      const chamada = api.mock.calls.find(
+        ([c, o]) => String(c).endsWith("/identidades/matific/efetiva")
+          && (o as RequestInit)?.method === "POST");
+      expect(chamada).toBeTruthy();
+      expect(JSON.parse(String((chamada?.[1] as RequestInit)?.body))).toEqual({
+        aluno_id: 31, id_externo_efetivo: "conta-A",
+        aposentar: ["conta-B"], motivo: "é a que ela usa",
+      });
+    });
+  });
+
+  it("com uma conta só, o bloco não aparece (não há o que decidir)", async () => {
+    const u = userEvent.setup();
+    filaMock([duasContas()]);
+    contasMock([
+      { id: 1, id_externo: "conta-A", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    await within(dialogo).findByRole("region", { name: "Candidatos encontrados" });
+    expect(within(dialogo).queryByRole("region", {
+      name: "Contas do aluno no Matific",
+    })).toBeNull();
+  });
+});

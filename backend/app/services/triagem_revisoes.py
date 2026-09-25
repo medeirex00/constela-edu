@@ -56,6 +56,7 @@ FICHA_EXCLUIDA = "ficha_excluida"
 SEM_MATRICULA = "sem_matricula_no_ano"
 SEM_IDENTIFICADOR = "sem_identificador_externo"
 IRMA_BLOQUEADA = "irma_bloqueada"
+IDENTIDADE_APOSENTADA = "identidade_aposentada"
 
 # Texto humano de cada motivo — a mesma frase vai para a API e para o relatório.
 TEXTO = {
@@ -80,6 +81,9 @@ TEXTO = {
                        "não é verificável",
     IRMA_BLOQUEADA: "outra pendência da MESMA identidade exige decisão humana, e "
                     "encerrar uma encerra todas",
+    IDENTIDADE_APOSENTADA: "esta conta da plataforma foi aposentada nesta ficha: "
+                           "o histórico está preservado, mas ela não alimenta mais "
+                           "o retrato do aluno",
 }
 
 
@@ -158,6 +162,16 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     id_externo = (rev.id_externo or "").strip()
     dono = ctx.identidade.get((rev.plataforma, id_externo)) if id_externo else None
     humano = ctx.resolvidas.get(rev.chave_identidade)
+
+    # Conta APOSENTADA: a escola já decidiu que ela não representa a criança.
+    # A pendência não é mais uma pergunta em aberto — é resíduo de uma decisão
+    # tomada, e encerrar por aqui reassociaria os dados.
+    if id_externo and (rev.plataforma, id_externo) in ctx.aposentadas:
+        aposentado = ctx.aposentadas[(rev.plataforma, id_externo)]
+        caso.conflitos.append(
+            f"a conta {id_externo} foi aposentada na ficha {aposentado} — "
+            "os dados dela não valem mais, e reativá-la exige decisão explícita")
+        return veredito(DECISAO_HUMANA, IDENTIDADE_APOSENTADA, aposentado)
 
     # ------------------------------------------------------------------ alvo
     # A identidade externa é a evidência mais forte do sistema — é o passo 1 do

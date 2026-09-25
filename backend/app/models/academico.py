@@ -113,6 +113,10 @@ class IdentidadeExterna(Base):
         # Um id externo aponta para UM aluno por escola/plataforma.
         UniqueConstraint("escola_id", "plataforma", "id_externo",
                          name="uq_identidade_externa"),
+        # "Quais contas EFETIVAS este aluno tem nesta plataforma" — a pergunta
+        # que a importação faz uma vez por escola, e a que decide a colisão.
+        Index("ix_identidade_externa_status",
+              "escola_id", "aluno_id", "plataforma", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -122,6 +126,21 @@ class IdentidadeExterna(Base):
     plataforma: Mapped[str] = mapped_column(String(30))      # matific | elefante
     id_externo: Mapped[str] = mapped_column(String(80))       # UUID/id do aluno lá
     created_at: Mapped[datetime] = mapped_column(default=agora)
+    # APOSENTADORIA (§ conta duplicada): a criança tem DUAS contas na mesma
+    # plataforma e a escola decidiu qual vale. A perdedora não é apagada — o
+    # histórico dela continua no banco e a linha aqui continua provando de quem
+    # era o id externo. Ela só deixa de ser a identidade EFETIVA: não casa mais
+    # na importação, não alimenta retrato nem pontuação, e não volta sozinha.
+    # É decisão INTERNA do Constela: a conta segue existindo na plataforma.
+    status: Mapped[str] = mapped_column(String(20), default="efetiva")  # efetiva|aposentada
+    aposentada_em: Mapped[datetime | None] = mapped_column(default=None)
+    aposentada_por_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), default=None)
+    motivo_aposentadoria: Mapped[str | None] = mapped_column(String(300), default=None)
+
+    @property
+    def efetiva(self) -> bool:
+        return self.status != "aposentada"
 
 
 class RevisaoIdentidade(Base):

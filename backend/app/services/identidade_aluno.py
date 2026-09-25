@@ -194,6 +194,10 @@ class Contexto:
     por_ra: dict[str, set[int]] = field(default_factory=dict)
     # decisões de revisão já tomadas por um humano, por chave de identidade
     resolvidas: dict[str, int] = field(default_factory=dict)
+    # Identidades APOSENTADAS: (plataforma, id_externo) → aluno_id. Continuam
+    # provando de quem era o id externo, mas estão FORA de ``identidade`` e de
+    # ``ids_do_aluno`` — não casam, não contam e não voltam sozinhas.
+    aposentadas: dict[tuple[str, str], int] = field(default_factory=dict)
     _memo_escola: dict = field(default_factory=dict, repr=False)
 
     # --- manutenção em memória -------------------------------------------
@@ -338,11 +342,19 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
             select(Matricula.aluno_id, Matricula.turma_id)
             .where(Matricula.escola_id == escola_id, Matricula.ano_letivo == ctx.ano)).all():
         ctx.registrar_matricula(aluno_id, turma_id)
-    for plataforma, id_externo, aluno_id in db.execute(
+    for plataforma, id_externo, aluno_id, status in db.execute(
             select(IdentidadeExterna.plataforma, IdentidadeExterna.id_externo,
-                   IdentidadeExterna.aluno_id)
+                   IdentidadeExterna.aluno_id, IdentidadeExterna.status)
             .where(IdentidadeExterna.escola_id == escola_id)
             .order_by(IdentidadeExterna.id)).all():
+        # A APOSENTADA fica FORA dos índices de casamento: quem consulta
+        # ``identidade``/``ids_do_aluno`` está perguntando "quem é esta conta
+        # HOJE", e a resposta para uma conta aposentada é "ninguém". O vínculo
+        # continua registrado em ``aposentadas`` para o motor reconhecê-la e
+        # recusá-la explicitamente, em vez de tratá-la como conta nova.
+        if status == "aposentada":
+            ctx.aposentadas[(plataforma, str(id_externo))] = aluno_id
+            continue
         ctx.vincular(aluno_id, plataforma, str(id_externo))
     for chave_ident, aluno_id in db.execute(
             select(RevisaoIdentidade.chave_identidade, RevisaoIdentidade.aluno_escolhido_id)
@@ -463,6 +475,17 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
                                chave_sala=chave)
         return Decisao(ASSOCIAR, aluno.id, "explicito", candidatos=(aluno.id,),
                        chave_sala=chave)
+
+    # 0b) Identidade APOSENTADA: a escola já decidiu que esta conta duplicada
+    # não representa mais a criança no Constela. A linha não vira dado nem volta
+    # para a fila — senão cada sincronização reabriria a mesma duplicidade que já
+    # foi decidida. Ela é IGNORADA, com aviso, e o histórico continua no banco.
+    # Só uma nova decisão humana (reativar a identidade) desfaz isso.
+    if linha.id_externo:
+        aposentada = ctx.aposentadas.get((linha.plataforma, linha.id_externo))
+        if aposentada is not None:
+            return Decisao(IGNORAR, aposentada, "identidade", "identidade_aposentada",
+                           (aposentada,), chave_sala=chave)
 
     # 1) Identidade externa — consultada ANTES de qualquer nome, em ficha ativa ou
     # inativa. Ficha excluída não segura identidade (fica livre p/ reatribuir).

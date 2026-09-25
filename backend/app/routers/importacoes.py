@@ -58,7 +58,9 @@ from app.schemas import (
     MatriculaTurmaOut,
 )
 from app.schemas.importacao import (
+    DefinirIdentidadeEfetivaIn,
     DescartarRevisaoIn,
+    ReativarIdentidadeIn,
     ResolucaoRevisaoOut,
     ResolverRevisaoIn,
     RevisaoIdentidadeOut,
@@ -67,7 +69,7 @@ from app.services import identidade_aluno as ida
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
 from app.services import dificuldade_livro, professores, push, scoring
-from app.services import triagem_revisoes
+from app.services import identidade_efetiva, triagem_revisoes
 from app.services.audit import registrar
 from app.models.base import agora
 
@@ -605,6 +607,15 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     decisao = ida.decidir(ctx, ident)
 
     if decisao.acao == ida.IGNORAR:
+        if decisao.motivo == "identidade_aposentada":
+            alvo = ctx.alunos.get(decisao.aluno_id)
+            avisos.append(
+                f"“{linha.nome}”: esta conta da plataforma foi APOSENTADA no Constela "
+                f"para {alvo.nome if alvo else 'o aluno'} — a criança tem outra conta "
+                "nesta plataforma, e a escola escolheu qual vale. A linha não foi "
+                "aplicada e o histórico dela continua guardado. (A conta segue "
+                "existindo na plataforma: a aposentadoria é interna do Constela.)")
+            return None
         avisos.append(f"Linha “{linha.nome}”: "
                       + ("aluno não pertence a esta escola" if decisao.motivo == "aluno_de_outra_escola"
                          else "a ficha escolhida foi excluída e não recebe dados")
@@ -763,6 +774,10 @@ def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
         IdentidadeExterna.plataforma == plataforma,
         IdentidadeExterna.id_externo == id_externo)).scalars().first()
     if ja is not None:
+        # Aposentada NUNCA é reativada de passagem: quem decidiu aposentar tem
+        # de decidir reativar, pelo caminho explícito e auditado.
+        if ja.status == "aposentada":
+            return False
         if ja.aluno_id == aluno_id:
             return True
         dono = db.get(Aluno, ja.aluno_id)
@@ -2536,6 +2551,23 @@ def resolver_revisao(
     escola = db.get(Escola, escola_id)
     avisos: list[str] = []
 
+    # Conta APOSENTADA não volta por aqui. A escola já decidiu que ela não
+    # representa a criança no Constela; resolver a pendência dela reassociaria
+    # os dados em silêncio e desfaria a decisão sem auditoria. Para voltar atrás
+    # existe o caminho explícito: /identidades/{plataforma}/reativar.
+    if rev.id_externo:
+        aposentada = db.execute(select(IdentidadeExterna).where(
+            IdentidadeExterna.escola_id == escola_id,
+            IdentidadeExterna.plataforma == rev.plataforma,
+            IdentidadeExterna.id_externo == rev.id_externo,
+            IdentidadeExterna.status == "aposentada")).scalars().first()
+        if aposentada is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"A conta {rev.id_externo} está aposentada nesta ficha e não "
+                "recebe dados. Para voltar a usá-la, reative-a explicitamente "
+                "em Identidades do aluno.")
+
     if corpo.aluno_id is not None:
         aluno = db.get(Aluno, corpo.aluno_id)
         if aluno is None or aluno.escola_id != escola_id:
@@ -2664,6 +2696,84 @@ def resolver_revisao(
         revisao=_revisao_out(rev), aluno_id=aluno.id,
         revisoes_resolvidas=[r.id for r in resolvidas], importacoes=importacoes,
         avisos=avisos)
+
+
+@router.get("/identidades/{plataforma}/aluno/{aluno_id}", response_model=list[dict])
+def listar_identidades_do_aluno(
+    plataforma: str,
+    aluno_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """As contas que este aluno tem NESTA plataforma, com o estado de cada uma —
+    a que vale hoje e as aposentadas, com quem decidiu, quando e por quê."""
+    aluno = db.get(Aluno, aluno_id)
+    if aluno is None or aluno.escola_id != escola_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    saida = []
+    for i in identidade_efetiva.identidades_do_aluno(db, escola_id, aluno_id, plataforma):
+        quem = db.get(Usuario, i.aposentada_por_id) if i.aposentada_por_id else None
+        saida.append({"id": i.id, "id_externo": i.id_externo, "status": i.status,
+                      "created_at": i.created_at, "aposentada_em": i.aposentada_em,
+                      "aposentada_por": quem.nome if quem else None,
+                      "motivo_aposentadoria": i.motivo_aposentadoria})
+    return saida
+
+
+@router.post("/identidades/{plataforma}/efetiva", response_model=dict)
+def definir_identidade_efetiva(
+    plataforma: str,
+    corpo: DefinirIdentidadeEfetivaIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """CONTA DUPLICADA: a criança tem mais de uma conta nesta plataforma e a
+    escola diz qual vale no Constela.
+
+    A conta escolhida passa a ser a identidade EFETIVA; as outras ficam
+    APOSENTADAS — preservadas com todo o histórico, mas fora da importação, do
+    retrato e da pontuação, e sem voltar a se associar sozinha. Nada é apagado.
+
+    Isto é decisão INTERNA do Constela: a conta continua existindo na plataforma
+    externa, e nada é desativado lá. A operação é reversível (``/reativar``) e
+    fica auditada com quem decidiu, quando, o estado anterior e o posterior."""
+    bloquear_escola_para_importacao(db, escola_id)
+    try:
+        r = identidade_efetiva.definir_efetiva(
+            db, escola_id, aluno_id=corpo.aluno_id, plataforma=plataforma,
+            id_externo_efetivo=corpo.id_externo_efetivo,
+            aposentar=list(corpo.aposentar), motivo=corpo.motivo,
+            usuario_id=usuario.id)
+    except identidade_efetiva.ErroIdentidade as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    db.commit()
+    return {**r.como_dict(),
+            "observacao": ("Decisão interna do Constela: a conta aposentada "
+                           "continua existindo na plataforma externa.")}
+
+
+@router.post("/identidades/{plataforma}/reativar", response_model=dict)
+def reativar_identidade(
+    plataforma: str,
+    corpo: ReativarIdentidadeIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """Desfaz uma aposentadoria — só quando isso não deixa duas contas efetivas."""
+    bloquear_escola_para_importacao(db, escola_id)
+    try:
+        r = identidade_efetiva.reativar(
+            db, escola_id, aluno_id=corpo.aluno_id, plataforma=plataforma,
+            id_externo=corpo.id_externo, motivo=corpo.motivo, usuario_id=usuario.id)
+    except identidade_efetiva.ErroIdentidade as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    db.commit()
+    return r.como_dict()
 
 
 @router.post("/revisoes/{revisao_id}/descartar", response_model=RevisaoIdentidadeOut)

@@ -502,6 +502,141 @@ function Linha({ rotulo, children }: { rotulo: string; children: ReactNode }) {
   );
 }
 
+export interface IdentidadeDoAluno {
+  id: number;
+  id_externo: string;
+  status: string;                 // efetiva | aposentada
+  created_at: string;
+  aposentada_em: string | null;
+  aposentada_por: string | null;
+  motivo_aposentadoria: string | null;
+}
+
+/** As contas que o aluno tem NESTA plataforma, com o estado de cada uma.
+ *
+ * Só aparece quando há mais de uma — que é quando a pergunta existe. Deixa
+ * escolher qual vale (a outra fica APOSENTADA: preservada, fora do retrato) e
+ * mostra o histórico da decisão: quem, quando e por quê.
+ *
+ * A frase sobre o Matific não é decoração: aposentar aqui não desativa nada na
+ * plataforma, e confundir as duas coisas é o erro que faz alguém achar que
+ * "resolveu" a conta duplicada quando ela continua lá. */
+function ContasDaPlataforma({
+  escolaId, plataforma, alunoId, alunoNome, podeDecidir, aoDecidir,
+}: {
+  escolaId: number | null;
+  plataforma: string;
+  alunoId: number;
+  alunoNome: string;
+  podeDecidir: boolean;
+  aoDecidir: () => void;
+}) {
+  const base = escolaId ? `/escolas/${escolaId}/importacoes/identidades/${plataforma}` : null;
+  const contas = useApi<IdentidadeDoAluno[]>(base ? `${base}/aluno/${alunoId}` : null);
+  const [escolhida, setEscolhida] = useState<string | null>(null);
+  const [motivo, setMotivo] = useState("");
+  const rotulo = NOME_PLATAFORMA[plataforma] ?? plataforma;
+
+  const definir = useMutation(
+    (alvo: string) => api<Record<string, unknown>>(`${base}/efetiva`, {
+      method: "POST",
+      body: JSON.stringify({
+        aluno_id: alunoId,
+        id_externo_efetivo: alvo,
+        aposentar: (contas.dados ?? [])
+          .map((c) => c.id_externo).filter((x) => x !== alvo),
+        motivo: motivo.trim(),
+      }),
+    }),
+    {
+      aoSucesso: () => {
+        setEscolhida(null);
+        setMotivo("");
+        contas.recarregar();
+        aoDecidir();
+      },
+    },
+  );
+
+  const lista = contas.dados ?? [];
+  if (contas.carregando) return <p className="text-sm text-zinc-500">Carregando as contas…</p>;
+  if (lista.length < 2) return null;
+
+  return (
+    <Bloco titulo={`Contas do aluno no ${rotulo}`}>
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+        <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma pode
+        alimentar o retrato e a pontuação — a outra fica <strong>aposentada</strong>:
+        preservada com todo o histórico, mas fora da importação.
+        <p className="mt-1">
+          Aposentar é uma decisão <strong>interna do Constela</strong>. Ela não desativa
+          nem remove a conta no {rotulo}.
+        </p>
+      </div>
+      <ul className="mt-2 space-y-2">
+        {lista.map((c) => {
+          const efetiva = c.status !== "aposentada";
+          return (
+            <li key={c.id}>
+              <Card className="p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="break-all font-mono text-xs">{c.id_externo}</p>
+                    <div className="mt-1">
+                      <Badge tom={efetiva ? "ok" : "neutro"}>
+                        {efetiva ? "Conta em uso" : "Preservada, não contabilizada"}
+                      </Badge>
+                    </div>
+                    {!efetiva && (
+                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                        Aposentada em {dataHora(c.aposentada_em)}
+                        {c.aposentada_por ? ` por ${c.aposentada_por}` : ""}
+                        {c.motivo_aposentadoria ? ` — ${c.motivo_aposentadoria}` : ""}
+                      </p>
+                    )}
+                  </div>
+                  {podeDecidir && efetiva && lista.length > 1 && (
+                    <Botao variante="neutro" disabled={definir.enviando}
+                           onClick={() => { setEscolhida(c.id_externo); setMotivo(""); }}>
+                      Usar só esta conta
+                    </Botao>
+                  )}
+                </div>
+              </Card>
+            </li>
+          );
+        })}
+      </ul>
+      {escolhida && (
+        <Card className="mt-2 space-y-2 p-3">
+          <p className="text-sm">
+            Usar só <span className="font-mono text-xs">{escolhida}</span> e aposentar
+            as demais. Os dados das outras continuam guardados, mas deixam de aparecer
+            no retrato de {alunoNome}. Nada muda no {rotulo}.
+          </p>
+          <label className="block text-xs">
+            Por que esta conta?
+            <textarea
+              className="mt-1 w-full rounded-lg border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              rows={2} value={motivo} maxLength={300}
+              onChange={(e) => setMotivo(e.target.value)}
+              placeholder="ex.: a escola confirmou que é a conta que a criança usa" />
+          </label>
+          {definir.erro && <p className="text-sm text-rose-600">{definir.erro.message}</p>}
+          <div className="flex gap-2">
+            <Botao disabled={definir.enviando || motivo.trim().length < 3}
+                   onClick={() => definir.executar(escolhida)}>
+              {definir.enviando ? "Salvando…" : "Confirmar"}
+            </Botao>
+            <Botao variante="neutro" disabled={definir.enviando}
+                   onClick={() => setEscolhida(null)}>Cancelar</Botao>
+          </div>
+        </Card>
+      )}
+    </Bloco>
+  );
+}
+
 /** A ficha já tem OUTRA conta da mesma plataforma.
  *
  * Aqui vincular não é só "dizer de quem é a linha": é escolher qual das duas
@@ -635,6 +770,12 @@ function DetalheRevisao({
   const dataRef = typeof rev.contexto?.data_referencia === "string" ? rev.contexto.data_referencia : null;
   const turmaEscolhida = turmas.find((t) => String(t.id) === turmaNova) ?? null;
   const orientacao = ORIENTACAO[rev.motivo];
+  // De quem são as contas a mostrar: a ficha já escolhida, ou o candidato único.
+  // Com vários candidatos ainda não se sabe de quem é a linha — não há o que listar.
+  const alvoContas = rev.aluno_escolhido_id
+    ? rev.candidatos.find((c) => c.aluno_id === rev.aluno_escolhido_id)
+      ?? { aluno_id: rev.aluno_escolhido_id, nome: "este aluno", status: "", turma: null }
+    : (rev.candidatos.length === 1 ? rev.candidatos[0] : null);
 
   return (
     <div ref={refRaiz} tabIndex={-1} className="space-y-6 outline-none">
@@ -725,6 +866,20 @@ function DetalheRevisao({
           />
         )}
       </Bloco>
+
+      {/* B2. CONTAS DO ALUNO NESTA PLATAFORMA — só quando há mais de uma, que é
+          quando existe a pergunta "qual delas vale". */}
+      {alvoContas && (
+        <ContasDaPlataforma
+          escolaId={escolaId}
+          plataforma={rev.plataforma}
+          alunoId={alvoContas.aluno_id}
+          alunoNome={alvoContas.nome}
+          podeDecidir={pendente}
+          aoDecidir={() => aoDesatualizar(
+            "Conta principal definida. A fila foi atualizada com a situação atual.")}
+        />
+      )}
 
       {/* C. DADOS DA IMPORTAÇÃO */}
       <Bloco titulo="Dados que aguardam associação">
