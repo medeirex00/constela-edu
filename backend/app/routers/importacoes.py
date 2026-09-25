@@ -67,6 +67,7 @@ from app.services import identidade_aluno as ida
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
 from app.services import dificuldade_livro, professores, push, scoring
+from app.services import triagem_revisoes
 from app.services.audit import registrar
 from app.models.base import agora
 
@@ -2393,9 +2394,10 @@ async def confirmar_matriculas(
 # pipeline normal de importação e audita. A fusão de fichas duplicadas continua
 # sendo a ação separada de Alunos › Fundir duplicatas.
 
-def _revisao_out(rev: RevisaoIdentidade) -> RevisaoIdentidadeOut:
+def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None) -> RevisaoIdentidadeOut:
     saida = RevisaoIdentidadeOut.model_validate(rev)
     saida.motivo_texto = ida.MOTIVOS.get(rev.motivo, rev.motivo)
+    saida.triagem = triagem
     return saida
 
 
@@ -2423,7 +2425,14 @@ def listar_revisoes(
     revisoes = db.execute(
         consulta.order_by(RevisaoIdentidade.atualizada_em.desc(),
                           RevisaoIdentidade.id.desc()).limit(500)).scalars().all()
-    return [_revisao_out(r) for r in revisoes]
+    # Cada pendência vem com a TRIAGEM: dá para encerrar com segurança, e por quê.
+    # Só leitura e determinística — não decide nada, apenas explica.
+    triagens: dict[int, dict] = {}
+    if revisoes:
+        ctx = ida.carregar_contexto(db, escola_id)
+        triagens = {rid: t.como_dict() for rid, t in triagem_revisoes.triar_revisoes(
+            ctx, list(revisoes)).items()}
+    return [_revisao_out(r, triagens.get(r.id)) for r in revisoes]
 
 
 def _confirmacao_da_revisao(rev: RevisaoIdentidade, aluno_id: int,

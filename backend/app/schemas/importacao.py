@@ -139,6 +139,9 @@ class RevisaoIdentidadeOut(ORMModel):
     resolucao: dict | None = None
     created_at: datetime
     atualizada_em: datetime
+    # Veredito determinístico da triagem ("dá para encerrar com segurança, e por
+    # quê") — ver ``services/triagem_revisoes``. Só na listagem da fila.
+    triagem: dict | None = None
 
 
 class ResolverRevisaoIn(BaseModel):
