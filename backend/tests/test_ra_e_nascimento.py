@@ -40,7 +40,6 @@ from app.services.lista_piloto import _COLUNAS, analisar_matriculas, ra_util
 
 CT_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ANO = 2026
-CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO"
 
 
 # ---------------------------------------------------------------------------

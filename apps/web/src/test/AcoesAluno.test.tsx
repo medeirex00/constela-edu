@@ -82,3 +82,43 @@ test("quem já está fora da escola não recebe a opção de novo", async () => 
   expect(await screen.findByText("Reativar")).toBeInTheDocument();
   expect(screen.queryByText("Marcar como transferido")).toBeNull();
 });
+
+// --- Fusão com sinal de conflito de identidade ------------------------------
+// A tela de fusão mostra só nome e turma. Quando o backend detecta prova de
+// serem crianças diferentes (nascimento/RA divergentes) ele responde 409 e
+// NOMEIA a divergência; a tela então revela um segundo campo de confirmação.
+// Sem isso, a proteção do backend seria inalcançável pela interface.
+
+test("conflito de identidade revela a segunda confirmação e a envia", async () => {
+  responderErro("POST", /\/alunos\/fundir/, 409,
+    "Estes dois cadastros têm sinais de serem crianças DIFERENTES: nascimento " +
+    "2020-07-31 × 2021-07-31. Se ainda assim for a mesma criança, digite " +
+    "“FUNDIR MESMO COM CONFLITO” para confirmar.");
+  responder("GET", /\/alunos\?busca=/, {
+    itens: [{ id: 20, nome: "Ana Souza Duplicada", status: "ativo", turma: "3º Ano A" }],
+    total: 1, pagina: 1, por_pagina: 8,
+  });
+  renderComApp(<AcoesAluno aluno={aluno} escolaId={1} aoMudar={vi.fn()} />);
+
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Fundir com outro aluno"));
+  await userEvent.type(screen.getByPlaceholderText(/Buscar o cadastro duplicado/), "Ana");
+  await userEvent.click(await screen.findByRole("button", { name: /Ana Souza Duplicada/ }));
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  await userEvent.click(screen.getByRole("button", { name: /Fundir cadastros/ }));
+
+  // a divergência aparece nomeada, e o campo extra surge
+  expect(await screen.findByText(/nascimento 2020-07-31 × 2021-07-31/)).toBeInTheDocument();
+  const extra = await screen.findByPlaceholderText("FUNDIR MESMO COM CONFLITO");
+  expect(extra).toBeInTheDocument();
+
+  // e é enviado no corpo da segunda tentativa
+  responder("POST", /\/alunos\/fundir/, { ok: true });
+  await userEvent.type(extra, "FUNDIR MESMO COM CONFLITO");
+  await userEvent.click(screen.getByRole("button", { name: /Fundir cadastros/ }));
+  await vi.waitFor(() => {
+    const chamadas = api.mock.calls.filter(([c]) => String(c).includes("/alunos/fundir"));
+    const ultima = JSON.parse(String((chamadas.at(-1)![1] as RequestInit).body));
+    expect(ultima.confirmar_conflito).toBe("FUNDIR MESMO COM CONFLITO");
+  });
+});

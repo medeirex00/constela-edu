@@ -45,6 +45,8 @@ from app.schemas import (
 from app.services import (
     alunos_dedup,
     alunos_fusao,
+    identidade_aluno,
+    matching,
     periodos,
     permissoes,
     scoring,
@@ -727,6 +729,33 @@ def excluir_alunos_permanente(
                         "todos os dados vinculados.", "afetados": n}
 
 
+_CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO"
+
+
+def _divergencias_de_identidade(a: Aluno, b: Aluno) -> list[str]:
+    """Os sinais que o MOTOR ÚNICO trata como prova de serem crianças diferentes,
+    em português, para a mensagem e para o log.
+
+    Usa ``matching.conflito_identidade`` como juiz — a mesma função que decide
+    isso em toda importação e sincronização — em vez de uma regra própria daqui.
+    Com isso o RA passa pela normalização canônica (``ra_forte``), então dois
+    RAs que só diferem na pontuação NÃO contam como divergência, e a decisão
+    sobre nº de chamada (renumeração de sala não é outra criança) é herdada em
+    vez de reinventada. Devolve [] quando não há prova de conflito."""
+    ia, ib = identidade_aluno.identidade_do_aluno(a), identidade_aluno.identidade_do_aluno(b)
+    if not matching.conflito_identidade(ia, ib):
+        return []
+    motivos = []
+    if ia.nascimento and ib.nascimento and ia.nascimento != ib.nascimento:
+        motivos.append(f"nascimento {ia.nascimento} × {ib.nascimento}")
+    if ia.ra and ib.ra and ia.ra != ib.ra:
+        motivos.append(f"RA {ia.ra} × {ib.ra}")
+    if (ia.chamada is not None and ib.chamada is not None
+            and ia.chamada != ib.chamada):
+        motivos.append(f"nº de chamada {ia.chamada} × {ib.chamada}")
+    return motivos or ["o motor de identidade aponta conflito"]
+
+
 @router.post("/alunos/fundir", response_model=dict)
 def fundir_alunos(
     dados: FusaoAlunos,
@@ -767,11 +796,36 @@ def fundir_alunos(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Só é possível fundir alunos ativos. Reative o "
                             "cadastro arquivado ou excluído antes de fundir.")
+    # PROVA DE SEREM CRIANÇAS DIFERENTES: a fusão apaga uma ficha, mas a tela
+    # mostra só nome e turma — quem digita "FUNDIR" não vê nascimento nem RA.
+    # A fusão em LOTE recomputa os candidatos e já barra esses pares; a manual
+    # não tinha rede nenhuma. Não vira bloqueio: fundir é ato humano e o gestor
+    # pode saber de algo que o dado não conta (um dos cadastros com nascimento
+    # errado, por exemplo). Vira uma segunda confirmação que NOMEIA a
+    # divergência, para que ela seja lida antes e fique no log.
+    divergencias = _divergencias_de_identidade(manter, remover)
+    if divergencias and dados.confirmar_conflito.strip().upper() != _CONFIRMA_CONFLITO:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Estes dois cadastros têm sinais de serem crianças DIFERENTES: "
+            + "; ".join(divergencias)
+            + f". Se ainda assim for a mesma criança, digite “{_CONFIRMA_CONFLITO}” "
+              "para confirmar. Se não tiver certeza, não funda: corrija antes o "
+              "dado divergente em Alunos › Editar dados.")
+
 
     # Núcleo compartilhado com a fusão em lote (Fundir duplicatas): reatribui/
     # deduplica cada relação, funde a ficha, registra a auditoria (com a foto
     # pré-fusão) e apaga o `remover`. Não commita nem recalcula — isso é aqui.
     r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
+    if divergencias:
+        # Fundiu APESAR da prova de conflito: o log tem de dizer o que o gestor
+        # aceitou passar por cima, senão a decisão some.
+        registrar(db, "aluno.fundido_com_conflito", escola_id=escola_id,
+                  usuario_id=usuario.id, entidade="aluno", entidade_id=manter.id,
+                  detalhes={"manter_id": manter.id, "remover_id": dados.remover_id,
+                            "divergencias": divergencias,
+                            "confirmacao_especifica": _CONFIRMA_CONFLITO})
     db.commit()
     _recalcular_escola(db, escola_id)
     return {

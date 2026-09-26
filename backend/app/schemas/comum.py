@@ -260,10 +260,17 @@ class ExclusaoPermanenteAlunos(BaseModel):
 class FusaoAlunos(BaseModel):
     """Funde dois cadastros do MESMO aluno (duplicados): todos os dados do
     `remover` passam para o `manter`, e o `remover` é apagado. Confirmação
-    textual ("FUNDIR") por ser irreversível."""
+    textual ("FUNDIR") por ser irreversível.
+
+    ``confirmar_conflito`` é exigido SÓ quando o motor de identidade encontra
+    prova de serem crianças diferentes (nascimento ou RA divergentes). A tela de
+    fusão mostra apenas nome e turma, então quem digita "FUNDIR" não vê esses
+    sinais — a segunda confirmação existe para que a divergência seja lida antes
+    de uma ficha ser apagada, não para impedir a decisão de um gestor."""
     manter_id: int
     remover_id: int
     confirmacao: str = ""
+    confirmar_conflito: str = ""
 
 
 class CorrigirDuplicadosAlunos(BaseModel):

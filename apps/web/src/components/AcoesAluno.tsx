@@ -304,6 +304,10 @@ export function ModalEditarAluno({ aluno, escolaId, aoFechar, aoSalvo }: {
 /** Funde dois cadastros do MESMO aluno (duplicados). Busca o outro cadastro,
  *  deixa escolher qual fica como principal e combina Matific + Elefante +
  *  leituras num só. Irreversível → confirmação "FUNDIR". */
+/** Confirmação extra quando o motor de identidade prova conflito (o backend
+ *  responde 409 e exige exatamente esta frase). */
+const CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO";
+
 export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
   aluno: Aluno;
   escolaId: number;
@@ -316,6 +320,11 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
   const [outro, setOutro] = useState<Aluno | null>(null);
   const [manterAtual, setManterAtual] = useState(true); // qual fica como principal
   const [confirmacao, setConfirmacao] = useState("");
+  // O backend só revela a divergência de identidade quando a fusão é tentada
+  // (409): a tela não tem nascimento nem RA para conferir sozinha. Quando isso
+  // acontece, a mensagem NOMEIA o conflito e pedimos uma 2ª confirmação.
+  const [conflito, setConflito] = useState(false);
+  const [confirmaConflito, setConfirmaConflito] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
 
@@ -336,7 +345,8 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
 
   const principal = manterAtual ? aluno : outro;
   const absorvido = manterAtual ? outro : aluno;
-  const liberado = outro && confirmacao.trim().toUpperCase() === "FUNDIR";
+  const liberado = outro && confirmacao.trim().toUpperCase() === "FUNDIR"
+    && (!conflito || confirmaConflito.trim().toUpperCase() === CONFIRMA_CONFLITO);
 
   async function fundir() {
     if (!principal || !absorvido) return;
@@ -348,10 +358,12 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
         body: JSON.stringify({
           manter_id: principal.id, remover_id: absorvido.id,
           confirmacao: confirmacao.trim(),
+          confirmar_conflito: confirmaConflito.trim(),
         }),
       });
       aoConcluir(absorvido.id === aluno.id);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) setConflito(true);
       setErro(e instanceof ApiError ? e.message : "Não foi possível fundir.");
     } finally {
       setOcupado(false);
@@ -421,7 +433,10 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
               {absorvido?.turma && <span className="text-zinc-400"> · {absorvido.turma}</span>}
             </div>
             <button className="text-xs text-zinc-500 hover:underline dark:text-zinc-400"
-                    onClick={() => { setOutro(null); setConfirmacao(""); setManterAtual(true); }}>
+                    onClick={() => {
+                      setOutro(null); setConfirmacao(""); setManterAtual(true);
+                      setConflito(false); setConfirmaConflito(""); setErro("");
+                    }}>
               ← escolher outro cadastro
             </button>
           </div>
@@ -432,6 +447,15 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
                      onChange={(e) => setConfirmacao(e.target.value)} />
             </Campo>
           </div>
+          {conflito && (
+            <div className="mt-3">
+              <Campo rotulo={`Há sinal de serem crianças diferentes — digite ${CONFIRMA_CONFLITO}`}>
+                <input className={estiloInput} value={confirmaConflito} autoComplete="off"
+                       placeholder={CONFIRMA_CONFLITO}
+                       onChange={(e) => setConfirmaConflito(e.target.value)} />
+              </Campo>
+            </div>
+          )}
         </>
       )}
 
