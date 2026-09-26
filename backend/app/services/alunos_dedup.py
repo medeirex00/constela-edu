@@ -40,6 +40,7 @@ from app.models import (
 from app.services import alunos_fusao
 from app.services._nomes import primeiro_token, tokens
 from app.services.importacao import casa_abreviado, tokens_nome
+from app.services.lista_piloto import ra_util
 from app.services.matching import plausivel
 from app.services.matriculas import chave_turma_norm
 
@@ -60,15 +61,22 @@ def _expande(curto: str, completo: str) -> bool:
 def _conflito_forte(a: Aluno, b: Aluno) -> bool:
     """Sinais que PROVAM serem crianças DIFERENTES — vetam a sugestão de fusão
     (nunca sugerir, nem para revisar). Data de nascimento, nº de chamada ou RA
-    preenchidos NOS DOIS cadastros e divergentes = duas crianças distintas."""
+    preenchidos NOS DOIS cadastros e divergentes = duas crianças distintas.
+
+    O RA passa pela MESMA regra do resto do sistema (``ra_util``): a ficha guarda
+    o RA como a secretaria digitou, então "123.269.537-3" e "1232695373" são o
+    MESMO RA e não podem ser lidos como prova de crianças diferentes. Comparar o
+    texto cru aqui deixava a duplicata real invisível na tela de fusão, que é o
+    oposto do que este veto existe para fazer. ``ra_util`` também anula
+    placeholders ("0", "S/RA"): preenchimento de secretaria não prova nada."""
     if (a.data_nascimento and b.data_nascimento
             and a.data_nascimento != b.data_nascimento):
         return True
     if (a.numero_chamada is not None and b.numero_chamada is not None
             and a.numero_chamada != b.numero_chamada):
         return True
-    ra_a = str((a.ficha or {}).get("ra", "")).strip()
-    ra_b = str((b.ficha or {}).get("ra", "")).strip()
+    ra_a = ra_util((a.ficha or {}).get("ra"))
+    ra_b = ra_util((b.ficha or {}).get("ra"))
     return bool(ra_a and ra_b and ra_a != ra_b)
 
 

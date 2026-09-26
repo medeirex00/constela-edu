@@ -441,6 +441,23 @@ def arbitrar_disputa(decisao: Decisao, disputados: set[int]) -> Decisao:
     return decisao
 
 
+def aviso_nascimento_divergente(nome: str, turma: str, na_ficha, na_planilha) -> str:
+    """A planilha traz um nascimento DIFERENTE do que já está na ficha.
+
+    A importação não sobrescreve — a data cadastrada pode ter vindo de uma fonte
+    melhor, e escolher sozinha entre duas datas é decidir quem é a criança. Mas
+    calar também não serve: divergência de nascimento é o sinal de identidade
+    mais forte do motor, e é assim que uma ficha duplicada começa. Então
+    preserva e AVISA, para um humano conferir na fonte."""
+    return (f"“{nome}” (turma {turma}) está cadastrado(a) com nascimento "
+            f"{na_ficha}, mas a planilha traz {na_planilha}. A importação NÃO "
+            "alterou a data: escolher entre as duas é decisão de gente, não do "
+            "sistema. Confira na certidão ou no RA do aluno e, se a planilha "
+            "estiver certa, corrija a ficha em Alunos › Editar dados. Enquanto "
+            "as duas datas divergirem, o motor de identidade trata os dois "
+            "registros como crianças diferentes.")
+
+
 def aviso_transferido(nome: str, turma: str) -> str:
     """A planilha traz um aluno que a escola marcou como TRANSFERIDO.
 

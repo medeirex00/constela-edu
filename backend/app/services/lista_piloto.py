@@ -193,7 +193,12 @@ _COLUNAS = {
     "ra": ("ra",),
     "nome": ("nome", "nome do aluno", "nome do estudante", "nome completo do aluno",
              "nome do a", "aluno"),
-    "nascimento": ("data de nasc", "data de nascimento", "nascimento", "data nasc"),
+    # "dt nasc" é o rótulo do MODELO OFICIAL da rede ("DT. NASC."). Sem ele a
+    # coluna não era mapeada e a importação saía sem nascimento para a escola
+    # inteira, em silêncio — perdendo o corroborador e o veto de identidade mais
+    # fortes do motor (``matching.conflito_identidade``).
+    "nascimento": ("data de nasc", "data de nascimento", "nascimento", "data nasc",
+                   "dt nasc"),
     "responsavel_completo": ("responsavel nome completo", "nome completo do responsavel"),
     "responsavel": ("responsavel", "nome da mae", "nome do responsavel",
                     "nome da mae ou responsavel", "mae", "filiacao"),
@@ -258,12 +263,18 @@ def _casar_coluna(rotulo: str, ja_usadas: set[str]) -> str | None:
 def _linha_cabecalho(linhas: list[list]) -> int | None:
     """Índice da linha de títulos: a que tem a coluna 'Nome' e uma data/RA.
     Usa _rotulo (sem pontuação) para reconhecer também 'R.A.'/'N.º'/'Data de
-    Nasc.' com pontos."""
+    Nasc.' com pontos.
+
+    Os rótulos de nascimento saem de ``_COLUNAS`` — não de uma lista própria.
+    Quando havia duas listas, acrescentar um sinônimo lá (o 'dt nasc' do modelo
+    oficial) fazia a coluna ser MAPEADA mas a linha de títulos não ser
+    RECONHECIDA: uma planilha com 'DT. NASC.' e sem coluna de RA era recusada
+    inteira, com o aviso enganoso de que faltava a coluna 'Nome'."""
     for i, linha in enumerate(linhas):
         rotulos = {_rotulo(v) for v in linha}
-        if "nome" in rotulos and (
-            any(p.startswith("data de nasc") for p in rotulos)
-            or "ra" in rotulos or "nascimento" in rotulos):
+        tem_nascimento = any(p == s or p.startswith(s + " ")
+                             for p in rotulos for s in _COLUNAS["nascimento"])
+        if "nome" in rotulos and (tem_nascimento or "ra" in rotulos):
             return i
     return None
 

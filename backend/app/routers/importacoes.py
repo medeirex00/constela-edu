@@ -2234,6 +2234,22 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
         existente.da_lista_piloto = True   # consta na lista → membro do piloto
         if nasc and existente.data_nascimento is None:
             existente.data_nascimento = nasc
+        elif nasc and existente.data_nascimento != nasc:
+            # NUNCA sobrescreve (a data da ficha pode ter vindo de fonte melhor),
+            # mas também não cala: divergência de nascimento é o veto de
+            # identidade mais forte do motor e é assim que nasce uma 2ª ficha.
+            # O aviso vive só na resposta da importação; o log é o que sobra
+            # para conferir depois que a tela foi fechada.
+            res.avisos.append(matriculas.aviso_nascimento_divergente(
+                existente.nome, turma.nome, existente.data_nascimento, nasc))
+            registrar(db, "aluno.nascimento_divergente", escola_id=escola_id,
+                      usuario_id=usuario.id, entidade="aluno",
+                      entidade_id=existente.id,
+                      detalhes={"nome": existente.nome, "turma": turma.nome,
+                                "na_ficha": str(existente.data_nascimento),
+                                "na_planilha": str(nasc),
+                                "acao": "preservado o da ficha; nada foi alterado",
+                                "origem": "importacao_matriculas"})
         if parsed.ficha:
             existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
         if existente.status == "transferido":
