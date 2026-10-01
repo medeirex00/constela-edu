@@ -458,6 +458,21 @@ def aviso_nascimento_divergente(nome: str, turma: str, na_ficha, na_planilha) ->
             "registros como crianças diferentes.")
 
 
+def aviso_fase_nao_reativa(nome: str, turma: str) -> str:
+    """A planilha traz, numa aba de FASE, um aluno que está inativo na escola.
+
+    A linha é aplicada (nome, ficha, turma), mas o status NÃO volta para ativo:
+    as Fases não concorrem às premiações, então deixar uma linha de Educação
+    Infantil reativar uma ficha seria trazer de volta à população ativa alguém
+    por um motivo que não dá direito a prêmio nenhum — e desfazendo, em
+    silêncio, uma decisão que alguém tomou antes."""
+    return (f"“{nome}” consta na aba {turma} (Educação Infantil), mas está "
+            "inativo(a) nesta escola — a importação NÃO o(a) reativou. As Fases "
+            "não participam das premiações, e por isso uma linha de Fase não "
+            "devolve ninguém à população ativa. Os dados continuam preservados; "
+            "se a criança deve mesmo voltar, use Alunos › Reativar.")
+
+
 def aviso_transferido(nome: str, turma: str) -> str:
     """A planilha traz um aluno que a escola marcou como TRANSFERIDO.
 

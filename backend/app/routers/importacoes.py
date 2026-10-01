@@ -65,7 +65,7 @@ from app.schemas.importacao import (
     ResolverRevisaoIn,
     RevisaoIdentidadeOut,
 )
-from app.services import identidade_aluno as ida
+from app.services import elegibilidade, identidade_aluno as ida
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
 from app.services import dificuldade_livro, professores, push, scoring
@@ -2278,9 +2278,20 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             # o caminho é Reativar explicitamente, com auditoria.
             res.avisos.append(matriculas.aviso_transferido(existente.nome, turma.nome))
         elif existente.status != "ativo":
-            # Consta na lista atual → reativa (inclusive quem estava
-            # "fora_lista_piloto" numa importação anterior).
-            existente.status = "ativo"
+            if not elegibilidade.participa_de_premiacao(turma.ano_escolar):
+                # LINHA DE FASE NÃO REATIVA NINGUÉM. A Lista Piloto oficial traz
+                # as abas da Educação Infantil junto com as do Fundamental, e
+                # elas não concorrem a premiação nenhuma. Reativar uma ficha
+                # inativa por causa de uma linha de Fase devolveria a criança à
+                # população ativa por um motivo que não dá direito a prêmio — e
+                # desfaria, em silêncio, uma decisão anterior. A linha continua
+                # sendo aplicada (nome, ficha, turma); só o status não muda.
+                res.avisos.append(
+                    matriculas.aviso_fase_nao_reativa(existente.nome, turma.nome))
+            else:
+                # Consta na lista atual → reativa (inclusive quem estava
+                # "fora_lista_piloto" numa importação anterior).
+                existente.status = "ativo"
         res.vistos.add(existente.id)
         # nº de chamada e matrícula pertencem à 1ª turma em que aparece.
         if existente.id not in ja_alocado:
