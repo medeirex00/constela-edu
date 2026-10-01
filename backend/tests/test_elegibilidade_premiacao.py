@@ -189,6 +189,31 @@ def test_fase_nao_aparece_no_ranking(cliente, db, escola_completa):
     assert da_fase.id not in ids, "a Fase não concorre, nem com nota alta"
 
 
+def test_fase_nao_aparece_no_painel_publico(cliente, db, escola_completa):
+    """O painel PÚBLICO monta o ranking por conta própria, sem passar por
+    `rankings._ranking` — e é a única superfície que qualquer pessoa abre sem
+    senha. Se o corte das fases não for repetido lá, ele vira o único lugar do
+    sistema ainda mostrando a Educação Infantil disputando."""
+    escola = escola_completa["escola"]
+    fund = _turma(db, escola, "5º Ano P", "5º Ano")
+    emei = _turma(db, escola, "2ª Fase P", "2ª Fase")
+    do_fund = _aluno(db, escola, fund, "APARECE NO TELAO", geral=61.0, aferido=True)
+    da_fase = _aluno(db, escola, emei, "NAO APARECE NO TELAO", geral=97.0,
+                     aferido=True)
+
+    r = cliente.put(f"{API}/escolas/{escola.id}/painel-publico",
+                    json={"ativo": True, "slides": ["ranking"],
+                          "intervalo_s": 8, "max_posicoes": 50})
+    assert r.status_code == 200, r.text
+    token = r.json()["url"].rsplit("/", 1)[-1]
+
+    painel = cliente.get(f"{API}/publico/{token}/painel")
+    assert painel.status_code == 200, painel.text
+    ids = {x["aluno_id"] for x in painel.json()["ranking"]}
+    assert do_fund.id in ids
+    assert da_fase.id not in ids, "a Fase não disputa, nem no telão sem login"
+
+
 def test_turmas_premiaveis_lista_so_o_fundamental(db, escola_completa):
     escola = escola_completa["escola"]
     fund = _turma(db, escola, "2º Ano J", "2º Ano")

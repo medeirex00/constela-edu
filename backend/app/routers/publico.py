@@ -25,7 +25,7 @@ from app.models import (
     Aluno, Configuracao, Escola, Matricula, Nota,
     SnapshotElefante, SnapshotMatific, Turma, Usuario,
 )
-from app.services import evolucao as svc_evolucao
+from app.services import elegibilidade, evolucao as svc_evolucao
 from app.services import gamificacao as svc_gami
 from app.services import relatorios as svc_relatorios
 from app.services import scoring
@@ -283,6 +283,16 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         # arquivada/excluída — a Nota órfã dela não some no recálculo.
         .where(Nota.escola_id == escola.id, Nota.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
+        # AS FASES NÃO CONCORREM: a premiação é do 1º ao 5º ano. O corte tem de
+        # ser repetido aqui porque o painel PÚBLICO monta a lista por conta
+        # própria, sem passar por `rankings._ranking` — e a Nota já carimbada de
+        # quem saiu da população não some no recálculo, igual à do arquivado
+        # logo acima. Sem isto, a tela SEM LOGIN seria o único lugar da rede
+        # ainda mostrando a Educação Infantil disputando.
+        # Pela MATRÍCULA, não por `Turma`: a segunda consulta não dá JOIN em
+        # Turma, e um filtro por `Turma.id` ali viraria produto cartesiano.
+        .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
+            db, escola.id, escola.ano_letivo_ativo)))
         .order_by(Nota.posicao)
         .limit(limite)
     ).all()
@@ -424,6 +434,16 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
         .where(Nota.escola_id == escola.id,
                Nota.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
+        # AS FASES NÃO CONCORREM: a premiação é do 1º ao 5º ano. O corte tem de
+        # ser repetido aqui porque o painel PÚBLICO monta a lista por conta
+        # própria, sem passar por `rankings._ranking` — e a Nota já carimbada de
+        # quem saiu da população não some no recálculo, igual à do arquivado
+        # logo acima. Sem isto, a tela SEM LOGIN seria o único lugar da rede
+        # ainda mostrando a Educação Infantil disputando.
+        # Pela MATRÍCULA, não por `Turma`: a segunda consulta não dá JOIN em
+        # Turma, e um filtro por `Turma.id` ali viraria produto cartesiano.
+        .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
+            db, escola.id, escola.ano_letivo_ativo)))
         .order_by(Nota.posicao)
         .limit(limite)
     ).scalars())
