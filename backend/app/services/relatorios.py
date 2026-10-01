@@ -534,9 +534,15 @@ _CERT_POS = {
 
 
 def _certificado_plataforma_html(escola_nome: str, aluno_nome: str,
-                                 plataforma: str) -> str:
+                                 plataforma: str, *,
+                                 bimestre: int | None = None) -> str:
     """Monta o HTML do certificado da plataforma com a arte e os campos
-    preenchidos (instituição, nome, bimestre e data de hoje)."""
+    preenchidos (instituição, nome, bimestre e data de hoje).
+
+    ``bimestre`` explícito manda; sem ele, cai no bimestre do mês de emissão,
+    como antes. O padrão pelo relógio faz o MESMO aluno, com os MESMOS dados,
+    receber "3" num dia e "4" no seguinte quando a entrega atravessa a virada —
+    por isso quem emite pode fixar o número."""
     chave = "elefante" if plataforma.lower().startswith("elef") else "matific"
     fundo = _asset_data_uri(f"certificado-{chave}.png")
     agora = agora_br()
@@ -545,7 +551,8 @@ def _certificado_plataforma_html(escola_nome: str, aluno_nome: str,
             .replace("⟦TAM_NOME⟧", str(_tam_fonte_nome(aluno_nome)))
             .replace("⟦INSTITUICAO⟧", _esc_html(escola_nome))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
-            .replace("⟦BIMESTRE⟧", str(_bimestre_por_mes(agora.month)))
+            .replace("⟦BIMESTRE⟧",
+                     str(bimestre if bimestre else _bimestre_por_mes(agora.month)))
             .replace("⟦DIA⟧", f"{agora.day:02d}")
             .replace("⟦MES⟧", _MESES[agora.month]))
     for token, valor in _CERT_POS[chave].items():
@@ -554,13 +561,15 @@ def _certificado_plataforma_html(escola_nome: str, aluno_nome: str,
 
 
 def gerar_certificado_plataforma(escola_nome: str, aluno_nome: str,
-                                 plataforma: str) -> bytes:
+                                 plataforma: str, *,
+                                 bimestre: int | None = None) -> bytes:
     """Certificado de desempenho da PLATAFORMA (Elefante Letrado / Matific): a
     arte oficial como fundo A4 paisagem, com instituição, nome do aluno, bimestre
     e data preenchidos automaticamente. Vetor (texto) sobre a arte embutida =
     pronto para impressão. Genérico para as duas plataformas."""
     return _html_para_pdf_paisagem(
-        _certificado_plataforma_html(escola_nome, aluno_nome, plataforma))
+        _certificado_plataforma_html(escola_nome, aluno_nome, plataforma,
+                                     bimestre=bimestre))
 
 
 def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,

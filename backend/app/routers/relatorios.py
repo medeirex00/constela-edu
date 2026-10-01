@@ -181,10 +181,17 @@ def cartaz_ranking(
     )
 
 
+_SITUACAO = {"transferido": "transferido (saiu da escola)",
+             "fora_lista_piloto": "fora da Lista Piloto",
+             "arquivado": "arquivado",
+             "excluido": "excluído"}
+
+
 @router.get("/certificados/{aluno_id}")
 def certificado(
     aluno_id: int,
     modelo: str | None = Query(default=None, pattern="^(elefante|matific)$"),
+    bimestre: int | None = Query(default=None, ge=1, le=4),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
@@ -193,13 +200,35 @@ def certificado(
 
     `modelo=elefante|matific` usa a ARTE oficial da plataforma (personagens),
     preenchida automaticamente (instituição, nome, bimestre e data). Sem `modelo`,
-    emite o certificado geral (moldura azul-marinho, com turma e nota)."""
+    emite o certificado geral (moldura azul-marinho, com turma e nota).
+
+    `bimestre` (1–4) é o número impresso na arte da plataforma. Sem ele, o padrão
+    continua sendo o bimestre do MÊS DE EMISSÃO — e é justamente por isso que o
+    parâmetro existe: emitir no dia 30/09 imprimia "3", e no dia seguinte, 01/10,
+    a MESMA criança com os MESMOS dados recebia "4", porque o único insumo era o
+    relógio. Quando a entrega atravessa a virada do bimestre, quem emite escolhe
+    qual período o documento afirma; o padrão não mudou, para não alterar nenhum
+    certificado já combinado."""
     escola = db.get(Escola, escola_id)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
                                       usuario, aluno_id)
+    if aluno.status != "ativo":
+        # QUEM NÃO ESTÁ NA POPULAÇÃO ATIVA NÃO RECEBE DOCUMENTO OFICIAL. O ranking,
+        # os relatórios e o seletor desta tela já filtram `status == "ativo"`; só
+        # esta rota aceitava um id direto e emitia. Para um aluno TRANSFERIDO isso
+        # é um brasão afirmando que ele é da escola — o mesmo tipo de problema que
+        # a guarda de "0,0" abaixo existe para evitar. Se a escola decidir que a
+        # criança deve receber mesmo assim, o caminho é explícito e auditado:
+        # Alunos › Reativar.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"“{aluno.nome}” está com situação {_SITUACAO.get(aluno.status, aluno.status)!r} "
+            "e não faz parte da população ativa da escola — não dá para emitir um "
+            "documento oficial em nome dela. Se a criança de fato deve receber, "
+            "reative o cadastro em Alunos › Reativar e emita em seguida.")
 
     matricula = db.execute(
         select(Matricula, Turma)
@@ -234,9 +263,17 @@ def certificado(
         )
 
     if modelo in ("elefante", "matific"):
+        # A arte da plataforma NÃO passa pela guarda de mérito do `_geral()`, e isso
+        # é deliberado: ela não imprime nota nem posição — é documento de
+        # participação na plataforma, não de mérito. `test_certificado_plataforma`
+        # trava esse contrato (aluno sem nenhuma Nota recebe 200). Só a guarda de
+        # POPULAÇÃO, acima, vale para os três botões da tela.
         try:
-            conteudo = svc.gerar_certificado_plataforma(escola.nome, aluno.nome, modelo)
+            conteudo = svc.gerar_certificado_plataforma(escola.nome, aluno.nome,
+                                                       modelo, bimestre=bimestre)
         except Exception:  # noqa: BLE001 — sem Chromium/erro de render: cai no geral
+            logger.warning("arte do certificado %s falhou; caindo no geral", modelo,
+                           exc_info=True)
             conteudo = _geral()
     else:
         conteudo = _geral()

@@ -20,6 +20,13 @@ const FORMATOS = [
   { formato: "csv", rotulo: "CSV", icone: FileDown },
 ];
 
+/** Bimestre pelo calendário escolar — o MESMO mapa do backend
+ *  (`relatorios._bimestre_por_mes`): fev–abr=1, mai–jul=2, ago–set=3, out–dez=4,
+ *  jan cai no 1º. Duplicado aqui só para o seletor abrir no número de hoje. */
+export function bimestreDoMes(d: Date): number {
+  return [1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4][d.getMonth() + 1];
+}
+
 export default function Relatorios() {
   const { escolaId, usuario } = useApp();
   // Professor exporta só o superficial (ranking e alunos das turmas dele);
@@ -35,6 +42,12 @@ export default function Relatorios() {
   );
   const alunos = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
   const [alunoId, setAlunoId] = useState("");
+  // Bimestre IMPRESSO na arte da plataforma. O backend cai no bimestre do MÊS de
+  // emissão quando não recebe o parâmetro — e aí o mesmo aluno, com o mesmo dado,
+  // recebe "3" num dia e "4" no seguinte se a entrega atravessa a virada. Quem
+  // emite escolhe; o padrão é o bimestre de hoje, para a tela não mudar nada
+  // para quem não liga para isso.
+  const [bimestre, setBimestre] = useState(String(bimestreDoMes(new Date())));
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState("");
 
@@ -107,6 +120,16 @@ export default function Relatorios() {
                 </select>
               </Campo>
             </div>
+            <div className="w-40">
+              <Campo rotulo="Bimestre (arte da plataforma)">
+                <select className={estiloInput} value={bimestre}
+                        onChange={(e) => setBimestre(e.target.value)}>
+                  {[1, 2, 3, 4].map((b) => (
+                    <option key={b} value={b}>{b}º bimestre</option>
+                  ))}
+                </select>
+              </Campo>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Botao
                 variante="neutro"
@@ -117,13 +140,13 @@ export default function Relatorios() {
               </Botao>
               <Botao
                 disabled={!alunoId || ocupado !== ""}
-                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}?modelo=elefante`, "cert-elefante")}
+                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}?modelo=elefante&bimestre=${bimestre}`, "cert-elefante")}
               >
                 <BookOpen size={15} /> {ocupado === "cert-elefante" ? "Gerando..." : "Elefante Letrado"}
               </Botao>
               <Botao
                 disabled={!alunoId || ocupado !== ""}
-                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}?modelo=matific`, "cert-matific")}
+                onClick={() => baixar(`/escolas/${escolaId}/certificados/${alunoId}?modelo=matific&bimestre=${bimestre}`, "cert-matific")}
               >
                 <Calculator size={15} /> {ocupado === "cert-matific" ? "Gerando..." : "Matific"}
               </Botao>
