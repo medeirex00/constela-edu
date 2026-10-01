@@ -193,16 +193,34 @@ def test_bimestre_explicito_manda_no_que_e_impresso():
     assert '<div class="campo bimestre">4</div>' in html4
 
 
-def test_sem_bimestre_o_padrao_continua_sendo_o_mes(monkeypatch):
-    """O padrão NÃO mudou — é o que garante que nenhum certificado já combinado
-    saia diferente. O que mudou é poder fixar o número."""
+def test_o_padrao_deixou_de_ser_o_mes_e_passou_a_ser_o_calendario(monkeypatch):
+    """MUDANÇA DELIBERADA de contrato, e este teste trocou de lado por isso.
+
+    Quando esta suíte nasceu, na véspera da entrega, o padrão era o mapa por MÊS
+    e a trava aqui era justamente "o padrão não mudou" — o parâmetro novo era a
+    saída, e mexer no padrão no dia da entrega seria mexer em certificado já
+    combinado. Agora o calendário oficial da rede entrou no lugar, e o mapa por
+    mês passou a ser só a rede de segurança para ano sem datas cadastradas.
+
+    A diferença entre os dois não é cosmética: entre 01/10 e 04/10 o mapa por mês
+    diz 4 e o calendário diz 3. É uma janela de quatro dias por ano em que o
+    documento afirmava o período errado — e a entrega da João Thimóteo caiu
+    exatamente dentro dela."""
+    from datetime import datetime
+
+    from app.services import bimestres
     from app.services import relatorios as svc
 
-    assert svc._bimestre_por_mes(9) == 3, "setembro = 3º bimestre"
-    assert svc._bimestre_por_mes(10) == 4, "outubro = 4º bimestre (a virada)"
+    monkeypatch.setattr(svc, "agora_br", lambda: datetime(2026, 10, 1, 9, 0))
     html = svc._certificado_plataforma_html("EMEF X", "ANA", "matific")
-    esperado = svc._bimestre_por_mes(svc.agora_br().month)
-    assert f'<div class="campo bimestre">{esperado}</div>' in html
+    assert '<div class="campo bimestre">3</div>' in html
+    assert svc._bimestre_por_mes(10) == 4, (
+        "o mapa por mês continua existindo e dizendo 4 — ele só não manda mais")
+    assert bimestres.bimestre_da_data(datetime(2026, 10, 1).date()) == 3
+
+    monkeypatch.setattr(svc, "agora_br", lambda: datetime(2026, 10, 5, 9, 0))
+    html = svc._certificado_plataforma_html("EMEF X", "ANA", "matific")
+    assert '<div class="campo bimestre">4</div>' in html, "05/10 já é o 4º"
 
 
 def test_o_bimestre_chega_ao_pdf_pelo_endpoint(cliente, db, escola_completa):

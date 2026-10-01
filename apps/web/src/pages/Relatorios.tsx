@@ -20,11 +20,44 @@ const FORMATOS = [
   { formato: "csv", rotulo: "CSV", icone: FileDown },
 ];
 
-/** Bimestre pelo calendário escolar — o MESMO mapa do backend
- *  (`relatorios._bimestre_por_mes`): fev–abr=1, mai–jul=2, ago–set=3, out–dez=4,
- *  jan cai no 1º. Duplicado aqui só para o seletor abrir no número de hoje. */
-export function bimestreDoMes(d: Date): number {
-  return [1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4][d.getMonth() + 1];
+/** Calendário oficial dos bimestres (Rede Estadual de SP, 2026) — as MESMAS
+ *  datas de `backend/app/services/bimestres.py`, que é quem manda. Aqui elas só
+ *  decidem qual opção o seletor abre marcada; o número impresso é sempre o que
+ *  o backend recebe. Fim de cada bimestre, inclusivo: 22/04, 23/07, 04/10, 31/12.
+ *
+ *  Não é o mês do relógio: em 01/10 o 3º bimestre ainda não acabou, e era
+ *  exatamente aí que o mapa por mês fazia o seletor abrir em "4º". */
+const FIM_DO_BIMESTRE: Array<[number, number, number]> = [
+  [1, 2026, Date.UTC(2026, 3, 22)],
+  [2, 2026, Date.UTC(2026, 6, 23)],
+  [3, 2026, Date.UTC(2026, 9, 4)],
+  [4, 2026, Date.UTC(2026, 11, 31)],
+];
+
+export function bimestreDeHoje(d: Date): number {
+  const dia = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  const doAno = FIM_DO_BIMESTRE.filter(([, ano]) => ano === d.getFullYear());
+  if (!doAno.length) return 1; // ano sem calendário: o backend decide o padrão
+  const achado = doAno.find(([, , fim]) => dia <= fim);
+  return achado ? achado[0] : 4;
+}
+
+/** Turmas que NÃO concorrem às premiações — espelho de
+ *  `backend/app/services/elegibilidade.py`. O backend barra de verdade (409);
+ *  isto aqui só evita oferecer na tela um nome que não pode ser emitido. */
+const RE_ETAPA_FORA =
+  /\b(FASE|ETAPA|EMEI|INFANTIL|MATERNAL|BERCARIO|CRECHE|JARDIM|PRE|EJA|MINIGRUPO)\b/;
+// O `O` maiúsculo na classe não é descuido: NFKD decompõe "º" em "o", e o rótulo
+// é passado para MAIÚSCULAS logo em seguida — "4º" chega aqui como "4O".
+const RE_ANO_EXPLICITO = /\b(\d\s*[º°O]?\s*ANO|ANO\s*\d)\b/;
+
+export function participaDePremiacao(anoEscolar: string | null | undefined): boolean {
+  const plano = (anoEscolar ?? "")
+    .normalize("NFKD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
+  if (!plano) return true; // sem rótulo não dá para afirmar que é fase
+  if (!RE_ANO_EXPLICITO.test(plano) && RE_ETAPA_FORA.test(plano)) return false;
+  const n = Number((plano.match(/\d/) ?? [])[0]);
+  return n >= 1 && n <= 5;
 }
 
 export default function Relatorios() {
@@ -38,16 +71,22 @@ export default function Relatorios() {
     : RELATORIOS.filter((r) => r.tipo === "ranking" || r.tipo === "alunos");
   // Lista de alunos para o seletor de certificados (leitura via useApi).
   const { dados: paginaAlunos, erro: erroAlunos } = useApi<PaginaAlunos>(
-    escolaId ? `/escolas/${escolaId}/alunos?por_pagina=100` : null,
+    escolaId ? `/escolas/${escolaId}/alunos?por_pagina=500` : null,
   );
-  const alunos = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
+  // Só quem concorre entra no seletor. A Educação Infantil continua ativa e
+  // matriculada — ela só não disputa premiação, e oferecer o nome aqui seria
+  // oferecer um botão que o backend vai recusar com 409.
+  const alunos = (paginaAlunos?.itens ?? [])
+    .filter((aluno) => participaDePremiacao(aluno.ano_escolar))
+    .map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
+  const foraDaPremiacao = (paginaAlunos?.itens ?? []).length - alunos.length;
   const [alunoId, setAlunoId] = useState("");
   // Bimestre IMPRESSO na arte da plataforma. O backend cai no bimestre do MÊS de
   // emissão quando não recebe o parâmetro — e aí o mesmo aluno, com o mesmo dado,
   // recebe "3" num dia e "4" no seguinte se a entrega atravessa a virada. Quem
   // emite escolhe; o padrão é o bimestre de hoje, para a tela não mudar nada
   // para quem não liga para isso.
-  const [bimestre, setBimestre] = useState(String(bimestreDoMes(new Date())));
+  const [bimestre, setBimestre] = useState(String(bimestreDeHoje(new Date())));
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState("");
 
@@ -106,6 +145,20 @@ export default function Relatorios() {
             O <strong>Geral</strong> traz turma, nota e posição; os de <strong>Elefante Letrado</strong> e
             <strong> Matific</strong> usam a arte oficial da plataforma.
           </p>
+          <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+            O <strong>bimestre</strong> é o período que o documento afirma, e não a data em que
+            ele sai: dá para emitir hoje um certificado do 3º bimestre. O seletor abre no
+            bimestre de hoje pelo calendário oficial, mas a sua escolha é que vale.
+            {foraDaPremiacao > 0 && (
+              <>
+                {" "}As premiações são do <strong>1º ao 5º ano</strong>;{" "}
+                {foraDaPremiacao === 1
+                  ? "1 aluno de Educação Infantil não aparece na lista"
+                  : `${foraDaPremiacao} alunos de Educação Infantil não aparecem na lista`}
+                {" "}— o cadastro e a matrícula deles seguem normais.
+              </>
+            )}
+          </p>
           {erroAlunos && (
             <div className="mb-4"><Mensagem tipo="erro">Não foi possível carregar os alunos: {erroAlunos.message}</Mensagem></div>
           )}
@@ -120,12 +173,12 @@ export default function Relatorios() {
                 </select>
               </Campo>
             </div>
-            <div className="w-40">
-              <Campo rotulo="Bimestre (arte da plataforma)">
+            <div className="w-44">
+              <Campo rotulo="Bimestre">
                 <select className={estiloInput} value={bimestre}
                         onChange={(e) => setBimestre(e.target.value)}>
                   {[1, 2, 3, 4].map((b) => (
-                    <option key={b} value={b}>{b}º bimestre</option>
+                    <option key={b} value={b}>{b}º Bimestre</option>
                   ))}
                 </select>
               </Campo>

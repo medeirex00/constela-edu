@@ -44,6 +44,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import bloquear_escola_para_recalculo
+from app.services import elegibilidade
 from app.models import (
     Aluno,
     Configuracao,
@@ -1084,6 +1085,20 @@ def _carregar_contexto(db: Session, escola_id: int):
         )
         .options(selectinload(Matricula.aluno))  # evita N+1 em matricula.aluno
     ).all()
+
+    # AS FASES NÃO CONCORREM (decisão de produto): a premiação é do Fundamental I,
+    # 1º ao 5º ano. As turmas de Educação Infantil que a Lista Piloto traz junto
+    # saem da população ANTES de qualquer conta — e sair daqui é o que faz a
+    # POSIÇÃO ficar certa em todo lugar de uma vez (ranking, pódio e o número que
+    # o certificado de mérito imprime), em vez de cada leitor renumerar por conta
+    # própria e os três discordarem.
+    #
+    # Não apaga nada: a Nota já gravada de quem sai continua no banco, exatamente
+    # como a de um aluno arquivado, e os leitores a filtram. A criança segue
+    # matriculada, ativa e com histórico intacto — isto é elegibilidade, não
+    # cadastro.
+    matriculas = [(m, t) for m, t in matriculas
+                  if elegibilidade.participa_de_premiacao(t.ano_escolar)]
 
     # Restringe os snapshots ao conjunto PONTUADO (ativos matriculados no ano) —
     # o mesmo dos `pontos_dif` abaixo. Sem isto, o snapshot de um aluno arquivado/

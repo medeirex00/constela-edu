@@ -316,8 +316,25 @@ def _payload_matific_placar(texto: str) -> dict | None:
 _RE_SERIE_NO_NOME = re.compile(r"^\s*(\d)\s*[ºo°]?\s*(?:ano)?\b", re.IGNORECASE)
 
 
+#: "1 FASE A", "2 FASE B" — o mesmo dígito à frente, mas de uma ETAPA, não de um
+#: ano. Captura o dígito e a palavra para o rótulo sair fiel.
+_RE_ETAPA_NO_NOME = re.compile(
+    r"^\s*(\d)\s*[ªa]?\s*(fase|etapa)\b", re.IGNORECASE)
+
+
 def _ano_escolar_do_nome(nome: str) -> str:
-    """Deriva a série do nome da turma: "5 ANO B MANHA ANUAL" → "5º Ano"."""
+    """Deriva a série do nome da turma: "5 ANO B MANHA ANUAL" → "5º Ano".
+
+    FABRICAVA ANO A PARTIR DE FASE. O ``(?:ano)?`` do padrão é OPCIONAL, então
+    "1 FASE A" casava o dígito, não casava "ano", e saía daqui como ``"1º Ano"``
+    — uma turma de Educação Infantil entrando no banco com rótulo de Fundamental.
+    Depois disso nenhuma regra a jusante consegue excluí-la da premiação: o dado
+    já chegou mentindo. Agora a etapa é reconhecida ANTES e o rótulo sai fiel
+    ("1ª Fase"), que é o mesmo que a Lista Piloto grava quando vem a aba certa.
+    """
+    etapa = _RE_ETAPA_NO_NOME.match(nome or "")
+    if etapa:
+        return f"{etapa.group(1)}ª {etapa.group(2).capitalize()}"
     par = _RE_SERIE_NO_NOME.match(nome or "")
     return f"{par.group(1)}º Ano" if par else ""
 

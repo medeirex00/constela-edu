@@ -28,7 +28,7 @@ from app.schemas import (
     RankingItemOut,
     RankingTurnoOut,
 )
-from app.services import modulos as svc_modulos
+from app.services import elegibilidade, modulos as svc_modulos
 from app.services import (dificuldade_livro, periodos, permissoes,
                           premiacoes as svc_premiacoes, scoring, turnos)
 from app.services.audit import registrar
@@ -130,6 +130,14 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     if turma_ids is not None:  # professor: só as turmas dele (posição segue geral)
         consulta = consulta.where(Turma.id.in_(turma_ids))
+    # AS FASES NÃO CONCORREM. O motor já as tirou da população, então elas não
+    # recebem posição nova — mas a Nota ANTIGA delas continua no banco (o
+    # recálculo não apaga linha de quem saiu da população, igual ao arquivado
+    # logo acima). Sem este corte na LEITURA, aquela linha congelada voltaria a
+    # aparecer na lista. O mobile e o painel público herdam de graça: os dois
+    # chamam esta mesma função.
+    consulta = consulta.where(
+        Turma.id.in_(elegibilidade.turmas_premiaveis(db, escola_id, ano)))
     # `turno` é kwarg NO FIM da assinatura: consumidores externos (app mobile,
     # painel público) chamam posicionalmente e não podem mudar de significado.
     consulta = _aplicar_turno(consulta, turno)

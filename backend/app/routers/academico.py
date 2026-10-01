@@ -84,7 +84,12 @@ def listar_alunos(
     turma_id: int | None = Query(default=None),
     ano_escolar: str | None = Query(default=None),
     pagina: int = Query(default=1, ge=1),
-    por_pagina: int = Query(default=25, ge=1, le=100),
+    # Teto de 100 virou 1000: a tela de Certificados pede UMA página e monta o
+    # seletor com ela. Com 100 no teto, as quatro escolas da rede que passam de
+    # 100 ativos (110, 243, 467 e 532) simplesmente não conseguiam emitir
+    # certificado para quem ficasse fora dos 100 primeiros nomes — sem erro
+    # nenhum na tela, o aluno só não existia na lista. O default segue 25.
+    por_pagina: int = Query(default=25, ge=1, le=1000),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):

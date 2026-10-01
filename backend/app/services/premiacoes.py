@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, SnapshotElefante,
                         SnapshotMatific, Turma)
-from app.services import dificuldade_livro, matific_destaque, scoring
+from app.services import dificuldade_livro, elegibilidade, matific_destaque, scoring
 from app.services import turnos as svc_turnos
 from app.services.evolucao import _series_por_aluno
 
@@ -101,9 +101,13 @@ def _alunos_ativos(db: Session, escola_id: int, ano: int,
         consulta = consulta.where(Turma.id == turma_id)
     if turma_ids is not None:  # professor: só as turmas designadas a ele
         consulta = consulta.where(Turma.id.in_(turma_ids))
+    # AS FASES NÃO CONCORREM: a premiação é do 1º ao 5º ano. Filtrar AQUI tira a
+    # Educação Infantil da coorte E do pódio de uma vez — as duas saem desta
+    # mesma função —, então não há como o denominador e a lista discordarem.
     return {aid: {"nome": nome, "turma": turma, "turma_id": tid,
                   "ano_escolar": serie, "turno": turno}
-            for aid, nome, turma, tid, serie, turno in db.execute(consulta).all()}
+            for aid, nome, turma, tid, serie, turno in db.execute(consulta).all()
+            if elegibilidade.participa_de_premiacao(serie)}
 
 
 def _recorte(coorte: dict[int, dict], turma_id: int | None,

@@ -21,7 +21,7 @@ from app.core.tempo import agora_br
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, Nota,
                         SnapshotElefante, SnapshotMatific, Turma)
-from app.services import scoring
+from app.services import bimestres, scoring
 
 _log = logging.getLogger(__name__)
 
@@ -459,12 +459,25 @@ _MESES = ["", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
 
 
 def _bimestre_por_mes(mes: int) -> int:
-    """Bimestre pelo calendário escolar padrão: fev–abr=1, mai–jul=2, ago–set=3,
-    out–dez=4 (jan cai no 1º). Usado quando os dados do relatório não trazem o
-    bimestre — que é o caso hoje; a prioridade é o dado do relatório, senão a
-    data de emissão."""
-    return {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2,
-            8: 3, 9: 3, 10: 4, 11: 4, 12: 4}[mes]
+    """Bimestre pelo MÊS — aproximação legada, mantida só como rede de segurança
+    para anos sem calendário oficial cadastrado.
+
+    Não é mais o que decide o número impresso: isso agora é
+    :func:`app.services.bimestres.bimestre_sugerido`, que usa as datas reais. O
+    mapa por mês erra exatamente onde a pergunta importa — pelo calendário de
+    2026 o 3º bimestre vai até 04/10, e este mapa já dizia 4 no dia 01/10."""
+    return bimestres.por_mes_legado(mes)
+
+
+def _tam_fonte_instituicao(nome: str) -> int:
+    """Corpo do nome da escola que CABE na linha, sem quebrar.
+
+    A caixa tinha corpo fixo de 20px, e "EMEI / EMEF JOÃO THIMÓTEO DO ROSÁRIO"
+    não cabia: quebrava em duas linhas e a segunda saía por cima do traço
+    impresso na arte. Mesma ideia do nome do aluno — encolhe para caber —, com o
+    teto nos 20px de antes, para nenhum certificado já combinado mudar de
+    aparência. A caixa tem 32% de 297mm ≈ 360px."""
+    return max(9, min(20, int(360 / (max(len(nome), 1) * 0.58))))
 
 
 def _tam_fonte_nome(nome: str) -> int:
@@ -485,19 +498,32 @@ _CERT_PLATAFORMA_TEMPLATE = """<style>
   .fundo { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; z-index:0; }
   .campo { position:absolute; z-index:1; display:flex; align-items:center;
            justify-content:center; text-align:center; line-height:1; overflow:hidden; }
-  .instituicao { left:28.5%; top:⟦INST⟧%; width:32%; height:4.2%; font-size:20px; color:#333333; }
-  .nome { left:19%; top:⟦NOME⟧%; width:62%; height:10%; background:#ffffff;
+  .instituicao { left:28.5%; top:⟦INST⟧%; width:32%; height:4.2%; color:#333333;
+                 white-space:nowrap; }
+  .nome { left:19%; top:⟦NOME⟧%; width:62%; height:10%; background:⟦FUNDOCOR⟧;
           font-weight:800; color:#16235a; text-transform:uppercase; letter-spacing:.5px; }
   .bimestre { left:⟦BIML⟧%; top:⟦BIMT⟧%; width:4%; height:3%; font-weight:700; color:#333333; font-size:17px; }
-  .dia { left:⟦DIAL⟧%; top:⟦DT⟧%; width:5%; height:3.4%; color:#333333; font-size:18px; }
-  .mes { left:⟦MESL⟧%; top:⟦DT⟧%; width:14%; height:3.4%; color:#333333; font-size:18px; }
+  /* A DATA É UM BLOCO SÓ. Antes eram duas caixas absolutas independentes
+     (.dia e .mes), cada uma centrando o próprio texto numa largura fixa, cada
+     uma tendo de pousar num tracinho desenhado no PNG — e a cola entre elas
+     ("de") e o ano eram pixels da arte. O dia do Matific caía 10,6% da página à
+     esquerda do tracinho dele, e o mês saía por cima do traço. Aqui a frase
+     inteira é uma linha de texto normal, centrada numa caixa única: dia, mês e
+     ano não têm como se separar, e o espaçamento entre eles passa a ser o da
+     tipografia, não a diferença de dois números mágicos. A faixa branca cobre a
+     linha impressa na arte — a mesma técnica que o .nome já usava —, o que de
+     quebra tira o ano de 2026 que estava CRAVADO no PNG. */
+  .data { left:30%; top:⟦DT⟧%; width:40%; height:4.2%; background:⟦FUNDOCOR⟧;
+          color:#333333; font-size:19px; white-space:nowrap; }
+  .data .v { display:inline-block; padding:0 .7em; margin:0 .12em;
+             border-bottom:1.6px solid #4a4a4a; }
 </style>
 <img class="fundo" src="⟦FUNDO⟧" alt="">
-<div class="campo instituicao">⟦INSTITUICAO⟧</div>
+<div class="campo instituicao" style="font-size:⟦TAM_INST⟧px">⟦INSTITUICAO⟧</div>
 <div class="campo nome" style="font-size:⟦TAM_NOME⟧px">⟦ALUNO⟧</div>
 <div class="campo bimestre">⟦BIMESTRE⟧</div>
-<div class="campo dia">⟦DIA⟧</div>
-<div class="campo mes">⟦MES⟧</div>
+<div class="campo data"><span><span class="v">⟦DIA⟧</span> de <span
+     class="v">⟦MES⟧</span> de ⟦ANO⟧</span></div>
 """
 
 
@@ -522,14 +548,24 @@ def _html_para_pdf_paisagem(corpo: str) -> bytes:
     return pdf
 
 
-# Posições dos campos (em % da página) POR arte — as duas plataformas têm o
-# mesmo texto, mas em alturas diferentes; por isso cada uma tem o seu conjunto.
-# Calibradas por renderização (screenshot) sobre a arte 1492×1054.
+# Posições dos campos (em % da página) POR arte. Só a ALTURA (e a altura do
+# bimestre, que pousa num branco no meio de uma frase) muda entre as duas artes:
+# a horizontal de todo o resto é centralização, não coordenada. Os dois números
+# que sobravam aqui — DIAL e MESL, o "esquerda do dia" e o "esquerda do mês" —
+# sumiram junto com as caixas independentes da data; eram eles que erravam.
+# Os valores vêm de MEDIÇÃO dos traços na arte 1492×1054 (varredura de pixel),
+# não de tentativa e erro: traço da data em 91,37% (matific) e 97,06%
+# (elefante); a caixa fica ~2,7% acima para a sublinha cair sobre ele.
 _CERT_POS = {
+    # FUNDOCOR = a cor REAL do papel de cada arte, amostrada do PNG (a moda dos
+    # pixels da faixa). Com #ffffff a máscara aparecia como um retângulo mais
+    # claro que o resto do certificado — o fundo do Matific é #fdfdfd e o do
+    # Elefante #fcfcfc, e dois níveis de diferença bastam para o olho ver a
+    # emenda numa impressão.
     "elefante": {"INST": "38", "NOME": "45.6", "BIML": "44", "BIMT": "61",
-                 "DT": "94.4", "DIAL": "34", "MESL": "45"},
+                 "DT": "94.4", "FUNDOCOR": "#fcfcfc"},
     "matific":  {"INST": "33.6", "NOME": "42", "BIML": "47.8", "BIMT": "58.4",
-                 "DT": "89.4", "DIAL": "28", "MESL": "39"},
+                 "DT": "88.7", "FUNDOCOR": "#fdfdfd"},
 }
 
 
@@ -546,15 +582,22 @@ def _certificado_plataforma_html(escola_nome: str, aluno_nome: str,
     chave = "elefante" if plataforma.lower().startswith("elef") else "matific"
     fundo = _asset_data_uri(f"certificado-{chave}.png")
     agora = agora_br()
+    # BIMESTRE AVALIADO e DATA DE EMISSÃO são coisas diferentes, e aqui elas se
+    # separam: o bimestre é a escolha de quem emite (ou, sem escolha, o bimestre
+    # em que HOJE cai pelo calendário oficial — não pelo mês do relógio); a data
+    # é sempre o dia da emissão. Um certificado do 3º bimestre emitido em
+    # 01/10/2026 é normal, e agora sai escrito assim.
+    numero = bimestre if bimestre else bimestres.bimestre_sugerido(agora.date())
     html = (_CERT_PLATAFORMA_TEMPLATE
             .replace("⟦FUNDO⟧", fundo)
             .replace("⟦TAM_NOME⟧", str(_tam_fonte_nome(aluno_nome)))
+            .replace("⟦TAM_INST⟧", str(_tam_fonte_instituicao(escola_nome)))
             .replace("⟦INSTITUICAO⟧", _esc_html(escola_nome))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
-            .replace("⟦BIMESTRE⟧",
-                     str(bimestre if bimestre else _bimestre_por_mes(agora.month)))
+            .replace("⟦BIMESTRE⟧", str(numero))
             .replace("⟦DIA⟧", f"{agora.day:02d}")
-            .replace("⟦MES⟧", _MESES[agora.month]))
+            .replace("⟦MES⟧", _MESES[agora.month])
+            .replace("⟦ANO⟧", str(agora.year)))
     for token, valor in _CERT_POS[chave].items():
         html = html.replace(f"⟦{token}⟧", valor)
     return html

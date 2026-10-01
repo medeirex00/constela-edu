@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Matricula, Nota, Turma, Usuario
+from app.services import elegibilidade
 from app.services import permissoes
 from app.services import relatorios as svc
 from app.services.audit import registrar
@@ -236,6 +237,25 @@ def certificado(
         .where(Matricula.aluno_id == aluno_id,
                Matricula.ano_letivo == escola.ano_letivo_ativo)
     ).first()
+    # AS FASES NÃO CONCORREM. A premiação é do Fundamental I (1º ao 5º ano); as
+    # turmas de Educação Infantil que a Lista Piloto traz junto não disputam, e
+    # portanto não recebem NENHUM dos três documentos — nem o Mérito nem a arte
+    # de participação. Isto é elegibilidade, não cadastro: a criança continua
+    # matriculada, ativa e com histórico intacto.
+    #
+    # Só bloqueia quando a série é CONHECIDA e não elegível. Sem matrícula no ano
+    # (ou com rótulo em branco) não dá para afirmar que é fase, e o contrato
+    # antigo — aluno sem matrícula alguma recebe a arte — continua valendo;
+    # `test_certificado_plataforma` o trava.
+    if matricula is not None and matricula[1].ano_escolar:
+        if not elegibilidade.participa_de_premiacao(matricula[1].ano_escolar):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{aluno.nome}” está em {matricula[1].nome!r} "
+                f"({matricula[1].ano_escolar}), que não participa das premiações "
+                "— elas são do 1º ao 5º ano. O cadastro e a matrícula seguem "
+                "normais; o que não há é certificado de premiação para esta turma.")
+
     nota = db.execute(
         select(Nota).where(Nota.aluno_id == aluno_id,
                            Nota.ano_letivo == escola.ano_letivo_ativo)
