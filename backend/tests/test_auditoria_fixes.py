@@ -140,11 +140,18 @@ def test_trocar_propria_senha_invalida_sessoes(cliente, db, escola_completa):
 
 # --- A5: certificado geral não emite "nota 0,0" para aluno sem Nota -----------
 
-def test_certificado_geral_recusa_aluno_sem_nota(cliente, escola_completa):
+def test_certificado_geral_recusa_aluno_sem_nota(cliente, db, escola_completa):
     """Aluno recém-cadastrado (sem Nota calculada) → 422, em vez de um documento
     oficial afirmando 'nota geral 0,0'."""
     escola = escola_completa["escola"]
     aluno = escola_completa["alunos"][0]   # sem snapshot/nota nesta fixture
+    # CONFIRMADO na Lista Piloto, para o 422 continuar medindo a guarda de MÉRITO.
+    # Sem o campo, quem barraria antes seria a guarda da Lista Piloto (409, ver
+    # ``test_certificado_lista_piloto``) e este teste deixaria de provar o que diz
+    # provar. A fixture não carimba o campo de propósito: ela representa aluno que
+    # não veio da importação da lista, e ``test_lista_piloto`` depende disso.
+    aluno.da_lista_piloto = True
+    db.commit()
     # Sem `modelo` = certificado GERAL (o que estampa a nota).
     r = cliente.get(f"{_base(escola.id)}/certificados/{aluno.id}")
     assert r.status_code == 422, r.text

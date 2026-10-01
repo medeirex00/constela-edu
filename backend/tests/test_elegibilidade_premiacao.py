@@ -161,9 +161,16 @@ def test_a_guarda_de_populacao_continua_valendo(cliente, db, escola_completa):
 
 def test_sem_matricula_o_contrato_antigo_continua(cliente, db, escola_completa):
     """Sem matrícula no ano não dá para afirmar que é fase — e o contrato antigo
-    (``test_certificado_plataforma``) diz que esse aluno recebe a arte."""
+    (``test_certificado_plataforma``) diz que esse aluno recebe a arte.
+
+    ``da_lista_piloto=True`` é o que mantém este teste medindo a guarda de SÉRIE,
+    que é a dele. Sem o campo, quem barraria seria a guarda da Lista Piloto
+    (``test_certificado_lista_piloto``), e aí o 409 não provaria nada sobre série:
+    aluno sem matrícula E sem confirmação na lista é justamente o caso mais
+    arriscado, e esse continua bloqueado — de propósito."""
     escola = escola_completa["escola"]
-    a = Aluno(escola_id=escola.id, nome="SEM MATRICULA NENHUMA")
+    a = Aluno(escola_id=escola.id, nome="SEM MATRICULA NENHUMA",
+              da_lista_piloto=True)
     db.add(a)
     db.commit()
 

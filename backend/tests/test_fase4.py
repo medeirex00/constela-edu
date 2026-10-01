@@ -171,6 +171,11 @@ def test_certificado_pdf(cliente, db, escola_completa):
     _dados_basicos(db, escola_completa)
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
+    # CONFIRMADA na Lista Piloto: desde a guarda de ``test_certificado_lista_piloto``
+    # a ficha que a importação da lista nunca casou não recebe documento oficial.
+    # A fixture não carimba o campo de propósito (``test_lista_piloto`` depende
+    # disso), então quem emite certificado carimba no próprio teste.
+    ana.da_lista_piloto = True
     scoring.recalcular_escola(db, escola.id)
 
     resposta = cliente.get(f"/api/v1/escolas/{escola.id}/certificados/{ana.id}")
@@ -262,6 +267,7 @@ def test_pdf_com_nome_longo_nao_quebra(cliente, db, escola_completa):
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     ana.nome = "AGATHA VITORYA LOURENÇO PEREIRA DOS SANTOS DE OLIVEIRA"
+    ana.da_lista_piloto = True       # ver nota em test_certificado_pdf
     db.commit()
     scoring.recalcular_escola(db, escola.id)
 

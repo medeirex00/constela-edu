@@ -256,6 +256,36 @@ def certificado(
                 "— elas são do 1º ao 5º ano. O cadastro e a matrícula seguem "
                 "normais; o que não há é certificado de premiação para esta turma.")
 
+    # FICHA NÃO CONFIRMADA NA LISTA PILOTO NÃO RECEBE DOCUMENTO OFICIAL SOZINHA.
+    # `da_lista_piloto=False` significa que a importação da Lista Piloto nunca
+    # casou este nome: a ficha nasceu de um relatório de plataforma, pelo
+    # `aluno.criado_auto`, e por isso vem sem RA e sem data de nascimento. Em
+    # 01/10/2026 havia 120 fichas assim nos rankings da rede, duas delas criadas
+    # naquela manhã por uma sincronização (2351 e 2352).
+    #
+    # Elas CONTINUAM no ranking de propósito — ver o módulo
+    # ``test_elegibilidade_lista_piloto``: fechar a população neste campo apagaria
+    # metade do desempenho de 25 crianças cujo dado está partido entre a ficha
+    # oficial e o stub, e o conserto certo é FUSÃO. Mas um certificado é documento
+    # com brasão afirmando o nome de uma criança, e aqui o custo do erro é
+    # assimétrico: deixar de emitir é um clique a mais, emitir errado é um
+    # documento oficial no nome de alguém que talvez não exista.
+    #
+    # O caminho da confirmação humana já existe e não é novo: importar a Lista
+    # Piloto (que reconhece o cadastro e carimba o campo) ou fundir a duplicata em
+    # Alunos › Duplicatas. Qualquer um dos dois libera a emissão. Esta guarda fica
+    # ANTES da escolha do modelo, de propósito: vale para o Mérito e também para
+    # as duas artes de participação, que não passam pela guarda de nota.
+    if not aluno.da_lista_piloto:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"“{aluno.nome}” ainda não está confirmado na Lista Piloto desta "
+            "escola, então não dá para emitir um documento oficial no nome dele. "
+            "Esta ficha foi criada a partir de um relatório de plataforma e está "
+            "sem RA e sem data de nascimento. Importe a Lista Piloto em Estrutura "
+            "› Matrículas, ou funda a ficha duplicada em Alunos › Duplicatas, e "
+            "emita em seguida.")
+
     nota = db.execute(
         select(Nota).where(Nota.aluno_id == aluno_id,
                            Nota.ano_letivo == escola.ano_letivo_ativo)

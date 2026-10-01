@@ -34,7 +34,10 @@ def test_html_plataforma_arte_e_posicoes_por_plataforma():
 
 def test_endpoint_emite_pdf_por_plataforma(cliente, db, escola_completa):
     escola = escola_completa["escola"]
-    aluno = Aluno(escola_id=escola.id, nome="Maria Teste")
+    # `da_lista_piloto=True`: a arte de participação não passa pela guarda de nota,
+    # mas passa pela da Lista Piloto — ficha não confirmada não recebe NENHUM dos
+    # três documentos. Ver ``test_certificado_lista_piloto``.
+    aluno = Aluno(escola_id=escola.id, nome="Maria Teste", da_lista_piloto=True)
     db.add(aluno)
     db.commit()
 
