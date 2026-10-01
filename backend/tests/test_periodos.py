@@ -8,7 +8,7 @@ import pytest
 
 from app.models import Leitura
 from app.services import dificuldade_livro as dl
-from app.services import periodos
+from app.services import bimestres, periodos
 from app.services.premiacoes import _podio
 
 
@@ -37,10 +37,15 @@ def _importar_leitura(cliente, escola_id, aluno, livro, nivel, data_iso, tempo=N
 
 def test_resolver_presets():
     h = date(2026, 7, 17)
+    # BIMESTRE: as datas do calendário OFICIAL da rede, não o bimestre do
+    # calendário civil. 17/07/2026 cai no 2º bimestre (23/04 a 23/07) — antes
+    # daqui este teste exigia 01/07 a 31/08 e era ele que travava o defeito que
+    # coroava a criança errada em 4 das 5 escolas. Ver
+    # ``test_periodo_bimestre_oficial.py``.
     i, f, _ = periodos.resolver("bimestre", h, 2026)
-    assert i.date() == date(2026, 7, 1) and f.date() == date(2026, 8, 31)
+    assert (i.date(), f.date()) == bimestres.intervalo(2, 2026)
     i, f, _ = periodos.resolver("bimestre_anterior", h, 2026)
-    assert i.date() == date(2026, 5, 1) and f.date() == date(2026, 6, 30)
+    assert (i.date(), f.date()) == bimestres.intervalo(1, 2026)
     i, f, _ = periodos.resolver("mes", h, 2026)
     assert i.date() == date(2026, 7, 1) and f.date() == date(2026, 7, 31)
     # "semana": segunda-feira até hoje (2026-07-17 é sexta → semana começa 13).
@@ -146,11 +151,12 @@ def test_evolucao_leitura_por_mes_e_bimestre(cliente, escola_completa):
     assert jul["nivel_medio"] == pytest.approx((_v("AA") + _v("D")) / 2, abs=0.02)  # pontos/livros
     assert ago["rotulo"] == "ago/2026" and ago["livros"] == 1
 
-    # julho e agosto caem no mesmo 4º bimestre → um único balde de 3 livros
+    # Balde por bimestre LETIVO: 05/07 e 20/07 estão no 2º (fecha 23/07) e
+    # 02/08 já está no 3º. Antes da fonte única os três caíam juntos num "4º
+    # bimestre" que vinha do calendário civil.
     por_bim = cliente.get(base + "?granularidade=bimestre").json()
-    assert len(por_bim["series"]) == 1
-    assert por_bim["series"][0]["livros"] == 3
-    assert "bim" in por_bim["series"][0]["rotulo"]
+    assert [(s["rotulo"], s["livros"]) for s in por_bim["series"]] == [
+        ("2º bim 2026", 2), ("3º bim 2026", 1)]
 
 
 # --- Premiações por período -------------------------------------------------

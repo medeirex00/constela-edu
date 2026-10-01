@@ -36,7 +36,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, matific_destaque, scoring
+from app.services import bimestres, dificuldade_livro, matific_destaque, scoring
 
 CAMPOS_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 CAMPOS_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
@@ -160,7 +160,12 @@ def _bucket_leitura(dt: datetime, granularidade: str) -> tuple[tuple, str]:
         ano, semana, _ = dt.isocalendar()
         return (ano, semana), f"Sem {semana:02d}/{ano}"
     if granularidade == "bimestre":
-        bimestre = (dt.month - 1) // 2 + 1
+        # Bimestre LETIVO (calendário oficial da rede), não o do calendário civil:
+        # ``(mês-1)//2+1`` chegava a rotular "5º bim" e "6º bim", que não existem
+        # num ano letivo, e punha jul e ago no mesmo balde quando o 2º bimestre
+        # fecha em 23/07. ``bimestre_sugerido`` sempre devolve 1–4 (e em ano sem
+        # calendário cadastrado cai no mapa por mês), então o eixo nunca quebra.
+        bimestre = bimestres.bimestre_sugerido(dt.date())
         return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
     return (dt.year, dt.month), f"{_MES_ABREV[dt.month]}/{dt.year}"  # mês (padrão)
 

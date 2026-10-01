@@ -27,6 +27,13 @@ export const PRESETS_PERIODO = [
   { valor: "mes_anterior", rotulo: "Mês passado" },
   { valor: "bimestre", rotulo: "Este bimestre" },
   { valor: "bimestre_anterior", rotulo: "Bimestre passado" },
+  // Bimestre pelo NÚMERO, nas datas do calendário oficial da rede. "Este
+  // bimestre" muda de janela quando o dia vira (em 05/10/2026 passa a ser o 4º),
+  // então quem vai PREMIAR um bimestre escolhe o número — a janela não se move.
+  { valor: "bimestre_1", rotulo: "1º bimestre" },
+  { valor: "bimestre_2", rotulo: "2º bimestre" },
+  { valor: "bimestre_3", rotulo: "3º bimestre" },
+  { valor: "bimestre_4", rotulo: "4º bimestre" },
   { valor: "ano_letivo", rotulo: "Ano letivo" },
   { valor: "personalizado", rotulo: "Período personalizado" },
 ] as const;

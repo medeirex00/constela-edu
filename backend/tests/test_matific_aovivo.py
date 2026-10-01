@@ -38,8 +38,15 @@ def test_mapa_filtro_presets_nativos_e_datas():
         "start_date=2026-07-14&end_date=2026-07-14"
     assert aovivo.mapa_filtro("mes", None, None, 2026, hoje)[0] == \
         "start_date=2026-07-01&end_date=2026-07-14"
+    # BIMESTRE: as datas do calendário OFICIAL da rede. 14/07/2026 cai no 2º
+    # bimestre (23/04 a 23/07), então o início é 23/04 — não 01/07, que era o
+    # bimestre do calendário civil. O MECANISMO não mudou: continua indo por
+    # start_date/end_date, com o fim limitado a hoje (nunca data futura).
     assert aovivo.mapa_filtro("bimestre", None, None, 2026, hoje)[0] == \
-        "start_date=2026-07-01&end_date=2026-07-14"
+        "start_date=2026-04-23&end_date=2026-07-14"
+    # E o bimestre NUMERADO, que é o que uma premiação pede, vai inteiro.
+    assert aovivo.mapa_filtro("bimestre_1", None, None, 2026, hoje)[0] == \
+        "start_date=2026-02-02&end_date=2026-04-22"
 
 
 def test_mapa_filtro_personalizado_e_erros():

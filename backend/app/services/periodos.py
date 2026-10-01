@@ -10,11 +10,17 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
+from app.services import bimestres
+
 # Presets aceitos pela API (o frontend usa exatamente estas chaves).
 PRESETS = (
     "hoje", "semana", "semana_anterior", "ontem", "7dias", "30dias", "mes",
     "mes_anterior", "bimestre", "bimestre_anterior", "semestre", "ano_letivo",
     "tudo", "personalizado",
+    # Bimestre NOMEADO do calendário oficial. Premiar "o 3º bimestre" não pode
+    # depender de que dia é hoje: "bimestre" vira o 4º em 05/10 e o pódio troca
+    # de criança sozinho. Quem entrega um prêmio escolhe o número.
+    "bimestre_1", "bimestre_2", "bimestre_3", "bimestre_4",
 )
 
 
@@ -44,6 +50,68 @@ def _rotulo_intervalo(inicio: date | None, fim: date | None) -> str:
     if fim:
         return f"até {fmt(fim)}"
     return "Todo o histórico"
+
+
+def _bimestre_legado(numero_par: int, ano: int, rotulo: str):
+    """Bimestre de CALENDÁRIO (jan/fev, mar/abr, ...) — a conta antiga, usada só
+    em ano sem calendário oficial cadastrado em :mod:`app.services.bimestres`.
+    Aproximada por construção; existe para 2027 não quebrar antes de alguém
+    cadastrar as datas."""
+    m1 = numero_par * 2 + 1
+    return _ini(_primeiro(ano, m1)), _fim(_ultimo(ano, m1 + 1)), rotulo
+
+
+def _bimestre(preset: str, hoje: date):
+    """Os presets de bimestre, pelo calendário OFICIAL da rede.
+
+    Antes daqui, "este bimestre" era ``(mês-1)//2`` — o bimestre do CALENDÁRIO,
+    não o da escola. Em 01/10/2026 isso devolvia 01/09–31/10 enquanto o 3º
+    bimestre oficial é 24/07–04/10: 61 dias contra 73, com só 34 em comum. Medido
+    na rede no dia em que isto foi escrito, o pódio de "Mais Livros Lidos"
+    coroava uma criança DIFERENTE em 4 das 5 escolas da Lista Piloto. É por isso
+    que a janela passa a vir de uma fonte só.
+
+    ``bimestre_1``…``bimestre_4`` são o jeito certo de premiar: o número é
+    explícito e não muda quando o dia virar. ``bimestre`` ("este") continua
+    existindo para as telas de acompanhamento, e em 05/10 ele passa a ser o 4º
+    porque é isso que o calendário diz — quem vai entregar um prêmio do 3º
+    escolhe ``bimestre_3``.
+    """
+    pedido = preset.rsplit("_", 1)[-1]
+    if pedido.isdigit():
+        numero, ano = int(pedido), hoje.year
+        if not (1 <= numero <= 4):
+            return None, None, "Todo o histórico"
+        if not bimestres.ano_com_calendario(ano):
+            # Inverso do mapa legado por mês (1–4→1º, 5–7→2º, 8–9→3º, 10–12→4º).
+            meses = [m for m in range(1, 13) if bimestres.por_mes_legado(m) == numero]
+            return (_ini(_primeiro(ano, meses[0])), _fim(_ultimo(ano, meses[-1])),
+                    bimestres.rotulo(numero))
+    else:
+        ano = hoje.year
+        if not bimestres.ano_com_calendario(ano):
+            # Sem calendário oficial: a conta antiga, com o rótulo antigo.
+            bim = (hoje.month - 1) // 2
+            if preset == "bimestre_anterior":
+                if bim == 0:
+                    return _bimestre_legado(5, ano - 1, "Bimestre anterior")
+                bim -= 1
+            return _bimestre_legado(
+                bim, ano,
+                "Bimestre anterior" if preset == "bimestre_anterior" else "Este bimestre")
+        numero = bimestres.bimestre_sugerido(hoje)
+        if preset == "bimestre_anterior":
+            if numero == 1:
+                # O 4º do ano passado. Sem calendário dele, cai no legado.
+                if bimestres.ano_com_calendario(ano - 1):
+                    ano, numero = ano - 1, 4
+                else:
+                    return _bimestre_legado(5, ano - 1, "Bimestre anterior")
+            else:
+                numero -= 1
+    inicio, fim = bimestres.intervalo(numero, ano)
+    return _ini(inicio), _fim(fim), (f"{bimestres.rotulo(numero)} "
+                                    f"({inicio:%d/%m} a {fim:%d/%m})")
 
 
 def resolver(
@@ -94,17 +162,8 @@ def resolver(
         ano, mes = (hoje.year - 1, 12) if hoje.month == 1 else (hoje.year, hoje.month - 1)
         return _ini(_primeiro(ano, mes)), _fim(_ultimo(ano, mes)), "Mês anterior"
 
-    if preset in ("bimestre", "bimestre_anterior"):
-        bim = (hoje.month - 1) // 2  # 0..5 (jan/fev=0, mar/abr=1, ...)
-        ano = hoje.year
-        if preset == "bimestre_anterior":
-            if bim == 0:
-                ano, bim = ano - 1, 5
-            else:
-                bim -= 1
-        m1 = bim * 2 + 1
-        rotulo = "Bimestre anterior" if preset == "bimestre_anterior" else "Este bimestre"
-        return _ini(_primeiro(ano, m1)), _fim(_ultimo(ano, m1 + 1)), rotulo
+    if preset.startswith("bimestre"):
+        return _bimestre(preset, hoje)
 
     if preset == "semestre":
         m1, m2 = (1, 6) if hoje.month <= 6 else (7, 12)
