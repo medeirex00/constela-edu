@@ -56,8 +56,10 @@ from app.schemas import (
     MatificAlunoOut,
     MatificEdicao,
     NiveisLeituraEdicao,
+    RestauracaoLeituras,
 )
-from app.services import dificuldade_livro, permissoes, scoring
+from app.services import (dificuldade_livro, leituras_restauracao,
+                          permissoes, scoring)
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Plataformas"])
@@ -929,3 +931,80 @@ def excluir_livro(
     db.delete(livro)
     db.commit()
     return {"mensagem": f"Livro “{livro.titulo}” excluído do catálogo."}
+
+
+_CONFIRMA_RESTAURACAO = "RESTAURAR HISTORICO"
+
+
+@router.post("/leituras/restaurar-historico", response_model=dict)
+def restaurar_leituras_historicas(
+    dados: RestauracaoLeituras,
+    usuario: Usuario = Depends(exigir_admin_global),
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+):
+    """Devolve a uma leitura a data e o tempo que ela comprovadamente tinha.
+
+    EXISTE PARA UM DANO ESPECÍFICO. A fusão de duas fichas do mesmo aluno
+    deduplica as leituras por livro e mantém a linha de quem FICA — com a data
+    de quem fica. Quando a ficha sobrevivente é a do histórico antigo, o livro
+    segue contado no ano, mas sai da janela do período premiado. Nenhum caminho
+    existente conserta isso: o importador pula livro que "já constava" (§35) e
+    nunca atualiza ``Leitura.data``, então reimportar e sincronizar são no-op.
+
+    NÃO DEDUZ NADA. Cada item vem com a evidência — o ``EventoAluno`` que
+    sobreviveu à fusão — e o serviço confere a afirmação contra o banco,
+    recalculando o hash da ``chave_natural``, que carrega dentro de si a ficha
+    de ORIGEM do dado. A evidência precisa ser a PRIMEIRA ocorrência do livro
+    naquela ficha, porque é na primeira importação que a linha de leitura nasce.
+    Item que não fecha derruba o lote inteiro: nada é aplicado pela metade.
+
+    ``dry_run`` é o padrão e devolve o plano conferido sem escrever. Aplicar é
+    ação RETROATIVA do Admin Global — mesma régua do ``aplicar_ao_historico`` do
+    catálogo —, auditada item a item com de/para e evento-fonte, e recalcula a
+    escola na MESMA transação."""
+    itens = [
+        leituras_restauracao.ItemRestauracao(
+            aluno_id=item.aluno_id, aluno_origem_id=item.aluno_origem_id,
+            livro_id=item.livro_id, data_original=item.data_original,
+            tempo_original=item.tempo_original,
+            evidencia_evento_id=item.evidencia_evento_id,
+            evidencia_chave_natural=item.evidencia_chave_natural,
+            motivo=item.motivo)
+        for item in dados.itens
+    ]
+    if dados.dry_run:
+        try:
+            plano = leituras_restauracao.planejar(
+                db, escola_id, itens,
+                permitir_fora_do_ano_letivo=dados.permitir_fora_do_ano_letivo)
+        except leituras_restauracao.RestauracaoInvalida as erro:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                erro.mensagem) from erro
+        # O ensaio não deixa rastro: nenhuma escrita acontece, e qualquer objeto
+        # tocado pela conferência volta ao estado do banco.
+        db.rollback()
+        return {"dry_run": True, "leituras_a_restaurar": len(plano),
+                "minutos_de": sum((l["tempo_anterior"] or 0) for l in plano),
+                "minutos_para": sum((l["tempo_restaurado"] or 0) for l in plano),
+                "itens": plano}
+
+    if dados.confirmacao.strip().upper() != _CONFIRMA_RESTAURACAO:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Confirmação inválida. Digite “{_CONFIRMA_RESTAURACAO}” para "
+            "reescrever a data das leituras — e rode antes com “dry_run” para "
+            "ler o de/para de cada livro.")
+    try:
+        resultado = leituras_restauracao.restaurar(
+            db, escola_id, itens, usuario.id,
+            permitir_fora_do_ano_letivo=dados.permitir_fora_do_ano_letivo)
+    except leituras_restauracao.RestauracaoInvalida as erro:
+        db.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            erro.mensagem) from erro
+    # Dado, auditoria e nota caem juntos: ``commit=False`` deixa o COMMIT para
+    # esta rota, então um erro no recálculo desfaz a restauração também.
+    scoring.recalcular_escola(db, escola_id, commit=False)
+    db.commit()
+    return {"dry_run": False, **resultado}

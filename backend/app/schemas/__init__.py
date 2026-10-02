@@ -71,6 +71,8 @@ from app.schemas.plataformas import (
     MatificAlunoOut,
     MatificEdicao,
     NiveisLeituraEdicao,
+    RestauracaoLeituraItem,
+    RestauracaoLeituras,
 )
 
 __all__ = [n for n in dir() if not n.startswith("_")]

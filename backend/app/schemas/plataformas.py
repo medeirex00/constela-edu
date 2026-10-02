@@ -164,3 +164,39 @@ class LivroUpdate(BaseModel):
                 if valor is None or not str(valor).strip():
                     raise ValueError(f"{rotulo} do livro não pode ficar vazio.")
         return self
+
+
+class RestauracaoLeituraItem(BaseModel):
+    """Uma leitura a ter data/tempo restaurados, COM a evidência que sustenta.
+
+    O chamador declara o que afirma; o serviço confere cada afirmação contra o
+    banco — inclusive recalculando o hash da ``chave_natural`` do evento, que
+    carrega dentro de si a ficha de ORIGEM do dado. Por isso
+    ``aluno_origem_id`` é obrigatório: ele é o que o hash prova, não um palpite.
+    """
+    aluno_id: int = Field(gt=0)
+    # Ficha ABSORVIDA pela fusão, de onde a data/tempo vieram. Já não existe
+    # como registro — existe dentro do hash do evento.
+    aluno_origem_id: int = Field(gt=0)
+    livro_id: int = Field(gt=0)
+    data_original: datetime
+    tempo_original: int | None = Field(default=None, ge=0, le=100000)
+    evidencia_evento_id: int = Field(gt=0)
+    # sha256 em hex: exatamente 64 caracteres.
+    evidencia_chave_natural: str = Field(min_length=64, max_length=64)
+    motivo: str = Field(min_length=10, max_length=500)
+
+
+class RestauracaoLeituras(BaseModel):
+    """Lote de restauração histórica (só Admin Global).
+
+    ``dry_run`` é o PADRÃO: pedir sem dizer nada devolve o plano conferido e não
+    escreve. Aplicar exige ``dry_run=false`` E a confirmação textual, pela mesma
+    razão da fusão — reescrever histórico não pode acontecer por acidente de
+    clique. ``permitir_fora_do_ano_letivo`` é uma decisão explícita: sem ele, uma
+    data de outro ano letivo é recusada como provável erro de origem.
+    """
+    itens: list[RestauracaoLeituraItem] = Field(min_length=1, max_length=500)
+    dry_run: bool = True
+    confirmacao: str = ""
+    permitir_fora_do_ano_letivo: bool = False
