@@ -350,6 +350,86 @@ def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
     row.valor = atual
 
 
+# RECONCILIAÇÃO PERIÓDICA (ver `_coleta_completa_devida`): de quantos em
+# quantos dias a sincronização ignora o cursor e recoleta TUDO.
+DIAS_ENTRE_COLETAS_COMPLETAS = 7
+_SUFIXO_COMPLETA = ":ultima_coleta_completa"
+
+
+def _linha_coleta_completa(db: Session, escola_id: int, plataforma: str):
+    from app.models.configuracao import Configuracao
+
+    return db.execute(
+        select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == _NS_INCREMENTAL,
+            Configuracao.chave == plataforma + _SUFIXO_COMPLETA)
+    ).scalar_one_or_none()
+
+
+def _coleta_completa_devida(db: Session, escola_id: int, plataforma: str,
+                            agora: datetime | None = None) -> tuple[bool, str]:
+    """A próxima coleta desta escola deve IGNORAR o cursor e trazer tudo?
+
+    POR QUE ISTO EXISTE. O cursor é ``{studentId: totalBooksRead}`` e o
+    ``totalBooksRead`` vem do relatório de TURMA do Elefante. Medimos (escola 1,
+    03/10/2026) que esse agregado pode ficar PARADO enquanto o endpoint por
+    aluno já devolve livro novo: duas crianças tinham, no relatório de turma,
+    exatamente os mesmos livros, tempo, tentativas e acertos do último retrato
+    gravado — e, no detalhe, livros lidos em 01–09/09 e 21/09 que nunca
+    entraram. Nenhum dos quatro campos do relatório mudou, então NENHUM sinal
+    derivado dele detectaria a novidade: o aluno fica congelado para sempre.
+
+    A correção não tenta adivinhar um sinal melhor (não existe nesse relatório):
+    ela aceita que o incremental é uma OTIMIZAÇÃO e não uma verdade, e garante
+    uma recoleta completa a cada ``DIAS_ENTRE_COLETAS_COMPLETAS`` dias. Assim
+    toda perda — por agregado defasado, por linha descartada no import, por
+    falha que o cursor não soube desfazer — tem teto de tempo em vez de ser
+    permanente. O custo é uma sincronização pesada por semana, que é
+    exatamente o que acontecia antes do incremental existir.
+
+    Devolve ``(devida, motivo)``; o motivo entra no log da execução.
+    """
+    agora = agora or _agora()
+    if not _carregar_contadores(db, escola_id, plataforma):
+        # Sem cursor não há o que ignorar: a coleta já é completa por natureza.
+        return False, "sem cursor"
+    linha = _linha_coleta_completa(db, escola_id, plataforma)
+    bruto = (linha.valor or {}).get("em") if linha is not None else None
+    if not bruto:
+        return True, "nunca houve recoleta completa registrada"
+    try:
+        ultima = datetime.fromisoformat(str(bruto))
+    except ValueError:
+        return True, "marca de recoleta completa ilegível"
+    # ``_agora`` deste módulo é UTC NAIVE (ver topo do arquivo). A marca normal
+    # nasce dele, então já é naive; uma marca com fuso (editada à mão, ou de
+    # outra convenção) é convertida para o mesmo referencial antes de subtrair.
+    if ultima.tzinfo is not None:
+        ultima = ultima.astimezone(timezone.utc).replace(tzinfo=None)
+    dias = (agora - ultima).days
+    if dias >= DIAS_ENTRE_COLETAS_COMPLETAS:
+        return True, f"última recoleta completa há {dias} dia(s)"
+    return False, f"recoleta completa há {dias} dia(s)"
+
+
+def _marcar_coleta_completa(db: Session, escola_id: int, plataforma: str,
+                            agora: datetime | None = None) -> None:
+    """Registra que a recoleta completa desta escola/plataforma foi concluída.
+
+    Só é chamada quando a execução gravou dados — uma recoleta que falhou no
+    meio NÃO reinicia o relógio, senão a janela de reconciliação pularia."""
+    from app.models.configuracao import Configuracao
+
+    linha = _linha_coleta_completa(db, escola_id, plataforma)
+    valor = {"em": (agora or _agora()).isoformat()}
+    if linha is None:
+        db.add(Configuracao(escola_id=escola_id, namespace=_NS_INCREMENTAL,
+                            chave=plataforma + _SUFIXO_COMPLETA, valor=valor))
+    else:
+        linha.valor = valor
+
+
 def _desfazer_cursor_ignorados(contexto: Contexto, ignorados: set[str]) -> None:
     """Remove de ``contadores_novos`` os alunos cujas linhas ficaram sem vínculo
     nesta sync (nomes normalizados em ``ignorados``): o merge de
@@ -425,8 +505,14 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         # INCREMENTAL SEGURO: passa as contagens por aluno da última sync — o
         # conector pula a coleta pesada de quem não mudou (aluno novo/atrasado
         # SEMPRE coleta tudo). 1ª sync = vazio = tudo.
-        contexto_fetch.contadores_anteriores = _carregar_contadores(
+        completa, motivo_completa = _coleta_completa_devida(
             db, execucao.escola_id, execucao.plataforma)
+        contexto_fetch.contadores_anteriores = {} if completa else _carregar_contadores(
+            db, execucao.escola_id, execucao.plataforma)
+        if completa:
+            registrar_log(db, execucao, "download", "info",
+                          "Recoleta COMPLETA nesta execução (cursor ignorado): "
+                          + motivo_completa + ".")
         db.commit()
         arquivos = asyncio.run(conector.sincronizar(cred, contexto_fetch))
         execucao.parser_versao = "perfis_pdf/planilhas"
@@ -466,6 +552,8 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
         if totais["arquivos"]:
             _salvar_contadores(db, execucao.escola_id, execucao.plataforma,
                                contexto_fetch.contadores_novos)
+            if completa:
+                _marcar_coleta_completa(db, execucao.escola_id, execucao.plataforma)
             # Sucesso COM dados: a integração voltou a estar fresca — fecha o
             # alerta de obsolescência (dado atualizado agora).
             resolver_alertas(db, execucao.escola_id, execucao.plataforma,
