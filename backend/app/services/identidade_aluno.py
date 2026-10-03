@@ -66,6 +66,9 @@ MOTIVOS = {
     "turma_ambigua": "mais de uma turma cadastrada corresponde à sala do relatório",
     "turma_nao_cadastrada": "a turma do relatório não existe no cadastro da escola",
     "sem_turma": "a linha não informa turma e nenhum aluno corresponde ao nome",
+    "criacao_bloqueada_por_politica":
+        "nenhum aluno corresponde e a política desta escola não deixa a "
+        "sincronização criar ficha (a matrícula vem da Lista Piloto)",
 }
 
 

@@ -58,9 +58,11 @@ from app.schemas.importacao import (
     ImportacaoResultadoOut,
     LinhaAnaliseOut,
     LinhaConfirmacao,
-    MatriculaTurmaOut,
     MatriculasAnaliseOut,
     MatriculasResultadoOut,
+    MatriculaTurmaOut,
+    PoliticaSincronizacaoIn,
+    PoliticaSincronizacaoOut,
 )
 from app.schemas.plataformas import (
     ElefanteAlunoOut,

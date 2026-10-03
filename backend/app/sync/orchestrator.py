@@ -23,7 +23,7 @@ from app.models.escola import Escola
 from app.routers import importacoes as imp  # reuso: confirmar, _guardar_temporario
 from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
 from app.services import importacao as svc
-from app.services import perfis_pdf, planilhas, professores
+from app.services import perfis_pdf, planilhas, politica_sync, professores
 from app.sync.interfaces import ArquivoObtido, Contexto
 
 
@@ -136,6 +136,11 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
         permitir_criar_turma=False,  # gate anti-turma-fantasma (item 4): a sync NUNCA
                                      # cria turma fora do cadastro a partir do rótulo da
                                      # plataforma — turma desconhecida vira aviso/pendência.
+        # FONTE DE VERDADE DA MATRÍCULA: a escola declara se a sincronização pode
+        # criar ficha de criança. Escola sem política configurada responde True —
+        # comportamento idêntico ao de antes. Com ``bloquear``, a linha sem
+        # candidato seguro vira pendência de revisão em vez de ficha nova.
+        permitir_criar_aluno=politica_sync.pode_criar_aluno(db, escola.id),
     )
 
     ator = _resolver_ator(db, escola.id, usuario_id)

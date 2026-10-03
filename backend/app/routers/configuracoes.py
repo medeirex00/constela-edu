@@ -33,10 +33,13 @@ from app.schemas import (
     NivelUpdate,
     PesosOut,
     PesosUpdate,
+    PoliticaSincronizacaoIn,
+    PoliticaSincronizacaoOut,
     ReferenciasOut,
     ReferenciasUpdate,
 )
-from app.services import dificuldade_livro, provisionamento, scoring
+from app.services import (dificuldade_livro, politica_sync,
+                          provisionamento, scoring)
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/configuracoes", tags=["Configurações"])
@@ -617,3 +620,48 @@ def salvar_pontuacao_turma(
     msg = (f"Pontuação aplicada a {n} turmas. Notas recalculadas." if n > 1
            else f"Pontuação da turma {turmas[dados.turma_id].nome} salva. Notas recalculadas.")
     return {"mensagem": msg, "turma_id": dados.turma_id, "turmas": alvos, "pontos": limpos}
+
+
+@router.get("/sincronizacao", response_model=PoliticaSincronizacaoOut,
+            dependencies=[Depends(exigir_papeis("admin", "coordenador"))])
+def obter_politica_sincronizacao(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+):
+    """A política de sincronização da escola — hoje, se a sync pode criar ficha.
+
+    Escola que nunca configurou responde ``permitir``, o comportamento de
+    sempre: a trava é opt-in e não muda nada retroativamente."""
+    return politica_sync.obter(db, escola_id)
+
+
+@router.put("/sincronizacao", response_model=PoliticaSincronizacaoOut)
+def salvar_politica_sincronizacao(
+    dados: PoliticaSincronizacaoIn,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_admin_global),
+    db: Session = Depends(get_db),
+):
+    """Declara quem é a FONTE DE VERDADE da matrícula desta escola.
+
+    ``bloquear`` diz que a plataforma não matricula ninguém: na sincronização, a
+    linha que não casa com segurança vira PENDÊNCIA de identidade em vez de
+    ficha nova — sem perder o nome recebido, o id externo, a turma do relatório
+    nem os candidatos. É o que impede um nome truncado pelo relatório ("ANNA E")
+    ou uma criança de outra unidade de nascer como ficha ativa, sem RA e sem
+    nascimento, já pesando no ranking e na régua da escola.
+
+    Não toca em nenhum dado já gravado e não recalcula nada: vale da próxima
+    sincronização em diante. O caminho da Lista Piloto segue criando — ele é a
+    fonte. Governança igual à da fórmula: só Admin Global."""
+    anterior = politica_sync.obter(db, escola_id)
+    try:
+        valores = politica_sync.definir(db, escola_id, dados.criar_aluno)
+    except ValueError as erro:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(erro)) from erro
+    registrar(db, "sincronizacao.politica_alterada", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
+              detalhes={"de": anterior, "para": valores,
+                        "motivo": (dados.motivo or "").strip() or None})
+    db.commit()
+    return valores

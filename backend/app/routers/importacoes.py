@@ -581,6 +581,7 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                     criados: dict | None = None,
                     turmas_novas: dict | None = None,
                     permitir_criar_turma: bool = True, *,
+                    permitir_criar_aluno: bool = True,
                     plataforma: str | None = None,
                     ctx: "ida.Contexto | None" = None,
                     revisoes: "ida.ColetorRevisoes | None" = None,
@@ -685,6 +686,34 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                                 dados, avisos, revisoes, usuario_id)
             return None
         ctx.registrar_turma(turma)
+
+    # POLÍTICA DE MATRÍCULA (``services/politica_sync``): numa escola cuja fonte
+    # de matrícula é a Lista Piloto, a plataforma NÃO cria criança. Aqui, e não
+    # antes, porque "sem turma" e "turma fora do cadastro" já têm o caminho e o
+    # motivo deles — a trava só pega a linha que REALMENTE criaria uma ficha, e
+    # a pendência nasce com a turma já resolvida.
+    if not permitir_criar_aluno:
+        if decisao.vetados:
+            # O motor ACHOU alguém de nome igual e o vetou porque RA/nascimento/
+            # id externo provaram ser outra criança. A pendência fica sem
+            # candidato de propósito (associar seria juntar crianças diferentes),
+            # mas quem for decidir precisa saber que esse homônimo existe — senão
+            # a tela diz "nenhum aluno corresponde" e convida a criar uma ficha
+            # que talvez seja a terceira da mesma criança.
+            quem = ", ".join(
+                c["nome"] for c in ida.descrever_candidatos(ctx, decisao.vetados))
+            avisos.append(
+                f"“{linha.nome}”: a política desta escola não deixa a "
+                f"sincronização criar ficha. Atenção: {quem} tem nome "
+                "compatível mas foi DESCARTADO porque o RA, o nascimento ou a "
+                "conta da plataforma provam ser outra criança — confira na Lista "
+                "Piloto antes de decidir.")
+        _enfileirar_revisao(db, escola_id, ctx, ident,
+                            replace(decisao, acao=ida.REVISAR,
+                                    motivo="criacao_bloqueada_por_politica"),
+                            dados, avisos, revisoes, usuario_id)
+        return None
+
     aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
     db.add(aluno)
     db.flush()
@@ -1818,6 +1847,8 @@ def _confirmar_sem_commit(
                                 avisos, criados, turmas_novas,
                                 permitir_criar_turma=getattr(
                                     dados, "permitir_criar_turma", True),
+                                permitir_criar_aluno=getattr(
+                                    dados, "permitir_criar_aluno", True),
                                 plataforma=dados.plataforma, ctx=ctx_identidade,
                                 revisoes=coletor, usuario_id=usuario.id)
         if aluno is None:

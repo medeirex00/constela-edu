@@ -84,6 +84,13 @@ class ImportacaoConfirm(BaseModel):
     # sincronização automática passa False (gate anti-turma-fantasma): turma
     # desconhecida NÃO é criada, vira aviso; só a Lista Piloto e o manual criam.
     permitir_criar_turma: bool = True
+    # Permite CRIAR a FICHA DO ALUNO quando a linha não casa com ninguém.
+    # Default True = comportamento histórico (upload manual e escolas sem
+    # política). A sincronização passa o que a POLÍTICA da escola disser
+    # (``services/politica_sync``): numa escola cuja matrícula vem da Lista
+    # Piloto, a plataforma não é fonte de matrícula e a linha sem candidato
+    # seguro vira PENDÊNCIA DE REVISÃO em vez de ficha nova.
+    permitir_criar_aluno: bool = True
 
 
 class ImportacaoOut(ORMModel):
@@ -222,3 +229,18 @@ class MatriculasResultadoOut(BaseModel):
     # Contas de professor criadas automaticamente (login = NomeSobrenome).
     professores_criados: int = 0
     avisos: list[str] = []
+
+
+class PoliticaSincronizacaoOut(BaseModel):
+    """A política de sincronização vigente da escola (ver ``politica_sync``)."""
+    criar_aluno: str
+
+
+class PoliticaSincronizacaoIn(BaseModel):
+    """``permitir`` (padrão histórico) ou ``bloquear`` (a sync não cria ficha).
+
+    Trocar isto não mexe em nenhum dado já gravado: vale da próxima
+    sincronização em diante, e o motivo fica no log de auditoria.
+    """
+    criar_aluno: str = Field(pattern="^(permitir|bloquear)$")
+    motivo: str | None = Field(default=None, max_length=300)
