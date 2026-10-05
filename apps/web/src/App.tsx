@@ -41,8 +41,9 @@ const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
 const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
 const RedeAvaliacoes = lazy(() => import("./pages/rede/RedeAvaliacoes"));
-const Relatorios = lazy(() => import("./pages/Relatorios"));
-const RelatorioPeriodo = lazy(() => import("./pages/RelatorioPeriodo"));
+// Relatórios é UMA área com duas abas (oficiais | por período). As duas rotas
+// abaixo apontam para a mesma tela; o caminho decide a aba.
+const RelatoriosArea = lazy(() => import("./pages/RelatoriosArea"));
 const RevisoesIdentidade = lazy(() => import("./pages/RevisoesIdentidade"));
 const Escolas = lazy(() => import("./pages/Escolas"));
 const SessoesAtivas = lazy(() => import("./pages/SessoesAtivas"));
@@ -158,11 +159,13 @@ export default function App() {
           <Route path="/insights" element={<Insights />} />
           {/* Relatórios: professor exporta o ranking e a lista das turmas dele
               (o backend filtra por turmas_permitidas). */}
-          <Route path="/relatorios" element={<Relatorios />} />
-          {/* Relatório por PERÍODO: consulta por janela de datas. Mesma guarda
-              do /relatorios (o endpoint nega a Secretaria e recorta o professor
-              por turmas_permitidas); não gera documento oficial. */}
-          <Route path="/relatorios/periodo" element={<RelatorioPeriodo />} />
+          <Route path="/relatorios" element={<RelatoriosArea />} />
+          {/* Relatório por PERÍODO: a MESMA tela, aberta na aba "Por período".
+              A rota é preservada inteira — já estava publicada, e link salvo,
+              histórico e atalho continuam valendo. Mesma guarda do /relatorios
+              (o endpoint nega a Secretaria e recorta o professor por
+              turmas_permitidas); não gera documento oficial. */}
+          <Route path="/relatorios/periodo" element={<RelatoriosArea />} />
           {/* Usuários: professor entra mas o backend só devolve a própria conta. */}
           <Route path="/usuarios" element={<Usuarios />} />
           {/* Minha conta (autoatendimento): QUALQUER autenticado vê a própria

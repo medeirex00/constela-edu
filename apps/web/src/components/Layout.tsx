@@ -9,7 +9,6 @@ import {
   Bot,
   Building2,
   Calculator,
-  CalendarRange,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -141,11 +140,13 @@ const IT = {
   diagnostico: { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar },
   conquistas: { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
   bibliotecaConquistas: { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
-  relatorios: { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText, exato: true },
-  // Consulta por JANELA DE DATAS ("o relatório de setembro"). Fica ao lado de
-  // "Relatórios" (que exporta o retrato ANUAL) porque responde outra pergunta.
-  relatorioPeriodo: { rotulo: "Relatório por Período", caminho: "/relatorios/periodo", icone: CalendarRange },
-  meusRelatorios: { rotulo: "Meus Relatórios", caminho: "/relatorios", icone: FileText, exato: true },
+  // UMA entrada para toda a área. "Por período" é um TIPO de relatório e vive
+  // numa aba dentro da página (ver `pages/RelatoriosArea.tsx`), não aqui ao
+  // lado — quem procura um relatório não deve ter de adivinhar o módulo.
+  // Sem `exato`: o item fica marcado também em /relatorios/periodo, que é a
+  // mesma área.
+  relatorios: { rotulo: "Relatórios", caminho: "/relatorios", icone: FileText },
+  meusRelatorios: { rotulo: "Meus Relatórios", caminho: "/relatorios", icone: FileText },
   painelPublico: { rotulo: "Painel Público", caminho: "/painel-publico", icone: MonitorPlay },
   metricas: { rotulo: "Métricas", caminho: "/metricas", icone: SlidersHorizontal },
   // Mesma rota /metricas, outra promessa: para a escola a página é a explicação
@@ -230,7 +231,7 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.importacoes, IT.sincronizacao, IT.revisoes, IT.diagnostico] },
     { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
     { chave: "conteudo", rotulo: "Avaliações", icone: FileText, itens: [IT.avaliacoesRede] },
-    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.relatorioPeriodo, IT.painelPublico] },
+    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
     { chave: "sistema", rotulo: "Sistema", icone: Settings, itens: [IT.metricas, IT.configuracoes] },
   ];
   // 🏛️ Secretaria — navegação ENXUTA: o Painel da Rede é o centro de comando
@@ -253,7 +254,7 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     // e pelo Admin Global); "Integrações" responde "os dados estão atualizados?".
     { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.sincronizacao, IT.revisoes] },
     { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
-    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.relatorioPeriodo, IT.painelPublico] },
+    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
     // "Pontuação" = a mesma página /metricas em modo explicativo (só leitura).
     { chave: "config", rotulo: "Configurações", icone: Settings, itens: [IT.pontuacao, IT.configuracoes] },
   ];
@@ -262,7 +263,7 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     { chave: "turmas", rotulo: "Minhas Turmas", icone: GraduationCap, itens: [IT.meusAlunos] },
     { chave: "desempenho", rotulo: "Desempenho", icone: Trophy, itens: [IT.rankingProf, IT.premiacoes, IT.insights] },
     { chave: "reconhecimento", rotulo: "Reconhecimento", icone: Medal, itens: [IT.bibliotecaConquistas] },
-    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.meusRelatorios, IT.relatorioPeriodo] },
+    { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.meusRelatorios] },
   ];
 }
 
