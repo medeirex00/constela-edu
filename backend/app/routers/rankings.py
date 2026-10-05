@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import exigir_modulo_da_escola
-from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.deps import (escola_autorizada, exigir_papeis,
+                           get_usuario_atual, negar_secretaria)
 from app.core.tempo import hoje_br
 from app.models import (
     Aluno,
@@ -30,7 +31,9 @@ from app.schemas import (
 )
 from app.services import elegibilidade, modulos as svc_modulos
 from app.services import (dificuldade_livro, periodos, permissoes,
-                          premiacoes as svc_premiacoes, scoring, turnos)
+                          premiacoes as svc_premiacoes,
+                          relatorios_periodo as svc_relatorio_periodo,
+                          scoring, turnos)
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Ranking e Dashboard"])
@@ -936,3 +939,93 @@ def dashboard(
 ):
     return montar_dashboard(
         db, escola_id, turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
+
+
+# ---------------------------------------------------------------------------
+# Relatório por PERÍODO
+# ---------------------------------------------------------------------------
+# POR QUE AQUI, e não num router próprio: o lugar natural seria um
+# `routers/relatorios_periodo.py` registrado em `main.py` — mas `main.py` e
+# `routers/relatorios.py` estão entre as alterações paralelas não commitadas
+# deste worktree, e tocá-los publicaria trabalho de terceiro inacabado. Este
+# router é LIMPO e já está registrado, e já é a casa das consultas recortadas
+# por período (`/premiacoes`, `/ranking/*`). Quando o trabalho paralelo entrar,
+# mover este endpoint para um router dedicado é um recorta-e-cola.
+#
+# A GUARDA DE PII VIAJA COM O ENDPOINT. `relatorios.router` é registrado atrás
+# de `negar_secretaria` porque seus PDFs têm NOME de criança; este relatório
+# lista nome por aluno, então precisa da MESMA guarda — e aqui ela é declarada
+# na própria rota, não na linha de registro, justamente para não depender de
+# `main.py`.
+@router.get("/relatorios/periodo", response_model=dict)
+def relatorio_por_periodo(
+    periodo: str = Query(default="mes",
+                         description="mes | mes_anterior | bimestre | "
+                                     "bimestre_1..4 | ano_letivo | personalizado "
+                                     "(e os demais presets de `periodos`)"),
+    inicio: str | None = Query(default=None, description="AAAA-MM-DD; "
+                                                         "obrigatório em `personalizado`"),
+    fim: str | None = Query(default=None, description="AAAA-MM-DD; "
+                                                      "obrigatório em `personalizado`"),
+    plataformas: list[str] = Query(default=["elefante", "matific"],
+                                   description="elefante e/ou matific"),
+    escopo: str = Query(default="escola", description="escola | turma | aluno"),
+    turma_id: int | None = Query(default=None),
+    aluno_id: int | None = Query(default=None),
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(negar_secretaria),
+):
+    """O que aconteceu numa JANELA de datas, por plataforma e por escopo.
+
+    É consulta: não grava nada e não altera scoring, ranking, nota, premiação,
+    certificado nem sincronização. O período vem do serviço OFICIAL
+    (`periodos.resolver`), então "setembro" aqui é o mesmo "setembro" do pódio.
+
+    A resposta diz, para cada plataforma, QUAL campo sustenta a janela e a
+    classificação do que foi calculado (`SUPORTADO` / `SUPORTADO COM RESSALVA` /
+    `NÃO SUPORTADO`) — métrica sem dado histórico suficiente volta `None` com o
+    motivo em `nao_suportado`, nunca um número inventado.
+    """
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo
+    # PERMISSÃO antes de qualquer consulta de dado.
+    if escopo == "aluno":
+        if aluno_id is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "Escolha o aluno para o relatório individual.")
+        permissoes.exigir_aluno_permitido(db, escola_id, ano, usuario, aluno_id)
+    if escopo == "turma":
+        if turma_id is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "Escolha a turma para o relatório da turma.")
+        permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
+    # Professor restrito: o recorte das turmas dele vale TAMBÉM no escopo
+    # "escola" — senão bastaria pedir escopo=escola para ver a escola inteira.
+    restrito = permissoes.turmas_permitidas(db, escola_id, usuario)
+
+    try:
+        dados = svc_relatorio_periodo.gerar(
+            db, escola_id, preset=periodo, plataformas=plataformas, escopo=escopo,
+            inicio=periodos._parse_data(inicio), fim=periodos._parse_data(fim),
+            turma_id=turma_id, aluno_id=aluno_id, turma_ids=restrito,
+            hoje=hoje_br())
+    except svc_relatorio_periodo.RelatorioInvalido as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except ValueError as exc:            # data em formato inválido
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Data inválida: use o formato AAAA-MM-DD.") from exc
+
+    # AUDITORIA: reusa o mecanismo existente (`logs_auditoria`), igual ao
+    # `certificado.emitido`. O relatório NÃO é persistido — nem os dados nem
+    # PDF —, então o log guarda só o PEDIDO (período, plataformas, escopo), que
+    # é o que permite responder "quem consultou o quê" sem duplicar PII.
+    registrar(db, "relatorio.periodo_consultado", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
+              detalhes={"periodo": periodo, "rotulo": dados["periodo"]["rotulo"],
+                        "plataformas": dados["plataformas"], "escopo": escopo,
+                        "turma_id": turma_id, "aluno_id": aluno_id,
+                        "alunos_considerados": dados["alunos"]["considerados"]})
+    db.commit()
+    return dados
