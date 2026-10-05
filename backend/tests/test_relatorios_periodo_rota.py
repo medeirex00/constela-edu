@@ -186,6 +186,49 @@ def test_rota_escopo_aluno(db, escola_completa, cliente):
     assert [x["aluno_id"] for x in corpo["por_aluno"]] == [a.id]
 
 
+def test_rota_recusa_turma_de_outra_escola(db, escola_completa, cliente):
+    """`exigir_turma_permitida` cuida da restrição do PROFESSOR e devolve cedo
+    para quem é de gestão — ela NÃO confere de que escola a turma é. Sem a
+    checagem de posse, um coordenador passava o id de uma turma alheia e
+    recebia 200 com relatório vazio."""
+    from app.models import Escola
+    outra = Escola(nome="OUTRA ESCOLA", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    alheia = Turma(escola_id=outra.id, nome="9º Ano Z", ano_escolar="9º Ano",
+                   ano_letivo=2026)
+    db.add(alheia)
+    db.commit()
+    resp = cliente.get(ROTA.format(eid=escola_completa["escola"].id),
+                       params={"escopo": "turma", "turma_id": alheia.id})
+    assert resp.status_code == 404
+    assert "não encontrada" in resp.json()["detail"]
+
+
+def test_rota_recusa_aluno_de_outra_escola(db, escola_completa, cliente):
+    from app.models import Escola
+    outra = Escola(nome="OUTRA ESCOLA", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    alheio = Aluno(escola_id=outra.id, nome="Crianca de outra escola")
+    db.add(alheio)
+    db.commit()
+    resp = cliente.get(ROTA.format(eid=escola_completa["escola"].id),
+                       params={"escopo": "aluno", "aluno_id": alheio.id})
+    assert resp.status_code == 404
+    assert "não encontrado" in resp.json()["detail"]
+
+
+def test_rota_recusa_turma_e_aluno_inexistentes(db, escola_completa, cliente):
+    eid = escola_completa["escola"].id
+    assert cliente.get(ROTA.format(eid=eid),
+                       params={"escopo": "turma", "turma_id": 999999}
+                       ).status_code == 404
+    assert cliente.get(ROTA.format(eid=eid),
+                       params={"escopo": "aluno", "aluno_id": 999999}
+                       ).status_code == 404
+
+
 def test_rota_nao_vaza_escola_alheia(db, escola_completa, cliente):
     from app.models import Escola
     outra = Escola(nome="OUTRA ESCOLA", ano_letivo_ativo=2026)

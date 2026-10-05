@@ -16,7 +16,16 @@
 import { describe, expect, it } from "vitest";
 
 import RelatorioPeriodo from "../pages/RelatorioPeriodo";
-import { escolaFake, renderComApp, responder, screen, usuarioFake } from "./utils";
+import {
+  ApiError,
+  apiDownload,
+  escolaFake,
+  renderComApp,
+  responder,
+  screen,
+  userEvent,
+  usuarioFake,
+} from "./utils";
 
 const texto = () => (document.body.textContent ?? "").replace(/\s+/g, " ").trim();
 
@@ -192,6 +201,60 @@ describe("Relatório por Período", () => {
     montar();
     expect(await screen.findByText("Joao Pedro Barbosa")).toBeTruthy();
     expect(texto()).toContain("30 alunos ativos no recorte");
+  });
+
+  it("o botão de PDF pede o MESMO recorte que a tela está mostrando", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    await userEvent.click(screen.getByRole("button", { name: /Gerar PDF/ }));
+    expect(apiDownload).toHaveBeenCalledTimes(1);
+    const pedido = (apiDownload as unknown as { mock: { calls: string[][] } })
+      .mock.calls[0][0];
+    // mesma rota, mesmo recorte — só o formato muda
+    expect(pedido).toContain("/escolas/1/relatorios/periodo.pdf?");
+    expect(pedido).toContain("periodo=mes_anterior");
+    expect(pedido).toContain("plataformas=elefante");
+    expect(pedido).toContain("plataformas=matific");
+    expect(pedido).toContain("escopo=escola");
+  });
+
+  it("mostra o erro do PDF sem apagar o relatório da tela", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    (apiDownload as unknown as { mockRejectedValueOnce: (e: unknown) => void })
+      .mockRejectedValueOnce(new ApiError(500, "Falha ao montar o documento."));
+    await userEvent.click(screen.getByRole("button", { name: /Gerar PDF/ }));
+    expect(await screen.findByText("Falha ao montar o documento.")).toBeTruthy();
+    // os números continuam na tela: o erro é do download, não da consulta
+    expect(texto()).toContain("Livros com atividade");
+  });
+
+  it("não deixa clicar duas vezes enquanto gera", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    let liberar: (() => void) | undefined;
+    (apiDownload as unknown as { mockImplementationOnce: (f: () => Promise<void>) => void })
+      .mockImplementationOnce(() => new Promise<void>((r) => { liberar = r; }));
+    const botao = screen.getByRole("button", { name: /Gerar PDF/ });
+    await userEvent.click(botao);
+    expect(await screen.findByRole("button", { name: /Gerando PDF/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Gerando PDF/ })).toHaveProperty(
+      "disabled", true);
+    liberar?.();
+  });
+
+  it("não oferece PDF de um recorte que a tela ainda não tem", async () => {
+    responder("GET", /\/escolas\/1\/turmas/, []);
+    responder("GET", /\/escolas\/1\/alunos/, { itens: [], total: 0 });
+    renderComApp(<RelatorioPeriodo />, {
+      rota: "/relatorios/periodo",
+      usuario: usuarioFake(),
+      escolas: [escolaFake({ id: 1 })],
+      escolaSelecionada: 1,
+      periodo: { preset: "personalizado" },
+    });
+    const botao = await screen.findByRole("button", { name: /Gerar PDF/ });
+    expect(botao).toHaveProperty("disabled", true);
   });
 
   it("não consulta o backend em personalizado sem as duas datas", async () => {

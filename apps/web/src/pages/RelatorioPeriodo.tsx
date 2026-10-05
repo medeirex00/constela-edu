@@ -22,13 +22,14 @@
  * refutou tanto a soma quanto a diferença). Um zero silencioso num relatório
  * de gestão é pior que uma lacuna declarada — a diretora agiria sobre ele.
  */
-import { BookOpen, CalendarRange, Clock, Info, RefreshCw, Sigma, Star } from "lucide-react";
-import { useMemo, useState } from "react";
+import { BookOpen, CalendarRange, Clock, FileDown, Info, RefreshCw, Sigma, Star } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
-import { Card, Carregando, Mensagem, PageHeader, SecaoRecolhivel, StatCard, Vazio, estiloInput } from "../components/ui";
+import { Botao, Card, Carregando, Mensagem, PageHeader, SecaoRecolhivel, StatCard, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { apiDownload } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
 import type { Turma } from "../lib/types";
 
@@ -176,17 +177,44 @@ export default function RelatorioPeriodo() {
   const personalizadoIncompleto =
     periodo.preset === "personalizado" && !(periodo.inicio && periodo.fim);
 
-  const url = useMemo(() => {
+  // UMA query para os DOIS formatos. A tela e o PDF não podem divergir de
+  // filtro: se o botão montasse a própria URL, bastaria alguém mexer num
+  // seletor para o papel sair de um recorte e a tela mostrar outro.
+  const consulta = useMemo(() => {
     if (!escolaId || personalizadoIncompleto) return null;
     const q = new URLSearchParams(periodoParaQuery(periodo));
     for (const p of plataformas.split(",")) q.append("plataformas", p);
     q.set("escopo", escopo);
     if (turmaId) q.set("turma_id", String(turmaId));
     if (alunoId) q.set("aluno_id", String(alunoId));
-    return `/escolas/${escolaId}/relatorios/periodo?${q.toString()}`;
+    return q.toString();
   }, [escolaId, periodo, plataformas, escopo, turmaId, alunoId, personalizadoIncompleto]);
 
+  const url = consulta ? `/escolas/${escolaId}/relatorios/periodo?${consulta}` : null;
+  const urlPdf = consulta ? `/escolas/${escolaId}/relatorios/periodo.pdf?${consulta}` : null;
+
   const { dados, erro, carregando } = useApi<RelatorioPeriodoT>(url);
+
+  // O PDF é gerado sob demanda e devolvido na resposta — nada é guardado no
+  // servidor. Quem nomeia o arquivo é o backend (Content-Disposition).
+  const [gerandoPdf, setGerandoPdf] = useState(false);
+  const [erroPdf, setErroPdf] = useState("");
+  // Mudou o recorte? O erro do recorte anterior deixou de valer.
+  useEffect(() => { setErroPdf(""); }, [consulta]);
+
+  async function gerarPdf() {
+    if (!urlPdf || gerandoPdf) return;
+    setGerandoPdf(true);
+    setErroPdf("");
+    try {
+      await apiDownload(urlPdf);
+    } catch (excecao) {
+      setErroPdf(excecao instanceof Error ? excecao.message
+                                          : "Não foi possível gerar o PDF.");
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
 
   const ele = dados?.elefante;
   const mat = dados?.matific;
@@ -203,7 +231,18 @@ export default function RelatorioPeriodo() {
       <PageHeader
         titulo="Relatório por Período"
         descricao="O que aconteceu numa janela de datas — do mês fechado ao intervalo que você escolher."
+        acoes={
+          <Botao
+            onClick={gerarPdf}
+            disabled={!urlPdf || gerandoPdf || carregando}
+            aria-busy={gerandoPdf}
+          >
+            <FileDown size={15} className="mr-1.5 inline" />
+            {gerandoPdf ? "Gerando PDF..." : "Gerar PDF"}
+          </Botao>
+        }
       />
+      {erroPdf && <Mensagem tipo="erro">{erroPdf}</Mensagem>}
 
       <Card>
         <div className="flex flex-wrap items-end gap-3">

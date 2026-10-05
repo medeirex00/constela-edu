@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import case, false, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -32,7 +32,9 @@ from app.schemas import (
 from app.services import elegibilidade, modulos as svc_modulos
 from app.services import (dificuldade_livro, periodos, permissoes,
                           premiacoes as svc_premiacoes,
+                          relatorios as svc_relatorios,
                           relatorios_periodo as svc_relatorio_periodo,
+                          relatorios_periodo_pdf as svc_relatorio_pdf,
                           scoring, turnos)
 from app.services.audit import registrar
 
@@ -987,18 +989,60 @@ def relatorio_por_periodo(
     `NÃO SUPORTADO`) — métrica sem dado histórico suficiente volta `None` com o
     motivo em `nao_suportado`, nunca um número inventado.
     """
+    return _relatorio_periodo_dados(
+        db, escola_id, usuario, periodo=periodo, inicio=inicio, fim=fim,
+        plataformas=plataformas, escopo=escopo, turma_id=turma_id,
+        aluno_id=aluno_id, acao="relatorio.periodo_consultado")
+
+
+def _relatorio_periodo_dados(
+    db: Session, escola_id: int, usuario: Usuario, *, periodo: str,
+    inicio: str | None, fim: str | None, plataformas: list[str], escopo: str,
+    turma_id: int | None, aluno_id: int | None, acao: str,
+) -> dict:
+    """Permissão + geração + auditoria do relatório por período.
+
+    Existe como FUNÇÃO porque duas rotas a usam — o JSON e o PDF — e a
+    autorização do PDF precisa ser a mesma, não uma cópia parecida. Cópia
+    envelhece: bastaria alguém endurecer uma das duas e a outra viraria a porta
+    de trás. Aqui, endurecer uma é endurecer as duas.
+    """
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
-    # PERMISSÃO antes de qualquer consulta de dado.
+    # CONTRATO antes de permissão: não se emite relatório de um produto que a
+    # rede não assinou — a mesma cascata de `routers/relatorios.py` e das rotas
+    # por plataforma aqui ao lado. Sem isto, bastava pedir
+    # `?plataformas=matific` para receber o que `/ranking/matematica` nega com
+    # 403, e com nome de criança no documento.
+    #   `.get` e não `[p]`: plataforma desconhecida tem de cair no 422 de
+    #   `gerar` (que valida o vocabulário), não num KeyError 500 aqui fora.
+    contratados = svc_modulos.modulos_da_escola(db, escola)
+    for plataforma in plataformas:
+        modulo = svc_modulos.PLATAFORMA_MODULO.get(plataforma)
+        if modulo is not None:
+            svc_modulos.exigir(contratados, modulo)
+    # PERMISSÃO antes de qualquer consulta de dado, em DUAS camadas — e a ordem
+    # importa. `exigir_*_permitida` cuida da restrição do PROFESSOR e devolve
+    # cedo quando o usuário é de gestão (`ids is None`); ela NÃO confere de que
+    # escola a turma/o aluno é. Quem confere é esta primeira camada. Sem ela, um
+    # coordenador podia passar o id de uma turma de outra escola e receber 200
+    # (relatório vazio, porque a coorte é filtrada por `Aluno.escola_id` — mas
+    # 200 mesmo assim). 404, e não 403, para não confirmar que o id existe.
     if escopo == "aluno":
         if aluno_id is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 "Escolha o aluno para o relatório individual.")
+        alvo = db.get(Aluno, aluno_id)
+        if alvo is None or alvo.escola_id != escola_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
         permissoes.exigir_aluno_permitido(db, escola_id, ano, usuario, aluno_id)
     if escopo == "turma":
         if turma_id is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 "Escolha a turma para o relatório da turma.")
+        alvo = db.get(Turma, turma_id)
+        if alvo is None or alvo.escola_id != escola_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
         permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
     # Professor restrito: o recorte das turmas dele vale TAMBÉM no escopo
     # "escola" — senão bastaria pedir escopo=escola para ver a escola inteira.
@@ -1021,7 +1065,7 @@ def relatorio_por_periodo(
     # `certificado.emitido`. O relatório NÃO é persistido — nem os dados nem
     # PDF —, então o log guarda só o PEDIDO (período, plataformas, escopo), que
     # é o que permite responder "quem consultou o quê" sem duplicar PII.
-    registrar(db, "relatorio.periodo_consultado", escola_id=escola_id,
+    registrar(db, acao, escola_id=escola_id,
               usuario_id=usuario.id, entidade="escola", entidade_id=escola_id,
               detalhes={"periodo": periodo, "rotulo": dados["periodo"]["rotulo"],
                         "plataformas": dados["plataformas"], "escopo": escopo,
@@ -1029,3 +1073,38 @@ def relatorio_por_periodo(
                         "alunos_considerados": dados["alunos"]["considerados"]})
     db.commit()
     return dados
+
+
+# MESMA rota, outro formato. O caminho termina em `.pdf` (e não `?formato=pdf`)
+# para o navegador e o histórico do gestor já dizerem o que o arquivo é.
+@router.get("/relatorios/periodo.pdf")
+def relatorio_por_periodo_pdf(
+    periodo: str = Query(default="mes"),
+    inicio: str | None = Query(default=None, description="AAAA-MM-DD"),
+    fim: str | None = Query(default=None, description="AAAA-MM-DD"),
+    plataformas: list[str] = Query(default=["elefante", "matific"]),
+    escopo: str = Query(default="escola", description="escola | turma | aluno"),
+    turma_id: int | None = Query(default=None),
+    aluno_id: int | None = Query(default=None),
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(negar_secretaria),
+):
+    """O MESMO relatório, em PDF.
+
+    Mesma cadeia de permissão, mesmos parâmetros e — o que importa — os MESMOS
+    números: o PDF recebe o dicionário que `svc_relatorio_periodo.gerar`
+    devolveu e não consulta o banco de novo. Não existe aqui uma segunda
+    aritmética que pudesse discordar da tela.
+    """
+    dados = _relatorio_periodo_dados(
+        db, escola_id, usuario, periodo=periodo, inicio=inicio, fim=fim,
+        plataformas=plataformas, escopo=escopo, turma_id=turma_id,
+        aluno_id=aluno_id, acao="relatorio.periodo_pdf")
+    conteudo = svc_relatorio_pdf.gerar(
+        dados, cor=svc_relatorios.cor_primaria(db, escola_id),
+        logos=svc_relatorios.logos_da_escola(db, escola_id))
+    nome = svc_relatorio_pdf.nome_arquivo(dados)
+    return Response(
+        content=conteudo, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{nome}"'})
