@@ -175,9 +175,11 @@ def _classificar_contas(db: Session, escola_id: int | None, *,
     seria justamente a de maior alcance a ficar de fora. ``globais`` escolhe o
     outro lado: as contas de administração global ficam numa lista à parte e
     nunca entram na invalidação automática (travar o único admin global não tem
-    volta pela interface)."""
-    consulta = select(Usuario).where(Usuario.status != "excluido",
-                                     Usuario.is_global.is_(globais))
+    volta pela interface).
+
+    As EXCLUÍDAS entram também: a exclusão é lógica e a conta pode ser
+    restaurada — sem esta varredura, voltaria ativa com a senha calculável."""
+    consulta = select(Usuario).where(Usuario.is_global.is_(globais))
     if escola_id is not None:
         consulta = consulta.where(Usuario.escola_id == escola_id)
     contas: list[dict] = []
@@ -189,7 +191,7 @@ def _classificar_contas(db: Session, escola_id: int | None, *,
                            for c in _senhas_da_convencao_antiga(u.nome, u.username))
         uso = _uso_da_conta(db, u)
         contas.append({"usuario_id": u.id, "escola_id": u.escola_id,
-                       "usuario": u.username, "cargo": u.cargo,
+                       "usuario": u.username, "cargo": u.cargo, "status": u.status,
                        "derivada": derivada, "uso": uso,
                        "nunca_usada": uso == USO_NUNCA_USADA})
     return contas

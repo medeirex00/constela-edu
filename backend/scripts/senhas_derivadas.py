@@ -51,6 +51,10 @@ from app.core.database import SessionLocal  # noqa: E402
 from app.services import professores  # noqa: E402
 
 
+def _escola(conta: dict) -> str:
+    return "-" if conta["escola_id"] is None else str(conta["escola_id"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Encontra (e, com --aplicar, invalida) senhas de professor derivadas do nome.")
@@ -72,8 +76,10 @@ def main() -> int:
               f"{len(por_uso['usada'])} já usadas, "
               f"{len(por_uso['indeterminada'])} indeterminadas)")
         for c in achadas:
-            print(f"  usuario_id={c['usuario_id']:<6} escola={c['escola_id']:<5} "
-                  f"@{(c['usuario'] or '-'):<28} {c['cargo']:<12} {c['uso'].upper()}")
+            # Conta de rede (Secretaria) pode não ter escola: "-" em vez de quebrar.
+            excluida = " (EXCLUÍDA)" if c.get("status") == "excluido" else ""
+            print(f"  usuario_id={c['usuario_id']:<6} escola={_escola(c):<5} "
+                  f"@{(c['usuario'] or '-'):<28} {c['cargo']:<12} {c['uso'].upper()}{excluida}")
         if args.escola is None:
             globais = professores.contas_globais_com_senha_derivada(db)
             if globais:
@@ -86,7 +92,7 @@ def main() -> int:
             print(f"\ncontas cujo hash não pôde ser conferido (fora da etapa): "
                   f"{len(nao_verificaveis)}")
             for c in nao_verificaveis:
-                print(f"  usuario_id={c['usuario_id']:<6} escola={c['escola_id']:<5} "
+                print(f"  usuario_id={c['usuario_id']:<6} escola={_escola(c):<5} "
                       f"@{(c['usuario'] or '-')}")
 
         if not args.aplicar:

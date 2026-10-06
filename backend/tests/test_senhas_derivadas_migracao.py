@@ -12,7 +12,9 @@ Contas sintéticas em todas as situações que a etapa precisa distinguir:
     ESCOLHIDA       senha que o professor escolheu               → nunca
     NÃO VERIFICÁVEL hash em formato desconhecido                 → nunca (listada à parte)
     GLOBAL          admin global com senha derivada              → listada à parte, NUNCA tocada
-    EXCLUÍDA        professor excluído                           → nunca
+    EXCLUÍDA        professor excluído (pode ser restaurado)     → tratada igual
+    DE REDE         Secretaria sem escola                        → tratada igual (sem quebrar)
+    OUTRA ESCOLA    conta da escola B com `--escola` da A        → intacta
 
 E as garantias: nada é apagado, ninguém é bloqueado (status intacto), sessão só
 cai de quem foi invalidado, cada invalidação é auditada e nenhuma senha (nem
@@ -38,6 +40,8 @@ SENHAS = {
     "escolhida": "uma-senha-escolhida-77",
     "coord": "coordsint123",
     "global": "gabiglobal123",
+    "rede": "secsint123",
+    "outra": "beatrizoutra123",
     "excluido": "hugoexcluido123",
 }
 
@@ -76,8 +80,20 @@ def banco(tmp_path):
                         is_global=True).id,
         "excluido": conta("excluido", "Hugo Sint Excluido", "HugoExcluido",
                           status="excluido").id,
+        "rede": conta("rede", "Sec Sint", "SecSint", cargo="coordenador").id,
     }
     db.add(LogAuditoria(escola_id=esc.id, usuario_id=ids["log"], acao="login"))
+    rede = db.get(Usuario, ids["rede"])
+    rede.escola_id = None                      # conta de rede, sem escola
+    outra = Escola(nome="ESCOLA_MIGRACAO_OUTRA_SINT", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    o = Usuario(escola_id=outra.id, nome="Beatriz Sint Outra", username="BeatrizOutra",
+                email="beatrizoutra@sint.local", cargo="professor",
+                senha_hash=hash_senha(SENHAS["outra"]))
+    db.add(o)
+    db.flush()
+    ids["outra"], ids["escola_a"] = o.id, esc.id
     db.commit()
     db.close()
     return Sessao, ids
@@ -109,14 +125,14 @@ def test_diagnostico_classifica_e_nao_grava_nada(banco, monkeypatch, capsys):
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao)
     assert codigo == 0
-    assert "6 (3 nunca usadas, 1 já usadas, 2 indeterminadas)" in saida
+    assert "9 (6 nunca usadas, 1 já usadas, 2 indeterminadas)" in saida
+    assert "(EXCLUÍDA)" in saida and "escola=-" in saida
     assert "hash não pôde ser conferido (fora da etapa): 1" in saida
     assert f"usuario_id={ids['hash']}" in saida
     assert "ADMINISTRAÇÃO GLOBAL com senha derivada (troca MANUAL, fora da etapa): 1" in saida
     assert f"usuario_id={ids['global']}" in saida
     assert "coordenador" in saida                     # a promovida entra
-    for fora in ("escolhida", "excluido"):
-        assert f"usuario_id={ids[fora]} " not in saida
+    assert f"usuario_id={ids['escolhida']} " not in saida
     assert "nada foi gravado" in saida
     assert _retrato(Sessao) == antes
     _sem_segredo_na_saida(saida, antes)
@@ -127,10 +143,10 @@ def test_so_nunca_usadas_toca_apenas_quem_nunca_entrou(banco, monkeypatch, capsy
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--aplicar", "--so-nunca-usadas")
     assert codigo == 0
-    assert "invalidadas: 3 de 6" in saida
+    assert "invalidadas: 6 de 9" in saida
     depois = _retrato(Sessao)
 
-    alvos = {ids["nunca"], ids["antiga"], ids["coord"]}
+    alvos = {ids[k] for k in ("nunca", "antiga", "coord", "excluido", "rede", "outra")}
     for uid, (h, versao, estado) in depois.items():
         h0, versao0, estado0 = antes[uid]
         assert estado == estado0                      # ninguém bloqueado
@@ -156,9 +172,10 @@ def test_aplicar_sem_filtro_tira_todas_as_derivadas_e_poupa_o_resto(banco, monke
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--aplicar")
     assert codigo == 0
-    assert "invalidadas: 6 de 6" in saida
+    assert "invalidadas: 9 de 9" in saida
     depois = _retrato(Sessao)
-    derivadas = {ids[k] for k in ("nunca", "antiga", "usada", "visto", "log", "coord")}
+    derivadas = {ids[k] for k in ("nunca", "antiga", "usada", "visto", "log", "coord",
+                                  "excluido", "rede", "outra")}
     for uid in antes:
         mudou = depois[uid][0] != antes[uid][0]
         assert mudou == (uid in derivadas), uid
@@ -180,3 +197,35 @@ def test_rodar_de_novo_nao_acha_mais_nada(banco, monkeypatch, capsys):
     assert "senha derivada do nome: 0 " in saida
     # a global continua listada para a troca manual — e intacta
     assert "ADMINISTRAÇÃO GLOBAL com senha derivada" in saida
+
+
+
+def test_escola_isola_a_execucao(banco, monkeypatch, capsys):
+    """`--aplicar --escola A` (o rollout controlado que o script recomenda) não
+    toca conta de outra escola: hash, sessão e auditoria intactos."""
+    Sessao, ids = banco
+    antes = _retrato(Sessao)
+    codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--aplicar",
+                           "--escola", str(ids["escola_a"]))
+    assert codigo == 0
+    depois = _retrato(Sessao)
+    assert depois[ids["outra"]] == antes[ids["outra"]]
+    assert depois[ids["rede"]] == antes[ids["rede"]]          # sem escola: fora do --escola
+    assert depois[ids["nunca"]] != antes[ids["nunca"]]
+    with Sessao() as db:
+        auditadas = {l.entidade_id for l in db.execute(select(LogAuditoria).where(
+            LogAuditoria.acao == "usuario.senha_derivada_invalidada")).scalars()}
+    assert ids["outra"] not in auditadas and ids["nunca"] in auditadas
+    _sem_segredo_na_saida(saida, antes)
+
+
+def test_conta_excluida_restaurada_nao_volta_com_a_senha_do_nome(banco, monkeypatch, capsys):
+    """A exclusão é lógica: depois da etapa, restaurar a conta não devolve a
+    senha calculável — o caminho é o link de redefinição."""
+    Sessao, ids = banco
+    _rodar(monkeypatch, capsys, Sessao, "--aplicar", "--so-nunca-usadas")
+    with Sessao() as db:
+        hugo = db.get(Usuario, ids["excluido"])
+        hugo.status = "ativo"                  # o que a restauração faz
+        db.commit()
+        assert not verificar_senha(SENHAS["excluido"], hugo.senha_hash)

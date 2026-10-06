@@ -162,3 +162,25 @@ def test_a_importacao_nao_ensina_mais_a_senha_antiga(cliente, db, escola_complet
     mensagem = r.json()["mensagem"]
     assert "ganharam conta de acesso" in mensagem
     assert "123" not in mensagem and "link de redefinição" in mensagem
+
+
+
+def test_a_convencao_do_arroba_vale_mesmo_quando_o_nome_mudou(db, escola_completa):
+    """A senha antiga nascia do @. Se a pessoa foi renomeada depois, o @ não sai
+    mais do nome — e só a checagem pelo @ recusa '<@>123'."""
+    escola = escola_completa["escola"]
+    professores.garantir_professor(db, escola.id, "Joana Sint Lima")
+    db.commit()
+    conta = db.execute(select(Usuario).where(Usuario.username == "JoanaLima")).scalar_one()
+    conta.nome = "Joana Sint Souza Prado"          # renomeada; o @ fica JoanaLima
+    db.commit()
+    admin = _cliente("admin@teste.local", "s3nh4")
+    token = _gerar_link(admin, escola.id, conta.id)
+    r = _definir(token, "joanalima123")
+    assert r.status_code == 422 and "padrão" in r.text
+    r = admin.patch(f"/api/v1/escolas/{escola.id}/usuarios/{conta.id}", json={"senha": "joanalima123"})
+    assert r.status_code == 422 and "padrão" in r.text
+    nova = {"nome": "Rita Sint Alves", "email": "rita.sint@constela-sint.com.br",
+            "username": "jlima", "cargo": "professor"}
+    r = admin.post(f"/api/v1/escolas/{escola.id}/usuarios", json={**nova, "senha": "jlima123"})
+    assert r.status_code == 422 and "padrão" in r.text
