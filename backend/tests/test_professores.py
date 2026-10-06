@@ -1,7 +1,9 @@
-"""Criação AUTOMÁTICA de contas de professor (login = NomeSobrenome em CamelCase,
-senha = o mesmo usuário em minúsculo + 123, ex.: paulavilela123). Idempotente
-entre fontes (Lista Piloto e Elefante) e em reimportações; senha só como HASH;
-username único na rede."""
+"""Criação AUTOMÁTICA de contas de professor (login = NomeSobrenome em CamelCase).
+Idempotente entre fontes (Lista Piloto e Elefante) e em reimportações; senha só
+como HASH; username único na rede.
+
+Senha (Fase 3A): NUNCA derivada do nome. A conta criada pela importação nasce
+sem senha conhecida; credencial gerada por ferramenta de gestão é aleatória."""
 from sqlalchemy import func, select
 
 from app.core.security import verificar_senha
@@ -11,17 +13,33 @@ from app.services import professores as svc
 
 # --- Convenção pedida pelo gestor -------------------------------------------
 
-def test_credenciais_seguem_a_convencao():
-    assert svc.credenciais_professor("Paula Vilela") == ("PaulaVilela", "paulavilela123")
+def test_o_usuario_segue_a_convencao_legivel():
+    """O @ continua derivado do nome: nome de usuário não é segredo."""
+    assert svc.usuario_base_professor("Paula Vilela") == "PaulaVilela"
     # Vários nomes → Primeiro + ÚLTIMO.
-    assert svc.credenciais_professor("Regiane Gomes Sousa") == ("RegianeSousa", "regianesousa123")
+    assert svc.usuario_base_professor("Regiane Gomes Sousa") == "RegianeSousa"
     # Um nome só.
-    assert svc.credenciais_professor("Zuleide") == ("Zuleide", "zuleide123")
-    # Acentos e caixa são normalizados (usuário sem acento; senha = o mesmo em minúsculo).
-    assert svc.credenciais_professor("josé ANTÔNIO") == ("JoseAntonio", "joseantonio123")
+    assert svc.usuario_base_professor("Zuleide") == "Zuleide"
+    # Acentos e caixa são normalizados.
+    assert svc.usuario_base_professor("josé ANTÔNIO") == "JoseAntonio"
     # Lixo → None (não cria conta).
+    assert svc.usuario_base_professor("   ") is None
+    assert svc.usuario_base_professor("") is None
+
+
+def test_a_senha_da_folha_nao_e_derivavel_do_nome():
+    """Fase 3A: a senha era o @ em minúsculas + "123" — quem soubesse o nome do
+    professor sabia a senha, e a regra estava publicada no código."""
+    usuario, senha = svc.credenciais_professor("Paula Vilela")
+    assert usuario == "PaulaVilela"
+    assert senha not in svc._senhas_da_convencao_antiga("Paula Vilela", usuario)
+    assert "paula" not in senha.lower() and "vilela" not in senha.lower()
+    # aleatória: duas chamadas não dão a mesma senha
+    assert len({svc.credenciais_professor("Paula Vilela")[1] for _ in range(6)}) > 1
+    # e passa na mesma regra de força das outras senhas do sistema
+    from app.core.security import validar_forca_senha
+    assert validar_forca_senha(senha) is None
     assert svc.credenciais_professor("   ") is None
-    assert svc.credenciais_professor("") is None
 
 
 def test_separa_varios_professores_de_um_campo():
@@ -46,9 +64,11 @@ def test_cria_professor_e_conta_de_login(db, escola_completa):
     assert user.escola_id == escola.id
     # RBAC: o e-mail do Usuario casa com o do Professor (permissoes.turmas_permitidas).
     assert user.email == prof.email
-    # Senha guardada só como HASH — nunca em texto puro.
-    assert user.senha_hash != "paulavilela123"
-    assert verificar_senha("paulavilela123", user.senha_hash)
+    # A conta nasce SEM senha conhecida: nenhuma convenção antiga abre a conta.
+    # O acesso inicial é pelo link de redefinição (o professor escolhe a senha).
+    for candidata in ("paulavilela123", "Paula123", "paula123"):
+        assert not verificar_senha(candidata, user.senha_hash), candidata
+    assert svc.contas_com_senha_derivada(db, escola.id) == []
 
 
 def test_idempotente_nao_duplica(db, escola_completa):
@@ -266,3 +286,104 @@ def test_coordenador_edita_email_e_sincroniza_a_conta(db, escola_completa):
 
     # E-mail de OUTRA conta de acesso → 409 (não duplica login).
     assert c.patch(rota, json={"email": "ocupado@x.com"}).status_code == 409
+
+
+# --- Migração: contas antigas que ainda usam a senha derivada ------------------
+
+def _conta_antiga(db, escola, nome, username, senha, usada=False):
+    from datetime import datetime, timezone
+
+    from app.core.security import hash_senha
+    u = Usuario(escola_id=escola.id, nome=nome, email=f"{username.lower()}@legado.local",
+                username=username, senha_hash=hash_senha(senha), cargo="professor",
+                ultimo_acesso=datetime.now(timezone.utc) if usada else None)
+    db.add(u)
+    db.flush()
+    return u
+
+
+def test_detector_acha_as_duas_convencoes_antigas_e_o_sufixo(db, escola_completa):
+    escola = escola_completa["escola"]
+    atual = _conta_antiga(db, escola, "Paula Benedita Vilela Nogueira", "PaulaNogueira",
+                          "paulanogueira123", usada=True)
+    antiga = _conta_antiga(db, escola, "Sueli Prado", "SueliPrado", "Sueli123")
+    sufixo = _conta_antiga(db, escola, "João Silva", "JoaoSilva2", "joaosilva123")
+    trocou = _conta_antiga(db, escola, "Marta Lima", "MartaLima", "uma-senha-que-ela-escolheu")
+    db.commit()
+
+    achadas = {c["usuario_id"]: c for c in svc.contas_com_senha_derivada(db, escola.id)}
+    assert set(achadas) == {atual.id, antiga.id, sufixo.id}
+    assert trocou.id not in achadas
+    assert achadas[atual.id]["nunca_usada"] is False
+    assert achadas[antiga.id]["nunca_usada"] is True
+    # nenhuma senha sai do detector
+    assert all("senha" not in c for c in achadas.values())
+
+
+def test_invalidar_e_so_diagnostico_por_padrao(db, escola_completa):
+    escola = escola_completa["escola"]
+    u = _conta_antiga(db, escola, "Paula Vilela", "PaulaVilela", "paulavilela123")
+    db.commit()
+    hash_antes, versao_antes = u.senha_hash, u.token_version
+
+    r = svc.invalidar_senhas_derivadas(db, escola.id)
+    db.commit()
+    assert r["aplicado"] is False and r["encontradas"] == 1
+    db.refresh(u)
+    assert (u.senha_hash, u.token_version) == (hash_antes, versao_antes)
+
+
+def test_invalidar_aplicado_tira_a_senha_publica_e_derruba_sessoes(db, escola_completa):
+    escola = escola_completa["escola"]
+    u = _conta_antiga(db, escola, "Paula Vilela", "PaulaVilela", "paulavilela123", usada=True)
+    db.commit()
+    versao_antes = u.token_version or 0
+
+    r = svc.invalidar_senhas_derivadas(db, escola.id, aplicar=True)
+    db.commit()
+    db.refresh(u)
+    assert r["encontradas"] == 1 and r["aplicado"] is True
+    assert not verificar_senha("paulavilela123", u.senha_hash)
+    assert u.token_version == versao_antes + 1
+    assert u.status == "ativo"            # não bloqueia: volta pelo link
+    assert svc.contas_com_senha_derivada(db, escola.id) == []
+
+
+def test_conta_criada_pela_importacao_nao_entra_com_a_senha_antiga(db, escola_completa):
+    """O ataque, de ponta a ponta: o nome do professor está na Lista Piloto; a
+    regra antiga está no código público; a conta foi criada pela importação e
+    ninguém a usou. O login com a senha derivada tem de falhar."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    escola = escola_completa["escola"]
+    svc.garantir_professor(db, escola.id, "Regiane Gomes Sousa")
+    db.commit()
+    cliente = TestClient(app)
+    for senha in ("regianesousa123", "Regiane123", "regiane123"):
+        r = cliente.post("/api/v1/auth/login",
+                         data={"username": "RegianeSousa", "password": senha})
+        assert r.status_code == 401, senha
+
+
+def test_invalidar_so_nunca_usadas_nao_toca_em_quem_ja_entra(db, escola_completa):
+    """Contas já usadas param de entrar quando invalidadas — a etapa de deploy
+    pode começar só pelas nunca usadas, sem afetar ninguém. A restrição tem de
+    valer para TUDO: senha, sessões e auditoria."""
+    from app.models import LogAuditoria
+    escola = escola_completa["escola"]
+    usada = _conta_antiga(db, escola, "Paula Vilela", "PaulaVilela", "paulavilela123", usada=True)
+    nova = _conta_antiga(db, escola, "Sueli Prado", "SueliPrado", "sueliprado123")
+    db.commit()
+    hash_usada, versao_usada = usada.senha_hash, usada.token_version
+
+    r = svc.invalidar_senhas_derivadas(db, escola.id, aplicar=True, so_nunca_usadas=True)
+    db.commit()
+    db.refresh(usada)
+    db.refresh(nova)
+    assert r["encontradas"] == 2 and r["invalidadas"] == 1
+    assert (usada.senha_hash, usada.token_version) == (hash_usada, versao_usada)
+    assert not verificar_senha("sueliprado123", nova.senha_hash)
+    logs = db.execute(select(LogAuditoria).where(
+        LogAuditoria.acao == "usuario.senha_derivada_invalidada")).scalars().all()
+    assert [l.entidade_id for l in logs] == [nova.id]

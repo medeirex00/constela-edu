@@ -1,10 +1,17 @@
 """Criação AUTOMÁTICA de contas de PROFESSOR a partir dos relatórios importados
 (Lista Piloto e Elefante Letrado).
 
-Cada nome vira um ``Professor`` (para o RBAC por turma) + um ``Usuario`` de login
-na convenção pedida pelo gestor:
-    usuário = Primeiro + Último nome, iniciais MAIÚSCULAS  → ex.: "PaulaVilela"
-    senha   = Primeiro nome + "123"                        → ex.: "Paula123"
+Cada nome vira um ``Professor`` (para o RBAC por turma) + um ``Usuario`` de login.
+O @ segue uma convenção legível — Primeiro + Último nome, iniciais MAIÚSCULAS
+("PaulaVilela") — porque nome de usuário não é segredo.
+
+A SENHA nunca é derivada do nome (política da Fase 3A, ver `credenciais_professor`):
+  * conta criada pela IMPORTAÇÃO nasce sem senha conhecida por ninguém; o acesso
+    inicial é pelo link de redefinição de uso único (o próprio professor escolhe
+    a senha);
+  * quando uma ferramenta de gestão GERA credenciais (padronização, fusão de
+    duplicados), a senha é aleatória e sai uma única vez, na folha entregue ao
+    gestor — o mesmo que o cadastro manual de professor já fazia.
 
 Idempotente: casa por NOME dentro da escola, então não duplica entre as duas
 fontes nem em reimportações. Um campo com vários professores ("A, B; C") cria uma
@@ -15,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 from collections import defaultdict
 
 from sqlalchemy import delete, func, select, update
@@ -22,7 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import email_reservado_ao_dono
-from app.core.security import hash_senha
+from app.core.security import gerar_senha_legivel, hash_senha, verificar_senha
 from app.models import (
     ConversaIA,
     DispositivoMovel,
@@ -52,16 +60,15 @@ def _cap_alnum(palavra: str) -> str:
     return (limpa[:1].upper() + limpa[1:].lower()) if limpa else ""
 
 
-def credenciais_professor(nome: str) -> tuple[str, str] | None:
-    """(username_base CamelCase, senha) na convenção pedida pelo dono, ou None
-    se o nome não servir.
+def usuario_base_professor(nome: str) -> str | None:
+    """O @ base na convenção legível, ou None se o nome não servir.
 
-        usuário = Primeiro nome + Último sobrenome, iniciais MAIÚSCULAS
-                  (partículas não contam) → "PaulaNogueira", "SueliPrado"
-        senha   = o MESMO usuário em minúsculas + "123" → "paulanogueira123"
+        Primeiro nome + Último sobrenome, iniciais MAIÚSCULAS (partículas não
+        contam) → "PaulaNogueira", "SueliPrado"
 
     O login é acento/caixa-insensível (auth.py), então guardar em CamelCase é só
-    exibição — a pessoa entra digitando de qualquer jeito."""
+    exibição — a pessoa entra digitando de qualquer jeito. O @ NÃO é segredo:
+    quem sabe o nome do professor sabe o @. Por isso a senha nunca deriva dele."""
     partes = [p for p in (nome or "").split() if p]
     if not partes:
         return None
@@ -73,8 +80,99 @@ def credenciais_professor(nome: str) -> tuple[str, str] | None:
     if not primeiro:
         return None
     # Deixa folga p/ sufixo de desambiguação (Usuario.username é String(30)).
-    base = (primeiro + ultimo)[:26]
-    return base, f"{base.lower()}123"
+    return (primeiro + ultimo)[:26]
+
+
+def credenciais_professor(nome: str) -> tuple[str, str] | None:
+    """(username_base, senha) para uma FOLHA de credenciais, ou None se o nome
+    não servir. A senha é ALEATÓRIA (`gerar_senha_legivel`, três palavras + dois
+    dígitos) e só existe em texto nesta folha, uma única vez.
+
+    POR QUE NÃO MAIS A CONVENÇÃO. Até a Fase 3A a senha era o @ em minúsculas +
+    "123" — e antes disso, o primeiro nome + "123". Qualquer pessoa que soubesse
+    o nome de um professor sabia a senha dele; a regra estava escrita no código
+    de um repositório público; não havia troca obrigatória no primeiro acesso; e
+    a importação criava essas contas ATIVAS sem avisar ninguém — exatamente as
+    que nunca têm a senha trocada. As contas antigas que ainda usam a senha da
+    convenção são encontradas por `contas_com_senha_derivada`."""
+    base = usuario_base_professor(nome)
+    if base is None:
+        return None
+    return base, gerar_senha_legivel()
+
+
+def senha_hash_sem_acesso() -> str:
+    """Hash de uma senha aleatória de 256 bits que NINGUÉM recebe: a conta existe
+    (para o vínculo professor ↔ turma), mas só entra quem receber o link de
+    redefinição e escolher a própria senha."""
+    return hash_senha(secrets.token_urlsafe(32))
+
+
+def _senhas_da_convencao_antiga(nome: str, username: str | None) -> set[str]:
+    """As senhas que as convenções antigas teriam dado a esta conta — só para
+    DETECTAR quem ainda as usa. Cobre as duas regras que existiram (@ minúsculo
+    + "123"; primeiro nome + "123") e o @ com sufixo de desambiguação ("…2"),
+    porque a senha nascia do @ BASE, antes do sufixo."""
+    candidatos: set[str] = set()
+    base = usuario_base_professor(nome)
+    if base:
+        candidatos.add(base.lower() + "123")
+    if username:
+        u = username.lower()
+        candidatos.add(u + "123")
+        candidatos.add(u.rstrip("0123456789") + "123")
+    partes = [p for p in (nome or "").split() if p]
+    if partes:
+        primeiro = _cap_alnum(partes[0])
+        if primeiro:
+            candidatos.update({primeiro + "123", primeiro.lower() + "123"})
+    candidatos.discard("123")
+    return candidatos
+
+
+def contas_com_senha_derivada(db: Session, escola_id: int | None = None) -> list[dict]:
+    """Contas de PROFESSOR cuja senha ainda é a da convenção antiga (derivável do
+    nome). Só LÊ — confere o hash bcrypt contra os candidatos; nada é gravado e
+    nenhuma senha sai daqui. É a base da etapa de migração do deploy."""
+    consulta = select(Usuario).where(Usuario.cargo == "professor",
+                                     Usuario.status != "excluido")
+    if escola_id is not None:
+        consulta = consulta.where(Usuario.escola_id == escola_id)
+    achadas: list[dict] = []
+    for u in db.execute(consulta.order_by(Usuario.id)).scalars():
+        if any(verificar_senha(c, u.senha_hash)
+               for c in _senhas_da_convencao_antiga(u.nome, u.username)):
+            achadas.append({"usuario_id": u.id, "escola_id": u.escola_id,
+                            "usuario": u.username,
+                            "nunca_usada": u.ultimo_acesso is None})
+    return achadas
+
+
+def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
+                               aplicar: bool = False,
+                               so_nunca_usadas: bool = False) -> dict:
+    """Etapa de deploy: tira de circulação a senha derivável. Sem ``aplicar`` é
+    só o diagnóstico (padrão). Com ``aplicar``, cada conta achada recebe uma senha
+    que ninguém conhece e perde as sessões abertas; o professor volta a entrar
+    pelo link de redefinição (botão "Gerar link de redefinição" em Usuários).
+    Não bloqueia ninguém para sempre e não cria senha conhecida de reserva.
+    ``so_nunca_usadas`` limita a invalidação às contas que nunca entraram — as que
+    não afetam ninguém; as já usadas continuam listadas em ``contas``.
+    NÃO commita — quem chama decide."""
+    from app.services.audit import registrar
+
+    achadas = contas_com_senha_derivada(db, escola_id)
+    alvos = [c for c in achadas if c["nunca_usada"]] if so_nunca_usadas else achadas
+    if aplicar:
+        for item in alvos:
+            u = db.get(Usuario, item["usuario_id"])
+            u.senha_hash = senha_hash_sem_acesso()
+            u.token_version = (u.token_version or 0) + 1   # derruba sessões
+            registrar(db, "usuario.senha_derivada_invalidada", escola_id=u.escola_id,
+                      entidade="usuario", entidade_id=u.id,
+                      detalhes={"nunca_usada": item["nunca_usada"]})
+    return {"encontradas": len(achadas), "aplicado": aplicar,
+            "invalidadas": len(alvos) if aplicar else 0, "contas": achadas}
 
 
 def nomes_de_professores(texto: str) -> list[str]:
@@ -183,8 +281,8 @@ def garantir_professor(db: Session, escola_id: int, nome: str) -> tuple[Professo
     nome completo (Matific manda 'PAULA'; a Lista Piloto, o nome cheio) para não
     criar duas contas da mesma professora — a causa das duplicatas."""
     nome = " ".join((nome or "").split())
-    cred = credenciais_professor(nome)
-    if cred is None:
+    user_base = usuario_base_professor(nome)
+    if user_base is None:
         return None, False
 
     # Poucas dezenas de professores por escola: carregar e casar em Python é
@@ -203,8 +301,10 @@ def garantir_professor(db: Session, escola_id: int, nome: str) -> tuple[Professo
             _promover_ao_nome_completo(db, escola_id, match, nome)
         return match, False
 
-    user_base, senha = cred
-    senha_hash = hash_senha(senha)
+    # A conta nasce SEM senha conhecida (ninguém recebe nada da importação). O
+    # professor entra pela primeira vez pelo link de redefinição, escolhendo a
+    # própria senha — antes, ela nascia com a senha derivada do nome.
+    senha_hash = senha_hash_sem_acesso()
     # Retry: se DUAS escolas criarem o mesmo username ao mesmo tempo, a UNIQUE do
     # banco barra uma; o SAVEPOINT desfaz só ESTE professor (não o import de
     # alunos) e recalculamos o username já vendo a linha que a outra commitou.
@@ -306,13 +406,17 @@ def _apagar_conta(db: Session, usuario: Usuario) -> None:
     db.delete(usuario)
 
 
+# Marcador da prévia de deduplicação no lugar da senha (ver `plano_deduplicacao`).
+SENHA_GERADA_AO_APLICAR = "(gerada ao aplicar)"
+
+
 def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     """PRÉVIA (read-only) — UMA linha por candidato a fusão: qual nome sai, em
     qual fica, a confiança (alta/revisar), o novo @/senha do que fica e as turmas
     que serão movidas. Nada é alterado; o gestor marca quais confirmar."""
     preview: list[dict] = []
     for loser, survivor, confianca in _candidatos(db, escola_id):
-        cred = credenciais_professor(survivor.nome)
+        base = usuario_base_professor(survivor.nome)
         su = _usuario_do_professor(db, escola_id, survivor)
         # Conta JÁ USADA não troca @/senha (preserva o que a professora definiu).
         ativa = su is not None and su.ultimo_acesso is not None
@@ -325,9 +429,12 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             "apagar": loser.nome,
             "manter": survivor.nome,
             "confianca": confianca,   # "alta" | "revisar"
-            "usuario_novo": (su.username if ativa and su else
-                             (cred[0] if cred else None)),
-            "senha_nova": None if ativa else (cred[1] if cred else None),
+            "usuario_novo": su.username if ativa and su else base,
+            # A prévia NÃO carrega senha: a senha nova é sorteada só ao aplicar e
+            # sai uma vez, na folha. Antes vinha aqui a senha derivada do nome —
+            # em claro, numa tela que é só de conferência. O front só testa
+            # `null` ("senha mantida"); o texto deixa claro que não é senha.
+            "senha_nova": None if ativa else (SENHA_GERADA_AO_APLICAR if base else None),
             "turmas_movidas": turmas,
         })
     return preview

@@ -19,9 +19,17 @@ def _login(username: str, senha: str) -> int:
 # --- Convenção ---------------------------------------------------------------
 
 def test_convencao_usuario_e_senha():
-    assert P.credenciais_professor("Paula Benedita Vilela Nogueira") == ("PaulaNogueira", "paulanogueira123")
-    assert P.credenciais_professor("Sueli Macedo do Prado") == ("SueliPrado", "sueliprado123")  # pula "do"
-    assert P.credenciais_professor("Ana Lucia") == ("AnaLucia", "analucia123")
+    """O @ segue a convenção; a senha não (Fase 3A)."""
+    assert P.usuario_base_professor("Paula Benedita Vilela Nogueira") == "PaulaNogueira"
+    assert P.usuario_base_professor("Sueli Macedo do Prado") == "SueliPrado"  # pula "do"
+    assert P.usuario_base_professor("Ana Lucia") == "AnaLucia"
+    usuario, senha = P.credenciais_professor("Ana Lucia")
+    assert usuario == "AnaLucia"
+    assert senha not in P._senhas_da_convencao_antiga("Ana Lucia", usuario)
+
+
+def _senha_e_aleatoria(senha, nome, usuario):
+    assert senha and senha not in P._senhas_da_convencao_antiga(nome, usuario)
 
 
 # --- Reconciliação (raiz da duplicação) --------------------------------------
@@ -30,14 +38,20 @@ def test_curto_depois_completo_nao_duplica_e_promove(db, escola_completa):
     escola = escola_completa["escola"]
     p1, novo1 = P.garantir_professor(db, escola.id, "PAULA")
     assert novo1 is True
+    db.flush()
+    hash_original = P._usuario_do_professor(db, escola.id, p1).senha_hash
     p2, novo2 = P.garantir_professor(db, escola.id, "Paula Benedita Vilela Nogueira")
     assert novo2 is False and p2.id == p1.id            # reconciliou, não criou 2ª
     db.flush()
     assert p1.nome == "Paula Benedita Vilela Nogueira"  # promoveu o NOME de exibição
     u = P._usuario_do_professor(db, escola.id, p1)
     assert u.username == "Paula"                          # @/senha PRESERVADOS (não rotaciona)
+    hash_antes = hash_original
     db.commit()
-    assert _login("paula", "paula123") == 200            # credencial já entregue segue valendo
+    db.refresh(u)
+    # A reconciliação não rotaciona a senha: quem já recebeu a credencial (pelo
+    # link de redefinição ou por uma folha) continua entrando com ela.
+    assert u.senha_hash == hash_antes
 
 
 def test_import_nao_reconcilia_dois_nomes_com_sobrenome(db, escola_completa):
@@ -100,7 +114,9 @@ def test_previa_nao_altera_nada(db, escola_completa):
     c = cands[0]
     assert c["apagar"] == "PAULA" and c["manter"] == "Paula Benedita Vilela Nogueira"
     assert c["confianca"] == "alta"      # primeiro nome sozinho = certeza
-    assert c["usuario_novo"] == "PaulaNogueira" and c["senha_nova"] == "paulanogueira123"
+    assert c["usuario_novo"] == "PaulaNogueira"
+    # A prévia não carrega senha nenhuma — só avisa que uma será gerada.
+    assert c["senha_nova"] == P.SENHA_GERADA_AO_APLICAR
     assert c["loser_id"] == curto.id
     # NADA mudou (é só prévia): as 2 contas continuam lá.
     assert db.execute(select(Usuario).where(Usuario.username == "Paula")).scalar_one_or_none() is not None
@@ -113,8 +129,11 @@ def test_aplicar_funde_move_turma_padroniza_e_loga(db, escola_completa):
     folha = P.aplicar_deduplicacao(db, escola.id, [curto.id])
     db.commit()
 
-    assert folha == [{"nome": "Paula Benedita Vilela Nogueira",
-                      "usuario": "PaulaNogueira", "senha": "paulanogueira123"}]
+    assert len(folha) == 1
+    assert folha[0]["nome"] == "Paula Benedita Vilela Nogueira"
+    assert folha[0]["usuario"] == "PaulaNogueira"
+    senha_da_folha = folha[0]["senha"]
+    _senha_e_aleatoria(senha_da_folha, "Paula Benedita Vilela Nogueira", "PaulaNogueira")
     nomes = {p.nome for p in db.execute(
         select(Professor).where(Professor.escola_id == escola.id)).scalars()}
     assert "PAULA" not in nomes and "Paula Benedita Vilela Nogueira" in nomes
@@ -123,7 +142,8 @@ def test_aplicar_funde_move_turma_padroniza_e_loga(db, escola_completa):
         Professor.nome == "Paula Benedita Vilela Nogueira")).scalar_one()
     assert turma.professor_id == completo.id                    # turma migrou
     assert db.execute(select(Usuario).where(Usuario.username == "Paula")).scalar_one_or_none() is None
-    assert _login("PAULANOGUEIRA", "paulanogueira123") == 200   # @ maiúsculo + senha nova
+    assert _login("PAULANOGUEIRA", senha_da_folha) == 200   # @ maiúsculo + senha da folha
+    assert _login("PAULANOGUEIRA", "paulanogueira123") == 401  # a derivada não entra
 
 
 def test_ana_lucia_composto_funde_so_quando_confirmado(db, escola_completa):
@@ -151,8 +171,9 @@ def test_ana_lucia_composto_funde_so_quando_confirmado(db, escola_completa):
 
     folha = P.aplicar_deduplicacao(db, escola.id, [curto.id])
     db.commit()
-    assert folha == [{"nome": "Ana Lucia Ferreira de Camargo",
-                      "usuario": "AnaCamargo", "senha": "anacamargo123"}]
+    assert [(f["nome"], f["usuario"]) for f in folha] == [
+        ("Ana Lucia Ferreira de Camargo", "AnaCamargo")]
+    _senha_e_aleatoria(folha[0]["senha"], "Ana Lucia Ferreira de Camargo", "AnaCamargo")
     assert db.execute(select(Professor).where(Professor.nome == "Ana Lucia")).scalar_one_or_none() is None
 
 
@@ -248,9 +269,11 @@ def test_padronizar_usernames_recaixa_usados_e_regenera_novos(db, escola_complet
     folha = P.padronizar_usernames(db, escola.id)
     db.commit()
 
-    # Nunca usada: @ CamelCase + senha nova na folha.
-    assert {"nome": "Gabriela Camargo", "usuario": "GabrielaCamargo",
-            "senha": "gabrielacamargo123"} in folha
+    # Nunca usada: @ CamelCase + senha nova (aleatória) na folha.
+    gabriela = next(f for f in folha if f["nome"] == "Gabriela Camargo")
+    assert gabriela["usuario"] == "GabrielaCamargo"
+    _senha_e_aleatoria(gabriela["senha"], "Gabriela Camargo", "GabrielaCamargo")
+    assert _login("GabrielaCamargo", gabriela["senha"]) == 200
     assert db.execute(select(Usuario).where(
         Usuario.username == "GabrielaCamargo")).scalar_one_or_none() is not None
     # Já usada: só re-caixa (senha mantida) e a senha dela continua entrando.
