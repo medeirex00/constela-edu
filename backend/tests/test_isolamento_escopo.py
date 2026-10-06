@@ -136,7 +136,18 @@ def conteudo(resposta, formato: str) -> str:
 # ===========================================================================
 # 1) EXPORTAÇÕES — o vazamento reproduzido na Fase 2.1
 # ===========================================================================
-TIPOS = ["alunos", "ranking", "ranking_leitura", "ranking_matematica"]
+def _tipos_de_exportacao():
+    """As exportações que o professor pode tirar. As por dimensão
+    (`ranking_leitura`/`ranking_matematica`) só existem a partir da versão que
+    as registra em `FONTES`: antes disso não há o que vazar, e o caso aparece
+    como SKIP explícito — nunca como falha falsa nem como sumiço silencioso."""
+    from app.services.relatorios import FONTES
+    return [pytest.param(t, marks=pytest.mark.skipif(
+                t not in FONTES, reason=f"exportação '{t}' inexistente nesta versão"))
+            for t in ("alunos", "ranking", "ranking_leitura", "ranking_matematica")]
+
+
+TIPOS = _tipos_de_exportacao()
 FORMATOS = ["csv", "xlsx", "pdf"]
 
 
