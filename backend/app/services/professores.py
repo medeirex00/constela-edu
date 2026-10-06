@@ -167,8 +167,8 @@ def _hash_conferivel(senha_hash: str | None) -> bool:
 
 def _classificar_contas(db: Session, escola_id: int | None, *,
                         globais: bool = False) -> list[dict]:
-    """Toda conta não excluída com: ``derivada`` (True/False, ou None quando o
-    hash não pôde ser conferido) e ``uso``. Só LÊ.
+    """Toda conta com: ``derivada`` (True/False, ou None quando o hash não pôde
+    ser conferido) e ``uso``. Só LÊ.
 
     TODOS os cargos, não só professor: a conta nasce professor na importação,
     mas pode ter sido promovida a coordenador ou admin mantendo a senha — e
@@ -178,10 +178,17 @@ def _classificar_contas(db: Session, escola_id: int | None, *,
     volta pela interface).
 
     As EXCLUÍDAS entram também: a exclusão é lógica e a conta pode ser
-    restaurada — sem esta varredura, voltaria ativa com a senha calculável."""
+    restaurada — sem esta varredura, voltaria ativa com a senha calculável.
+
+    Com ``escola_id`` (o rollout por escola), as contas de REDE ficam de fora: a
+    Secretaria guarda o ``escola_id`` de onde foi promovida, mas alcança a rede
+    inteira e só o admin global gera o link dela — invalidá-la no rollout
+    combinado com UMA escola tiraria o acesso do município sem que essa escola
+    pudesse devolver. Ela entra na execução completa (sem ``escola_id``)."""
     consulta = select(Usuario).where(Usuario.is_global.is_(globais))
     if escola_id is not None:
-        consulta = consulta.where(Usuario.escola_id == escola_id)
+        consulta = consulta.where(Usuario.escola_id == escola_id,
+                                  Usuario.rede_id.is_(None))
     contas: list[dict] = []
     for u in db.execute(consulta.order_by(Usuario.id)).scalars():
         if not _hash_conferivel(u.senha_hash):
@@ -192,6 +199,7 @@ def _classificar_contas(db: Session, escola_id: int | None, *,
         uso = _uso_da_conta(db, u)
         contas.append({"usuario_id": u.id, "escola_id": u.escola_id,
                        "usuario": u.username, "cargo": u.cargo, "status": u.status,
+                       "rede_id": u.rede_id,
                        "derivada": derivada, "uso": uso,
                        "nunca_usada": uso == USO_NUNCA_USADA})
     return contas

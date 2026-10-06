@@ -38,6 +38,9 @@ Como executar
     python -m scripts.senhas_derivadas --escola 42        # diagnóstico, uma escola
     python -m scripts.senhas_derivadas --aplicar --escola 42
     python -m scripts.senhas_derivadas --aplicar --so-nunca-usadas   # sem impacto em quem usa
+
+Contas de REDE (Secretaria) não entram no ``--escola``: alcançam a rede inteira e
+só o admin global gera o link delas. Saem marcadas "(REDE n)" na execução completa.
 """
 from __future__ import annotations
 
@@ -78,8 +81,11 @@ def main() -> int:
         for c in achadas:
             # Conta de rede (Secretaria) pode não ter escola: "-" em vez de quebrar.
             excluida = " (EXCLUÍDA)" if c.get("status") == "excluido" else ""
+            rede = (f" (REDE {c['rede_id']}: link só pelo admin global)"
+                    if c.get("rede_id") else "")
             print(f"  usuario_id={c['usuario_id']:<6} escola={_escola(c):<5} "
-                  f"@{(c['usuario'] or '-'):<28} {c['cargo']:<12} {c['uso'].upper()}{excluida}")
+                  f"@{(c['usuario'] or '-'):<28} {c['cargo']:<12} {c['uso'].upper()}"
+                  f"{excluida}{rede}")
         if args.escola is None:
             globais = professores.contas_globais_com_senha_derivada(db)
             if globais:

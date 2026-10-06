@@ -13,7 +13,10 @@ Contas sintéticas em todas as situações que a etapa precisa distinguir:
     NÃO VERIFICÁVEL hash em formato desconhecido                 → nunca (listada à parte)
     GLOBAL          admin global com senha derivada              → listada à parte, NUNCA tocada
     EXCLUÍDA        professor excluído (pode ser restaurado)     → tratada igual
-    DE REDE         Secretaria sem escola                        → tratada igual (sem quebrar)
+    DE REDE         Secretaria (rede_id) hospedada na escola A, como
+                    `PUT /redes/{id}/usuarios` a deixa           → tratada igual na
+                    execução completa; FORA do `--escola A`
+    REDE SEM ESCOLA Secretaria sem escola_id                     → tratada igual (sem quebrar)
     OUTRA ESCOLA    conta da escola B com `--escola` da A        → intacta
 
 E as garantias: nada é apagado, ninguém é bloqueado (status intacto), sessão só
@@ -29,7 +32,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.core.security import hash_senha, verificar_senha
-from app.models import Escola, LogAuditoria, Usuario
+from app.models import Escola, LogAuditoria, Rede, Usuario
 
 SENHAS = {
     "nunca": "ananunca123",            # @ em minúsculas + 123
@@ -41,6 +44,7 @@ SENHAS = {
     "coord": "coordsint123",
     "global": "gabiglobal123",
     "rede": "secsint123",
+    "rede_sem": "rosasemescola123",
     "outra": "beatrizoutra123",
     "excluido": "hugoexcluido123",
 }
@@ -52,7 +56,10 @@ def banco(tmp_path):
     Base.metadata.create_all(engine)
     Sessao = sessionmaker(bind=engine)
     db = Sessao()
-    esc = Escola(nome="ESCOLA_MIGRACAO_SINT", ano_letivo_ativo=2026)
+    rede_sint = Rede(nome="REDE_MIGRACAO_SINT")
+    db.add(rede_sint)
+    db.flush()
+    esc = Escola(nome="ESCOLA_MIGRACAO_SINT", ano_letivo_ativo=2026, rede_id=rede_sint.id)
     db.add(esc)
     db.flush()
     agora = datetime.now(timezone.utc)
@@ -80,11 +87,14 @@ def banco(tmp_path):
                         is_global=True).id,
         "excluido": conta("excluido", "Hugo Sint Excluido", "HugoExcluido",
                           status="excluido").id,
-        "rede": conta("rede", "Sec Sint", "SecSint", cargo="coordenador").id,
+        # a forma REAL da Secretaria: rede_id + o escola_id de onde foi promovida
+        "rede": conta("rede", "Sec Sint", "SecSint", cargo="coordenador",
+                      rede_id=rede_sint.id).id,
+        "rede_sem": conta("rede_sem", "Rosa Sint", "RosaSemEscola", cargo="coordenador",
+                          rede_id=rede_sint.id).id,
     }
     db.add(LogAuditoria(escola_id=esc.id, usuario_id=ids["log"], acao="login"))
-    rede = db.get(Usuario, ids["rede"])
-    rede.escola_id = None                      # conta de rede, sem escola
+    db.get(Usuario, ids["rede_sem"]).escola_id = None     # conta de rede sem escola
     outra = Escola(nome="ESCOLA_MIGRACAO_OUTRA_SINT", ano_letivo_ativo=2026)
     db.add(outra)
     db.flush()
@@ -93,7 +103,7 @@ def banco(tmp_path):
                 senha_hash=hash_senha(SENHAS["outra"]))
     db.add(o)
     db.flush()
-    ids["outra"], ids["escola_a"] = o.id, esc.id
+    ids["outra"], ids["escola_a"], ids["rede_id"] = o.id, esc.id, rede_sint.id
     db.commit()
     db.close()
     return Sessao, ids
@@ -125,8 +135,9 @@ def test_diagnostico_classifica_e_nao_grava_nada(banco, monkeypatch, capsys):
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao)
     assert codigo == 0
-    assert "9 (6 nunca usadas, 1 já usadas, 2 indeterminadas)" in saida
+    assert "10 (7 nunca usadas, 1 já usadas, 2 indeterminadas)" in saida
     assert "(EXCLUÍDA)" in saida and "escola=-" in saida
+    assert f"(REDE {ids['rede_id']}: link só pelo admin global)" in saida
     assert "hash não pôde ser conferido (fora da etapa): 1" in saida
     assert f"usuario_id={ids['hash']}" in saida
     assert "ADMINISTRAÇÃO GLOBAL com senha derivada (troca MANUAL, fora da etapa): 1" in saida
@@ -143,10 +154,11 @@ def test_so_nunca_usadas_toca_apenas_quem_nunca_entrou(banco, monkeypatch, capsy
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--aplicar", "--so-nunca-usadas")
     assert codigo == 0
-    assert "invalidadas: 6 de 9" in saida
+    assert "invalidadas: 7 de 10" in saida
     depois = _retrato(Sessao)
 
-    alvos = {ids[k] for k in ("nunca", "antiga", "coord", "excluido", "rede", "outra")}
+    alvos = {ids[k] for k in ("nunca", "antiga", "coord", "excluido", "rede", "rede_sem",
+                              "outra")}
     for uid, (h, versao, estado) in depois.items():
         h0, versao0, estado0 = antes[uid]
         assert estado == estado0                      # ninguém bloqueado
@@ -172,10 +184,10 @@ def test_aplicar_sem_filtro_tira_todas_as_derivadas_e_poupa_o_resto(banco, monke
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--aplicar")
     assert codigo == 0
-    assert "invalidadas: 9 de 9" in saida
+    assert "invalidadas: 10 de 10" in saida
     depois = _retrato(Sessao)
     derivadas = {ids[k] for k in ("nunca", "antiga", "usada", "visto", "log", "coord",
-                                  "excluido", "rede", "outra")}
+                                  "excluido", "rede", "rede_sem", "outra")}
     for uid in antes:
         mudou = depois[uid][0] != antes[uid][0]
         assert mudou == (uid in derivadas), uid
@@ -210,12 +222,17 @@ def test_escola_isola_a_execucao(banco, monkeypatch, capsys):
     assert codigo == 0
     depois = _retrato(Sessao)
     assert depois[ids["outra"]] == antes[ids["outra"]]
-    assert depois[ids["rede"]] == antes[ids["rede"]]          # sem escola: fora do --escola
+    # A Secretaria HOSPEDADA na escola A (escola_id = A, rede_id): fora do
+    # rollout da escola — só o admin global devolveria o acesso dela.
+    assert depois[ids["rede"]] == antes[ids["rede"]]
+    assert depois[ids["rede_sem"]] == antes[ids["rede_sem"]]
     assert depois[ids["nunca"]] != antes[ids["nunca"]]
+    assert f"usuario_id={ids['rede']} " not in saida
     with Sessao() as db:
         auditadas = {l.entidade_id for l in db.execute(select(LogAuditoria).where(
             LogAuditoria.acao == "usuario.senha_derivada_invalidada")).scalars()}
     assert ids["outra"] not in auditadas and ids["nunca"] in auditadas
+    assert ids["rede"] not in auditadas
     _sem_segredo_na_saida(saida, antes)
 
 
