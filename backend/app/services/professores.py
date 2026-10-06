@@ -130,22 +130,97 @@ def _senhas_da_convencao_antiga(nome: str, username: str | None) -> set[str]:
     return candidatos
 
 
-def contas_com_senha_derivada(db: Session, escola_id: int | None = None) -> list[dict]:
-    """Contas de PROFESSOR cuja senha ainda é a da convenção antiga (derivável do
-    nome). Só LÊ — confere o hash bcrypt contra os candidatos; nada é gravado e
-    nenhuma senha sai daqui. É a base da etapa de migração do deploy."""
-    consulta = select(Usuario).where(Usuario.cargo == "professor",
-                                     Usuario.status != "excluido")
+USO_NUNCA_USADA = "nunca_usada"
+USO_USADA = "usada"
+USO_INDETERMINADO = "indeterminada"
+
+
+def _uso_da_conta(db: Session, u: Usuario) -> str:
+    """Se a conta já foi usada — decide quem a etapa ``--so-nunca-usadas`` pode
+    tocar sem afetar ninguém. ``ultimo_acesso`` é gravado em TODO login desde o
+    início do sistema; mas um sinal de uso sem ele (presença em ``visto_em`` ou
+    um registro de auditoria ``login``) quer dizer que os dados divergem — aí a
+    conta é INDETERMINADA e fica fora da etapa automática."""
+    from app.models import LogAuditoria
+
+    if u.ultimo_acesso is not None:
+        return USO_USADA
+    if u.visto_em is not None:
+        return USO_INDETERMINADO
+    houve_login = db.execute(
+        select(LogAuditoria.id).where(LogAuditoria.acao == "login",
+                                      LogAuditoria.usuario_id == u.id).limit(1)
+    ).first()
+    return USO_INDETERMINADO if houve_login else USO_NUNCA_USADA
+
+
+def _hash_conferivel(senha_hash: str | None) -> bool:
+    """O hash está num formato que o verificador reconhece? ``verificar_senha``
+    devolve False para hash malformado — sem esta checagem, uma conta assim
+    passaria calada como "senha não derivada"."""
+    from app.core.security import pwd_context
+    try:
+        return bool(senha_hash) and pwd_context.identify(senha_hash) is not None
+    except (ValueError, TypeError):
+        return False
+
+
+def _classificar_contas(db: Session, escola_id: int | None, *,
+                        globais: bool = False) -> list[dict]:
+    """Toda conta não excluída com: ``derivada`` (True/False, ou None quando o
+    hash não pôde ser conferido) e ``uso``. Só LÊ.
+
+    TODOS os cargos, não só professor: a conta nasce professor na importação,
+    mas pode ter sido promovida a coordenador ou admin mantendo a senha — e
+    seria justamente a de maior alcance a ficar de fora. ``globais`` escolhe o
+    outro lado: as contas de administração global ficam numa lista à parte e
+    nunca entram na invalidação automática (travar o único admin global não tem
+    volta pela interface)."""
+    consulta = select(Usuario).where(Usuario.status != "excluido",
+                                     Usuario.is_global.is_(globais))
     if escola_id is not None:
         consulta = consulta.where(Usuario.escola_id == escola_id)
-    achadas: list[dict] = []
+    contas: list[dict] = []
     for u in db.execute(consulta.order_by(Usuario.id)).scalars():
-        if any(verificar_senha(c, u.senha_hash)
-               for c in _senhas_da_convencao_antiga(u.nome, u.username)):
-            achadas.append({"usuario_id": u.id, "escola_id": u.escola_id,
-                            "usuario": u.username,
-                            "nunca_usada": u.ultimo_acesso is None})
-    return achadas
+        if not _hash_conferivel(u.senha_hash):
+            derivada = None   # formato que o verificador não lê: não dá para afirmar
+        else:
+            derivada = any(verificar_senha(c, u.senha_hash)
+                           for c in _senhas_da_convencao_antiga(u.nome, u.username))
+        uso = _uso_da_conta(db, u)
+        contas.append({"usuario_id": u.id, "escola_id": u.escola_id,
+                       "usuario": u.username, "cargo": u.cargo,
+                       "derivada": derivada, "uso": uso,
+                       "nunca_usada": uso == USO_NUNCA_USADA})
+    return contas
+
+
+def _sem_flag(conta: dict) -> dict:
+    return {k: v for k, v in conta.items() if k != "derivada"}
+
+
+def contas_com_senha_derivada(db: Session, escola_id: int | None = None) -> list[dict]:
+    """Contas (de qualquer cargo, não globais) cuja senha ainda é a da convenção
+    antiga de professor (derivável do nome). Só LÊ — confere o hash bcrypt contra
+    os candidatos; nada é gravado e nenhuma senha sai daqui. É a base da etapa de
+    migração do deploy.
+
+    Cada conta vem com ``uso`` (``nunca_usada`` | ``usada`` | ``indeterminada``)
+    e ``nunca_usada`` (só True quando o uso é inequívoco)."""
+    return [_sem_flag(c) for c in _classificar_contas(db, escola_id) if c["derivada"] is True]
+
+
+def contas_globais_com_senha_derivada(db: Session) -> list[dict]:
+    """Contas de ADMINISTRAÇÃO GLOBAL com a senha da convenção: só para o
+    diagnóstico — a troca é manual (ver ``_classificar_contas``)."""
+    return [_sem_flag(c) for c in _classificar_contas(db, None, globais=True)
+            if c["derivada"] is True]
+
+
+def contas_nao_verificaveis(db: Session, escola_id: int | None = None) -> list[dict]:
+    """Contas de professor cujo hash não pôde ser conferido — impossível dizer se
+    a senha é a derivada. Nunca entram na invalidação automática."""
+    return [_sem_flag(c) for c in _classificar_contas(db, escola_id) if c["derivada"] is None]
 
 
 def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
@@ -162,7 +237,8 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
     from app.services.audit import registrar
 
     achadas = contas_com_senha_derivada(db, escola_id)
-    alvos = [c for c in achadas if c["nunca_usada"]] if so_nunca_usadas else achadas
+    alvos = ([c for c in achadas if c["uso"] == USO_NUNCA_USADA] if so_nunca_usadas
+             else achadas)
     if aplicar:
         for item in alvos:
             u = db.get(Usuario, item["usuario_id"])
@@ -170,9 +246,11 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
             u.token_version = (u.token_version or 0) + 1   # derruba sessões
             registrar(db, "usuario.senha_derivada_invalidada", escola_id=u.escola_id,
                       entidade="usuario", entidade_id=u.id,
-                      detalhes={"nunca_usada": item["nunca_usada"]})
+                      detalhes={"uso": item["uso"]})
     return {"encontradas": len(achadas), "aplicado": aplicar,
-            "invalidadas": len(alvos) if aplicar else 0, "contas": achadas}
+            "invalidadas": len(alvos) if aplicar else 0, "contas": achadas,
+            "por_uso": {uso: sum(1 for c in achadas if c["uso"] == uso)
+                        for uso in (USO_NUNCA_USADA, USO_USADA, USO_INDETERMINADO)}}
 
 
 def nomes_de_professores(texto: str) -> list[str]:

@@ -17,6 +17,11 @@ Garantias
   único ("Gerar link de redefinição", em Usuários), escolhendo a própria senha.
 * NÃO BLOQUEIA ninguém para sempre e NÃO cria senha conhecida de reserva: a
   conta continua ativa; só a senha pública deixa de funcionar.
+* Classifica cada conta: NUNCA USADA (sem login registrado de forma alguma),
+  USADA (tem ``ultimo_acesso``) ou INDETERMINADA (sinais divergentes — ex.:
+  presença registrada sem ``ultimo_acesso``). ``--so-nunca-usadas`` só toca as
+  NUNCA USADAS. Conta cujo hash não pôde ser conferido é listada à parte e
+  nunca é tocada.
 * As sessões abertas dessas contas caem (``token_version``).
 * Cada conta invalidada fica no log de auditoria (``usuario.senha_derivada_invalidada``).
 
@@ -59,12 +64,30 @@ def main() -> int:
     db = SessionLocal()
     try:
         achadas = professores.contas_com_senha_derivada(db, args.escola)
-        nunca = [c for c in achadas if c["nunca_usada"]]
-        print(f"contas de professor com senha derivada do nome: {len(achadas)} "
-              f"({len(nunca)} nunca usadas, {len(achadas) - len(nunca)} já usadas)")
+        por_uso = {uso: [c for c in achadas if c["uso"] == uso]
+                   for uso in (professores.USO_NUNCA_USADA, professores.USO_USADA,
+                               professores.USO_INDETERMINADO)}
+        print(f"contas com senha derivada do nome: {len(achadas)} "
+              f"({len(por_uso['nunca_usada'])} nunca usadas, "
+              f"{len(por_uso['usada'])} já usadas, "
+              f"{len(por_uso['indeterminada'])} indeterminadas)")
         for c in achadas:
             print(f"  usuario_id={c['usuario_id']:<6} escola={c['escola_id']:<5} "
-                  f"@{c['usuario']:<28} {'nunca usada' if c['nunca_usada'] else 'JA USADA'}")
+                  f"@{(c['usuario'] or '-'):<28} {c['cargo']:<12} {c['uso'].upper()}")
+        if args.escola is None:
+            globais = professores.contas_globais_com_senha_derivada(db)
+            if globais:
+                print(f"\nADMINISTRAÇÃO GLOBAL com senha derivada (troca MANUAL, "
+                      f"fora da etapa): {len(globais)}")
+                for c in globais:
+                    print(f"  usuario_id={c['usuario_id']:<6} @{(c['usuario'] or '-')}")
+        nao_verificaveis = professores.contas_nao_verificaveis(db, args.escola)
+        if nao_verificaveis:
+            print(f"\ncontas cujo hash não pôde ser conferido (fora da etapa): "
+                  f"{len(nao_verificaveis)}")
+            for c in nao_verificaveis:
+                print(f"  usuario_id={c['usuario_id']:<6} escola={c['escola_id']:<5} "
+                      f"@{(c['usuario'] or '-')}")
 
         if not args.aplicar:
             print("\ndiagnóstico apenas — nada foi gravado. Use --aplicar para invalidar.")
@@ -75,6 +98,8 @@ def main() -> int:
         db.commit()
         print(f"\ninvalidadas: {resultado['invalidadas']} de {resultado['encontradas']} "
               "encontradas. Os professores voltam a entrar pelo link de redefinição.")
+        if args.so_nunca_usadas:
+            print("(--so-nunca-usadas: as já usadas e as indeterminadas não foram tocadas)")
         return 0
     except Exception:
         db.rollback()

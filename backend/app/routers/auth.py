@@ -173,7 +173,8 @@ def validar_link_reset(token: str, db: Session = Depends(get_db)):
     alvo = db.get(Usuario, registro.usuario_id)
     if alvo is None or alvo.status == "excluido":
         return {"valido": False}
-    return {"valido": True, "nome": alvo.nome}
+    # Só o PRIMEIRO nome, para a saudação: a rota é pública (basta o link).
+    return {"valido": True, "nome": (alvo.nome or "").split(" ")[0]}
 
 
 @router.post("/redefinir-senha", response_model=dict)
@@ -190,6 +191,11 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
     if alvo is None or alvo.status == "excluido":
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Conta indisponível. Fale com o administrador.")
+    # A regra que depende do DONO da conta (o validador do corpo não o conhece).
+    erro = validar_forca_senha(dados.nova_senha, alvo.email, nome=alvo.nome,
+                               usuario=alvo.username)
+    if erro:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, erro)
 
     alvo.senha_hash = hash_senha(dados.nova_senha)
     registro.usado_em = datetime.now(timezone.utc)   # uso único

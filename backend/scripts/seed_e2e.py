@@ -58,6 +58,12 @@ def _garantir_usuario(db, escola_id: int, nome: str, email: str, senha: str, car
 
 
 def main() -> None:
+    # O script APAGA e repovoa o banco com contas de senha conhecida (padrão
+    # publicado no repositório): só existe para o SQLite descartável do E2E.
+    from app.core.config import settings
+    if settings.em_producao or not settings.DATABASE_URL.startswith("sqlite"):
+        raise SystemExit("seed_e2e recusado: só roda fora de produção e com "
+                         "DATABASE_URL apontando para um SQLite de teste.")
     aplicar_migracoes(engine)
     db = SessionLocal()
     try:
