@@ -21,6 +21,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import email_reservado_ao_dono
 from app.core.security import hash_senha
 from app.models import (
     ConversaIA,
@@ -107,7 +108,12 @@ def _identidade_livre(db: Session, base: str, escola_id: int,
             | (func.lower(Usuario.email) == email))
         if excluir_id is not None:
             consulta = consulta.where(Usuario.id != excluir_id)
-        if db.execute(consulta).first() is None:
+        # O e-mail reservado ao dono (ADMIN_GLOBAL_EMAIL) é promovido a
+        # `is_global` no boot: nunca pode sair GERADO para uma conta de
+        # professor (a folha entrega a senha ao gestor; a importação cria a
+        # conta e a coordenação gera o link de redefinição).
+        if (db.execute(consulta).first() is None
+                and not email_reservado_ao_dono(email)):
             return username, email
         i += 1
 
@@ -136,9 +142,21 @@ def _reconciliar(nome: str, existentes: list[Professor]) -> Professor | None:
 
 
 def _usuario_do_professor(db: Session, escola_id: int, prof: Professor) -> Usuario | None:
+    """A conta de login de um Professor: SÓ a conta de PROFESSOR desta escola
+    (sem rede, não global). A fusão de duplicados APAGA ou REESCREVE (@, e-mail
+    e senha, devolvida na folha) a conta que sai daqui — sem o recorte, um
+    Professor cadastrado com o e-mail da Secretaria (que guarda o `escola_id` de
+    origem), do coordenador ou do admin desta escola levava a fusão a apagar
+    essa conta ou a entregar a senha nova dela ao gestor."""
+    email = (prof.email or "").strip().lower()
+    if not email or email_reservado_ao_dono(email):
+        return None
     return db.execute(
         select(Usuario).where(Usuario.escola_id == escola_id,
-                              func.lower(Usuario.email) == (prof.email or "").lower())
+                              func.lower(Usuario.email) == email,
+                              Usuario.cargo == "professor",
+                              Usuario.rede_id.is_(None),
+                              Usuario.is_global.is_(False))
     ).scalars().first()
 
 
@@ -338,10 +356,14 @@ def aplicar_deduplicacao(db: Session, escola_id: int,
         db.execute(update(Turma).where(Turma.escola_id == escola_id,
                                        Turma.professor_id.in_(ids))
                    .values(professor_id=survivor.id))
-        # 2) apaga as contas duplicadas (Usuario + Professor).
+        # 2) apaga as contas duplicadas (Usuario + Professor) — NUNCA a conta
+        #    do que FICA: dois cadastros podem apontar para a MESMA conta de
+        #    professor (vínculo); apagar a do duplicado seria apagar a dela.
+        conta_que_fica = _usuario_do_professor(db, escola_id, survivor)
         for loser in losers:
             u = _usuario_do_professor(db, escola_id, loser)
-            if u is not None:
+            if u is not None and (conta_que_fica is None
+                                  or u.id != conta_que_fica.id):
                 _apagar_conta(db, u)
             db.delete(loser)
         # 3) padroniza @ e senha do survivor — SÓ se a conta nunca foi usada

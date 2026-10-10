@@ -191,6 +191,14 @@ def _usuario_alvo(db: Session, escola_id: int, usuario_id: int,
     # ranking e boletim de TODAS as escolas do município — exatamente o
     # isolamento que `exigir_rede` existe para impedir. Mesma régua de
     # `is_global`: alcance maior que o do ator só o admin global administra.
+    # Conta com o e-mail RESERVADO ao dono (ADMIN_GLOBAL_EMAIL) ainda não
+    # promovida (o boot a promove a `is_global`): quem trocasse a senha dela,
+    # gerasse o link de redefinição ou mudasse o cargo viraria admin global no
+    # reboot seguinte. Mesma régua de `is_global`.
+    if email_reservado_ao_dono(alvo.email) and not ator.is_global:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Somente administradores globais podem gerenciar "
+                            "esta conta.")
     if alvo.rede_id is not None and not ator.is_global:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Esta conta pertence à Secretaria da rede — "

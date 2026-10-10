@@ -1305,6 +1305,79 @@ def listar_professores(
     ).scalars().all()
 
 
+# --- E-mail do Professor = login da conta de professor -------------------------
+#
+# O e-mail de um `Professor` é a chave que liga uma CONTA às turmas dele
+# (`permissoes.turmas_permitidas`) e é por ele que a edição acha a conta cujo
+# LOGIN acompanha a troca. A autorização para reescrever um login vem só do
+# SERVIDOR — da escola da rota (`escola_autorizada`) e do tipo da conta achada
+# — e nunca do e-mail gravado no cadastro ou enviado no corpo. Por isso:
+#   * a única conta que acompanha o e-mail de um Professor é a conta de
+#     PROFESSOR desta escola (cargo professor, mesma escola, sem rede, não
+#     global) — `_conta_do_professor`;
+#   * um Professor só recebe um e-mail livre ou o da conta de professor desta
+#     escola (vínculo do cadastro com a conta) — nunca o login de conta de
+#     gestão, de outra escola, de rede (Secretaria) ou global, nem o e-mail
+#     reservado ao dono (`ADMIN_GLOBAL_EMAIL`, promovido a `is_global` no boot)
+#     — `_exigir_email_de_professor`.
+# Sem isso (P0), um gestor de escola cadastrava um Professor com o e-mail de
+# outra conta e, ao editá-lo, reescrevia o login dela: lockout de outra escola
+# ou do dono e, com ADMIN_GLOBAL_EMAIL declarado, o coordenador virava admin
+# global no reboot seguinte (`database._promover_admin_global`).
+
+def _e_conta_de_professor_da_escola(conta: Usuario, escola_id: int) -> bool:
+    return (conta.escola_id == escola_id and conta.cargo == "professor"
+            and conta.rede_id is None and not conta.is_global)
+
+
+def _conta_do_professor(db: Session, escola_id: int, email: str | None) -> Usuario | None:
+    """A conta de login que acompanha o e-mail de um Professor: SÓ a conta de
+    professor DESTA escola — nunca a de gestão, de outra escola, de rede ou
+    global, mesmo que o cadastro (legado) carregue o e-mail dela. Nem a conta
+    com o e-mail reservado ao dono (ainda não promovida no boot)."""
+    email = (email or "").strip().lower()
+    if not email or email_reservado_ao_dono(email):
+        return None
+    return db.execute(
+        select(Usuario).where(func.lower(Usuario.email) == email,
+                              Usuario.escola_id == escola_id,
+                              Usuario.cargo == "professor",
+                              Usuario.rede_id.is_(None),
+                              Usuario.is_global.is_(False))
+    ).scalars().first()
+
+
+def _exigir_email_de_professor(db: Session, escola_id: int, email: str,
+                               conta_atual: Usuario | None = None) -> None:
+    """Recusa o e-mail que um Professor desta escola não pode ter.
+
+    ``email`` já normalizado (strip + minúsculas). ``conta_atual`` é a conta de
+    professor que vai ACOMPANHAR a troca (a do próprio professor, na edição) —
+    ela não colide consigo mesma. Sem ``conta_atual`` (cadastro, ou professor
+    ainda sem conta), o e-mail pode ser o da conta de professor desta escola.
+
+    403 — e-mail reservado ao dono. Vale também para o admin global: a conta que
+          acompanha um Professor tem a senha do PROFESSOR, e o boot a promoveria
+          a ``is_global``.
+    409 — o e-mail já é o login de outra conta: e-mail OU @username (o login
+          aceita os dois, sem diferenciar caixa)."""
+    if email_reservado_ao_dono(email):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Este e-mail é reservado à administração da plataforma.")
+    donos = db.execute(
+        select(Usuario).where((func.lower(Usuario.email) == email)
+                              | (func.lower(Usuario.username) == email))
+    ).scalars().all()
+    for dono in donos:
+        if conta_atual is not None and dono.id == conta_atual.id:
+            continue
+        if (conta_atual is None and (dono.email or "").strip().lower() == email
+                and _e_conta_de_professor_da_escola(dono, escola_id)):
+            continue
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Este e-mail já é o login de outra conta de acesso.")
+
+
 @router.post("/professores", response_model=ProfessorOut, status_code=status.HTTP_201_CREATED)
 def criar_professor(
     dados: ProfessorCreate,
@@ -1312,7 +1385,11 @@ def criar_professor(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    professor = Professor(escola_id=escola_id, **dados.model_dump())
+    campos = dados.model_dump()
+    if campos.get("email"):
+        campos["email"] = str(campos["email"]).strip().lower()
+        _exigir_email_de_professor(db, escola_id, campos["email"])
+    professor = Professor(escola_id=escola_id, **campos)
     db.add(professor)
     registrar(db, "professor.criado", escola_id=escola_id, usuario_id=usuario.id,
               entidade="professor", detalhes={"nome": dados.nome})
@@ -1343,29 +1420,29 @@ def atualizar_professor(
         professor.nome = campos["nome"].strip()
     if campos.get("email"):
         novo_email = str(campos["email"]).strip().lower()
-        # Conta de login atualmente vinculada a este professor (casa pelo e-mail
-        # ATUAL do professor). Se existir, o e-mail dela precisa acompanhar a
-        # troca — é o mesmo e-mail que o RBAC usa para achar as turmas do prof.
-        conta = None
-        if professor.email:
-            conta = db.execute(
-                select(Usuario).where(func.lower(Usuario.email) == professor.email.strip().lower())
-            ).scalar_one_or_none()
-        if conta is not None:
-            # Vou trocar o e-mail (login) da conta → não pode colidir com OUTRA.
-            colisao = db.execute(
-                select(Usuario).where(func.lower(Usuario.email) == novo_email, Usuario.id != conta.id)
-            ).scalar_one_or_none()
-            if colisao is not None:
-                raise HTTPException(status.HTTP_409_CONFLICT,
-                                    "Este e-mail já está em uso por outra conta de acesso.")
-            conta.email = novo_email
+        atual = (professor.email or "").strip().lower()
+        if novo_email != atual:
+            # Conta de login vinculada a este professor (casa pelo e-mail ATUAL):
+            # se existir, o e-mail dela acompanha a troca — é o mesmo e-mail que
+            # o RBAC usa para achar as turmas do professor. SÓ a conta de
+            # professor desta escola (`_conta_do_professor`); e o novo e-mail não
+            # pode ser o login de outra conta nem o reservado ao dono.
+            conta = _conta_do_professor(db, escola_id, atual)
+            _exigir_email_de_professor(db, escola_id, novo_email, conta_atual=conta)
+            if conta is not None:
+                conta.email = novo_email
         professor.email = novo_email
 
     registrar(db, "professor.atualizado", escola_id=escola_id, usuario_id=usuario.id,
               entidade="professor", entidade_id=professor.id,
               detalhes={"nome": professor.nome, "email": professor.email})
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Corrida com outra gravação do mesmo login: o índice único decide.
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Este e-mail já é o login de outra conta de acesso.")
     db.refresh(professor)
     return professor
 
@@ -1424,15 +1501,15 @@ def criar_professor_completo(
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Turma inválida para esta escola.")
 
+    # Com OU sem conta de acesso, o e-mail de um Professor não pode ser o login
+    # de outra conta nem o reservado ao dono (ver `_exigir_email_de_professor`).
+    # Antes, com `criar_acesso=False`, nada era conferido: o cadastro com o
+    # e-mail da Secretaria (que guarda o escola_id de origem) ou da gestão
+    # entrava por aqui e a fusão de duplicados apagava ou reescrevia aquela conta.
+    _exigir_email_de_professor(db, escola_id, email)
+
     acesso = None
     if dados.criar_acesso:
-        # Mesma reserva de `admin.criar_usuario`: a conta do DONO da plataforma
-        # (ADMIN_GLOBAL_EMAIL) é promovida a `is_global` no boot — criá-la por
-        # uma rota de ESCOLA seria reivindicar o acesso a todas as redes.
-        if email_reservado_ao_dono(email) and not usuario.is_global:
-            raise HTTPException(status.HTTP_403_FORBIDDEN,
-                                "Este e-mail é reservado à administração da "
-                                "plataforma.")
         ja_existe = db.execute(
             select(Usuario).where(func.lower(Usuario.email) == email)
         ).scalar_one_or_none()

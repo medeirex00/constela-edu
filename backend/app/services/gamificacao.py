@@ -466,12 +466,20 @@ def anonimizar_nome(nome: str | None) -> str:
 def mural(db: Session, escola_id: int,
           serie_m: dict | None = None, serie_e: dict | None = None,
           mapa_dif: dict | None = None, anonimizar: bool = False,
-          base_no_periodo: bool = False) -> dict:
+          base_no_periodo: bool = False,
+          turma_ids: list[int] | None = None) -> dict:
     """Mural da escola: destaques do dia/semana/mês + eventos recentes.
 
     ``anonimizar=True`` (uso no painel PÚBLICO sem login) reduz o nome do aluno
     nos destaques e nos eventos a "primeiro nome + inicial" — ver
     :func:`anonimizar_nome`.
+
+    ``turma_ids`` (opcional) só RECORTA quem pode ser nomeado: os eventos e os
+    destaques ficam restritos a crianças matriculadas nessas turmas. O painel
+    PÚBLICO passa as turmas que concorrem (as Fases da Educação Infantil não
+    disputam o "Aluno do Dia/Semana/Mês"). A régua da evolução continua a da
+    escola inteira (`evolucao.ranking_evolucao`), então a nota exibida não muda.
+    ``None`` (padrão) = sem recorte — os demais chamadores seguem idênticos.
 
     Trabalha em LOTE: todos os snapshots da escola são carregados em 2
     consultas e a gamificação de cada aluno é computada em memória — antes
@@ -491,12 +499,37 @@ def mural(db: Session, escola_id: int,
     series_e = serie_e if serie_e is not None else evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
     if mapa_dif is None:   # a REGRA de dificuldade (fonte única)
         mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
-    nomes = dict(db.execute(
-        select(Aluno.id, Aluno.nome).where(Aluno.escola_id == escola_id)
-    ).all())
+    # COORTE do mural = a MESMA de todas as outras superfícies: aluno ATIVO e
+    # MATRICULADO no ano letivo corrente (o JOIN de `publico._consulta_ranking`).
+    #
+    # As séries de snapshot cobrem a escola inteira e NÃO são apagadas quando
+    # alguém é arquivado, excluído ou perde a matrícula — e este `nomes` não
+    # filtrava nada. Uma criança fora da escola cuja conquista caiu nos últimos
+    # 30 dias voltava NOMEADA ao mural, inclusive no telão PÚBLICO sem login,
+    # no elemento de texto mais explícito da tela ("Fulano desbloqueou ...").
+    # Era a única superfície que o A1 (`test_publico.py::test_a1_aluno_
+    # arquivado_some_de_todas_as_superficies`) não cobria.
+    #
+    # O filtro é ESTRITAMENTE RESTRITIVO: ninguém passa a aparecer no mural,
+    # apenas deixam de aparecer os que já não deviam. Nenhuma regra de exposição
+    # do telão muda (slides, anonimização e top-N seguem idênticos).
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo if escola is not None else 0
+    consulta_nomes = (
+        select(Aluno.id, Aluno.nome)
+        .join(Matricula, (Matricula.aluno_id == Aluno.id)
+              & (Matricula.ano_letivo == ano))
+        .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
+    )
+    if turma_ids is not None:
+        # Recorte opcional (ver docstring): também ESTRITAMENTE RESTRITIVO.
+        consulta_nomes = consulta_nomes.where(Matricula.turma_id.in_(turma_ids))
+    nomes = dict(db.execute(consulta_nomes).all())
 
     corte = datetime.now(timezone.utc) - timedelta(days=30)
-    for aluno_id in set(series_m) | set(series_e):
+    # `& nomes`: só quem está na coorte acima. Sem isto, o dono do snapshot
+    # entrava no laço e era nomeado com o fallback "Aluno".
+    for aluno_id in (set(series_m) | set(series_e)) & set(nomes):
         detalhe = _computar_gamificacao(
             aluno_id, series_m.get(aluno_id, []), series_e.get(aluno_id, []),
             pesos_xp, base, conquistas_cfg)
@@ -524,7 +557,7 @@ def mural(db: Session, escola_id: int,
         melhor = _melhor_do_ranking(evolucao.ranking_evolucao(
             db, escola_id, dias=dias,
             serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif,
-            base_no_periodo=base_no_periodo))
+            base_no_periodo=base_no_periodo, turma_ids=turma_ids))
         if melhor and anonimizar:
             # k-anonimato no PÓDIO: além do nome reduzido, a TURMA também some —
             # "Ana B." + turma + destaque reidentificaria a criança no elemento

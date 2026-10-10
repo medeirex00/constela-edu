@@ -265,6 +265,16 @@ def qr_code(
 publico_router = APIRouter(prefix="/publico", tags=["Painel Público"])
 
 
+def _turmas_premiaveis(db: Session, escola: Escola) -> list[int]:
+    """As turmas da escola que CONCORREM (1º ao 5º ano) no ano letivo ativo.
+
+    AS FASES NÃO CONCORREM — e o telão é a única superfície que qualquer pessoa
+    abre sem senha. Todo caminho deste módulo que lista ou abre criança passa
+    por aqui: ranking, evolução, destaques/mural e o perfil público. A regra
+    mora em `services/elegibilidade.py` (fonte única); aqui só se aplica."""
+    return elegibilidade.turmas_premiaveis(db, escola.id, escola.ano_letivo_ativo)
+
+
 def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     limite = int(config.get("max_posicoes", 10))
     # Telão sem login: nome anonimizado por padrão (primeiro nome + inicial).
@@ -273,6 +283,9 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     # K-anonimato: no modo anônimo, a TURMA também é omitida — senão "Ana B." +
     # turma + posição identifica a criança numa turma pequena (LGPD/ECA).
     turma_pub = (lambda _t: None) if anonimizar else (lambda t: t)
+    # Um corte só, para TODAS as listas do telão (ranking, evolução, destaques
+    # e mural): uma consulta barata por montagem, absorvida pelo cache de 60 s.
+    premiaveis = _turmas_premiaveis(db, escola)
     ranking = db.execute(
         select(Nota, Aluno, Turma)
         .join(Aluno, Nota.aluno_id == Aluno.id)
@@ -291,8 +304,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         # ainda mostrando a Educação Infantil disputando.
         # Pela MATRÍCULA, não por `Turma`: a segunda consulta não dá JOIN em
         # Turma, e um filtro por `Turma.id` ali viraria produto cartesiano.
-        .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
-            db, escola.id, escola.ano_letivo_ativo)))
+        .where(Matricula.turma_id.in_(premiaveis))
         .order_by(Nota.posicao)
         .limit(limite)
     ).all()
@@ -302,12 +314,18 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     # acumulado de vida da criança apareceria como "evolução" (caso Antonella).
     # Só quem REALMENTE cresceu (>0) aparece — no início, quando todos empatam
     # em 0, o slide fica vazio em vez de exibir alunos por acaso (sem dado).
+    # AS FASES NÃO CONCORREM aqui também: `turma_ids` só RECORTA a lista (a
+    # régua continua a da escola inteira, a nota de cada criança é a mesma do
+    # sistema) e a posição é renumerada entre quem concorre.
     evolucao_itens = [
         it for it in svc_evolucao.ranking_evolucao(
-            db, escola.id, dias=30, base_no_periodo=True)
+            db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
         if it.nota_evolucao > 0
     ][:limite]
-    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True)
+    # Destaques ("Aluno do Dia/Semana/Mês") e eventos do mural: o mesmo corte —
+    # a Educação Infantil não disputa o pódio do telão nem é nomeada nele.
+    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True,
+                           turma_ids=premiaveis)
 
     # Estatísticas REAIS da escola (agregadas dos snapshots atuais — nada é
     # inventado): faixa de indicadores do painel. Custo absorvido pelo cache
@@ -426,6 +444,9 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     if em_cache and agora - em_cache[0] < TTL_PAINEL_S:
         return em_cache[1]
     limite = int(config.get("max_posicoes", 10))
+    # AS FASES NÃO CONCORREM: o conjunto tem de casar com o que o telão exibe
+    # (`_dados_publicos`), senão abriria o perfil de quem não está no telão.
+    premiaveis = _turmas_premiaveis(db, escola)
     ids = set(db.execute(
         select(Aluno.id)
         .join(Nota, Nota.aluno_id == Aluno.id)
@@ -442,17 +463,18 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
         # ainda mostrando a Educação Infantil disputando.
         # Pela MATRÍCULA, não por `Turma`: a segunda consulta não dá JOIN em
         # Turma, e um filtro por `Turma.id` ali viraria produto cartesiano.
-        .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
-            db, escola.id, escola.ano_letivo_ativo)))
+        .where(Matricula.turma_id.in_(premiaveis))
         .order_by(Nota.posicao)
         .limit(limite)
     ).scalars())
     # A evolução também é exibida (slide próprio) — seus alunos podem ser abertos.
     # base_no_periodo=True + só quem cresceu (>0): mesma regra do payload público
     # (não expõe, no começo do piloto, quem só tem acumulado como "evolução" nem
-    # abre perfil de aluno que não aparece de fato no telão).
+    # abre perfil de aluno que não aparece de fato no telão). Mesmo recorte das
+    # Fases do payload: sem ele, a criança da Fase que lidera o crescimento
+    # entraria aqui e o perfil público dela abriria (200).
     for item in [it for it in svc_evolucao.ranking_evolucao(
-            db, escola.id, dias=30, base_no_periodo=True)
+            db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
             if it.nota_evolucao > 0][:limite]:
         ids.add(item.aluno_id)
     _cache_visiveis[escola.id] = (agora, ids)
@@ -475,6 +497,19 @@ def perfil_publico(token: str, aluno_id: int, response: Response,
     # Só alunos exibidos no painel: bloqueia enumeração por aluno_id sequencial.
     if (aluno is None or aluno.escola_id != escola.id or aluno.status != "ativo"
             or aluno_id not in _ids_visiveis(db, escola, config)):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    # AS FASES NÃO CONCORREM — e o perfil público só existe para quem concorre
+    # no telão. `_ids_visiveis` já não as inclui; esta é a segunda linha: um
+    # slide futuro que esqueça o corte não reabre o perfil de uma criança da
+    # Educação Infantil. Mesma resposta e mesma mensagem do 404 acima: o link
+    # público não revela se a criança existe nem em que etapa ela está.
+    if db.execute(
+        select(Matricula.id)
+        .where(Matricula.aluno_id == aluno_id,
+               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Matricula.turma_id.in_(_turmas_premiaveis(db, escola)))
+        .limit(1)
+    ).first() is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
 
     matricula = db.execute(
