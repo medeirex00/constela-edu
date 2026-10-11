@@ -157,8 +157,15 @@ def _criador_ainda_pode(db: Session, registro: TokenResetSenha, alvo: Usuario) -
     no uso, um link ainda pendente sobrevivia a uma mudança da conta-alvo (virou
     admin, Secretaria ou global): quem o gerou definia a senha da conta já
     promovida e entrava com o alcance novo. Mesmas regras da geração
-    (``admin._usuario_alvo`` e ``admin._pode_redefinir_senha``)."""
-    if registro.criado_por is None or registro.criado_por == alvo.id:
+    (``admin._usuario_alvo`` e ``admin._pode_redefinir_senha``).
+
+    Sem autor (``criado_por`` nulo) o link não vale: toda geração grava o autor,
+    e o nulo só aparece quando a conta de quem gerou foi apagada de vez
+    (``ON DELETE SET NULL``) — aceitá-lo devolveria a validade a um link que a
+    conferência acima já tinha derrubado."""
+    if registro.criado_por is None:
+        return False
+    if registro.criado_por == alvo.id:
         return True
     from app.core.config import email_reservado_ao_dono
     from app.routers.admin import _pode_redefinir_senha

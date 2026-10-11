@@ -89,6 +89,25 @@ def test_link_do_admin_da_escola_cai_quando_a_conta_vira_secretaria(db, escola_c
     assert _login("x.sint@teste.local", NOVA).status_code == 401
 
 
+def test_link_sem_autor_nao_vale(db, escola_completa):
+    """A conta de quem gerou o link foi apagada de vez: o banco zera o autor
+    (ON DELETE SET NULL). O link não pode voltar a valer por isso."""
+    from sqlalchemy import update
+
+    from app.models import TokenResetSenha
+    escola = escola_completa["escola"]
+    _conta(db, escola.id, "coord.sint@teste.local", "coordenador")
+    prof = _conta(db, escola.id, "prof.sint@teste.local", "professor")
+    coord = _cliente("coord.sint@teste.local")
+    token = coord.post(f"/api/v1/escolas/{escola.id}/usuarios/{prof.id}/redefinir-senha"
+                       ).json()["token"]
+    db.execute(update(TokenResetSenha).where(TokenResetSenha.usuario_id == prof.id)
+               .values(criado_por=None))
+    db.commit()
+    assert TestClient(app).get(f"/api/v1/auth/redefinir-senha/{token}").json()["valido"] is False
+    assert _consumir(token).status_code == 400
+
+
 def test_link_continua_valendo_sem_mudanca_na_conta(db, escola_completa):
     escola = escola_completa["escola"]
     _conta(db, escola.id, "coord.sint@teste.local", "coordenador")
