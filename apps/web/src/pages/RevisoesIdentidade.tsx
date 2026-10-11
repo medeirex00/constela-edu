@@ -1044,17 +1044,27 @@ function DetalheRevisao({
   );
 }
 
-/** Resolvida/descartada: o que foi decidido (visto pelos filtros de situação). */
+/** Resolvida/descartada: o que foi decidido (visto pelos filtros de situação).
+ *  Revisão que o SISTEMA encerrou sozinho (`resolucao.automatica === true`,
+ *  gravado pelo vínculo automático seguro da importação) aparece como
+ *  "Encerrada automaticamente", com a regra usada quando ela vem gravada — a
+ *  decisão não foi de ninguém da escola. Sem o campo, "Resolvida" como antes. */
 function SituacaoFinal({ rev }: { rev: RevisaoIdentidade }) {
   const escolhido = rev.candidatos.find((c) => c.aluno_id === rev.aluno_escolhido_id);
   const justificativa = typeof rev.resolucao?.motivo === "string" ? rev.resolucao.motivo : "";
   const criou = rev.resolucao?.acao === "criar";
+  const automatica = rev.status === "resolvida" && rev.resolucao?.automatica === true;
+  const regra = automatica && typeof rev.resolucao?.regra === "string" ? rev.resolucao.regra : "";
   return (
     <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
       <p className="font-medium">
-        {rev.status === "resolvida" ? "Resolvida" : rev.status === "descartada" ? "Descartada" : rev.status}
+        {automatica ? "Encerrada automaticamente"
+          : rev.status === "resolvida" ? "Resolvida" : rev.status === "descartada" ? "Descartada" : rev.status}
         {rev.resolvida_em ? ` em ${dataHora(rev.resolvida_em)}` : ""}
       </p>
+      {regra && (
+        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Regra: {regra}</p>
+      )}
       {rev.status === "resolvida" && (
         <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
           {criou ? "Uma ficha nova foi criada" : "Vinculada"}
