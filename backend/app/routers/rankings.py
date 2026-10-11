@@ -92,6 +92,16 @@ def _aplicar_turno(consulta, turno: str | None):
     return consulta.where(Turma.turno.is_(None) if turno == "" else Turma.turno == turno)
 
 
+def _apenas_premiaveis(consulta, db: Session, escola_id: int, ano: int):
+    """Corte de ELEGIBILIDADE (1º–5º ano; as Fases não concorrem) — o MESMO para
+    a lista (`_ranking`) e para o denominador dela (`_contar_aferidos`). Num
+    lugar só para os dois não poderem divergir: "1º de 4" numa lista de 2 nomes.
+    A regra em si mora em ``services.elegibilidade``. A consulta precisa já ter
+    ``Turma`` no FROM/JOIN."""
+    return consulta.where(
+        Turma.id.in_(elegibilidade.turmas_premiaveis(db, escola_id, ano)))
+
+
 def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None,
              limite=None, turma_ids: list[int] | None = None,
              dimensao: str | None = None, turno: str | None = None):
@@ -141,8 +151,7 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     # logo acima). Sem este corte na LEITURA, aquela linha congelada voltaria a
     # aparecer na lista. O mobile e o painel público herdam de graça: os dois
     # chamam esta mesma função.
-    consulta = consulta.where(
-        Turma.id.in_(elegibilidade.turmas_premiaveis(db, escola_id, ano)))
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     # `turno` é kwarg NO FIM da assinatura: consumidores externos (app mobile,
     # painel público) chamam posicionalmente e não podem mudar de significado.
     consulta = _aplicar_turno(consulta, turno)
@@ -189,17 +198,22 @@ def _contar_aferidos(db: Session, escola_id: int, ano: int, dimensao: str) -> in
     """Quantos alunos ATIVOS da escola entraram na ordenação daquela dimensão —
     o denominador da posição ("8º de 21 aferidos em Leitura").
 
-    Mesmos filtros de `_ranking` (ativo + matriculado no ano), para o
-    denominador não poder contar alguém que a lista não mostra."""
+    Mesmos filtros de `_ranking` (ativo + matriculado no ano + turma que
+    CONCORRE), para o denominador não poder contar alguém que a lista não
+    mostra. Sem o corte de elegibilidade, a Nota antiga de uma criança da
+    Educação Infantil (que o recálculo não apaga) entrava no "de N"."""
     _, aferido, _, _ = _COLUNAS_DIMENSAO[dimensao]
-    return int(db.execute(
+    consulta = (
         select(func.count(func.distinct(Nota.id)))
         .join(Aluno, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
               & (Matricula.ano_letivo == ano))
+        .join(Turma, Matricula.turma_id == Turma.id)
         .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
                Aluno.status == "ativo", aferido.is_(True))
-    ).scalar_one() or 0)
+    )
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
+    return int(db.execute(consulta).scalar_one() or 0)
 
 
 @router.get("/ranking", response_model=list[RankingItemOut])

@@ -59,6 +59,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+from app.models.base import agora
 
 # Pontos extras "por livro lido NA ESCOLA": a janela de horário é definida pelo
 # TURNO da turma (horário de Brasília, como já vem no relatório individual do
@@ -1595,6 +1596,14 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     )
     resultados.sort(key=lambda r: _chave_ordenacao(r, criterios))
 
+    # INSTANTE deste recálculo — um só para a escola inteira, atribuído
+    # EXPLICITAMENTE em cada linha abaixo. O `default=agora` da coluna só vale no
+    # INSERT: a linha reaproveitada (o caso comum) ficava com a data da PRIMEIRA
+    # gravação, e a tela afirmava "calculada em" um dia em que aquele número nem
+    # existia. Atribuição explícita, e não `onupdate`: este carimbo não pode
+    # depender de o flush detectar mudança em outra coluna — recálculo idêntico
+    # também é recálculo.
+    instante = agora()
     # Carrega TODAS as notas do ano numa query só (era 1 SELECT por aluno).
     notas_existentes = {
         n.aluno_id: n for n in db.execute(
@@ -1624,9 +1633,10 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
         # default 0,0 e sem backfill) NÃO vira "zero" na média: fica PENDENTE de
         # recálculo até `scripts.recalcular_institucional --pendentes`.
         # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
-        # recalcular duas vezes não pode gerar UPDATE; o instante fica em
-        # `Nota.calculada_em`.)
+        # recalcular duas vezes não pode mudar nota, posição nem detalhes; o
+        # instante fica SÓ em `Nota.calculada_em`, logo abaixo.)
         nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
+        nota_row.calculada_em = instante
 
     if commit:
         db.commit()
