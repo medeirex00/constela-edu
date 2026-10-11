@@ -252,12 +252,29 @@ def _categoria(chave: str, titulo: str, icone: str, descricao: str, unidade: str
             "podio": _itens(ordenados, alunos, limite, extras)}
 
 
+# Categoria → módulo contratado que a sustenta (``services/modulos``). A rede que
+# não contratou o módulo não vê a categoria (nem a régua da Matemática).
+MODULO_DA_CATEGORIA = {
+    "melhor_leitor": "leitura",
+    "melhor_matematica": "matematica",
+    "mais_livros": "leitura",
+    "mais_tempo": "leitura",
+}
+
+
 def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict,
-                matematica: dict[int, dict], limite: int = 5) -> list[dict]:
+                matematica: dict[int, dict], limite: int = 5,
+                modulos: set[str] | None = None) -> list[dict]:
     """Os 4 pódios para um conjunto de alunos (o recorte, ou um turno dele).
 
     ``limite`` é só QUANTAS linhas voltam: 5 no cartão, mais no ranking completo.
-    A ordem, o desempate e o valor de cada linha não mudam com ele."""
+    A ordem, o desempate e o valor de cada linha não mudam com ele.
+
+    ``modulos`` (os do plano da rede; ``None`` = todos) tira as categorias de
+    módulo não contratado — as demais saem iguais, na mesma ordem."""
+    if modulos is not None:
+        return [c for c in _categorias(alunos, livros, pontos, tempo, matematica, limite)
+                if MODULO_DA_CATEGORIA[c["chave"]] in modulos]
     indices = {aid: d["indice"] for aid, d in matematica.items()}
     # Desempate da Matemática: estrelas do período → atividades do período → nome.
     desempate_m = {aid: (d["estrelas"], d["atividades"]) for aid, d in matematica.items()}
@@ -284,11 +301,16 @@ def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict
 def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
                fim: datetime | None, turma_id: int | None = None,
                turma_ids: list[int] | None = None,
-               por_turno: bool = False, limite: int = 5) -> dict:
+               por_turno: bool = False, limite: int = 5,
+               modulos: set[str] | None = None) -> dict:
     """Pódios do período. ``limite`` é QUANTAS linhas cada pódio traz — 5 no
     cartão da tela, mais quando ela pede o ranking completo daquela premiação.
     Nada além do tamanho da lista muda: mesma coorte, mesma régua, mesma ordem,
-    mesmo desempate, mesmas posições."""
+    mesmo desempate, mesmas posições.
+
+    ``modulos`` = os módulos do plano da rede (``None`` = todos): categoria de
+    módulo não contratado não sai (``melhor_matematica`` e a ``regua_matematica``
+    sem Matemática; as de leitura sem Leitura), também nos pódios por turno."""
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
     # COORTE COMPLETA da escola (sem turma nem professor): é a base da régua.
@@ -300,9 +322,12 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
     matematica, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
 
     resultado: dict = {
-        "categorias": _categorias(alunos, livros, pontos, tempo, matematica, limite),
+        "categorias": _categorias(alunos, livros, pontos, tempo, matematica, limite,
+                                  modulos),
         "regua_matematica": regua,
     }
+    if modulos is not None and "matematica" not in modulos:
+        resultado.pop("regua_matematica")
 
     # Quebra por TURNO (só na visão "todas as turmas"): agrupa os MESMOS dados já
     # calculados por Turma.turno, sem recomputar a régua. Turnos vêm do banco.
@@ -313,7 +338,8 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
         resultado["turnos"] = [
             {"turno": turno, "turno_rotulo": svc_turnos.rotulo_turno(turno),
              "total": len(sub),
-             "categorias": _categorias(sub, livros, pontos, tempo, matematica, limite)}
+             "categorias": _categorias(sub, livros, pontos, tempo, matematica, limite,
+                                       modulos)}
             for turno, sub in sorted(grupos.items(), key=lambda kv: svc_turnos.ordem_turno(kv[0]))
         ]
     return resultado

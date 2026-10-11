@@ -131,11 +131,12 @@ def test_b2_perfil_publico_bloqueia_enumeracao_fora_do_painel(cliente, db, escol
 def test_medio7_perfil_publico_usa_cache_de_visiveis(cliente, db, escola_completa,
                                                      monkeypatch):
     """Médio-7 (perf): abrir perfis públicos não recomputa a evolução da escola
-    a cada request — os ids visíveis ficam em cache por TTL (como o painel)."""
+    a cada request — os ids visíveis ficam em cache por TTL (como o painel).
+    O slide de evolução fica LIGADO: desligado, o servidor nem calcula a evolução."""
     _com_notas(db, escola_completa)
     escola_id = escola_completa["escola"].id
     r = cliente.put(f"/api/v1/escolas/{escola_id}/painel-publico",
-                    json={"ativo": True, "slides": ["ranking"],
+                    json={"ativo": True, "slides": ["ranking", "evolucao"],
                           "intervalo_s": 8, "max_posicoes": 5})
     token = r.json()["url"].rsplit("/", 1)[-1]
     alvo = escola_completa["alunos"][0].id

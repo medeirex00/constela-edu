@@ -106,7 +106,14 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     snapshot atual da plataforma dela), ordenados pela posição carimbada dentro
     da dimensão. Quem não tem snapshot NÃO entra com zero — sai da lista e
     aparece em `GET /nao-aferidos`.
+
+    A nota de PLATAFORMA (`nota_matific` / `nota_elefante`) de módulo que a rede
+    não contratou sai nula — vale para todo consumidor (Ranking Geral, Top 10
+    do dashboard, pacote do app). A ordenação não muda.
     """
+    modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
+    mostra_matific = "matematica" in modulos
+    mostra_elefante = "leitura" in modulos
     coluna_nota = aferido = posicao_dim = None
     if dimensao:
         coluna_nota, aferido, posicao_dim, _ = _COLUNAS_DIMENSAO[dimensao]
@@ -157,8 +164,8 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
             nome=aluno.nome,
             turma=turma.nome,
             ano_escolar=turma.ano_escolar,
-            nota_matific=nota.nota_matific,
-            nota_elefante=nota.nota_elefante,
+            nota_matific=nota.nota_matific if mostra_matific else None,
+            nota_elefante=nota.nota_elefante if mostra_elefante else None,
             nota_geral=nota.nota_geral,
             # Carimbo de AFERIÇÃO, sempre — também na rota legada. As duas
             # colunas de nota acima chegam `0.0` tanto para quem NÃO USA a
@@ -699,7 +706,9 @@ def premiacoes(
     dados = svc_premiacoes.premiacoes(
         db, escola_id, ini, fim_dt, turma_id,
         turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
-        por_turno=turnos, limite=limite)
+        por_turno=turnos, limite=limite,
+        # Categoria de módulo não contratado não sai (o módulo não existe p/ a rede).
+        modulos=svc_modulos.modulos_da_escola(db, escola))
     dados["periodo"] = {"chave": periodo, "rotulo": rotulo,
                         "inicio": ini.isoformat() if ini else None,
                         "fim": fim_dt.isoformat() if fim_dt else None}

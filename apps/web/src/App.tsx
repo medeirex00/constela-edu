@@ -189,10 +189,9 @@ export default function App() {
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
           <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />
           <Route path="/escola" element={<RotaGestao><VisaoEscola /></RotaGestao>} />
-          {/* Evolução por aluno: coordenador/admin veem qualquer aluno; o
-              professor vê os das turmas dele — o backend (exigir_aluno_permitido)
-              é quem escopa (404 fora do alcance). Sem guard de gestão aqui. */}
-          <Route path="/alunos/:id/evolucao" element={<EvolucaoAluno />} />
+          {/* Evolução detalhada por aluno: só gestão (o backend responde 403 ao
+              professor e à Secretaria — negar_dado_individual). */}
+          <Route path="/alunos/:id/evolucao" element={<RotaGestao><EvolucaoAluno /></RotaGestao>} />
           <Route path="/turmas" element={<RotaGestao><Turmas /></RotaGestao>} />
           <Route path="/turmas/:id" element={<RotaGestao><TurmaDetalhe /></RotaGestao>} />
           <Route path="/professores" element={<RotaGestao><Professores /></RotaGestao>} />

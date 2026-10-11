@@ -20,11 +20,17 @@ export function nota(valor: number): string {
  *  no item do Ranking Geral legado), com o qual um app já atualizado pode falar
  *  durante um rollout escalonado.
  *
+ *  `valor === null` = o servidor NÃO manda a nota daquela plataforma porque o
+ *  módulo está fora do plano da rede (`routers/rankings.py::_ranking`). O
+ *  `aferido_*` continua `true` nesse caso (o snapshot existe), então sem este
+ *  corte a tela mostraria "0,0" — um zero falso. Também vira "—".
+ *
  *  Vive no pacote compartilhado de propósito: web e app têm de dizer a MESMA
  *  coisa sobre a mesma criança. */
 export function notaDaMateria(valor: number | null | undefined,
                               aferido?: boolean | null): string {
-  return aferido === false ? "—" : nota(valor ?? 0);
+  if (aferido === false || valor === null) return "—";
+  return nota(valor ?? 0);
 }
 
 /** Fuso oficial do produto (escolas brasileiras). Mostrar sempre no horário de

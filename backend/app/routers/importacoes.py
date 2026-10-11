@@ -2459,8 +2459,8 @@ async def confirmar_matriculas(
              "o nome completo.") if alunos_vinculados else ""
     if profs_criados:
         extra += (f" {profs_criados} professor(es) ganharam conta de acesso "
-                  "automática (usuário = NomeSobrenome, senha = Primeiro nome + 123 "
-                  "— peça para trocarem no primeiro acesso).")
+                  "automática (usuário = NomeSobrenome). A conta nasce sem senha: "
+                  "para o primeiro acesso, gere o link de redefinição em Usuários.")
     if alunos_fora_lista:
         extra += (f" {alunos_fora_lista} aluno(s) que não constam mais na lista "
                   "foram marcados como “fora da lista piloto” — continuam "

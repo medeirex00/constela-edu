@@ -130,7 +130,9 @@ export function CompeticaoLeituraTurno() {
                       {item.turma ?? "—"}
                     </td>
                     <td className="px-4 py-2.5 text-right font-semibold">
-                      {fmtNota(item.nota_elefante)}
+                      {/* A rota exige o módulo Leitura, então a nota nunca vem
+                          nula aqui (nula = módulo fora do plano da rede). */}
+                      {fmtNota(item.nota_elefante ?? 0)}
                     </td>
                   </tr>
                 ))}

@@ -76,7 +76,8 @@ def test_admin_gera_link_e_usuario_define_nova_senha(db, contas):
     # A tela confere o link antes de mostrar o formulário.
     checagem = TestClient(app).get(f"/api/v1/auth/redefinir-senha/{token}")
     assert checagem.status_code == 200
-    assert checagem.json() == {"valido": True, "nome": "Prof Carla"}
+    # Rota pública (basta o link): só o PRIMEIRO nome, para a saudação.
+    assert checagem.json() == {"valido": True, "nome": "Prof"}
 
     # A pessoa escolhe a nova senha.
     troca = TestClient(app).post("/api/v1/auth/redefinir-senha",
