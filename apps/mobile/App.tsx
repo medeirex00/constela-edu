@@ -19,7 +19,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { focusManager, onlineManager } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
+import { type JSX, useEffect } from "react";
 import { AppState, Platform, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
