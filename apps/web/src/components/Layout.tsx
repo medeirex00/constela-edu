@@ -93,14 +93,11 @@ const COMECAR: ItemNav = { rotulo: "Comece aqui", caminho: "/comecar", icone: Ro
 // "Secretaria": painel municipal (rede de escolas) + mapa — fica fora dos grupos,
 // no topo, e só aparece para quem tem rede vinculada ou é admin global.
 const SECRETARIA: ItemNav = { rotulo: "Secretaria", caminho: "/rede", icone: Landmark, exato: true };
-// "Suporte": pasta no Google Drive com todos os guias de uso (Secretaria e Escola).
-// Fica no rodapé do menu e aparece para TODOS os papéis — abre em nova aba.
-const SUPORTE: ItemNav = {
-  rotulo: "Suporte",
-  caminho: "https://drive.google.com/drive/folders/1kbDGPRSsh7TOb6nk6smwXNyAJPkySk-i?hl=pt-br",
-  icone: LifeBuoy,
-  externo: true,
-};
+// "Suporte": página interna (/suporte) com as dúvidas comuns do perfil, a
+// explicação e o exemplo da pontuação, a orientação de sincronização e o link
+// para a pasta dos guias em PDF no Google Drive. Fica no rodapé do menu e
+// aparece para TODOS os papéis.
+const SUPORTE: ItemNav = { rotulo: "Suporte", caminho: "/suporte", icone: LifeBuoy };
 
 // ── Catálogo de itens de menu ────────────────────────────────────────────
 // Cada item aponta para uma ROTA que já existe. As sidebars por perfil (logo
@@ -330,6 +327,7 @@ const TITULOS_ESPECIAIS: Record<string, string> = {
   // a navegação da Secretaria segue enxuta por decisão do dono.
   "/rede/ranking": "Ranking da Rede",
   "/usuarios": "Usuários e acessos",
+  "/suporte": "Suporte",
   "/sincronizacao": "Integrações",
   "/importacoes": "Importações (avançado)",
   "/diagnostico-elefante": "Diagnóstico da integração (avançado)",

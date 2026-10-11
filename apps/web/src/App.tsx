@@ -49,6 +49,7 @@ const Escolas = lazy(() => import("./pages/Escolas"));
 const SessoesAtivas = lazy(() => import("./pages/SessoesAtivas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
 const Sincronizacao = lazy(() => import("./pages/Sincronizacao"));
+const Suporte = lazy(() => import("./pages/Suporte"));
 const DiagnosticoElefante = lazy(() => import("./pages/DiagnosticoElefante"));
 const TurmaDetalhe = lazy(() => import("./pages/TurmaDetalhe"));
 const Turmas = lazy(() => import("./pages/Turmas"));
@@ -188,6 +189,8 @@ export default function App() {
               conta (reusa /auth/me). Sem guard de gestão — é o caminho da
               Secretaria/professor para os próprios dados, sem tocar /usuarios. */}
           <Route path="/minha-conta" element={<MinhaConta />} />
+          {/* Suporte: todos os perfis (o conteúdo se adapta ao perfil). */}
+          <Route path="/suporte" element={<Suporte />} />
 
           {/* --- Secretaria (rede) ou admin global: painel municipal + mapa --- */}
           <Route path="/rede" element={<RotaRede><RedeDashboard /></RotaRede>} />

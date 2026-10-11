@@ -52,6 +52,14 @@ describe("Menu — Configurações Gerais só para o administrador", () => {
         .toBeGreaterThan(0);
       expect(screen.queryAllByRole("link", { name: "Editar conquistas" })).toHaveLength(0);
     });
+
+  it("o Suporte do menu abre a página interna /suporte, para todos os perfis", async () => {
+    escolaConfigurada();
+    renderComApp(<LayoutReal />, { usuario: coordenadora, escolas: [escolaFake({ id: 1 })] });
+    const suporte = await screen.findAllByRole("link", { name: "Suporte" });
+    expect(suporte[0]).toHaveAttribute("href", "/suporte");
+    expect(suporte[0]).not.toHaveAttribute("target");
+  });
 });
 
 /** Como no app: as guardas só rodam com a sessão aberta (o Layout espera o
