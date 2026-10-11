@@ -59,6 +59,7 @@ import { usePerfil } from "../hooks/usePerfil";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
+import { podeAbrirRota } from "../lib/rotasGuardadas";
 import { LogoHorizontal } from "./Logo";
 import { Carregando } from "./ui";
 
@@ -613,11 +614,14 @@ function Notificacoes() {
     }
   }
 
-  // Aviso de backup aponta para Configurações Gerais, que é só do administrador:
-  // para os demais o aviso fica sem link (antes levava a um redirecionamento mudo).
-  const { admin, secretaria } = usePerfil();
+  // Aviso que aponta para uma tela que o perfil não abre (ex.: backup →
+  // Configurações Gerais, só do administrador; importação → Importações, que o
+  // professor não opera) fica sem link — antes levava a um redirecionamento
+  // mudo para o Dashboard. As guardas são as mesmas de App.tsx.
+  const perfil = usePerfil();
+  const { tem } = useModulos();
   const rotaDe = (item: Notificacao) =>
-    item.rota === "/configuracoes" && !(admin && !secretaria) ? null : item.rota;
+    item.rota && podeAbrirRota(item.rota, perfil, tem) ? item.rota : null;
 
   function irPara(item: Notificacao) {
     setAberto(false);
