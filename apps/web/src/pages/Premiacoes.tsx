@@ -44,6 +44,7 @@ import { SeletorTurno } from "../components/SeletorTurno";
 import { Card, Carregando, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { destinoEvolucaoDoAluno, usePerfil } from "../hooks/usePerfil";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
 import { TURNO_TODOS, chaveTurno, rotuloTurno, turnoEfetivo, turnoParaQuery } from "../lib/turnos";
@@ -517,6 +518,8 @@ function ModalRankingEvolucao({ itens, titulo, icone, aoFechar }: {
 
 export default function Premiacoes() {
   const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  // Módulo fora do plano: o cartão de evolução dele some (o servidor recusa).
+  const modulos = useModulos();
   const [turmaId, setTurmaId] = useState("");
   // Premiação cujo ranking completo está aberto (null = só os cartões).
   const [rankingAberto, setRankingAberto] = useState<CategoriaPremiacao | null>(null);
@@ -649,32 +652,38 @@ export default function Premiacoes() {
           </h2>
           {escolaId && (
             <div className="grid gap-4 md:grid-cols-2">
-              <CartaoEvolucao
-                escolaId={escolaId} dimensao="leitura" params={paramsEvol}
-                titulo="Melhor Evolução — Leitura" icone="📚"
-                vazio="Sem dados suficientes para medir evolução de leitura no período." />
-              <CartaoEvolucao
-                escolaId={escolaId} dimensao="matematica" params={paramsEvol}
-                titulo="Melhor Evolução — Matemática" icone="🧮"
-                vazio="Sem dados suficientes no período para medir evolução de Matemática." />
+              {modulos.leitura && (
+                <CartaoEvolucao
+                  escolaId={escolaId} dimensao="leitura" params={paramsEvol}
+                  titulo="Melhor Evolução — Leitura" icone="📚"
+                  vazio="Sem dados suficientes para medir evolução de leitura no período." />
+              )}
+              {modulos.matematica && (
+                <CartaoEvolucao
+                  escolaId={escolaId} dimensao="matematica" params={paramsEvol}
+                  titulo="Melhor Evolução — Matemática" icone="🧮"
+                  vazio="Sem dados suficientes no período para medir evolução de Matemática." />
+              )}
             </div>
           )}
         </>
       )}
 
-      <p className="mt-6 flex items-start gap-1.5 text-xs text-zinc-400">
-        <Award size={13} className="mt-0.5 shrink-0" />
-        <span>
-          Melhor Matemática divide as estrelas do período pelas atividades do período somadas a atividades extras sem estrela (20% da mediana de atividades da escola).
-          {" "}A régua é a da escola inteira, em qualquer filtro, e{" "}
-          {regua?.modo === "situacao_atual"
-            ? `vale o acumulado do ano letivo ${regua.ano_letivo} — “Todo o histórico” não recorta período.`
-            : regua
-              ? `só entram atividades feitas dentro do período, sempre recortado pelo ano letivo ${regua.ano_letivo}.`
-              : "só entram atividades feitas dentro do período."}
-          {" "}Evolução mede o crescimento dentro do intervalo, não o acumulado.
-        </span>
-      </p>
+      {modulos.matematica && (
+        <p className="mt-6 flex items-start gap-1.5 text-xs text-zinc-400">
+          <Award size={13} className="mt-0.5 shrink-0" />
+          <span>
+            Melhor Matemática divide as estrelas do período pelas atividades do período somadas a atividades extras sem estrela (20% da mediana de atividades da escola).
+            {" "}A régua é a da escola inteira, em qualquer filtro, e{" "}
+            {regua?.modo === "situacao_atual"
+              ? `vale o acumulado do ano letivo ${regua.ano_letivo} — “Todo o histórico” não recorta período.`
+              : regua
+                ? `só entram atividades feitas dentro do período, sempre recortado pelo ano letivo ${regua.ano_letivo}.`
+                : "só entram atividades feitas dentro do período."}
+            {" "}Evolução mede o crescimento dentro do intervalo, não o acumulado.
+          </span>
+        </p>
+      )}
       {grupoTurno && (
         <p className="mt-1 text-xs text-zinc-400">
           Vencedores calculados só com os alunos do turno selecionado; a régua da Matemática é a da escola inteira.

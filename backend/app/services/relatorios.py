@@ -105,6 +105,24 @@ FONTES = {
     "livros": ("Catálogo de Livros", linhas_livros),
 }
 
+# Coluna de nota de PLATAFORMA do Ranking Geral → módulo contratado que a
+# sustenta (``services/modulos``). Módulo fora do plano = a coluna não sai.
+COLUNA_NOTA_MODULO = {"Nota Matific": "matematica", "Nota Elefante": "leitura"}
+
+
+def sem_notas_fora_do_plano(cabecalho: list[str], linhas: list[list],
+                            modulos: set[str]) -> tuple[list[str], list[list]]:
+    """Tira do Ranking exportado as colunas de nota das plataformas cujo módulo a
+    rede NÃO contratou (o módulo não existe para ela — nem na tela, nem no
+    arquivo). As demais colunas, a ordem e as linhas ficam iguais; com tudo
+    contratado devolve exatamente o que recebeu."""
+    manter = [i for i, nome in enumerate(cabecalho)
+              if COLUNA_NOTA_MODULO.get(nome) is None or COLUNA_NOTA_MODULO[nome] in modulos]
+    if len(manter) == len(cabecalho):
+        return cabecalho, linhas
+    return ([cabecalho[i] for i in manter],
+            [[linha[i] for i in manter if i < len(linha)] for linha in linhas])
+
 
 # ---------------------------------------------------------------------------
 # Geradores por formato
@@ -784,7 +802,7 @@ _CARTAZ_TEMPLATE = """<style>
 <table>
   <thead><tr>
     <th>Posição</th><th class="esq">Aluno</th><th class="esq">Turma</th><th class="esq">Série</th>
-    <th>⟦IC_STAR⟧Nota Matific</th><th>⟦IC_ELE⟧Nota Elefante</th><th>⟦IC_TRO⟧Nota Geral</th>
+    ⟦TH_NOTAS⟧<th>⟦IC_TRO⟧Nota Geral</th>
   </tr></thead>
   <tbody>⟦LINHAS⟧</tbody>
 </table>
@@ -798,10 +816,27 @@ _CARTAZ_TEMPLATE = """<style>
 """
 
 
-def _linhas_cartaz_html(linhas: list[list]) -> str:
+# Cabeçalho completo do cartaz e o <th> de cada nota de plataforma (a coluna só
+# sai quando o módulo está no plano — ver ``sem_notas_fora_do_plano``).
+_CABECALHO_CARTAZ = ["Posição", "Aluno", "Turma", "Série", "Nota Matific",
+                     "Nota Elefante", "Nota Geral"]
+_TH_NOTA_PLATAFORMA = {"Nota Matific": "<th>⟦IC_STAR⟧Nota Matific</th>",
+                       "Nota Elefante": "<th>⟦IC_ELE⟧Nota Elefante</th>"}
+
+
+def _th_notas_cartaz(cabecalho: list[str] | None) -> str:
+    cabecalho = cabecalho or _CABECALHO_CARTAZ
+    return "".join(th for nome, th in _TH_NOTA_PLATAFORMA.items() if nome in cabecalho)
+
+
+def _linhas_cartaz_html(linhas: list[list], cabecalho: list[str] | None = None) -> str:
+    cabecalho = list(cabecalho or _CABECALHO_CARTAZ)
+    notas_plataforma = [nome for nome in _TH_NOTA_PLATAFORMA if nome in cabecalho]
     partes = []
     for linha in linhas:
-        pos, nome, turma, serie, nm, ne, ng = (linha + [""] * 7)[:7]
+        valores = dict(zip(cabecalho, list(linha) + [""] * len(cabecalho)))
+        pos, nome, turma, serie, ng = (valores.get(c, "") for c in
+                                       ("Posição", "Aluno", "Turma", "Série", "Nota Geral"))
         try:
             pos_int = int(pos)
         except (TypeError, ValueError):
@@ -818,8 +853,8 @@ def _linhas_cartaz_html(linhas: list[list]) -> str:
             f'<td class="aluno">{_esc_html(nome)}</td>'
             f'<td class="turma">{_esc_html(turma)}</td>'
             f'<td class="serie">{_esc_html(serie)}</td>'
-            f'<td>{_fmt_nota(nm)}</td><td>{_fmt_nota(ne)}</td>'
-            f'<td class="geral">{_fmt_nota(ng)}</td></tr>')
+            + "".join(f"<td>{_fmt_nota(valores[c])}</td>" for c in notas_plataforma)
+            + f'<td class="geral">{_fmt_nota(ng)}</td></tr>')
     return "".join(partes)
 
 
@@ -845,13 +880,15 @@ def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
     """Cartaz do Ranking Geral em PDF (todos os alunos). HTML→Chromium com o
     layout completo; sem navegador, cai para o PDF simples de ranking (reserva)."""
     try:
-        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas, logos)
+        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas, logos,
+                                cabecalho=cabecalho)
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples de ranking
         return gerar_pdf("Ranking Geral", escola_nome, cor, cabecalho, linhas)
 
 
 def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
-                     estatisticas: dict, logos: tuple[str, str] | None = None) -> bytes:
+                     estatisticas: dict, logos: tuple[str, str] | None = None,
+                     cabecalho: list[str] | None = None) -> bytes:
     from playwright.sync_api import sync_playwright
 
     def _mil(n) -> str:
@@ -870,12 +907,13 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
 
     html = (_CARTAZ_TEMPLATE
             .replace("⟦CABECALHO⟧", _cabecalho_logos(logos))
+            .replace("⟦TH_NOTAS⟧", _th_notas_cartaz(cabecalho))
             .replace("⟦IC_STAR⟧", _IC_STAR)
             .replace("⟦IC_ELE⟧", _IC_ELEFANTE)
             .replace("⟦IC_TRO⟧", _IC_TROFEU)
             .replace("⟦ANO⟧", str(ano_letivo))
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
-            .replace("⟦LINHAS⟧", _linhas_cartaz_html(linhas))
+            .replace("⟦LINHAS⟧", _linhas_cartaz_html(linhas, cabecalho))
             .replace("⟦TILES⟧", tiles_html)
             .replace("⟦DATA⟧", agora_br().strftime("%d/%m/%Y")))
     doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"

@@ -52,12 +52,14 @@ def evolucao_leitura_do_aluno(
 ):
     """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
     semana, mês ou bimestre), respeitando o período escolhido.
-    Dado detalhado: só a gestão da própria escola. Professor e Secretaria → 403."""
+    Dado detalhado: só a gestão da própria escola. Professor e Secretaria → 403.
+    Rede que não contratou Leitura → 403 (o módulo não existe para ela)."""
     permissoes.negar_dado_individual(db, escola_id, usuario)
+    escola = db.get(Escola, escola_id)
+    svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), "leitura")
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
-    escola = db.get(Escola, escola_id)
     try:
         preset = "personalizado" if (inicio or fim) else "tudo"
         ini, fim_dt, _ = periodos.resolver(

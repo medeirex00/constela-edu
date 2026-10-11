@@ -53,6 +53,7 @@ from app.services import (
     turmas_dedup,
 )
 from app.services import dificuldade_livro
+from app.services import modulos as svc_modulos
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Acadêmico"])
@@ -307,8 +308,11 @@ def historico_leituras(
     (AAAA-MM-DD) ou um único `dia`. Cada leitura traz livro, nível, plataforma,
     data/hora, tempo e pontos de dificuldade.
 
-    Dado ESPECÍFICO ("quando o aluno leu X livro"): professor não acessa."""
+    Dado ESPECÍFICO ("quando o aluno leu X livro"): professor não acessa.
+    Rede que não contratou Leitura → 403 (o módulo não existe para ela)."""
     permissoes.negar_dado_individual(db, escola_id, usuario)
+    svc_modulos.exigir(svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)),
+                       "leitura")
     aluno = _aluno_da_escola(db, escola_id, aluno_id)
     ano = _ano_ativo(db, escola_id)
     try:

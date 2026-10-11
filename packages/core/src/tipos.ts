@@ -114,8 +114,9 @@ export interface RankingItem {
   nome: string;
   turma: string | null;
   ano_escolar: string | null;
-  nota_matific: number;
-  nota_elefante: number;
+  /** `null` quando o módulo da plataforma não está no plano da rede. */
+  nota_matific: number | null;
+  nota_elefante: number | null;
   /** LEGADO: composição entre dimensões. Não ordena mais nada. */
   nota_geral: number;
   /** DISCRIMINANTE das duas notas acima: `nota_matific`/`nota_elefante` chegam
