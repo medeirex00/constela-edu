@@ -167,27 +167,35 @@ def cartaz_ranking(
     as linhas vêm do ranking oficial POR DIMENSÃO (`rankings._ranking` com
     ``dimensao`` — só os alunos AFERIDOS naquela matéria, na ordem da posição
     carimbada dela, com a mesma elegibilidade), sempre da ESCOLA INTEIRA, com
-    uma só coluna de nota e o nome da matéria no título. Exige o módulo da
-    matéria contratado (403); dimensão fora da lista = 422."""
+    uma só coluna de nota e o nome da matéria no título. Os cartões de
+    estatística também são DA MATÉRIA e dos MESMOS alunos listados (Leitura:
+    livros e tempo de leitura; Matemática: atividades e estrelas — ver
+    `relatorios.estatisticas_cartaz_materia`). Exige o módulo da matéria
+    contratado (403); dimensão fora da lista = 422."""
     permissoes.negar_restrito(db, escola_id, usuario)
     escola = db.get(Escola, escola_id)
     if dimensao:
         svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
         cabecalho = svc.cabecalho_cartaz_materia(dimensao)
+        itens = _ranking(db, escola_id, escola.ano_letivo_ativo, dimensao=dimensao)
         linhas = [
             [item.posicao, item.nome, item.turma, item.ano_escolar, item.nota]
-            for item in _ranking(db, escola_id, escola.ano_letivo_ativo,
-                                 dimensao=dimensao)
+            for item in itens
         ]
+        # Cartões da matéria: os totais saem dos alunos DESTA lista, não da
+        # escola inteira (senão "livros lidos" contaria quem não está no cartaz).
+        estatisticas = svc.estatisticas_cartaz_materia(
+            db, escola_id, dimensao, [item.aluno_id for item in itens])
     else:
         cabecalho, linhas = svc.linhas_ranking(db, escola_id)
+        estatisticas = svc.estatisticas_cartaz(db, escola_id)
     conteudo = svc.gerar_cartaz_ranking(
         escola_nome=escola.nome,
         cor=svc.cor_primaria(db, escola_id),
         ano_letivo=escola.ano_letivo_ativo,
         cabecalho=cabecalho,
         linhas=linhas,
-        estatisticas=svc.estatisticas_cartaz(db, escola_id),
+        estatisticas=estatisticas,
         logos=svc.logos_da_escola(db, escola_id),
         materia=dimensao,
     )

@@ -715,6 +715,37 @@ def estatisticas_cartaz(db: Session, escola_id: int,
         return {"atividades": 0, "livros": 0}
 
 
+def estatisticas_cartaz_materia(db: Session, escola_id: int, materia: str,
+                                aluno_ids: list[int]) -> dict:
+    """Totais para os cartões do pôster DE UMA MATÉRIA — só números daquela
+    matéria e só dos alunos que o cartaz LISTA (``aluno_ids`` = os aferidos da
+    dimensão, as linhas do ranking por dimensão).
+
+    Leitura: livros lidos e minutos de leitura (Elefante). Matemática:
+    atividades e estrelas (Matific). A fonte é a MESMA de `estatisticas_cartaz`
+    — o snapshot ATUAL de cada aluno (scoring._snapshots_atuais), sem janela
+    nova —; muda só a população, que deixa de ser "ativos matriculados" e passa
+    a ser exatamente a tabela do cartaz. Sem isso o cartaz de Leitura mostrava
+    as atividades do Matific e somava livros de quem nem aparece na lista (a
+    Educação Infantil, por exemplo, que não concorre). Best-effort, como os
+    cartões do Ranking Geral: qualquer falha vira zero."""
+    listados = set(aluno_ids)
+    try:
+        if materia == "leitura":
+            atuais = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+            snaps = [s for aid, s in atuais.items() if aid in listados]
+            return {"livros": int(sum(s.livros_unicos or 0 for s in snaps)),
+                    "tempo_leitura_min": int(sum(s.tempo_leitura_min or 0 for s in snaps))}
+        atuais = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+        snaps = [s for aid, s in atuais.items() if aid in listados]
+        return {"atividades": int(sum(s.atividades or 0 for s in snaps)),
+                "estrelas": int(sum(s.estrelas or 0 for s in snaps))}
+    except Exception:  # noqa: BLE001 — cartões decorativos: nunca derrubam o cartaz
+        if materia == "leitura":
+            return {"livros": 0, "tempo_leitura_min": 0}
+        return {"atividades": 0, "estrelas": 0}
+
+
 _CARTAZ_TEMPLATE = """<style>
   @page { size: A4 portrait; margin: 13mm 12mm 12mm; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -857,6 +888,21 @@ def _faixa_anos(linhas: list[list]) -> tuple[str, str]:
     return str(turmas), ("turmas" if turmas != 1 else "turma")
 
 
+def _tempo_cartaz(minutos) -> str:
+    """Minutos de leitura para o cartão do cartaz de Leitura: '45 min',
+    '10h 50min', '1.250h' (milhar com ponto). Mesma escrita do relatório por
+    período, com o milhar para os totais da escola inteira."""
+    try:
+        minutos = max(0, int(minutos or 0))
+    except (TypeError, ValueError):
+        minutos = 0
+    if minutos < 60:
+        return f"{minutos} min"
+    horas, resto = divmod(minutos, 60)
+    horas_txt = f"{horas:,}".replace(",", ".")
+    return f"{horas_txt}h {resto}min" if resto else f"{horas_txt}h"
+
+
 def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
                          cabecalho: list[str], linhas: list[list],
                          estatisticas: dict,
@@ -869,7 +915,9 @@ def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
     Geral). ``materia`` = ``leitura`` | ``matematica`` = cartaz DAQUELA matéria:
     título com o nome dela e uma só coluna de nota — as linhas chegam como
     ``[posição, aluno, turma, série, nota da matéria]`` (ver
-    `cabecalho_cartaz_materia`)."""
+    `cabecalho_cartaz_materia`). ``estatisticas`` são os totais dos cartões:
+    `estatisticas_cartaz` no Ranking Geral, `estatisticas_cartaz_materia` (só a
+    matéria, só os alunos listados) no cartaz da matéria."""
     titulo = (f"Ranking de {CARTAZ_MATERIAS[materia][0]}" if materia
               else "Ranking Geral")
     try:
@@ -888,9 +936,26 @@ def _cartaz_documento_html(escola_nome: str, ano_letivo: int, linhas: list[list]
         return f"{int(n):,}".replace(",", ".")
 
     faixa_n, faixa_r = _faixa_anos(linhas)
-    tiles = [
-        (_mil(estatisticas.get("atividades", 0)), "atividades"),
-        (_mil(estatisticas.get("livros", 0)), "livros lidos"),
+    # Os dois primeiros cartões são DA MATÉRIA do cartaz: no de Leitura não
+    # aparece atividade do Matific, no de Matemática não aparece livro do
+    # Elefante (os totais vêm de `estatisticas_cartaz_materia`, só dos alunos
+    # listados). O Ranking Geral segue com atividades + livros da escola.
+    if materia == "leitura":
+        tiles = [
+            (_mil(estatisticas.get("livros", 0)), "livros lidos"),
+            (_tempo_cartaz(estatisticas.get("tempo_leitura_min", 0)), "tempo de leitura"),
+        ]
+    elif materia == "matematica":
+        tiles = [
+            (_mil(estatisticas.get("atividades", 0)), "atividades"),
+            (_mil(estatisticas.get("estrelas", 0)), "estrelas"),
+        ]
+    else:
+        tiles = [
+            (_mil(estatisticas.get("atividades", 0)), "atividades"),
+            (_mil(estatisticas.get("livros", 0)), "livros lidos"),
+        ]
+    tiles += [
         (_mil(len(linhas)), "estudantes ranqueados"),
         (faixa_n, faixa_r),
     ]
