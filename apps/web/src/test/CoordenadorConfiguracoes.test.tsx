@@ -13,7 +13,7 @@ import { useApp } from "../context/AppContext";
 import Layout from "../components/Layout";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import { destinosDoTeclado } from "../lib/atalhos";
-import { escolaFake, renderComApp, responder, screen, usuarioFake } from "./utils";
+import { escolaFake, renderComApp, responder, screen, userEvent, usuarioFake } from "./utils";
 
 function LayoutReal() {
   return (
@@ -103,5 +103,28 @@ describe("Atalho Alt+0", () => {
     expect(destinosDoTeclado(false)["0"]).toBeUndefined();
     // As demais teclas continuam iguais para todos.
     expect(destinosDoTeclado(false)["1"]).toBe("/");
+  });
+});
+
+describe("Notificação de backup (aponta para Configurações Gerais)", () => {
+  const backup = {
+    id: 9, tipo: "backup.gerado", severidade: "info", titulo: "Backup gerado",
+    rota: "/configuracoes", lida: false, autor: "Admin", data: "2026-10-10T10:00:00",
+  };
+
+  it.each([
+    ["coordenação: sem link (antes caía calada no Dashboard)", coordenadora, true],
+    ["admin da escola: abre Configurações Gerais", adminEscola, false],
+  ])("%s", async (_rotulo, usuario, semLink) => {
+    escolaConfigurada();
+    responder("GET", "/notificacoes/contador", { nao_lidas: 1 });
+    responder("GET", "/notificacoes", [backup]);
+    responder("POST", "/notificacoes/marcar-lidas", {});
+    renderComApp(<LayoutReal />, { usuario, escolas: [escolaFake({ id: 1 })] });
+    await userEvent.click(await screen.findByRole("button", { name: /Notificações/ }));
+    const item = (await screen.findByText("Backup gerado")).closest("button");
+    expect(item).not.toBeNull();
+    if (semLink) expect(item).toBeDisabled();
+    else expect(item).toBeEnabled();
   });
 });

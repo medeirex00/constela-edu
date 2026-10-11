@@ -6,7 +6,12 @@
 import { describe, expect, it } from "vitest";
 
 import Suporte, { PASTAS_GUIAS, type RegraPontuacao } from "../pages/Suporte";
-import { FAQ_COORDENACAO, FAQ_PROFESSOR, FAQ_SECRETARIA } from "../pages/suporteConteudo";
+import {
+  FAQ_COORDENACAO,
+  FAQ_PROFESSOR,
+  FAQ_SECRETARIA,
+  faqDaGestao,
+} from "../pages/suporteConteudo";
 import { escolaFake, renderComApp, responder, responderErro, screen, usuarioFake } from "./utils";
 
 const URL_REGRA = "/escolas/1/configuracoes/pontuacao/regra";
@@ -28,6 +33,7 @@ function regra(over: Partial<RegraPontuacao> = {}): RegraPontuacao {
       { dimensao: "matematica", plataforma: "matific", contratada: true,
         pesos: { atividades: 44, media: 31, estrelas: 25 } },
     ],
+    nota_geral: { pesos: { matific: 57, elefante: 43 } },
     normalizacao: { modo: "auto", percentil_referencia: 87, minimo_alunos_percentil: 11,
                     indicadores_volume: ["atividades", "livros"] },
     ...over,
@@ -58,14 +64,25 @@ describe("Suporte — conteúdo por perfil", () => {
     expect(screen.getByRole("link", { name: "Abrir Integrações" })).toHaveAttribute("href", "/sincronizacao");
   });
 
-  it("professor: guia do professor, sem o exemplo da gestão nem o atalho de Integrações", async () => {
-    abrir(professor);
+  it("professor: guia do professor e a explicação SEM os parâmetros da fórmula", async () => {
+    abrir(professor, null);
     expect(await screen.findByRole("link", { name: "Abrir o Guia do Professor" }))
       .toHaveAttribute("href", PASTAS_GUIAS.professor);
     for (const p of FAQ_PROFESSOR) expect(screen.getByText(p.pergunta)).toBeInTheDocument();
-    expect((await screen.findAllByText(/livros únicos/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/aparece com “—”, não\s+com zero/)).toBeInTheDocument();
+    // Os pesos são da gestão (Onda 2): nem pede a regra, nem mostra números.
+    expect(screen.queryByText(/%$/)).toBeNull();
     expect(screen.queryByText("Quer ver um exemplo?")).toBeNull();
     expect(screen.queryByRole("link", { name: "Abrir Integrações" })).toBeNull();
+  });
+
+  it("admin da escola e Admin Global: o caminho de Configurações Gerais é o do menu deles", () => {
+    const pergunta = "Onde mudo a cor da escola, o brasão ou o nome da escola?";
+    const resposta = (lista: { pergunta: string; resposta: string }[]) =>
+      lista.find((p) => p.pergunta === pergunta)?.resposta ?? "";
+    expect(resposta(faqDaGestao({ admin: false, global: false }))).toMatch(/Editar conquistas/);
+    expect(resposta(faqDaGestao({ admin: true, global: false }))).toMatch(/Configurações › Configurações Gerais/);
+    expect(resposta(faqDaGestao({ admin: true, global: true }))).toMatch(/Sistema › Configurações Gerais/);
   });
 
   it("Secretaria: guia da Secretaria", async () => {
@@ -95,6 +112,9 @@ describe("Suporte — a regra da nota vem do servidor", () => {
     expect(screen.getByText(/elefante_dificuldade_v2/)).toBeInTheDocument();
     // Ausência não é zero.
     expect(screen.getByText(/fora do ranking daquela matéria/)).toBeInTheDocument();
+    // A Nota Geral (legado) aparece com os pesos da API e o 0,0 de quem não tem dado.
+    expect(screen.getByText("57%")).toBeInTheDocument();
+    expect(screen.getByText(/0,0 na coluna Geral/)).toBeInTheDocument();
   });
 
   it("régua própria da escola e referências manuais aparecem como tais", async () => {

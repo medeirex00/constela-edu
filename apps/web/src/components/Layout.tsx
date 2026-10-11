@@ -55,6 +55,7 @@ import { useModulos } from "../hooks/useModulos";
 import { api } from "../lib/api";
 import { useHeartbeat } from "../hooks/useHeartbeat";
 import { useOnboarding } from "../hooks/useOnboarding";
+import { usePerfil } from "../hooks/usePerfil";
 import { useAtalhosGlobais } from "../lib/atalhos";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
@@ -612,9 +613,16 @@ function Notificacoes() {
     }
   }
 
+  // Aviso de backup aponta para Configurações Gerais, que é só do administrador:
+  // para os demais o aviso fica sem link (antes levava a um redirecionamento mudo).
+  const { admin, secretaria } = usePerfil();
+  const rotaDe = (item: Notificacao) =>
+    item.rota === "/configuracoes" && !(admin && !secretaria) ? null : item.rota;
+
   function irPara(item: Notificacao) {
     setAberto(false);
-    if (item.rota) navegar(item.rota);
+    const rota = rotaDe(item);
+    if (rota) navegar(rota);
   }
 
   return (
@@ -647,9 +655,9 @@ function Notificacoes() {
                   <button
                     type="button"
                     onClick={() => irPara(item)}
-                    disabled={!item.rota}
+                    disabled={!rotaDe(item)}
                     className={`flex w-full items-start gap-2.5 border-b border-zinc-100 px-3 py-2 text-left last:border-0 dark:border-zinc-800/60 ${
-                      item.rota ? "hover:bg-zinc-50 dark:hover:bg-zinc-800/50" : "cursor-default"
+                      rotaDe(item) ? "hover:bg-zinc-50 dark:hover:bg-zinc-800/50" : "cursor-default"
                     }`}
                   >
                     <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
@@ -662,7 +670,7 @@ function Notificacoes() {
                         {item.autor ? `${item.autor} · ` : ""}{dataHora(item.data)}
                       </span>
                     </span>
-                    {item.rota && (
+                    {rotaDe(item) && (
                       <ChevronRight size={14} className="mt-0.5 shrink-0 text-zinc-300 dark:text-zinc-600" aria-hidden />
                     )}
                   </button>

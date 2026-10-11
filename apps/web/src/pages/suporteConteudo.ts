@@ -17,7 +17,7 @@ export const SINCRONIZACAO_GESTAO: Pergunta[] = [
   },
   {
     pergunta: "Funcionando",
-    resposta: "A última sincronização terminou bem. Confira também “Próxima”: se disser “manual”, os dados só chegam quando alguém clica em “Sincronizar agora”.",
+    resposta: "A última sincronização terminou bem. Confira também “Próxima”: se disser “manual”, os dados só chegam quando alguém clica em “Sincronizar agora”. Se a agenda é automática mas a data da última sincronização não avança há dias, use “Sincronizar agora” e avise o suporte — a atualização automática pode estar pausada no servidor.",
   },
   {
     pergunta: "Sem dados ainda / Ainda não configurada / Conexão não validada",
@@ -33,7 +33,7 @@ export const SINCRONIZACAO_GESTAO: Pergunta[] = [
   },
   {
     pergunta: "O aluno não aparece, ou a conta dele não foi ligada",
-    resposta: "Quando a plataforma manda um nome que o Constela não consegue ligar com segurança a um aluno da escola, a linha vai para Plataformas › Revisões de identidade. Os casos claros são ligados sozinhos; os que ficam lá pedem a sua escolha, e a escolha vale para as próximas sincronizações.",
+    resposta: "Os casos claros são ligados sozinhos. Quando há dúvida (dois alunos parecidos, nome que só casa em outra turma, duas contas para a mesma ficha), a linha vai para Plataformas › Revisões de identidade; escolhida a ficha, as próximas sincronizações já ligam aquela conta sozinhas — uma linha descartada volta se a plataforma mandá-la de novo. Se a escola permite que a sincronização crie fichas, um nome sem nenhum candidato vira ficha nova: junte-a à certa em Minha Escola › Alunos › “Fundir duplicatas”.",
   },
 ];
 
@@ -45,14 +45,14 @@ export const SINCRONIZACAO_LEITURA: Pergunta[] = [
   },
 ];
 
-export const FAQ_COORDENACAO: Pergunta[] = [
+const FAQ_GESTAO_BASE: Pergunta[] = [
   {
     pergunta: "Os números parecem velhos. O que faço?",
     resposta: "Abra Plataformas › Integrações e veja a situação e a data da última sincronização de cada plataforma. Para buscar dados novos, clique em “Sincronizar agora” (todas) ou no botão de sincronizar do cartão da plataforma; a tela se atualiza sozinha enquanto sincroniza.",
   },
   {
     pergunta: "Por que aparece “—” no lugar da nota?",
-    resposta: "“—” quer dizer que o aluno não tem dado daquela plataforma: não é nota zero. Ele fica fora da classificação e da média daquela matéria e aparece em “Ainda não aferidos”, nas abas Leitura e Matemática do Ranking Geral. O 0 aparece só para quem já usa a plataforma e ainda não produziu.",
+    resposta: "“—” quer dizer que o aluno não tem dado daquela plataforma: não é nota zero. Ele fica fora da classificação e da média daquela matéria e aparece em “Ainda não aferidos”, nas abas Leitura e Matemática do Ranking Geral; nessas abas, o 0 aparece só para quem já usa a plataforma e ainda não produziu. Na coluna Geral, quem não tem dado de nenhuma plataforma aparece com 0,0.",
   },
   {
     pergunta: "O professor diz que não vê os alunos dele.",
@@ -108,6 +108,26 @@ export const FAQ_COORDENACAO: Pergunta[] = [
   },
 ];
 
+const CONFIG_INSTITUCIONAL = "Onde mudo a cor da escola, o brasão ou o nome da escola?";
+const PONTUACAO = "Como a pontuação é calculada?";
+
+/** O FAQ da gestão com os caminhos do MENU de quem lê: a coordenação não tem
+ *  Configurações Gerais (edita as medalhas por Gamificação); o admin da escola
+ *  tem; o Admin Global chega lá por Sistema. */
+export function faqDaGestao({ admin, global }: { admin: boolean; global: boolean }): Pergunta[] {
+  const trocas: Record<string, string> = {};
+  if (global) {
+    trocas[CONFIG_INSTITUCIONAL] = "Em Sistema › Configurações Gerais, com a escola escolhida no topo: cor, brasão da cidade, logo da prefeitura e dados da escola. As medalhas ficam no cartão “Conquistas” da mesma tela.";
+    trocas[PONTUACAO] = "Veja “Como a nota é calculada”, nesta página: os pesos e a régua vêm do próprio sistema e o exemplo mostra a conta feita pelo servidor. Os parâmetros ficam em Sistema › Métricas.";
+  } else if (admin) {
+    trocas[CONFIG_INSTITUCIONAL] = "Em Configurações › Configurações Gerais: cor, brasão da cidade, logo da prefeitura e dados da escola. As medalhas ficam no cartão “Conquistas” da mesma tela.";
+  }
+  return FAQ_GESTAO_BASE.map((p) => (trocas[p.pergunta] ? { ...p, resposta: trocas[p.pergunta] } : p));
+}
+
+/** O FAQ da coordenação (o caso mais comum da gestão). */
+export const FAQ_COORDENACAO: Pergunta[] = faqDaGestao({ admin: false, global: false });
+
 export const FAQ_PROFESSOR: Pergunta[] = [
   {
     pergunta: "Esqueci a senha, ou o link não funciona.",
@@ -138,7 +158,7 @@ export const FAQ_SECRETARIA: Pergunta[] = [
   },
   {
     pergunta: "A nota de 0 a 100 da escola é alta, mas o índice é baixo. Qual vale?",
-    resposta: "Os dois, para perguntas diferentes. O Índice (0 a 1000) compara as escolas por aluno e ordena o ranking; a nota de 0 a 100 compara cada aluno com os colegas da própria escola e serve para acompanhar a escola no tempo.",
+    resposta: "Os dois, para perguntas diferentes. O Índice (0 a 1000) compara as escolas por aluno e ordena o Ranking da Rede. A nota de 0 a 100 mostra como cada aluno está em relação aos colegas da própria escola: não compara escolas e não mede a evolução da escola — se todos os alunos dobrarem a atividade, a média 0 a 100 não muda.",
   },
   {
     pergunta: "Consigo ver a lista de alunos de uma escola?",
