@@ -44,7 +44,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import bloquear_escola_para_recalculo
-from app.services import elegibilidade
+from app.services import elegibilidade, matific_destaque
 from app.models import (
     Aluno,
     Configuracao,
@@ -508,34 +508,58 @@ def obter_pesos_brutos(db: Session, escola_id: int, namespace: str) -> dict[str,
 # Estado atual dos alunos (snapshots mais recentes)
 # ---------------------------------------------------------------------------
 
-def _snapshots_atuais(db: Session, escola_id: int, modelo):
+def _snapshots_atuais(db: Session, escola_id: int, modelo, janela=None):
     """Último snapshot de cada aluno para a plataforma indicada.
 
     "Último" pela DATA DE REFERÊNCIA (id desempata), não pelo id: importar um
     relatório de um período antigo (backfill mensal do Matific) registra o
     histórico sem rebaixar o estado atual dos rankings. A seleção acontece no
     banco (window function) — snapshots são imutáveis e só crescem; varrer
-    todos como objetos ORM a cada recálculo não escala."""
-    ids = ids_snapshots_atuais(modelo, escola_id)
+    todos como objetos ORM a cada recálculo não escala.
+
+    ``janela`` (opcional, ``(início, fim)`` inclusivos): só snapshots com
+    ``data_referencia`` dentro dela concorrem a "último" — ver
+    ``ids_snapshots_atuais``."""
+    ids = ids_snapshots_atuais(modelo, escola_id, janela=janela)
     rows = db.execute(select(modelo).where(modelo.id.in_(ids))).scalars().all()
     return {row.aluno_id: row for row in rows}
 
 
-def ids_snapshots_atuais(modelo, escola_id: int):
+def ids_snapshots_atuais(modelo, escola_id: int, janela=None):
     """Subquery com o id do snapshot mais recente (data_referencia, id) de
-    cada aluno da escola."""
-    numerado = (
-        select(
-            modelo.id.label("snap_id"),
-            func.row_number().over(
-                partition_by=modelo.aluno_id,
-                order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
-            ).label("posicao"),
-        )
-        .where(modelo.escola_id == escola_id)
-        .subquery()
-    )
+    cada aluno da escola.
+
+    ``janela`` = ``(início, fim)`` inclusivos: o recorte é aplicado ANTES de
+    numerar, então o "atual" passa a ser o último snapshot DENTRO da janela (e
+    quem não tem nenhum nela simplesmente não aparece). É o que permite tratar
+    contadores DO ANO (Matific) — ``matific_destaque.janela_ano_letivo`` — sem
+    duplicar a window function. Sem ``janela``, o comportamento de sempre."""
+    consulta = select(
+        modelo.id.label("snap_id"),
+        func.row_number().over(
+            partition_by=modelo.aluno_id,
+            order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
+        ).label("posicao"),
+    ).where(modelo.escola_id == escola_id)
+    if janela is not None:
+        inicio, fim = janela
+        consulta = consulta.where(modelo.data_referencia >= inicio,
+                                  modelo.data_referencia <= fim)
+    numerado = consulta.subquery()
     return select(numerado.c.snap_id).where(numerado.c.posicao == 1).scalar_subquery()
+
+
+def snapshots_matific_do_ano(db: Session, escola_id: int, ano_letivo: int):
+    """Último snapshot do Matific de cada aluno DENTRO do ano letivo.
+
+    MATIFIC É CONTADOR DO ANO: é a DEFINIÇÃO de "aferido em Matemática" — quem
+    só tem coleta de outro ano não é aferido (ausência no ano, não zero). Mora
+    num lugar só porque o motor e todo consumidor que faz MÉDIA de Matemática
+    (painel da rede, dashboard da escola, resumo de turma/escola, comparador)
+    têm de decidir "aferido" do mesmo jeito: se o motor deixa a criança de fora
+    e a média a conta, ela entra na média como o 0,0 que o motor gravou."""
+    return _snapshots_atuais(db, escola_id, SnapshotMatific,
+                             janela=matific_destaque.janela_ano_letivo(ano_letivo))
 
 
 def _chaves_do_nivel(nivel: NivelDificuldade) -> list[str]:
@@ -1107,7 +1131,14 @@ def _carregar_contexto(db: Session, escola_id: int):
     # ser pontuado: arquivar um aluno (operação rotineira, que dispara recálculo)
     # mudava as notas e as posições de todos os ativos.
     ids_pontuados = {m.aluno_id for m, _t in matriculas}
-    matific = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotMatific).items()
+    # MATIFIC É CONTADOR DO ANO (atividades/estrelas do ``this-year``): um
+    # snapshot de outro ano letivo não diz nada sobre este — nem como estado
+    # atual. O "atual" do motor é o último snapshot DENTRO do ano letivo (a mesma
+    # janela de ``matific_destaque.ganho_no_periodo`` e de ``/ranking/matematica``);
+    # quem só tem coleta de ano anterior NÃO é aferido em Matemática (ausência no
+    # ano, não zero). O Elefante NÃO recebe este corte: o contador dele é
+    # vitalício (livros lidos não "zeram" na virada do ano).
+    matific = {aid: s for aid, s in snapshots_matific_do_ano(db, escola_id, ano).items()
                if aid in ids_pontuados}
     elefante = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
                 if aid in ids_pontuados}
