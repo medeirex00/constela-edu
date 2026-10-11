@@ -9,7 +9,7 @@ test.describe("Login", () => {
   test("entra com credenciais válidas e chega ao painel", async ({ page }) => {
     await entrar(page, CONTAS.admin);
     await expect(page).not.toHaveURL(/\/login/);
-    await expect(page.getByLabel("Selecionar escola")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Menu do usuário" })).toBeVisible();
   });
 
   test("mostra mensagem de erro com senha inválida", async ({ page }) => {
@@ -20,6 +20,6 @@ test.describe("Login", () => {
 
     await expect(page.getByText(/incorretos|inv[aá]lid/i)).toBeVisible();
     // Continua na tela de login (não criou sessão).
-    await expect(page.getByLabel("Selecionar escola")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Menu do usuário" })).toHaveCount(0);
   });
 });

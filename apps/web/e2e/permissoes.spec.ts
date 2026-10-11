@@ -13,7 +13,9 @@ test.describe("Permissões — professor (acesso restrito)", () => {
 
   test("é bloqueado na gestão de escolas (só admin global)", async ({ page }) => {
     await page.goto("/escolas");
-    await expect(page.getByText("Somente o administrador global")).toBeVisible();
+    // A guarda de rota (RotaGlobal) devolve o professor ao Dashboard.
+    await expect(page).not.toHaveURL(/\/escolas/);
+    await expect(page.getByRole("heading", { name: "Escolas", exact: true })).toHaveCount(0);
   });
 });
 

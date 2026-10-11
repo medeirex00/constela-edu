@@ -30,6 +30,7 @@ export async function entrar(page: Page, conta: Conta): Promise<void> {
   await page.getByLabel(/mail ou nome de usu/i).fill(conta.email);
   await page.getByLabel("Senha", { exact: true }).fill(conta.senha);
   await page.getByRole("button", { name: /entrar/i }).click();
-  // O seletor de escola do Dashboard só existe depois da sessão criada.
-  await expect(page.getByLabel("Selecionar escola")).toBeVisible();
+  // O menu do usuário (avatar) só existe depois da sessão criada — vale para
+  // todos os perfis (o seletor de escola não aparece na Visão Global).
+  await expect(page.getByRole("button", { name: "Menu do usuário" })).toBeVisible();
 }
