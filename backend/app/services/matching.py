@@ -29,7 +29,6 @@ from datetime import date
 from app.services.importacao import (
     _similaridade,
     casa_abreviado,
-    normalizar_nome,
     tokens_nome,
     variante_ortografica,
 )
