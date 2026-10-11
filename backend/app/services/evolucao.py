@@ -36,7 +36,8 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import bimestres, dificuldade_livro, matific_destaque, scoring
+from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
+                          scoring)
 
 CAMPOS_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 CAMPOS_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
@@ -816,7 +817,8 @@ def _media_da_dimensao(notas: list[Nota], campo: str, aferidos: set[int],
 
 def _monta_resumo_turma(turma: Turma, aluno_ids: list[int], notas: list[Nota],
                         indicadores: dict, aferidos: dict[str, set[int]],
-                        contratadas: list[str]) -> dict:
+                        contratadas: list[str],
+                        cobertura: dict[str, set[int]] | None = None) -> dict:
     """Monta o dict de resumo de UMA turma a partir de dados já carregados
     (matrículas + notas + quem tem snapshot de cada plataforma). Sem consulta ao
     banco — o chamador decide se carrega por turma (`resumo_turma`) ou em lote
@@ -842,7 +844,16 @@ def _monta_resumo_turma(turma: Turma, aluno_ids: list[int], notas: list[Nota],
     (`TurmaDetalhe`, a barra de comparação de `VisaoEscola`), agora calculado
     com a régua certa. Virar "uma barra por dimensão" na tela é decisão de
     produto (§ Aprovação 5), não conversão mecânica.
+
+    ``aferidos`` decide o DESEMPENHO (médias e ``n_*``) e ``cobertura`` decide a
+    COBERTURA (``adocao_*``, ``alcance``, ``nao_aferidos``). Diferem só em
+    Matemática: aferido é ter snapshot do Matific DO ANO letivo (a definição do
+    motor, ``scoring.snapshots_matific_do_ano``) e cobertura é ter snapshot de
+    qualquer época (a mesma régua de ``rede.adocao_matific``). ``cobertura``
+    ausente = a mesma coisa que ``aferidos``.
     """
+    if cobertura is None:
+        cobertura = aferidos
     n_leitura, media_elefante = _media_da_dimensao(
         notas, "nota_elefante", aferidos["leitura"]) if "leitura" in contratadas else (0, 0.0)
     n_matematica, media_matific = _media_da_dimensao(
@@ -853,7 +864,7 @@ def _monta_resumo_turma(turma: Turma, aluno_ids: list[int], notas: list[Nota],
 
     total = len(aluno_ids)
     com_algum = len({a for a in aluno_ids
-                     for d in contratadas if a in aferidos[d]})
+                     for d in contratadas if a in cobertura[d]})
     n_por_dimensao = {"leitura": n_leitura, "matematica": n_matematica}
     # COBERTURA sai da COORTE (matriculados ∩ tem snapshot da plataforma) — a
     # mesma população de `alcance` e de `rede.adocao_elefante`, e nunca a
@@ -865,9 +876,9 @@ def _monta_resumo_turma(turma: Turma, aluno_ids: list[int], notas: list[Nota],
     # `adocao_leitura = 0 %` e `nao_aferidos = 0` — três números que não podem
     # ser verdade juntos. Depois do recálculo os dois conjuntos coincidem, então
     # em operação normal nenhum número se move.
-    cobertura = {d: sum(1 for a in aluno_ids if a in aferidos[d])
-                 for d in contratadas}
-    adocoes = {d: round(cobertura[d] / total * 100, 1) if total else 0.0
+    usuarios = {d: sum(1 for a in aluno_ids if a in cobertura[d])
+                for d in contratadas}
+    adocoes = {d: round(usuarios[d] / total * 100, 1) if total else 0.0
                for d in contratadas}
     return {
         "turma": {"id": turma.id, "nome": turma.nome, "ano_escolar": turma.ano_escolar},
@@ -922,11 +933,16 @@ def resumo_turma(db: Session, escola_id: int, turma_id: int,
         matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
     if elefante is None:
         elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    # Aferido em Matemática = snapshot do Matific DO ANO (a definição do motor):
+    # quem só tem coleta do ano anterior não entra na média como o 0,0 que o
+    # motor gravou. A cobertura segue com `matific` (qualquer época).
+    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
     indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante)
     return _monta_resumo_turma(
         turma, aluno_ids, notas, indicadores,
-        {"leitura": set(elefante), "matematica": set(matific)},
-        scoring.dimensoes_contratadas(db, escola))
+        {"leitura": set(elefante), "matematica": set(matific_ano)},
+        scoring.dimensoes_contratadas(db, escola),
+        cobertura={"leitura": set(elefante), "matematica": set(matific)})
 
 
 def resumo_escola(db: Session, escola_id: int) -> dict:
@@ -941,6 +957,8 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
     # cada turma varria a escola inteira duas vezes).
     matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    # Aferido em Matemática = Matific DO ANO (ver `resumo_turma`).
+    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
 
     # Matrículas ativas e notas de TODAS as turmas em DUAS consultas (antes,
     # resumo_turma disparava 2 por turma — N+1 que crescia com a escola).
@@ -966,7 +984,8 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
         ).scalars()
     }
 
-    aferidos = {"leitura": set(elefante), "matematica": set(matific)}
+    aferidos = {"leitura": set(elefante), "matematica": set(matific_ano)}
+    cobertura = {"leitura": set(elefante), "matematica": set(matific)}
     contratadas = scoring.dimensoes_contratadas(db, escola)
     resumos = []
     for turma in turmas:
@@ -974,7 +993,7 @@ def resumo_escola(db: Session, escola_id: int) -> dict:
         notas = [notas_por_aluno[a] for a in aluno_ids if a in notas_por_aluno]
         indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific, elefante)
         resumos.append(_monta_resumo_turma(turma, aluno_ids, notas, indicadores,
-                                           aferidos, contratadas))
+                                           aferidos, contratadas, cobertura=cobertura))
     return {
         "escola": {"id": escola.id, "nome": escola.nome},
         "turmas": resumos,
@@ -1021,7 +1040,10 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
     ).scalar_one_or_none()
     matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
-    aferido = {"leitura": aluno_id in elefante, "matematica": aluno_id in matific}
+    # Aferido em Matemática = Matific DO ANO, a definição do motor: a criança
+    # que só tem coleta do ano anterior aparece "sem dado", e não "0,0".
+    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
+    aferido = {"leitura": aluno_id in elefante, "matematica": aluno_id in matific_ano}
     # DENOMINADOR da posição do aluno, na mesma fonte que o perfil dele usa
     # (`dimensoes.bloco` → `detalhes.dimensoes[d].n_aferidos`, carimbado pelo
     # motor). Sem ele o comparador exibia "3º" pelado, e "3º" numa matéria ao
@@ -1103,6 +1125,12 @@ def _lado_escola(db: Session, escola_id: int) -> dict | None:
     nas médias e no denominador de cada dimensão, e o lado "escola" do
     comparador divergia do dashboard da mesma escola. Mesma régua de
     `resumo_turma`/`resumo_escola`, que já filtram por matrícula.
+
+    O DESEMPENHO segue os mesmos dois cortes do dashboard e do painel da rede
+    (``rankings._desempenho_da_escola``, ``rede._medias_por_plataforma``): só a
+    matrícula numa turma PREMIÁVEL conta (AS FASES NÃO CONCORREM) e aferido em
+    Matemática é ter Matific DO ANO. ``total_alunos``, ``alcance`` e os
+    indicadores são cobertura e continuam sobre todos os matriculados.
     """
     escola = db.get(Escola, escola_id)
     if escola is None:
@@ -1125,15 +1153,24 @@ def _lado_escola(db: Session, escola_id: int) -> dict | None:
     # snapshots (a existência do snapshot é a definição de aferido).
     matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
     contratadas = scoring.dimensoes_contratadas(db, escola)
+    premiaveis = set(db.execute(
+        select(Matricula.aluno_id)
+        .where(Matricula.escola_id == escola_id,
+               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
+                   db, escola_id, escola.ano_letivo_ativo) or [0]))
+    ).scalars())
+    notas_desempenho = [n for n in notas if n.aluno_id in premiaveis]
     # 1 casa: é a régua de ESCOLA do produto inteiro (`rede._kpis_da_rede` e
     # `rankings._desempenho_da_escola`). Com 2 casas aqui, a mesma escola voltaria
     # a exibir números que não batem — que é justamente o defeito corrigido.
     n_leitura, media_elefante = (
-        _media_da_dimensao(notas, "nota_elefante", set(elefante), casas=1)
+        _media_da_dimensao(notas_desempenho, "nota_elefante", set(elefante), casas=1)
         if "leitura" in contratadas else (0, 0.0))
     n_matematica, media_matific = (
-        _media_da_dimensao(notas, "nota_matific", set(matific), casas=1)
+        _media_da_dimensao(notas_desempenho, "nota_matific", set(matific_ano), casas=1)
         if "matematica" in contratadas else (0, 0.0))
     disponiveis = [m for m, q in ((media_elefante, n_leitura),
                                   (media_matific, n_matematica)) if q]

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import secrets
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -42,14 +42,21 @@ from app.models import (
 _CARIMBO_INSTITUCIONAL = Nota.detalhes["regua_institucional"]["versao_dificuldade"].as_string()
 
 
-def _matriculado_no_ano_ativo():
-    return (
+def _matriculado_no_ano_ativo(turma_ids: list[int] | None = None):
+    """EXISTS: o aluno da Nota tem matrícula no ano letivo ATIVO da escola.
+
+    ``turma_ids`` (opcional) restringe a matrícula que conta a essas turmas —
+    é por onde entra o corte de elegibilidade (só turmas premiáveis). ``None``
+    = qualquer turma (comportamento de sempre)."""
+    consulta = (
         select(Matricula.id)
         .where(Matricula.escola_id == Nota.escola_id,
                Matricula.aluno_id == Nota.aluno_id,
                Matricula.ano_letivo == Escola.ano_letivo_ativo)
-        .exists()
     )
+    if turma_ids is not None:
+        consulta = consulta.where(Matricula.turma_id.in_(turma_ids))
+    return consulta.exists()
 
 
 def _carimbo_pendente():
@@ -96,7 +103,8 @@ def escolas_com_notas_pendentes(db: Session) -> list[int]:
     recálculo pós-deploy ser seletivo e idempotente)."""
     ids = [e for (e,) in db.execute(select(Escola.id)).all()]
     return sorted(_pendentes_recalculo(db, ids))
-from app.services import dificuldade_livro, modulos, scoring
+from app.services import (dificuldade_livro, elegibilidade, matific_destaque,
+                          modulos, scoring)
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -176,7 +184,29 @@ def _totais_plataforma_por_escola(db: Session, ids: list[int], modelo,
     return {linha.escola_id: dict(linha._mapping) for linha in linhas}
 
 
-def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
+def _matific_no_ano_ativo(db: Session, ids: list[int]):
+    """Condição SQL: o snapshot do Matific é do ano letivo ATIVO da escola dele.
+
+    MATIFIC É CONTADOR DO ANO — a mesma definição de aferido do motor
+    (``scoring.snapshots_matific_do_ano``) e a mesma janela
+    (``matific_destaque.janela_ano_letivo``). Cada escola tem o seu ano ativo,
+    então a janela é montada POR ANO e casada pelo ``escola_id`` (as escolas de
+    uma rede costumam estar no mesmo ano: na prática, um termo só)."""
+    por_ano: dict[int, list[int]] = {}
+    for escola_id, ano in db.execute(
+            select(Escola.id, Escola.ano_letivo_ativo).where(Escola.id.in_(ids))).all():
+        por_ano.setdefault(ano, []).append(escola_id)
+    termos = []
+    for ano, escolas in por_ano.items():
+        inicio, fim = matific_destaque.janela_ano_letivo(ano)
+        termos.append(and_(SnapshotMatific.escola_id.in_(escolas),
+                           SnapshotMatific.data_referencia >= inicio,
+                           SnapshotMatific.data_referencia <= fim))
+    return or_(*termos) if termos else false()
+
+
+def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
+                           turmas_premiaveis: list[int] | None = None
                            ) -> dict[int, tuple[int, float]]:
     """Média da nota de UMA plataforma, SOMENTE sobre os alunos que têm dado dela.
 
@@ -203,6 +233,25 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
     porque o aluno pode ter matrícula em mais de uma turma: o JOIN duplicaria a
     linha da nota e distorceria a contagem e a média.
 
+    AS FASES NÃO CONCORREM (``services.elegibilidade``): a matrícula que conta é
+    a de uma turma PREMIÁVEL (1º–5º ano). O motor já tira a Educação Infantil da
+    população e não atualiza mais a Nota dela — mas a linha antiga continua no
+    banco, carimbada, e sem este corte entrava na média da escola no painel da
+    rede com um número que ninguém recalcula. É o mesmo corte de leitura que
+    ``rankings._apenas_premiaveis`` faz no ranking da escola (e que o dashboard
+    da escola, ``rankings._desempenho_da_escola``, e o lado "escola" do
+    comparador, ``evolucao._lado_escola``, também fazem). A COBERTURA
+    (``_alunos_com_qualquer_dado``, ``total_alunos``) não muda: a criança segue
+    matriculada e usando a plataforma; ela só não compõe o DESEMPENHO.
+    ``turmas_premiaveis`` pode vir pronto do chamador (``_kpis_da_rede`` calcula
+    uma vez para as duas plataformas); ``None`` = calcula aqui.
+
+    MATIFIC É CONTADOR DO ANO: "tem dado" do Matific é ter snapshot DENTRO do
+    ano letivo ativo da escola (``_matific_no_ano_ativo``) — a definição de
+    aferido do motor. Sem isto, quem só tem coleta do ano anterior (o motor o
+    deixa sem aferição e com 0,0) entrava aqui como ZERO: na virada do ano a
+    média de Matemática da rede despencava até a primeira coleta do ano novo.
+
     Devolve ``{escola_id: (alunos_com_dado, media)}``.
     """
     if not ids:
@@ -212,6 +261,13 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
         .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id)
         .exists()
     )
+    if modelo is SnapshotMatific:
+        tem_dado = (
+            select(modelo.id)
+            .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id,
+                   _matific_no_ano_ativo(db, ids))
+            .exists()
+        )
     if modelo is SnapshotElefante:
         # Leitura ITEMIZADA também é dado do Elefante (aluno sem snapshot mas com
         # relatório individual/sync é aferido pelo motor — e entra aqui também).
@@ -220,7 +276,9 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna
             .where(Leitura.escola_id == Nota.escola_id, Leitura.aluno_id == Nota.aluno_id)
             .exists()
         )
-    matriculado = _matriculado_no_ano_ativo()
+    if turmas_premiaveis is None:
+        turmas_premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, ids)
+    matriculado = _matriculado_no_ano_ativo(turma_ids=turmas_premiaveis)
     linhas = db.execute(
         select(Nota.escola_id, func.count(Nota.id), func.avg(coluna))
         .join(Aluno, Aluno.id == Nota.aluno_id)
@@ -307,11 +365,17 @@ def _kpis_da_rede(db: Session, rede_id: int) -> list[dict]:
     # `Nota.nota_elefante`/`nota_matific` (a nota LOCAL da escola) aqui deixaria um
     # coordenador manipular a posição da escola no ranking da rede mudando os
     # próprios pesos/dificuldade. Travado por test_scoring_institucional.py.
+    # As turmas premiáveis (o corte "as Fases não concorrem") saem UMA vez e
+    # servem às duas plataformas.
+    premiaveis = (elegibilidade.turmas_premiaveis_da_rede(db, ids)
+                  if (tem_mod_leitura or tem_mod_matematica) else [])
     med_ele = (_medias_por_plataforma(db, ids, SnapshotElefante,
-                                      Nota.nota_elefante_institucional)
+                                      Nota.nota_elefante_institucional,
+                                      turmas_premiaveis=premiaveis)
                if tem_mod_leitura else {})
     med_mat = (_medias_por_plataforma(db, ids, SnapshotMatific,
-                                      Nota.nota_matific_institucional)
+                                      Nota.nota_matific_institucional,
+                                      turmas_premiaveis=premiaveis)
                if tem_mod_matematica else {})
     # COBERTURA: alunos distintos com dado de alguma plataforma (numerador real).
     com_dados_por_escola = _alunos_com_qualquer_dado(db, ids)
