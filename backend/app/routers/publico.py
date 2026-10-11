@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis
+from app.core.deps import escola_autorizada, exigir_papeis, negar_secretaria
 from app.models import (
     Aluno, Configuracao, Escola, Matricula, Nota,
     SnapshotElefante, SnapshotMatific, Turma, Usuario,
@@ -127,8 +127,12 @@ def _escola_pelo_token(db: Session, token: str) -> tuple[Escola, dict] | None:
 # Configuração (autenticado)
 # ---------------------------------------------------------------------------
 
+# A Secretaria fica de fora (leitura também): a configuração traz o link com o
+# token do painel, e o painel pode exibir o nome completo das crianças — dado
+# individual que ela não vê (LGPD). Só a gestão da própria escola e o admin global.
 config_router = APIRouter(prefix="/escolas/{escola_id}/painel-publico",
-                          tags=["Painel Público"])
+                          tags=["Painel Público"],
+                          dependencies=[Depends(negar_secretaria)])
 
 
 class PainelConfigIn(BaseModel):
@@ -275,8 +279,17 @@ def _turmas_premiaveis(db: Session, escola: Escola) -> list[int]:
     return elegibilidade.turmas_premiaveis(db, escola.id, escola.ano_letivo_ativo)
 
 
+def _slides_ativos(config: dict) -> set[str]:
+    """Slides ligados pela escola. O servidor só monta o que eles exibem: o
+    token é público, então desligar o slide do ranking tem de tirar o ranking
+    da resposta (e o perfil público de quem só aparecia nele), não só do
+    carrossel."""
+    return set(config.get("slides", SLIDES_VALIDOS))
+
+
 def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     limite = int(config.get("max_posicoes", 10))
+    ativos = _slides_ativos(config)
     # Telão sem login: nome anonimizado por padrão (primeiro nome + inicial).
     anonimizar = bool(config.get("anonimizar", True))
     nome_pub = (svc_gami.anonimizar_nome if anonimizar else (lambda n: n))
@@ -307,7 +320,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         .where(Matricula.turma_id.in_(premiaveis))
         .order_by(Nota.posicao)
         .limit(limite)
-    ).all()
+    ).all() if "ranking" in ativos else []
 
     # Telão PÚBLICO: base_no_periodo=True → só o crescimento DENTRO da janela
     # conta (regra justa das premiações). Sem isso, no começo do piloto o
@@ -321,11 +334,12 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         it for it in svc_evolucao.ranking_evolucao(
             db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
         if it.nota_evolucao > 0
-    ][:limite]
+    ][:limite] if "evolucao" in ativos else []
     # Destaques ("Aluno do Dia/Semana/Mês") e eventos do mural: o mesmo corte —
     # a Educação Infantil não disputa o pódio do telão nem é nomeada nele.
-    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True,
-                           turma_ids=premiaveis)
+    mural = (svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True,
+                            turma_ids=premiaveis)
+             if ativos & {"destaques", "mural"} else {"destaques": [], "eventos": []})
 
     # Estatísticas REAIS da escola (agregadas dos snapshots atuais — nada é
     # inventado): faixa de indicadores do painel. Custo absorvido pelo cache
@@ -374,11 +388,11 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             }
             for item in evolucao_itens
         ],
-        "destaques": mural["destaques"],
+        "destaques": mural["destaques"] if "destaques" in ativos else [],
         "estatisticas": estatisticas,
         "mural": [
             {"icone": evento["icone"], "texto": evento["texto"]}
-            for evento in mural["eventos"][:10]
+            for evento in (mural["eventos"][:10] if "mural" in ativos else [])
         ],
     }
 
@@ -444,10 +458,11 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     if em_cache and agora - em_cache[0] < TTL_PAINEL_S:
         return em_cache[1]
     limite = int(config.get("max_posicoes", 10))
+    ativos = _slides_ativos(config)
     # AS FASES NÃO CONCORREM: o conjunto tem de casar com o que o telão exibe
     # (`_dados_publicos`), senão abriria o perfil de quem não está no telão.
     premiaveis = _turmas_premiaveis(db, escola)
-    ids = set(db.execute(
+    ids: set[int] = set() if "ranking" not in ativos else set(db.execute(
         select(Aluno.id)
         .join(Nota, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
@@ -473,6 +488,9 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     # abre perfil de aluno que não aparece de fato no telão). Mesmo recorte das
     # Fases do payload: sem ele, a criança da Fase que lidera o crescimento
     # entraria aqui e o perfil público dela abriria (200).
+    if "evolucao" not in ativos:
+        _cache_visiveis[escola.id] = (agora, ids)
+        return ids
     for item in [it for it in svc_evolucao.ranking_evolucao(
             db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
             if it.nota_evolucao > 0][:limite]:
