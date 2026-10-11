@@ -134,8 +134,9 @@ function RegraDaNota({ escolaId, daSecretaria }: { escolaId: number; daSecretari
       </p>
       {daSecretaria && dados.perfil === "personalizado" && (
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Nos números da rede, as notas desta escola são recalculadas com a régua da rede, para comparar
-          escolas pela mesma conta.
+          Nos números da rede, as notas desta escola são recalculadas com a régua da rede (os mesmos pesos
+          e regras de todas as escolas), para que a configuração local não mude os números da rede. Para
+          comparar escolas, use o Índice.
         </p>
       )}
 
@@ -224,8 +225,9 @@ function ExplicacaoSemNumeros() {
       </p>
       <p>
         Aluno sem dado de uma plataforma fica fora do ranking daquela matéria e aparece com “—”, não
-        com zero. Os pesos e a régua de cada matéria ficam com a coordenação, em Configurações ›
-        Pontuação.
+        com zero. A aba Geral do Ranking usa a Nota Geral, que junta as matérias com dado do aluno;
+        quem ainda não tem dado de nenhuma plataforma aparece ali com 0,0. Os pesos e a régua de cada
+        matéria ficam com a coordenação, em Configurações › Pontuação.
       </p>
     </div>
   );

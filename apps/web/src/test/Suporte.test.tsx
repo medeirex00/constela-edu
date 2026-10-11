@@ -145,3 +145,12 @@ describe("Suporte — a regra da nota vem do servidor", () => {
     expect(screen.queryByText(/%$/)).toBeNull();
   });
 });
+
+describe("Suporte — caminhos do menu do Admin Global", () => {
+  it("troca Minha Escola por Estrutura/Gestão Escolar", () => {
+    const textos = faqDaGestao({ admin: true, global: true }).map((p) => p.resposta).join(" ");
+    expect(textos).not.toMatch(/Minha Escola/);
+    expect(textos).toMatch(/Estrutura › Usuários/);
+    expect(textos).toMatch(/Gestão Escolar › Alunos/);
+  });
+});

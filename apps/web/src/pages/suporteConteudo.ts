@@ -122,7 +122,17 @@ export function faqDaGestao({ admin, global }: { admin: boolean; global: boolean
   } else if (admin) {
     trocas[CONFIG_INSTITUCIONAL] = "Em Configurações › Configurações Gerais: cor, brasão da cidade, logo da prefeitura e dados da escola. As medalhas ficam no cartão “Conquistas” da mesma tela.";
   }
-  return FAQ_GESTAO_BASE.map((p) => (trocas[p.pergunta] ? { ...p, resposta: trocas[p.pergunta] } : p));
+  const lista = FAQ_GESTAO_BASE.map((p) => (trocas[p.pergunta] ? { ...p, resposta: trocas[p.pergunta] } : p));
+  if (!global) return lista;
+  // No menu do Admin Global, Usuários fica em Estrutura e Alunos/Turmas/
+  // Professores em Gestão Escolar (não há "Minha Escola").
+  return lista.map((p) => ({
+    ...p,
+    resposta: p.resposta
+      .split("Minha Escola › Usuários").join("Estrutura › Usuários")
+      .split("Minha Escola ›").join("Gestão Escolar ›")
+      .replace("peça um link de redefinição à administração do Constela", "peça um link de redefinição a outro administrador do Constela"),
+  }));
 }
 
 /** O FAQ da coordenação (o caso mais comum da gestão). */
