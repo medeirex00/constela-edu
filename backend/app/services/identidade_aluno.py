@@ -223,6 +223,11 @@ class Contexto:
     # provando de quem era o id externo, mas estão FORA de ``identidade`` e de
     # ``ids_do_aluno`` — não casam, não contam e não voltam sozinhas.
     aposentadas: dict[tuple[str, str], int] = field(default_factory=dict)
+    # PRENOMES de crianças cadastradas no Constela (1º e 2º nome de quem tem 3+
+    # palavras; o 1º de quem tem 2), de TODAS as escolas — ver ``_grafia_segura``:
+    # uma forma que é prenome de alguém é um nome de verdade, não um erro de
+    # digitação.
+    prenomes: frozenset[str] = frozenset()
     _memo_escola: dict = field(default_factory=dict, repr=False)
 
     # --- manutenção em memória -------------------------------------------
@@ -403,6 +408,9 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
                    RevisaoIdentidade.status == "pendente")
             .order_by(RevisaoIdentidade.id)).all():
         ctx.pendentes.setdefault(chave_ident, []).append(revisao_id)
+    ctx.prenomes = frozenset(
+        t for (nome,) in db.execute(select(Aluno.nome).where(Aluno.status != "excluido"))
+        for t in _prenomes(nome))
     return ctx
 
 
@@ -492,14 +500,26 @@ _SUFIXO_TURMA = re.compile(r"\d{1,2}[ºª]?[a-z]")
 _SUFIXO_TURMA_COLADO = re.compile(r"([a-z]{2,})(\d{1,2}[ºª]?[a-z])")
 
 
-def _nome_para_casar(nome: str) -> str:
+def _sufixo_da_sala(token: str, chave: str) -> bool:
+    """O sufixo de turma ("2b", "2ºb") é o da SALA da linha ("2|B")? Só então ele é
+    a turma digitada junto do nome. Sufixo de OUTRA sala ("3a" na 2ºB) contradiz
+    o relatório, e "2o" ("2o B") não é sala nenhuma — nos dois casos o token fica
+    e a linha segue o caminho de sempre."""
+    num, _, letra = (chave or "").partition("|")
+    digitos = re.match(r"\d{1,2}", token)
+    return (bool(num.isdigit() and letra and digitos)
+            and int(digitos.group()) == int(num) and token[-1] == letra.lower())
+
+
+def _nome_para_casar(nome: str, chave: str = "") -> str:
     """O nome RECEBIDO como ele entra no CASAMENTO: sem o sufixo de TURMA. O
     professor do Elefante às vezes digita a turma junto do nome ("… RIBEIRO 2B",
     "… BRIET 4A"); esse sufixo não é nome de criança e, mantido, transformava o nome
     idêntico da ficha em "nome parcial" — revisão a cada sincronização.
 
-    Só sai o que tem forma de sufixo de turma (``_SUFIXO_TURMA``), como token
-    separado ou grudado no fim de um nome ("PINTO2B" → "PINTO"). Qualquer outro
+    Só sai o que tem forma de sufixo de turma (``_SUFIXO_TURMA``) E é a sala da
+    própria linha (``_sufixo_da_sala`` contra ``chave``), como token separado ou
+    grudado no fim de um nome ("PINTO2B" → "PINTO"); sem sala legível, nada sai. Qualquer outro
     token com dígito fica: um número puro ("… SOUZA 2") pode distinguir homônimos
     e, se sumisse, o dado da 2ª criança iria para a ficha da 1ª.
 
@@ -510,27 +530,90 @@ def _nome_para_casar(nome: str) -> str:
     tokens = tokens_nome(nome)
     limpos: list[str] = []
     for t in tokens:
-        if _SUFIXO_TURMA.fullmatch(t):
+        if _SUFIXO_TURMA.fullmatch(t) and _sufixo_da_sala(t, chave):
             continue
         colado = _SUFIXO_TURMA_COLADO.fullmatch(t)
-        limpos.append(colado.group(1) if colado else t)
+        limpos.append(colado.group(1) if colado and _sufixo_da_sala(colado.group(2), chave)
+                      else t)
     if not limpos or limpos == tokens:
         return nome
     return " ".join(limpos)
+
+
+def _prenomes(nome: str) -> list[str]:
+    """Os PRENOMES de um nome: 1ª e 2ª palavra de quem tem 3 ou mais (MARIA
+    EDUARDA SILVA SOUZA), só a 1ª de quem tem 2."""
+    tokens = tokens_nome(nome)
+    return tokens[:2] if len(tokens) >= 3 else tokens[:1]
+
+
+# Grafias equivalentes de nome próprio no português do Brasil (LUÍS/LUIZ,
+# RODRIGUES/RODRIGUEZ, EMANUELE/EMANUELLE, THAIS/TAIS, HELOISA/ELOISA): a MESMA
+# pronúncia escrita de outro jeito.
+_EQUIVALENCIAS = (("ph", "f"), ("th", "t"), ("y", "i"), ("w", "v"), ("k", "c"), ("z", "s"))
+
+
+def _forma_ortografica(token: str) -> str:
+    for de, para in _EQUIVALENCIAS:
+        token = token.replace(de, para)
+    if token.startswith("h"):
+        token = token[1:]                                     # H inicial mudo
+    return re.sub(r"([b-df-hj-np-tv-z])\1", r"\1", token)   # consoante dobrada
+
+
+def _distancia_edicao(a: str, b: str) -> int:
+    """Distância de edição com transposição (Damerau, alinhamento ótimo)."""
+    d = [[i + j if i * j == 0 else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1,
+                          d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
 
 
 # Vínculos do motor que vêm de VARIAÇÃO DE GRAFIA (não de nome idêntico, abreviação,
 # subconjunto ou identificador) — os que a plataforma passou a aceitar (A).
 _VIA_GRAFIA = ("variante", "typo")
 
+# Erro de digitação (uma letra trocada, sobrando, faltando ou invertida) só é
+# reconhecido em palavra com pelo menos isto de letras: em nome curto, uma letra
+# separa nomes diferentes (LARA/LAURA, ELOA/ELOAH).
+_MINIMO_LETRAS_ERRO_DIGITACAO = 5
 
-def _grafia_num_token_so(nome_a: str, nome_b: str) -> bool:
-    """A variação de grafia está em UM token só (mesmo nº de tokens, um diferente)?
-    O motor aceita até dois tokens do meio diferentes (``variante_ortografica``);
-    na plataforma o vínculo automático por grafia vale para UM — "MARIA HELOISA
-    SOUSA LIMA" × "MARIA ELOISA SOUZA LIMA" (dois nomes do meio trocados) é revisão."""
-    ta, tb = tokens_nome(nome_a), tokens_nome(nome_b)
-    return len(ta) == len(tb) and sum(1 for x, y in zip(ta, tb) if x != y) == 1
+
+def _grafia_segura(ctx: Contexto, recebido: str, ficha: str) -> bool:
+    """A diferença entre o nome RECEBIDO da plataforma e o da FICHA é de grafia —
+    a mesma criança — e não outro nome? Vale para o vínculo automático por grafia
+    de candidato único (passo 3b) e para o desempate oficial × duplicata (3c).
+
+    O motor aceita até dois tokens do meio com similaridade >= 0,7
+    (``variante_ortografica``); isso também casa NOMES DIFERENTES (ALICE/ALINE,
+    CRISTINA/CRISTIANA, GUSTAVO/AUGUSTO). Aqui, só com TODAS as condições:
+      1. mesmo nº de palavras (3+), UMA só diferente, no MEIO (1º nome e último
+         sobrenome idênticos);
+      2. as duas formas são a MESMA grafia (``_forma_ortografica``: Z/S, Y/I, W/V,
+         K/C, PH/F, TH/T, H inicial mudo, consoante dobrada) — OU é um erro de
+         UMA letra (``_distancia_edicao`` == 1) em palavra de 5+ letras E a forma
+         recebida NÃO é prenome de nenhuma criança cadastrada (``ctx.prenomes``):
+         erro de digitação produz forma que não é nome de ninguém; ALINE, LAURA,
+         CRISTIANA são nomes de outras crianças, e aí quem decide é gente.
+    Medido em 2026-10-11 (só leitura) nas 16 linhas pendentes da rede que o motor
+    ligaria por grafia: todas são grafia equivalente ou erro de uma letra cuja
+    forma recebida não é prenome de ninguém."""
+    ta, tb = tokens_nome(recebido), tokens_nome(ficha)
+    if len(ta) != len(tb) or len(ta) < 3:
+        return False
+    difs = [i for i, (x, y) in enumerate(zip(ta, tb)) if x != y]
+    if len(difs) != 1 or difs[0] in (0, len(ta) - 1):
+        return False
+    x, y = ta[difs[0]], tb[difs[0]]
+    if _forma_ortografica(x) == _forma_ortografica(y):
+        return True
+    return (_distancia_edicao(x, y) == 1
+            and min(len(x), len(y)) >= _MINIMO_LETRAS_ERRO_DIGITACAO
+            and x not in ctx.prenomes)
 
 
 def _homonimos_fora_da_sala(ctx: Contexto, ident: matching.Identidade, alvo_nome: str,
@@ -550,13 +633,30 @@ def _homonimos_fora_da_sala(ctx: Contexto, ident: matching.Identidade, alvo_nome
     return fora
 
 
-def _revisar_homonimo_fora(fora: list[Aluno], da_sala: tuple[int, ...], via: str,
-                           chave: str) -> Decisao:
-    """Nome IDÊNTICO em outra sala × nome só PARECIDO na sala: a prova mais forte
-    está fora da sala, a sala da plataforma pode estar errada — quem decide é gente,
-    vendo as duas fichas (e a triagem, com 2+ candidatos, não chama de "segura")."""
-    ids = tuple(dict.fromkeys((*(a.id for a in fora), *da_sala)))
-    return Decisao(REVISAR, fora[0].id, via, "homonimo_em_outra_sala", ids, chave_sala=chave)
+def _casa_fora_da_sala(ctx: Contexto, ident: matching.Identidade,
+                       chave: str) -> tuple[int, ...]:
+    """Fichas FORA da sala com que a linha casa pelo MESMO motor do passo 4b
+    (``classificar_na_escola``): nome idêntico, abreviado, sem um sobrenome, com
+    "DE" a mais ou de grafia parecida — sem identificador que prove ser outra
+    criança. Só olhar o nome IDÊNTICO deixava de fora a dona real cadastrada como
+    "… ALVES DE PEREIRA", "… PEREIRA" ou como o stub "MARIA A", e a linha ia
+    para a ficha só parecida da sala."""
+    res = ctx.classificar_na_escola(replace(ident, chamada=None), excluir_sala=chave)
+    if res.status in (matching.VINCULADO, matching.REVISAR):
+        return tuple(res.candidatos)
+    return ()
+
+
+def _revisar_casa_fora(ctx: Contexto, fora: tuple[int, ...], da_sala: tuple[int, ...],
+                       via: str, chave: str, alvo_nome: str) -> Decisao:
+    """Revisão com as fichas das DUAS salas: a de fora casa com a linha e a sala
+    do relatório pode estar errada — quem decide é gente."""
+    identica = any(chave_nome(ctx.alunos[i].nome) == alvo_nome
+                   for i in fora if i in ctx.alunos)
+    ids = tuple(dict.fromkeys((*fora, *da_sala)))
+    return Decisao(REVISAR, fora[0], via,
+                   "homonimo_em_outra_sala" if identica else "nome_casa_em_outra_sala",
+                   ids, chave_sala=chave)
 
 
 def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
@@ -604,12 +704,11 @@ def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
                                          vincular_variante=True)
     if sozinha.status != matching.VINCULADO or sozinha.aluno_id != oficial.id:
         return None
-    if sozinha.motivo in _VIA_GRAFIA and not _grafia_num_token_so(ident.nome, oficial.nome):
-        return None
     # Conta APOSENTADA nesta plataforma também conta como "tem conta": a escola já
     # olhou para aquela ficha e decidiu algo sobre ela — não é sombra anônima.
     com_conta_aposentada = {aid for (plat, _), aid in ctx.aposentadas.items()
                             if plat == linha.plataforma}
+    todas_aposentadas = set(ctx.aposentadas.values())
     for sombra in alunos:
         if sombra.id == oficial.id:
             continue
@@ -619,6 +718,12 @@ def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
             return None
         if (ctx.ids_do_aluno.get((sombra.id, linha.plataforma))
                 or sombra.id in com_conta_aposentada):
+            return None
+        # Nome IDÊNTICO ao da oficial (não abreviado) pode ser OUTRA criança real
+        # com o mesmo nome: só é sombra sem conta em NENHUMA plataforma.
+        if set(tokens_nome(sombra.nome)) == set(tokens_nome(oficial.nome)) and (
+                any(ctx.ids_do_aluno.get((sombra.id, plat)) for plat in CAMPO_ID_EXTERNO)
+                or sombra.id in todas_aposentadas):
             return None
     return oficial, sozinha.motivo
 
@@ -700,7 +805,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
 
     # Daqui em diante o NOME decide: entra o recebido sem o sufixo de turma com
     # dígito ("… 2B"). A linha (nome exibido/gravado, chave da identidade) não muda.
-    nome_casar = _nome_para_casar(linha.nome)
+    nome_casar = _nome_para_casar(linha.nome, chave)
 
     # 2) RA (identificador forte da escola inteira).
     ra = ra_forte(linha.ra)
@@ -747,16 +852,18 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         res = matching.classificar_linha(ident, roster, permitir_subconjunto_unico=True,
                                          vincular_variante=True)
         if (res.status == matching.VINCULADO and res.motivo in _VIA_GRAFIA
-                and res.aluno_id in ctx.alunos
-                and not _grafia_num_token_so(nome_casar, ctx.alunos[res.aluno_id].nome)):
-            # Mesma decisão de antes da mudança: revisão do candidato único.
-            res = replace(res, status=matching.REVISAR)
+                and res.aluno_id in ctx.alunos):
+            # Grafia: primeiro, a dona pode estar em OUTRA sala (com qualquer forma
+            # do nome) — revisão com as duas salas; depois, a diferença tem de ser
+            # de grafia mesmo, não outro nome (``_grafia_segura``) — senão, a
+            # revisão do candidato único de antes da mudança.
+            fora = _casa_fora_da_sala(ctx, ident, chave)
+            if fora:
+                return _revisar_casa_fora(ctx, fora, res.candidatos, res.motivo, chave,
+                                          alvo_nome)
+            if not _grafia_segura(ctx, nome_casar, ctx.alunos[res.aluno_id].nome):
+                res = replace(res, status=matching.REVISAR)
         if res.status == matching.VINCULADO and res.aluno_id in ctx.alunos:
-            if res.motivo in _VIA_GRAFIA:
-                homonimos = _homonimos_fora_da_sala(ctx, ident, alvo_nome, na_sala)
-                if homonimos:
-                    return _revisar_homonimo_fora(homonimos, res.candidatos, res.motivo,
-                                                  chave)
             return _para_aluno(ctx, linha, ctx.alunos[res.aluno_id], res.motivo, chave,
                                chave_alt=chave_alt)
         if res.status == matching.REVISAR:
@@ -766,13 +873,16 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
             # casa com a oficial por nome IDÊNTICO, um homônimo exato em outra sala
             # manda para a revisão — o desempate é novo e não arrisca.
             desempate = _oficial_entre_duplicatas(ctx, linha, ident, res.candidatos)
+            if desempate is not None and desempate[1] != "exato":
+                fora = _casa_fora_da_sala(ctx, ident, chave)
+                if fora:
+                    return _revisar_casa_fora(ctx, fora, res.candidatos, res.motivo, chave,
+                                              alvo_nome)
+                if (desempate[1] in _VIA_GRAFIA
+                        and not _grafia_segura(ctx, nome_casar, desempate[0].nome)):
+                    desempate = None
             if desempate is not None:
                 oficial, como = desempate
-                if como != "exato":
-                    homonimos = _homonimos_fora_da_sala(ctx, ident, alvo_nome, na_sala)
-                    if homonimos:
-                        return _revisar_homonimo_fora(homonimos, res.candidatos, res.motivo,
-                                                      chave)
                 dec = _para_aluno(ctx, linha, oficial, "lista_piloto_unica", chave,
                                   candidatos=res.candidatos, chave_alt=chave_alt)
                 if dec.acao == ASSOCIAR:

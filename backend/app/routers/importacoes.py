@@ -849,8 +849,26 @@ def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[st
     congelada = _instante((rev.contexto or {}).get("data_referencia"))
     if congelada is None:
         return True          # sem data: o /resolver nunca reaplicaria esse retrato
+    if coletor.origem != "sincronizacao" and not (coletor.contexto or {}).get("data_informada"):
+        # Arquivo enviado à mão sem a data do relatório: a "data desta importação"
+        # é só o relógio de agora, e o relatório pode ser antigo. Fica para o
+        # /resolver, que compara com o retrato mais recente de verdade.
+        return False
     atual = _instante((coletor.contexto or {}).get("data_referencia"))
     return atual is not None and _sem_fuso(atual).date() >= _sem_fuso(congelada).date()
+
+
+def _motor_escolheria(ctx: "ida.Contexto", ident: "ida.LinhaIdentidade",
+                      aluno: Aluno) -> bool:
+    """A ficha FIXADA por quem confirmou é a mesma que o motor escolheria sozinho
+    pelo nome? Então foi a sugestão da prévia aceita como veio — não uma escolha
+    de gente — e a pendência encerra como AUTOMÁTICA (não vira memória que
+    desligaria, nas próximas importações, a guarda de homônimo novo e a de ficha
+    inativa). Pela conta da plataforma não vale: ela acabou de ser gravada nesta
+    mesma linha e sempre "concordaria"."""
+    sem_escolha = replace(ident, aluno_id=None, id_externo="")
+    dec = ida.decidir(ctx, sem_escolha)
+    return dec.acao == ida.ASSOCIAR and dec.aluno_id == aluno.id
 
 
 def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contexto",
@@ -908,13 +926,13 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                                            str(contexto.get("periodo_inicio") or ""),
                                            str(contexto.get("periodo_fim") or ""))
                        for c in chaves}
-    humana = ident.aluno_id is not None
+    humana = ident.aluno_id is not None and not _motor_escolheria(ctx, ident, aluno)
     if humana:
         regra = _REGRA_ESCOLHA_HUMANA
     else:
         regra = _REGRA_DA_VIA.get(decisao.via, f"decisão automática ({decisao.via})")
         if (decisao.via not in _VIAS_SEM_NOME
-                and ida._nome_para_casar(ident.nome) != ident.nome):
+                and ida._nome_para_casar(ident.nome, decisao.chave_sala) != ident.nome):
             # "… RIBEIRO 2B" casou como nome idêntico: a regra diz que o sufixo saiu.
             regra += ", sem o sufixo de turma digitado junto do nome"
     preteridos = _preteridos(ctx, decisao.preteridos)
@@ -952,7 +970,7 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                       usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
                       detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
                                 "formato": rev.formato, "motivo": rev.motivo,
-                                "acao": "associar", "nome_recebido": rev.nome_recebido,
+                                "acao": "associar", "origem": rev.nome_recebido,
                                 "dados_superados": dados_superados,
                                 "candidatos": candidatos,
                                 "resolvida_na": "confirmacao_da_importacao",
@@ -2011,6 +2029,9 @@ def _confirmar_sem_commit(
     contexto_revisao = {
         "tipo": dados.tipo,
         "data_referencia": data_referencia.isoformat(),
+        # A data veio do relatório (ou da sincronização)? Sem ela, a acima é o
+        # relógio de agora — ver ``_linha_substitui_o_congelado``.
+        "data_informada": dados.data_referencia is not None,
         "periodo_inicio": dados.periodo_inicio.isoformat() if dados.periodo_inicio else "",
         "periodo_fim": dados.periodo_fim.isoformat() if dados.periodo_fim else "",
     }

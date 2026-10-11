@@ -451,9 +451,11 @@ def test_grafia_na_sala_nao_vence_nome_identico_em_outra_sala(db, rede):
     assert set(d.candidatos) == {identica.id, parecida.id}
 
 
-def test_homonimo_em_outra_sala_com_identificador_divergente_nao_trava_a_grafia(db, rede):
-    """O homônimo de fora só trava quando PODE ser a dona: nascimento divergente do
-    da linha prova que é outra criança (o mesmo filtro do passo 4)."""
+def test_homonimo_de_fora_com_identificador_divergente_nao_e_a_dona_mas_alice_e_nome(db, rede):
+    """O homônimo de fora só trava como "dona" quando PODE ser ela: nascimento
+    divergente prova que é outra criança (o mesmo filtro do passo 4). Mas ALICE é
+    PRENOME de uma criança cadastrada — ALICE × ALINE não é erro de digitação, é
+    outro nome: a linha vai para a revisão do candidato único, não para a ALINE."""
     esc = rede["escola"]
     _aluno(db, esc, rede["c"], "ISADORA ALICE VIANA FROTA", nascimento=date(2017, 3, 3))
     parecida = _aluno(db, esc, rede["b"], "ISADORA ALINE VIANA FROTA")
@@ -463,7 +465,8 @@ def test_homonimo_em_outra_sala_com_identificador_divergente_nao_trava_a_grafia(
         "ISADORA ALICE VIANA FROTA",
         {"elefante_student_id": "9999", "data_nascimento": "2019-05-10"},
         plataforma="elefante", turma_nome=SALA_2B))
-    assert (d.acao, d.aluno_id) == (ida.ASSOCIAR, parecida.id)
+    assert (d.acao, d.motivo, d.aluno_id) == (ida.REVISAR, "correspondencia_insegura",
+                                              parecida.id)
 
 
 @pytest.mark.parametrize("oficial_nome,sombra_nome,fora_nome,recebido", [
@@ -564,15 +567,20 @@ def test_vi_nome_so_de_digitos_nao_vira_nome_vazio(db, rede):
     assert d.acao == ida.CRIAR
 
 
-@pytest.mark.parametrize("recebido,para_casar", [
-    ("ARTUR PRADO LIMA 2B", "artur prado lima"),
-    ("ARTUR PRADO LIMA2B", "artur prado lima"),            # só o sufixo sai do token
-    ("ARTUR PRADO LIMA 2", "ARTUR PRADO LIMA 2"),          # número puro fica
-    ("ARTUR PRADO LIMA2", "ARTUR PRADO LIMA2"),
-    ("ARTUR PRADO LIMA 123B", "ARTUR PRADO LIMA 123B"),    # não tem forma de turma
+@pytest.mark.parametrize("recebido,chave,para_casar", [
+    ("ARTUR PRADO LIMA 2B", "2|B", "artur prado lima"),
+    ("ARTUR PRADO LIMA2B", "2|B", "artur prado lima"),     # só o sufixo sai do token
+    ("ARTUR PRADO LIMA 2", "2|B", "ARTUR PRADO LIMA 2"),   # número puro fica
+    ("ARTUR PRADO LIMA2", "2|B", "ARTUR PRADO LIMA2"),
+    ("ARTUR PRADO LIMA 123B", "2|B", "ARTUR PRADO LIMA 123B"),  # não tem forma de turma
+    # O sufixo só sai quando É a sala da linha: outra sala ou sala ilegível, fica.
+    ("ARTUR PRADO LIMA 3A", "2|B", "ARTUR PRADO LIMA 3A"),
+    ("ARTUR PRADO LIMA 2B", "", "ARTUR PRADO LIMA 2B"),
+    ("ARTUR PRADO LIMA 2B", "2 ano", "ARTUR PRADO LIMA 2B"),
+    ("JOAO SILVA 2o B", "2|B", "JOAO SILVA 2o B"),          # "2o" não é a 2ºB
 ])
-def test_vi_so_o_sufixo_de_turma_sai_do_casamento(recebido, para_casar):
-    assert ida._nome_para_casar(recebido) == para_casar
+def test_vi_so_o_sufixo_de_turma_sai_do_casamento(recebido, chave, para_casar):
+    assert ida._nome_para_casar(recebido, chave) == para_casar
 
 
 def test_vi_numero_puro_no_nome_nao_e_sufixo_de_turma(db, rede):
@@ -704,3 +712,107 @@ def test_cadastro_manual_com_oficial_e_stub_continua_recusando_por_semelhanca(
                      json={"nome": "LARISSA VITORIA MENEZEZ COSTA", "turma_id": turma.id})
     assert r.status_code == 409 and "muito parecido" in r.json()["detail"]
     assert _n_alunos(db, esc) == antes
+
+
+# --- revisão adversarial de 2026-10-11: grafia é grafia, não outro nome ----------------
+
+@pytest.mark.parametrize("ficha,recebido,outro_com_o_nome", [
+    # Prenomes diferentes a UMA letra — o recebido é prenome de outra criança.
+    ("MARIA ALICE ALVES PEREIRA", "MARIA ALINE ALVES PEREIRA", "ALINE SOUZA CRUZ"),
+    ("RAFAELA CRISTINA NOGUEIRA LOPES", "RAFAELA CRISTIANA NOGUEIRA LOPES",
+     "CRISTIANA MOTA DIAS"),
+    ("ANA LIVIA ROCHA SANTOS", "ANA LIDIA ROCHA SANTOS", "LIDIA RAMOS PINTO"),
+])
+def test_grafia_que_e_prenome_de_outra_crianca_vai_para_revisao(db, rede, ficha, recebido,
+                                                                 outro_com_o_nome):
+    esc = rede["escola"]
+    unico = _aluno(db, esc, rede["b"], ficha)
+    _aluno(db, esc, rede["c"], outro_com_o_nome)      # o nome existe, em outra família
+    db.commit()
+    d = _decidir(db, esc, recebido, SALA_2B)
+    assert (d.acao, d.motivo, d.aluno_id) == (ida.REVISAR, "correspondencia_insegura", unico.id)
+
+
+@pytest.mark.parametrize("ficha,recebido", [
+    ("MARIA LARA SOUZA DIAS", "MARIA LAURA SOUZA DIAS"),     # nome curto (4 letras)
+    ("JOAO LUCAS MOURA LIMA", "JOAO LUCCA MOURA LIMA"),      # duas letras
+    ("JOAO GUSTAVO PEREIRA LIMA", "JOAO AUGUSTO PEREIRA LIMA"),
+    ("MARIA ELOA SANTOS DIAS", "MARIA ELOISA SANTOS DIAS"),
+])
+def test_diferenca_que_nao_e_erro_de_uma_letra_vai_para_revisao(db, rede, ficha, recebido):
+    esc = rede["escola"]
+    unico = _aluno(db, esc, rede["b"], ficha)
+    db.commit()
+    d = _decidir(db, esc, recebido, SALA_2B)
+    assert d.acao == ida.REVISAR and d.aluno_id == unico.id
+
+
+@pytest.mark.parametrize("ficha,recebido,existe", [
+    # Grafia equivalente: liga mesmo que a forma recebida seja prenome de alguém.
+    ("PEDRO LUIS ALVES COSTA", "PEDRO LUIZ ALVES COSTA", "LUIZ CARLOS MOTA"),
+    ("ANA THAIS ROCHA LIMA", "ANA TAIS ROCHA LIMA", "TAIS MELO SOUZA"),
+    ("JULIA EMANUELE SOUZA DIAS", "JULIA EMANUELLE SOUZA DIAS", "EMANUELLE COSTA"),
+    # Erro de uma letra que não é prenome de ninguém.
+    ("OTAVIO RICARDO MARQUES LIMA", "OTAVIO RICADO MARQUES LIMA", "RICARDO ALVES"),
+])
+def test_grafia_equivalente_ou_erro_de_digitacao_liga(db, rede, ficha, recebido, existe):
+    esc = rede["escola"]
+    unico = _aluno(db, esc, rede["b"], ficha)
+    _aluno(db, esc, rede["c"], existe)
+    db.commit()
+    d = _decidir(db, esc, recebido, SALA_2B)
+    assert (d.acao, d.aluno_id) == (ida.ASSOCIAR, unico.id)
+    assert d.via in ("variante", "typo")
+
+
+@pytest.mark.parametrize("dona_fora", [
+    "MARIA ALINE ALVES DE PEREIRA",     # com partícula
+    "MARIA ALINE PEREIRA",              # sem um sobrenome
+    "MARIA ALINE ALVES PEREIRA",        # idêntica
+])
+def test_dona_de_fora_da_sala_em_qualquer_forma_trava_a_grafia(db, rede, dona_fora):
+    """A sala do relatório pode estar errada: se a linha casa com alguém de OUTRA
+    sala em qualquer forma do nome, revisão com as duas — nunca a ficha só
+    parecida da sala."""
+    esc = rede["escola"]
+    parecida = _aluno(db, esc, rede["b"], "MARIA ALIME ALVES PEREIRA")
+    dona = _aluno(db, esc, rede["c"], dona_fora)
+    db.commit()
+    d = _decidir(db, esc, "MARIA ALINE ALVES PEREIRA", SALA_2B)
+    assert d.acao == ida.REVISAR
+    assert d.motivo in ("homonimo_em_outra_sala", "nome_casa_em_outra_sala")
+    assert {dona.id, parecida.id} <= set(d.candidatos)
+
+
+def test_desempate_tambem_respeita_a_dona_de_fora_com_particula(db, rede):
+    esc = rede["escola"]
+    oficial = _aluno(db, esc, rede["b"], "ISADORA ALINE VIANA FROTA")
+    stub = _aluno(db, esc, rede["b"], "ISADORA A", lp=False)
+    _conta(db, esc, stub, "matific", "u-stub-isadora")
+    dona = _aluno(db, esc, rede["c"], "ISADORA ALIME VIANA DE FROTA")
+    db.commit()
+    d = _decidir(db, esc, "ISADORA ALIME VIANA FROTA", SALA_2B)
+    assert d.acao == ida.REVISAR and dona.id in d.candidatos
+    assert d.preteridos == ()
+
+
+def test_sombra_de_nome_identico_com_conta_em_outra_plataforma_e_outra_crianca(db, rede):
+    """Duas crianças reais de nome idêntico na sala: a de fora da Lista Piloto tem
+    conta no Matific. Não é sombra da oficial — revisão, não desempate."""
+    esc = rede["escola"]
+    oficial = _aluno(db, esc, rede["b"], "LUCAS SILVA SANTOS")
+    outro = _aluno(db, esc, rede["b"], "LUCAS SILVA SANTOS", lp=False)
+    _conta(db, esc, outro, "matific", "u-outro-lucas")
+    db.commit()
+    d = _decidir(db, esc, "LUCAS SILVA SANTOS", SALA_2B, id_externo="7700")
+    assert (d.acao, d.motivo) == (ida.REVISAR, "candidatos_multiplos")
+    assert set(d.candidatos) == {oficial.id, outro.id}
+
+
+def test_sufixo_de_outra_sala_nao_vira_nome_identico(db, rede):
+    """"… LIMA 3A" no relatório da 2ºB: o sufixo contradiz a sala e não sai."""
+    esc = rede["escola"]
+    _aluno(db, esc, rede["b"], "ANA CLARA SOUZA LIMA")
+    db.commit()
+    d = _decidir(db, esc, "ANA CLARA SOUZA LIMA 3A", SALA_2B)
+    assert d.acao != ida.ASSOCIAR or d.via != "exato"

@@ -159,6 +159,10 @@ def _matific(nome, uuid, turma=SALA_MATIFIC, aluno_id=None):
 
 
 def _confirmar(db, esc, admin, plataforma, linhas, **kw):
+    # Como um arquivo COM a data do relatório (o de hoje). Sem data, o encerramento
+    # não trata retrato de outro dia — ver test_arquivo_sem_data_nao_encerra_retrato.
+    if kw.pop("sem_data", False) is False:
+        kw.setdefault("data_referencia", datetime.now(timezone.utc))
     conf = ImportacaoConfirm(plataforma=plataforma, formato=kw.pop("formato", "resumo"),
                              tipo="texto", linhas=linhas, recalcular=False, **kw)
     return imp.confirmar(dados=conf, escola_id=esc.id, usuario=admin, db=db)
@@ -756,3 +760,40 @@ def test_regra_da_conta_nao_fala_de_sufixo(db, sala):
     [r] = _revisoes(db, esc)
     assert r.status == "resolvida" and r.resolucao["via"] == "identidade"
     assert r.resolucao["regra"] == "vínculo pela conta da plataforma"
+
+
+# --- revisão adversarial de 2026-10-11 --------------------------------------------
+
+def test_arquivo_sem_data_nao_encerra_retrato_de_outro_dia(db, oficial_e_stub):
+    """Arquivo enviado à mão SEM a data do relatório: a "data desta importação" é
+    só o relógio de agora e o relatório pode ser antigo. O retrato guardado fica
+    para o /resolver."""
+    c = oficial_e_stub
+    esc, oficial = c["escola"], c["oficial"]
+    rev = _pendencia(db, esc, chave_ident=CHAVE_GIOVANA, id_externo=str(SID_GIOVANA),
+                     nome=NOME_ELEFANTE_GIOVANA, candidatos=(oficial, c["stub"]))
+    _confirmar(db, esc, c["admin"], "elefante",
+               [_elefante(NOME_ELEFANTE_GIOVANA, SID_GIOVANA, livros=3)], sem_data=True)
+    assert [r.id for r in _pendentes(db, esc)] == [rev.id]
+    assert _logs(db, ACAO_AUTO) == [] and _logs(db, ACAO_HUMANA) == []
+
+
+def test_sugestao_da_previa_aceita_como_veio_encerra_como_automatica(db, sala):
+    """Quem confirma a importação com a ficha que o PRÓPRIO motor sugeriu não
+    decidiu nada: a pendência encerra como automática e não vira memória (que
+    desligaria a guarda de homônimo novo e a de ficha inativa depois)."""
+    esc, admin = sala["escola"], sala["admin"]
+    talita = _aluno(db, esc, sala["b"], "TALITA REGINA FONTES")
+    db.commit()
+    chave = ida.chave_identidade(
+        ida.linha_de_dados("TALITA REGINA FONTES", {"matific_uuid": "u-talita"},
+                           plataforma="matific", turma_nome=SALA_MATIFIC), "")
+    _pendencia(db, esc, chave_ident=chave, plataforma="matific", id_externo="u-talita",
+               nome="TALITA REGINA FONTES", candidatos=(talita,))
+    _confirmar(db, esc, admin, "matific",
+               [_matific("TALITA REGINA FONTES", "u-talita", aluno_id=talita.id)])
+    [r] = _revisoes(db, esc)
+    assert (r.status, r.aluno_escolhido_id, r.resolvida_por_id) == ("resolvida", talita.id, None)
+    assert r.resolucao["automatica"] is True
+    assert _logs(db, ACAO_HUMANA) == [] and len(_logs(db, ACAO_AUTO)) == 1
+    assert r.chave_identidade not in ida.carregar_contexto(db, esc.id).resolvidas

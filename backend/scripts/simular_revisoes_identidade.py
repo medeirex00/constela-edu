@@ -10,8 +10,13 @@ como o importador faz: a 2ª pendência da MESMA conta (resumo + leituras) casa 
 conta e a 2ª conta na MESMA ficha vira conflito, exatamente como na sync real.
 
 Classes (os três estados da vinculação):
-  * VINCULO_SEGURO — a próxima sincronização associa e encerra a pendência
+  * VINCULO_DIRETO — a próxima sincronização associa pela conta da plataforma,
+    pelo nome idêntico ou pelo RA, e encerra a pendência
     (``revisao.encerrada_automaticamente``);
+  * VINCULO_POR_REGRA — associa por regra de semelhança (abreviação,
+    subconjunto, grafia, oficial × duplicata): é o MESMO matcher se aprovando,
+    então ``--detalhe`` lista cada um com a via para conferência humana antes de
+    publicar;
   * AMBIGUO — continua na revisão (vários candidatos, nome que só casa em outra
     sala, evidência insuficiente);
   * CONFLITO — continua na revisão (conta da plataforma em disputa: segunda conta
@@ -43,9 +48,12 @@ _CONFLITOS = frozenset({"outra_identidade_na_plataforma", "identidade_de_outro_a
                         "identidade_de_ficha_inativa", "ra_repetido"})
 
 
+_VIAS_DIRETAS = frozenset({"identidade", "uuid", "exato", "ra", "revisao", "explicito"})
+
+
 def classe(dec: ida.Decisao) -> str:
     if dec.acao == ida.ASSOCIAR:
-        return "VINCULO_SEGURO"
+        return "VINCULO_DIRETO" if dec.via in _VIAS_DIRETAS else "VINCULO_POR_REGRA"
     if dec.acao == ida.REVISAR:
         return "CONFLITO" if dec.motivo in _CONFLITOS else "AMBIGUO"
     if dec.acao == ida.CRIAR:
@@ -92,8 +100,7 @@ def simular_escola(db: Session, escola_id: int, detalhe: bool) -> tuple[Counter,
             print(f"    revisão #{rev.id:<6} {rev.plataforma:9} {rev.formato or '-':9} {c:20} "
                   f"via={dec.via or '-':20} motivo={dec.motivo or '-':32} "
                   f"ficha=#{dec.aluno_id} sala={dec.chave_sala!r}")
-    contas = Counter("VINCULO_SEGURO" if cs == {"VINCULO_SEGURO"} else "+".join(sorted(cs))
-                     for cs in por_conta.values())
+    contas = Counter("+".join(sorted(cs)) for cs in por_conta.values())
     print(f"escola #{escola_id}: {len(pendentes)} pendentes → {dict(por_classe)} | "
           f"{len(por_conta)} contas/identidades → {dict(contas)}")
     return por_classe, por_regra, contas
