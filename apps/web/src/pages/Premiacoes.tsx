@@ -34,6 +34,12 @@
  * letivo, datas invertidas, sem atividade), em vez de afirmar sempre que
  * ninguém fez atividade — o que era falso justamente quando o dado existia e
  * foi descartado pelo filtro de ano. Nada aqui recalcula: só lê e formata.
+ *
+ * ÍNDICE OCULTO: com poucos alunos com atividade no período, o backend devolve
+ * as linhas da Matemática com `valor: null` (o índice, junto das estrelas e das
+ * atividades, revelaria a mediana da escola — e com ela a contagem de uma
+ * criança). A tela mostra "—" no lugar do número e diz por quê; a ordem e as
+ * posições são as do backend, como sempre.
  */
 import { Award, TrendingUp, Trophy } from "lucide-react";
 import { useId, useState } from "react";
@@ -68,6 +74,8 @@ interface ReguaMatematica {
   ano_letivo: number;
   inicio_efetivo: string | null;
   fim_efetivo: string | null;
+  /** Quantos alunos fizeram atividade no período (base da régua). */
+  alunos_com_atividade?: number;
 }
 
 type RespostaPremiacoes = PremiacoesT & { regua_matematica?: ReguaMatematica };
@@ -114,7 +122,28 @@ function textoVazioMatematica(regua?: ReguaMatematica): string {
   }
 }
 
-function formatarValor(valor: number, unidade: string): string {
+/** O índice da Matemática que o backend não exibe (poucos alunos com atividade):
+ *  um traço no lugar do número — nunca "0", "NaN" ou "null". */
+const VALOR_OCULTO = "—";
+
+/** Alguma linha desta premiação veio sem o valor (índice oculto pelo backend)? */
+function temValorOculto(categoria: CategoriaPremiacao): boolean {
+  return categoria.podio.some((item) => item.valor == null);
+}
+
+/** Por que a Matemática mostra "—": o número de alunos vem da própria régua
+ *  (sem fixar aqui o mínimo, que é decisão do backend). */
+function notaIndiceOculto(regua?: ReguaMatematica): string {
+  const n = regua?.alunos_com_atividade;
+  const quem = typeof n === "number" && n > 0
+    ? `só ${n} ${n === 1 ? "aluno fez" : "alunos fizeram"} atividade no período`
+    : "poucos alunos fizeram atividade no período";
+  return `Índice não exibido: ${quem}, e com tão poucos ele revelaria o resultado de `
+    + "uma criança. A ordem do pódio é a mesma.";
+}
+
+function formatarValor(valor: number | null, unidade: string): string {
+  if (valor == null) return VALOR_OCULTO;
   if (unidade === "min") return tempoLeitura(valor);
   if (unidade === UNIDADE_MATEMATICA) {
     // Só exibição: o índice (0 a 5) já vem calculado pelo backend.
@@ -124,8 +153,10 @@ function formatarValor(valor: number, unidade: string): string {
   return `${numero(valor)} ${unidade}`;
 }
 
-function CartaoCategoria({ categoria, vazioTexto, legenda, aoVerRanking }: {
+function CartaoCategoria({ categoria, vazioTexto, legenda, aviso, aoVerRanking }: {
   categoria: CategoriaPremiacao; vazioTexto?: string; legenda?: string;
+  /** Nota sob o pódio (ex.: por que o índice da Matemática não aparece). */
+  aviso?: string;
   aoVerRanking?: () => void;
 }) {
   const [campeao, ...resto] = categoria.podio;
@@ -180,6 +211,10 @@ function CartaoCategoria({ categoria, vazioTexto, legenda, aoVerRanking }: {
                 </li>
               ))}
             </ul>
+          )}
+
+          {aviso && (
+            <p role="note" className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{aviso}</p>
           )}
 
           {/* O cartão é o Top 5; o ranking completo da MESMA premiação (mesma
@@ -323,12 +358,14 @@ function ModalRanking({ titulo, icone, descricao, rodape, avisoLimite, linhas, t
  *  `limite` maior. Nada é reordenado aqui — a posição exibida é a que o backend
  *  carimbou, e "Carregar mais" só aumenta o limite (a lista nova contém a
  *  anterior, então nenhum aluno é pulado nem repetido). */
-function ModalRankingCompleto({ categoria, urlBase, turnoChave, aoFechar }: {
+function ModalRankingCompleto({ categoria, urlBase, turnoChave, regua, aoFechar }: {
   categoria: CategoriaPremiacao;
   urlBase: string;
   /** Turno em exibição na aba (ou null em "Todos"): o ranking respeita o MESMO
    *  recorte de período, turma e turno já aplicado na tela. */
   turnoChave: string | null;
+  /** Régua da Matemática da aba, até a resposta maior chegar com a dela. */
+  regua?: ReguaMatematica;
   aoFechar: () => void;
 }) {
   const [limite, setLimite] = useState(PASSO_RANKING);
@@ -358,6 +395,10 @@ function ModalRankingCompleto({ categoria, urlBase, turnoChave, aoFechar }: {
       titulo={categoria.titulo} icone={categoria.icone} descricao={categoria.descricao}
       avisoLimite={truncado
         ? `Esta janela mostra as ${LIMITE_MAXIMO_RANKING} primeiras posições.`
+        : undefined}
+      /* Índice oculto pelo backend: o ranking completo diz o MESMO motivo do cartão. */
+      rodape={temValorOculto(completa)
+        ? notaIndiceOculto(dados?.regua_matematica ?? regua)
         : undefined}
       linhas={podio.map((item) => ({
         aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
@@ -640,6 +681,7 @@ export default function Premiacoes() {
                 legenda={categoria.chave === "melhor_matematica"
                   ? "Média ajustada de estrelas por atividade no período (0 a 5)"
                   : undefined}
+                aviso={temValorOculto(categoria) ? notaIndiceOculto(regua) : undefined}
                 aoVerRanking={() => setRankingAberto(categoria)}
               />
             ))}
@@ -704,6 +746,7 @@ export default function Premiacoes() {
           categoria={rankingAberto}
           urlBase={urlPremiacoes}
           turnoChave={grupoTurno ? chaveTurno(grupoTurno.turno) : null}
+          regua={regua}
           aoFechar={() => setRankingAberto(null)}
         />
       )}

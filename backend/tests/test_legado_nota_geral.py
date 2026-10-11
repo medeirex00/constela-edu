@@ -125,6 +125,14 @@ ALLOWLIST: dict[str, dict] = {
                    "`legado: True`), senão ele passaria a mentir."),
         "pode_sair": "junto com a parada de escrita no motor",
     },
+    "app/routers/configuracoes.py": {
+        "ocorrencias": 1, "papel": "contrato-api",
+        "porque": ("a regra da nota explicada à gestão (`GET /configuracoes/"
+                   "pontuacao/regra`, página Suporte) traz os pesos da COMPOSIÇÃO "
+                   "na chave `nota_geral`. Enquanto o motor compõe, a explicação "
+                   "tem de mostrar a composição — o mesmo motivo do Simulador."),
+        "pode_sair": "junto com a parada de escrita no motor (Gatilho 1)",
+    },
     "app/schemas/comum.py": {
         "ocorrencias": 3, "papel": "schema",
         "porque": "declara o campo nos três payloads acima.",
@@ -175,6 +183,14 @@ ALLOWLIST_FRONT: dict[str, dict] = {
     "apps/web/src/pages/RankingGeral.tsx": {
         "ocorrencias": 1, "papel": "exibição",
         "porque": "coluna 'Nota' da aba Geral (legada). A ordem vem do backend.",
+    },
+    "apps/web/src/pages/Suporte.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("Suporte › 'Como a nota é calculada': os pesos da composição "
+                   "(chave `nota_geral` da regra) enquanto o motor compõe."),
+    },
+    "apps/web/src/test/Suporte.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste", "porque": "payload falso da regra.",
     },
     "apps/web/src/pages/publico/PainelPublico.tsx": {
         "ocorrencias": 4, "papel": "exibição",

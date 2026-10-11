@@ -13,14 +13,17 @@ Trava as decisões desta fase:
     gravam uma BASE antes da janela (`_cresceu`).
 NADA aqui altera pesos/A3/P90/normalização (só lê o motor read-only).
 """
+import copy
 from datetime import datetime
 
+import pytest
 from sqlalchemy import select
 
 from app.core.security import hash_senha
 from app.models import (
     Aluno, Escola, Importacao, Leitura, Livro, Matricula, SnapshotMatific, Turma, Usuario,
 )
+from app.services import matific_destaque as md
 from app.services import premiacoes, provisionamento
 
 JAN = datetime(2026, 8, 10)          # dentro da janela padrão do teste
@@ -78,7 +81,15 @@ def _podio(dados, chave):
 # ---------------------------------------------------------------------------
 # 1) CRITÉRIO: média ajustada de estrelas por atividade, não quantidade
 # ---------------------------------------------------------------------------
-def test_melhor_matematica_usa_media_ajustada_nao_so_atividades(db):
+def _sem_corte_de_privacidade(monkeypatch):
+    """Desliga o corte de privacidade (mínimo 0): as premiações voltam a devolver
+    a régua com o ``k`` e o índice de cada aluno — exatamente o payload de antes
+    do corte. Serve para conferir os NÚMEROS que ordenaram o pódio em cenários
+    com poucos alunos, que por padrão não os exibem."""
+    monkeypatch.setattr(premiacoes, "MINIMO_ALUNOS_REFERENCIA_MATIFIC", 0)
+
+
+def test_melhor_matematica_usa_media_ajustada_nao_so_atividades(db, monkeypatch):
     esc, imp, turmas = _cenario(db)
     # VOLUME: muitas atividades, poucas estrelas por atividade. GANHARIA no
     # critério antigo (só atividades).
@@ -94,7 +105,15 @@ def test_melhor_matematica_usa_media_ajustada_nao_so_atividades(db):
     assert categoria["unidade"] == "estrelas/atividade"
     podio = categoria["podio"]
     assert [p["nome"] for p in podio[:2]] == ["Quali Dade", "Volumoso Volume"]
-    # Escala 0 a 5 (estrelas por atividade), não contagem de atividades nem nota 0–100.
+    # Só 2 alunos com atividade (abaixo do mínimo de privacidade): o índice não sai.
+    assert [p["valor"] for p in podio] == [None, None]
+
+    # O índice que ORDENOU (visto sem o corte): mesma ordem; escala 0 a 5
+    # (estrelas por atividade), não contagem de atividades nem nota 0–100.
+    _sem_corte_de_privacidade(monkeypatch)
+    podio = _podio(premiacoes.premiacoes(db, esc.id, datetime(2026, 8, 1),
+                                         datetime(2026, 8, 31)), "melhor_matematica")
+    assert [p["nome"] for p in podio[:2]] == ["Quali Dade", "Volumoso Volume"]
     assert podio[0]["valor"] <= 5 and podio[0]["valor"] > podio[1]["valor"]
 
 
@@ -322,7 +341,7 @@ def test_carregar_mais_nao_duplica_nem_pula_aluno(db):
     assert [p["posicao"] for p in pagina3] == list(range(1, 15))
 
 
-def test_limite_maior_preserva_o_desempate_da_matematica(db):
+def test_limite_maior_preserva_o_desempate_da_matematica(db, monkeypatch):
     """G) Empate no índice: a ordem continua sendo estrelas → atividades → nome,
     com ou sem limite maior."""
     esc, imp, turmas = _cenario(db)
@@ -341,8 +360,17 @@ def test_limite_maior_preserva_o_desempate_da_matematica(db):
     completo = _podio(_premiar(db, esc, limite=50), "melhor_matematica")
     assert [p["nome"] for p in top5] == [p["nome"] for p in completo]
     assert [p["nome"] for p in completo] == ["Mm Lider", "Aa Empatada", "Zz Empatado"]
-    assert completo[1]["valor"] == completo[2]["valor"]   # empate de verdade
     assert completo[1]["estrelas"] == completo[2]["estrelas"]
+    # Só 3 alunos com atividade: o índice não sai — nem no Top 5 nem no completo.
+    assert all(p["valor"] is None for p in top5 + completo)
+
+    # O empate é DE VERDADE no índice que ordenou (visto sem o corte), e a ordem
+    # sem o corte é a mesma.
+    _sem_corte_de_privacidade(monkeypatch)
+    visivel = _podio(_premiar(db, esc, limite=50), "melhor_matematica")
+    assert [p["nome"] for p in visivel] == [p["nome"] for p in completo]
+    assert visivel[1]["valor"] == visivel[2]["valor"]     # empate de verdade
+    assert visivel[0]["valor"] > visivel[1]["valor"]
 
 
 def test_limite_maior_nao_muda_as_outras_premiacoes(db):
@@ -411,3 +439,222 @@ def test_endpoint_aceita_limite_e_mantem_o_padrao_em_5(db, cliente, escola_compl
     # Limite fora da faixa é recusado pela própria rota (nada de lista infinita).
     assert cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?limite=0").status_code == 422
     assert cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?limite=5000").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Privacidade da régua: com poucos alunos o ``k`` não sai (mesmo corte do exemplo)
+# ---------------------------------------------------------------------------
+# Decisão já tomada no "Quer ver um exemplo?" da Pontuação
+# (``MINIMO_ALUNOS_REFERENCIA_MATIFIC``): abaixo do mínimo de alunos com
+# atividade, a mediana ``k`` praticamente revela a contagem de uma criança. As
+# premiações devolvem a régua a qualquer usuário da escola, então aplicam o MESMO
+# corte — sem mudar o índice nem a ordem, que continuam saindo do ``k`` real.
+
+_JOGADORES = [("Bia", 10, 45), ("Caio", 20, 70), ("Duda", 30, 120), ("Enzo", 40, 150),
+              ("Fabi", 50, 190)]
+
+
+def _jogaram(db, quantos):
+    esc, imp, turmas = _cenario(db)
+    for nome, atividades, estrelas in _JOGADORES[:quantos]:
+        _cresceu(db, esc, imp, _aluno(db, esc, turmas["manha"], nome),
+                 atividades, estrelas, 3.0)
+    db.commit()
+    return esc
+
+
+def test_abaixo_do_minimo_a_regua_nao_mostra_k_nem_os_zeros_extras(db, monkeypatch):
+    quantos = premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC - 1
+    esc = _jogaram(db, quantos)
+    dados = _premiar(db, esc)
+    regua = dados["regua_matematica"]
+    assert regua["alunos_com_atividade"] == quantos
+    assert regua["k_mediana_atividades"] is None
+    assert regua["zeros_extras"] is None          # 20% do k: devolveria o k
+    assert regua["modo"] == "periodo" and regua["coorte"] == "escola"
+
+    # A ordem NÃO muda: continua saindo do índice do k real da escola.
+    k_real = premiacoes.regua_matematica(
+        db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))["k_mediana_atividades"]
+    assert k_real == 25.0                          # mediana de 10, 20, 30, 40
+    esperado = sorted(((round(md.indice(a, e, k_real), 2), n)
+                       for n, a, e in _JOGADORES[:quantos]), reverse=True)
+    podio = _podio(dados, "melhor_matematica")
+    assert [p["nome"] for p in podio] == [n for _, n in esperado]
+    # ... mas a linha não traz o índice (com estrelas e atividades, ele devolve o k).
+    assert all(p["valor"] is None for p in podio)
+
+    # Sem o corte, cada linha mostra exatamente o índice do k real.
+    _sem_corte_de_privacidade(monkeypatch)
+    visivel = _podio(_premiar(db, esc), "melhor_matematica")
+    assert [(p["valor"], p["nome"]) for p in visivel] == esperado
+
+
+def test_a_partir_do_minimo_a_regua_mostra_k(db):
+    esc = _jogaram(db, premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC)
+    regua = _premiar(db, esc)["regua_matematica"]
+    assert regua["alunos_com_atividade"] == premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC
+    assert regua["k_mediana_atividades"] == 30.0   # mediana de 10, 20, 30, 40, 50
+    assert regua["zeros_extras"] == 6.0
+
+
+def test_o_exemplo_e_as_premiacoes_usam_o_mesmo_minimo():
+    from app.routers import configuracoes
+    assert (configuracoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC
+            == premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC == 5)
+
+
+# ---------------------------------------------------------------------------
+# Privacidade do PÓDIO: abaixo do mínimo, nenhuma linha permite deduzir o ``k``
+# ---------------------------------------------------------------------------
+# Esconder só a régua não bastava: cada linha da Melhor Matemática trazia o
+# índice junto com as estrelas e as atividades do período, e
+#     índice = estrelas ÷ (atividades + 0,2·k)  ⇒  k = 5·(estrelas ÷ índice − atividades).
+# Abaixo do mínimo, o ``valor`` (o índice) sai ``None`` em TODAS as listas da
+# resposta — pódio geral, pódios por turno e ranking completo (``limite``) —;
+# estrelas, atividades e datas (auditoria) ficam. Ordem, desempate, posições e
+# ``total`` são os de antes (o índice bruto já ordenou). A partir do mínimo, o
+# payload é o de sempre.
+
+# Ganho no período (atividades, estrelas), alternando manhã e tarde.
+_ESCOLA_MAT = [("Ana Mat", "manha", 10, 45), ("Beto Mat", "tarde", 20, 70),
+               ("Cris Mat", "manha", 30, 120), ("Davi Mat", "tarde", 40, 150),
+               ("Eva Mat", "manha", 50, 190), ("Fred Mat", "tarde", 60, 300)]
+_CAMPOS_DA_LINHA = {"aluno_id", "nome", "turma", "valor", "posicao",
+                    "estrelas", "atividades", "data_base", "data_atual"}
+
+
+def _escola_com(db, quantos):
+    esc, imp, turmas = _cenario(db)
+    for nome, turno, atividades, estrelas in _ESCOLA_MAT[:quantos]:
+        _cresceu(db, esc, imp, _aluno(db, esc, turmas[turno], nome),
+                 atividades, estrelas, 3.0)
+    db.commit()
+    return esc, turmas
+
+
+def _listas_da_matematica(dados):
+    """Todas as listas de Melhor Matemática da resposta: a geral e a de cada turno."""
+    listas = [_podio(dados, "melhor_matematica")]
+    for grupo in dados.get("turnos", []):
+        listas.append(_categoria(grupo, "melhor_matematica"))   # já é o pódio
+    return listas
+
+
+def _k_deduzido(item):
+    """O ``k`` que uma linha entrega quando traz o trio índice + estrelas +
+    atividades; ``None`` quando o trio não está completo."""
+    valor, estrelas, atividades = (item.get("valor"), item.get("estrelas"),
+                                   item.get("atividades"))
+    if valor is None or estrelas is None or atividades is None or valor == 0:
+        return None
+    return 5 * (estrelas / valor - atividades)
+
+
+def _sem_indice_nem_k(dados):
+    """A resposta com o índice da Matemática e o ``k`` da régua apagados — o
+    que o corte PODE mudar. Todo o resto tem de ser idêntico."""
+    copia = copy.deepcopy(dados)
+    for lista in _listas_da_matematica(copia):
+        for item in lista:
+            item["valor"] = None
+    copia["regua_matematica"].update(k_mediana_atividades=None, zeros_extras=None)
+    return copia
+
+
+@pytest.mark.parametrize("limite", [5, 50])
+def test_abaixo_do_minimo_nenhuma_linha_da_matematica_permite_deduzir_k(db, monkeypatch,
+                                                                        limite):
+    esc, _turmas = _escola_com(db, 2)
+    dados = _premiar(db, esc, por_turno=True, limite=limite)
+    assert dados["regua_matematica"]["alunos_com_atividade"] == 2
+
+    listas = _listas_da_matematica(dados)
+    assert len(listas) == 3                                   # geral + manhã + tarde
+    linhas = [item for lista in listas for item in lista]
+    assert len(linhas) == 4                                   # 2 no geral + 1 por turno
+    for item in linhas:
+        assert item["valor"] is None
+        assert _k_deduzido(item) is None
+        assert set(item) == _CAMPOS_DA_LINHA                  # nenhum campo novo com o k
+    assert dados["regua_matematica"]["k_mediana_atividades"] is None
+
+    # A ORDEM e todo o resto são os de ANTES: sem o corte, a resposta difere só
+    # no índice e no k. E antes o k saía de QUALQUER linha — é o que o corte fecha.
+    _sem_corte_de_privacidade(monkeypatch)
+    antes = _premiar(db, esc, por_turno=True, limite=limite)
+    assert _sem_indice_nem_k(dados) == _sem_indice_nem_k(antes)
+    assert [p["nome"] for p in _podio(antes, "melhor_matematica")] == ["Ana Mat", "Beto Mat"]
+    k_real = antes["regua_matematica"]["k_mediana_atividades"]
+    assert k_real == 15.0                                     # mediana de 10 e 20
+    for lista in _listas_da_matematica(antes):
+        for item in lista:
+            # Só o arredondamento do índice (2 casas) separa o deduzido do real.
+            assert _k_deduzido(item) == pytest.approx(k_real, abs=0.5)
+
+
+def test_abaixo_do_minimo_o_professor_tambem_nao_ve_o_indice(db):
+    """O recorte do professor (só as turmas dele) é justamente quem NÃO vê as
+    outras turmas — e quem mais ganharia deduzindo o k da escola inteira."""
+    esc, turmas = _escola_com(db, 4)
+    for kw in ({"turma_ids": [turmas["manha"].id]}, {"turma_id": turmas["tarde"].id}):
+        for limite in (5, 50):
+            podio = _podio(_premiar(db, esc, limite=limite, **kw), "melhor_matematica")
+            assert podio, kw
+            assert all(p["valor"] is None and _k_deduzido(p) is None for p in podio), kw
+
+
+@pytest.mark.parametrize("limite", [5, 50])
+def test_a_partir_do_minimo_o_payload_e_o_de_sempre(db, monkeypatch, limite):
+    esc, _turmas = _escola_com(db, 6)
+    dados = _premiar(db, esc, por_turno=True, limite=limite)
+    regua = dados["regua_matematica"]
+    assert regua["alunos_com_atividade"] == 6
+    assert (regua["k_mediana_atividades"], regua["zeros_extras"]) == (35.0, 7.0)
+    ganho = {nome: (a, e) for nome, _turno, a, e in _ESCOLA_MAT}
+    for lista in _listas_da_matematica(dados):
+        assert lista
+        for item in lista:
+            a, e = ganho[item["nome"]]
+            assert item["valor"] == round(md.indice(a, e, 35.0), 2)
+            assert (item["atividades"], item["estrelas"]) == (a, e)
+
+    # IDÊNTICO ao payload sem o corte (= o de antes desta proteção).
+    _sem_corte_de_privacidade(monkeypatch)
+    assert _premiar(db, esc, por_turno=True, limite=limite) == dados
+
+
+def test_endpoint_premiacoes_esconde_k_com_poucos_alunos(db, cliente, escola_completa,
+                                                         monkeypatch):
+    escola = escola_completa["escola"]
+    imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(imp)
+    db.flush()
+    ganhos = dict(zip((a.nome for a in escola_completa["alunos"]),
+                      [(10, 40), (20, 70), (30, 120)]))
+    for aluno in escola_completa["alunos"]:
+        _cresceu(db, escola, imp, aluno, *ganhos[aluno.nome], 3.0)
+    db.commit()
+
+    url = (f"/api/v1/escolas/{escola.id}/premiacoes"
+           "?periodo=personalizado&inicio=2026-08-01&fim=2026-08-31")
+    corpo = cliente.get(url).json()
+    regua = corpo["regua_matematica"]
+    assert regua["alunos_com_atividade"] == 3
+    assert (regua["k_mediana_atividades"], regua["zeros_extras"]) == (None, None)
+    # O pódio continua lá, na ordem do índice calculado pelo k real (mediana 20),
+    # mas sem o índice de cada linha — no cartão, por turno e no ranking completo.
+    esperado = sorted(ganhos, key=lambda nome: -md.indice(*ganhos[nome], 20.0))
+    for extra in ("", "&limite=50", "&turnos=true", "&turnos=true&limite=50"):
+        resposta = cliente.get(url + extra).json()
+        assert [p["nome"] for p in _podio(resposta, "melhor_matematica")] == esperado, extra
+        for lista in _listas_da_matematica(resposta):
+            assert all(p["valor"] is None and _k_deduzido(p) is None for p in lista), extra
+
+    # Sem o corte, a MESMA rota devolve os números de antes.
+    _sem_corte_de_privacidade(monkeypatch)
+    mm = _podio(cliente.get(url).json(), "melhor_matematica")
+    assert [p["nome"] for p in mm] == esperado
+    assert [p["valor"] for p in mm] == sorted(
+        (round(md.indice(a, e, 20.0), 2) for a, e in [(10, 40), (20, 70), (30, 120)]),
+        reverse=True)

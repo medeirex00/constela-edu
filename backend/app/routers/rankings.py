@@ -718,7 +718,12 @@ def premiacoes(
     ``?limite=N`` só aumenta o TAMANHO de cada pódio — mesma coorte, mesma régua,
     mesma ordem, mesmo desempate e as mesmas posições do Top 5, que continua
     sendo o prefixo da lista. Cada categoria traz ``total``, o número de alunos
-    premiáveis, para a tela saber se ainda há ranking além do que recebeu."""
+    premiáveis, para a tela saber se ainda há ranking além do que recebeu.
+
+    Privacidade: com menos de ``MINIMO_ALUNOS_REFERENCIA_MATIFIC`` alunos com
+    atividade no período, a régua sai sem ``k`` e as linhas da Melhor Matemática
+    saem com ``valor: null`` (o índice, que com estrelas e atividades devolveria
+    o ``k``) — em todos os pódios da resposta. A ordem é a mesma."""
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(

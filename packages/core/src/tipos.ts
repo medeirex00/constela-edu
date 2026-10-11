@@ -340,7 +340,11 @@ export interface PodioItem {
   aluno_id: number;
   nome: string;
   turma: string | null;
-  valor: number;
+  /** O valor da premiação, pronto do backend. `null` só na "Melhor Matemática"
+   *  com poucos alunos com atividade no período: o índice não é exibido (junto
+   *  das estrelas e das atividades, revelaria a mediana `k` da escola). A
+   *  posição e a ordem continuam as do índice. */
+  valor: number | null;
 }
 
 /** Uma categoria de premiação (com o pódio do período). */

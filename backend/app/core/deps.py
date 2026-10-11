@@ -122,8 +122,13 @@ def exigir_modulo_da_escola(modulo: str):
     Necessária porque o admin global — que passa em ``exigir_modulo`` — opera
     escolas de QUALQUER rede: o módulo tem de ser o da rede DAQUELA escola, não o
     catálogo inteiro. Usada nas rotas ``/escolas/{escola_id}/...`` específicas de
-    uma plataforma."""
-    def dependencia(escola_id: int = Path(...),
+    uma plataforma.
+
+    Resolve ``escola_autorizada`` ANTES de olhar o contrato: dependência de
+    decorador roda antes das do endpoint, e sem isto um pedido SEM login (ou de
+    outra escola) recebia "o módulo não faz parte do plano" — ficava sabendo o
+    que a rede daquela escola contratou antes de ser barrado."""
+    def dependencia(escola_id: int = Depends(escola_autorizada),
                     db: Session = Depends(get_db)) -> int:
         from app.services import modulos as svc_modulos
         escola = db.get(Escola, escola_id)
