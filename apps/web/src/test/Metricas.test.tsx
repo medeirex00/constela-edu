@@ -27,6 +27,8 @@ const URL_PESOS_ELEFANTE = "/escolas/1/configuracoes/pesos/elefante";
 const URL_REFERENCIAS = "/escolas/1/configuracoes/referencias";
 const URL_EXTRA = "/escolas/1/configuracoes/elefante-extra";
 const URL_DIFICULDADE = "/escolas/1/configuracoes/dificuldade";
+const URL_LIVROS = "/escolas/1/livros";
+const URL_EXEMPLO_ELEFANTE = "/escolas/1/configuracoes/pontuacao/exemplo/elefante";
 
 const TEXTO_DO_DONO =
   "Os pontos dos livros são calculados automaticamente pelo Constela considerando o nível de leitura, as características do livro e o ano escolar.";
@@ -125,13 +127,15 @@ describe("Métricas — visão da escola (Pontuação)", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Catálogo de referência: 752 livros/)).toBeInTheDocument();
 
-    // Nenhum editor: nem abas, nem pesos, nem referências, nem a escolha de régua.
+    // Nenhum editor: nem abas de editor, nem pesos, nem referências, nem a
+    // escolha de régua. A ÚNICA lista de abas é a do exemplo por plataforma.
     expect(screen.queryByText("Referências de Normalização")).toBeNull();
     expect(screen.queryByText("Pesos da Nota")).toBeNull();
-    expect(screen.queryByText("Matific")).toBeNull();
     expect(screen.queryByRole("radio")).toBeNull();
     expect(screen.queryByRole("radiogroup")).toBeNull();
-    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    expect(screen.getByRole("tablist", { name: "Exemplo por plataforma" })).toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Elefante Letrado", "Matific"]);
     expect(screen.queryByRole("slider")).toBeNull();
     expect(screen.queryByRole("button", { name: /Salvar/ })).toBeNull();
     expect(screen.queryByText(/modo leitura/)).toBeNull();
@@ -230,61 +234,66 @@ describe("Métricas — visão da escola (Pontuação)", () => {
     // O texto do dono e o rodapé continuam — não dependem da API.
     expect(screen.getByText(TEXTO_DO_DONO)).toBeInTheDocument();
     expect(screen.getByText(RODAPE)).toBeInTheDocument();
+    // O exemplo tem rotas próprias: a área continua, sem nenhum número.
+    expect(screen.getByText("Quer ver um exemplo?")).toBeInTheDocument();
+    expect(screen.queryByText(/pontos$/)).toBeNull();
   });
 
-  it("pede um exemplo à API e mostra a decomposição só com o que ela devolve", async () => {
+  it("o exemplo do Elefante usa o livro do acervo e a rota nova, com os números da API", async () => {
     responder("GET", URL_PERFIL, { modo: "institucional" });
-    responder("GET", URL_DIFICULDADE_LIVRO, (caminho: string) => {
-      if (!caminho.includes("nivel=")) return dificuldadeLivroFake();
-      return {
-        ...dificuldadeLivroFake(),
-        exemplo: {
-          versao: "elefante_dificuldade_v1",
-          titulo: null,
-          nivel: "D",
-          posicao: 7,
-          base_nivel: 2.0544,
-          word_count: null,
-          mediana_nivel: 139,
-          ajuste_intrinseco: 1,
-          serie: 3,
-          fator_serie: 1.2,
-          valor: 2.4653,
-          encontrado_no_catalogo: null,
-        },
-      };
+    responder("GET", URL_DIFICULDADE_LIVRO, dificuldadeLivroFake());
+    responder("GET", URL_LIVROS, {
+      total: 1, pagina: 1, por_pagina: 8,
+      itens: [{ id: 7, titulo: "Livro Teste", autor: null, nivel_codigo: "D", categoria: null,
+                paginas: null, pontos: 2.06, leituras: 0 }],
+    });
+    responder("GET", URL_EXEMPLO_ELEFANTE, {
+      plataforma: "elefante", regra: "elefante_dificuldade_v2", regra_da_rede: "elefante_dificuldade_v2",
+      catalogo: { versao: "78ca392a0a48", n_livros: 752 },
+      entrada: { origem: "acervo", livro_id: 7, elefante_id: null, titulo: "Livro Teste", nivel: "D", serie: 3 },
+      serie: 3, valor: 2.4676, valor_exibido: 2.47, personalizada: false,
+      livro: { titulo: "Livro Teste", nivel: "D", palavras: null, palavras_status: "ausente",
+               resolvido_por: null, encontrado_no_catalogo: false },
+      calculo: { posicao_nivel: 7, base_nivel: 2.056345, mediana_palavras_nivel: 139, fator_tamanho: 1,
+                 limite_tamanho: null, piso_tamanho: 0.8, teto_tamanho: 1.35, fator_serie: 1.2, valor: 2.4676 },
+      avisos: ["Não há contagem de palavras deste livro no catálogo oficial, então ele vale o livro típico do nível (fator de tamanho 1,00)."],
     });
     renderComApp(<Metricas />, { rota: "/metricas" });
 
     const u = userEvent.setup();
     await u.click(await screen.findByRole("button", { name: "Como funciona?" }));
     expect(await screen.findByText("Quer ver um exemplo?")).toBeInTheDocument();
-
-    await u.type(screen.getByLabelText("Nível do livro"), "d");
-    await u.type(screen.getByLabelText("Ano escolar (opcional)"), "3º Ano");
+    await u.type(screen.getByLabelText("Livro do acervo"), "Livro");
+    await u.click(await screen.findByRole("button", { name: /Livro Teste/ }));
+    await u.selectOptions(screen.getByLabelText("Ano escolar do aluno"), "3");
     await u.click(screen.getByRole("button", { name: "Ver exemplo" }));
 
     expect(await screen.findByText("2,47 pontos")).toBeInTheDocument();
-    expect(screen.getByText(/2,05 \(nível\) × 1,00 \(tamanho\) × 1,20 \(série\)/)).toBeInTheDocument();
-    expect(api).toHaveBeenCalledWith(
-      expect.stringMatching(/\/escolas\/1\/configuracoes\/dificuldade-livro\?nivel=D&ano_escolar=/),
-    );
+    expect(api).toHaveBeenCalledWith(`${URL_EXEMPLO_ELEFANTE}?livro_id=7&serie=3`);
+    expect(api).toHaveBeenCalledWith(`${URL_LIVROS}?busca=Livro&por_pagina=8`, expect.anything());
+    expect(screen.getByTestId("conta-elefante")).toHaveTextContent(
+      "2,056345 (nível) × 1,00 (tamanho) × 1,20 (série) = 2,4676 pontos");
+    expect(screen.getByText(/vale o livro típico do nível/)).toBeInTheDocument();
+    // A rota antiga (?nivel= em /dificuldade-livro) não é mais usada pelo exemplo.
+    // Varre TODAS as chamadas (com 1 ou 2 argumentos): /dificuldade-livro é
+    // carregada sem query pela explicação, nunca com ?nivel=.
+    const urls = api.mock.calls.map(([url]) => String(url));
+    expect(urls).toContain(URL_DIFICULDADE_LIVRO);
+    expect(urls.filter((url) => /dificuldade-livro\?/.test(url))).toEqual([]);
   });
 
-  it("sem exemplo na resposta, avisa em vez de inventar um valor", async () => {
+  it("rede sem Leitura: a explicação diz que está fora do plano, e o exemplo segue com o Matific", async () => {
     responder("GET", URL_PERFIL, { modo: "institucional" });
-    responder("GET", URL_DIFICULDADE_LIVRO, dificuldadeLivroFake());
-    renderComApp(<Metricas />, { rota: "/metricas" });
+    responderErro("GET", URL_DIFICULDADE_LIVRO, 403, "O módulo Leitura não faz parte do plano desta rede.");
+    renderComApp(<Metricas />, { rota: "/metricas", usuario: usuarioFake({ modulos: ["matematica"] }) });
 
     const u = userEvent.setup();
     await u.click(await screen.findByRole("button", { name: "Como funciona?" }));
-    await u.type(await screen.findByLabelText("Nível do livro"), "D");
-    await u.click(screen.getByRole("button", { name: "Ver exemplo" }));
-
-    expect(
-      await screen.findByText("A regra não devolveu um exemplo para esses dados."),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/pontos$/)).toBeNull();
+    expect(await screen.findByText("O módulo Leitura não faz parte do plano desta rede.")).toBeInTheDocument();
+    expect(screen.getByText("Quer ver um exemplo?")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Matific" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Elefante Letrado" })).toBeNull();
+    expect(screen.getByText("Premiação Melhor Matemática")).toBeInTheDocument();
   });
 });
 
