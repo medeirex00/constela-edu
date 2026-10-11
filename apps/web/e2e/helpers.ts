@@ -28,7 +28,7 @@ export const STORAGE = {
 export async function entrar(page: Page, conta: Conta): Promise<void> {
   await page.goto("/login");
   await page.getByLabel(/mail ou nome de usu/i).fill(conta.email);
-  await page.getByLabel("Senha").fill(conta.senha);
+  await page.getByLabel("Senha", { exact: true }).fill(conta.senha);
   await page.getByRole("button", { name: /entrar/i }).click();
   // O seletor de escola do Dashboard só existe depois da sessão criada.
   await expect(page.getByLabel("Selecionar escola")).toBeVisible();

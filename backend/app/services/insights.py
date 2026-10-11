@@ -30,7 +30,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, evolucao, scoring
+from app.services import dificuldade_livro, evolucao
 
 DIAS_SEM_ATIVIDADE = 30
 QUEDA_ACERTOS_PONTOS = 15.0

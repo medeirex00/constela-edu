@@ -15,7 +15,7 @@ test.describe("Login", () => {
   test("mostra mensagem de erro com senha inválida", async ({ page }) => {
     await page.goto("/login");
     await page.getByLabel(/mail ou nome de usu/i).fill(CONTAS.admin.email);
-    await page.getByLabel("Senha").fill("senha-totalmente-errada");
+    await page.getByLabel("Senha", { exact: true }).fill("senha-totalmente-errada");
     await page.getByRole("button", { name: /entrar/i }).click();
 
     await expect(page.getByText(/incorretos|inv[aá]lid/i)).toBeVisible();
