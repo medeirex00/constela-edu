@@ -129,7 +129,11 @@ def conteudo(resposta, formato: str) -> str:
                         for linha in ws.iter_rows() for c in linha if c.value is not None)
     if formato == "pdf":
         from pypdf import PdfReader
-        return " ".join((p.extract_text() or "") for p in PdfReader(BytesIO(resposta.content)).pages)
+        # Sem espaços: o pypdf 6.20 reparte em pedaços o texto dos PDFs gerados
+        # pelo fpdf2 ("A LUN O_PROFESSOR_A _2026"). Os marcadores procurados não
+        # têm espaço, então a prova de presença/ausência continua a mesma.
+        return "".join("".join((p.extract_text() or "").split())
+                       for p in PdfReader(BytesIO(resposta.content)).pages)
     return resposta.text
 
 
