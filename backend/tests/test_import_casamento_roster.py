@@ -58,12 +58,17 @@ def test_elefante_abreviado_vincula_ao_aluno_da_lista_piloto(db):
     assert _conta_alunos(db, esc.id) == antes                 # NENHUM aluno novo
 
 
-def test_matific_variante_ortografica_sem_corroboracao_vai_para_revisao(db):
-    """Porta única de identidade (2026-09-21, substitui a decisão de 2026-08-04 para
-    os imports de PLATAFORMA): variação de grafia (LUIZ vs LUÍS) de candidato único
-    SEM identificador corroborando não associa só pelo nome — vai para a fila de
-    revisão. Continua NÃO criando a 2ª ficha: a linha fica guardada até o gestor
-    escolher o aluno."""
+def test_matific_variante_segura_no_nome_do_meio_associa_sem_criar(db):
+    """Variação de grafia (LUIZ vs LUÍS) num nome do MEIO, 1º nome e último
+    sobrenome idênticos, candidato ÚNICO na sala → ASSOCIA, sem ficha nova e sem
+    revisão.
+
+    MUDANÇA DE DECISÃO EXPLÍCITA DO DONO (2026-10-07): de 2026-09-21 até aqui a
+    plataforma mandava esse caso para a revisão (``vincular_variante=False``) e o
+    dado da criança ficava parado a cada sincronização. Agora a plataforma usa o
+    MESMO critério único da Lista Piloto (``matching.vincula_por_nome_unico``,
+    aprovado em 2026-08-04). Variação no sobrenome ou no 1º nome continua em
+    revisão (``test_identidade_automatica.py``)."""
     from app.models import RevisaoIdentidade
 
     esc, turma, abraao = _cenario(db)
@@ -72,10 +77,9 @@ def test_matific_variante_ortografica_sem_corroboracao_vai_para_revisao(db):
     r = _resolver_aluno(db, esc.id, 2026,
                         _linha("ABRAAO LUIZ DIAS", "4 ANO C INTEGRAL"),
                         [], {}, {})
-    assert r is None                                      # não associa pelo nome
+    assert r is not None and r.id == abraao.id            # associa à ficha da sala
     assert _conta_alunos(db, esc.id) == antes             # nenhum aluno novo criado
-    rev = db.execute(select(RevisaoIdentidade)).scalars().one()
-    assert [c["aluno_id"] for c in rev.candidatos] == [abraao.id]
+    assert db.execute(select(RevisaoIdentidade)).scalars().first() is None
 
 
 def test_dois_homonimos_na_turma_vao_para_revisao(db):
