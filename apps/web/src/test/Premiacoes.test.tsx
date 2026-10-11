@@ -30,7 +30,7 @@ const chamadasEvolucao = () =>
   api.mock.calls.map((c) => String(c[0])).filter((p) => p.startsWith(`${URL_EVOL}?`));
 
 function cat(chave: string, titulo: string, unidade: string,
-             podio: Array<[number, string, number]>): CategoriaPremiacao {
+             podio: Array<[number, string, number | null]>): CategoriaPremiacao {
   return {
     chave, titulo, icone: "🧮", descricao: "d", unidade,
     podio: podio.map(([aluno_id, nome, valor], i) => ({
@@ -311,6 +311,81 @@ describe("Premiações", () => {
     expect(screen.getByText("4,07 estrelas/atividade")).toBeInTheDocument();
     expect(screen.getByText(/20% da mediana de atividades da escola/)).toBeInTheDocument();
     expect(screen.queryByText(/null|NaN|undefined/)).toBeNull();
+  });
+
+  // Abaixo do mínimo, o backend também tira o ÍNDICE de cada linha da Matemática
+  // (`valor: null`): com estrelas e atividades ele devolveria o `k`. A tela põe
+  // "—" no lugar do número e diz por quê; nome, posição e ordem continuam.
+  const reguaPoucos = { modo: "periodo", ano_letivo: 2026, coorte: "escola",
+                        inicio_efetivo: null, fim_efetivo: null,
+                        k_mediana_atividades: null, zeros_extras: null, alunos_com_atividade: 2 };
+  const matematicaOculta = cat("melhor_matematica", "Melhor Matemática", "estrelas/atividade",
+                               [[2, "Mat Manha", null], [6, "Mat Segunda", null]]);
+
+  it("índice oculto (poucos alunos): o pódio da Matemática mostra '—' e a nota, sem número", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      categorias: [cat("melhor_leitor", "Melhor Leitor", "pontos", [[1, "Leo Manha", 30]]),
+                   matematicaOculta],
+      turnos: [],
+      regua_matematica: reguaPoucos,
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Mat Manha")).toBeInTheDocument();
+    expect(screen.getByText("Mat Segunda")).toBeInTheDocument();
+    const cartao = screen.getByText("Melhor Matemática").closest("div.flex-col") as HTMLElement;
+    // Um traço por linha no lugar do índice — nenhum número de estrelas/atividade.
+    expect(within(cartao).getAllByText("—")).toHaveLength(2);
+    expect(within(cartao).queryByText(/estrelas\/atividade$/)).toBeNull();
+    expect(within(cartao).getByRole("note"))
+      .toHaveTextContent(/Índice não exibido: só 2 alunos fizeram atividade no período/);
+    expect(within(cartao).getByRole("note")).toHaveTextContent(/A ordem do pódio é a mesma/);
+    // As outras premiações seguem com o número; nada de null/NaN/undefined na tela.
+    expect(screen.getByText("30 pontos")).toBeInTheDocument();
+    expect(screen.queryByText(/null|NaN|undefined/)).toBeNull();
+  });
+
+  it("índice presente (alunos suficientes): mostra o número e nenhuma nota de índice oculto", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      turnos: [],
+      regua_matematica: { ...reguaPoucos, k_mediana_atividades: 35, zeros_extras: 7,
+                          alunos_com_atividade: 6 },
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Mat Manha")).toBeInTheDocument();
+    expect(screen.getByText("4,07 estrelas/atividade")).toBeInTheDocument();
+    expect(screen.queryByText(/Índice não exibido/)).toBeNull();
+    expect(screen.queryByText("—")).toBeNull();
+  });
+
+  it("índice oculto: o ranking completo da Matemática também mostra '—' e diz por quê", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      categorias: [{ ...matematicaOculta, total: 2 }],
+      turnos: [],
+      regua_matematica: reguaPoucos,
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    renderComApp(<Premiacoes />);
+    await screen.findByText("Mat Manha");
+
+    await u.click(screen.getByRole("button", { name: "Ver ranking completo de Melhor Matemática" }));
+    const janela = (await screen.findByRole("heading", { level: 2, name: /Melhor Matemática/ }))
+      .closest("div") as HTMLElement;
+    expect(await within(janela).findByText("Mat Segunda")).toBeInTheDocument();
+    const linhas = within(janela).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(linhas[0]).toContain("Mat Manha");
+    expect(linhas[1]).toContain("Mat Segunda");
+    expect(linhas.every((texto) => texto.includes("—"))).toBe(true);
+    expect(within(janela).getByText(/Índice não exibido: só 2 alunos fizeram atividade/))
+      .toBeInTheDocument();
+    expect(within(janela).queryByText(/null|NaN|undefined/)).toBeNull();
   });
 
   it("escola sem turmas + turno guardado: evolução sem turno, seletor em 'Todos os turnos' e sem aviso", async () => {
