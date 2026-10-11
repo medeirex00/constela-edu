@@ -150,6 +150,31 @@ def _token_valido(db: Session, token_bruto: str | None) -> TokenResetSenha | Non
     return registro
 
 
+def _criador_ainda_pode(db: Session, registro: TokenResetSenha, alvo: Usuario) -> bool:
+    """O link gerado por OUTRA pessoa só vale enquanto ela AINDA poderia gerá-lo.
+
+    A permissão é conferida quando o link é gerado; sem esta segunda conferência
+    no uso, um link ainda pendente sobrevivia a uma mudança da conta-alvo (virou
+    admin, Secretaria ou global): quem o gerou definia a senha da conta já
+    promovida e entrava com o alcance novo. Mesmas regras da geração
+    (``admin._usuario_alvo`` e ``admin._pode_redefinir_senha``)."""
+    if registro.criado_por is None or registro.criado_por == alvo.id:
+        return True
+    from app.core.config import email_reservado_ao_dono
+    from app.routers.admin import _pode_redefinir_senha
+
+    criador = db.get(Usuario, registro.criado_por)
+    if criador is None or criador.status != "ativo":
+        return False
+    if criador.is_global:
+        return True
+    if criador.rede_id is not None or criador.escola_id != alvo.escola_id:
+        return False
+    if alvo.is_global or alvo.rede_id is not None or email_reservado_ao_dono(alvo.email):
+        return False
+    return _pode_redefinir_senha(criador, alvo)
+
+
 class RedefinirSenhaIn(BaseModel):
     token: str = Field(min_length=8, max_length=200)
     nova_senha: str = Field(min_length=8, max_length=100)
@@ -171,7 +196,7 @@ def validar_link_reset(token: str, db: Session = Depends(get_db)):
     if registro is None:
         return {"valido": False}
     alvo = db.get(Usuario, registro.usuario_id)
-    if alvo is None or alvo.status == "excluido":
+    if alvo is None or alvo.status == "excluido" or not _criador_ainda_pode(db, registro, alvo):
         return {"valido": False}
     # Só o PRIMEIRO nome, para a saudação: a rota é pública (basta o link).
     return {"valido": True, "nome": (alvo.nome or "").split(" ")[0]}
@@ -191,6 +216,10 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
     if alvo is None or alvo.status == "excluido":
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Conta indisponível. Fale com o administrador.")
+    if not _criador_ainda_pode(db, registro, alvo):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Link inválido ou expirado. Peça um novo ao "
+                            "administrador da escola.")
     # A regra que depende do DONO da conta (o validador do corpo não o conhece).
     erro = validar_forca_senha(dados.nova_senha, alvo.email, nome=alvo.nome,
                                usuario=alvo.username)
