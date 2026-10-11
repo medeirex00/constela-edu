@@ -243,8 +243,9 @@ def regra_da_pontuacao(
 # DECISÃO PROVISÓRIA (privacidade): com menos alunos do que isto fazendo
 # atividade no período, a mediana ``k`` da escola praticamente revela a contagem
 # de uma criança — o exemplo do Matific não mostra o ``k`` nem o índice (que
-# permitiria deduzir o ``k``). Mudar o número é decisão do dono.
-MINIMO_ALUNOS_REFERENCIA_MATIFIC = 5
+# permitiria deduzir o ``k``). Mudar o número é decisão do dono. O número mora
+# nas premiações, que aplicam o MESMO corte à régua de ``GET /premiacoes``.
+MINIMO_ALUNOS_REFERENCIA_MATIFIC = svc_premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC
 # Um exemplo é de UM aluno: acima disto o número não é de criança (e um inteiro
 # gigante estouraria o float da conta).
 LIMITE_ATIVIDADES_EXEMPLO = 100_000

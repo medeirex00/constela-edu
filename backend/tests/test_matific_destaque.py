@@ -299,7 +299,12 @@ def test_premiacao_de_setembro_2026_ignora_acumulado_de_dezembro_2025(db):
     assert podio[0]["data_atual"] == "2026-09-12T00:00:00"
     assert (podio[0]["atividades"], podio[0]["estrelas"]) == (12, 48)
     regua = dados["regua_matematica"]
-    assert regua["alunos_com_atividade"] == 1 and regua["k_mediana_atividades"] == 12
+    # Um aluno só: a régua DEVOLVIDA não mostra o k (privacidade — o mesmo corte
+    # do exemplo da Pontuação, `MINIMO_ALUNOS_REFERENCIA_MATIFIC`); o k calculado
+    # continua sendo a mediana da coorte (12), conferido na régua sem o corte.
+    assert regua["alunos_com_atividade"] == 1 and regua["k_mediana_atividades"] is None
+    assert premiacoes.regua_matematica(
+        db, esc.id, SET_INI, SET_FIM)["k_mediana_atividades"] == 12
     assert regua["modo"] == "periodo"
     assert regua["inicio_efetivo"] == SET_INI.isoformat()
     assert regua["fim_efetivo"] == SET_FIM.isoformat()

@@ -217,8 +217,12 @@ def test_melhor_matematica_usa_so_o_ganho_do_periodo(cliente, escola_completa):
                     "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
     mm = {c["chave"]: c["podio"] for c in r["categorias"]}["melhor_matematica"]
     assert [p["nome"] for p in mm] == [ana.nome, sofia.nome]     # João fora
-    # k = mediana(30, 10) = 20 → 4 atividades extras com zero estrela.
-    assert r["regua_matematica"]["k_mediana_atividades"] == 20
+    # k = mediana(30, 10) = 20 → 4 atividades extras com zero estrela. Com só 2
+    # alunos a régua DEVOLVIDA não mostra o k (privacidade — o mesmo corte do
+    # exemplo da Pontuação, mínimo de 5); os valores abaixo provam que o índice
+    # continua usando k = 20.
+    assert r["regua_matematica"]["k_mediana_atividades"] is None
+    assert r["regua_matematica"]["alunos_com_atividade"] == 2
     assert r["regua_matematica"]["coorte"] == "escola"
     assert mm[0]["valor"] == pytest.approx(round(120 / 34, 2))
     assert mm[1]["valor"] == pytest.approx(round(40 / 14, 2))

@@ -21,6 +21,7 @@ from app.core.security import hash_senha
 from app.models import (
     Aluno, Escola, Importacao, Leitura, Livro, Matricula, SnapshotMatific, Turma, Usuario,
 )
+from app.services import matific_destaque as md
 from app.services import premiacoes, provisionamento
 
 JAN = datetime(2026, 8, 10)          # dentro da janela padrão do teste
@@ -411,3 +412,81 @@ def test_endpoint_aceita_limite_e_mantem_o_padrao_em_5(db, cliente, escola_compl
     # Limite fora da faixa é recusado pela própria rota (nada de lista infinita).
     assert cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?limite=0").status_code == 422
     assert cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes?limite=5000").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Privacidade da régua: com poucos alunos o ``k`` não sai (mesmo corte do exemplo)
+# ---------------------------------------------------------------------------
+# Decisão já tomada no "Quer ver um exemplo?" da Pontuação
+# (``MINIMO_ALUNOS_REFERENCIA_MATIFIC``): abaixo do mínimo de alunos com
+# atividade, a mediana ``k`` praticamente revela a contagem de uma criança. As
+# premiações devolvem a régua a qualquer usuário da escola, então aplicam o MESMO
+# corte — sem mudar o índice nem a ordem, que continuam saindo do ``k`` real.
+
+_JOGADORES = [("Bia", 10, 45), ("Caio", 20, 70), ("Duda", 30, 120), ("Enzo", 40, 150),
+              ("Fabi", 50, 190)]
+
+
+def _jogaram(db, quantos):
+    esc, imp, turmas = _cenario(db)
+    for nome, atividades, estrelas in _JOGADORES[:quantos]:
+        _cresceu(db, esc, imp, _aluno(db, esc, turmas["manha"], nome),
+                 atividades, estrelas, 3.0)
+    db.commit()
+    return esc
+
+
+def test_abaixo_do_minimo_a_regua_nao_mostra_k_nem_os_zeros_extras(db):
+    quantos = premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC - 1
+    esc = _jogaram(db, quantos)
+    dados = _premiar(db, esc)
+    regua = dados["regua_matematica"]
+    assert regua["alunos_com_atividade"] == quantos
+    assert regua["k_mediana_atividades"] is None
+    assert regua["zeros_extras"] is None          # 20% do k: devolveria o k
+    assert regua["modo"] == "periodo" and regua["coorte"] == "escola"
+
+    # O índice e a ordem NÃO mudam: continuam saindo do k real da escola.
+    k_real = premiacoes.regua_matematica(
+        db, esc.id, datetime(2026, 8, 1), datetime(2026, 8, 31))["k_mediana_atividades"]
+    assert k_real == 25.0                          # mediana de 10, 20, 30, 40
+    esperado = sorted(((round(md.indice(a, e, k_real), 2), n)
+                       for n, a, e in _JOGADORES[:quantos]), reverse=True)
+    podio = _podio(dados, "melhor_matematica")
+    assert [(p["valor"], p["nome"]) for p in podio] == esperado
+
+
+def test_a_partir_do_minimo_a_regua_mostra_k(db):
+    esc = _jogaram(db, premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC)
+    regua = _premiar(db, esc)["regua_matematica"]
+    assert regua["alunos_com_atividade"] == premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC
+    assert regua["k_mediana_atividades"] == 30.0   # mediana de 10, 20, 30, 40, 50
+    assert regua["zeros_extras"] == 6.0
+
+
+def test_o_exemplo_e_as_premiacoes_usam_o_mesmo_minimo():
+    from app.routers import configuracoes
+    assert (configuracoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC
+            == premiacoes.MINIMO_ALUNOS_REFERENCIA_MATIFIC == 5)
+
+
+def test_endpoint_premiacoes_esconde_k_com_poucos_alunos(db, cliente, escola_completa):
+    escola = escola_completa["escola"]
+    imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(imp)
+    db.flush()
+    for aluno, atividades, estrelas in zip(escola_completa["alunos"], (10, 20, 30),
+                                           (40, 70, 120)):
+        _cresceu(db, escola, imp, aluno, atividades, estrelas, 3.0)
+    db.commit()
+
+    corpo = cliente.get(f"/api/v1/escolas/{escola.id}/premiacoes"
+                        "?periodo=personalizado&inicio=2026-08-01&fim=2026-08-31").json()
+    regua = corpo["regua_matematica"]
+    assert regua["alunos_com_atividade"] == 3
+    assert (regua["k_mediana_atividades"], regua["zeros_extras"]) == (None, None)
+    # O pódio continua lá, com o índice calculado pelo k real (mediana 20).
+    mm = _podio(corpo, "melhor_matematica")
+    assert [p["valor"] for p in mm] == sorted(
+        (round(md.indice(a, e, 20.0), 2) for a, e in [(10, 40), (20, 70), (30, 120)]),
+        reverse=True)

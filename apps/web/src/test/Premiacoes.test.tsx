@@ -293,6 +293,26 @@ describe("Premiações", () => {
     expect(screen.queryByText(/só entram atividades feitas dentro do período/)).toBeNull();
   });
 
+  // Com poucos alunos com atividade o backend devolve a régua SEM o `k` (e sem
+  // os zeros extras) — o mesmo corte de privacidade do exemplo da Pontuação.
+  // A tela não usa o `k`: pódio, valor e rodapé seguem iguais.
+  it("régua sem k (poucos alunos): o pódio da Matemática e o rodapé aparecem normalmente", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      turnos: [],
+      regua_matematica: { modo: "periodo", ano_letivo: 2026, coorte: "escola",
+                          inicio_efetivo: null, fim_efetivo: null,
+                          k_mediana_atividades: null, zeros_extras: null, alunos_com_atividade: 3 },
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Mat Manha")).toBeInTheDocument();
+    expect(screen.getByText("4,07 estrelas/atividade")).toBeInTheDocument();
+    expect(screen.getByText(/20% da mediana de atividades da escola/)).toBeInTheDocument();
+    expect(screen.queryByText(/null|NaN|undefined/)).toBeNull();
+  });
+
   it("escola sem turmas + turno guardado: evolução sem turno, seletor em 'Todos os turnos' e sem aviso", async () => {
     responder("GET", URL_TURMAS, []);
     responder("GET", URL_PREM, premiacoesResp({ categorias: categoriasTodos, turnos: [] }));

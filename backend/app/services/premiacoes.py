@@ -36,6 +36,13 @@ from app.services import dificuldade_livro, elegibilidade, matific_destaque, sco
 from app.services import turnos as svc_turnos
 from app.services.evolucao import _series_por_aluno
 
+# DECISÃO PROVISÓRIA (privacidade) — a MESMA do "Quer ver um exemplo?" da
+# Pontuação (``routers.configuracoes``, que reusa esta constante): com menos
+# alunos do que isto fazendo atividade no período, a mediana ``k`` da escola
+# praticamente revela a contagem de uma criança, e a régua devolvida pelas
+# premiações não a mostra. Mudar o número é decisão do dono.
+MINIMO_ALUNOS_REFERENCIA_MATIFIC = 5
+
 
 def _ordenar(valores: dict[int, float], alunos: dict[int, dict],
              desempate: dict[int, tuple] | None = None) -> list[tuple[int, float]]:
@@ -241,9 +248,10 @@ def _matematica_no_periodo(db: Session, escola_id: int, coorte: dict[int, dict],
 
 def regua_matematica(db: Session, escola_id: int, inicio: datetime | None,
                      fim: datetime | None) -> dict:
-    """A RÉGUA da "Melhor Matemática" da escola no período — exatamente o dict
-    que ``premiacoes()`` devolve em ``regua_matematica`` (``k_mediana_atividades``,
-    ``zeros_extras``, ``alunos_com_atividade``, ``modo``, janela efetiva).
+    """A RÉGUA da "Melhor Matemática" da escola no período — o dict que
+    ``premiacoes()`` devolve em ``regua_matematica`` (``k_mediana_atividades``,
+    ``zeros_extras``, ``alunos_com_atividade``, ``modo``, janela efetiva), aqui
+    SEM o corte de privacidade (``_regua_publicada``): quem chama aplica o dele.
 
     Mesma coorte (``_alunos_ativos`` da escola inteira, 1º–5º ano, ano letivo
     ativo) e mesmo cálculo (``_matematica_no_periodo``): é a mesma régua por
@@ -256,6 +264,16 @@ def regua_matematica(db: Session, escola_id: int, inicio: datetime | None,
     coorte = _alunos_ativos(db, escola_id, ano, None)
     _por_aluno, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
     return regua
+
+
+def _regua_publicada(regua: dict) -> dict:
+    """A régua como as premiações a DEVOLVEM: abaixo de
+    ``MINIMO_ALUNOS_REFERENCIA_MATIFIC`` alunos com atividade, sem o ``k`` e sem
+    os ``zeros_extras`` (20% do ``k`` — devolver um é devolver o outro). Só a
+    descrição muda: os índices, a ordem e o desempate já saíram do ``k`` real."""
+    if int(regua.get("alunos_com_atividade") or 0) >= MINIMO_ALUNOS_REFERENCIA_MATIFIC:
+        return regua
+    return {**regua, "k_mediana_atividades": None, "zeros_extras": None}
 
 
 def _categoria(chave: str, titulo: str, icone: str, descricao: str, unidade: str,
@@ -320,7 +338,8 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
 
     resultado: dict = {
         "categorias": _categorias(alunos, livros, pontos, tempo, matematica, limite),
-        "regua_matematica": regua,
+        # Abaixo do mínimo de alunos o ``k`` não sai (ver ``_regua_publicada``).
+        "regua_matematica": _regua_publicada(regua),
     }
 
     # Quebra por TURNO (só na visão "todas as turmas"): agrupa os MESMOS dados já
