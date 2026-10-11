@@ -164,6 +164,67 @@ def dificuldade_livro_vigente(
     return saida
 
 
+# --- A regra da nota, como o MOTOR a aplica nesta escola ----------------------
+
+@router.get("/pontuacao/regra")
+def regra_da_pontuacao(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+):
+    """A regra da nota DESTA escola, lida das mesmas funções do recálculo — a
+    fonte única da explicação (Suporte e "Como funciona?"). Nada aqui é editável
+    nem calcula aluno algum: perfil (institucional da rede ou personalizado
+    autorizado pelo Admin Global), módulos contratados, pesos EFETIVOS de cada
+    dimensão (``scoring.pesos_efetivos`` — no perfil institucional os fixos da
+    rede, ignorando a configuração local, como o motor), versões (composição por
+    dimensão e régua de dificuldade dos livros) e a normalização em uso.
+
+    Sem dado de aluno: qualquer usuário da escola lê (professor inclusive — é a
+    regra da nota que ele explica às famílias); a Secretaria, por GET, nas
+    escolas da rede dela. Não exige módulo: a resposta diz o que está contratado
+    em vez de esconder."""
+    escola = db.get(Escola, escola_id)
+    personalizado = scoring._scoring_personalizado(db, escola_id)
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+
+    def percentuais(namespace: str) -> dict[str, float]:
+        return scoring.pesos_efetivos(db, escola_id, namespace)[1]
+
+    modo = "auto"
+    if personalizado:
+        # Só o perfil personalizado lê o modo da escola (o institucional é sempre
+        # automático — ``scoring.contexto_normalizacao``).
+        ref = db.execute(select(ReferenciaNormalizacao).where(
+            ReferenciaNormalizacao.escola_id == escola_id)).scalar_one_or_none()
+        modo = ref.modo if ref is not None and ref.modo in ("auto", "manual") else "auto"
+    return {
+        "perfil": "personalizado" if personalizado else "institucional",
+        "versoes": {
+            "composicao": scoring.COMPOSICAO_ATUAL,
+            "dificuldade": dificuldade_livro.regra_da_escola(db, escola_id).versao,
+            "dificuldade_da_rede": dificuldade_livro.VERSAO_VIGENTE,
+        },
+        "dimensoes": [
+            {"dimensao": "leitura", "plataforma": "elefante",
+             "contratada": "leitura" in contratadas,
+             "pesos": percentuais("pesos.elefante"),
+             "subpesos_questoes": percentuais("pesos.questoes")},
+            {"dimensao": "matematica", "plataforma": "matific",
+             "contratada": "matematica" in contratadas,
+             "pesos": percentuais("pesos.matific")},
+        ],
+        "normalizacao": {
+            "modo": modo,
+            # Referência = percentil 90 dos alunos com dado (>0) quando a
+            # dimensão tem amostra; abaixo disso, o maior valor.
+            "percentil_referencia": round(scoring.PERCENTIL_REFERENCIA * 100),
+            "minimo_alunos_percentil": scoring.MIN_ALUNOS_ROBUSTO,
+            # Volume com retorno decrescente (x / (x + k), k = mediana).
+            "indicadores_volume": sorted(scoring.INDICADORES_VOLUME),
+        },
+    }
+
+
 # --- "Quer ver um exemplo?" — a conta REAL de um caso, por plataforma ---------
 #
 # Somente leitura e sem nenhum dado de aluno. Cada rota chama a MESMA função que

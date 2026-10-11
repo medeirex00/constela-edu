@@ -88,7 +88,9 @@ ROTAS_GET = ["pesos/geral", "pesos/elefante", "pesos/matific", "referencias",
              "dificuldade-livro",
              # "Quer ver um exemplo?" da página Pontuação (só leitura).
              "pontuacao/exemplo/elefante?nivel=D&serie=3",
-             "pontuacao/exemplo/matific?atividades=10&estrelas=30"]
+             "pontuacao/exemplo/matific?atividades=10&estrelas=30",
+             # A regra da nota como o motor a aplica (Suporte / "Como funciona?").
+             "pontuacao/regra"]
 
 
 # --------------------------------------------------------------------------
