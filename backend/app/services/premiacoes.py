@@ -239,6 +239,25 @@ def _matematica_no_periodo(db: Session, escola_id: int, coorte: dict[int, dict],
     return matematica, descricao_regua
 
 
+def regua_matematica(db: Session, escola_id: int, inicio: datetime | None,
+                     fim: datetime | None) -> dict:
+    """A RÉGUA da "Melhor Matemática" da escola no período — exatamente o dict
+    que ``premiacoes()`` devolve em ``regua_matematica`` (``k_mediana_atividades``,
+    ``zeros_extras``, ``alunos_com_atividade``, ``modo``, janela efetiva).
+
+    Mesma coorte (``_alunos_ativos`` da escola inteira, 1º–5º ano, ano letivo
+    ativo) e mesmo cálculo (``_matematica_no_periodo``): é a mesma régua por
+    construção, não uma cópia. Serve o "Quer ver um exemplo?" da Pontuação, que
+    explica o índice com o ``k`` REAL da escola sem expor nenhum aluno — por isso
+    só a régua sai daqui, nunca os índices por aluno. NÃO grava nada e ignora o
+    contrato de módulos (quem chama já exige ``matematica``)."""
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo
+    coorte = _alunos_ativos(db, escola_id, ano, None)
+    _por_aluno, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
+    return regua
+
+
 def _categoria(chave: str, titulo: str, icone: str, descricao: str, unidade: str,
                valores: dict, alunos: dict[int, dict], limite: int,
                desempate: dict[int, tuple] | None = None,
