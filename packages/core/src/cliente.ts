@@ -103,8 +103,11 @@ async function buscar(url: string, init: RequestInit): Promise<Response> {
     // ("AbortError") precisa PROPAGAR para o chamador — o useApi mapeia o
     // timeout para 408 ("A conexão demorou demais") e ignora o abort. Sem esta
     // ponte, uma requisição lenta era rotulada como "sem internet".
-    if (erro instanceof DOMException
-        && (erro.name === "TimeoutError" || erro.name === "AbortError")) {
+    // Compara pelo NOME, não por `instanceof DOMException`: o React Native
+    // (Hermes) não tem DOMException global — ler o identificador lançava
+    // ReferenceError — e o abort do fetch dele usa um DOMException local.
+    const nome = (erro as { name?: unknown } | null)?.name;
+    if (nome === "TimeoutError" || nome === "AbortError") {
       throw erro;
     }
     // Falha de REDE real (offline, DNS, CORS, servidor fora) — um TypeError em
