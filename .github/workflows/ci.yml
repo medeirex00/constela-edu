@@ -44,6 +44,28 @@ jobs:
           npm run typecheck --workspace @constela/quest-core
           npm run typecheck --workspace @constela/mobile
 
+  # O job acima para no ruff (erros preexistentes no backend) e aí o typecheck
+  # nunca roda. Este job dá ao typecheck do core/quest-core/mobile e aos testes
+  # do @constela/core um resultado próprio, sem afrouxar o ruff.
+  typecheck:
+    name: Typecheck (core, quest-core, mobile) + testes do core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+      - name: Typecheck (core, quest-core, mobile)
+        run: |
+          npm run typecheck --workspace @constela/core
+          npm run typecheck --workspace @constela/quest-core
+          npm run typecheck --workspace @constela/mobile
+      - name: Testes do @constela/core (cliente HTTP compartilhado)
+        run: npm run test --workspace @constela/core
+
   test-backend:
     name: Testes backend (pytest + cobertura)
     runs-on: ubuntu-latest
