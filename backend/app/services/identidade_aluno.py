@@ -12,11 +12,17 @@ Ordem (mais forte primeiro — ver ``decidir``):
      escola cadastrou a turma SEM a letra, a sala do relatório é reconhecida pela
      SÉRIE se houver uma única turma ativa dela — ``Contexto.sala_efetiva``): nome
      idêntico único → chamada/RA/nascimento corroborando → candidato ÚNICO
-     estruturalmente plausível (``matching.classificar_linha``);
+     estruturalmente plausível (``matching.classificar_linha``, com a variação de
+     grafia SEGURA do nome do meio — o mesmo critério da Lista Piloto) → ficha
+     oficial da Lista Piloto × duplicata dela na sala, de nome igual ou
+     abreviado (``_oficial_entre_duplicatas``);
   4. homônimo EXATO fora da sala (outra turma, outra série) → revisão, nunca
      vínculo;
   5. revisão sempre que houver candidato e nenhum for seguro;
   6. criação SÓ quando não houver candidato algum.
+
+O nome RECEBIDO entra no casamento sem os tokens que contêm dígito (o sufixo de
+turma que o professor digita junto do nome, "… 2B") — ``_nome_para_casar``.
 
 Nunca escolhe "o primeiro" candidato, nunca funde fichas (fusão é ação
 administrativa explícita) e nunca cria ficha nova quando a identidade externa
@@ -30,6 +36,7 @@ Quem grava é o router — inclusive a fila de revisão (``RevisaoIdentidade``).
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, replace
 from datetime import date
 
@@ -39,7 +46,7 @@ from sqlalchemy.orm import Session
 from app.models import Aluno, Escola, IdentidadeExterna, Matricula, Turma
 from app.models.academico import RevisaoIdentidade
 from app.services import matching
-from app.services.importacao import chave_nome
+from app.services.importacao import chave_nome, tokens_nome
 from app.services.lista_piloto import ra_util
 
 ASSOCIAR = "associar"   # dados vão para uma ficha existente
@@ -173,6 +180,10 @@ class Decisao:
     turma_id: int | None = None        # onde criar (CRIAR) / turma da sala (REVISAR)
     chave_sala: str = ""
     vetados: tuple[int, ...] = ()      # nome casava, identidade provou outra criança
+    # Desempate "oficial × duplicata" (passo 3c): as fichas da sala que ERAM
+    # candidatas e foram deixadas de lado — o rastro de quem perdeu, para auditoria
+    # (``candidatos`` de um ASSOCIAR só traz o escolhido).
+    preteridos: tuple[int, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +206,19 @@ class Contexto:
     turma_de: dict[int, int] = field(default_factory=dict)
     por_nome: dict[str, set[int]] = field(default_factory=dict)
     por_ra: dict[str, set[int]] = field(default_factory=dict)
-    # decisões de revisão já tomadas por um humano, por chave de identidade
+    # decisões de revisão já tomadas por um humano, por chave de identidade. As
+    # revisões ENCERRADAS PELO SISTEMA (``resolucao.automatica``) não entram ao
+    # carregar: valem só dentro da importação que as encerrou — ver
+    # ``carregar_contexto``.
     resolvidas: dict[str, int] = field(default_factory=dict)
+    # Revisões PENDENTES da escola por chave de identidade → ids (as "irmãs" de
+    # formato — resumo, leituras, períodos do Matific — ficam na mesma lista).
+    # Lidas UMA vez: na primeira linha ASSOCIADA de uma identidade, o router
+    # avalia as pendências dela, encerra as que essa linha respondeu (as do MESMO
+    # tipo de dado) e retira todas daqui — já avaliadas nesta importação —, sem
+    # uma consulta por linha numa sincronização de milhares
+    # (``importacoes._encerrar_revisoes_respondidas``).
+    pendentes: dict[str, list[int]] = field(default_factory=dict)
     # Identidades APOSENTADAS: (plataforma, id_externo) → aluno_id. Continuam
     # provando de quem era o id externo, mas estão FORA de ``identidade`` e de
     # ``ids_do_aluno`` — não casam, não contam e não voltam sozinhas.
@@ -359,13 +381,28 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
             ctx.aposentadas[(plataforma, str(id_externo))] = aluno_id
             continue
         ctx.vincular(aluno_id, plataforma, str(id_externo))
-    for chave_ident, aluno_id in db.execute(
-            select(RevisaoIdentidade.chave_identidade, RevisaoIdentidade.aluno_escolhido_id)
+    for chave_ident, aluno_id, resolucao in db.execute(
+            select(RevisaoIdentidade.chave_identidade, RevisaoIdentidade.aluno_escolhido_id,
+                   RevisaoIdentidade.resolucao)
             .where(RevisaoIdentidade.escola_id == escola_id,
                    RevisaoIdentidade.status == "resolvida",
                    RevisaoIdentidade.aluno_escolhido_id.is_not(None))
             .order_by(RevisaoIdentidade.resolvida_em, RevisaoIdentidade.id)).all():
+        # Revisão ENCERRADA PELO SISTEMA não vira memória: a escolha dela só
+        # repete a regra que a fez, e a regra roda de novo a cada linha. Se ela
+        # entrasse aqui, valeria como confirmação humana — a guarda de ficha
+        # inativa (``_confirmado_por_humano``) deixaria de abrir revisão e um
+        # homônimo novo na sala não reabriria a dúvida. A linha com conta da
+        # plataforma continua estável pelo vínculo gravado na ficha.
+        if isinstance(resolucao, dict) and resolucao.get("automatica") is True:
+            continue
         ctx.resolvidas[chave_ident] = aluno_id
+    for chave_ident, revisao_id in db.execute(
+            select(RevisaoIdentidade.chave_identidade, RevisaoIdentidade.id)
+            .where(RevisaoIdentidade.escola_id == escola_id,
+                   RevisaoIdentidade.status == "pendente")
+            .order_by(RevisaoIdentidade.id)).all():
+        ctx.pendentes.setdefault(chave_ident, []).append(revisao_id)
     return ctx
 
 
@@ -446,6 +483,146 @@ def _turma_para_criar(ctx: Contexto, linha: LinhaIdentidade, chave: str
     return None, "turma_ambigua"
 
 
+# Sufixo de TURMA que o professor digita junto do nome: série (1–2 dígitos), o
+# ordinal opcional e a letra da sala — "2B", "4A", "2ºB" ("2°B" já chega como "2b":
+# ``tokens_nome`` tira o símbolo de grau). Número PURO ("… SOUZA 2") não é sufixo
+# de turma: pode ser o número que a escola usa para separar dois homônimos.
+_SUFIXO_TURMA = re.compile(r"\d{1,2}[ºª]?[a-z]")
+# O mesmo sufixo GRUDADO no último nome ("PINTO2B"): sai só o sufixo.
+_SUFIXO_TURMA_COLADO = re.compile(r"([a-z]{2,})(\d{1,2}[ºª]?[a-z])")
+
+
+def _nome_para_casar(nome: str) -> str:
+    """O nome RECEBIDO como ele entra no CASAMENTO: sem o sufixo de TURMA. O
+    professor do Elefante às vezes digita a turma junto do nome ("… RIBEIRO 2B",
+    "… BRIET 4A"); esse sufixo não é nome de criança e, mantido, transformava o nome
+    idêntico da ficha em "nome parcial" — revisão a cada sincronização.
+
+    Só sai o que tem forma de sufixo de turma (``_SUFIXO_TURMA``), como token
+    separado ou grudado no fim de um nome ("PINTO2B" → "PINTO"). Qualquer outro
+    token com dígito fica: um número puro ("… SOUZA 2") pode distinguir homônimos
+    e, se sumisse, o dado da 2ª criança iria para a ficha da 1ª.
+
+    Vale SÓ para decidir de quem é a linha: o nome exibido, o gravado na revisão e
+    o da chave da identidade (``chave_identidade``, memória das decisões humanas)
+    continuam os recebidos. Sem sufixo de turma — ou quando só sobraria o sufixo —
+    devolve o nome intacto, e nada muda."""
+    tokens = tokens_nome(nome)
+    limpos: list[str] = []
+    for t in tokens:
+        if _SUFIXO_TURMA.fullmatch(t):
+            continue
+        colado = _SUFIXO_TURMA_COLADO.fullmatch(t)
+        limpos.append(colado.group(1) if colado else t)
+    if not limpos or limpos == tokens:
+        return nome
+    return " ".join(limpos)
+
+
+# Vínculos do motor que vêm de VARIAÇÃO DE GRAFIA (não de nome idêntico, abreviação,
+# subconjunto ou identificador) — os que a plataforma passou a aceitar (A).
+_VIA_GRAFIA = ("variante", "typo")
+
+
+def _grafia_num_token_so(nome_a: str, nome_b: str) -> bool:
+    """A variação de grafia está em UM token só (mesmo nº de tokens, um diferente)?
+    O motor aceita até dois tokens do meio diferentes (``variante_ortografica``);
+    na plataforma o vínculo automático por grafia vale para UM — "MARIA HELOISA
+    SOUSA LIMA" × "MARIA ELOISA SOUZA LIMA" (dois nomes do meio trocados) é revisão."""
+    ta, tb = tokens_nome(nome_a), tokens_nome(nome_b)
+    return len(ta) == len(tb) and sum(1 for x, y in zip(ta, tb) if x != y) == 1
+
+
+def _homonimos_fora_da_sala(ctx: Contexto, ident: matching.Identidade, alvo_nome: str,
+                            na_sala: set[int]) -> list[Aluno]:
+    """Fichas (não excluídas) de nome IDÊNTICO ao recebido FORA da sala, sem
+    identificador que prove ser outra criança. A chamada não conta: é numeração da
+    sala, e fora dela não veta nem corrobora nada."""
+    fora: list[Aluno] = []
+    for aid in sorted(ctx.por_nome.get(alvo_nome, ())):
+        a = ctx.ativo(aid)
+        if a is None or aid in na_sala:
+            continue
+        if matching.conflito_identidade(replace(ident, chamada=None),
+                                        replace(identidade_do_aluno(a), chamada=None)):
+            continue
+        fora.append(a)
+    return fora
+
+
+def _revisar_homonimo_fora(fora: list[Aluno], da_sala: tuple[int, ...], via: str,
+                           chave: str) -> Decisao:
+    """Nome IDÊNTICO em outra sala × nome só PARECIDO na sala: a prova mais forte
+    está fora da sala, a sala da plataforma pode estar errada — quem decide é gente,
+    vendo as duas fichas (e a triagem, com 2+ candidatos, não chama de "segura")."""
+    ids = tuple(dict.fromkeys((*(a.id for a in fora), *da_sala)))
+    return Decisao(REVISAR, fora[0].id, via, "homonimo_em_outra_sala", ids, chave_sala=chave)
+
+
+def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
+                              ident: matching.Identidade,
+                              candidatos: tuple[int, ...]) -> tuple[Aluno, str] | None:
+    """Desempate DETERMINÍSTICO "ficha oficial × duplicata dela", na sala.
+
+    O padrão real (escola 1, 2ºB; aqui com nome fictício): a ficha OFICIAL da
+    Lista Piloto "LARISSA VITORIA MENEZES COSTA" e, na mesma sala, a ficha
+    "LARISSA V" que a sincronização do Matific criou quando só recebia o nome
+    abreviado. O Elefante manda o nome completo com um typo no meio ("MENEZEZ"),
+    os dois viram candidatos e a linha ia para a revisão a cada sincronização — o
+    dado da criança ficava parado. A ficha abreviada não é uma segunda criança
+    plausível para ESSA linha: é a sombra da oficial.
+
+    Devolve (O, como a linha casa com O) SOMENTE quando TODAS as condições valem:
+      1. exatamente UM candidato é da Lista Piloto — e ele está ativo (é O);
+      2. a linha casaria com O SOZINHA pelo critério de candidato único da
+         plataforma (o mesmo ``matching.classificar_linha`` do passo 3b: nome
+         exato/abreviação, grafia diferente em UM nome do meio ou subconjunto
+         estrutural);
+      3. cada OUTRO candidato S está fora da Lista Piloto, tem nome igual ao de O
+         ou forma curta/abreviação dele (``matching.plausivel`` == 'forte' — nome
+         parcial ou com grafia diferente NÃO serve), não tem identificador que
+         prove ser outra criança (RA/nascimento/chamada divergentes dos de O) e
+         NÃO tem conta nesta mesma plataforma — se tem, pode ser a conta de outra
+         criança, e quem decide é gente.
+    Qualquer outra situação (duas fichas da Lista Piloto, ficha fora da lista sem
+    dono compatível na Lista Piloto, identificador divergente, conta própria)
+    devolve None e a linha segue para a revisão de sempre. O chamador ainda
+    confere o nome idêntico em OUTRA sala (``_homonimos_fora_da_sala``). Nada é
+    fundido: a duplicata continua existindo, com a conta dela, até a fusão
+    administrativa."""
+    if len(candidatos) < 2 or not linha.plataforma:
+        return None
+    alunos = [ctx.alunos.get(i) for i in candidatos]
+    if any(a is None for a in alunos):
+        return None
+    da_lista = [a for a in alunos if a.da_lista_piloto]
+    if len(da_lista) != 1 or da_lista[0].status != "ativo":
+        return None
+    oficial = da_lista[0]
+    id_oficial = identidade_do_aluno(oficial)
+    sozinha = matching.classificar_linha(ident, [id_oficial], permitir_subconjunto_unico=True,
+                                         vincular_variante=True)
+    if sozinha.status != matching.VINCULADO or sozinha.aluno_id != oficial.id:
+        return None
+    if sozinha.motivo in _VIA_GRAFIA and not _grafia_num_token_so(ident.nome, oficial.nome):
+        return None
+    # Conta APOSENTADA nesta plataforma também conta como "tem conta": a escola já
+    # olhou para aquela ficha e decidiu algo sobre ela — não é sombra anônima.
+    com_conta_aposentada = {aid for (plat, _), aid in ctx.aposentadas.items()
+                            if plat == linha.plataforma}
+    for sombra in alunos:
+        if sombra.id == oficial.id:
+            continue
+        if matching.plausivel(sombra.nome, oficial.nome) != "forte":
+            return None
+        if matching.conflito_identidade(identidade_do_aluno(sombra), id_oficial):
+            return None
+        if (ctx.ids_do_aluno.get((sombra.id, linha.plataforma))
+                or sombra.id in com_conta_aposentada):
+            return None
+    return oficial, sozinha.motivo
+
+
 def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     """A decisão ÚNICA (prévia = confirmação). Só lê ``ctx``."""
     # A SALA da linha. Turma escolhida explicitamente manda; senão vale a do
@@ -521,21 +698,25 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     if anterior is not None:
         return _para_aluno(ctx, linha, anterior, "revisao", chave, chave_alt=chave_alt)
 
+    # Daqui em diante o NOME decide: entra o recebido sem o sufixo de turma com
+    # dígito ("… 2B"). A linha (nome exibido/gravado, chave da identidade) não muda.
+    nome_casar = _nome_para_casar(linha.nome)
+
     # 2) RA (identificador forte da escola inteira).
     ra = ra_forte(linha.ra)
     if ra:
         from app.services.matriculas import nomes_compativeis
         por_ra = [ctx.alunos[i] for i in sorted(ctx.por_ra.get(ra, ()))
-                  if nomes_compativeis(linha.nome, ctx.alunos[i].nome)]
+                  if nomes_compativeis(nome_casar, ctx.alunos[i].nome)]
         if len(por_ra) == 1:
             return _para_aluno(ctx, linha, por_ra[0], "ra", chave, chave_alt=chave_alt)
         if len(por_ra) > 1:
             ids = tuple(a.id for a in por_ra)
             return Decisao(REVISAR, ids[0], "ra", "ra_repetido", ids, chave_sala=chave)
 
-    ident = matching.Identidade(nome=linha.nome, chamada=linha.chamada,
+    ident = matching.Identidade(nome=nome_casar, chamada=linha.chamada,
                                 nascimento=linha.nascimento, ra=ra)
-    alvo_nome = chave_nome(linha.nome)
+    alvo_nome = chave_nome(nome_casar)
     sala_conhecida = bool(chave) and (
         linha.turma_id is not None or chave in ctx.turmas_da_sala or _sala_parseavel(chave))
 
@@ -553,13 +734,51 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
             return _para_aluno(ctx, linha, ctx.alunos[exatos[0].id], "exato", chave,
                                chave_alt=chave_alt)
         # 3b) Motor único: chamada/RA/nascimento corroborando, candidato único
-        # estruturalmente plausível, ou revisão.
+        # estruturalmente plausível, ou revisão. A variação de grafia SEGURA de
+        # candidato único ("RICADO"/"RICARDO": 1º nome e último sobrenome idênticos)
+        # associa — decisão do dono, o MESMO critério que a Lista Piloto já usa
+        # (``matching.vincula_por_nome_unico``), com duas travas a mais aqui:
+        #   * a grafia difere em UM nome do meio só (o motor aceita dois) — com dois,
+        #     revisão como antes;
+        #   * nome IDÊNTICO em OUTRA sala vence o nome só parecido desta: revisão
+        #     "homonimo_em_outra_sala" com as fichas das duas salas.
+        # Variação no sobrenome ou no 1º nome (SOUZA/SOUSA, BRUNO/BRUNA) continua
+        # em revisão.
         res = matching.classificar_linha(ident, roster, permitir_subconjunto_unico=True,
-                                         vincular_variante=False)
+                                         vincular_variante=True)
+        if (res.status == matching.VINCULADO and res.motivo in _VIA_GRAFIA
+                and res.aluno_id in ctx.alunos
+                and not _grafia_num_token_so(nome_casar, ctx.alunos[res.aluno_id].nome)):
+            # Mesma decisão de antes da mudança: revisão do candidato único.
+            res = replace(res, status=matching.REVISAR)
         if res.status == matching.VINCULADO and res.aluno_id in ctx.alunos:
+            if res.motivo in _VIA_GRAFIA:
+                homonimos = _homonimos_fora_da_sala(ctx, ident, alvo_nome, na_sala)
+                if homonimos:
+                    return _revisar_homonimo_fora(homonimos, res.candidatos, res.motivo,
+                                                  chave)
             return _para_aluno(ctx, linha, ctx.alunos[res.aluno_id], res.motivo, chave,
                                chave_alt=chave_alt)
         if res.status == matching.REVISAR:
+            # 3c) Ficha oficial da Lista Piloto × duplicata abreviada dela na sala:
+            # desempate determinístico, com as guardas de sempre (``_para_aluno``:
+            # ficha inativa, outra conta nesta plataforma → revisão). Se a linha não
+            # casa com a oficial por nome IDÊNTICO, um homônimo exato em outra sala
+            # manda para a revisão — o desempate é novo e não arrisca.
+            desempate = _oficial_entre_duplicatas(ctx, linha, ident, res.candidatos)
+            if desempate is not None:
+                oficial, como = desempate
+                if como != "exato":
+                    homonimos = _homonimos_fora_da_sala(ctx, ident, alvo_nome, na_sala)
+                    if homonimos:
+                        return _revisar_homonimo_fora(homonimos, res.candidatos, res.motivo,
+                                                      chave)
+                dec = _para_aluno(ctx, linha, oficial, "lista_piloto_unica", chave,
+                                  candidatos=res.candidatos, chave_alt=chave_alt)
+                if dec.acao == ASSOCIAR:
+                    dec = replace(dec, preteridos=tuple(
+                        i for i in res.candidatos if i != oficial.id))
+                return dec
             motivo = ("candidatos_multiplos" if len(res.candidatos) > 1
                       else "correspondencia_insegura")
             return Decisao(REVISAR, res.aluno_id, res.motivo, motivo, res.candidatos,
@@ -570,15 +789,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     # excluído). Com a sala conhecida ele NÃO casa — é revisão (pode ser a mesma
     # criança que mudou de sala, ou outra criança). Sem sala utilizável, o nome
     # idêntico ÚNICO na escola é a melhor evidência que existe.
-    fora = []
-    for aid in sorted(ctx.por_nome.get(alvo_nome, ())):
-        a = ctx.ativo(aid)
-        if a is None or aid in na_sala:
-            continue
-        if matching.conflito_identidade(replace(ident, chamada=None),
-                                        replace(identidade_do_aluno(a), chamada=None)):
-            continue
-        fora.append(a)
+    fora = _homonimos_fora_da_sala(ctx, ident, alvo_nome, na_sala)
     if fora:
         ids = tuple(a.id for a in fora)
         if not sala_conhecida and len(fora) == 1:

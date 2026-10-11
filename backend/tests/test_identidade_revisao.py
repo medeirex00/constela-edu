@@ -254,17 +254,28 @@ def test_matching_subconjunto_so_estrutural():
         permitir_subconjunto_unico=True).status == matching.REVISAR
 
 
-def test_variante_de_grafia_sem_corroboracao_vai_para_revisao(db, sala):
-    """"RICADO" × "RICARDO" (typo no nome do meio, pontas iguais): parecido não é
-    prova. Na plataforma não associa só pelo nome — revisão."""
-    esc, mathias = sala["escola"], sala["mathias"]
-    linha = _matific("MATHIAS RICADO RODRIGUES MARADEI", "5ºA", "u-ricado")
+def test_variante_de_grafia_segura_no_nome_do_meio_associa(db, sala):
+    """"RICADO" × "RICARDO" (typo num nome do MEIO, 1º nome e último sobrenome
+    idênticos, candidato ÚNICO na sala) → ASSOCIA.
+
+    MUDANÇA DE DECISÃO EXPLÍCITA DO DONO (2026-10-07): até aqui a plataforma
+    exigia revisão nesse caso (``vincular_variante=False``) e o dado da criança
+    ficava parado a cada sincronização (caso real do Elefante, escola 1). Agora a
+    plataforma usa o MESMO critério único já aprovado para a Lista Piloto em
+    04/08 (``matching.vincula_por_nome_unico``). A variação no sobrenome ou no 1º
+    nome continua em revisão — ver ``test_identidade_automatica.py``."""
+    esc = sala["escola"]
+    otavio = _aluno(db, esc, sala["turma"], "OTAVIO RICARDO MENDES FARIAS")
+    db.commit()
+    linha = _matific("OTAVIO RICADO MENDES FARIAS", "5ºA", "u-ricado")
     [corr] = _previa(db, esc, "matific", [linha])
-    assert corr["status"] == "revisar" and corr["aluno_id"] == mathias.id
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", otavio.id,
+                                                              "variante")
     antes = _n_alunos(db, esc)
     r = _confirmar(db, esc, sala["admin"], "matific", [linha])
-    assert r.qtd_revisoes == 1 and _n_alunos(db, esc) == antes
-    assert _snap_matific(db, mathias.id) is None
+    assert (r.qtd_alunos, r.qtd_revisoes) == (1, 0) and _n_alunos(db, esc) == antes
+    assert _snap_matific(db, otavio.id) is not None
+    assert _dono(db, esc, "matific", "u-ricado") == otavio.id
 
 
 def test_nome_que_so_casa_em_outra_turma_nao_vira_ficha_stub(db, sala):
