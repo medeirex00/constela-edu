@@ -30,7 +30,8 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, evolucao
+from app.services import dificuldade_livro, evolucao, scoring
+from app.services import dimensoes as svc_dimensoes
 
 DIAS_SEM_ATIVIDADE = 30
 QUEDA_ACERTOS_PONTOS = 15.0
@@ -208,17 +209,28 @@ def alertas_da_escola(db: Session, escola_id: int,
     # MEDIANA da turma para o alerta "muito abaixo da turma" — robusta a
     # outlier: um aluno excepcional não infla a referência nem empurra colegas
     # normais para o alerta (a média aritmética fazia exatamente isso).
-    mediana_turma: dict[int, float] = {}
+    #
+    # POR DIMENSÃO (Arquitetura 2, docs/spec-arquitetura-2.md, "ausência nunca
+    # vira zero ... nem no alerta 'abaixo da turma'"): a mediana é só entre os
+    # AFERIDOS daquela dimensão, e o aluno só é comparado nas dimensões em que
+    # ele próprio foi aferido. Antes era a mediana de `nota_geral` (legado) da
+    # turma inteira: os zeros de quem nunca teve dado puxavam a referência para
+    # baixo e o próprio aluno sem dado disparava "está com nota 0,0".
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+    mediana_turma: dict[int, dict[str, float]] = {}
     alunos_por_turma: dict[int, list[int]] = {}
     for matricula, turma in matriculas:
         alunos_por_turma.setdefault(turma.id, []).append(matricula.aluno_id)
     for turma_id, ids in alunos_por_turma.items():
-        com_nota = sorted(notas[i].nota_geral for i in ids if i in notas)
-        if not com_nota:
-            mediana_turma[turma_id] = 0.0
-        else:
+        mediana_turma[turma_id] = {}
+        for dimensao in contratadas:
+            coluna, marca, _ = svc_dimensoes.COLUNAS[dimensao]
+            com_nota = sorted(getattr(notas[i], coluna) or 0.0 for i in ids
+                              if i in notas and getattr(notas[i], marca))
+            if not com_nota:
+                continue
             meio = len(com_nota) // 2
-            mediana_turma[turma_id] = (
+            mediana_turma[turma_id][dimensao] = (
                 com_nota[meio] if len(com_nota) % 2
                 else (com_nota[meio - 1] + com_nota[meio]) / 2
             )
@@ -261,15 +273,23 @@ def alertas_da_escola(db: Session, escola_id: int,
                     "texto": f"{nome} caiu de {anterior}% para {atual}% de acertos nas questões.",
                 })
 
+        # Um alerta POR DIMENSÃO, só nas que o aluno foi aferido: "abaixo da
+        # turma em Leitura" é acionável; sem dizer em quê, não era.
         nota = notas.get(aluno_id)
-        mediana = mediana_turma.get(turma.id, 0.0)
-        if nota and mediana > 0 and nota.nota_geral < mediana * FRACAO_ABAIXO_TURMA:
-            alertas.append({
-                "tipo": "abaixo_da_turma", "gravidade": "media",
-                "aluno_id": aluno_id, "nome": nome, "turma": turma.nome,
-                "texto": (f"{nome} está com nota {nota.nota_geral:.1f}, "
-                          f"menos da metade da mediana da turma ({mediana:.1f})."),
-            })
+        for dimensao, mediana in mediana_turma.get(turma.id, {}).items():
+            coluna, marca, _ = svc_dimensoes.COLUNAS[dimensao]
+            if not nota or not getattr(nota, marca) or mediana <= 0:
+                continue
+            valor = getattr(nota, coluna) or 0.0
+            if valor < mediana * FRACAO_ABAIXO_TURMA:
+                alertas.append({
+                    "tipo": "abaixo_da_turma", "gravidade": "media",
+                    "aluno_id": aluno_id, "nome": nome, "turma": turma.nome,
+                    "dimensao": dimensao,
+                    "texto": (f"{nome} está com nota {valor:.1f} em "
+                              f"{svc_dimensoes.ROTULOS[dimensao]}, menos da metade "
+                              f"da mediana da turma ({mediana:.1f})."),
+                })
 
     ordem = {"alta": 0, "media": 1, "baixa": 2}
     alertas.sort(key=lambda alerta: (ordem.get(alerta["gravidade"], 9), alerta["nome"]))

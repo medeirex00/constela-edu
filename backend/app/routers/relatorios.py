@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Matricula, Nota, Turma, Usuario
+from app.services import dimensoes as svc_dimensoes
 from app.services import elegibilidade
 from app.services import modulos as svc_modulos
 from app.services import permissoes
@@ -310,10 +311,15 @@ def certificado(
     ).scalar_one_or_none()
 
     def _geral() -> bytes:
-        # Certificado de MÉRITO: sem nota calculada (aluno recém-cadastrado, import
-        # ainda não recalculado, ou sem dado de plataforma) NÃO se emite — um
-        # documento oficial com brasão afirmando "nota geral 0,0" é constrangedor.
-        if nota is None or (nota.nota_geral or 0.0) <= 0:
+        # Certificado de MÉRITO: sem desempenho aferido (aluno recém-cadastrado,
+        # import ainda não recalculado, ou sem dado de plataforma) NÃO se emite —
+        # um documento oficial com brasão afirmando "0,0" é constrangedor. A
+        # guarda lê as DIMENSÕES (contratada, aferida e com nota > 0), não o
+        # legado `nota_geral`: é a mesma condição de antes (a nota geral é média
+        # ponderada de valores não negativos), sem decidir pela coluna legada.
+        # O TEXTO do documento ainda cita nota geral e posição — o que o
+        # certificado afirma é decisão do dono (spec-arquitetura-2, Aprovações 4).
+        if nota is None or not svc_dimensoes.com_desempenho(db, escola, nota):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "Este aluno ainda não tem nota calculada — não dá para emitir o "
