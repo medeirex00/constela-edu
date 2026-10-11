@@ -775,7 +775,7 @@ _CARTAZ_TEMPLATE = """<style>
 </style>
 <div class="barra"></div>
 ⟦CABECALHO⟧
-<h1>RANKING GERAL</h1>
+<h1>⟦TITULO⟧</h1>
 <div class="divisor"><span class="linha"></span><span class="losango"></span><span class="linha"></span></div>
 <div class="pills">
   <span class="pill ano">Constela Edu · Ano letivo de ⟦ANO⟧</span>
@@ -784,7 +784,7 @@ _CARTAZ_TEMPLATE = """<style>
 <table>
   <thead><tr>
     <th>Posição</th><th class="esq">Aluno</th><th class="esq">Turma</th><th class="esq">Série</th>
-    <th>⟦IC_STAR⟧Nota Matific</th><th>⟦IC_ELE⟧Nota Elefante</th><th>⟦IC_TRO⟧Nota Geral</th>
+    ⟦COLUNAS_NOTA⟧
   </tr></thead>
   <tbody>⟦LINHAS⟧</tbody>
 </table>
@@ -798,10 +798,28 @@ _CARTAZ_TEMPLATE = """<style>
 """
 
 
-def _linhas_cartaz_html(linhas: list[list]) -> str:
+# Cartaz POR MATÉRIA: rótulo da matéria e ícone da coluna da nota. As chaves
+# são as dimensões oficiais do ranking (`?dimensao=` de `/ranking`).
+CARTAZ_MATERIAS: dict[str, tuple[str, str]] = {
+    "leitura": ("Leitura", _IC_ELEFANTE),
+    "matematica": ("Matemática", _IC_STAR),
+}
+
+
+def cabecalho_cartaz_materia(materia: str) -> list[str]:
+    """Colunas do cartaz de UMA matéria: só a nota daquela matéria."""
+    rotulo, _ = CARTAZ_MATERIAS[materia]
+    return ["Posição", "Aluno", "Turma", "Série", f"Nota de {rotulo}"]
+
+
+def _linhas_cartaz_html(linhas: list[list], materia: str | None = None) -> str:
     partes = []
     for linha in linhas:
-        pos, nome, turma, serie, nm, ne, ng = (linha + [""] * 7)[:7]
+        if materia:
+            # Cartaz da matéria: [posição, aluno, turma, série, nota da matéria].
+            pos, nome, turma, serie, nota_materia = (linha + [""] * 5)[:5]
+        else:
+            pos, nome, turma, serie, nm, ne, ng = (linha + [""] * 7)[:7]
         try:
             pos_int = int(pos)
         except (TypeError, ValueError):
@@ -818,8 +836,9 @@ def _linhas_cartaz_html(linhas: list[list]) -> str:
             f'<td class="aluno">{_esc_html(nome)}</td>'
             f'<td class="turma">{_esc_html(turma)}</td>'
             f'<td class="serie">{_esc_html(serie)}</td>'
-            f'<td>{_fmt_nota(nm)}</td><td>{_fmt_nota(ne)}</td>'
-            f'<td class="geral">{_fmt_nota(ng)}</td></tr>')
+            + (f'<td class="geral">{_fmt_nota(nota_materia)}</td></tr>' if materia
+               else f'<td>{_fmt_nota(nm)}</td><td>{_fmt_nota(ne)}</td>'
+                    f'<td class="geral">{_fmt_nota(ng)}</td></tr>'))
     return "".join(partes)
 
 
@@ -841,19 +860,30 @@ def _faixa_anos(linhas: list[list]) -> tuple[str, str]:
 def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
                          cabecalho: list[str], linhas: list[list],
                          estatisticas: dict,
-                         logos: tuple[str, str] | None = None) -> bytes:
-    """Cartaz do Ranking Geral em PDF (todos os alunos). HTML→Chromium com o
-    layout completo; sem navegador, cai para o PDF simples de ranking (reserva)."""
+                         logos: tuple[str, str] | None = None,
+                         materia: str | None = None) -> bytes:
+    """Cartaz do Ranking em PDF (todos os alunos). HTML→Chromium com o layout
+    completo; sem navegador, cai para o PDF simples de ranking (reserva).
+
+    ``materia`` ausente = cartaz do Ranking Geral (notas Matific, Elefante e
+    Geral). ``materia`` = ``leitura`` | ``matematica`` = cartaz DAQUELA matéria:
+    título com o nome dela e uma só coluna de nota — as linhas chegam como
+    ``[posição, aluno, turma, série, nota da matéria]`` (ver
+    `cabecalho_cartaz_materia`)."""
+    titulo = (f"Ranking de {CARTAZ_MATERIAS[materia][0]}" if materia
+              else "Ranking Geral")
     try:
-        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas, logos)
+        return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas,
+                                logos, materia=materia)
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples de ranking
-        return gerar_pdf("Ranking Geral", escola_nome, cor, cabecalho, linhas)
+        return gerar_pdf(titulo, escola_nome, cor, cabecalho, linhas)
 
 
-def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
-                     estatisticas: dict, logos: tuple[str, str] | None = None) -> bytes:
-    from playwright.sync_api import sync_playwright
-
+def _cartaz_documento_html(escola_nome: str, ano_letivo: int, linhas: list[list],
+                           estatisticas: dict, logos: tuple[str, str] | None = None,
+                           materia: str | None = None) -> str:
+    """HTML completo do cartaz (o que o Chromium imprime). Separado da
+    impressão para o conteúdo poder ser conferido sem navegador."""
     def _mil(n) -> str:
         return f"{int(n):,}".replace(",", ".")
 
@@ -868,18 +898,39 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
         f'<div class="tile"><div class="n">{n}</div><div class="r">{r}</div></div>'
         for n, r in tiles)
 
+    if materia:
+        rotulo, icone = CARTAZ_MATERIAS[materia]
+        titulo = f"RANKING DE {rotulo.upper()}"
+        colunas_nota = f"<th>{icone}Nota de {rotulo}</th>"
+    else:
+        titulo = "RANKING GERAL"
+        colunas_nota = ("<th>⟦IC_STAR⟧Nota Matific</th><th>⟦IC_ELE⟧Nota Elefante</th>"
+                        "<th>⟦IC_TRO⟧Nota Geral</th>")
+
+    # As colunas entram ANTES dos ícones: as do Ranking Geral usam marcadores.
     html = (_CARTAZ_TEMPLATE
+            .replace("⟦COLUNAS_NOTA⟧", colunas_nota)
+            .replace("⟦TITULO⟧", titulo)
             .replace("⟦CABECALHO⟧", _cabecalho_logos(logos))
             .replace("⟦IC_STAR⟧", _IC_STAR)
             .replace("⟦IC_ELE⟧", _IC_ELEFANTE)
             .replace("⟦IC_TRO⟧", _IC_TROFEU)
             .replace("⟦ANO⟧", str(ano_letivo))
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
-            .replace("⟦LINHAS⟧", _linhas_cartaz_html(linhas))
+            .replace("⟦LINHAS⟧", _linhas_cartaz_html(linhas, materia))
             .replace("⟦TILES⟧", tiles_html)
             .replace("⟦DATA⟧", agora_br().strftime("%d/%m/%Y")))
-    doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
-           f"</head><body>{html}</body></html>")
+    return (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
+            f"</head><body>{html}</body></html>")
+
+
+def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
+                     estatisticas: dict, logos: tuple[str, str] | None = None,
+                     materia: str | None = None) -> bytes:
+    from playwright.sync_api import sync_playwright
+
+    doc = _cartaz_documento_html(escola_nome, ano_letivo, linhas, estatisticas,
+                                 logos, materia=materia)
 
     with sync_playwright() as p:
         try:
