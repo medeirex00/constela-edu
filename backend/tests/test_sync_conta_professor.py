@@ -19,6 +19,12 @@ from app.sync import orchestrator
 from app.sync.interfaces import ArquivoObtido, Contexto
 
 
+def _zerar_limitadores():
+    from app.core import rate_limit
+    rate_limit.limitador_login._eventos.clear()
+    rate_limit.limitador_conta._eventos.clear()
+
+
 def _login(usuario: str, senha: str):
     return TestClient(app).post("/api/v1/auth/login",
                                 data={"username": usuario, "password": senha})
@@ -58,6 +64,10 @@ def test_a_sync_cria_a_conta_do_professor_sem_senha_conhecida(db, escola_complet
     previsiveis |= {"marisa123", "Marisa123", "marisaquintela123", "MarisaQuintela123",
                     "quintela123", "marisaquintela", "12345678", conta.email}
     for senha in previsiveis:
+        # A lista de candidatos cresceu (todas as caixas do nome/@) além do teto
+        # do limitador de login: zera-o a cada tentativa para que CADA senha
+        # receba a recusa por senha errada (401), não o 429 do limitador.
+        _zerar_limitadores()
         assert _login("MarisaQuintela", senha).status_code == 401, senha
 
     # O registro técnico da sincronização não ensina senha nenhuma e aponta o link.

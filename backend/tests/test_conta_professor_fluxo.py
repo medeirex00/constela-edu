@@ -18,6 +18,12 @@ from app.services import professores
 SENHA_GESTAO = "s3nh4-sintetica"
 
 
+def _zerar_limitadores():
+    from app.core import rate_limit
+    rate_limit.limitador_login._eventos.clear()
+    rate_limit.limitador_conta._eventos.clear()
+
+
 def _login(usuario: str, senha: str):
     return TestClient(app).post("/api/v1/auth/login",
                                 data={"username": usuario, "password": senha})
@@ -55,6 +61,10 @@ def test_da_importacao_ao_login_pelo_link(db, escola_completa):
     previsiveis = professores._senhas_da_convencao_antiga(conta.nome, conta.username)
     previsiveis |= {"regiane123", "sousa123", "regianesousa", "12345678", conta.email}
     for senha in previsiveis:
+        # A lista de candidatos cresceu (todas as caixas do nome/@) além do teto
+        # do limitador de login: zera-o a cada tentativa para que CADA senha
+        # receba a recusa por senha errada (401), não o 429 do limitador.
+        _zerar_limitadores()
         assert _login("RegianeSousa", senha).status_code == 401, senha
 
     # 2. Há caminho de acesso: a coordenação gera o link de uso único.

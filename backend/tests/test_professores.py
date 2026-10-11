@@ -387,3 +387,142 @@ def test_invalidar_so_nunca_usadas_nao_toca_em_quem_ja_entra(db, escola_completa
     logs = db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "usuario.senha_derivada_invalidada")).scalars().all()
     assert [l.entidade_id for l in logs] == [nova.id]
+
+
+# --- Variantes previsíveis e nomes antigos da conta ----------------------------
+
+def _hash_rapido(senha):
+    """bcrypt de custo baixo: o detector confere ~10 candidatos por conta e o
+    verificador lê o custo do próprio hash."""
+    from app.core.security import pwd_context
+    return pwd_context.handler("bcrypt").using(rounds=4).hash(senha)
+
+
+def _conta_variante(db, escola, nome, username, senha, **kw):
+    u = Usuario(escola_id=escola.id, nome=nome, email=f"{username.lower()}@variante.local",
+                username=username, senha_hash=_hash_rapido(senha), cargo="professor", **kw)
+    db.add(u)
+    db.flush()
+    return u
+
+
+def test_candidatos_cobrem_as_caixas_do_nome_e_do_arroba():
+    c = svc._senhas_da_convencao_antiga("Ana Maria Silva", "AnaSilva2")
+    for senha in ("AnaSilva123",        # @ base na caixa original (CamelCase)
+                  "anasilva123", "ANASILVA123", "Anasilva123",
+                  "AnaSilva2123",       # o @ da conta, com o sufixo, na caixa original
+                  "anasilva2123",
+                  "Ana123", "ana123", "ANA123"):
+        assert senha in c, senha
+    # nenhum candidato genérico, sem base no nome/@
+    assert "123" not in c and "senha123" not in c and "Maria123" not in c
+    # nomes/@ que a conta JÁ teve entram também
+    c2 = svc._senhas_da_convencao_antiga("Ana Maria Silva", "AnaSilva",
+                                         nomes_antigos=["Ana Lopes"],
+                                         usernames_antigos=["AninhaL"])
+    assert {"AnaLopes123", "analopes123", "ANALOPES123", "AninhaL123",
+            "aninhal123"} <= c2
+
+
+def test_detector_acha_camelcase_e_maiusculas(db, escola_completa):
+    escola = escola_completa["escola"]
+    camel = _conta_variante(db, escola, "Paula Vilela", "PaulaVilela", "PaulaVilela123")
+    caixa_alta = _conta_variante(db, escola, "Sueli Prado", "SueliPrado", "SUELIPRADO123")
+    primeiro_alto = _conta_variante(db, escola, "Rita Lins", "RitaLins", "RITA123")
+    db.commit()
+    achadas = {c["usuario_id"] for c in svc.contas_com_senha_derivada(db, escola.id)}
+    assert {camel.id, caixa_alta.id, primeiro_alto.id} <= achadas
+
+
+def test_senha_forte_escolhida_pelo_usuario_nao_e_marcada(db, escola_completa):
+    """Negativo: mesmo contendo o nome, uma senha fora da regra nome/@ + 123 não
+    é da convenção — a conta não pode ser invalidada."""
+    escola = escola_completa["escola"]
+    forte = _conta_variante(db, escola, "Paula Vilela", "PaulaVilela", "PaulaVilela#2026!x")
+    quase = _conta_variante(db, escola, "Marta Lima", "MartaLima", "martalima1234")
+    db.commit()
+    achadas = {c["usuario_id"] for c in svc.contas_com_senha_derivada(db, escola.id)}
+    assert forte.id not in achadas and quase.id not in achadas
+
+
+def test_detector_usa_o_nome_antigo_da_auditoria_e_do_cadastro(db, escola_completa):
+    """A senha nasceu do nome/@ da ÉPOCA. Depois a conta foi renomeada — o
+    detector tem de usar o que o banco registra de fato: o @ anterior na
+    auditoria da edição de usuário, o nome gravado nas edições do cadastro de
+    professor e o ``Professor.nome`` ligado pelo e-mail."""
+    from app.models import LogAuditoria
+    escola = escola_completa["escola"]
+    # 1) @ trocado pelo PATCH /admin/usuarios ({"username": {"de", "para"}})
+    renomeada = _conta_variante(db, escola, "Maria Clara Souza", "MariaSouza",
+                                "marianalopes123")
+    db.add(LogAuditoria(escola_id=escola.id, acao="usuario.atualizado",
+                        entidade="usuario", entidade_id=renomeada.id,
+                        detalhes={"nome": "Maria Clara Souza",
+                                  "username": {"de": "MarianaLopes", "para": "MariaSouza"},
+                                  "email": renomeada.email}))
+    # 2) cadastro de professor ligado pelo e-mail com o nome completo antigo
+    pelo_cadastro = _conta_variante(db, escola, "Teca", "Teca", "teresarocha123")
+    db.add(Professor(escola_id=escola.id, nome="Teresa Rocha", email=pelo_cadastro.email))
+    # 3) nome antigo gravado na edição do cadastro (professor.atualizado)
+    pela_edicao = _conta_variante(db, escola, "Zilda Prado", "ZildaPrado", "ZILDAMOURA123")
+    prof = Professor(escola_id=escola.id, nome="Zilda Prado", email=pela_edicao.email)
+    db.add(prof)
+    db.flush()
+    db.add(LogAuditoria(escola_id=escola.id, acao="professor.atualizado",
+                        entidade="professor", entidade_id=prof.id,
+                        detalhes={"nome": "Zilda Moura", "email": prof.email}))
+    # Controle: o nome antigo de OUTRA conta não marca esta.
+    sem_relacao = _conta_variante(db, escola, "Lia Reis", "LiaReis", "marianalopes123")
+    db.commit()
+
+    achadas = {c["usuario_id"] for c in svc.contas_com_senha_derivada(db, escola.id)}
+    assert {renomeada.id, pelo_cadastro.id, pela_edicao.id} <= achadas
+    assert sem_relacao.id not in achadas
+
+
+def test_invalidar_derruba_a_sessao_aberta(db, escola_completa):
+    """A sessão emitida com a senha antiga para de valer depois da etapa
+    (``token_version`` sobe na mesma instrução da troca)."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    escola = escola_completa["escola"]
+    _conta_variante(db, escola, "Paula Vilela", "PaulaVilela", "paulavilela123")
+    db.commit()
+    cliente = TestClient(app)
+    r = cliente.post("/api/v1/auth/login",
+                     data={"username": "PaulaVilela", "password": "paulavilela123"})
+    assert r.status_code == 200, r.text
+    cabecalho = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    assert cliente.get("/api/v1/auth/me", headers=cabecalho).status_code == 200
+
+    r = svc.invalidar_senhas_derivadas(db, escola.id, aplicar=True, esperado=1)
+    db.commit()
+    assert r["invalidadas"] == 1
+    assert cliente.get("/api/v1/auth/me", headers=cabecalho).status_code == 401
+    r = cliente.post("/api/v1/auth/login",
+                     data={"username": "PaulaVilela", "password": "paulavilela123"})
+    assert r.status_code == 401
+
+
+def test_invalidar_com_esperado_divergente_nao_grava(db, escola_completa):
+    escola = escola_completa["escola"]
+    u = _conta_variante(db, escola, "Paula Vilela", "PaulaVilela", "paulavilela123")
+    db.commit()
+    antes = (u.senha_hash, u.token_version)
+    import pytest
+    with pytest.raises(svc.EsperadoDivergente):
+        svc.invalidar_senhas_derivadas(db, escola.id, aplicar=True, esperado=2)
+    db.rollback()
+    db.refresh(u)
+    assert (u.senha_hash, u.token_version) == antes
+
+
+def test_validar_forca_senha_recusa_as_variantes_novas():
+    """A regra de força usa a MESMA lista (com casefold): quem tenta voltar à
+    convenção pelo link é recusado em qualquer caixa."""
+    from app.core.security import validar_forca_senha
+    for senha in ("PaulaVilela123", "PAULAVILELA123", "Paula123"):
+        assert validar_forca_senha(senha, nome="Paula Vilela", usuario="PaulaVilela"), senha
+    assert validar_forca_senha("PaulaVilela#2026!x", nome="Paula Vilela",
+                               usuario="PaulaVilela") is None

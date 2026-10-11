@@ -108,31 +108,110 @@ def senha_hash_sem_acesso() -> str:
     return hash_senha(secrets.token_urlsafe(32))
 
 
-def _senhas_da_convencao_antiga(nome: str, username: str | None) -> set[str]:
+def _variantes_123(radical: str) -> set[str]:
+    """O radical + "123" na caixa original, minúscula, MAIÚSCULA e Capitalizada —
+    as formas que a pessoa (ou quem cadastrou) digitaria ao seguir a regra."""
+    radical = (radical or "").strip().lstrip("@")
+    if not radical:
+        return set()
+    return {f"{r}123" for r in (radical, radical.lower(), radical.upper(),
+                                radical.capitalize())}
+
+
+def _senhas_da_convencao_antiga(nome: str, username: str | None, *,
+                                nomes_antigos=(), usernames_antigos=()) -> set[str]:
     """As senhas que as convenções antigas teriam dado a esta conta — só para
-    DETECTAR quem ainda as usa. Cobre as duas regras que existiram (@ minúsculo
-    + "123"; primeiro nome + "123") e o @ com sufixo de desambiguação ("…2"),
-    porque a senha nascia do @ BASE, antes do sufixo."""
+    DETECTAR quem ainda as usa. Cobre as duas regras que existiram (@ + "123";
+    primeiro nome + "123") e o @ com sufixo de desambiguação ("…2"), porque a
+    senha nascia do @ BASE, antes do sufixo.
+
+    Cada radical (primeiro nome, @ BASE CamelCase, @ da conta, @ sem sufixo) entra
+    na caixa original, minúscula, MAIÚSCULA e Capitalizada ("AnaSilva123",
+    "anasilva123", "ANASILVA123", "Anasilva123"). ``nomes_antigos`` e
+    ``usernames_antigos`` são os que a conta JÁ teve (ver
+    ``_identidades_antigas``): a senha nasceu do nome da época, não do atual.
+
+    Nada de dicionário genérico: todo candidato sai do nome/@ da própria conta —
+    senão contas sem relação com a convenção seriam marcadas."""
+    radicais: set[str] = set()
+    for n in (nome, *nomes_antigos):
+        base = usuario_base_professor(n or "")
+        if base:
+            radicais.add(base)
+        partes = [p for p in (n or "").split() if p]
+        if partes:
+            primeiro = _cap_alnum(partes[0])
+            if primeiro:
+                radicais.add(primeiro)
+    for un in (username, *usernames_antigos):
+        un = (un or "").strip().lstrip("@")
+        if un:
+            radicais.add(un)
+            radicais.add(un.rstrip("0123456789"))
     candidatos: set[str] = set()
-    base = usuario_base_professor(nome)
-    if base:
-        candidatos.add(base.lower() + "123")
-    if username:
-        u = username.lower()
-        candidatos.add(u + "123")
-        candidatos.add(u.rstrip("0123456789") + "123")
-    partes = [p for p in (nome or "").split() if p]
-    if partes:
-        primeiro = _cap_alnum(partes[0])
-        if primeiro:
-            candidatos.update({primeiro + "123", primeiro.lower() + "123"})
+    for r in radicais:
+        candidatos |= _variantes_123(r)
     candidatos.discard("123")
     return candidatos
+
+
+def _identidades_antigas(db: Session, u: Usuario) -> tuple[set[str], set[str]]:
+    """(nomes, @s) que esta conta JÁ teve, pelo que o banco registra de fato:
+
+    * ``Professor.nome`` do cadastro ligado pelo e-mail (o vínculo do RBAC), na
+      mesma escola quando a conta tem escola;
+    * a auditoria das edições da conta (``PATCH /admin/usuarios/{id}``: o
+      ``nome`` gravado em cada edição e o ``username`` ``{"de", "para"}``);
+    * a auditoria das edições do cadastro de professor ligado
+      (``professor.atualizado`` / ``professor.criado`` com ``entidade_id``: o
+      ``nome`` gravado).
+
+    Só LÊ. O que não deixou rastro (ex.: o @ re-caixado em lote, que só conta
+    as contas) não tem como entrar.
+
+    Limitação conhecida: o ``PATCH /admin/usuarios`` grava em ``nome`` o nome
+    NOVO, e ``usuario.criado`` não grava nome; assim, o nome que a conta tinha
+    ANTES da 1ª edição não fica na auditoria de usuário. Ele só entra se houver
+    rastro no cadastro de professor ligado (``Professor.nome`` ou a auditoria
+    dele). O ``professor.criado`` de ``routers/academico.py`` é gravado sem
+    ``entidade_id`` e, por isso, não se liga à conta."""
+    nomes: set[str] = set()
+    usernames: set[str] = set()
+    email = (u.email or "").strip().lower()
+    prof_ids: list[int] = []
+    if email:
+        consulta = select(Professor).where(func.lower(Professor.email) == email)
+        if u.escola_id is not None:
+            consulta = consulta.where(Professor.escola_id == u.escola_id)
+        for prof in db.execute(consulta).scalars():
+            prof_ids.append(prof.id)
+            if prof.nome:
+                nomes.add(prof.nome)
+    logs = db.execute(
+        select(LogAuditoria.entidade, LogAuditoria.detalhes).where(
+            ((LogAuditoria.entidade == "usuario") & (LogAuditoria.entidade_id == u.id))
+            | ((LogAuditoria.entidade == "professor")
+               & LogAuditoria.entidade_id.in_(prof_ids or [-1])))
+    ).all()
+    for _entidade, detalhes in logs:
+        if not isinstance(detalhes, dict):
+            continue
+        if isinstance(detalhes.get("nome"), str):
+            nomes.add(detalhes["nome"])
+        troca = detalhes.get("username")
+        if isinstance(troca, dict):
+            for lado in ("de", "para"):
+                if isinstance(troca.get(lado), str):
+                    usernames.add(troca[lado])
+    return nomes, usernames
 
 
 USO_NUNCA_USADA = "nunca_usada"
 USO_USADA = "usada"
 USO_INDETERMINADO = "indeterminada"
+
+# Origem gravada na auditoria de cada invalidação feita pela etapa de deploy.
+ORIGEM_ETAPA = "scripts/senhas_derivadas"
 
 
 def _uso_da_conta(db: Session, u: Usuario) -> str:
@@ -141,8 +220,6 @@ def _uso_da_conta(db: Session, u: Usuario) -> str:
     início do sistema; mas um sinal de uso sem ele (presença em ``visto_em`` ou
     um registro de auditoria ``login``) quer dizer que os dados divergem — aí a
     conta é INDETERMINADA e fica fora da etapa automática."""
-    from app.models import LogAuditoria
-
     if u.ultimo_acesso is not None:
         return USO_USADA
     if u.visto_em is not None:
@@ -166,9 +243,10 @@ def _hash_conferivel(senha_hash: str | None) -> bool:
 
 
 def _classificar_contas(db: Session, escola_id: int | None, *,
-                        globais: bool = False) -> list[dict]:
+                        globais: bool = False) -> tuple[list[dict], dict[int, str]]:
     """Toda conta com: ``derivada`` (True/False, ou None quando o hash não pôde
-    ser conferido) e ``uso``. Só LÊ.
+    ser conferido) e ``uso``; e, À PARTE, o hash lido de cada uma (a base da
+    gravação compare-and-set — nunca vai para a saída). Só LÊ.
 
     TODOS os cargos, não só professor: a conta nasce professor na importação,
     mas pode ter sido promovida a coordenador ou admin mantendo a senha — e
@@ -190,52 +268,111 @@ def _classificar_contas(db: Session, escola_id: int | None, *,
         consulta = consulta.where(Usuario.escola_id == escola_id,
                                   Usuario.rede_id.is_(None))
     contas: list[dict] = []
+    hashes: dict[int, str] = {}
     for u in db.execute(consulta.order_by(Usuario.id)).scalars():
+        hashes[u.id] = u.senha_hash
         if not _hash_conferivel(u.senha_hash):
             derivada = None   # formato que o verificador não lê: não dá para afirmar
         else:
-            derivada = any(verificar_senha(c, u.senha_hash)
-                           for c in _senhas_da_convencao_antiga(u.nome, u.username))
+            nomes_antigos, usernames_antigos = _identidades_antigas(db, u)
+            candidatos = _senhas_da_convencao_antiga(
+                u.nome, u.username, nomes_antigos=nomes_antigos,
+                usernames_antigos=usernames_antigos)
+            derivada = any(verificar_senha(c, u.senha_hash) for c in sorted(candidatos))
         uso = _uso_da_conta(db, u)
         contas.append({"usuario_id": u.id, "escola_id": u.escola_id,
                        "usuario": u.username, "cargo": u.cargo, "status": u.status,
                        "rede_id": u.rede_id,
                        "derivada": derivada, "uso": uso,
                        "nunca_usada": uso == USO_NUNCA_USADA})
-    return contas
+    return contas, hashes
 
 
 def _sem_flag(conta: dict) -> dict:
     return {k: v for k, v in conta.items() if k != "derivada"}
 
 
+def classificar_senhas_derivadas(db: Session, escola_id: int | None = None) -> dict:
+    """A classificação ÚNICA da etapa — uma passada de bcrypt por conta, que o
+    diagnóstico, a conferência do ``--esperado`` e a gravação reaproveitam
+    (antes eram 2–3 passadas, minutos de CPU cada). Só LÊ. Devolve:
+
+    * ``derivadas``: contas não globais COM escola e senha derivada — as únicas
+      que a invalidação automática pode tocar;
+    * ``sem_escola``: contas não globais SEM escola e senha derivada — nunca
+      tocadas aqui (nenhuma tela de escola gera o link delas): a recuperação é
+      manual, pelo admin global (``scripts/link_redefinicao.py``);
+    * ``globais``: administração global com senha derivada (só na execução
+      completa) — troca manual;
+    * ``nao_verificaveis``: hash em formato desconhecido — fora da etapa;
+    * ``hashes_lidos``: ``{usuario_id: hash}`` do momento da leitura, para a
+      gravação compare-and-set. NUNCA sai na saída nem na auditoria."""
+    contas, hashes = _classificar_contas(db, escola_id)
+    derivadas = [c for c in contas if c["derivada"] is True]
+    globais: list[dict] = []
+    if escola_id is None:
+        contas_globais, _ = _classificar_contas(db, None, globais=True)
+        globais = [_sem_flag(c) for c in contas_globais if c["derivada"] is True]
+    return {
+        "derivadas": [_sem_flag(c) for c in derivadas if c["escola_id"] is not None],
+        "sem_escola": [_sem_flag(c) for c in derivadas if c["escola_id"] is None],
+        "globais": globais,
+        "nao_verificaveis": [_sem_flag(c) for c in contas if c["derivada"] is None],
+        "hashes_lidos": hashes,
+    }
+
+
 def contas_com_senha_derivada(db: Session, escola_id: int | None = None) -> list[dict]:
     """Contas (de qualquer cargo, não globais) cuja senha ainda é a da convenção
     antiga de professor (derivável do nome). Só LÊ — confere o hash bcrypt contra
-    os candidatos; nada é gravado e nenhuma senha sai daqui. É a base da etapa de
-    migração do deploy.
+    os candidatos; nada é gravado e nenhuma senha sai daqui. Inclui as SEM escola,
+    que a invalidação automática não toca (ver ``classificar_senhas_derivadas``).
 
     Cada conta vem com ``uso`` (``nunca_usada`` | ``usada`` | ``indeterminada``)
     e ``nunca_usada`` (só True quando o uso é inequívoco)."""
-    return [_sem_flag(c) for c in _classificar_contas(db, escola_id) if c["derivada"] is True]
+    c = classificar_senhas_derivadas(db, escola_id)
+    return sorted(c["derivadas"] + c["sem_escola"], key=lambda x: x["usuario_id"])
 
 
 def contas_globais_com_senha_derivada(db: Session) -> list[dict]:
     """Contas de ADMINISTRAÇÃO GLOBAL com a senha da convenção: só para o
     diagnóstico — a troca é manual (ver ``_classificar_contas``)."""
-    return [_sem_flag(c) for c in _classificar_contas(db, None, globais=True)
-            if c["derivada"] is True]
+    contas, _ = _classificar_contas(db, None, globais=True)
+    return [_sem_flag(c) for c in contas if c["derivada"] is True]
 
 
 def contas_nao_verificaveis(db: Session, escola_id: int | None = None) -> list[dict]:
     """Contas de professor cujo hash não pôde ser conferido — impossível dizer se
     a senha é a derivada. Nunca entram na invalidação automática."""
-    return [_sem_flag(c) for c in _classificar_contas(db, escola_id) if c["derivada"] is None]
+    contas, _ = _classificar_contas(db, escola_id)
+    return [_sem_flag(c) for c in contas if c["derivada"] is None]
+
+
+def alvos_da_invalidacao(classificacao: dict, *, so_nunca_usadas: bool = False) -> list[dict]:
+    """As contas que ``invalidar_senhas_derivadas`` tocaria com esta
+    classificação — o número que o operador confere no ``--esperado``."""
+    derivadas = classificacao["derivadas"]
+    if so_nunca_usadas:
+        return [c for c in derivadas if c["uso"] == USO_NUNCA_USADA]
+    return list(derivadas)
+
+
+class EsperadoDivergente(Exception):
+    """O número de alvos não é o que o operador conferiu no diagnóstico — nada
+    foi gravado."""
+
+    def __init__(self, esperado: int, encontrados: int):
+        super().__init__(f"esperado {esperado}, encontrados {encontrados}")
+        self.esperado = esperado
+        self.encontrados = encontrados
 
 
 def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
                                aplicar: bool = False,
-                               so_nunca_usadas: bool = False) -> dict:
+                               so_nunca_usadas: bool = False,
+                               esperado: int | None = None,
+                               classificacao: dict | None = None,
+                               origem: str = ORIGEM_ETAPA) -> dict:
     """Etapa de deploy: tira de circulação a senha derivável. Sem ``aplicar`` é
     só o diagnóstico (padrão). Com ``aplicar``, cada conta achada recebe uma senha
     que ninguém conhece e perde as sessões abertas; o professor volta a entrar
@@ -243,22 +380,58 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
     Não bloqueia ninguém para sempre e não cria senha conhecida de reserva.
     ``so_nunca_usadas`` limita a invalidação às contas que nunca entraram — as que
     não afetam ninguém; as já usadas continuam listadas em ``contas``.
-    NÃO commita — quem chama decide."""
+
+    * ``classificacao``: a de ``classificar_senhas_derivadas`` que o chamador já
+      fez (o diagnóstico) — reaproveitada, sem nova passada de bcrypt.
+    * ``esperado``: com ``aplicar``, o número de alvos que o operador conferiu;
+      se divergir, levanta ``EsperadoDivergente`` ANTES de gravar qualquer coisa.
+    * Contas SEM escola nunca são tocadas: voltam em ``sem_escola``.
+    * Gravação COMPARE-AND-SET: a senha só é trocada se o hash ainda for o lido
+      na classificação (``UPDATE … WHERE id = :id AND senha_hash = :lido``), e o
+      ``token_version`` sobe na MESMA instrução. Quem trocou a senha no meio da
+      execução não é sobrescrito: volta em ``trocadas_durante``.
+
+    NÃO commita — quem chama decide (transação única: falha no meio = rollback
+    de tudo)."""
+    from sqlalchemy.orm.util import identity_key
+
     from app.services.audit import registrar
 
-    achadas = contas_com_senha_derivada(db, escola_id)
-    alvos = ([c for c in achadas if c["uso"] == USO_NUNCA_USADA] if so_nunca_usadas
-             else achadas)
+    if classificacao is None:
+        classificacao = classificar_senhas_derivadas(db, escola_id)
+    achadas = classificacao["derivadas"]
+    alvos = alvos_da_invalidacao(classificacao, so_nunca_usadas=so_nunca_usadas)
+    if aplicar and esperado is not None and esperado != len(alvos):
+        raise EsperadoDivergente(esperado, len(alvos))
+    invalidadas: list[dict] = []
+    trocadas: list[dict] = []
     if aplicar:
+        lidos = classificacao["hashes_lidos"]
         for item in alvos:
-            u = db.get(Usuario, item["usuario_id"])
-            u.senha_hash = senha_hash_sem_acesso()
-            u.token_version = (u.token_version or 0) + 1   # derruba sessões
-            registrar(db, "usuario.senha_derivada_invalidada", escola_id=u.escola_id,
-                      entidade="usuario", entidade_id=u.id,
-                      detalhes={"uso": item["uso"]})
+            uid = item["usuario_id"]
+            resultado = db.execute(
+                update(Usuario)
+                .where(Usuario.id == uid, Usuario.senha_hash == lidos[uid])
+                .values(senha_hash=senha_hash_sem_acesso(),
+                        token_version=func.coalesce(Usuario.token_version, 0) + 1)
+                .execution_options(synchronize_session=False))
+            if resultado.rowcount != 1:
+                trocadas.append(item)     # a senha mudou desde a leitura: não toca
+                continue
+            # A instância já carregada nesta sessão (se houver) relê hash e versão.
+            carregada = db.identity_map.get(identity_key(Usuario, uid))
+            if carregada is not None:
+                db.expire(carregada, ["senha_hash", "token_version"])
+            registrar(db, "usuario.senha_derivada_invalidada", escola_id=item["escola_id"],
+                      entidade="usuario", entidade_id=uid,
+                      detalhes={"uso": item["uso"], "origem": origem})
+            invalidadas.append(item)
     return {"encontradas": len(achadas), "aplicado": aplicar,
-            "invalidadas": len(alvos) if aplicar else 0, "contas": achadas,
+            "alvos": len(alvos),
+            "invalidadas": len(invalidadas) if aplicar else 0,
+            "trocadas_durante": trocadas,
+            "contas": achadas,
+            "sem_escola": classificacao["sem_escola"],
             "por_uso": {uso: sum(1 for c in achadas if c["uso"] == uso)
                         for uso in (USO_NUNCA_USADA, USO_USADA, USO_INDETERMINADO)}}
 
