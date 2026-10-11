@@ -44,6 +44,7 @@ import { SeletorTurno } from "../components/SeletorTurno";
 import { Card, Carregando, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { destinoEvolucaoDoAluno, usePerfil } from "../hooks/usePerfil";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
 import { TURNO_TODOS, chaveTurno, rotuloTurno, turnoEfetivo, turnoParaQuery } from "../lib/turnos";
 import type { CategoriaPremiacao, Premiacoes as PremiacoesT, Turma } from "../lib/types";
@@ -401,6 +402,7 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
   escolaId: number; dimensao: "leitura" | "matematica";
   titulo: string; icone: string; params: string; vazio: string;
 }) {
+  const { gestor } = usePerfil();
   // `params` traz o MESMO período e turno das premiações (o filtro é lockado).
   const { dados, erro, carregando } = useApi<EvolucaoItem[]>(
     `/escolas/${escolaId}/ranking-evolucao?dimensao=${dimensao}${params}`,
@@ -429,7 +431,7 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
       ) : (
         <>
           <Link
-            to={`/alunos/${campeao.aluno_id}/evolucao`}
+            to={destinoEvolucaoDoAluno(campeao.aluno_id, gestor)}
             className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 transition-colors hover:bg-emerald-50 dark:border-emerald-500/20 dark:bg-emerald-500/10"
           >
             <span className="text-2xl">🥇</span>
@@ -445,7 +447,7 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
             <ul className="mt-2 space-y-0.5">
               {resto.map((item) => (
                 <li key={item.aluno_id}>
-                  <Link to={`/alunos/${item.aluno_id}/evolucao`}
+                  <Link to={destinoEvolucaoDoAluno(item.aluno_id, gestor)}
                         className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
                     <span className="w-5 shrink-0 text-center">
                       {MEDALHAS[item.posicao - 1] ?? <span className="text-xs text-zinc-400">{item.posicao}º</span>}
@@ -489,6 +491,7 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
 function ModalRankingEvolucao({ itens, titulo, icone, aoFechar }: {
   itens: EvolucaoItem[]; titulo: string; icone: string; aoFechar: () => void;
 }) {
+  const { gestor } = usePerfil();
   const [limite, setLimite] = useState(PASSO_RANKING);
   const linhas = itens.slice(0, limite);
   return (
@@ -499,7 +502,7 @@ function ModalRankingEvolucao({ itens, titulo, icone, aoFechar }: {
       linhas={linhas.map((item) => ({
         aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
         valor: fmtNota(item.nota ?? 0),
-        destino: `/alunos/${item.aluno_id}/evolucao`,
+        destino: destinoEvolucaoDoAluno(item.aluno_id, gestor),
       }))}
       total={itens.length}
       carregando={false}

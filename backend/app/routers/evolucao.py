@@ -25,15 +25,13 @@ def evolucao_do_aluno(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Linha do tempo completa + variação no período (PRD §67–§71).
-    Coordenador/admin veem qualquer aluno da escola; o PROFESSOR vê a evolução
-    dos alunos das TURMAS DELE (404 fora do escopo); a Secretaria não vê dado
-    individual (404)."""
+    Dado detalhado: só a gestão da própria escola. Professor e Secretaria → 403
+    (a regra de ``services/permissoes``: o professor vê posição, pontos e o
+    passo a passo da nota dos alunos dele, mas não a evolução detalhada)."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
-    escola = db.get(Escola, escola_id)
-    permissoes.exigir_aluno_permitido(
-        db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
     return {
         "aluno_id": aluno_id,
         "nome": aluno.nome,
@@ -54,14 +52,12 @@ def evolucao_leitura_do_aluno(
 ):
     """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
     semana, mês ou bimestre), respeitando o período escolhido.
-    Coordenador/admin: qualquer aluno da escola; PROFESSOR: os alunos das turmas
-    dele (404 fora do escopo); Secretaria: 404 (sem dado individual)."""
+    Dado detalhado: só a gestão da própria escola. Professor e Secretaria → 403."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     escola = db.get(Escola, escola_id)
-    permissoes.exigir_aluno_permitido(
-        db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
     try:
         preset = "personalizado" if (inicio or fim) else "tudo"
         ini, fim_dt, _ = periodos.resolver(
