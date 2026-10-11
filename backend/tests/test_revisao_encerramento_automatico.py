@@ -284,7 +284,9 @@ def test_sincronizacao_encerra_cada_irma_com_a_linha_do_tipo_dela(
     assert {k: v for k, v in r.resolucao.items() if k != "dados_superados"} == {
         "acao": "associar", "aluno_id": oficial.id, "automatica": True,
         "via": "lista_piloto_unica", "regra": REGRA_DESEMPATE,
-        "preteridos": [{"aluno_id": stub.id, "nome": "GIOVANA E"}],
+        # Só o id na revisão (a exclusão LGPD não redige revisões); o nome
+        # fica na auditoria, que é redigida.
+        "preteridos": [{"aluno_id": stub.id}],
         "importacao_id": imp1,
     }
     assert _superados(r, "resumo")
@@ -797,3 +799,41 @@ def test_sugestao_da_previa_aceita_como_veio_encerra_como_automatica(db, sala):
     assert r.resolucao["automatica"] is True
     assert _logs(db, ACAO_HUMANA) == [] and len(_logs(db, ACAO_AUTO)) == 1
     assert r.chave_identidade not in ida.carregar_contexto(db, esc.id).resolvidas
+
+
+def test_escolha_que_passa_por_cima_da_trava_de_conta_e_humana(db, sala):
+    """A ficha fixada já tem OUTRA conta desta plataforma: o motor, sozinho, nunca
+    associaria (revisão "outra_identidade_na_plataforma"). Quem confirmou passou
+    por cima da trava — é decisão de gente, com autor."""
+    esc, admin = sala["escola"], sala["admin"]
+    talita = _aluno(db, esc, sala["b"], "TALITA REGINA FONTES")
+    _conta(db, esc, talita, "matific", "u-velha")
+    db.commit()
+    chave = ida.chave_identidade(
+        ida.linha_de_dados("TALITA REGINA FONTES", {"matific_uuid": "u-nova"},
+                           plataforma="matific", turma_nome=SALA_MATIFIC), "")
+    _pendencia(db, esc, chave_ident=chave, plataforma="matific", id_externo="u-nova",
+               nome="TALITA REGINA FONTES", candidatos=(talita,),
+               motivo="outra_identidade_na_plataforma")
+    _confirmar(db, esc, admin, "matific",
+               [_matific("TALITA REGINA FONTES", "u-nova", aluno_id=talita.id)])
+    [r] = _revisoes(db, esc)
+    assert (r.status, r.resolvida_por_id) == ("resolvida", admin.id)
+    assert r.resolucao["automatica"] is False
+    assert _logs(db, ACAO_AUTO) == [] and len(_logs(db, ACAO_HUMANA)) == 1
+
+
+def test_sugestao_aceita_grava_a_regra_do_motor_nao_explicito(db, sala):
+    esc, admin = sala["escola"], sala["admin"]
+    talita = _aluno(db, esc, sala["b"], "TALITA REGINA FONTES")
+    db.commit()
+    chave = ida.chave_identidade(
+        ida.linha_de_dados("TALITA REGINA FONTES", {"matific_uuid": "u-t"},
+                           plataforma="matific", turma_nome=SALA_MATIFIC), "")
+    _pendencia(db, esc, chave_ident=chave, plataforma="matific", id_externo="u-t",
+               nome="TALITA REGINA FONTES", candidatos=(talita,))
+    _confirmar(db, esc, admin, "matific",
+               [_matific("TALITA REGINA FONTES", "u-t", aluno_id=talita.id)])
+    [r] = _revisoes(db, esc)
+    assert r.resolucao["automatica"] is True
+    assert (r.resolucao["via"], r.resolucao["regra"]) == ("exato", "nome idêntico, candidato único")

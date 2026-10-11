@@ -195,10 +195,10 @@ def test_segunda_conta_da_mesma_plataforma_na_mesma_ficha_vai_para_revisao(db, r
 
 # --- registros de diferentes plataformas ---------------------------------------
 
-def test_caso_matias_grafia_no_meio_e_conta_de_outra_plataforma_associa(db, rede):
-    """Padrão do caso relatado (nome fictício): a ficha oficial já tem a conta do
-    MATIFIC; o ELEFANTE manda o nome com UMA letra diferente num nome do meio.
-    A conta de outra plataforma não é conflito — só a da MESMA plataforma seria."""
+def test_grafia_equivalente_no_sobrenome_e_conta_de_outra_plataforma_associa(db, rede):
+    """A ficha oficial já tem a conta do MATIFIC; o ELEFANTE manda o nome com a
+    grafia equivalente de um sobrenome do meio (RODRIGUES/RODRIGUEZ). A conta de
+    outra plataforma não é conflito — só a da MESMA plataforma seria."""
     esc = rede["escola"]
     otavio = _aluno(db, esc, rede["b"], "OTAVIO RICARDO RODRIGUES MARQUES")
     _conta(db, esc, otavio, "matific", "u-otavio")
@@ -299,3 +299,19 @@ def test_mapa_dos_casos_cobertos_em_outros_arquivos():
                  "test_decisao_revisar_mantem_a_pendencia",
                  "test_conta_contestada_nao_e_encerrada_pela_mesma_conta"):
         assert hasattr(enc, nome), nome
+
+
+def test_caso_matias_uma_letra_no_segundo_prenome_fica_para_gente(db, rede):
+    """Padrão medido do caso relatado (nome fictício): o Elefante manda o 2º
+    PRENOME com UMA letra a menos ("RICADO"). É provável que seja a mesma
+    criança, mas a mesma regra ligaria MARIA ALINE à ficha da MARIA ALICE (gêmeas
+    se distinguem pelo prenome) — e não há lista de prenomes confiável no
+    cadastro. Fica na revisão, com a ficha sugerida; um clique resolve e a conta
+    passa a ligar sozinha nas próximas sincronizações."""
+    esc = rede["escola"]
+    otavio = _aluno(db, esc, rede["b"], "OTAVIO RICARDO RODRIGUES MARQUES")
+    _conta(db, esc, otavio, "matific", "u-otavio")
+    db.commit()
+    d = _decidir(db, esc, "OTAVIO RICADO RODRIGUES MARQUES", SALA_2B, id_externo="601")
+    assert (d.acao, d.motivo, d.aluno_id) == (ida.REVISAR, "correspondencia_insegura",
+                                              otavio.id)

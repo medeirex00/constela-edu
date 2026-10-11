@@ -385,13 +385,23 @@ def test_ii_ficha_fora_da_lista_com_nome_parcial_nao_e_sombra(db, rede):
     assert (d.acao, d.motivo) == (ida.REVISAR, "candidatos_multiplos")
 
 
-def test_iii_typo_num_nome_do_meio_com_candidato_unico_associa(db, rede):
+def test_iii_erro_de_uma_letra_num_sobrenome_do_meio_com_candidato_unico_associa(db, rede):
+    esc = rede["escola"]
+    rafaela = _aluno(db, esc, rede["b"], "RAFAELA CRISTINA NOGUEIRA LOPES")
+    db.commit()
+    d = _decidir(db, esc, "RAFAELA CRISTINA NOGEIRA LOPES", SALA_2B)
+    assert (d.acao, d.aluno_id) == (ida.ASSOCIAR, rafaela.id)
+    assert d.via in ("variante", "typo")
+
+
+def test_iii_uma_letra_no_prenome_e_outro_nome_vai_para_revisao(db, rede):
+    """CRISTINA × CRISTIANA é OUTRO prenome, não erro de digitação."""
     esc = rede["escola"]
     rafaela = _aluno(db, esc, rede["b"], "RAFAELA CRISTINA NOGUEIRA LOPES")
     db.commit()
     d = _decidir(db, esc, "RAFAELA CRISTIANA NOGUEIRA LOPES", SALA_2B)
-    assert (d.acao, d.aluno_id) == (ida.ASSOCIAR, rafaela.id)
-    assert d.via in ("variante", "typo")
+    assert (d.acao, d.motivo, d.aluno_id) == (ida.REVISAR, "correspondencia_insegura",
+                                              rafaela.id)
 
 
 @pytest.mark.parametrize("recebido,associa", [
@@ -716,18 +726,21 @@ def test_cadastro_manual_com_oficial_e_stub_continua_recusando_por_semelhanca(
 
 # --- revisão adversarial de 2026-10-11: grafia é grafia, não outro nome ----------------
 
-@pytest.mark.parametrize("ficha,recebido,outro_com_o_nome", [
-    # Prenomes diferentes a UMA letra — o recebido é prenome de outra criança.
-    ("MARIA ALICE ALVES PEREIRA", "MARIA ALINE ALVES PEREIRA", "ALINE SOUZA CRUZ"),
-    ("RAFAELA CRISTINA NOGUEIRA LOPES", "RAFAELA CRISTIANA NOGUEIRA LOPES",
-     "CRISTIANA MOTA DIAS"),
-    ("ANA LIVIA ROCHA SANTOS", "ANA LIDIA ROCHA SANTOS", "LIDIA RAMOS PINTO"),
+@pytest.mark.parametrize("ficha,recebido", [
+    # Prenomes diferentes a UMA letra: gêmeas/irmãs se distinguem pelo prenome. Vale
+    # SEM depender de alguém com o nome recebido estar cadastrado (o cadastro de
+    # produção não tem ALINE, CRISTIANA, DANIELE).
+    ("MARIA ALICE ALVES PEREIRA", "MARIA ALINE ALVES PEREIRA"),
+    ("RAFAELA CRISTINA NOGUEIRA LOPES", "RAFAELA CRISTIANA NOGUEIRA LOPES"),
+    ("ANA LIVIA ROCHA SANTOS", "ANA LIDIA ROCHA SANTOS"),
+    ("MARIA DANIELA ROCHA SANTOS", "MARIA DANIELE ROCHA SANTOS"),
+    ("ANA GABRIELA SOUZA LIMA", "ANA GABRIELE SOUZA LIMA"),
+    ("MARIA ALICE PEREIRA", "MARIA ALINE PEREIRA"),          # 3 palavras
 ])
-def test_grafia_que_e_prenome_de_outra_crianca_vai_para_revisao(db, rede, ficha, recebido,
-                                                                 outro_com_o_nome):
+def test_uma_letra_no_prenome_vai_para_revisao_sem_depender_do_cadastro(db, rede, ficha,
+                                                                        recebido):
     esc = rede["escola"]
     unico = _aluno(db, esc, rede["b"], ficha)
-    _aluno(db, esc, rede["c"], outro_com_o_nome)      # o nome existe, em outra família
     db.commit()
     d = _decidir(db, esc, recebido, SALA_2B)
     assert (d.acao, d.motivo, d.aluno_id) == (ida.REVISAR, "correspondencia_insegura", unico.id)
@@ -752,8 +765,9 @@ def test_diferenca_que_nao_e_erro_de_uma_letra_vai_para_revisao(db, rede, ficha,
     ("PEDRO LUIS ALVES COSTA", "PEDRO LUIZ ALVES COSTA", "LUIZ CARLOS MOTA"),
     ("ANA THAIS ROCHA LIMA", "ANA TAIS ROCHA LIMA", "TAIS MELO SOUZA"),
     ("JULIA EMANUELE SOUZA DIAS", "JULIA EMANUELLE SOUZA DIAS", "EMANUELLE COSTA"),
-    # Erro de uma letra que não é prenome de ninguém.
-    ("OTAVIO RICARDO MARQUES LIMA", "OTAVIO RICADO MARQUES LIMA", "RICARDO ALVES"),
+    # Erro de uma letra num SOBRENOME do meio (irmãos compartilham sobrenomes).
+    ("OTAVIO RICARDO MARQUES LIMA", "OTAVIO RICARDO MARQES LIMA", "RICARDO ALVES"),
+    ("WENDEL SOFIA FIDELIS SILVA", "WENDEL SOFIA FIDELES SILVA", "SOFIA RAMOS"),
 ])
 def test_grafia_equivalente_ou_erro_de_digitacao_liga(db, rede, ficha, recebido, existe):
     esc = rede["escola"]
@@ -816,3 +830,15 @@ def test_sufixo_de_outra_sala_nao_vira_nome_identico(db, rede):
     db.commit()
     d = _decidir(db, esc, "ANA CLARA SOUZA LIMA 3A", SALA_2B)
     assert d.acao != ida.ASSOCIAR or d.via != "exato"
+
+
+def test_sufixo_de_turma_vale_na_sala_reconhecida_pela_serie(db, rede):
+    """Turma cadastrada SEM letra ("4º Ano", única da série) e o relatório com a
+    letra ("4 ANO A …"): ``sala_efetiva`` prova que é a mesma sala, e o "4A" que o
+    professor digitou junto do nome sai do casamento como na turma com letra."""
+    esc = rede["escola"]
+    quarto = _turma(db, esc, "4º Ano", "4º Ano")
+    luana = _aluno(db, esc, quarto, "LUANA SOUZA BRIET")
+    db.commit()
+    d = _decidir(db, esc, "LUANA SOUZA BRIET 4A", "4 ANO A INTEGRAL (300309347)")
+    assert (d.acao, d.aluno_id, d.via) == (ida.ASSOCIAR, luana.id, "exato")

@@ -254,28 +254,36 @@ def test_matching_subconjunto_so_estrutural():
         permitir_subconjunto_unico=True).status == matching.REVISAR
 
 
-def test_variante_de_grafia_segura_no_nome_do_meio_associa(db, sala):
-    """"RICADO" × "RICARDO" (typo num nome do MEIO, 1º nome e último sobrenome
-    idênticos, candidato ÚNICO na sala) → ASSOCIA.
+def test_uma_letra_no_segundo_prenome_continua_em_revisao(db, sala):
+    """"RICADO" × "RICARDO" no 2º PRENOME, candidato ÚNICO na sala → REVISÃO.
 
-    MUDANÇA DE DECISÃO EXPLÍCITA DO DONO (2026-10-07): até aqui a plataforma
-    exigia revisão nesse caso (``vincular_variante=False``) e o dado da criança
-    ficava parado a cada sincronização (caso real do Elefante, escola 1). Agora a
-    plataforma usa o MESMO critério único já aprovado para a Lista Piloto em
-    04/08 (``matching.vincula_por_nome_unico``). A variação no sobrenome ou no 1º
-    nome continua em revisão — ver ``test_identidade_automatica.py``."""
+    Em 2026-10-07 o trabalho local passou a associar este caso (variação de grafia
+    num nome do meio). A revisão adversarial de 2026-10-11 mostrou que a mesma
+    regra liga prenomes DIFERENTES (MARIA ALICE × MARIA ALINE, gêmeas) e que não
+    há lista de prenomes confiável no cadastro. Regra vigente
+    (``identidade_aluno._grafia_segura``): grafia equivalente em qualquer palavra
+    do meio; erro de UMA letra só num SOBRENOME do meio. Automatizar o erro no
+    prenome é decisão do dono (com uma lista de prenomes de referência)."""
     esc = sala["escola"]
     otavio = _aluno(db, esc, sala["turma"], "OTAVIO RICARDO MENDES FARIAS")
     db.commit()
     linha = _matific("OTAVIO RICADO MENDES FARIAS", "5ºA", "u-ricado")
     [corr] = _previa(db, esc, "matific", [linha])
-    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", otavio.id,
-                                                              "variante")
+    assert (corr["status"], corr["aluno_id"]) == ("revisar", otavio.id)
     antes = _n_alunos(db, esc)
     r = _confirmar(db, esc, sala["admin"], "matific", [linha])
-    assert (r.qtd_alunos, r.qtd_revisoes) == (1, 0) and _n_alunos(db, esc) == antes
-    assert _snap_matific(db, otavio.id) is not None
-    assert _dono(db, esc, "matific", "u-ricado") == otavio.id
+    assert r.qtd_revisoes == 1 and _n_alunos(db, esc) == antes
+    assert _snap_matific(db, otavio.id) is None
+
+
+def test_uma_letra_num_sobrenome_do_meio_associa(db, sala):
+    esc = sala["escola"]
+    otavio = _aluno(db, esc, sala["turma"], "OTAVIO RICARDO MENDES FARIAS")
+    db.commit()
+    linha = _matific("OTAVIO RICARDO MANDES FARIAS", "5ºA", "u-mandes")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", otavio.id,
+                                                              "variante")
 
 
 def test_nome_que_so_casa_em_outra_turma_nao_vira_ficha_stub(db, sala):

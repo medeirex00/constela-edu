@@ -223,11 +223,6 @@ class Contexto:
     # provando de quem era o id externo, mas estão FORA de ``identidade`` e de
     # ``ids_do_aluno`` — não casam, não contam e não voltam sozinhas.
     aposentadas: dict[tuple[str, str], int] = field(default_factory=dict)
-    # PRENOMES de crianças cadastradas no Constela (1º e 2º nome de quem tem 3+
-    # palavras; o 1º de quem tem 2), de TODAS as escolas — ver ``_grafia_segura``:
-    # uma forma que é prenome de alguém é um nome de verdade, não um erro de
-    # digitação.
-    prenomes: frozenset[str] = frozenset()
     _memo_escola: dict = field(default_factory=dict, repr=False)
 
     # --- manutenção em memória -------------------------------------------
@@ -408,9 +403,6 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
                    RevisaoIdentidade.status == "pendente")
             .order_by(RevisaoIdentidade.id)).all():
         ctx.pendentes.setdefault(chave_ident, []).append(revisao_id)
-    ctx.prenomes = frozenset(
-        t for (nome,) in db.execute(select(Aluno.nome).where(Aluno.status != "excluido"))
-        for t in _prenomes(nome))
     return ctx
 
 
@@ -511,14 +503,15 @@ def _sufixo_da_sala(token: str, chave: str) -> bool:
             and int(digitos.group()) == int(num) and token[-1] == letra.lower())
 
 
-def _nome_para_casar(nome: str, chave: str = "") -> str:
+def _nome_para_casar(nome: str, chave: str = "", chave_alt: str = "") -> str:
     """O nome RECEBIDO como ele entra no CASAMENTO: sem o sufixo de TURMA. O
     professor do Elefante às vezes digita a turma junto do nome ("… RIBEIRO 2B",
     "… BRIET 4A"); esse sufixo não é nome de criança e, mantido, transformava o nome
     idêntico da ficha em "nome parcial" — revisão a cada sincronização.
 
     Só sai o que tem forma de sufixo de turma (``_SUFIXO_TURMA``) E é a sala da
-    própria linha (``_sufixo_da_sala`` contra ``chave``), como token separado ou
+    própria linha (``_sufixo_da_sala`` contra ``chave`` — ou contra ``chave_alt``,
+    a sala do relatório que ``sala_efetiva`` reconheceu na turma sem letra), como token separado ou
     grudado no fim de um nome ("PINTO2B" → "PINTO"); sem sala legível, nada sai. Qualquer outro
     token com dígito fica: um número puro ("… SOUZA 2") pode distinguir homônimos
     e, se sumisse, o dado da 2ª criança iria para a ficha da 1ª.
@@ -530,21 +523,16 @@ def _nome_para_casar(nome: str, chave: str = "") -> str:
     tokens = tokens_nome(nome)
     limpos: list[str] = []
     for t in tokens:
-        if _SUFIXO_TURMA.fullmatch(t) and _sufixo_da_sala(t, chave):
+        if _SUFIXO_TURMA.fullmatch(t) and (_sufixo_da_sala(t, chave)
+                                           or _sufixo_da_sala(t, chave_alt)):
             continue
         colado = _SUFIXO_TURMA_COLADO.fullmatch(t)
-        limpos.append(colado.group(1) if colado and _sufixo_da_sala(colado.group(2), chave)
-                      else t)
+        da_sala = colado is not None and (_sufixo_da_sala(colado.group(2), chave)
+                                          or _sufixo_da_sala(colado.group(2), chave_alt))
+        limpos.append(colado.group(1) if da_sala else t)
     if not limpos or limpos == tokens:
         return nome
     return " ".join(limpos)
-
-
-def _prenomes(nome: str) -> list[str]:
-    """Os PRENOMES de um nome: 1ª e 2ª palavra de quem tem 3 ou mais (MARIA
-    EDUARDA SILVA SOUZA), só a 1ª de quem tem 2."""
-    tokens = tokens_nome(nome)
-    return tokens[:2] if len(tokens) >= 3 else tokens[:1]
 
 
 # Grafias equivalentes de nome próprio no português do Brasil (LUÍS/LUIZ,
@@ -583,7 +571,7 @@ _VIA_GRAFIA = ("variante", "typo")
 _MINIMO_LETRAS_ERRO_DIGITACAO = 5
 
 
-def _grafia_segura(ctx: Contexto, recebido: str, ficha: str) -> bool:
+def _grafia_segura(recebido: str, ficha: str) -> bool:
     """A diferença entre o nome RECEBIDO da plataforma e o da FICHA é de grafia —
     a mesma criança — e não outro nome? Vale para o vínculo automático por grafia
     de candidato único (passo 3b) e para o desempate oficial × duplicata (3c).
@@ -594,26 +582,32 @@ def _grafia_segura(ctx: Contexto, recebido: str, ficha: str) -> bool:
       1. mesmo nº de palavras (3+), UMA só diferente, no MEIO (1º nome e último
          sobrenome idênticos);
       2. as duas formas são a MESMA grafia (``_forma_ortografica``: Z/S, Y/I, W/V,
-         K/C, PH/F, TH/T, H inicial mudo, consoante dobrada) — OU é um erro de
-         UMA letra (``_distancia_edicao`` == 1) em palavra de 5+ letras E a forma
-         recebida NÃO é prenome de nenhuma criança cadastrada (``ctx.prenomes``):
-         erro de digitação produz forma que não é nome de ninguém; ALINE, LAURA,
-         CRISTIANA são nomes de outras crianças, e aí quem decide é gente.
-    Medido em 2026-10-11 (só leitura) nas 16 linhas pendentes da rede que o motor
-    ligaria por grafia: todas são grafia equivalente ou erro de uma letra cuja
-    forma recebida não é prenome de ninguém."""
+         K/C, PH/F, TH/T, H inicial mudo, consoante dobrada) — em qualquer palavra
+         do meio; OU
+      3. é um erro de UMA letra (``_distancia_edicao`` == 1), em palavra de 5+
+         letras, num SOBRENOME do meio: nome de 4+ palavras e a diferença da 3ª
+         palavra em diante (nunca na última). Irmãos e gêmeos compartilham os
+         sobrenomes e se distinguem pelo PRENOME — MARIA ALICE × MARIA ALINE
+         ALVES PEREIRA —, então uma letra diferente no prenome é revisão. Não
+         há lista de prenomes a consultar: o cadastro de produção (1.420 fichas,
+         2026-10-11) não tem ALINE, CRISTIANA, DANIELE nem BRUNA, e um corpus
+         assim ligaria justamente as gêmeas.
+    Medido em 2026-10-11 (só leitura): das linhas pendentes da rede que o motor
+    ligaria por grafia, as de sobrenome do meio e as de grafia equivalente ligam;
+    as de erro de uma letra num prenome (2º nome) passam a pedir revisão."""
     ta, tb = tokens_nome(recebido), tokens_nome(ficha)
     if len(ta) != len(tb) or len(ta) < 3:
         return False
     difs = [i for i, (x, y) in enumerate(zip(ta, tb)) if x != y]
     if len(difs) != 1 or difs[0] in (0, len(ta) - 1):
         return False
-    x, y = ta[difs[0]], tb[difs[0]]
+    i = difs[0]
+    x, y = ta[i], tb[i]
     if _forma_ortografica(x) == _forma_ortografica(y):
         return True
-    return (_distancia_edicao(x, y) == 1
-            and min(len(x), len(y)) >= _MINIMO_LETRAS_ERRO_DIGITACAO
-            and x not in ctx.prenomes)
+    sobrenome_do_meio = len(ta) >= 4 and i >= 2
+    return (sobrenome_do_meio and _distancia_edicao(x, y) == 1
+            and min(len(x), len(y)) >= _MINIMO_LETRAS_ERRO_DIGITACAO)
 
 
 def _homonimos_fora_da_sala(ctx: Contexto, ident: matching.Identidade, alvo_nome: str,
@@ -805,7 +799,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
 
     # Daqui em diante o NOME decide: entra o recebido sem o sufixo de turma com
     # dígito ("… 2B"). A linha (nome exibido/gravado, chave da identidade) não muda.
-    nome_casar = _nome_para_casar(linha.nome, chave)
+    nome_casar = _nome_para_casar(linha.nome, chave, chave_alt)
 
     # 2) RA (identificador forte da escola inteira).
     ra = ra_forte(linha.ra)
@@ -861,7 +855,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
             if fora:
                 return _revisar_casa_fora(ctx, fora, res.candidatos, res.motivo, chave,
                                           alvo_nome)
-            if not _grafia_segura(ctx, nome_casar, ctx.alunos[res.aluno_id].nome):
+            if not _grafia_segura(nome_casar, ctx.alunos[res.aluno_id].nome):
                 res = replace(res, status=matching.REVISAR)
         if res.status == matching.VINCULADO and res.aluno_id in ctx.alunos:
             return _para_aluno(ctx, linha, ctx.alunos[res.aluno_id], res.motivo, chave,
@@ -879,7 +873,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
                     return _revisar_casa_fora(ctx, fora, res.candidatos, res.motivo, chave,
                                               alvo_nome)
                 if (desempate[1] in _VIA_GRAFIA
-                        and not _grafia_segura(ctx, nome_casar, desempate[0].nome)):
+                        and not _grafia_segura(nome_casar, desempate[0].nome)):
                     desempate = None
             if desempate is not None:
                 oficial, como = desempate

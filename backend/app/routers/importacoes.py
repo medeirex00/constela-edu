@@ -859,16 +859,25 @@ def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[st
 
 
 def _motor_escolheria(ctx: "ida.Contexto", ident: "ida.LinhaIdentidade",
-                      aluno: Aluno) -> bool:
-    """A ficha FIXADA por quem confirmou é a mesma que o motor escolheria sozinho
-    pelo nome? Então foi a sugestão da prévia aceita como veio — não uma escolha
-    de gente — e a pendência encerra como AUTOMÁTICA (não vira memória que
-    desligaria, nas próximas importações, a guarda de homônimo novo e a de ficha
-    inativa). Pela conta da plataforma não vale: ela acabou de ser gravada nesta
-    mesma linha e sempre "concordaria"."""
-    sem_escolha = replace(ident, aluno_id=None, id_externo="")
-    dec = ida.decidir(ctx, sem_escolha)
-    return dec.acao == ida.ASSOCIAR and dec.aluno_id == aluno.id
+                      aluno: Aluno) -> "ida.Decisao | None":
+    """A ficha FIXADA por quem confirmou é a mesma que o motor escolheria sozinho?
+    Então foi a sugestão da prévia aceita como veio — não uma escolha de gente —
+    e a pendência encerra como AUTOMÁTICA (não vira memória que desligaria, nas
+    próximas importações, a guarda de homônimo novo e a de ficha inativa).
+    Devolve a decisão do motor nesse caso (para gravar a regra DELE), senão None.
+
+    A conta da plataforma acabou de ser gravada nesta mesma linha e sempre
+    "concordaria"; por isso o motor decide pelo NOME — mas as travas da CONTA
+    valem antes: conta aposentada ou OUTRA conta desta plataforma na ficha
+    fixada são situações em que o motor nunca associaria sozinho (é gente
+    passando por cima da trava), e a escolha é humana."""
+    if ident.id_externo:
+        if (ident.plataforma, ident.id_externo) in ctx.aposentadas:
+            return None
+        if ctx.ids_do_aluno.get((aluno.id, ident.plataforma), set()) - {ident.id_externo}:
+            return None
+    dec = ida.decidir(ctx, replace(ident, aluno_id=None, id_externo=""))
+    return dec if dec.acao == ida.ASSOCIAR and dec.aluno_id == aluno.id else None
 
 
 def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contexto",
@@ -926,13 +935,17 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                                            str(contexto.get("periodo_inicio") or ""),
                                            str(contexto.get("periodo_fim") or ""))
                        for c in chaves}
-    humana = ident.aluno_id is not None and not _motor_escolheria(ctx, ident, aluno)
+    motor = _motor_escolheria(ctx, ident, aluno) if ident.aluno_id is not None else None
+    humana = ident.aluno_id is not None and motor is None
+    if motor is not None:
+        decisao = motor        # a regra gravada é a do motor, não "explicito"
     if humana:
         regra = _REGRA_ESCOLHA_HUMANA
     else:
         regra = _REGRA_DA_VIA.get(decisao.via, f"decisão automática ({decisao.via})")
         if (decisao.via not in _VIAS_SEM_NOME
-                and ida._nome_para_casar(ident.nome, decisao.chave_sala) != ident.nome):
+                and ida._nome_para_casar(ident.nome, decisao.chave_sala,
+                                         ida.chave_sala(ident.turma_nome)) != ident.nome):
             # "… RIBEIRO 2B" casou como nome idêntico: a regra diz que o sufixo saiu.
             regra += ", sem o sufixo de turma digitado junto do nome"
     preteridos = _preteridos(ctx, decisao.preteridos)
@@ -955,7 +968,9 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
         if humana:
             resolucao["resolvida_na"] = "confirmacao_da_importacao"
         if preteridos:
-            resolucao["preteridos"] = preteridos
+            # Só o id: a revisão não passa pela redação LGPD da exclusão
+            # permanente (os logs passam, e lá o nome fica).
+            resolucao["preteridos"] = [{"aluno_id": p["aluno_id"]} for p in preteridos]
         if coletor.importacao_id is not None:
             resolucao["importacao_id"] = coletor.importacao_id
         rev.status = "resolvida"
