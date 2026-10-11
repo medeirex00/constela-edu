@@ -102,6 +102,22 @@ function RotaGlobal({ children }: { children: React.ReactNode }) {
   return global ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+/** Só ADMINISTRADOR — Admin Global ou admin da escola (`usePerfil().admin`, o
+ *  mesmo `is_global || cargo === "admin"` da tela de Configurações Gerais e do
+ *  `exigir_papeis("admin")` do backend); a Secretaria não opera escolas.
+ *
+ *  Por que a coordenação não entra em /configuracoes: tudo o que a tela oferece
+ *  a ela é título sem conteúdo (Backup), leitura do que não pode mudar (cor,
+ *  brasão e logos da identidade institucional, pesos legados) ou um "Salvar
+ *  dados da escola" que o backend recusa com 403 (`PATCH /escolas/{id}` exige
+ *  admin). O que ela PODE fazer ali — editar as medalhas — ganhou item próprio
+ *  no menu (Gamificação → Editar conquistas), e /configuracoes/conquistas segue
+ *  aberta a ela. O backend continua sendo a trava real. */
+export function RotaAdmin({ children }: { children: React.ReactNode }) {
+  const { admin, secretaria } = usePerfil();
+  return admin && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 /** Só a Secretaria (usuário com rede vinculada) ou o admin global entra em
  *  /rede — o painel municipal com o mapa. Professor/escola cai no Dashboard. */
 function RotaRede({ children }: { children: React.ReactNode }) {
@@ -197,7 +213,10 @@ export default function App() {
           <Route path="/turmas/:id" element={<RotaGestao><TurmaDetalhe /></RotaGestao>} />
           <Route path="/professores" element={<RotaGestao><Professores /></RotaGestao>} />
           <Route path="/metricas" element={<RotaGestao><Metricas /></RotaGestao>} />
-          <Route path="/configuracoes" element={<RotaGestao><Configuracoes /></RotaGestao>} />
+          {/* Configurações Gerais: só administrador (ver RotaAdmin). O editor de
+              medalhas logo abaixo continua com a coordenação (o backend deixa
+              admin e coordenador gravarem as definições). */}
+          <Route path="/configuracoes" element={<RotaGestao><RotaAdmin><Configuracoes /></RotaAdmin></RotaGestao>} />
           <Route path="/configuracoes/conquistas" element={<RotaGestao><ConfigConquistas /></RotaGestao>} />
           {/* Telas de PRODUTO: só existem para a rede que contratou o módulo. */}
           <Route path="/matific" element={<RotaGestao><RotaModulo modulo="matematica"><Matific /></RotaModulo></RotaGestao>} />

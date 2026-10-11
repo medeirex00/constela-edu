@@ -1,8 +1,9 @@
 /**
  * Configurações → Conquistas — nada de critério fixo no código.
  *
- * O administrador cria, edita, reordena, ativa/desativa e remove
- * conquistas. Ao salvar, as regras passam a valer imediatamente para
+ * A gestão da escola (administrador ou coordenação — o backend libera as
+ * definições para `admin` e `coordenador`) cria, edita, reordena,
+ * ativa/desativa e remove conquistas. Ao salvar, as regras passam a valer imediatamente para
  * todos os alunos: XP, mural, biblioteca, perfil e painel público.
  */
 import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2 } from "lucide-react";
@@ -22,6 +23,7 @@ import {
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { usePerfil } from "../../hooks/usePerfil";
 import { ApiError, api } from "../../lib/api";
 import { BadgeRaridade, NOME_PLATAFORMA } from "../BibliotecaConquistas";
 
@@ -61,6 +63,13 @@ const NOVA: Definicao = {
 
 export default function ConfigConquistas() {
   const { escolaId } = useApp();
+  // O caminho de volta é o de quem CHEGOU aqui: o administrador vem do cartão
+  // dentro de Configurações Gerais; a coordenação — que não abre aquela tela
+  // (RotaAdmin) — vem do grupo Gamificação do menu, cuja página é o mural.
+  const { admin } = usePerfil();
+  const volta = admin
+    ? { para: "/configuracoes", rotulo: "Configurações" }
+    : { para: "/conquistas", rotulo: "Conquistas" };
   const [lista, setLista] = useState<Definicao[]>([]);
   const [alterado, setAlterado] = useState(false);
   const [emEdicao, setEmEdicao] = useState<{ indice: number | null; item: Definicao } | null>(null);
@@ -131,13 +140,15 @@ export default function ConfigConquistas() {
     <div className="space-y-6">
       <div>
         <Link
-          to="/configuracoes"
+          to={volta.para}
           className="mb-3 inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          <ArrowLeft size={15} /> Configurações
+          <ArrowLeft size={15} /> {volta.rotulo}
         </Link>
+        {/* O MESMO nome do item de menu que abre esta tela (Gamificação →
+            "Editar conquistas"): "Conquistas" sozinho é o mural (/conquistas). */}
         <PageHeader
-          titulo="Conquistas"
+          titulo="Editar conquistas"
           descricao="Crie e ajuste as medalhas da escola — critérios, XP, raridade e ordem — sem tocar no código. Novas conquistas valem na hora."
           acoes={
             <div className="flex gap-2">

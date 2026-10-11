@@ -34,6 +34,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  SquarePen,
   Sun,
   Trophy,
   Upload,
@@ -140,6 +141,10 @@ const IT = {
   diagnostico: { rotulo: "Diagnóstico Elefante", caminho: "/diagnostico-elefante", icone: Radar },
   conquistas: { rotulo: "Conquistas", caminho: "/conquistas", icone: Award, exato: true },
   bibliotecaConquistas: { rotulo: "Biblioteca de Conquistas", caminho: "/conquistas/biblioteca", icone: Medal },
+  // Editor das medalhas da escola. A coordenação grava as definições (o backend
+  // libera admin e coordenador) mas não abre Configurações Gerais, onde ficava o
+  // único caminho até aqui — ganha item próprio em Gamificação.
+  editorConquistas: { rotulo: "Editar conquistas", caminho: "/configuracoes/conquistas", icone: SquarePen },
   // UMA entrada para toda a área. "Por período" é um TIPO de relatório e vive
   // numa aba dentro da página (ver `pages/RelatoriosArea.tsx`), não aqui ao
   // lado — quem procura um relatório não deve ter de adivinhar o módulo.
@@ -179,6 +184,10 @@ interface Perfil {
   secretaria: boolean;
   /** Gestão (admin/coordenador/global) — o professor é `false` aqui. */
   gestor: boolean;
+  /** Administrador (global ou cargo "admin") — `usePerfil().admin`. Separa,
+   *  dentro da sidebar da escola, o admin da coordenação: Configurações Gerais
+   *  é só dele. */
+  admin: boolean;
 }
 
 /** Rótulo do Dashboard conforme o perfil — mesma rota "/", foco diferente. */
@@ -253,10 +262,12 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     // saem do menu (rotas e permissões intactas — acessíveis por "Integrações"
     // e pelo Admin Global); "Integrações" responde "os dados estão atualizados?".
     { chave: "plataformas", rotulo: "Plataformas", icone: Blocks, itens: [IT.matific, IT.elefante, IT.livros, IT.sincronizacao, IT.revisoes] },
-    { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas] },
+    { chave: "gamificacao", rotulo: "Gamificação", icone: Award, itens: [IT.conquistas, IT.bibliotecaConquistas, ...(p.admin ? [] : [IT.editorConquistas])] },
     { chave: "relatorios", rotulo: "Relatórios", icone: FileText, itens: [IT.relatorios, IT.painelPublico] },
     // "Pontuação" = a mesma página /metricas em modo explicativo (só leitura).
-    { chave: "config", rotulo: "Configurações", icone: Settings, itens: [IT.pontuacao, IT.configuracoes] },
+    // Configurações Gerais (cor, brasão, dados da escola, backup, IA) é do
+    // administrador: a coordenação não vê o item (nem abre a rota — RotaAdmin).
+    { chave: "config", rotulo: "Configurações", icone: Settings, itens: [IT.pontuacao, ...(p.admin ? [IT.configuracoes] : [])] },
   ];
   // 👩‍🏫 Professor — só as turmas dele (o backend filtra por turmas_permitidas).
   return [
@@ -381,6 +392,7 @@ function PesquisaGlobal() {
   const global = Boolean(usuario?.is_global);
   // Secretaria = tem rede vinculada e NÃO é admin global: some das operações de escola.
   const secretaria = !global && usuario?.rede_id != null;
+  const admin = global || usuario?.cargo === "admin";
 
   const consulta = termo.trim();
 
@@ -405,7 +417,7 @@ function PesquisaGlobal() {
 
   // Páginas do menu que casam com o texto (só as que o cargo pode abrir).
   const alvo = normalizar(consulta);
-  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis({ global, secretaria, gestor }, modulosBusca)
+  const paginas: Opcao[] = consulta.length < 1 ? [] : itensNavVisiveis({ global, secretaria, gestor, admin }, modulosBusca)
     .filter((item) => normalizar(item.rotulo).includes(alvo))
     .slice(0, 6)
     .map((item) => ({
@@ -717,7 +729,8 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const rede = Boolean(usuario?.is_global) || usuario?.rede_id != null;
   // Secretaria = tem rede vinculada e NÃO é admin global.
   const secretaria = !usuario?.is_global && usuario?.rede_id != null;
-  const perfil: Perfil = { global: Boolean(usuario?.is_global), secretaria, gestor };
+  const admin = Boolean(usuario?.is_global) || usuario?.cargo === "admin";
+  const perfil: Perfil = { global: Boolean(usuario?.is_global), secretaria, gestor, admin };
   // "Comece aqui" só aparece enquanto a escola não foi configurada; depois da
   // config inicial ele some (novas importações passam a ser por "Importações").
   const { precisaConfigurar } = useOnboarding();
@@ -894,6 +907,7 @@ function NavegacaoRail() {
     global: Boolean(usuario?.is_global),
     secretaria: !usuario?.is_global && usuario?.rede_id != null,
     gestor: Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? ""),
+    admin: Boolean(usuario?.is_global) || usuario?.cargo === "admin",
   };
   const bruto: ItemNav[] = [
     { ...DASHBOARD, rotulo: rotuloDashboard(perfil) },
@@ -967,6 +981,7 @@ function Trilha() {
     global: Boolean(usuario?.is_global),
     secretaria: !usuario?.is_global && usuario?.rede_id != null,
     gestor: Boolean(usuario?.is_global) || ["admin", "coordenador"].includes(usuario?.cargo ?? ""),
+    admin: Boolean(usuario?.is_global) || usuario?.cargo === "admin",
   };
   // /metricas é "Métricas" (editores da régua) para o Admin Global e "Pontuação"
   // (explicação, só leitura) para a escola — a trilha usa o mesmo nome do menu.
