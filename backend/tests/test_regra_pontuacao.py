@@ -9,8 +9,10 @@ Trava:
   * a normalização declarada é a do motor (percentil e amostra mínima vêm das
     constantes de ``scoring``; modo manual só vale no perfil personalizado);
   * o módulo não contratado aparece como ``contratada: false`` (sem esconder);
-  * acesso: qualquer usuário da escola lê (professor inclusive), sem login 401,
-    outra escola 403; é só GET (a governança da fórmula cobre a rota).
+  * a Nota Geral (legado) declara os pesos efetivos de ``pesos.geral``;
+  * acesso: admin e coordenação da escola leem; professor não (os parâmetros da
+    fórmula são fechados a ele desde a Onda 2); sem login 401, outra escola 403;
+    é só GET (a governança da fórmula cobre a rota).
 """
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -80,6 +82,8 @@ def test_institucional_devolve_os_pesos_da_rede_mesmo_com_config_local(cliente, 
     assert matematica["pesos"] == scoring.PESOS_PADRAO["pesos.matific"]
     for dim, ns in ((leitura, "pesos.elefante"), (matematica, "pesos.matific")):
         assert dim["pesos"] == scoring.pesos_efetivos(db, escola_id, ns)[1]
+    assert corpo["nota_geral"]["pesos"] == scoring.pesos_efetivos(
+        db, escola_id, "pesos.geral")[1]
     assert corpo["versoes"] == {
         "composicao": scoring.COMPOSICAO_ATUAL,
         "dificuldade": dificuldade_livro.VERSAO_VIGENTE,
@@ -130,10 +134,12 @@ def test_modulo_nao_contratado_aparece_sem_esconder(cliente, db, escola_completa
     assert (leitura["contratada"], matematica["contratada"]) == (True, False)
 
 
-def test_qualquer_usuario_da_escola_le_e_ninguem_de_fora(db, escola_completa):
+def test_gestao_le_professor_nao_e_ninguem_de_fora(db, escola_completa):
     escola_id = escola_completa["escola"].id
-    for email, cargo in (("prof@regra.local", "professor"), ("coord@regra.local", "coordenador")):
-        assert _usuario(db, escola_id, email, cargo).get(_url(escola_id)).status_code == 200
+    assert _usuario(db, escola_id, "coord@regra.local", "coordenador").get(
+        _url(escola_id)).status_code == 200
+    assert _usuario(db, escola_id, "prof@regra.local", "professor").get(
+        _url(escola_id)).status_code == 403
     assert TestClient(app).get(_url(escola_id)).status_code == 401
     outra = Escola(nome="ESCOLA DE FORA", ano_letivo_ativo=2026)
     db.add(outra)

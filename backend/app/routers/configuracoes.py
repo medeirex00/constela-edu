@@ -170,6 +170,7 @@ def dificuldade_livro_vigente(
 def regra_da_pontuacao(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
     """A regra da nota DESTA escola, lida das mesmas funções do recálculo — a
     fonte única da explicação (Suporte e "Como funciona?"). Nada aqui é editável
@@ -177,12 +178,14 @@ def regra_da_pontuacao(
     autorizado pelo Admin Global), módulos contratados, pesos EFETIVOS de cada
     dimensão (``scoring.pesos_efetivos`` — no perfil institucional os fixos da
     rede, ignorando a configuração local, como o motor), versões (composição por
-    dimensão e régua de dificuldade dos livros) e a normalização em uso.
+    dimensão e régua de dificuldade dos livros), a normalização em uso e os pesos
+    da Nota Geral — o LEGADO que junta as matérias e ainda ordena o Ranking
+    Geral, o certificado "Geral" e as vitrines.
 
-    Sem dado de aluno: qualquer usuário da escola lê (professor inclusive — é a
-    regra da nota que ele explica às famílias); a Secretaria, por GET, nas
-    escolas da rede dela. Não exige módulo: a resposta diz o que está contratado
-    em vez de esconder."""
+    Sem dado de aluno. Mesmo acesso dos demais GETs desta página (admin e
+    coordenação; a Secretaria, por GET, nas escolas da rede dela): os parâmetros
+    da fórmula ficam fechados ao professor desde a Onda 2 (F17/F18). Não exige
+    módulo: a resposta diz o que está contratado em vez de esconder."""
     escola = db.get(Escola, escola_id)
     personalizado = scoring._scoring_personalizado(db, escola_id)
     contratadas = scoring.dimensoes_contratadas(db, escola)
@@ -213,6 +216,9 @@ def regra_da_pontuacao(
              "contratada": "matematica" in contratadas,
              "pesos": percentuais("pesos.matific")},
         ],
+        # LEGADO: média ponderada das matérias COM dado do aluno (renormalizada);
+        # ordena o Ranking Geral, o certificado "Geral" e as vitrines.
+        "nota_geral": {"pesos": percentuais("pesos.geral")},
         "normalizacao": {
             "modo": modo,
             # Referência = percentil 90 dos alunos com dado (>0) quando a
