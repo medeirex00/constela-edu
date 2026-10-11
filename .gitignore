@@ -14,6 +14,9 @@ apps/web/dist/
 apps/quest/dist/
 apps/mobile/.expo/
 apps/mobile/dist/
+# Projetos nativos gerados por `expo prebuild`/`expo run` (o EAS gera via CNG)
+apps/mobile/android/
+apps/mobile/ios/
 packages/*/dist/
 
 # Cobertura de testes (relatório gerado)
