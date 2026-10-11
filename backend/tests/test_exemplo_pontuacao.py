@@ -675,3 +675,36 @@ def test_sem_matematica_o_matific_e_barrado(cliente, db, escola_completa):
     _rede_com(db, escola, matematica=False)
     assert cliente.get(_url(escola.id, "matific", "atividades=5&estrelas=5")).status_code == 403
     assert cliente.get(_url(escola.id, "elefante", "nivel=D&serie=3")).status_code == 200
+
+
+@pytest.mark.parametrize("caminho", [
+    "configuracoes/pontuacao/exemplo/matific?atividades=5&estrelas=5",
+    "matific",      # rota antiga com a mesma trava (plataformas.py)
+])
+def test_trava_de_modulo_so_responde_depois_do_login(db, escola_completa, caminho):
+    """``exigir_modulo_da_escola`` resolve ``escola_autorizada`` ANTES do contrato:
+    sem login é 401 e de outra escola é o 403 de ACESSO — o "não faz parte do
+    plano" (que revela o que a rede contratou) só chega a quem entra na escola."""
+    escola = escola_completa["escola"]
+    _rede_com(db, escola, matematica=False)
+    outra = Escola(nome="ESCOLA VIZINHA", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    db.add(Usuario(escola_id=outra.id, nome="Coordenacao Vizinha", email="viz@exemplo.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="coordenador"))
+    db.add(Usuario(escola_id=escola.id, nome="Coordenacao", email="coord2@exemplo.local",
+                   senha_hash=hash_senha("s3nh4"), cargo="coordenador"))
+    db.commit()
+    url = f"{API}/escolas/{escola.id}/{caminho}"
+
+    anonimo = TestClient(app).get(url)
+    assert anonimo.status_code == 401
+    assert "plano" not in anonimo.text
+
+    vizinha = _login("viz@exemplo.local").get(url)
+    assert vizinha.status_code == 403
+    assert "plano" not in vizinha.json()["detail"]
+
+    da_escola = _login("coord2@exemplo.local").get(url)
+    assert da_escola.status_code == 403
+    assert "plano" in da_escola.json()["detail"]
