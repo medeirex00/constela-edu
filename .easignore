@@ -1,0 +1,54 @@
+# Pacote enviado ao EAS Build (app mobile, apps/mobile).
+#
+# ATENÇÃO: quando este arquivo existe, o EAS NÃO lê o .gitignore. Por isso ele
+# é uma LISTA DE PERMISSÃO: sobe só o necessário para o `npm ci` na raiz do
+# monorepo e para o build de apps/mobile. Backend, banco, uploads, exports,
+# capturas dos crawlers, docs e segredos ficam de fora.
+#
+# Regras sem barra final de propósito: o eas-cli testa diretórios sem "/" e
+# uma negação como "!/apps/mobile/" não casaria, deixando o app de fora.
+# Conferir com o teste de empacotamento antes de mudar.
+
+/*
+!/package.json
+!/package-lock.json
+!/.easignore
+
+# Workspaces: o mobile e o @constela/core inteiros; dos demais, só o
+# package.json (o `npm ci` do monorepo exige os manifestos).
+!/apps
+/apps/*
+!/apps/mobile
+!/apps/web
+/apps/web/*
+!/apps/web/package.json
+!/apps/quest
+/apps/quest/*
+!/apps/quest/package.json
+!/apps/desktop
+/apps/desktop/*
+!/apps/desktop/package.json
+!/packages
+/packages/*
+!/packages/core
+!/packages/quest-core
+/packages/quest-core/*
+!/packages/quest-core/package.json
+
+# Mesmo dentro do que sobe: gerados, projetos nativos (o EAS gera via CNG)
+# e segredos nunca vão.
+.expo
+dist
+coverage
+apps/mobile/android
+apps/mobile/ios
+.env
+.env.*
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+credentials.json
+*.db
+*.sqlite

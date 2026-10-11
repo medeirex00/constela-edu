@@ -1,7 +1,8 @@
 {
   "cli": {
     "version": ">= 13.0.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "remote",
+    "requireCommit": true
   },
   "build": {
     "desenvolvimento": {
@@ -9,19 +10,18 @@
       "distribution": "internal"
     },
     "preview": {
-      "comment-": "Gera um APK instalável direto no aparelho (sem loja)",
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://SEU-SERVIDOR:8000/api/v1"
+        "EXPO_PUBLIC_API_URL": "https://SEU-SERVIDOR-DE-TESTES/api/v1"
       }
     },
     "producao": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://SEU-DOMINIO/api/v1"
+        "EXPO_PUBLIC_API_URL": "https://api.constelaedu.com/api/v1"
       }
     }
   },

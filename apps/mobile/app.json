@@ -7,6 +7,9 @@
     "scheme": "constelaedu",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "experiments": {
+      "autolinkingModuleResolution": true
+    },
     "icon": "./assets/icone.png",
     "splash": {
       "image": "./assets/splash.png",
@@ -38,11 +41,6 @@
           "defaultChannel": "default"
         }
       ]
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "SUBSTITUA-PELO-PROJECT-ID-DO-EAS"
-      }
-    }
+    ]
   }
 }

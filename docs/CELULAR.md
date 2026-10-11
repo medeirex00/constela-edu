@@ -11,7 +11,10 @@ publicado na internet em produção).
 
 ## Caminho 1 — Testar AGORA com o Expo Go (≈10 minutos, sem build)
 
-1. **No celular**: instale o app **Expo Go** (Play Store / App Store).
+1. **No celular (Android)**: o app usa o **Expo SDK 54**, e o Expo Go das lojas
+   só roda o SDK mais recente. Instale o Expo Go do SDK 54 pelo APK em
+   https://expo.dev/go. No **iPhone** não há Expo Go do SDK 54 para aparelho:
+   use o Caminho 2. Push não funciona no Expo Go.
 2. **No computador** (dois terminais):
 
    ```powershell
@@ -25,8 +28,8 @@ publicado na internet em produção).
    npm run dev:mobile
    ```
 
-3. O terminal mostra um **QR code** → escaneie com o Expo Go (Android) ou
-   com a câmera (iPhone). O app abre no aparelho.
+3. O terminal mostra um **QR code** → escaneie com o Expo Go (Android).
+   O app abre no aparelho.
 4. Entre com `admin@constela.local` e a senha que o seed exibiu no console.
 
 Requisitos: celular e computador na **mesma rede Wi-Fi**; se não conectar,
@@ -44,13 +47,19 @@ Expo Go. Precisa de uma conta gratuita em https://expo.dev.
 npm install -g eas-cli
 eas login                       # sua conta Expo
 cd apps/mobile
-eas init                        # cria o projectId e preenche o app.json
+eas init                        # cria o projectId e grava no app.json (commitar)
 eas build -p android --profile preview
 ```
 
 Antes do build, edite `apps/mobile/eas.json` e troque
-`EXPO_PUBLIC_API_URL` do perfil `preview` pela URL real da sua API
-(em teste na rede local: `http://192.168.15.30:8000/api/v1`).
+`EXPO_PUBLIC_API_URL` do perfil `preview` pela URL **HTTPS** de um servidor
+de testes com dados de teste (o APK do preview é de release e o Android
+bloqueia `http://`; não aponte o teste para a produção com dados reais).
+
+O `eas.json` tem `requireCommit: true`: o EAS só empacota o que está
+commitado, e o `.easignore` da raiz limita o envio ao app mobile e ao
+`@constela/core` (banco, uploads, exports e segredos nunca sobem). Rode o
+build a partir de um checkout limpo do commit.
 
 Ao final, o EAS mostra um **link com QR code para baixar o APK** — abra no
 celular e instale (autorize "instalar apps de fontes desconhecidas").
@@ -64,7 +73,7 @@ distribuição ad-hoc/TestFlight: `eas build -p ios --profile preview`.
 ## Caminho 3 — Publicar nas lojas (produção)
 
 1. Publique o servidor (VPS com `docker compose up -d` + domínio HTTPS).
-2. Ajuste `EXPO_PUBLIC_API_URL` do perfil `producao` no `eas.json`.
+2. O perfil `producao` do `eas.json` já aponta para `https://api.constelaedu.com/api/v1`.
 3. Contas de desenvolvedor: Google Play (US$ 25 única) e/ou Apple (US$ 99/ano).
 4. Build + envio:
 
@@ -75,8 +84,11 @@ distribuição ad-hoc/TestFlight: `eas build -p ios --profile preview`.
    eas submit -p ios
    ```
 
-Push em produção: o `projectId` criado pelo `eas init` já habilita as
-notificações via Expo — nenhuma configuração extra no backend.
+Push: além do `projectId` do `eas init`, o Android exige um projeto Firebase
+(`google-services.json` em `android.googleServicesFile` no `app.json`) e a
+chave FCM V1 enviada ao EAS (`eas credentials`); o iOS exige conta Apple
+Developer e a chave APNs (o EAS oferece criar no primeiro build). O backend
+não precisa de mudança.
 
 ---
 
