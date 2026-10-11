@@ -254,17 +254,36 @@ def test_matching_subconjunto_so_estrutural():
         permitir_subconjunto_unico=True).status == matching.REVISAR
 
 
-def test_variante_de_grafia_sem_corroboracao_vai_para_revisao(db, sala):
-    """"RICADO" × "RICARDO" (typo no nome do meio, pontas iguais): parecido não é
-    prova. Na plataforma não associa só pelo nome — revisão."""
-    esc, mathias = sala["escola"], sala["mathias"]
-    linha = _matific("MATHIAS RICADO RODRIGUES MARADEI", "5ºA", "u-ricado")
+def test_uma_letra_no_segundo_prenome_continua_em_revisao(db, sala):
+    """"RICADO" × "RICARDO" no 2º PRENOME, candidato ÚNICO na sala → REVISÃO.
+
+    Em 2026-10-07 o trabalho local passou a associar este caso (variação de grafia
+    num nome do meio). A revisão adversarial de 2026-10-11 mostrou que a mesma
+    regra liga prenomes DIFERENTES (MARIA ALICE × MARIA ALINE, gêmeas) e que não
+    há lista de prenomes confiável no cadastro. Regra vigente
+    (``identidade_aluno._grafia_segura``): grafia equivalente em qualquer palavra
+    do meio; erro de UMA letra só num SOBRENOME do meio. Automatizar o erro no
+    prenome é decisão do dono (com uma lista de prenomes de referência)."""
+    esc = sala["escola"]
+    otavio = _aluno(db, esc, sala["turma"], "OTAVIO RICARDO MENDES FARIAS")
+    db.commit()
+    linha = _matific("OTAVIO RICADO MENDES FARIAS", "5ºA", "u-ricado")
     [corr] = _previa(db, esc, "matific", [linha])
-    assert corr["status"] == "revisar" and corr["aluno_id"] == mathias.id
+    assert (corr["status"], corr["aluno_id"]) == ("revisar", otavio.id)
     antes = _n_alunos(db, esc)
     r = _confirmar(db, esc, sala["admin"], "matific", [linha])
     assert r.qtd_revisoes == 1 and _n_alunos(db, esc) == antes
-    assert _snap_matific(db, mathias.id) is None
+    assert _snap_matific(db, otavio.id) is None
+
+
+def test_uma_letra_num_sobrenome_do_meio_associa(db, sala):
+    esc = sala["escola"]
+    otavio = _aluno(db, esc, sala["turma"], "OTAVIO RICARDO MENDES FARIAS")
+    db.commit()
+    linha = _matific("OTAVIO RICARDO MANDES FARIAS", "5ºA", "u-mandes")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", otavio.id,
+                                                              "variante")
 
 
 def test_nome_que_so_casa_em_outra_turma_nao_vira_ficha_stub(db, sala):

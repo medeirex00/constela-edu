@@ -585,12 +585,17 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                     plataforma: str | None = None,
                     ctx: "ida.Contexto | None" = None,
                     revisoes: "ida.ColetorRevisoes | None" = None,
-                    usuario_id: int | None = None) -> Aluno | None:
+                    usuario_id: int | None = None,
+                    encerrar_revisoes: bool = True) -> Aluno | None:
     """Aplica à linha a decisão da PORTA ÚNICA de identidade
     (``identidade_aluno.decidir``) — a MESMA que a prévia mostrou:
 
       * ASSOCIAR → devolve a ficha e grava a identidade externa (UUID do Matific /
-        studentId do Elefante) nela, para a próxima sincronização casar direto;
+        studentId do Elefante) nela, para a próxima sincronização casar direto; e
+        ENCERRA a revisão pendente desta mesma identidade e do mesmo tipo de dado,
+        que a linha acabou de responder (``_encerrar_revisoes_respondidas`` —
+        ``encerrar_revisoes=False`` só no /resolver, que fecha as pendências ele
+        mesmo);
       * REVISAR  → NÃO associa e NÃO cria: a linha vai INTEIRA para a fila de
         revisão (``RevisaoIdentidade``), com candidatos e motivo, e é devolvida em
         ``ignorados`` (a sync não avança o cursor desse aluno);
@@ -656,13 +661,27 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             # AUDITORIA (regra §17): vínculo decidido pelo motor sem nome idêntico
             # (abreviação, parcial estrutural, grafia segura, identificador).
             turma = ctx.turma_do_aluno(aluno.id)
+            detalhes = {"origem": linha.nome, "aluno": aluno.nome,
+                        "turma": turma.nome if turma is not None else turma_nome,
+                        "confianca": "alta", "candidatos": 1,
+                        "correspondencia": decisao.via,
+                        "motivo": "único candidato plausível na mesma sala"}
+            if decisao.preteridos:
+                # DESEMPATE "oficial × duplicata" (``lista_piloto_unica``): havia
+                # MAIS de um candidato na sala. O rastro diz quantos, quem perdeu e
+                # por quê — "1 candidato" seria falso e esconderia as fichas que a
+                # fusão administrativa ainda precisa juntar à oficial.
+                detalhes.update(
+                    candidatos=1 + len(decisao.preteridos),
+                    preteridos=_preteridos(ctx, decisao.preteridos),
+                    motivo=_MOTIVO_DESEMPATE)
             registrar(db, "aluno.vinculado_auto", escola_id=escola_id,
                       usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
-                      detalhes={"origem": linha.nome, "aluno": aluno.nome,
-                                "turma": turma.nome if turma is not None else turma_nome,
-                                "confianca": "alta", "candidatos": 1,
-                                "correspondencia": decisao.via,
-                                "motivo": "único candidato plausível na mesma sala"})
+                      detalhes=detalhes)
+        if encerrar_revisoes:
+            _encerrar_revisoes_respondidas(
+                db, escola_id, ctx, ident, decisao, aluno, avisos,
+                coletor=revisoes, usuario_id=usuario_id)
         if criados is not None:
             criados[chave_log] = aluno
         return aluno
@@ -744,6 +763,258 @@ def _marcar_via(linha, via: str) -> None:
         linha.via = via
     except (AttributeError, ValueError, TypeError):
         pass
+
+
+# O motivo VERDADEIRO do desempate "oficial × duplicata" (``identidade_aluno.
+# _oficial_entre_duplicatas``), para a auditoria e para a revisão encerrada.
+_MOTIVO_DESEMPATE = ("única ficha da Lista Piloto compatível na sala; as outras são "
+                     "duplicatas dela (mesmo nome ou abreviado), fora da Lista Piloto")
+
+# A regra de cada via de ASSOCIAR, em uma frase: é o "por quê" gravado na revisão
+# que o sistema encerra sozinho — quem abrir a fila depois entende a decisão sem
+# precisar ler o código.
+_REGRA_DA_VIA = {
+    "identidade": "vínculo pela conta da plataforma",
+    "uuid": "vínculo pela conta da plataforma",
+    "ra": "RA da escola, com nome compatível",
+    "exato": "nome idêntico, candidato único",
+    "identificador": "nº de chamada, RA ou nascimento confirmando o candidato da sala",
+    "abreviacao": "nome abreviado, candidato único na sala",
+    "parcial": "nome do meio omitido, candidato único na sala",
+    "variante": "grafia segura num nome do meio, candidato único na sala",
+    "typo": "grafia segura num nome do meio, candidato único na sala",
+    "lista_piloto_unica": ("única ficha da Lista Piloto compatível; as demais são "
+                           "duplicatas dela (mesmo nome ou abreviado), fora da Lista Piloto"),
+    "revisao": "mesma escolha de uma revisão já resolvida desta identidade",
+}
+
+# Quando quem confirmou FIXOU a ficha da linha (prévia aceita ou alternativa
+# escolhida na tela): a revisão é encerrada por essa pessoa, não pelo sistema.
+_REGRA_ESCOLHA_HUMANA = ("ficha fixada por quem confirmou a importação "
+                         "(prévia aceita ou alternativa escolhida)")
+
+# Vias que NÃO casam pelo nome — a conta da plataforma, a escolha explícita e a
+# memória de uma decisão humana. Só nas outras o sufixo de turma retirado do nome
+# ("… RIBEIRO 2B") fez parte do casamento e cabe na regra.
+_VIAS_SEM_NOME = frozenset({"identidade", "uuid", "explicito", "revisao"})
+
+# Motivos cuja PERGUNTA é o próprio vínculo da conta: quem confirmou disse que a
+# linha da conta U é de BRUNA, mas U está na ficha de BEATRIZ. A sincronização que
+# casa por essa MESMA conta só repete o estado contestado — não responde nada.
+# Só o /resolver, que pode transferir a conta, encerra essa pendência.
+_SO_O_GESTOR_ENCERRA = frozenset({"identidade_de_outro_aluno"})
+
+
+def _preteridos(ctx: "ida.Contexto", ids) -> list[dict]:
+    """As fichas deixadas de lado no desempate: id e nome (o nome é o que deixa a
+    auditoria legível; a anonimização LGPD do log o alcança dentro da lista)."""
+    return [{"aluno_id": c["aluno_id"], "nome": c["nome"]}
+            for c in ida.descrever_candidatos(ctx, ids)]
+
+
+def _instante(texto) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(texto)) if texto else None
+    except ValueError:
+        return None
+
+
+def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[str],
+                                 coletor: "ida.ColetorRevisoes") -> bool:
+    """Esta linha traz o MESMO dado que a pendência guardava, tão novo quanto ou
+    mais? Só então encerrar sem aplicar o congelado não perde nada — é o mesmo
+    juízo que o /resolver faz com ``_retrato_superado``, antecipado.
+
+      * MESMO TIPO DE DADO: a ``chave`` da pendência (identidade + formato +
+        período) é a que esta linha atualizaria se fosse para a revisão. A irmã de
+        OUTRO tipo (leituras numa importação de resumo, outro período do Matific)
+        guarda dado que esta importação não traz: continua pendente até chegar
+        uma linha do tipo dela, ou até o gestor resolvê-la (o /resolver aplica).
+        Caso real (backup de 05/10): o cursor incremental do Elefante já tinha o
+        total de livros de crianças em revisão, então a sincronização diária traz
+        só o resumo delas — encerrar a irmã de leituras ali deixaria de fora
+        livros que só a pendência guardava;
+      * conta contestada (``_SO_O_GESTOR_ENCERRA``): nunca por aqui;
+      * LEITURAS: só a sincronização encerra — o conector busca a lista de livros
+        da criança no período LIFETIME (``elefante._corpo_relatorio``), que contém
+        tudo o que a pendência acumulou. Um arquivo manual pode trazer só parte
+        dos livros: a pendência fica para o gestor;
+      * RETRATO (resumo, placar): a pendência guarda o retrato da importação que a
+        abriu. Se ele é de um dia POSTERIOR ao desta importação (relatório antigo
+        importado à mão), ele é o mais novo — fica para o /resolver aplicá-lo."""
+    if rev.chave not in chaves_da_linha or rev.motivo in _SO_O_GESTOR_ENCERRA:
+        return False
+    if rev.formato == "leituras":
+        return coletor.origem == "sincronizacao"
+    congelada = _instante((rev.contexto or {}).get("data_referencia"))
+    if congelada is None:
+        return True          # sem data: o /resolver nunca reaplicaria esse retrato
+    if coletor.origem != "sincronizacao" and not (coletor.contexto or {}).get("data_informada"):
+        # Arquivo enviado à mão sem a data do relatório: a "data desta importação"
+        # é só o relógio de agora, e o relatório pode ser antigo. Fica para o
+        # /resolver, que compara com o retrato mais recente de verdade.
+        return False
+    atual = _instante((coletor.contexto or {}).get("data_referencia"))
+    return atual is not None and _sem_fuso(atual).date() >= _sem_fuso(congelada).date()
+
+
+def _motor_escolheria(ctx: "ida.Contexto", ident: "ida.LinhaIdentidade",
+                      aluno: Aluno) -> "ida.Decisao | None":
+    """A ficha FIXADA por quem confirmou é a mesma que o motor escolheria sozinho?
+    Então foi a sugestão da prévia aceita como veio — não uma escolha de gente —
+    e a pendência encerra como AUTOMÁTICA (não vira memória que desligaria, nas
+    próximas importações, a guarda de homônimo novo e a de ficha inativa).
+    Devolve a decisão do motor nesse caso (para gravar a regra DELE), senão None.
+
+    A conta da plataforma acabou de ser gravada nesta mesma linha e sempre
+    "concordaria"; por isso o motor decide pelo NOME — mas as travas da CONTA
+    valem antes: conta aposentada ou OUTRA conta desta plataforma na ficha
+    fixada são situações em que o motor nunca associaria sozinho (é gente
+    passando por cima da trava), e a escolha é humana."""
+    if ident.id_externo:
+        if (ident.plataforma, ident.id_externo) in ctx.aposentadas:
+            return None
+        if ctx.ids_do_aluno.get((aluno.id, ident.plataforma), set()) - {ident.id_externo}:
+            return None
+    dec = ida.decidir(ctx, replace(ident, aluno_id=None, id_externo=""))
+    return dec if dec.acao == ida.ASSOCIAR and dec.aluno_id == aluno.id else None
+
+
+def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contexto",
+                                   ident: "ida.LinhaIdentidade", decisao: "ida.Decisao",
+                                   aluno: Aluno, avisos: list[str], *,
+                                   coletor: "ida.ColetorRevisoes | None",
+                                   usuario_id: int | None) -> list[int]:
+    """A linha acabou de ser ASSOCIADA: a revisão PENDENTE da MESMA identidade
+    (mesma escola, mesma ``chave_identidade``) e do MESMO tipo de dado perguntava
+    exatamente isto, e a pergunta foi respondida. Sem este passo ela ficava
+    "pendente" para sempre, porque só o /resolver e o /descartar mudam o status —
+    a fila acumulava casos já decididos.
+
+    Encerra como RESOLVIDA: ``aluno_escolhido_id`` = o associado; ``resolucao``
+    com a via, a regra (e os preteridos do desempate) e ``dados_superados`` (o
+    congelado não é aplicado — ver abaixo).
+      * decisão do SISTEMA (linha sem ficha fixada — a sincronização):
+        ``resolvida_por_id`` None, ``automatica: true``, auditoria
+        ``revisao.encerrada_automaticamente``;
+      * ficha FIXADA por quem confirmou (prévia aceita, alternativa escolhida):
+        é decisão dessa pessoa — ``resolvida_por_id`` = ela, ``automatica:
+        false``, auditoria ``identidade.revisao_resolvida`` (a mesma do /resolver).
+    A escolha entra em ``ctx.resolvidas`` para as próximas linhas DESTA
+    importação. A encerrada pelo sistema não volta como memória nas próximas
+    (``identidade_aluno.carregar_contexto``): lá a linha é decidida de novo pela
+    regra — e a que tem conta da plataforma casa pelo vínculo gravado na ficha.
+
+    Os DADOS CONGELADOS na revisão NÃO são aplicados: só se encerra a pendência
+    cujo dado ESTA linha substitui (``_linha_substitui_o_congelado`` — mesmo tipo
+    de dado, retrato não mais antigo, leituras só pela sincronização). Retrato:
+    vale o desta linha, e o /resolver descartaria o congelado
+    (``_retrato_superado``). Leituras: a lista LIFETIME da sincronização contém
+    os livros guardados (e a UNIQUE de Leitura impede duplicar). Pendência que esta
+    linha NÃO substitui continua na fila, intacta.
+
+    Pendências vêm de ``ctx.pendentes`` (lidas UMA vez por importação) e saem de
+    lá na primeira linha ASSOCIADA da identidade: nenhuma consulta por linha. A
+    PRÉVIA nunca passa por aqui (``importacao.casar_nomes`` só chama ``decidir``),
+    e sem o coletor da importação (que diz o tipo de dado) nada é encerrado.
+    Devolve os ids encerrados."""
+    if coletor is None:
+        return []
+    # A chave sob a sala RECONHECIDA e, quando difere, a da sala do RELATÓRIO
+    # (pendências gravadas antes de ``sala_efetiva`` existir) — o mesmo par que
+    # ``Contexto.decisao_humana`` consulta. Linha com identidade externa tem uma
+    # chave só (não depende da sala). [:400]: o tamanho gravado na revisão.
+    chaves = list(dict.fromkeys(
+        c[:400] for c in (ida.chave_identidade(ident, decisao.chave_sala),
+                          ida.chave_identidade(ident, ida.chave_sala(ident.turma_nome)))))
+    ids = [rid for c in chaves for rid in ctx.pendentes.pop(c, [])]
+    if not ids:
+        return []
+    contexto = coletor.contexto or {}
+    chaves_da_linha = {ida.chave_pendencia(c, coletor.formato,
+                                           str(contexto.get("periodo_inicio") or ""),
+                                           str(contexto.get("periodo_fim") or ""))
+                       for c in chaves}
+    motor = _motor_escolheria(ctx, ident, aluno) if ident.aluno_id is not None else None
+    humana = ident.aluno_id is not None and motor is None
+    if motor is not None:
+        decisao = motor        # a regra gravada é a do motor, não "explicito"
+    if humana:
+        regra = _REGRA_ESCOLHA_HUMANA
+    else:
+        regra = _REGRA_DA_VIA.get(decisao.via, f"decisão automática ({decisao.via})")
+        if (decisao.via not in _VIAS_SEM_NOME
+                and ida._nome_para_casar(ident.nome, decisao.chave_sala,
+                                         ida.chave_sala(ident.turma_nome)) != ident.nome):
+            # "… RIBEIRO 2B" casou como nome idêntico: a regra diz que o sufixo saiu.
+            regra += ", sem o sufixo de turma digitado junto do nome"
+    preteridos = _preteridos(ctx, decisao.preteridos)
+    momento = agora()
+    encerradas: list[int] = []
+    ficaram: list[RevisaoIdentidade] = []
+    for rid in ids:
+        rev = db.get(RevisaoIdentidade, rid)
+        if rev is None or rev.escola_id != escola_id or rev.status != "pendente":
+            continue                     # já decidida por outro caminho: não mexe
+        if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor):
+            ficaram.append(rev)
+            continue
+        dados_superados = {"motivo": "substituidos_pela_linha_desta_importacao",
+                           "formato": rev.formato, "plataforma": rev.plataforma,
+                           "data_congelada": (rev.contexto or {}).get("data_referencia") or None,
+                           "data_desta_importacao": contexto.get("data_referencia") or None}
+        resolucao = {"acao": "associar", "aluno_id": aluno.id, "automatica": not humana,
+                     "via": decisao.via, "regra": regra, "dados_superados": dados_superados}
+        if humana:
+            resolucao["resolvida_na"] = "confirmacao_da_importacao"
+        if preteridos:
+            # Só o id: a revisão não passa pela redação LGPD da exclusão
+            # permanente (os logs passam, e lá o nome fica).
+            resolucao["preteridos"] = [{"aluno_id": p["aluno_id"]} for p in preteridos]
+        if coletor.importacao_id is not None:
+            resolucao["importacao_id"] = coletor.importacao_id
+        rev.status = "resolvida"
+        rev.aluno_escolhido_id = aluno.id
+        rev.resolvida_por_id = usuario_id if humana else None
+        rev.resolvida_em = momento
+        rev.resolucao = resolucao
+        ctx.resolvidas[rev.chave_identidade] = aluno.id
+        candidatos = [c.get("aluno_id") for c in (rev.candidatos or [])]
+        if humana:
+            registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
+                      usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
+                                "formato": rev.formato, "motivo": rev.motivo,
+                                "acao": "associar", "origem": rev.nome_recebido,
+                                "dados_superados": dados_superados,
+                                "candidatos": candidatos,
+                                "resolvida_na": "confirmacao_da_importacao",
+                                "via": decisao.via,
+                                "importacao_id": coletor.importacao_id})
+        else:
+            registrar(db, "revisao.encerrada_automaticamente", escola_id=escola_id,
+                      usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
+                                "formato": rev.formato, "motivo": rev.motivo,
+                                "origem": rev.nome_recebido, "aluno": aluno.nome,
+                                "via": decisao.via, "regra": regra,
+                                "preteridos": preteridos,
+                                "dados_superados": dados_superados,
+                                "importacao_id": coletor.importacao_id,
+                                "candidatos": candidatos})
+        encerradas.append(rev.id)
+    if encerradas:
+        como = ("resolvidas pela sua confirmação" if humana
+                else f"encerradas automaticamente ({regra})")
+        aviso = (f"“{ident.nome}”: {len(encerradas)} pendência(s) de revisão desta "
+                 f"identidade foram {como} — o dado desta importação foi para "
+                 f"{aluno.nome} e substitui o que elas guardavam.")
+        if ficaram:
+            tipos = ", ".join(sorted({r.formato or "resumo" for r in ficaram}))
+            aviso += (f" Continuam na fila {len(ficaram)} pendência(s) dela ({tipos}) "
+                      "que esta linha não responde.")
+        avisos.append(aviso)
+    return encerradas
 
 
 def _enfileirar_revisao(db: Session, escola_id: int, ctx: "ida.Contexto",
@@ -1737,13 +2008,20 @@ def _confirmar_sem_commit(
     escola_id: int,
     usuario: Usuario,
     db: Session,
+    encerrar_revisoes: bool = True,
 ) -> _NucleoImportacao:
     """TODO o trabalho do /confirmar, SEM commit e SEM efeito externo.
 
     É aqui que a importação acontece: identidade, turmas, snapshots, leituras,
     eventos e a fila de revisão. Nada de ``db.commit()`` — quem chama decide
     quando fechar. Assim o ``/resolver`` aplica várias pendências irmãs e fecha
-    tudo numa transação única: falhou no meio, nada fica."""
+    tudo numa transação única: falhou no meio, nada fica.
+
+    ``encerrar_revisoes``: linha ASSOCIADA encerra a revisão pendente da mesma
+    identidade e do mesmo tipo de dado (``_encerrar_revisoes_respondidas``). O
+    /resolver passa False — é ele quem fecha as pendências (todas as irmãs, com o
+    gestor como autor e o dado congelado aplicado); encerrá-las aqui, no meio da
+    reaplicação, deixaria uma segunda auditoria, sem o resultado dele."""
     inicio = time.monotonic()
     from app.models import Escola
 
@@ -1766,6 +2044,9 @@ def _confirmar_sem_commit(
     contexto_revisao = {
         "tipo": dados.tipo,
         "data_referencia": data_referencia.isoformat(),
+        # A data veio do relatório (ou da sincronização)? Sem ela, a acima é o
+        # relógio de agora — ver ``_linha_substitui_o_congelado``.
+        "data_informada": dados.data_referencia is not None,
         "periodo_inicio": dados.periodo_inicio.isoformat() if dados.periodo_inicio else "",
         "periodo_fim": dados.periodo_fim.isoformat() if dados.periodo_fim else "",
     }
@@ -1850,7 +2131,8 @@ def _confirmar_sem_commit(
                                 permitir_criar_aluno=getattr(
                                     dados, "permitir_criar_aluno", True),
                                 plataforma=dados.plataforma, ctx=ctx_identidade,
-                                revisoes=coletor, usuario_id=usuario.id)
+                                revisoes=coletor, usuario_id=usuario.id,
+                                encerrar_revisoes=encerrar_revisoes)
         if aluno is None:
             chave_ign = svc.chave_nome(linha.nome)
             if chave_ign not in ignorados:
@@ -2737,8 +3019,10 @@ def resolver_revisao(
     importacoes: list[int] = []
     for r in com_dados:
         conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
+        # encerrar_revisoes=False: estas pendências são fechadas logo abaixo, pelo
+        # gestor — não como "encerradas automaticamente".
         nucleo = _confirmar_sem_commit(dados=conf, escola_id=escola_id,
-                                       usuario=usuario, db=db)
+                                       usuario=usuario, db=db, encerrar_revisoes=False)
         importacoes.append(nucleo.importacao_id)
         avisos.extend(nucleo.avisos)
 
