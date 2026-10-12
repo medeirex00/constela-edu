@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Matricula, Nota, Turma, Usuario
 from app.services import elegibilidade
+from app.services import modulos as svc_modulos
 from app.services import permissoes
 from app.services import relatorios as svc
 from app.services.audit import registrar
@@ -75,8 +76,15 @@ def exportar_relatorio(
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             f"Relatórios disponíveis: {', '.join(sorted(svc.FONTES))}.")
     escola = db.get(Escola, escola_id)
+    modulos = svc_modulos.modulos_da_escola(db, escola)
+    if tipo == "livros":
+        # Catálogo de livros é dado do módulo Leitura: fora do plano, 403.
+        svc_modulos.exigir(modulos, "leitura")
     titulo, fonte = svc.FONTES[tipo]
     cabecalho, linhas = fonte(db, escola_id)
+    if tipo == "ranking":
+        # Nota de plataforma de módulo não contratado não sai no arquivo.
+        cabecalho, linhas = svc.sem_notas_fora_do_plano(cabecalho, linhas, modulos)
 
     # Professor: só o relatório SUPERFICIAL (ranking) e apenas das turmas dele.
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
@@ -160,6 +168,10 @@ def cartaz_ranking(
     permissoes.negar_restrito(db, escola_id, usuario)
     escola = db.get(Escola, escola_id)
     cabecalho, linhas = svc.linhas_ranking(db, escola_id)
+    # Nota de plataforma de módulo não contratado não sai no cartaz (a mesma
+    # regra do relatório de ranking).
+    cabecalho, linhas = svc.sem_notas_fora_do_plano(
+        cabecalho, linhas, svc_modulos.modulos_da_escola(db, escola))
     conteudo = svc.gerar_cartaz_ranking(
         escola_nome=escola.nome,
         cor=svc.cor_primaria(db, escola_id),
@@ -209,8 +221,14 @@ def certificado(
     a MESMA criança com os MESMOS dados recebia "4", porque o único insumo era o
     relógio. Quando a entrega atravessa a virada do bimestre, quem emite escolhe
     qual período o documento afirma; o padrão não mudou, para não alterar nenhum
-    certificado já combinado."""
+    certificado já combinado.
+
+    A arte de uma plataforma exige o módulo dela no plano da rede (``matific`` →
+    Matemática, ``elefante`` → Leitura); fora do plano, 403."""
     escola = db.get(Escola, escola_id)
+    if modelo is not None:
+        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola),
+                           svc_modulos.PLATAFORMA_MODULO[modelo])
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")

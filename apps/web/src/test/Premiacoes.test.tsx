@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import Premiacoes from "../pages/Premiacoes";
 import type { CategoriaPremiacao } from "../lib/types";
-import { ApiError, api, renderComApp, responder, screen, turmaFake, userEvent, waitFor, within } from "./utils";
+import { api, ApiError, renderComApp, responder, screen, turmaFake, userEvent, usuarioFake, waitFor, within } from "./utils";
 
 const URL_TURMAS = "/escolas/1/turmas";
 const URL_PREM = "/escolas/1/premiacoes";
@@ -859,5 +859,49 @@ describe("Premiações", () => {
     expect(within(caixaB).queryByText("Leitor 51")).not.toBeInTheDocument();
     // A janela antiga saiu de cena: só uma está montada.
     expect(screen.queryByRole("heading", { level: 2, name: /Melhor Leitor/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Premiações — rede sem um dos módulos", () => {
+  it("sem Matemática no plano, o backend não manda a categoria nem a régua e a tela mostra só as de Leitura", async () => {
+    const soLeitura = premiacoesResp().categorias.filter((c) => c.chave !== "melhor_matematica");
+    const resp = premiacoesResp({ categorias: soLeitura, turnos: [] });
+    delete (resp as Record<string, unknown>).regua_matematica;
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, resp);
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Melhor Leitor")).toBeInTheDocument();
+    expect(screen.getByText("Mais Livros Lidos")).toBeInTheDocument();
+    expect(screen.getByText("Mais Tempo de Leitura")).toBeInTheDocument();
+    // O cartão da categoria ausente simplesmente não existe (nada quebra).
+    expect(screen.queryByText("Melhor Matemática")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mat Manha")).not.toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("o cartão de evolução do módulo fora do plano some (o servidor o recusaria)", async () => {
+    const soLeitura = premiacoesResp().categorias.filter((c) => c.chave !== "melhor_matematica");
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({ categorias: soLeitura, turnos: [] }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, { usuario: usuarioFake({ modulos: ["leitura"] }) });
+
+    expect(await screen.findByText("Melhor Evolução — Leitura")).toBeInTheDocument();
+    expect(screen.queryByText("Melhor Evolução — Matemática")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Melhor Matemática divide as estrelas/)).not.toBeInTheDocument();
+  });
+
+  it("sem Leitura no plano, só a Melhor Matemática aparece", async () => {
+    const soMatematica = premiacoesResp().categorias.filter((c) => c.chave === "melhor_matematica");
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({ categorias: soMatematica, turnos: [] }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Melhor Matemática")).toBeInTheDocument();
+    expect(screen.queryByText("Melhor Leitor")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mais Livros Lidos")).not.toBeInTheDocument();
   });
 });

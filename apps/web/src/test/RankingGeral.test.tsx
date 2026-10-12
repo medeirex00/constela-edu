@@ -12,6 +12,7 @@ import {
   userEvent,
   usuarioFake,
   waitFor,
+  within,
 } from "./utils";
 
 const URL_TURMAS = "/escolas/1/turmas";
@@ -52,6 +53,29 @@ describe("RankingGeral", () => {
     ).toBeInTheDocument();
     // A visão por matéria (sub-abas) saiu daqui: vive nas abas Leitura/Matemática.
     expect(screen.queryByRole("tab", { name: /Desempenho em/ })).not.toBeInTheDocument();
+  });
+
+  it("nota null (módulo fora do plano) mostra \"—\", nunca um 0,0 falso", async () => {
+    // Rede sem Matemática: o servidor manda `nota_matific: null`, mas o
+    // `aferido_matematica` segue `true` (o snapshot existe). Antes isso virava
+    // "0,0", como se o aluno tivesse tirado zero.
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("GET", URL_RANKING, [
+      rankingItemFake({
+        aluno_id: 10, nome: "Ana Beatriz Souza", n_aferidos: 1,
+        nota_matific: null, aferido_matematica: true,
+        nota_elefante: 90, aferido_leitura: true,
+      }),
+    ]);
+
+    renderComApp(<RankingGeral />, opcoes);
+
+    const link = await screen.findByRole("link", { name: "Ana Beatriz Souza" });
+    const linha = link.closest("tr") as HTMLElement;
+    const celulas = within(linha).getAllByRole("cell").map((c) => c.textContent?.trim());
+    expect(celulas).toContain("—");
+    expect(celulas).toContain("90,0");
+    expect(celulas).not.toContain("0,0");
   });
 
   it("mostra o estado vazio quando não há nenhuma nota calculada", async () => {

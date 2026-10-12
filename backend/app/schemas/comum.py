@@ -419,8 +419,10 @@ class RankingItemOut(BaseModel):
     nome: str
     turma: str | None
     ano_escolar: str | None
-    nota_matific: float
-    nota_elefante: float
+    # Nula quando o módulo da plataforma não está no plano da rede (o módulo
+    # não existe para ela); senão, o número de sempre.
+    nota_matific: float | None
+    nota_elefante: float | None
     # LEGADO: composição entre dimensões; não ordena mais nada.
     nota_geral: float
     # Discriminante de AFERIÇÃO por dimensão — carimbado SEMPRE, inclusive na

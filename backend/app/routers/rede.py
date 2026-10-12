@@ -9,13 +9,13 @@ from datetime import datetime, timezone
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
                      UploadFile, status)
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
-from app.models import Escola, Rede, Usuario
+from app.models import Escola, Rede, TokenResetSenha, Usuario
 from app.schemas import (
     EscolaLocalIn,
     MetaRedeIn,
@@ -299,6 +299,13 @@ def definir_usuarios(
     `admin._usuario_alvo`, que recusa qualquer alvo com `rede_id` para ator não
     global — e o router de administração inteiro nega a Secretaria
     (`deps.negar_secretaria`), independentemente do cargo dela.
+
+    A conta que PASSA A TER o `rede_id` desta rede (promovida a Secretaria, ou
+    vinda de outra rede) muda de alcance: as sessões abertas dela caem
+    (`token_version`) e os links de redefinição pendentes deixam de valer —
+    nenhum token emitido para o alcance antigo sobrevive à promoção. Cada
+    promoção fica na auditoria (`usuario.promovido_a_secretaria`). A senha NÃO
+    é trocada aqui.
     """
     rede = db.get(Rede, rede_id)
     if rede is None:
@@ -314,10 +321,29 @@ def definir_usuarios(
     for alvo_u in atuais:
         if alvo_u.id not in ids_validos:
             alvo_u.rede_id = None
+    agora = datetime.now(timezone.utc)
+    promovidas: list[int] = []
     for alvo_u in validos:
+        if alvo_u.rede_id != rede_id:
+            # Promoção: alcance novo = sessões antigas caem e links pendentes morrem.
+            rede_anterior = alvo_u.rede_id
+            alvo_u.token_version = (alvo_u.token_version or 0) + 1
+            links = db.execute(
+                update(TokenResetSenha)
+                .where(TokenResetSenha.usuario_id == alvo_u.id,
+                       TokenResetSenha.usado_em.is_(None))
+                .values(usado_em=agora)
+                .execution_options(synchronize_session=False)).rowcount
+            promovidas.append(alvo_u.id)
+            registrar(db, "usuario.promovido_a_secretaria", escola_id=alvo_u.escola_id,
+                      usuario_id=usuario.id, entidade="usuario", entidade_id=alvo_u.id,
+                      detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior,
+                                "sessoes_encerradas": True,
+                                "links_pendentes_invalidados": links})
         alvo_u.rede_id = rede_id
     registrar(db, "rede.usuarios_definidos", usuario_id=usuario.id, entidade="rede",
-              entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos)})
+              entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos),
+                                             "promovidas": sorted(promovidas)})
     db.commit()
     return {"rede_id": rede_id, "usuario_ids": sorted(ids_validos)}
 

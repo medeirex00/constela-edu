@@ -3,7 +3,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
+from app.core.deps import (
+    exigir_admin_global,
+    exigir_papeis,
+    get_usuario_atual,
+    negar_secretaria,
+)
 from app.models import Escola, Nota, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
 from app.services import provisionamento
@@ -71,7 +76,11 @@ def atualizar(
     dados: EscolaUpdate,
     usuario: Usuario = Depends(exigir_papeis("admin")),
     db: Session = Depends(get_db),
+    _sem_secretaria: Usuario = Depends(negar_secretaria),
 ):
+    # A Secretaria não altera escola (a regra central de `escola_autorizada`):
+    # a conta promovida a Secretaria guarda o cargo e o `escola_id` de origem, e
+    # sem o `negar_secretaria` renomeava ou inativava a escola de onde veio.
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")

@@ -21,3 +21,10 @@ export function usePerfil() {
   const escolaOnly = !global && usuario?.rede_id == null;
   return { global, secretaria, rede, gestor, escolaOnly, cargo: usuario?.cargo ?? null };
 }
+
+/** Destino do clique no nome de um aluno nas telas de evolução: a gestão abre
+ * a evolução detalhada; o professor abre o perfil (a evolução detalhada é dado
+ * de gestão — o servidor responde 403 ao professor). */
+export function destinoEvolucaoDoAluno(alunoId: number, gestor: boolean): string {
+  return gestor ? `/alunos/${alunoId}/evolucao` : `/alunos/${alunoId}`;
+}

@@ -189,14 +189,14 @@ describe("Usuarios", () => {
       revisar: 1,
       candidatos: [
         { loser_id: 10, apagar: "PAULA", manter: "Paula Benedita Vilela Nogueira",
-          confianca: "alta", usuario_novo: "PaulaNogueira", senha_nova: "paulanogueira123", turmas_movidas: ["1º Ano A"] },
+          confianca: "alta", usuario_novo: "PaulaNogueira", senha_nova: "(gerada ao aplicar)", turmas_movidas: ["1º Ano A"] },
         { loser_id: 20, apagar: "Ana Paula", manter: "Ana Paula Souza",
-          confianca: "revisar", usuario_novo: "AnaSouza", senha_nova: "anasouza123", turmas_movidas: [] },
+          confianca: "revisar", usuario_novo: "AnaSouza", senha_nova: "(gerada ao aplicar)", turmas_movidas: [] },
       ],
     });
     responder("POST", "/escolas/1/professores/duplicados/corrigir", {
       corrigidos: 1,
-      folha: [{ nome: "Paula Benedita Vilela Nogueira", usuario: "PaulaNogueira", senha: "paulanogueira123" }],
+      folha: [{ nome: "Paula Benedita Vilela Nogueira", usuario: "PaulaNogueira", senha: "lago-farol-neve-42" }],
     });
 
     const u = userEvent.setup();
@@ -213,7 +213,7 @@ describe("Usuarios", () => {
     await u.click(screen.getByRole("button", { name: /unir 1 selecionada/i }));
 
     expect(await screen.findByText(/1 professor\(es\) unificado/i)).toBeInTheDocument();
-    expect(screen.getByText("paulanogueira123")).toBeInTheDocument();
+    expect(screen.getByText("lago-farol-neve-42")).toBeInTheDocument();
     expect(api).toHaveBeenCalledWith(
       "/escolas/1/professores/duplicados/corrigir",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ loser_ids: [10] }) }),
