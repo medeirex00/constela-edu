@@ -16,23 +16,36 @@ A 1ª simulação em produção achou só 1 par na rede: a regra antiga tratava 
 tinha o Matific ligado por NOME até 31/07, antes de a sombra existir. Agora:
 
 * CONTINUIDADE DA CONTA: dado da mesma plataforma nas duas fichas só passa se
-  for a MESMA conta continuando — a oficial sem conta própria nela, retratos
-  sem sobreposição de dias, contadores acumulados do limite iguais ou maiores
-  do lado posterior, no máximo 31 dias entre os dois e nenhum dado novo na
-  ficha anterior depois de a posterior começar. Senão, CONFLITO com o motivo
-  (``dados_simultaneos_mesma_plataforma``, ``contador_regrediu``,
-  ``intervalo_longo``, ``continuidade_sem_retrato``,
-  ``leitura_repetida_nas_duas_fichas``, ``duas_contas_mesma_plataforma``);
+  for a MESMA conta continuando DA OFICIAL PARA A SOMBRA — a oficial sem conta
+  própria nela, retratos sem sobreposição de dias, a oficial ANTES (a ordem
+  medida: por nome até 31/07, a conta na sombra depois), algum contador da
+  oficial acima de zero, cada contador acumulado do limite do lado da sombra
+  >= o MAIOR valor dele na oficial, no máximo 31 dias entre os dois, nenhum
+  dado novo na oficial depois de a sombra começar e nenhum dado da sombra de
+  antes do último retrato da oficial que não seja CÓPIA de um dado dela (o
+  histórico da conta reenviado). Senão, CONFLITO com o motivo
+  (``dados_simultaneos_mesma_plataforma``, ``ordem_invertida``,
+  ``contadores_zerados``, ``contador_regrediu``, ``intervalo_longo``,
+  ``continuidade_sem_retrato``, ``leitura_repetida_nas_duas_fichas``,
+  ``duas_contas_mesma_plataforma``). Entre duas sombras da mesma oficial: a
+  por nome antes da que tem a conta, no mesmo sentido em todas as plataformas
+  (``ordem_cruzada_entre_sombras``); elas são fundidas nessa ordem;
 * nome IDÊNTICO com dado só consolida continuando dado ANTERIOR da oficial;
 * FORMA DO NOME: o sufixo da turma no fim do nome ("… 2B"), a partícula a
-  menos (DOS) e a vogal acentuada que virou minúscula não impedem o par. O
-  PRENOME diferente continua na revisão manual (decisão 3 do dono).
+  menos (DE/DA/DO/DAS/DOS — o "E" isolado não, ambíguo com uma inicial) e a
+  vogal acentuada que virou minúscula não impedem o par. O PRENOME diferente
+  continua na revisão manual (decisão 3 do dono);
+* a fusão não DOBRA o evento da leitura que a conta reenviou (a cópia sai) e
+  passa para a chave da oficial os eventos que só a sombra tinha — a próxima
+  coleta da conta não os grava de novo. A auditoria lista os ids.
 
 A linha de cada CONSOLIDAR mostra a continuidade por plataforma (dias do
 limite, intervalo, contadores iguais/crescentes). RISCO que os dados não
-eliminam: outra criança cuja conta começa com contadores iguais ou maiores
-que os da oficial logo depois de ela parar passaria como continuidade — por
-isso a conferência das linhas antes de ``--aplicar`` continua obrigatória.
+eliminam: a conta NOVA de outra criança que só começa a mandar dado depois do
+último retrato da oficial e, no primeiro retrato, já passou de todos os
+contadores que a oficial tinha no ano passaria como continuidade (possível
+quando a oficial tem contador baixo) — por isso a conferência das linhas antes
+de ``--aplicar`` continua obrigatória.
 
 Garantias
 ---------

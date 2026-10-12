@@ -18,7 +18,12 @@ Este módulo prova, contra o banco de produção (Postgres):
      transação só;
   6. a CONTINUIDADE da conta (iteração 2) com os tipos do Postgres: datas de
      snapshot e ``max`` de timestamp de evento comparadas por dia, e a
-     evidência gravada no JSON da auditoria.
+     evidência gravada no JSON da auditoria;
+  7. (iteração 3) o histórico reenviado pela conta não DOBRA os eventos na
+     fusão e a próxima coleta não os grava de novo — a identidade do evento
+     (minuto de ``ocorrido_em`` como o Postgres devolve) e a chave recalculada
+     para a oficial batem com as do importador; a oficial zerada e a sombra
+     com dado próprio de antes do limite seguem CONFLITO.
 
 Como rodar::
 
@@ -299,6 +304,112 @@ def test_continuidade_da_conta_no_postgres(motor_pg, cena):
             "contadores": "iguais",
             "contadores_anterior": {"atividades": 23, "estrelas": 70},
             "contadores_posterior": {"atividades": 23, "estrelas": 70}}
+
+
+def test_historico_reenviado_nao_dobra_eventos_no_postgres(motor_pg, cena):
+    """Iteração 3: a sombra de nome idêntico com o histórico da conta reenviado
+    (cópias das leituras de julho da oficial, com o evento de cada uma, mais as
+    de agosto) consolida SEM dobrar o evento de julho, e a próxima coleta da
+    conta — agora da oficial — não grava nada de novo. No mesmo plano, a
+    oficial zerada e a sombra com livros próprios de julho seguem CONFLITO."""
+    from datetime import datetime
+
+    from app.models import EventoAluno, Leitura, Livro
+    from app.services.eventos import chave_evento, ingerir_eventos
+
+    with Session(motor_pg) as db:
+        eid = cena["escola_id"]
+        turma = db.execute(select(Turma).where(Turma.escola_id == eid)).scalar_one()
+        imp = db.execute(select(Importacao).where(Importacao.escola_id == eid)).scalar_one()
+
+        def ficha(nome, lp, conta=None):
+            a = Aluno(escola_id=eid, nome=nome, da_lista_piloto=lp)
+            db.add(a)
+            db.flush()
+            db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+            if conta:
+                db.add(IdentidadeExterna(escola_id=eid, aluno_id=a.id, plataforma="elefante",
+                                         id_externo=conta))
+            return a.id
+
+        def retratos(aluno_id, serie):
+            for dia, livros, minutos in serie:
+                db.add(SnapshotElefante(escola_id=eid, aluno_id=aluno_id, importacao_id=imp.id,
+                                        data_referencia=datetime.fromisoformat(dia),
+                                        livros_unicos=livros, tempo_leitura_min=minutos,
+                                        livros_por_nivel={"D": livros}))
+
+        def ler(aluno_id, titulo, quando):
+            livro = db.execute(select(Livro).where(Livro.escola_id == eid,
+                                                   Livro.titulo == titulo)).scalar_one_or_none()
+            if livro is None:
+                livro = Livro(escola_id=eid, titulo=titulo, nivel_codigo="D")
+                db.add(livro)
+                db.flush()
+            db.add(Leitura(escola_id=eid, aluno_id=aluno_id, livro_id=livro.id, data=quando,
+                           tempo_leitura_min=15, nivel_codigo="D"))
+            db.add(EventoAluno(escola_id=eid, aluno_id=aluno_id, plataforma="elefante",
+                               tipo_evento="leitura", ocorrido_em=quando, livro_id=livro.id,
+                               conteudo_titulo=titulo, nivel_codigo="D",
+                               chave_natural=chave_evento("elefante", "leitura", aluno_id,
+                                                          titulo, quando)))
+
+        nome = "LEOCADIA SOUZA BRAGA"
+        oficial, sombra = ficha(nome, True), ficha(nome, False, f"44{eid}01")
+        retratos(oficial, [("2026-07-13T03:10:00", 1, 20), ("2026-07-31T03:10:00", 3, 45)])
+        retratos(sombra, [("2026-08-01T03:10:00", 3, 45), ("2026-08-20T03:10:00", 5, 70)])
+        quandos = [datetime(2026, 7, 10, 14, 0, 37), datetime(2026, 7, 15, 14, 0),
+                   datetime(2026, 7, 20, 14, 0), datetime(2026, 8, 5, 14, 0),
+                   datetime(2026, 8, 12, 9, 30)]
+        titulos = [f"LIVRO PG {i}" for i in range(5)]
+        for t, q in zip(titulos[:3], quandos[:3]):
+            ler(oficial, t, q)
+            ler(sombra, t, q)                   # o histórico da conta, de novo
+        for t, q in zip(titulos[3:], quandos[3:]):
+            ler(sombra, t, q)
+
+        zerada, nova = ficha("CLEMENTINA ROSA VASCONCELOS", True), ficha("CLEMENTINA R",
+                                                                       False, f"44{eid}02")
+        retratos(zerada, [("2026-07-13", 0, 0), ("2026-07-31", 0, 0)])
+        retratos(nova, [("2026-08-01", 2, 10)])
+        com_julho_oficial, com_julho = (ficha("HORTENSIA MARIA LIMA", True),
+                                        ficha("HORTENSIA M", False, f"44{eid}03"))
+        retratos(com_julho_oficial, [("2026-07-13", 8, 40), ("2026-07-31", 10, 60)])
+        retratos(com_julho, [("2026-08-01", 40, 300)])
+        ler(com_julho, "LIVRO PG PROPRIO", datetime(2026, 7, 9, 15, 0))
+        db.commit()
+
+        plano = cs.planejar(db, eid)
+        assert plano.item_da_sombra(sombra).classe == cs.CONSOLIDAR
+        assert (plano.item_da_sombra(nova).classe, plano.item_da_sombra(nova).motivo) == (
+            cs.CONFLITO, "contadores_zerados")
+        assert (plano.item_da_sombra(com_julho).classe,
+                plano.item_da_sombra(com_julho).motivo) == (
+            cs.CONFLITO, "dados_simultaneos_mesma_plataforma")
+        res = cs.aplicar(db, plano, usuario_id=None, origem="teste_pg")
+        assert sombra in [x["sombra_id"] for x in res["consolidados"]]
+        assert {nova, com_julho}.isdisjoint(x["sombra_id"] for x in res["consolidados"])
+
+    with Session(motor_pg) as db:
+        linhas = db.execute(select(EventoAluno.conteudo_titulo, EventoAluno.ocorrido_em,
+                                   EventoAluno.chave_natural)
+                            .where(EventoAluno.aluno_id == oficial)
+                            .order_by(EventoAluno.ocorrido_em)).all()
+        assert [(t, q) for t, q, _c in linhas] == list(zip(titulos, quandos))
+        assert all(c == chave_evento("elefante", "leitura", oficial, t, q)
+                   for t, q, c in linhas)
+        [detalhes] = db.execute(select(LogAuditoria.detalhes).where(
+            LogAuditoria.escola_id == eid, LogAuditoria.acao == "aluno.consolidado_automatico",
+            LogAuditoria.entidade_id == oficial)).scalars().all()
+        assert (len(detalhes["eventos_copia_descartados"]),
+                len(detalhes["eventos_rechaveados"])) == (3, 2)
+        novos = ingerir_eventos(db, oficial, "elefante", [
+            {"escola_id": eid, "aluno_id": oficial, "plataforma": "elefante",
+             "tipo_evento": "leitura", "ocorrido_em": q, "conteudo_titulo": t,
+             "chave_natural": chave_evento("elefante", "leitura", oficial, t, q)}
+            for t, q in zip(titulos, quandos)])
+        db.rollback()
+        assert novos == 0
 
 
 def test_simulacao_do_script_e_somente_leitura_no_postgres(motor_pg, cena, monkeypatch,
