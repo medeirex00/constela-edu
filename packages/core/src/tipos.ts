@@ -114,8 +114,9 @@ export interface RankingItem {
   nome: string;
   turma: string | null;
   ano_escolar: string | null;
-  nota_matific: number;
-  nota_elefante: number;
+  /** `null` quando o módulo da plataforma não está no plano da rede. */
+  nota_matific: number | null;
+  nota_elefante: number | null;
   /** LEGADO: composição entre dimensões. Não ordena mais nada. */
   nota_geral: number;
   /** DISCRIMINANTE das duas notas acima: `nota_matific`/`nota_elefante` chegam
@@ -339,7 +340,11 @@ export interface PodioItem {
   aluno_id: number;
   nome: string;
   turma: string | null;
-  valor: number;
+  /** O valor da premiação, pronto do backend. `null` só na "Melhor Matemática"
+   *  com poucos alunos com atividade no período: o índice não é exibido (junto
+   *  das estrelas e das atividades, revelaria a mediana `k` da escola). A
+   *  posição e a ordem continuam as do índice. */
+  valor: number | null;
 }
 
 /** Uma categoria de premiação (com o pódio do período). */

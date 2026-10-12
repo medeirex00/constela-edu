@@ -547,6 +547,43 @@ describe("Revisões de identidade — detalhe", () => {
     expect(within(criada).getByRole("link", { name: "abrir ficha" })).toHaveAttribute("href", "/alunos/99");
   });
 
+  it("revisão encerrada pelo sistema diz 'Encerrada automaticamente' e a regra; a humana segue 'Resolvida'", async () => {
+    const u = userEvent.setup();
+    filaMock([
+      revisaoFake({ status: "resolvida", aluno_escolhido_id: 31, resolvida_por_id: null,
+        resolvida_em: "2026-10-11T09:00:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: true, via: "abreviacao",
+          regra: "nome abreviado, candidato único na sala" } }),
+      revisaoFake({ id: 8, nome_recebido: "MATHIAS R", status: "resolvida", aluno_escolhido_id: 31,
+        resolvida_por_id: 1, resolvida_em: "2026-10-11T09:30:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: false, via: "explicito",
+          regra: "ficha fixada por quem confirmou a importação (prévia aceita ou alternativa escolhida)" } }),
+      revisaoFake({ id: 9, nome_recebido: "KAUA MENDES", status: "resolvida", aluno_escolhido_id: 31,
+        resolvida_por_id: null, resolvida_em: "2026-10-11T10:00:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: true } }),
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await u.selectOptions(await screen.findByLabelText("Situação"), "todas");
+
+    const automatica = await abrirDetalhe(u);
+    expect(within(automatica).getByText(/^Encerrada automaticamente em/)).toBeInTheDocument();
+    expect(within(automatica).getByText("Regra: nome abreviado, candidato único na sala")).toBeInTheDocument();
+    expect(within(automatica).queryByText(/^Resolvida em/)).toBeNull();
+    expect(within(automatica).getByText(/Vinculada: TAUFIK DE OLIVEIRA SANTOS/)).toBeInTheDocument();
+    await u.click(within(automatica).getByRole("button", { name: "Fechar" }));
+
+    // Decisão de uma pessoa (automatica: false): continua "Resolvida", sem a regra.
+    const humana = await abrirDetalhe(u, "MATHIAS R");
+    expect(within(humana).getByText(/^Resolvida em/)).toBeInTheDocument();
+    expect(within(humana).queryByText(/^Regra:/)).toBeNull();
+    await u.click(within(humana).getByRole("button", { name: "Fechar" }));
+
+    // Automática sem regra gravada: o título muda, a linha da regra não aparece.
+    const semRegra = await abrirDetalhe(u, "KAUA MENDES");
+    expect(within(semRegra).getByText(/^Encerrada automaticamente em/)).toBeInTheDocument();
+    expect(within(semRegra).queryByText(/^Regra:/)).toBeNull();
+  });
+
   it("Esc numa confirmação fecha só a confirmação (a revisão e o texto digitado ficam)", async () => {
     const u = userEvent.setup();
     filaMock([revisaoFake()]);

@@ -125,6 +125,14 @@ ALLOWLIST: dict[str, dict] = {
                    "`legado: True`), senão ele passaria a mentir."),
         "pode_sair": "junto com a parada de escrita no motor",
     },
+    "app/routers/configuracoes.py": {
+        "ocorrencias": 1, "papel": "contrato-api",
+        "porque": ("a regra da nota explicada à gestão (`GET /configuracoes/"
+                   "pontuacao/regra`, página Suporte) traz os pesos da COMPOSIÇÃO "
+                   "na chave `nota_geral`. Enquanto o motor compõe, a explicação "
+                   "tem de mostrar a composição — o mesmo motivo do Simulador."),
+        "pode_sair": "junto com a parada de escrita no motor (Gatilho 1)",
+    },
     "app/schemas/comum.py": {
         "ocorrencias": 3, "papel": "schema",
         "porque": "declara o campo nos três payloads acima.",
@@ -137,10 +145,31 @@ ALLOWLIST: dict[str, dict] = {
         "pode_sair": "quando o web ler `dimensoes` no comparador",
     },
     "app/services/relatorios.py": {
-        "ocorrencias": 1, "papel": "contrato-api",
-        "porque": ("a exportação CSV/PDF do Ranking Geral legado tem a coluna "
-                   "'Nota Geral'. `linhas_ranking_dimensao` é a forma nova."),
-        "pode_sair": "quando o cartaz/exportação padrão for por dimensão",
+        "ocorrencias": 8, "papel": "contrato-api + documento-legado",
+        "porque": ("(1) a exportação CSV/PDF do Ranking Geral legado tem a coluna "
+                   "'Nota Geral' (`linhas_ranking_dimensao` é a forma nova); "
+                   "(2) o certificado GERAL imprime 'nota geral X' e a posição "
+                   "única (`gerar_certificado` e os dois modelos). O que o "
+                   "documento afirma é decisão do dono (spec-arquitetura-2, "
+                   "Aprovações item 4); a guarda de emissão já é por dimensão."),
+        "pode_sair": ("quando o cartaz/exportação padrão for por dimensão E o "
+                      "dono decidir o item 4 (certificado por dimensão)"),
+    },
+    "app/routers/relatorios.py": {
+        "ocorrencias": 2, "papel": "documento-legado",
+        "porque": ("a rota do certificado GERAL repassa `nota_geral` (e a "
+                   "posição única) para o texto do documento. A GUARDA de "
+                   "emissão lê as dimensões (`dimensoes.com_desempenho`), não o "
+                   "legado; só o texto depende do item 4 das Aprovações."),
+        "pode_sair": "quando o dono decidir o item 4 (certificado por dimensão)",
+    },
+    "app/services/assistente.py": {
+        "ocorrencias": 2, "papel": "contexto-ia",
+        "porque": ("o contexto do Assistente lista cada aluno com 'geral X' "
+                   "(seção ### ALUNOS e o aluno citado). Mudar o conteúdo do "
+                   "prompt de uma feature de IA é item do dono — o mesmo achado "
+                   "registrado para a ordem dessa seção em ORDEM_UNICA_LEGADA."),
+        "pode_sair": "quando o dono aprovar o contexto da IA só por dimensão",
     },
 }
 
@@ -155,19 +184,59 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "ocorrencias": 1, "papel": "exibição",
         "porque": "coluna 'Nota' da aba Geral (legada). A ordem vem do backend.",
     },
+    "apps/web/src/pages/Suporte.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("Suporte › 'Como a nota é calculada': os pesos da composição "
+                   "(chave `nota_geral` da regra) enquanto o motor compõe."),
+    },
+    "apps/web/src/test/Suporte.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste", "porque": "payload falso da regra.",
+    },
     "apps/web/src/pages/publico/PainelPublico.tsx": {
         "ocorrencias": 4, "papel": "exibição",
         "porque": "slide `ranking` do telão (legado, opt-in do dono).",
     },
     "apps/web/src/pages/publico/PerfilPublico.tsx": {
-        "ocorrencias": 1, "papel": "schema",
-        "porque": "tipo do perfil público legado.",
+        "ocorrencias": 2, "papel": "schema + exibição",
+        "porque": ("tipo e linha 'Geral' do perfil público legado (plano de "
+                   "retirada, item 6 — decisão do dono)."),
+    },
+    "apps/web/src/pages/Dashboard.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": ("Top 5 do painel da escola: vitrine na ordem única (pinado em "
+                   "`test_o_top10_do_painel_AINDA_segue_a_ordem_legada`; plano, "
+                   "item 7 — decisão do dono)."),
+    },
+    "apps/web/src/pages/PerfilAluno.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("cartão 'Nota Geral' e a linha do passo a passo do cálculo; o "
+                   "payload já traz `dimensoes[]` (plano, item 3). Sair da tela "
+                   "depende da Aprovação 2 da spec (a coluna some das telas?)."),
+    },
+    "apps/web/src/pages/TurmaDetalhe.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("coluna de nota da lista da turma (plano, itens 2–3; mesma "
+                   "dependência da Aprovação 2 da spec)."),
+    },
+    "apps/mobile/src/telas/Painel.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": ("app em campo: só sai com versão de API (plano, item 11 — "
+                   "exige o Sensor 4)."),
+    },
+    "apps/mobile/src/telas/PerfilAluno.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": "app em campo (plano, item 11).",
+    },
+    "apps/mobile/src/telas/Ranking.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": "app em campo (plano, item 11).",
     },
     "apps/web/src/test/utils.tsx": {
         "ocorrencias": 2, "papel": "fixture de teste", "porque": "payload falso.",
     },
     "apps/web/src/test/ExplicacaoDaNota.test.tsx": {
-        "ocorrencias": 1, "papel": "fixture de teste", "porque": "payload falso.",
+        "ocorrencias": 5, "papel": "fixture de teste",
+        "porque": "payloads falsos do perfil (o passo a passo ainda mostra a Geral).",
     },
     "apps/web/src/test/CompeticaoLeituraTurno.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
@@ -193,6 +262,14 @@ ORDENACOES_LEGADAS: set[tuple[str, str]] = {
     ("app/routers/rankings.py", "ranking_leitura_por_turno"),
     # Coluna 'Nota Geral' da exportação legada (idem).
     ("app/services/relatorios.py", "linhas_ranking"),
+    # Certificado GERAL: o TEXTO ainda afirma 'nota geral X' e a posição única
+    # (o nome das funções dispara o vocabulário de premiação). A guarda de
+    # emissão já é por dimensão; o conteúdo do documento é decisão do dono
+    # (spec-arquitetura-2, Aprovações item 4) — não é conversão mecânica.
+    ("app/routers/relatorios.py", "certificado"),
+    ("app/services/relatorios.py", "gerar_certificado"),
+    ("app/services/relatorios.py", "_certificado_html_pdf"),
+    ("app/services/relatorios.py", "_certificado_fpdf"),
 }
 
 # ---------------------------------------------------------------------------

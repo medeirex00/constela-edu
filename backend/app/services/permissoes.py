@@ -20,7 +20,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Matricula, Professor, Turma, Usuario
+from app.models import Aluno, Escola, Matricula, Professor, Turma, Usuario
 
 CARGOS_TOTAIS = ("admin", "coordenador")
 
@@ -38,7 +38,27 @@ def e_secretaria(usuario: Usuario) -> bool:
 
 
 def turmas_permitidas(db: Session, escola_id: int, usuario: Usuario) -> list[int] | None:
-    """None = sem restrição. Lista (pode ser vazia) = restrito a essas turmas."""
+    """None = sem restrição. Lista (pode ser vazia) = restrito a essas turmas.
+
+    Para o professor, são as turmas dele **no ano letivo ativo da escola** — a
+    designação ATUAL. Turma de ano anterior não entra.
+
+    Por que o ano importa (auditoria de segurança da Fase 3A). Nomes de turma
+    se repetem entre anos ("3º Ano A" existe todo ano); só são únicos dentro do
+    ano (`UNIQUE(escola_id, ano_letivo, nome)`). A exportação de relatórios
+    recorta as linhas do professor comparando o NOME da turma, e as linhas são
+    do ano ativo. Com turmas de qualquer ano aqui, a professora que deu o
+    "3º Ano A" em 2025 e foi para outra turma em 2026 exportava também as
+    crianças do "3º Ano A" de 2026, que é de outra pessoa — vazamento
+    reproduzido em teste. Restrita ao ano ativo, a lista só contém nomes que
+    são únicos no conjunto que a exportação compara; nome passa a equivaler a id.
+
+    Nenhum consumidor perde dado legítimo: todos os que mostram aluno já cruzam
+    com as matrículas do ano ativo (`alunos_permitidos`). Saem apenas as rotas
+    de turma de ANO ANTERIOR por id, que a interface do professor não usa.
+
+    Escola sem ano letivo ativo definido mantém o comportamento anterior (sem
+    filtro de ano): não há ano contra o qual recortar."""
     # Secretaria: nenhuma turma de trabalho → as telas INDIVIDUAIS (lista de
     # alunos, rankings nominais, insights por aluno, ficha) ficam vazias/404. Os
     # agregados por escola/rede NÃO passam por aqui (usam acesso_total/exigir_rede),
@@ -51,12 +71,16 @@ def turmas_permitidas(db: Session, escola_id: int, usuario: Usuario) -> list[int
     email = (usuario.email or "").strip().lower()
     if not email:
         return []
-    return list(db.execute(
+    consulta = (
         select(Turma.id)
         .join(Professor, Turma.professor_id == Professor.id)
         .where(Turma.escola_id == escola_id,
                func.lower(Professor.email) == email)
-    ).scalars().all())
+    )
+    escola = db.get(Escola, escola_id)
+    if escola is not None and escola.ano_letivo_ativo is not None:
+        consulta = consulta.where(Turma.ano_letivo == escola.ano_letivo_ativo)
+    return list(db.execute(consulta).scalars().all())
 
 
 def alunos_permitidos(db: Session, escola_id: int, ano: int,

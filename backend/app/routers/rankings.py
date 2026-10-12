@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import case, false, func, or_, select
+from sqlalchemy import and_, case, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -30,7 +30,7 @@ from app.schemas import (
     RankingTurnoOut,
 )
 from app.services import elegibilidade, modulos as svc_modulos
-from app.services import (dificuldade_livro, periodos, permissoes,
+from app.services import (dificuldade_livro, matific_destaque, periodos, permissoes,
                           premiacoes as svc_premiacoes,
                           relatorios as svc_relatorios,
                           relatorios_periodo as svc_relatorio_periodo,
@@ -92,6 +92,16 @@ def _aplicar_turno(consulta, turno: str | None):
     return consulta.where(Turma.turno.is_(None) if turno == "" else Turma.turno == turno)
 
 
+def _apenas_premiaveis(consulta, db: Session, escola_id: int, ano: int):
+    """Corte de ELEGIBILIDADE (1º–5º ano; as Fases não concorrem) — o MESMO para
+    a lista (`_ranking`) e para o denominador dela (`_contar_aferidos`). Num
+    lugar só para os dois não poderem divergir: "1º de 4" numa lista de 2 nomes.
+    A regra em si mora em ``services.elegibilidade``. A consulta precisa já ter
+    ``Turma`` no FROM/JOIN."""
+    return consulta.where(
+        Turma.id.in_(elegibilidade.turmas_premiaveis(db, escola_id, ano)))
+
+
 def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None,
              limite=None, turma_ids: list[int] | None = None,
              dimensao: str | None = None, turno: str | None = None):
@@ -106,7 +116,14 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     snapshot atual da plataforma dela), ordenados pela posição carimbada dentro
     da dimensão. Quem não tem snapshot NÃO entra com zero — sai da lista e
     aparece em `GET /nao-aferidos`.
+
+    A nota de PLATAFORMA (`nota_matific` / `nota_elefante`) de módulo que a rede
+    não contratou sai nula — vale para todo consumidor (Ranking Geral, Top 10
+    do dashboard, pacote do app). A ordenação não muda.
     """
+    modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
+    mostra_matific = "matematica" in modulos
+    mostra_elefante = "leitura" in modulos
     coluna_nota = aferido = posicao_dim = None
     if dimensao:
         coluna_nota, aferido, posicao_dim, _ = _COLUNAS_DIMENSAO[dimensao]
@@ -141,8 +158,7 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     # logo acima). Sem este corte na LEITURA, aquela linha congelada voltaria a
     # aparecer na lista. O mobile e o painel público herdam de graça: os dois
     # chamam esta mesma função.
-    consulta = consulta.where(
-        Turma.id.in_(elegibilidade.turmas_premiaveis(db, escola_id, ano)))
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     # `turno` é kwarg NO FIM da assinatura: consumidores externos (app mobile,
     # painel público) chamam posicionalmente e não podem mudar de significado.
     consulta = _aplicar_turno(consulta, turno)
@@ -157,8 +173,8 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
             nome=aluno.nome,
             turma=turma.nome,
             ano_escolar=turma.ano_escolar,
-            nota_matific=nota.nota_matific,
-            nota_elefante=nota.nota_elefante,
+            nota_matific=nota.nota_matific if mostra_matific else None,
+            nota_elefante=nota.nota_elefante if mostra_elefante else None,
             nota_geral=nota.nota_geral,
             # Carimbo de AFERIÇÃO, sempre — também na rota legada. As duas
             # colunas de nota acima chegam `0.0` tanto para quem NÃO USA a
@@ -189,17 +205,22 @@ def _contar_aferidos(db: Session, escola_id: int, ano: int, dimensao: str) -> in
     """Quantos alunos ATIVOS da escola entraram na ordenação daquela dimensão —
     o denominador da posição ("8º de 21 aferidos em Leitura").
 
-    Mesmos filtros de `_ranking` (ativo + matriculado no ano), para o
-    denominador não poder contar alguém que a lista não mostra."""
+    Mesmos filtros de `_ranking` (ativo + matriculado no ano + turma que
+    CONCORRE), para o denominador não poder contar alguém que a lista não
+    mostra. Sem o corte de elegibilidade, a Nota antiga de uma criança da
+    Educação Infantil (que o recálculo não apaga) entrava no "de N"."""
     _, aferido, _, _ = _COLUNAS_DIMENSAO[dimensao]
-    return int(db.execute(
+    consulta = (
         select(func.count(func.distinct(Nota.id)))
         .join(Aluno, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
               & (Matricula.ano_letivo == ano))
+        .join(Turma, Matricula.turma_id == Turma.id)
         .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
                Aluno.status == "ativo", aferido.is_(True))
-    ).scalar_one() or 0)
+    )
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
+    return int(db.execute(consulta).scalar_one() or 0)
 
 
 @router.get("/ranking", response_model=list[RankingItemOut])
@@ -316,6 +337,10 @@ def ranking_leitura_por_turno(
         # ordem correta DENTRO do turno.
         .order_by(posicao_dim.asc().nullslast(), coluna_nota.desc(), Aluno.id)
     )
+    # AS FASES NÃO CONCORREM: a mesma régua de `_ranking`. A Nota antiga de uma
+    # criança da Educação Infantil (que o recálculo não apaga) não pode voltar
+    # a disputar dentro do turno dela.
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
@@ -487,6 +512,9 @@ def ranking_leitura(
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     consulta = _aplicar_turno(consulta, turno)
+    # AS FASES NÃO CONCORREM (base das premiações por período): a mesma régua de
+    # `_ranking`, aplicada também ao total do Elefante logo abaixo.
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
@@ -535,6 +563,7 @@ def ranking_leitura(
         if ano_escolar:
             q_snap = q_snap.where(Turma.ano_escolar == ano_escolar)
         q_snap = _aplicar_turno(q_snap, turno)
+        q_snap = _apenas_premiaveis(q_snap, db, escola_id, ano)
         if permitidas is not None:
             q_snap = q_snap.where(Turma.id.in_(permitidas))
         for aluno_id, livros, tempo, nome, turma_nome, serie, por_nivel, tid in db.execute(q_snap).all():
@@ -606,6 +635,8 @@ def ranking_matematica(
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     consulta = _aplicar_turno(consulta, turno)
+    # AS FASES NÃO CONCORREM: a mesma régua de `_ranking` e das premiações.
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
         consulta = consulta.where(Turma.id.in_(permitidas))
@@ -687,7 +718,12 @@ def premiacoes(
     ``?limite=N`` só aumenta o TAMANHO de cada pódio — mesma coorte, mesma régua,
     mesma ordem, mesmo desempate e as mesmas posições do Top 5, que continua
     sendo o prefixo da lista. Cada categoria traz ``total``, o número de alunos
-    premiáveis, para a tela saber se ainda há ranking além do que recebeu."""
+    premiáveis, para a tela saber se ainda há ranking além do que recebeu.
+
+    Privacidade: com menos de ``MINIMO_ALUNOS_REFERENCIA_MATIFIC`` alunos com
+    atividade no período, a régua sai sem ``k`` e as linhas da Melhor Matemática
+    saem com ``valor: null`` (o índice, que com estrelas e atividades devolveria
+    o ``k``) — em todos os pódios da resposta. A ordem é a mesma."""
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(
@@ -699,7 +735,9 @@ def premiacoes(
     dados = svc_premiacoes.premiacoes(
         db, escola_id, ini, fim_dt, turma_id,
         turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
-        por_turno=turnos, limite=limite)
+        por_turno=turnos, limite=limite,
+        # Categoria de módulo não contratado não sai (o módulo não existe p/ a rede).
+        modulos=svc_modulos.modulos_da_escola(db, escola))
     dados["periodo"] = {"chave": periodo, "rotulo": rotulo,
                         "inicio": ini.isoformat() if ini else None,
                         "fim": fim_dt.isoformat() if fim_dt else None}
@@ -745,17 +783,48 @@ def _desempenho_da_escola(db: Session, escola_id: int, ano: int,
     As três marcas cabem numa CONSULTA SÓ (agregados condicionais) de propósito:
     uma consulta por dimensão multiplicaria os acessos às tabelas de snapshot
     num endpoint que já é o mais quente do sistema.
+
+    O DESEMPENHO (as médias e os ``n_*``) segue mais dois cortes do painel da
+    rede, para a identidade acima continuar valendo:
+
+      * MATIFIC É CONTADOR DO ANO: aferido em Matemática é ter snapshot DENTRO do
+        ano letivo (``matific_destaque.janela_ano_letivo``) — a definição do
+        motor (``scoring.snapshots_matific_do_ano``). Quem só tem coleta do ano
+        anterior o motor deixa sem aferição e com 0,0; sem o corte, entrava aqui
+        como ZERO na média;
+      * AS FASES NÃO CONCORREM: só a matrícula numa turma PREMIÁVEL
+        (``services.elegibilidade``) compõe o desempenho. A Nota antiga da
+        Educação Infantil (que o motor não atualiza mais) fica fora.
+
+    O ALCANCE (``com_dados``) NÃO recebe esses cortes: é cobertura — quem usa a
+    plataforma —, o mesmo conceito de ``rede._alunos_com_qualquer_dado``.
     """
-    def _marca(dimensao: str):
+    def _marca(dimensao: str, do_ano: bool = False):
         if dimensao not in contratadas:
             return false()
         _, _, _, modelo = _COLUNAS_DIMENSAO[dimensao]
-        return (select(modelo.id)
-                .where(modelo.escola_id == Nota.escola_id,
-                       modelo.aluno_id == Nota.aluno_id)
-                .exists())
+        consulta = select(modelo.id).where(modelo.escola_id == Nota.escola_id,
+                                           modelo.aluno_id == Nota.aluno_id)
+        if do_ano and modelo is SnapshotMatific:
+            inicio, fim = matific_destaque.janela_ano_letivo(ano)
+            consulta = consulta.where(modelo.data_referencia >= inicio,
+                                      modelo.data_referencia <= fim)
+        return consulta.exists()
 
+    # COBERTURA: tem snapshot da plataforma, de qualquer época.
     marcas = {"leitura": _marca("leitura"), "matematica": _marca("matematica")}
+    # DESEMPENHO: aferido (Matific do ano) E matriculado numa turma premiável.
+    premiavel = (
+        select(Matricula.id)
+        .where(Matricula.escola_id == Nota.escola_id,
+               Matricula.aluno_id == Nota.aluno_id,
+               Matricula.ano_letivo == ano,
+               Matricula.turma_id.in_(
+                   elegibilidade.turmas_premiaveis(db, escola_id, ano)))
+        .exists()
+    )
+    desempenho = {"leitura": and_(marcas["leitura"], premiavel),
+                  "matematica": and_(_marca("matematica", do_ano=True), premiavel)}
     # CONJUNTO = os MATRICULADOS no ano letivo, o mesmo de `total_alunos` (o
     # denominador do Alcance) e o mesmo que o motor pontua. `notas` não é apagada
     # quando o aluno perde a matrícula (o recálculo só grava por cima das linhas
@@ -773,10 +842,10 @@ def _desempenho_da_escola(db: Session, escola_id: int, ano: int,
     )
     consulta = (
         select(
-            func.sum(case((marcas["leitura"], 1), else_=0)),
-            func.avg(case((marcas["leitura"], Nota.nota_elefante))),
-            func.sum(case((marcas["matematica"], 1), else_=0)),
-            func.avg(case((marcas["matematica"], Nota.nota_matific))),
+            func.sum(case((desempenho["leitura"], 1), else_=0)),
+            func.avg(case((desempenho["leitura"], Nota.nota_elefante))),
+            func.sum(case((desempenho["matematica"], 1), else_=0)),
+            func.avg(case((desempenho["matematica"], Nota.nota_matific))),
             # ALCANCE: tem dado de ALGUMA dimensão CONTRATADA — cascata contrato
             # → dado. Uma rede que desligou a Matemática não pode ser cobrada
             # por snapshots de um produto que ela não assinou.

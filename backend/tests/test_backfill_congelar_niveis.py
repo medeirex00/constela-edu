@@ -150,11 +150,18 @@ def test_nivel_congelado_vazio_conta_como_congelado_e_nao_e_regravado(db, escola
     assert db.get(Leitura, vazia.id).nivel_codigo == ""
 
 
-def test_auditoria_valora_a_leitura_como_o_motor(db, escola_completa):
+def test_auditoria_valora_a_leitura_como_o_motor(db, escola_completa, monkeypatch):
     """RECONFERÊNCIA do ajuste 3 — ``auditar_notas_elefante._valor_da_leitura``
     tem de dar EXATAMENTE o mesmo valor que a régua dá ao item que o motor monta
     (id oficial antes do título; nível congelado com fallback só no NULO)."""
+    import os
+
     from app.models import Livro
+    # O script recusa importar sem DATABASE_URL (trava da linha de comando). O
+    # teste só usa a função de valoração, sem abrir sessão: um SQLite em memória
+    # basta — nenhum banco real é tocado (no CI a variável não existe).
+    if not os.environ.get("DATABASE_URL"):
+        monkeypatch.setenv("DATABASE_URL", "sqlite://")
     from scripts import auditar_notas_elefante as auditoria
 
     esc = escola_completa["escola"]

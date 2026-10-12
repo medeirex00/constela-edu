@@ -14,7 +14,10 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import Aluno, Escola, Matricula, Nota, Turma, Usuario
+from app.routers.rankings import _ranking
+from app.services import dimensoes as svc_dimensoes
 from app.services import elegibilidade
+from app.services import modulos as svc_modulos
 from app.services import permissoes
 from app.services import relatorios as svc
 from app.services.audit import registrar
@@ -75,8 +78,15 @@ def exportar_relatorio(
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             f"Relatórios disponíveis: {', '.join(sorted(svc.FONTES))}.")
     escola = db.get(Escola, escola_id)
+    modulos = svc_modulos.modulos_da_escola(db, escola)
+    if tipo == "livros":
+        # Catálogo de livros é dado do módulo Leitura: fora do plano, 403.
+        svc_modulos.exigir(modulos, "leitura")
     titulo, fonte = svc.FONTES[tipo]
     cabecalho, linhas = fonte(db, escola_id)
+    if tipo == "ranking":
+        # Nota de plataforma de módulo não contratado não sai no arquivo.
+        cabecalho, linhas = svc.sem_notas_fora_do_plano(cabecalho, linhas, modulos)
 
     # Professor: só o relatório SUPERFICIAL (ranking) e apenas das turmas dele.
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
@@ -150,30 +160,64 @@ def exportar_relatorio(
 
 @router.get("/ranking/cartaz")
 def cartaz_ranking(
+    dimensao: str | None = Query(
+        default=None, pattern="^(leitura|matematica)$",
+        description="leitura | matematica. Ausente = cartaz do Ranking Geral."),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Cartaz (pôster) do Ranking Geral em PDF — TODOS os alunos, paginado.
     Documento de vitrine (gestão apenas): moldura Constela + logos da cidade,
-    medalhas para o pódio e cartões de estatística."""
+    medalhas para o pódio e cartões de estatística.
+
+    Com ``?dimensao=leitura`` ou ``?dimensao=matematica`` é o cartaz DA MATÉRIA:
+    as linhas vêm do ranking oficial POR DIMENSÃO (`rankings._ranking` com
+    ``dimensao`` — só os alunos AFERIDOS naquela matéria, na ordem da posição
+    carimbada dela, com a mesma elegibilidade), sempre da ESCOLA INTEIRA, com
+    uma só coluna de nota e o nome da matéria no título. Os cartões de
+    estatística também são DA MATÉRIA e dos MESMOS alunos listados (Leitura:
+    livros e tempo de leitura; Matemática: atividades e estrelas — ver
+    `relatorios.estatisticas_cartaz_materia`). Exige o módulo da matéria
+    contratado (403); dimensão fora da lista = 422."""
     permissoes.negar_restrito(db, escola_id, usuario)
     escola = db.get(Escola, escola_id)
-    cabecalho, linhas = svc.linhas_ranking(db, escola_id)
+    if dimensao:
+        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
+        cabecalho = svc.cabecalho_cartaz_materia(dimensao)
+        itens = _ranking(db, escola_id, escola.ano_letivo_ativo, dimensao=dimensao)
+        linhas = [
+            [item.posicao, item.nome, item.turma, item.ano_escolar, item.nota]
+            for item in itens
+        ]
+        # Cartões da matéria: os totais saem dos alunos DESTA lista, não da
+        # escola inteira (senão "livros lidos" contaria quem não está no cartaz).
+        estatisticas = svc.estatisticas_cartaz_materia(
+            db, escola_id, dimensao, [item.aluno_id for item in itens])
+    else:
+        cabecalho, linhas = svc.linhas_ranking(db, escola_id)
+        # Nota de plataforma de módulo não contratado não sai no cartaz (a mesma
+        # regra do relatório de ranking).
+        cabecalho, linhas = svc.sem_notas_fora_do_plano(
+            cabecalho, linhas, svc_modulos.modulos_da_escola(db, escola))
+        estatisticas = svc.estatisticas_cartaz(db, escola_id)
     conteudo = svc.gerar_cartaz_ranking(
         escola_nome=escola.nome,
         cor=svc.cor_primaria(db, escola_id),
         ano_letivo=escola.ano_letivo_ativo,
         cabecalho=cabecalho,
         linhas=linhas,
-        estatisticas=svc.estatisticas_cartaz(db, escola_id),
+        estatisticas=estatisticas,
         logos=svc.logos_da_escola(db, escola_id),
+        materia=dimensao,
     )
     momento = datetime.now(timezone.utc)
-    nome_arquivo = f"ranking_cartaz_{momento:%Y%m%d_%H%M%S}.pdf"
+    sufixo = f"_{dimensao}" if dimensao else ""
+    nome_arquivo = f"ranking_cartaz{sufixo}_{momento:%Y%m%d_%H%M%S}.pdf"
     _arquivar_copia(nome_arquivo, conteudo)
     registrar(db, "relatorio.exportado", escola_id=escola_id, usuario_id=usuario.id,
-              detalhes={"tipo": "ranking_cartaz", "formato": "pdf", "linhas": len(linhas)})
+              detalhes={"tipo": f"ranking_cartaz{sufixo}", "formato": "pdf",
+                        "linhas": len(linhas)})
     db.commit()
     return Response(
         content=conteudo,
@@ -209,8 +253,14 @@ def certificado(
     a MESMA criança com os MESMOS dados recebia "4", porque o único insumo era o
     relógio. Quando a entrega atravessa a virada do bimestre, quem emite escolhe
     qual período o documento afirma; o padrão não mudou, para não alterar nenhum
-    certificado já combinado."""
+    certificado já combinado.
+
+    A arte de uma plataforma exige o módulo dela no plano da rede (``matific`` →
+    Matemática, ``elefante`` → Leitura); fora do plano, 403."""
     escola = db.get(Escola, escola_id)
+    if modelo is not None:
+        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola),
+                           svc_modulos.PLATAFORMA_MODULO[modelo])
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
@@ -292,10 +342,15 @@ def certificado(
     ).scalar_one_or_none()
 
     def _geral() -> bytes:
-        # Certificado de MÉRITO: sem nota calculada (aluno recém-cadastrado, import
-        # ainda não recalculado, ou sem dado de plataforma) NÃO se emite — um
-        # documento oficial com brasão afirmando "nota geral 0,0" é constrangedor.
-        if nota is None or (nota.nota_geral or 0.0) <= 0:
+        # Certificado de MÉRITO: sem desempenho aferido (aluno recém-cadastrado,
+        # import ainda não recalculado, ou sem dado de plataforma) NÃO se emite —
+        # um documento oficial com brasão afirmando "0,0" é constrangedor. A
+        # guarda lê as DIMENSÕES (contratada, aferida e com nota > 0), não o
+        # legado `nota_geral`: é a mesma condição de antes (a nota geral é média
+        # ponderada de valores não negativos), sem decidir pela coluna legada.
+        # O TEXTO do documento ainda cita nota geral e posição — o que o
+        # certificado afirma é decisão do dono (spec-arquitetura-2, Aprovações 4).
+        if nota is None or not svc_dimensoes.com_desempenho(db, escola, nota):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "Este aluno ainda não tem nota calculada — não dá para emitir o "

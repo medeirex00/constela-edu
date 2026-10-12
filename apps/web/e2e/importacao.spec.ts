@@ -13,6 +13,8 @@ test("a central de importações mostra o histórico semeado e o formulário", a
   await expect(page.getByRole("heading", { name: "Histórico" })).toBeVisible();
   // O seed criou importações (matific/elefante), então NÃO é o estado vazio.
   await expect(page.getByText("Nenhuma importação ainda")).toHaveCount(0);
-  // O formulário de análise (importação individual) está disponível ao gestor.
+  // O formulário de análise (importação individual, modo "Um por vez") está
+  // disponível ao gestor.
+  await page.getByRole("button", { name: "Um por vez" }).click();
   await expect(page.getByRole("button", { name: /analisar e ver prévia/i })).toBeVisible();
 });

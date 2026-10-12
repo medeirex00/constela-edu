@@ -64,8 +64,10 @@ class NavFake:
     async def fechar(self): pass
     async def coletar_respostas(self, url, timeout_s=25): return self._caps
     async def coletar_apos_acao(self, acao, timeout_s=20):
-        try: await acao()
-        except Exception: pass  # noqa: BLE001
+        try:
+            await acao()
+        except Exception:  # noqa: BLE001
+            pass
         return []
 
     async def avaliar(self, expr):

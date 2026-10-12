@@ -1,7 +1,7 @@
 """Hash de senhas, política de senha e emissão/validação de tokens JWT."""
 from datetime import datetime, timedelta, timezone
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -136,9 +136,16 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def validar_forca_senha(senha: str, email: str | None = None) -> str | None:
+def validar_forca_senha(senha: str, email: str | None = None, *,
+                        nome: str | None = None, usuario: str | None = None) -> str | None:
     """Devolve a mensagem de erro se a senha for fraca; None se for aceitável.
-    Regra única compartilhada por todos os fluxos de senha (criar/trocar)."""
+    Regra única compartilhada por todos os fluxos de senha (criar/trocar).
+
+    Com ``nome``/``usuario`` (o dono da senha), recusa também as senhas das
+    convenções antigas de professor ("nomesobrenome123", "Primeiro123"): a regra
+    está publicada no histórico do repositório, e quem se acostumou a ela
+    tenderia a escolhê-la de novo pelo link — e a conta voltaria a ser
+    calculável a partir do nome."""
     if len(senha) < 8:
         return "A senha deve ter pelo menos 8 caracteres."
     if len(senha.encode("utf-8")) > LIMITE_SENHA_BYTES:
@@ -149,6 +156,13 @@ def validar_forca_senha(senha: str, email: str | None = None) -> str | None:
         alvo = email.casefold().strip()
         if senha.casefold() in (alvo, alvo.split("@")[0]):
             return "A senha não pode ser igual ao e-mail."
+    if nome or usuario:
+        # Import tardio: o serviço de professores importa este módulo.
+        from app.services.professores import _senhas_da_convencao_antiga
+        convencoes = {c.casefold() for c in _senhas_da_convencao_antiga(nome or "", usuario)}
+        if senha.casefold() in convencoes:
+            return ("Esta senha segue um padrão fácil de adivinhar (nome + 123). "
+                    "Escolha outra.")
     return None
 
 
@@ -170,5 +184,5 @@ def decodificar_token(token: str) -> dict | None:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         int(payload.get("sub"))  # garante que 'sub' é um id válido
         return payload
-    except (JWTError, TypeError, ValueError):
+    except (jwt.PyJWTError, TypeError, ValueError):
         return None

@@ -120,7 +120,9 @@ class UsuarioCreate(BaseModel):
     @field_validator("senha")
     @classmethod
     def _forca(cls, valor: str, info) -> str:
-        erro = validar_forca_senha(valor, info.data.get("email"))
+        erro = validar_forca_senha(valor, info.data.get("email"),
+                                   nome=info.data.get("nome"),
+                                   usuario=info.data.get("username"))
         if erro:
             raise ValueError(erro)
         return valor
@@ -340,6 +342,11 @@ def atualizar_usuario(
         alteracoes["status"] = {"de": alvo.status, "para": dados.status}
         alvo.status = dados.status
     if dados.senha is not None:
+        # Com o nome/@ JÁ atualizados acima: a convenção antiga é a do dono.
+        erro = validar_forca_senha(dados.senha, alvo.email, nome=alvo.nome,
+                                   usuario=alvo.username)
+        if erro:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, erro)
         alvo.senha_hash = hash_senha(dados.senha)
         # Trocar a senha invalida TODAS as sessões abertas da conta — inclusive a
         # PRÓPRIA e um eventual token roubado. Sem isto, "troquei a senha" não

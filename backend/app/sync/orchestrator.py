@@ -158,8 +158,9 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                  + (" e notas recalculadas." if recalcular else "."))
 
     # Cria automaticamente a conta de login dos PROFESSORES da turma detectada
-    # (login = NomeSobrenome, senha = Primeiro nome + 123) e vincula o titular
-    # para o RBAC. Acessório e idempotente: roda numa transação própria (o
+    # (login = NomeSobrenome; a conta nasce SEM senha conhecida — o primeiro
+    # acesso é pelo link de redefinição gerado pela gestão em Usuários) e
+    # vincula o titular para o RBAC. Acessório e idempotente: roda numa transação própria (o
     # confirmar já commitou os alunos) e NUNCA derruba a sync se falhar.
     professor_txt = getattr(analise, "professor_detectado", "") or ""
     turma_txt = getattr(analise, "turma_detectada", "") or ""
@@ -176,7 +177,9 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
             if n_prof:
                 contexto.log("professores", "info",
                              f"{n_prof} conta(s) de professor criada(s) "
-                             "automaticamente (usuário = NomeSobrenome).")
+                             "automaticamente (usuário = NomeSobrenome), sem "
+                             "senha: para o primeiro acesso, a gestão gera o "
+                             "link de redefinição em Usuários.")
         except Exception:  # noqa: BLE001 — professor é acessório; aluno é o essencial
             db.rollback()
             contexto.log("professores", "warn",

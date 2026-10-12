@@ -10,6 +10,7 @@ import { SeletorTurno } from "../components/SeletorTurno";
 import { Badge, Botao, Card, Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { destinoEvolucaoDoAluno, usePerfil } from "../hooks/usePerfil";
 import { nota, numero } from "../lib/formato";
 import { aplicarTurno, turnoEfetivo } from "../lib/turnos";
 import type { Turma } from "../lib/types";
@@ -32,6 +33,7 @@ interface ItemEvolucao {
 
 export default function RankingEvolucao({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  const { gestor } = usePerfil();
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
@@ -92,7 +94,7 @@ export default function RankingEvolucao({ embutido = false }: { embutido?: boole
                       {item.posicao <= 3 ? <Badge tom="ok">{item.posicao}º</Badge> : `${item.posicao}º`}
                     </td>
                     <td className="px-4 py-2.5">
-                      <Link to={`/alunos/${item.aluno_id}/evolucao`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                      <Link to={destinoEvolucaoDoAluno(item.aluno_id, gestor)} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
                         {item.nome}
                       </Link>
                     </td>

@@ -3,9 +3,10 @@
 Mantidos em um módulo único nesta fase; ao crescer, dividir por domínio
 sem alterar os imports (o pacote reexporta tudo).
 """
+import math
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -344,6 +345,21 @@ class PesosOut(BaseModel):
 class PesosUpdate(BaseModel):
     valores: dict[str, float]
 
+    @field_validator("valores")
+    @classmethod
+    def _pesos_nao_negativos(cls, valores: dict[str, float]) -> dict[str, float]:
+        """Peso é a FATIA do indicador na nota: vai de 0 (indicador desligado) a
+        100. A rota só conferia a soma = 100, então ``{"livros": -10, "tempo":
+        45, ...}`` passava e o motor premiava quem lê MENOS. (``not 0 <= peso <
+        inf`` recusa também NaN e infinito.)"""
+        invalidos = sorted(chave for chave, peso in valores.items()
+                           if not 0 <= peso < math.inf)
+        if invalidos:
+            raise ValueError(
+                f"Peso não pode ser negativo nem infinito (use 0 para desligar o "
+                f"indicador): {', '.join(invalidos)}.")
+        return valores
+
 
 class NivelOut(ORMModel):
     id: int
@@ -402,6 +418,25 @@ class ReferenciasUpdate(BaseModel):
     modo: str = Field(pattern="^(auto|manual)$")
     valores_manuais: dict[str, float] = {}
 
+    @field_validator("valores_manuais")
+    @classmethod
+    def _referencias_validas(cls, valores: dict[str, float]) -> dict[str, float]:
+        """A referência é o resultado que vale 100 — o DIVISOR da normalização.
+
+        ZERO continua valendo e quer dizer "nesta chave, use a referência
+        automática": é assim que o motor o lê (``manuais.get(chave) or
+        auto[chave]``) e é o que a tela de Referências envia para a plataforma
+        sem dado. NEGATIVO ou INFINITO zeravam o indicador de todos os alunos sem
+        aviso (``normalizar`` devolve 0 com referência <= 0; dividir por infinito
+        dá 0). (``not 0 <= valor < inf`` recusa também NaN.)"""
+        invalidas = sorted(chave for chave, valor in valores.items()
+                           if not 0 <= valor < math.inf)
+        if invalidas:
+            raise ValueError(
+                f"Valor de referência manual não pode ser negativo nem infinito "
+                f"(use 0 para seguir a referência automática): {', '.join(invalidas)}.")
+        return valores
+
 
 # --- Ranking e Dashboard ----------------------------------------------------
 
@@ -419,8 +454,10 @@ class RankingItemOut(BaseModel):
     nome: str
     turma: str | None
     ano_escolar: str | None
-    nota_matific: float
-    nota_elefante: float
+    # Nula quando o módulo da plataforma não está no plano da rede (o módulo
+    # não existe para ela); senão, o número de sempre.
+    nota_matific: float | None
+    nota_elefante: float | None
     # LEGADO: composição entre dimensões; não ordena mais nada.
     nota_geral: float
     # Discriminante de AFERIÇÃO por dimensão — carimbado SEMPRE, inclusive na

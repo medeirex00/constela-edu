@@ -36,6 +36,14 @@ from app.services import dificuldade_livro, elegibilidade, matific_destaque, sco
 from app.services import turnos as svc_turnos
 from app.services.evolucao import _series_por_aluno
 
+# DECISÃO PROVISÓRIA (privacidade) — a MESMA do "Quer ver um exemplo?" da
+# Pontuação (``routers.configuracoes``, que reusa esta constante): com menos
+# alunos do que isto fazendo atividade no período, a mediana ``k`` da escola
+# praticamente revela a contagem de uma criança, e as premiações não devolvem
+# nada de onde ela saia — nem a régua (``_regua_publicada``) nem o índice de
+# cada aluno no pódio (``_sem_indice``). Mudar o número é decisão do dono.
+MINIMO_ALUNOS_REFERENCIA_MATIFIC = 5
+
 
 def _ordenar(valores: dict[int, float], alunos: dict[int, dict],
              desempate: dict[int, tuple] | None = None) -> list[tuple[int, float]]:
@@ -239,6 +247,69 @@ def _matematica_no_periodo(db: Session, escola_id: int, coorte: dict[int, dict],
     return matematica, descricao_regua
 
 
+def regua_matematica(db: Session, escola_id: int, inicio: datetime | None,
+                     fim: datetime | None) -> dict:
+    """A RÉGUA da "Melhor Matemática" da escola no período — o dict que
+    ``premiacoes()`` devolve em ``regua_matematica`` (``k_mediana_atividades``,
+    ``zeros_extras``, ``alunos_com_atividade``, ``modo``, janela efetiva), aqui
+    SEM o corte de privacidade (``_regua_publicada``): quem chama aplica o dele.
+
+    Mesma coorte (``_alunos_ativos`` da escola inteira, 1º–5º ano, ano letivo
+    ativo) e mesmo cálculo (``_matematica_no_periodo``): é a mesma régua por
+    construção, não uma cópia. Serve o "Quer ver um exemplo?" da Pontuação, que
+    explica o índice com o ``k`` REAL da escola sem expor nenhum aluno — por isso
+    só a régua sai daqui, nunca os índices por aluno. NÃO grava nada e ignora o
+    contrato de módulos (quem chama já exige ``matematica``)."""
+    escola = db.get(Escola, escola_id)
+    ano = escola.ano_letivo_ativo
+    coorte = _alunos_ativos(db, escola_id, ano, None)
+    _por_aluno, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
+    return regua
+
+
+def _referencia_publicavel(regua: dict) -> bool:
+    """A régua desta escola no período pode ser mostrada? Só a partir de
+    ``MINIMO_ALUNOS_REFERENCIA_MATIFIC`` alunos com atividade — o MESMO corte
+    vale para a régua e para o índice do pódio (``_sem_indice``)."""
+    return int(regua.get("alunos_com_atividade") or 0) >= MINIMO_ALUNOS_REFERENCIA_MATIFIC
+
+
+def _regua_publicada(regua: dict) -> dict:
+    """A régua como as premiações a DEVOLVEM: abaixo de
+    ``MINIMO_ALUNOS_REFERENCIA_MATIFIC`` alunos com atividade, sem o ``k`` e sem
+    os ``zeros_extras`` (20% do ``k`` — devolver um é devolver o outro). Só a
+    descrição muda: os índices, a ordem e o desempate já saíram do ``k`` real."""
+    if _referencia_publicavel(regua):
+        return regua
+    return {**regua, "k_mediana_atividades": None, "zeros_extras": None}
+
+
+def _sem_indice(categoria: dict) -> dict:
+    """O pódio da "Melhor Matemática" SEM o índice de cada aluno (``valor`` =
+    ``None``), para quando a régua não pode ser mostrada.
+
+    Esconder só a régua não basta: o item traz o índice junto com as estrelas e
+    as atividades do período, e ``índice = estrelas ÷ (atividades + 0,2·k)``
+    devolve ``k = 5·(estrelas ÷ índice − atividades)`` a partir de QUALQUER
+    linha. Das três peças, sai o índice — a única que carrega o ``k``:
+
+      * estrelas e atividades do período são o dado BRUTO da própria criança e
+        já saem por aluno em outras telas, inclusive para o professor (o
+        relatório por período, ``por_aluno``, com a mesma ``ganho_no_periodo``;
+        e o Ranking de Matemática por período). Tirá-las daqui e manter o
+        índice deixaria o ``k`` a um cruzamento de distância;
+      * sem o índice, nenhuma resposta da escola carrega o ``k``: o exemplo da
+        Pontuação também o omite abaixo do mesmo mínimo.
+
+    A ORDEM, o desempate, as posições e o ``total`` NÃO mudam: tudo isso já foi
+    decidido pelo índice BRUTO em ``_ordenar`` antes deste passo — aqui só a
+    exibição do número muda. Vale igual para o Top 5, os pódios por turno e o
+    ranking completo (``?limite=``), que saem todos de ``_categorias``."""
+    for item in categoria["podio"]:
+        item["valor"] = None
+    return categoria
+
+
 def _categoria(chave: str, titulo: str, icone: str, descricao: str, unidade: str,
                valores: dict, alunos: dict[int, dict], limite: int,
                desempate: dict[int, tuple] | None = None,
@@ -252,26 +323,51 @@ def _categoria(chave: str, titulo: str, icone: str, descricao: str, unidade: str
             "podio": _itens(ordenados, alunos, limite, extras)}
 
 
+# Categoria → módulo contratado que a sustenta (``services/modulos``). A rede que
+# não contratou o módulo não vê a categoria (nem a régua da Matemática).
+MODULO_DA_CATEGORIA = {
+    "melhor_leitor": "leitura",
+    "melhor_matematica": "matematica",
+    "mais_livros": "leitura",
+    "mais_tempo": "leitura",
+}
+
+
 def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict,
-                matematica: dict[int, dict], limite: int = 5) -> list[dict]:
+                matematica: dict[int, dict], limite: int = 5,
+                modulos: set[str] | None = None,
+                ocultar_indice: bool = False) -> list[dict]:
     """Os 4 pódios para um conjunto de alunos (o recorte, ou um turno dele).
 
     ``limite`` é só QUANTAS linhas voltam: 5 no cartão, mais no ranking completo.
-    A ordem, o desempate e o valor de cada linha não mudam com ele."""
+    A ordem, o desempate e o valor de cada linha não mudam com ele.
+    ``ocultar_indice`` tira o índice das linhas da Matemática (``_sem_indice``)
+    DEPOIS de ordenar — a ordem continua a do índice.
+
+    ``modulos`` (os do plano da rede; ``None`` = todos) tira as categorias de
+    módulo não contratado — as demais saem iguais, na mesma ordem."""
+    if modulos is not None:
+        return [c for c in _categorias(alunos, livros, pontos, tempo, matematica, limite,
+                                       ocultar_indice=ocultar_indice)
+                if MODULO_DA_CATEGORIA[c["chave"]] in modulos]
     indices = {aid: d["indice"] for aid, d in matematica.items()}
     # Desempate da Matemática: estrelas do período → atividades do período → nome.
     desempate_m = {aid: (d["estrelas"], d["atividades"]) for aid, d in matematica.items()}
     auditoria_m = {aid: {"estrelas": d["estrelas"], "atividades": d["atividades"],
                          "data_base": d["data_base"], "data_atual": d["data_atual"]}
                    for aid, d in matematica.items()}
+    melhor_matematica = _categoria(
+        "melhor_matematica", "Melhor Matemática", "🧮",
+        "Maior média ajustada de estrelas por atividade no período",
+        "estrelas/atividade", indices, alunos, limite,
+        desempate=desempate_m, extras=auditoria_m)
+    if ocultar_indice:
+        _sem_indice(melhor_matematica)
     return [
         _categoria("melhor_leitor", "Melhor Leitor", "🏆",
                    "Mais pontos de dificuldade no período", "pontos",
                    pontos, alunos, limite),
-        _categoria("melhor_matematica", "Melhor Matemática", "🧮",
-                   "Maior média ajustada de estrelas por atividade no período",
-                   "estrelas/atividade", indices, alunos, limite,
-                   desempate=desempate_m, extras=auditoria_m),
+        melhor_matematica,
         _categoria("mais_livros", "Mais Livros Lidos", "📚",
                    "Maior quantidade de livros no período", "livros",
                    livros, alunos, limite),
@@ -284,11 +380,16 @@ def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict
 def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
                fim: datetime | None, turma_id: int | None = None,
                turma_ids: list[int] | None = None,
-               por_turno: bool = False, limite: int = 5) -> dict:
+               por_turno: bool = False, limite: int = 5,
+               modulos: set[str] | None = None) -> dict:
     """Pódios do período. ``limite`` é QUANTAS linhas cada pódio traz — 5 no
     cartão da tela, mais quando ela pede o ranking completo daquela premiação.
     Nada além do tamanho da lista muda: mesma coorte, mesma régua, mesma ordem,
-    mesmo desempate, mesmas posições."""
+    mesmo desempate, mesmas posições.
+
+    ``modulos`` = os módulos do plano da rede (``None`` = todos): categoria de
+    módulo não contratado não sai (``melhor_matematica`` e a ``regua_matematica``
+    sem Matemática; as de leitura sem Leitura), também nos pódios por turno."""
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
     # COORTE COMPLETA da escola (sem turma nem professor): é a base da régua.
@@ -298,11 +399,19 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
 
     livros, pontos, tempo = _leitura_no_periodo(db, escola_id, alunos, inicio, fim)
     matematica, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
+    # Abaixo do mínimo de alunos com atividade o ``k`` não sai de jeito nenhum:
+    # nem na régua (``_regua_publicada``) nem deduzido do índice de um aluno do
+    # pódio (``_sem_indice``) — em TODOS os pódios desta resposta.
+    ocultar_indice = not _referencia_publicavel(regua)
 
     resultado: dict = {
-        "categorias": _categorias(alunos, livros, pontos, tempo, matematica, limite),
-        "regua_matematica": regua,
+        "categorias": _categorias(alunos, livros, pontos, tempo, matematica, limite,
+                                  modulos, ocultar_indice=ocultar_indice),
+        # Abaixo do mínimo de alunos o ``k`` não sai (ver ``_regua_publicada``).
+        "regua_matematica": _regua_publicada(regua),
     }
+    if modulos is not None and "matematica" not in modulos:
+        resultado.pop("regua_matematica")
 
     # Quebra por TURNO (só na visão "todas as turmas"): agrupa os MESMOS dados já
     # calculados por Turma.turno, sem recomputar a régua. Turnos vêm do banco.
@@ -313,7 +422,8 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
         resultado["turnos"] = [
             {"turno": turno, "turno_rotulo": svc_turnos.rotulo_turno(turno),
              "total": len(sub),
-             "categorias": _categorias(sub, livros, pontos, tempo, matematica, limite)}
+             "categorias": _categorias(sub, livros, pontos, tempo, matematica, limite,
+                                       modulos, ocultar_indice=ocultar_indice)}
             for turno, sub in sorted(grupos.items(), key=lambda kv: svc_turnos.ordem_turno(kv[0]))
         ]
     return resultado

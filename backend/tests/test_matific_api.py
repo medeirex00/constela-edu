@@ -277,8 +277,10 @@ def test_sincronizar_agrupa_por_turma_com_api_interna(monkeypatch):
             return {"ok": False, "status": 0, "body": None}
 
         async def coletar_apos_acao(self, acao, timeout_s=20):
-            try: await acao()
-            except Exception: pass  # noqa: BLE001
+            try:
+                await acao()
+            except Exception:  # noqa: BLE001
+                pass
             return []
         async def baixar(self, s, timeout_s=60): return (b"", "x")
 

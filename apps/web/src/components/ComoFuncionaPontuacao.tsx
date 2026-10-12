@@ -17,14 +17,18 @@
  * endpoint que os exponha — são constantes de código, iguais para toda a rede —
  * por isso ficam espelhados aqui. Se um dia mudarem no backend, este espelho
  * precisa acompanhar.
+ *
+ * "Quer ver um exemplo?" (`ExemploPontuacao`) fica FORA do trecho que depende
+ * de /dificuldade-livro: ele tem as próprias rotas, uma aba por plataforma
+ * contratada, e não pode sumir numa rede sem Leitura (a aba do Matific segue).
  */
 import { ChevronDown, HelpCircle } from "lucide-react";
 import { useId, useState } from "react";
 
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
-import { api, ApiError } from "../lib/api";
-import { Botao, Card, Carregando, Mensagem, estiloInput } from "./ui";
+import ExemploPontuacao from "./ExemploPontuacao";
+import { Card, Carregando, Mensagem } from "./ui";
 
 /** Resposta de GET /escolas/{id}/configuracoes/dificuldade-livro. */
 export interface DificuldadeLivroInfo {
@@ -43,24 +47,6 @@ export interface DificuldadeLivroInfo {
     calibracao?: { n_livros?: number; catalogo_de?: string; fonte?: string };
   };
   catalogo?: { n?: number; gerado_em?: string };
-  /** Só vem quando a consulta leva ?nivel= (e, opcionalmente, titulo e ano_escolar). */
-  exemplo?: ExemploDificuldade;
-}
-
-/** Decomposição de UMA leitura (regra vigente). Na régua legada (perfil
- *  personalizado) só ``nivel`` e ``valor`` existem. */
-export interface ExemploDificuldade {
-  versao?: string;
-  nivel: string;
-  titulo?: string | null;
-  base_nivel?: number;
-  ajuste_intrinseco?: number;
-  fator_serie?: number;
-  serie?: number | null;
-  word_count?: number | null;
-  mediana_nivel?: number | null;
-  valor: number;
-  encontrado_no_catalogo?: boolean | null;
 }
 
 // Pesos INSTITUCIONAIS (scoring.PESOS_PADRAO) — ver o comentário do topo.
@@ -107,129 +93,6 @@ function fatoresPorSerie(fatores: Record<string, number> | undefined): Array<[st
 
 function listaPesos(pesos: Array<[string, number]>): string {
   return pesos.map(([nome, peso]) => `${nome} ${peso}%`).join(", ");
-}
-
-/* -------------------------------------------------------------------------
- * Exemplo opcional: pede a decomposição de UMA leitura à própria API
- * (?nivel=&titulo=&ano_escolar=). Só mostra o que a API devolver.
- * ----------------------------------------------------------------------- */
-function ExemploDeLivro({ escolaId }: { escolaId: number }) {
-  const [nivel, setNivel] = useState("");
-  const [titulo, setTitulo] = useState("");
-  const [anoEscolar, setAnoEscolar] = useState("");
-  const [exemplo, setExemplo] = useState<ExemploDificuldade | null>(null);
-  const [erro, setErro] = useState("");
-  const [calculando, setCalculando] = useState(false);
-
-  async function calcular() {
-    const codigo = nivel.trim().toUpperCase();
-    if (!codigo) {
-      setErro("Informe o nível do livro (ex.: D).");
-      return;
-    }
-    setCalculando(true);
-    setErro("");
-    setExemplo(null);
-    const query = new URLSearchParams({ nivel: codigo });
-    if (titulo.trim()) query.set("titulo", titulo.trim());
-    if (anoEscolar.trim()) query.set("ano_escolar", anoEscolar.trim());
-    try {
-      const resposta = await api<DificuldadeLivroInfo>(
-        `/escolas/${escolaId}/configuracoes/dificuldade-livro?${query.toString()}`,
-      );
-      if (resposta.exemplo && typeof resposta.exemplo.valor === "number") {
-        setExemplo(resposta.exemplo);
-      } else {
-        setErro("A regra não devolveu um exemplo para esses dados.");
-      }
-    } catch (excecao) {
-      setErro(excecao instanceof ApiError ? excecao.message : "Não foi possível calcular o exemplo.");
-    } finally {
-      setCalculando(false);
-    }
-  }
-
-  const completo =
-    exemplo != null &&
-    typeof exemplo.base_nivel === "number" &&
-    typeof exemplo.ajuste_intrinseco === "number" &&
-    typeof exemplo.fator_serie === "number";
-
-  return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <p className="text-sm font-medium">Quer ver um exemplo?</p>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-        Informe o nível do livro e, se quiser, o título e o ano escolar do aluno. O valor vem da
-        mesma regra que calcula as notas.
-      </p>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <label className="block text-sm">
-          <span className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Nível do livro</span>
-          <input
-            className={estiloInput}
-            placeholder="Ex.: D"
-            value={nivel}
-            onChange={(e) => setNivel(e.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Título (opcional)</span>
-          <input
-            className={estiloInput}
-            placeholder="Ex.: O que é o que é?"
-            value={titulo}
-            onChange={(e) => setTitulo(e.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Ano escolar (opcional)</span>
-          <input
-            className={estiloInput}
-            placeholder="Ex.: 3º Ano"
-            value={anoEscolar}
-            onChange={(e) => setAnoEscolar(e.target.value)}
-          />
-        </label>
-      </div>
-      <div className="mt-3">
-        <Botao variante="neutro" onClick={calcular} disabled={calculando}>
-          {calculando ? "Calculando..." : "Ver exemplo"}
-        </Botao>
-      </div>
-      {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-      {exemplo && (
-        <div className="mt-3 rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
-          {completo ? (
-            <p>
-              Nível <strong>{exemplo.nivel}</strong>
-              {exemplo.titulo ? <> — “{exemplo.titulo}”</> : null}
-              {typeof exemplo.serie === "number" ? <> — {exemplo.serie}º ano</> : null}:{" "}
-              <span className="tabular-nums">
-                {decimal(exemplo.base_nivel as number)} (nível) × {decimal(exemplo.ajuste_intrinseco as number)}{" "}
-                (tamanho) × {decimal(exemplo.fator_serie as number)} (série) ={" "}
-                <strong>{decimal(exemplo.valor)} pontos</strong>
-              </span>
-            </p>
-          ) : (
-            <p>
-              Nível <strong>{exemplo.nivel}</strong>: <strong>{decimal(exemplo.valor)} pontos</strong>
-            </p>
-          )}
-          {typeof exemplo.word_count === "number" && typeof exemplo.mediana_nivel === "number" && (
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Palavras do livro: {exemplo.word_count.toLocaleString("pt-BR")} (livro típico do nível:{" "}
-              {exemplo.mediana_nivel.toLocaleString("pt-BR")}).
-            </p>
-          )}
-          {exemplo.titulo && exemplo.encontrado_no_catalogo === false && (
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Título não encontrado no catálogo: o cálculo usou o livro típico do nível.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 /* -------------------------------------------------------------------------
@@ -282,83 +145,92 @@ export default function ComoFuncionaPontuacao({
             <p className="text-zinc-500 dark:text-zinc-400">
               Selecione uma escola no topo para ver os detalhes da regra.
             </p>
-          ) : carregando ? (
-            <Carregando texto="Carregando a regra..." />
-          ) : erro || !dados ? (
-            <Mensagem tipo="erro">{MENSAGEM_FALHA}</Mensagem>
           ) : (
             <>
-              <ol className="list-decimal space-y-3 pl-5">
-                <li>
-                  <strong>Nível do livro.</strong> Cada livro do Elefante Letrado tem um nível de
-                  leitura, de AA a Z. Quanto mais alto o nível, mais pontos o livro vale.
-                </li>
-                <li>
-                  <strong>Tamanho do livro.</strong> Dentro do mesmo nível, um livro maior que o
-                  típico vale um pouco mais
-                  {maisPct != null ? <> (até +{maisPct}%)</> : null} e um livro menor vale um pouco
-                  menos{menosPct != null ? <> (no mínimo −{menosPct}%)</> : null}. O nível continua
-                  sendo o que mais pesa.
-                </li>
-                <li>
-                  <strong>Série do aluno.</strong> O mesmo livro vale mais para quem está no começo
-                  da alfabetização.
-                  {fatores.length > 0 ? (
-                    <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-zinc-600 dark:text-zinc-400">
-                      {fatores.map(([serie, valor]) => (
-                        <li key={serie} className="tabular-nums">
-                          {serie}: {fator(valor)}
-                        </li>
-                      ))}
-                      {typeof parametros?.fator_serie_padrao === "number" && (
-                        <li className="tabular-nums">
-                          Outras séries: {fator(parametros.fator_serie_padrao)}
-                        </li>
-                      )}
-                    </ul>
-                  ) : null}
-                </li>
-                <li>
-                  <strong>Cada livro conta uma vez.</strong> Reler um livro não soma pontos de novo.
-                </li>
-                {modo === "institucional" ? (
-                  <>
+              {carregando ? (
+                <Carregando texto="Carregando a regra..." />
+              ) : erro?.status === 403 ? (
+                // Fora do plano (ex.: rede sem Leitura): explicar, não pedir que
+                // "tente de novo mais tarde".
+                <p className="text-zinc-500 dark:text-zinc-400">{erro.message}</p>
+              ) : erro || !dados ? (
+                <Mensagem tipo="erro">{MENSAGEM_FALHA}</Mensagem>
+              ) : (
+                <>
+                  <ol className="list-decimal space-y-3 pl-5">
                     <li>
-                      <strong>Nota de Leitura (0 a 100).</strong> Combina quatro indicadores:{" "}
-                      {listaPesos(PESOS_LEITURA)}. Em cada um, o aluno é comparado com os colegas da
-                      própria escola.
+                      <strong>Nível do livro.</strong> Cada livro do Elefante Letrado tem um nível de
+                      leitura, de AA a Z. Quanto mais alto o nível, mais pontos o livro vale.
                     </li>
                     <li>
-                      <strong>Nota de Matemática (0 a 100).</strong> Combina três indicadores do Matific:{" "}
-                      {listaPesos(PESOS_MATEMATICA)}. Também comparando com os colegas da própria escola.
+                      <strong>Tamanho do livro.</strong> Dentro do mesmo nível, um livro maior que o
+                      típico vale um pouco mais
+                      {maisPct != null ? <> (até +{maisPct}%)</> : null} e um livro menor vale um pouco
+                      menos{menosPct != null ? <> (no mínimo −{menosPct}%)</> : null}. O nível continua
+                      sendo o que mais pesa.
                     </li>
-                  </>
-                ) : (
-                  <li>
-                    <strong>Notas de Leitura e de Matemática (0 a 100).</strong>{" "}
-                    {modo === "personalizado"
-                      ? TEXTO_REGUA_PERSONALIZADA
-                      : "Os pesos de cada nota são definidos pela Constela."}{" "}
-                    Em cada indicador, o aluno é comparado com os colegas da própria escola.
-                  </li>
-                )}
-              </ol>
+                    <li>
+                      <strong>Série do aluno.</strong> O mesmo livro vale mais para quem está no começo
+                      da alfabetização.
+                      {fatores.length > 0 ? (
+                        <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-zinc-600 dark:text-zinc-400">
+                          {fatores.map(([serie, valor]) => (
+                            <li key={serie} className="tabular-nums">
+                              {serie}: {fator(valor)}
+                            </li>
+                          ))}
+                          {typeof parametros?.fator_serie_padrao === "number" && (
+                            <li className="tabular-nums">
+                              Outras séries: {fator(parametros.fator_serie_padrao)}
+                            </li>
+                          )}
+                        </ul>
+                      ) : null}
+                    </li>
+                    <li>
+                      <strong>Cada livro conta uma vez.</strong> Reler um livro não soma pontos de novo.
+                    </li>
+                    {modo === "institucional" ? (
+                      <>
+                        <li>
+                          <strong>Nota de Leitura (0 a 100).</strong> Combina quatro indicadores:{" "}
+                          {listaPesos(PESOS_LEITURA)}. Em cada um, o aluno é comparado com os colegas da
+                          própria escola.
+                        </li>
+                        <li>
+                          <strong>Nota de Matemática (0 a 100).</strong> Combina três indicadores do Matific:{" "}
+                          {listaPesos(PESOS_MATEMATICA)}. Também comparando com os colegas da própria escola.
+                        </li>
+                      </>
+                    ) : (
+                      <li>
+                        <strong>Notas de Leitura e de Matemática (0 a 100).</strong>{" "}
+                        {modo === "personalizado"
+                          ? TEXTO_REGUA_PERSONALIZADA
+                          : "Os pesos de cada nota são definidos pela Constela."}{" "}
+                        Em cada indicador, o aluno é comparado com os colegas da própria escola.
+                      </li>
+                    )}
+                  </ol>
 
-              <ExemploDeLivro escolaId={escolaId} />
-
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Regra em uso nesta escola: {dados.regra_da_escola}
-                {dados.regra_da_escola !== dados.versao_vigente ? (
-                  <> (regra da rede: {dados.versao_vigente})</>
-                ) : null}
-                {typeof catalogoN === "number" ? (
-                  <>
-                    . Catálogo de referência: {catalogoN.toLocaleString("pt-BR")} livros
-                    {catalogoDe ? <> ({catalogoDe})</> : null}
-                  </>
-                ) : null}
-                .
-              </p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Regra em uso nesta escola: {dados.regra_da_escola}
+                    {dados.regra_da_escola !== dados.versao_vigente ? (
+                      <> (regra da rede: {dados.versao_vigente})</>
+                    ) : null}
+                    {typeof catalogoN === "number" ? (
+                      <>
+                        . Catálogo de referência: {catalogoN.toLocaleString("pt-BR")} livros
+                        {catalogoDe ? <> ({catalogoDe})</> : null}
+                      </>
+                    ) : null}
+                    .
+                  </p>
+                </>
+              )}
+              {/* Fora do trecho que depende de /dificuldade-livro: sem Leitura, a aba
+                  do Matific continua. */}
+              <ExemploPontuacao escolaId={escolaId} />
             </>
           )}
         </div>

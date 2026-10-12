@@ -17,7 +17,7 @@ import secrets
 import unicodedata
 from datetime import datetime, timedelta, timezone
 
-from jose import jwt
+import jwt
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
