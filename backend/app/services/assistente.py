@@ -158,6 +158,13 @@ DADOS DO SISTEMA (fonte única de verdade):
 _PLATAFORMA_DA_DISCIPLINA = {"leitura": "Elefante Letrado", "matematica": "Matific"}
 
 
+# Marca da linha de ALUNOS de quem está numa turma que não concorre (Fases da
+# Educação Infantil — `services.elegibilidade`): a criança continua aparecendo
+# (o professor pode perguntar por ela), mas fica fora de todo ranking e de toda
+# contagem de aferidos, exatamente como no ranking oficial.
+_NAO_CONCORRE = "não concorre aos rankings (só turmas do 1º ao 5º ano concorrem)"
+
+
 def _rotulo_disciplina(dimensao: str) -> str:
     """"Leitura (Elefante Letrado)" / "Matemática (Matific)"."""
     return f"{dimensoes.ROTULOS[dimensao]} ({_PLATAFORMA_DA_DISCIPLINA[dimensao]})"
@@ -177,7 +184,9 @@ def _notas_do_aluno(nota: Nota, turma: Turma, contratadas: list[str]) -> str:
     snapshot vira o texto "não aferido" — jamais "0.0", que a IA leria como
     desempenho péssimo (ausência ≠ zero, `dimensoes.valor`). A posição só
     aparece para quem CONCORRE (1º–5º ano): a Nota antiga de uma turma de Fase
-    não é recalculada e a posição dela não é a do ranking oficial."""
+    não é recalculada e a posição dela não é a do ranking oficial. Quem não
+    concorre ganha a marca `_NAO_CONCORRE` no fim da linha, para a IA externa
+    não pôr no pódio quem as seções de ranking deixaram de fora."""
     concorre = elegibilidade.participa_de_premiacao(turma.ano_escolar)
     partes = []
     for dimensao in contratadas:
@@ -191,6 +200,8 @@ def _notas_do_aluno(nota: Nota, turma: Turma, contratadas: list[str]) -> str:
         if concorre and posicao:
             texto += f" ({posicao}º lugar em {dimensoes.ROTULOS[dimensao]})"
         partes.append(texto)
+    if not concorre:
+        partes.append(_NAO_CONCORRE)
     return "; ".join(partes)
 
 
@@ -229,9 +240,11 @@ def montar_contexto(db: Session, escola_id: int) -> str:
     ALUNOS sai em ordem ALFABÉTICA — neutra; quem quer saber quem lidera lê as
     seções de ranking, que seguem a ordem oficial de cada disciplina.
 
-    Este texto é também o contrato do provedor LOCAL
-    (`ia.provedores.LocalProvedor._RE_ALUNO`/`_RE_NOTA`): mudar o formato das
-    linhas exige mudar o parser junto."""
+    Este texto é também o contrato do provedor LOCAL: o pódio dele ("top N",
+    `LocalProvedor._RE_PODIO`) lê RANKING_ELEFANTE/RANKING_MATIFIC — a lista
+    oficial, com o corte de elegibilidade —, e a pergunta sobre um aluno lê a
+    linha dele em ALUNOS. Mudar o formato dessas linhas exige mudar o parser
+    junto (`tests/test_ia.py::test_local_responde_sobre_o_contexto_real`)."""
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
     contratadas = scoring.dimensoes_contratadas(db, escola)
@@ -264,7 +277,10 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             linhas_ranking.append(
                 f"- Nenhum aluno aferido em {dimensoes.ROTULOS[dimensao]} ainda.")
 
-    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante".
+    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante". São
+    # também a fonte do "top N" do modo local (`LocalProvedor._top_n`), por isso
+    # têm o tamanho do teto dele: o pódio que o professor recebe é sempre um
+    # recorte da lista oficial, nunca uma lista remontada de ALUNOS.
     def podio(dimensao: str) -> list[str]:
         if dimensao not in contratadas:
             return [f"- {_rotulo_disciplina(dimensao)} não faz parte do contrato "
@@ -272,7 +288,8 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         return [
             f"- {lugar}º: {aluno.nome} ({turma.nome}) — nota "
             f"{dimensoes.valor(nota, dimensao):.1f}"
-            for lugar, nota, aluno, turma in por_disciplina[dimensao][:10]
+            for lugar, nota, aluno, turma
+            in por_disciplina[dimensao][:LocalProvedor.MAX_PODIO]
         ]
     linhas_matific = podio("matematica")
     linhas_elefante = podio("leitura")
@@ -280,6 +297,8 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         f"- {aluno.nome}: turma {turma.nome} — {_notas_do_aluno(nota, turma, contratadas)}"
         for nota, aluno, turma in linhas
     ]
+    fora_da_disputa = len({aluno.id for _nota, aluno, turma in linhas
+                           if not elegibilidade.participa_de_premiacao(turma.ano_escolar)})
 
     itens_evolucao = evolucao.ranking_evolucao(db, escola_id, dias=30)[:10]
     linhas_evolucao = [
@@ -329,9 +348,13 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             "- Disciplinas: " + ", ".join(_rotulo_disciplina(d) for d in contratadas)
             + " — cada uma com nota e ranking próprios; não há nota única do aluno",
             f"- Alunos ativos no contexto: {len(linhas)}",
-            *(f"- Aferidos em {_rotulo_disciplina(d)}: "
-              f"{sum(1 for nota, _a, _t in linhas if dimensoes.aferido(nota, d))}"
+            # "Aferidos" = quem está na lista oficial da disciplina (o mesmo "de
+            # N" do ranking: `routers.rankings._contar_aferidos`). A criança de
+            # turma que não concorre não entra, nem com Nota antiga aferida.
+            *(f"- Aferidos em {_rotulo_disciplina(d)}: {len(por_disciplina[d])}"
               for d in contratadas),
+            *([f"- Em turmas que não concorrem aos rankings (só 1º ao 5º ano "
+               f"concorre): {fora_da_disputa}"] if fora_da_disputa else []),
             f"- Turmas: {len(resumo_escola['turmas'])}",
             f"- Alertas ativos: {len(alertas)}",
         ], "- Sem dados."),

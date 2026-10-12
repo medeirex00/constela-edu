@@ -268,6 +268,25 @@ def _rota_de(scope: dict) -> str:
 # uma aba de navegador presa num bundle antigo — e são exatamente esses que
 # decidem quando o motor pode parar de gravar `nota_geral` (Gatilho 1 do plano).
 # Para eles, "ninguém mais lê" só pode ser MEDIDO no servidor: é este contador.
+#
+# LIMITAÇÃO DE INFRA — o contador ainda NÃO vale como critério do Gatilho 1
+# ("== 0 durante 2 ciclos letivos, com a série temporal preservada"; achado da
+# revisão de 2026-10-12). Ele vive na memória de CADA processo: o container sobe
+# com `--workers "${WEB_CONCURRENCY:-2}"` (entrypoint.sh) sem
+# PROMETHEUS_MULTIPROC_DIR, e `render_metricas` serializa o registro padrão do
+# processo — cada coleta de /metrics vê só o worker que a atendeu, e tudo zera
+# a cada deploy ou reinício. O código daqui está certo; falta infra:
+#   1. somar os workers: PROMETHEUS_MULTIPROC_DIR apontando para um diretório
+#      esvaziado a cada boot (no entrypoint, antes do uvicorn) e /metrics
+#      servindo um `CollectorRegistry` com `multiprocess.MultiProcessCollector`
+#      (o Gauge `http_em_andamento` passa a pedir `multiprocess_mode`) — ou
+#      subir com 1 worker;
+#   2. guardar a série: um Prometheus (ou coletor equivalente) raspando /metrics
+#      com o Bearer de METRICS_TOKEN e retenção maior que 2 ciclos letivos — é
+#      o `increase()` dele que atravessa os zeros de cada deploy.
+# Até lá o contador serve para inspeção pontual ("ainda há quem leia?"), nunca
+# como prova de zero. `tests/test_sensor_legado_nota_geral.py::
+# test_o_sensor_4_AINDA_nao_soma_os_workers` cai quando o passo 1 for feito.
 
 # Tipos de cliente deduzidos do User-Agent — conjunto FECHADO. O rótulo nunca
 # carrega texto livre do cabeçalho: um User-Agent por série temporal deixaria

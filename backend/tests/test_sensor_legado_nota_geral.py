@@ -321,3 +321,28 @@ def test_telemetria_nunca_derruba_nem_muda_a_resposta(cliente, com_notas, monkey
     com_falha = cliente.get(url)
     assert com_falha.status_code == 200, com_falha.text
     assert com_falha.json() == normal.json()
+
+
+# --- Limitação de infra registrada ------------------------------------------------
+
+def test_o_sensor_4_AINDA_nao_soma_os_workers():
+    """ACHADO REGISTRADO, não corrigido (infra; revisão de 2026-10-12): o
+    contador vive na memória de cada worker do uvicorn, e o /metrics serializa
+    só o processo que atendeu a coleta. Com 2 workers, cada coleta mostra
+    metade da verdade, e tudo zera a cada deploy — o Sensor 4 ainda não sustenta
+    o critério do Gatilho 1 ("== 0 por 2 ciclos letivos, série preservada").
+
+    Corrigir é mudança de infraestrutura/produção, fora desta entrega: o passo a
+    passo está no comentário do Sensor 4 em `app/core/observabilidade.py`.
+    Este teste existe para o fato ficar VISÍVEL e cai quando alguém somar os
+    workers — a queda dele é o lembrete de atualizar aquele comentário e o
+    `docs/plano-retirada-nota-geral.md`. Ainda faltará guardar a série num
+    Prometheus com retenção longa, que nenhum teste daqui enxerga."""
+    import inspect
+    from pathlib import Path
+
+    entrypoint = (Path(__file__).resolve().parents[1] / "entrypoint.sh").read_text(
+        encoding="utf-8")
+    assert '--workers "${WEB_CONCURRENCY:-2}"' in entrypoint
+    assert "PROMETHEUS_MULTIPROC_DIR" not in entrypoint
+    assert "MultiProcessCollector" not in inspect.getsource(obs.render_metricas)
