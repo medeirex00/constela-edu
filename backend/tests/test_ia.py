@@ -136,9 +136,11 @@ def test_provedor_anthropic_exige_chave(monkeypatch):
 def test_provedor_local_responde_do_contexto():
     sistema = assistente.INSTRUCOES + (
         "### RESUMO\n- Escola: TESTE\n\n"
-        "### RANKING\n- 1º: Ana Beatriz Souza (3º Ano A) — geral 92.0\n\n"
+        "### RANKING\nLeitura (Elefante Letrado) — só alunos aferidos, na ordem "
+        "da disciplina:\n- 1º: Ana Beatriz Souza (3º Ano A) — Leitura 92.0\n\n"
         "### ALERTAS\n- [alta] João está sem novos dados há 45 dias.\n\n"
-        "### ALUNOS\n- Ana Beatriz Souza: turma 3º Ano A, 1º lugar, nota geral 92.0\n"
+        "### ALUNOS\n- Ana Beatriz Souza: turma 3º Ano A — Leitura (Elefante "
+        "Letrado) 92.0 (1º lugar em Leitura); Matemática (Matific): não aferido\n"
     )
     provedor = LocalProvedor()
 
@@ -233,14 +235,37 @@ def test_insights_pela_api(cliente, db, escola_completa):
 
 # --- Modo local inteligente: "os N melhores do X" -----------------------------------
 
+# Mesmo formato que `assistente.montar_contexto` escreve: os pódios de cada
+# disciplina (RANKING_ELEFANTE/RANKING_MATIFIC, a lista oficial, de onde o modo
+# local tira o "top N") e a seção ALUNOS (ordem alfabética, uma nota POR
+# DISCIPLINA; quem não é aferido numa disciplina não tem número nela).
+# `test_local_responde_sobre_o_contexto_real` confere que o parser casa com o
+# texto de verdade, não só com esta cópia.
 _CTX_TOP = assistente.INSTRUCOES + (
     "### RESUMO\n- Escola: TESTE\n\n"
+    "### RANKING_MATIFIC\n"
+    "- 1º: João Pedro Barbosa (3º Ano A) — nota 88.0\n"
+    "- 2º: Sofia Almeida Duarte (3º Ano B) — nota 80.0\n"
+    "- 3º: Ana Beatriz Souza (3º Ano A) — nota 70.0\n"
+    "- 4º: Carlos Lima Neto (3º Ano B) — nota 40.0\n\n"
+    "### RANKING_ELEFANTE\n"
+    "- 1º: Ana Beatriz Souza (3º Ano A) — nota 95.0\n"
+    "- 2º: Carlos Lima Neto (3º Ano B) — nota 78.0\n"
+    "- 3º: Sofia Almeida Duarte (3º Ano B) — nota 71.0\n"
+    "- 4º: João Pedro Barbosa (3º Ano A) — nota 60.0\n"
+    "- 5º: Bruno Sem Conta (3º Ano A) — nota 50.0\n\n"
     "### EVOLUCAO\n- 1º: Fulano Errado (1º Ano A) — evolução 90.0\n\n"
     "### ALUNOS\n"
-    "- Ana Beatriz Souza: turma 3º Ano A, 1º lugar, geral 92.0, Matific 70.0, Elefante 95.0\n"
-    "- João Pedro Barbosa: turma 3º Ano A, 2º lugar, geral 80.0, Matific 88.0, Elefante 60.0\n"
-    "- Sofia Almeida Duarte: turma 3º Ano B, 3º lugar, geral 75.0, Matific 80.0, Elefante 71.0\n"
-    "- Carlos Lima Neto: turma 3º Ano B, 4º lugar, geral 60.0, Matific 40.0, Elefante 78.0\n"
+    "- Ana Beatriz Souza: turma 3º Ano A — Leitura (Elefante Letrado) 95.0 "
+    "(1º lugar em Leitura); Matemática (Matific) 70.0 (3º lugar em Matemática)\n"
+    "- Bruno Sem Conta: turma 3º Ano A — Leitura (Elefante Letrado) 50.0 "
+    "(5º lugar em Leitura); Matemática (Matific): não aferido\n"
+    "- Carlos Lima Neto: turma 3º Ano B — Leitura (Elefante Letrado) 78.0 "
+    "(2º lugar em Leitura); Matemática (Matific) 40.0 (4º lugar em Matemática)\n"
+    "- João Pedro Barbosa: turma 3º Ano A — Leitura (Elefante Letrado) 60.0 "
+    "(4º lugar em Leitura); Matemática (Matific) 88.0 (1º lugar em Matemática)\n"
+    "- Sofia Almeida Duarte: turma 3º Ano B — Leitura (Elefante Letrado) 71.0 "
+    "(3º lugar em Leitura); Matemática (Matific) 80.0 (2º lugar em Matemática)\n"
 )
 
 
@@ -268,10 +293,17 @@ def test_local_nao_sequestra_evolucao_nem_alertas():
         assert "nota geral" not in resposta.lower() or "evolução" in resposta
 
 
-def test_local_melhor_aluno_geral_e_top_elefante():
+def test_local_melhor_aluno_sem_disciplina_e_top_elefante():
+    """REGRA MUDOU (decisão 1 do dono, 2026-10-12): não existe mais "o melhor
+    aluno da escola" numa nota só. Sem disciplina na pergunta, o modo local
+    responde o melhor de CADA disciplina — antes respondia só a Ana, pela
+    composição `geral`, e escondia que o João é o 1º em Matemática."""
     um = LocalProvedor().responder(_CTX_TOP, [{
         "papel": "usuario", "conteudo": "qual o melhor aluno da escola?"}])
-    assert "Ana Beatriz Souza" in um and "João Pedro Barbosa" not in um
+    leitura, matematica = um.split("em Matemática (Matific)")
+    assert "Ana Beatriz Souza" in leitura and "João Pedro Barbosa" not in leitura
+    assert "João Pedro Barbosa" in matematica and "Ana Beatriz Souza" not in matematica
+    assert "geral" not in um.lower()
 
     ele = LocalProvedor().responder(_CTX_TOP, [{
         "papel": "usuario", "conteudo": "top 2 do elefante letrado"}])
@@ -294,6 +326,277 @@ def test_contexto_tem_rankings_por_plataforma(db, escola_completa):
     assert "### RANKING_MATIFIC" in contexto
     assert "### RANKING_ELEFANTE" in contexto
     assert "Matific" in contexto.split("### ALUNOS")[1]
+
+
+# --- Contexto POR DISCIPLINA (decisão 1 do dono: transição da `nota_geral`) ------
+
+def _secoes(contexto: str) -> dict[str, str]:
+    return LocalProvedor._extrair_secoes(contexto)
+
+
+def _linha_do_aluno(secao_alunos: str, nome: str) -> str:
+    return next(linha for linha in secao_alunos.splitlines()
+                if linha.startswith(f"- {nome}:"))
+
+
+@pytest.fixture()
+def tres_situacoes(db, escola_completa):
+    """Ana só no Matific, João só no Elefante, Sofia em nenhuma plataforma."""
+    escola = escola_completa["escola"]
+    ana, joao, sofia = escola_completa["alunos"]
+    _snapshot(db, escola.id, ana.id, atividades=50, estrelas=150, pontuacao_media=85)
+    _snapshot(db, escola.id, joao.id, livros_unicos=12, tempo_leitura_min=300,
+              questoes_tentativas=40, questoes_acertos=30,
+              livros_por_nivel={"D": 12})
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    return escola, ana, joao, sofia
+
+
+def test_contexto_descreve_cada_aluno_por_disciplina_sem_compor_nem_zerar(
+        db, tres_situacoes):
+    escola, ana, joao, sofia = tres_situacoes
+    secoes = _secoes(assistente.montar_contexto(db, escola.id))
+    alunos = secoes["ALUNOS"]
+
+    linha_ana = _linha_do_aluno(alunos, ana.nome)
+    assert "Matemática (Matific) " in linha_ana and "1º lugar em Matemática" in linha_ana
+    assert "Leitura (Elefante Letrado): não aferido" in linha_ana
+    linha_joao = _linha_do_aluno(alunos, joao.nome)
+    assert "1º lugar em Leitura" in linha_joao
+    assert "Matemática (Matific): não aferido" in linha_joao
+    # Quem não usa nenhuma plataforma não tem número NENHUM — nem 0,0.
+    linha_sofia = _linha_do_aluno(alunos, sofia.nome)
+    assert linha_sofia.count("não aferido") == 2
+    assert not re.search(r"\d+\.\d", linha_sofia), linha_sofia
+
+    # Nada composto: nem nota "geral", nem a posição única legada.
+    for nome in ("ALUNOS", "RANKING", "RANKING_MATIFIC", "RANKING_ELEFANTE", "TURMAS"):
+        assert "geral" not in secoes[nome].lower(), (nome, secoes[nome])
+    assert not re.search(r"\dº lugar(?! em (Leitura|Matemática))", alunos)
+
+    # Rankings: cada disciplina só com os SEUS aferidos.
+    assert ana.nome in secoes["RANKING_MATIFIC"] and joao.nome not in secoes["RANKING_MATIFIC"]
+    assert joao.nome in secoes["RANKING_ELEFANTE"] and ana.nome not in secoes["RANKING_ELEFANTE"]
+    for nome in ("RANKING", "RANKING_MATIFIC", "RANKING_ELEFANTE"):
+        assert sofia.nome not in secoes[nome], nome
+
+    # ALUNOS em ordem alfabética (neutra), não na ordem de quem "lidera".
+    nomes = [linha[2:].split(":", 1)[0] for linha in alunos.splitlines()
+             if linha.startswith("- ")]
+    assert nomes == sorted(nomes)
+
+
+def test_contexto_nao_cita_disciplina_que_a_rede_nao_contratou(db, tres_situacoes):
+    """Cascata contrato → dado: numa rede só de Leitura ninguém é "não aferido
+    em Matemática" — a disciplina nem existe para a escola."""
+    from app.models import Rede
+    from app.services import modulos
+
+    escola, ana, joao, _sofia = tres_situacoes
+    rede = Rede(nome="Rede Só Leitura", status="ativa")
+    db.add(rede)
+    db.flush()
+    escola.rede_id = rede.id
+    modulos.definir(db, rede.id, "matematica", False)
+    db.commit()
+
+    secoes = _secoes(assistente.montar_contexto(db, escola.id))
+    assert "Matemática" not in secoes["ALUNOS"]
+    assert "Matific" not in secoes["ALUNOS"]
+    assert "não faz parte do contrato" in secoes["RANKING_MATIFIC"]
+    assert joao.nome in secoes["RANKING_ELEFANTE"]
+
+
+def test_local_nao_aferido_nao_entra_no_podio_com_zero():
+    """Bruno não usa o Matific: no pódio de Matemática ele não aparece — nem em
+    último com 0. No de Leitura, onde tem nota, aparece."""
+    mat = LocalProvedor().responder(_CTX_TOP, [{
+        "papel": "usuario", "conteudo": "top 10 do matific"}])
+    assert "Bruno Sem Conta" not in mat
+    assert "Os 4 melhores alunos em Matemática" in mat
+    ele = LocalProvedor().responder(_CTX_TOP, [{
+        "papel": "usuario", "conteudo": "top 10 da leitura"}])
+    assert "Bruno Sem Conta" in ele
+
+
+def test_local_responde_sobre_o_contexto_real(db, tres_situacoes):
+    """O formato das linhas é o contrato entre `montar_contexto` e o parser do
+    modo local: aqui o parser lê o texto DE VERDADE, não uma cópia escrita à mão."""
+    escola, ana, joao, sofia = tres_situacoes
+    sistema = assistente.INSTRUCOES + assistente.montar_contexto(db, escola.id)
+
+    mat = LocalProvedor().responder(sistema, [{
+        "papel": "usuario", "conteudo": "quais os 5 melhores alunos do matific?"}])
+    assert ana.nome in mat and joao.nome not in mat and sofia.nome not in mat
+
+    um = LocalProvedor().responder(sistema, [{
+        "papel": "usuario", "conteudo": "qual o melhor aluno da escola?"}])
+    assert ana.nome in um and joao.nome in um and sofia.nome not in um
+
+    aluna = LocalProvedor().responder(sistema, [{
+        "papel": "usuario", "conteudo": f"Como está a {sofia.nome}?"}])
+    assert "não aferido" in aluna
+
+
+@pytest.fixture()
+def com_crianca_da_fase(db, escola_completa):
+    """Ana e João (3º Ano) aferidos em Leitura; Zeca, de uma turma de Fase
+    (Educação Infantil, que NÃO concorre), com uma Nota ANTIGA aferida em
+    Leitura e maior que a do João — o recálculo tira a Fase da população, mas
+    não apaga a linha já gravada (`scoring.recalcular_escola`)."""
+    from app.models import Aluno, Matricula, Nota, Turma
+
+    escola = escola_completa["escola"]
+    ana, joao, _sofia = escola_completa["alunos"]
+    _snapshot(db, escola.id, ana.id, livros_unicos=12, tempo_leitura_min=300,
+              questoes_tentativas=40, questoes_acertos=30, livros_por_nivel={"D": 12})
+    _snapshot(db, escola.id, joao.id, livros_unicos=4, tempo_leitura_min=60,
+              questoes_tentativas=10, questoes_acertos=5, livros_por_nivel={"D": 4})
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+
+    fase = Turma(escola_id=escola.id, nome="1ª Fase A", ano_escolar="1ª Fase",
+                 ano_letivo=2026)
+    db.add(fase)
+    db.flush()
+    zeca = Aluno(escola_id=escola.id, nome="Zeca Fase Infantil")
+    db.add(zeca)
+    db.flush()
+    db.add(Matricula(escola_id=escola.id, aluno_id=zeca.id, turma_id=fase.id,
+                     ano_letivo=2026))
+    db.add(Nota(escola_id=escola.id, aluno_id=zeca.id, ano_letivo=2026,
+                nota_elefante=99.0, aferido_leitura=True, posicao_leitura=1))
+    db.commit()
+    return escola, ana, joao, zeca
+
+
+def test_local_podio_e_o_ranking_oficial_sem_quem_nao_concorre(db, com_crianca_da_fase):
+    """Achado da revisão (2026-10-12): o pódio do modo local — o provedor
+    padrão — era remontado a partir da seção ALUNOS e punha a criança da Fase
+    em 2º lugar em Leitura, enquanto o ranking oficial (e a seção
+    RANKING_ELEFANTE do próprio contexto) a deixa de fora. O pódio agora é um
+    recorte da lista oficial: mesma população, mesma ordem, mesmo lugar."""
+    escola, ana, joao, zeca = com_crianca_da_fase
+    contexto = assistente.montar_contexto(db, escola.id)
+    secoes = _secoes(contexto)
+    assert zeca.nome not in secoes["RANKING_ELEFANTE"]
+
+    resposta = LocalProvedor().responder(assistente.INSTRUCOES + contexto, [{
+        "papel": "usuario", "conteudo": "quais os 3 melhores alunos da leitura?"}])
+    assert zeca.nome not in resposta
+    assert f"1º: {ana.nome}" in resposta and f"2º: {joao.nome}" in resposta
+    assert "Os 2 melhores alunos em Leitura" in resposta
+
+    sem_disciplina = LocalProvedor().responder(assistente.INSTRUCOES + contexto, [{
+        "papel": "usuario", "conteudo": "top 5 alunos da escola"}])
+    assert zeca.nome not in sem_disciplina
+
+
+def test_contexto_marca_quem_nao_concorre_e_nao_o_conta_como_aferido(
+        db, com_crianca_da_fase):
+    """A criança da Fase continua no contexto (o professor pode perguntar por
+    ela), mas marcada como fora dos rankings — sem posição — e fora do "Aferidos
+    em Leitura", que é o mesmo "de N" do ranking oficial."""
+    escola, ana, joao, zeca = com_crianca_da_fase
+    contexto = assistente.montar_contexto(db, escola.id)
+    secoes = _secoes(contexto)
+
+    linha_zeca = _linha_do_aluno(secoes["ALUNOS"], zeca.nome)
+    assert linha_zeca.endswith("não concorre aos rankings (só turmas do 1º ao 5º ano "
+                               "concorrem)"), linha_zeca
+    assert "lugar" not in linha_zeca
+    assert "não concorre" not in _linha_do_aluno(secoes["ALUNOS"], ana.nome)
+
+    assert "- Aferidos em Leitura (Elefante Letrado): 2\n" in secoes["RESUMO"]
+    assert "não concorrem aos rankings (só 1º ao 5º ano concorre): 1" in secoes["RESUMO"]
+
+    sobre_zeca = LocalProvedor().responder(assistente.INSTRUCOES + contexto, [{
+        "papel": "usuario", "conteudo": f"Como está o {zeca.nome}?"}])
+    assert "não concorre aos rankings" in sobre_zeca
+
+
+def test_contexto_sem_fase_nao_fala_de_quem_nao_concorre(db, tres_situacoes):
+    escola, *_ = tres_situacoes
+    contexto = assistente.montar_contexto(db, escola.id)
+    assert "não concorre" not in contexto
+
+
+def test_local_em_rede_so_de_leitura(db, tres_situacoes):
+    """Rede que só contratou Leitura: a pergunta sem disciplina responde o pódio
+    de Leitura SEM o aviso de que "não existe nota única que junte as duas"
+    (ali só existe uma), e a pergunta pelo Matific diz que a disciplina não faz
+    parte do contrato — em vez de cair numa seção qualquer que "melhores" casa."""
+    from app.models import Rede
+    from app.services import modulos
+
+    escola, ana, joao, sofia = tres_situacoes
+    rede = Rede(nome="Rede Só Leitura", status="ativa")
+    db.add(rede)
+    db.flush()
+    escola.rede_id = rede.id
+    modulos.definir(db, rede.id, "matematica", False)
+    db.commit()
+    sistema = assistente.INSTRUCOES + assistente.montar_contexto(db, escola.id)
+
+    um = LocalProvedor().responder(sistema, [{
+        "papel": "usuario", "conteudo": "qual o melhor aluno da escola?"}])
+    assert f"1º: {joao.nome}" in um
+    assert "junte as duas" not in um and "Matemática" not in um
+
+    mat = LocalProvedor().responder(sistema, [{
+        "papel": "usuario", "conteudo": "quais os 3 melhores alunos do matific?"}])
+    assert "Matemática (Matific) não faz parte do contrato desta rede" in mat
+    for nome in (ana.nome, joao.nome, sofia.nome):
+        assert nome not in mat
+
+
+def test_local_disciplina_contratada_sem_aferidos_diz_isso(db, escola_completa):
+    """Ninguém aferido ainda (escola recém-criada): o pódio diz que não há
+    aferidos em cada disciplina — não devolve a seção de EVOLUÇÃO, que a palavra
+    "melhores" também casa."""
+    escola = escola_completa["escola"]
+    sistema = assistente.INSTRUCOES + assistente.montar_contexto(db, escola.id)
+    resposta = LocalProvedor().responder(sistema, [{
+        "papel": "usuario", "conteudo": "quais os melhores alunos da leitura?"}])
+    assert resposta.startswith(
+        "Ainda não há alunos aferidos em Leitura (Elefante Letrado).")
+
+
+def test_podios_do_contexto_tem_o_tamanho_do_teto_do_modo_local(
+        db, tres_situacoes, monkeypatch):
+    """O "top N" do modo local é um recorte das seções de pódio: elas têm de ter
+    o tamanho do teto dele (`LocalProvedor.MAX_PODIO`), senão "top 25" sairia
+    com as linhas que couberam."""
+    escola, ana, joao, _sofia = tres_situacoes
+    monkeypatch.setattr(LocalProvedor, "MAX_PODIO", 1)
+    _snapshot(db, escola.id, ana.id, livros_unicos=2, tempo_leitura_min=30,
+              questoes_tentativas=4, questoes_acertos=2, livros_por_nivel={"D": 2})
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    secoes = _secoes(assistente.montar_contexto(db, escola.id))
+    linhas = [linha for linha in secoes["RANKING_ELEFANTE"].splitlines()
+              if linha.startswith("- ")]
+    assert linhas == [linhas[0]] and "1º:" in linhas[0]
+
+
+def test_local_aluno_citado_casa_o_nome_inteiro_e_o_mais_longo():
+    """"Ana Souza" está contido em "Mariana Souza" e em "Ana Souza Lima". A
+    pergunta sobre a Mariana devolvia a linha da Ana (a primeira, na ordem
+    alfabética da seção ALUNOS) — dado de outra criança."""
+    sistema = assistente.INSTRUCOES + (
+        "### ALUNOS\n"
+        "- Ana Souza: turma 3º Ano A — Leitura (Elefante Letrado) 10.0\n"
+        "- Ana Souza Lima: turma 3º Ano B — Leitura (Elefante Letrado) 20.0\n"
+        "- Mariana Souza: turma 3º Ano A — Leitura (Elefante Letrado) 30.0\n")
+    def perguntar(texto: str) -> str:
+        return LocalProvedor().responder(
+            sistema, [{"papel": "usuario", "conteudo": texto}])
+
+    assert perguntar("Como está a Mariana Souza?").startswith("Sobre Mariana Souza ")
+    assert perguntar("e a ana souza lima?").startswith("Sobre Ana Souza Lima ")
+    assert perguntar("Como está a Ana Souza?").startswith("Sobre Ana Souza ")
+    assert "Ana Souza Lima" not in perguntar("Como está a Ana Souza?")
 
 
 # --- Configuração do assistente pela interface --------------------------------------

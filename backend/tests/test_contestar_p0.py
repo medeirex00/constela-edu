@@ -216,7 +216,16 @@ def test_04_vinculo_e_depois_promocao_a_secretaria(mundo):
     r = coord.patch(_url(mundo, f"/professores/{pa.id}"), json={"email": f"pa.novo@{DOM}"})
     assert r.status_code == 200, r.text
     assert _retrato_id(mundo, uid)[:7] == antes[:7]
-    lr = _login("prof_a@sint.local")
+    # Decisão 5 do dono: a promoção invalidou a senha anterior — a conta só
+    # volta a entrar pelo link que o admin global gera DEPOIS da promoção.
+    assert _login("prof_a@sint.local").status_code == 401
+    r = glob.post(_url(mundo, f"/usuarios/{uid}/redefinir-senha"))
+    assert r.status_code == 200, r.text
+    nova = "farol-cedro-lua-38"
+    assert TestClient(app).post("/api/v1/auth/redefinir-senha",
+                                json={"token": r.json()["token"],
+                                      "nova_senha": nova}).status_code == 200
+    lr = _login("prof_a@sint.local", nova)
     assert lr.status_code == 200
     c = TestClient(app)
     c.headers["Authorization"] = f"Bearer {lr.json()['access_token']}"

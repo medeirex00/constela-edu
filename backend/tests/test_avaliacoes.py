@@ -157,14 +157,14 @@ def test_catalogo_inclui_caed_como_fonte_propria(db, escola_completa, cliente):
     assert por_chave["crianca_alfabetizada"]["nome"] == "Criança Alfabetizada"
 
 
-def test_importar_endpoint_escopa_pela_escola_do_admin(db, escola_completa, cliente):
-    # O admin de teste é da escola (não global): só casa a PRÓPRIA escola.
+def test_importar_endpoint_admin_de_escola_recebe_403_e_nada_grava(db, escola_completa,
+                                                                    cliente):
+    # REGRA MUDOU (decisão do dono): o admin de ESCOLA (não global, sem rede)
+    # gravava o IDEB da própria escola; agora importar é só do admin global e da
+    # Secretaria da rede. O escopo da Secretaria (escola de outra rede não casa)
+    # está provado em test_avaliacoes_permissao_escrita.py.
     escola = escola_completa["escola"]
-    escola.codigo_inep = "35012345"
-    # SEGUNDA escola (de outra escola/rede) COM um INEP que ESTÁ na planilha: se o
-    # escopo falhasse (fosse global), ela também casaria. Prova o filtro de escopo.
-    db.add(Escola(nome="EM Fora do Escopo", ano_letivo_ativo=2026, status="ativa",
-                  codigo_inep="35067890"))
+    escola.codigo_inep = "35012345"   # o INEP dela ESTÁ na planilha: casaria se passasse
     db.commit()
 
     r = cliente.post(
@@ -172,11 +172,9 @@ def test_importar_endpoint_escopa_pela_escola_do_admin(db, escola_completa, clie
         data={"avaliacao": "ideb", "edicao": 2023, "indicador": "ideb", "unidade": "indice",
               "linha_dados": 2, "col_inep": 0, "col_valor": 2, "etapa_fixa": "anos_iniciais"},
         files={"arquivo": ("ideb.csv", _PLANILHA, "text/csv")})
-    assert r.status_code == 200, r.text
-    corpo = r.json()
-    assert corpo["casados"] == 1 and corpo["inseridos"] == 1  # só a do admin, não a 35067890
+    assert r.status_code == 403, r.text
     db.expire_all()
-    assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 1
+    assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 0
 
 
 def test_dimensao_mapeada_vazia_vira_null_nao_string_none(db, escola_completa):
@@ -219,8 +217,9 @@ def test_importa_de_dentro_de_zip(db):
     assert res["casados"] == 1                          # casou EM A pelo INEP, de dentro do ZIP
 
 
-def test_importar_endpoint_avaliacao_desconhecida_400(db, escola_completa, cliente):
-    r = cliente.post(
+def test_importar_endpoint_avaliacao_desconhecida_400(db, escola_completa, cliente_global):
+    # Quem importa é o admin global (a escola recebe 403 ANTES de validar o corpo).
+    r = cliente_global.post(
         "/api/v1/avaliacoes/importar",
         data={"avaliacao": "enem", "edicao": 2023, "indicador": "x", "unidade": "y",
               "linha_dados": 1, "col_inep": 0, "col_valor": 1},
@@ -443,24 +442,24 @@ def _raw_layout(escolas, preamble=8) -> bytes:
     return "\n".join(";".join(c for c in ln) for ln in linhas).encode("utf-8")
 
 
-def test_importar_preset_ideb_1_clique(db, escola_completa, cliente):
+def test_importar_preset_ideb_1_clique(db, escola_completa, cliente_global):
     escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
     arq = _raw_layout([("35012345", "6.5", "220.0", "210.0")])
-    r = cliente.post("/api/v1/avaliacoes/importar-preset",
-                     data={"preset": "ideb_ai", "edicao": 2023},
-                     files={"arquivo": ("ideb.csv", arq, "text/csv")})
+    r = cliente_global.post("/api/v1/avaliacoes/importar-preset",
+                            data={"preset": "ideb_ai", "edicao": 2023},
+                            files={"arquivo": ("ideb.csv", arq, "text/csv")})
     assert r.status_code == 200, r.text
     assert r.json()["series"][0]["casados"] == 1
     reg = db.execute(select(ResultadoAvaliacao)).scalars().one()
     assert reg.indicador == "ideb" and round(reg.valor, 1) == 6.5 and reg.etapa == "anos_iniciais"
 
 
-def test_importar_preset_saeb_duas_series_1_clique(db, escola_completa, cliente):
+def test_importar_preset_saeb_duas_series_1_clique(db, escola_completa, cliente_global):
     escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
     arq = _raw_layout([("35012345", "6.5", "220.5", "210.2")])
-    r = cliente.post("/api/v1/avaliacoes/importar-preset",
-                     data={"preset": "saeb_ai", "edicao": 2023},
-                     files={"arquivo": ("saeb.csv", arq, "text/csv")})
+    r = cliente_global.post("/api/v1/avaliacoes/importar-preset",
+                            data={"preset": "saeb_ai", "edicao": 2023},
+                            files={"arquivo": ("saeb.csv", arq, "text/csv")})
     assert r.status_code == 200, r.text
     series = {s["componente"]: s for s in r.json()["series"]}
     assert series["matematica"]["casados"] == 1 and series["portugues"]["casados"] == 1
@@ -468,43 +467,43 @@ def test_importar_preset_saeb_duas_series_1_clique(db, escola_completa, cliente)
     assert round(regs["matematica"], 1) == 220.5 and round(regs["portugues"], 1) == 210.2   # SAEB Mat/Port
 
 
-def test_importar_preset_desconhecido_400(db, escola_completa, cliente):
-    r = cliente.post("/api/v1/avaliacoes/importar-preset",
-                     data={"preset": "xyz", "edicao": 2023},
-                     files={"arquivo": ("x.csv", b"a;b", "text/csv")})
+def test_importar_preset_desconhecido_400(db, escola_completa, cliente_global):
+    r = cliente_global.post("/api/v1/avaliacoes/importar-preset",
+                            data={"preset": "xyz", "edicao": 2023},
+                            files={"arquivo": ("x.csv", b"a;b", "text/csv")})
     assert r.status_code == 400
 
 
-def test_importar_preset_saresp_componente_em_coluna(db, escola_completa, cliente):
+def test_importar_preset_saresp_componente_em_coluna(db, escola_completa, cliente_global):
     # SARESP: o preset lê o COMPONENTE de uma COLUNA (não fixo) — arquivo enxuto
     # INEP;COMPONENTE;PROFICIENCIA que o Constela prepara dos microdados.
     escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
     arq = _csv([["CO_ESCOLA", "COMPONENTE", "PROFICIENCIA"],
                 ["35012345", "portugues", "210.5"],
                 ["35012345", "matematica", "225.0"]])
-    r = cliente.post("/api/v1/avaliacoes/importar-preset",
-                     data={"preset": "saresp_ai", "edicao": 2025},
-                     files={"arquivo": ("saresp.csv", arq, "text/csv")})
+    r = cliente_global.post("/api/v1/avaliacoes/importar-preset",
+                            data={"preset": "saresp_ai", "edicao": 2025},
+                            files={"arquivo": ("saresp.csv", arq, "text/csv")})
     assert r.status_code == 200, r.text
     regs = {reg.componente: reg.valor
             for reg in db.execute(select(ResultadoAvaliacao)).scalars()}
     assert round(regs["portugues"], 1) == 210.5 and round(regs["matematica"], 1) == 225.0
 
 
-def test_importar_preset_crianca_alfabetizada(db, escola_completa, cliente):
+def test_importar_preset_crianca_alfabetizada(db, escola_completa, cliente_global):
     # Criança Alfabetizada: taxa (%) por escola, derivada do 2º ano da SARESP.
     escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
     arq = _csv([["CO_ESCOLA", "TAXA_ALFABETIZADOS_PCT"], ["35012345", "96.8"]])
-    r = cliente.post("/api/v1/avaliacoes/importar-preset",
-                     data={"preset": "crianca_alfab", "edicao": 2025},
-                     files={"arquivo": ("alfab.csv", arq, "text/csv")})
+    r = cliente_global.post("/api/v1/avaliacoes/importar-preset",
+                            data={"preset": "crianca_alfab", "edicao": 2025},
+                            files={"arquivo": ("alfab.csv", arq, "text/csv")})
     assert r.status_code == 200, r.text
     reg = db.execute(select(ResultadoAvaliacao)).scalars().one()
     assert reg.indicador == "taxa_alfabetizacao" and round(reg.valor, 1) == 96.8
     assert reg.etapa == "2_ano" and reg.unidade == "percentual"
 
 
-def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, cliente):
+def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, cliente_global):
     # Cenário do dono: importou o mesmo arquivo como 2025 SEM QUERER (além de 2023).
     # Remover a edição 2025 não pode tocar na 2023.
     escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
@@ -516,7 +515,7 @@ def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, client
     db.commit()
     assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 2   # 1 em 2023, 1 em 2025
 
-    r = cliente.delete(
+    r = cliente_global.delete(
         "/api/v1/avaliacoes/resultados?avaliacao=ideb&edicao=2025&indicador=ideb&etapa=anos_iniciais")
     assert r.status_code == 200, r.text
     assert r.json()["removidos"] == 1
@@ -525,7 +524,7 @@ def test_excluir_resultados_desfaz_importacao_errada(db, escola_completa, client
     assert len(restantes) == 1 and restantes[0].edicao == 2023   # a boa continua
 
 
-def test_excluir_resultados_nao_apaga_serie_irma(db, escola_completa, cliente):
+def test_excluir_resultados_nao_apaga_serie_irma(db, escola_completa, cliente_global):
     # Achado da revisão (alto): remover UMA série não pode apagar as irmãs da MESMA
     # edição (outra etapa/componente importados à parte, e corretos).
     escola = escola_completa["escola"]; escola.codigo_inep = "35012345"; db.commit()
@@ -536,7 +535,7 @@ def test_excluir_resultados_nao_apaga_serie_irma(db, escola_completa, cliente):
     db.commit()
     assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 2
 
-    r = cliente.delete(
+    r = cliente_global.delete(
         "/api/v1/avaliacoes/resultados?avaliacao=ideb&edicao=2023&indicador=ideb&etapa=anos_iniciais")
     assert r.status_code == 200 and r.json()["removidos"] == 1   # só anos_iniciais
     db.expire_all()
@@ -545,7 +544,8 @@ def test_excluir_resultados_nao_apaga_serie_irma(db, escola_completa, cliente):
 
 
 def test_excluir_resultados_escopo_de_rede(db):
-    # Um coordenador de rede só remove os resultados das escolas DA rede dele.
+    # A Secretaria (conta de rede com cargo de gestão) só remove os resultados das
+    # escolas DA rede dela.
     ra = Rede(nome="A", status="ativa"); rb = Rede(nome="B", status="ativa")
     db.add_all([ra, rb]); db.flush()
     _escola_inep(db, ra.id, "EM A", "35012345")
@@ -553,7 +553,7 @@ def test_excluir_resultados_escopo_de_rede(db):
     db.commit()
     _importar_ideb(db, [("35012345", "6,0"), ("35067890", "4,0")])  # casa as duas (global)
     db.commit()
-    cliente = _login_rede(db, ra.id)   # coordenador da rede A
+    cliente = _login_rede(db, ra.id)   # Secretaria da rede A
 
     r = cliente.delete("/api/v1/avaliacoes/resultados?avaliacao=ideb&edicao=2023&indicador=ideb")
     assert r.status_code == 200 and r.json()["removidos"] == 1   # só a EM A
@@ -562,8 +562,8 @@ def test_excluir_resultados_escopo_de_rede(db):
     assert restante.codigo_inep == "35067890"                    # a EM B (rede B) fica
 
 
-def test_excluir_resultados_avaliacao_desconhecida_400(db, escola_completa, cliente):
-    r = cliente.delete("/api/v1/avaliacoes/resultados?avaliacao=enem&edicao=2023&indicador=x")
+def test_excluir_resultados_avaliacao_desconhecida_400(db, escola_completa, cliente_global):
+    r = cliente_global.delete("/api/v1/avaliacoes/resultados?avaliacao=enem&edicao=2023&indicador=x")
     assert r.status_code == 400
 
 

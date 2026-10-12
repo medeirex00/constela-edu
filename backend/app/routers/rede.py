@@ -12,7 +12,7 @@ from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import email_reservado_ao_dono, settings
 from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
 from app.models import Escola, Rede, TokenResetSenha, Usuario
@@ -33,6 +33,7 @@ from app.services import modulos as svc_modulos
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
+from app.services.professores import senha_hash_sem_acesso
 
 _MAX_BYTES_INEP = 150 * 1024 * 1024  # mesmo teto do IDEB (arquivo oficial ~97 MB)
 
@@ -304,15 +305,29 @@ def definir_usuarios(
     vinda de outra rede) muda de alcance: as sessões abertas dela caem
     (`token_version`) e os links de redefinição pendentes deixam de valer —
     nenhum token emitido para o alcance antigo sobrevive à promoção. Cada
-    promoção fica na auditoria (`usuario.promovido_a_secretaria`). A senha NÃO
-    é trocada aqui.
+    promoção fica na auditoria (`usuario.promovido_a_secretaria`).
+
+    A SENHA ATUAL também deixa de valer (decisão do dono): ela foi escolhida —
+    ou entregue — quando a conta enxergava UMA escola, e quem a conhecia (a
+    própria escola, uma folha de credenciais antiga, uma senha derivada do nome)
+    passaria a ler a rede inteira. O hash vira o de uma senha aleatória que
+    ninguém recebe (`professores.senha_hash_sem_acesso`, o mesmo mecanismo da
+    migração de senhas): a conta só volta a entrar por um link de redefinição
+    gerado DEPOIS da promoção pelo admin global — na tela de Usuários da escola
+    de origem ou, para conta sem escola, por `scripts/link_redefinicao.py`.
+    Nenhum link é gerado aqui. Ficam de fora a conta GLOBAL e a do e-mail
+    reservado ao dono (`ADMIN_GLOBAL_EMAIL`): a troca dessas é manual, nunca
+    por link, e invalidá-las trancaria a administração da plataforma. Só quem
+    PASSA a ter o `rede_id` é afetado — salvar de novo a mesma lista não
+    invalida nada. A resposta diz quais contas exigem o link
+    (`exigem_redefinicao`) e a auditoria registra `senha_invalidada`.
     """
     rede = db.get(Rede, rede_id)
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
     alvo = set(dados.usuario_ids)
     validos = db.execute(
-        select(Usuario).where(Usuario.id.in_(alvo))
+        select(Usuario).where(Usuario.id.in_(alvo)).order_by(Usuario.id)
     ).scalars().all() if alvo else []
     ids_validos = {u.id for u in validos}
     atuais = db.execute(
@@ -323,6 +338,7 @@ def definir_usuarios(
             alvo_u.rede_id = None
     agora = datetime.now(timezone.utc)
     promovidas: list[int] = []
+    exigem_redefinicao: list[dict] = []
     for alvo_u in validos:
         if alvo_u.rede_id != rede_id:
             # Promoção: alcance novo = sessões antigas caem e links pendentes morrem.
@@ -334,18 +350,37 @@ def definir_usuarios(
                        TokenResetSenha.usado_em.is_(None))
                 .values(usado_em=agora)
                 .execution_options(synchronize_session=False)).rowcount
+            # ...e a senha do alcance antigo também — exceto a da conta global e
+            # a do e-mail do dono, cuja troca é manual (nunca por link).
+            mantida_por: str | None = None
+            if alvo_u.is_global:
+                mantida_por = "conta_global"
+            elif email_reservado_ao_dono(alvo_u.email):
+                mantida_por = "email_reservado_ao_dono"
+            detalhes = {"rede_id": rede_id, "rede_anterior": rede_anterior,
+                        "sessoes_encerradas": True,
+                        "links_pendentes_invalidados": links,
+                        "senha_invalidada": mantida_por is None}
+            if mantida_por is None:
+                alvo_u.senha_hash = senha_hash_sem_acesso()
+                exigem_redefinicao.append({"id": alvo_u.id, "nome": alvo_u.nome,
+                                           "email": alvo_u.email,
+                                           "escola_id": alvo_u.escola_id})
+            else:
+                detalhes["senha_mantida_por"] = mantida_por
             promovidas.append(alvo_u.id)
             registrar(db, "usuario.promovido_a_secretaria", escola_id=alvo_u.escola_id,
                       usuario_id=usuario.id, entidade="usuario", entidade_id=alvo_u.id,
-                      detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior,
-                                "sessoes_encerradas": True,
-                                "links_pendentes_invalidados": links})
+                      detalhes=detalhes)
         alvo_u.rede_id = rede_id
     registrar(db, "rede.usuarios_definidos", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos),
-                                             "promovidas": sorted(promovidas)})
+                                             "promovidas": sorted(promovidas),
+                                             "senhas_invalidadas": sorted(
+                                                 c["id"] for c in exigem_redefinicao)})
     db.commit()
-    return {"rede_id": rede_id, "usuario_ids": sorted(ids_validos)}
+    return {"rede_id": rede_id, "usuario_ids": sorted(ids_validos),
+            "exigem_redefinicao": exigem_redefinicao}
 
 
 @router.post("/{rede_id}/geocodificar")

@@ -11,8 +11,19 @@
  * chegam por props — a tela dona é quem tem os seletores; aqui só se consulta.
  *
  * Endpoints: `/ranking?dimensao=...` e `/nao-aferidos`, ambos com os mesmos
- * filtros (turma_id | ano_escolar, turno). O denominador exibido é o
- * `n_aferidos` carimbado pela API no conjunto filtrado.
+ * filtros (turma_id | ano_escolar, turno).
+ *
+ * CONTAGEM honesta no cabeçalho da tabela — a posição exibida precisa bater com
+ * o número ao lado (a mesma régua que a antiga ordem única tinha):
+ *   - sem filtro            → "N alunos aferidos em <matéria>" (o `n_aferidos`
+ *     carimbado pela API);
+ *   - com turno             → a API renumera dentro do recorte e carimba o
+ *     denominador dele: "N aluno(s) aferido(s) … no turno X" ("em turmas sem
+ *     turno" para o turno vazio);
+ *   - turma/série sem turno → a GESTÃO recebe a posição carimbada da ESCOLA e o
+ *     `n_aferidos` da escola inteira: a tela conta quantos o filtro mostra e diz
+ *     de onde vem a posição ("· posição entre os N aferidos da escola"). O
+ *     professor já recebe a lista renumerada nas turmas dele, sem o sufixo.
  *
  * CARTAZ da matéria (gestão): `/ranking/cartaz?dimensao=...` — pôster em PDF
  * com os alunos aferidos naquela matéria na ESCOLA INTEIRA. Como o cartaz não
@@ -28,7 +39,7 @@ import { useApi } from "../hooks/useApi";
 import { usePerfil } from "../hooks/usePerfil";
 import { apiDownload } from "../lib/api";
 import { nota, numero } from "../lib/formato";
-import { TURNO_TODOS, aplicarTurno } from "../lib/turnos";
+import { TURNO_SEM, TURNO_TODOS, aplicarTurno, rotuloTurno } from "../lib/turnos";
 import type { Dimensao, NaoAferidos, RankingItem } from "../lib/types";
 import { Badge, Botao, Card, Carregando, Mensagem, Vazio } from "./ui";
 
@@ -80,8 +91,32 @@ export function DesempenhoDimensao({ dimensao, filtros }: {
 
   // O cartaz é sempre da escola inteira: com turma, série ou turno aplicado ele
   // NÃO corresponde à lista da tela, então o botão desabilita e diz por quê.
-  const comFiltro = Boolean(filtros.turma_id || filtros.ano_escolar)
-    || filtros.turno !== TURNO_TODOS;
+  const comTurmaOuSerie = Boolean(filtros.turma_id || filtros.ano_escolar);
+  const comTurno = filtros.turno !== TURNO_TODOS;
+  const comFiltro = comTurmaOuSerie || comTurno;
+
+  // CONTAGEM coerente com a posição exibida (ver o topo do arquivo).
+  const totalDaApi = lista[0]?.n_aferidos ?? lista.length;
+  const aferidos = (n: number) =>
+    `${numero(n)} aluno${n === 1 ? "" : "s"} aferido${n === 1 ? "" : "s"} em ${materia.rotulo}`;
+  let contagem: string;
+  if (comTurno) {
+    // Posições renumeradas pela API dentro do turno (e da turma/série, se houver).
+    // "Sem turno" não é nome de turno: vira "em turmas sem turno".
+    const recorteTurno = filtros.turno === TURNO_SEM
+      ? "em turmas sem turno" : `no turno ${rotuloTurno(filtros.turno)}`;
+    contagem = comTurmaOuSerie
+      ? `${aferidos(totalDaApi)} neste filtro, ${recorteTurno}`
+      : `${aferidos(totalDaApi)} ${recorteTurno}`;
+  } else if (comTurmaOuSerie) {
+    // Sem turno, a gestão recebe a posição carimbada da ESCOLA e o denominador
+    // da escola inteira: o número ao lado da lista é quantos o filtro mostra.
+    contagem = gestor
+      ? `${aferidos(lista.length)} neste filtro · posição entre os ${numero(totalDaApi)} aferidos da escola`
+      : `${aferidos(lista.length)} neste filtro`;
+  } else {
+    contagem = `${numero(totalDaApi)} alunos aferidos em ${materia.rotulo}`;
+  }
   const cartazIndisponivel = comFiltro
     ? "O cartaz é da escola inteira: tire os filtros de turma, série e turno para baixar."
     : lista.length === 0
@@ -143,10 +178,10 @@ export function DesempenhoDimensao({ dimensao, filtros }: {
         ) : (
           <div className="overflow-x-auto">
             {/* O DENOMINADOR precisa estar visível: sem ele, um "3º" em Leitura
-                e um "3º" em Matemática parecem comparáveis, e não são. Vem da
-                API (conjunto filtrado), não da contagem local. */}
+                e um "3º" em Matemática parecem comparáveis, e não são. E tem de
+                ser o da posição exibida — ver "CONTAGEM honesta" no topo. */}
             <p className="border-b border-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-400">
-              {numero(lista[0]?.n_aferidos ?? lista.length)} alunos aferidos em {materia.rotulo}
+              {contagem}
             </p>
             <table className="w-full text-sm tabular-nums">
               <thead>

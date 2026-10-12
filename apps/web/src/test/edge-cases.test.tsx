@@ -124,6 +124,8 @@ describe("Respostas incompletas da API — a tela não pode quebrar", () => {
     responder("GET", "/escolas/1/ranking", null);
     renderComApp(<RankingGeral />, { rota: "/ranking" });
 
-    expect(await screen.findByText("Nenhuma nota calculada ainda")).toBeInTheDocument();
+    // A aba agora é a classificação por matéria (Decisão 1 do dono): o estado
+    // vazio é o da matéria aberta, não mais o da ordem única.
+    expect(await screen.findByText("Nenhum aluno aferido em Leitura ainda")).toBeInTheDocument();
   });
 });

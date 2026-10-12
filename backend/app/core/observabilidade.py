@@ -10,7 +10,8 @@ Peças:
     Gera request_id, aceita/gera correlation_id, mede a latência, emite o log de
     acesso, alimenta as métricas Prometheus e é a rede de segurança de 500.
   * Métricas Prometheus (`/metrics`): contagem, latência e requisições em curso
-    por método/rota/status.
+    por método/rota/status — e o Sensor 4 do plano de retirada do legado
+    (`legado_nota_geral_servido_total`, ver `registrar_legado_nota_geral`).
   * Sentry (opcional, ligado por `SENTRY_DSN`): erros e tracing de performance,
     com o usuário e a escola anexados ao evento.
 
@@ -22,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from contextvars import ContextVar
@@ -46,6 +48,12 @@ ctx_correlation_id: ContextVar[str | None] = ContextVar("correlation_id", defaul
 ctx_usuario_id: ContextVar[int | None] = ContextVar("usuario_id", default=None)
 ctx_escola_id: ContextVar[int | None] = ContextVar("escola_id", default=None)
 ctx_rota: ContextVar[str | None] = ContextVar("rota", default=None)
+# O `scope` ASGI da requisição em curso. Não entra no log: existe para que um
+# sensor chamado de DENTRO do handler (ver `registrar_legado_nota_geral`) leia o
+# template da rota casada e o cliente sem que cada rota precise declarar um
+# parâmetro `Request` só para a telemetria. Fora de uma requisição HTTP
+# (chamada direta da função em Python, script) fica `None` e o sensor não conta.
+ctx_escopo_http: ContextVar[dict | None] = ContextVar("escopo_http", default=None)
 
 _CAMPOS_CONTEXTO = (
     ("request_id", ctx_request_id),
@@ -117,8 +125,13 @@ if _prom is not None:
         buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
     _M_ANDAMENTO = _prom.Gauge(
         "http_em_andamento", "Requisições HTTP em andamento", ["metodo"])
+    # Sensor 4 do plano de retirada (docs/plano-retirada-nota-geral.md §1).
+    _M_LEGADO = _prom.Counter(
+        "legado_nota_geral_servido_total",
+        "Respostas servidas com o contrato legado nota_geral/Nota.posicao",
+        ["rota", "cliente"])
 else:  # pragma: no cover
-    _M_REQS = _M_DUR = _M_ANDAMENTO = None
+    _M_REQS = _M_DUR = _M_ANDAMENTO = _M_LEGADO = None
 
 
 def metricas_ativas() -> bool:
@@ -249,6 +262,129 @@ def _rota_de(scope: dict) -> str:
     return caminho if caminho else "<no_match>"
 
 
+# --- Sensor 4: quem ainda RECEBE o contrato legado `nota_geral` ---------------
+# O inventário estático (tests/test_legado_nota_geral.py) cobre o código DESTE
+# repositório. Ele não enxerga o binário do app já instalado nos celulares nem
+# uma aba de navegador presa num bundle antigo — e são exatamente esses que
+# decidem quando o motor pode parar de gravar `nota_geral` (Gatilho 1 do plano).
+# Para eles, "ninguém mais lê" só pode ser MEDIDO no servidor: é este contador.
+#
+# LIMITAÇÃO DE INFRA — o contador ainda NÃO vale como critério do Gatilho 1
+# ("== 0 durante 2 ciclos letivos, com a série temporal preservada"; achado da
+# revisão de 2026-10-12). Ele vive na memória de CADA processo: o container sobe
+# com `--workers "${WEB_CONCURRENCY:-2}"` (entrypoint.sh) sem
+# PROMETHEUS_MULTIPROC_DIR, e `render_metricas` serializa o registro padrão do
+# processo — cada coleta de /metrics vê só o worker que a atendeu, e tudo zera
+# a cada deploy ou reinício. O código daqui está certo; falta infra:
+#   1. somar os workers: PROMETHEUS_MULTIPROC_DIR apontando para um diretório
+#      esvaziado a cada boot (no entrypoint, antes do uvicorn) e /metrics
+#      servindo um `CollectorRegistry` com `multiprocess.MultiProcessCollector`
+#      (o Gauge `http_em_andamento` passa a pedir `multiprocess_mode`) — ou
+#      subir com 1 worker;
+#   2. guardar a série: um Prometheus (ou coletor equivalente) raspando /metrics
+#      com o Bearer de METRICS_TOKEN e retenção maior que 2 ciclos letivos — é
+#      o `increase()` dele que atravessa os zeros de cada deploy.
+# Até lá o contador serve para inspeção pontual ("ainda há quem leia?"), nunca
+# como prova de zero. `tests/test_sensor_legado_nota_geral.py::
+# test_o_sensor_4_AINDA_nao_soma_os_workers` cai quando o passo 1 for feito.
+
+# Tipos de cliente deduzidos do User-Agent — conjunto FECHADO. O rótulo nunca
+# carrega texto livre do cabeçalho: um User-Agent por série temporal deixaria
+# qualquer um estourar a memória do prometheus_client (o mesmo DoS por
+# cardinalidade que `_rota_de` fecha para o caminho).
+CLIENTES_POR_USER_AGENT = ("web", "mobile-android", "mobile-ios", "outro")
+
+# Cabeçalho OPCIONAL com que um cliente se declara COM versão ("mobile/1.4.0").
+# Nenhum cliente o envia hoje: ele existe para o próximo build do app poder dizer
+# a versão — a única forma de saber QUAL versão em campo ainda lê o `ranking`
+# legado do pacote de sincronização (plano, §4 item 11).
+CABECALHO_CLIENTE = b"x-constela-cliente"
+_RE_CLIENTE_DECLARADO = re.compile(r"(web|mobile)/(\d{1,3}(?:\.\d{1,3}){0,2})")
+# A versão vem do cliente, então também é limitada: no máximo este número de
+# pares tipo/versão distintos por processo. Passou disso, o rótulo vira
+# "<tipo>/outra" — a métrica perde detalhe, a memória não cresce.
+MAX_VERSOES_DECLARADAS = 16
+_versoes_admitidas: set[str] = set()
+_trava_versoes = threading.Lock()
+
+# Variantes de rota admitidas no rótulo — texto FIXO do código, nunca da query.
+# Separam, dentro da mesma rota, o pedido que além de receber o campo ainda
+# ORDENA pelo legado (a lista da turma com `?ordenar=desempenho`, plano §4 item 2).
+VARIANTES_ROTA = frozenset({"ordenar=desempenho"})
+
+
+def cliente_da_requisicao(escopo: dict) -> str:
+    """Rótulo de cliente, de BAIXA cardinalidade, para o Sensor 4.
+
+    1. ``X-Constela-Cliente: <web|mobile>/<versão>`` bem formado →
+       ``"mobile/1.4.0"`` (no máximo ``MAX_VERSOES_DECLARADAS`` pares por
+       processo; o excedente vira ``"mobile/outra"``);
+    2. senão, o ``User-Agent`` reduzido a ``CLIENTES_POR_USER_AGENT``:
+       ``okhttp/`` (o fetch do React Native no Android) → ``mobile-android``;
+       ``CFNetwork/`` (o fetch nativo do iOS) → ``mobile-ios``; navegador
+       (``Mozilla/``) → ``web``; qualquer outra coisa → ``outro``.
+
+    A heurística do User-Agent é deliberadamente grosseira: o que importa é
+    separar o app instalado (que não atualizamos à força) do web (que muda a
+    cada deploy)."""
+    cabecalhos = dict(escopo.get("headers") or [])
+    declarado = cabecalhos.get(CABECALHO_CLIENTE, b"").decode("latin-1").strip().lower()
+    achado = _RE_CLIENTE_DECLARADO.fullmatch(declarado)
+    if achado:
+        tipo, versao = achado.groups()
+        rotulo = f"{tipo}/{versao}"
+        with _trava_versoes:
+            if (rotulo in _versoes_admitidas
+                    or len(_versoes_admitidas) < MAX_VERSOES_DECLARADAS):
+                _versoes_admitidas.add(rotulo)
+                return rotulo
+        return f"{tipo}/outra"
+    agente = cabecalhos.get(b"user-agent", b"").decode("latin-1")
+    if "okhttp/" in agente:
+        return "mobile-android"
+    if "CFNetwork/" in agente:
+        return "mobile-ios"
+    if agente.startswith("Mozilla/"):
+        return "web"
+    return "outro"
+
+
+def registrar_legado_nota_geral(variante: str | None = None) -> None:
+    """SENSOR 4 (docs/plano-retirada-nota-geral.md §1): conta UMA resposta
+    servida com o contrato legado — `nota_geral` e/ou a ordem única
+    `Nota.posicao`.
+
+    Quem chama: as rotas da §4 do plano, logo antes de devolver o payload, e só
+    quando o payload é o LEGADO (ex.: `/ranking` SEM `?dimensao=`). A rota por
+    dimensão não conta: o item dela ainda traz o campo (é o mesmo schema), mas
+    quem pede `?dimensao=` lê `nota`/`posicao` da dimensão — é cliente migrado.
+
+    Rótulos: ``rota`` = TEMPLATE da rota casada
+    (``/api/v1/escolas/{escola_id}/ranking`` — nunca a URL com ids, nunca o
+    token do telão), mais a ``variante`` quando ela é uma de ``VARIANTES_ROTA``;
+    ``cliente`` = `cliente_da_requisicao`.
+
+    Puramente aditivo: não lê nem altera a resposta e NUNCA derruba a
+    requisição — telemetria que quebra o produto é pior do que nenhuma. Fora de
+    uma requisição HTTP (a função da rota chamada direto em Python) não conta."""
+    if _M_LEGADO is None:  # pragma: no cover — prometheus-client ausente
+        return
+    escopo = ctx_escopo_http.get()
+    if escopo is None:
+        return
+    try:
+        rota = _rota_de(escopo)
+        if variante is not None:
+            if variante in VARIANTES_ROTA:
+                rota = f"{rota}?{variante}"
+            else:  # erro de programação: conta na rota simples, mas avisa
+                logger.warning("sensor_legado_variante_desconhecida",
+                               extra={"variante": variante})
+        _M_LEGADO.labels(rota, cliente_da_requisicao(escopo)).inc()
+    except Exception:  # noqa: BLE001 — telemetria nunca derruba a resposta
+        logger.warning("sensor_legado_falhou", exc_info=True)
+
+
 # Rotas de infra não geram log de acesso (evita ruído nos scrapes/probes).
 _SEM_LOG = ("/api/health", "/metrics")
 
@@ -279,6 +415,9 @@ class ObservabilidadeMiddleware:
 
         ctx_request_id.set(request_id)
         ctx_correlation_id.set(correlation_id)
+        # O MESMO dict que o roteador completa com a rota casada (`scope.update`)
+        # — por isso o sensor, chamado já dentro do handler, enxerga o template.
+        token_escopo = ctx_escopo_http.set(scope)
         if escola_id is not None:
             ctx_escola_id.set(escola_id)
         if usuario_id is not None:
@@ -319,6 +458,7 @@ class ObservabilidadeMiddleware:
             if _M_ANDAMENTO is not None:
                 _M_ANDAMENTO.labels(metodo).dec()
             self._registrar(metodo, rota, caminho, estado["status"], duracao)
+            ctx_escopo_http.reset(token_escopo)
 
     def _registrar(self, metodo, rota, caminho, status, duracao) -> None:
         if _M_REQS is not None:

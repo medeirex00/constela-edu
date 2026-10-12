@@ -5,6 +5,7 @@ Endpoints somente-leitura: toda a informação vem dos snapshots imutáveis.
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core import observabilidade as obs
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.core.tempo import hoje_br
@@ -279,4 +280,9 @@ def comparar(
     if resultado is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "Aluno, turma ou escola não encontrado.")
+    if "aluno" in (tipo_a, tipo_b):
+        # Sensor 4: só o lado ALUNO leva o legado (`notas.geral` = `nota_geral`
+        # e `notas.posicao` = ordem única; plano de retirada, §4 item 9). Nos
+        # lados turma/escola `notas.geral` é a média das dimensões com dado.
+        obs.registrar_legado_nota_geral()
     return resultado

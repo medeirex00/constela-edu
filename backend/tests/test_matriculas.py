@@ -262,6 +262,71 @@ def test_mesma_linha_repetida_nao_e_disputa():
     assert m.candidatos_disputados(linhas, ctx) == set()
 
 
+# Gêmeas FICTÍCIAS que se distinguem por UMA letra no 2º prenome (decisão 3 do
+# dono, 2026-10-12: esse padrão é revisão de gente, nunca vínculo automático).
+GEMEA_FICHA = "MARIA ALICE ALVES PEREIRA"
+GEMEA_VARIANTE = "MARIA ALINE ALVES PEREIRA"
+
+
+def test_gemeas_no_mesmo_arquivo_disputam_a_unica_ficha_da_sala():
+    """As duas gêmeas vêm no MESMO arquivo e a sala só tem a ficha de uma delas
+    (sem nº de chamada — a plataforma criou). A linha de nome IDÊNTICO é a dona;
+    a outra quer a mesma ficha só pelo nome parecido ("variante"). Antes, só a
+    reivindicação por nome contava como disputa: as duas linhas reusavam a MESMA
+    ficha, o nome dela virava o da última linha e a outra criança sumia sem
+    aviso. Agora a ficha é disputada — a dona fica com ela e a variante vai para
+    a revisão. Nas duas ordens do arquivo, sem e com o mesmo nascimento (gêmeas:
+    aí a dona chega por "identificador", que também é reivindicação firme)."""
+    nasc = date(2017, 5, 5)
+    for nasc_ficha, nasc_linha, motivo_dona in ((None, None, "exato"),
+                                                (nasc, nasc, "identificador")):
+        for ordem in ((GEMEA_VARIANTE, GEMEA_FICHA), (GEMEA_FICHA, GEMEA_VARIANTE)):
+            ctx = _ctx((_ident(1, GEMEA_FICHA, nasc=nasc_ficha), "3º Ano B"))
+            linhas = [_linha(n, turma="3º Ano B", nasc=nasc_linha) for n in ordem]
+            disputados = m.candidatos_disputados(linhas, ctx)
+            assert disputados == {1}, (ordem, nasc_linha)
+            dec = {linha.nome: m.arbitrar_disputa(m.resolver_linha(linha, ctx), disputados)
+                   for linha in linhas}
+            assert (dec[GEMEA_FICHA].acao, dec[GEMEA_FICHA].aluno_id,
+                    dec[GEMEA_FICHA].motivo) == (m.REUSAR, 1, motivo_dona)
+            assert (dec[GEMEA_VARIANTE].acao, dec[GEMEA_VARIANTE].motivo,
+                    dec[GEMEA_VARIANTE].candidatos) == (
+                m.REVISAR, "disputado_por_varias_linhas", (1,))
+
+
+def test_variante_sozinha_no_arquivo_continua_sem_disputa():
+    """A disputa só existe com DUAS linhas de nomes diferentes. A variante
+    sozinha segue a regra da Lista Piloto de 2026-08-04 (variação segura do nome
+    do meio, candidato único: reusa) — a correção acima não a muda."""
+    ctx = _ctx((_ident(1, GEMEA_FICHA), "3º Ano B"))
+    linhas = [_linha(GEMEA_VARIANTE, turma="3º Ano B")]
+    assert m.candidatos_disputados(linhas, ctx) == set()
+    d = m.arbitrar_disputa(m.resolver_linha(linhas[0], ctx), set())
+    assert (d.acao, d.aluno_id, d.motivo) == (m.REUSAR, 1, "variante")
+
+
+def test_gemeas_separadas_pela_chamada_nao_sao_disputa():
+    """Quando a ficha tem nº de chamada, ele já separa as duas: a da chamada
+    igual é a dona ("identificador") e a outra, vetada só pela chamada de uma
+    ficha que já tem dona no arquivo, é criada. Nada disputa a ficha."""
+    ctx = _ctx((_ident(1, GEMEA_FICHA, chamada=10), "3º Ano B"))
+    linhas = [_linha(GEMEA_FICHA, turma="3º Ano B", chamada=10),
+              _linha(GEMEA_VARIANTE, turma="3º Ano B", chamada=11)]
+    assert m.candidatos_disputados(linhas, ctx) == set()
+    ctx.reivindicados = m.reivindicados_no_arquivo(linhas, ctx)
+    assert m.resolver_linha(linhas[0], ctx).acao == m.REUSAR
+    assert m.resolver_linha(linhas[1], ctx).acao == m.CRIAR
+
+
+def test_dona_por_nome_identico_repetida_nao_e_disputa():
+    """Duas linhas de nome IDÊNTICO à ficha (repetição, ou a mesma criança em
+    duas abas) não disputam nada: a dona firme só conta quando OUTRA linha, de
+    nome diferente, quer a ficha pelo nome parecido."""
+    ctx = _ctx((_ident(1, GEMEA_FICHA), "3º Ano B"))
+    linhas = [_linha(GEMEA_FICHA, turma="3º Ano B"), _linha(GEMEA_FICHA, turma="3º Ano B")]
+    assert m.candidatos_disputados(linhas, ctx) == set()
+
+
 # --- resolver_linha: mudança de SALA ---------------------------------------
 
 def test_mudanca_de_sala_com_prova_reusa():

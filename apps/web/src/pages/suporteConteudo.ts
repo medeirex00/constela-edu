@@ -152,8 +152,8 @@ export const FAQ_PROFESSOR: Pergunta[] = [
     resposta: "Não há dado daquela plataforma para ele: não é nota zero. Se ele já usa a plataforma há dias, avise a coordenação — a conta dele pode ainda não estar ligada à ficha.",
   },
   {
-    pergunta: "Mudei o período e a aba Geral do Ranking não mudou.",
-    resposta: "A aba Geral é sempre o acumulado do ano letivo; para ver um período, use a aba Evolução ou as Premiações. No Ranking, a posição conta só os alunos das suas turmas.",
+    pergunta: "Mudei o período e a aba Desempenho do Ranking não mudou.",
+    resposta: "A aba Desempenho é sempre o acumulado do ano letivo, uma matéria por vez; para ver um período, use a aba Evolução ou as Premiações. No Ranking, a posição conta só os alunos das suas turmas.",
   },
   {
     pergunta: "Apareceu “Algo deu errado”.",

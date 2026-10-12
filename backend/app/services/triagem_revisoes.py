@@ -57,6 +57,15 @@ SEM_MATRICULA = "sem_matricula_no_ano"
 SEM_IDENTIFICADOR = "sem_identificador_externo"
 IRMA_BLOQUEADA = "irma_bloqueada"
 IDENTIDADE_APOSENTADA = "identidade_aposentada"
+NOME_NAO_CONFIRMADO = "nome_nao_confirmado"
+
+# Motivos com que o MOTOR mandou a linha para a fila por recusar o NOME do
+# candidato (``identidade_aluno.decidir``): parecido, mas não seguro — o caso
+# típico é UMA letra diferente no 2º prenome, que a decisão 3 do dono
+# (2026-10-12) manteve na revisão MANUAL, porque irmãs se distinguem pelo
+# prenome. "Candidato único" e "série compatível" são o que o motor já tinha
+# quando recusou: não confirmam o nome.
+_NOME_RECUSADO_PELO_MOTOR = frozenset({"correspondencia_insegura", "candidatos_multiplos"})
 
 # Texto humano de cada motivo — a mesma frase vai para a API e para o relatório.
 TEXTO = {
@@ -84,6 +93,10 @@ TEXTO = {
     IDENTIDADE_APOSENTADA: "esta conta da plataforma foi aposentada nesta ficha: "
                            "o histórico está preservado, mas ela não alimenta mais "
                            "o retrato do aluno",
+    NOME_NAO_CONFIRMADO: "o nome recebido não confere com segurança com o do "
+                         "candidato (ex.: uma letra diferente no prenome, que "
+                         "distingue irmãos) — candidato único e série não "
+                         "provam que é a mesma criança",
 }
 
 
@@ -277,6 +290,15 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
 
     if humano == alvo:
         caso.evidencias.append("um gestor já escolheu esta ficha para esta identidade")
+    elif motivo_ok == CANDIDATO_UNICO_COMPATIVEL and rev.motivo in _NOME_RECUSADO_PELO_MOTOR:
+        # Sem conta vinculada e sem escolha humana, o candidato único só existe
+        # porque o NOME parecia — e foi exatamente o nome que o motor recusou.
+        # Chamar isso de "seguro" contradiria a decisão 3 do dono: a sugestão
+        # fica para o gestor, com as evidências, mas quem decide é gente.
+        caso.conflitos.append(
+            f"o motor recusou o nome: “{rev.nome_recebido}” não confere com "
+            f"segurança com a ficha {alvo} (motivo {rev.motivo})")
+        return veredito(DECISAO_HUMANA, NOME_NAO_CONFIRMADO, alvo)
     return veredito(SEGURA, motivo_ok, alvo)
 
 

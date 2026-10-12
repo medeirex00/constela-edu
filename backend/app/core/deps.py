@@ -148,6 +148,32 @@ def exigir_admin_global(usuario: Usuario = Depends(get_usuario_atual)) -> Usuari
     return usuario
 
 
+def exigir_admin_global_ou_secretaria(
+    usuario: Usuario = Depends(get_usuario_atual),
+) -> Usuario:
+    """Gravar ou apagar resultados de AVALIAÇÕES EXTERNAS (IDEB, SAEB, SARESP...).
+
+    Decisão do dono: importar e excluir esses resultados é tarefa do admin global
+    e da Secretaria da PRÓPRIA rede — o resultado oficial é um dado da rede, e a
+    coordenação/administração de uma escola não pode reescrever (nem apagar) o
+    IDEB que a Secretaria usa para comparar as escolas entre si.
+
+    A Secretaria precisa ainda de cargo de gestão (``PODE_EDITAR_METRICAS``): a
+    regra antiga (``exigir_papeis("admin", "coordenador")``) já exigia isso, e a
+    decisão RESTRINGE quem grava — não abre a escrita para uma conta de rede com
+    cargo de professor. O ALCANCE (só as escolas da rede dela) continua sendo
+    aplicado pela rota, que filtra as escolas pelo ``rede_id`` da conta."""
+    if usuario.is_global:
+        return usuario
+    if _e_secretaria(usuario) and usuario.cargo in PODE_EDITAR_METRICAS:
+        return usuario
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "Só o administrador global e a Secretaria da rede podem importar ou "
+        "excluir resultados de avaliações externas (IDEB, SAEB e outras).",
+    )
+
+
 def escola_autorizada(
     request: Request,
     escola_id: int = Path(...),

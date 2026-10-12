@@ -7,8 +7,11 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { useModulosDaEscola } from "../hooks/useModulos";
 import RankingDaRede from "../pages/rede/RankingRede";
-import { renderComApp, responder, screen, userEvent, usuarioFake } from "./utils";
+import {
+  escolaComContrato, escolaFake, renderComApp, responder, screen, userEvent, usuarioFake, waitFor,
+} from "./utils";
 
 function cartao(over: Record<string, unknown> = {}) {
   return {
@@ -98,5 +101,42 @@ describe("Módulos contratados — Ranking da Rede", () => {
 
     // A aba CONTINUA lá — o módulo faz parte do plano, só não tem dados ainda.
     expect(screen.getByRole("tab", { name: /Matemática/i })).toBeInTheDocument();
+  });
+});
+
+/** Mostra o que `useModulosDaEscola` resolve, para o teste ler. */
+function SondaModulosDaEscola() {
+  const { modulos } = useModulosDaEscola();
+  return <p data-testid="modulos">{modulos.join(",")}</p>;
+}
+
+describe("useModulosDaEscola — o contrato da ESCOLA aberta", () => {
+  // O Admin Global recebe o catálogo inteiro no /auth/me; as rotas da escola
+  // exigem o plano da rede DELA (403 fora dele). Sem este hook, a aba
+  // Desempenho, o Top 5 e as colunas da turma consultavam a matéria recusada.
+  it("Admin Global numa escola cuja rede só contratou Matemática: só Matemática", async () => {
+    renderComApp(<SondaModulosDaEscola />, {
+      usuario: usuarioFake({ cargo: "admin", is_global: true, escola_id: null,
+                             modulos: ["leitura", "matematica"] }),
+      escolas: [escolaComContrato(["matematica"])],
+    });
+    await waitFor(() => expect(screen.getByTestId("modulos")).toHaveTextContent(/^matematica$/));
+  });
+
+  it("vale o que está no plano do usuário E no da escola (interseção)", async () => {
+    renderComApp(<SondaModulosDaEscola />, {
+      usuario: usuarioFake({ modulos: ["leitura"] }),
+      escolas: [escolaComContrato(["leitura", "matematica"])],
+    });
+    await waitFor(() => expect(screen.getByTestId("modulos")).toHaveTextContent(/^leitura$/));
+  });
+
+  it("API anterior (escola sem `modulos`): cai no plano do usuário, como antes", async () => {
+    renderComApp(<SondaModulosDaEscola />, {
+      usuario: usuarioFake({ cargo: "admin", is_global: true, escola_id: null }),
+      escolas: [escolaFake()],
+    });
+    await screen.findByTestId("modulos");
+    expect(screen.getByTestId("modulos")).toHaveTextContent(/^leitura,matematica$/);
   });
 });

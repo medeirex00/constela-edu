@@ -27,6 +27,18 @@ export function usePerfil() {
   return { global, secretaria, rede, gestor, admin, escolaOnly, cargo: usuario?.cargo ?? null };
 }
 
+/** Quem IMPORTA e REMOVE resultados de avaliações externas (IDEB, SAEB...): o
+ * admin global e a Secretaria da rede com cargo de gestão (admin/coordenador) —
+ * a MESMA regra de `deps.exigir_admin_global_ou_secretaria` no backend, que é a
+ * barreira de verdade; a tela só esconde os controles que o servidor recusaria.
+ * A coordenação e a administração de escola (sem rede) não importam nem excluem:
+ * o resultado oficial é dado da rede, usado para comparar as escolas entre si. */
+export function podeGravarAvaliacoes(
+  p: Pick<ReturnType<typeof usePerfil>, "global" | "secretaria" | "gestor">,
+): boolean {
+  return p.global || (p.secretaria && p.gestor);
+}
+
 /** Destino do clique no nome de um aluno nas telas de evolução: a gestão abre
  * a evolução detalhada; o professor abre o perfil (a evolução detalhada é dado
  * de gestão — o servidor responde 403 ao professor). */

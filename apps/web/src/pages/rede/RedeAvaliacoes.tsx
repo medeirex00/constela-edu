@@ -5,7 +5,9 @@
  * Duas partes: (1) CORRELAÇÃO/EVOLUÇÃO — dispersão engajamento × avaliação por
  * escola, correlação de Pearson e a evolução histórica, SEM afirmar causalidade;
  * (2) IMPORTAÇÃO — upload do arquivo oficial → mapear colunas → conferir → gravar
- * (casa por código INEP). Só dados agregados por escola.
+ * (casa por código INEP). Só dados agregados por escola. Importar e remover são
+ * do admin global e da Secretaria da rede (`podeGravarAvaliacoes`); quem não
+ * pode vê só a consulta e um aviso de quem faz.
  */
 import {
   AlertTriangle,
@@ -34,6 +36,7 @@ import {
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { podeGravarAvaliacoes, usePerfil } from "../../hooks/usePerfil";
 import { ApiError, api, apiUpload } from "../../lib/api";
 import { nota } from "../../lib/formato";
 
@@ -764,7 +767,15 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
         </Card>
       )}
 
-      {podeImportar && <ImportarUmClique aoImportar={recarregar} />}
+      {podeImportar ? <ImportarUmClique aoImportar={recarregar} /> : (
+        <p className="flex items-start gap-1.5 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-400">
+          <Info size={14} className="mt-0.5 shrink-0" />
+          <span>
+            Importar e remover resultados oficiais (IDEB, SAEB e outros) é feito pelo{" "}
+            <b>administrador global</b> ou pela <b>Secretaria da rede</b>. Esta conta só consulta.
+          </span>
+        </p>
+      )}
 
       {podeImportar && catalogo && (
         <ImportarAvaliacao catalogo={catalogo} aoImportar={recarregar}
@@ -781,13 +792,13 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
 
 export default function RedeAvaliacoes() {
   const { usuario } = useApp();
+  const perfil = usePerfil();
   const redeDoUsuario = usuario?.rede_id ?? null;
   const { dados: redes, carregando, erro: erroRedes } = useApi<{ id: number; nome: string }[]>(
     redeDoUsuario == null ? "/redes" : null);
   const redeId = redeDoUsuario ?? redes?.[0]?.id ?? null;
-  const ehGlobal = Boolean(usuario?.is_global);
-  const podeImportar = ehGlobal
-    || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const ehGlobal = perfil.global;
+  const podeImportar = podeGravarAvaliacoes(perfil);
 
   const conteudo = useMemo(() => {
     if (redeId == null) {

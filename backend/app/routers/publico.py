@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import observabilidade as obs
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, negar_secretaria
@@ -426,6 +427,12 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
     # bloquear NA HORA, e o payload pode conter nome de criança (anonimizar=False).
     # O cache em memória (_cache_painel) já absorve os polls do telão no servidor.
     response.headers["Cache-Control"] = "no-store"
+    if "ranking" in _slides_ativos(config):
+        # Sensor 4: o slide `ranking` é a ordem única com `nota_geral` por
+        # criança (plano de retirada, §4 item 5 — decisão do dono). Com o slide
+        # desligado o telão não recebe o legado e não conta. O rótulo da rota é
+        # o TEMPLATE (`/publico/{token}/painel`): o token nunca vira rótulo.
+        obs.registrar_legado_nota_geral()
     return dados
 
 
@@ -545,7 +552,7 @@ def perfil_publico(token: str, aluno_id: int, response: Response,
     # Estritamente pedagógico: nome, turma, notas e conquistas. O nome sai
     # anonimizado por padrão (mesma regra do telão) — este link é público.
     anonimizar = bool(config.get("anonimizar", True))
-    return {
+    perfil = {
         "nome": svc_gami.anonimizar_nome(aluno.nome) if anonimizar else aluno.nome,
         # K-anonimato: turma omitida no modo anônimo (não reidentificar).
         "turma": None if anonimizar else (matricula[1].nome if matricula else None),
@@ -561,6 +568,11 @@ def perfil_publico(token: str, aluno_id: int, response: Response,
         ],
         "escola": escola.nome,
     }
+    # Sensor 4: o perfil público ainda leva `nota_geral`/`posicao` (plano de
+    # retirada, §4 item 6 — decisão do dono). Conta só o que é de fato servido:
+    # os 404 acima já saíram sem contar.
+    obs.registrar_legado_nota_geral()
+    return perfil
 
 
 @publico_router.get("/rede/{token}")

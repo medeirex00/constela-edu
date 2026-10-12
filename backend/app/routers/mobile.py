@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import observabilidade as obs
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import DispositivoMovel, Escola, Usuario
@@ -128,7 +129,7 @@ def sincronizar(
                                               escola.ano_letivo_ativo, permitidas)
         alertas = permissoes.filtrar_por_aluno(alertas, alunos)
 
-    return {
+    pacote = {
         "gerado_em": datetime.now(timezone.utc).isoformat(),
         "dashboard": montar_dashboard(db, escola_id, turma_ids=permitidas),
         "ranking": _ranking(db, escola_id, escola.ano_letivo_ativo, turma_ids=permitidas),
@@ -147,3 +148,9 @@ def sincronizar(
         "alertas": alertas,
         "mural": eventos_mural,
     }
+    # Sensor 4: o pacote leva o `ranking` LEGADO (ordem única + `nota_geral`) e
+    # o Top 10 do painel. É o consumidor que não atualizamos à força — o app já
+    # instalado —, então é aqui que o rótulo `cliente` mais importa (plano de
+    # retirada, §4 item 11).
+    obs.registrar_legado_nota_geral()
+    return pacote

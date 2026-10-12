@@ -228,6 +228,34 @@ def test_f2_admin_global_tambem_respeita_o_plano_da_escola(db):
     assert root.get(f"/api/v1/escolas/{esc.id}/matific").status_code == 200
 
 
+def test_f3_seletor_de_escolas_traz_o_contrato_de_cada_escola(db):
+    """`GET /escolas` traz os módulos da rede de CADA escola — o que a tela da
+    escola precisa para não oferecer ao Admin Global (catálogo inteiro no
+    `/auth/me`) uma matéria que `/ranking?dimensao=` recusaria com 403. O
+    contrato do seletor é exatamente o que a API daquela escola aceita."""
+    rede, esc = _cenario(db)
+    avulsa = Escola(nome="EM Avulsa", ano_letivo_ativo=2026, status="ativa")
+    db.add(avulsa)
+    svc.definir(db, rede.id, "matematica", False)
+    db.commit()
+    root = _login("root@mod.local")
+
+    # O usuário global continua com o catálogo inteiro (ele administra redes)…
+    assert root.get("/api/v1/auth/me").json()["modulos"] == ["leitura", "matematica"]
+    # …mas cada escola do seletor declara o contrato DELA.
+    escolas = {e["id"]: e for e in root.get("/api/v1/escolas").json()}
+    assert escolas[esc.id]["modulos"] == ["leitura"]
+    assert escolas[avulsa.id]["modulos"] == ["leitura", "matematica"]  # sem rede = tudo
+    # E o contrato do seletor é o que a rota da dimensão aplica.
+    assert root.get(f"/api/v1/escolas/{esc.id}/ranking?dimensao=leitura").status_code == 200
+    assert root.get(
+        f"/api/v1/escolas/{esc.id}/ranking?dimensao=matematica").status_code == 403
+
+    # A Secretaria vê as escolas da rede dela com o mesmo contrato.
+    sec = _login("sec@mod.local")
+    assert [e["modulos"] for e in sec.get("/api/v1/escolas").json()] == [["leitura"]]
+
+
 # --- Renormalização dos pesos (nota do ALUNO) -------------------------------
 
 def test_pesos_geral_redistribuidos_entre_modulos_contratados(db):

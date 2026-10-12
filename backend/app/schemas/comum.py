@@ -51,6 +51,13 @@ class EscolaOut(ORMModel):
     logotipo_url: str | None
     ano_letivo_ativo: int
     status: str
+    # Módulos CONTRATADOS pela rede DESTA escola (SaaS). Preenchido só pelo
+    # seletor (`GET /escolas`); nas demais respostas fica `None` (não informado).
+    # Existe porque `UsuarioOut.modulos` é o que vale para o USUÁRIO — e o Admin
+    # Global recebe o catálogo inteiro (administra todas as redes) —, enquanto
+    # as rotas por escola (`/ranking?dimensao=`, …) exigem o contrato DA ESCOLA
+    # e respondem 403 fora dele. A tela de uma escola decide as matérias por aqui.
+    modulos: list[str] | None = None
 
 
 class EscolaCreate(BaseModel):
@@ -238,6 +245,12 @@ class AlunoGestaoOut(ORMModel):
     aferido_matematica: bool = False
     posicao_leitura: int | None = None
     posicao_matematica: int | None = None
+    # O que os campos por dimensão acima VALEM (`services.dimensoes.situacao`):
+    # "classificado" | "sem_nota" | "fora_da_classificacao". Só "classificado"
+    # afirma nota/ausência; nos outros dois os campos vêm vazios. `None` = API
+    # anterior a este campo, que também não preenchia os campos por dimensão —
+    # o cliente não pode ler o `False`/`None` deles como "sem dado".
+    situacao_desempenho: str | None = None
 
 
 class AcaoAlunos(BaseModel):
@@ -327,6 +340,11 @@ class AlunoPerfilOut(BaseModel):
     # Desempenho por DIMENSÃO (a verdade oficial) + a cobertura ao lado.
     dimensoes: list[DimensaoAlunoOut] = []
     adocao: AdocaoAlunoOut | None = None
+    # O que `dimensoes`/`adocao` valem: "classificado" | "sem_nota" |
+    # "fora_da_classificacao" (`services.dimensoes.situacao`). Fora da
+    # classificação as duas vêm vazias, mesmo havendo linha de `notas` antiga.
+    # `None` = API anterior a este campo.
+    situacao_desempenho: str | None = None
     detalhes: dict
     calculada_em: datetime | None
     leitura_niveis: LeituraNiveisOut | None = None

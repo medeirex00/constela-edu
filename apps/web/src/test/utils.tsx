@@ -38,6 +38,12 @@ export function escolaFake(over: Partial<Escola> = {}): Escola {
   };
 }
 
+/** Escola do seletor com o CONTRATO da rede dela (`modulos`, de `GET /escolas`).
+ *  O campo não está no tipo comum (`@constela/core`) — ver `useModulosDaEscola`. */
+export function escolaComContrato(modulos: string[], over: Partial<Escola> = {}): Escola {
+  return Object.assign(escolaFake(over), { modulos });
+}
+
 export function usuarioFake(over: Partial<Usuario> = {}): Usuario {
   return {
     id: 1,
@@ -108,9 +114,11 @@ export function dashboardFake(over: Partial<Dashboard> = {}): Dashboard {
     alcance: 83.3,
     nao_aferidos: 7,
     media_geral: 78.5,
+    // LEGADO (ordem única): o /dashboard ainda manda — o app em campo lê —, mas
+    // o painel web não o usa mais (Top 5 por matéria vem de /ranking?dimensao=).
     top10: [
       rankingItemFake(),
-      rankingItemFake({ posicao: 2, aluno_id: 11, nome: "João Pedro Barbosa", nota_geral: 82 }),
+      rankingItemFake({ posicao: 2, aluno_id: 11, nome: "João Pedro Barbosa" }),
     ],
     ...over,
   };

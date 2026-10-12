@@ -132,8 +132,8 @@ class LocalProvedor(ProvedorIA):
                     "Posso detalhar evolução, alertas ou conquistas se você perguntar.")
 
         # "Os 3 melhores do Matific", "top 5 no Elefante", "melhor aluno da
-        # escola": monta o pódio certo, na métrica certa, com o N pedido.
-        podio = self._top_n(pergunta, secoes.get("ALUNOS", ""))
+        # escola": devolve o pódio OFICIAL da disciplina, com o N pedido.
+        podio = self._top_n(pergunta, secoes)
         if podio:
             return podio
 
@@ -164,18 +164,35 @@ class LocalProvedor(ProvedorIA):
                 secoes[atual] += linha + "\n"
         return secoes
 
-    # Linha da seção ALUNOS: "- NOME: turma T, 3º lugar, geral 8.5, Matific 7.0,
-    # Elefante 9.0" — montada em assistente.montar_contexto.
-    # A turma ancora em "º lugar" (não na primeira vírgula) para nomes de turma
-    # com vírgula ("4º Ano, Integral") não saírem truncados.
-    _RE_ALUNO = re.compile(
-        r"^- (?P<nome>.+?): turma (?P<turma>.+?), \S+º lugar, .*?"
-        r"geral (?P<geral>\d+(?:[.,]\d+)?)"
-        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?)"
-        r", Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
+    # O pódio sai das seções de RANKING DA DISCIPLINA que
+    # `assistente.montar_contexto` escreve — RANKING_ELEFANTE e RANKING_MATIFIC —,
+    # que já são a lista OFICIAL (a mesma de `GET /ranking?dimensao=`): só os
+    # aferidos na disciplina, só quem CONCORRE (1º ao 5º ano), na posição que o
+    # motor carimbou. Linha:
+    #   "- 3º: NOME (TURMA) — nota 72.0"
+    # Por que não remontar o pódio a partir da seção ALUNOS: lá aparece TODO
+    # aluno ativo com Nota, inclusive a criança de turma de Fase cuja Nota
+    # antiga o recálculo não apaga — ela não concorre, e um pódio reordenado
+    # dali divergia do ranking oficial (achado da revisão de 2026-10-12).
+    # A turma vai até o ÚLTIMO ") — nota", para nomes de turma com parênteses
+    # ("4º Ano A (Integral)") não saírem truncados.
+    _RE_PODIO = re.compile(
+        r"^- (?P<lugar>\d+)º: (?P<nome>.+?) \((?P<turma>.+)\) — nota "
+        r"(?P<nota>\d+(?:[.,]\d+)?)$")
+    _SECAO_DA_DISCIPLINA = {"leitura": "RANKING_ELEFANTE",
+                            "matematica": "RANKING_MATIFIC"}
+    _ROTULOS = {"leitura": "em Leitura (Elefante Letrado)",
+                "matematica": "em Matemática (Matific)"}
+    # O que `montar_contexto` escreve na seção de pódio de uma disciplina que a
+    # rede NÃO contratou (cascata contrato → dado).
+    _FORA_DO_CONTRATO = "não faz parte do contrato"
+    #: Teto do "top N". `montar_contexto` escreve as seções de pódio com este
+    #: mesmo tamanho — senão "top 25" seria respondido com as 10 linhas que
+    #: couberam, chamadas de "os 10 melhores", como se fossem a lista inteira.
+    MAX_PODIO = 25
 
     @classmethod
-    def _top_n(cls, pergunta: str, secao_alunos: str) -> str | None:
+    def _top_n(cls, pergunta: str, secoes: dict[str, str]) -> str | None:
         # Evolução/alertas têm seções próprias: "melhor evolução", "top 3 que
         # mais evoluíram" ou "alunos em risco" NÃO são pódio de nota — deixa a
         # pergunta seguir para EVOLUCAO/ALERTAS em vez de responder errado.
@@ -188,49 +205,74 @@ class LocalProvedor(ProvedorIA):
                          r"portugues|letrado|nota|escola|geral)\b", pergunta):
             return None
 
+        rodape = "\n\n(Resposta gerada no modo local, somente com dados do sistema.)"
+        # Disciplinas que esta rede tem: a seção de pódio existe no contexto e
+        # não diz "não faz parte do contrato".
+        contratadas = [d for d, nome in cls._SECAO_DA_DISCIPLINA.items()
+                       if nome in secoes
+                       and cls._FORA_DO_CONTRATO not in secoes[nome]]
+
         if re.search(r"\b(matific|matematica)\b", pergunta):
-            metrica, rotulo = "matific", "no Matific"
+            disciplinas = ["matematica"]
         elif re.search(r"\b(elefante|leitura|portugues|letrado)\b", pergunta):
-            metrica, rotulo = "elefante", "no Elefante Letrado"
+            disciplinas = ["leitura"]
         else:
-            metrica, rotulo = "geral", "da escola (nota geral)"
+            # Sem disciplina na pergunta ("o melhor aluno da escola"): não existe
+            # uma nota única que junte as disciplinas (Arquitetura 2) — a
+            # resposta honesta é o pódio de CADA disciplina contratada.
+            disciplinas = contratadas
+        if len(disciplinas) == 1 and disciplinas[0] not in contratadas:
+            # Pediu a disciplina que a rede não contratou: diz isso, em vez de
+            # cair numa seção qualquer que "melhores" também casa.
+            secao = secoes.get(cls._SECAO_DA_DISCIPLINA[disciplinas[0]], "").strip()
+            return (secao.lstrip("- ") + rodape) if secao else None
 
         achado = re.search(r"\b(\d+)\b", pergunta)
         n = int(achado.group(1)) if achado else (
             1 if re.search(r"\bmelhor\b", pergunta) else 5)
-        n = max(1, min(n, 25))
+        n = max(1, min(n, cls.MAX_PODIO))
 
-        alunos = []
-        for linha in secao_alunos.splitlines():
-            par = cls._RE_ALUNO.match(linha.strip())
-            if not par or par.group(metrica) is None:
+        blocos = []
+        for disciplina in disciplinas:
+            # A seção já vem na ordem oficial, com o lugar oficial: o modo local
+            # não reordena nem renumera — só corta no N pedido.
+            alunos = [par for par in (
+                cls._RE_PODIO.match(linha.strip())
+                for linha in secoes[cls._SECAO_DA_DISCIPLINA[disciplina]].splitlines())
+                if par][:n]
+            rotulo = cls._ROTULOS[disciplina]
+            if not alunos:
+                blocos.append(f"Ainda não há alunos aferidos {rotulo}.")
                 continue
-            alunos.append((float(par.group(metrica).replace(",", ".")),
-                           par.group("nome"), par.group("turma"), par))
-        if not alunos:
+            titulo = (f"O melhor aluno {rotulo}" if n == 1
+                      else f"Os {len(alunos)} melhores alunos {rotulo}")
+            blocos.append(f"{titulo}, pelos dados do sistema:\n" + "\n".join(
+                f"{par.group('lugar')}º: {par.group('nome')} ({par.group('turma')})"
+                f" — nota {float(par.group('nota').replace(',', '.')):.1f}"
+                for par in alunos))
+        if not blocos:
             return None
-
-        alunos.sort(key=lambda a: a[0], reverse=True)
-        linhas = [
-            f"{i}º: {nome} ({turma}) — nota {valor:.1f}"
-            + (f" (geral {par.group('geral')})" if metrica != "geral" else "")
-            for i, (valor, nome, turma, par) in enumerate(alunos[:n], start=1)
-        ]
-        titulo = (f"O melhor aluno {rotulo}" if n == 1
-                  else f"Os {min(n, len(alunos))} melhores alunos {rotulo}")
-        return (f"{titulo}, pelos dados do sistema:\n" + "\n".join(linhas)
-                + "\n\n(Resposta gerada no modo local, somente com dados do sistema.)")
+        aviso = ("Cada disciplina tem o seu próprio ranking — não existe uma nota "
+                 "única que junte as duas.\n\n" if len(disciplinas) > 1 else "")
+        return aviso + "\n\n".join(blocos) + rodape
 
     @staticmethod
     def _aluno_citado(pergunta: str, secao_alunos: str) -> dict | None:
+        """O aluno cujo nome aparece na pergunta. Casa por PALAVRA inteira e,
+        havendo mais de um, fica com o nome mais longo: "Ana Souza" está
+        contido em "Mariana Souza" e em "Ana Souza Lima" — sem essas duas
+        regras, a pergunta sobre a Mariana devolvia a linha da Ana (a seção
+        ALUNOS é alfabética, e a Ana vem antes)."""
+        citado = None
         for linha in secao_alunos.splitlines():
             linha = linha.strip()
             if not linha.startswith("- "):
                 continue
             nome = linha[2:].split(":", 1)[0].strip()
-            if nome and _plano(nome) in pergunta:
-                return {"nome": nome, "linha": linha}
-        return None
+            if (nome and re.search(rf"(?<!\w){re.escape(_plano(nome))}(?!\w)", pergunta)
+                    and (citado is None or len(nome) > len(citado["nome"]))):
+                citado = {"nome": nome, "linha": linha}
+        return citado
 
 
 def obter_provedor(provedor: str | None = None, api_key: str | None = None,

@@ -225,9 +225,10 @@ function ExplicacaoSemNumeros() {
       </p>
       <p>
         Aluno sem dado de uma plataforma fica fora do ranking daquela matéria e aparece com “—”, não
-        com zero. A aba Geral do Ranking usa a Nota Geral, que junta as matérias com dado do aluno;
-        quem ainda não tem dado de nenhuma plataforma aparece ali com 0,0. Os pesos e a régua de cada
-        matéria ficam com a coordenação, em Configurações › Pontuação.
+        com zero. A aba Desempenho do Ranking mostra a classificação de uma matéria por vez, só com
+        quem foi aferido nela; quem ainda não tem dado aparece logo abaixo, como “ainda não
+        aferido”. Os pesos e a régua de cada matéria ficam com a coordenação, em Configurações ›
+        Pontuação.
       </p>
     </div>
   );

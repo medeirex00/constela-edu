@@ -5,6 +5,9 @@
  *  2. PLACAR MATIFIC (estrelas e atividades no período):
  *     • ANO LETIVO → lê o BANCO LOCAL (mantido pela sincronização diária).
  *       Rápido e não depende do Matific estar no ar. O turno vai na query.
+ *       As estrelas são as que CONTAM (no máximo 5 por atividade, a regra da
+ *       premiação "Melhor Matemática"); quando o teto corta, a linha mostra o
+ *       número registrado e a tabela explica — a conta é do backend.
  *     • Sub-períodos (Hoje, Ontem, Esta/Semana passada, Mês/Mês passado,
  *       Bimestre/Bimestre passado, Personalizado) → CONSULTA O MATIFIC AO VIVO
  *       (API interna por HTTP; navegador só para autenticar). Mostra os mesmos
@@ -32,10 +35,16 @@ type PlacarItem = {
   nome: string;
   turma: string | null;
   serie?: string | null;
+  /** No ano letivo (banco local): as estrelas que CONTAM — no máximo 5 por
+   *  atividade, a mesma regra da premiação "Melhor Matemática". Ao vivo: o
+   *  número do site do Matific. */
   estrelas: number;
   atividades: number;
   pontuacao_media: number;
   aluno_id: number | null;
+  /** Só no banco local: o ganho do período ANTES do teto, e se o teto cortou. */
+  estrelas_brutas?: number;
+  teto_estrelas_aplicado?: boolean;
 };
 type PlacarAoVivo = {
   periodo: string;
@@ -171,6 +180,10 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
     if (alvo.startsWith("serie:")) return { ano_escolar: alvo.slice(6), turno: turnoAtivo };
     return { turno: turnoAtivo };
   }, [alvo, turmaDaBase, turnoAtivo]);
+
+  // O backend já ordenou pelas estrelas que contam; a tela só avisa quando o
+  // teto cortou alguma linha visível (nunca refaz a conta).
+  const algumTeto = visiveis.some((i) => i.teto_estrelas_aplicado);
 
   const atualizadoEm = !isAno && live.dados?.atualizado_em
     ? new Date(live.dados.atualizado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })
@@ -312,13 +325,27 @@ export default function RankingMatematica({ embutido = false }: { embutido?: boo
                       )}
                     </td>
                     <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{item.turma ?? "—"}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold">⭐ {numero(item.estrelas)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold">
+                      ⭐ {numero(item.estrelas)}
+                      {item.teto_estrelas_aplicado && item.estrelas_brutas !== undefined && (
+                        <span className="ml-1 text-xs font-normal text-amber-700 dark:text-amber-300">
+                          (de {numero(item.estrelas_brutas)}*)
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-right">{numero(item.atividades)}</td>
                     <td className="hidden px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400 sm:table-cell">{item.pontuacao_media.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {algumTeto && (
+              <p className="px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
+                * Contam no máximo 5 estrelas por atividade — a mesma regra da premiação
+                Melhor Matemática. Nas linhas marcadas, o período registrou mais estrelas do que
+                as atividades permitem; a posição usa as estrelas que contam.
+              </p>
+            )}
           </div>
         )}
       </Card>
