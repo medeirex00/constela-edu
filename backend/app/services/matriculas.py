@@ -413,14 +413,28 @@ def candidatos_disputados(linhas: list[LinhaMatricula],
     na ficha da outra. Aqui só se DETECTA a disputa; quem a resolve é
     ``arbitrar_disputa``, mandando as linhas envolvidas para revisão.
 
-    Só conta a disputa por NOME: duas linhas com o MESMO RA (ou o mesmo aluno em
-    duas turmas do arquivo) são a mesma criança e não são disputa nenhuma."""
-    reivindicado: dict[int, set[str]] = {}
+    Só há disputa quando ao menos uma linha quer a ficha SÓ pelo NOME: duas linhas
+    com o MESMO RA (ou o mesmo aluno em duas turmas do arquivo) são a mesma
+    criança e não são disputa nenhuma.
+
+    Mas a linha que reusa por nome IDÊNTICO ou por identificador (reivindicação
+    FIRME) também conta como dona quando OUTRA linha, de nome diferente, quer a
+    mesma ficha pelo nome parecido. É o caso das gêmeas MARIA ALICE e MARIA ALINE
+    no mesmo arquivo com a sala só com a ficha da ALICE: sem isto as duas linhas
+    reusavam a MESMA ficha, o nome dela virava o da última linha e a outra
+    criança sumia sem aviso nem revisão (decisão 3 do dono, 2026-10-12: uma letra
+    no prenome é revisão de gente). ``arbitrar_disputa`` só converte o REUSAR por
+    nome, então a dona firme fica com a ficha e a variante vai para a revisão."""
+    so_nome: dict[int, set[str]] = {}
+    firmes: dict[int, set[str]] = {}
     for linha in linhas:
         d = resolver_linha(linha, ctx)
-        if d.acao == REUSAR and d.aluno_id is not None and d.motivo in _MOTIVOS_SO_NOME:
-            reivindicado.setdefault(d.aluno_id, set()).add(svc.chave_nome(linha.nome))
-    return {aid for aid, nomes in reivindicado.items() if len(nomes) > 1}
+        if d.acao != REUSAR or d.aluno_id is None:
+            continue
+        destino = so_nome if d.motivo in _MOTIVOS_SO_NOME else firmes
+        destino.setdefault(d.aluno_id, set()).add(svc.chave_nome(linha.nome))
+    return {aid for aid, nomes in so_nome.items()
+            if len(nomes | firmes.get(aid, set())) > 1}
 
 
 def reivindicados_no_arquivo(linhas: list[LinhaMatricula],

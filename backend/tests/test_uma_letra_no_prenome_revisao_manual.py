@@ -19,10 +19,14 @@ Aqui ficam os caminhos AUTOMÁTICOS que poderiam fechar o caso sem gente:
   2. o ENCERRAMENTO AUTOMÁTICO de revisões respondidas
      (``importacoes._encerrar_revisoes_respondidas``) — nem a mesma linha de novo,
      nem os livros da mesma conta, nem a sincronização da OUTRA plataforma da
-     ficha, nem a listagem da fila (que calcula a triagem) fecham a pendência;
+     ficha, nem a listagem da fila (que calcula a triagem) fecham a pendência — e
+     a triagem também não chama o caso de "seguro" (decisão humana);
   3. FUSÃO — com DUAS fichas (a oficial e a de uma letra a menos), nenhuma
      sincronização funde nada, e a detecção de duplicatas só as sugere na faixa
      "revisar" (nunca pré-marcada).
+
+A forma do caso na LISTA PILOTO (as duas irmãs no mesmo arquivo, a sala só com a
+ficha de uma delas) e a triagem isolada ficam nos arquivos delas — ver o mapa.
 
 Nomes FICTÍCIOS: reproduzem o PADRÃO do caso (uma letra a menos no 2º prenome,
 1º nome e sobrenomes idênticos) sem usar o nome da criança.
@@ -33,6 +37,7 @@ from app.models import Aluno, IdentidadeExterna, Leitura, SnapshotMatific
 from app.services import alunos_dedup
 from app.services import identidade_aluno as ida
 from app.services import matching
+from app.services import triagem_revisoes as tri
 from tests.test_revisao_encerramento_automatico import (  # noqa: F401 — fixtures reutilizadas
     ACAO_AUTO,
     ACAO_HUMANA,
@@ -152,7 +157,9 @@ def test_pendencia_do_caso_sobrevive_as_sincronizacoes_seguintes(
     conta é ASSOCIADA. Nada do dia a dia da escola faz isso aqui: a mesma linha
     volta (revisão de novo), os livros da mesma conta chegam (revisão também), a
     ficha recebe o Matific pela conta dela (é OUTRA conta, outra pendência) e a
-    fila é listada com a triagem (só leitura)."""
+    fila é listada com a triagem (só leitura) — que também não chama o caso de
+    "seguro": candidato único e série compatível não confirmam o nome que o motor
+    recusou, então o veredito é decisão humana."""
     esc, admin = sala["escola"], sala["admin"]
     oficial = _aluno(db, esc, sala["b"], FICHA)
     _conta(db, esc, oficial, "matific", CONTA_MATIFIC)
@@ -177,6 +184,11 @@ def test_pendencia_do_caso_sobrevive_as_sincronizacoes_seguintes(
     resp = cliente.get(f"/api/v1/escolas/{esc.id}/importacoes/revisoes")
     assert resp.status_code == 200, resp.text
     assert {r["id"] for r in resp.json()} == {resumo.id, leituras.id}
+    for item in resp.json():
+        triagem = item["triagem"]
+        assert (triagem["classificacao"], triagem["motivo"]) == (
+            tri.DECISAO_HUMANA, tri.NOME_NAO_CONFIRMADO), triagem
+        assert triagem["aluno_id"] == oficial.id           # sugestão para o gestor
 
     revs = _revisoes(db, esc)
     assert [r.id for r in revs] == sorted([resumo.id, leituras.id])   # nada novo
@@ -232,13 +244,17 @@ def test_duas_fichas_do_caso_nunca_sao_fundidas_por_sincronizacao(db, sala, monk
 # --- mapa: onde o matcher já está coberto ---------------------------------------------
 
 def test_mapa_da_decisao_nos_outros_arquivos():
-    """Os testes que provam a DECISÃO do matcher para este padrão (para quem
-    revisa a cobertura — e para que nenhum suma sem este arquivo perceber)."""
+    """Os testes que provam a DECISÃO do matcher para este padrão, a forma dele na
+    Lista Piloto e o veredito da triagem (para quem revisa a cobertura — e para
+    que nenhum suma sem este arquivo perceber)."""
     import tests.test_alunos_dedup as dedup
     import tests.test_identidade_automatica as auto
     import tests.test_identidade_casos_obrigatorios as obrig
     import tests.test_identidade_revisao as revisao
+    import tests.test_lista_piloto_identidade as lista_piloto
+    import tests.test_matriculas as matriculas
     import tests.test_revisao_encerramento_automatico as enc
+    import tests.test_triagem_revisoes as triagem
     mapa = {
         obrig: ("test_caso_matias_uma_letra_no_segundo_prenome_fica_para_gente",),
         revisao: ("test_uma_letra_no_segundo_prenome_continua_em_revisao",),
@@ -246,6 +262,9 @@ def test_mapa_da_decisao_nos_outros_arquivos():
                "test_iii_uma_letra_no_prenome_e_outro_nome_vai_para_revisao"),
         enc: ("test_decisao_revisar_mantem_a_pendencia",),
         dedup: ("test_detecta_variante_em_turmas_fantasma_da_mesma_sala",),
+        matriculas: ("test_gemeas_no_mesmo_arquivo_disputam_a_unica_ficha_da_sala",),
+        lista_piloto: ("test_d3_gemeas_no_mesmo_arquivo_nao_viram_uma_ficha_so",),
+        triagem: ("test_nome_recusado_pelo_motor_nao_vira_segura_so_por_candidato_unico",),
     }
     for modulo, nomes in mapa.items():
         for nome in nomes:

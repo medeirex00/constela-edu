@@ -113,6 +113,72 @@ def test_candidato_unico_com_serie_compativel_e_segura(db):
     assert any("série compatível" in x for x in v.evidencias)
 
 
+# --- 2b. candidato único, mas o motor RECUSOU o nome (decisão 3 do dono) ------
+# Nomes FICTÍCIOS com o padrão do caso: UMA letra a menos no 2º prenome.
+FICHA_PRENOME = "CAIO FERNANDO LACERDA BORGES"
+RECEBIDO_PRENOME = "CAIO FERNADO LACERDA BORGES"
+
+
+@pytest.mark.parametrize("motivo", ["correspondencia_insegura", "candidatos_multiplos"])
+def test_nome_recusado_pelo_motor_nao_vira_segura_so_por_candidato_unico(db, motivo):
+    """Decisão 3 do dono (2026-10-12): uma letra diferente no 2º PRENOME fica na
+    revisão MANUAL — irmãs se distinguem pelo prenome (MARIA ALICE × MARIA ALINE).
+    O motor manda o caso para a fila dizendo que o NOME não confere com segurança.
+    Candidato único e série compatível são justamente o que ele já tinha quando
+    recusou: não são evidência nova. Sem conta vinculada e sem escolha humana
+    anterior, a triagem não pode chamar isso de "segura" — a sugestão continua
+    lá para o gestor, com as evidências, mas quem decide é gente."""
+    e = _escola(db)
+    t = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
+    a = _aluno(db, e, t, FICHA_PRENOME)
+    r = _revisao(db, e, plataforma="elefante", id_externo="4410777",
+                 nome=RECEBIDO_PRENOME, candidatos=(a,), motivo=motivo)
+
+    v = _triar(db, e)[r.id]
+    assert v.classificacao == tri.DECISAO_HUMANA
+    assert v.motivo == tri.NOME_NAO_CONFIRMADO
+    assert tri.TEXTO[tri.NOME_NAO_CONFIRMADO]
+    assert v.aluno_id == a.id                         # a sugestão, não a decisão
+    assert any("candidato único" in x for x in v.evidencias)
+    assert any("série compatível" in x for x in v.evidencias)
+    assert any(RECEBIDO_PRENOME in c and motivo in c for c in v.conflitos)
+
+
+def test_nome_recusado_com_conta_ja_vinculada_continua_segura(db):
+    """A trava acima vale só quando NADA além do nome sustenta o vínculo. Se a
+    conta da plataforma já pertence ao candidato (alguém resolveu e a pendência
+    ficou órfã), o motivo congelado ficou velho: a identidade é a evidência."""
+    e = _escola(db)
+    t = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
+    a = _aluno(db, e, t, FICHA_PRENOME)
+    _vincular(db, e, a, "elefante", "4410777")
+    r = _revisao(db, e, plataforma="elefante", id_externo="4410777",
+                 nome=RECEBIDO_PRENOME, candidatos=(a,),
+                 motivo="correspondencia_insegura")
+
+    v = _triar(db, e)[r.id]
+    assert (v.classificacao, v.motivo) == (tri.SEGURA, tri.IDENTIDADE_JA_VINCULADA)
+
+
+def test_nome_recusado_ja_decidido_por_gestor_para_esta_ficha_continua_segura(db):
+    """Um gestor JÁ escolheu esta ficha para esta mesma conta (a irmã de outro
+    formato foi resolvida à mão): a decisão humana existe, e a pendência que
+    sobrou só repete a pergunta já respondida."""
+    e = _escola(db)
+    t = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
+    a = _aluno(db, e, t, FICHA_PRENOME)
+    _revisao(db, e, plataforma="elefante", id_externo="4410777", formato="leituras",
+             nome=RECEBIDO_PRENOME, candidatos=(a,), motivo="correspondencia_insegura",
+             status="resolvida", escolhido=a.id)
+    r = _revisao(db, e, plataforma="elefante", id_externo="4410777",
+                 nome=RECEBIDO_PRENOME, candidatos=(a,),
+                 motivo="correspondencia_insegura")
+
+    v = _triar(db, e)[r.id]
+    assert (v.classificacao, v.motivo) == (tri.SEGURA, tri.CANDIDATO_UNICO_COMPATIVEL)
+    assert any("um gestor já escolheu esta ficha" in x for x in v.evidencias)
+
+
 # --- 3. candidato único + série INCOMPATÍVEL --------------------------------
 
 def test_candidato_unico_com_serie_incompativel_vai_para_humano(db):

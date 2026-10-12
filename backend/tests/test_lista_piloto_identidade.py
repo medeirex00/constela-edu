@@ -282,6 +282,44 @@ def test_d2_cadastro_disputado_por_duas_linhas_nao_e_entregue_a_primeira(
     assert db.get(Aluno, stub_id).nome == "AGATHA V"   # ninguém levou o cadastro
 
 
+@pytest.mark.parametrize("variante_primeiro", [True, False])
+def test_d3_gemeas_no_mesmo_arquivo_nao_viram_uma_ficha_so(
+        cliente, db, escola_completa, variante_primeiro):
+    """Decisão 3 do dono (2026-10-12): uma letra diferente no PRENOME é revisão
+    de gente — irmãs se distinguem por ele. Gêmeas FICTÍCIAS na MESMA Lista
+    Piloto, mesmo nascimento, e a sala só com a ficha de uma delas (criada pela
+    plataforma, sem nº de chamada). A linha da ALICE é a dona pelo nome idêntico;
+    a da ALINE casaria com a mesma ficha pela variação do nome do meio.
+
+    Antes, as duas linhas reusavam a MESMA ficha: o nome dela virava o da última
+    linha do arquivo, a outra criança sumia e não havia aviso nem revisão. Agora
+    a ficha fica com a dona e a ALINE vai para a revisão (não cria, não altera,
+    avisa) — em qualquer ordem do arquivo e também na reimportação."""
+    escola_id = escola_completa["escola"].id
+    alice, aline = "MARIA ALICE ALVES PEREIRA", "MARIA ALINE ALVES PEREIRA"
+    _plataforma(cliente, escola_id, "elefante", [
+        {"nome": alice, "dados": {"livros_unicos": 4},
+         "criar_em_turma_nome": "1 ANO A TARDE ANUAL (300396600)"}])
+    [ficha] = _alunos(db, escola_id, "MARIA")
+    antes = _conta(db, escola_id)
+
+    linhas = [_aluno(alice, numero=10, nasc=date(2017, 5, 5)),
+              _aluno(aline, numero=11, nasc=date(2017, 5, 5))]
+    if variante_primeiro:
+        linhas.reverse()
+    conteudo = _planilha(("1º Ano A", linhas))
+    for _ in range(2):                                # importa e reimporta
+        corpo = _confirmar(cliente, escola_id, conteudo)
+        assert corpo["alunos_criados"] == 0
+        assert corpo["alunos_em_revisao"] == 1
+        assert [av for av in corpo["avisos"] if aline in av and "Fundir duplicatas" in av]
+        assert _conta(db, escola_id) == antes
+        db.expire_all()
+        atual = db.get(Aluno, ficha.id)
+        assert (atual.nome, atual.status, atual.da_lista_piloto) == (alice, "ativo", True)
+        assert _alunos(db, escola_id, aline) == []
+
+
 # ---------------------------------------------------------------------------
 # E) Homônimos REAIS continuam duas pessoas
 # ---------------------------------------------------------------------------
