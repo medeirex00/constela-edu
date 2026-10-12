@@ -3,8 +3,15 @@
 MVP: importação de ARQUIVO oficial (XLSX/CSV) — nenhuma das fontes (SAEB/IDEB/
 SARESP/Criança Alfabetizada) tem API self-serve. Fluxo: `analisar` mostra a grade
 crua (o gestor escolhe a linha de dados e mapeia as colunas), `importar` grava
-casando escola por CÓDIGO INEP. Só admin/coordenador; o alcance segue o perfil
-(global = todas; rede = escolas da rede; escola = a própria).
+casando escola por CÓDIGO INEP.
+
+Quem GRAVA ou APAGA resultado (analisar, importar, importar-preset e excluir):
+só o admin global e a Secretaria da própria rede (decisão do dono —
+``deps.exigir_admin_global_ou_secretaria``). O alcance segue o perfil: global =
+todas as escolas; Secretaria = as escolas da rede dela. A coordenação e a
+administração de escola não importam nem excluem. As fontes do robô (coleta
+automática) continuam exclusivas do admin global. A leitura (catálogo, presets,
+correlação da rede) não muda.
 """
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -12,7 +19,11 @@ from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
+from app.core.deps import (
+    exigir_admin_global,
+    exigir_admin_global_ou_secretaria,
+    get_usuario_atual,
+)
 from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao, Usuario
 from app.services import avaliacoes as svc
 from app.services.audit import registrar
@@ -26,15 +37,21 @@ _MAX_BYTES = 150 * 1024 * 1024
 
 
 def _escopo_escolas(db: Session, usuario: Usuario) -> set[int] | None:
-    """Escolas que este usuário pode gravar resultado: None = todas (global);
-    conjunto = escolas da rede (Secretaria) ou a própria escola; vazio = nada."""
+    """Escolas em que este usuário pode gravar/apagar resultado: None = todas
+    (admin global); conjunto = as escolas da PRÓPRIA rede (Secretaria) — uma
+    escola de outra rede nunca casa, mesmo que o INEP dela esteja no arquivo;
+    vazio = nenhuma.
+
+    As rotas de escrita já barram quem não é global nem Secretaria
+    (``exigir_admin_global_ou_secretaria``). Conta de escola cai no conjunto
+    VAZIO de propósito (antes da decisão do dono ela gravava na própria escola):
+    é a segunda trava — se a dependência for afrouxada por engano, a coordenação
+    continua sem alcance em vez de voltar a reescrever o IDEB da escola."""
     if usuario.is_global:
         return None
     if usuario.rede_id is not None:
         return set(db.execute(
             select(Escola.id).where(Escola.rede_id == usuario.rede_id)).scalars())
-    if usuario.escola_id is not None:
-        return {usuario.escola_id}
     return set()
 
 
@@ -61,7 +78,7 @@ def catalogo(usuario: Usuario = Depends(get_usuario_atual), db: Session = Depend
 @router.post("/analisar")
 def analisar(
     arquivo: UploadFile = File(...),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global_ou_secretaria),
 ):
     """Prévia: grade crua das primeiras linhas — a tela usa para escolher a linha
     de dados e mapear as colunas (por índice). Robusto a pré-âmbulo/edição."""
@@ -87,7 +104,7 @@ def importar(
     col_turma: int | None = Form(None),
     etapa_fixa: str | None = Form(None),
     componente_fixo: str | None = Form(None),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global_ou_secretaria),
     db: Session = Depends(get_db),
 ):
     """Importa os resultados casando escola por CÓDIGO INEP (dentro do alcance do
@@ -166,7 +183,7 @@ def importar_preset(
     arquivo: UploadFile = File(...),
     preset: str = Form(...),
     edicao: int = Form(...),
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global_ou_secretaria),
     db: Session = Depends(get_db),
 ):
     """Import de 1 CLIQUE: escolha a base (preset) + suba o arquivo oficial do INEP.
@@ -207,7 +224,7 @@ def excluir_resultados(
     indicador: str,
     etapa: str | None = None,
     componente: str | None = None,
-    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    usuario: Usuario = Depends(exigir_admin_global_ou_secretaria),
     db: Session = Depends(get_db),
 ):
     """Remove UMA série específica de resultados — para DESFAZER uma importação
