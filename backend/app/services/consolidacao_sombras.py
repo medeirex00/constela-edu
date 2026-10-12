@@ -16,24 +16,39 @@ A REGRA. Fundir sozinho só quando a evidência basta, e NUNCA juntar crianças
 diferentes (gêmeos, irmãos, homônimos). Sem limiar numérico de similaridade: o
 vínculo usa só as relações que o motor único (``matching``) já define; uma
 relação mais frouxa (``_pode_ser_a_dona``) existe só para SEGURAR, nunca para
-ligar. Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
+ligar.
+
+A FORMA DO NOME vem antes de qualquer comparação. O nome de cada ficha entra
+sem o SUFIXO DA TURMA que o professor digitou na plataforma ("… ROSA 2B" na
+2ºB; o MESMO ``identidade_aluno._nome_para_casar`` do motor, contra a sala da
+própria ficha — sufixo de outra sala fica) e sem acento nem caixa (a vogal
+acentuada que a plataforma perdeu e virou minúscula, "MAGALHaES", é
+MAGALHÃES). E dois nomes que só diferem pelas partículas DE/DA/DO/DAS/DOS/E
+("… SOARES SANTOS" × "… SOARES DOS SANTOS") são o MESMO nome — "idêntico",
+com a regra (e). As partículas não entram na forma ABREVIADA: o relatório
+corta por posição, e "TEOBALDO O" não é a forma de "TEOBALDO DE OLIVEIRA"
+(seria "TEOBALDO D").
+
+Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
 
   (a) S está ativa e fora da Lista Piloto, e nenhum identificador (nº de
       chamada, nascimento, RA) diverge do de O (``matching.conflito_identidade``);
   (b) O é a ÚNICA ficha da Lista Piloto, ativa, na MESMA turma do ano ativo com
-      ``matching.plausivel(S, O) == "forte"``. Duas oficiais compatíveis
-      (gêmeos) → revisão;
+      nome "forte" com o de S (``matching.plausivel(S, O) == "forte"`` ou o
+      mesmo nome sem as partículas). Duas oficiais compatíveis (gêmeos) →
+      revisão;
   (b2) o nome de S é a FORMA DO RELATÓRIO do nome de O: o MESMO prenome, os
       nomes seguintes iguais por posição e só a última palavra reduzida à
       INICIAL ("ZULEICA R", "ZULEICA RAMONA T") — ou o mesmo nome, na mesma
-      ordem. "Forte" sozinho não basta: ele também aceita prefixo de nome
-      inteiro, e GABRIEL × GABRIELA, LUIS × LUISA ou RICARD × RICARDO são, na
-      mesma sala, irmãos de sexo diferente. Fora da forma do relatório →
-      revisão: prenome diferente, os mesmos nomes em outra ordem (MARIA CLARA ×
-      CLARA MARIA), nome cortado no meio, ou a OFICIAL é que está abreviada (a
-      ficha fora da lista tem o nome mais completo — não é sombra de relatório).
-      Uma letra diferente no prenome (RICADO × RICARDO) nem chega a "forte":
-      decisão 3 do dono, 12/10 — segue na revisão manual;
+      ordem (partículas à parte). "Forte" sozinho não basta: ele também aceita
+      prefixo de nome inteiro, e GABRIEL × GABRIELA, LUIS × LUISA ou RICARD ×
+      RICARDO são, na mesma sala, irmãos de sexo diferente. Fora da forma do
+      relatório → revisão: prenome diferente, os mesmos nomes em outra ordem
+      (MARIA CLARA × CLARA MARIA), nome cortado no meio, ou a OFICIAL é que
+      está abreviada (a ficha fora da lista tem o nome mais completo — não é
+      sombra de relatório). Uma letra diferente no prenome (RICADO × RICARDO)
+      nem chega a "forte": decisão 3 do dono, 12/10 — segue na revisão manual,
+      com qualquer continuidade de dados;
   (c) nenhuma OUTRA ficha pode ser a dona de S:
       * na escola inteira, nenhuma ficha "forte" com S — de qualquer turma e
         status, com ou sem conta. Só não bloqueia a ficha FORA da Lista Piloto,
@@ -52,29 +67,61 @@ ligar. Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
         "forte" com O) não bloqueiam desde que também sejam consolidáveis — mas
         se um identificador ESTÁVEL (nascimento/RA) prova que duas delas são
         crianças diferentes, as duas vão para revisão;
-  (d) S não tem conta nem DADO numa plataforma em que O já tem conta ou dado,
-      nem duas contas numa mesma plataforma, nem divide plataforma com outra
-      sombra da mesma O, nem tem conta CONTESTADA na fila → CONFLITO: qual
-      retrato é o da criança é decisão de gente. Dado gravado por NOME, antes
-      de existir a conta (snapshot, leitura, evento), conta como presença na
-      plataforma. Contestada é a conta de S que aparece numa pendência "o
-      aluno já tem outra conta" / "a identidade é de outro aluno", ou numa
-      pendência de OUTRA conta da mesma plataforma que lista S como candidata;
-  (e) nome IDÊNTICO ao de O só consolida se S não tiver conta nem dado em
-      NENHUMA plataforma: com eles, pode ser outra criança real de mesmo nome
-      (a mesma regra de ``_oficial_entre_duplicatas``);
+  (d) CONTAS: S não tem duas contas numa mesma plataforma nem conta CONTESTADA
+      na fila (contestada é a conta de S que aparece numa pendência "o aluno já
+      tem outra conta" / "a identidade é de outro aluno", ou numa pendência de
+      OUTRA conta da mesma plataforma que lista S como candidata). E, em cada
+      plataforma P em que S e O têm conta ou DADO (snapshot, leitura, evento —
+      o gravado por NOME antes de existir a conta também conta):
+        * O com conta própria em P (efetiva ou aposentada) → CONFLITO
+          ``duas_contas_mesma_plataforma``: são duas contas reais;
+        * O sem conta em P → só passa se for a MESMA conta CONTINUANDO de uma
+          ficha para a outra (``_continuidade``): (i) as duas têm snapshot de
+          P; (ii) os retratos de P não se sobrepõem — todos os da ficha
+          ANTERIOR em dia estritamente anterior ao primeiro da POSTERIOR; (iii)
+          no limite, CADA contador acumulado do ano da posterior é >= o da
+          anterior (Matific: atividades, estrelas; Elefante: livros, minutos,
+          questões tentadas e acertadas); (iv) no máximo 31 dias entre o
+          último retrato da anterior e o primeiro da posterior; (v) nenhum
+          outro dado de P na anterior (leitura, evento) do dia do primeiro
+          retrato da posterior em diante; e, no Elefante, nenhum livro lido nas
+          duas com data, tempo ou nível diferentes (a fusão descartaria uma
+          das leituras). Qualquer falha → CONFLITO com o motivo dela.
+      O padrão medido (12/10): a oficial tem o Matific ligado por NOME de abril
+      a 31/07, a sombra o tem com a conta de 01/08 em diante e os contadores
+      do limite são iguais (ou crescem) — é a mesma conta, não duas. A mesma
+      regra vale entre duas sombras da mesma O que dividem uma plataforma:
+      as duas com conta nela → CONFLITO; senão, só com continuidade entre elas;
+  (e) nome IDÊNTICO ao de O (após a forma do nome) com conta ou dado só
+      consolida se, em TODAS as plataformas de S, a continuidade de (d) parte
+      de dado ANTERIOR da própria O: a oficial tinha a conta antes, a sombra é
+      a continuação. Sem esse dado anterior de O numa plataforma de S, pode
+      ser outra criança real de mesmo nome → revisão (a mesma cautela de
+      ``_oficial_entre_duplicatas``). Sem conta nem dado, consolida;
   (f) nenhuma revisão resolvida por HUMANO escolheu S como destino — uma pessoa
       já tratou S como ficha própria;
   (g) S tem uma única matrícula no ano ativo, na turma de O.
 
 E uma trava de "nunca perder dado": se as DUAS fichas têm perfil ou credencial
 do Quest, a fusão descartaria um deles (com o progresso) — revisão. A leitura do
-mesmo livro nas duas fichas (que a fusão descartaria com data e tempo) já cai
-em (d): as duas têm dado do Elefante.
+mesmo livro nas duas fichas com data, tempo ou nível diferentes (que a fusão
+descartaria) é CONFLITO em (d); a cópia idêntica da MESMA leitura (a plataforma
+reenviou o histórico da conta) não perde nada.
+
+O RISCO QUE A CONTINUIDADE NÃO ELIMINA. Os dados não distinguem a mesma conta
+continuando de OUTRA criança cuja conta, por acaso, começa com contadores
+iguais ou maiores que os da oficial logo depois de ela parar. O que segura esse
+caso é o resto da regra (o nome na forma do relatório na mesma turma, ninguém
+mais que possa ser a dona, a Lista Piloto) — e a conta nova de outra criança
+normalmente começa do zero, abaixo da oficial (contador que regride →
+CONFLITO). Ver ``test_falsificacao_de_continuidade``.
 
 O DESTINO de cada ficha ativa fora da Lista Piloto matriculada no ano ativo:
 CONSOLIDAR (com as evidências), REVISAR (motivo), CONFLITO (motivo) ou SEM_PAR
-(nenhuma ficha da Lista Piloto em que ela possa ser — é outra criança).
+(nenhuma ficha da Lista Piloto em que ela possa ser — é outra criança). As
+evidências de um CONSOLIDAR guardam, por plataforma, a continuidade provada
+(qual ficha veio antes, os dias do limite, o intervalo e os contadores dos dois
+lados) e a forma do nome normalizada — só números, datas e rótulos, sem nome.
 
 ``planejar`` só LÊ. ``aplicar`` reconfere cada par contra o banco ATUAL antes de
 fundir (compare-and-set), funde com ``alunos_fusao.fundir_par`` (a MESMA fusão
@@ -86,8 +133,9 @@ existir.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -100,6 +148,7 @@ from app.models import (
     RevisaoIdentidade,
     SnapshotElefante,
     SnapshotMatific,
+    Turma,
 )
 from app.services import alunos_fusao, matching
 from app.services._nomes import PARTICULAS
@@ -107,6 +156,8 @@ from app.services.audit import registrar
 from app.services.identidade_aluno import (
     _distancia_edicao,
     _forma_ortografica,
+    _nome_para_casar,
+    chave_sala,
     identidade_do_aluno,
 )
 from app.services.importacao import (
@@ -135,8 +186,9 @@ MOTIVOS = {
     "decisao_humana_na_sombra": "uma pessoa já escolheu esta ficha numa revisão de "
                                 "identidade",
     "conta_aposentada_na_sombra": "uma pessoa já aposentou uma conta desta ficha",
-    "nome_identico_com_conta": "nome idêntico ao da oficial e com conta ou dado de "
-                               "plataforma: pode ser outra criança de mesmo nome",
+    "nome_identico_com_conta": "nome idêntico ao da oficial e com conta ou dado numa "
+                               "plataforma em que a oficial não tinha dado ANTES: pode "
+                               "ser outra criança de mesmo nome",
     "nome_em_outra_ordem": "os mesmos nomes da oficial em outra ordem (MARIA CLARA × "
                            "CLARA MARIA): pode ser outra criança",
     "prenome_diferente": "o prenome não é o mesmo da oficial (GABRIEL × GABRIELA): "
@@ -153,9 +205,24 @@ MOTIVOS = {
                               "consolidada",
     "quest_nos_dois": "as duas fichas têm perfil/credencial do Quest — a fusão "
                       "descartaria um deles",
-    "duas_contas_mesma_plataforma": "a criança ficaria com duas contas (ou dois "
-                                    "retratos) na mesma plataforma",
+    "duas_contas_mesma_plataforma": "as duas fichas têm conta própria na mesma "
+                                    "plataforma (ou esta tem duas): são duas contas",
     "conta_contestada": "há revisão pendente contestando a conta desta ficha",
+    # Falhas da CONTINUIDADE da conta (``_continuidade``): as duas fichas têm dado
+    # da mesma plataforma e não dá para provar que é a mesma conta continuando.
+    "continuidade_sem_retrato": "as duas fichas têm dado da mesma plataforma, mas "
+                                "falta retrato (snapshot) numa delas para provar que "
+                                "é a mesma conta continuando",
+    "dados_simultaneos_mesma_plataforma": "as duas fichas recebem dado da mesma "
+                                          "plataforma no mesmo período: são duas "
+                                          "contas, ou duas crianças",
+    "contador_regrediu": "no limite entre as duas fichas um contador acumulado da "
+                         "plataforma diminuiu: não é a mesma conta continuando",
+    "intervalo_longo": "mais de 31 dias entre o último retrato de uma ficha e o "
+                       "primeiro da outra: não há como provar que é a mesma conta",
+    "leitura_repetida_nas_duas_fichas": "o mesmo livro lido nas duas fichas com data, "
+                                        "tempo ou nível diferentes: a fusão descartaria "
+                                        "uma das leituras",
 }
 
 # Pendências que CONTESTAM a conta de uma ficha (``identidade_aluno.MOTIVOS``): a
@@ -176,6 +243,21 @@ _TABELAS_DA_FICHA = (
     ("eventos", EventoAluno),
     ("identidades_externas", IdentidadeExterna),
 )
+
+# Os contadores ACUMULADOS do ano que cada plataforma manda no snapshot: a MESMA
+# conta nunca os vê diminuir de um retrato para o seguinte. Plataforma fora daqui
+# não tem retrato com que provar continuidade (→ CONFLITO).
+_CONTADORES = {
+    "matific": (SnapshotMatific, ("atividades", "estrelas")),
+    "elefante": (SnapshotElefante, ("livros_unicos", "tempo_leitura_min",
+                                    "questoes_tentativas", "questoes_acertos")),
+}
+
+# Maior intervalo (em dias) entre o último retrato da ficha anterior e o primeiro
+# da posterior em que a continuidade ainda é aceita. Medido em 12/10: nos pares
+# reais a sombra começa no dia seguinte ao último retrato da oficial; um mês sem
+# coleta já não prova que a conta é a mesma.
+INTERVALO_MAXIMO_DIAS = 31
 
 
 @dataclass
@@ -226,17 +308,28 @@ class Plano:
 # Nomes: a forma do relatório e a relação frouxa que só segura
 # ---------------------------------------------------------------------------
 
+def _sem_particulas(toks: list[str]) -> tuple[str, ...]:
+    """O nome sem DE/DA/DO/DAS/DOS/E, na mesma ordem: a escola digita o nome na
+    plataforma com ou sem a partícula ("… SOARES SANTOS" × "… SOARES DOS
+    SANTOS"), e ela não distingue criança nenhuma."""
+    return tuple(t for t in toks if t not in PARTICULAS)
+
+
 def _forma_do_nome(ts: list[str], to: list[str]) -> str:
     """Como o nome da ficha fora da lista (``ts``) se relaciona com o da oficial
-    (``to``), sabendo que ``plausivel`` já deu "forte". Devolve ``"identico"``,
-    ``"truncado"`` (a forma que o relatório produz) ou o MOTIVO da revisão.
+    (``to``), sabendo que os dois já são "forte" (``_Estado.forte``). Os tokens
+    já vêm sem acento, sem caixa e sem o sufixo da turma (``_carregar``).
+    Devolve ``"identico"``, ``"truncado"`` (a forma que o relatório produz) ou o
+    MOTIVO da revisão.
 
-    A forma do relatório é posicional e estreita (``casa_abreviado_posicional``):
-    prenome idêntico, os nomes do meio idênticos por posição e só a ÚLTIMA
-    palavra reduzida a uma inicial. É o que o Matific escreve ("WENDY S",
-    "HEITOR O"); prefixo de nome inteiro (GABRIEL → GABRIELA) e corte no meio
-    (RICARD → RICARDO) não são."""
-    if ts == to:
+    Idêntico é o mesmo nome na mesma ordem, partículas à parte. A forma do
+    relatório é posicional e estreita (``casa_abreviado_posicional``): prenome
+    idêntico, os nomes do meio idênticos por posição e só a ÚLTIMA palavra
+    reduzida a uma inicial. É o que o Matific escreve ("WENDY S", "HEITOR O");
+    prefixo de nome inteiro (GABRIEL → GABRIELA) e corte no meio (RICARD →
+    RICARDO) não são. A partícula fica na forma do relatório: ele corta por
+    posição, e a partícula ocupa a posição dela."""
+    if ts == to or (_sem_particulas(ts) and _sem_particulas(ts) == _sem_particulas(to)):
         return "identico"
     if set(ts) == set(to):
         return "nome_em_outra_ordem"
@@ -291,11 +384,32 @@ def _pode_ser_a_dona(ts: list[str], tf: list[str]) -> bool:
 # Estado da escola (lido uma vez por plano)
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _Retrato:
+    """Um snapshot de plataforma reduzido ao que a continuidade compara: o DIA da
+    coleta e os contadores acumulados (na ordem de ``_CONTADORES``)."""
+    dia: date
+    contadores: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _Continuidade:
+    """Veredito da continuidade de UMA plataforma entre duas fichas: ``motivo``
+    None = é a mesma conta continuando (``evidencia`` diz como); senão, o motivo
+    do CONFLITO."""
+    motivo: str | None
+    evidencia: dict = field(default_factory=dict)
+
+
 @dataclass
 class _Estado:
     escola_id: int
     ano: int
     alunos: dict[int, Aluno] = field(default_factory=dict)        # não excluídos
+    # O nome que ENTRA nas comparações: sem o sufixo da turma da própria ficha
+    # (``_nome_para_casar``). O nome gravado não muda.
+    nomes: dict[int, str] = field(default_factory=dict)
+    com_sufixo_da_turma: set[int] = field(default_factory=set)
     tokens: dict[int, list[str]] = field(default_factory=dict)
     turmas_de: dict[int, list[int]] = field(default_factory=dict)  # no ano ativo
     da_turma: dict[int, list[int]] = field(default_factory=dict)   # turma → fichas
@@ -308,8 +422,12 @@ class _Estado:
     contestadas: set[int] = field(default_factory=set)
     por_inicial: dict[str, set[int]] = field(default_factory=dict)
     por_tokens: dict[frozenset, set[int]] = field(default_factory=dict)
+    por_sem_particulas: dict[tuple, set[int]] = field(default_factory=dict)
     # Fichas da Lista Piloto ATIVAS por turma do ano ativo (as oficiais possíveis).
     oficiais_da_turma: dict[int, list[int]] = field(default_factory=dict)
+    # Lidos sob demanda, só para os pares que chegam à continuidade (``_continuidade``).
+    retratos: dict[tuple[int, str], list[_Retrato]] = field(default_factory=dict)
+    leituras: dict[int, dict[int, tuple]] = field(default_factory=dict)
 
     def plataformas(self, aluno_id: int) -> set[str]:
         """Plataformas em que a ficha tem CONTA (efetiva ou aposentada)."""
@@ -323,21 +441,32 @@ class _Estado:
         return any(st != "aposentada"
                    for _i, st in self.contas.get(aluno_id, {}).get(plataforma, ()))
 
+    def forte(self, a: int, b: int) -> bool:
+        """Os nomes das duas fichas (sem o sufixo da turma, sem acento nem caixa)
+        são "forte" um com o outro: o MESMO ``matching.plausivel`` do motor — ou o
+        mesmo nome, na mesma ordem, a menos das partículas. A segunda relação só
+        AMPLIA quem conta como "forte": mais oficiais possíveis (gêmeos →
+        revisão) e mais fichas que podem ser a dona (→ revisão)."""
+        sa, sb = _sem_particulas(self.tokens.get(a) or []), _sem_particulas(
+            self.tokens.get(b) or [])
+        if sa and sa == sb:
+            return True
+        return matching.plausivel(self.nomes[a], self.nomes[b]) == "forte"
+
     def fortes_com(self, aluno_id: int) -> list[int]:
-        """Fichas (não excluídas) cujo nome é "forte" com o desta — decidido pelo
-        MESMO ``matching.plausivel``. O índice só PODA quem não teria como ser
-        forte, sem mudar o veredito: "forte" é o mesmo conjunto de tokens
-        (``por_tokens``) ou uma abreviação POSICIONAL, em que o 1º token de um é o
-        começo do 1º token do outro — a mesma letra inicial (``por_inicial``)."""
+        """Fichas (não excluídas) cujo nome é "forte" com o desta (``forte``). O
+        índice só PODA quem não teria como ser forte, sem mudar o veredito:
+        "forte" é o mesmo conjunto de tokens (``por_tokens``), o mesmo nome sem
+        as partículas (``por_sem_particulas``) ou uma abreviação POSICIONAL, em
+        que o 1º token de um é o começo do 1º token do outro — a mesma letra
+        inicial (``por_inicial``)."""
         toks = self.tokens.get(aluno_id) or []
         if not toks:
             return []
         cands = (self.por_inicial.get(toks[0][0], set())
-                 | self.por_tokens.get(frozenset(toks), set()))
-        nome = self.alunos[aluno_id].nome
-        return sorted(i for i in cands
-                      if i != aluno_id
-                      and matching.plausivel(nome, self.alunos[i].nome) == "forte")
+                 | self.por_tokens.get(frozenset(toks), set())
+                 | self.por_sem_particulas.get(_sem_particulas(toks), set()))
+        return sorted(i for i in cands if i != aluno_id and self.forte(aluno_id, i))
 
 
 def _carregar(db: Session, escola_id: int) -> _Estado:
@@ -353,11 +482,6 @@ def _carregar(db: Session, escola_id: int) -> _Estado:
                             .order_by(Aluno.id)
                             .execution_options(populate_existing=True)).scalars():
         est.alunos[aluno.id] = aluno
-        toks = tokens_nome(aluno.nome)
-        est.tokens[aluno.id] = toks
-        if toks:
-            est.por_inicial.setdefault(toks[0][0], set()).add(aluno.id)
-            est.por_tokens.setdefault(frozenset(toks), set()).add(aluno.id)
     for aluno_id, turma_id in db.execute(
             select(Matricula.aluno_id, Matricula.turma_id)
             .where(Matricula.escola_id == escola_id, Matricula.ano_letivo == est.ano)
@@ -371,6 +495,27 @@ def _carregar(db: Session, escola_id: int) -> _Estado:
             est.da_turma.setdefault(turma_id, []).append(aluno_id)
         if a.da_lista_piloto and a.status == "ativo" and len(turmas) == 1:
             est.oficiais_da_turma.setdefault(turmas[0], []).append(aluno_id)
+    # O NOME que entra nas comparações: sem o sufixo da turma que o professor
+    # digitou na plataforma ("… ROSA 2B") — o MESMO ``_nome_para_casar`` do motor,
+    # contra a sala da ÚNICA turma da ficha no ano ativo (sufixo de outra sala, ou
+    # ficha sem turma única, fica como está). Acento e caixa já saem em
+    # ``tokens_nome``: "MAGALHaES" (a vogal acentuada que a plataforma perdeu) e
+    # "MAGALHÃES" dão o mesmo token.
+    nome_da_turma = dict(db.execute(select(Turma.id, Turma.nome)
+                                    .where(Turma.escola_id == escola_id)).all())
+    for aluno_id, aluno in est.alunos.items():
+        turmas = list(dict.fromkeys(est.turmas_de.get(aluno_id, ())))
+        sala = chave_sala(nome_da_turma.get(turmas[0], "")) if len(turmas) == 1 else ""
+        nome = _nome_para_casar(aluno.nome, sala) if sala else aluno.nome
+        if nome != aluno.nome:
+            est.com_sufixo_da_turma.add(aluno_id)
+        est.nomes[aluno_id] = nome
+        toks = tokens_nome(nome)
+        est.tokens[aluno_id] = toks
+        if toks:
+            est.por_inicial.setdefault(toks[0][0], set()).add(aluno_id)
+            est.por_tokens.setdefault(frozenset(toks), set()).add(aluno_id)
+            est.por_sem_particulas.setdefault(_sem_particulas(toks), set()).add(aluno_id)
     for aluno_id, plataforma, id_externo, status in db.execute(
             select(IdentidadeExterna.aluno_id, IdentidadeExterna.plataforma,
                    IdentidadeExterna.id_externo, IdentidadeExterna.status)
@@ -445,11 +590,124 @@ def _quest_nos_dois(db: Session, a: int, b: int) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Continuidade da conta: a mesma conta passando de uma ficha para a outra
+# ---------------------------------------------------------------------------
+
+def _dia(valor) -> date:
+    return valor.date() if isinstance(valor, datetime) else valor
+
+
+def _retratos(db: Session, est: _Estado, aluno_id: int, plataforma: str) -> list[_Retrato]:
+    """Os snapshots da ficha na plataforma, em ordem de coleta. TODOS os da ficha
+    — os que a fusão moveria —, lidos uma vez por plano."""
+    chave = (aluno_id, plataforma)
+    if chave not in est.retratos:
+        modelo, campos = _CONTADORES.get(plataforma, (None, ()))
+        linhas = [] if modelo is None else db.execute(
+            select(modelo.data_referencia, *(getattr(modelo, c) for c in campos))
+            .where(modelo.aluno_id == aluno_id)
+            .order_by(modelo.data_referencia, modelo.id)).all()
+        est.retratos[chave] = [_Retrato(_dia(linha[0]), tuple(int(v or 0) for v in linha[1:]))
+                               for linha in linhas]
+    return est.retratos[chave]
+
+
+def _ultimo_outro_dado(db: Session, aluno_id: int, plataforma: str) -> date | None:
+    """O dia do dado MAIS RECENTE da ficha na plataforma fora dos snapshots: a
+    leitura (Elefante) e o evento da linha do tempo — o resto do que a fusão
+    move para a plataforma (a conta não tem data)."""
+    datas = [db.execute(select(func.max(EventoAluno.ocorrido_em))
+                        .where(EventoAluno.aluno_id == aluno_id,
+                               EventoAluno.plataforma == plataforma)).scalar()]
+    if plataforma == "elefante":
+        datas.append(db.execute(select(func.max(Leitura.data))
+                                .where(Leitura.aluno_id == aluno_id)).scalar())
+    dias = [_dia(d) for d in datas if d is not None]
+    return max(dias) if dias else None
+
+
+def _leituras_divergentes(db: Session, est: _Estado, a: int, b: int) -> bool:
+    """As duas fichas leram o MESMO livro com data, tempo ou nível diferentes? A
+    fusão guarda uma leitura por livro (§35) e descartaria a outra com a data e
+    o tempo dela. A cópia idêntica da MESMA leitura (a plataforma mandou o
+    histórico da conta de novo) não perde nada."""
+    for aluno_id in (a, b):
+        if aluno_id not in est.leituras:
+            est.leituras[aluno_id] = {
+                livro: (quando, tempo, nivel) for livro, quando, tempo, nivel in db.execute(
+                    select(Leitura.livro_id, Leitura.data, Leitura.tempo_leitura_min,
+                           Leitura.nivel_codigo).where(Leitura.aluno_id == aluno_id)).all()}
+    la, lb = est.leituras[a], est.leituras[b]
+    return any(la[livro] != lb[livro] for livro in la.keys() & lb.keys())
+
+
+def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
+                  papeis: dict[int, str]) -> _Continuidade:
+    """Os dados de ``plataforma`` nas fichas ``a`` e ``b`` são a MESMA conta
+    continuando de uma ficha para a outra — e não duas contas (ou duas
+    crianças)? Quem chama já excluiu as duas com conta própria nela.
+
+    O padrão real (12/10): a oficial tem o Matific ligado por NOME até 31/07; em
+    01/08 a sincronização passou a receber a conta e criou a sombra, que segue
+    dali. Os dois retratos do limite têm os MESMOS contadores acumulados do ano
+    (ou maiores do lado da sombra): é a mesma conta, só que dividida em duas
+    fichas. Duas contas reais, ao contrário, recebem dado no MESMO período, ou
+    a segunda começa do zero.
+
+    Aceita SOMENTE com tudo isto (cada falha tem o seu motivo):
+      (i) as duas fichas têm snapshot da plataforma — leitura ou evento soltos
+          não têm contador com que provar (``continuidade_sem_retrato``);
+      (ii) os retratos não se sobrepõem: o último da ficha ANTERIOR (a que
+          começou antes) é de dia estritamente anterior ao primeiro da
+          POSTERIOR (``dados_simultaneos_mesma_plataforma``);
+      (iii) no limite, CADA contador da posterior é >= o da anterior
+          (``contador_regrediu``);
+      (iv) no máximo ``INTERVALO_MAXIMO_DIAS`` entre os dois (``intervalo_longo``);
+      (v) a anterior não tem outro dado da plataforma (leitura, evento) do dia
+          do primeiro retrato da posterior em diante
+          (``dados_simultaneos_mesma_plataforma``);
+      e, no Elefante, nenhum livro lido nas duas com data/tempo diferentes
+      (``leitura_repetida_nas_duas_fichas``: a fusão descartaria uma leitura).
+    Tudo em DIA de calendário: dois dados do mesmo dia em fichas diferentes já
+    são simultâneos. ``papeis`` só rotula a evidência ("oficial", "sombra")."""
+    ra, rb = _retratos(db, est, a, plataforma), _retratos(db, est, b, plataforma)
+    if not ra or not rb:
+        return _Continuidade("continuidade_sem_retrato")
+    (ant, r_ant), (post, r_post) = sorted(((a, ra), (b, rb)),
+                                          key=lambda par: (par[1][0].dia, par[0]))
+    ultimo, primeiro = r_ant[-1], r_post[0]
+    if ultimo.dia >= primeiro.dia:
+        return _Continuidade("dados_simultaneos_mesma_plataforma")
+    dias = (primeiro.dia - ultimo.dia).days
+    if dias > INTERVALO_MAXIMO_DIAS:
+        return _Continuidade("intervalo_longo")
+    if any(p < u for u, p in zip(ultimo.contadores, primeiro.contadores)):
+        return _Continuidade("contador_regrediu")
+    outro = _ultimo_outro_dado(db, ant, plataforma)
+    if outro is not None and outro >= primeiro.dia:
+        return _Continuidade("dados_simultaneos_mesma_plataforma")
+    if plataforma == "elefante" and _leituras_divergentes(db, est, a, b):
+        return _Continuidade("leitura_repetida_nas_duas_fichas")
+    campos = _CONTADORES[plataforma][1]
+    return _Continuidade(None, {
+        "ficha_anterior": papeis.get(ant, str(ant)),
+        "ultimo_retrato_anterior": ultimo.dia.isoformat(),
+        "primeiro_retrato_posterior": primeiro.dia.isoformat(),
+        "dias_entre": dias,
+        "contadores": ("iguais" if ultimo.contadores == primeiro.contadores
+                       else "crescentes"),
+        "contadores_anterior": dict(zip(campos, ultimo.contadores)),
+        "contadores_posterior": dict(zip(campos, primeiro.contadores)),
+    })
+
+
 def _assinatura(est: _Estado, s: Aluno, o: Aluno, turma_id: int) -> tuple:
     """O que precisa continuar IGUAL para o par ainda ser o par do plano. A
     presença de DADO nas plataformas não entra: a fusão da primeira sombra leva
-    dado para a oficial e não pode pular a segunda — o choque de plataforma é
-    reavaliado pela própria classificação (``_classificar`` (d))."""
+    dado para a oficial e não pode pular a segunda — o choque de plataforma e a
+    continuidade da conta são reavaliados pela própria classificação
+    (``_classificar`` (d)), contra o banco atual."""
     def ident(a: Aluno) -> tuple:
         i = identidade_do_aluno(a)
         return (chave_nome(a.nome), a.status, bool(a.da_lista_piloto), i.chamada,
@@ -469,7 +727,44 @@ def _irmas(est: _Estado, sid: int, o: Aluno, turma: int) -> tuple[int, ...]:
         if i not in (sid, o.id)
         and not est.alunos[i].da_lista_piloto and est.alunos[i].status == "ativo"
         and est.turmas_de.get(i) == [turma]
-        and matching.plausivel(est.alunos[i].nome, o.nome) == "forte")
+        and est.forte(i, o.id))
+
+
+def _conflito_de_plataformas(db: Session, est: _Estado, sid: int, oid: int,
+                             irmas: tuple[int, ...]) -> tuple[Item | None, dict, list]:
+    """(d) As plataformas que a sombra DIVIDE com a oficial e com as outras
+    sombras da mesma oficial. Devolve o CONFLITO (ou None) e, se não houver, a
+    continuidade provada com a oficial (por plataforma) e com as irmãs.
+
+    Com a oficial: conta própria dela na plataforma → duas contas reais; sem
+    conta, só passa a MESMA conta continuando (``_continuidade``). Entre duas
+    sombras: as duas com conta na plataforma → duas contas; senão, também só com
+    continuidade entre elas."""
+    pres_s, contas_s = est.presenca(sid), est.plataformas(sid)
+    com_oficial: dict[str, dict] = {}
+    for p in sorted(pres_s & est.presenca(oid)):
+        if p in est.plataformas(oid):
+            return (Item(sid, CONFLITO, "duas_contas_mesma_plataforma"), {}, [])
+        c = _continuidade(db, est, oid, sid, p, {oid: "oficial", sid: "sombra"})
+        if c.motivo:
+            return Item(sid, CONFLITO, c.motivo), {}, []
+        com_oficial[p] = c.evidencia
+    falhas: list[tuple[int, str]] = []
+    com_irmas: list[dict] = []
+    for i in irmas:
+        for p in sorted(est.presenca(i) & pres_s):
+            if p in est.plataformas(i) and p in contas_s:
+                falhas.append((i, "duas_contas_mesma_plataforma"))
+                break
+            c = _continuidade(db, est, i, sid, p, {i: "outra_sombra", sid: "sombra"})
+            if c.motivo:
+                falhas.append((i, c.motivo))
+                break
+            com_irmas.append({"sombra_id": i, "plataforma": p, **c.evidencia})
+    if falhas:
+        return (Item(sid, CONFLITO, falhas[0][1], relacionados=tuple(i for i, _m in falhas)),
+                {}, [])
+    return None, com_oficial, com_irmas
 
 
 def _classificar(db: Session, est: _Estado, sid: int) -> Item:
@@ -489,7 +784,7 @@ def _classificar(db: Session, est: _Estado, sid: int) -> Item:
                         relacionados=tuple(da_lista))
         parecidas = tuple(
             i for i in sorted(est.oficiais_da_turma.get(turma, ()))
-            if matching.plausivel(s.nome, est.alunos[i].nome) in ("parcial", "fraco")
+            if matching.plausivel(est.nomes[sid], est.nomes[i]) in ("parcial", "fraco")
             or _pode_ser_a_dona(ts, est.tokens[i]))
         if parecidas:
             return Item(sid, REVISAR, "nome_parecido_na_turma", turma_id=turma,
@@ -511,13 +806,12 @@ def _classificar(db: Session, est: _Estado, sid: int) -> Item:
     irmas = _irmas(est, sid, o, turma)
     if sid in est.contestadas:                                     # (d)
         return Item(sid, CONFLITO, "conta_contestada", **par)
-    if (pres_s & est.presenca(oid)
-            or any(len(lst) > 1 for lst in contas_s.values())):
+    if any(len(lst) > 1 for lst in contas_s.values()):
         return Item(sid, CONFLITO, "duas_contas_mesma_plataforma", **par)
-    dividem = tuple(i for i in irmas if est.presenca(i) & pres_s)
-    if dividem:
-        return Item(sid, CONFLITO, "duas_contas_mesma_plataforma",
-                    relacionados=dividem, **par)
+    conflito, continuidade, entre_sombras = _conflito_de_plataformas(
+        db, est, sid, oid, irmas)
+    if conflito is not None:
+        return replace(conflito, **par)
     if any(st == "aposentada" for lst in contas_s.values() for _i, st in lst):
         # Aposentar uma conta é decisão de gente sobre ESTA ficha: ela já não é
         # uma sombra anônima (o mesmo critério de ``_oficial_entre_duplicatas``).
@@ -525,7 +819,11 @@ def _classificar(db: Session, est: _Estado, sid: int) -> Item:
     forma = _forma_do_nome(ts, est.tokens[oid])                    # (b2)
     if forma not in ("identico", "truncado"):
         return Item(sid, REVISAR, forma, **par)
-    if forma == "identico" and pres_s:                             # (e)
+    # (e) Nome idêntico com conta ou dado: só é a sombra se, em CADA plataforma
+    # dela, a oficial tinha o dado ANTES e a sombra é a continuação (d). Sem
+    # esse dado anterior da oficial, pode ser outra criança de mesmo nome.
+    if forma == "identico" and any(
+            continuidade.get(p, {}).get("ficha_anterior") != "oficial" for p in pres_s):
         return Item(sid, REVISAR, "nome_identico_com_conta", **par)
 
     # (c) Quem mais pode ser a dona desta ficha.
@@ -569,14 +867,25 @@ def _classificar(db: Session, est: _Estado, sid: int) -> Item:
                     relacionados=(oid, *parecidas), **par)
     if _quest_nos_dois(db, sid, oid):
         return Item(sid, REVISAR, "quest_nos_dois", **par)
+    # A forma do nome que precisou ser normalizada para o par casar (só rótulos).
+    nome_normalizado = []
+    if sid in est.com_sufixo_da_turma:
+        nome_normalizado.append("sufixo_da_turma")
+    if forma == "identico" and ts != est.tokens[oid]:
+        nome_normalizado.append("particulas")
     evidencias = {
         "regra": REGRA,
         "relacao_nome": "nome_identico" if forma == "identico" else "abreviacao",
+        "nome_normalizado": nome_normalizado,
         "turma_id": turma,
         "plataformas_da_sombra": sorted(pres_s),
         "identificadores_divergentes": False,
         "outras_compativeis_com_conta_propria": com_conta_propria,
         "outras_sombras_da_mesma_oficial": list(irmas),
+        # A MESMA conta continuando, por plataforma dividida com a oficial — e
+        # com as outras sombras dela: só dias e contadores, nenhum nome.
+        "continuidade": continuidade,
+        "continuidade_entre_sombras": entre_sombras,
     }
     return Item(sid, CONSOLIDAR, "", relacionados=irmas, evidencias=evidencias,
                 assinatura=_assinatura(est, s, o, turma), **par)
@@ -586,7 +895,8 @@ def _travas_do_grupo(itens: dict[int, Item]) -> None:
     """Irmã que não vai para a MESMA oficial: se ela pode ser outra criança, a
     sombra também pode ser dela → revisão (no lugar). Repete até estabilizar:
     rebaixar uma sombra pode rebaixar a irmã dela. (Duas sombras da mesma
-    oficial na mesma plataforma já saem CONFLITO em ``_classificar``.)"""
+    oficial na mesma plataforma, sem continuidade da conta entre elas, já saem
+    CONFLITO em ``_classificar``.)"""
     mudou = True
     while mudou:
         mudou = False

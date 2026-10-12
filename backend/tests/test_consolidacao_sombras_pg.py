@@ -15,7 +15,10 @@ Este módulo prova, contra o banco de produção (Postgres):
   4. o compare-and-set enxerga a mudança gravada por OUTRA transação mesmo com
      as fichas ainda vivas no identity map de quem aplica;
   5. se o recálculo cai, o rollback desfaz as fusões — elas e as notas são uma
-     transação só.
+     transação só;
+  6. a CONTINUIDADE da conta (iteração 2) com os tipos do Postgres: datas de
+     snapshot e ``max`` de timestamp de evento comparadas por dia, e a
+     evidência gravada no JSON da auditoria.
 
 Como rodar::
 
@@ -226,6 +229,76 @@ def test_falha_no_recalculo_nao_deixa_fusao_gravada_no_postgres(motor_pg, cena,
             cena["sombra"]]
         assert db.execute(select(func.count()).select_from(LogAuditoria).where(
             LogAuditoria.escola_id == cena["escola_id"])).scalar_one() == 0
+
+
+def test_continuidade_da_conta_no_postgres(motor_pg, cena):
+    """Iteração 2: a oficial com o Matific por NOME até 31/07 e a sombra com a
+    conta de 01/08 em diante (contadores iguais no limite) consolidam; o mesmo
+    par com um evento da oficial DEPOIS de a sombra começar (``func.max`` sobre
+    timestamp no Postgres) é CONFLITO. A continuidade fica na auditoria (JSON)."""
+    from datetime import datetime
+
+    from app.models import EventoAluno
+
+    with Session(motor_pg) as db:
+        eid = cena["escola_id"]
+        turma = db.execute(select(Turma).where(Turma.escola_id == eid)).scalar_one()
+        imp = db.execute(select(Importacao).where(Importacao.escola_id == eid)).scalar_one()
+
+        def par(nome_oficial, nome_sombra, conta):
+            ids = []
+            for nome, lp in ((nome_oficial, True), (nome_sombra, False)):
+                a = Aluno(escola_id=eid, nome=nome, da_lista_piloto=lp)
+                db.add(a)
+                db.flush()
+                db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=turma.id,
+                                 ano_letivo=2026))
+                ids.append(a.id)
+            db.add(IdentidadeExterna(escola_id=eid, aluno_id=ids[1], plataforma="matific",
+                                     id_externo=conta))
+            for aluno_id, dia, atividades, estrelas in (
+                    (ids[0], "2026-06-30", 15, 48), (ids[0], "2026-07-31", 23, 70),
+                    (ids[1], "2026-08-01", 23, 70), (ids[1], "2026-09-01", 31, 101)):
+                db.add(SnapshotMatific(escola_id=eid, aluno_id=aluno_id, importacao_id=imp.id,
+                                       data_referencia=datetime.fromisoformat(dia),
+                                       atividades=atividades, estrelas=estrelas,
+                                       pontuacao_media=3.0))
+            return ids
+
+        oficial, sombra = par("WALDIRENE SOFIA FAGUNDES SILVA", "WALDIRENE S",
+                              f"u-w-{eid}")
+        oficial_b, sombra_b = par("CLEMENTINA ROSA VASCONCELOS", "CLEMENTINA R",
+                                  f"u-c-{eid}")
+        db.add(EventoAluno(escola_id=eid, aluno_id=oficial_b, plataforma="matific",
+                           tipo_evento="atividade", chave_natural=f"evt-{eid}",
+                           ocorrido_em=datetime(2026, 8, 20, 14, 30)))
+        db.commit()
+
+        plano = cs.planejar(db, eid)
+        item = plano.item_da_sombra(sombra)
+        assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial)
+        assert item.evidencias["continuidade"]["matific"]["contadores"] == "iguais"
+        outro = plano.item_da_sombra(sombra_b)
+        assert (outro.classe, outro.motivo) == (cs.CONFLITO,
+                                                "dados_simultaneos_mesma_plataforma")
+        res = cs.aplicar(db, plano, usuario_id=None, origem="teste_pg")
+        assert sombra in [x["sombra_id"] for x in res["consolidados"]]
+        assert sombra_b not in [x["sombra_id"] for x in res["consolidados"]]
+
+    with Session(motor_pg) as db:
+        assert db.get(Aluno, sombra) is None and db.get(Aluno, sombra_b) is not None
+        assert db.execute(select(func.count()).select_from(SnapshotMatific).where(
+            SnapshotMatific.aluno_id == oficial)).scalar_one() == 4
+        [detalhes] = db.execute(select(LogAuditoria.detalhes).where(
+            LogAuditoria.escola_id == cena["escola_id"],
+            LogAuditoria.acao == "aluno.consolidado_automatico",
+            LogAuditoria.entidade_id == oficial)).scalars().all()
+        assert detalhes["evidencias"]["continuidade"]["matific"] == {
+            "ficha_anterior": "oficial", "ultimo_retrato_anterior": "2026-07-31",
+            "primeiro_retrato_posterior": "2026-08-01", "dias_entre": 1,
+            "contadores": "iguais",
+            "contadores_anterior": {"atividades": 23, "estrelas": 70},
+            "contadores_posterior": {"atividades": 23, "estrelas": 70}}
 
 
 def test_simulacao_do_script_e_somente_leitura_no_postgres(motor_pg, cena, monkeypatch,

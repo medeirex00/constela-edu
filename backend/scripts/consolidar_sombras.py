@@ -9,6 +9,31 @@ contagem da turma. A política ``consolidar_sombras = automatico`` resolve isso
 a cada sincronização daqui em diante; este script resolve o PASSIVO, escola a
 escola, com as MESMAS regras (``app/services/consolidacao_sombras.py``).
 
+As regras (iteração 2, 12/10)
+-----------------------------
+A 1ª simulação em produção achou só 1 par na rede: a regra antiga tratava como
+"duas contas" qualquer dado da mesma plataforma nas duas fichas — e a oficial
+tinha o Matific ligado por NOME até 31/07, antes de a sombra existir. Agora:
+
+* CONTINUIDADE DA CONTA: dado da mesma plataforma nas duas fichas só passa se
+  for a MESMA conta continuando — a oficial sem conta própria nela, retratos
+  sem sobreposição de dias, contadores acumulados do limite iguais ou maiores
+  do lado posterior, no máximo 31 dias entre os dois e nenhum dado novo na
+  ficha anterior depois de a posterior começar. Senão, CONFLITO com o motivo
+  (``dados_simultaneos_mesma_plataforma``, ``contador_regrediu``,
+  ``intervalo_longo``, ``continuidade_sem_retrato``,
+  ``leitura_repetida_nas_duas_fichas``, ``duas_contas_mesma_plataforma``);
+* nome IDÊNTICO com dado só consolida continuando dado ANTERIOR da oficial;
+* FORMA DO NOME: o sufixo da turma no fim do nome ("… 2B"), a partícula a
+  menos (DOS) e a vogal acentuada que virou minúscula não impedem o par. O
+  PRENOME diferente continua na revisão manual (decisão 3 do dono).
+
+A linha de cada CONSOLIDAR mostra a continuidade por plataforma (dias do
+limite, intervalo, contadores iguais/crescentes). RISCO que os dados não
+eliminam: outra criança cuja conta começa com contadores iguais ou maiores
+que os da oficial logo depois de ela parar passaria como continuidade — por
+isso a conferência das linhas antes de ``--aplicar`` continua obrigatória.
+
 Garantias
 ---------
 * SIMULAÇÃO POR PADRÃO: sem ``--aplicar`` nada é gravado. No Postgres a
@@ -137,12 +162,23 @@ def _nome(db, aluno_id: int | None) -> str:
     return a.nome if a is not None else "?"
 
 
+def _continuidade(evidencias: dict) -> str:
+    """A continuidade provada, por plataforma, numa linha: "matific oficial
+    2026-07-31->2026-08-01 (1d) iguais". Só datas e rótulos (e só ASCII na
+    seta: o console do Windows sem UTF-8 não imprime "→")."""
+    partes = [f"{p} {ev['ficha_anterior']} {ev['ultimo_retrato_anterior']}->"
+              f"{ev['primeiro_retrato_posterior']} ({ev['dias_entre']}d) {ev['contadores']}"
+              for p, ev in sorted((evidencias.get("continuidade") or {}).items())]
+    return f"; continuidade: {', '.join(partes)}" if partes else ""
+
+
 def _linha(db, item: cs.Item, nomes: bool) -> str:
     rel = f" relacionados={list(item.relacionados)}" if item.relacionados else ""
     if item.classe == cs.CONSOLIDAR:
         texto = (f"  CONSOLIDAR sombra={item.sombra_id} -> oficial={item.oficial_id} "
                  f"turma={item.turma_id} [{item.evidencias.get('relacao_nome')}; "
-                 f"plataformas: {', '.join(item.evidencias.get('plataformas_da_sombra')) or '-'}]"
+                 f"plataformas: {', '.join(item.evidencias.get('plataformas_da_sombra')) or '-'}"
+                 f"{_continuidade(item.evidencias)}]"
                  + rel)
     else:
         oficial = f" oficial={item.oficial_id}" if item.oficial_id else ""

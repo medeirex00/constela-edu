@@ -27,9 +27,22 @@ O que estes testes travam:
     "automatico" funde, numa transação própria, sem derrubar a sync se falhar;
     só o admin global a altera;
   * o script: simulação não grava; --aplicar exige --esperado e --assinatura;
-    divergência de qualquer um sai 3.
+    divergência de qualquer um sai 3;
+  * (iteração 2) CONTINUIDADE DA CONTA no lugar de "presença = duas contas":
+    a oficial com o Matific ligado por nome até 31/07 e a sombra com a conta
+    de 01/08 em diante, contadores do limite iguais ou crescentes, consolidam;
+    sobreposição de datas, contador que regride, intervalo > 31 dias, dado sem
+    snapshot, dado novo na ficha anterior, leitura repetida divergente e conta
+    própria da oficial na plataforma são CONFLITO. O nome idêntico com dado só
+    consolida continuando dado ANTERIOR da oficial. A forma do nome: sufixo da
+    turma ("… 2B"), partícula a menos e vogal acentuada que virou minúscula
+    não impedem o par; prenome diferente e gêmeos seguem na revisão mesmo com
+    continuidade perfeita. E o risco que a regra não elimina (criança diferente
+    cujos contadores começam acima dos da oficial) fica documentado em
+    ``test_falsificacao_de_continuidade``.
 
-Nomes FICTÍCIOS, montados para o teste (nenhum é de aluno real).
+Nomes FICTÍCIOS, montados para o teste (nenhum é de aluno real). As datas e os
+contadores seguem o PADRÃO medido em produção (12/10), não dados de criança.
 """
 import json
 import sys
@@ -46,6 +59,7 @@ from app.main import app
 from app.models import (
     Aluno,
     Escola,
+    EventoAluno,
     IdentidadeExterna,
     Importacao,
     LogAuditoria,
@@ -724,7 +738,12 @@ def test_pendencia_da_propria_conta_ou_de_outra_plataforma_nao_contesta(db, padr
 def test_oficial_com_dado_legado_na_plataforma_da_sombra_e_conflito(db, esc):
     """O histórico do Elefante foi gravado por NOME, antes do studentId: a oficial
     tem o retrato sem conta registrada. Uma sombra com OUTRA conta do Elefante
-    não pode ser fundida — o retrato vigente da criança viraria o da sombra."""
+    não pode ser fundida — o retrato vigente da criança viraria o da sombra.
+
+    REGRA MUDOU (iteração 2, continuidade da conta): presença de dado nas duas
+    fichas já não é, sozinha, "duas contas". Aqui a sombra começa com 5 livros
+    depois de a oficial ter 30 — o contador acumulado REGRIDE, então não é a
+    mesma conta continuando: segue CONFLITO, agora com o motivo exato."""
     e, b = esc["escola"], esc["b"]
     oficial = _aluno(db, e, b, OFICIAL_Z, chamada=7)
     sombra = _aluno(db, e, b, SOMBRA_Z, lp=False)
@@ -738,7 +757,7 @@ def test_oficial_com_dado_legado_na_plataforma_da_sombra_e_conflito(db, esc):
                             tempo_leitura_min=100, livros_por_nivel={"D": 5}))
     db.commit()
     item = _item(cs.planejar(db, e.id), sombra)
-    assert (item.classe, item.motivo) == (cs.CONFLITO, "duas_contas_mesma_plataforma")
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "contador_regrediu")
     assert _aplicar(db, e)["consolidados"] == []
     db.expire_all()
     assert db.execute(select(SnapshotElefante.livros_unicos).where(
@@ -767,7 +786,12 @@ def test_nome_identico_com_dado_sem_conta_nao_consolida(db, esc):
 
 def test_leitura_do_mesmo_livro_nas_duas_fichas_nao_e_descartada(db, esc):
     """A fusão descartaria a leitura repetida da sombra, com data e tempo — perda
-    irreversível. Com leitura nas duas, as duas têm dado do Elefante: CONFLITO."""
+    irreversível. Com leitura nas duas, as duas têm dado do Elefante: CONFLITO.
+
+    REGRA MUDOU (iteração 2): o motivo agora diz POR QUE não há como provar que
+    é a mesma conta — nenhuma das duas tem snapshot do Elefante (só leitura).
+    Com snapshots e continuidade, a leitura repetida divergente continua
+    CONFLITO (``test_continuidade_com_leitura_repetida_divergente_e_conflito``)."""
     from app.models import Leitura, Livro
     e, b = esc["escola"], esc["b"]
     oficial = _aluno(db, e, b, OFICIAL_Z, chamada=7)
@@ -780,7 +804,7 @@ def test_leitura_do_mesmo_livro_nas_duas_fichas_nao_e_descartada(db, esc):
     _leitura(db, e, sombra, livro, datetime(2026, 8, 6, 10, 0))
     db.commit()
     item = _item(cs.planejar(db, e.id), sombra)
-    assert (item.classe, item.motivo) == (cs.CONFLITO, "duas_contas_mesma_plataforma")
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "continuidade_sem_retrato")
     assert _aplicar(db, e)["consolidados"] == []
     db.expire_all()
     assert sorted(d.month for d in db.execute(
@@ -915,6 +939,501 @@ def test_sombra_irma_que_nao_consolida_segura_a_outra(db, padrao):
     item = _item(plano, c["sombra_z"])
     assert (item.classe, item.motivo, item.relacionados) == (
         cs.REVISAR, "sombra_irma_em_revisao", (identica.id,))
+
+
+# --- 3b. continuidade da conta (iteração 2) --------------------------------------
+#
+# O padrão medido em produção (12/10), com nomes e números sintéticos: a oficial
+# tem o Matific ligado por NOME de 30/04 a 31/07; a sombra tem a conta e os
+# snapshots de 01/08 a 01/10. Os contadores acumulados do ano no limite são
+# iguais (ou crescem): é a MESMA conta dividida em duas fichas.
+
+OFICIAL_W = "WALDIRENE SOFIA FAGUNDES SILVA"
+SOMBRA_W = "WALDIRENE S"
+HIST_OFICIAL_W = [("2026-04-30", 4, 12), ("2026-05-31", 9, 27), ("2026-06-30", 15, 48),
+                  ("2026-07-31", 23, 70)]
+HIST_SOMBRA_W = [("2026-08-01", 23, 70), ("2026-09-01", 31, 101), ("2026-10-01", 38, 126)]
+
+
+def _snaps(db, escola, aluno, plataforma, serie):
+    """Snapshots da ficha: ``serie`` = [(dia, contador1, contador2), …] — no
+    Matific (atividades, estrelas), no Elefante (livros, minutos)."""
+    imp = _importacao(db, escola, plataforma)
+    for dia, c1, c2 in serie:
+        quando = datetime.fromisoformat(dia)
+        if plataforma == "matific":
+            db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id,
+                                   importacao_id=imp.id, data_referencia=quando,
+                                   atividades=c1, estrelas=c2, pontuacao_media=3.0))
+        else:
+            db.add(SnapshotElefante(escola_id=escola.id, aluno_id=aluno.id,
+                                    importacao_id=imp.id, data_referencia=quando,
+                                    livros_unicos=c1, tempo_leitura_min=c2,
+                                    livros_por_nivel={"D": c1}))
+    db.flush()
+
+
+def _evento(db, escola, aluno, plataforma, quando, chave):
+    db.add(EventoAluno(escola_id=escola.id, aluno_id=aluno.id, plataforma=plataforma,
+                       tipo_evento="atividade" if plataforma == "matific" else "leitura",
+                       ocorrido_em=datetime.fromisoformat(quando), chave_natural=chave))
+    db.flush()
+
+
+def _livro(db, escola, titulo="LIVRO SINTETICO"):
+    from app.models import Livro
+    livro = Livro(escola_id=escola.id, titulo=titulo, nivel_codigo="D")
+    db.add(livro)
+    db.flush()
+    return livro
+
+
+def _par(db, esc, *, hist_oficial=HIST_OFICIAL_W, hist_sombra=HIST_SOMBRA_W,
+         plataforma="matific", oficial_nome=OFICIAL_W, sombra_nome=SOMBRA_W,
+         conta="u-waldirene", turma=None):
+    """A oficial com o histórico ligado por nome (sem conta) e a sombra com a
+    conta e o histórico dela, na mesma turma."""
+    e = esc["escola"]
+    turma = turma or esc["b"]
+    oficial = _aluno(db, e, turma, oficial_nome, chamada=5)
+    sombra = _aluno(db, e, turma, sombra_nome, lp=False)
+    if conta:
+        _conta(db, e, sombra, plataforma, conta)
+    if hist_oficial:
+        _snaps(db, e, oficial, plataforma, hist_oficial)
+    if hist_sombra:
+        _snaps(db, e, sombra, plataforma, hist_sombra)
+    db.commit()
+    return oficial, sombra
+
+
+@pytest.mark.parametrize("limite_oficial, limite_sombra, contadores", [
+    ((23, 70), (23, 70), "iguais"),           # 9 dos 10 pares medidos
+    ((36, 150), (39, 164), "crescentes"),      # o par em que a conta seguiu ativa
+])
+def test_continuidade_da_conta_consolida_e_registra_o_limite(db, esc, limite_oficial,
+                                                             limite_sombra, contadores):
+    e = esc["escola"]
+    oficial, sombra = _par(
+        db, esc, hist_oficial=HIST_OFICIAL_W[:-1] + [("2026-07-31", *limite_oficial)],
+        hist_sombra=[("2026-08-01", *limite_sombra)] + HIST_SOMBRA_W[1:])
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+    assert item.evidencias["relacao_nome"] == "abreviacao"
+    continuidade = {
+        "ficha_anterior": "oficial",
+        "ultimo_retrato_anterior": "2026-07-31",
+        "primeiro_retrato_posterior": "2026-08-01",
+        "dias_entre": 1,
+        "contadores": contadores,
+        "contadores_anterior": dict(zip(("atividades", "estrelas"), limite_oficial)),
+        "contadores_posterior": dict(zip(("atividades", "estrelas"), limite_sombra)),
+    }
+    assert item.evidencias["continuidade"] == {"matific": continuidade}
+
+    res = _aplicar(db, e)
+    assert [x["sombra_id"] for x in res["consolidados"]] == [sombra.id]
+    assert not _existe(db, sombra.id)
+    assert _dono(db, e, "matific", "u-waldirene") == oficial.id
+    # O histórico inteiro, das duas fichas, fica na oficial — contínuo.
+    assert len(db.execute(select(SnapshotMatific.id).where(
+        SnapshotMatific.aluno_id == oficial.id)).scalars().all()) == 7
+    nota = db.execute(select(Nota).where(Nota.aluno_id == oficial.id)).scalar_one()
+    assert nota.aferido_matematica
+    [log] = _logs(db, "aluno.consolidado_automatico")
+    assert log.detalhes["evidencias"]["continuidade"] == {"matific": continuidade}
+    texto = json.dumps(log.detalhes, ensure_ascii=False)
+    assert OFICIAL_W not in texto and SOMBRA_W not in texto        # só datas e números
+
+
+@pytest.mark.parametrize("hist_oficial", [
+    # A oficial seguiu recebendo dado depois que a sombra começou.
+    HIST_OFICIAL_W + [("2026-08-05", 25, 75)],
+    # O mesmo dia nas duas fichas já é simultâneo.
+    HIST_OFICIAL_W[:-1] + [("2026-08-01", 23, 70)],
+])
+def test_retratos_que_se_sobrepoem_sao_conflito(db, esc, hist_oficial):
+    e = esc["escola"]
+    _oficial, sombra = _par(db, esc, hist_oficial=hist_oficial)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "dados_simultaneos_mesma_plataforma")
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
+
+
+@pytest.mark.parametrize("limite_sombra", [(23, 69), (22, 80), (0, 0)])
+def test_contador_que_regride_no_limite_e_conflito(db, esc, limite_sombra):
+    e = esc["escola"]
+    _oficial, sombra = _par(db, esc, hist_sombra=[("2026-08-01", *limite_sombra)])
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "contador_regrediu")
+
+
+@pytest.mark.parametrize("ultimo_da_oficial, classe, motivo", [
+    ("2026-06-30", cs.CONFLITO, "intervalo_longo"),       # 32 dias até 01/08
+    ("2026-07-01", cs.CONSOLIDAR, ""),                    # 31 dias: o limite aceito
+])
+def test_intervalo_maior_que_31_dias_e_conflito(db, esc, ultimo_da_oficial, classe, motivo):
+    e = esc["escola"]
+    _oficial, sombra = _par(db, esc, hist_oficial=[("2026-04-30", 4, 12),
+                                                   (ultimo_da_oficial, 23, 70)])
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (classe, motivo)
+    if classe == cs.CONSOLIDAR:
+        assert item.evidencias["continuidade"]["matific"]["dias_entre"] == 31
+
+
+@pytest.mark.parametrize("caso", ["oficial_so_com_evento", "oficial_so_com_leitura",
+                                  "sombra_so_com_conta"])
+def test_dado_sem_snapshot_nao_prova_continuidade(db, esc, caso):
+    """Leitura e evento soltos (ou a conta sem retrato) não têm contador com que
+    provar que é a mesma conta: CONFLITO, sem fundir nada."""
+    e = esc["escola"]
+    plataforma = "elefante" if caso == "oficial_so_com_leitura" else "matific"
+    hist_elefante = [("2026-08-01", 12, 300), ("2026-09-01", 15, 360)]
+    oficial, sombra = _par(
+        db, esc, plataforma=plataforma, conta="4416001" if plataforma == "elefante"
+        else "u-waldirene",
+        hist_oficial=None if caso != "sombra_so_com_conta" else HIST_OFICIAL_W,
+        hist_sombra=(None if caso == "sombra_so_com_conta"
+                     else hist_elefante if plataforma == "elefante" else HIST_SOMBRA_W))
+    if caso == "oficial_so_com_evento":
+        _evento(db, e, oficial, "matific", "2026-07-10T10:00:00", "evt-oficial-1")
+    elif caso == "oficial_so_com_leitura":
+        _leitura(db, e, oficial, _livro(db, e), datetime(2026, 7, 10, 10, 0))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "continuidade_sem_retrato")
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
+
+
+@pytest.mark.parametrize("plataforma, quando", [
+    ("matific", "2026-08-15T10:00:00"),    # evento da oficial depois de a sombra começar
+    ("matific", "2026-08-01T07:00:00"),    # no mesmo dia do 1º retrato da sombra
+    ("elefante", "2026-08-10T09:00:00"),   # leitura da oficial depois de a sombra começar
+])
+def test_dado_novo_na_ficha_anterior_e_conflito(db, esc, plataforma, quando):
+    """(v): os snapshots não se sobrepõem, mas a oficial ainda recebeu dado da
+    plataforma depois de a sombra começar — duas fontes ao mesmo tempo."""
+    e = esc["escola"]
+    if plataforma == "matific":
+        oficial, sombra = _par(db, esc)
+        _evento(db, e, oficial, "matific", quando, "evt-oficial-tardio")
+    else:
+        oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416002",
+                               hist_oficial=[("2026-07-13", 120, 180), ("2026-07-31", 129, 200)],
+                               hist_sombra=[("2026-08-01", 135, 220)])
+        _leitura(db, e, oficial, _livro(db, e), datetime.fromisoformat(quando))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "dados_simultaneos_mesma_plataforma")
+
+
+@pytest.mark.parametrize("status", ["efetiva", "aposentada"])
+def test_oficial_com_conta_propria_na_plataforma_e_conflito_mesmo_continuo(db, esc, status):
+    """Continuidade perfeita nos snapshots, mas a OFICIAL tem conta própria no
+    Matific: são duas contas reais — qual é a da criança, gente decide."""
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc)
+    _conta(db, e, oficial, "matific", "u-conta-da-oficial", status=status)
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "duas_contas_mesma_plataforma")
+
+
+@pytest.mark.parametrize("copia_identica", [True, False])
+def test_continuidade_com_leitura_repetida_divergente_e_conflito(db, esc, copia_identica):
+    """Mesmo com a conta continuando, o MESMO livro nas duas fichas com data ou
+    tempo diferentes seria descartado na fusão (uma leitura por livro): CONFLITO.
+    A cópia idêntica da mesma leitura (a plataforma reenviou o histórico da
+    conta) não perde nada e consolida."""
+    from app.models import Leitura
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416003",
+                           hist_oficial=[("2026-07-13", 120, 180), ("2026-07-31", 129, 200)],
+                           hist_sombra=[("2026-08-01", 135, 220), ("2026-09-17", 140, 250)])
+    livro = _livro(db, e)
+    db.add(Leitura(escola_id=e.id, aluno_id=oficial.id, livro_id=livro.id,
+                   data=datetime(2026, 7, 20, 10, 0), tempo_leitura_min=12))
+    db.add(Leitura(escola_id=e.id, aluno_id=sombra.id, livro_id=livro.id,
+                   data=datetime(2026, 7, 20, 10, 0) if copia_identica
+                   else datetime(2026, 8, 6, 10, 0), tempo_leitura_min=12))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    if not copia_identica:
+        assert (item.classe, item.motivo) == (cs.CONFLITO, "leitura_repetida_nas_duas_fichas")
+        assert _aplicar(db, e)["consolidados"] == []
+        db.expire_all()
+        assert len(db.execute(select(Leitura.id)).scalars().all()) == 2
+        return
+    assert item.classe == cs.CONSOLIDAR
+    assert item.evidencias["continuidade"]["elefante"]["contadores"] == "crescentes"
+    assert len(_aplicar(db, e)["consolidados"]) == 1
+    db.expire_all()
+    assert db.execute(select(Leitura.aluno_id, Leitura.data)).all() == [
+        (oficial.id, datetime(2026, 7, 20, 10, 0))]
+
+
+def test_sombra_de_nome_identico_do_elefante_com_continuidade_consolida(db, esc):
+    """O caso real: a MESMA oficial tem a sombra truncada do Matific e uma sombra
+    de nome IDÊNTICO criada pelo Elefante. A oficial tinha o Elefante por nome
+    (13/07–31/07) e o Matific por nome (abr–jul); cada sombra continua uma das
+    contas a partir de 01/08. As duas consolidam."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, "HELOIZA BEATRIZ NOGUEIRA PRATES", chamada=8)
+    truncada = _aluno(db, e, b, "HELOIZA B", lp=False)
+    identica = _aluno(db, e, b, "HELOIZA BEATRIZ NOGUEIRA PRATES", lp=False)
+    _conta(db, e, truncada, "matific", "u-heloiza")
+    _conta(db, e, identica, "elefante", "4416004")
+    _snaps(db, e, oficial, "matific", HIST_OFICIAL_W)
+    _snaps(db, e, oficial, "elefante", [("2026-07-13", 120, 180), ("2026-07-31", 129, 200)])
+    _snaps(db, e, truncada, "matific", HIST_SOMBRA_W)
+    _snaps(db, e, identica, "elefante", [("2026-08-01", 135, 220), ("2026-09-17", 150, 270)])
+    db.commit()
+    plano = cs.planejar(db, e.id)
+    item = _item(plano, identica)
+    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+    assert item.evidencias["relacao_nome"] == "nome_identico"
+    ev = item.evidencias["continuidade"]["elefante"]
+    assert (ev["ficha_anterior"], ev["contadores"], ev["contadores_anterior"]["livros_unicos"],
+            ev["contadores_posterior"]["livros_unicos"]) == ("oficial", "crescentes", 129, 135)
+    assert _item(plano, truncada).classe == cs.CONSOLIDAR
+    res = _aplicar(db, e, plano)
+    assert sorted(x["sombra_id"] for x in res["consolidados"]) == sorted(
+        [truncada.id, identica.id])
+    assert res["pulados"] == []
+    assert _dono(db, e, "matific", "u-heloiza") == oficial.id
+    assert _dono(db, e, "elefante", "4416004") == oficial.id
+    assert set(db.execute(select(SnapshotElefante.aluno_id)).scalars()) == {oficial.id}
+
+
+@pytest.mark.parametrize("caso", ["oficial_sem_dado_na_plataforma", "sombra_veio_antes"])
+def test_nome_identico_sem_dado_anterior_da_oficial_continua_revisao(db, esc, caso):
+    """Regra (e): o nome idêntico com dado só é a sombra se continua dado
+    ANTERIOR da oficial na mesma plataforma. A oficial só com Matific (e a
+    sombra com o Elefante), ou a sombra com o Elefante ANTES da oficial: pode
+    ser outra criança de mesmo nome → revisão."""
+    e = esc["escola"]
+    nome = "LAURINDA GOMES DA SILVA"
+    if caso == "oficial_sem_dado_na_plataforma":
+        oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416005",
+                               oficial_nome=nome + "*", sombra_nome=nome, hist_oficial=None,
+                               hist_sombra=[("2026-08-01", 10, 60)])
+        _snaps(db, e, oficial, "matific", HIST_OFICIAL_W)
+    else:
+        oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416005",
+                               oficial_nome=nome + "*", sombra_nome=nome,
+                               hist_oficial=[("2026-08-01", 12, 80)],
+                               hist_sombra=[("2026-06-30", 8, 40), ("2026-07-31", 10, 60)])
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo, item.oficial_id) == (
+        cs.REVISAR, "nome_identico_com_conta", oficial.id)
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
+
+
+def test_duas_sombras_que_dividem_plataforma_so_passam_com_continuidade(db, esc):
+    """A mesma lógica entre duas SOMBRAS da mesma oficial: uma tem o Matific por
+    nome (jun–jul, sem conta), a outra a conta a partir de 01/08. Continuidade
+    entre elas → as duas consolidam, uma depois da outra."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, "QUITERIA HELENA BARROS", chamada=14)
+    por_nome = _aluno(db, e, b, "QUITERIA H", lp=False)
+    com_conta = _aluno(db, e, b, "QUITERIA HELENA B", lp=False)
+    _conta(db, e, com_conta, "matific", "u-quiteria")
+    _snaps(db, e, por_nome, "matific", HIST_OFICIAL_W[2:])
+    _snaps(db, e, com_conta, "matific", HIST_SOMBRA_W)
+    db.commit()
+    plano = cs.planejar(db, e.id)
+    for s, outra in ((por_nome, com_conta), (com_conta, por_nome)):
+        item = _item(plano, s)
+        assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+        [ev] = item.evidencias["continuidade_entre_sombras"]
+        assert (ev["sombra_id"], ev["plataforma"], ev["contadores"]) == (
+            outra.id, "matific", "iguais")
+    res = _aplicar(db, e, plano)
+    assert {x["sombra_id"] for x in res["consolidados"]} == {por_nome.id, com_conta.id}
+    assert res["pulados"] == []
+    assert _dono(db, e, "matific", "u-quiteria") == oficial.id
+
+
+def test_duas_sombras_que_dividem_plataforma_sem_continuidade_sao_conflito(db, esc):
+    e, b = esc["escola"], esc["b"]
+    _aluno(db, e, b, "QUITERIA HELENA BARROS", chamada=14)
+    por_nome = _aluno(db, e, b, "QUITERIA H", lp=False)
+    com_conta = _aluno(db, e, b, "QUITERIA HELENA B", lp=False)
+    _conta(db, e, com_conta, "matific", "u-quiteria")
+    _snaps(db, e, por_nome, "matific", HIST_OFICIAL_W + [("2026-08-20", 30, 90)])
+    _snaps(db, e, com_conta, "matific", HIST_SOMBRA_W)
+    db.commit()
+    plano = cs.planejar(db, e.id)
+    for s, outra in ((por_nome, com_conta), (com_conta, por_nome)):
+        assert (_item(plano, s).classe, _item(plano, s).motivo,
+                _item(plano, s).relacionados) == (
+            cs.CONFLITO, "dados_simultaneos_mesma_plataforma", (outra.id,))
+    assert _aplicar(db, e, plano)["consolidados"] == []
+
+
+# --- 3c. a forma do nome (iteração 2) ---------------------------------------------
+
+ARTEMISIA = "ARTEMISIA ELIZA FERNANDES ROSA"
+HIST_ELEFANTE_OFICIAL = [("2026-07-13", 40, 90), ("2026-07-31", 44, 101)]
+HIST_ELEFANTE_SOMBRA = [("2026-08-01", 44, 101), ("2026-09-17", 51, 130)]
+
+
+@pytest.mark.parametrize("turma_nome, ano_escolar, nome_sombra", [
+    ("2º Ano B", "2º Ano", ARTEMISIA + " 2B"),
+    ("2º Ano A", "2º Ano", ARTEMISIA + " 2a"),
+    ("5º Ano A", "5º Ano", ARTEMISIA + " 5A"),
+    ("4º Ano A", "4º Ano", ARTEMISIA + "4A"),            # grudado no último nome
+])
+def test_sufixo_da_turma_no_nome_da_sombra_nao_impede_o_par(db, esc, turma_nome,
+                                                            ano_escolar, nome_sombra):
+    """A sombra criada pelo Elefante com a turma digitada junto do nome: sem o
+    sufixo da PRÓPRIA sala, é o nome idêntico ao da oficial — e consolida com a
+    continuidade do Elefante (regra (e))."""
+    e = esc["escola"]
+    turma = {"2º Ano B": esc["b"], "4º Ano A": esc["a4"]}.get(turma_nome) or _turma(
+        db, e, turma_nome, ano_escolar)
+    oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416006",
+                           oficial_nome=ARTEMISIA, sombra_nome=nome_sombra, turma=turma,
+                           hist_oficial=HIST_ELEFANTE_OFICIAL,
+                           hist_sombra=HIST_ELEFANTE_SOMBRA)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+    assert item.evidencias["relacao_nome"] == "nome_identico"
+    assert item.evidencias["nome_normalizado"] == ["sufixo_da_turma"]
+    assert len(_aplicar(db, e)["consolidados"]) == 1 and not _existe(db, sombra.id)
+    db.expire_all()
+    assert db.get(Aluno, oficial.id).nome == ARTEMISIA       # o nome oficial não muda
+
+
+def test_sufixo_de_outra_sala_fica_no_nome(db, esc):
+    """"… 3A" na 2ºB não é a turma da sombra: o token fica (como no motor) e o par
+    segue para a revisão de sempre."""
+    e = esc["escola"]
+    _oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416007",
+                            oficial_nome=ARTEMISIA, sombra_nome=ARTEMISIA + " 3A",
+                            hist_oficial=HIST_ELEFANTE_OFICIAL,
+                            hist_sombra=HIST_ELEFANTE_SOMBRA)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.REVISAR, "nome_parecido_na_turma")
+
+
+@pytest.mark.parametrize("com_dado", [False, True])
+def test_particula_a_menos_e_o_mesmo_nome(db, esc, com_dado):
+    """"… SOARES SANTOS" × "… SOARES DOS SANTOS*": a partícula não distingue
+    ninguém. Sem dado, consolida como nome idêntico; com dado, consolida com a
+    continuidade da oficial (regra (e))."""
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416008" if com_dado else None,
+                           oficial_nome="TELMO LUCAS SOARES DOS SANTOS*",
+                           sombra_nome="TELMO LUCAS SOARES SANTOS",
+                           hist_oficial=HIST_ELEFANTE_OFICIAL if com_dado else None,
+                           hist_sombra=HIST_ELEFANTE_SOMBRA if com_dado else None)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+    assert item.evidencias["relacao_nome"] == "nome_identico"
+    assert item.evidencias["nome_normalizado"] == ["particulas"]
+    assert len(_aplicar(db, e)["consolidados"]) == 1
+
+
+def test_particula_a_menos_com_conta_e_sem_dado_da_oficial_vai_para_revisao(db, esc):
+    e = esc["escola"]
+    _oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416009",
+                            oficial_nome="TELMO LUCAS SOARES DOS SANTOS*",
+                            sombra_nome="TELMO LUCAS SOARES SANTOS", hist_oficial=None,
+                            hist_sombra=HIST_ELEFANTE_SOMBRA)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.REVISAR, "nome_identico_com_conta")
+
+
+@pytest.mark.parametrize("nome_sombra", [
+    "SAMANTA INOCeNCIO MAGALHaES",            # a vogal acentuada virou minúscula
+    "SAMANTA INOCeNCIO MAGALHaES 2B",         # … e com o sufixo da turma
+])
+def test_vogal_acentuada_que_virou_minuscula_e_o_mesmo_nome(db, esc, nome_sombra):
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416010",
+                           oficial_nome="SAMANTA INOCÊNCIO MAGALHÃES", sombra_nome=nome_sombra,
+                           hist_oficial=HIST_ELEFANTE_OFICIAL,
+                           hist_sombra=HIST_ELEFANTE_SOMBRA)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.oficial_id, item.evidencias["relacao_nome"]) == (
+        cs.CONSOLIDAR, oficial.id, "nome_identico")
+
+
+@pytest.mark.parametrize("oficial_nome, sombra_nome, motivo", [
+    ("GABRIELA TEODORO MASCARENHAS", "GABRIEL TEODORO MASCARENHAS", "prenome_diferente"),
+    ("OTAVIANO RICARDO BRAGANCA MELO", "OTAVIANA R", "nome_parecido_na_turma"),
+    ("KETLIN SOFIA FALCAO", "KETLYN SOFIA FALCAO", "nome_parecido_na_turma"),
+    ("KETLIN SOFIA FALCAO", "KETLYN S", "nome_parecido_na_turma"),
+])
+def test_prenome_diferente_continua_revisao_mesmo_com_continuidade_perfeita(
+        db, esc, oficial_nome, sombra_nome, motivo):
+    """Decisão 3 do dono: o PRENOME diferente é revisão manual — e a
+    continuidade dos dados não muda isso (irmãos dividem tablet e turma)."""
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc, oficial_nome=oficial_nome, sombra_nome=sombra_nome)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.REVISAR, motivo)
+    assert oficial.id in ((item.oficial_id,) + item.relacionados)
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
+
+
+def test_gemeos_com_continuidade_perfeita_continuam_revisao(db, esc):
+    e, b = esc["escola"], esc["b"]
+    alice = _aluno(db, e, b, "MARIA ALICE ALVES PEREIRA", chamada=1)
+    aline = _aluno(db, e, b, "MARIA ALINE ALVES PEREIRA", chamada=2)
+    sombra = _aluno(db, e, b, "MARIA A", lp=False)
+    _conta(db, e, sombra, "matific", "u-maria-a")
+    _snaps(db, e, alice, "matific", HIST_OFICIAL_W)
+    _snaps(db, e, sombra, "matific", HIST_SOMBRA_W)
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.REVISAR, "varias_oficiais")
+    assert set(item.relacionados) == {alice.id, aline.id}
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
+
+
+# --- 3d. o risco que a continuidade não elimina -----------------------------------
+
+@pytest.mark.parametrize("inicio_da_outra, classe, motivo", [
+    # A conta NOVA de outra criança começa do zero, abaixo da oficial: protegido.
+    ((2, 5), cs.CONFLITO, "contador_regrediu"),
+    # A outra criança já usava o Matific (outra escola, conta antiga) e começa
+    # ACIMA da oficial: os dados não a distinguem da mesma conta continuando.
+    ((40, 130), cs.CONSOLIDAR, ""),
+])
+def test_falsificacao_de_continuidade(db, esc, inicio_da_outra, classe, motivo):
+    """FALSIFICAÇÃO: uma criança DIFERENTE — fora da Lista Piloto, na mesma
+    turma, com nome que é a forma do relatório do nome da oficial — cuja conta
+    passa a mandar dados depois que a oficial parou (05/08, quatro dias depois
+    do último retrato da oficial).
+
+    O que a regra faz: com contadores ABAIXO dos da oficial (a conta nova de
+    outra criança), o contador regride → CONFLITO. Com contadores IGUAIS ou
+    MAIORES, a continuidade é aceita e o par CONSOLIDA: datas e contadores
+    acumulados não distinguem a mesma conta continuando de outra conta que, por
+    acaso, já estava acima. É um RISCO ACEITO, não escondido: o que segura esse
+    caso é o resto da regra — o nome tem de ser a forma do relatório do nome da
+    oficial NA MESMA TURMA, nenhuma outra ficha da escola pode ser a dona, a
+    criança de verdade não está na Lista Piloto (senão seriam duas oficiais) —
+    e a política da escola começa em "manual". A auditoria guarda os
+    contadores dos dois lados do limite para quem precisar desfazer."""
+    e = esc["escola"]
+    oficial, outra = _par(db, esc, oficial_nome="CLEMENTINA ROSA VASCONCELOS",
+                          sombra_nome="CLEMENTINA R", conta="u-outra-crianca",
+                          hist_oficial=[("2026-05-31", 6, 20), ("2026-07-31", 12, 39)],
+                          hist_sombra=[("2026-08-05", *inicio_da_outra),
+                                       ("2026-09-05", inicio_da_outra[0] + 9,
+                                        inicio_da_outra[1] + 30)])
+    item = _item(cs.planejar(db, e.id), outra)
+    assert (item.classe, item.motivo, item.oficial_id) == (classe, motivo, oficial.id)
+    if classe == cs.CONSOLIDAR:
+        ev = item.evidencias["continuidade"]["matific"]
+        assert (ev["dias_entre"], ev["contadores"]) == (5, "crescentes")
+        assert ev["contadores_anterior"] == {"atividades": 12, "estrelas": 39}
+        assert ev["contadores_posterior"] == {"atividades": 40, "estrelas": 130}
 
 
 # --- 4. compare-and-set ----------------------------------------------------------
@@ -1276,6 +1795,18 @@ def test_script_simulacao_nao_grava_e_so_mostra_ids(banco, monkeypatch, capsys):
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--todas", "--nomes")
     assert codigo == 0 and f"«{SOMBRA_Z}» × «{OFICIAL_Z}»" in saida
     assert _retrato(Sessao) == antes
+
+
+def test_script_linha_do_consolidar_mostra_a_continuidade(db, esc):
+    """A conferência antes de --aplicar vê a continuidade de cada par (dias do
+    limite, intervalo, iguais/crescentes) — sem nome e só com ASCII na seta."""
+    import scripts.consolidar_sombras as etapa
+    _oficial, sombra = _par(db, esc)
+    item = _item(cs.planejar(db, esc["escola"].id), sombra)
+    linha = etapa._linha(db, item, False)
+    assert "continuidade: matific oficial 2026-07-31->2026-08-01 (1d) iguais" in linha
+    assert SOMBRA_W not in linha and OFICIAL_W not in linha
+    linha.encode("ascii")
 
 
 def test_script_esperado_divergente_sai_3_sem_gravar(banco, monkeypatch, capsys):
