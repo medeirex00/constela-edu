@@ -2,13 +2,19 @@
  * Painel (dashboard) — usa o pacote consolidado /sincronizacao: uma única
  * viagem de rede hidrata estatísticas, destaque, alertas e mural. Com o
  * cache persistido, tudo isso reaparece instantaneamente offline.
+ *
+ * Desempenho POR MATÉRIA (Arquitetura 2): uma média por matéria contratada,
+ * cada uma só sobre quem tem dado da plataforma dela, e o Top com a nota de
+ * cada matéria — "—" para quem não usa a plataforma, nunca 0,0. Nenhuma nota
+ * composta entre matérias é lida nem exibida (regras em `../materias`).
  */
-import { api, nota, numero, tempoLeitura, type PacoteSincronizacao } from "@constela/core";
+import { api, numero, tempoLeitura, type PacoteSincronizacao } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Carregando, Cartao, Etiqueta, TextoSuave, Titulo } from "../componentes/basicos";
 import { useAutenticacao } from "../contexto/Autenticacao";
+import { materiasDaEscola, mediasDaEscola, notasDoItem } from "../materias";
 import { cores, espacos } from "../tema";
 
 function Estatistica({ rotulo, valor }: { rotulo: string; valor: string }) {
@@ -21,7 +27,7 @@ function Estatistica({ rotulo, valor }: { rotulo: string; valor: string }) {
 }
 
 export default function Painel() {
-  const { escolaId, escolas } = useAutenticacao();
+  const { escolaId, escolas, usuario } = useAutenticacao();
   const escola = escolas.find((item) => item.id === escolaId);
 
   const { data, isLoading, refetch, isRefetching, dataUpdatedAt } = useQuery({
@@ -34,6 +40,15 @@ export default function Painel() {
   if (!data) return <Carregando texto="Sem dados — conecte-se uma vez para sincronizar." />;
 
   const painel = data.dashboard;
+  // Matéria fora do plano da rede não aparece — nem a média, nem os totais da
+  // plataforma dela, nem a nota dela no Top.
+  const materias = materiasDaEscola(data, usuario?.modulos);
+  const temLeitura = materias.includes("leitura");
+  const temMatematica = materias.includes("matematica");
+  // `null` = pacote salvo por um servidor anterior às médias por matéria: a tela
+  // avisa em vez de voltar para a média composta.
+  const medias = mediasDaEscola(painel, materias);
+  const top = painel.top10.slice(0, 5);
 
   return (
     <ScrollView
@@ -48,24 +63,53 @@ export default function Painel() {
 
       <View style={estilos.grade}>
         <Estatistica rotulo="Alunos" valor={numero(painel.total_alunos)} />
-        <Estatistica rotulo="Média geral" valor={nota(painel.media_geral)} />
-        <Estatistica rotulo="Atividades" valor={numero(painel.total_atividades)} />
-        <Estatistica rotulo="Livros" valor={numero(painel.total_livros)} />
-        <Estatistica rotulo="Leitura" valor={tempoLeitura(painel.tempo_leitura_min)} />
+        {(medias ?? []).map((media) => (
+          <Estatistica
+            key={media.materia}
+            rotulo={`Média em ${media.rotulo} (${numero(media.comDado)} com dado)`}
+            valor={media.valor}
+          />
+        ))}
+        {temMatematica && (
+          <Estatistica rotulo="Atividades" valor={numero(painel.total_atividades)} />
+        )}
+        {temLeitura && <Estatistica rotulo="Livros" valor={numero(painel.total_livros)} />}
+        {temLeitura && (
+          <Estatistica rotulo="Tempo de leitura" valor={tempoLeitura(painel.tempo_leitura_min)} />
+        )}
         <Estatistica rotulo="Turmas" valor={numero(painel.total_turmas)} />
       </View>
+      {medias === null && materias.length > 0 && (
+        <TextoSuave>
+          As médias por matéria ainda não vieram neste pacote — puxe para sincronizar.
+        </TextoSuave>
+      )}
 
+      {/* A ORDEM deste Top é a que o servidor decide para o painel da escola:
+          trocá-la por um Top por matéria muda quem sobe ao pódio, e isso é
+          decisão de produto pendente (plano de retirada §4, item 7). O que o
+          app mostra é a nota de CADA matéria, nunca a composta. */}
       <Cartao>
         <Titulo>Top 5 — Ranking Geral</Titulo>
-        {painel.top10.slice(0, 5).map((item) => (
-          <View key={item.aluno_id} style={estilos.linha}>
-            <Etiqueta texto={`${item.posicao}º`} tom={item.posicao <= 3 ? "destaque" : "neutro"} />
-            <Text style={estilos.linhaNome} numberOfLines={1}>
-              {item.nome}
-            </Text>
-            <Text style={estilos.linhaNota}>{nota(item.nota_geral)}</Text>
-          </View>
-        ))}
+        {top.map((item) => {
+          const notas = notasDoItem(item, materias);
+          return (
+            <View key={item.aluno_id} style={estilos.linha}>
+              <Etiqueta texto={`${item.posicao}º`} tom={item.posicao <= 3 ? "destaque" : "neutro"} />
+              <View style={estilos.linhaCorpo}>
+                <Text style={estilos.linhaNome} numberOfLines={1}>
+                  {item.nome}
+                </Text>
+                {notas.length > 0 && (
+                  <TextoSuave>{notas.map((n) => `${n.rotulo} ${n.valor}`).join(" · ")}</TextoSuave>
+                )}
+              </View>
+            </View>
+          );
+        })}
+        {top.length > 0 && materias.length > 0 && (
+          <TextoSuave>"—" = ainda sem dado da plataforma (não é nota zero).</TextoSuave>
+        )}
       </Cartao>
 
       {data.alertas.length > 0 && (
@@ -121,8 +165,8 @@ const estilos = StyleSheet.create({
     gap: espacos.m,
     paddingVertical: 6,
   },
-  linhaNome: { flex: 1, color: cores.texto, fontSize: 14, fontWeight: "500" },
-  linhaNota: { fontWeight: "700", color: cores.texto },
+  linhaCorpo: { flex: 1 },
+  linhaNome: { color: cores.texto, fontSize: 14, fontWeight: "500" },
   alerta: { flexDirection: "row", alignItems: "flex-start", gap: espacos.s, paddingVertical: 4 },
   alertaTexto: { flex: 1, fontSize: 13, color: cores.texto },
   muralTexto: { flex: 1, fontSize: 13, color: cores.texto },

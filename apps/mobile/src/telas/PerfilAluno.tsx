@@ -1,4 +1,12 @@
-/** Perfil do aluno: notas, posição e o "como esta nota foi calculada". */
+/**
+ * Perfil do aluno: a nota e a posição de CADA matéria contratada e o "como esta
+ * nota foi calculada" de cada uma.
+ *
+ * Arquitetura 2: não existe mais uma nota "Geral" nem uma posição única no
+ * ranking — compor as matérias é o que a arquitetura eliminou. Cada matéria
+ * traz a SUA posição ("3º de 21"), e a matéria sem dado da plataforma mostra
+ * "—", nunca 0,0 (regras e fontes em `../materias`).
+ */
 import { api, nota, type LinhaCalculo, type PerfilAluno as Perfil } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -6,10 +14,14 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Carregando, Cartao, Etiqueta, TextoSuave, Titulo } from "../componentes/basicos";
 import { useAutenticacao } from "../contexto/Autenticacao";
+import { blocosDoPerfil, calculoDaMateria } from "../materias";
 import type { PilhaPrincipal } from "../navegacao";
 import { cores, espacos } from "../tema";
 
 type Props = NativeStackScreenProps<PilhaPrincipal, "PerfilAluno">;
+
+// Nome da plataforma de cada matéria no título do passo a passo do cálculo.
+const PLATAFORMA = { leitura: "Elefante Letrado", matematica: "Matific" } as const;
 
 function TabelaCalculo({ titulo, linhas, notaFinal }: {
   titulo: string;
@@ -36,7 +48,7 @@ function TabelaCalculo({ titulo, linhas, notaFinal }: {
 }
 
 export default function PerfilAluno({ route }: Props) {
-  const { escolaId } = useAutenticacao();
+  const { escolaId, usuario } = useAutenticacao();
   const { alunoId } = route.params;
 
   const { data: perfil, isLoading } = useQuery({
@@ -48,44 +60,51 @@ export default function PerfilAluno({ route }: Props) {
   if (isLoading && !perfil) return <Carregando />;
   if (!perfil) return <Carregando texto="Perfil indisponível offline — conecte-se uma vez." />;
 
-  const { detalhes } = perfil;
+  const { blocos, carimbado } = blocosDoPerfil(perfil, usuario?.modulos);
+  // O passo a passo só das matérias COM dado: para quem não usa a plataforma o
+  // motor grava uma conta de zeros, que afirmaria uma nota 0,0 nunca medida.
+  const calculos = blocos.flatMap((bloco) => {
+    const calculo = calculoDaMateria(perfil, bloco);
+    return calculo ? [{ bloco, calculo }] : [];
+  });
 
   return (
     <ScrollView style={estilos.tela} contentContainerStyle={{ padding: espacos.l }}>
       <Titulo>{perfil.aluno.nome}</Titulo>
       <View style={estilos.etiquetas}>
-        {perfil.posicao ? <Etiqueta texto={`${perfil.posicao}º no ranking`} tom="destaque" /> : null}
         <Etiqueta texto={`${perfil.aluno.turma ?? ""} · ${perfil.aluno.ano_escolar ?? ""}`} />
       </View>
 
-      <View style={estilos.notas}>
-        {[
-          { rotulo: "Matific", valor: perfil.nota_matific },
-          { rotulo: "Leitura", valor: perfil.nota_elefante },
-          { rotulo: "Geral", valor: perfil.nota_geral },
-        ].map((item) => (
-          <View key={item.rotulo} style={estilos.nota}>
-            <Text style={estilos.notaValor}>{nota(item.valor)}</Text>
-            <TextoSuave>{item.rotulo}</TextoSuave>
-          </View>
-        ))}
-      </View>
+      {blocos.length > 0 && (
+        <View style={estilos.notas}>
+          {blocos.map((bloco) => (
+            <View key={bloco.materia} style={estilos.nota}>
+              <Text style={estilos.notaValor}>{bloco.valor}</Text>
+              <TextoSuave>{bloco.rotulo}</TextoSuave>
+              {bloco.posicao ? (
+                <Etiqueta texto={bloco.posicao} tom="destaque" />
+              ) : bloco.aferido === false ? (
+                <TextoSuave>sem dado da plataforma</TextoSuave>
+              ) : null}
+            </View>
+          ))}
+        </View>
+      )}
+      {!carimbado && blocos.length > 0 && (
+        <TextoSuave>
+          A posição em cada matéria aparece depois do próximo recálculo da escola.
+        </TextoSuave>
+      )}
 
-      {detalhes.matific && (
+      {calculos.map(({ bloco, calculo }) => (
         <TabelaCalculo
-          titulo="Matific"
-          linhas={detalhes.matific.indicadores}
-          notaFinal={detalhes.matific.nota}
+          key={bloco.materia}
+          titulo={PLATAFORMA[bloco.materia]}
+          linhas={calculo.indicadores}
+          notaFinal={calculo.nota}
         />
-      )}
-      {detalhes.elefante && (
-        <TabelaCalculo
-          titulo="Elefante Letrado"
-          linhas={detalhes.elefante.indicadores}
-          notaFinal={detalhes.elefante.nota}
-        />
-      )}
-      {!detalhes.matific && !detalhes.elefante && (
+      ))}
+      {calculos.length === 0 && (
         <Cartao>
           <TextoSuave>Ainda não há nota calculada para este aluno.</TextoSuave>
         </Cartao>
@@ -106,6 +125,7 @@ const estilos = StyleSheet.create({
     borderColor: cores.borda,
     padding: espacos.m,
     alignItems: "center",
+    gap: espacos.xs,
   },
   notaValor: { fontSize: 20, fontWeight: "700", color: cores.texto },
   cabecalhoTabela: {

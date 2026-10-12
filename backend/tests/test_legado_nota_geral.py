@@ -215,19 +215,12 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "porque": ("tipo e linha 'Geral' do perfil público legado (plano de "
                    "retirada, item 6 — decisão do dono)."),
     },
-    "apps/mobile/src/telas/Painel.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": ("app em campo: só sai com versão de API (plano, item 11 — "
-                   "exige o Sensor 4)."),
-    },
-    "apps/mobile/src/telas/PerfilAluno.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": "app em campo (plano, item 11).",
-    },
-    "apps/mobile/src/telas/Ranking.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": "app em campo (plano, item 11).",
-    },
+    # O CÓDIGO do app mobile (Painel, Ranking, Perfil) saiu da lista: as três
+    # telas leem nota e posição POR MATÉRIA (`apps/mobile/src/materias.ts`) e
+    # nenhuma lê mais a nota composta nem o `ranking` legado do pacote. Isso NÃO
+    # libera o servidor de mandá-los: as versões do app já instaladas em campo
+    # continuam lendo — o critério de saída do contrato segue sendo o Sensor 4
+    # (plano de retirada, item 11).
     "apps/web/src/test/utils.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
         "porque": ("`rankingItemFake`: o tipo `RankingItem` ainda exige o campo "
