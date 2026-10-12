@@ -18,14 +18,22 @@ tinha o Matific ligado por NOME até 31/07, antes de a sombra existir. Agora:
 * CONTINUIDADE DA CONTA: dado da mesma plataforma nas duas fichas só passa se
   for a MESMA conta continuando DA OFICIAL PARA A SOMBRA — a oficial sem conta
   própria nela, retratos sem sobreposição de dias, a oficial ANTES (a ordem
-  medida: por nome até 31/07, a conta na sombra depois), algum contador da
-  oficial acima de zero, cada contador acumulado do limite do lado da sombra
-  >= o MAIOR valor dele na oficial, no máximo 31 dias entre os dois, nenhum
+  medida: por nome até 31/07, a conta na sombra depois), contadores do limite
+  que provam a mesma conta (abaixo), no máximo 31 dias entre os dois, nenhum
   dado novo na oficial depois de a sombra começar e nenhum dado da sombra de
   antes do último retrato da oficial que não seja CÓPIA de um dado dela (o
-  histórico da conta reenviado). Senão, CONFLITO com o motivo
-  (``dados_simultaneos_mesma_plataforma``, ``ordem_invertida``,
-  ``contadores_zerados``, ``contador_regrediu``, ``intervalo_longo``,
+  histórico da conta reenviado). Os contadores do limite: no MATIFIC
+  (acumulados do ano), algum contador da oficial acima de zero e cada um do
+  lado da sombra >= o MAIOR valor dele na oficial; no ELEFANTE (iteração 4,
+  12/10), cujos contadores caem dentro da MESMA ficha — medido em produção:
+  132 quedas de livros e 211 de minutos entre retratos seguidos —, o 1º
+  retrato da sombra REPETE EXATAMENTE o último da oficial nos quatro
+  contadores (livros, minutos, questões tentadas e acertadas), com algum
+  acima de zero. Dos 8 pares reais do Elefante, 6 repetem; os 2 em que os
+  contadores crescem ficam, de propósito, para a revisão humana. Senão,
+  CONFLITO com o motivo (``dados_simultaneos_mesma_plataforma``,
+  ``ordem_invertida``, ``contadores_zerados``, ``contador_regrediu``,
+  ``contadores_diferentes_no_limite``, ``intervalo_longo``,
   ``continuidade_sem_retrato``, ``leitura_repetida_nas_duas_fichas``,
   ``duas_contas_mesma_plataforma``). Entre duas sombras da mesma oficial: a
   por nome antes da que tem a conta, no mesmo sentido em todas as plataformas
@@ -40,12 +48,14 @@ tinha o Matific ligado por NOME até 31/07, antes de a sombra existir. Agora:
   coleta da conta não os grava de novo. A auditoria lista os ids.
 
 A linha de cada CONSOLIDAR mostra a continuidade por plataforma (dias do
-limite, intervalo, contadores iguais/crescentes). RISCO que os dados não
-eliminam: a conta NOVA de outra criança que só começa a mandar dado depois do
-último retrato da oficial e, no primeiro retrato, já passou de todos os
-contadores que a oficial tinha no ano passaria como continuidade (possível
-quando a oficial tem contador baixo) — por isso a conferência das linhas antes
-de ``--aplicar`` continua obrigatória.
+limite, intervalo, contadores iguais/crescentes — no Elefante, só iguais).
+RISCO que os dados não eliminam: a conta NOVA de outra criança que só começa a
+mandar dado depois do último retrato da oficial e, no primeiro retrato, já
+passou de todos os contadores que a oficial tinha no ano (no Matific) — ou
+começa com os quatro contadores iguais aos do último retrato dela (no
+Elefante) — passaria como continuidade (possível quando a oficial tem
+contador baixo) — por isso a conferência das linhas antes de ``--aplicar``
+continua obrigatória.
 
 Garantias
 ---------

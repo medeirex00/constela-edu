@@ -84,25 +84,36 @@ Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
           a anterior é a OFICIAL (``ordem_invertida``): nos pares medidos a
           ordem foi sempre oficial por nome ANTES, conta na sombra DEPOIS — uma
           conta que para e um dado por nome que começa na outra ficha é o
-          retrato de duas contas; (iii) a anterior tem algum contador acima de
-          zero (``contadores_zerados``: zero não prova continuidade nenhuma —
-          a conta nova de qualquer criança também começa ali) e, no limite,
-          CADA contador acumulado do ano da posterior é >= o MAIOR valor dele
-          em todos os retratos da anterior, não só no último (Matific:
-          atividades, estrelas; Elefante: livros, minutos, questões tentadas e
-          acertadas); (iv) no máximo 31 dias entre o último retrato da
-          anterior e o primeiro da posterior; (v) nenhum outro dado de P na
-          anterior (leitura, evento) do dia do primeiro retrato da posterior em
-          diante; (vi) o simétrico: todo dado de P da POSTERIOR (leitura,
-          evento) de dia ANTERIOR ao do último retrato da anterior é CÓPIA de
-          um dado da anterior — o histórico da conta reenviado. Um livro que a
-          anterior não tem, lido enquanto ela ainda recebia retratos, prova
-          duas contas ativas ao mesmo tempo. E, no Elefante, nenhum livro lido
-          nas duas com data, tempo ou nível diferentes (a fusão descartaria
-          uma das leituras). Qualquer falha → CONFLITO com o motivo dela.
+          retrato de duas contas; (iii) os contadores do LIMITE provam a mesma
+          conta — e zero não prova nada (``contadores_zerados``: a conta nova
+          de qualquer criança também começa ali). No Matific, cujos contadores
+          (atividades, estrelas) são acumulados do ano, a anterior tem algum
+          contador acima de zero e CADA contador da posterior é >= o MAIOR
+          valor dele em todos os retratos da anterior, não só no último
+          (``contador_regrediu``). No Elefante, NÃO: medido em produção
+          (12/10), os contadores caem dentro da MESMA ficha (132 quedas de
+          livros e 211 de minutos entre retratos seguidos), então "maior ou
+          igual" não prova nada — o primeiro retrato da posterior tem de
+          REPETIR EXATAMENTE o último da anterior nos quatro contadores
+          (livros, minutos, questões tentadas e acertadas), com algum acima
+          de zero (``contadores_diferentes_no_limite``,
+          ``_SO_IGUALDADE_NO_LIMITE``); (iv) no máximo 31 dias entre o
+          último retrato da anterior e o primeiro da posterior; (v) nenhum
+          outro dado de P na anterior (leitura, evento) do dia do primeiro
+          retrato da posterior em diante; (vi) o simétrico: todo dado de P
+          da POSTERIOR (leitura, evento) de dia ANTERIOR ao do último retrato
+          da anterior é CÓPIA de um dado da anterior — o histórico da conta
+          reenviado. Um livro que a anterior não tem, lido enquanto ela ainda
+          recebia retratos, prova duas contas ativas ao mesmo tempo. E, no
+          Elefante, nenhum livro lido nas duas com data, tempo ou nível
+          diferentes (a fusão descartaria uma das leituras). Qualquer falha →
+          CONFLITO com o motivo dela.
       O padrão medido (12/10): a oficial tem o Matific ligado por NOME de abril
       a 31/07, a sombra o tem com a conta de 01/08 em diante e os contadores
-      do limite são iguais (ou crescem) — é a mesma conta, não duas. A mesma
+      do limite são iguais (ou crescem) — é a mesma conta, não duas. No
+      Elefante, 6 dos 8 pares reais têm o 1º retrato da sombra IDÊNTICO ao
+      último da oficial nos quatro contadores; os 2 em que eles crescem ficam,
+      de propósito, para a revisão humana. A mesma
       regra vale entre duas sombras da mesma O que dividem uma plataforma: as
       duas com conta nela → CONFLITO; só uma com conta → ela tem de ser a
       POSTERIOR (a por nome antes, a conta depois, como com a oficial); sem
@@ -132,13 +143,16 @@ dos eventos que só a sombra tinha (``_alinhar_eventos``).
 O RISCO QUE A CONTINUIDADE NÃO ELIMINA. Datas e contadores fecham a criança
 diferente que tinha dado ANTES de a oficial parar (vi), a que começa abaixo do
 maior contador da oficial (iii), a oficial zerada (iii) e a ordem inversa
-(ii'). Não fecham uma conta NOVA de outra criança que começa a mandar dado só
-DEPOIS do último retrato da oficial e, até o primeiro retrato dela (no máximo
-31 dias), já passou de TODOS os contadores acumulados que a oficial tinha no
-ano. Para a oficial com contador baixo isso é possível. O que segura esse caso
-é o resto da regra (o nome na forma do relatório na mesma turma, ninguém mais
-que possa ser a dona, a Lista Piloto) e a política da escola, que nasce
-"manual". Ver ``test_falsificacao_de_continuidade``.
+(ii'). No Matific, não fecham uma conta NOVA de outra criança que começa a
+mandar dado só DEPOIS do último retrato da oficial e, até o primeiro retrato
+dela (no máximo 31 dias), já passou de TODOS os contadores acumulados que a
+oficial tinha no ano. Para a oficial com contador baixo isso é possível. No
+Elefante a porta é mais estreita — a conta da outra criança teria de começar
+com os QUATRO contadores iguais aos do último retrato da oficial —, mas, com
+contadores baixos, não é impossível. O que segura esse caso é o resto da regra
+(o nome na forma do relatório na mesma turma, ninguém mais que possa ser a
+dona, a Lista Piloto) e a política da escola, que nasce "manual". Ver
+``test_falsificacao_de_continuidade``.
 
 O DESTINO de cada ficha ativa fora da Lista Piloto matriculada no ano ativo:
 CONSOLIDAR (com as evidências), REVISAR (motivo), CONFLITO (motivo) ou SEM_PAR
@@ -256,6 +270,10 @@ MOTIVOS = {
     "contador_regrediu": "no limite entre as duas fichas um contador acumulado da "
                          "plataforma ficou abaixo do maior valor da ficha anterior: "
                          "não é a mesma conta continuando",
+    "contadores_diferentes_no_limite": "nesta plataforma os contadores não são "
+                                       "acumulados (podem cair na mesma conta): só o "
+                                       "primeiro retrato de uma ficha REPETINDO o último "
+                                       "da outra prova que é a mesma conta",
     "intervalo_longo": "mais de 31 dias entre o último retrato de uma ficha e o "
                        "primeiro da outra: não há como provar que é a mesma conta",
     "leitura_repetida_nas_duas_fichas": "o mesmo livro lido nas duas fichas com data, "
@@ -282,14 +300,25 @@ _TABELAS_DA_FICHA = (
     ("identidades_externas", IdentidadeExterna),
 )
 
-# Os contadores ACUMULADOS do ano que cada plataforma manda no snapshot: a MESMA
-# conta nunca os vê diminuir de um retrato para o seguinte. Plataforma fora daqui
+# Os contadores do ano que cada plataforma manda no snapshot. No Matific eles são
+# ACUMULADOS: a MESMA conta nunca os vê diminuir de um retrato para o seguinte. No
+# Elefante, na prática, não (``_SO_IGUALDADE_NO_LIMITE``). Plataforma fora daqui
 # não tem retrato com que provar continuidade (→ CONFLITO).
 _CONTADORES = {
     "matific": (SnapshotMatific, ("atividades", "estrelas")),
     "elefante": (SnapshotElefante, ("livros_unicos", "tempo_leitura_min",
                                     "questoes_tentativas", "questoes_acertos")),
 }
+
+# Plataformas cujos contadores do snapshot NÃO são acumulados na prática: medido
+# em produção (12/10), há 132 quedas de livros_unicos e 211 de tempo_leitura_min
+# entre retratos seguidos da MESMA ficha do Elefante. Aí "maior ou igual" não
+# prova nada (a mesma conta cai; outra conta pode começar acima). Só vale a
+# IGUALDADE do limite: o primeiro retrato da posterior repete, contador a
+# contador, o último da anterior — nos pares reais do Elefante, os quatro: 6 dos
+# 8 pares de sombra medidos repetem exatamente; os 2 em que os contadores crescem
+# no limite ficam, de propósito, para a revisão humana.
+_SO_IGUALDADE_NO_LIMITE = frozenset({"elefante"})
 
 # Maior intervalo (em dias) entre o último retrato da ficha anterior e o primeiro
 # da posterior em que a continuidade ainda é aceita. Medido em 12/10: nos pares
@@ -737,13 +766,14 @@ def _dado_proprio_da_posterior(db: Session, est: _Estado, ant: int, post: int,
     anterior já o contaria.
 
     O dia do último retrato fica de fora (``<``, não ``<=``): o retrato é datado
-    pela hora da coleta (a agenda roda às 00:10), e o que a criança lê naquele
-    dia, depois da coleta, só aparece na ficha seguinte — é justamente o que
-    faz o contador crescer no limite (129 → 135 livros, de uma coleta para a
-    outra, no par medido do Elefante). ``<=`` não protegeria mais: a conta de
-    outra criança que começa naquele dia é a mesma que começa no dia seguinte,
-    e esta passa de qualquer jeito (o risco de
-    ``test_falsificacao_de_continuidade``)."""
+    pela hora da coleta (a agenda roda às 00:10), e o que a criança faz naquele
+    dia, depois da coleta, só aparece na ficha seguinte — no Matific, é o que
+    faz o contador crescer no limite. (No Elefante o limite tem de REPETIR os
+    contadores, ``_SO_IGUALDADE_NO_LIMITE``: o par medido em que eles cresciam,
+    129 → 135 livros, vai para a revisão humana por (iii), não por aqui.)
+    ``<=`` não protegeria mais: a conta de outra criança que começa naquele dia
+    é a mesma que começa no dia seguinte, e esta só é barrada pelos contadores
+    (o risco de ``test_falsificacao_de_continuidade``)."""
     da_anterior = {ident for _dia_ev, ident in _eventos(db, est, ant, plataforma)}
     if any(dia < ate and ident not in da_anterior
            for dia, ident in _eventos(db, est, post, plataforma)):
@@ -764,10 +794,11 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
 
     O padrão real (12/10): a oficial tem o Matific ligado por NOME até 31/07; em
     01/08 a sincronização passou a receber a conta e criou a sombra, que segue
-    dali. Os dois retratos do limite têm os MESMOS contadores acumulados do ano
-    (ou maiores do lado da sombra): é a mesma conta, só que dividida em duas
-    fichas. Duas contas reais, ao contrário, recebem dado no MESMO período, ou
-    a segunda começa do zero.
+    dali. Os dois retratos do limite têm os MESMOS contadores do ano (no
+    Matific, acumulados, também maiores do lado da sombra; no Elefante, só os
+    mesmos): é a mesma conta, só que dividida em duas fichas. Duas contas
+    reais, ao contrário, recebem dado no MESMO período, ou a segunda começa do
+    zero.
 
     Aceita SOMENTE com tudo isto (cada falha tem o seu motivo):
       (i) as duas fichas têm snapshot da plataforma — leitura ou evento soltos
@@ -783,7 +814,13 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
           todos os retratos da anterior (``contador_regrediu``). Zero não prova
           nada — a conta nova de qualquer criança começa ali —, e o maior valor
           (não só o último) impede que um último retrato que caiu abra a porta
-          para uma conta que começa baixo;
+          para uma conta que começa baixo. Nas plataformas de
+          ``_SO_IGUALDADE_NO_LIMITE`` (Elefante, cujos contadores caem dentro da
+          mesma conta) vale só a IGUALDADE: o ÚLTIMO retrato da anterior tem
+          algum contador acima de zero (``contadores_zerados``) e o 1º retrato
+          da posterior o repete em todos os contadores
+          (``contadores_diferentes_no_limite``) — o máximo da anterior não
+          entra: a queda DENTRO dela é a mesma conta, não prova nada;
       (iv) no máximo ``INTERVALO_MAXIMO_DIAS`` entre os dois (``intervalo_longo``);
       (v) a anterior não tem outro dado da plataforma (leitura, evento) do dia
           do primeiro retrato da posterior em diante
@@ -808,11 +845,23 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
     dias = (primeiro.dia - ultimo.dia).days
     if dias > INTERVALO_MAXIMO_DIAS:
         return _Continuidade("intervalo_longo")
-    maximos = tuple(max(valores) for valores in zip(*(r.contadores for r in r_ant)))
-    if not any(maximos):
-        return _Continuidade("contadores_zerados")
-    if any(p < m for m, p in zip(maximos, primeiro.contadores)):
-        return _Continuidade("contador_regrediu")
+    if plataforma in _SO_IGUALDADE_NO_LIMITE:
+        # Contador que cai dentro da mesma conta: comparar com o máximo barraria
+        # a conta legítima e "crescer" não provaria nada — só a repetição exata
+        # do último retrato da anterior (com algo acima de zero) prova. A
+        # referência é o último (não o máximo): a evidência sai sempre
+        # "iguais", sem ``maximos_anterior``.
+        maximos = ultimo.contadores
+        if not any(ultimo.contadores):
+            return _Continuidade("contadores_zerados")
+        if primeiro.contadores != ultimo.contadores:
+            return _Continuidade("contadores_diferentes_no_limite")
+    else:
+        maximos = tuple(max(valores) for valores in zip(*(r.contadores for r in r_ant)))
+        if not any(maximos):
+            return _Continuidade("contadores_zerados")
+        if any(p < m for m, p in zip(maximos, primeiro.contadores)):
+            return _Continuidade("contador_regrediu")
     outro = _ultimo_outro_dado(db, ant, plataforma)
     if outro is not None and outro >= primeiro.dia:
         return _Continuidade("dados_simultaneos_mesma_plataforma")
@@ -827,7 +876,8 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
         "primeiro_retrato_posterior": primeiro.dia.isoformat(),
         "dias_entre": dias,
         # "iguais" só quando o 1º retrato da posterior repete o último (que é
-        # também o maior) da anterior; 0 → 0 em TODOS nunca chega aqui.
+        # também o maior) da anterior; 0 → 0 em TODOS nunca chega aqui. No
+        # Elefante (``_SO_IGUALDADE_NO_LIMITE``) só "iguais" chega aqui.
         "contadores": ("iguais" if primeiro.contadores == ultimo.contadores == maximos
                        else "crescentes"),
         "contadores_anterior": dict(zip(campos, ultimo.contadores)),

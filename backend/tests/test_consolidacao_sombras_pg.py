@@ -23,7 +23,12 @@ Este módulo prova, contra o banco de produção (Postgres):
      fusão e a próxima coleta não os grava de novo — a identidade do evento
      (minuto de ``ocorrido_em`` como o Postgres devolve) e a chave recalculada
      para a oficial batem com as do importador; a oficial zerada e a sombra
-     com dado próprio de antes do limite seguem CONFLITO.
+     com dado próprio de antes do limite seguem CONFLITO;
+  8. (iteração 4) no Elefante só a IGUALDADE do limite prova a mesma conta: o
+     1º retrato da sombra repetindo o último da oficial nos quatro contadores
+     (com queda DENTRO da série da oficial) consolida e a evidência dos quatro
+     vai para o JSON da auditoria; um contador diferente, ou o limite
+     crescendo, é CONFLITO ``contadores_diferentes_no_limite``.
 
 Como rodar::
 
@@ -375,7 +380,9 @@ def test_historico_reenviado_nao_dobra_eventos_no_postgres(motor_pg, cena):
         com_julho_oficial, com_julho = (ficha("HORTENSIA MARIA LIMA", True),
                                         ficha("HORTENSIA M", False, f"44{eid}03"))
         retratos(com_julho_oficial, [("2026-07-13", 8, 40), ("2026-07-31", 10, 60)])
-        retratos(com_julho, [("2026-08-01", 40, 300)])
+        # O limite REPETE os contadores (iteração 4: a única forma de o limite
+        # do Elefante passar) — a trava exercitada é o livro próprio de julho.
+        retratos(com_julho, [("2026-08-01", 10, 60)])
         ler(com_julho, "LIVRO PG PROPRIO", datetime(2026, 7, 9, 15, 0))
         db.commit()
 
@@ -410,6 +417,90 @@ def test_historico_reenviado_nao_dobra_eventos_no_postgres(motor_pg, cena):
             for t, q in zip(titulos, quandos)])
         db.rollback()
         assert novos == 0
+
+
+def test_elefante_so_aceita_a_igualdade_do_limite_no_postgres(motor_pg, cena):
+    """Iteração 4, com os tipos do Postgres (``data_referencia`` com hora da
+    coleta, comparada por dia; evidência no JSON da auditoria). Medido em
+    produção (12/10): os contadores do Elefante caem dentro da MESMA ficha, e
+    nos pares reais o 1º retrato da sombra repete o último da oficial nos
+    quatro contadores. Três pares na mesma escola:
+
+      * a oficial CAI dentro da série dela e a sombra repete o último retrato
+        nos quatro contadores → CONSOLIDA ("iguais", sem ``maximos_anterior``);
+      * um contador só (questões acertadas) difere no limite → CONFLITO;
+      * o limite CRESCE nos quatro → CONFLITO (a regra do maior aceitaria)."""
+    from datetime import datetime
+
+    campos = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas",
+              "questoes_acertos")
+    limite = (38, 9, 64, 29)
+    with Session(motor_pg) as db:
+        eid = cena["escola_id"]
+        turma = db.execute(select(Turma).where(Turma.escola_id == eid)).scalar_one()
+        imp = db.execute(select(Importacao).where(Importacao.escola_id == eid)).scalar_one()
+
+        def par(nome_oficial, nome_sombra, conta, serie_oficial, serie_sombra):
+            ids = []
+            for nome, lp in ((nome_oficial, True), (nome_sombra, False)):
+                a = Aluno(escola_id=eid, nome=nome, da_lista_piloto=lp)
+                db.add(a)
+                db.flush()
+                db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=turma.id,
+                                 ano_letivo=2026))
+                ids.append(a.id)
+            db.add(IdentidadeExterna(escola_id=eid, aluno_id=ids[1], plataforma="elefante",
+                                     id_externo=conta))
+            for aluno_id, serie in zip(ids, (serie_oficial, serie_sombra)):
+                for dia, (livros, minutos, tentativas, acertos) in serie:
+                    db.add(SnapshotElefante(
+                        escola_id=eid, aluno_id=aluno_id, importacao_id=imp.id,
+                        data_referencia=datetime.fromisoformat(dia),
+                        livros_unicos=livros, tempo_leitura_min=minutos,
+                        questoes_tentativas=tentativas, questoes_acertos=acertos,
+                        livros_por_nivel={"D": livros}))
+            return ids
+
+        serie_oficial = [("2026-07-13T03:10:00", (52, 14, 90, 41)),
+                         ("2026-07-31T03:10:00", limite)]
+        oficial, sombra = par("ROSALVA MIRANDA PIRES", "ROSALVA M", f"45{eid}01",
+                              serie_oficial,
+                              [("2026-08-01T03:10:00", limite),
+                               ("2026-08-20T03:10:00", (35, 8, 60, 27))])
+        _of_um, um_diferente = par("TEODOMIRO SALES BRITO", "TEODOMIRO S", f"45{eid}02",
+                                   serie_oficial,
+                                   [("2026-08-01T03:10:00", (38, 9, 64, 30))])
+        _of_cresce, crescente = par("BERENICE QUADROS LIMA", "BERENICE Q", f"45{eid}03",
+                                    serie_oficial,
+                                    [("2026-08-01T03:10:00", (40, 12, 70, 33))])
+        db.commit()
+
+        plano = cs.planejar(db, eid)
+        item = plano.item_da_sombra(sombra)
+        assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial)
+        ev = item.evidencias["continuidade"]["elefante"]
+        assert ev["contadores"] == "iguais" and "maximos_anterior" not in ev
+        for outro in (um_diferente, crescente):
+            assert (plano.item_da_sombra(outro).classe, plano.item_da_sombra(outro).motivo) == (
+                cs.CONFLITO, "contadores_diferentes_no_limite")
+        res = cs.aplicar(db, plano, usuario_id=None, origem="teste_pg")
+        assert sombra in [x["sombra_id"] for x in res["consolidados"]]
+        assert {um_diferente, crescente}.isdisjoint(x["sombra_id"] for x in res["consolidados"])
+
+    with Session(motor_pg) as db:
+        assert db.get(Aluno, sombra) is None
+        assert db.get(Aluno, um_diferente) is not None and db.get(Aluno, crescente) is not None
+        assert db.execute(select(func.count()).select_from(SnapshotElefante).where(
+            SnapshotElefante.aluno_id == oficial)).scalar_one() == 4
+        [detalhes] = db.execute(select(LogAuditoria.detalhes).where(
+            LogAuditoria.escola_id == eid, LogAuditoria.acao == "aluno.consolidado_automatico",
+            LogAuditoria.entidade_id == oficial)).scalars().all()
+        quatro = dict(zip(campos, limite))
+        assert detalhes["evidencias"]["continuidade"]["elefante"] == {
+            "ficha_anterior": "oficial", "ultimo_retrato_anterior": "2026-07-31",
+            "primeiro_retrato_posterior": "2026-08-01", "dias_entre": 1,
+            "contadores": "iguais", "contadores_anterior": quatro,
+            "contadores_posterior": quatro}
 
 
 def test_simulacao_do_script_e_somente_leitura_no_postgres(motor_pg, cena, monkeypatch,
