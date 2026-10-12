@@ -2,7 +2,9 @@
  * Gestão de REDES (administrador GLOBAL) — provisiona o tier Secretaria:
  *   1. cria/renomeia uma rede;
  *   2. escolhe QUAIS escolas entram nela (e onde ficam no mapa: lat/long);
- *   3. designa QUEM é a Secretaria (usuários que recebem o escopo da rede).
+ *   3. designa QUEM é a Secretaria (usuários que recebem o escopo da rede). A
+ *      conta promovida PERDE a senha (o backend a invalida): a tela avisa antes
+ *      de salvar e depois diz quem precisa do link de redefinição e onde gerá-lo.
  *
  * Sem isto, a rede só existia por seed. A segurança real é no backend
  * (todas as rotas exigem admin global); esta tela é só a interface.
@@ -70,6 +72,20 @@ interface Gerenciar {
   redes: RedeItem[];
   escolas: EscolaItem[];
   usuarios: UsuarioItem[];
+}
+/** Conta que PASSOU a ser Secretaria numa gravação e perdeu a senha (decisão do
+ *  dono): só volta a entrar por um link de redefinição gerado pelo admin global. */
+interface ContaSemSenha {
+  id: number;
+  nome: string;
+  email: string;
+  escola_id: number | null;
+}
+interface DefinicaoUsuarios {
+  rede_id: number;
+  usuario_ids: number[];
+  /** Aditivo no backend: ausente numa API antiga = ninguém perdeu a senha. */
+  exigem_redefinicao?: ContaSemSenha[];
 }
 
 type Aviso = { tipo: "ok" | "erro"; texto: string } | null;
@@ -275,13 +291,18 @@ export function ModulosDaRede({ redeId }: { redeId: number }) {
 }
 
 export default function RedeGestao() {
-  const { usuario, recarregarEscolas } = useApp();
+  const { usuario, recarregarEscolas, selecionarEscola } = useApp();
   const navegar = useNavigate();
   const { dados, erro, carregando, recarregar } = useApi<Gerenciar>("/redes/gerenciar");
 
   const [redeSel, setRedeSel] = useState<number | null>(null);
   const [aviso, setAviso] = useState<Aviso>(null);
   const [ocupado, setOcupado] = useState(false);
+  // Promoção a Secretaria INVALIDA a senha da conta (o backend decide quem):
+  // antes de salvar a tela pede confirmação; depois, lista quem precisa do link
+  // de redefinição — por rede, para não mostrar a lista de uma rede em outra.
+  const [confirmarPromocao, setConfirmarPromocao] = useState(false);
+  const [semSenha, setSemSenha] = useState<{ redeId: number; contas: ContaSemSenha[] } | null>(null);
 
   // Nova rede
   const [novaAberta, setNovaAberta] = useState(false);
@@ -396,21 +417,64 @@ export default function RedeGestao() {
     }
   }
 
+  /** Contas marcadas que AINDA não são desta rede: ao salvar, viram Secretaria e
+   *  perdem a senha. A global fica fora (o backend nunca invalida a senha dela). */
+  function aPromover(): UsuarioItem[] {
+    if (!dados || redeSel === null) return [];
+    return dados.usuarios.filter(
+      (u) => usuariosSel.has(u.id) && u.rede_id !== redeSel && !u.is_global,
+    );
+  }
+
+  // "Salvar acessos": com promoção pendente, AVISA antes (a senha das contas
+  // promovidas deixa de valer); sem promoção, nada se perde e salva direto.
+  function pedirSalvarUsuarios() {
+    if (redeSel === null) return;
+    if (aPromover().length > 0) setConfirmarPromocao(true);
+    else void salvarUsuarios();
+  }
+
   async function salvarUsuarios() {
     if (redeSel === null) return;
+    const rede = redeSel;
+    setConfirmarPromocao(false);
     setOcupado(true);
     try {
-      await api(`/redes/${redeSel}/usuarios`, {
+      const r = await api<DefinicaoUsuarios>(`/redes/${rede}/usuarios`, {
         method: "PUT",
         body: JSON.stringify({ usuario_ids: [...usuariosSel] }),
       });
-      setAviso({ tipo: "ok", texto: "Secretaria da rede atualizada." });
+      // A lista vem do BACKEND (fonte da verdade sobre quem perdeu a senha).
+      // Soma à de gravações anteriores desta rede: quem foi promovido antes e
+      // ainda não recebeu o link continua precisando dele.
+      const novas = r?.exigem_redefinicao ?? [];
+      if (novas.length > 0) {
+        setSemSenha((atual) => {
+          const anteriores = atual?.redeId === rede ? atual.contas : [];
+          const ids = new Set(novas.map((c) => c.id));
+          return { redeId: rede, contas: [...anteriores.filter((c) => !ids.has(c.id)), ...novas] };
+        });
+      }
+      setAviso({
+        tipo: "ok",
+        texto: novas.length > 0
+          ? `Secretaria da rede atualizada. ${novas.length} conta(s) promovida(s) perderam a senha `
+            + "e só voltam a entrar com um link de redefinição — veja abaixo onde gerá-lo."
+          : "Secretaria da rede atualizada.",
+      });
       recarregar();
     } catch (e) {
       setAviso({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível salvar." });
     } finally {
       setOcupado(false);
     }
+  }
+
+  // Leva o admin global à tela de Usuários da escola de origem da conta — onde
+  // fica o "Redefinir senha". Só navega: o link NÃO é gerado aqui.
+  function abrirUsuariosDaEscola(escolaId: number) {
+    selecionarEscola(escolaId);
+    navegar("/usuarios");
   }
 
   // Cola um bloco "Nome; bairro; latitude; longitude" (bairro e/ou coordenadas
@@ -577,6 +641,8 @@ export default function RedeGestao() {
   const escolas = dados?.escolas ?? [];
   const usuarios = dados?.usuarios ?? [];
   const escolasNaRede = escolas.filter((e) => e.rede_id === redeSel);
+  const promocoesPendentes = aPromover();
+  const contasSemSenha = semSenha && semSenha.redeId === redeSel ? semSenha.contas : [];
 
   return (
     <div className="space-y-6">
@@ -665,14 +731,71 @@ export default function RedeGestao() {
                   <h2 className="flex items-center gap-2 text-sm font-semibold">
                     <Users size={16} className="text-indigo-600" /> Acesso da Secretaria
                   </h2>
-                  <Botao onClick={salvarUsuarios} disabled={ocupado}>
+                  <Botao onClick={pedirSalvarUsuarios} disabled={ocupado}>
                     <Save size={14} /> Salvar acessos
                   </Botao>
                 </div>
                 <p className="mb-2 text-xs text-zinc-500">
                   Quem for marcado passa a enxergar o painel desta rede (e só dela). O admin
-                  global já vê todas as redes.
+                  global já vê todas as redes. <b>Quem passa a ter este acesso perde a senha
+                  atual</b>: só volta a entrar com um link de redefinição gerado por você.
                 </p>
+                {contasSemSenha.length > 0 && (
+                  <section
+                    aria-label="Contas que precisam de link de redefinição"
+                    className="mb-3 space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200"
+                  >
+                    <p className="font-semibold">
+                      {contasSemSenha.length} conta(s) promovida(s) precisam de um link de
+                      redefinição para voltar a entrar
+                    </p>
+                    <ul className="space-y-1.5">
+                      {contasSemSenha.map((c) => {
+                        const origem = c.escola_id != null
+                          ? escolas.find((e) => e.id === c.escola_id)?.nome ?? `escola #${c.escola_id}`
+                          : null;
+                        return (
+                          <li key={c.id}>
+                            <b>{c.nome}</b> · {c.email} —{" "}
+                            {c.escola_id != null ? (
+                              <>
+                                gere em <b>Usuários e acessos</b> da escola <b>{origem}</b>, no
+                                menu da conta → <b>Redefinir senha</b>.{" "}
+                                <button
+                                  type="button"
+                                  className="font-semibold underline underline-offset-2"
+                                  onClick={() => abrirUsuariosDaEscola(c.escola_id as number)}
+                                >
+                                  Abrir Usuários de {origem}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                conta sem escola (não aparece em tela de Usuários): gere no
+                                servidor com{" "}
+                                <code className="break-all rounded bg-amber-100 px-1 dark:bg-amber-500/20">
+                                  python -m scripts.link_redefinicao --usuario-id {c.id} --por{" "}
+                                  {usuario.id} --confirmar
+                                </code>
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <p>
+                      Nenhum link foi gerado automaticamente. Entregue cada link por canal
+                      seguro — ele vale uma única vez e expira.
+                    </p>
+                    <button
+                      type="button"
+                      className="font-semibold underline underline-offset-2"
+                      onClick={() => setSemSenha(null)}
+                    >
+                      Ocultar lista
+                    </button>
+                  </section>
+                )}
                 <ul className="max-h-80 space-y-0.5 overflow-y-auto">
                   {usuarios.filter((u) => !u.is_global).map((u) => (
                     <li key={u.id}>
@@ -686,6 +809,9 @@ export default function RedeGestao() {
                         <span className="flex-1 truncate text-sm">
                           {u.nome} <span className="text-zinc-400">· {u.email}</span>
                         </span>
+                        {usuariosSel.has(u.id) && u.rede_id !== redeSel && (
+                          <Badge tom="alerta">perde a senha ao salvar</Badge>
+                        )}
                         <Badge tom="neutro">{u.cargo}</Badge>
                       </label>
                     </li>
@@ -904,6 +1030,41 @@ export default function RedeGestao() {
             <Botao variante="neutro" onClick={() => setNovaAberta(false)} disabled={ocupado}>Cancelar</Botao>
             <Botao disabled={ocupado || nome.trim().length < 2} onClick={criarRede}>
               {ocupado ? "Criando..." : "Criar rede"}
+            </Botao>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Confirmação da promoção a Secretaria (a senha deixa de valer) --- */}
+      <Modal
+        titulo="Promover a Secretaria"
+        aberto={confirmarPromocao}
+        aoFechar={() => setConfirmarPromocao(false)}
+      >
+        <div className="space-y-3 text-sm">
+          <p>
+            {promocoesPendentes.length} conta(s) passam a ter o acesso da Secretaria
+            {redeAtual ? <> de <b>{redeAtual.nome}</b></> : null}:
+          </p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {promocoesPendentes.map((u) => (
+              <li key={u.id}>
+                <b>{u.nome}</b> <span className="text-zinc-500">· {u.email}</span>
+              </li>
+            ))}
+          </ul>
+          <p>
+            Por segurança, ao salvar, <b>a senha atual dessas contas deixa de valer</b>, as
+            sessões abertas caem e os links de redefinição pendentes são anulados. Elas só
+            voltam a entrar com um <b>link de redefinição</b> que você gera depois — nenhum
+            link é gerado automaticamente.
+          </p>
+          <div className="flex justify-end gap-2 pt-1">
+            <Botao variante="neutro" onClick={() => setConfirmarPromocao(false)} disabled={ocupado}>
+              Cancelar
+            </Botao>
+            <Botao onClick={() => void salvarUsuarios()} disabled={ocupado}>
+              Salvar e invalidar as senhas
             </Botao>
           </div>
         </div>
