@@ -10,6 +10,10 @@ import { useApp } from "../context/AppContext";
  * - secretaria  → SEDUC: conta com rede vinculada, NÃO global (agrega a rede).
  * - rede        → alcança o painel /rede (SEDUC ou Admin Global).
  * - gestor      → admin/coordenador (ou global): vê telas de gestão.
+ * - admin       → administrador (global OU cargo "admin"): o MESMO teste que a
+ *                 tela de Configurações Gerais usa e que o backend aplica em
+ *                 `exigir_papeis("admin")` (o global sempre passa). A
+ *                 coordenação NÃO é admin: não abre Configurações Gerais.
  * - escolaOnly  → opera UMA escola (professor/coordenador/admin sem rede).
  */
 export function usePerfil() {
@@ -18,6 +22,7 @@ export function usePerfil() {
   const secretaria = !global && usuario?.rede_id != null;
   const rede = global || usuario?.rede_id != null;
   const gestor = global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  const admin = global || usuario?.cargo === "admin";
   const escolaOnly = !global && usuario?.rede_id == null;
-  return { global, secretaria, rede, gestor, escolaOnly, cargo: usuario?.cargo ?? null };
+  return { global, secretaria, rede, gestor, admin, escolaOnly, cargo: usuario?.cargo ?? null };
 }

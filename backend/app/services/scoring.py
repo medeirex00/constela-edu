@@ -260,6 +260,9 @@ INDICADORES_VOLUME = {"atividades", "estrelas", "livros", "tempo", "tentativas"}
 # Estatística robusta (P90/mediana) só é confiável com amostra suficiente;
 # abaixo disso a escola cai na escala simples por máximo (comportamento antigo).
 MIN_ALUNOS_ROBUSTO = 8
+# Percentil da REFERÊNCIA robusta (o 100 da escala): os 10% mais altos não
+# definem a régua sozinhos. Fonte única — o motor e a explicação leem daqui.
+PERCENTIL_REFERENCIA = 0.90
 
 # DIMENSÃO de cada indicador. Existe para uma garantia estrutural (Arquitetura 2,
 # item 6): a nota de LEITURA só pode nascer de dado do Elefante e a de MATEMÁTICA
@@ -388,7 +391,7 @@ def referencias_robustas(
         # A amostra que liga o modo robusto (``n_alunos``) não muda.
         ativos = _ativos_finitos(valores)
         if usar_robusto and len(ativos) >= 2:
-            refs[chave] = _percentil(ativos, 0.90)
+            refs[chave] = _percentil(ativos, PERCENTIL_REFERENCIA)
             if indicador in INDICADORES_VOLUME:
                 k_vol[indicador] = _percentil(ativos, 0.50)
         else:
@@ -833,7 +836,7 @@ def _referencias_auto(
         usar_robusto = (n_por_dimensao[DIMENSAO_DO_INDICADOR[indicador]]
                         >= MIN_ALUNOS_ROBUSTO)
         if usar_robusto and len(ativos) >= 2:
-            refs[chave] = _percentil(ativos, 0.90)        # régua robusta (top 10%)
+            refs[chave] = _percentil(ativos, PERCENTIL_REFERENCIA)        # régua robusta (top 10%)
             if indicador in INDICADORES_VOLUME:
                 k_vol[indicador] = _percentil(ativos, 0.50)  # meia-saturação = mediana
         else:
