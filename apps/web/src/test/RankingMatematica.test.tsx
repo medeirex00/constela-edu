@@ -188,6 +188,46 @@ describe("RankingMatematica (Matific ao vivo)", () => {
     expect(screen.queryByRole("link", { name: /Ana Local/ })).not.toBeInTheDocument();
   });
 
+  it("ANO LETIVO com teto de estrelas: mostra as que contam, o número registrado e explica a regra", async () => {
+    // O backend já cortou (2 atividades → contam 10 de 50) e já ordenou; a tela
+    // só exibe o que veio e explica — não refaz a conta.
+    responder("GET", "/escolas/1/ranking/matematica", [
+      { posicao: 1, aluno_id: 40, nome: "Joao Legitimo", turma: "4º Ano B",
+        estrelas: 40, atividades: 10, pontuacao_media: 4,
+        estrelas_brutas: 40, teto_estrelas_aplicado: false },
+      { posicao: 2, aluno_id: 41, nome: "Ana Corrigida", turma: "4º Ano B",
+        estrelas: 10, atividades: 2, pontuacao_media: 5,
+        estrelas_brutas: 50, teto_estrelas_aplicado: true },
+    ]);
+
+    renderComApp(<RankingMatematica />, {
+      rota: "/ranking-matematica", periodo: { preset: "ano_letivo" },
+    });
+
+    const linhaAna = (await screen.findByRole("link", { name: /Ana Corrigida/ })).closest("tr")!;
+    expect(within(linhaAna).getByText(/⭐ 10/)).toBeInTheDocument();
+    expect(within(linhaAna).getByText("(de 50*)")).toBeInTheDocument();
+    const linhaJoao = screen.getByRole("link", { name: /Joao Legitimo/ }).closest("tr")!;
+    expect(within(linhaJoao).queryByText(/\(de /)).not.toBeInTheDocument();
+    expect(screen.getByText(/Contam no máximo 5 estrelas por atividade/)).toBeInTheDocument();
+  });
+
+  it("ANO LETIVO sem teto aplicado: nenhuma marca nem nota de teto", async () => {
+    responder("GET", "/escolas/1/ranking/matematica", [
+      { posicao: 1, aluno_id: 40, nome: "Joao Legitimo", turma: "4º Ano B",
+        estrelas: 40, atividades: 10, pontuacao_media: 4,
+        estrelas_brutas: 40, teto_estrelas_aplicado: false },
+    ]);
+
+    renderComApp(<RankingMatematica />, {
+      rota: "/ranking-matematica", periodo: { preset: "ano_letivo" },
+    });
+
+    expect(await screen.findByRole("link", { name: /Joao Legitimo/ })).toBeInTheDocument();
+    expect(screen.queryByText(/\(de /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Contam no máximo 5 estrelas por atividade/)).not.toBeInTheDocument();
+  });
+
   it("mostra o estado vazio quando ninguém pontuou no período", async () => {
     responder("GET", URL, placar([]));
 

@@ -611,7 +611,25 @@ def ranking_matematica(
     conquistadas apenas no intervalo escolhido — o espelho do Ranking de
     Leitura para os melhores da matemática. Como o Matific não tem eventos
     individuais datados, o ganho vem dos snapshots (os imports mensais com
-    "Intervalo de datas" criam exatamente um ponto por período)."""
+    "Intervalo de datas" criam exatamente um ponto por período).
+
+    TETO DE ESTRELAS (decisão do dono, 2026-10-12): contam no máximo
+    ``matific_destaque.ESTRELAS_MAX_POR_ATIVIDADE`` (5) estrelas por atividade
+    do período — a MESMA ``limitar_estrelas`` que a premiação "Melhor
+    Matemática" aplica em ``ganho_no_periodo``. Sem ela, uma correção de
+    relatório entre dois snapshots (2 atividades e 50 estrelas no período)
+    punha a criança no topo deste ranking com 50 estrelas, enquanto a premiação
+    contava 10 para a MESMA criança no MESMO período. Contrato (aditivo):
+
+      * ``estrelas``               — as estrelas que CONTAM (ordenam o ranking),
+        o mesmo número que o pódio da premiação mostra em ``estrelas``;
+      * ``estrelas_brutas``        — o ganho do período antes do teto, para a
+        tela poder dizer quanto o Matific informou;
+      * ``teto_estrelas_aplicado`` — ``estrelas_brutas > estrelas``.
+
+    Período com estrelas e NENHUMA atividade conta 0 estrela (uma correção não
+    cria estrela sem atividade) e, sem atividade, a criança fica fora do
+    ranking do período — como já fica fora da premiação."""
     from app.services.evolucao import _delta, _janela, _series_por_aluno
 
     escola = db.get(Escola, escola_id)
@@ -662,8 +680,10 @@ def ranking_matematica(
                               ano_letivo=ano)
         if atual is None:
             continue
-        estrelas = _delta(atual, base, "estrelas")
+        estrelas_brutas = _delta(atual, base, "estrelas")
         atividades = _delta(atual, base, "atividades")
+        # As estrelas que CONTAM: a fonte única do teto, a mesma da premiação.
+        estrelas = matific_destaque.limitar_estrelas(atividades, estrelas_brutas)
         if estrelas == 0 and atividades == 0:
             continue  # sem atividade no período: fora do pódio do período
         # Média DO PERÍODO, derivada dos snapshots (o import acumula a média
@@ -681,12 +701,16 @@ def ranking_matematica(
             "ano_escolar": serie_escolar,
             "estrelas": int(estrelas), "atividades": int(atividades),
             "pontuacao_media": media_periodo,
+            "estrelas_brutas": int(estrelas_brutas),
+            "teto_estrelas_aplicado": estrelas < estrelas_brutas,
         })
 
-    # Desempate determinístico por nome e, por último, pelo ID DO ALUNO — a
-    # convenção das premiações (``premiacoes._podio``). Sem o id, dois homônimos
-    # empatados ficavam à mercê da ordem que o banco devolvesse e podiam trocar
-    # de posição entre duas requisições idênticas.
+    # Ordena pelas estrelas que CONTAM (nunca pelas brutas: o excesso cortado
+    # pelo teto não pode voltar como desempate). Desempate determinístico por
+    # nome e, por último, pelo ID DO ALUNO — a convenção das premiações
+    # (``premiacoes._podio``). Sem o id, dois homônimos empatados ficavam à
+    # mercê da ordem que o banco devolvesse e podiam trocar de posição entre
+    # duas requisições idênticas.
     itens.sort(key=lambda x: (-x["estrelas"], -x["atividades"],
                               -x["pontuacao_media"], x["nome"].casefold(),
                               x["aluno_id"]))

@@ -329,9 +329,16 @@ export interface RankingMatematicaItem {
   nome: string;
   turma: string | null;
   ano_escolar: string | null;
+  /** Estrelas que CONTAM no período: no máximo 5 por atividade — a mesma regra
+   *  (e o mesmo número) da premiação "Melhor Matemática". É o que ordena. */
   estrelas: number;
   atividades: number;
   pontuacao_media: number;
+  /** Ganho de estrelas do período ANTES do teto. Opcional: respostas antigas
+   *  em cache não o trazem. */
+  estrelas_brutas?: number;
+  /** `estrelas_brutas > estrelas` — o teto cortou estrelas desta linha. */
+  teto_estrelas_aplicado?: boolean;
 }
 
 /** Um colocado no pódio de uma premiação. */
