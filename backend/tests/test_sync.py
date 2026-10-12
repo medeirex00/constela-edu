@@ -986,18 +986,32 @@ def test_scheduler_desligado_por_padrao():
 
 
 def test_uma_rodada_orquestra_agenda_e_fila(monkeypatch):
+    """Uma rodada chama TODAS as etapas, nesta ordem. Todas são substituídas:
+    antes, a auto-cura da agenda e a checagem de obsolescência rodavam de verdade
+    contra o ``SessionLocal`` da aplicação — com ``DATABASE_URL=sqlite://`` cada
+    thread tem a sua conexão em memória (SingletonThreadPool), sem as tabelas, e
+    o teste falhava ou passava conforme a ordem da suíte."""
     from app.sync import scheduler, service
-    chamou = {"agendados": 0, "executou": [], "reaper": 0}
+    ordem: list[str] = []
+    executou: list[int] = []
     monkeypatch.setattr(service, "recuperar_execucoes_travadas",
-                        lambda db: chamou.__setitem__("reaper", 1))
-    monkeypatch.setattr(service, "enfileirar_agendados", lambda db: chamou.__setitem__("agendados", 1))
+                        lambda db: ordem.append("reaper"))
+    monkeypatch.setattr(service, "garantir_agendas_diarias",
+                        lambda db: ordem.append("agendas"))
+    monkeypatch.setattr(service, "verificar_obsolescencia",
+                        lambda db: ordem.append("obsolescencia"))
+    monkeypatch.setattr(service, "enfileirar_agendados",
+                        lambda db: ordem.append("agendados"))
 
     class _FakeEx:
         id = 42
     monkeypatch.setattr(service, "proximas_da_fila", lambda db, limite: [_FakeEx()])
-    monkeypatch.setattr(service, "executar_por_id", lambda eid: chamou["executou"].append(eid))
+    monkeypatch.setattr(service, "executar_por_id", lambda eid: executou.append(eid))
+    monkeypatch.setattr(scheduler, "_coletar_avaliacoes_pendentes",
+                        lambda: ordem.append("avaliacoes"))
     scheduler._uma_rodada()
-    assert chamou["agendados"] == 1 and chamou["executou"] == [42]
+    assert ordem == ["reaper", "agendas", "obsolescencia", "agendados", "avaliacoes"]
+    assert executou == [42]
 
 
 def test_orquestrador_sem_linhas_retorna_sem_dados(db, escola_completa, monkeypatch):
