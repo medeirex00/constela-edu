@@ -164,15 +164,20 @@ class LocalProvedor(ProvedorIA):
                 secoes[atual] += linha + "\n"
         return secoes
 
-    # Linha da seção ALUNOS: "- NOME: turma T, 3º lugar, geral 8.5, Matific 7.0,
-    # Elefante 9.0" — montada em assistente.montar_contexto.
-    # A turma ancora em "º lugar" (não na primeira vírgula) para nomes de turma
-    # com vírgula ("4º Ano, Integral") não saírem truncados.
-    _RE_ALUNO = re.compile(
-        r"^- (?P<nome>.+?): turma (?P<turma>.+?), \S+º lugar, .*?"
-        r"geral (?P<geral>\d+(?:[.,]\d+)?)"
-        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?)"
-        r", Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
+    # Linha da seção ALUNOS, montada em assistente.montar_contexto:
+    #   "- NOME: turma T — Leitura (Elefante Letrado) 72.0 (3º lugar em Leitura);
+    #    Matemática (Matific): não aferido"
+    # Uma nota POR DISCIPLINA, só das contratadas; quem não é aferido numa
+    # disciplina não tem número nela (é texto, nunca 0). A turma termina no
+    # " — " (não na primeira vírgula) para nomes de turma com vírgula ("4º Ano,
+    # Integral") não saírem truncados.
+    _RE_ALUNO = re.compile(r"^- (?P<nome>.+?): turma (?P<turma>.+?) — (?P<notas>.+)$")
+    _RE_NOTA = re.compile(
+        r"(?P<disciplina>Leitura|Matemática) \([^)]*\) (?P<nota>\d+(?:[.,]\d+)?)"
+        r"(?: \((?P<posicao>\d+)º lugar)?")
+    _DISCIPLINAS = {"Leitura": "leitura", "Matemática": "matematica"}
+    _ROTULOS = {"leitura": "em Leitura (Elefante Letrado)",
+                "matematica": "em Matemática (Matific)"}
 
     @classmethod
     def _top_n(cls, pergunta: str, secao_alunos: str) -> str | None:
@@ -189,36 +194,53 @@ class LocalProvedor(ProvedorIA):
             return None
 
         if re.search(r"\b(matific|matematica)\b", pergunta):
-            metrica, rotulo = "matific", "no Matific"
+            disciplinas = ["matematica"]
         elif re.search(r"\b(elefante|leitura|portugues|letrado)\b", pergunta):
-            metrica, rotulo = "elefante", "no Elefante Letrado"
+            disciplinas = ["leitura"]
         else:
-            metrica, rotulo = "geral", "da escola (nota geral)"
+            # Sem disciplina na pergunta ("o melhor aluno da escola"): não existe
+            # uma nota única que junte as duas (Arquitetura 2) — a resposta
+            # honesta é o pódio de CADA disciplina, lado a lado.
+            disciplinas = ["leitura", "matematica"]
 
         achado = re.search(r"\b(\d+)\b", pergunta)
         n = int(achado.group(1)) if achado else (
             1 if re.search(r"\bmelhor\b", pergunta) else 5)
         n = max(1, min(n, 25))
 
-        alunos = []
+        notas: dict[str, list] = {d: [] for d in disciplinas}
         for linha in secao_alunos.splitlines():
             par = cls._RE_ALUNO.match(linha.strip())
-            if not par or par.group(metrica) is None:
+            if not par:
                 continue
-            alunos.append((float(par.group(metrica).replace(",", ".")),
-                           par.group("nome"), par.group("turma"), par))
-        if not alunos:
-            return None
+            for nota in cls._RE_NOTA.finditer(par.group("notas")):
+                disciplina = cls._DISCIPLINAS[nota.group("disciplina")]
+                if disciplina not in notas:
+                    continue
+                posicao = int(nota.group("posicao")) if nota.group("posicao") else None
+                notas[disciplina].append(
+                    (float(nota.group("nota").replace(",", ".")), posicao,
+                     par.group("nome"), par.group("turma")))
 
-        alunos.sort(key=lambda a: a[0], reverse=True)
-        linhas = [
-            f"{i}º: {nome} ({turma}) — nota {valor:.1f}"
-            + (f" (geral {par.group('geral')})" if metrica != "geral" else "")
-            for i, (valor, nome, turma, par) in enumerate(alunos[:n], start=1)
-        ]
-        titulo = (f"O melhor aluno {rotulo}" if n == 1
-                  else f"Os {min(n, len(alunos))} melhores alunos {rotulo}")
-        return (f"{titulo}, pelos dados do sistema:\n" + "\n".join(linhas)
+        blocos = []
+        for disciplina in disciplinas:
+            # Só quem TEM nota na disciplina entra (o não aferido não tem número
+            # na linha); desempate pela posição carimbada pelo motor.
+            alunos = sorted(notas[disciplina],
+                            key=lambda a: (-a[0], a[1] is None, a[1] or 0))
+            if not alunos:
+                continue
+            rotulo = cls._ROTULOS[disciplina]
+            titulo = (f"O melhor aluno {rotulo}" if n == 1
+                      else f"Os {min(n, len(alunos))} melhores alunos {rotulo}")
+            blocos.append(f"{titulo}, pelos dados do sistema:\n" + "\n".join(
+                f"{i}º: {nome} ({turma}) — nota {valor:.1f}"
+                for i, (valor, _pos, nome, turma) in enumerate(alunos[:n], start=1)))
+        if not blocos:
+            return None
+        aviso = ("Cada disciplina tem o seu próprio ranking — não existe uma nota "
+                 "única que junte as duas.\n\n" if len(disciplinas) > 1 else "")
+        return (aviso + "\n\n".join(blocos)
                 + "\n\n(Resposta gerada no modo local, somente com dados do sistema.)")
 
     @staticmethod

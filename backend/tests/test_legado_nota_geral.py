@@ -163,14 +163,11 @@ ALLOWLIST: dict[str, dict] = {
                    "legado; só o texto depende do item 4 das Aprovações."),
         "pode_sair": "quando o dono decidir o item 4 (certificado por dimensão)",
     },
-    "app/services/assistente.py": {
-        "ocorrencias": 2, "papel": "contexto-ia",
-        "porque": ("o contexto do Assistente lista cada aluno com 'geral X' "
-                   "(seção ### ALUNOS e o aluno citado). Mudar o conteúdo do "
-                   "prompt de uma feature de IA é item do dono — o mesmo achado "
-                   "registrado para a ordem dessa seção em ORDEM_UNICA_LEGADA."),
-        "pode_sair": "quando o dono aprovar o contexto da IA só por dimensão",
-    },
+    # `app/services/assistente.py` SAIU (2026-10-12, decisão 1 do dono: transição
+    # da `nota_geral` para notas por disciplina). O contexto da IA descreve cada
+    # aluno por Leitura/Matemática, sem compor e sem zerar quem não é aferido —
+    # a catraca abaixo (`test_contexto_da_ia_nao_muda_com_o_legado_adulterado`)
+    # impede que ele volte a depender do legado.
 }
 
 # Frontend: mesma regra, varredura por linha (sem AST de TS). Arquivos de teste
@@ -293,12 +290,9 @@ ORDEM_UNICA_LEGADA: dict[tuple[str, str], str] = {
         "o slide acima, senão abre perfil de quem não está no telão.",
     ("app/services/relatorios.py", "linhas_ranking"):
         "exportação/cartaz do Ranking Geral legado.",
-    ("app/services/assistente.py", "montar_contexto"):
-        "ACHADO REGISTRADO (risco médio): só a seção `### ALUNOS` do contexto "
-        "da IA herda esta ordem. As seções RANKING_LEITURA/RANKING_MATEMATICA "
-        "reordenam pela posição DA DIMENSÃO antes de escrever. Trocar por ordem "
-        "alfabética é neutro e desejável, mas muda o prompt de uma feature de "
-        "IA — item para o dono, não conversão mecânica.",
+    # `("app/services/assistente.py", "montar_contexto")` SAIU (2026-10-12,
+    # decisão 1 do dono): a seção `### ALUNOS` passou à ordem ALFABÉTICA e as
+    # seções de ranking seguem a posição carimbada DENTRO de cada disciplina.
 }
 
 MENSAGEM = (
@@ -455,7 +449,7 @@ def test_ninguem_novo_ordena_pela_ordem_unica_legada():
           PREMIE (``order_by``/``sorted``/``sort``/``key=``/``max``/``min``),
           seja qual for o objeto — inclusive ``item["posicao"]``.
     O braço (b) é largo de propósito e custa zero ruído: hoje ele acende
-    exatamente nos 5 sítios legados já inventariados. `posicao_leitura` e
+    exatamente nos 4 sítios legados já inventariados. `posicao_leitura` e
     `posicao_matematica` (as oficiais) são atributos DIFERENTES e não entram."""
     achados: set[tuple[str, str]] = set()
     for caminho in sorted((RAIZ_BACKEND / "app").rglob("*.py")):
@@ -676,6 +670,33 @@ def test_a_visao_oficial_da_escola_nao_muda_com_o_legado_adulterado(
         assert depois[chave] == antes[chave], (
             f"[{nome_sabotagem}] '{chave}' mudou ao adulterar o legado — "
             f"logo ele ainda é consumido." + MENSAGEM)
+
+
+@pytest.mark.parametrize("nome_sabotagem", list(SABOTAGENS))
+def test_contexto_da_ia_nao_muda_com_o_legado_adulterado(
+        db, escola_mista, nome_sabotagem):
+    """O contexto do Assistente saiu do inventário (decisão 1 do dono): ele
+    descreve cada aluno POR DISCIPLINA, lista os alunos em ordem alfabética e
+    ranqueia pela posição DENTRO da disciplina. A prova de que não sobrou
+    dependência escondida é a mesma da visão oficial: com `nota_geral` e
+    `Nota.posicao` adulteradas no banco, o prompt sai idêntico, byte a byte."""
+    from app.services import assistente
+
+    escola, alunos = escola_mista
+    antes = assistente.montar_contexto(db, escola.id)
+    # Sem sinal, a comparação não provaria nada: o cenário tem de pôr alunos
+    # nas duas disciplinas e alguém fora das duas.
+    assert "1º lugar em Leitura" in antes and "1º lugar em Matemática" in antes
+    assert alunos["nenhuma"].nome in antes
+
+    sabotar = SABOTAGENS[nome_sabotagem]
+    for indice, nota in enumerate(db.query(Nota).all()):
+        sabotar(indice, nota)
+    db.commit()
+
+    assert assistente.montar_contexto(db, escola.id) == antes, (
+        f"[{nome_sabotagem}] o contexto da IA mudou ao adulterar o legado — "
+        f"logo ele ainda é consumido." + MENSAGEM)
 
 
 def test_o_top10_do_painel_AINDA_segue_a_ordem_legada(db, escola_mista):
