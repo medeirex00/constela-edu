@@ -1,7 +1,7 @@
 """Hash de senhas, política de senha e emissão/validação de tokens JWT."""
 from datetime import datetime, timedelta, timezone
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -184,5 +184,5 @@ def decodificar_token(token: str) -> dict | None:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         int(payload.get("sub"))  # garante que 'sub' é um id válido
         return payload
-    except (JWTError, TypeError, ValueError):
+    except (jwt.PyJWTError, TypeError, ValueError):
         return None

@@ -199,3 +199,37 @@ def test_b6_metrics_fail_closed_em_producao_sem_token(monkeypatch):
     c = TestClient(app)
     # Produção sem token: /metrics não expõe telemetria (fail-closed).
     assert c.get("/metrics").status_code == 404
+
+
+def test_token_so_aceita_hs256_com_o_segredo():
+    """O token de sessão só vale assinado com HS256 e o SECRET_KEY: alg=none,
+    outro algoritmo, outro segredo e chave pública como segredo HMAC (a
+    confusão de algoritmo do CVE-2024-33663/CVE-2026-85394) são recusados."""
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    from app.core.config import settings
+    from app.core.security import criar_token, decodificar_token
+
+    def b64(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    corpo = b64(json.dumps({"sub": "1", "ver": 0, "exp": 4102444800}).encode())
+
+    def forjar(alg: str, chave: bytes, dig) -> str:
+        cab = b64(json.dumps({"alg": alg, "typ": "JWT"}).encode())
+        sig = b64(hmac.new(chave, f"{cab}.{corpo}".encode(), dig).digest()) if dig else ""
+        return f"{cab}.{corpo}.{sig}"
+
+    chave_publica_der = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004") + b"\x01" * 64
+    assert settings.ALGORITHM == "HS256"
+    assert decodificar_token(forjar("none", b"", None)) is None
+    assert decodificar_token(forjar("HS512", settings.SECRET_KEY.encode(), hashlib.sha512)) is None
+    assert decodificar_token(forjar("HS256", b"chave-errada" * 4, hashlib.sha256)) is None
+    assert decodificar_token(forjar("HS256", chave_publica_der, hashlib.sha256)) is None
+    assert decodificar_token(forjar("HS256", settings.SECRET_KEY.encode(), hashlib.sha256)) is not None
+    # O token emitido pelo sistema continua válido (sub, ver).
+    payload = decodificar_token(criar_token(42, token_version=3))
+    assert payload["sub"] == "42" and payload["ver"] == 3
