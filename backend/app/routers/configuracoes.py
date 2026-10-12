@@ -1187,10 +1187,13 @@ def obter_politica_sincronizacao(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
 ):
-    """A política de sincronização da escola — hoje, se a sync pode criar ficha.
+    """A política de sincronização da escola: se a sync pode criar ficha
+    (``criar_aluno``) e se ela consolida sozinha as fichas-sombra
+    (``consolidar_sombras``).
 
-    Escola que nunca configurou responde ``permitir``, o comportamento de
-    sempre: a trava é opt-in e não muda nada retroativamente."""
+    Escola que nunca configurou responde ``permitir`` e ``manual``, o
+    comportamento de sempre: as duas são opt-in e não mudam nada
+    retroativamente."""
     return politica_sync.obter(db, escola_id)
 
 
@@ -1210,12 +1213,20 @@ def salvar_politica_sincronizacao(
     ou uma criança de outra unidade de nascer como ficha ativa, sem RA e sem
     nascimento, já pesando no ranking e na régua da escola.
 
-    Não toca em nenhum dado já gravado e não recalcula nada: vale da próxima
-    sincronização em diante. O caminho da Lista Piloto segue criando — ele é a
-    fonte. Governança igual à da fórmula: só Admin Global."""
+    ``consolidar_sombras`` = ``automatico`` deixa a sincronização fundir, ao
+    fim de cada execução, a ficha-sombra (criada pela plataforma ao lado da
+    ficha oficial da mesma criança) quando a evidência basta — as regras estão
+    em ``services/consolidacao_sombras``; qualquer dúvida continua na fila.
+    ``manual`` (padrão) mantém a fusão só pela tela.
+
+    Cada campo é opcional e só o informado muda. Não toca em nenhum dado já
+    gravado e não recalcula nada: vale da próxima sincronização em diante. O
+    caminho da Lista Piloto segue criando — ele é a fonte. Governança igual à
+    da fórmula: só Admin Global."""
     anterior = politica_sync.obter(db, escola_id)
     try:
-        valores = politica_sync.definir(db, escola_id, dados.criar_aluno)
+        valores = politica_sync.definir(db, escola_id, dados.criar_aluno,
+                                        consolidar_sombras=dados.consolidar_sombras)
     except ValueError as erro:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(erro)) from erro
     registrar(db, "sincronizacao.politica_alterada", escola_id=escola_id,

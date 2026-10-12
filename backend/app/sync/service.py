@@ -540,6 +540,15 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
             _recalcular_ao_final(db, escola.id, execucao.plataforma, totais["alunos"])
             contexto.log("ranking", "info",
                          f"Notas recalculadas ao final ({totais['alunos']} aluno(s)).")
+        # FICHAS-SOMBRA: com a política ``consolidar_sombras = automatico`` da
+        # escola, a ficha que a plataforma criou ao lado da ficha oficial da mesma
+        # criança é fundida nela quando a evidência basta — UMA vez por execução,
+        # depois de todos os arquivos (não a cada turma), em transação própria e
+        # com recálculo próprio só se fundir algo. No padrão ``manual`` não faz
+        # nada; uma falha ali não derruba a sincronização.
+        if totais["arquivos"]:
+            orchestrator.consolidar_sombras_da_escola(
+                db, escola.id, usuario_id=execucao.usuario_id, contexto=contexto)
 
         execucao.qtd_arquivos = totais["arquivos"]
         execucao.qtd_alunos = totais["alunos"]

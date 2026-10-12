@@ -1,0 +1,204 @@
+"""Consolida as FICHAS-SOMBRA da sincronização na ficha oficial da Lista Piloto.
+
+Por que existe
+--------------
+Em julho/agosto a sincronização do Matific criou fichas com o nome TRUNCADO pelo
+relatório ao lado da ficha oficial da mesma criança (mesma turma, fora da Lista
+Piloto, com a conta da plataforma). A criança passou a ser duas no ranking e na
+contagem da turma. A política ``consolidar_sombras = automatico`` resolve isso
+a cada sincronização daqui em diante; este script resolve o PASSIVO, escola a
+escola, com as MESMAS regras (``app/services/consolidacao_sombras.py``).
+
+Garantias
+---------
+* SIMULAÇÃO POR PADRÃO: sem ``--aplicar`` nada é gravado. No Postgres a
+  transação nasce ``READ ONLY`` e o script CONFERE (``SHOW
+  transaction_read_only``) antes de ler qualquer coisa; se não ficou somente
+  leitura, aborta (código 4).
+* Saída só com IDS (sombra, oficial, turma, fichas relacionadas). Nomes de
+  criança só com ``--nomes`` — e nunca vão para a auditoria.
+* ``--aplicar`` EXIGE ``--esperado N``: N é o total de pares CONSOLIDAR que a
+  simulação mostrou para o MESMO recorte (``--escola`` ou ``--todas``). Se esta
+  execução achar outro número, aborta ANTES de gravar, com código 3.
+* COMPARE-AND-SET: cada par é reconferido no banco atual antes de fundir; o que
+  mudou entre a simulação e a aplicação é pulado e listado.
+* Só pares CONSOLIDAR são fundidos. REVISAR e CONFLITO ficam para gente;
+  SEM_PAR é outra criança.
+* Cada fusão fica na auditoria (``aluno.fundido`` com a foto pré-fusão e
+  ``aluno.consolidado_automatico`` com as evidências, origem ``script``). Um
+  commit e um recálculo por escola.
+
+Antes de aplicar — decisão operacional
+--------------------------------------
+A fusão APAGA a ficha-sombra (irreversível por design; a foto pré-fusão fica na
+auditoria). Aplicar EXIGE AUTORIZAÇÃO DO DONO e BACKUP VALIDADO (restaurável),
+tomado imediatamente antes.
+
+Como executar
+-------------
+Simulação (não grava nada):
+
+    python -m scripts.consolidar_sombras --escola 11
+    python -m scripts.consolidar_sombras --todas
+    python -m scripts.consolidar_sombras --escola 11 --nomes   # com os nomes
+
+Aplicação (N = o total de CONSOLIDAR que a simulação ACABOU de mostrar):
+
+    python -m scripts.consolidar_sombras --escola 11 --aplicar --esperado N
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sqlalchemy import select, text  # noqa: E402
+
+from app.core.database import SessionLocal  # noqa: E402
+from app.models import Aluno, Escola  # noqa: E402
+from app.services import consolidacao_sombras as cs  # noqa: E402
+from app.services import politica_sync  # noqa: E402
+
+# Código de saída quando o --esperado não confere (nada gravado).
+SAIDA_ESPERADO_DIVERGENTE = 3
+# Código de saída quando a simulação não conseguiu uma transação somente leitura.
+SAIDA_SEM_SOMENTE_LEITURA = 4
+
+
+def _argumentos(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Simula (e, com --aplicar --esperado N, aplica) a consolidação "
+                    "das fichas-sombra na ficha oficial da Lista Piloto.")
+    alvo = parser.add_mutually_exclusive_group(required=True)
+    alvo.add_argument("--escola", type=int, default=None, help="só esta escola")
+    alvo.add_argument("--todas", action="store_true", help="todas as escolas")
+    parser.add_argument("--aplicar", action="store_true",
+                        help="grava: funde os pares CONSOLIDAR (sem isto, só simula). "
+                             "Exige --esperado.")
+    parser.add_argument("--esperado", type=int, default=None, metavar="N",
+                        help="com --aplicar: total de pares CONSOLIDAR conferido na "
+                             "simulação; se divergir, aborta sem gravar")
+    parser.add_argument("--nomes", action="store_true",
+                        help="mostra os nomes das fichas (dado pessoal: use só na "
+                             "conferência)")
+    args = parser.parse_args(argv)
+    if args.esperado is not None and not args.aplicar:
+        parser.error("--esperado só vale junto com --aplicar.")
+    if args.aplicar and args.esperado is None:
+        parser.error("--aplicar exige --esperado N (o total de pares CONSOLIDAR que "
+                     "a simulação mostrou).")
+    if args.esperado is not None and args.esperado < 0:
+        parser.error("--esperado não pode ser negativo.")
+    return args
+
+
+def _abrir_somente_leitura(db) -> bool:
+    """Simulação no Postgres: a transação nasce READ ONLY (primeira instrução) e
+    o próprio banco confirma — nem um engano no caminho consegue gravar. Outros
+    dialetos (o SQLite dos testes) não têm a instrução: lá vale o rollback ao
+    final, e a função responde True."""
+    if db.get_bind().dialect.name != "postgresql":
+        return True
+    db.execute(text("SET TRANSACTION READ ONLY"))
+    return str(db.execute(text("SHOW transaction_read_only")).scalar()).lower() == "on"
+
+
+def _nome(db, aluno_id: int | None) -> str:
+    a = db.get(Aluno, aluno_id) if aluno_id is not None else None
+    return a.nome if a is not None else "?"
+
+
+def _linha(db, item: cs.Item, nomes: bool) -> str:
+    rel = f" relacionados={list(item.relacionados)}" if item.relacionados else ""
+    if item.classe == cs.CONSOLIDAR:
+        texto = (f"  CONSOLIDAR sombra={item.sombra_id} -> oficial={item.oficial_id} "
+                 f"turma={item.turma_id} [{item.evidencias.get('relacao_nome')}; "
+                 f"plataformas: {', '.join(item.evidencias.get('plataformas_da_sombra')) or '-'}]"
+                 + rel)
+    else:
+        oficial = f" oficial={item.oficial_id}" if item.oficial_id else ""
+        texto = (f"  {item.classe.upper():<10} sombra={item.sombra_id}{oficial} "
+                 f"turma={item.turma_id} motivo={item.motivo}{rel}")
+    if nomes:
+        texto += f"  «{_nome(db, item.sombra_id)}»"
+        if item.oficial_id:
+            texto += f" × «{_nome(db, item.oficial_id)}»"
+    return texto
+
+
+def _imprimir(db, plano: cs.Plano, nome_escola: str, nomes: bool) -> None:
+    c = plano.contagens()
+    politica = politica_sync.obter(db, plano.escola_id)["consolidar_sombras"]
+    print(f"escola {plano.escola_id} ({nome_escola}) ano {plano.ano}: "
+          f"CONSOLIDAR {c[cs.CONSOLIDAR]} · REVISAR {c[cs.REVISAR]} · "
+          f"CONFLITO {c[cs.CONFLITO]} · SEM_PAR {c[cs.SEM_PAR]} "
+          f"(política da sincronização: {politica})")
+    for classe in (cs.CONSOLIDAR, cs.CONFLITO, cs.REVISAR):
+        for item in plano.da_classe(classe):
+            print(_linha(db, item, nomes))
+
+
+def main(argv=None) -> int:
+    args = _argumentos(argv)
+
+    db = SessionLocal()
+    try:
+        if not args.aplicar and not _abrir_somente_leitura(db):
+            db.rollback()
+            print("ABORTADO — a transação da simulação não ficou somente leitura. "
+                  "Nada foi lido nem gravado.")
+            return SAIDA_SEM_SOMENTE_LEITURA
+        if args.escola is not None:
+            if db.get(Escola, args.escola) is None:
+                print(f"escola {args.escola} não existe.")
+                db.rollback()
+                return 2
+            ids = [args.escola]
+        else:
+            ids = list(db.execute(select(Escola.id).order_by(Escola.id)).scalars())
+        nomes_escola = dict(db.execute(select(Escola.id, Escola.nome)
+                                       .where(Escola.id.in_(ids or [-1]))).all())
+        planos = [cs.planejar(db, eid) for eid in ids]
+        for plano in planos:
+            _imprimir(db, plano, nomes_escola.get(plano.escola_id, "?"), args.nomes)
+        total = sum(len(p.consolidar) for p in planos)
+        print(f"\ntotal de pares CONSOLIDAR: {total}")
+
+        if not args.aplicar:
+            print("simulação apenas — nada foi gravado. Para consolidar (só com "
+                  "autorização e backup validado): --aplicar --esperado N.")
+            db.rollback()
+            return 0
+
+        if total != args.esperado:
+            db.rollback()
+            print(f"\nABORTADO — esperado {args.esperado}, mas esta execução tem "
+                  f"{total} par(es) CONSOLIDAR. Nada foi gravado. Rode a simulação de "
+                  "novo e confira antes de aplicar.")
+            return SAIDA_ESPERADO_DIVERGENTE
+
+        db.rollback()        # a leitura acabou; cada escola grava na sua transação
+        fundidos = 0
+        for plano in planos:
+            if not plano.consolidar:
+                continue
+            resultado = cs.aplicar(db, plano, usuario_id=None, origem="script")
+            fundidos += len(resultado["consolidados"])
+            print(f"escola {plano.escola_id}: {len(resultado['consolidados'])} "
+                  f"consolidada(s), {len(resultado['pulados'])} pulada(s)")
+            for p in resultado["pulados"]:
+                print(f"  PULADA sombra={p['sombra_id']} oficial={p['oficial_id']} "
+                      f"agora={p['classe_atual']}/{p['motivo_atual']}")
+        print(f"\nconsolidadas: {fundidos} de {total}.")
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

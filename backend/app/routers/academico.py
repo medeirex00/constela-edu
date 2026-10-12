@@ -931,6 +931,8 @@ def corrigir_alunos_duplicados(
 # A fusão AUTOMÁTICA do passivo foi removida (revisão adversarial: nenhum sinal é
 # seguro o bastante para fundir/deletar registro de criança sem revisão humana).
 # O passivo é resolvido pela ferramenta MANUAL acima (detecção + Selecionar todos).
+# Exceção opt-in por escola: a ficha-sombra da sincronização com evidência
+# suficiente (``services/consolidacao_sombras``, política ``consolidar_sombras``).
 
 
 # --- Turmas e Professores ---------------------------------------------------

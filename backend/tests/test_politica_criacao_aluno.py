@@ -80,7 +80,10 @@ def cena(db, escola_completa):
 def test_escola_sem_politica_permite_criar(db, escola_completa):
     """TESTE I — default = comportamento atual. Nada muda para quem não configurou."""
     eid = escola_completa["escola"].id
-    assert politica_sync.obter(db, eid) == {"criar_aluno": "permitir"}
+    # A política ganhou a chave ``consolidar_sombras`` (padrão "manual": nada é
+    # fundido sozinho) — o padrão da criação continua o de sempre.
+    assert politica_sync.obter(db, eid) == {"criar_aluno": "permitir",
+                                            "consolidar_sombras": "manual"}
     assert politica_sync.pode_criar_aluno(db, eid) is True
     assert db.scalar(select(Configuracao).where(
         Configuracao.escola_id == eid,
@@ -89,7 +92,8 @@ def test_escola_sem_politica_permite_criar(db, escola_completa):
 
 def test_definir_e_ler_a_politica(db, escola_completa):
     eid = escola_completa["escola"].id
-    assert politica_sync.definir(db, eid, "bloquear") == {"criar_aluno": "bloquear"}
+    assert politica_sync.definir(db, eid, "bloquear") == {"criar_aluno": "bloquear",
+                                                          "consolidar_sombras": "manual"}
     db.commit()
     assert politica_sync.pode_criar_aluno(db, eid) is False
     politica_sync.definir(db, eid, "permitir")
@@ -349,15 +353,19 @@ def test_rota_le_grava_e_exige_admin_global(cliente, cliente_global, db,
                                             escola_completa):
     url = f"/api/v1/escolas/{escola_completa['escola'].id}/configuracoes/sincronizacao"
 
-    assert cliente.get(url).json() == {"criar_aluno": "permitir"}
+    # A política devolve também ``consolidar_sombras`` (padrão "manual"); mudar
+    # ``criar_aluno`` não mexe nela.
+    assert cliente.get(url).json() == {"criar_aluno": "permitir",
+                                       "consolidar_sombras": "manual"}
     # o admin da escola NÃO administra a fonte de verdade da matrícula
     assert cliente.put(url, json={"criar_aluno": "bloquear"}).status_code == 403
 
     ok = cliente_global.put(url, json={"criar_aluno": "bloquear",
                                        "motivo": "matricula vem da Lista Piloto"})
     assert ok.status_code == 200, ok.text
-    assert ok.json() == {"criar_aluno": "bloquear"}
-    assert cliente.get(url).json() == {"criar_aluno": "bloquear"}
+    assert ok.json() == {"criar_aluno": "bloquear", "consolidar_sombras": "manual"}
+    assert cliente.get(url).json() == {"criar_aluno": "bloquear",
+                                       "consolidar_sombras": "manual"}
 
     assert cliente_global.put(url, json={"criar_aluno": "talvez"}).status_code == 422
 
@@ -365,8 +373,8 @@ def test_rota_le_grava_e_exige_admin_global(cliente, cliente_global, db,
     log = db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "sincronizacao.politica_alterada")).scalars().first()
     assert log is not None
-    assert log.detalhes["de"] == {"criar_aluno": "permitir"}
-    assert log.detalhes["para"] == {"criar_aluno": "bloquear"}
+    assert log.detalhes["de"] == {"criar_aluno": "permitir", "consolidar_sombras": "manual"}
+    assert log.detalhes["para"] == {"criar_aluno": "bloquear", "consolidar_sombras": "manual"}
     assert log.detalhes["motivo"] == "matricula vem da Lista Piloto"
 
 

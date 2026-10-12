@@ -1,7 +1,7 @@
 """Schemas do fluxo de importação (PRD §15–§16, §50–§52)."""
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.comum import ORMModel
 
@@ -234,13 +234,27 @@ class MatriculasResultadoOut(BaseModel):
 class PoliticaSincronizacaoOut(BaseModel):
     """A política de sincronização vigente da escola (ver ``politica_sync``)."""
     criar_aluno: str
+    consolidar_sombras: str = "manual"
 
 
 class PoliticaSincronizacaoIn(BaseModel):
-    """``permitir`` (padrão histórico) ou ``bloquear`` (a sync não cria ficha).
+    """Cada campo é OPCIONAL e só o informado muda (ao menos um é exigido):
+
+      * ``criar_aluno``: ``permitir`` (padrão histórico) ou ``bloquear`` (a sync
+        não cria ficha);
+      * ``consolidar_sombras``: ``manual`` (padrão — só uma pessoa funde) ou
+        ``automatico`` (ao fim de cada sincronização, a ficha-sombra cuja
+        evidência basta é fundida na ficha oficial da Lista Piloto).
 
     Trocar isto não mexe em nenhum dado já gravado: vale da próxima
     sincronização em diante, e o motivo fica no log de auditoria.
     """
-    criar_aluno: str = Field(pattern="^(permitir|bloquear)$")
+    criar_aluno: str | None = Field(default=None, pattern="^(permitir|bloquear)$")
+    consolidar_sombras: str | None = Field(default=None, pattern="^(manual|automatico)$")
     motivo: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def _algum_campo(self):
+        if self.criar_aluno is None and self.consolidar_sombras is None:
+            raise ValueError("Informe “criar_aluno” e/ou “consolidar_sombras”.")
+        return self
