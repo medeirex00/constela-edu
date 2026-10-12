@@ -12,6 +12,13 @@
 #                                   (guarde-a num cofre, NÃO no repositório)
 #
 # Restauração e teste (“game day”): docs/DR-RUNBOOK.md
+#
+# ENSAIO DE RESTAURAÇÃO (a cada execução): depois de guardar o artefato, o job
+# restaura o backup que ACABOU de gerar num PostgreSQL 17 DESCARTÁVEL deste
+# próprio job (contêiner de serviço, apagado ao fim) e confere a versão de
+# migração e as contagens de linhas contra as da origem. A senha do backup
+# nunca sai do GitHub e o log só tem números. Se o ensaio falhar, o job falha
+# (o artefato já foi guardado) e o sinal de vida não é enviado.
 # =============================================================================
 name: Backup do banco (produção)
 
@@ -27,7 +34,23 @@ jobs:
   backup:
     if: vars.BACKUP_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # Banco DESCARTÁVEL só para o ensaio de restauração: as credenciais abaixo
+    # existem apenas dentro deste contêiner (nenhuma é de produção).
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: restauracao
+          POSTGRES_PASSWORD: restauracao
+          POSTGRES_DB: restauracao_teste
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U restauracao"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +72,11 @@ jobs:
           # para os passos seguintes (senão o pg_dump 16 é usado e dá mismatch).
           echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
+      - name: Contar linhas na origem (só números, sessão somente leitura)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_RO }}
+        run: bash backend/scripts/contar_tabelas.sh "$DATABASE_URL" > contagens_origem.txt
+
       - name: Gerar backup cifrado
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_RO }}
@@ -62,6 +90,13 @@ jobs:
           path: backups/*.enc
           retention-days: 30
           if-no-files-found: error
+
+      - name: Ensaio de restauração (banco descartável deste job)
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          RESTORE_DATABASE_URL: postgresql://restauracao:restauracao@localhost:5432/restauracao_teste
+          CONTAGENS_ORIGEM: contagens_origem.txt
+        run: bash backend/scripts/verificar_restauracao.sh backups/*.enc
 
       - name: Sinal de vida (dead-man's-switch)
         # A cada backup BEM-SUCEDIDO, pinga um monitor externo (ex.: healthchecks.io,

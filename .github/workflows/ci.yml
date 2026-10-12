@@ -256,3 +256,73 @@ jobs:
         run: docker build -t sgpe-backend ./backend
       - name: Build da imagem do web
         run: docker build -t sgpe-web -f apps/web/Dockerfile .
+
+  ensaio-restauracao:
+    name: Ensaio de restauração (dump sintético)
+    runs-on: ubuntu-latest
+    # Exercita os MESMOS scripts do backup de produção (backup_postgres.sh,
+    # contar_tabelas.sh, verificar_restauracao.sh) com um banco SINTÉTICO:
+    # migra um PostgreSQL vazio, gera o backup cifrado com uma senha de ensaio
+    # (não é segredo), restaura num segundo banco e confere versão e contagens.
+    # As credenciais só existem dentro do contêiner de serviço deste job.
+    services:
+      postgres:
+        image: postgres:16   # mesma major do psql/pg_dump que o runner já traz
+        env:
+          POSTGRES_USER: constela_teste
+          POSTGRES_PASSWORD: constela_teste
+          POSTGRES_DB: origem_teste
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U constela_teste"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ORIGEM_URL: postgresql://constela_teste:constela_teste@localhost:5432/origem_teste
+      DESTINO_URL: postgresql://constela_teste:constela_teste@localhost:5432/restauracao_teste
+      BACKUP_PASSPHRASE: ensaio-ci-nao-e-segredo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Instalar dependências (+ driver do Postgres)
+        run: pip install -r backend/requirements.txt "psycopg[binary]==3.2.3"
+      - name: Migrar a origem sintética
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://constela_teste:constela_teste@localhost:5432/origem_teste
+          ENV: dev
+        run: python -m scripts.migrate
+      - name: Dados sintéticos e uma política de RLS (como as do Supabase)
+        run: |
+          psql "$ORIGEM_URL" -X -v ON_ERROR_STOP=1 \
+            -c "INSERT INTO escolas (nome, ano_letivo_ativo, status, created_at) VALUES ('ESCOLA SINTETICA', 2026, 'ativa', now())" \
+            -c "CREATE ROLE anon NOLOGIN" \
+            -c "ALTER TABLE escolas ENABLE ROW LEVEL SECURITY" \
+            -c "CREATE POLICY leitura_ensaio ON escolas FOR SELECT TO anon USING (true)"
+      - name: Contar a origem, gerar o backup cifrado e restaurar
+        run: |
+          bash backend/scripts/contar_tabelas.sh "$ORIGEM_URL" > contagens_origem.txt
+          DATABASE_URL="$ORIGEM_URL" bash backend/scripts/backup_postgres.sh ./backups
+          psql "$ORIGEM_URL" -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE restauracao_teste"
+          RESTORE_DATABASE_URL="$DESTINO_URL" CONTAGENS_ORIGEM=contagens_origem.txt \
+            bash backend/scripts/verificar_restauracao.sh backups/*.enc
+      - name: As travas recusam destino real e senha errada
+        run: |
+          set +e
+          RESTORE_DATABASE_URL="$ORIGEM_URL" bash backend/scripts/verificar_restauracao.sh backups/*.enc
+          rc=$?; [ "$rc" -eq 2 ] || { echo "destino não vazio deveria sair 2 (saiu $rc)"; exit 1; }
+          RESTORE_DATABASE_URL="postgresql://u:s@db.exemplo.com:5432/restauracao_teste" \
+            bash backend/scripts/verificar_restauracao.sh backups/*.enc
+          rc=$?; [ "$rc" -eq 2 ] || { echo "destino remoto deveria sair 2 (saiu $rc)"; exit 1; }
+          psql "$ORIGEM_URL" -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE restauracao_teste_senha"
+          BACKUP_PASSPHRASE=senha-errada \
+            RESTORE_DATABASE_URL="postgresql://constela_teste:constela_teste@localhost:5432/restauracao_teste_senha" \
+            bash backend/scripts/verificar_restauracao.sh backups/*.enc
+          rc=$?; [ "$rc" -ne 0 ] || { echo "senha errada deveria falhar"; exit 1; }
+          echo "travas OK"
