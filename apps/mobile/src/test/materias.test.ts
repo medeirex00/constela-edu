@@ -7,13 +7,17 @@
  *  - ausência de dado numa matéria é "—", nunca 0,0 — e o zero legítimo
  *    (tem dado, ainda não produziu) continua 0,0;
  *  - matéria fora do plano da rede some, em vez de virar "—";
+ *  - quem sai do ranking da matéria por não ter dado NÃO some do app: entra no
+ *    bloco "Ainda não aferidos", sem nota e sem posição (spec §1.2 e §2.4);
  *  - pacote antigo do cache (sem `ranking_por_dimensao`) e servidor anterior
  *    degradam para uma MENSAGEM, nunca para um crash nem para a lista legada
  *    ordenada pela nota composta.
  */
 import type {
+  AlunoNaoAferido,
   Dashboard,
   DesempenhoDimensao,
+  NaoAferidos,
   PacoteSincronizacao,
   PerfilAluno,
   RankingItem,
@@ -29,6 +33,7 @@ import {
   materiasDaEscola,
   materiasDoUsuario,
   mediasDaEscola,
+  naoAferidosDaMateria,
   notasDoItem,
   rankingDaRota,
   totalAferidos,
@@ -200,6 +205,139 @@ describe("aba de uma matéria no Ranking", () => {
     expect(linhasDaMateria(itens).map((l) => l.valor)).toEqual(["88,5", "0,0", "—"]);
     expect(totalAferidos(itens)).toBe(21);
     expect(totalAferidos([itemDaMateria("leitura", { n_aferidos: null })])).toBe(1);
+  });
+});
+
+describe("Ranking: quem ainda não foi aferido não some do app", () => {
+  // A mesma escola do teste do backend (test_desempenho_por_dimensao.py):
+  // "Usa As Duas" está nos dois rankings; as outras três ficam de fora de pelo
+  // menos um — e é aqui que elas precisam aparecer.
+  function aluno(aluno_id: number, nome: string): AlunoNaoAferido {
+    return { aluno_id, nome, turma: "4ºA", ano_escolar: "4º Ano" };
+  }
+  const soLeitura = aluno(2, "So Leitura");
+  const soConta = aluno(3, "So Conta");
+  const nenhuma = aluno(4, "Nenhuma Plataforma");
+
+  function resposta(campos: Partial<NaoAferidos> = {}): NaoAferidos {
+    return {
+      contratadas: ["leitura", "matematica"],
+      total_alunos: 4,
+      dimensoes: [
+        { dimensao: "leitura", plataforma: "elefante", n_aferidos: 2, total: 4,
+          alunos: [nenhuma, soConta] },
+        { dimensao: "matematica", plataforma: "matific", n_aferidos: 2, total: 4,
+          alunos: [nenhuma, soLeitura] },
+      ],
+      sem_nenhuma: [nenhuma],
+      ...campos,
+    };
+  }
+  const pronta = (dados: unknown) => ({ dados, carregando: false });
+
+  it("cada aba lista os não aferidos DA SUA matéria — nome e turma, sem nota e sem posição", () => {
+    const leitura = naoAferidosDaMateria("leitura", pronta(resposta()));
+    expect(leitura.tipo).toBe("lista");
+    if (leitura.tipo !== "lista") return;
+    expect(leitura.titulo).toBe("Ainda não aferidos em Leitura (2)");
+    expect(leitura.linhas.map((l) => l.chave)).toEqual([nenhuma.aluno_id, soConta.aluno_id]);
+    // Operacional, não competitivo: a linha não tem campo de posição nem de nota.
+    expect(Object.keys(leitura.linhas[1]).sort()).toEqual(["chave", "detalhe", "nome"]);
+    expect(leitura.linhas[1]).toEqual({ chave: 3, nome: "So Conta", detalhe: "4ºA" });
+
+    const matematica = naoAferidosDaMateria("matematica", pronta(resposta()));
+    expect(matematica.tipo === "lista" && matematica.linhas.map((l) => l.nome))
+      .toEqual(["Nenhuma Plataforma", "So Leitura"]);
+  });
+
+  it("quem não tem dado em NENHUMA matéria aparece em todas, marcado com adoção 0%", () => {
+    for (const materia of ["leitura", "matematica"] as const) {
+      const estado = naoAferidosDaMateria(materia, pronta(resposta()));
+      if (estado.tipo !== "lista") throw new Error(`esperava lista em ${materia}`);
+      const linha = estado.linhas.find((l) => l.chave === nenhuma.aluno_id);
+      expect(linha?.detalhe).toBe("4ºA · sem dado em nenhuma matéria (adoção 0%)");
+      expect(estado.linhas.filter((l) => l.detalhe.includes("adoção 0%"))).toHaveLength(1);
+      expect(estado.explicacao).toContain("ausência não é nota zero");
+      expect(estado.explicacao).toContain("1 não tem dado em nenhuma matéria");
+    }
+  });
+
+  it("com uma matéria só no plano, a marca de 'nenhuma' seria redundante e não aparece", () => {
+    const so = resposta({
+      contratadas: ["leitura"],
+      dimensoes: [{ dimensao: "leitura", plataforma: "elefante", n_aferidos: 1, total: 3,
+        alunos: [nenhuma, soConta] }],
+      sem_nenhuma: [nenhuma, soConta],
+    });
+    const estado = naoAferidosDaMateria("leitura", pronta(so));
+    expect(estado.tipo === "lista" && estado.linhas.map((l) => l.detalhe)).toEqual(["4ºA", "4ºA"]);
+    expect(estado.tipo === "lista" && estado.explicacao).not.toContain("nenhuma matéria");
+  });
+
+  it("contrato: matéria fora do plano não tem bloco; lista vazia (Secretaria, todos aferidos) também não", () => {
+    const semMatematica = resposta({
+      contratadas: ["leitura"],
+      dimensoes: [resposta().dimensoes[0]],
+    });
+    expect(naoAferidosDaMateria("matematica", pronta(semMatematica))).toEqual({ tipo: "oculto" });
+    // A Secretaria recebe as listas vazias do servidor (não enxerga criança).
+    const secretaria = resposta({
+      total_alunos: 0,
+      dimensoes: resposta().dimensoes.map((d) => ({ ...d, alunos: [] })),
+      sem_nenhuma: [],
+    });
+    expect(naoAferidosDaMateria("leitura", pronta(secretaria))).toEqual({ tipo: "oculto" });
+  });
+
+  it("403 diz que o acesso não inclui a lista; 404 (servidor anterior) diz que ela ainda não vem", () => {
+    const negado = naoAferidosDaMateria("leitura",
+      { erro: new ApiError(403, "Sem acesso"), carregando: false });
+    expect(negado).toEqual({
+      tipo: "aviso",
+      texto: "Seu acesso não inclui a lista de quem ainda não foi aferido nesta escola.",
+    });
+    const antigo = naoAferidosDaMateria("matematica",
+      { erro: new ApiError(404, "Not Found"), carregando: false });
+    expect(antigo.tipo === "aviso" && antigo.texto).toContain("ainda não envia");
+    expect(antigo.tipo === "aviso" && antigo.texto).toContain("Matemática");
+  });
+
+  it("cache antigo, salvo antes desta consulta existir, e sem rede: mensagem, não sumiço", () => {
+    // Offline-first: a consulta pausa sem rede — sem dado, sem erro, sem carregar.
+    const offline = naoAferidosDaMateria("leitura", { carregando: false });
+    expect(offline.tipo === "aviso" && offline.texto).toContain("conecte-se");
+    expect(naoAferidosDaMateria("leitura", { carregando: true })).toEqual({ tipo: "carregando" });
+    // Com a lista no cache, uma releitura que falhou não a apaga da tela.
+    const comCache = naoAferidosDaMateria("leitura",
+      { dados: resposta(), erro: new Error("rede caiu"), carregando: false });
+    expect(comCache.tipo).toBe("lista");
+  });
+
+  it("resposta fora do contrato vira aviso, nunca crash nem lista inventada", () => {
+    for (const estranha of [null, { detail: "x" }, [], "html",
+      resposta({ dimensoes: [{ dimensao: "leitura" } as never] }),
+      resposta({ dimensoes: [{ ...resposta().dimensoes[0], alunos: [{ aluno_id: 1 }] as never }] }),
+    ]) {
+      const estado = naoAferidosDaMateria("leitura", pronta(estranha));
+      expect(estado.tipo).toBe("aviso");
+    }
+    // `sem_nenhuma` ausente (contrato mais antigo) não impede a lista principal.
+    const semCampo = { ...resposta() } as Partial<NaoAferidos>;
+    delete semCampo.sem_nenhuma;
+    const estado = naoAferidosDaMateria("leitura", pronta(semCampo));
+    expect(estado.tipo === "lista" && estado.linhas).toHaveLength(2);
+  });
+
+  it("ranking + bloco cobrem a escola inteira: ninguém fica sem porta para o perfil", () => {
+    const usaAsDuas = itemDaMateria("leitura", { aluno_id: 1, nome: "Usa As Duas" });
+    const soLeituraNoRanking = itemDaMateria("leitura", { aluno_id: 2, nome: "So Leitura", posicao: 2 });
+    const ranking = estadoDoRanking("leitura",
+      pacote({ ranking_por_dimensao: { leitura: [usaAsDuas, soLeituraNoRanking] } }),
+      { carregando: false });
+    const bloco = naoAferidosDaMateria("leitura", pronta(resposta()));
+    if (ranking.tipo !== "lista" || bloco.tipo !== "lista") throw new Error("esperava as duas listas");
+    const alcancaveis = [...linhasDaMateria(ranking.itens), ...bloco.linhas].map((l) => l.chave);
+    expect(new Set(alcancaveis)).toEqual(new Set([1, 2, 3, 4]));
   });
 });
 

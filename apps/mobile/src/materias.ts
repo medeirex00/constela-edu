@@ -14,20 +14,25 @@
  *    produziu), que é outra afirmação, e verdadeira;
  *  * CONTRATO → DADO: matéria fora do plano da rede não vira "—" — ela some,
  *    porque ninguém é "sem dado" num produto que a rede não comprou;
+ *  * O ALUNO NÃO SOME: quem sai do ranking da matéria por não ter dado entra
+ *    na lista "Ainda não aferidos em <matéria>" — sem nota e sem posição —,
+ *    que é a lista de ação da coordenação e a porta do app para o perfil dele;
  *  * COMPATIBILIDADE: o app guarda o pacote de sincronização no cache cifrado
  *    por até uma semana e pode falar com um servidor anterior durante o
  *    rollout. Campo ausente degrada para uma MENSAGEM — nunca para um crash e
  *    nunca de volta para a nota composta.
  *
- * Referências: docs/spec-arquitetura-2.md §1.2, §3.5, §10.6 e
+ * Referências: docs/spec-arquitetura-2.md §1.2, §2.4, §3.5, §10.6 e
  * docs/plano-retirada-nota-geral.md §4, item 11.
  */
 import {
   notaDaMateria,
   numero,
+  type AlunoNaoAferido,
   type Dashboard,
   type DesempenhoDimensao,
   type Dimensao,
+  type NaoAferidos,
   type PacoteSincronizacao,
   type PerfilAluno,
   type RankingItem,
@@ -186,7 +191,7 @@ export interface LinhaRanking {
 
 /** Linhas da aba de uma matéria: a posição e a nota DAQUELA matéria, como o
  *  servidor carimbou. A lista só traz alunos AFERIDOS nela (quem não tem dado
- *  sai da lista em vez de entrar com 0,0). */
+ *  sai da lista em vez de entrar com 0,0 — e aparece em `naoAferidosDaMateria`). */
 export function linhasDaMateria(itens: RankingItem[]): LinhaRanking[] {
   return itens.map((item) => ({
     chave: item.aluno_id,
@@ -202,6 +207,126 @@ export function linhasDaMateria(itens: RankingItem[]): LinhaRanking[] {
 export function totalAferidos(itens: RankingItem[]): number {
   const carimbado = itens[0]?.n_aferidos;
   return typeof carimbado === "number" ? carimbado : itens.length;
+}
+
+// --- Ainda não aferidos ---------------------------------------------------------
+
+/** Uma criança da lista "Ainda não aferidos": nome e turma, SEM nota e SEM
+ *  posição — de propósito (spec §2.4). Quem nunca foi alcançado não é o último
+ *  da escola: é quem a coordenação precisa ver. */
+export interface LinhaNaoAferido {
+  chave: number;
+  nome: string;
+  detalhe: string;
+}
+
+export type EstadoNaoAferidos =
+  | { tipo: "lista"; titulo: string; explicacao: string; linhas: LinhaNaoAferido[] }
+  /** Nada a mostrar: matéria fora do plano da rede, ou ninguém sem dado no
+   *  recorte (inclui a Secretaria, que recebe as listas vazias do servidor). */
+  | { tipo: "oculto" }
+  | { tipo: "carregando" }
+  | { tipo: "aviso"; texto: string };
+
+function ehAlunoNaoAferido(valor: unknown): valor is AlunoNaoAferido {
+  return typeof valor === "object" && valor !== null
+    && typeof (valor as AlunoNaoAferido).aluno_id === "number"
+    && typeof (valor as AlunoNaoAferido).nome === "string";
+}
+
+/** O bloco "Ainda não aferidos em <matéria>" da aba do Ranking, a partir de
+ *  `GET /escolas/{id}/nao-aferidos` (a mesma rota do web; o pacote de
+ *  sincronização não a traz).
+ *
+ *  É a contrapartida obrigatória do corte "ausência não é zero" (spec §1.2,
+ *  consequência 3): ao sair do ranking da matéria, a criança sem dado não pode
+ *  sumir do app — e a aba do Ranking é a única porta do app para o perfil.
+ *
+ *  O escopo vem pronto do servidor (professor: só as turmas dele; Secretaria:
+ *  listas vazias, porque não enxerga criança individual) — o app não filtra
+ *  nada. Matéria fora de `contratadas` não tem bloco: ninguém é "não aferido"
+ *  num produto que a rede não comprou. Quem não tem dado em NENHUMA matéria
+ *  aparece aqui em todas elas (spec §2.4); com mais de uma matéria no plano, a
+ *  linha diz isso (adoção 0%).
+ *
+ *  Sem a resposta (rota que o servidor ainda não tem, cache antigo salvo antes
+ *  desta consulta existir, sem rede), o bloco vira uma MENSAGEM — nunca some
+ *  calado, porque sumir é justamente o defeito que ele existe para impedir. */
+export function naoAferidosDaMateria(
+  materia: Dimensao,
+  consulta: { dados?: unknown; erro?: unknown; carregando: boolean },
+): EstadoNaoAferidos {
+  const rotulo = ROTULOS[materia];
+  const indisponivel: EstadoNaoAferidos = {
+    tipo: "aviso",
+    texto: `A lista de quem ainda não foi aferido em ${rotulo} não veio num formato que `
+      + "este app reconheça. Atualize o app ou consulte pelo sistema web.",
+  };
+
+  if (consulta.dados !== undefined) {
+    const resposta = consulta.dados as Partial<NaoAferidos> | null;
+    const contratadas = resposta?.contratadas;
+    const dimensoes = resposta?.dimensoes;
+    if (!Array.isArray(contratadas) || !Array.isArray(dimensoes)) return indisponivel;
+    if (!contratadas.includes(materia)) return { tipo: "oculto" };
+
+    const daMateria = dimensoes.find(
+      (d) => typeof d === "object" && d !== null && d.dimensao === materia);
+    const alunos: unknown = daMateria?.alunos;
+    if (!Array.isArray(alunos) || !alunos.every(ehAlunoNaoAferido)) return indisponivel;
+    if (alunos.length === 0) return { tipo: "oculto" };
+
+    // "Sem nenhuma" só acrescenta informação quando o plano tem mais de uma
+    // matéria; com uma só, todo não aferido nela já está sem nenhuma.
+    const variasMaterias = contratadas.filter((c) => c in ROTULOS).length > 1;
+    const recebidos: unknown = resposta?.sem_nenhuma;
+    const semNenhuma = new Set(
+      variasMaterias && Array.isArray(recebidos)
+        ? recebidos.filter(ehAlunoNaoAferido).map((a) => a.aluno_id)
+        : []);
+
+    const linhas = alunos.map((aluno) => ({
+      chave: aluno.aluno_id,
+      nome: aluno.nome,
+      detalhe: [
+        aluno.turma ?? "",
+        semNenhuma.has(aluno.aluno_id) ? "sem dado em nenhuma matéria (adoção 0%)" : "",
+      ].filter(Boolean).join(" · "),
+    }));
+    const nenhuma = linhas.filter((linha) => semNenhuma.has(linha.chave)).length;
+    return {
+      tipo: "lista",
+      titulo: `Ainda não aferidos em ${rotulo} (${numero(linhas.length)})`,
+      explicacao: "Sem dado da plataforma desta matéria: não entram no ranking nem na média "
+        + "— ausência não é nota zero."
+        + (nenhuma > 0
+          ? ` ${numero(nenhuma)} ${nenhuma === 1 ? "não tem" : "não têm"} dado em nenhuma matéria.`
+          : ""),
+      linhas,
+    };
+  }
+
+  if (consulta.carregando) return { tipo: "carregando" };
+  // Por campo, e não `instanceof ApiError` (mesma razão de `estadoDoRanking`).
+  const status = (consulta.erro as { status?: unknown } | null | undefined)?.status;
+  if (status === 404) {
+    return {
+      tipo: "aviso",
+      texto: `O servidor ainda não envia a lista de quem não foi aferido em ${rotulo}. `
+        + "Ela aparece aqui assim que o servidor for atualizado.",
+    };
+  }
+  if (status === 403) {
+    return {
+      tipo: "aviso",
+      texto: "Seu acesso não inclui a lista de quem ainda não foi aferido nesta escola.",
+    };
+  }
+  return {
+    tipo: "aviso",
+    texto: `Sem a lista de quem ainda não foi aferido em ${rotulo} neste aparelho `
+      + "— conecte-se uma vez para sincronizar.",
+  };
 }
 
 // --- Painel ---------------------------------------------------------------------
