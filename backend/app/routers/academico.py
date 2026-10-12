@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -54,6 +54,7 @@ from app.services import (
     turmas_dedup,
 )
 from app.services import dificuldade_livro
+from app.services import dimensoes as svc_dimensoes
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
 
@@ -274,12 +275,27 @@ def perfil_aluno(
         turma_id=matricula[1].id if matricula else None, aluno_id=aluno_id,
         livros_unicos=snap_e.livros_unicos if snap_e else None)
 
+    # DESEMPENHO POR DIMENSÃO (a leitura oficial) + a COBERTURA ao lado. O schema
+    # já declarava os dois campos, mas a rota não os preenchia — a tela do perfil
+    # só tinha a nota geral (legado) e as duas notas de plataforma SEM o corte de
+    # aferido (0,0 para quem nunca abriu a plataforma). A montagem é a do leitor
+    # único (`services.dimensoes`), o mesmo do certificado e dos alertas: o perfil
+    # não pode discordar da lista nem do documento. Sem linha de `notas` (aluno
+    # ainda não calculado, ou fora da população pontuada — as Fases) não há o que
+    # afirmar: lista vazia e adoção nula, e a tela diz "sem nota calculada", em
+    # vez de declarar "não aferido" quem talvez tenha dado.
+    escola = db.get(Escola, escola_id)
+    dimensoes = svc_dimensoes.blocos(db, escola, nota) if nota else []
+    adocao = svc_dimensoes.adocao(db, escola, nota) if nota else None
+
     perfil = AlunoPerfilOut(
         aluno=saida,
         nota_matific=nota.nota_matific if nota else 0.0,
         nota_elefante=nota.nota_elefante if nota else 0.0,
         nota_geral=nota.nota_geral if nota else 0.0,
         posicao=nota.posicao if nota else None,
+        dimensoes=dimensoes,
+        adocao=adocao,
         # O professor também vê o PASSO A PASSO do cálculo (liberado pelo dono) —
         # só das crianças das turmas dele (exigir_aluno_permitido acima barra as
         # de fora). A ficha cadastral (dados pessoais) e as leituras seguem só p/
@@ -1006,13 +1022,45 @@ def listar_turmas(
     return saida
 
 
+# Ordenação da lista da turma POR MATÉRIA (Arquitetura 2, spec §4.2): a marca de
+# AFERIDO, a posição carimbada na dimensão e a nota da dimensão.
+_ORDEM_DIMENSAO = {
+    "desempenho_leitura": (Nota.aferido_leitura, Nota.posicao_leitura,
+                           Nota.nota_elefante),
+    "desempenho_matematica": (Nota.aferido_matematica, Nota.posicao_matematica,
+                              Nota.nota_matific),
+}
+
+
 def _ordem_alunos(ordenar: str) -> list:
     """Cláusulas ORDER BY portáveis (SQLite/Postgres) por critério do painel.
-    Os ".is_(None)" jogam os NULOS para o fim de forma independente do banco."""
+    Os ".is_(None)" jogam os NULOS para o fim de forma independente do banco.
+
+    `desempenho_leitura` / `desempenho_matematica` são as ordens OFICIAIS: quem
+    é aferido na matéria vem primeiro, na posição carimbada pelo motor (o mesmo
+    desempate LOCAL do ranking da dimensão), e quem não tem dado dela vai para o
+    FIM — por nome, sem nota —, nunca entre os aferidos como se tivesse 0,0. O
+    corte é a marca de aferido (existência do snapshot), jamais `nota > 0`.
+
+    `desempenho` (ordem única pela nota geral) segue aceito só por contrato com
+    cliente não migrado; a tela web não o pede mais."""
     if ordenar == "data":
         return [Aluno.created_at.desc()]
     if ordenar == "chamada":
         return [Aluno.numero_chamada.is_(None), Aluno.numero_chamada.asc()]
+    if ordenar in _ORDEM_DIMENSAO:
+        aferido, posicao_dim, nota_dim = _ORDEM_DIMENSAO[ordenar]
+        e_aferido = aferido.is_(True)
+        # Posição e nota só ordenam ENTRE os aferidos: para os demais as duas
+        # viram NULL (empate), e quem decide é o nome que o chamador acrescenta
+        # — um valor residual de quem não é aferido (ex.: Matific só do ano
+        # anterior) não pode furar a fila. A ordem dos nulos de cada banco não
+        # importa: a posição nula vai para o fim pela chave `is_(None)`, e a
+        # nota só é nula entre os não aferidos, onde todas empatam.
+        posicao = case((e_aferido, posicao_dim), else_=None)
+        nota_ordem = case((e_aferido, nota_dim), else_=None)
+        return [case((e_aferido, 0), else_=1),
+                posicao.is_(None), posicao.asc(), nota_ordem.desc()]
     if ordenar == "desempenho":
         return [Nota.nota_geral.is_(None), Nota.nota_geral.desc()]
     # "nome" | "alfabetica" | "serie" (numa turma a série é única) | padrão
@@ -1031,11 +1079,19 @@ def listar_alunos_da_turma(
 ):
     """Alunos da turma para o painel de gestão: com nota, posição e data de
     cadastro; busca por nome e ordenação. `incluir_inativos` traz também os
-    arquivados/excluídos (para restaurar ou apagar de vez)."""
+    arquivados/excluídos (para restaurar ou apagar de vez).
+
+    Cada aluno traz o desempenho POR MATÉRIA contratada (`nota_leitura`,
+    `aferido_leitura`, `posicao_leitura` e os de Matemática) — campos que o
+    schema já declarava e a rota não preenchia. Sem dado da plataforma: nota e
+    posição `None` (a tela mostra "—"), nunca 0,0. Matéria que a rede não
+    contratou fica `None`/`False` (não existe para a escola). `nota_geral` e
+    `posicao` seguem no payload só por contrato (legado)."""
     turma = _turma_da_escola(db, escola_id, turma_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None and turma_id not in permitidas:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
+    contratadas = set(scoring.dimensoes_contratadas(db, db.get(Escola, escola_id)))
     consulta = (
         select(Aluno, Nota)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
@@ -1058,6 +1114,19 @@ def listar_alunos_da_turma(
         item.ano_escolar = turma.ano_escolar
         item.nota_geral = nota.nota_geral if nota else None
         item.posicao = nota.posicao if nota else None
+        # Por MATÉRIA: o corte é a marca de aferido (`services.dimensoes`), o
+        # mesmo do ranking da dimensão — a lista da turma não discorda dele.
+        item.aferido_leitura = ("leitura" in contratadas
+                                and svc_dimensoes.aferido(nota, "leitura"))
+        item.nota_leitura = (svc_dimensoes.valor(nota, "leitura")
+                             if item.aferido_leitura else None)
+        item.posicao_leitura = nota.posicao_leitura if item.aferido_leitura else None
+        item.aferido_matematica = ("matematica" in contratadas
+                                   and svc_dimensoes.aferido(nota, "matematica"))
+        item.nota_matematica = (svc_dimensoes.valor(nota, "matematica")
+                                if item.aferido_matematica else None)
+        item.posicao_matematica = (nota.posicao_matematica
+                                   if item.aferido_matematica else None)
         saida.append(item)
     # Sensor 4: TODA resposta desta lista leva `nota_geral`/`posicao` por aluno
     # (plano de retirada, §4 itens 2–3). `?ordenar=desempenho` ganha a variante

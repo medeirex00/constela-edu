@@ -10,7 +10,13 @@ import { Badge, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { nota, numero } from "../lib/formato";
-import type { LeituraNiveis, LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
+import type {
+  AdocaoAluno,
+  DesempenhoDimensao,
+  LeituraNiveis,
+  LinhaCalculo,
+  PerfilAluno as Perfil,
+} from "../lib/types";
 
 // Ficha cadastral MINIMIZADA (LGPD): o produto guarda só o RA como identidade.
 // Nome e nº de chamada aparecem no topo do perfil (não aqui). Nada de dados
@@ -103,6 +109,68 @@ function LeituraPorNivel({ dados }: { dados: LeituraNiveis }) {
     </Card>
   );
 }
+
+const MATERIAS: Record<string, { titulo: string; plataforma: string }> = {
+  leitura: { titulo: "Leitura", plataforma: "Elefante Letrado" },
+  matematica: { titulo: "Matemática", plataforma: "Matific" },
+};
+
+/** Desempenho do aluno em UMA matéria (Arquitetura 2): a nota oficial dela e a
+ *  posição COM o denominador ("3º de 21 na escola") — sem ele, um "3º" em
+ *  Leitura e um "3º" em Matemática parecem comparáveis, e não são. Sem dado da
+ *  plataforma: "—" e o motivo, nunca 0,0 (o zero fica para quem tem dado e
+ *  ainda não produziu). */
+function CartaoMateria({ bloco }: { bloco: DesempenhoDimensao }) {
+  const materia = MATERIAS[bloco.dimensao] ?? { titulo: bloco.dimensao, plataforma: bloco.plataforma };
+  const temNota = bloco.aferido && bloco.nota != null;
+  return (
+    <Card className="p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        {materia.titulo}
+        <span className="ml-1 font-normal normal-case tracking-normal text-zinc-400">· {materia.plataforma}</span>
+      </p>
+      {temNota ? (
+        <>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(bloco.nota ?? 0)}</p>
+          {bloco.posicao != null && (
+            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+              {bloco.posicao}º{bloco.n_aferidos > 0 && ` de ${numero(bloco.n_aferidos)}`} na escola em {materia.titulo}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-2xl font-semibold text-zinc-300 dark:text-zinc-600">—</p>
+          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+            Ainda não aferido: sem dado do {materia.plataforma}.
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/** Adoção = em quantas matérias contratadas o aluno tem dado. Fica AO LADO do
+ *  desempenho e nunca entra na nota (é cobertura, não mérito). */
+function CartaoAdocao({ adocao }: { adocao: AdocaoAluno }) {
+  return (
+    <Card className="border-indigo-200 p-4 dark:border-indigo-500/30">
+      <p className="text-xs font-medium uppercase tracking-wide text-indigo-600 dark:text-indigo-400">Adoção</p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">{numero(Math.round(adocao.pct))}%</p>
+      <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+        {adocao.com_dados.length} de {adocao.contratadas.length} matéria{adocao.contratadas.length === 1 ? "" : "s"} com dado
+      </p>
+    </Card>
+  );
+}
+
+// Colunas do grid dos cartões do topo (classe literal: o Tailwind não enxerga
+// nome de classe montado em tempo de execução).
+const COLUNAS_CARTOES: Record<number, string> = {
+  1: "sm:grid-cols-1",
+  2: "sm:grid-cols-2",
+  3: "sm:grid-cols-3",
+};
 
 function TabelaCalculo({ titulo, linhas, notaFinal }: { titulo: string; linhas: LinhaCalculo[]; notaFinal: number }) {
   return (
@@ -228,23 +296,16 @@ export default function PerfilAluno() {
   if (!perfil) return <Vazio titulo="Aluno não encontrado" />;
 
   const { aluno, detalhes } = perfil;
-  // As parcelas da Nota Geral saem do que o MOTOR de fato usou (detalhes.geral.
-  // pesos), não de uma lista fixa de plataformas: numa rede que só contratou a
-  // Leitura, a conta é "Elefante 70 × 100% = 70" — escrever "Matific × 0% +
-  // Elefante × 50%" mostraria uma equação que não fecha com a própria nota.
-  const pesosGerais: Record<string, number> = detalhes.geral?.pesos ?? {};
-  const ROTULO_PLATAFORMA: Record<string, string> = {
-    matific: "Matific",
-    elefante: "Elefante",
-  };
-  const parcelasGerais = Object.entries(pesosGerais)
-    .filter(([, peso]) => Number(peso) > 0)
-    .map(([chave, peso]) => ({
-      chave,
-      rotulo: ROTULO_PLATAFORMA[chave] ?? chave,
-      peso: Number(peso),
-      valor: chave === "matific" ? perfil.nota_matific : perfil.nota_elefante,
-    }));
+  // DESEMPENHO POR MATÉRIA (Decisão 1 do dono, 2026-10-12): o topo do perfil
+  // lê `dimensoes[]` + `adocao` — a nota oficial de cada matéria CONTRATADA
+  // (a API já manda só as contratadas), com a posição e o denominador dela — e
+  // não mais a nota geral nem a posição na ordem única (que a API ainda manda,
+  // só por contrato). Sem linha de nota (aluno ainda não calculado) a API manda
+  // a lista vazia: nada de cartão afirmando "não aferido"; a seção do cálculo
+  // abaixo já diz que não há nota.
+  const dimensoes = perfil.dimensoes ?? [];
+  const adocao = perfil.adocao ?? null;
+  const totalCartoes = dimensoes.length + (adocao ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -254,7 +315,6 @@ export default function PerfilAluno() {
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold tracking-tight">{aluno.nome}</h1>
-          {perfil.posicao && <Badge tom="destaque">{perfil.posicao}º no ranking</Badge>}
           {detalhes.modo_normalizacao && (
             <Badge>Normalização: {detalhes.modo_normalizacao === "auto" ? "automática" : "manual"}</Badge>
           )}
@@ -319,20 +379,12 @@ export default function PerfilAluno() {
 
       {aba === "perfil" && (
         <>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Nota Matific</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_matific)}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Nota Elefante Letrado</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_elefante)}</p>
-        </Card>
-        <Card className="border-indigo-200 p-4 dark:border-indigo-500/30">
-          <p className="text-xs font-medium uppercase tracking-wide text-indigo-600 dark:text-indigo-400">Nota Geral</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_geral)}</p>
-        </Card>
-      </div>
+      {totalCartoes > 0 && (
+        <div className={`grid grid-cols-1 gap-3 ${COLUNAS_CARTOES[totalCartoes] ?? "sm:grid-cols-3"}`}>
+          {dimensoes.map((bloco) => <CartaoMateria key={bloco.dimensao} bloco={bloco} />)}
+          {adocao && <CartaoAdocao adocao={adocao} />}
+        </div>
+      )}
 
       {perfil.ficha && Object.keys(perfil.ficha).length > 0 && (
         <FichaCadastral ficha={perfil.ficha} />
@@ -458,21 +510,9 @@ export default function PerfilAluno() {
         {detalhes.elefante && (
           <TabelaCalculo titulo="Elefante Letrado" linhas={detalhes.elefante.indicadores} notaFinal={detalhes.elefante.nota} />
         )}
-        {detalhes.geral && parcelasGerais.length > 0 && (
-          <Card className="p-4 text-sm">
-            <p className="font-medium">Nota Geral</p>
-            <p className="mt-1 tabular-nums text-zinc-600 dark:text-zinc-300">
-              {parcelasGerais.map((p, i) => (
-                <span key={p.chave}>
-                  {i > 0 && " + "}
-                  {p.rotulo} {nota(p.valor)} × {p.peso}%
-                </span>
-              ))}
-              {" = "}
-              <span className="font-semibold text-zinc-900 dark:text-zinc-100">{nota(perfil.nota_geral)}</span>
-            </p>
-          </Card>
-        )}
+        {/* A equação "Elefante × p% + Matific × q% = nota geral" saiu junto com
+            a nota geral: cada matéria tem a sua nota, explicada na tabela dela,
+            e nenhuma conta as junta numa só. */}
         {!detalhes.matific && !detalhes.elefante && (
           <Vazio titulo="Ainda não há nota calculada para este aluno" descricao="Importe dados das plataformas para gerar a primeira nota." />
         )}

@@ -2,7 +2,7 @@
  * Ranking Geral — tela única com dois níveis de seleção, sem trocar de página:
  *
  *   CATEGORIA  → Alunos | Turmas | Escolas
- *   (Alunos)   → Geral | Leitura | Matemática | Evolução
+ *   (Alunos)   → Desempenho | Leitura | Matemática | Evolução
  *
  * Cada visão é a MESMA tela de antes (filtros de período/turma/série/turno,
  * paginação e comportamento preservados), embutida aqui sem o próprio
@@ -57,10 +57,13 @@ const CATEGORIAS = [
 ] as const;
 type Categoria = (typeof CATEGORIAS)[number]["chave"];
 
-// Sub-visões de ALUNOS: uma por FONTE de dados — Geral (ordem única), Leitura
-// (Elefante Letrado), Matemática (Matific) e Evolução.
+// Sub-visões de ALUNOS: Desempenho (a classificação oficial de uma matéria por
+// vez, com seletor), Leitura (Elefante Letrado), Matemática (Matific) e
+// Evolução. A chave da 1ª continua "geral" — é o padrão sem `?ver=` e o que
+// atalhos e deep-links já usam —, mas a aba deixou de ser a ordem única pela
+// nota geral (Decisão 1 do dono): o rótulo agora diz o que ela mostra.
 const VISOES_ALUNOS = [
-  { chave: "geral", rotulo: "Geral", modulo: null },
+  { chave: "geral", rotulo: "Desempenho", modulo: null },
   { chave: "leitura", rotulo: "Leitura", modulo: "leitura" },
   { chave: "matematica", rotulo: "Matemática", modulo: "matematica" },
   { chave: "evolucao", rotulo: "Evolução", modulo: null },

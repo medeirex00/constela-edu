@@ -7,6 +7,15 @@
  * (reversível); a exclusão PERMANENTE apaga o aluno e todos os dados
  * vinculados e exige uma confirmação extra. Após cada ação, as contagens,
  * o ranking e as estatísticas se atualizam sozinhos (sem recarregar a página).
+ *
+ * DESEMPENHO POR MATÉRIA (Decisão 1 do dono, 2026-10-12): a lista mostra a nota
+ * de Leitura e a de Matemática de cada aluno, uma coluna por matéria CONTRATADA,
+ * e ordena por qualquer uma delas (`ordenar=desempenho_leitura` |
+ * `desempenho_matematica`). Antes era uma coluna só, com a nota geral e a
+ * posição na ordem única. Quem não tem dado da plataforma mostra "—" (e vai
+ * para o fim na ordenação daquela matéria), nunca 0,0. A posição não aparece na
+ * lista: sem o denominador ("8º de quantos?") ela se passaria por comparável
+ * entre matérias — o perfil do aluno mostra as duas com o "de N".
  */
 import {
   Archive,
@@ -45,6 +54,7 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { api, ApiError } from "../lib/api";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
 import type { AlunoGestao, Turma } from "../lib/types";
@@ -58,13 +68,32 @@ interface ResumoTurma {
   indicadores: Record<string, number>;
 }
 
-const ORDENACOES = [
+// `modulo` = a matéria que a opção exige contratada (as demais valem sempre).
+const ORDENACOES: { valor: string; rotulo: string; modulo?: string }[] = [
   { valor: "nome", rotulo: "Nome (A–Z)" },
   { valor: "data", rotulo: "Data de cadastro" },
-  { valor: "desempenho", rotulo: "Desempenho" },
+  { valor: "desempenho_leitura", rotulo: "Nota de Leitura", modulo: "leitura" },
+  { valor: "desempenho_matematica", rotulo: "Nota de Matemática", modulo: "matematica" },
   { valor: "chamada", rotulo: "Nº de chamada" },
   { valor: "serie", rotulo: "Série" },
 ];
+
+/** Nota de UMA matéria na lista: "—" quando o aluno não tem dado da plataforma
+ *  (não aferido) — o 0,0 fica reservado a quem tem dado e ainda não produziu. */
+function NotaDaMateria({ valor, aferido, materia }: {
+  valor: number | null | undefined;
+  aferido: boolean | undefined;
+  materia: string;
+}) {
+  if (aferido !== true || valor == null) {
+    return (
+      <span className="text-zinc-300 dark:text-zinc-600" title={`Ainda sem dado de ${materia}`}>
+        —
+      </span>
+    );
+  }
+  return <span className="font-semibold">{fmtNota(valor)}</span>;
+}
 
 const STATUS_BADGE: Record<string, { tom: "neutro" | "alerta"; texto: string }> = {
   arquivado: { tom: "neutro", texto: "Arquivado" },
@@ -133,6 +162,9 @@ export default function TurmaDetalhe() {
   // Secretaria (rede vinculada, não-global): só visualiza — sem seleção em massa,
   // menu de ações, transferência nem geração de cartões (o backend também barra).
   const podeEditar = !(!usuario?.is_global && usuario?.rede_id != null);
+  // Matéria que a rede não contratou não vira coluna nem opção de ordenação.
+  const { leitura, matematica, tem } = useModulos();
+  const ordenacoes = ORDENACOES.filter((o) => !o.modulo || tem(o.modulo));
 
   const [busca, setBusca] = useState("");
   const [buscaAplicada, setBuscaAplicada] = useState("");
@@ -312,7 +344,7 @@ export default function TurmaDetalhe() {
             />
           </label>
           <select className={`${estiloInput} w-auto`} value={ordenar} onChange={(e) => setOrdenar(e.target.value)} aria-label="Ordenar por">
-            {ORDENACOES.map((o) => <option key={o.valor} value={o.valor}>{o.rotulo}</option>)}
+            {ordenacoes.map((o) => <option key={o.valor} value={o.valor}>{o.rotulo}</option>)}
           </select>
           <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
             <input type="checkbox" className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
@@ -369,7 +401,8 @@ export default function TurmaDetalhe() {
                   )}
                   <th className="px-2 py-2 font-medium">Aluno</th>
                   <th className="px-2 py-2 text-center font-medium">Nº</th>
-                  <th className="px-2 py-2 text-right font-medium">Desempenho</th>
+                  {leitura && <th className="px-2 py-2 text-right font-medium">Leitura</th>}
+                  {matematica && <th className="px-2 py-2 text-right font-medium">Matemática</th>}
                   {podeEditar && <th className="w-12 px-4 py-2"></th>}
                 </tr>
               </thead>
@@ -409,16 +442,17 @@ export default function TurmaDetalhe() {
                       <td className="px-2 py-2.5 text-center tabular-nums text-zinc-500 dark:text-zinc-400">
                         {aluno.numero_chamada ?? "—"}
                       </td>
-                      <td className="px-2 py-2.5 text-right tabular-nums">
-                        {aluno.nota_geral != null ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="font-semibold">{fmtNota(aluno.nota_geral)}</span>
-                            {aluno.posicao != null && <span className="text-xs text-zinc-400">{aluno.posicao}º</span>}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-zinc-400">sem nota</span>
-                        )}
-                      </td>
+                      {leitura && (
+                        <td className="px-2 py-2.5 text-right tabular-nums">
+                          <NotaDaMateria valor={aluno.nota_leitura} aferido={aluno.aferido_leitura} materia="Leitura" />
+                        </td>
+                      )}
+                      {matematica && (
+                        <td className="px-2 py-2.5 text-right tabular-nums">
+                          <NotaDaMateria valor={aluno.nota_matematica} aferido={aluno.aferido_matematica}
+                                         materia="Matemática" />
+                        </td>
+                      )}
                       {podeEditar && (
                         <td className="px-4 py-2.5 text-right">
                           <MenuAcoes aluno={aluno} aoEscolher={(escolha) => aoEscolherNoMenu(aluno, escolha)} />

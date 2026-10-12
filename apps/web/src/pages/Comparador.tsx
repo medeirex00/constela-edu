@@ -1,4 +1,14 @@
-/** Comparador aluno×aluno, aluno×turma e turma×turma (PRD §73–§75). */
+/** Comparador aluno×aluno, aluno×turma e turma×turma (PRD §73–§75).
+ *
+ * As NOTAS comparadas são POR MATÉRIA (Decisão 1 do dono, 2026-10-12): cada
+ * lado traz o bloco `dimensoes` (Leitura, Matemática) — nota, posição e
+ * denominador do aluno, ou a média SÓ dos aferidos da turma/escola com o "de
+ * N" ao lado. O cartão "Nota Geral" (bloco legado `notas.geral`/`notas.posicao`,
+ * que a API ainda manda por contrato) saiu: não existe ordem nem média única
+ * entre matérias. Sem dado da matéria: "—" e o motivo, nunca 0,0 — comparar um
+ * zero de ausência com uma média já cortada por aferido seria pôr lado a lado
+ * dois números com a mesma cara e significados diferentes.
+ */
 import { GitCompareArrows } from "lucide-react";
 import { useState } from "react";
 
@@ -6,9 +16,23 @@ import { BarraDupla } from "../components/Grafico";
 import { Botao, Campo, Card, Carregando, Mensagem, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { api } from "../lib/api";
-import { nota, tempoLeitura } from "../lib/formato";
-import type { Escola, PaginaAlunos, Turma } from "../lib/types";
+import { nota, numero, tempoLeitura } from "../lib/formato";
+import type { Dimensao, Escola, PaginaAlunos, Turma } from "../lib/types";
+
+/** Uma matéria de UM lado (`services/evolucao._bloco_dimensoes`). */
+interface MateriaLado {
+  plataforma: string;
+  contratada: boolean;
+  aferido: boolean;
+  /** Aluno: a nota dele. Turma/escola: a média SÓ dos aferidos. `null` = sem dado. */
+  nota: number | null;
+  /** Só do aluno: a posição carimbada na matéria (escola inteira). */
+  posicao: number | null;
+  /** Aluno: o denominador da posição. Turma/escola: quantos entraram na média. */
+  n_aferidos: number | null;
+}
 
 interface Lado {
   tipo: string;
@@ -16,7 +40,43 @@ interface Lado {
   nome: string;
   total_alunos?: number;
   indicadores: Record<string, number>;
-  notas: { matific: number; elefante: number; geral: number; posicao: number | null };
+  dimensoes?: Partial<Record<Dimensao, MateriaLado>>;
+}
+
+const MATERIAS: { chave: Dimensao; rotulo: string }[] = [
+  { chave: "leitura", rotulo: "Leitura" },
+  { chave: "matematica", rotulo: "Matemática" },
+];
+
+/** Texto pequeno sob o número: de onde ele vem, ou por que não há número. */
+function detalheMateria(lado: Lado, materia: MateriaLado | undefined): string {
+  if (!materia || !materia.contratada) return "matéria fora do plano";
+  if (!materia.aferido || materia.nota == null) return "sem dado da plataforma";
+  const n = materia.n_aferidos ?? 0;
+  if (lado.tipo === "aluno") {
+    return materia.posicao != null
+      ? `${materia.posicao}º${n > 0 ? ` de ${numero(n)}` : ""} na escola`
+      : "";
+  }
+  return `média de ${numero(n)} aluno${n === 1 ? "" : "s"} com dado`;
+}
+
+function ValorMateria({ lado, materia, cor, alinhamento }: {
+  lado: Lado;
+  materia: MateriaLado | undefined;
+  cor: string;
+  alinhamento: "esquerda" | "direita";
+}) {
+  const temNota = Boolean(materia?.contratada && materia.aferido && materia.nota != null);
+  return (
+    <div className={alinhamento === "direita" ? "text-right" : ""}>
+      <p className="text-[11px] text-zinc-400">{lado.nome}</p>
+      <p className={`text-xl font-semibold tabular-nums ${temNota ? cor : "text-zinc-300 dark:text-zinc-600"}`}>
+        {temNota ? nota(materia?.nota ?? 0) : "—"}
+      </p>
+      <p className="text-[11px] text-zinc-400">{detalheMateria(lado, materia)}</p>
+    </div>
+  );
 }
 
 interface Comparacao {
@@ -85,6 +145,7 @@ const INDICADORES: { chave: string; rotulo: string; formato?: (valor: number) =>
 
 export default function Comparador() {
   const { escolaId, usuario } = useApp();
+  const { tem } = useModulos();
   // "Escola" como lado é exclusivo do ADM supremo (rede/Secretaria).
   const podeEscola = !!usuario?.is_global;
   // Opções dos seletores: buscas de leitura (ociosas sem escola) via useApi.
@@ -152,29 +213,28 @@ export default function Comparador() {
 
       {comparacao && (
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            {(["matific", "elefante", "geral"] as const).map((chave) => (
-              <Card key={chave} className="p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                  Nota {chave === "geral" ? "Geral" : chave === "matific" ? "Matific" : "Elefante Letrado"}
-                  {(comparacao.a.tipo !== "aluno" || comparacao.b.tipo !== "aluno") && " (média)"}
-                </p>
-                <div className="mt-2 flex items-end justify-between">
-                  <div>
-                    <p className="text-[11px] text-zinc-400">{comparacao.a.nome}</p>
-                    <p className="text-xl font-semibold tabular-nums text-indigo-600 dark:text-indigo-400">
-                      {nota(comparacao.a.notas[chave])}
-                    </p>
+          {/* Uma matéria só aparece se está no plano do usuário E contratada
+              em pelo menos um dos lados (o ADM supremo compara escolas de redes
+              com planos diferentes; o lado sem a matéria mostra "—"). */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {MATERIAS
+              .filter((m) => tem(m.chave)
+                && (comparacao.a.dimensoes?.[m.chave]?.contratada
+                  || comparacao.b.dimensoes?.[m.chave]?.contratada))
+              .map((m) => (
+                <Card key={m.chave} className="p-4">
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Nota de {m.rotulo}
+                    {(comparacao.a.tipo !== "aluno" || comparacao.b.tipo !== "aluno") && " (média)"}
+                  </p>
+                  <div className="mt-2 flex items-end justify-between gap-3">
+                    <ValorMateria lado={comparacao.a} materia={comparacao.a.dimensoes?.[m.chave]}
+                                  cor="text-indigo-600 dark:text-indigo-400" alinhamento="esquerda" />
+                    <ValorMateria lado={comparacao.b} materia={comparacao.b.dimensoes?.[m.chave]}
+                                  cor="text-emerald-600 dark:text-emerald-400" alinhamento="direita" />
                   </div>
-                  <div className="text-right">
-                    <p className="text-[11px] text-zinc-400">{comparacao.b.nome}</p>
-                    <p className="text-xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      {nota(comparacao.b.notas[chave])}
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              ))}
           </div>
 
           <Card className="p-4">

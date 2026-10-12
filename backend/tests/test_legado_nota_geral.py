@@ -98,8 +98,13 @@ ALLOWLIST: dict[str, dict] = {
         "porque": ("perfil do aluno e lista da turma devolvem o campo; "
                    "`ordenar=desempenho` (sem dimensão) ainda ordena por ele. "
                    "As opções oficiais são `desempenho_leitura`/"
-                   "`desempenho_matematica`."),
-        "pode_sair": "quando o web parar de pedir `ordenar=desempenho`",
+                   "`desempenho_matematica`. Desde 2026-10-12 (Decisão 1 do "
+                   "dono) o web lê `dimensoes`/`nota_leitura`… e não pede mais "
+                   "`ordenar=desempenho`; o app em campo ainda lê `nota_geral` "
+                   "do perfil."),
+        "pode_sair": ("quando o app em campo parar de ler o perfil legado "
+                      "(plano, item 11 — Sensor 4); `ordenar=desempenho` já não "
+                      "tem cliente no repositório"),
     },
     "app/routers/rankings.py": {
         "ocorrencias": 4, "papel": "contrato-api",
@@ -108,8 +113,10 @@ ALLOWLIST: dict[str, dict] = {
                    "LEGADO (sem `?dimensao=`), cuja ordem vem de `Nota.posicao`; "
                    "(2) a competição de leitura POR TURNO (`ranking_leitura_por_"
                    "turno`), cuja ordem vem de `Nota.posicao_leitura` (dimensão), "
-                   "não deste valor."),
-        "pode_sair": "quando web e mobile só chamarem `?dimensao=`",
+                   "não deste valor. O web só chama `?dimensao=` desde "
+                   "2026-10-12 (aba Desempenho e Top 5 por matéria do painel); "
+                   "o app em campo e o `top10` do painel ainda são legados."),
+        "pode_sair": "quando o mobile também só chamar `?dimensao=` (plano, item 11)",
     },
     "app/routers/publico.py": {
         "ocorrencias": 4, "papel": "contrato-api",
@@ -141,8 +148,12 @@ ALLOWLIST: dict[str, dict] = {
     "app/services/evolucao.py": {
         "ocorrencias": 1, "papel": "contrato-api",
         "porque": ("o comparador devolve `notas.geral` (chave histórica) ao "
-                   "lado do bloco por dimensão, que é a leitura oficial."),
-        "pode_sair": "quando o web ler `dimensoes` no comparador",
+                   "lado do bloco por dimensão, que é a leitura oficial. O web "
+                   "lê só `dimensoes` desde 2026-10-12 (plano, item 9); a chave "
+                   "fica no payload por contrato até o Sensor 4 confirmar que "
+                   "nenhum cliente externo a lê."),
+        "pode_sair": ("já sem leitor no repositório: sai na limpeza de contrato "
+                      "(Sensor 4 zerado)"),
     },
     "app/services/relatorios.py": {
         "ocorrencias": 8, "papel": "contrato-api + documento-legado",
@@ -172,14 +183,20 @@ ALLOWLIST: dict[str, dict] = {
 
 # Frontend: mesma regra, varredura por linha (sem AST de TS). Arquivos de teste
 # entram porque são fixtures do payload legado.
+#
+# 2026-10-12 — Decisão 1 do dono (transição da `nota_geral` para as notas por
+# disciplina): SAÍRAM as telas internas da gestão que liam o legado —
+# `RankingGeral.tsx` (aba "Desempenho", só `?dimensao=`; plano item 1),
+# `TurmaDetalhe.tsx` (colunas e ordenação por matéria; itens 2–3),
+# `PerfilAluno.tsx` (`dimensoes[]` + `adocao`; itens 3–4) e `Dashboard.tsx`
+# (Top 5 por matéria; itens 4 e 7). O comparador (item 9) nunca escreveu o
+# token, mas também deixou de ler `notas.geral`. Ficam: telão e perfil
+# públicos (itens 5–6, decisão própria do dono), Suporte (cai com o motor),
+# o app em campo (item 11) e os tipos (item 12, por último).
 ALLOWLIST_FRONT: dict[str, dict] = {
     "packages/core/src/tipos.ts": {
         "ocorrencias": 3, "papel": "schema",
         "porque": "tipos dos três payloads legados.",
-    },
-    "apps/web/src/pages/RankingGeral.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": "coluna 'Nota' da aba Geral (legada). A ordem vem do backend.",
     },
     "apps/web/src/pages/Suporte.tsx": {
         "ocorrencias": 2, "papel": "exibição",
@@ -198,23 +215,6 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "porque": ("tipo e linha 'Geral' do perfil público legado (plano de "
                    "retirada, item 6 — decisão do dono)."),
     },
-    "apps/web/src/pages/Dashboard.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": ("Top 5 do painel da escola: vitrine na ordem única (pinado em "
-                   "`test_o_top10_do_painel_AINDA_segue_a_ordem_legada`; plano, "
-                   "item 7 — decisão do dono)."),
-    },
-    "apps/web/src/pages/PerfilAluno.tsx": {
-        "ocorrencias": 2, "papel": "exibição",
-        "porque": ("cartão 'Nota Geral' e a linha do passo a passo do cálculo; o "
-                   "payload já traz `dimensoes[]` (plano, item 3). Sair da tela "
-                   "depende da Aprovação 2 da spec (a coluna some das telas?)."),
-    },
-    "apps/web/src/pages/TurmaDetalhe.tsx": {
-        "ocorrencias": 2, "papel": "exibição",
-        "porque": ("coluna de nota da lista da turma (plano, itens 2–3; mesma "
-                   "dependência da Aprovação 2 da spec)."),
-    },
     "apps/mobile/src/telas/Painel.tsx": {
         "ocorrencias": 1, "papel": "exibição",
         "porque": ("app em campo: só sai com versão de API (plano, item 11 — "
@@ -229,11 +229,19 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "porque": "app em campo (plano, item 11).",
     },
     "apps/web/src/test/utils.tsx": {
-        "ocorrencias": 2, "papel": "fixture de teste", "porque": "payload falso.",
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("`rankingItemFake`: o tipo `RankingItem` ainda exige o campo "
+                   "(tipos.ts sai por último, plano item 12)."),
     },
     "apps/web/src/test/ExplicacaoDaNota.test.tsx": {
-        "ocorrencias": 5, "papel": "fixture de teste",
-        "porque": "payloads falsos do perfil (o passo a passo ainda mostra a Geral).",
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("payload do perfil COM o legado presente, para provar que a "
+                   "tela não exibe a nota geral nem a equação."),
+    },
+    "apps/web/src/test/TurmaDetalhe.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("aluno da lista da turma COM o legado presente, para provar "
+                   "que a tela mostra só as notas por matéria."),
     },
     "apps/web/src/test/CompeticaoLeituraTurno.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
@@ -521,6 +529,14 @@ def test_inventario_do_frontend_esta_travado():
     assert not divergentes, (
         f"o número de usos mudou no frontend (esperado, encontrado): "
         f"{divergentes}." + MENSAGEM)
+    # Arquivo que ZEROU os usos (ou foi apagado) também tem de sair da lista —
+    # a mesma régua do inventário do backend: sem isto, uma entrada morta
+    # ficava na ALLOWLIST_FRONT e o "lista vazia ⇒ nenhum leitor" do plano de
+    # retirada (gatilho 1) nunca chegaria a ser verdade aritmética.
+    sumiram = sorted(set(ALLOWLIST_FRONT) - set(achados))
+    assert not sumiram, (
+        f"`nota_geral` saiu de {sumiram} — ótimo. Remova-os da ALLOWLIST_FRONT "
+        f"e registre o avanço em docs/plano-retirada-nota-geral.md.")
 
 
 # ===========================================================================

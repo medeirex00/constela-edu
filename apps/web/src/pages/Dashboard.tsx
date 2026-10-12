@@ -21,9 +21,10 @@ import { Link } from "react-router-dom";
 import { Botao, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
 import { nota, numero, tempoLeitura } from "../lib/formato";
-import type { Dashboard as DadosDashboard } from "../lib/types";
+import type { Dashboard as DadosDashboard, Dimensao, RankingItem } from "../lib/types";
 
 // Panorama da REDE (SEDUC) e o GLOBAL de todas as redes (Admin Global). Lazy:
 // puxam o Leaflet do mapa — mantém o chunk do Dashboard leve para o professor/
@@ -327,26 +328,52 @@ function LeituraMatematica({ dados }: { dados: DadosDashboard }) {
   );
 }
 
-/** Top 5 do ranking geral (compacto) — o completo fica na página de ranking. */
-function TopRanking({ top }: { top: DadosDashboard["top10"] }) {
-  const top5 = top.slice(0, 5);
+const MATERIAS_TOP: { chave: Dimensao; rotulo: string }[] = [
+  { chave: "leitura", rotulo: "Leitura" },
+  { chave: "matematica", rotulo: "Matemática" },
+];
+
+/** Top 5 de UMA matéria (compacto) — a classificação OFICIAL dela: só quem é
+ *  aferido na matéria, pela nota 0–100 dela, com o denominador no rodapé. O
+ *  completo fica na aba Desempenho do Ranking, já aberta na matéria.
+ *
+ *  Era um "Top 5 — Ranking Geral" na ordem única pela nota geral (`top10` do
+ *  `/dashboard`). Decisão 1 do dono (2026-10-12): o painel passa a ler a nota
+ *  por disciplina (plano de retirada, itens 4 e 7). O `/dashboard` ainda manda
+ *  o `top10` legado — o app em campo lê —, mas esta tela não o usa mais.
+ *  Professor: a API devolve a lista nas turmas dele, renumerada 1..N (a mesma
+ *  regra da tela de ranking). */
+function TopMateria({ escolaId, dimensao, rotulo }: {
+  escolaId: number; dimensao: Dimensao; rotulo: string;
+}) {
+  const { dados, erro, carregando } = useApi<RankingItem[]>(
+    `/escolas/${escolaId}/ranking?dimensao=${dimensao}`);
+  const lista = dados ?? [];
+  const top5 = lista.slice(0, 5);
+  const total = lista[0]?.n_aferidos ?? lista.length;
   return (
-    <section>
-      <Card>
-        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-          <h2 className="inline-flex items-center gap-2 text-sm font-semibold">
-            <Trophy size={16} className="text-amber-500" /> Top 5 — Ranking Geral
-          </h2>
-          <Link to="/ranking" className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-            Ver ranking completo <ArrowRight size={14} />
-          </Link>
+    <Card className="flex flex-col">
+      <div className="flex items-center justify-between gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <h2 className="inline-flex items-center gap-2 text-sm font-semibold">
+          <Trophy size={16} className="text-amber-500" /> Top 5 — {rotulo}
+        </h2>
+        <Link to={`/ranking?materia=${dimensao}`} className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+          Ver classificação completa <ArrowRight size={14} />
+        </Link>
+      </div>
+      {carregando ? (
+        <div className="space-y-3 p-4">
+          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-8" />)}
         </div>
-        {top5.length === 0 ? (
-          <Vazio
-            titulo="Ainda não há notas calculadas"
-            descricao="Importe dados das plataformas ou cadastre alunos para começar."
-          />
-        ) : (
+      ) : erro ? (
+        <Vazio titulo={`Não foi possível carregar o Top 5 de ${rotulo}`} descricao={erro.message} />
+      ) : top5.length === 0 ? (
+        <Vazio
+          titulo={`Ainda não há alunos aferidos em ${rotulo}`}
+          descricao="Importe ou sincronize os dados da plataforma para gerar a classificação."
+        />
+      ) : (
+        <>
           <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
             {top5.map((item) => (
               <li key={item.aluno_id} className="flex items-center gap-3 px-4 py-3">
@@ -361,12 +388,31 @@ function TopRanking({ top }: { top: DadosDashboard["top10"] }) {
                   {item.nome}
                 </Link>
                 <span className="hidden shrink-0 text-xs text-zinc-400 sm:inline">{item.turma}</span>
-                <span className="shrink-0 text-sm font-semibold tabular-nums">{nota(item.nota_geral)}</span>
+                <span className="shrink-0 text-sm font-semibold tabular-nums">{nota(item.nota ?? 0)}</span>
               </li>
             ))}
           </ul>
-        )}
-      </Card>
+          {/* O denominador: "1º" sem "de quantos" parece comparável entre as
+              matérias, e não é. */}
+          <p className="mt-auto border-t border-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-400">
+            {numero(total)} aluno{total === 1 ? "" : "s"} aferido{total === 1 ? "" : "s"} em {rotulo}
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/** Um Top 5 por matéria CONTRATADA — matéria fora do plano não aparece. */
+function TopPorMateria({ escolaId }: { escolaId: number }) {
+  const { tem } = useModulos();
+  const materias = MATERIAS_TOP.filter((m) => tem(m.chave));
+  if (materias.length === 0) return null;
+  return (
+    <section className={`grid gap-4 ${materias.length > 1 ? "lg:grid-cols-2" : ""}`}>
+      {materias.map((m) => (
+        <TopMateria key={m.chave} escolaId={escolaId} dimensao={m.chave} rotulo={m.rotulo} />
+      ))}
     </section>
   );
 }
@@ -492,7 +538,7 @@ function DashboardEscola() {
           <Indicadores dados={dados} />
           <Inteligencia intel={intel ?? null} carregando={carregandoIntel && !intel} />
           <LeituraMatematica dados={dados} />
-          <TopRanking top={dados.top10} />
+          {escolaId != null && <TopPorMateria escolaId={escolaId} />}
         </>
       )}
     </div>

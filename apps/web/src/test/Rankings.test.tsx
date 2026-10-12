@@ -30,7 +30,7 @@ function navCategorias(): HTMLElement {
 describe("Rankings (tela única com seletor)", () => {
   it("mostra o seletor e alterna o conteúdo sem trocar de página", async () => {
     responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
-    // Geral (padrão, período "tudo") → endpoint /ranking
+    // Desempenho (padrão) → endpoint /ranking?dimensao=leitura
     responder("GET", URL_GERAL, [
       rankingItemFake({ aluno_id: 10, nome: "Ana Beatriz Souza" }),
     ] as RankingItem[]);
@@ -47,15 +47,20 @@ describe("Rankings (tela única com seletor)", () => {
 
     // Cabeçalho único + os 4 tipos de ranking de alunos como abas do seletor.
     expect(await screen.findByText("Ranking Geral")).toBeInTheDocument();
-    for (const rotulo of ["Geral", "Leitura", "Matemática", "Evolução"]) {
+    // A 1ª aba deixou de ser "Geral" (ordem única pela nota geral): agora é
+    // "Desempenho", a classificação oficial por matéria (Decisão 1 do dono).
+    for (const rotulo of ["Desempenho", "Leitura", "Matemática", "Evolução"]) {
       expect(screen.getByRole("tab", { name: rotulo })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("tab", { name: "Geral" })).not.toBeInTheDocument();
 
-    // Começa no Geral: mostra o aluno do /ranking e as colunas da ordem única
-    // ("Leitura" também é o nome de uma aba, então mira o cabeçalho da coluna).
+    // Começa no Desempenho: a classificação oficial da 1ª matéria (Leitura),
+    // pela nota da matéria — sem a coluna nem o rótulo da ordem única.
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Leitura" })).toBeInTheDocument();
-    expect(screen.getByText("Geral (Leitura + Matemática)", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Classificação oficial — Leitura")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Nota de Leitura" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Geral" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Geral (Leitura + Matemática)", { exact: false })).not.toBeInTheDocument();
 
     // Troca para Leitura: só o CONTEÚDO muda (busca /ranking/leitura).
     await u.click(screen.getByRole("tab", { name: "Leitura" }));
@@ -88,11 +93,11 @@ describe("Rankings (tela única com seletor)", () => {
       .toHaveAttribute("aria-controls", painelAlunos.id);
     expect(within(painelAlunos).getByRole("tablist", { name: "Tipo de ranking" })).toBeInTheDocument();
 
-    // 2º nível: o painel do tipo é rotulado pela aba Geral e contém a lista.
-    const abaGeral = screen.getByRole("tab", { name: "Geral" });
-    const painelGeral = screen.getByRole("tabpanel", { name: "Geral" });
-    expect(abaGeral).toHaveAttribute("aria-controls", painelGeral.id);
-    expect(within(painelGeral).getByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
+    // 2º nível: o painel do tipo é rotulado pela aba Desempenho e contém a lista.
+    const abaDesempenho = screen.getByRole("tab", { name: "Desempenho" });
+    const painelDesempenho = screen.getByRole("tabpanel", { name: "Desempenho" });
+    expect(abaDesempenho).toHaveAttribute("aria-controls", painelDesempenho.id);
+    expect(within(painelDesempenho).getByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
   });
 
   it("respeita o tipo vindo da URL (?ver=matematica) para deep-links/atalhos", async () => {
@@ -144,7 +149,7 @@ describe("Rankings (tela única com seletor)", () => {
     const u = userEvent.setup();
     renderComApp(<Harness />, { rota: "/ranking" });
 
-    // Começa no Geral.
+    // Começa no Desempenho (a 1ª aba).
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
 
     // Navegação EXTERNA muda só a query → a aba Evolução tem que assumir.
@@ -154,7 +159,7 @@ describe("Rankings (tela única com seletor)", () => {
       "aria-selected", "true");
   });
 
-  it("Geral com período ≠ ano letivo: avisa e o botão leva para a aba Evolução", async () => {
+  it("Desempenho com período ≠ ano letivo: avisa e o botão leva para a aba Evolução", async () => {
     responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
     responder("GET", URL_GERAL, [
       rankingItemFake({ aluno_id: 10, nome: "Ana Beatriz Souza" }),
@@ -228,7 +233,7 @@ describe("Rankings (tela única com seletor)", () => {
     expect(screen.getByText("71,5")).toBeInTheDocument();
   });
 
-  it("professor vê só a categoria Alunos (sem seletor de categoria) e ?ver=turmas cai no Geral", async () => {
+  it("professor vê só a categoria Alunos (sem seletor de categoria) e ?ver=turmas cai no Desempenho", async () => {
     responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
     responder("GET", URL_GERAL, [
       rankingItemFake({ aluno_id: 10, nome: "Ana Beatriz Souza" }),
@@ -242,7 +247,7 @@ describe("Rankings (tela única com seletor)", () => {
     expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "Categoria do ranking" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Turmas" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Geral" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Desempenho" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Admin Global com escola selecionada vê Alunos, Turmas e Escolas (antes só via Escolas)", async () => {
