@@ -11,6 +11,7 @@ from app.core.deps import (
 )
 from app.models import Escola, Nota, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
+from app.services import modulos as svc_modulos
 from app.services import provisionamento
 from app.services.audit import registrar
 
@@ -25,7 +26,14 @@ def listar(
 ):
     """Seletor ESCOLA da página inicial (PRD §10, §20). O admin GLOBAL pode
     pedir também as inativas (tela Escolas) — sem isso, uma escola inativada
-    sumiria de todas as listas sem caminho de volta."""
+    sumiria de todas as listas sem caminho de volta.
+
+    Cada escola traz os MÓDULOS contratados pela rede dela (aditivo). O
+    `/auth/me` diz o que vale para o USUÁRIO, e o Admin Global recebe o
+    catálogo inteiro; aberta uma escola cuja rede não contratou Matemática, a
+    tela oferecia Matemática e a consulta da dimensão voltava 403. Com o
+    contrato da escola no seletor, as telas por escola decidem as matérias pelo
+    mesmo critério da API (`modulos_da_escola`, que `_exigir_dimensao` usa)."""
     consulta = select(Escola).order_by(Escola.nome)
     if not (incluir_inativas and usuario.is_global):
         consulta = consulta.where(Escola.status == "ativa")
@@ -36,7 +44,18 @@ def listar(
             consulta = consulta.where(Escola.rede_id == usuario.rede_id)
         else:
             consulta = consulta.where(Escola.id == usuario.escola_id)
-    return db.execute(consulta).scalars().all()
+    escolas = db.execute(consulta).scalars().all()
+    # Uma consulta por REDE (não por escola): o contrato é da rede.
+    contratos: dict[int | None, list[str]] = {}
+    saida = []
+    for escola in escolas:
+        if escola.rede_id not in contratos:
+            contratos[escola.rede_id] = sorted(
+                svc_modulos.modulos_da_rede(db, escola.rede_id))
+        item = EscolaOut.model_validate(escola)
+        item.modulos = contratos[escola.rede_id]
+        saida.append(item)
+    return saida
 
 
 @router.post("", response_model=EscolaOut, status_code=status.HTTP_201_CREATED)

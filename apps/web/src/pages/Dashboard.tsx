@@ -21,7 +21,7 @@ import { Link } from "react-router-dom";
 import { Botao, Card, Carregando, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
-import { useModulos } from "../hooks/useModulos";
+import { useModulosDaEscola } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 import type { Dashboard as DadosDashboard, Dimensao, RankingItem } from "../lib/types";
@@ -403,9 +403,14 @@ function TopMateria({ escolaId, dimensao, rotulo }: {
   );
 }
 
-/** Um Top 5 por matéria CONTRATADA — matéria fora do plano não aparece. */
+/** Um Top 5 por matéria CONTRATADA — matéria fora do plano não aparece. O
+ *  plano é o da ESCOLA (`useModulosDaEscola`), o mesmo que `/ranking?dimensao=`
+ *  exige. Hoje só a gestão da própria escola chega a este painel (o Admin
+ *  Global e a Secretaria abrem os panoramas de rede) e, para ela, plano do
+ *  usuário e da escola coincidem; a regra fica explícita para um perfil novo
+ *  não herdar um 403 no painel. */
 function TopPorMateria({ escolaId }: { escolaId: number }) {
-  const { tem } = useModulos();
+  const { tem } = useModulosDaEscola();
   const materias = MATERIAS_TOP.filter((m) => tem(m.chave));
   if (materias.length === 0) return null;
   return (

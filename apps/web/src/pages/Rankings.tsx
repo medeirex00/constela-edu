@@ -38,7 +38,7 @@ import { useLocation, useSearchParams } from "react-router-dom";
 
 import { Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { useModulos } from "../hooks/useModulos";
+import { useModulosDaEscola } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
 import RankingEvolucao from "./RankingEvolucao";
 import RankingGeral from "./RankingGeral";
@@ -83,7 +83,10 @@ const estiloAba = (ativa: boolean) =>
 export default function Rankings() {
   const { global, secretaria, gestor } = usePerfil();
   const { escolaId } = useApp();
-  const { tem } = useModulos();
+  // As abas de matéria seguem o contrato da ESCOLA aberta: o Admin Global tem o
+  // catálogo inteiro, mas as rotas da escola recusam (403) a matéria fora do
+  // plano dela — a aba existiria só para mostrar o erro.
+  const { tem } = useModulosDaEscola();
   const [params, setParams] = useSearchParams();
   // /rede/ranking é o atalho "Ranking de Escolas" (menu do Admin Global e
   // "Ver ranking completo" do Painel da Rede): sem `?ver=` abre em Escolas.

@@ -38,6 +38,12 @@ export function escolaFake(over: Partial<Escola> = {}): Escola {
   };
 }
 
+/** Escola do seletor com o CONTRATO da rede dela (`modulos`, de `GET /escolas`).
+ *  O campo não está no tipo comum (`@constela/core`) — ver `useModulosDaEscola`. */
+export function escolaComContrato(modulos: string[], over: Partial<Escola> = {}): Escola {
+  return Object.assign(escolaFake(over), { modulos });
+}
+
 export function usuarioFake(over: Partial<Usuario> = {}): Usuario {
   return {
     id: 1,

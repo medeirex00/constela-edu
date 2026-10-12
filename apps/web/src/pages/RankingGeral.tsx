@@ -43,7 +43,7 @@ import { SeletorTurno } from "../components/SeletorTurno";
 import { Botao, Card, Mensagem, PageHeader, Vazio, estiloInput } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
-import { useModulos } from "../hooks/useModulos";
+import { useModulosDaEscola } from "../hooks/useModulos";
 import { apiDownload } from "../lib/api";
 import { turnoEfetivo } from "../lib/turnos";
 import type { Dimensao, Turma } from "../lib/types";
@@ -56,7 +56,9 @@ const MATERIAS: { chave: Dimensao; rotulo: string }[] = [
 
 export default function RankingGeral({ embutido = false }: { embutido?: boolean } = {}) {
   const { escolaId, usuario, periodo, definirPeriodo, turno, definirTurno } = useApp();
-  const { tem } = useModulos();
+  // Contrato da ESCOLA aberta (não só o do usuário): o Admin Global tem o
+  // catálogo inteiro, mas `/ranking?dimensao=` exige o plano da rede da escola.
+  const { tem } = useModulosDaEscola();
   const [params, setParams] = useSearchParams();
   const [alvo, setAlvo] = useState<AlvoRanking>({});
   const [baixandoCartaz, setBaixandoCartaz] = useState(false);
@@ -68,9 +70,10 @@ export default function RankingGeral({ embutido = false }: { embutido?: boolean 
   // Período ≠ ano letivo: a classificação por período é a aba Evolução.
   const porPeriodo = periodo.preset !== "ano_letivo";
 
-  // Matéria que a rede não contratou NÃO aparece — nem como opção, nem como
-  // lista vazia. Um `?materia=` de matéria fora do plano cai na primeira
-  // contratada (em vez de consultar uma dimensão que a API recusaria com 403).
+  // Matéria que a rede DA ESCOLA não contratou NÃO aparece — nem como opção,
+  // nem como lista vazia. Um `?materia=` de matéria fora do plano cai na
+  // primeira contratada (em vez de consultar uma dimensão que a API recusaria
+  // com 403).
   const materias = MATERIAS.filter((m) => tem(m.chave));
   const materia = materias.find((m) => m.chave === params.get("materia")) ?? materias[0];
 

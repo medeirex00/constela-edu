@@ -143,5 +143,22 @@ describe("Perfil do aluno — desempenho por matéria", () => {
     expect(screen.getByText("Ainda não há nota calculada para este aluno")).toBeInTheDocument();
     expect(screen.queryByText(/Ainda não aferido/)).not.toBeInTheDocument();
     expect(screen.queryByText("Adoção")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fora da classificação")).not.toBeInTheDocument();
+  });
+
+  it("fora da classificação (turma de Fase, aluno inativo): diz por quê, sem cartão de nota nem posição", async () => {
+    // A API não manda os blocos de quem saiu da população — a linha de nota que
+    // sobrou está congelada. O legado (nota geral, "1º" na ordem única) ainda
+    // vem por contrato e continua fora da tela.
+    await abrir(perfil({
+      situacao_desempenho: "fora_da_classificacao", dimensoes: [], adocao: null,
+    }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Fora da classificação");
+    expect(screen.getByRole("status")).toHaveTextContent(/não tem\s+nota nem posição por matéria/);
+    expect(screen.queryByText(/na escola em/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ainda não aferido/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Adoção")).not.toBeInTheDocument();
+    expect(screen.queryByText(/º no ranking/)).not.toBeInTheDocument();
   });
 });

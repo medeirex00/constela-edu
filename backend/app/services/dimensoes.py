@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Nota
 from app.schemas import AdocaoAlunoOut, DimensaoAlunoOut
-from app.services import scoring
+from app.services import elegibilidade, scoring
 
 # dimensão → (coluna da nota, coluna de AFERIDO, coluna da posição carimbada).
 # FONTE ÚNICA deste mapeamento no lado de leitura: alertas, contexto da IA,
@@ -38,6 +38,41 @@ COLUNAS = {
 _COLUNAS = COLUNAS
 
 ROTULOS = {"leitura": "Leitura", "matematica": "Matemática"}
+
+# SITUAÇÃO do aluno diante da classificação por matéria — o que o perfil e a
+# lista da turma declaram ao lado (ou no lugar) das notas por dimensão:
+#: na população que o motor classifica e com linha de `notas`: as notas valem.
+CLASSIFICADO = "classificado"
+#: na população, mas ainda sem linha de `notas` (não recalculado): nada a afirmar.
+SEM_NOTA = "sem_nota"
+#: FORA da população (arquivado/excluído, sem matrícula no ano ou turma que não
+#: concorre — as Fases): a linha de `notas` que sobrar está CONGELADA.
+FORA_DA_CLASSIFICACAO = "fora_da_classificacao"
+
+
+def na_classificacao(status_aluno: str | None, ano_escolar: str | None) -> bool:
+    """O aluno pertence à população que o ranking da dimensão classifica?
+
+    É o MESMO corte de LEITURA do ranking (`rankings._ranking` /
+    `_contar_aferidos`): aluno ativo, matriculado no ano (sem matrícula não há
+    `ano_escolar`) e numa turma que concorre (`elegibilidade`). Existe porque o
+    recálculo NÃO apaga a linha de `notas` de quem sai da população — só deixa
+    de atualizá-la (`scoring._carregar_contexto`). Sem este corte, o perfil e a
+    lista da turma mostravam a nota e a posição CONGELADAS de quem foi para uma
+    turma de Fase ("2º de 2 na escola") enquanto a classificação oficial tinha
+    um aluno só."""
+    return status_aluno == "ativo" and elegibilidade.participa_de_premiacao(ano_escolar)
+
+
+def situacao(status_aluno: str | None, ano_escolar: str | None,
+             nota: Nota | None) -> str:
+    """`CLASSIFICADO` | `SEM_NOTA` | `FORA_DA_CLASSIFICACAO` (ver as constantes).
+
+    A população vem ANTES da nota: fora dela, a linha de `notas` que existir é
+    resíduo de um recálculo anterior e não pode virar nota nem posição na tela."""
+    if not na_classificacao(status_aluno, ano_escolar):
+        return FORA_DA_CLASSIFICACAO
+    return CLASSIFICADO if nota is not None else SEM_NOTA
 
 
 def aferido(nota, dimensao: str) -> bool:

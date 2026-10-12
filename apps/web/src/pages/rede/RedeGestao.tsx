@@ -154,6 +154,11 @@ export function ModulosDaRede({ redeId }: { redeId: number }) {
   const { dados, erro, carregando, recarregar } =
     useApi<{ chave: string; nome: string; produto: string; icone: string; ativo: boolean }[]>(
       `/redes/${redeId}/modulos`);
+  // O seletor de escolas (`GET /escolas`) carrega o contrato de cada escola, e
+  // é por ele que as telas da escola decidem as matérias (`useModulosDaEscola`).
+  // Mudou o plano: relê o seletor, senão a escola aberta seguiria com o antigo.
+  const { recarregarEscolas } = useApp();
+  const atualizarSeletor = () => { void recarregarEscolas().catch(() => {}); };
   const [salvando, setSalvando] = useState<string | null>(null);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   // Último pedido enviado — o botão "Tentar novamente" reenvia exatamente ele.
@@ -206,6 +211,7 @@ export function ModulosDaRede({ redeId }: { redeId: number }) {
         });
       }
       recarregar();
+      atualizarSeletor();
     } catch (e) {
       // NÃO dá para afirmar "falha ao salvar": o contrato é gravado ANTES do
       // recálculo, então um erro aqui (timeout do gateway, queda de rede depois
@@ -221,6 +227,7 @@ export function ModulosDaRede({ redeId }: { redeId: number }) {
           + '"Tentar novamente" (nada é duplicado).',
       });
       recarregar();
+      atualizarSeletor();  // o plano pode já estar aplicado (ver acima)
     } finally {
       enviando.current = false;
       setSalvando(null);

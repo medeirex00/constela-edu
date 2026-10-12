@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import Rankings from "../pages/Rankings";
 import type { RankingItem, RankingLeituraItem, Turma } from "../lib/types";
 import {
-  api, rankingItemFake, renderComApp, responder, screen, turmaFake, userEvent, usuarioFake, waitFor,
-  within,
+  api, escolaComContrato, rankingItemFake, renderComApp, responder, screen, turmaFake, userEvent,
+  usuarioFake, waitFor, within,
 } from "./utils";
 
 const URL_TURMAS = "/escolas/1/turmas";
@@ -266,6 +266,30 @@ describe("Rankings (tela única com seletor)", () => {
     for (const rotulo of ["Alunos", "Turmas", "Escolas"]) {
       expect(within(categorias).getByRole("tab", { name: rotulo })).toBeInTheDocument();
     }
+  });
+
+  it("Admin Global numa escola cuja rede não contratou Matemática: sem a aba Matemática (a API daria 403)", async () => {
+    responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
+    responder("GET", URL_GERAL, [
+      rankingItemFake({ aluno_id: 10, nome: "Ana Beatriz Souza" }),
+    ] as RankingItem[]);
+
+    renderComApp(<Rankings />, {
+      rota: "/ranking?ver=matematica",
+      // O global tem o catálogo inteiro; o que manda na tela é o plano da ESCOLA.
+      usuario: usuarioFake({ cargo: "admin", is_global: true, escola_id: null,
+                             modulos: ["leitura", "matematica"] }),
+      escolas: [escolaComContrato(["leitura"])],
+    });
+
+    expect(await screen.findByRole("link", { name: /Ana Beatriz Souza/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "Matemática" })).not.toBeInTheDocument());
+    expect(screen.getByRole("tab", { name: "Leitura" })).toBeInTheDocument();
+    // O deep-link ?ver=matematica cai no Desempenho (em vez de uma aba que só
+    // mostraria o 403), na única matéria da escola.
+    expect(screen.getByRole("tab", { name: "Desempenho" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Classificação oficial — Leitura")).toBeInTheDocument();
   });
 
   it("Secretaria vê só o ranking de ESCOLAS (a página da rede, com o próprio cabeçalho)", async () => {

@@ -12,18 +12,26 @@
  *   3. período ≠ ano letivo continua apontando para a aba Evolução;
  *   4. turma/série e turno chegam à consulta da matéria;
  *   5. o cartaz GERAL (ordem única) continua disponível à gestão — o que o
- *      cartaz padrão vira é decisão própria do dono (plano, item 8).
+ *      cartaz padrão vira é decisão própria do dono (plano, item 8);
+ *   6. as matérias seguem o contrato da ESCOLA aberta, também para o Admin
+ *      Global (que tem o catálogo inteiro no /auth/me);
+ *   7. CONTAGEM honesta no cabeçalho (a régua que a ordem única tinha, agora em
+ *      `DesempenhoDimensao`): turma/série sem turno diz quantos o filtro mostra
+ *      e que a posição é entre os aferidos da escola; com turno, o recorte.
  */
 import { describe, expect, it } from "vitest";
 
 import type { RankingItem } from "../lib/types";
 import RankingGeral from "../pages/RankingGeral";
 import {
+  ApiError,
   api,
   apiDownload,
+  escolaComContrato,
   rankingItemFake,
   renderComApp,
   responder,
+  responderErro,
   screen,
   turmaFake,
   userEvent,
@@ -200,5 +208,160 @@ describe("RankingGeral (aba Desempenho — classificação oficial por matéria)
     renderComApp(<RankingGeral />, { ...opcoes, usuario: usuarioFake({ cargo: "professor" }) });
     await screen.findByRole("link", { name: "Ana Leitora" });
     expect(screen.queryByRole("button", { name: /Baixar cartaz/ })).not.toBeInTheDocument();
+  });
+
+  it("Admin Global numa escola cuja rede só contratou Matemática: abre na Matemática, sem o 403 da Leitura", async () => {
+    // O /auth/me do global traz o catálogo inteiro; a escola, só Matemática. A
+    // API recusa a Leitura dessa escola com 403 (como `_exigir_dimensao`).
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("GET", URL_RANKING, (caminho: string) =>
+      parametros(caminho).get("dimensao") === "matematica"
+        ? [itemDimensao({ aluno_id: 30, nome: "Davi Contas", dimensao: "matematica", nota: 88, n_aferidos: 1 })]
+        : new ApiError(403, "O módulo Leitura não faz parte do plano desta rede."));
+    responder("GET", URL_NAO_AFERIDOS, {
+      contratadas: ["matematica"], total_alunos: 1, dimensoes: [], sem_nenhuma: [],
+    });
+    renderComApp(<RankingGeral />, {
+      ...opcoes,
+      usuario: usuarioFake({ cargo: "admin", is_global: true, escola_id: null,
+                             modulos: ["leitura", "matematica"] }),
+      escolas: [escolaComContrato(["matematica"])],
+    });
+
+    expect(await screen.findByRole("link", { name: "Davi Contas" })).toBeInTheDocument();
+    expect(screen.getByText("Classificação oficial — Matemática")).toBeInTheDocument();
+    // Uma matéria só no plano da escola: não há o que escolher.
+    expect(screen.queryByLabelText("Matéria")).not.toBeInTheDocument();
+    expect(screen.queryByText("Não foi possível carregar a classificação oficial")).not.toBeInTheDocument();
+    // Estado final: a consulta que vale é a da Matemática (há um render antes
+    // da sessão abrir, sem a guarda do App — ver o teste "rede só com Leitura").
+    await waitFor(() => {
+      const chamadas = chamadasRanking();
+      expect(parametros(chamadas[chamadas.length - 1]).get("dimensao")).toBe("matematica");
+    });
+  });
+
+  it("gestão com turma e sem turno: conta quantos o filtro mostra e diz que a posição é entre os aferidos da escola", async () => {
+    responder("GET", URL_TURMAS, [turmaFake({ id: 1, nome: "3º Ano A", turno: "manha" })]);
+    responder("GET", URL_RANKING, (caminho: string) =>
+      parametros(caminho).get("turma_id") === "1"
+        // Sem turno, a gestão recebe a posição CARIMBADA da escola (7º, 12º) e o
+        // denominador da escola inteira (40): o "40" não pode se passar pelo
+        // tamanho desta lista.
+        ? [itemDimensao({ posicao: 7, aluno_id: 20, nome: "Aluno Da Turma A", n_aferidos: 40 }),
+           itemDimensao({ posicao: 12, aluno_id: 21, nome: "Outro Da Turma A", n_aferidos: 40 })]
+        : [itemDimensao({ n_aferidos: 40 })]);
+    responder("GET", URL_NAO_AFERIDOS, { contratadas: ["leitura"], total_alunos: 40, dimensoes: [], sem_nenhuma: [] });
+    const u = userEvent.setup();
+    renderComApp(<RankingGeral />, opcoes);
+
+    await screen.findByRole("link", { name: "Ana Leitora" });
+    expect(screen.getByText("40 alunos aferidos em Leitura")).toBeInTheDocument();
+
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "turma:1");
+    expect(await screen.findByRole("link", { name: "Aluno Da Turma A" })).toBeInTheDocument();
+    expect(screen.getByText("7º")).toBeInTheDocument();
+    expect(screen.getByText(
+      "2 alunos aferidos em Leitura neste filtro · posição entre os 40 aferidos da escola",
+    )).toBeInTheDocument();
+    expect(screen.queryByText("40 alunos aferidos em Leitura")).not.toBeInTheDocument();
+  });
+
+  it("professor com turma: a lista já vem renumerada nas turmas dele, sem o sufixo da escola", async () => {
+    responder("GET", URL_TURMAS, [turmaFake({ id: 1, nome: "3º Ano A", turno: "manha" })]);
+    responder("GET", URL_RANKING, (caminho: string) =>
+      parametros(caminho).get("turma_id") === "1"
+        ? [itemDimensao({ posicao: 1, aluno_id: 20, nome: "Aluno Da Turma A", n_aferidos: 2 }),
+           itemDimensao({ posicao: 2, aluno_id: 21, nome: "Outro Da Turma A", n_aferidos: 2 })]
+        : [itemDimensao({ n_aferidos: 1 })]);
+    responder("GET", URL_NAO_AFERIDOS, { contratadas: ["leitura"], total_alunos: 2, dimensoes: [], sem_nenhuma: [] });
+    const u = userEvent.setup();
+    renderComApp(<RankingGeral />, { ...opcoes, usuario: usuarioFake({ cargo: "professor" }) });
+
+    await screen.findByRole("link", { name: "Ana Leitora" });
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "turma:1");
+    expect(await screen.findByRole("link", { name: "Aluno Da Turma A" })).toBeInTheDocument();
+    expect(screen.getByText("2 alunos aferidos em Leitura neste filtro")).toBeInTheDocument();
+    expect(screen.queryByText(/posição entre/)).not.toBeInTheDocument();
+  });
+
+  it("série: ano_escolar vai para as duas consultas da matéria, e a contagem é a do filtro", async () => {
+    responder("GET", URL_TURMAS, [
+      turmaFake({ id: 1, nome: "1º Ano A", ano_escolar: "1º Ano" }),
+      turmaFake({ id: 2, nome: "1º Ano B", ano_escolar: "1º Ano" }),
+    ]);
+    responder("GET", URL_RANKING, (caminho: string) =>
+      parametros(caminho).get("ano_escolar") === "1º Ano"
+        ? [itemDimensao({ posicao: 3, aluno_id: 30, nome: "Aluno Da Serie", n_aferidos: 9 })]
+        : [itemDimensao({ n_aferidos: 9 })]);
+    responder("GET", URL_NAO_AFERIDOS, { contratadas: ["leitura"], total_alunos: 9, dimensoes: [], sem_nenhuma: [] });
+    const u = userEvent.setup();
+    renderComApp(<RankingGeral />, opcoes);
+
+    await screen.findByRole("link", { name: "Ana Leitora" });
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "serie:1º Ano");
+
+    expect(await screen.findByRole("link", { name: "Aluno Da Serie" })).toBeInTheDocument();
+    expect(chamadasRanking().some((p) =>
+      parametros(p).get("ano_escolar") === "1º Ano" && parametros(p).get("dimensao") === "leitura")).toBe(true);
+    const naoAferidos = api.mock.calls.map((c) => String(c[0]))
+      .filter((p) => p.startsWith(`${URL_NAO_AFERIDOS}?`));
+    expect(naoAferidos.some((p) => parametros(p).get("ano_escolar") === "1º Ano")).toBe(true);
+    expect(screen.getByText(
+      "1 aluno aferido em Leitura neste filtro · posição entre os 9 aferidos da escola",
+    )).toBeInTheDocument();
+  });
+
+  it("turno: Tarde e 'Sem turno' (turno= vazio) vão para a consulta e a contagem diz o recorte", async () => {
+    responder("GET", URL_TURMAS, [
+      turmaFake({ id: 1, nome: "3º Ano A", turno: "manha" }),
+      turmaFake({ id: 2, nome: "3º Ano B", turno: "tarde" }),
+      turmaFake({ id: 3, nome: "3º Ano C", turno: null }),
+    ]);
+    responder("GET", URL_RANKING, (caminho: string) => {
+      const q = parametros(caminho);
+      if (q.get("turno") === "tarde") return [itemDimensao({ aluno_id: 20, nome: "Aluno Da Tarde", n_aferidos: 1 })];
+      if (q.get("turno") === "") return [itemDimensao({ aluno_id: 30, nome: "Aluno Sem Turno", n_aferidos: 1 })];
+      return [itemDimensao({ n_aferidos: 3 })];
+    });
+    responder("GET", URL_NAO_AFERIDOS, { contratadas: ["leitura"], total_alunos: 3, dimensoes: [], sem_nenhuma: [] });
+    const u = userEvent.setup();
+    renderComApp(<RankingGeral />, opcoes);
+
+    await screen.findByRole("link", { name: "Ana Leitora" });
+    expect(chamadasRanking().some((p) => parametros(p).has("turno"))).toBe(false);
+    expect(screen.getByText("3 alunos aferidos em Leitura")).toBeInTheDocument();
+
+    const seletor = await screen.findByLabelText("Turno");
+    await u.selectOptions(seletor, "tarde");
+    expect(await screen.findByRole("link", { name: "Aluno Da Tarde" })).toBeInTheDocument();
+    expect(screen.getByText("1 aluno aferido em Leitura no turno Tarde")).toBeInTheDocument();
+
+    // "Sem turno" vai como turno= (vazio) — e não vira "no turno Sem turno".
+    await u.selectOptions(seletor, "");
+    expect(await screen.findByRole("link", { name: "Aluno Sem Turno" })).toBeInTheDocument();
+    await waitFor(() => expect(chamadasRanking().some((p) =>
+      parametros(p).get("turno") === "" && parametros(p).get("dimensao") === "leitura")).toBe(true));
+    expect(screen.getByText("1 aluno aferido em Leitura em turmas sem turno")).toBeInTheDocument();
+
+    // Turno + turma: a contagem é do recorte inteiro (a turma dentro do turno).
+    await u.selectOptions(screen.getByLabelText("Filtrar por turma ou série"), "turma:3");
+    expect(await screen.findByText("1 aluno aferido em Leitura neste filtro, em turmas sem turno"))
+      .toBeInTheDocument();
+  });
+
+  it("falha da classificação: mostra o erro e 'Tentar de novo' refaz a consulta", async () => {
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responderErro("GET", URL_RANKING, 500, "Erro interno");
+    responder("GET", URL_NAO_AFERIDOS, { contratadas: ["leitura"], total_alunos: 0, dimensoes: [], sem_nenhuma: [] });
+    const u = userEvent.setup();
+    renderComApp(<RankingGeral />, opcoes);
+
+    expect(await screen.findByText("Não foi possível carregar a classificação oficial")).toBeInTheDocument();
+    expect(screen.getByText("Erro interno")).toBeInTheDocument();
+
+    responder("GET", URL_RANKING, [itemDimensao()]);
+    await u.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByRole("link", { name: "Ana Leitora" })).toBeInTheDocument();
   });
 });

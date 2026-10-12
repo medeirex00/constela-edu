@@ -18,6 +18,13 @@ import type {
   PerfilAluno as Perfil,
 } from "../lib/types";
 
+/** O perfil com a SITUAÇÃO das notas por matéria — campo novo da API, declarado
+ *  aqui até o tipo comum (`@constela/core`) ser revisto no fim da transição da
+ *  nota geral (plano de retirada, item 12). */
+type PerfilComSituacao = Perfil & {
+  situacao_desempenho?: "classificado" | "sem_nota" | "fora_da_classificacao" | null;
+};
+
 // Ficha cadastral MINIMIZADA (LGPD): o produto guarda só o RA como identidade.
 // Nome e nº de chamada aparecem no topo do perfil (não aqui). Nada de dados
 // sensíveis (raça/cor, SUS) ou documentos (CPF/RG) — nem são coletados.
@@ -279,7 +286,7 @@ export default function PerfilAluno() {
     erro: erroPerfil,
     carregando,
     recarregar: recarregarPerfil,
-  } = useApi<Perfil>(podeBuscar ? `/escolas/${escolaId}/alunos/${id}/perfil` : null);
+  } = useApi<PerfilComSituacao>(podeBuscar ? `/escolas/${escolaId}/alunos/${id}/perfil` : null);
   const { dados: gamificacao, recarregar: recarregarGamificacao } = useApi<Gamificacao>(
     podeBuscar ? `/escolas/${escolaId}/gamificacao/alunos/${id}` : null,
   );
@@ -302,10 +309,13 @@ export default function PerfilAluno() {
   // não mais a nota geral nem a posição na ordem única (que a API ainda manda,
   // só por contrato). Sem linha de nota (aluno ainda não calculado) a API manda
   // a lista vazia: nada de cartão afirmando "não aferido"; a seção do cálculo
-  // abaixo já diz que não há nota.
+  // abaixo já diz que não há nota. FORA DA CLASSIFICAÇÃO (turma de Fase, aluno
+  // inativo) a lista também vem vazia — a linha de nota que sobrou está
+  // congelada e não vale para o ranking —, e o perfil diz por quê.
   const dimensoes = perfil.dimensoes ?? [];
   const adocao = perfil.adocao ?? null;
   const totalCartoes = dimensoes.length + (adocao ? 1 : 0);
+  const foraDaClassificacao = perfil.situacao_desempenho === "fora_da_classificacao";
 
   return (
     <div className="space-y-6">
@@ -379,6 +389,20 @@ export default function PerfilAluno() {
 
       {aba === "perfil" && (
         <>
+      {foraDaClassificacao && (
+        <Card className="p-4">
+          <div role="status">
+            <p className="text-sm font-semibold">Fora da classificação</p>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Este aluno não concorre na classificação da escola neste ano letivo
+              (turma que não participa, como as Fases, ou aluno não ativo): não tem
+              nota nem posição por matéria. Um cálculo que apareça abaixo é o último
+              registrado e não vale para o ranking.
+            </p>
+          </div>
+        </Card>
+      )}
+
       {totalCartoes > 0 && (
         <div className={`grid grid-cols-1 gap-3 ${COLUNAS_CARTOES[totalCartoes] ?? "sm:grid-cols-3"}`}>
           {dimensoes.map((bloco) => <CartaoMateria key={bloco.dimensao} bloco={bloco} />)}

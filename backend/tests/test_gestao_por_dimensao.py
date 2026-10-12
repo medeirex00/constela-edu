@@ -16,11 +16,14 @@ dimensão:
     ranking da dimensão, com os não aferidos no FIM (por nome, sem nota);
   * nada disso depende do legado: com `nota_geral`/`posicao` adulteradas no
     banco, tudo sai idêntico (a mesma sabotagem de `test_legado_nota_geral`);
-  * o contrato antigo continua: `nota_geral`, `posicao` e `ordenar=desempenho`.
+  * o contrato antigo continua: `nota_geral`, `posicao` e `ordenar=desempenho`;
+  * quem saiu da POPULAÇÃO classificada (turma reconhecida como Fase, aluno
+    arquivado) não exibe a nota nem a posição CONGELADAS da linha de `notas`
+    que o recálculo não apaga — `situacao_desempenho` diz por quê.
 """
 import random
 
-from app.models import Nota
+from app.models import Aluno, Nota, Turma
 from app.services import modulos as svc_modulos
 from app.services import scoring
 from tests.test_desempenho_por_dimensao import (
@@ -114,6 +117,7 @@ def test_perfil_sem_nota_calculada_nao_afirma_ausencia(db):
     perfil = _perfil(logar(), escola.id, novato.id)
     assert perfil["dimensoes"] == []
     assert perfil["adocao"] is None
+    assert perfil["situacao_desempenho"] == "sem_nota"
 
 
 def test_perfil_e_lista_so_mostram_a_materia_contratada(db):
@@ -233,3 +237,97 @@ def test_perfil_e_lista_por_materia_nao_dependem_do_legado(db):
     db.commit()
 
     assert oficial() == antes
+
+
+# --- Quem saiu da classificação -------------------------------------------------
+
+def test_quem_vai_para_turma_de_fase_nao_exibe_nota_nem_posicao_congeladas(db):
+    """A turma "1 FASE A" chegou como "4º Ano" (o rótulo mentia, caso real antes
+    do c496cec), foi pontuada, e depois foi reconhecida como Fase. O recálculo
+    tira a criança da população mas NÃO apaga a linha de `notas`: antes desta
+    correção o perfil dizia "2º de 2 na escola em Leitura" e a lista da turma
+    mostrava a nota velha, enquanto a classificação oficial tinha 1 aluno."""
+    _, escola, turma, imp = montar_escola(db)
+    forte = novo_aluno(db, escola, turma, imp, "Leitor Forte", elefante=dict(LEITOR))
+    fase = Turma(escola_id=escola.id, nome="1 FASE A", ano_escolar="4º Ano",
+                 ano_letivo=2026, status="ativa")
+    db.add(fase)
+    db.flush()
+    # Na turma da Fase, o MELHOR nas duas matérias vem DEPOIS no nome — se a
+    # posição congelada ordenasse a lista, a ordem inverteria.
+    mudou = novo_aluno(db, escola, fase, imp, "Vai Para Fase",
+                       elefante=dict(LEITOR), matific=dict(MATIFIC_TOPO))
+    colega = novo_aluno(db, escola, fase, imp, "Aaron Da Fase",
+                        elefante=dict(LEITOR_FRACO), matific=dict(MATIFIC_FRACO))
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    db.get(Turma, fase.id).ano_escolar = "1ª Fase"
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    # Pré-condição do defeito: a linha congelada continua no banco, aferida.
+    congelada = db.query(Nota).filter(Nota.aluno_id == mudou.id).one()
+    assert congelada.aferido_leitura is True and congelada.posicao_leitura is not None
+    cliente = logar()
+
+    ranking = cliente.get(
+        f"/api/v1/escolas/{escola.id}/ranking?dimensao=leitura").json()
+    assert [(i["nome"], i["n_aferidos"]) for i in ranking] == [("Leitor Forte", 1)]
+
+    perfil = _perfil(cliente, escola.id, mudou.id)
+    assert perfil["situacao_desempenho"] == "fora_da_classificacao"
+    assert perfil["dimensoes"] == [] and perfil["adocao"] is None
+
+    lista = _lista(cliente, escola.id, fase.id)
+    for linha in lista:
+        assert linha["situacao_desempenho"] == "fora_da_classificacao"
+        for campo in ("nota_leitura", "posicao_leitura", "nota_matematica",
+                      "posicao_matematica"):
+            assert linha[campo] is None, (linha["nome"], campo)
+        assert linha["aferido_leitura"] is False and linha["aferido_matematica"] is False
+    # A ordem "por matéria" de uma turma que não concorre é só o nome: a posição
+    # congelada ("Vai Para Fase" à frente nas duas, se valesse) não ordena.
+    posicoes = {n.aluno_id: (n.posicao_leitura, n.posicao_matematica)
+                for n in db.query(Nota).filter(Nota.aluno_id.in_([mudou.id, colega.id]))}
+    assert posicoes[mudou.id][0] < posicoes[colega.id][0]
+    assert posicoes[mudou.id][1] < posicoes[colega.id][1]
+    for dimensao in ("leitura", "matematica"):
+        nomes = [a["nome"] for a in _lista(cliente, escola.id, fase.id,
+                                           f"desempenho_{dimensao}")]
+        assert nomes == ["Aaron Da Fase", "Vai Para Fase"]
+
+    # Quem segue na classificação continua igual — e declara isso.
+    perfil_forte = _perfil(cliente, escola.id, forte.id)
+    assert perfil_forte["situacao_desempenho"] == "classificado"
+    leitura = _por_dimensao(perfil_forte)["leitura"]
+    assert (leitura["posicao"], leitura["n_aferidos"]) == (1, 1)
+    assert colega.id not in {i["aluno_id"] for i in ranking}
+
+
+def test_aluno_arquivado_sai_da_classificacao_na_lista_e_no_perfil(db):
+    """Arquivado (o ranking filtra `Aluno.status == "ativo"`): com
+    `incluir_inativos`, a lista o mostra SEM nota e no FIM da ordem por matéria —
+    não na posição velha, entre os ativos."""
+    _, escola, turma, _, alunos = _cenario(db)
+    scoring.recalcular_escola(db, escola.id)
+    # "Usa As Duas" é aferido nas duas matérias; arquivado, a linha fica.
+    db.get(Aluno, alunos["duas"].id).status = "arquivado"
+    db.commit()
+    cliente = logar()
+
+    perfil = _perfil(cliente, escola.id, alunos["duas"].id)
+    assert perfil["situacao_desempenho"] == "fora_da_classificacao"
+    assert perfil["dimensoes"] == [] and perfil["adocao"] is None
+
+    r = cliente.get(f"/api/v1/escolas/{escola.id}/turmas/{turma.id}/alunos"
+                    f"?ordenar=desempenho_matematica&incluir_inativos=true")
+    assert r.status_code == 200, r.text
+    lista = r.json()
+    arquivado = next(a for a in lista if a["id"] == alunos["duas"].id)
+    assert arquivado["situacao_desempenho"] == "fora_da_classificacao"
+    assert arquivado["nota_matematica"] is None and arquivado["posicao_matematica"] is None
+    # Aferido ativo primeiro; depois os sem lugar na classificação, por nome
+    # (o arquivado tinha a MELHOR posição de Matemática — não fura a fila).
+    assert [a["nome"] for a in lista] == [
+        "So Conta", "Nenhuma Plataforma", "So Leitura", "Usa As Duas"]
+    ativos = [a for a in lista if a["id"] != alunos["duas"].id]
+    assert all(a["situacao_desempenho"] == "classificado" for a in ativos)

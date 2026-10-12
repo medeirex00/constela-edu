@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import and_, case, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -46,6 +46,7 @@ from app.schemas import (
 from app.services import (
     alunos_dedup,
     alunos_fusao,
+    elegibilidade,
     identidade_aluno,
     matching,
     periodos,
@@ -280,22 +281,34 @@ def perfil_aluno(
     # só tinha a nota geral (legado) e as duas notas de plataforma SEM o corte de
     # aferido (0,0 para quem nunca abriu a plataforma). A montagem é a do leitor
     # único (`services.dimensoes`), o mesmo do certificado e dos alertas: o perfil
-    # não pode discordar da lista nem do documento. Sem linha de `notas` (aluno
-    # ainda não calculado, ou fora da população pontuada — as Fases) não há o que
-    # afirmar: lista vazia e adoção nula, e a tela diz "sem nota calculada", em
-    # vez de declarar "não aferido" quem talvez tenha dado.
+    # não pode discordar da lista nem do documento.
+    #
+    # Só afirma algo quem está NA CLASSIFICAÇÃO (o mesmo corte de leitura do
+    # ranking: ativo, matriculado no ano, turma que concorre). O recálculo NÃO
+    # apaga a linha de `notas` de quem sai da população — a criança cuja turma
+    # passou a ser reconhecida como Fase, ou que foi arquivada, fica com a nota e
+    # a posição CONGELADAS, e o perfil dizia "2º de 2 na escola" enquanto a
+    # classificação oficial tinha um aluno só. Fora dela: lista vazia, adoção
+    # nula e `situacao_desempenho` explícita. Na população e ainda sem linha de
+    # `notas` (não recalculado): também vazio — a tela diz "sem nota calculada",
+    # em vez de declarar "não aferido" quem talvez tenha dado.
     escola = db.get(Escola, escola_id)
-    dimensoes = svc_dimensoes.blocos(db, escola, nota) if nota else []
-    adocao = svc_dimensoes.adocao(db, escola, nota) if nota else None
+    situacao = svc_dimensoes.situacao(aluno.status, ano_escolar, nota)
+    classificado = situacao == svc_dimensoes.CLASSIFICADO
+    dimensoes = svc_dimensoes.blocos(db, escola, nota) if classificado else []
+    adocao = svc_dimensoes.adocao(db, escola, nota) if classificado else None
 
     perfil = AlunoPerfilOut(
         aluno=saida,
         nota_matific=nota.nota_matific if nota else 0.0,
         nota_elefante=nota.nota_elefante if nota else 0.0,
+        # LEGADO (contrato de cliente não migrado): segue como sempre foi, sem o
+        # corte acima — a tela web não lê mais estes dois campos.
         nota_geral=nota.nota_geral if nota else 0.0,
         posicao=nota.posicao if nota else None,
         dimensoes=dimensoes,
         adocao=adocao,
+        situacao_desempenho=situacao,
         # O professor também vê o PASSO A PASSO do cálculo (liberado pelo dono) —
         # só das crianças das turmas dele (exigir_aluno_permitido acima barra as
         # de fora). A ficha cadastral (dados pessoais) e as leituras seguem só p/
@@ -1032,7 +1045,7 @@ _ORDEM_DIMENSAO = {
 }
 
 
-def _ordem_alunos(ordenar: str) -> list:
+def _ordem_alunos(ordenar: str, turma_concorre: bool = True) -> list:
     """Cláusulas ORDER BY portáveis (SQLite/Postgres) por critério do painel.
     Os ".is_(None)" jogam os NULOS para o fim de forma independente do banco.
 
@@ -1042,6 +1055,12 @@ def _ordem_alunos(ordenar: str) -> list:
     FIM — por nome, sem nota —, nunca entre os aferidos como se tivesse 0,0. O
     corte é a marca de aferido (existência do snapshot), jamais `nota > 0`.
 
+    Quem está FORA da classificação também vai para o fim, por nome: aluno não
+    ativo (com `incluir_inativos`) e, com `turma_concorre=False` (turma de Fase,
+    que não concorre), a turma inteira. A linha de `notas` deles está congelada
+    (o recálculo não a apaga) e não pode ordenar ninguém — a lista os mostra sem
+    nota, e uma ordem pela posição velha vazaria o número que a tela esconde.
+
     `desempenho` (ordem única pela nota geral) segue aceito só por contrato com
     cliente não migrado; a tela web não o pede mais."""
     if ordenar == "data":
@@ -1049,8 +1068,10 @@ def _ordem_alunos(ordenar: str) -> list:
     if ordenar == "chamada":
         return [Aluno.numero_chamada.is_(None), Aluno.numero_chamada.asc()]
     if ordenar in _ORDEM_DIMENSAO:
+        if not turma_concorre:
+            return []  # ninguém classificado: só o nome, que o chamador acrescenta
         aferido, posicao_dim, nota_dim = _ORDEM_DIMENSAO[ordenar]
-        e_aferido = aferido.is_(True)
+        e_aferido = and_(aferido.is_(True), Aluno.status == "ativo")
         # Posição e nota só ordenam ENTRE os aferidos: para os demais as duas
         # viram NULL (empate), e quem decide é o nome que o chamador acrescenta
         # — um valor residual de quem não é aferido (ex.: Matific só do ano
@@ -1086,12 +1107,18 @@ def listar_alunos_da_turma(
     schema já declarava e a rota não preenchia. Sem dado da plataforma: nota e
     posição `None` (a tela mostra "—"), nunca 0,0. Matéria que a rede não
     contratou fica `None`/`False` (não existe para a escola). `nota_geral` e
-    `posicao` seguem no payload só por contrato (legado)."""
+    `posicao` seguem no payload só por contrato (legado).
+
+    `situacao_desempenho` diz o que esses campos valem: só "classificado"
+    afirma nota ou ausência. Fora da classificação (aluno não ativo, turma que
+    não concorre) eles vêm vazios — a linha de `notas` que sobrou é congelada."""
     turma = _turma_da_escola(db, escola_id, turma_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None and turma_id not in permitidas:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
     contratadas = set(scoring.dimensoes_contratadas(db, db.get(Escola, escola_id)))
+    # Turma de Fase não concorre: ninguém dela está na classificação.
+    turma_concorre = elegibilidade.participa_de_premiacao(turma.ano_escolar)
     consulta = (
         select(Aluno, Nota)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
@@ -1105,7 +1132,8 @@ def listar_alunos_da_turma(
         consulta = consulta.where(Aluno.status == "ativo")
     if busca:
         consulta = consulta.where(Aluno.nome.ilike(f"%{busca}%"))
-    consulta = consulta.order_by(*_ordem_alunos(ordenar), Aluno.nome.asc())
+    consulta = consulta.order_by(*_ordem_alunos(ordenar, turma_concorre),
+                                 Aluno.nome.asc())
 
     saida = []
     for aluno, nota in db.execute(consulta).all():
@@ -1114,6 +1142,14 @@ def listar_alunos_da_turma(
         item.ano_escolar = turma.ano_escolar
         item.nota_geral = nota.nota_geral if nota else None
         item.posicao = nota.posicao if nota else None
+        item.situacao_desempenho = svc_dimensoes.situacao(
+            aluno.status, turma.ano_escolar, nota)
+        if item.situacao_desempenho != svc_dimensoes.CLASSIFICADO:
+            # Fora da classificação ou sem nota: nada por matéria a afirmar (os
+            # campos ficam no default vazio). A linha congelada de quem saiu da
+            # população não vira nota nem posição na lista.
+            saida.append(item)
+            continue
         # Por MATÉRIA: o corte é a marca de aferido (`services.dimensoes`), o
         # mesmo do ranking da dimensão — a lista da turma não discorda dele.
         item.aferido_leitura = ("leitura" in contratadas
