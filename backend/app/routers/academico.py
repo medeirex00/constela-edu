@@ -5,6 +5,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import observabilidade as obs
 from app.core.config import email_reservado_ao_dono
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
@@ -273,7 +274,7 @@ def perfil_aluno(
         turma_id=matricula[1].id if matricula else None, aluno_id=aluno_id,
         livros_unicos=snap_e.livros_unicos if snap_e else None)
 
-    return AlunoPerfilOut(
+    perfil = AlunoPerfilOut(
         aluno=saida,
         nota_matific=nota.nota_matific if nota else 0.0,
         nota_elefante=nota.nota_elefante if nota else 0.0,
@@ -288,6 +289,10 @@ def perfil_aluno(
         leitura_niveis=leitura_niveis if not superficial else None,
         ficha=(aluno.ficha or {}) if not superficial else {},
     )
+    # Sensor 4: o perfil ainda leva `nota_geral`/`posicao` ao lado do bloco por
+    # dimensão (plano de retirada, §4 item 3).
+    obs.registrar_legado_nota_geral()
+    return perfil
 
 
 # --- Histórico de leituras por período (base das premiações) ----------------
@@ -1054,6 +1059,11 @@ def listar_alunos_da_turma(
         item.nota_geral = nota.nota_geral if nota else None
         item.posicao = nota.posicao if nota else None
         saida.append(item)
+    # Sensor 4: TODA resposta desta lista leva `nota_geral`/`posicao` por aluno
+    # (plano de retirada, §4 itens 2–3). `?ordenar=desempenho` ganha a variante
+    # própria no rótulo: além de receber o campo, ela ORDENA pelo legado.
+    obs.registrar_legado_nota_geral(
+        "ordenar=desempenho" if ordenar == "desempenho" else None)
     return saida
 
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import and_, case, false, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core import observabilidade as obs
 from app.core.database import get_db
 from app.core.deps import exigir_modulo_da_escola
 from app.core.deps import (escola_autorizada, exigir_papeis,
@@ -299,6 +300,11 @@ def ranking_geral(
     if total is not None:
         for item in itens:
             item.n_aferidos = total
+    if not dimensao:
+        # Sensor 4: o Ranking Geral LEGADO foi servido (plano de retirada, §4
+        # item 1). A rota por dimensão não conta — quem pede `?dimensao=` já lê
+        # `nota`/`posicao` da dimensão.
+        obs.registrar_legado_nota_geral()
     return itens
 
 
@@ -1032,8 +1038,12 @@ def dashboard(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    return montar_dashboard(
+    painel = montar_dashboard(
         db, escola_id, turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
+    # Sensor 4: o Top 10 do painel ainda é a ordem única, com `nota_geral` por
+    # item (plano de retirada, §4 item 7 — decisão de produto do dono).
+    obs.registrar_legado_nota_geral()
+    return painel
 
 
 # ---------------------------------------------------------------------------
