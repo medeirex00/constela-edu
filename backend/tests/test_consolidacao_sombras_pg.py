@@ -11,7 +11,11 @@ Este módulo prova, contra o banco de produção (Postgres):
      de importação da escola serializa, e a segunda reconfere o par no banco
      atual (compare-and-set) e o pula — sem erro, sem fundir duas vezes;
   3. a simulação do script roda numa transação que o próprio banco confirma ser
-     somente leitura, e não grava nada.
+     somente leitura, e não grava nada;
+  4. o compare-and-set enxerga a mudança gravada por OUTRA transação mesmo com
+     as fichas ainda vivas no identity map de quem aplica;
+  5. se o recálculo cai, o rollback desfaz as fusões — elas e as notas são uma
+     transação só.
 
 Como rodar::
 
@@ -178,6 +182,50 @@ def test_duas_aplicacoes_concorrentes_fundem_o_par_uma_vez(motor_pg, cena):
             LogAuditoria.acao.in_(("aluno.consolidado_automatico", "aluno.fundido")))
         ).scalars().all()
         assert sorted(acoes) == ["aluno.consolidado_automatico", "aluno.fundido"]
+
+
+def test_mudanca_de_outra_transacao_com_fichas_vivas_na_memoria_pula(motor_pg, cena):
+    """Quem aplica ainda segura as fichas que o plano leu (identity map da
+    sessão) e OUTRA transação dá à sombra um nº de chamada divergente do da
+    oficial e grava. O compare-and-set relê do banco: o par é pulado."""
+    with Session(motor_pg, autoflush=False) as a:
+        a.get(Aluno, cena["oficial"]).numero_chamada = 7
+        a.commit()
+        plano = cs.planejar(a, cena["escola_id"])
+        vivas = (a.get(Aluno, cena["sombra"]), a.get(Aluno, cena["oficial"]))
+        with Session(motor_pg) as b:
+            b.get(Aluno, cena["sombra"]).numero_chamada = 3
+            b.commit()
+        res = cs.aplicar(a, plano, usuario_id=None, origem="teste_pg")
+        assert res["consolidados"] == [] and len(vivas) == 2
+        [pulado] = res["pulados"]
+        assert (pulado["sombra_id"], pulado["motivo_atual"]) == (
+            cena["sombra"], "identificador_divergente")
+    with Session(motor_pg) as db:
+        assert db.get(Aluno, cena["sombra"]) is not None
+
+
+def test_falha_no_recalculo_nao_deixa_fusao_gravada_no_postgres(motor_pg, cena,
+                                                                monkeypatch):
+    """Fusões, auditoria e recálculo numa transação só: se o recálculo cai, o
+    rollback de quem chamou desfaz a fusão — nenhuma ficha fica fundida com a
+    nota velha."""
+    def explode(*a, **k):
+        raise RuntimeError("recálculo caiu")
+
+    monkeypatch.setattr(cs, "_recalcular", explode)
+    with Session(motor_pg) as db:
+        plano = cs.planejar(db, cena["escola_id"])
+        with pytest.raises(RuntimeError):
+            cs.aplicar(db, plano, usuario_id=None, origem="teste_pg")
+        db.rollback()
+    with Session(motor_pg) as db:
+        assert db.get(Aluno, cena["sombra"]) is not None
+        assert db.execute(select(IdentidadeExterna.aluno_id).where(
+            IdentidadeExterna.escola_id == cena["escola_id"])).scalars().all() == [
+            cena["sombra"]]
+        assert db.execute(select(func.count()).select_from(LogAuditoria).where(
+            LogAuditoria.escola_id == cena["escola_id"])).scalar_one() == 0
 
 
 def test_simulacao_do_script_e_somente_leitura_no_postgres(motor_pg, cena, monkeypatch,

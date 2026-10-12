@@ -17,16 +17,22 @@ Garantias
   leitura, aborta (código 4).
 * Saída só com IDS (sombra, oficial, turma, fichas relacionadas). Nomes de
   criança só com ``--nomes`` — e nunca vão para a auditoria.
-* ``--aplicar`` EXIGE ``--esperado N``: N é o total de pares CONSOLIDAR que a
-  simulação mostrou para o MESMO recorte (``--escola`` ou ``--todas``). Se esta
-  execução achar outro número, aborta ANTES de gravar, com código 3.
+* ``--aplicar`` EXIGE ``--esperado N`` e ``--assinatura A``: N é o total de
+  pares CONSOLIDAR e A a assinatura dos PARES (sha256 curto da lista ordenada de
+  escola, sombra e oficial) que a simulação mostrou para o MESMO recorte
+  (``--escola`` ou ``--todas``). O número sozinho não basta: entre a conferência
+  e a aplicação um par pode sair e outro entrar mantendo N — e seria fundido um
+  par que ninguém viu. Se esta execução achar outro número OU outros pares,
+  aborta ANTES de gravar, com código 3.
 * COMPARE-AND-SET: cada par é reconferido no banco atual antes de fundir; o que
   mudou entre a simulação e a aplicação é pulado e listado.
 * Só pares CONSOLIDAR são fundidos. REVISAR e CONFLITO ficam para gente;
   SEM_PAR é outra criança.
-* Cada fusão fica na auditoria (``aluno.fundido`` com a foto pré-fusão e
-  ``aluno.consolidado_automatico`` com as evidências, origem ``script``). Um
-  commit e um recálculo por escola.
+* Cada fusão fica na auditoria (``aluno.fundido`` com a foto pré-fusão e a
+  origem automática; ``aluno.consolidado_automatico`` com as evidências e os ids
+  das linhas movidas, origem ``script``), sem usuário: nenhuma pessoa fundiu na
+  tela. Fusões, auditoria e recálculo de cada escola caem num commit só — se o
+  recálculo falha, nada daquela escola fica gravado.
 
 Antes de aplicar — decisão operacional
 --------------------------------------
@@ -42,13 +48,15 @@ Simulação (não grava nada):
     python -m scripts.consolidar_sombras --todas
     python -m scripts.consolidar_sombras --escola 11 --nomes   # com os nomes
 
-Aplicação (N = o total de CONSOLIDAR que a simulação ACABOU de mostrar):
+Aplicação (N e A = o total de CONSOLIDAR e a assinatura dos pares que a
+simulação ACABOU de mostrar):
 
-    python -m scripts.consolidar_sombras --escola 11 --aplicar --esperado N
+    python -m scripts.consolidar_sombras --escola 11 --aplicar --esperado N --assinatura A
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 
@@ -76,22 +84,41 @@ def _argumentos(argv=None) -> argparse.Namespace:
     alvo.add_argument("--todas", action="store_true", help="todas as escolas")
     parser.add_argument("--aplicar", action="store_true",
                         help="grava: funde os pares CONSOLIDAR (sem isto, só simula). "
-                             "Exige --esperado.")
+                             "Exige --esperado e --assinatura.")
     parser.add_argument("--esperado", type=int, default=None, metavar="N",
                         help="com --aplicar: total de pares CONSOLIDAR conferido na "
                              "simulação; se divergir, aborta sem gravar")
+    parser.add_argument("--assinatura", default=None, metavar="A",
+                        help="com --aplicar: assinatura dos pares CONSOLIDAR que a "
+                             "simulação mostrou; se outros pares forem achados, aborta "
+                             "sem gravar")
     parser.add_argument("--nomes", action="store_true",
                         help="mostra os nomes das fichas (dado pessoal: use só na "
                              "conferência)")
     args = parser.parse_args(argv)
     if args.esperado is not None and not args.aplicar:
         parser.error("--esperado só vale junto com --aplicar.")
+    if args.assinatura is not None and not args.aplicar:
+        parser.error("--assinatura só vale junto com --aplicar.")
     if args.aplicar and args.esperado is None:
         parser.error("--aplicar exige --esperado N (o total de pares CONSOLIDAR que "
                      "a simulação mostrou).")
+    if args.aplicar and not (args.assinatura or "").strip():
+        parser.error("--aplicar exige --assinatura A (a assinatura dos pares que a "
+                     "simulação mostrou).")
     if args.esperado is not None and args.esperado < 0:
         parser.error("--esperado não pode ser negativo.")
     return args
+
+
+def assinatura_dos_pares(planos: list[cs.Plano]) -> str:
+    """Impressão digital ESTÁVEL de QUAIS pares a execução vai fundir: sha256 da
+    lista ordenada de (escola, sombra, oficial), em 12 hexadecimais. Só ids —
+    nenhum nome entra."""
+    pares = sorted((p.escola_id, i.sombra_id, i.oficial_id)
+                   for p in planos for i in p.consolidar)
+    texto = ";".join(f"{e}:{s}>{o}" for e, s, o in pares)
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()[:12]
 
 
 def _abrir_somente_leitura(db) -> bool:
@@ -164,11 +191,14 @@ def main(argv=None) -> int:
         for plano in planos:
             _imprimir(db, plano, nomes_escola.get(plano.escola_id, "?"), args.nomes)
         total = sum(len(p.consolidar) for p in planos)
+        assinatura = assinatura_dos_pares(planos)
         print(f"\ntotal de pares CONSOLIDAR: {total}")
+        print(f"assinatura dos pares CONSOLIDAR: {assinatura}")
 
         if not args.aplicar:
             print("simulação apenas — nada foi gravado. Para consolidar (só com "
-                  "autorização e backup validado): --aplicar --esperado N.")
+                  "autorização e backup validado): --aplicar --esperado N "
+                  "--assinatura A.")
             db.rollback()
             return 0
 
@@ -177,6 +207,13 @@ def main(argv=None) -> int:
             print(f"\nABORTADO — esperado {args.esperado}, mas esta execução tem "
                   f"{total} par(es) CONSOLIDAR. Nada foi gravado. Rode a simulação de "
                   "novo e confira antes de aplicar.")
+            return SAIDA_ESPERADO_DIVERGENTE
+        if assinatura != args.assinatura.strip().lower():
+            db.rollback()
+            print(f"\nABORTADO — a assinatura dos pares desta execução ({assinatura}) "
+                  f"não é a conferida ({args.assinatura.strip()}): os pares mudaram "
+                  "desde a simulação. Nada foi gravado. Rode a simulação de novo e "
+                  "confira antes de aplicar.")
             return SAIDA_ESPERADO_DIVERGENTE
 
         db.rollback()        # a leitura acabou; cada escola grava na sua transação

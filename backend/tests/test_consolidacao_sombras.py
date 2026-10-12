@@ -11,17 +11,23 @@ O que estes testes travam:
     (uma letra diferente num SOBRENOME do meio; a partícula "DE" faltando) vai
     para a oficial SEM revisão, e as pendências antigas dessa linha são
     encerradas pelo mecanismo que já existe;
-  * NUNCA junta crianças diferentes: gêmeos, irmão de outra turma sem conta,
-    nome idêntico com conta, identificador divergente, decisão humana na
-    sombra, uma letra diferente no PRENOME (decisão 3 do dono: segue manual);
-  * duas contas na mesma plataforma é CONFLITO; homônimo com conta própria não
-    bloqueia;
-  * a aplicação reconfere o par (compare-and-set), é idempotente, move tudo
-    para a oficial sem dobrar a nota e audita;
+  * NUNCA junta crianças diferentes: gêmeos, irmão de outra turma (com ou sem
+    conta, se for da Lista Piloto), gêmea fora da lista na mesma turma, nome
+    idêntico com conta ou dado, nomes em outra ordem, identificador divergente,
+    decisão humana na sombra, a dona real escondida por partícula ou por uma
+    letra no prenome, uma letra diferente no PRENOME (decisão 3 do dono: segue
+    manual) e prenome que é prefixo do outro (GABRIEL × GABRIELA);
+  * duas contas (ou dois retratos) na mesma plataforma é CONFLITO — também com
+    o dado gravado por nome, sem conta, e com a 2ª conta pendente na fila; a
+    sombra de OUTRA turma, fora da lista, com conta própria não bloqueia;
+  * a aplicação reconfere o par (compare-and-set, relendo as fichas do banco),
+    é idempotente, move tudo para a oficial sem dobrar a nota, audita os ids
+    movidos sem pôr uma pessoa como autora, e é atômica com o recálculo;
   * a política da escola: "manual" (padrão) não funde nada na sincronização;
     "automatico" funde, numa transação própria, sem derrubar a sync se falhar;
     só o admin global a altera;
-  * o script: simulação não grava; --aplicar exige --esperado; divergência sai 3.
+  * o script: simulação não grava; --aplicar exige --esperado e --assinatura;
+    divergência de qualquer um sai 3.
 
 Nomes FICTÍCIOS, montados para o teste (nenhum é de aluno real).
 """
@@ -257,12 +263,16 @@ def test_auditoria_e_dados_movidos_sem_dobrar_a_nota(db, padrao):
     c = padrao
     e, sombra, oficial = c["escola"], c["sombra_z"], c["oficial_z"]
     imp_m, imp_e = _importacao(db, e, "matific"), _importacao(db, e, "elefante")
-    db.add(SnapshotMatific(escola_id=e.id, aluno_id=sombra.id, importacao_id=imp_m.id,
-                           atividades=40, estrelas=150, pontuacao_media=3.75))
+    snap_m = SnapshotMatific(escola_id=e.id, aluno_id=sombra.id, importacao_id=imp_m.id,
+                             atividades=40, estrelas=150, pontuacao_media=3.75)
+    db.add(snap_m)
     db.add(SnapshotElefante(escola_id=e.id, aluno_id=oficial.id, importacao_id=imp_e.id,
                             livros_unicos=12, tempo_leitura_min=300,
                             livros_por_nivel={"D": 2}))
     db.commit()
+    snap_m_id = snap_m.id
+    [conta_id] = db.execute(select(IdentidadeExterna.id).where(
+        IdentidadeExterna.aluno_id == sombra.id)).scalars().all()
     scoring.recalcular_escola(db, e.id)
     nota_sombra = db.execute(select(Nota).where(Nota.aluno_id == sombra.id)).scalar_one()
     matematica_antes = nota_sombra.nota_matific
@@ -297,13 +307,21 @@ def test_auditoria_e_dados_movidos_sem_dobrar_a_nota(db, padrao):
         oficial.id, c["b"].id, cs.REGRA, "teste")
     assert d["plataformas_movidas"] == ["matific"]
     assert (d["identidades_movidas"], d["snapshots_matific"]) == (1, 1)
+    # QUAIS linhas vieram da sombra (para desfazer pelo log, se preciso).
+    assert d["linhas_movidas"] == {"snapshots_matific": [snap_m_id],
+                                   "snapshots_elefante": [], "leituras": [],
+                                   "eventos": [], "identidades_externas": [conta_id]}
+    assert all(v == [] for v in d["linhas_descartadas"].values())
     assert d["evidencias"]["relacao_nome"] == "abreviacao"
     texto = json.dumps(d, ensure_ascii=False)
     assert SOMBRA_Z not in texto and OFICIAL_Z not in texto       # sem PII nova
-    # A fusão em si é a da tela: "aluno.fundido" com a foto pré-fusão.
+    # A fusão em si é a da tela: "aluno.fundido" com a foto pré-fusão — e marcada
+    # como automática, sem pessoa como autora.
     fundido = [l for l in _logs(db, "aluno.fundido")
                if l.detalhes["removido"]["id"] == sombra.id]
     assert len(fundido) == 1 and fundido[0].detalhes["foto_pre_fusao"]["id"] == sombra.id
+    assert fundido[0].detalhes["origem"] == "consolidacao_automatica:teste"
+    assert fundido[0].usuario_id is None
 
 
 def test_idempotente_a_segunda_execucao_nao_acha_nada(db, padrao):
@@ -345,15 +363,52 @@ def test_irmao_em_outra_turma_sem_conta_vai_para_revisao(db, padrao):
     assert _existe(db, c["sombra_z"].id)
 
 
-def test_homonimo_de_outra_turma_com_conta_propria_nao_bloqueia(db, padrao):
+@pytest.mark.parametrize("da_lista, classe", [
+    # A ficha da Lista Piloto de outra turma, mesmo com conta própria, pode ser a
+    # dona da conta antiga da sombra: a criança mudou de turma e ganhou conta nova.
+    (True, cs.REVISAR),
+    # A ficha FORA da lista, em outra turma, com a conta dela é a sombra de outra
+    # criança — não disputa a conta desta.
+    (False, cs.CONSOLIDAR),
+])
+def test_homonimo_de_outra_turma_com_conta_propria(db, padrao, da_lista, classe):
+    """REGRA MUDOU (revisão adversarial, 12/10): conta própria só isenta a ficha
+    FORA da Lista Piloto de OUTRA turma."""
     c = padrao
     e = c["escola"]
-    irmao = _aluno(db, e, c["a4"], "ZULEICA REBECA TEODORO DA CUNHA")
+    irmao = _aluno(db, e, c["a4"], "ZULEICA REBECA TEODORO DA CUNHA", lp=da_lista)
     _conta(db, e, irmao, "matific", "u-zuleica-rebeca")
     db.commit()
     item = _item(cs.planejar(db, e.id), c["sombra_z"])
-    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, c["oficial_z"].id)
-    assert item.evidencias["outras_compativeis_com_conta_propria"] == [irmao.id]
+    assert (item.classe, item.oficial_id) == (classe, c["oficial_z"].id)
+    if classe == cs.REVISAR:
+        assert (item.motivo, item.relacionados) == ("compativel_em_outra_ficha", (irmao.id,))
+    else:
+        assert item.evidencias["outras_compativeis_com_conta_propria"] == [irmao.id]
+
+
+@pytest.mark.parametrize("cenario", ["transferida_de_turma", "saiu_da_escola",
+                                     "gemea_fora_da_lista"])
+def test_conta_propria_nao_isenta_quem_pode_ter_ganho_segunda_conta(db, esc, cenario):
+    """A criança que pode ter ganhado uma SEGUNDA conta no Matific: a conta da
+    sombra pode ser a antiga dela. Conta própria não prova nada."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, "IRACEMA SOFIA LIMA", chamada=10)
+    if cenario == "transferida_de_turma":
+        outra = _aluno(db, e, esc["a4"], "IRACEMA SILVA COSTA", chamada=11)
+    elif cenario == "saiu_da_escola":
+        outra = _aluno(db, e, b, "IRACEMA SILVA COSTA", chamada=11, status="transferido")
+    else:
+        outra = _aluno(db, e, b, "IRACEMA SILVIA COSTA", lp=False)
+    _conta(db, e, outra, "matific", "u-iracema-nova")
+    sombra = _aluno(db, e, b, "IRACEMA S", lp=False)
+    _conta(db, e, sombra, "matific", "u-iracema-antiga")
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo, item.oficial_id, item.relacionados) == (
+        cs.REVISAR, "compativel_em_outra_ficha", oficial.id, (outra.id,))
+    assert _aplicar(db, e)["consolidados"] == []
+    assert _dono(db, e, "matific", "u-iracema-antiga") == sombra.id
 
 
 def test_homonimo_so_com_conta_aposentada_continua_bloqueando(db, padrao):
@@ -534,6 +589,225 @@ def test_prenome_com_uma_letra_diferente_nunca_consolida(db, esc, nome_sombra):
     assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
 
 
+@pytest.mark.parametrize("oficial_nome, outra_nome, com_conta, motivo", [
+    # Prenome com uma letra a mais/a menos NO FIM: "forte" para o motor (prefixo
+    # = truncamento), mas na sala são irmãos de sexo diferente — nos dois sentidos.
+    ("GABRIELA TEODORO MASCARENHAS", "GABRIEL TEODORO MASCARENHAS", True,
+     "prenome_diferente"),
+    ("GABRIEL TEODORO MASCARENHAS", "GABRIELA TEODORO MASCARENHAS", True,
+     "prenome_diferente"),
+    ("LUISA TEODORO MASCARENHAS", "LUIS TEODORO MASCARENHAS", False, "prenome_diferente"),
+    ("LUIS TEODORO MASCARENHAS", "LUISA TEODORO MASCARENHAS", False, "prenome_diferente"),
+    ("VICTORIA TEODORO MASCARENHAS", "VICTOR TEODORO MASCARENHAS", True,
+     "prenome_diferente"),
+    ("VICTOR TEODORO MASCARENHAS", "VICTORIA TEODORO MASCARENHAS", True,
+     "prenome_diferente"),
+    # 2º prenome com uma letra a menos no fim (o irmão do RICADO × RICARDO).
+    ("OTAVIANO RICARDO BRAGANCA MELO", "OTAVIANO RICARD BRAGANCA MELO", True,
+     "truncamento_fora_do_padrao"),
+    ("OTAVIANO RICARD BRAGANCA MELO", "OTAVIANO RICARDO BRAGANCA MELO", True,
+     "oficial_abreviada"),
+])
+def test_decisao3_prenome_que_e_prefixo_do_outro_nunca_consolida(
+        db, esc, oficial_nome, outra_nome, com_conta, motivo):
+    """Decisão 3 do dono: a diferença no PRENOME (ou um nome cortado no meio) é
+    revisão manual. Só a forma do relatório — prenome igual e a última palavra
+    reduzida à inicial — consolida."""
+    from app.services import matching
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, oficial_nome, chamada=9)
+    outra = _aluno(db, e, b, outra_nome, lp=False)
+    if com_conta:
+        _conta(db, e, outra, "matific", "u-outra")
+    db.commit()
+    assert matching.plausivel(outra_nome, oficial_nome) == "forte"   # o motor casaria
+    item = _item(cs.planejar(db, e.id), outra)
+    assert (item.classe, item.motivo, item.oficial_id) == (cs.REVISAR, motivo, oficial.id)
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, outra.id)
+
+
+def test_nomes_em_outra_ordem_nao_sao_nome_identico(db, esc):
+    """MARIA CLARA × CLARA MARIA: os mesmos nomes, outra criança."""
+    e, b = esc["escola"], esc["b"]
+    _aluno(db, e, b, "MARIA CLARA VIEIRA", chamada=17)
+    outra = _aluno(db, e, b, "CLARA MARIA VIEIRA", lp=False)          # sem conta
+    db.commit()
+    item = _item(cs.planejar(db, e.id), outra)
+    assert (item.classe, item.motivo) == (cs.REVISAR, "nome_em_outra_ordem")
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, outra.id)
+
+
+def test_oficial_abreviada_com_ficha_completa_nao_consolida(db, esc):
+    """A Lista Piloto tem o 2º prenome abreviado; a ficha fora da lista tem o nome
+    COMPLETO e a conta do Elefante. Não é sombra de relatório — pode ser a gêmea
+    que não está na lista."""
+    e, b = esc["escola"], esc["b"]
+    _aluno(db, e, b, "ZILDA E MOTTA", chamada=21)
+    completa = _aluno(db, e, b, "ZILDA ESTER MOTTA", lp=False)
+    _conta(db, e, completa, "elefante", "77001")
+    db.commit()
+    item = _item(cs.planejar(db, e.id), completa)
+    assert (item.classe, item.motivo) == (cs.REVISAR, "oficial_abreviada")
+
+
+@pytest.mark.parametrize("dona_nome, colega_nome, sombra_nome", [
+    # A partícula ocupa a posição da inicial: "TEOBALDO O" não é "forte" com a
+    # dona real, só com o colega de mesmo prenome.
+    ("TEOBALDO DE OLIVEIRA SOUSA", "TEOBALDO OTAVIO LIMA", "TEOBALDO O"),
+    ("GERVASIO HENRIQUE DOS SANTOS", "GERVASIO HENRIQUE SOARES LIMA", "GERVASIO HENRIQUE S"),
+    # Decisão 3: a dona real tem UMA letra diferente no prenome (KETLIN × KETLYN)
+    # — o caso que segue manual não pode ser resolvido sozinho para outra criança.
+    ("KETLIN SOFIA FALCAO", "KETLYN SAMARA COSTA", "KETLYN S"),
+])
+def test_dona_real_invisivel_ao_forte_segura_a_sombra(db, esc, dona_nome, colega_nome,
+                                                      sombra_nome):
+    e, b = esc["escola"], esc["b"]
+    dona = _aluno(db, e, b, dona_nome, chamada=3)
+    colega = _aluno(db, e, b, colega_nome, chamada=4)
+    sombra = _aluno(db, e, b, sombra_nome, lp=False)
+    _conta(db, e, sombra, "matific", "u-sombra")
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo, item.oficial_id) == (
+        cs.REVISAR, "nome_parecido_na_turma", colega.id)
+    assert set(item.relacionados) == {colega.id, dona.id}
+    assert _aplicar(db, e)["consolidados"] == []
+    assert _dono(db, e, "matific", "u-sombra") == sombra.id      # a conta não andou
+
+
+@pytest.mark.parametrize("nome_da_segunda_conta", ["ODILA SO", "ODILA SOFIA L"])
+def test_segunda_conta_pendente_na_fila_e_conflito(db, esc, nome_da_segunda_conta):
+    """A sombra tem a conta X; chega a conta Y com outro recorte do nome e o motor
+    grava "candidatos_multiplos" (oficial, sombra). É a mesma dúvida das duas
+    contas: gente decide antes de a conta X ir para a oficial."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, "ODILA SOFIA LIMA", chamada=18)
+    sombra = _aluno(db, e, b, "ODILA S", lp=False)
+    _conta(db, e, sombra, "matific", "u-odila-x")
+    db.commit()
+    ctx = ida.carregar_contexto(db, e.id)
+    dec = ida.decidir(ctx, ida.LinhaIdentidade(
+        nome=nome_da_segunda_conta, plataforma="matific", id_externo="u-odila-y",
+        turma_nome="2º Ano B"))
+    assert (dec.acao, dec.motivo) == (ida.REVISAR, "candidatos_multiplos")
+    assert set(dec.candidatos) == {oficial.id, sombra.id}
+    db.add(RevisaoIdentidade(
+        escola_id=e.id, chave="matific|id:u-odila-y|resumo||",
+        chave_identidade="matific|id:u-odila-y", plataforma="matific", formato="resumo",
+        id_externo="u-odila-y", nome_recebido=nome_da_segunda_conta,
+        turma_informada="2º Ano B", motivo=dec.motivo,
+        candidatos=[{"aluno_id": i} for i in dec.candidatos], linhas=[],
+        origem="sincronizacao", status="pendente"))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "conta_contestada")
+
+
+def test_pendencia_da_propria_conta_ou_de_outra_plataforma_nao_contesta(db, padrao):
+    """A pendência do Elefante com (oficial, sombra) é o estado normal do padrão
+    — a sombra não tem conta do Elefante; e a pendência com o MESMO id da conta
+    da sombra não é outra conta."""
+    c = padrao
+    e = c["escola"]
+    for plataforma, id_externo in (("elefante", "4410099"), ("matific", "u-sombra-zuleica")):
+        db.add(RevisaoIdentidade(
+            escola_id=e.id, chave=f"{plataforma}|id:{id_externo}|resumo||",
+            chave_identidade=f"{plataforma}|id:{id_externo}", plataforma=plataforma,
+            formato="resumo", id_externo=id_externo, nome_recebido=OFICIAL_Z,
+            motivo="candidatos_multiplos",
+            candidatos=[{"aluno_id": c["oficial_z"].id}, {"aluno_id": c["sombra_z"].id}],
+            linhas=[], origem="sincronizacao", status="pendente"))
+    db.commit()
+    assert _item(cs.planejar(db, e.id), c["sombra_z"]).classe == cs.CONSOLIDAR
+
+
+def test_oficial_com_dado_legado_na_plataforma_da_sombra_e_conflito(db, esc):
+    """O histórico do Elefante foi gravado por NOME, antes do studentId: a oficial
+    tem o retrato sem conta registrada. Uma sombra com OUTRA conta do Elefante
+    não pode ser fundida — o retrato vigente da criança viraria o da sombra."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, OFICIAL_Z, chamada=7)
+    sombra = _aluno(db, e, b, SOMBRA_Z, lp=False)
+    _conta(db, e, sombra, "elefante", "4419001")
+    imp = _importacao(db, e, "elefante")
+    db.add(SnapshotElefante(escola_id=e.id, aluno_id=oficial.id, importacao_id=imp.id,
+                            data_referencia=datetime(2026, 9, 1), livros_unicos=30,
+                            tempo_leitura_min=900, livros_por_nivel={"D": 30}))
+    db.add(SnapshotElefante(escola_id=e.id, aluno_id=sombra.id, importacao_id=imp.id,
+                            data_referencia=datetime(2026, 9, 10), livros_unicos=5,
+                            tempo_leitura_min=100, livros_por_nivel={"D": 5}))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "duas_contas_mesma_plataforma")
+    assert _aplicar(db, e)["consolidados"] == []
+    db.expire_all()
+    assert db.execute(select(SnapshotElefante.livros_unicos).where(
+        SnapshotElefante.aluno_id == oficial.id)).scalars().all() == [30]
+
+
+def _leitura(db, escola, aluno, livro, quando):
+    from app.models import Leitura
+    db.add(Leitura(escola_id=escola.id, aluno_id=aluno.id, livro_id=livro.id, data=quando))
+
+
+def test_nome_identico_com_dado_sem_conta_nao_consolida(db, esc):
+    """Nome idêntico e SEM conta registrada, mas com dado de plataforma (gravado
+    por nome): pode ser outra criança real de mesmo nome — revisão."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, "LAURINDA GOMES DA SILVA*", chamada=4)
+    sombra = _aluno(db, e, b, "LAURINDA GOMES DA SILVA", lp=False)
+    imp = _importacao(db, e, "matific")
+    db.add(SnapshotMatific(escola_id=e.id, aluno_id=sombra.id, importacao_id=imp.id,
+                           atividades=10, estrelas=20, pontuacao_media=2.0))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo, item.oficial_id) == (
+        cs.REVISAR, "nome_identico_com_conta", oficial.id)
+
+
+def test_leitura_do_mesmo_livro_nas_duas_fichas_nao_e_descartada(db, esc):
+    """A fusão descartaria a leitura repetida da sombra, com data e tempo — perda
+    irreversível. Com leitura nas duas, as duas têm dado do Elefante: CONFLITO."""
+    from app.models import Leitura, Livro
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, OFICIAL_Z, chamada=7)
+    sombra = _aluno(db, e, b, SOMBRA_Z, lp=False)
+    _conta(db, e, sombra, "matific", "u-z")
+    livro = Livro(escola_id=e.id, titulo="LIVRO SINTETICO", nivel_codigo="D")
+    db.add(livro)
+    db.flush()
+    _leitura(db, e, oficial, livro, datetime(2026, 3, 25, 10, 0))
+    _leitura(db, e, sombra, livro, datetime(2026, 8, 6, 10, 0))
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "duas_contas_mesma_plataforma")
+    assert _aplicar(db, e)["consolidados"] == []
+    db.expire_all()
+    assert sorted(d.month for d in db.execute(
+        select(Leitura.data).where(Leitura.livro_id == livro.id)).scalars()) == [3, 8]
+
+
+def test_duas_sombras_provadamente_diferentes_vao_para_revisao(db, esc):
+    """Duas fichas fora da lista, as duas na forma do relatório da MESMA oficial
+    (sem nascimento), com nascimentos diferentes entre si: são duas crianças. No
+    máximo uma é a oficial — a ordem dos ids não pode escolher."""
+    e, b = esc["escola"], esc["b"]
+    oficial = _aluno(db, e, b, OFICIAL_Z)
+    s1 = _aluno(db, e, b, SOMBRA_Z, lp=False, nascimento=date(2018, 1, 1))
+    _conta(db, e, s1, "matific", "u-s1")
+    s2 = _aluno(db, e, b, "ZULEICA RAMONA T", lp=False, nascimento=date(2018, 6, 6))
+    _conta(db, e, s2, "elefante", "4418002")
+    db.commit()
+    plano = cs.planejar(db, e.id)
+    for s, outra in ((s1, s2), (s2, s1)):
+        item = _item(plano, s)
+        assert (item.classe, item.motivo, item.relacionados) == (
+            cs.REVISAR, "sombras_distintas", (outra.id,))
+    assert _aplicar(db, e, plano)["consolidados"] == []
+    db.expire_all()
+    assert db.get(Aluno, oficial.id).data_nascimento is None
+
+
 def test_quest_nos_dois_lados_vai_para_revisao(db, padrao):
     from app.quest.models import QuestPerfil
     c = padrao
@@ -582,16 +856,50 @@ def test_ficha_de_nome_parcial_na_turma_segura_a_sombra(db, padrao):
         cs.REVISAR, "nome_parecido_na_turma")
 
 
-def test_duas_sombras_com_conta_na_mesma_plataforma_sao_conflito(db, padrao):
+@pytest.mark.parametrize("nome_segunda", ["ZULEICA RA", "ZULEICA RAMONA T"])
+def test_duas_sombras_com_conta_na_mesma_plataforma_sao_conflito(db, padrao, nome_segunda):
     c = padrao
     e = c["escola"]
-    segunda = _aluno(db, e, c["b"], "ZULEICA RA", lp=False)
+    segunda = _aluno(db, e, c["b"], nome_segunda, lp=False)
     _conta(db, e, segunda, "matific", "u-outra-zuleica")
     db.commit()
     plano = cs.planejar(db, e.id)
-    for s in (c["sombra_z"], segunda):
-        assert (_item(plano, s).classe, _item(plano, s).motivo) == (
-            cs.CONFLITO, "duas_contas_mesma_plataforma")
+    for s, outra in ((c["sombra_z"], segunda), (segunda, c["sombra_z"])):
+        assert (_item(plano, s).classe, _item(plano, s).motivo,
+                _item(plano, s).relacionados) == (
+            cs.CONFLITO, "duas_contas_mesma_plataforma", (outra.id,))
+
+
+@pytest.mark.parametrize("rebaixa", ["decisao_humana", "conta_aposentada", "nome_fora_do_padrao"])
+def test_irma_com_conta_na_mesma_plataforma_segura_mesmo_rebaixada(db, padrao, rebaixa):
+    """A outra ficha-sombra da mesma oficial tem OUTRA conta Matific e vai para a
+    revisão por um motivo que nada tem a ver com a conta. A primeira continua
+    CONFLITO: fundi-la daria a conta X à oficial sem ninguém escolher entre X e
+    Y (gêmeas em que só uma está na Lista Piloto)."""
+    c = padrao
+    e = c["escola"]
+    segunda = _aluno(db, e, c["b"],
+                     "ZULEICA RA" if rebaixa == "nome_fora_do_padrao" else "ZULEICA RAMONA T",
+                     lp=False)
+    _conta(db, e, segunda, "matific", "u-outra-zuleica",
+           status="aposentada" if rebaixa == "conta_aposentada" else "efetiva")
+    if rebaixa == "decisao_humana":
+        db.add(RevisaoIdentidade(
+            escola_id=e.id, chave="elefante|nome:x|sala:2|B|resumo||",
+            chave_identidade="elefante|nome:x|sala:2|B", plataforma="elefante",
+            formato="resumo", id_externo=None, nome_recebido="ZULEICA RAMONA T",
+            motivo="correspondencia_insegura", candidatos=[], linhas=[],
+            origem="sincronizacao", status="resolvida", aluno_escolhido_id=segunda.id,
+            resolucao={"acao": "associar", "aluno_id": segunda.id}))
+    db.commit()
+    plano = cs.planejar(db, e.id)
+    assert _item(plano, segunda).classe != cs.CONSOLIDAR
+    item = _item(plano, c["sombra_z"])
+    assert (item.classe, item.motivo, item.relacionados) == (
+        cs.CONFLITO, "duas_contas_mesma_plataforma", (segunda.id,))
+    assert c["sombra_z"].id not in [x["sombra_id"]
+                                    for x in _aplicar(db, e, plano)["consolidados"]]
+    assert _dono(db, e, "matific", "u-sombra-zuleica") == c["sombra_z"].id
 
 
 def test_sombra_irma_que_nao_consolida_segura_a_outra(db, padrao):
@@ -630,6 +938,30 @@ def test_estado_muda_entre_planejar_e_aplicar_o_par_e_pulado(db, padrao):
     assert {l.entidade_id for l in _logs(db, "aluno.consolidacao_pulada")} == {
         c["sombra_z"].id, c["sombra_o"].id}
     assert _logs(db, "aluno.consolidado_automatico") == []
+
+
+@pytest.mark.parametrize("mudanca", ["chamada_da_sombra", "oficial_transferida",
+                                     "sombra_entra_na_lista"])
+def test_mudanca_de_outra_sessao_com_fichas_vivas_na_memoria_pula(db, padrao, mudanca):
+    """Quem aplica ainda SEGURA as fichas desta sessão (o plano acabou de lê-las)
+    e OUTRA transação muda o cadastro e grava. O compare-and-set relê do banco,
+    não do identity map: pula o par."""
+    c = padrao
+    e = c["escola"]
+    plano = cs.planejar(db, e.id)
+    vivas = (db.get(Aluno, c["sombra_z"].id), db.get(Aluno, c["oficial_z"].id))
+    with sessionmaker(bind=db.get_bind())() as outra:
+        if mudanca == "chamada_da_sombra":
+            outra.get(Aluno, c["sombra_z"].id).numero_chamada = 3     # oficial tem 7
+        elif mudanca == "oficial_transferida":
+            outra.get(Aluno, c["oficial_z"].id).status = "transferido"
+        else:
+            outra.get(Aluno, c["sombra_z"].id).da_lista_piloto = True
+        outra.commit()
+    res = _aplicar(db, e, plano)
+    assert [p["sombra_id"] for p in res["pulados"]] == [c["sombra_z"].id]
+    assert c["sombra_z"].id not in [x["sombra_id"] for x in res["consolidados"]]
+    assert _existe(db, c["sombra_z"].id) and len(vivas) == 2
 
 
 def test_conta_nova_da_oficial_entre_planejar_e_aplicar_pula(db, padrao):
@@ -724,18 +1056,25 @@ def test_politica_manual_nao_funde_nada_na_sync(db, padrao, monkeypatch, gravar_
 
 
 def test_politica_automatico_funde_na_sync(db, padrao, monkeypatch):
+    """REGRA MUDOU (revisão adversarial, 12/10): a sync do AGENDADOR não tem
+    autor — a fusão automática fica com ``usuario_id`` vazio e a origem em
+    ``aluno.fundido``, em vez de ser atribuída ao primeiro admin da escola."""
     c = padrao
     e = c["escola"]
     politica_sync.definir(db, e.id, consolidar_sombras="automatico")
     db.commit()
     ex = _executar_sync(db, e, monkeypatch)
-    assert ex.status == "concluida"
+    assert ex.status == "concluida" and ex.usuario_id is None
     assert not _existe(db, c["sombra_z"].id) and not _existe(db, c["sombra_o"].id)
     assert _dono(db, e, "matific", "u-sombra-zuleica") == c["oficial_z"].id
     logs = _logs(db, "aluno.consolidado_automatico")
     assert len(logs) == 2
     assert {l.detalhes["origem"] for l in logs} == {"sincronizacao"}
-    assert {l.usuario_id for l in logs} == {c["admin"].id}      # o ator da sync
+    assert {l.usuario_id for l in logs} == {None}               # ninguém fundiu à mão
+    fundidos = _logs(db, "aluno.fundido")
+    assert len(fundidos) == 2 and {l.usuario_id for l in fundidos} == {None}
+    assert {l.detalhes["origem"] for l in fundidos} == {
+        "consolidacao_automatica:sincronizacao"}
     [log] = _logs_da_execucao(db, ex, "identidade")
     assert log.nivel == "info" and "2 ficha(s)-sombra consolidada(s)" in log.mensagem
     assert SOMBRA_Z not in log.mensagem
@@ -743,6 +1082,52 @@ def test_politica_automatico_funde_na_sync(db, padrao, monkeypatch):
     ex2 = _executar_sync(db, e, monkeypatch)
     assert ex2.status == "concluida" and _logs_da_execucao(db, ex2, "identidade") == []
     assert len(_logs(db, "aluno.consolidado_automatico")) == 2
+
+
+def test_sync_pedida_por_uma_pessoa_registra_quem_pediu(db, padrao, monkeypatch):
+    c = padrao
+    e = c["escola"]
+    politica_sync.definir(db, e.id, consolidar_sombras="automatico")
+    db.commit()
+    ex = _executar_sync(db, e, monkeypatch, usuario_id=c["admin"].id)
+    assert ex.status == "concluida"
+    for acao in ("aluno.consolidado_automatico", "aluno.fundido"):
+        assert {l.usuario_id for l in _logs(db, acao)} == {c["admin"].id}
+    assert {l.detalhes["origem"] for l in _logs(db, "aluno.fundido")} == {
+        "consolidacao_automatica:sincronizacao"}
+
+
+def test_falha_no_recalculo_desfaz_as_fusoes(db, padrao, monkeypatch):
+    """O recálculo roda na MESMA transação das fusões: se ele cai, nada fica
+    fundido — a criança não fica com a nota velha (a da sombra, com a
+    Matemática, apagada) e o log diz a verdade."""
+    c = padrao
+    e = c["escola"]
+    imp_m = _importacao(db, e, "matific")
+    db.add(SnapshotMatific(escola_id=e.id, aluno_id=c["sombra_z"].id,
+                           importacao_id=imp_m.id, atividades=40, estrelas=150,
+                           pontuacao_media=3.75))
+    db.commit()
+    scoring.recalcular_escola(db, e.id)
+    politica_sync.definir(db, e.id, consolidar_sombras="automatico")
+    db.commit()
+
+    def explode(*a, **k):
+        raise RuntimeError("recálculo caiu")
+
+    monkeypatch.setattr(cs, "_recalcular", explode)
+    ex = _executar_sync(db, e, monkeypatch)
+    assert ex.status == "concluida"
+    assert _existe(db, c["sombra_z"].id) and _existe(db, c["sombra_o"].id)
+    assert _dono(db, e, "matific", "u-sombra-zuleica") == c["sombra_z"].id
+    assert _logs(db, "aluno.fundido") == []
+    assert _logs(db, "aluno.consolidado_automatico") == []
+    [falha] = _logs(db, "aluno.consolidacao_automatica_falhou")
+    assert falha.detalhes == {"origem": "sincronizacao", "erro": "RuntimeError"}
+    nota = db.execute(select(Nota).where(Nota.aluno_id == c["sombra_z"].id)).scalar_one()
+    assert nota.aferido_matematica                       # a nota da sombra segue viva
+    [log] = _logs_da_execucao(db, ex, "identidade")
+    assert log.nivel == "warn" and "nenhuma ficha foi fundida" in log.mensagem
 
 
 def test_falha_na_consolidacao_nao_derruba_a_sync(db, padrao, monkeypatch):
@@ -869,6 +1254,12 @@ def _retrato(Sessao):
                 db.execute(select(func.count()).select_from(LogAuditoria)).scalar_one())
 
 
+def _assinatura_da_simulacao(saida: str) -> str:
+    [linha] = [l for l in saida.splitlines()
+               if l.startswith("assinatura dos pares CONSOLIDAR: ")]
+    return linha.split(": ", 1)[1].strip()
+
+
 def test_script_simulacao_nao_grava_e_so_mostra_ids(banco, monkeypatch, capsys):
     Sessao, ids = banco
     antes = _retrato(Sessao)
@@ -878,6 +1269,7 @@ def test_script_simulacao_nao_grava_e_so_mostra_ids(banco, monkeypatch, capsys):
     assert f"sombra={ids['sombra']} -> oficial={ids['oficial']}" in saida
     assert f"sombra={ids['gemea']}" in saida and "varias_oficiais" in saida
     assert "total de pares CONSOLIDAR: 1" in saida and "nada foi gravado" in saida
+    assert len(_assinatura_da_simulacao(saida)) == 12
     assert SOMBRA_Z not in saida and OFICIAL_Z not in saida      # nomes só com --nomes
     assert _retrato(Sessao) == antes
 
@@ -890,34 +1282,69 @@ def test_script_esperado_divergente_sai_3_sem_gravar(banco, monkeypatch, capsys)
     Sessao, ids = banco
     import scripts.consolidar_sombras as etapa
     antes = _retrato(Sessao)
+    _, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]))
+    assinatura = _assinatura_da_simulacao(saida)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]),
-                           "--aplicar", "--esperado", "2")
+                           "--aplicar", "--esperado", "2", "--assinatura", assinatura)
     assert codigo == etapa.SAIDA_ESPERADO_DIVERGENTE == 3
     assert "ABORTADO" in saida and "Nada foi gravado" in saida
     assert _retrato(Sessao) == antes
 
 
+def test_script_outros_pares_com_o_mesmo_total_sai_3_sem_gravar(banco, monkeypatch, capsys):
+    """Entre a conferência e a aplicação um par sai e outro entra — o TOTAL é o
+    mesmo, os pares não. A assinatura pega: nada é gravado."""
+    Sessao, ids = banco
+    import scripts.consolidar_sombras as etapa
+    _, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]))
+    conferida = _assinatura_da_simulacao(saida)
+    with Sessao() as db:                      # o par conferido some, outro aparece
+        escola = db.get(Escola, ids["escola"])
+        db.get(Aluno, ids["sombra"]).numero_chamada = 3
+        db.get(Aluno, ids["oficial"]).numero_chamada = 7
+        turma = db.execute(select(Turma).where(Turma.escola_id == escola.id)).scalars().first()
+        _aluno(db, escola, turma, "OSVALDINO BRAGANCA DE MELO")
+        _aluno(db, escola, turma, "OSVALDINO B", lp=False)
+        db.commit()
+    antes = _retrato(Sessao)
+    _, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]))
+    assert "total de pares CONSOLIDAR: 1" in saida
+    assert _assinatura_da_simulacao(saida) != conferida
+    codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]),
+                           "--aplicar", "--esperado", "1", "--assinatura", conferida)
+    assert codigo == etapa.SAIDA_ESPERADO_DIVERGENTE
+    assert "ABORTADO" in saida and "os pares mudaram" in saida
+    assert _retrato(Sessao) == antes
+
+
 def test_script_aplicar_com_o_esperado_certo_consolida(banco, monkeypatch, capsys):
     Sessao, ids = banco
+    _, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]))
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--escola", str(ids["escola"]),
-                           "--aplicar", "--esperado", "1")
+                           "--aplicar", "--esperado", "1",
+                           "--assinatura", _assinatura_da_simulacao(saida))
     assert codigo == 0 and "consolidadas: 1 de 1" in saida
     with Sessao() as db:
         assert db.get(Aluno, ids["sombra"]) is None
         assert db.get(Aluno, ids["gemea"]) is not None             # gêmea: revisão
         [log] = db.execute(select(LogAuditoria).where(
             LogAuditoria.acao == "aluno.consolidado_automatico")).scalars().all()
-        assert log.detalhes["origem"] == "script"
+        assert log.detalhes["origem"] == "script" and log.usuario_id is None
     # De novo: nada mais a consolidar.
+    _, saida = _rodar(monkeypatch, capsys, Sessao, "--todas")
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--todas",
-                           "--aplicar", "--esperado", "0")
+                           "--aplicar", "--esperado", "0",
+                           "--assinatura", _assinatura_da_simulacao(saida))
     assert codigo == 0 and "consolidadas: 0 de 0" in saida
 
 
 @pytest.mark.parametrize("args, trecho", [
     (["--escola", "1", "--aplicar"], "--aplicar exige --esperado N"),
+    (["--escola", "1", "--aplicar", "--esperado", "1"], "--aplicar exige --assinatura A"),
     (["--escola", "1", "--esperado", "3"], "--esperado só vale junto com --aplicar"),
-    (["--escola", "1", "--aplicar", "--esperado", "-1"], "--esperado não pode ser negativo"),
+    (["--escola", "1", "--assinatura", "abc"], "--assinatura só vale junto com --aplicar"),
+    (["--escola", "1", "--aplicar", "--esperado", "-1", "--assinatura", "abc"],
+     "--esperado não pode ser negativo"),
     (["--aplicar", "--esperado", "1"], "one of the arguments --escola --todas is required"),
     (["--escola", "1", "--todas"], "not allowed with argument"),
 ])

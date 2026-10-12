@@ -220,12 +220,19 @@ def consolidar_sombras_da_escola(db: Session, escola_id: int, *,
     OFICIAL da Lista Piloto (nome truncado, mesma turma, com a conta da
     plataforma). ``consolidacao_sombras.planejar`` decide, ficha a ficha, se a
     evidência basta; ``aplicar`` funde SÓ esses pares, reconferindo cada um no
-    banco atual, com um commit e um recálculo próprios.
+    banco atual, e recalcula a escola — fusões, auditoria e notas num commit só.
+
+    ``usuario_id`` é quem PEDIU esta sincronização (None no agendador). A
+    auditoria registra exatamente isso: diferente da importação, que precisa de
+    um "ator" da escola para o ``confirmar``, aqui ninguém é posto como autor
+    de uma fusão automática que não decidiu — ``aluno.fundido`` leva a origem.
 
     TRANSAÇÃO PRÓPRIA: o que a sincronização gravou é confirmado ANTES, então
     uma falha aqui não desfaz nenhum dado importado — e NÃO derruba a sync: vira
     log da execução, log da aplicação e auditoria
-    (``aluno.consolidacao_automatica_falhou``)."""
+    (``aluno.consolidacao_automatica_falhou``). Como a aplicação é atômica, a
+    falha desfaz TODAS as fusões desta rodada: nenhuma ficha fica fundida com a
+    nota velha."""
     try:
         automatico = politica_sync.consolidar_sombras_automatico(db, escola_id)
     except Exception:  # noqa: BLE001 — sem política legível, nada se funde
@@ -233,30 +240,25 @@ def consolidar_sombras_da_escola(db: Session, escola_id: int, *,
         return None
     if not automatico:
         return None
-    ator_id = None
     try:
-        # Mesmo ator da importação automática (quem pediu a sync, ou o primeiro
-        # admin/coordenador ativo da escola) — a auditoria diz ``origem``.
-        ator = _resolver_ator(db, escola_id, usuario_id)
-        ator_id = ator.id if ator is not None else None
-        db.commit()
+        db.commit()                      # o que a sincronização gravou fica firme
         plano = consolidacao_sombras.planejar(db, escola_id)
         if not plano.consolidar:
             db.commit()                  # fecha a leitura; nada a fundir
             return {"escola_id": escola_id, "consolidados": [], "pulados": [],
                     "contagens": plano.contagens()}
-        resultado = consolidacao_sombras.aplicar(db, plano, usuario_id=ator_id,
+        resultado = consolidacao_sombras.aplicar(db, plano, usuario_id=usuario_id,
                                                  origem="sincronizacao")
     except Exception as exc:  # noqa: BLE001 — consolidar é acessório; a sync é o essencial
         db.rollback()
         logger.exception("Falha na consolidação de fichas-sombra (escola %s)", escola_id)
         contexto.log("identidade", "warn",
                      "A consolidação automática das fichas-sombra falhou nesta "
-                     "sincronização; o que foi importado está salvo e as fichas "
-                     "seguem como estavam ou como a auditoria registra.")
+                     "sincronização e nenhuma ficha foi fundida; o que foi "
+                     "importado está salvo. A próxima sincronização tenta de novo.")
         try:
             registrar(db, "aluno.consolidacao_automatica_falhou", escola_id=escola_id,
-                      usuario_id=ator_id, entidade="escola", entidade_id=escola_id,
+                      usuario_id=usuario_id, entidade="escola", entidade_id=escola_id,
                       detalhes={"origem": "sincronizacao", "erro": type(exc).__name__})
             db.commit()
         except Exception:  # noqa: BLE001 — nem a auditoria pode derrubar a sync
