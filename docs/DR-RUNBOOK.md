@@ -85,6 +85,7 @@ Ao final, anote a data do drill e o tempo que levou (seu **RTO** real) no §6.
 | Round-trip de **cifra/decifra** do backup (openssl AES-256, com acentos; senha errada não decifra) | ✅ **testado automaticamente** neste repositório |
 | Normalização da URL (`postgresql+psycopg` → `postgresql`) para o `pg_dump` | ✅ implementado |
 | **Restauração real** num Postgres + conferência de integridade | ⏳ **depende de você**: exige `pg_dump`/`psql` e um banco scratch — rode o `dr_drill.sh` no staging. Não foi possível executar no ambiente de desenvolvimento (sem cliente Postgres). |
+| **Ensaio de restauração do backup DIÁRIO** (o artefato real) | ✅ automático **depois do merge no `main`**: o job de `backup.yml` restaura o arquivo que acabou de gerar num PostgreSQL 17 descartável do próprio job (`verificar_restauracao.sh`) e confere a versão do Alembic e as contagens contra a origem (`contar_tabelas.sh`). A senha nunca sai do GitHub e o log só tem números. Falhou o ensaio → o job falha e o sinal de vida não é enviado. Os scripts são ensaiados em toda PR pelo job "Ensaio de restauração (dump sintético)" da CI. |
 
 ## 6. Metas
 
