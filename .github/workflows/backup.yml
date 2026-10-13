@@ -72,7 +72,10 @@ jobs:
           # para os passos seguintes (senão o pg_dump 16 é usado e dá mismatch).
           echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
-      - name: Contar linhas na origem (só números, sessão somente leitura)
+      - name: Contar linhas na origem (só números, transações somente leitura)
+        # NUNCA pode impedir o backup: se a contagem falhar, o backup segue e o
+        # ensaio, lá embaixo, reprova o job (depois de o artefato estar guardado).
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_RO }}
         run: bash backend/scripts/contar_tabelas.sh "$DATABASE_URL" > contagens_origem.txt
@@ -95,8 +98,16 @@ jobs:
         env:
           BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
           RESTORE_DATABASE_URL: postgresql://restauracao:restauracao@localhost:5432/restauracao_teste
-          CONTAGENS_ORIGEM: contagens_origem.txt
-        run: bash backend/scripts/verificar_restauracao.sh backups/*.enc
+        run: |
+          # Sem as contagens da origem a restauração ainda é ensaiada (decifra,
+          # aplica, versão do Alembic), mas o job reprova: faltou a comparação.
+          if [ -s contagens_origem.txt ]; then
+            CONTAGENS_ORIGEM=contagens_origem.txt bash backend/scripts/verificar_restauracao.sh backups/*.enc
+          else
+            bash backend/scripts/verificar_restauracao.sh backups/*.enc
+            echo "::error::A contagem da origem falhou: a restauração foi ensaiada, mas não comparada com a produção."
+            exit 1
+          fi
 
       - name: Sinal de vida (dead-man's-switch)
         # A cada backup BEM-SUCEDIDO, pinga um monitor externo (ex.: healthchecks.io,
@@ -123,7 +134,7 @@ jobs:
         run: |
           if [ -n "$ALERT_WEBHOOK" ]; then
             curl -fsS -m 15 -X POST -H 'Content-Type: application/json' \
-              -d '{"text":"⚠️ Constela Edu: o BACKUP diario do banco FALHOU. Verifique o GitHub Actions."}' \
+              -d '{"text":"⚠️ Constela Edu: o BACKUP diario do banco (ou o ensaio de restauracao dele) FALHOU. Verifique o GitHub Actions."}' \
               "$ALERT_WEBHOOK" || true
           else
             echo "BACKUP_ALERT_WEBHOOK não configurado — pulando o aviso de falha."

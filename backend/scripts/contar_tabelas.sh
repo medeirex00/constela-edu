@@ -5,21 +5,27 @@
 # (verificar_restauracao.sh).
 #
 # Uso: bash backend/scripts/contar_tabelas.sh <url-postgres>
-# Somente leitura: a sessão abre em READ ONLY.
+# Somente leitura: cada consulta roda dentro de BEGIN TRANSACTION READ ONLY …
+# COMMIT, na MESMA chamada. Não usa PGOPTIONS de propósito: um pooler de
+# conexões (ex.: o do Supabase) pode recusar parâmetros de inicialização, e a
+# transação explícita vale com ou sem pooler.
 set -euo pipefail
 
 URL="${1:?Informe a string de conexão do PostgreSQL.}"
 URL="${URL/postgresql+psycopg:\/\//postgresql://}"
 URL="${URL/postgres+psycopg:\/\//postgres://}"
 
-export PGOPTIONS="-c default_transaction_read_only=on"
-# `tr -d '\r'`: o psql do Windows encerra as linhas com CRLF.
-tabelas="$(psql "$URL" -X -Atq -v ON_ERROR_STOP=1 -c \
-  "SELECT table_name FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-    ORDER BY table_name" | tr -d '\r')"
+# Só o resultado do SELECT sai (-q cala BEGIN/COMMIT); `tr -d '\r'`: o psql do
+# Windows encerra as linhas com CRLF.
+ler() {
+  psql "$URL" -X -Atq -v ON_ERROR_STOP=1 \
+    -c "BEGIN TRANSACTION READ ONLY; $1; COMMIT;" | tr -d '\r'
+}
+
+tabelas="$(ler "SELECT table_name FROM information_schema.tables
+                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                 ORDER BY table_name")"
 
 for t in $tabelas; do
-  n="$(psql "$URL" -X -Atq -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.\"${t}\"" | tr -d '\r')"
-  echo "${t}=${n}"
+  echo "${t}=$(ler "SELECT count(*) FROM public.\"${t}\"")"
 done
