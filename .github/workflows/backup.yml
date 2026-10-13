@@ -78,7 +78,10 @@ jobs:
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_RO }}
-        run: bash backend/scripts/contar_tabelas.sh "$DATABASE_URL" > contagens_origem.txt
+        # Só vira contagens_origem.txt se TERMINAR: falha no meio não deixa arquivo parcial.
+        run: |
+          bash backend/scripts/contar_tabelas.sh "$DATABASE_URL" > contagens_origem.tmp
+          mv contagens_origem.tmp contagens_origem.txt
 
       - name: Gerar backup cifrado
         env:

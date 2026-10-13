@@ -93,6 +93,19 @@ echo "[restauração] ${total_tabelas} tabelas, ${total_linhas} linhas restaurad
 
 if [ -n "${CONTAGENS_ORIGEM:-}" ]; then
   [ -f "$CONTAGENS_ORIGEM" ] || { echo "[restauração] CONTAGENS_ORIGEM não encontrado." >&2; exit 2; }
+  # A contagem da origem tem de estar INTEIRA e VÁLIDA, senão a comparação
+  # abaixo aprovaria só uma parte: linha sem número ("tabela=") contaria como
+  # zero, e um arquivo que parou no meio conferiria só as tabelas que listou.
+  invalidas="$(grep -cvE '^[^=]+=[0-9]+$' "$CONTAGENS_ORIGEM" || true)"
+  if [ "$invalidas" != "0" ]; then
+    echo "[restauração] FALHOU: contagem da origem com ${invalidas} linha(s) sem número." >&2
+    exit 1
+  fi
+  tabelas_origem="$(grep -c '=' "$CONTAGENS_ORIGEM" || true)"
+  if [ "$tabelas_origem" -lt "$total_tabelas" ]; then
+    echo "[restauração] FALHOU: contagem da origem incompleta (${tabelas_origem} tabelas; restauradas ${total_tabelas})." >&2
+    exit 1
+  fi
   awk -F= '
     NR == FNR { restaurado[$1] = $2; next }
     {
