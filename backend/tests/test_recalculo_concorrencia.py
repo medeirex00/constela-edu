@@ -141,7 +141,11 @@ def test_namespaces_das_travas_nao_colidem():
 
 
 # --------------------------------------------------------------------------
-# 2. HIERARQUIA: nunca pegar 4713 segurando 4711 (senão dá deadlock cruzado).
+# 2. HIERARQUIA: a ordem é importação (4711) → recálculo (4713). Os endpoints de
+# importação comitam ANTES de recalcular (não seguram 4711 no recálculo); a
+# consolidação de sombras e o /resolver recalculam DENTRO da trava de
+# importação (fusão/dado e nota caem juntos) — permitido. O inverso, pedir 4711
+# segurando 4713, é o que fecharia o ciclo: proibido.
 # --------------------------------------------------------------------------
 @pytest.fixture()
 def vigia_hierarquia(monkeypatch):
@@ -240,12 +244,123 @@ def test_matriculas_confirmar_solta_a_trava_antes_de_recalcular(
     assert vigia_hierarquia["violacoes"] == []
 
 
+@pytest.fixture()
+def vigia_ordem_das_travas(monkeypatch):
+    """Registra a ORDEM em que as travas da escola são pedidas (``importacao`` =
+    4711, ``recalculo`` = 4713) e conta como violação pedir 4711 com 4713 já
+    segura — o sentido proibido. As travas são transacionais: caem no
+    commit/rollback."""
+    from sqlalchemy.orm import Session
+
+    from app.routers import importacoes as imp
+
+    estado = {"seguras": set(), "ordem": [], "violacoes": []}
+    trava_importacao_real = core_db.bloquear_escola_para_importacao
+    trava_recalculo_real = scoring.bloquear_escola_para_recalculo
+
+    def _importacao(sessao, eid):
+        if "recalculo" in estado["seguras"]:
+            estado["violacoes"].append(eid)
+        estado["seguras"].add("importacao")
+        estado["ordem"].append("importacao")
+        return trava_importacao_real(sessao, eid)
+
+    def _recalculo(sessao, eid):
+        estado["seguras"].add("recalculo")
+        estado["ordem"].append(("recalculo", "importacao" in estado["seguras"]))
+        return trava_recalculo_real(sessao, eid)
+
+    # A consolidação importa a trava de importação na hora da chamada (de
+    # core_db); o router a importou pelo nome; o scoring, a do recálculo.
+    monkeypatch.setattr(core_db, "bloquear_escola_para_importacao", _importacao)
+    monkeypatch.setattr(imp, "bloquear_escola_para_importacao", _importacao)
+    monkeypatch.setattr(scoring, "bloquear_escola_para_recalculo", _recalculo)
+    commit_real, rollback_real = Session.commit, Session.rollback
+
+    def _commit(self):
+        r = commit_real(self)
+        estado["seguras"].clear()
+        return r
+
+    def _rollback(self):
+        r = rollback_real(self)
+        estado["seguras"].clear()
+        return r
+
+    monkeypatch.setattr(Session, "commit", _commit)
+    monkeypatch.setattr(Session, "rollback", _rollback)
+    return estado
+
+
+def test_consolidacao_de_sombras_recalcula_dentro_da_trava_de_importacao(
+        db, escola_completa, vigia_ordem_das_travas):
+    """``consolidacao_sombras.aplicar`` pega 4711 e recalcula na MESMA transação
+    (fusão e nota caem juntas): a ordem permitida, 4711 → 4713, sem nunca pedir
+    4711 com 4713 segura."""
+    from app.models import Aluno, IdentidadeExterna, Matricula
+    from app.services import consolidacao_sombras as cs
+
+    escola, turma = escola_completa["escola"], escola_completa["turma"]
+    oficial = Aluno(escola_id=escola.id, nome="ZULEICA RAMONA TEODORO DA CUNHA",
+                    da_lista_piloto=True)
+    sombra = Aluno(escola_id=escola.id, nome="ZULEICA R", da_lista_piloto=False)
+    db.add_all([oficial, sombra])
+    db.flush()
+    for aluno in (oficial, sombra):
+        db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id, turma_id=turma.id,
+                         ano_letivo=2026))
+    db.add(IdentidadeExterna(escola_id=escola.id, aluno_id=sombra.id,
+                             plataforma="matific", id_externo="u-sombra"))
+    db.commit()
+    plano = cs.planejar(db, escola.id)
+    vigia_ordem_das_travas["ordem"].clear()
+    res = cs.aplicar(db, plano, usuario_id=None, origem="teste")
+    assert [x["sombra_id"] for x in res["consolidados"]] == [sombra.id]
+    # O recálculo foi pedido COM a trava de importação segura (o aninhamento
+    # documentado), e nunca o inverso.
+    assert vigia_ordem_das_travas["ordem"] == ["importacao", ("recalculo", True)]
+    assert vigia_ordem_das_travas["violacoes"] == []
+
+
+def test_resolver_de_revisao_recalcula_dentro_da_trava_de_importacao(
+        cliente, db, escola_completa, vigia_ordem_das_travas):
+    """O /resolver de revisão de identidade aplica o dado da pendência e
+    recalcula na MESMA transação (``commit=False``): 4711 → 4713, nunca o
+    inverso."""
+    from app.models import RevisaoIdentidade
+
+    escola, ana = escola_completa["escola"], escola_completa["alunos"][0]
+    rev = RevisaoIdentidade(
+        escola_id=escola.id, chave="elefante|id:8888|resumo||",
+        chave_identidade="elefante|id:8888", plataforma="elefante", formato="resumo",
+        id_externo="8888", nome_recebido="ANA BEATRIZ SOUZA", turma_informada="3ºA",
+        motivo="nome_casa_em_outra_sala", candidatos=[],
+        linhas=[{"turma_relatorio": "3ºA", "elefante_student_id": "8888",
+                 "livros_unicos": 9, "tempo_leitura_min": 45,
+                 "questoes_tentativas": 6, "questoes_acertos": 5}],
+        contexto={"tipo": "texto", "periodo_inicio": "", "periodo_fim": "",
+                  "data_referencia": "2026-09-22T16:51:00+00:00"},
+        origem="sincronizacao", status="pendente")
+    db.add(rev)
+    db.commit()
+    vigia_ordem_das_travas["ordem"].clear()
+    r = cliente.post(f"/api/v1/escolas/{escola.id}/importacoes/revisoes/{rev.id}/resolver",
+                     json={"aluno_id": ana.id})
+    assert r.status_code == 200, r.text
+    assert r.json()["importacoes"], "o /resolver não aplicou dado — teste inócuo"
+    ordem = vigia_ordem_das_travas["ordem"]
+    assert ordem[-1] == ("recalculo", True) and set(ordem[:-1]) == {"importacao"}
+    assert vigia_ordem_das_travas["violacoes"] == []
+
+
 def test_recalcular_recebe_transacao_limpa(cliente, cliente_global, db,
                                            escola_completa, monkeypatch):
-    """Todo chamador comita ANTES de recalcular: a sessão que entra em
-    ``recalcular_escola`` não tem escrita pendente. Importa porque a trava é
-    transacional — pendências arrastariam a transação (e o lock) para fora do
-    escopo do recálculo."""
+    """Todo chamador que não precisa recalcular na mesma transação comita ANTES
+    de recalcular: a sessão que entra em ``recalcular_escola`` não tem escrita
+    pendente. Importa porque a trava é transacional — pendências arrastariam a
+    transação (e o lock) para fora do escopo do recálculo. (A consolidação de
+    sombras e o /resolver recalculam com ``commit=False`` dentro da própria
+    transação, de propósito: seção 2.)"""
     pendencias: list[tuple] = []
     recalcular_real = scoring.recalcular_escola
 
