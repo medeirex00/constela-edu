@@ -59,12 +59,18 @@ Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
         ficha da Lista Piloto, ou numa ficha da MESMA turma, não isenta: a
         criança pode ter ganhado uma SEGUNDA conta (mudou de turma, saiu da
         escola, a gêmea fora da lista);
-      * na MESMA turma, nenhuma ficha de nome PARECIDO o bastante para ser a
-        dona (``_pode_ser_a_dona``: o mesmo prenome — ou com uma letra/grafia
-        de diferença — e cada nome seguinte de S começando um nome posterior
+      * nenhuma ficha de nome PARECIDO o bastante para ser a dona
+        (``_pode_ser_a_dona``: o mesmo prenome — ou com uma letra/grafia de
+        diferença — e cada nome seguinte de S começando um nome posterior
         dela, sem contar DE/DA/DOS). "TEOBALDO O" pode ser "TEOBALDO DE
         OLIVEIRA SOUSA" mesmo casando "forte" só com "TEOBALDO OTAVIO LIMA", e
-        "KETLYN S" pode ser "KETLIN SOFIA";
+        "KETLYN S" pode ser "KETLIN SOFIA". Vale na MESMA turma
+        (``nome_parecido_na_turma``) e FORA dela — nas turmas da mesma série e
+        nas fichas sem matrícula no ano ativo (``nome_parecido_fora_da_turma``):
+        a dona real pode ter mudado de sala e a conta ter ficado na classe
+        antiga, o mesmo motivo por que o "forte" olha a escola inteira. Fora
+        da turma, a mesma isenção do "forte": a ficha fora da Lista Piloto com
+        conta própria em todas as plataformas de S não bloqueia;
       * as outras sombras da MESMA oficial (fora da lista, ativas, na turma,
         "forte" com O) não bloqueiam desde que também sejam consolidáveis — mas
         se um identificador ESTÁVEL (nascimento/RA) prova que duas delas são
@@ -97,8 +103,14 @@ Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
           REPETIR EXATAMENTE o último da anterior nos quatro contadores
           (livros, minutos, questões tentadas e acertadas), com algum acima
           de zero (``contadores_diferentes_no_limite``,
-          ``_SO_IGUALDADE_NO_LIMITE``); (iv) no máximo 31 dias entre o
-          último retrato da anterior e o primeiro da posterior; (v) nenhum
+          ``_SO_IGUALDADE_NO_LIMITE``) — e o retrato repetido tem de carregar
+          informação: as questões, que quase nunca caem, no MAIOR valor da
+          anterior (``queda_no_limite``: o último retrato que caiu para um
+          valor pequeno é o que a conta nova de outra criança repetiria), e
+          pelo menos 10 livros, com minutos e questões tentadas acima de zero
+          (``limite_pouco_informativo``); (iv) no máximo 31 dias entre o
+          último retrato da anterior e o primeiro da posterior — no Elefante,
+          2 (o padrão medido é o dia seguinte); (v) nenhum
           outro dado de P na anterior (leitura, evento) do dia do primeiro
           retrato da posterior em diante; (vi) o simétrico: todo dado de P
           da POSTERIOR (leitura, evento) de dia ANTERIOR ao do último retrato
@@ -112,8 +124,10 @@ Uma sombra S é CONSOLIDADA na oficial O quando TODAS valem:
       a 31/07, a sombra o tem com a conta de 01/08 em diante e os contadores
       do limite são iguais (ou crescem) — é a mesma conta, não duas. No
       Elefante, 6 dos 8 pares reais têm o 1º retrato da sombra IDÊNTICO ao
-      último da oficial nos quatro contadores; os 2 em que eles crescem ficam,
-      de propósito, para a revisão humana. A mesma
+      último da oficial nos quatro contadores, no dia seguinte, com as
+      questões no maior valor da oficial e no mínimo 45 livros, 6 minutos e
+      34 questões tentadas; os 2 em que eles crescem ficam, de propósito,
+      para a revisão humana. A mesma
       regra vale entre duas sombras da mesma O que dividem uma plataforma: as
       duas com conta nela → CONFLITO; só uma com conta → ela tem de ser a
       POSTERIOR (a por nome antes, a conta depois, como com a oficial); sem
@@ -147,12 +161,18 @@ maior contador da oficial (iii), a oficial zerada (iii) e a ordem inversa
 mandar dado só DEPOIS do último retrato da oficial e, até o primeiro retrato
 dela (no máximo 31 dias), já passou de TODOS os contadores acumulados que a
 oficial tinha no ano. Para a oficial com contador baixo isso é possível. No
-Elefante a porta é mais estreita — a conta da outra criança teria de começar
-com os QUATRO contadores iguais aos do último retrato da oficial —, mas, com
-contadores baixos, não é impossível. O que segura esse caso é o resto da regra
-(o nome na forma do relatório na mesma turma, ninguém mais que possa ser a
-dona, a Lista Piloto) e a política da escola, que nasce "manual". Ver
-``test_falsificacao_de_continuidade``.
+Elefante a igualdade é a ÚNICA prova numérica e, sozinha, seria FROUXA, não
+estreita: com três contadores em zero, "repetir os quatro" é repetir um número
+pequeno, e o último retrato da oficial que CAIU para um valor pequeno (a queda
+é comum lá) é justamente o que a conta nova de outra criança repetiria. Por
+isso, no Elefante, o retrato repetido precisa carregar informação (piso; as
+questões no maior valor da oficial) e a janela é de 2 dias. O que continua
+possível: a conta de outra criança que começa, em até 2 dias, com os QUATRO
+contadores iguais aos do último retrato da oficial, acima do piso e com as
+questões no maior valor dela — uma coincidência de quatro números. O que segura
+esses casos é o resto da regra (o nome na forma do relatório na mesma turma,
+ninguém mais que possa ser a dona, a Lista Piloto) e a política da escola, que
+nasce "manual". Ver ``test_falsificacao_de_continuidade``.
 
 O DESTINO de cada ficha ativa fora da Lista Piloto matriculada no ano ativo:
 CONSOLIDAR (com as evidências), REVISAR (motivo), CONFLITO (motivo) ou SEM_PAR
@@ -222,6 +242,10 @@ MOTIVOS = {
     "oficial_em_outra_turma": "a ficha da Lista Piloto compatível está em outra turma",
     "nome_parecido_na_turma": "na turma há ficha de nome parecido que também pode ser "
                               "a dona (grafia diferente, partícula, nome parcial)",
+    "nome_parecido_fora_da_turma": "em outra turma da mesma série (ou sem matrícula no "
+                                   "ano) há ficha de nome parecido que também pode ser a "
+                                   "dona: a criança pode ter mudado de sala e a conta ter "
+                                   "ficado na classe antiga",
     "identificador_divergente": "nº de chamada, nascimento ou RA divergem dos da "
                                 "ficha oficial",
     "decisao_humana_na_sombra": "uma pessoa já escolheu esta ficha numa revisão de "
@@ -274,8 +298,16 @@ MOTIVOS = {
                                        "acumulados (podem cair na mesma conta): só o "
                                        "primeiro retrato de uma ficha REPETINDO o último "
                                        "da outra prova que é a mesma conta",
-    "intervalo_longo": "mais de 31 dias entre o último retrato de uma ficha e o "
-                       "primeiro da outra: não há como provar que é a mesma conta",
+    "queda_no_limite": "o retrato repetido no limite tem as questões (que no Elefante "
+                       "quase nunca caem) abaixo do maior valor da ficha anterior: o "
+                       "último retrato dela caiu, e o valor caído é o que a conta nova "
+                       "de outra criança pode repetir por acaso",
+    "limite_pouco_informativo": "o retrato repetido no limite carrega pouca informação "
+                                "(menos de 10 livros, ou minutos ou questões em zero): a "
+                                "conta nova de outra criança pode coincidir com ele",
+    "intervalo_longo": "intervalo longo demais entre o último retrato de uma ficha e o "
+                       "primeiro da outra (mais de 31 dias; no Elefante, mais de 2): "
+                       "não há como provar que é a mesma conta",
     "leitura_repetida_nas_duas_fichas": "o mesmo livro lido nas duas fichas com data, "
                                         "tempo ou nível diferentes: a fusão descartaria "
                                         "uma das leituras",
@@ -320,11 +352,36 @@ _CONTADORES = {
 # no limite ficam, de propósito, para a revisão humana.
 _SO_IGUALDADE_NO_LIMITE = frozenset({"elefante"})
 
+# Nessas plataformas a igualdade do limite é a ÚNICA prova numérica — e, sozinha,
+# ela é frouxa onde o retrato carrega pouca informação. Com três contadores em
+# zero, "repetir os quatro" vira repetir UM número pequeno (1 livro; 1 questão; 3
+# minutos), e a conta NOVA de outra criança começa justamente aí. Por isso o
+# retrato repetido tem de passar de um PISO por contador (livros >= 10, minutos e
+# questões tentadas acima de zero: ``limite_pouco_informativo``). Calibrado nos 6
+# pares reais do Elefante que repetem o limite (12/10, somente leitura): o menor
+# tem 45 livros, 6 minutos e 34 questões tentadas — nenhum cai.
+_PISO_DO_LIMITE = {"elefante": {"livros_unicos": 10, "tempo_leitura_min": 1,
+                                "questoes_tentativas": 1}}
+
+# Os contadores que, mesmo nessas plataformas, quase nunca caem na MESMA ficha:
+# no Elefante, as questões (medido, 12/10: 10 quedas de cada uma na rede inteira,
+# contra 132 de livros e 211 de minutos) — e nos 6 pares reais que repetem o
+# limite elas estão no MAIOR valor da oficial. O retrato repetido com questões
+# abaixo do maior valor da anterior é o último retrato que CAIU, e o valor caído
+# (pequeno) é o que a conta nova de outra criança pode repetir por acaso
+# (``queda_no_limite``). Livros e minutos ficam de fora: caem nos pares reais
+# (60 → 45 livros; os minutos caem em todos os 6).
+_SEM_QUEDA_NO_LIMITE = {"elefante": ("questoes_tentativas", "questoes_acertos")}
+
 # Maior intervalo (em dias) entre o último retrato da ficha anterior e o primeiro
 # da posterior em que a continuidade ainda é aceita. Medido em 12/10: nos pares
 # reais a sombra começa no dia seguinte ao último retrato da oficial; um mês sem
 # coleta já não prova que a conta é a mesma.
 INTERVALO_MAXIMO_DIAS = 31
+# No Elefante — onde a igualdade é a única prova —, a janela é a do padrão
+# medido: nos 8 pares reais a sombra começa no dia SEGUINTE (D+1) ao último
+# retrato da oficial. 31 dias só ampliariam a chance de outra conta coincidir.
+_INTERVALO_MAXIMO_POR_PLATAFORMA = {"elefante": 2}
 
 
 @dataclass
@@ -490,6 +547,10 @@ class _Estado:
     tokens: dict[int, list[str]] = field(default_factory=dict)
     turmas_de: dict[int, list[int]] = field(default_factory=dict)  # no ano ativo
     da_turma: dict[int, list[int]] = field(default_factory=dict)   # turma → fichas
+    # Série (número) de cada turma da escola; None = não dá para dizer.
+    serie_da_turma: dict[int, int | None] = field(default_factory=dict)
+    # Prenome → fichas (não excluídas): poda da relação frouxa fora da turma.
+    por_prenome: dict[str, set[int]] = field(default_factory=dict)
     # aluno → plataforma → [(id_externo, status)] — efetivas E aposentadas
     contas: dict[int, dict[str, list[tuple[str, str]]]] = field(default_factory=dict)
     # aluno → plataformas em que há DADO dele (snapshot, leitura, evento), com ou
@@ -579,8 +640,14 @@ def _carregar(db: Session, escola_id: int) -> _Estado:
     # ficha sem turma única, fica como está). Acento e caixa já saem em
     # ``tokens_nome``: "MAGALHaES" (a vogal acentuada que a plataforma perdeu) e
     # "MAGALHÃES" dão o mesmo token.
-    nome_da_turma = dict(db.execute(select(Turma.id, Turma.nome)
-                                    .where(Turma.escola_id == escola_id)).all())
+    from app.services.dificuldade_livro import serie_numero
+    nome_da_turma: dict[int, str] = {}
+    for turma_id, nome_turma, ano_escolar in db.execute(
+            select(Turma.id, Turma.nome, Turma.ano_escolar)
+            .where(Turma.escola_id == escola_id)).all():
+        nome_da_turma[turma_id] = nome_turma
+        serie = serie_numero(ano_escolar)
+        est.serie_da_turma[turma_id] = serie if serie is not None else serie_numero(nome_turma)
     for aluno_id, aluno in est.alunos.items():
         turmas = list(dict.fromkeys(est.turmas_de.get(aluno_id, ())))
         sala = chave_sala(nome_da_turma.get(turmas[0], "")) if len(turmas) == 1 else ""
@@ -591,6 +658,7 @@ def _carregar(db: Session, escola_id: int) -> _Estado:
         toks = tokens_nome(nome)
         est.tokens[aluno_id] = toks
         if toks:
+            est.por_prenome.setdefault(toks[0], set()).add(aluno_id)
             est.por_inicial.setdefault(toks[0][0], set()).add(aluno_id)
             est.por_tokens.setdefault(frozenset(toks), set()).add(aluno_id)
             est.por_sem_particulas.setdefault(_sem_particulas(toks), set()).add(aluno_id)
@@ -820,8 +888,15 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
           algum contador acima de zero (``contadores_zerados``) e o 1º retrato
           da posterior o repete em todos os contadores
           (``contadores_diferentes_no_limite``) — o máximo da anterior não
-          entra: a queda DENTRO dela é a mesma conta, não prova nada;
-      (iv) no máximo ``INTERVALO_MAXIMO_DIAS`` entre os dois (``intervalo_longo``);
+          entra nos contadores que caem na mesma conta (livros, minutos). Mas
+          o retrato repetido tem de carregar informação: nos contadores que
+          quase nunca caem (``_SEM_QUEDA_NO_LIMITE``: as questões) ele está no
+          maior valor da anterior (``queda_no_limite`` — o último retrato que
+          caiu para um valor pequeno não serve de prova), e passa do piso de
+          ``_PISO_DO_LIMITE`` (``limite_pouco_informativo``);
+      (iv) no máximo ``INTERVALO_MAXIMO_DIAS`` entre os dois — no Elefante,
+          ``_INTERVALO_MAXIMO_POR_PLATAFORMA`` (2 dias: o padrão medido é D+1)
+          (``intervalo_longo``);
       (v) a anterior não tem outro dado da plataforma (leitura, evento) do dia
           do primeiro retrato da posterior em diante
           (``dados_simultaneos_mesma_plataforma``);
@@ -843,19 +918,28 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
     if anterior_exigida is not None and ant != anterior_exigida:
         return _Continuidade("ordem_invertida")
     dias = (primeiro.dia - ultimo.dia).days
-    if dias > INTERVALO_MAXIMO_DIAS:
+    if dias > _INTERVALO_MAXIMO_POR_PLATAFORMA.get(plataforma, INTERVALO_MAXIMO_DIAS):
         return _Continuidade("intervalo_longo")
+    campos = _CONTADORES[plataforma][1]
     if plataforma in _SO_IGUALDADE_NO_LIMITE:
         # Contador que cai dentro da mesma conta: comparar com o máximo barraria
         # a conta legítima e "crescer" não provaria nada — só a repetição exata
-        # do último retrato da anterior (com algo acima de zero) prova. A
-        # referência é o último (não o máximo): a evidência sai sempre
-        # "iguais", sem ``maximos_anterior``.
+        # do último retrato da anterior prova. A referência é o último (não o
+        # máximo): a evidência sai sempre "iguais", sem ``maximos_anterior``.
+        # E o repetido tem de CARREGAR informação: as questões (que quase não
+        # caem) no maior valor da anterior, e acima do piso.
         maximos = ultimo.contadores
         if not any(ultimo.contadores):
             return _Continuidade("contadores_zerados")
         if primeiro.contadores != ultimo.contadores:
             return _Continuidade("contadores_diferentes_no_limite")
+        for campo in _SEM_QUEDA_NO_LIMITE.get(plataforma, ()):
+            i = campos.index(campo)
+            if ultimo.contadores[i] < max(r.contadores[i] for r in r_ant):
+                return _Continuidade("queda_no_limite")
+        if any(ultimo.contadores[campos.index(campo)] < piso
+               for campo, piso in _PISO_DO_LIMITE.get(plataforma, {}).items()):
+            return _Continuidade("limite_pouco_informativo")
     else:
         maximos = tuple(max(valores) for valores in zip(*(r.contadores for r in r_ant)))
         if not any(maximos):
@@ -869,7 +953,6 @@ def _continuidade(db: Session, est: _Estado, a: int, b: int, plataforma: str,
         return _Continuidade("dados_simultaneos_mesma_plataforma")
     if plataforma == "elefante" and _leituras_divergentes(db, est, a, b):
         return _Continuidade("leitura_repetida_nas_duas_fichas")
-    campos = _CONTADORES[plataforma][1]
     evidencia = {
         "ficha_anterior": papeis.get(ant, str(ant)),
         "ultimo_retrato_anterior": ultimo.dia.isoformat(),
@@ -916,6 +999,35 @@ def _irmas(est: _Estado, sid: int, o: Aluno, turma: int) -> tuple[int, ...]:
         and not est.alunos[i].da_lista_piloto and est.alunos[i].status == "ativo"
         and est.turmas_de.get(i) == [turma]
         and est.forte(i, o.id))
+
+
+def _fora_da_turma(est: _Estado, fid: int, turma: int) -> bool:
+    """A ficha ``fid`` está FORA de ``turma``, mas onde a dona real de uma ficha
+    de ``turma`` pode ter ido parar: numa turma da MESMA série no ano ativo, ou
+    sem matrícula no ano. Série que não se lê (de um lado ou do outro) conta
+    como a mesma — na dúvida, a ficha segura o par."""
+    turmas = est.turmas_de.get(fid)
+    if not turmas:
+        return True
+    if turma in turmas:
+        return False
+    serie = est.serie_da_turma.get(turma)
+    return any(serie is None or est.serie_da_turma.get(t) is None
+               or est.serie_da_turma.get(t) == serie for t in turmas)
+
+
+def _parecidas_fora_da_turma(est: _Estado, ts: list[str], turma: int) -> list[int]:
+    """As fichas fora de ``turma`` (``_fora_da_turma``) que PODEM ser a dona do
+    nome ``ts`` (``_pode_ser_a_dona``). O índice por prenome só poda quem não
+    teria prenome próximo — sem mudar o veredito."""
+    if not ts:
+        return []
+    candidatas: set[int] = set()
+    for prenome, fichas in est.por_prenome.items():
+        if _prenome_proximo(ts[0], prenome):
+            candidatas |= fichas
+    return sorted(i for i in candidatas
+                  if _fora_da_turma(est, i, turma) and _pode_ser_a_dona(ts, est.tokens[i]))
 
 
 def _conflito_de_plataformas(db: Session, est: _Estado, sid: int, oid: int,
@@ -1043,18 +1155,22 @@ def _classificar(db: Session, est: _Estado, sid: int) -> Item:
         # Duas "sombras" da mesma oficial que são crianças DIFERENTES: no máximo
         # uma é a oficial — escolher pela ordem dos ids seria fundir no escuro.
         return Item(sid, REVISAR, "sombras_distintas", relacionados=distintas, **par)
+
+    def conta_propria_isenta(fid: int) -> bool:
+        # Só a ficha FORA da Lista Piloto, de OUTRA turma, com conta própria em
+        # todas as plataformas da sombra, fica de fora: é a sombra de outra
+        # criança, com a conta dela. Na Lista Piloto ou na mesma turma, conta
+        # própria não prova nada — a criança pode ter ganhado uma 2ª conta.
+        return (not est.alunos[fid].da_lista_piloto
+                and turma not in est.turmas_de.get(fid, ())
+                and bool(contas_s) and all(est.tem_efetiva(fid, p) for p in contas_s))
+
     com_conta_propria: list[int] = []
     bloqueadoras: list[int] = []
     for fid in fortes:
         if fid == oid or fid in irmas or estavel_diverge(fid):
             continue
-        f = est.alunos[fid]
-        # Só a ficha FORA da Lista Piloto, de OUTRA turma, com conta própria em
-        # todas as plataformas da sombra, fica de fora: é a sombra de outra
-        # criança, com a conta dela. Na Lista Piloto ou na mesma turma, conta
-        # própria não prova nada — a criança pode ter ganhado uma 2ª conta.
-        if (not f.da_lista_piloto and turma not in est.turmas_de.get(fid, ())
-                and contas_s and all(est.tem_efetiva(fid, p) for p in contas_s)):
+        if conta_propria_isenta(fid):
             com_conta_propria.append(fid)
             continue
         bloqueadoras.append(fid)
@@ -1068,6 +1184,16 @@ def _classificar(db: Session, est: _Estado, sid: int) -> Item:
     if parecidas:
         return Item(sid, REVISAR, "nome_parecido_na_turma",
                     relacionados=(oid, *parecidas), **par)
+    # A mesma relação frouxa FORA da turma — nas turmas da mesma série e nas
+    # fichas sem matrícula no ano: a dona real que mudou de sala, com a conta
+    # que ficou na classe antiga (o mesmo motivo por que o "forte" olha a escola
+    # inteira). Com a mesma isenção do "forte".
+    fora = tuple(i for i in _parecidas_fora_da_turma(est, ts, turma)
+                 if i not in vistas and not estavel_diverge(i)
+                 and not conta_propria_isenta(i))
+    if fora:
+        return Item(sid, REVISAR, "nome_parecido_fora_da_turma",
+                    relacionados=(oid, *fora), **par)
     if _quest_nos_dois(db, sid, oid):
         return Item(sid, REVISAR, "quest_nos_dois", **par)
     # A forma do nome que precisou ser normalizada para o par casar (só rótulos).
@@ -1287,13 +1413,20 @@ def aplicar(db: Session, plano: Plano, *, usuario_id: int | None, origem: str,
             select(Aluno.id).where(Aluno.escola_id == escola_id,
                                    Aluno.id.in_((item.sombra_id, item.oficial_id)))
             .with_for_update()).scalars())
+        existem = travadas == {item.sombra_id, item.oficial_id}
         atual = (planejar(db, escola_id).item_da_sombra(item.sombra_id)
-                 if travadas == {item.sombra_id, item.oficial_id} else None)
+                 if existem else None)
         if (atual is None or atual.classe != CONSOLIDAR
                 or atual.assinatura != item.assinatura):
+            # Sem item no plano atual: ou uma das fichas não existe mais, ou a
+            # sombra existe mas saiu do alvo do plano (entrou na Lista Piloto,
+            # deixou de estar ativa, perdeu a matrícula do ano) — rótulos
+            # diferentes, para a auditoria não dizer que some uma ficha viva.
+            motivo_atual = ((atual.motivo or None) if atual
+                            else "fora_do_alvo" if existem else "ficha_inexistente")
             pulado = {"sombra_id": item.sombra_id, "oficial_id": item.oficial_id,
                       "classe_atual": atual.classe if atual else None,
-                      "motivo_atual": (atual.motivo or None) if atual else "ficha_inexistente"}
+                      "motivo_atual": motivo_atual}
             registrar(db, "aluno.consolidacao_pulada", escola_id=escola_id,
                       usuario_id=usuario_id, entidade="aluno", entidade_id=item.sombra_id,
                       detalhes={**pulado, "origem": origem, "motivo": "estado_mudou"})

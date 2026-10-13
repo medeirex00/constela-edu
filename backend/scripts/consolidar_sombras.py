@@ -29,15 +29,25 @@ tinha o Matific ligado por NOME até 31/07, antes de a sombra existir. Agora:
   132 quedas de livros e 211 de minutos entre retratos seguidos —, o 1º
   retrato da sombra REPETE EXATAMENTE o último da oficial nos quatro
   contadores (livros, minutos, questões tentadas e acertadas), com algum
-  acima de zero. Dos 8 pares reais do Elefante, 6 repetem; os 2 em que os
-  contadores crescem ficam, de propósito, para a revisão humana. Senão,
-  CONFLITO com o motivo (``dados_simultaneos_mesma_plataforma``,
-  ``ordem_invertida``, ``contadores_zerados``, ``contador_regrediu``,
-  ``contadores_diferentes_no_limite``, ``intervalo_longo``,
+  acima de zero — e (iteração 5) o retrato repetido carrega informação: as
+  questões, que quase nunca caem, no maior valor da oficial (o último retrato
+  que caiu para um valor pequeno não prova nada), pelo menos 10 livros,
+  minutos e questões tentadas acima de zero, e no máximo 2 dias entre os dois
+  (o padrão medido é o dia seguinte). Dos 8 pares reais do Elefante, 6
+  repetem e passam em tudo; os 2 em que os contadores crescem ficam, de
+  propósito, para a revisão humana. Senão, CONFLITO com o motivo
+  (``dados_simultaneos_mesma_plataforma``, ``ordem_invertida``,
+  ``contadores_zerados``, ``contador_regrediu``,
+  ``contadores_diferentes_no_limite``, ``queda_no_limite``,
+  ``limite_pouco_informativo``, ``intervalo_longo``,
   ``continuidade_sem_retrato``, ``leitura_repetida_nas_duas_fichas``,
   ``duas_contas_mesma_plataforma``). Entre duas sombras da mesma oficial: a
   por nome antes da que tem a conta, no mesmo sentido em todas as plataformas
   (``ordem_cruzada_entre_sombras``); elas são fundidas nessa ordem;
+* a DONA real que o nome "forte" não enxerga (partícula, uma letra no
+  prenome, nome do meio pulado) segura a sombra na mesma turma e também
+  (iteração 5) nas turmas da mesma série e nas fichas sem matrícula no ano
+  (``nome_parecido_fora_da_turma``): a criança pode ter mudado de sala;
 * nome IDÊNTICO com dado só consolida continuando dado ANTERIOR da oficial;
 * FORMA DO NOME: o sufixo da turma no fim do nome ("… 2B"), a partícula a
   menos (DE/DA/DO/DAS/DOS — o "E" isolado não, ambíguo com uma inicial) e a
@@ -51,11 +61,12 @@ A linha de cada CONSOLIDAR mostra a continuidade por plataforma (dias do
 limite, intervalo, contadores iguais/crescentes — no Elefante, só iguais).
 RISCO que os dados não eliminam: a conta NOVA de outra criança que só começa a
 mandar dado depois do último retrato da oficial e, no primeiro retrato, já
-passou de todos os contadores que a oficial tinha no ano (no Matific) — ou
-começa com os quatro contadores iguais aos do último retrato dela (no
-Elefante) — passaria como continuidade (possível quando a oficial tem
-contador baixo) — por isso a conferência das linhas antes de ``--aplicar``
-continua obrigatória.
+passou de todos os contadores que a oficial tinha no ano (no Matific; possível
+quando a oficial tem contador baixo) — ou começa, em até 2 dias, com os quatro
+contadores iguais aos do último retrato dela, acima do piso e com as questões
+no maior valor dela (no Elefante; uma coincidência de quatro números) —
+passaria como continuidade. Por isso a conferência das linhas antes de
+``--aplicar`` continua obrigatória.
 
 Garantias
 ---------

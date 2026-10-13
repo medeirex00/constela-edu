@@ -56,7 +56,17 @@ O que estes testes travam:
     contador só — é CONFLITO ``contadores_diferentes_no_limite``; tudo zero,
     ``contadores_zerados``; a queda DENTRO da série da oficial não atrapalha. O
     Matific segue a regra do maior contador (crescente consolida). Os testes
-    do Elefante que exercitam OUTRA trava passam a montar o limite repetido.
+    do Elefante que exercitam OUTRA trava passam a montar o limite repetido;
+  * (iteração 5, 3ª revisão adversarial) no Elefante o retrato repetido tem
+    de carregar informação: as questões (que quase nunca caem) no maior valor
+    da oficial (``queda_no_limite`` — o último retrato que caiu para um valor
+    pequeno não prova nada) e um piso (10 livros, minutos e questões acima de
+    zero: ``limite_pouco_informativo``), numa janela de 2 dias (o padrão
+    medido é D+1). Os 6 limites reais que se repetem continuam consolidando.
+    A dona real escondida do "forte" segura a sombra também FORA da turma (na
+    mesma série, ou sem matrícula no ano). O pulo da ficha viva que saiu do
+    alvo é ``fora_do_alvo``, não ``ficha_inexistente``, e o placar ao vivo
+    liga a linha pela conta depois da consolidação.
 
 Nomes FICTÍCIOS, montados para o teste (nenhum é de aluno real). As datas e os
 contadores seguem o PADRÃO medido em produção (12/10), não dados de criança.
@@ -67,7 +77,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
@@ -364,6 +374,30 @@ def test_idempotente_a_segunda_execucao_nao_acha_nada(db, padrao):
     res = _aplicar(db, e, plano)
     assert res == {"escola_id": e.id, "consolidados": [], "pulados": []}
     assert len(_logs(db, "aluno.consolidado_automatico")) == n_logs
+
+
+def test_placar_ao_vivo_liga_a_linha_pela_conta_depois_da_consolidacao(db, padrao):
+    """O placar AO VIVO do Matific (premiação por período) recebe a linha com o
+    nome do relatório ("ZULEICA R") e o uuid da conta. Depois da consolidação a
+    ficha com esse nome não existe mais: o link vem do uuid, que passou para a
+    oficial. (Antes, ligado só pelo nome, a linha da criança consolidada ficava
+    sem link nenhum.)"""
+    from app.sync import aovivo
+    c = padrao
+    e = c["escola"]
+    linha = {"nome": SOMBRA_Z, "uuid": "u-sombra-zuleica", "turma": "2B",
+             "estrelas": 40, "atividades": 12}
+
+    def link():
+        [item] = aovivo._montar_ranking([dict(linha)],
+                                        aovivo._mapa_nome_para_aluno(db, e.id, ANO),
+                                        aovivo._mapa_uuid_para_aluno(db, e.id, ANO))
+        return item["aluno_id"]
+
+    assert link() == c["sombra_z"].id
+    assert len(_aplicar(db, e)["consolidados"]) == 2
+    db.expire_all()
+    assert link() == c["oficial_z"].id
 
 
 # --- 2. nunca junta crianças diferentes ----------------------------------------
@@ -689,6 +723,8 @@ def test_oficial_abreviada_com_ficha_completa_nao_consolida(db, esc):
     # Decisão 3: a dona real tem UMA letra diferente no prenome (KETLIN × KETLYN)
     # — o caso que segue manual não pode ser resolvido sozinho para outra criança.
     ("KETLIN SOFIA FALCAO", "KETLYN SAMARA COSTA", "KETLYN S"),
+    # O professor digitou no Matific só o primeiro e o ÚLTIMO nome da dona.
+    ("TEOBALDO DE OLIVEIRA SOUSA", "TEOBALDO SILVA MOURA", "TEOBALDO S"),
 ])
 def test_dona_real_invisivel_ao_forte_segura_a_sombra(db, esc, dona_nome, colega_nome,
                                                       sombra_nome):
@@ -704,6 +740,72 @@ def test_dona_real_invisivel_ao_forte_segura_a_sombra(db, esc, dona_nome, colega
     assert set(item.relacionados) == {colega.id, dona.id}
     assert _aplicar(db, e)["consolidados"] == []
     assert _dono(db, e, "matific", "u-sombra") == sombra.id      # a conta não andou
+
+
+@pytest.mark.parametrize("dona_nome, colega_nome, sombra_nome", [
+    ("TEOBALDO DE OLIVEIRA SOUSA", "TEOBALDO OTAVIO LIMA", "TEOBALDO O"),
+    ("GERVASIO HENRIQUE DOS SANTOS", "GERVASIO HENRIQUE SOARES LIMA", "GERVASIO HENRIQUE S"),
+    ("KETLIN SOFIA FALCAO", "KETLYN SAMARA COSTA", "KETLYN S"),
+    ("TEOBALDO DE OLIVEIRA SOUSA", "TEOBALDO SILVA MOURA", "TEOBALDO S"),
+])
+@pytest.mark.parametrize("onde", ["outra_turma_da_mesma_serie", "sem_matricula_no_ano"])
+def test_dona_real_invisivel_ao_forte_fora_da_turma_segura_a_sombra(
+        db, esc, dona_nome, colega_nome, sombra_nome, onde):
+    """Iteração 5 (3ª revisão adversarial): a dona real, da Lista Piloto, MUDOU
+    para outra turma da mesma série — ou está sem matrícula no ano — e a conta
+    do Matific ficou na classe antiga (2ºB), onde a sincronização criou a
+    sombra. O "forte" só enxerga o colega de mesmo prenome, e a relação frouxa
+    só olhava a MESMA turma: a conta da dona era fundida no colega, que é outra
+    criança. Agora a relação frouxa olha também a mesma série e quem está sem
+    matrícula no ano (o mesmo motivo por que o "forte" olha a escola inteira):
+    revisão, sem fundir nada."""
+    e, b = esc["escola"], esc["b"]
+    if onde == "outra_turma_da_mesma_serie":
+        dona = _aluno(db, e, _turma(db, e, "2º Ano A", "2º Ano"), dona_nome, chamada=3)
+    else:
+        dona = _aluno(db, e, None, dona_nome, chamada=3)
+    colega = _aluno(db, e, b, colega_nome, chamada=4)
+    sombra = _aluno(db, e, b, sombra_nome, lp=False)
+    _conta(db, e, sombra, "matific", "u-sombra")
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo, item.oficial_id, item.relacionados) == (
+        cs.REVISAR, "nome_parecido_fora_da_turma", colega.id, (colega.id, dona.id))
+    assert _aplicar(db, e)["consolidados"] == []
+    assert _dono(db, e, "matific", "u-sombra") == sombra.id      # a conta não andou
+
+
+@pytest.mark.parametrize("cenario, classe, motivo", [
+    # Fora da Lista Piloto e SEM conta própria, em outra turma da série: pode ser
+    # a dona.
+    ("fora_da_lista_sem_conta", cs.REVISAR, "nome_parecido_fora_da_turma"),
+    # Na Lista Piloto, conta própria não isenta: a criança pode ter ganhado uma
+    # SEGUNDA conta na turma nova.
+    ("lista_piloto_com_conta_propria", cs.REVISAR, "nome_parecido_fora_da_turma"),
+    # Fora da Lista Piloto, com a conta própria do Matific: é a sombra de OUTRA
+    # criança, com a conta dela — a mesma isenção do "forte".
+    ("fora_da_lista_com_conta_propria", cs.CONSOLIDAR, ""),
+    # Outra SÉRIE: a criança não muda de série no meio do ano. O "forte" segue
+    # olhando a escola inteira; a relação frouxa, mais larga, fica na série.
+    ("lista_piloto_em_outra_serie", cs.CONSOLIDAR, ""),
+])
+def test_relacao_frouxa_fora_da_turma_isenta_so_quem_a_regra_c_isenta(db, esc, cenario,
+                                                                       classe, motivo):
+    e, b = esc["escola"], esc["b"]
+    turma = esc["a4"] if cenario == "lista_piloto_em_outra_serie" else _turma(
+        db, e, "2º Ano A", "2º Ano")
+    outra = _aluno(db, e, turma, "TEOBALDO DE OLIVEIRA SOUSA",
+                   lp=cenario.startswith("lista_piloto"))
+    if cenario.endswith("com_conta_propria"):
+        _conta(db, e, outra, "matific", "u-teobaldo-outra")
+    colega = _aluno(db, e, b, "TEOBALDO OTAVIO LIMA", chamada=4)
+    sombra = _aluno(db, e, b, "TEOBALDO O", lp=False)
+    _conta(db, e, sombra, "matific", "u-sombra")
+    db.commit()
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo, item.oficial_id) == (classe, motivo, colega.id)
+    if classe == cs.REVISAR:
+        assert item.relacionados == (colega.id, outra.id)
 
 
 @pytest.mark.parametrize("nome_da_segunda_conta", ["ODILA SO", "ODILA SOFIA L"])
@@ -766,7 +868,12 @@ def test_oficial_com_dado_legado_na_plataforma_da_sombra_e_conflito(db, esc):
     Elefante caem dentro da mesma ficha (medido em produção), então "regrediu"
     já não é o motivo no Elefante — o limite só prova a mesma conta repetindo
     exatamente o último retrato da oficial, e 30 → 5 não repete. Segue
-    CONFLITO, sem fundir nada, com ``contadores_diferentes_no_limite``."""
+    CONFLITO, sem fundir nada, com ``contadores_diferentes_no_limite``.
+
+    REGRA MUDOU (iteração 5, janela do Elefante): no Elefante a continuidade só
+    vale até 2 dias depois do último retrato da oficial (o padrão medido é o
+    dia seguinte); entre 01/09 e 10/09 são 9 dias — o par para antes, em
+    ``intervalo_longo``. Segue CONFLITO, sem fundir nada."""
     e, b = esc["escola"], esc["b"]
     oficial = _aluno(db, e, b, OFICIAL_Z, chamada=7)
     sombra = _aluno(db, e, b, SOMBRA_Z, lp=False)
@@ -780,7 +887,7 @@ def test_oficial_com_dado_legado_na_plataforma_da_sombra_e_conflito(db, esc):
                             tempo_leitura_min=100, livros_por_nivel={"D": 5}))
     db.commit()
     item = _item(cs.planejar(db, e.id), sombra)
-    assert (item.classe, item.motivo) == (cs.CONFLITO, "contadores_diferentes_no_limite")
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "intervalo_longo")
     assert _aplicar(db, e)["consolidados"] == []
     db.expire_all()
     assert db.execute(select(SnapshotElefante.livros_unicos).where(
@@ -974,6 +1081,13 @@ def test_sombra_irma_que_nao_consolida_segura_a_outra(db, padrao):
 
 OFICIAL_W = "WALDIRENE SOFIA FAGUNDES SILVA"
 SOMBRA_W = "WALDIRENE S"
+# O Elefante dos testes que exercitam OUTRA trava: o 1º retrato da sombra (01/08)
+# REPETE o último da oficial (31/07) nos quatro contadores (iteração 4), e o
+# retrato repetido carrega informação — as questões no maior valor da oficial e
+# acima do piso de livros/minutos/questões (iteração 5). (livros, minutos,
+# questões tentadas, questões acertadas.)
+ELEFANTE_ANTES = ("2026-07-13", 120, 180, 131, 90)
+ELEFANTE_LIMITE = (129, 200, 140, 98)
 HIST_OFICIAL_W = [("2026-04-30", 4, 12), ("2026-05-31", 9, 27), ("2026-06-30", 15, 48),
                   ("2026-07-31", 23, 70)]
 HIST_SOMBRA_W = [("2026-08-01", 23, 70), ("2026-09-01", 31, 101), ("2026-10-01", 38, 126)]
@@ -1144,16 +1258,16 @@ def test_dado_sem_snapshot_nao_prova_continuidade(db, esc, caso):
 def test_dado_novo_na_ficha_anterior_e_conflito(db, esc, plataforma, quando):
     """(v): os snapshots não se sobrepõem, mas a oficial ainda recebeu dado da
     plataforma depois de a sombra começar — duas fontes ao mesmo tempo. (No
-    Elefante, o limite repete os contadores — iteração 4 —, para a trava
-    exercitada ser a (v).)"""
+    Elefante, o limite repete os contadores — iteração 4 — e carrega
+    informação — iteração 5 —, para a trava exercitada ser a (v).)"""
     e = esc["escola"]
     if plataforma == "matific":
         oficial, sombra = _par(db, esc)
         _evento(db, e, oficial, "matific", quando, "evt-oficial-tardio")
     else:
         oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416002",
-                               hist_oficial=[("2026-07-13", 120, 180), ("2026-07-31", 129, 200)],
-                               hist_sombra=[("2026-08-01", 129, 200)])
+                               hist_oficial=[ELEFANTE_ANTES, ("2026-07-31", *ELEFANTE_LIMITE)],
+                               hist_sombra=[("2026-08-01", *ELEFANTE_LIMITE)])
         _leitura(db, e, oficial, _livro(db, e), datetime.fromisoformat(quando))
     db.commit()
     item = _item(cs.planejar(db, e.id), sombra)
@@ -1181,12 +1295,14 @@ def test_continuidade_com_leitura_repetida_divergente_e_conflito(db, esc, copia_
 
     (Iteração 4) O limite do Elefante repete os contadores — a única forma de
     a continuidade passar nele —, então a evidência da cópia idêntica é
-    "iguais" (antes, com o limite crescendo, era "crescentes")."""
+    "iguais" (antes, com o limite crescendo, era "crescentes"). (Iteração 5) O
+    limite repetido carrega informação (questões e piso)."""
     from app.models import Leitura
     e = esc["escola"]
     oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416003",
-                           hist_oficial=[("2026-07-13", 120, 180), ("2026-07-31", 129, 200)],
-                           hist_sombra=[("2026-08-01", 129, 200), ("2026-09-17", 140, 250)])
+                           hist_oficial=[ELEFANTE_ANTES, ("2026-07-31", *ELEFANTE_LIMITE)],
+                           hist_sombra=[("2026-08-01", *ELEFANTE_LIMITE),
+                                        ("2026-09-17", 140, 250, 160, 110)])
     livro = _livro(db, e)
     db.add(Leitura(escola_id=e.id, aluno_id=oficial.id, livro_id=livro.id,
                    data=datetime(2026, 7, 20, 10, 0), tempo_leitura_min=12))
@@ -1212,7 +1328,7 @@ def test_continuidade_com_leitura_repetida_divergente_e_conflito(db, esc, copia_
 def _heloiza(db, esc, limite_identica):
     """A MESMA oficial com a sombra truncada do Matific e uma sombra de nome
     IDÊNTICO criada pelo Elefante, que começa em 01/08 com ``limite_identica``
-    (o último retrato da oficial no Elefante, em 31/07, é (129, 200))."""
+    (o último retrato da oficial no Elefante, em 31/07, é ``ELEFANTE_LIMITE``)."""
     e, b = esc["escola"], esc["b"]
     oficial = _aluno(db, e, b, "HELOIZA BEATRIZ NOGUEIRA PRATES", chamada=8)
     truncada = _aluno(db, e, b, "HELOIZA B", lp=False)
@@ -1220,10 +1336,10 @@ def _heloiza(db, esc, limite_identica):
     _conta(db, e, truncada, "matific", "u-heloiza")
     _conta(db, e, identica, "elefante", "4416004")
     _snaps(db, e, oficial, "matific", HIST_OFICIAL_W)
-    _snaps(db, e, oficial, "elefante", [("2026-07-13", 120, 180), ("2026-07-31", 129, 200)])
+    _snaps(db, e, oficial, "elefante", [ELEFANTE_ANTES, ("2026-07-31", *ELEFANTE_LIMITE)])
     _snaps(db, e, truncada, "matific", HIST_SOMBRA_W)
     _snaps(db, e, identica, "elefante", [("2026-08-01", *limite_identica),
-                                         ("2026-09-17", 150, 270)])
+                                         ("2026-09-17", 150, 270, 170, 120)])
     db.commit()
     return oficial, truncada, identica
 
@@ -1236,11 +1352,12 @@ def test_sombra_de_nome_identico_do_elefante_com_continuidade_consolida(db, esc)
 
     REGRA MUDOU (iteração 4): no Elefante o limite só prova a mesma conta
     REPETINDO exatamente o último retrato da oficial (6 dos 8 pares reais);
-    aqui a sombra do Elefante começa com os mesmos (129, 200). O gêmeo com o
-    limite CRESCENDO (129 → 135, como os 2 pares reais que crescem) está em
+    aqui a sombra do Elefante começa com os mesmos quatro contadores (iteração
+    5: com as questões no maior valor da oficial e acima do piso). O gêmeo com
+    o limite CRESCENDO (129 → 135, como os 2 pares reais que crescem) está em
     ``test_sombra_de_nome_identico_do_elefante_crescente_e_conflito``."""
     e = esc["escola"]
-    oficial, truncada, identica = _heloiza(db, esc, (129, 200))
+    oficial, truncada, identica = _heloiza(db, esc, ELEFANTE_LIMITE)
     plano = cs.planejar(db, e.id)
     item = _item(plano, identica)
     assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
@@ -1267,7 +1384,7 @@ def test_sombra_de_nome_identico_do_elefante_crescente_e_conflito(db, esc):
     a revisão humana, de propósito. A sombra truncada do Matific, irmã dela,
     também não consolida sozinha (``sombra_irma_em_revisao``): nada é fundido."""
     e = esc["escola"]
-    oficial, truncada, identica = _heloiza(db, esc, (135, 220))
+    oficial, truncada, identica = _heloiza(db, esc, (135, 220, 150, 106))
     plano = cs.planejar(db, e.id)
     item = _item(plano, identica)
     assert (item.classe, item.motivo, item.oficial_id) == (
@@ -1360,8 +1477,10 @@ def test_duas_sombras_que_dividem_plataforma_sem_continuidade_sao_conflito(db, e
 # --- 3c. a forma do nome (iteração 2) ---------------------------------------------
 
 ARTEMISIA = "ARTEMISIA ELIZA FERNANDES ROSA"
-HIST_ELEFANTE_OFICIAL = [("2026-07-13", 40, 90), ("2026-07-31", 44, 101)]
-HIST_ELEFANTE_SOMBRA = [("2026-08-01", 44, 101), ("2026-09-17", 51, 130)]
+# (livros, minutos, questões tentadas, acertadas): o limite repetido carrega
+# informação (iteração 5) — a forma do nome é a trava exercitada aqui.
+HIST_ELEFANTE_OFICIAL = [("2026-07-13", 40, 90, 60, 41), ("2026-07-31", 44, 101, 66, 45)]
+HIST_ELEFANTE_SOMBRA = [("2026-08-01", 44, 101, 66, 45), ("2026-09-17", 51, 130, 80, 52)]
 
 
 @pytest.mark.parametrize("turma_nome, ano_escolar, nome_sombra", [
@@ -1635,13 +1754,15 @@ def test_posterior_com_livros_proprios_de_antes_do_limite_e_conflito(db, esc, so
     31/07). Se fosse a mesma conta, o retrato de 31/07 já as contaria: são duas
     contas ativas ao mesmo tempo, mesmo com o limite REPETINDO exatamente os
     contadores da oficial (iteração 4: a única forma de o limite do Elefante
-    passar — a trava exercitada aqui é a (vi)). Vale para a forma truncada e
-    para o homônimo de nome idêntico (regra (e))."""
+    passar — a trava exercitada aqui é a (vi)), com as questões e o piso da
+    iteração 5. Vale para a forma truncada e para o homônimo de nome idêntico
+    (regra (e))."""
     e = esc["escola"]
     oficial, sombra = _par(db, esc, plataforma="elefante", conta="4419902",
                            oficial_nome=CLEMENTINA, sombra_nome=sombra_nome,
-                           hist_oficial=[("2026-07-13", 8, 40), ("2026-07-31", 10, 60)],
-                           hist_sombra=[("2026-08-01", 10, 60)])
+                           hist_oficial=[("2026-07-13", 8, 40, 12, 8),
+                                         ("2026-07-31", 10, 60, 15, 10)],
+                           hist_sombra=[("2026-08-01", 10, 60, 15, 10)])
     for i in range(10):
         _ler(db, e, oficial, _livro(db, e, f"LIVRO DA OFICIAL {i}"),
              datetime(2026, 7, 2 + i, 10, 0), tempo=6)
@@ -1676,12 +1797,13 @@ def test_posterior_com_evento_no_meio_da_janela_da_anterior_e_conflito(db, esc):
 def test_livro_novo_da_posterior_no_limite(db, esc, quando, classe, motivo):
     """A sombra tem a cópia da leitura de julho da oficial (o histórico
     reenviado) e um livro que a oficial não tem. O limite repete os contadores
-    da oficial (iteração 4: a única forma de o limite do Elefante passar), para
-    a fronteira exercitada ser a do dia em (vi)."""
+    da oficial (iteração 4: a única forma de o limite do Elefante passar) e
+    carrega informação (iteração 5), para a fronteira exercitada ser a do dia
+    em (vi)."""
     e = esc["escola"]
     oficial, sombra = _par(db, esc, plataforma="elefante", conta="4416011",
-                           hist_oficial=[("2026-07-13", 120, 180), ("2026-07-31", 129, 200)],
-                           hist_sombra=[("2026-08-01", 129, 200)])
+                           hist_oficial=[ELEFANTE_ANTES, ("2026-07-31", *ELEFANTE_LIMITE)],
+                           hist_sombra=[("2026-08-01", *ELEFANTE_LIMITE)])
     reenviado = _livro(db, e, "LIVRO REENVIADO")
     for aluno in (oficial, sombra):
         _ler(db, e, aluno, reenviado, datetime(2026, 7, 20, 10, 0))
@@ -1698,7 +1820,8 @@ def test_historico_reenviado_nao_dobra_eventos_e_a_proxima_coleta_nao_regrava(db
     alinhar, a fusão deixava os eventos de julho em DOBRO na oficial (linha do
     tempo e ``eventos_leitura`` do Relatório por Período), e a próxima coleta
     da conta — agora da oficial — gravava de novo os de agosto. Agora a cópia
-    sai, os de agosto passam a ter a chave da oficial, e a auditoria diz quais."""
+    sai, os de agosto passam a ter a chave da oficial, e a auditoria diz quais.
+    (Iteração 5: o limite repetido carrega informação — questões e piso.)"""
     from app.models import Leitura
     from app.services import relatorios_periodo as rp
     from app.services.eventos import chave_evento, ingerir_eventos
@@ -1706,8 +1829,10 @@ def test_historico_reenviado_nao_dobra_eventos_e_a_proxima_coleta_nao_regrava(db
     nome = "LEOCADIA SOUZA BRAGA"
     oficial, sombra = _par(db, esc, plataforma="elefante", conta="4419912",
                            oficial_nome=nome, sombra_nome=nome,
-                           hist_oficial=[("2026-07-13", 1, 20), ("2026-07-31", 3, 45)],
-                           hist_sombra=[("2026-08-01", 3, 45), ("2026-08-20", 5, 70)])
+                           hist_oficial=[("2026-07-13", 11, 20, 14, 9),
+                                         ("2026-07-31", 13, 45, 18, 12)],
+                           hist_sombra=[("2026-08-01", 13, 45, 18, 12),
+                                        ("2026-08-20", 15, 70, 22, 15)])
     livros = [_livro(db, e, f"LIVRO SINTETICO {i}") for i in range(5)]
     quandos = [datetime(2026, 7, 10 + 5 * i, 14, 0) for i in range(3)] + [
         datetime(2026, 8, 5, 14, 0), datetime(2026, 8, 12, 9, 30)]
@@ -1865,12 +1990,15 @@ def test_e_isolado_nao_some_como_particula_no_nome_identico(db, esc, oficial_nom
     (DE/DA/DO/DAS/DOS não). Antes, os três pares eram "nome idêntico" — com
     continuidade (ou sem dado nenhum), consolidavam."""
     e = esc["escola"]
+    # Com dado, o limite repete e carrega informação (iterações 4 e 5): a trava
+    # exercitada é a forma do nome.
     _oficial, sombra = _par(db, esc, plataforma="elefante",
                             conta="4419904" if com_dado else None,
                             oficial_nome=oficial_nome, sombra_nome=sombra_nome,
-                            hist_oficial=[("2026-07-13", 3, 20), ("2026-07-31", 4, 25)]
+                            hist_oficial=[("2026-07-13", 13, 20, 14, 9),
+                                          ("2026-07-31", 14, 25, 18, 12)]
                             if com_dado else None,
-                            hist_sombra=[("2026-08-01", 4, 25)] if com_dado else None)
+                            hist_sombra=[("2026-08-01", 14, 25, 18, 12)] if com_dado else None)
     item = _item(cs.planejar(db, e.id), sombra)
     assert (item.classe, item.motivo) == (cs.REVISAR, motivo)
     assert _aplicar(db, e)["consolidados"] == [] and _existe(db, sombra.id)
@@ -1894,11 +2022,12 @@ def test_falsificacao_fechada_pelos_dados(db, esc, cenario, motivo):
     e = esc["escola"]
     plataforma, hist_oficial, hist_sombra = "matific", None, None
     if cenario == "historico_proprio_em_julho":
-        # O limite do Elefante repete os contadores (iteração 4): a trava aqui
-        # é o histórico próprio de julho, não o contador.
+        # O limite do Elefante repete os contadores (iteração 4) e carrega
+        # informação (iteração 5): a trava aqui é o histórico próprio de julho,
+        # não o contador.
         plataforma = "elefante"
-        hist_oficial = [("2026-07-13", 8, 40), ("2026-07-31", 10, 60)]
-        hist_sombra = [("2026-08-01", 10, 60)]
+        hist_oficial = [("2026-07-13", 8, 40, 12, 8), ("2026-07-31", 10, 60, 15, 10)]
+        hist_sombra = [("2026-08-01", 10, 60, 15, 10)]
     elif cenario == "oficial_zerada":
         hist_oficial = [("2026-04-30", 0, 0), ("2026-07-31", 0, 0)]
         hist_sombra = [("2026-08-05", 2, 5)]
@@ -2020,13 +2149,21 @@ def test_matific_segue_o_maior_contador_e_o_elefante_so_a_igualdade(
         db, esc, plataforma, limite_sombra, classe, motivo, contadores):
     """A regra do Matific NÃO mudou: contadores acumulados do ano (monotônicos),
     a posterior >= o maior da anterior — crescer no limite consolida, cair é
-    ``contador_regrediu``. No Elefante a mesma série só passa repetindo."""
+    ``contador_regrediu``. No Elefante a mesma série só passa repetindo (com
+    as questões, iguais nos dois lados, no maior valor da oficial e acima do
+    piso — iteração 5)."""
     e = esc["escola"]
+
+    def serie(linhas):
+        questoes = (50, 30) if plataforma == "elefante" else ()
+        return [(dia, *c, *questoes) for dia, c in linhas]
+
     oficial, sombra = _par(db, esc, plataforma=plataforma,
                            conta="4419923" if plataforma == "elefante" else "u-waldirene",
-                           hist_oficial=[("2026-06-30", 30, 120), ("2026-07-31", 36, 150)],
-                           hist_sombra=[("2026-08-01", *limite_sombra),
-                                        ("2026-09-01", 45, 190)])
+                           hist_oficial=serie([("2026-06-30", (30, 120)),
+                                               ("2026-07-31", (36, 150))]),
+                           hist_sombra=serie([("2026-08-01", limite_sombra),
+                                              ("2026-09-01", (45, 190))]))
     item = _item(cs.planejar(db, e.id), sombra)
     assert (item.classe, item.motivo, item.oficial_id) == (classe, motivo, oficial.id)
     if classe != cs.CONSOLIDAR:
@@ -2046,11 +2183,20 @@ def test_matific_segue_o_maior_contador_e_o_elefante_so_a_igualdade(
 def test_queda_dentro_da_serie_da_oficial_no_elefante_nao_impede_a_igualdade(
         db, esc, plataforma, classe, motivo):
     """Os contadores do Elefante caem entre retratos seguidos da MESMA ficha
-    (medido). Aqui a oficial cai de (52, 14, 90, 41) em 13/07 para o limite em
-    31/07, e a sombra também cai dentro da série dela depois de 01/08. O 1º
-    retrato da sombra repete o ÚLTIMO da oficial: consolida, "iguais", sem
-    ``maximos_anterior`` — no Elefante o maior valor da anterior não entra. No
-    Matific (atividades, estrelas), a mesma série é ``contador_regrediu``."""
+    (medido). Aqui a oficial cai de 52 livros e 14 minutos em 13/07 para o
+    limite em 31/07, e a sombra também cai dentro da série dela depois de
+    01/08. O 1º retrato da sombra repete o ÚLTIMO da oficial: consolida,
+    "iguais", sem ``maximos_anterior`` — no Elefante o maior valor da anterior
+    não entra nos livros e minutos. No Matific (atividades, estrelas), a mesma
+    série é ``contador_regrediu``.
+
+    REGRA MUDOU (iteração 5): as QUESTÕES do Elefante quase nunca caem
+    (medido, 12/10: 10 quedas de cada na rede inteira; nos 6 pares reais que
+    repetem o limite, elas estão no maior valor da oficial). A série da
+    oficial deste teste fazia as questões caírem também (90 → 64) e
+    consolidava; agora ela as mantém no maior valor — como nos pares reais —,
+    e a queda das questões no limite está em
+    ``test_elefante_com_as_questoes_caidas_no_limite_e_queda_no_limite``."""
     e = esc["escola"]
 
     def serie(linhas):
@@ -2059,7 +2205,7 @@ def test_queda_dentro_da_serie_da_oficial_no_elefante_nao_impede_a_igualdade(
     oficial, sombra = _par(
         db, esc, plataforma=plataforma,
         conta="4419924" if plataforma == "elefante" else "u-waldirene",
-        hist_oficial=serie([("2026-06-30", (45, 11, 70, 33)), ("2026-07-13", (52, 14, 90, 41)),
+        hist_oficial=serie([("2026-06-30", (45, 11, 60, 27)), ("2026-07-13", (52, 14, 64, 29)),
                             ("2026-07-31", LIMITE_ELEFANTE)]),
         hist_sombra=serie([("2026-08-01", LIMITE_ELEFANTE), ("2026-08-20", (35, 8, 60, 27)),
                            ("2026-09-17", (44, 13, 75, 34))]))
@@ -2073,6 +2219,142 @@ def test_queda_dentro_da_serie_da_oficial_no_elefante_nao_impede_a_igualdade(
     assert len(_aplicar(db, e)["consolidados"]) == 1
     assert len(db.execute(select(SnapshotElefante.id).where(
         SnapshotElefante.aluno_id == oficial.id)).scalars().all()) == 6
+
+
+# --- 3g. iteração 5: no Elefante, o limite repetido tem de carregar informação ----
+#
+# A 3ª revisão adversarial (12/10) mostrou que, SOZINHA, a igualdade do limite é
+# frouxa no Elefante: (a) o último retrato da oficial que CAIU para um valor
+# pequeno (40 livros → 1) vira a referência, e a conta nova de outra criança que
+# começa nesse valor "repete" o limite — em 1f8d588 isso era contador_regrediu;
+# (b) com três contadores em zero, repetir os quatro é repetir UM número pequeno.
+# Medido nos 8 pares reais (12/10, somente leitura): os 6 que repetem o limite o
+# fazem no dia SEGUINTE, com as questões no MAIOR valor da oficial (as questões
+# quase nunca caem: 10 quedas de cada na rede inteira, contra 132 de livros e 211
+# de minutos) e no mínimo 45 livros, 6 minutos e 34 questões tentadas.
+
+# Os 6 limites reais que se repetem (só contadores, sem ficha): o maior valor de
+# cada contador na série da oficial e o último retrato dela (= o 1º da sombra).
+LIMITES_REAIS_ELEFANTE = [
+    ((60, 126, 81, 37), (45, 6, 81, 37)),
+    ((65, 186, 150, 65), (64, 60, 150, 65)),
+    ((64, 201, 510, 172), (63, 170, 510, 172)),
+    ((135, 537, 356, 250), (135, 365, 356, 250)),
+    ((139, 315, 34, 23), (139, 241, 34, 23)),
+    ((121, 404, 46, 37), (121, 333, 46, 37)),
+]
+
+
+@pytest.mark.parametrize("maximos, limite", LIMITES_REAIS_ELEFANTE)
+def test_os_seis_limites_reais_do_elefante_continuam_consolidando(db, esc, maximos, limite):
+    """Calibração: nenhuma trava da iteração 5 (questões sem queda, piso, janela
+    de 2 dias) tira um dos 6 pares reais que repetem o limite. A oficial sobe
+    aos maiores valores medidos e CAI (livros, minutos) até o limite de 02/08;
+    a sombra começa com ele em 03/08, como nos pares reais."""
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc, plataforma="elefante", conta="4419930",
+                           oficial_nome=CLEMENTINA, sombra_nome="CLEMENTINA R",
+                           hist_oficial=[("2026-07-13", *maximos), ("2026-08-02", *limite)],
+                           hist_sombra=[("2026-08-03", *limite),
+                                        ("2026-09-03", limite[0] + 5, limite[1] + 20,
+                                         limite[2] + 8, limite[3] + 5)])
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+    ev = item.evidencias["continuidade"]["elefante"]
+    assert (ev["dias_entre"], ev["contadores"]) == (1, "iguais")
+    assert ev["contadores_anterior"] == dict(zip(CAMPOS_ELEFANTE, limite))
+    assert len(_aplicar(db, e)["consolidados"]) == 1 and not _existe(db, sombra.id)
+
+
+@pytest.mark.parametrize("antes, limite", [
+    # A sonda da revisão: a oficial lia muito e o último retrato caiu para quase
+    # nada — a conta nova de outra criança começa exatamente nele.
+    ([("2026-06-30", 38, 280, 55, 27), ("2026-07-13", 40, 300, 60, 30)], (1, 2, 0, 0)),
+    # A queda para um valor ACIMA do piso: as questões caídas seguram o par.
+    ([("2026-07-13", 140, 400, 300, 200)], (12, 5, 3, 1)),
+    # A série que a iteração 4 deixava consolidar: as questões caem 90 → 64.
+    ([("2026-06-30", 45, 11, 70, 33), ("2026-07-13", 52, 14, 90, 41)], LIMITE_ELEFANTE),
+    # Só as questões ACERTADAS caem (31 → 29).
+    ([("2026-07-13", 40, 12, 64, 31)], LIMITE_ELEFANTE),
+])
+def test_elefante_com_as_questoes_caidas_no_limite_e_queda_no_limite(db, esc, antes, limite):
+    """O último retrato da oficial CAIU e a ficha fora da lista começa repetindo-o
+    no dia seguinte. Na iteração 4, a igualdade com o ÚLTIMO retrato consolidava
+    (em 1f8d588, a regra do maior dava ``contador_regrediu``): a falsificação
+    "ultimo_retrato_caiu" reaberta no Elefante. As questões do Elefante quase
+    não caem; abaixo do maior valor da oficial, o retrato repetido não prova
+    nada — CONFLITO ``queda_no_limite``, sem fundir."""
+    e = esc["escola"]
+    _oficial, outra = _par(db, esc, plataforma="elefante", conta="4419931",
+                           oficial_nome=CLEMENTINA, sombra_nome="CLEMENTINA R",
+                           hist_oficial=antes + [("2026-07-31", *limite)],
+                           hist_sombra=[("2026-08-01", *limite),
+                                        ("2026-09-01", 50, 90, 70, 40)])
+    item = _item(cs.planejar(db, e.id), outra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "queda_no_limite")
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, outra.id)
+    assert _dono(db, e, "elefante", "4419931") == outra.id
+
+
+@pytest.mark.parametrize("limite", [
+    (1, 0, 0, 0), (0, 0, 1, 1), (0, 3, 0, 0), (2, 5, 0, 0), (3, 0, 0, 0),
+    (3, 14, 4, 2),          # os quatro acima de zero, mas só 3 livros
+    (9, 40, 12, 8),         # um livro abaixo do piso
+    (40, 0, 12, 8),         # minutos em zero
+    (40, 30, 0, 0),         # questões em zero
+])
+@pytest.mark.parametrize("sombra_nome", ["CLEMENTINA R", CLEMENTINA])
+def test_elefante_com_limite_pouco_informativo_e_conflito(db, esc, limite, sombra_nome):
+    """O limite REPETE no dia seguinte, sem queda nenhuma (a oficial tem o mesmo
+    retrato desde 13/07), mas carrega pouca informação: a conta nova de outra
+    criança que começa com 1 livro, ou 1 questão, coincide com ele por acaso.
+    CONFLITO ``limite_pouco_informativo`` — também para o homônimo de nome
+    IDÊNTICO, que a regra (e) deixaria passar continuando o dado da oficial."""
+    e = esc["escola"]
+    _oficial, outra = _par(db, esc, plataforma="elefante", conta="4419932",
+                           oficial_nome=CLEMENTINA, sombra_nome=sombra_nome,
+                           hist_oficial=[("2026-07-13", *limite), ("2026-07-31", *limite)],
+                           hist_sombra=[("2026-08-01", *limite),
+                                        ("2026-09-01", 50, 90, 70, 40)])
+    item = _item(cs.planejar(db, e.id), outra)
+    assert (item.classe, item.motivo) == (cs.CONFLITO, "limite_pouco_informativo")
+    assert _aplicar(db, e)["consolidados"] == [] and _existe(db, outra.id)
+
+
+def test_elefante_no_piso_exato_consolida(db, esc):
+    """O piso é inclusivo: 10 livros, 1 minuto e 1 questão tentada (nenhuma
+    acertada), repetidos no dia seguinte, consolidam."""
+    e = esc["escola"]
+    oficial, sombra = _par(db, esc, plataforma="elefante", conta="4419933",
+                           hist_oficial=[("2026-07-13", 8, 1, 1, 0), ("2026-07-31", 10, 1, 1, 0)],
+                           hist_sombra=[("2026-08-01", 10, 1, 1, 0)])
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial.id)
+
+
+@pytest.mark.parametrize("plataforma, primeiro_da_sombra, classe, motivo", [
+    ("elefante", "2026-08-02", cs.CONSOLIDAR, ""),             # 2 dias: o limite aceito
+    ("elefante", "2026-08-03", cs.CONFLITO, "intervalo_longo"),
+    ("elefante", "2026-08-05", cs.CONFLITO, "intervalo_longo"),  # a janela da sonda
+    # Contraste: no Matific a janela segue de 31 dias.
+    ("matific", "2026-08-05", cs.CONSOLIDAR, ""),
+])
+def test_janela_do_elefante_e_de_dois_dias(db, esc, plataforma, primeiro_da_sombra, classe,
+                                           motivo):
+    """No Elefante a igualdade do limite é a única prova numérica, e o padrão
+    medido é o dia seguinte (D+1, nos 8 pares reais): a janela é de 2 dias, não
+    de 31 — mais tempo só amplia a chance de outra conta coincidir."""
+    e = esc["escola"]
+    if plataforma == "elefante":
+        hist_oficial = [("2026-07-13", 30, 7, 50, 22), ("2026-07-31", *LIMITE_ELEFANTE)]
+        hist_sombra = [(primeiro_da_sombra, *LIMITE_ELEFANTE)]
+    else:
+        hist_oficial, hist_sombra = HIST_OFICIAL_W, [(primeiro_da_sombra, 23, 70)]
+    _oficial, sombra = _par(db, esc, plataforma=plataforma,
+                            conta="4419934" if plataforma == "elefante" else "u-waldirene",
+                            hist_oficial=hist_oficial, hist_sombra=hist_sombra)
+    item = _item(cs.planejar(db, e.id), sombra)
+    assert (item.classe, item.motivo) == (classe, motivo)
 
 
 # --- 4. compare-and-set ----------------------------------------------------------
@@ -2120,6 +2402,34 @@ def test_mudanca_de_outra_sessao_com_fichas_vivas_na_memoria_pula(db, padrao, mu
     assert [p["sombra_id"] for p in res["pulados"]] == [c["sombra_z"].id]
     assert c["sombra_z"].id not in [x["sombra_id"] for x in res["consolidados"]]
     assert _existe(db, c["sombra_z"].id) and len(vivas) == 2
+
+
+@pytest.mark.parametrize("mudanca", ["sombra_entra_na_lista", "sombra_arquivada",
+                                     "sombra_sem_matricula_no_ano"])
+def test_pulo_de_ficha_viva_fora_do_alvo_nao_diz_ficha_inexistente(db, padrao, mudanca):
+    """A sombra ainda EXISTE, mas saiu do alvo do plano entre planejar e aplicar
+    (entrou na Lista Piloto, foi arquivada, perdeu a matrícula do ano): o pulo
+    é auditado como ``fora_do_alvo``. ``ficha_inexistente`` fica para a ficha
+    que de fato sumiu (``test_estado_muda_entre_planejar_e_aplicar_o_par_e_pulado``)."""
+    c = padrao
+    e = c["escola"]
+    plano = cs.planejar(db, e.id)
+    with sessionmaker(bind=db.get_bind())() as outra:
+        if mudanca == "sombra_entra_na_lista":
+            outra.get(Aluno, c["sombra_z"].id).da_lista_piloto = True
+        elif mudanca == "sombra_arquivada":
+            outra.get(Aluno, c["sombra_z"].id).status = "arquivado"
+        else:
+            outra.execute(delete(Matricula).where(Matricula.aluno_id == c["sombra_z"].id))
+        outra.commit()
+    res = _aplicar(db, e, plano)
+    [pulado] = [p for p in res["pulados"] if p["sombra_id"] == c["sombra_z"].id]
+    assert (pulado["classe_atual"], pulado["motivo_atual"]) == (None, "fora_do_alvo")
+    [log] = [log for log in _logs(db, "aluno.consolidacao_pulada")
+             if log.entidade_id == c["sombra_z"].id]
+    assert (log.detalhes["motivo_atual"], log.detalhes["motivo"]) == (
+        "fora_do_alvo", "estado_mudou")
+    assert _existe(db, c["sombra_z"].id)
 
 
 def test_conta_nova_da_oficial_entre_planejar_e_aplicar_pula(db, padrao):

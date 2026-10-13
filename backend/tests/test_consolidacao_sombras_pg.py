@@ -28,7 +28,11 @@ Este módulo prova, contra o banco de produção (Postgres):
      1º retrato da sombra repetindo o último da oficial nos quatro contadores
      (com queda DENTRO da série da oficial) consolida e a evidência dos quatro
      vai para o JSON da auditoria; um contador diferente, ou o limite
-     crescendo, é CONFLITO ``contadores_diferentes_no_limite``.
+     crescendo, é CONFLITO ``contadores_diferentes_no_limite``;
+  9. (iteração 5) no Elefante o retrato repetido carrega informação: as
+     questões caídas no limite (``queda_no_limite``), o limite abaixo do piso
+     (``limite_pouco_informativo``) e a sombra começando 3 dias depois, com a
+     hora da coleta (``intervalo_longo``), são CONFLITO.
 
 Como rodar::
 
@@ -338,10 +342,13 @@ def test_historico_reenviado_nao_dobra_eventos_no_postgres(motor_pg, cena):
             return a.id
 
         def retratos(aluno_id, serie):
-            for dia, livros, minutos in serie:
+            for dia, livros, minutos, *questoes in serie:
+                tentativas, acertos = questoes or (0, 0)
                 db.add(SnapshotElefante(escola_id=eid, aluno_id=aluno_id, importacao_id=imp.id,
                                         data_referencia=datetime.fromisoformat(dia),
                                         livros_unicos=livros, tempo_leitura_min=minutos,
+                                        questoes_tentativas=tentativas,
+                                        questoes_acertos=acertos,
                                         livros_por_nivel={"D": livros}))
 
         def ler(aluno_id, titulo, quando):
@@ -361,8 +368,11 @@ def test_historico_reenviado_nao_dobra_eventos_no_postgres(motor_pg, cena):
 
         nome = "LEOCADIA SOUZA BRAGA"
         oficial, sombra = ficha(nome, True), ficha(nome, False, f"44{eid}01")
-        retratos(oficial, [("2026-07-13T03:10:00", 1, 20), ("2026-07-31T03:10:00", 3, 45)])
-        retratos(sombra, [("2026-08-01T03:10:00", 3, 45), ("2026-08-20T03:10:00", 5, 70)])
+        # O limite repete e carrega informação (iteração 5: questões e piso).
+        retratos(oficial, [("2026-07-13T03:10:00", 11, 20, 14, 9),
+                           ("2026-07-31T03:10:00", 13, 45, 18, 12)])
+        retratos(sombra, [("2026-08-01T03:10:00", 13, 45, 18, 12),
+                          ("2026-08-20T03:10:00", 15, 70, 22, 15)])
         quandos = [datetime(2026, 7, 10, 14, 0, 37), datetime(2026, 7, 15, 14, 0),
                    datetime(2026, 7, 20, 14, 0), datetime(2026, 8, 5, 14, 0),
                    datetime(2026, 8, 12, 9, 30)]
@@ -379,10 +389,12 @@ def test_historico_reenviado_nao_dobra_eventos_no_postgres(motor_pg, cena):
         retratos(nova, [("2026-08-01", 2, 10)])
         com_julho_oficial, com_julho = (ficha("HORTENSIA MARIA LIMA", True),
                                         ficha("HORTENSIA M", False, f"44{eid}03"))
-        retratos(com_julho_oficial, [("2026-07-13", 8, 40), ("2026-07-31", 10, 60)])
+        retratos(com_julho_oficial, [("2026-07-13", 8, 40, 12, 8),
+                                     ("2026-07-31", 10, 60, 15, 10)])
         # O limite REPETE os contadores (iteração 4: a única forma de o limite
-        # do Elefante passar) — a trava exercitada é o livro próprio de julho.
-        retratos(com_julho, [("2026-08-01", 10, 60)])
+        # do Elefante passar) e carrega informação (iteração 5) — a trava
+        # exercitada é o livro próprio de julho.
+        retratos(com_julho, [("2026-08-01", 10, 60, 15, 10)])
         ler(com_julho, "LIVRO PG PROPRIO", datetime(2026, 7, 9, 15, 0))
         db.commit()
 
@@ -426,10 +438,17 @@ def test_elefante_so_aceita_a_igualdade_do_limite_no_postgres(motor_pg, cena):
     nos pares reais o 1º retrato da sombra repete o último da oficial nos
     quatro contadores. Três pares na mesma escola:
 
-      * a oficial CAI dentro da série dela e a sombra repete o último retrato
-        nos quatro contadores → CONSOLIDA ("iguais", sem ``maximos_anterior``);
+      * a oficial CAI dentro da série dela (livros, minutos) e a sombra repete
+        o último retrato nos quatro contadores → CONSOLIDA ("iguais", sem
+        ``maximos_anterior``);
       * um contador só (questões acertadas) difere no limite → CONFLITO;
-      * o limite CRESCE nos quatro → CONFLITO (a regra do maior aceitaria)."""
+      * o limite CRESCE nos quatro → CONFLITO (a regra do maior aceitaria).
+
+    Iteração 5, nos mesmos tipos: as questões da oficial CAEM até o limite
+    (``queda_no_limite``); o limite repetido abaixo do piso
+    (``limite_pouco_informativo``); a sombra começando 3 dias depois do último
+    retrato, com a hora da coleta (``intervalo_longo``: no Elefante a janela é
+    de 2 dias, contados por dia de calendário)."""
     from datetime import datetime
 
     campos = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas",
@@ -461,7 +480,9 @@ def test_elefante_so_aceita_a_igualdade_do_limite_no_postgres(motor_pg, cena):
                         livros_por_nivel={"D": livros}))
             return ids
 
-        serie_oficial = [("2026-07-13T03:10:00", (52, 14, 90, 41)),
+        # As questões ficam no maior valor da oficial (como nos pares reais):
+        # só livros e minutos caem dentro da série.
+        serie_oficial = [("2026-07-13T03:10:00", (52, 14, 64, 29)),
                          ("2026-07-31T03:10:00", limite)]
         oficial, sombra = par("ROSALVA MIRANDA PIRES", "ROSALVA M", f"45{eid}01",
                               serie_oficial,
@@ -473,6 +494,17 @@ def test_elefante_so_aceita_a_igualdade_do_limite_no_postgres(motor_pg, cena):
         _of_cresce, crescente = par("BERENICE QUADROS LIMA", "BERENICE Q", f"45{eid}03",
                                     serie_oficial,
                                     [("2026-08-01T03:10:00", (40, 12, 70, 33))])
+        _of_queda, queda = par("GENOVEVA PRADO LIMA", "GENOVEVA P", f"45{eid}04",
+                               [("2026-07-13T03:10:00", (52, 14, 90, 41)),
+                                ("2026-07-31T03:10:00", limite)],
+                               [("2026-08-01T03:10:00", limite)])
+        pequeno = (3, 14, 4, 2)
+        _of_pequeno, pouco = par("FLORISBELA NUNES LIMA", "FLORISBELA N", f"45{eid}05",
+                                 [("2026-07-13T03:10:00", pequeno),
+                                  ("2026-07-31T03:10:00", pequeno)],
+                                 [("2026-08-01T03:10:00", pequeno)])
+        _of_longe, longe = par("ISAURINA MOTA LIMA", "ISAURINA M", f"45{eid}06",
+                               serie_oficial, [("2026-08-03T01:00:00", limite)])
         db.commit()
 
         plano = cs.planejar(db, eid)
@@ -480,16 +512,21 @@ def test_elefante_so_aceita_a_igualdade_do_limite_no_postgres(motor_pg, cena):
         assert (item.classe, item.oficial_id) == (cs.CONSOLIDAR, oficial)
         ev = item.evidencias["continuidade"]["elefante"]
         assert ev["contadores"] == "iguais" and "maximos_anterior" not in ev
-        for outro in (um_diferente, crescente):
+        for outro, motivo in ((um_diferente, "contadores_diferentes_no_limite"),
+                              (crescente, "contadores_diferentes_no_limite"),
+                              (queda, "queda_no_limite"),
+                              (pouco, "limite_pouco_informativo"),
+                              (longe, "intervalo_longo")):
             assert (plano.item_da_sombra(outro).classe, plano.item_da_sombra(outro).motivo) == (
-                cs.CONFLITO, "contadores_diferentes_no_limite")
+                cs.CONFLITO, motivo)
         res = cs.aplicar(db, plano, usuario_id=None, origem="teste_pg")
         assert sombra in [x["sombra_id"] for x in res["consolidados"]]
-        assert {um_diferente, crescente}.isdisjoint(x["sombra_id"] for x in res["consolidados"])
+        recusadas = {um_diferente, crescente, queda, pouco, longe}
+        assert recusadas.isdisjoint(x["sombra_id"] for x in res["consolidados"])
 
     with Session(motor_pg) as db:
         assert db.get(Aluno, sombra) is None
-        assert db.get(Aluno, um_diferente) is not None and db.get(Aluno, crescente) is not None
+        assert all(db.get(Aluno, s) is not None for s in recusadas)
         assert db.execute(select(func.count()).select_from(SnapshotElefante).where(
             SnapshotElefante.aluno_id == oficial)).scalar_one() == 4
         [detalhes] = db.execute(select(LogAuditoria.detalhes).where(
