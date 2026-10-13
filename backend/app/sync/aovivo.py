@@ -28,12 +28,12 @@ import unicodedata
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.core.security import cifrar_segredo, decifrar_segredo
-from app.models.academico import Aluno, Matricula
+from app.models.academico import Aluno, IdentidadeExterna, Matricula
 from app.models.configuracao import Configuracao
 from app.models.escola import Escola
 from app.services import periodos
@@ -313,9 +313,34 @@ def _mapa_nome_para_aluno(db: Session, escola_id: int, ano_letivo: int) -> dict[
     return {k: v for k, v in mapa.items() if v is not None}
 
 
-def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int]) -> list[dict]:
+def _mapa_uuid_para_aluno(db: Session, escola_id: int, ano_letivo: int) -> dict[str, int]:
+    """{uuid da conta do Matific: aluno_id} das contas EFETIVAS cujos donos estão
+    ATIVOS e matriculados no ano. O uuid é a identificação confiável da linha do
+    Placar: depois de uma fusão (a consolidação das fichas-sombra, a fusão da
+    tela) a conta passa para a ficha que fica, mas a linha continua chegando com
+    o nome do relatório ("ZULEICA R"), que já não é o nome de ficha nenhuma."""
+    linhas = db.execute(
+        select(IdentidadeExterna.id_externo, IdentidadeExterna.aluno_id)
+        .join(Aluno, Aluno.id == IdentidadeExterna.aluno_id)
+        .where(IdentidadeExterna.escola_id == escola_id,
+               IdentidadeExterna.plataforma == "matific",
+               or_(IdentidadeExterna.status.is_(None),
+                   IdentidadeExterna.status != "aposentada"),
+               Aluno.status == "ativo",
+               Aluno.id.in_(select(Matricula.aluno_id).where(
+                   Matricula.escola_id == escola_id,
+                   Matricula.ano_letivo == ano_letivo)))
+    ).all()
+    return {str(uuid): aluno_id for uuid, aluno_id in linhas if uuid}
+
+
+def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int],
+                    mapa_uuid: dict[str, int] | None = None) -> list[dict]:
     """Ordena como o Placar do Matific (estrelas desc) e monta a linha do
-    ranking. ``pontuacao_media = estrelas / atividades`` (definição do Matific)."""
+    ranking. ``pontuacao_media = estrelas / atividades`` (definição do Matific).
+    O link para a ficha vem PRIMEIRO do uuid da conta (``mapa_uuid``) e, sem
+    ele, do nome exato (``mapa_aluno``)."""
+    mapa_uuid = mapa_uuid or {}
     ordenados = sorted(
         alunos,
         key=lambda a: (-int(a.get("estrelas", 0)), -int(a.get("atividades", 0)),
@@ -333,7 +358,8 @@ def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int]) -> list[dict
             "estrelas": estrelas,
             "atividades": atividades,
             "pontuacao_media": media,
-            "aluno_id": mapa_aluno.get(_norm(a.get("nome", ""))),
+            "aluno_id": (mapa_uuid.get(str(a.get("uuid") or "").strip())
+                         or mapa_aluno.get(_norm(a.get("nome", "")))),
         })
     return itens
 
@@ -418,7 +444,8 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
                 db.rollback()
 
         mapa_aluno = _mapa_nome_para_aluno(db, escola_id, ano_letivo)
-        itens = _montar_ranking(alunos, mapa_aluno)
+        mapa_uuid = _mapa_uuid_para_aluno(db, escola_id, ano_letivo)
+        itens = _montar_ranking(alunos, mapa_aluno, mapa_uuid)
         resultado = {
             "periodo": rotulo,
             "filtro": filtro,

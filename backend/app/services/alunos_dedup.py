@@ -457,3 +457,9 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
 # ferramenta MANUAL (detecção inteligente + "Selecionar todos" + avisos ⚠), onde
 # um humano confirma. A regra do dono ("nunca fundir crianças diferentes") vence a
 # conveniência da automação.
+#
+# ÚNICA EXCEÇÃO, deliberada (decisão do dono, 12/10): ``consolidacao_sombras`` —
+# opt-in por escola (``politica_sync``), só a ficha-sombra fora da Lista Piloto
+# cuja oficial é a ÚNICA compatível na turma, sem outra ficha da escola que possa
+# ser a dona, sem conta duplicada e sem decisão humana em contrário. Ela não usa
+# os candidatos deste detector: tem o próprio plano, reconferido antes de fundir.

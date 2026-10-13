@@ -682,8 +682,9 @@ def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
     dono compatível na Lista Piloto, identificador divergente, conta própria)
     devolve None e a linha segue para a revisão de sempre. O chamador ainda
     confere o nome idêntico em OUTRA sala (``_homonimos_fora_da_sala``). Nada é
-    fundido: a duplicata continua existindo, com a conta dela, até a fusão
-    administrativa."""
+    fundido aqui: a duplicata continua existindo, com a conta dela, até a fusão
+    administrativa — ou até a consolidação automática da escola que a ligou
+    (``consolidacao_sombras``, com regras próprias e mais estritas)."""
     if len(candidatos) < 2 or not linha.plataforma:
         return None
     alunos = [ctx.alunos.get(i) for i in candidatos]

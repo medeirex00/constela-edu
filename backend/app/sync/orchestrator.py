@@ -14,6 +14,8 @@ preserva o pipeline 100% (zero risco de regressão). A verdade de auditoria de
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -22,9 +24,12 @@ from app.models.academico import Turma
 from app.models.escola import Escola
 from app.routers import importacoes as imp  # reuso: confirmar, _guardar_temporario
 from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
+from app.services import consolidacao_sombras, perfis_pdf, planilhas, politica_sync, professores
 from app.services import importacao as svc
-from app.services import perfis_pdf, planilhas, politica_sync, professores
+from app.services.audit import registrar
 from app.sync.interfaces import ArquivoObtido, Contexto
+
+logger = logging.getLogger(__name__)
 
 
 # Marcador do conteúdo JSON vindo da API interna do Elefante (overall-course-
@@ -201,3 +206,71 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
         "ignorados": list(getattr(resultado, "ignorados", None) or []),
         "sem_dados": False,
     }
+
+
+def consolidar_sombras_da_escola(db: Session, escola_id: int, *,
+                                 usuario_id: int | None,
+                                 contexto: Contexto) -> dict | None:
+    """Depois de aplicar os arquivos da escola, consolida as FICHAS-SOMBRA — só
+    quando a política da escola é ``consolidar_sombras = automatico``
+    (``politica_sync``). No padrão ``manual`` devolve None sem ler mais nada: o
+    comportamento da sincronização é exatamente o de antes.
+
+    A ficha-sombra é a que a própria sincronização criou ao lado da ficha
+    OFICIAL da Lista Piloto (nome truncado, mesma turma, com a conta da
+    plataforma). ``consolidacao_sombras.planejar`` decide, ficha a ficha, se a
+    evidência basta; ``aplicar`` funde SÓ esses pares, reconferindo cada um no
+    banco atual, e recalcula a escola — fusões, auditoria e notas num commit só.
+
+    ``usuario_id`` é quem PEDIU esta sincronização (None no agendador). A
+    auditoria registra exatamente isso: diferente da importação, que precisa de
+    um "ator" da escola para o ``confirmar``, aqui ninguém é posto como autor
+    de uma fusão automática que não decidiu — ``aluno.fundido`` leva a origem.
+
+    TRANSAÇÃO PRÓPRIA: o que a sincronização gravou é confirmado ANTES, então
+    uma falha aqui não desfaz nenhum dado importado — e NÃO derruba a sync: vira
+    log da execução, log da aplicação e auditoria
+    (``aluno.consolidacao_automatica_falhou``). Como a aplicação é atômica, a
+    falha desfaz TODAS as fusões desta rodada: nenhuma ficha fica fundida com a
+    nota velha."""
+    try:
+        automatico = politica_sync.consolidar_sombras_automatico(db, escola_id)
+    except Exception:  # noqa: BLE001 — sem política legível, nada se funde
+        logger.exception("Política de consolidação ilegível (escola %s)", escola_id)
+        return None
+    if not automatico:
+        return None
+    try:
+        db.commit()                      # o que a sincronização gravou fica firme
+        plano = consolidacao_sombras.planejar(db, escola_id)
+        if not plano.consolidar:
+            db.commit()                  # fecha a leitura; nada a fundir
+            return {"escola_id": escola_id, "consolidados": [], "pulados": [],
+                    "contagens": plano.contagens()}
+        resultado = consolidacao_sombras.aplicar(db, plano, usuario_id=usuario_id,
+                                                 origem="sincronizacao")
+    except Exception as exc:  # noqa: BLE001 — consolidar é acessório; a sync é o essencial
+        db.rollback()
+        logger.exception("Falha na consolidação de fichas-sombra (escola %s)", escola_id)
+        contexto.log("identidade", "warn",
+                     "A consolidação automática das fichas-sombra falhou nesta "
+                     "sincronização e nenhuma ficha foi fundida; o que foi "
+                     "importado está salvo. A próxima sincronização tenta de novo.")
+        try:
+            registrar(db, "aluno.consolidacao_automatica_falhou", escola_id=escola_id,
+                      usuario_id=usuario_id, entidade="escola", entidade_id=escola_id,
+                      detalhes={"origem": "sincronizacao", "erro": type(exc).__name__})
+            db.commit()
+        except Exception:  # noqa: BLE001 — nem a auditoria pode derrubar a sync
+            db.rollback()
+        return {"escola_id": escola_id, "erro": type(exc).__name__}
+    n, pulados = len(resultado["consolidados"]), len(resultado["pulados"])
+    resultado["contagens"] = plano.contagens()
+    if n or pulados:
+        # Só contagens: nome de criança não vai para o log da execução (LGPD).
+        contexto.log("identidade", "info",
+                     f"{n} ficha(s)-sombra consolidada(s) na ficha oficial da Lista "
+                     "Piloto (política da escola)"
+                     + (f"; {pulados} par(es) pulado(s) porque o cadastro mudou "
+                        "durante a sincronização." if pulados else "."))
+    return resultado

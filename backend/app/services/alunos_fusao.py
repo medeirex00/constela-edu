@@ -107,11 +107,16 @@ def _foto_pre_fusao(db: Session, remover: Aluno) -> dict:
 
 
 def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
-               usuario_id: int) -> dict:
+               usuario_id: int | None, *, origem: str | None = None) -> dict:
     """Funde ``remover`` em ``manter`` (mesma escola, ambos já validados como
     ativos pelo chamador). Reatribui/deduplica cada relação, funde a ficha,
     registra a auditoria (com a foto pré-fusão) e apaga o ``remover``. NÃO
-    commita nem recalcula — devolve as contagens do que foi movido."""
+    commita nem recalcula — devolve as contagens do que foi movido.
+
+    ``origem`` marca a fusão que NENHUMA pessoa decidiu na tela (a consolidação
+    automática das fichas-sombra): vai para os detalhes de ``aluno.fundido``,
+    para quem lê o histórico de fusões não tomá-la por decisão de um
+    coordenador. Sem ``origem`` (a tela), o registro é o de sempre."""
     manter_nome, remover_nome = manter.nome, remover.nome
     foto = _foto_pre_fusao(db, remover)   # ANTES de mover/apagar qualquer coisa
 
@@ -332,6 +337,7 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
               detalhes={"mantido": {"id": manter_id, "nome": manter_nome},
                         "removido": {"id": remover.id, "nome": remover_nome},
                         "foto_pre_fusao": foto,
+                        **({"origem": origem} if origem else {}),
                         **contagens})
     # Grava as reatribuições ANTES do delete — o cascade não pega o que foi movido.
     db.flush()

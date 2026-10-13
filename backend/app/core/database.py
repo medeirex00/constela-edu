@@ -127,11 +127,18 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
     fim do recálculo), então deve ser adquirido ANTES de qualquer leitura que
     participe do cálculo e sem commit no meio.
 
-    HIERARQUIA (regra de ouro contra deadlock ENTRE travas): nunca adquirir
-    esta segurando ``_NS_IMPORTACAO`` (4711). Todos os chamadores de
-    ``recalcular_escola`` comitam antes de chamá-lo — inclusive os dois
-    endpoints de importação, que soltam 4711 no commit e só então recalculam.
-    ``tests/test_recalculo_concorrencia.py`` guarda essa ordem.
+    HIERARQUIA (regra de ouro contra deadlock ENTRE travas): a ORDEM é sempre
+    importação → recálculo. Pegar esta (4713) segurando ``_NS_IMPORTACAO``
+    (4711) é permitido — e necessário onde a escrita e a nota têm de cair
+    juntas: a consolidação das fichas-sombra
+    (``consolidacao_sombras.aplicar``) e o /resolver de revisão de identidade
+    recalculam DENTRO da transação que travou a importação (``commit=False``),
+    para nunca ficar fusão ou dado sem a nota. O PROIBIDO é o inverso: pedir
+    4711 segurando 4713 — fecharia o ciclo com esses caminhos. Por isso
+    ``recalcular_escola`` não chama nada que pegue a trava de importação. Quem
+    não precisa da atomicidade comita antes de recalcular e não segura 4711
+    durante o recálculo (os dois endpoints de importação). As duas coisas estão
+    em ``tests/test_recalculo_concorrencia.py``.
 
     SQLite (dev/testes): no-op — banco de um único escritor; produção é
     Postgres. A defesa cross-DB é a própria ``uq_nota_aluno_ano``, que impede a

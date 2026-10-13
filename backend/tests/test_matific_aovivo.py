@@ -88,6 +88,48 @@ def test_montar_ranking_ordena_e_calcula_media():
     assert itens[1]["aluno_id"] is None              # sem correspondência
 
 
+def test_montar_ranking_liga_pelo_uuid_antes_do_nome():
+    """O uuid da conta é a identificação confiável da linha: depois de uma fusão
+    a linha chega com o nome do relatório ("ZULEICA R"), que não é o nome de
+    ficha nenhuma. Sem o uuid no cadastro, vale o nome exato."""
+    alunos = [
+        {"nome": "ZULEICA R", "uuid": "u-z", "estrelas": 40, "atividades": 12},
+        {"nome": "Ana Beatriz Souza", "uuid": "u-desconhecido", "estrelas": 30,
+         "atividades": 10},
+        # O uuid é de outra ficha que a do nome: a conta manda (o nome é homônimo).
+        {"nome": "João Pedro Barbosa", "uuid": "u-j", "estrelas": 20, "atividades": 10},
+        {"nome": "Sem Uuid", "estrelas": 10, "atividades": 5},
+    ]
+    mapa_nome = {aovivo._norm("Ana Beatriz Souza"): 7, aovivo._norm("João Pedro Barbosa"): 8,
+                 aovivo._norm("Sem Uuid"): 11}
+    itens = aovivo._montar_ranking(alunos, mapa_nome, {"u-z": 4, "u-j": 9})
+    assert [i["aluno_id"] for i in itens] == [4, 7, 9, 11]
+    # Sem o mapa de uuid (como antes), só o nome.
+    assert [i["aluno_id"] for i in aovivo._montar_ranking(alunos, mapa_nome)] == [
+        None, 7, 8, 11]
+
+
+def test_mapa_uuid_so_conta_efetiva_de_aluno_ativo_matriculado_no_ano(db, escola_completa):
+    from app.models import Aluno, IdentidadeExterna
+
+    escola = escola_completa["escola"]
+    ana, joao, sofia = escola_completa["alunos"]
+    fora_do_ano = Aluno(escola_id=escola.id, nome="Fora Do Ano")
+    db.add(fora_do_ano)
+    db.flush()
+    sofia.status = "transferido"
+    for aluno, plataforma, uuid, status in (
+            (ana, "matific", "u-ana", "efetiva"),
+            (joao, "matific", "u-joao-velha", "aposentada"),
+            (sofia, "matific", "u-sofia", "efetiva"),
+            (ana, "elefante", "4410099", "efetiva"),
+            (fora_do_ano, "matific", "u-fora", "efetiva")):
+        db.add(IdentidadeExterna(escola_id=escola.id, aluno_id=aluno.id,
+                                 plataforma=plataforma, id_externo=uuid, status=status))
+    db.commit()
+    assert aovivo._mapa_uuid_para_aluno(db, escola.id, 2026) == {"u-ana": ana.id}
+
+
 # --- Navegador FAKE ---------------------------------------------------------
 
 def _payloads(nomes_por_uuid: dict[str, str]):
@@ -231,6 +273,35 @@ def test_placar_matific_round_trip_com_sessao_persistida(db, escola_completa, mo
                                agora=agora)
     assert r2["periodo"] == "Esta semana"
     assert nav.logins == 1
+
+
+def test_placar_matific_liga_pela_conta_quando_o_nome_e_o_do_relatorio(
+        db, escola_completa, monkeypatch):
+    """A linha chega com o nome do RELATÓRIO ("ANA S", como depois da
+    consolidação de uma ficha-sombra) — nome de ficha nenhuma — e o uuid da
+    conta, que o cadastro conhece: o link vem da conta."""
+    from app.models import IdentidadeExterna
+
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    db.add(IdentidadeExterna(escola_id=escola.id, aluno_id=ana.id, plataforma="matific",
+                             id_externo="u-ana"))
+    ss, sl = _payloads({"u-ana": "ANA S", "u-joao": "João Pedro Barbosa",
+                        "u-sofia": "Sofia Almeida Duarte"})
+    nav = NavFake(ss, sl)
+
+    async def fab(**_kw):
+        return nav
+
+    con = matific.ConectorMatific(fab)
+    monkeypatch.setattr(connectors, "obter", lambda plat: con if plat == "matific" else None)
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    db.commit()
+
+    r = aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None,
+                              agora=datetime(2026, 7, 14, 12, 0, 0))
+    assert {i["nome"]: i["aluno_id"] for i in r["itens"]}["ANA S"] == ana.id
+    assert r["com_link"] == 3
 
 
 def test_placar_matific_sem_credencial_erro_claro(db, escola_completa):
