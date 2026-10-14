@@ -1,99 +1,110 @@
 # =============================================================================
-# Backup diário CIFRADO do Postgres de produção → artefato off-site (GitHub).
+# BRANCH DE RECUPERAÇÃO "recuperacao/senha-backups" — NÃO FAZER MERGE.
 #
-# DESLIGADO por padrão (fail-safe): só roda quando a variável de repositório
-# BACKUP_ENABLED == 'true'. Assim o arquivo pode ser mesclado sem começar a
-# tocar a produção antes de o dono configurar os segredos.
+# Neste branch, este arquivo SUBSTITUI o backup diário por uma recuperação
+# manual dos backups históricos. O backup diário do main continua intacto: o
+# agendamento só roda no branch padrão. O arquivo tem o MESMO caminho do
+# backup.yml do main porque o GitHub só dispara manualmente um workflow que
+# exista no branch padrão; o disparo é feito com ref = recuperacao/senha-backups.
 #
-# Para ativar (uma vez), no GitHub → Settings:
-#   • Variables → BACKUP_ENABLED = true
-#   • Secrets → DATABASE_URL_RO   = string de conexão (idealmente read-only)
-#   • Secrets → BACKUP_PASSPHRASE = senha forte que cifra o dump
-#                                   (guarde-a num cofre, NÃO no repositório)
-#
-# Restauração e teste (“game day”): docs/DR-RUNBOOK.md
+# modo = diagnostico : baixa UM backup DESTE repositório (padrão: o de 20/09,
+#   artefato 10604370780) e tenta decifrá-lo com o secret BACKUP_PASSPHRASE.
+#   Registra só "RESULTADO: OK | FALHOU | ERRO TÉCNICO". Não sobe artefato.
+# modo = transferir  : (só depois de um diagnóstico OK) recifra os backups
+#   aprovados do secret BACKUP_PASSPHRASE para o secret TEMPORÁRIO
+#   BACKUP_PASSPHRASE_TRANSFERENCIA e sobe UM artefato de 3 dias, para o
+#   repositório privado importar. Os artefatos originais NÃO são tocados.
+# Nada aqui imprime senha ou conteúdo do banco. Nada é escrito no GitHub além
+# do artefato de transferência (modo transferir).
 # =============================================================================
-name: Backup do banco (produção)
+name: Recuperação dos backups (branch de recuperação — não fazer merge)
 
 on:
-  schedule:
-    - cron: "0 6 * * *"   # 06:00 UTC ≈ 03:00 BRT (fora do horário escolar)
-  workflow_dispatch: {}    # permite disparo manual para testar
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: 'diagnostico ou transferir'
+        required: true
+        type: choice
+        options: [diagnostico, transferir]
+      confirmacao:
+        description: 'Digite DIAGNOSTICO ou TRANSFERIR (igual ao modo)'
+        required: true
+      artefato:
+        description: 'Só no modo diagnostico: id do artefato (padrão: o de 20/09)'
+        required: false
+        default: '10604370780'
+      ids:
+        description: 'Só no modo transferir: ids aprovados, separados por vírgula'
+        required: false
+        default: '10604370780,10690878242,10746600820,11032708030,11415732920,11820675729'
 
 permissions:
   contents: read
+  actions: read    # baixar artefatos DESTE repositório com o token efêmero do job
+
+concurrency:
+  group: recuperacao-backups
+  cancel-in-progress: false
 
 jobs:
-  backup:
-    if: vars.BACKUP_ENABLED == 'true'
+  # Disparo com modo e confirmação que não combinam termina VERMELHO (e não
+  # "verde sem nada", que poderia ser lido como sucesso).
+  conferir-entrada:
+    if: "!((inputs.modo == 'diagnostico' && inputs.confirmacao == 'DIAGNOSTICO') || (inputs.modo == 'transferir' && inputs.confirmacao == 'TRANSFERIR'))"
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - run: |
+          echo "::error::modo e confirmação não combinam: nada foi executado."
+          exit 1
 
-      - name: Instalar postgresql-client 17 (mesma major do Supabase)
-        # O runner do GitHub traz o client 16; o Supabase roda Postgres 17 e o
-        # pg_dump exige client >= versão do servidor. Adiciona o repositório
-        # oficial (PGDG) e instala o client 17.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl ca-certificates
-          sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-            --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
-          # O runner já tinha o client 16 no PATH. Coloca o 17 na FRENTE do PATH
-          # para os passos seguintes (senão o pg_dump 16 é usado e dá mismatch).
-          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
-
-      - name: Gerar backup cifrado
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL_RO }}
-          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
-        run: bash backend/scripts/backup_postgres.sh ./backups
-
-      - name: Guardar off-site (artefato retido 30 dias)
-        uses: actions/upload-artifact@v4
+  diagnostico:
+    if: inputs.modo == 'diagnostico' && inputs.confirmacao == 'DIAGNOSTICO'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
-          name: backup-postgres-${{ github.run_id }}
-          path: backups/*.enc
-          retention-days: 30
+          persist-credentials: false
+      - name: Diagnóstico — o secret abre o backup? (só OK / FALHOU / ERRO TÉCNICO)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          ARTEFATO: ${{ inputs.artefato }}
+        run: bash .github/recuperacao/diagnosticar_senha.sh "$ARTEFATO"
+
+  transferir:
+    if: inputs.modo == 'transferir' && inputs.confirmacao == 'TRANSFERIR'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Recifrar para a senha de transferência (originais intactos)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          BACKUP_PASSPHRASE_TRANSFERENCIA: ${{ secrets.BACKUP_PASSPHRASE_TRANSFERENCIA }}
+          IDS: ${{ inputs.ids }}
+        run: bash .github/recuperacao/transferir_backups.sh "$IDS" ./transferencia
+      - name: Guardar para o repositório privado importar (artefato de 3 dias)
+        id: transferencia
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: transferencia-backups-${{ github.run_id }}
+          path: transferencia/
+          retention-days: 3
           if-no-files-found: error
-
-      - name: Sinal de vida (dead-man's-switch)
-        # A cada backup BEM-SUCEDIDO, pinga um monitor externo (ex.: healthchecks.io,
-        # grátis). Se o ping PARAR (backup falhou ou não rodou), o monitor avisa o
-        # dono por e-mail — é o alarme de "nenhum backup nas últimas ~26h", que o
-        # GitHub sozinho não dá. Sem o segredo configurado, o passo é ignorado.
-        if: success()
+      - name: Id do artefato de transferência (entrada da importação no repositório privado)
         env:
-          HEARTBEAT_URL: ${{ secrets.BACKUP_HEARTBEAT_URL }}
+          ID_TRANSFERENCIA: ${{ steps.transferencia.outputs.artifact-id }}
         run: |
-          if [ -n "$HEARTBEAT_URL" ]; then
-            curl -fsS -m 15 --retry 3 "$HEARTBEAT_URL" || true
-          else
-            echo "BACKUP_HEARTBEAT_URL não configurado — pulando o sinal de vida."
-          fi
-
-      - name: Avisar se o backup FALHOU
-        # Em QUALQUER falha, notifica um webhook (Slack/Discord/genérico) se
-        # configurado. Independente disso, o GitHub já envia e-mail ao dono quando
-        # um workflow agendado falha (aviso padrão) — este passo é um reforço.
-        if: failure()
-        env:
-          ALERT_WEBHOOK: ${{ secrets.BACKUP_ALERT_WEBHOOK }}
-        run: |
-          if [ -n "$ALERT_WEBHOOK" ]; then
-            curl -fsS -m 15 -X POST -H 'Content-Type: application/json' \
-              -d '{"text":"⚠️ Constela Edu: o BACKUP diario do banco FALHOU. Verifique o GitHub Actions."}' \
-              "$ALERT_WEBHOOK" || true
-          else
-            echo "BACKUP_ALERT_WEBHOOK não configurado — pulando o aviso de falha."
-          fi
-
-      # OPCIONAL (recomendado ao escalar para rede municipal): enviar também
-      # para um bucket S3/Backblaze com versionamento e Object Lock, em vez de
-      # depender só do artefato do GitHub. Ver docs/DR-RUNBOOK.md §“Off-site”.
+          echo "ID DO ARTEFATO DE TRANSFERÊNCIA: ${ID_TRANSFERENCIA}"
+          echo "### Id do artefato de transferência: **${ID_TRANSFERENCIA}**" >> "$GITHUB_STEP_SUMMARY"
