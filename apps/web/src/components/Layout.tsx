@@ -235,13 +235,14 @@ function gruposDoPerfil(p: Perfil): GrupoNav[] {
     { chave: "sistema", rotulo: "Sistema", icone: Settings, itens: [IT.metricas, IT.configuracoes] },
   ];
   // 🏛️ Secretaria — navegação ENXUTA: o Painel da Rede é o centro de comando
-  // (mapa, metas, vitrine, avaliações, boletim vivem lá dentro) e o Panorama é a
-  // visão geral. Sem atalhos duplicados — tudo o que existia como item aqui já
-  // está acessível dentro dessas duas telas (ver relatório). Permissões e
+  // (mapa, metas, vitrine, boletim vivem lá dentro) e o Panorama é a visão geral.
+  // As Avaliações Externas (indicadores oficiais: ICA, SARESP, Ideb/Saeb) ganham
+  // item próprio por decisão do dono (D5, 17/10): a Secretaria lê a rede inteira —
+  // só leitura; importar e desfazer é do admin global (D4). Permissões e
   // blindagem de PII inalteradas (backend: turmas_permitidas=[], etc.).
   if (p.secretaria) return [
     { chave: "principal", rotulo: "Principal", icone: LayoutDashboard, itens: [IT.panoramaRede] },
-    { chave: "rede", rotulo: "Rede Municipal", icone: Landmark, itens: [IT.painelRede] },
+    { chave: "rede", rotulo: "Rede Municipal", icone: Landmark, itens: [IT.painelRede, IT.avaliacoesRede] },
   ];
   // 🏫 Coordenador — administra a própria escola de ponta a ponta.
   if (p.gestor) return [

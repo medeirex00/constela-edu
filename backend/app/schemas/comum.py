@@ -528,6 +528,8 @@ class RedeOut(ORMModel):
     nome: str
     uf: str | None = None
     codigo_ibge: str | None = None
+    # CODMUN da SEDUC-SP (SARESP por município) — NÃO é o IBGE.
+    codigo_municipio_estadual: str | None = None
     status: str = "ativa"
 
 
@@ -535,6 +537,8 @@ class RedeCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     uf: str | None = Field(default=None, max_length=2)
     codigo_ibge: str | None = Field(default=None, max_length=7)
+    # Só dígitos (o CODMUN da SEDUC; Caraguatatuba = 254). "" = sem código.
+    codigo_municipio_estadual: str | None = Field(default=None, pattern=r"^\d{0,8}$")
 
 
 class RedeUpdate(BaseModel):
@@ -542,6 +546,8 @@ class RedeUpdate(BaseModel):
     nome: str | None = Field(default=None, min_length=2, max_length=200)
     uf: str | None = Field(default=None, max_length=2)
     codigo_ibge: str | None = Field(default=None, max_length=7)
+    # CODMUN da SEDUC-SP, só dígitos; "" limpa. Nunca deduzido do nome do município.
+    codigo_municipio_estadual: str | None = Field(default=None, pattern=r"^\d{0,8}$")
     status: str | None = Field(default=None, pattern="^(ativa|inativa)$")
 
 

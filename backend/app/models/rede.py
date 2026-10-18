@@ -26,6 +26,11 @@ class Rede(Base):
     # Código IBGE do município (7 dígitos) — chave normalizada para agregação
     # municipal, independente de variações de grafia do nome da cidade.
     codigo_ibge: Mapped[str | None] = mapped_column(String(7), index=True)
+    # Código do município na SEDUC-SP (``CODMUN`` dos arquivos do SARESP; NÃO é o
+    # IBGE — Caraguatatuba = 254). Recorta o SARESP por município (0035). Gravado
+    # uma vez e conferido na prévia (o arquivo mostra o nome do CODMUN) — nunca
+    # casado pelo nome do município.
+    codigo_municipio_estadual: Mapped[str | None] = mapped_column(String(8), default=None)
     status: Mapped[str] = mapped_column(String(20), default="ativa")  # ativa | inativa
     # Painel público da Secretaria (vitrine SEM login): quando definido, habilita
     # /publico/rede/{token} com as MELHORES ESCOLAS (top 5 em leitura e matemática)

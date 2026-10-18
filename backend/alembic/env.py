@@ -40,8 +40,24 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 target_metadata = Base.metadata
 
 
+def _ddl_transacional_no_sqlite(connection: Connection) -> None:
+    """SQLite: abre a transação ANTES do primeiro DDL. O pysqlite (modo legado) só
+    emite BEGIN antes de INSERT/UPDATE/DELETE, então o CREATE TABLE de uma migração
+    rodava em autocommit: se uma migração seguinte da MESMA execução recusasse (ex.: a
+    0035 com INEP repetido), as tabelas da anterior ficavam criadas com a
+    ``alembic_version`` antiga — e a mensagem "nada foi alterado" mentia; o boot
+    seguinte quebrava com "table ... already exists". Com o BEGIN explícito, a recusa
+    reverte tudo, como no PostgreSQL. O ``PRAGMA foreign_keys=OFF`` de
+    ``aplicar_migracoes`` vem antes (PRAGMA não muda dentro de transação)."""
+    if connection.dialect.name != "sqlite":
+        return
+    if not connection.connection.dbapi_connection.in_transaction:
+        connection.exec_driver_sql("BEGIN")
+
+
 def _executar(connection: Connection) -> None:
     """Configura o contexto sobre uma conexão viva e roda as migrações."""
+    _ddl_transacional_no_sqlite(connection)
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -93,6 +109,9 @@ def run_migrations_online() -> None:
     )
     with connectable.connect() as connection:
         _executar(connection)
+        # No SQLite a transação foi aberta antes do Alembic (DDL transacional), que então
+        # não a fecha: o commit é daqui. No PostgreSQL o Alembic já fez o commit (no-op).
+        connection.commit()
 
 
 if context.is_offline_mode():

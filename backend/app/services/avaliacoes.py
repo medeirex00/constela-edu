@@ -30,6 +30,52 @@ from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvalia
 # qualquer arquivo real por escola (o país tem ~200 mil escolas).
 _MAX_LINHAS_IMPORT = 1_000_000
 
+# EXIBIÇÃO por chave: vale em TODA saída da API que mostra o nome, o órgão (e a
+# descrição) da avaliação, MESMO com a linha antiga do banco dizendo outra coisa —
+# `obter_avaliacao` não reescreve linha existente, e aqui não há migração.
+# Decisão D1 do dono: a série `crianca_alfabetizada` é uma ESTIMATIVA calculada
+# pelo Constela a partir do SARESP do 2º ano (Suficiente + Avançado), por escola —
+# NÃO é o Indicador Criança Alfabetizada do INEP (que é da rede). A chave fica. O
+# ÓRGÃO segue a mesma regra (o número é do Constela, não do INEP/CAEd) — isso
+# reabre a decisão de 2026-08-04, que manteve "INEP / CAEd": PENDE o dono confirmar.
+# `nome_curto` é o do eixo do gráfico (o nome inteiro não cabe na altura dele).
+# Reverter = tirar a entrada daqui: a API volta ao que está no banco, e o CATALOGO
+# e o rótulo do preset (routers/avaliacoes.py) caem no texto anterior à D1, sem
+# quebrar o import. MAS a instalação criada com a entrada já gravou o rótulo novo
+# na linha do catálogo (e o mantém: lá, voltar exige corrigir a linha), e a `dica`
+# do preset é texto à parte.
+_EXIBICAO: dict[str, dict[str, str]] = {
+    "crianca_alfabetizada": {
+        "nome": "Estimativa Constela de alfabetização (SARESP 2º ano) — não é o indicador oficial",
+        "nome_curto": "Estimativa Constela (SARESP 2º ano)",
+        "orgao": "Constela (estimativa a partir do SARESP)",
+        "descricao": "Cálculo do Constela, por escola, a partir do SARESP do 2º ano "
+                     "(Suficiente + Avançado). NÃO é o Indicador Criança Alfabetizada do "
+                     "INEP: o oficial é da rede (município) e entrará como série separada.",
+    },
+}
+
+
+def nome_exibicao(chave: str, nome: str | None) -> str | None:
+    """Nome que a API MOSTRA para a avaliação (o do banco, salvo em `_EXIBICAO`)."""
+    return _EXIBICAO.get(chave, {}).get("nome", nome)
+
+
+def nome_curto_exibicao(chave: str, nome: str | None) -> str | None:
+    """Nome para espaço curto (eixo do gráfico): o `nome_curto`, senão o de exibição."""
+    return _EXIBICAO.get(chave, {}).get("nome_curto", nome_exibicao(chave, nome))
+
+
+def orgao_exibicao(chave: str, orgao: str | None) -> str | None:
+    """Órgão que a API MOSTRA (o do banco, salvo em `_EXIBICAO`)."""
+    return _EXIBICAO.get(chave, {}).get("orgao", orgao)
+
+
+def descricao_exibicao(chave: str, descricao: str | None) -> str | None:
+    """Descrição que a API MOSTRA (a do banco, salvo em `_EXIBICAO`)."""
+    return _EXIBICAO.get(chave, {}).get("descricao", descricao)
+
+
 # Catálogo inicial (extensível: adicionar aqui + um mapeamento na tela). O IDEB
 # entra como INDICADOR (derivado), separado das avaliações de desempenho.
 CATALOGO = {
@@ -37,22 +83,78 @@ CATALOGO = {
              "descricao": "Sistema de Avaliação da Educação Básica (proficiência em escala SAEB)."},
     "ideb": {"nome": "IDEB", "tipo": "indicador", "orgao": "INEP",
              "descricao": "Índice derivado: desempenho (SAEB) × fluxo (aprovação). Não é medição direta."},
+    # A descrição antiga dizia "rede estadual": o SARESP cobre também as redes
+    # municipais que aderem. A linha já gravada é corrigida pela migração 0035.
     "saresp": {"nome": "SARESP", "tipo": "avaliacao", "orgao": "SEDUC-SP",
-               "descricao": "Avaliação de rendimento da rede estadual de São Paulo."},
-    "crianca_alfabetizada": {"nome": "Criança Alfabetizada", "tipo": "avaliacao", "orgao": "INEP / CAEd",
-                             "descricao": "Avaliação de alfabetização (2º ano do EF)."},
+               "descricao": "Sistema de Avaliação de Rendimento Escolar do Estado de São "
+                            "Paulo (SEDUC-SP): rede estadual e redes municipais que aderem "
+                            "(proficiência em escala SARESP)."},
+    # Instalação nova já nasce com o rótulo da D1 (a antiga é coberta por `_EXIBICAO`);
+    # sem a entrada lá, cai no texto anterior à D1 (o 2º argumento).
+    "crianca_alfabetizada": {
+        "nome": nome_exibicao("crianca_alfabetizada", "Criança Alfabetizada"),
+        "tipo": "avaliacao",
+        "orgao": orgao_exibicao("crianca_alfabetizada", "INEP / CAEd"),
+        "descricao": descricao_exibicao("crianca_alfabetizada",
+                                        "Avaliação de alfabetização (2º ano do EF)."),
+    },
     # CAEd como FONTE/tipo próprio (decisão do dono 2026-08-04): as avaliações do CAEd
-    # entram como avaliações SEPARADAS, sem alterar "Criança Alfabetizada" (que segue
-    # como está). Ainda SEM preset de import de 1 clique — o mapeamento de colunas
-    # será travado com o ARQUIVO OFICIAL de cada avaliação (não inventar formato); a
-    # tela já permite importar por mapeamento manual quando o arquivo existir.
+    # entram como avaliações SEPARADAS, sem alterar a série `crianca_alfabetizada`
+    # (chave e dados seguem; só o RÓTULO e o órgão exibidos mudaram, pela D1).
+    # Ainda SEM preset de import de 1 clique — o mapeamento de colunas será travado
+    # com o ARQUIVO OFICIAL de cada avaliação (não inventar formato); a tela já
+    # permite importar por mapeamento manual quando o arquivo existir.
     "caed_fluencia": {"nome": "CAEd — Fluência Leitora", "tipo": "avaliacao", "orgao": "CAEd",
                       "descricao": "Fluência leitora aplicada pelo CAEd. Mapeamento de "
                                    "importação a configurar com o arquivo oficial."},
     "caed_diagnostica": {"nome": "CAEd — Avaliação Diagnóstica", "tipo": "avaliacao", "orgao": "CAEd",
                          "descricao": "Avaliação diagnóstica do CAEd. Mapeamento de "
                                       "importação a configurar com o arquivo oficial."},
+    # O ICA OFICIAL (etapa E2 dos indicadores): número da REDE, não da escola. Os
+    # resultados ficam em `indicadores_referencia` (município, UF e Brasil), com
+    # importação própria (services/indicadores) — nunca em `resultados_avaliacao`.
+    "ica": {"nome": "Indicador Criança Alfabetizada (ICA)", "tipo": "indicador", "orgao": "INEP",
+            "descricao": "Indicador oficial do Compromisso Nacional Criança Alfabetizada: "
+                         "percentual de alunos do 2º ano da REDE municipal com 743 pontos ou "
+                         "mais na escala Saeb de Língua Portuguesa. É da rede (município); "
+                         "não existe por escola."},
+    # O IEE da SEDUC (etapa E4): nota, meta e cumprimento da meta POR ESCOLA da rede
+    # municipal, a partir do SARESP do 2º e do 5º ano. Fica em
+    # `indicadores_referencia` (abrangência escola), com importação própria — a
+    # proficiência oficial do SARESP que vem no mesmo arquivo vai para
+    # `resultados_avaliacao` (chave `saresp`).
+    "iee": {"nome": "Índice de Excelência Educacional (IEE)", "tipo": "indicador",
+            "orgao": "SEDUC-SP",
+            "descricao": "Índice da SEDUC-SP por escola municipal, calculado a partir do "
+                         "SARESP do 2º e do 5º ano: nota, meta da escola e cumprimento da "
+                         "meta. Não é proficiência."},
 }
+
+# Chaves com fluxo PRÓPRIO, com prévia e desfazer, em `services/indicadores`: não
+# entram na importação por escola (upload manual, robô) nem no seletor dela. O ICA
+# só existe por território (município/UF/Brasil); o IEE vem do arquivo oficial da
+# SEDUC, junto com a proficiência e a participação do SARESP.
+SO_REFERENCIA = frozenset({"ica", "iee"})
+
+# SAEB e SARESP gravam a SÉRIE avaliada como etapa (0035): "5_ano" (e "2_ano" no
+# SARESP). "anos_iniciais" fica para o IDEB — numa série do SAEB/SARESP ele criaria
+# uma série paralela à normalizada (e, no SARESP, misturaria o 2º com o 5º ano).
+_ETAPA_POR_SERIE = frozenset({"saeb", "saresp"})
+_MSG_ETAPA_POR_SERIE = ("Para o SAEB e o SARESP, a etapa é a SÉRIE avaliada: use “5_ano” (ou "
+                        "“2_ano” no SARESP), não “anos_iniciais” — esse rótulo fica para o "
+                        "IDEB. Nada foi gravado.")
+
+
+def _eh_anos_iniciais(etapa) -> bool:
+    """'anos_iniciais', 'Anos Iniciais', 'anos-iniciais' → True (o rótulo do IDEB)."""
+    return "_".join(str(etapa or "").replace("-", " ").casefold().split()) == "anos_iniciais"
+
+
+def exigir_etapa_por_serie(avaliacao_chave: str, etapa) -> None:
+    """LEVANTA ``ImportacaoRecusada`` se a etapa de um SAEB/SARESP for "anos_iniciais".
+    Vale para a importação manual, o 1 clique, o robô e o cadastro da receita dele."""
+    if avaliacao_chave in _ETAPA_POR_SERIE and _eh_anos_iniciais(etapa):
+        raise ImportacaoRecusada(_MSG_ETAPA_POR_SERIE)
 
 
 def obter_avaliacao(db: Session, chave: str) -> AvaliacaoExterna:
@@ -191,6 +293,74 @@ def _dimensao(linha: list, col: int | None, fixo: str | None) -> str | None:
     return None
 
 
+class ImportacaoRecusada(ValueError):
+    """Importação recusada ANTES de gravar qualquer linha (layout que não confere,
+    cadastro ambíguo). A mensagem vai como está para a tela (HTTP 400)."""
+
+
+# --- Layout oficial do INEP (Ideb/Saeb por escola) --------------------------
+
+# A planilha oficial tem pré-âmbulo e cabeçalho em várias linhas; a ÚLTIMA delas é
+# a linha TÉCNICA, com os nomes das variáveis (SG_UF, ID_ESCOLA, VL_OBSERVADO_2023...).
+# Ela é procurada só no topo do arquivo (em 2023 é a 8ª linha não-vazia).
+_LINHAS_TOPO_INEP = 20
+
+
+def localizar_colunas_inep(conteudo: bytes, nome: str, exigidas: list[str], *,
+                           marcadores_etapa: tuple[str, ...],
+                           arquivo_esperado: str) -> tuple[int, dict[str, int]]:
+    """Acha a linha técnica (a que contém a célula ``ID_ESCOLA``) nas primeiras
+    linhas não-vazias e localiza cada variável ``exigidas`` PELO NOME. Devolve
+    ``(linha_dados, {variável: índice})`` — os dados começam na linha não-vazia
+    seguinte à técnica, no mesmo índice que ``importar_resultados`` usa.
+
+    A ETAPA também é conferida: os arquivos de Anos Iniciais, Anos Finais e Ensino
+    Médio usam os MESMOS nomes de variável (VL_OBSERVADO_2023 em todos); só o topo
+    diz a etapa ("Ensino Fundamental Regular - Anos Iniciais", "1º ao 5º ano").
+    Alguma célula ACIMA da linha técnica tem de conter um dos ``marcadores_etapa``
+    (sem diferenciar maiúsculas) — senão o arquivo de outra etapa gravaria por cima
+    da série desta (a chave é escola+etapa+componente+turma).
+
+    LEVANTA ``ImportacaoRecusada`` se a linha técnica não existir, se o topo não
+    trouxer a etapa, se faltar uma variável ou se ela aparecer repetida. NUNCA cai
+    de volta para posição fixa: a edição seguinte insere colunas novas em cada
+    bloco, e ler pela posição de 2023 gravaria outra variável como se fosse a
+    edição escolhida. ``arquivo_esperado`` completa a mensagem ("confira se é ...")."""
+    topo: list[str] = []   # células das linhas acima da técnica (pré-âmbulo + cabeçalho)
+    for i, linha in enumerate(islice(_iterar_grade(conteudo, nome), _LINHAS_TOPO_INEP)):
+        nomes = ["" if c is None else str(c).strip().upper() for c in linha]
+        if "ID_ESCOLA" not in nomes:
+            topo.extend(str(c).casefold() for c in linha if c is not None)
+            continue
+        if not any(m.casefold() in celula for celula in topo for m in marcadores_etapa):
+            marcas = " nem ".join(f'"{m}"' for m in marcadores_etapa)
+            raise ImportacaoRecusada(
+                f"O cabeçalho do arquivo não indica a etapa esperada (não traz {marcas}); "
+                f"confira se é {arquivo_esperado}. Nada foi gravado.")
+        indices: dict[str, int] = {}
+        faltam, repetidas = [], []
+        for variavel in exigidas:
+            posicoes = [j for j, n in enumerate(nomes) if n == variavel.upper()]
+            if not posicoes:
+                faltam.append(variavel)
+            elif len(posicoes) > 1:
+                repetidas.append(variavel)
+            else:
+                indices[variavel] = posicoes[0]
+        if faltam:
+            raise ImportacaoRecusada(
+                f"O arquivo não tem a coluna {', '.join(faltam)}; confira se é "
+                f"{arquivo_esperado}. Nada foi gravado.")
+        if repetidas:
+            raise ImportacaoRecusada(
+                f"A coluna {', '.join(repetidas)} aparece mais de uma vez no arquivo; "
+                f"confira se é {arquivo_esperado}. Nada foi gravado.")
+        return i + 1, indices
+    raise ImportacaoRecusada(
+        "Não encontrei a linha técnica do INEP (a que tem a coluna ID_ESCOLA) no "
+        f"começo do arquivo; confira se é {arquivo_esperado}. Nada foi gravado.")
+
+
 # --- Importação --------------------------------------------------------------
 
 def importar_resultados(
@@ -211,19 +381,54 @@ def importar_resultados(
     (chave: escola+etapa+componente+turma). A idempotência assume imports NÃO
     concorrentes da mesma (avaliação, edição, indicador) — é uma ação de gestão,
     sob demanda; não há corrida esperada.
-    """
-    avaliacao = obter_avaliacao(db, avaliacao_chave)
 
+    LEVANTA ``ImportacaoRecusada`` (antes de gravar qualquer coisa) se duas escolas
+    do escopo tiverem o MESMO código INEP normalizado: casar com uma delas seria
+    escolher em silêncio de quem é o resultado — e se a etapa de um SAEB/SARESP for
+    "anos_iniciais" (desde a 0035 a etapa deles é a série: "5_ano"/"2_ano"), seja a
+    etapa fixa, seja a lida da COLUNA (``col_etapa``) em qualquer linha com INEP e
+    valor: o arquivo inteiro é recusado antes de gravar a 1ª linha.
+
+    Linha que veio de uma importação OFICIAL com prévia (``importacao_id``) NÃO é
+    sobrescrita pela importação manual: fica como está e é contada em
+    ``mantidos_oficiais`` (trocá-la é pela importação oficial — prévia e desfazer).
+    """
+    if col_etapa is None:
+        exigir_etapa_por_serie(avaliacao_chave, etapa_fixa)
+    elif avaliacao_chave in _ETAPA_POR_SERIE:
+        # A etapa vem célula a célula: confere o arquivo TODO antes de gravar (o laço
+        # de baixo grava enquanto lê, e o robô não desfaz o que já entrou na sessão).
+        recusadas = sum(
+            1 for linha in islice(_iterar_grade(conteudo, nome), linha_dados,
+                                  linha_dados + _MAX_LINHAS_IMPORT)
+            if normalizar_inep(_cel(linha, col_inep)) is not None
+            and _num(_cel(linha, col_valor)) is not None
+            and _eh_anos_iniciais(_dimensao(linha, col_etapa, None)))
+        if recusadas:
+            raise ImportacaoRecusada(
+                f"{recusadas} linha(s) do arquivo trazem “anos_iniciais” na coluna da "
+                f"etapa. {_MSG_ETAPA_POR_SERIE}")
     # Índice CÓDIGO INEP -> (escola_id, rede_id), só das escolas do escopo.
-    q = select(Escola.id, Escola.rede_id, Escola.codigo_inep).where(
+    q = select(Escola.id, Escola.rede_id, Escola.codigo_inep, Escola.nome).where(
         Escola.codigo_inep.isnot(None))
     if escopo_escolas is not None:
         q = q.where(Escola.id.in_(escopo_escolas))
     por_inep = {}
-    for eid, rid, inep in db.execute(q):
+    nomes_por_inep: dict[str, list[str]] = {}
+    for eid, rid, inep, nome_escola in db.execute(q.order_by(Escola.nome, Escola.id)):
         chave = normalizar_inep(inep)
         if chave:
             por_inep[chave] = (eid, rid)
+            nomes_por_inep.setdefault(chave, []).append(nome_escola)
+    duplicados = {k: v for k, v in nomes_por_inep.items() if len(v) > 1}
+    if duplicados:
+        lista = "; ".join(f"{k} ({', '.join(v)})" for k, v in sorted(duplicados.items()))
+        raise ImportacaoRecusada(
+            "Importação recusada: o mesmo código INEP está cadastrado em mais de uma "
+            f"escola — {lista}. Corrija o cadastro (cada escola com o seu INEP) e "
+            "importe de novo. Nada foi gravado.")
+
+    avaliacao = obter_avaliacao(db, avaliacao_chave)
 
     # Resultados JÁ existentes desta (avaliação, edição, indicador) no escopo, para
     # atualizar em vez de duplicar. Chave: (escola_id, etapa, componente, turma).
@@ -240,6 +445,7 @@ def importar_resultados(
 
     fonte = f"{avaliacao.nome} {edicao} — {nome}"[:200]
     inseridos = atualizados = casados = nao_casados = ignorados = processadas = 0
+    mantidos_oficiais = 0
     inep_nao_casados: set[str] = set()
     truncado = False
 
@@ -257,8 +463,7 @@ def importar_resultados(
         alvo = por_inep.get(inep)
         if alvo is None:
             nao_casados += 1
-            if len(inep_nao_casados) < 50:
-                inep_nao_casados.add(inep)
+            inep_nao_casados.add(inep)   # TODOS (a tela decide quanto mostrar)
             continue
         escola_id, rede_id = alvo
         etapa = _dimensao(linha, col_etapa, etapa_fixa)
@@ -268,6 +473,9 @@ def importar_resultados(
 
         chave = (escola_id, etapa, componente, turma)
         atual = existentes.get(chave)
+        if atual is not None and atual.importacao_id is not None:
+            mantidos_oficiais += 1        # número oficial (com prévia): não se mexe aqui
+            continue
         if atual is not None:
             atual.valor, atual.unidade, atual.fonte = valor, unidade, fonte
             atual.rede_id, atual.codigo_inep = rede_id, inep
@@ -291,10 +499,24 @@ def importar_resultados(
         "casados": casados,
         "inseridos": inseridos,
         "atualizados": atualizados,
-        "nao_casados": nao_casados,
+        "nao_casados": nao_casados,          # linhas (com INEP e valor) sem escola
         "ignorados": ignorados,
-        "inep_nao_casados_amostra": sorted(inep_nao_casados)[:20],
+        # linhas casadas que JÁ têm o número oficial (importação com prévia): mantidas
+        "mantidos_oficiais": mantidos_oficiais,
+        # A lista COMPLETA dos códigos (distintos) sem escola no escopo — antes era
+        # uma amostra de 20 e o gestor não tinha como conferir o resto.
+        "inep_nao_casados": sorted(inep_nao_casados),
     }
+
+
+def resumo_para_auditoria(resumo: dict) -> dict:
+    """O resumo SEM a lista completa de códigos não casados (o arquivo nacional do
+    INEP tem ~65 mil escolas — a trilha de auditoria guarda a contagem, e uma
+    amostra, não o arquivo inteiro). A resposta da API segue com a lista toda."""
+    saida = {k: v for k, v in resumo.items() if k != "inep_nao_casados"}
+    if "inep_nao_casados" in resumo:
+        saida["inep_nao_casados_amostra"] = resumo["inep_nao_casados"][:20]
+    return saida
 
 
 # --- Correlação / evolução (cruzar avaliação × engajamento) -------------------
@@ -306,7 +528,11 @@ def _escolas_da_rede_ids(db: Session, rede_id: int) -> list[int]:
 def opcoes_rede(db: Session, rede_id: int) -> list[dict]:
     """As séries de avaliação que EXISTEM para as escolas da rede — por
     (avaliação, indicador, etapa, componente) e as edições presentes. A tela usa
-    para montar os seletores sem oferecer combinação vazia."""
+    para montar os seletores sem oferecer combinação vazia.
+
+    Só linhas de ESCOLA com VALOR (desde a 0035): a ausência registrada (valor
+    nulo + motivo) não cria série nem edição. Nunca lê `indicadores_referencia`:
+    metas, níveis e números de município/UF/Brasil não entram aqui."""
     ids = _escolas_da_rede_ids(db, rede_id)
     if not ids:
         return []
@@ -315,14 +541,16 @@ def opcoes_rede(db: Session, rede_id: int) -> list[dict]:
                ResultadoAvaliacao.indicador, ResultadoAvaliacao.etapa,
                ResultadoAvaliacao.componente, ResultadoAvaliacao.edicao)
         .join(ResultadoAvaliacao, ResultadoAvaliacao.avaliacao_id == AvaliacaoExterna.id)
-        .where(ResultadoAvaliacao.escola_id.in_(ids))
+        .where(ResultadoAvaliacao.escola_id.in_(ids),
+               ResultadoAvaliacao.valor.isnot(None))
         .distinct()
     ).all()
     series: dict[tuple, dict] = {}
     for chave, nome, tipo, indicador, etapa, componente, edicao in linhas:
         k = (chave, indicador, etapa, componente)
         s = series.setdefault(k, {
-            "avaliacao": chave, "nome": nome, "tipo": tipo, "indicador": indicador,
+            "avaliacao": chave, "nome": nome_exibicao(chave, nome), "tipo": tipo,
+            "indicador": indicador,
             "etapa": etapa, "componente": componente, "edicoes": set()})
         s["edicoes"].add(edicao)
     saida = []
@@ -373,9 +601,12 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
     def _filtro(q):
         # ESCOPO da rede (isolamento): só resultados das escolas DESTA rede — senão
         # a evolução somaria escolas de outras redes que importaram a mesma série.
+        # Só com VALOR (0035): a ausência (valor nulo + motivo) não é ponto nem conta
+        # escola na evolução — ausência ≠ zero, e também não é "uma escola a mais".
         q = q.where(ResultadoAvaliacao.avaliacao_id == av.id,
                     ResultadoAvaliacao.indicador == indicador,
-                    ResultadoAvaliacao.escola_id.in_(ids))
+                    ResultadoAvaliacao.escola_id.in_(ids),
+                    ResultadoAvaliacao.valor.isnot(None))
         q = q.where(ResultadoAvaliacao.etapa == etapa) if etapa else q.where(
             ResultadoAvaliacao.etapa.is_(None))
         q = q.where(ResultadoAvaliacao.componente == componente) if componente else q.where(
@@ -416,7 +647,8 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
                 for e, m, n in ev]
 
     return {
-        "avaliacao": av.chave, "nome": av.nome, "tipo": av.tipo,
+        "avaliacao": av.chave, "nome": nome_exibicao(av.chave, av.nome), "tipo": av.tipo,
+        "nome_curto": nome_curto_exibicao(av.chave, av.nome),   # eixo do gráfico
         "indicador": indicador, "etapa": etapa, "componente": componente,
         "edicao": edicao, "metrica": metrica,
         "pontos": pontos, "n": len(pontos), "pearson": pearson,
@@ -518,6 +750,8 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
             col_turma=m.get("col_turma"),
             etapa_fixa=m.get("etapa_fixa"), componente_fixo=m.get("componente_fixo"),
             escopo_escolas=None)  # global: casa qualquer escola da base por código INEP
+        # Persistido (e relido a cada listagem): contagem + amostra, como antes.
+        resumo = resumo_para_auditoria(resumo)
         fonte.ultimo_status, fonte.ultimo_erro, fonte.ultimo_resumo = "ok", None, resumo
     except Exception as exc:  # noqa: BLE001 — nunca quebra: registra o erro
         fonte.ultimo_status = "erro"

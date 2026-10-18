@@ -8,6 +8,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { usePerfil } from "../hooks/usePerfil";
 import { nota, numero, tempoLeitura } from "../lib/formato";
+import IndicadoresDaEscola from "./IndicadoresDaEscola";
 
 interface ResumoTurma {
   turma: { id: number; nome: string; ano_escolar: string };
@@ -117,6 +118,8 @@ export default function VisaoEscola() {
           </div>
         )}
       </Card>
+      {/* Indicadores oficiais (E9, D5): só esta escola + as referências da rede/SP/Brasil. */}
+      <IndicadoresDaEscola escolaId={escolaId} />
     </div>
   );
 }

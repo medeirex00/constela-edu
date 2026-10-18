@@ -72,7 +72,49 @@ interface Gerenciar {
   usuarios: UsuarioItem[];
 }
 
-type Aviso = { tipo: "ok" | "erro"; texto: string } | null;
+// `detalhes`: uma linha por item que falhou, com a mensagem do backend (ex.: o 409 de
+// um código INEP que já é de outra escola) — "N com erro" sozinho não diz o que fazer.
+type Aviso = { tipo: "ok" | "erro"; texto: string; detalhes?: string[] } | null;
+
+// O mesmo código INEP em 8 dígitos que o backend compara (`normalizar_inep`): "035012345"
+// e "35012345" são o mesmo código.
+function inepNormalizado(valor: string | null | undefined): string {
+  const digitos = (valor ?? "").trim().replace(/\.0$/, "").replace(/\D/g, "");
+  return digitos ? digitos.padStart(8, "0").slice(-8) : "";
+}
+
+// Troca (A↔B) ou ciclo (A→B→C→A) dentro do MESMO lote: cada 409 diz "corrija primeiro a
+// outra escola", o que é circular — a outra também espera. O que resolve é liberar um código.
+const DICA_TROCA_INEP = "Como resolver: os códigos estão sendo trocados entre escolas deste "
+  + "lote e nenhuma ordem de salvamento resolve isso. Apague o código de uma delas, clique em "
+  + "Salvar códigos e depois preencha os novos.";
+
+// Há troca só quando as esperas fecham um CICLO dentro do lote: seguindo "escola em espera →
+// a escola, também em espera, que HOJE tem o código que ela pede", o caminho volta a uma
+// escola já vista. Se o caminho sai do grupo (o código é de uma escola fora do lote — de
+// outra rede, por exemplo — ou de ninguém), é bloqueio de fora: apagar o código de uma
+// escola do lote não resolve, e a mensagem do backend (de quem é o código) é o que orienta.
+// `atual`: o código de hoje (normalizado) de cada escola, de qualquer rede.
+function haTrocaNoLote(pedidos: { id: number; valor: string }[],
+                       atual: Map<number, string>): boolean {
+  const esperando = pedidos.map((p) => p.id);
+  const proxima = new Map<number, number>();
+  for (const { id, valor } of pedidos) {
+    const codigo = inepNormalizado(valor);
+    if (!codigo) continue;
+    const dona = esperando.find((outra) => outra !== id && atual.get(outra) === codigo);
+    if (dona !== undefined) proxima.set(id, dona);
+  }
+  return esperando.some((inicio) => {
+    const vistas = new Set<number>();
+    let escola: number | undefined = inicio;
+    while (escola !== undefined && !vistas.has(escola)) {
+      vistas.add(escola);
+      escola = proxima.get(escola);
+    }
+    return escola !== undefined;            // voltou a uma escola já vista: ciclo
+  });
+}
 
 // Palavras que NÃO distinguem uma escola de outra (tipo de unidade e títulos).
 // Tiradas antes de casar o nome colado com a escola da rede.
@@ -552,23 +594,53 @@ export default function RedeGestao() {
   async function salvarInep() {
     if (!dados || redeSel === null) return;
     setOcupado(true);
+    // O INEP é único (409 quando o código ainda é de OUTRA escola) e cada PATCH vai
+    // sozinho: os que LIMPAM o código vão primeiro (liberam o código para outra escola);
+    // e quem levou 409 tenta de novo enquanto houver progresso — o código pode sair da
+    // outra escola mais adiante no MESMO salvamento (ex.: A recebe o de B, B recebe um
+    // novo). Uma troca entre duas escolas (A↔B) não tem ordem que resolva: segue como
+    // erro, com a mensagem do backend e a dica do que resolve (DICA_TROCA_INEP).
+    // `atual`: o código de HOJE de cada escola (o 409 vem de qualquer rede), atualizado a
+    // cada PATCH aceito — é por ele que se reconhece a troca no fim.
+    const atual = new Map(dados.escolas.map((x) => [x.id, inepNormalizado(x.codigo_inep)]));
+    let troca = false;
+    let fila = dados.escolas
+      .filter((x) => x.rede_id === redeSel)
+      .map((e) => ({ e, valor: (inep[e.id] ?? "").trim() }))
+      .filter(({ e, valor }) => valor !== (e.codigo_inep ?? "")) // nada mudou
+      .sort((a, b) => Number(a.valor !== "") - Number(b.valor !== ""));
     let ok = 0;
-    let falhas = 0;
-    for (const e of dados.escolas.filter((x) => x.rede_id === redeSel)) {
-      const valor = (inep[e.id] ?? "").trim();
-      if (valor === (e.codigo_inep ?? "")) continue; // nada mudou
-      try {
-        await api(`/redes/escolas/${e.id}`, {
-          method: "PATCH", body: JSON.stringify({ codigo_inep: valor }),
-        });
-        ok += 1;
-      } catch {
-        falhas += 1;
+    const erros: string[] = [];
+    while (fila.length > 0) {
+      const conflitos: { item: (typeof fila)[number]; msg: string }[] = [];
+      for (const item of fila) {
+        try {
+          await api(`/redes/escolas/${item.e.id}`, {
+            method: "PATCH", body: JSON.stringify({ codigo_inep: item.valor }),
+          });
+          ok += 1;
+          atual.set(item.e.id, inepNormalizado(item.valor));
+        } catch (err) {
+          // A recusa do backend, como veio (o 409 diz de qual escola é o código).
+          const msg = err instanceof ApiError ? err.message : "não foi possível salvar.";
+          if (err instanceof ApiError && err.status === 409) conflitos.push({ item, msg });
+          else erros.push(`${item.e.nome}: ${msg}`);
+        }
       }
+      if (conflitos.length === fila.length) {           // nenhum progresso: fica o erro
+        erros.push(...conflitos.map(({ item, msg }) => `${item.e.nome}: ${msg}`));
+        // Troca: as esperas fecham um ciclo dentro do lote (não basta uma escola pedir o
+        // código de outra que também espera — a cadeia pode terminar fora do lote).
+        troca = haTrocaNoLote(conflitos.map(({ item }) => ({ id: item.e.id, valor: item.valor })),
+                              atual);
+        break;
+      }
+      fila = conflitos.map(({ item }) => item);
     }
     setAviso({
-      tipo: falhas ? "erro" : "ok",
-      texto: `${ok} código(s) salvo(s)` + (falhas ? `; ${falhas} com erro.` : "."),
+      tipo: erros.length ? "erro" : "ok",
+      texto: `${ok} código(s) salvo(s)` + (erros.length ? `; ${erros.length} com erro:` : "."),
+      detalhes: troca ? [...erros, DICA_TROCA_INEP] : erros,
     });
     recarregar();
     setOcupado(false);
@@ -590,7 +662,16 @@ export default function RedeGestao() {
         }
       />
 
-      {aviso && <Mensagem tipo={aviso.tipo}>{aviso.texto}</Mensagem>}
+      {aviso && (
+        <Mensagem tipo={aviso.tipo}>
+          {aviso.texto}
+          {aviso.detalhes && aviso.detalhes.length > 0 && (
+            <ul className="mt-1 list-disc space-y-0.5 pl-5" data-testid="aviso-detalhes">
+              {aviso.detalhes.map((d) => <li key={d}>{d}</li>)}
+            </ul>
+          )}
+        </Mensagem>
+      )}
 
       {dados && dados.redes.length === 0 ? (
         <Vazio titulo="Nenhuma rede ainda"
@@ -821,7 +902,9 @@ export default function RedeGestao() {
                   <>
                     <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 ${ocupado || escolasNaRede.length === 0 ? "pointer-events-none opacity-50" : ""}`}>
                       <ScanLine size={14} /> Preencher automaticamente
-                      <input type="file" accept=".xlsx,.xls,.csv,.zip" className="hidden"
+                      {/* Só o que o backend lê (o mesmo leitor das avaliações): o .xls
+                          antigo voltaria uma proposta vazia, sem erro. */}
+                      <input type="file" accept=".xlsx,.csv,.zip" className="hidden"
                              onChange={(ev) => { const f = ev.target.files?.[0]; if (f) preencherInep(f); ev.target.value = ""; }} />
                     </label>
                     <Botao onClick={salvarInep} disabled={ocupado || escolasNaRede.length === 0}>

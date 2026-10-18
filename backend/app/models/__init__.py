@@ -8,6 +8,7 @@ from app.models.academico import (
 )
 from app.models.avaliacao_externa import AvaliacaoExterna, ResultadoAvaliacao
 from app.models.fonte_avaliacao import FonteAvaliacao
+from app.models.indicador_referencia import ImportacaoIndicador, IndicadorReferencia
 from app.models.configuracao import (
     Configuracao,
     DificuldadeTurma,
@@ -45,6 +46,8 @@ __all__ = [
     "AvaliacaoExterna",
     "ResultadoAvaliacao",
     "FonteAvaliacao",
+    "ImportacaoIndicador",
+    "IndicadorReferencia",
     "Configuracao",
     "ConversaIA",
     "DispositivoMovel",

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -11,6 +11,15 @@ class Escola(Base):
     """Raiz do modelo multi-tenant: toda informação pertence a uma escola."""
 
     __tablename__ = "escolas"
+    __table_args__ = (
+        # Um código INEP pertence a UMA escola (0035): é a chave que casa as bases
+        # oficiais, e duas escolas com o mesmo código fariam a importação escolher
+        # em silêncio de quem é o resultado. Índice PARCIAL (sem INEP = livre),
+        # igual no SQLite e no PostgreSQL. O PATCH responde 409 antes de chegar aqui.
+        Index("uq_escolas_codigo_inep", "codigo_inep", unique=True,
+              sqlite_where=text("codigo_inep IS NOT NULL"),
+              postgresql_where=text("codigo_inep IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     nome: Mapped[str] = mapped_column(String(200), index=True)

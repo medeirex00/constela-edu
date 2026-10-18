@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
                      UploadFile, status)
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -52,7 +53,8 @@ def listar_redes(
             return []
         consulta = consulta.where(Rede.id == usuario.rede_id)
     return [
-        {"id": r.id, "nome": r.nome, "uf": r.uf, "codigo_ibge": r.codigo_ibge}
+        {"id": r.id, "nome": r.nome, "uf": r.uf, "codigo_ibge": r.codigo_ibge,
+         "codigo_municipio_estadual": r.codigo_municipio_estadual}
         for r in db.execute(consulta).scalars().all()
     ]
 
@@ -78,7 +80,8 @@ def gerenciar(
     return {
         "redes": [
             {"id": r.id, "nome": r.nome, "uf": r.uf,
-             "codigo_ibge": r.codigo_ibge, "status": r.status}
+             "codigo_ibge": r.codigo_ibge,
+             "codigo_municipio_estadual": r.codigo_municipio_estadual, "status": r.status}
             for r in redes
         ],
         "escolas": [
@@ -113,7 +116,8 @@ def criar_rede(
     if repetida is not None:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"Já existe uma rede chamada “{repetida.nome}”.")
-    rede = Rede(nome=nome, uf=(dados.uf or None), codigo_ibge=(dados.codigo_ibge or None))
+    rede = Rede(nome=nome, uf=(dados.uf or None), codigo_ibge=(dados.codigo_ibge or None),
+                codigo_municipio_estadual=(dados.codigo_municipio_estadual or None))
     db.add(rede)
     db.flush()
     registrar(db, "rede.criada", usuario_id=usuario.id, entidade="rede",
@@ -136,6 +140,9 @@ def atualizar_rede(
     alteracoes = dados.model_dump(exclude_unset=True)
     if "nome" in alteracoes:
         alteracoes["nome"] = alteracoes["nome"].strip()
+    if "codigo_municipio_estadual" in alteracoes:
+        # "" limpa (o SARESP por município volta a pedir o código na prévia).
+        alteracoes["codigo_municipio_estadual"] = alteracoes["codigo_municipio_estadual"] or None
     for campo, valor in alteracoes.items():
         setattr(rede, campo, valor)
     registrar(db, "rede.atualizada", usuario_id=usuario.id, entidade="rede",
@@ -227,6 +234,23 @@ def definir_escolas(
     return {"rede_id": rede_id, "escola_ids": sorted(ids_validos)}
 
 
+def _exigir_inep_livre(db: Session, escola: Escola, codigo: str) -> None:
+    """409 quando o código INEP (já normalizado) pertence a OUTRA escola — de
+    qualquer rede: o INEP identifica uma escola só, e duas com o mesmo código fariam
+    a importação oficial escolher em silêncio de quem é o resultado. A comparação é
+    pelo código NORMALIZADO (um cadastro antigo com "035012345" também conta); o
+    índice único ``uq_escolas_codigo_inep`` (0035) é a trava final no banco."""
+    for outra_id, outra_nome, outro_codigo in db.execute(
+            select(Escola.id, Escola.nome, Escola.codigo_inep).where(
+                Escola.id != escola.id, Escola.codigo_inep.isnot(None))):
+        if svc_avaliacoes.normalizar_inep(outro_codigo) == codigo:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"O código INEP {codigo} já pertence à escola “{outra_nome}” (id "
+                f"{outra_id}). Cada escola tem o seu INEP: confira o código ou corrija "
+                "primeiro a outra escola. Nada foi alterado.")
+
+
 @router.patch("/escolas/{escola_id}")
 def atualizar_local_escola(
     escola_id: int,
@@ -243,11 +267,19 @@ def atualizar_local_escola(
         bruto = (alteracoes["codigo_inep"] or "").strip()
         # "" limpa; caso contrário normaliza p/ 8 dígitos (recusa lixo).
         alteracoes["codigo_inep"] = svc_avaliacoes.normalizar_inep(bruto) if bruto else None
+        if alteracoes["codigo_inep"]:
+            _exigir_inep_livre(db, escola, alteracoes["codigo_inep"])
     for campo, valor in alteracoes.items():
         setattr(escola, campo, valor)
     registrar(db, "escola.local_atualizado", escola_id=escola.id, usuario_id=usuario.id,
               entidade="escola", entidade_id=escola.id, detalhes=alteracoes)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:   # outra gravação simultânea levou o mesmo código
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "O código INEP acabou de ser gravado em outra escola. "
+                            "Nada foi alterado.") from exc
     db.refresh(escola)
     return {"id": escola.id, "cidade": escola.cidade, "estado": escola.estado,
             "bairro": escola.bairro, "endereco": escola.endereco,

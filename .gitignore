@@ -53,3 +53,17 @@ exports/*
 # Capturas dos crawlers (contêm dados reais de alunos — NUNCA commitar)
 matific_captura/
 elefante_captura/
+
+# Microdados do INEP e pacotes recortados pelo `preparar` (indicadores oficiais):
+# arquivo oficial CC BY-ND e repositório público — ficam FORA do repo (D13).
+# `pacote_*.zip` cobre o do ICA (pacote_ica_*), o do Ideb (pacote_ideb_*: escolas,
+# município, UF e Brasil) e o da planilha do Saeb (pacote_saeb_*);
+# `divulgacao_*` cobre os zips do Ideb do INEP e a planilha extraída deles (.xlsx/.ods);
+# `saeb_*.xlsx` e `Resultados_Saeb_*.xlsx`, as planilhas do Saeb (Brasil/estados/municípios).
+pacote_*.zip
+microdados_*.zip
+divulgacao_*.zip
+divulgacao_*.xlsx
+divulgacao_*.ods
+saeb_*.xlsx
+Resultados_Saeb_*.xlsx

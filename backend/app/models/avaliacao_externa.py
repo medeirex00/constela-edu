@@ -12,7 +12,7 @@ O IDEB é um INDICADOR derivado (desempenho × fluxo), então entra no catálogo
 """
 from datetime import datetime
 
-from sqlalchemy import Float, ForeignKey, Index, String, text
+from sqlalchemy import CheckConstraint, Float, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -41,6 +41,17 @@ class ResultadoAvaliacao(Base):
     Só o que a fonte publica é preenchido; o resto fica NULO. Ex.: o IDEB por
     escola preenche escola/etapa e deixa componente/turma nulos; o SARESP pode
     preencher até turma; o SAEB por escola vai até componente (sem turma/aluno).
+
+    ETAPA = a série avaliada (desde a 0035): SAEB e SARESP gravam ``5_ano`` /
+    ``2_ano``; o IDEB continua ``anos_iniciais`` (o índice cobre do 1º ao 5º ano).
+
+    AUSÊNCIA ≠ ZERO (desde a 0035): a importação oficial com prévia
+    (``services/indicadores``) grava a ausência com ``valor`` nulo e o MOTIVO
+    (CHECK: um dos dois sempre existe) — nunca imputa número. ``importacao_id``
+    diz de qual importação oficial a linha veio (proveniência e desfazer); nulo =
+    linha da importação manual/antiga (sem prévia), como as médias do SARESP 2025
+    calculadas pelo Constela em 26/07. As consultas de correlação/evolução leem
+    só ``valor`` não nulo.
     """
 
     __tablename__ = "resultados_avaliacao"
@@ -67,11 +78,20 @@ class ResultadoAvaliacao(Base):
 
     # A medida.
     indicador: Mapped[str] = mapped_column(String(60))   # "proficiencia" | "ideb" | ...
-    valor: Mapped[float] = mapped_column(Float)
+    valor: Mapped[float | None] = mapped_column(Float, default=None)
     unidade: Mapped[str] = mapped_column(String(30))     # "escala_saeb" | "indice" | "percentual"
+    # Por que não há valor (só com ``valor`` nulo): nao_divulgado | participacao_baixa
+    # | sem_etapa — só com evidência na fonte; sem ela, nao_divulgado.
+    motivo_ausencia: Mapped[str | None] = mapped_column(String(40), default=None)
 
     # Proveniência (arquivo/edição de onde veio), para o cruzamento ser auditável.
     fonte: Mapped[str | None] = mapped_column(String(200), default=None)
+    # Importação OFICIAL (com prévia e desfazer) que gravou a linha; nula na
+    # importação manual/antiga. SET NULL: apagar o registro da importação não
+    # apaga o número.
+    importacao_id: Mapped[int | None] = mapped_column(
+        ForeignKey("importacoes_indicador.id", ondelete="SET NULL",
+                   name="fk_resultados_avaliacao_importacao_id"), default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)
 
     __table_args__ = (
@@ -87,4 +107,7 @@ class ResultadoAvaliacao(Base):
               "escola_id", text("COALESCE(etapa, '')"),
               text("COALESCE(componente, '')"), text("COALESCE(turma, '')"),
               unique=True),
+        # Ausência ≠ zero, e nunca sem explicação (0035).
+        CheckConstraint("valor IS NOT NULL OR motivo_ausencia IS NOT NULL",
+                        name="ck_resultado_valor_ou_motivo"),
     )
