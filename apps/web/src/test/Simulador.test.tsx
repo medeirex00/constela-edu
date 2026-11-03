@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import Simulador from "../pages/Simulador";
 import {
-  api, renderComApp, responder, screen, turmaFake, userEvent, waitFor,
+  api, renderComApp, responder, screen, turmaFake, userEvent, usuarioFake, waitFor,
 } from "./utils";
 
 const URL_TURMAS = "/escolas/1/turmas";
@@ -47,18 +47,29 @@ function corpoDoPost(indice = 0) {
   return JSON.parse(String((postsDoSimulador()[indice][1] as RequestInit).body));
 }
 
-async function abrir(over: Record<string, unknown> = {}) {
+async function abrir(over: Record<string, unknown> = {}, modulos?: string[]) {
   responder("GET", URL_TURMAS, [turmaFake()]);
   responder("POST", URL_SIM, resultadoFake(over));
-  renderComApp(<Simulador />, { rota: "/simulador" });
+  renderComApp(<Simulador />, {
+    rota: "/simulador",
+    ...(modulos ? { usuario: usuarioFake({ modulos }) } : {}),
+  });
   return userEvent.setup();
 }
+
+/** As chaves que o POST do simulador SEMPRE leva (o corpo não depende da tela). */
+const CHAVES_DO_POST = [
+  "ano_escolar", "atividades", "estrelas", "livros_por_nivel", "pontuacao_media",
+  "questoes_acertos", "questoes_tentativas", "tempo_leitura_min",
+];
 
 describe("Simulador", () => {
   it("níveis oficiais Z+ e A+ chegam íntegros ao backend", async () => {
     const u = await abrir();
 
     const campo = await screen.findByLabelText(/Livros por nível/);
+    // O formato do campo é explicado em linguagem simples, ligado ao campo.
+    expect(campo).toHaveAccessibleDescription(/“AA:2, D:1” são 2 livros do nível AA e 1 do nível D/);
     await u.clear(campo);
     await u.type(campo, "AA:2, Z+:3, A+:1");
     await u.click(screen.getByRole("button", { name: /Simular nota/ }));
@@ -90,7 +101,7 @@ describe("Simulador", () => {
 
     // A descrição não promete mais "os pesos e referências ATUAIS da escola":
     // no perfil institucional o motor ignora a configuração local.
-    expect(await screen.findByText(/MESMA régua que o motor aplica nesta escola/))
+    expect(await screen.findByText(/mesma régua que o Constela usa nesta escola/))
       .toBeInTheDocument();
 
     await u.click(screen.getByRole("button", { name: /Simular nota/ }));
@@ -98,6 +109,37 @@ describe("Simulador", () => {
     expect(await screen.findByText(/Régua Padrão Constela — a mesma para toda a rede/))
       .toBeInTheDocument();
     expect(screen.queryByText(/personalizada desta escola/)).toBeNull();
+  });
+
+  it("resultado: a nota de cada matéria em destaque e a Nota Geral só como legado", async () => {
+    const u = await abrir();
+
+    await u.click(await screen.findByRole("button", { name: /Simular nota/ }));
+
+    expect(await screen.findByText("Como chegamos aqui")).toBeInTheDocument();
+    // As notas vêm do POST, sem conta no front.
+    expect(screen.getByText("71,25")).toBeInTheDocument();
+    expect(screen.getByText("62,5")).toBeInTheDocument();
+    expect(screen.getByText(/Nota Geral \(legado\)/)).toHaveTextContent("66,88");
+    // A decomposição de cada indicador, como a API devolveu.
+    expect(screen.getByText("Pontos de dificuldade")).toBeInTheDocument();
+    expect(screen.getByText("Atividades")).toBeInTheDocument();
+  });
+
+  it("rede só com Matemática: sem os campos e a nota da Leitura, e o POST não muda", async () => {
+    const u = await abrir({}, ["matematica"]);
+
+    expect(await screen.findByLabelText("Atividades (Matific)")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Livros por nível/)).toBeNull();
+    expect(screen.queryByLabelText("Tempo de leitura (min)")).toBeNull();
+
+    await u.click(screen.getByRole("button", { name: /Simular nota/ }));
+    await waitFor(() => expect(postsDoSimulador()).toHaveLength(1));
+    expect(Object.keys(corpoDoPost()).sort()).toEqual(CHAVES_DO_POST);
+
+    expect(await screen.findByText("62,5")).toBeInTheDocument();
+    expect(screen.queryByText("71,25")).toBeNull();
+    expect(screen.queryByText("Pontos de dificuldade")).toBeNull();
   });
 
   it("perfil personalizado aparece com o vocabulário da tela de Pontuação", async () => {

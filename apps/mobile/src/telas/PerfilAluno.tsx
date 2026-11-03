@@ -1,5 +1,5 @@
 /** Perfil do aluno: notas, posição e o "como esta nota foi calculada". */
-import { api, nota, type LinhaCalculo, type PerfilAluno as Perfil } from "@constela/core";
+import { api, nota, notaDaMateria, type LinhaCalculo, type PerfilAluno as Perfil } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
@@ -65,7 +65,8 @@ export default function PerfilAluno({ route }: Props) {
           { rotulo: "Geral", valor: perfil.nota_geral },
         ].map((item) => (
           <View key={item.rotulo} style={estilos.nota}>
-            <Text style={estilos.notaValor}>{nota(item.valor)}</Text>
+            {/* `null` = módulo fora do plano da rede: "—", nunca um 0,0 falso. */}
+            <Text style={estilos.notaValor}>{notaDaMateria(item.valor)}</Text>
             <TextoSuave>{item.rotulo}</TextoSuave>
           </View>
         ))}

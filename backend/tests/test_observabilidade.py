@@ -26,15 +26,20 @@ def test_health_ready_confere_o_banco():
     assert r.status_code == 200 and r.json()["banco"] == "ok"
 
 
-def test_health_geral_traz_versao_uptime_e_banco():
+def test_health_geral_traz_so_status_banco_e_versao():
+    # Público e mínimo: tempo no ar e o diagnóstico do robô foram para
+    # /api/v1/sistema/diagnostico (admin global) — ver test_health_diagnostico.py.
     corpo = cliente.get("/api/health").json()
-    assert corpo["status"] == "ok"
-    assert corpo["banco"] == "ok" and corpo["versao"] and "uptime_s" in corpo
+    assert corpo == {"status": "ok", "banco": "ok", "versao": settings.APP_VERSION}
 
 
 # --- Métricas Prometheus -----------------------------------------------------
 
-def test_metrics_no_formato_prometheus():
+def test_metrics_no_formato_prometheus(monkeypatch):
+    # Sem token, /metrics só abre com a opção EXPLÍCITA de desenvolvimento
+    # (o fechamento por padrão está em tests/test_metrics_protecao.py).
+    monkeypatch.setattr(settings, "METRICS_TOKEN", "")
+    monkeypatch.setattr(settings, "METRICS_PUBLICO", True)
     r = cliente.get("/metrics")
     assert r.status_code == 200
     assert "http_requisicoes_total" in r.text
@@ -95,7 +100,8 @@ def _registro(msg="oi", **extra) -> logging.LogRecord:
 def test_log_vira_json_valido_com_campos_extra():
     linha = obs.FormatadorJson().format(_registro("http_acesso", metodo="GET", status=200))
     d = json.loads(linha)
-    assert d["nivel"] == "INFO" and d["msg"] == "http_acesso"
+    assert d["level"] == "info" and d["message"] == "http_acesso"   # campos do Railway
+    assert d["nivel"] == "INFO" and d["msg"] == "http_acesso"       # compatibilidade
     assert d["metodo"] == "GET" and d["status"] == 200 and "ts" in d
 
 

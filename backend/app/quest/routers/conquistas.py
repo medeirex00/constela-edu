@@ -13,10 +13,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.quest.deps import ContextoAluno, get_aluno_atual
+from app.quest.deps import (ContextoAluno, exigir_quest_aluno_habilitado,
+                             get_aluno_atual)
 from app.services import gamificacao
 
-router = APIRouter(prefix="/quest", tags=["Quest — Conquistas"])
+router = APIRouter(prefix="/quest", tags=["Quest — Conquistas"],
+                   dependencies=[Depends(exigir_quest_aluno_habilitado)])
 
 
 @router.get("/conquistas")

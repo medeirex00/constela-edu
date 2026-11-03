@@ -4,15 +4,23 @@
  * (sem crawler nem F12) e mostra endpoints, parâmetros, períodos, paginação,
  * estrutura (tipos/chaves, sem dado de criança) e o que MUDOU desde o último
  * inventário. Nada é público; só admin/coordenador acessa.
+ *
+ * Identidade v2 só na casca (é uma tela técnica, não se gamifica): cartões de 20 px,
+ * botão violeta, pílulas de status e datas no horário de Brasília (`dataHora`, como o
+ * resto do sistema — antes era o fuso do navegador).
  */
-import { AlertTriangle, ArrowLeft, PlayCircle, Radar, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarRange, KeyRound, Layers, PlayCircle, Radar, RefreshCw } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { Card, Carregando, PageHeader, Vazio } from "../components/ui";
+import {
+  Badge, Botao, Card, Erro, ESTILOS_BOTAO, IconePastel, PageHeader, TAMANHOS_BOTAO, Vazio, type TomPastel,
+} from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useMutation } from "../hooks/useMutation";
 import { api } from "../lib/api";
+import { dataHora } from "../lib/formato";
 
 type Paginacao = {
   formato: string;
@@ -49,12 +57,21 @@ type Diff = {
 };
 type Resultado = { inventario: Inventario; diff: Diff; anterior_em?: string | null };
 
+/** Status HTTP em pílula: 200 verde; qualquer outro (ou sem resposta) âmbar. */
 function BadgeStatus({ status }: { status: number | null }) {
-  const ok = status === 200;
-  const cor = ok
-    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-    : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300";
-  return <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${cor}`}>{status ?? "—"}</span>;
+  return <Badge tom={status === 200 ? "ok" : "alerta"}>{status ?? "—"}</Badge>;
+}
+
+function Resumo({ icone, tom, rotulo, valor }: { icone: LucideIcon; tom: TomPastel; rotulo: string; valor: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
+      <IconePastel icone={icone} tom={tom} tamanho="sm" />
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{rotulo}</p>
+        <p className="break-words text-[15px] font-semibold text-zinc-900 dark:text-white">{valor}</p>
+      </div>
+    </div>
+  );
 }
 
 export default function DiagnosticoElefante() {
@@ -91,82 +108,91 @@ export default function DiagnosticoElefante() {
         acoes={
           <Link
             to="/sincronizacao"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            className={`inline-flex items-center justify-center font-semibold transition-colors ${TAMANHOS_BOTAO.md} ${ESTILOS_BOTAO.secundario}`}
           >
-            <ArrowLeft size={15} /> Voltar para Integrações
+            <ArrowLeft size={15} aria-hidden /> Voltar para Integrações
           </Link>
         }
       />
 
-      <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
-        <button
-          type="button"
-          onClick={executar}
-          disabled={diag.enviando}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-        >
+      <Card className="mb-5 flex flex-wrap items-center gap-4 p-5">
+        <IconePastel icone={Radar} tom="violeta" tamanho="lg" />
+        <Botao onClick={executar} disabled={diag.enviando} aria-busy={diag.enviando}>
           {diag.enviando
-            ? <><RefreshCw size={15} className="animate-spin" /> Investigando…</>
-            : <><PlayCircle size={16} /> {res ? "Executar de novo" : "Executar diagnóstico"}</>}
-        </button>
+            ? <><RefreshCw size={15} aria-hidden className="animate-spin motion-reduce:animate-none" /> Investigando…</>
+            : <><PlayCircle size={16} aria-hidden /> {res ? "Executar de novo" : "Executar diagnóstico"}</>}
+        </Botao>
         {res?.inventario.gerado_em && !diag.enviando && (
-          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-            <Radar size={13} /> Gerado em {new Date(res.inventario.gerado_em).toLocaleString("pt-BR")}
-            {res.anterior_em && ` · anterior: ${new Date(res.anterior_em).toLocaleString("pt-BR")}`}
+          <span className="text-sm text-zinc-600 dark:text-zinc-300">
+            Gerado em <strong>{dataHora(res.inventario.gerado_em)}</strong>
+            {res.anterior_em && <> · anterior: {dataHora(res.anterior_em)}</>}
           </span>
         )}
       </Card>
 
       {diag.enviando ? (
         <Card>
-          <div className="flex flex-col items-center gap-2 py-10 text-center">
-            <Carregando />
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          <div role="status" className="flex flex-col items-center gap-3 py-14 text-center">
+            <span aria-hidden className="h-8 w-8 animate-spin rounded-full border-[3px] border-indigo-100 border-t-indigo-600 motion-reduce:animate-none dark:border-zinc-700 dark:border-t-indigo-400" />
+            <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
               O robô está logando no Elefante e sondando os endpoints…
             </p>
-            <p className="max-w-md text-xs text-zinc-400">Pode levar cerca de um minuto.</p>
+            <p className="max-w-md text-xs text-zinc-500 dark:text-zinc-400">Pode levar cerca de um minuto.</p>
           </div>
         </Card>
       ) : diag.erro ? (
-        <Vazio titulo="Não foi possível executar o diagnóstico" descricao={diag.erro.message} />
+        <Card>
+          <Erro titulo="Não foi possível executar o diagnóstico" descricao={diag.erro.message}
+                aoTentar={() => { void executar(); }} />
+        </Card>
       ) : !res ? (
-        <Vazio titulo="Nenhum diagnóstico ainda"
-               descricao="Clique em “Executar diagnóstico” para investigar a API do Elefante." />
+        <Card>
+          <Vazio icone={Radar} titulo="Nenhum diagnóstico ainda"
+                 descricao="Clique em “Executar diagnóstico” para investigar a API do Elefante." />
+        </Card>
       ) : !inv?.ok ? (
-        <Vazio titulo="A investigação não concluiu" descricao={inv?.erro ?? "Tente novamente."} />
+        <Card>
+          <Vazio icone={AlertTriangle} titulo="A investigação não concluiu" descricao={inv?.erro ?? "Tente novamente."} />
+        </Card>
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
           {/* Avisos de mudança da API */}
           {diff && (diff.avisos.length > 0) && (
-            <Card className={`p-4 ${temMudanca ? "border-amber-300 dark:border-amber-700" : ""}`}>
-              <div className="mb-1 flex items-center gap-2 text-sm font-medium">
-                <AlertTriangle size={15} className={temMudanca ? "text-amber-500" : "text-zinc-400"} />
+            <Card className={`p-5 ${temMudanca ? "border-ouro-300 dark:border-ouro-400/40" : ""}`}>
+              <div className="mb-2 flex items-center gap-3 text-[15px] font-semibold text-zinc-900 dark:text-white">
+                <IconePastel icone={AlertTriangle} tom={temMudanca ? "ambar" : "neutro"} tamanho="sm" />
                 {temMudanca ? "Mudanças detectadas na API" : "Comparação com o último inventário"}
               </div>
-              <ul className="list-inside list-disc text-sm text-zinc-600 dark:text-zinc-300">
+              <ul className="list-inside list-disc space-y-0.5 text-sm text-zinc-700 dark:text-zinc-300">
                 {diff.avisos.map((a, i) => <li key={i}>{a}</li>)}
               </ul>
             </Card>
           )}
 
           {/* Resumo */}
-          <Card className="flex flex-wrap gap-x-6 gap-y-1 p-4 text-sm">
-            <span><b>{inv.turmas}</b> turma(s) vistas</span>
-            <span>Autenticação: <b>{inv.auth === "jwt" ? "JWT (Bearer)" : "cookie"}</b></span>
-            <span>Aceita datas personalizadas: <b>{inv.aceita_datas_personalizadas ? "sim" : "não"}</b></span>
-            <span>Períodos no tráfego: <b>{inv.periodos_no_trafego.join(", ") || "—"}</b></span>
-          </Card>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Resumo icone={Layers} tom="violeta" rotulo="Turmas vistas" valor={`${inv.turmas} turma(s)`} />
+            <Resumo icone={KeyRound} tom="azul" rotulo="Autenticação" valor={inv.auth === "jwt" ? "JWT (Bearer)" : "cookie"} />
+            <Resumo icone={CalendarRange} tom="teal" rotulo="Aceita datas personalizadas"
+                    valor={inv.aceita_datas_personalizadas ? "sim" : "não"} />
+            <Resumo icone={RefreshCw} tom="neutro" rotulo="Períodos no tráfego"
+                    valor={inv.periodos_no_trafego.join(", ") || "—"} />
+          </div>
 
           {/* Endpoints */}
           {inv.endpoints.map((e) => (
-            <Card key={e.nome} className="p-4">
+            <Card key={e.nome} className="p-5">
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs dark:bg-zinc-800">{e.metodo}</span>
-                <span className="font-medium">{e.nome}</span>
+                <span className="rounded-lg bg-indigo-50 px-2 py-0.5 font-mono text-xs font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">{e.metodo}</span>
+                <span className="font-semibold text-zinc-900 dark:text-white">{e.nome}</span>
                 <BadgeStatus status={e.status} />
-                {e.rota && <span className="font-mono text-xs text-zinc-400">{e.rota}</span>}
+                {e.rota && <span className="break-all font-mono text-xs text-zinc-500 dark:text-zinc-400">{e.rota}</span>}
               </div>
-              {e.erro && <p className="text-sm text-amber-600 dark:text-amber-400">⚠️ {e.erro}</p>}
+              {e.erro && (
+                <p className="flex items-start gap-1.5 text-sm text-ouro-700 dark:text-ouro-300">
+                  <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0" /> {e.erro}
+                </p>
+              )}
               {(e.parametros?.length ?? 0) > 0 && (
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
                   Parâmetros: <span className="font-mono">{e.parametros!.join(", ")}</span>
@@ -182,7 +208,7 @@ export default function DiagnosticoElefante() {
                 </p>
               )}
               {e.estrutura && (
-                <pre className="mt-2 max-h-64 overflow-auto rounded bg-zinc-50 p-2 text-xs text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-zinc-50 p-3 text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
                   {e.estrutura}
                 </pre>
               )}

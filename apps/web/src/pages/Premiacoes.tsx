@@ -34,27 +34,117 @@
  * letivo, datas invertidas, sem atividade), em vez de afirmar sempre que
  * ninguém fez atividade — o que era falso justamente quando o dado existia e
  * foi descartado pelo filtro de ano. Nada aqui recalcula: só lê e formata.
+ *
+ * ÍNDICE OCULTO: com poucos alunos com atividade no período, o backend devolve
+ * as linhas da Matemática com `valor: null` (o índice, junto das estrelas e das
+ * atividades, revelaria a mediana da escola — e com ela a contagem de uma
+ * criança). A tela mostra "—" no lugar do número e diz por quê; a ordem e as
+ * posições são as do backend, como sempre.
+ *
+ * IDENTIDADE VISUAL v2 (docs/design/IDENTIDADE-VISUAL-V2.md): cada categoria num
+ * cartão com ícone em quadrado pastel, o 1º colocado em destaque creme/ouro com
+ * medalha e avatar, 2º e 3º com medalha prata/bronze, os demais com a bolinha
+ * da posição. "Certificados do pódio" abre a emissão EM LOTE (GerarCertificados)
+ * com a lista da categoria, na ordem da tela (D7) — escondido de quem não emite
+ * (Secretaria). O chip "Fim do Nº bimestre · em N dias" usa o calendário oficial
+ * (não existe data de premiação no sistema) e só aparece quando o período é o
+ * bimestre em curso.
  */
-import { Award, TrendingUp, Trophy } from "lucide-react";
-import { useId, useState } from "react";
+import {
+  AlertTriangle,
+  Award,
+  BookOpenCheck,
+  Calculator,
+  CalendarClock,
+  ChevronRight,
+  Clock,
+  Info,
+  Library,
+  Timer,
+  TrendingUp,
+  Trophy,
+  Users,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { Fragment, useId, useState } from "react";
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import GerarCertificados from "../components/GerarCertificados";
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { SeletorTurno } from "../components/SeletorTurno";
-import { Card, Carregando, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { SeloFrescor, type Frescor } from "../components/SeloFrescor";
+import {
+  Avatar,
+  Botao,
+  Card,
+  Carregando,
+  Chip,
+  ESTILOS_BOTAO,
+  Erro,
+  IconePastel,
+  Medalha,
+  Modal,
+  PageHeader,
+  PosicaoBolinha,
+  SecaoRecolhivel,
+  Skeleton,
+  TAMANHOS_BOTAO,
+} from "../components/ui";
+import type { TomPastel } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
+import { usePerfil } from "../hooks/usePerfil";
+import { bimestreEmCurso } from "../lib/calendarioBimestres";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
+import { bimestreDoPeriodo } from "../lib/tiposCertificados";
+import type { AlunoParaCertificado, ModeloCertificado } from "../lib/tiposCertificados";
 import { TURNO_TODOS, chaveTurno, rotuloTurno, turnoEfetivo, turnoParaQuery } from "../lib/turnos";
 import type { CategoriaPremiacao, Premiacoes as PremiacoesT, Turma } from "../lib/types";
 
-const MEDALHAS = ["🥇", "🥈", "🥉"];
 /** Quantos alunos o ranking completo traz por vez (e por "Carregar mais"). */
 const PASSO_RANKING = 50;
 /** Teto do `limite` aceito pelo endpoint de premiações (`le=500`). Pedir mais
  *  do que isso devolveria 422 e a janela mostraria erro no lugar do ranking. */
 const LIMITE_MAXIMO_RANKING = 500;
 const UNIDADE_MATEMATICA = "estrelas/atividade";
+
+/** Visual de cada categoria (ícone lucide no quadrado pastel). Só apresentação:
+ *  a lista de categorias e a ordem vêm do backend; chave desconhecida cai no troféu. */
+interface VisualCategoria {
+  icone: LucideIcon;
+  tom: TomPastel;
+}
+
+const VISUAL_CATEGORIA: Record<string, VisualCategoria> = {
+  melhor_leitor: { icone: BookOpenCheck, tom: "violeta" },
+  melhor_matematica: { icone: Calculator, tom: "teal" },
+  mais_livros: { icone: Library, tom: "azul" },
+  mais_tempo: { icone: Timer, tom: "rosa" },
+};
+const VISUAL_PADRAO: VisualCategoria = { icone: Trophy, tom: "ambar" };
+const VISUAL_EVOLUCAO: VisualCategoria = { icone: TrendingUp, tom: "verde" };
+
+const visualDa = (chave: string): VisualCategoria => VISUAL_CATEGORIA[chave] ?? VISUAL_PADRAO;
+
+/** Modelo do certificado pela categoria (D7): Leitura → arte do Elefante Letrado,
+ *  Matemática → arte do Matific. Chave sem modelo de plataforma abre no Geral (a
+ *  pessoa ainda pode escolher no modal, que respeita os módulos do plano). */
+const MODELO_DA_CATEGORIA: Record<string, ModeloCertificado> = {
+  melhor_leitor: "elefante",
+  mais_livros: "elefante",
+  mais_tempo: "elefante",
+  melhor_matematica: "matific",
+};
+
+/** O que o modal de certificados recebe: a lista da categoria, NA ORDEM da tela. */
+interface PedidoCertificados {
+  alunos: AlunoParaCertificado[];
+  modelo: ModeloCertificado;
+  contexto: string;
+}
 
 /** Régua da "Melhor Matemática": a janela REALMENTE usada pelo backend.
  *  Ainda não está em packages/core (ver pendências), por isso é tipada aqui e
@@ -66,9 +156,17 @@ interface ReguaMatematica {
   ano_letivo: number;
   inicio_efetivo: string | null;
   fim_efetivo: string | null;
+  /** Quantos alunos fizeram atividade no período (base da régua). */
+  alunos_com_atividade?: number;
 }
 
-type RespostaPremiacoes = PremiacoesT & { regua_matematica?: ReguaMatematica };
+/** `frescor`: DE QUANDO é o dado dos pódios (`frescor_ranking`, o mesmo bloco
+ *  de `/ranking/frescor`, com a população do pódio). Um pódio de "outubro"
+ *  montado com a última coleta de 01/10 parece completo e não é. */
+type RespostaPremiacoes = PremiacoesT & {
+  regua_matematica?: ReguaMatematica;
+  frescor?: Frescor | null;
+};
 
 /** "2026-01-31T23:59:59.999999" → "31/01/2026". Sem passar por `Date`: a data
  *  vem na hora local da escola e converter fuso deslocaria o dia. */
@@ -112,7 +210,28 @@ function textoVazioMatematica(regua?: ReguaMatematica): string {
   }
 }
 
-function formatarValor(valor: number, unidade: string): string {
+/** O índice da Matemática que o backend não exibe (poucos alunos com atividade):
+ *  um traço no lugar do número — nunca "0", "NaN" ou "null". */
+const VALOR_OCULTO = "—";
+
+/** Alguma linha desta premiação veio sem o valor (índice oculto pelo backend)? */
+function temValorOculto(categoria: CategoriaPremiacao): boolean {
+  return categoria.podio.some((item) => item.valor == null);
+}
+
+/** Por que a Matemática mostra "—": o número de alunos vem da própria régua
+ *  (sem fixar aqui o mínimo, que é decisão do backend). */
+function notaIndiceOculto(regua?: ReguaMatematica): string {
+  const n = regua?.alunos_com_atividade;
+  const quem = typeof n === "number" && n > 0
+    ? `só ${n} ${n === 1 ? "aluno fez" : "alunos fizeram"} atividade no período`
+    : "poucos alunos fizeram atividade no período";
+  return `Índice não exibido: ${quem}, e com tão poucos ele revelaria o resultado de `
+    + "uma criança. A ordem do pódio é a mesma.";
+}
+
+function formatarValor(valor: number | null, unidade: string): string {
+  if (valor == null) return VALOR_OCULTO;
   if (unidade === "min") return tempoLeitura(valor);
   if (unidade === UNIDADE_MATEMATICA) {
     // Só exibição: o índice (0 a 5) já vem calculado pelo backend.
@@ -122,40 +241,160 @@ function formatarValor(valor: number, unidade: string): string {
   return `${numero(valor)} ${unidade}`;
 }
 
-function CartaoCategoria({ categoria, vazioTexto, legenda, aoVerRanking }: {
+/** O valor com um ponto de quebra depois de cada "/" ("estrelas/atividade"): no
+ *  celular a unidade longa quebrava o cartão para fora da tela. O texto é o mesmo. */
+function quebravel(texto: string): ReactNode {
+  const partes = texto.split("/");
+  return partes.map((parte, i) => (
+    <Fragment key={i}>{i > 0 && <>/<wbr /></>}{parte}</Fragment>
+  ));
+}
+
+// --- Peças visuais -----------------------------------------------------------
+
+/** Posição de uma linha: medalha prata/bronze/ouro (1º–3º, com "Nº lugar" para
+ *  leitor de tela) ou a bolinha com o número; o ordinal também vai em texto
+ *  (sr-only), para a informação não depender do desenho. */
+function MarcadorPosicao({ posicao }: { posicao: number }) {
+  if (posicao >= 1 && posicao <= 3) {
+    return <Medalha posicao={posicao as 1 | 2 | 3} tamanho={28} semFita />;
+  }
+  return (
+    <span className="inline-flex shrink-0">
+      <span aria-hidden className="inline-flex">
+        <PosicaoBolinha posicao={posicao} />
+      </span>
+      <span className="sr-only">{posicao}º</span>
+      <span className="sr-only"> lugar</span>
+    </span>
+  );
+}
+
+/** "Fim do 4º bimestre · em 61 dias" — calendário oficial, nunca "premiação em N dias". */
+function ChipFimDoBimestre({ numero: n, dias }: { numero: number; dias: number }) {
+  const texto = dias === 0
+    ? `O ${n}º bimestre termina hoje`
+    : `Fim do ${n}º bimestre · em ${dias} ${dias === 1 ? "dia" : "dias"}`;
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full bg-ouro-100 px-4 py-2 text-sm font-semibold text-marinho-900 shadow-ambar ring-1 ring-ouro-200 dark:bg-ouro-400/15 dark:text-ouro-200 dark:shadow-none dark:ring-ouro-400/30">
+      <CalendarClock size={16} strokeWidth={2.2} aria-hidden className="text-ouro-700 dark:text-ouro-300" />
+      {texto}
+    </span>
+  );
+}
+
+/** Aviso em faixa (nota, status) com ícone; o texto fica num único elemento. */
+function Faixa({ papel, tom, icone: Icone, children }: {
+  papel: "note" | "status"; tom: "alerta" | "info"; icone: LucideIcon; children: ReactNode;
+}) {
+  const estilo = tom === "alerta"
+    ? "bg-amber-50 text-amber-900 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/25"
+    : "bg-white text-zinc-700 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-200 dark:ring-zinc-800";
+  return (
+    <p role={papel} className={`mb-4 flex items-start gap-2.5 rounded-2xl px-4 py-3 text-sm ring-1 ${estilo}`}>
+      <Icone size={16} aria-hidden className="mt-0.5 shrink-0" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/** Pódio vazio, com o motivo em texto (nunca um "0" no lugar). */
+function PodioVazio({ texto }: { texto: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 px-4 py-8 text-center dark:border-zinc-700">
+      <Trophy size={22} aria-hidden className="mb-2 text-zinc-400" />
+      <p className="max-w-xs text-sm text-zinc-500 dark:text-zinc-400">{texto}</p>
+    </div>
+  );
+}
+
+/** Botão "Ver ranking completo" (secundário, com o nome da premiação no rótulo acessível). */
+function BotaoRankingCompleto({ titulo, extra, aoClicar }: {
+  titulo: string; extra?: string; aoClicar: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={aoClicar}
+      /* São vários botões iguais na tela: o rótulo acessível diz de QUAL
+         premiação é este, para quem navega por leitor de tela. */
+      aria-label={`Ver ranking completo de ${titulo}`}
+      className={`inline-flex items-center font-semibold transition-colors ${TAMANHOS_BOTAO.sm} ${ESTILOS_BOTAO.secundario}`}
+    >
+      Ver ranking completo{extra}
+      <ChevronRight size={14} aria-hidden className="-mr-0.5 text-zinc-500" />
+    </button>
+  );
+}
+
+function BotaoCertificados({ titulo, aoClicar }: { titulo: string; aoClicar: () => void }) {
+  return (
+    <Botao
+      variante="ambar"
+      tamanho="sm"
+      onClick={aoClicar}
+      aria-label={`Certificados do pódio de ${titulo}`}
+      aria-haspopup="dialog"
+    >
+      <Award size={14} aria-hidden />
+      Certificados do pódio
+    </Botao>
+  );
+}
+
+/** Cabeçalho de um cartão de categoria: quadrado pastel + título (h3) + descrição.
+ *  O título NÃO pode ficar dentro de outro `div.flex-col` (os testes sobem até o
+ *  cartão por `closest("div.flex-col")`). */
+function CabecalhoCartao({ visual, titulo, descricao, legenda }: {
+  visual: VisualCategoria; titulo: string; descricao: string; legenda?: string;
+}) {
+  return (
+    <div className="mb-4 flex items-start gap-3.5">
+      <IconePastel icone={visual.icone} tom={visual.tom} tamanho="lg" />
+      <div className="min-w-0 flex-1">
+        <h3 className="text-base font-semibold leading-snug text-zinc-900 dark:text-white">{titulo}</h3>
+        <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">{descricao}</p>
+        {legenda && <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{legenda}</p>}
+      </div>
+    </div>
+  );
+}
+
+function CartaoCategoria({ categoria, vazioTexto, legenda, aviso, aoVerRanking, aoGerarCertificados }: {
   categoria: CategoriaPremiacao; vazioTexto?: string; legenda?: string;
+  /** Nota sob o pódio (ex.: por que o índice da Matemática não aparece). */
+  aviso?: string;
   aoVerRanking?: () => void;
+  /** Abre a emissão em lote com a lista desta categoria (ausente = quem não emite). */
+  aoGerarCertificados?: () => void;
 }) {
   const [campeao, ...resto] = categoria.podio;
   return (
-    <Card className="flex flex-col p-5">
-      <div className="mb-3 flex items-start gap-3">
-        <span className="text-2xl leading-none">{categoria.icone}</span>
-        <div>
-          <h3 className="text-sm font-semibold">{categoria.titulo}</h3>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{categoria.descricao}</p>
-          {legenda && <p className="mt-0.5 text-[11px] text-zinc-400">{legenda}</p>}
-        </div>
-      </div>
+    <Card className="flex h-full flex-col p-5 sm:p-6">
+      <CabecalhoCartao
+        visual={visualDa(categoria.chave)} titulo={categoria.titulo}
+        descricao={categoria.descricao} legenda={legenda}
+      />
 
       {!campeao ? (
-        <p className="py-6 text-center text-sm text-zinc-400">
-          {vazioTexto ?? "Sem dados no período."}
-        </p>
+        <PodioVazio texto={vazioTexto ?? "Sem dados no período."} />
       ) : (
         <>
           <Link
             to={`/alunos/${campeao.aluno_id}`}
-            className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3 transition-colors hover:bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10"
+            className="flex items-center gap-3.5 rounded-2xl bg-gradient-to-br from-ouro-50 via-ouro-50/70 to-white p-4 ring-1 ring-ouro-200/80 transition-shadow hover:shadow-cartao dark:from-ouro-400/15 dark:via-ouro-400/5 dark:to-transparent dark:ring-ouro-400/25"
           >
-            <span className="text-2xl">🥇</span>
+            <Medalha posicao={1} tamanho={34} />
+            <Avatar nome={campeao.nome} chave={campeao.aluno_id} tamanho="lg" />
             <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{campeao.nome}</p>
-              {campeao.turma && <p className="text-xs text-zinc-500 dark:text-zinc-400">{campeao.turma}</p>}
+              <p title={campeao.nome} className="truncate text-[15px] font-semibold text-zinc-900 dark:text-white">{campeao.nome}</p>
+              {campeao.turma && (
+                <Chip className="mt-1 bg-white/90 dark:bg-zinc-800">{campeao.turma}</Chip>
+              )}
+              <p className="mt-1.5 text-xl font-bold leading-tight tracking-tight tabular-nums text-zinc-900 dark:text-white">
+                {quebravel(formatarValor(campeao.valor, categoria.unidade))}
+              </p>
             </div>
-            <span className="shrink-0 text-right text-sm font-bold tabular-nums text-amber-700 dark:text-amber-300">
-              {formatarValor(campeao.valor, categoria.unidade)}
-            </span>
           </Link>
 
           {resto.length > 0 && (
@@ -164,15 +403,21 @@ function CartaoCategoria({ categoria, vazioTexto, legenda, aoVerRanking }: {
                 <li key={item.aluno_id}>
                   <Link
                     to={`/alunos/${item.aluno_id}`}
-                    className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                    className="flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
                   >
-                    <span className="w-5 shrink-0 text-center">
-                      {MEDALHAS[item.posicao - 1] ?? <span className="text-xs text-zinc-400">{item.posicao}º</span>}
+                    <span className="flex w-7 shrink-0 justify-center">
+                      <MarcadorPosicao posicao={item.posicao} />
                     </span>
-                    <span className="min-w-0 flex-1 truncate">{item.nome}</span>
-                    {item.turma && <span className="hidden shrink-0 text-xs text-zinc-400 sm:block">{item.turma}</span>}
-                    <span className="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">
-                      {formatarValor(item.valor, categoria.unidade)}
+                    <Avatar nome={item.nome} chave={item.aluno_id} tamanho="sm" />
+                    {/* Nome e turma empilhados: a turma não some em tela estreita. */}
+                    <span className="min-w-0 flex-1">
+                      <span title={item.nome} className="block truncate font-medium text-zinc-800 dark:text-zinc-100">{item.nome}</span>
+                      {item.turma && (
+                        <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400" title={item.turma}>{item.turma}</span>
+                      )}
+                    </span>
+                    <span className="max-w-[45%] shrink-0 text-right font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">
+                      {quebravel(formatarValor(item.valor, categoria.unidade))}
                     </span>
                   </Link>
                 </li>
@@ -180,25 +425,55 @@ function CartaoCategoria({ categoria, vazioTexto, legenda, aoVerRanking }: {
             </ul>
           )}
 
+          {aviso && (
+            <p role="note" className="mt-3 rounded-xl bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800/60 dark:text-zinc-300">
+              {aviso}
+            </p>
+          )}
+
           {/* O cartão é o Top 5; o ranking completo da MESMA premiação (mesma
               ordem, mesmas posições) abre sob demanda. */}
-          {aoVerRanking && (
-            <button
-              type="button"
-              onClick={aoVerRanking}
-              /* São quatro botões iguais na tela: o rótulo acessível diz de QUAL
-                 premiação é este, para quem navega por leitor de tela. */
-              aria-label={`Ver ranking completo de ${categoria.titulo}`}
-              className="mt-3 self-start text-sm font-medium text-indigo-700 underline-offset-2 hover:underline dark:text-indigo-300"
-            >
-              Ver ranking completo
-              {categoria.total != null && categoria.total > categoria.podio.length
-                && ` (${categoria.total} alunos)`}
-            </button>
+          {(aoVerRanking || aoGerarCertificados) && (
+            <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
+              {aoVerRanking && (
+                <BotaoRankingCompleto
+                  titulo={categoria.titulo}
+                  extra={categoria.total != null && categoria.total > categoria.podio.length
+                    ? ` (${categoria.total} alunos)` : undefined}
+                  aoClicar={aoVerRanking}
+                />
+              )}
+              {aoGerarCertificados && (
+                <BotaoCertificados titulo={categoria.titulo} aoClicar={aoGerarCertificados} />
+              )}
+            </div>
           )}
         </>
       )}
     </Card>
+  );
+}
+
+/** Esqueleto dos cartões enquanto as premiações carregam (sem texto falso). */
+function EsqueletoCartoes({ quantos }: { quantos: number }) {
+  return (
+    <div aria-hidden className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      {Array.from({ length: quantos }, (_, i) => (
+        <Card key={i} className="p-5 sm:p-6">
+          <div className="flex items-center gap-3.5">
+            <Skeleton className="h-12 w-12 rounded-2xl" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-3 w-3/4" />
+            </div>
+          </div>
+          <Skeleton className="mt-5 h-[88px] w-full rounded-2xl" />
+          <div className="mt-3 space-y-2">
+            {[0, 1, 2].map((j) => <Skeleton key={j} className="h-9 w-full rounded-xl" />)}
+          </div>
+        </Card>
+      ))}
+    </div>
   );
 }
 
@@ -216,11 +491,12 @@ interface LinhaRanking {
 
 /** A JANELA do ranking completo — só apresentação, compartilhada por todas as
  *  premiações (inclusive as de Evolução). Exibe as linhas na ORDEM recebida,
- *  com a posição que o ranking carimbou. */
-function ModalRanking({ titulo, icone, descricao, rodape, avisoLimite, linhas, total,
+ *  com a posição que o ranking carimbou. O <h2> do Modal continua irmão direto
+ *  da lista (os testes sobem do título até a caixa da janela). */
+function ModalRanking({ titulo, visual, descricao, rodape, avisoLimite, linhas, total,
                         carregando, erro, erroParcial, temMais, aoCarregarMais,
                         aoTentarDeNovo, aoFechar, vazio }: {
-  titulo: string; icone: string; descricao: string; rodape?: string;
+  titulo: string; visual: VisualCategoria; descricao: string; rodape?: string;
   /** Aviso de que a janela mostra só o começo do ranking (teto do endpoint). */
   avisoLimite?: string;
   linhas: LinhaRanking[];
@@ -236,46 +512,51 @@ function ModalRanking({ titulo, icone, descricao, rodape, avisoLimite, linhas, t
   aoFechar: () => void; vazio: string;
 }) {
   return (
-    <Modal titulo={`${icone} ${titulo}`} aberto aoFechar={aoFechar}>
-      <p className="-mt-2 mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-        {descricao}
-        {total != null && <> · {total} {total === 1 ? "aluno" : "alunos"} no período</>}
-      </p>
+    <Modal titulo={titulo} aberto aoFechar={aoFechar} largura="max-w-xl">
+      <div className="-mt-1 mb-4 flex items-center gap-3">
+        <IconePastel icone={visual.icone} tom={visual.tom} tamanho="sm" />
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          {descricao}
+          {total != null && <> · {total} {total === 1 ? "aluno" : "alunos"} no período</>}
+        </p>
+      </div>
       {carregando && linhas.length === 0 ? (
         <Carregando />
       ) : erro ? (
-        <div className="py-6 text-center">
-          <p className="text-sm text-zinc-400">Não foi possível carregar o ranking.</p>
+        <div role="alert" className="flex flex-col items-center py-8 text-center">
+          <span aria-hidden className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-rose-50 text-rose-500 dark:bg-rose-500/15 dark:text-rose-300">
+            <AlertTriangle size={22} />
+          </span>
+          <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Não foi possível carregar o ranking.</p>
           {aoTentarDeNovo && (
-            <button type="button" onClick={aoTentarDeNovo} disabled={carregando}
-                    className="mt-2 text-sm font-medium text-indigo-700 underline-offset-2 hover:underline disabled:opacity-60 dark:text-indigo-300">
+            <Botao variante="secundario" tamanho="sm" className="mt-3" onClick={aoTentarDeNovo} disabled={carregando}>
               {carregando ? "Carregando..." : "Tentar de novo"}
-            </button>
+            </Botao>
           )}
         </div>
       ) : linhas.length === 0 ? (
-        <p className="py-6 text-center text-sm text-zinc-400">{vazio}</p>
+        <PodioVazio texto={vazio} />
       ) : (
         <>
-          <ol className="space-y-0.5">
+          <ol className="-mx-2 space-y-0.5">
             {linhas.map((item) => (
               <li key={item.aluno_id}>
                 <Link
                   to={item.destino}
-                  className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                  className="flex items-center gap-3 rounded-xl px-2 py-2 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
                 >
-                  <span className="w-7 shrink-0 text-center">
-                    {MEDALHAS[item.posicao - 1]
-                      ?? <span className="text-xs tabular-nums text-zinc-400">{item.posicao}º</span>}
+                  <span className="flex w-8 shrink-0 justify-center">
+                    <MarcadorPosicao posicao={item.posicao} />
                   </span>
+                  <Avatar nome={item.nome} chave={item.aluno_id} tamanho="sm" />
                   {/* Nome e turma empilhados: em tela estreita nada transborda. */}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">{item.nome}</span>
+                    <span title={item.nome} className="block truncate font-medium text-zinc-800 dark:text-zinc-100">{item.nome}</span>
                     {item.turma && (
-                      <span className="block truncate text-xs text-zinc-400">{item.turma}</span>
+                      <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400" title={item.turma}>{item.turma}</span>
                     )}
                   </span>
-                  <span className="shrink-0 tabular-nums text-zinc-600 dark:text-zinc-300">
+                  <span className="shrink-0 font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">
                     {item.valor}
                   </span>
                 </Link>
@@ -286,31 +567,27 @@ function ModalRanking({ titulo, icone, descricao, rodape, avisoLimite, linhas, t
               na tela; só o lote novo é que não veio. "Tentar de novo" repete o
               MESMO pedido (mesmo limite), então nada é pulado nem duplicado. */}
           {erroParcial ? (
-            <div role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+            <div role="alert" className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900 ring-1 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/25">
+              <AlertTriangle size={15} aria-hidden className="shrink-0" />
               Não foi possível carregar mais posições.
               {aoTentarDeNovo && (
                 <button type="button" onClick={aoTentarDeNovo} disabled={carregando}
-                        className="ml-2 font-medium underline underline-offset-2 disabled:opacity-60">
+                        className="ml-1 font-semibold underline underline-offset-2 disabled:opacity-60">
                   {carregando ? "Carregando..." : "Tentar de novo"}
                 </button>
               )}
             </div>
           ) : temMais && (
-            <button
-              type="button"
-              disabled={carregando}
-              onClick={aoCarregarMais}
-              className="mt-3 w-full rounded-lg border border-zinc-200 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
-            >
+            <Botao variante="secundario" className="mt-4 w-full" disabled={carregando} onClick={aoCarregarMais}>
               {carregando ? "Carregando..." : "Carregar mais"}
-            </button>
+            </Botao>
           )}
           {/* Teto do endpoint: a lista para antes do fim e a janela DIZ isso —
               o total real continua no cabeçalho, sem fingir que acabou. */}
           {avisoLimite && (
-            <p role="note" className="mt-3 text-[11px] text-amber-700 dark:text-amber-300">{avisoLimite}</p>
+            <p role="note" className="mt-3 text-xs font-medium text-amber-800 dark:text-amber-300">{avisoLimite}</p>
           )}
-          {rodape && <p className="mt-3 text-[11px] text-zinc-400">{rodape}</p>}
+          {rodape && <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{rodape}</p>}
         </>
       )}
     </Modal>
@@ -321,12 +598,14 @@ function ModalRanking({ titulo, icone, descricao, rodape, avisoLimite, linhas, t
  *  `limite` maior. Nada é reordenado aqui — a posição exibida é a que o backend
  *  carimbou, e "Carregar mais" só aumenta o limite (a lista nova contém a
  *  anterior, então nenhum aluno é pulado nem repetido). */
-function ModalRankingCompleto({ categoria, urlBase, turnoChave, aoFechar }: {
+function ModalRankingCompleto({ categoria, urlBase, turnoChave, regua, aoFechar }: {
   categoria: CategoriaPremiacao;
   urlBase: string;
   /** Turno em exibição na aba (ou null em "Todos"): o ranking respeita o MESMO
    *  recorte de período, turma e turno já aplicado na tela. */
   turnoChave: string | null;
+  /** Régua da Matemática da aba, até a resposta maior chegar com a dela. */
+  regua?: ReguaMatematica;
   aoFechar: () => void;
 }) {
   const [limite, setLimite] = useState(PASSO_RANKING);
@@ -353,9 +632,13 @@ function ModalRankingCompleto({ categoria, urlBase, turnoChave, aoFechar }: {
 
   return (
     <ModalRanking
-      titulo={categoria.titulo} icone={categoria.icone} descricao={categoria.descricao}
+      titulo={categoria.titulo} visual={visualDa(categoria.chave)} descricao={categoria.descricao}
       avisoLimite={truncado
         ? `Esta janela mostra as ${LIMITE_MAXIMO_RANKING} primeiras posições.`
+        : undefined}
+      /* Índice oculto pelo backend: o ranking completo diz o MESMO motivo do cartão. */
+      rodape={temValorOculto(completa)
+        ? notaIndiceOculto(dados?.regua_matematica ?? regua)
         : undefined}
       linhas={podio.map((item) => ({
         aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
@@ -397,12 +680,16 @@ function cresceram(itens: EvolucaoItem[] | null | undefined): EvolucaoItem[] {
   return (itens ?? []).filter((item) => (item.nota ?? 0) > 0);
 }
 
-function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
+const DESCRICAO_EVOLUCAO = "Quem mais CRESCEU no período (não o maior acumulado)";
+
+function CartaoEvolucao({ escolaId, dimensao, titulo, params, vazio, aoGerarCertificados }: {
   escolaId: number; dimensao: "leitura" | "matematica";
-  titulo: string; icone: string; params: string; vazio: string;
+  titulo: string; params: string; vazio: string;
+  /** Abre a emissão em lote com o Top 5 deste cartão (ausente = quem não emite). */
+  aoGerarCertificados?: (alunos: AlunoParaCertificado[]) => void;
 }) {
   // `params` traz o MESMO período e turno das premiações (o filtro é lockado).
-  const { dados, erro, carregando } = useApi<EvolucaoItem[]>(
+  const { dados, erro, carregando, recarregar } = useApi<EvolucaoItem[]>(
     `/escolas/${escolaId}/ranking-evolucao?dimensao=${dimensao}${params}`,
   );
   const [rankingAberto, setRankingAberto] = useState(false);
@@ -410,48 +697,58 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
   const podio = elegiveis.slice(0, 5);
   const [campeao, ...resto] = podio;
   return (
-    <Card className="flex flex-col p-5">
-      <div className="mb-3 flex items-start gap-3">
-        <span className="text-2xl leading-none">{icone}</span>
-        <div>
-          <h3 className="text-sm font-semibold">{titulo}</h3>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Quem mais CRESCEU no período (não o maior acumulado)
-          </p>
-        </div>
-      </div>
+    <Card className="flex h-full flex-col p-5 sm:p-6">
+      <CabecalhoCartao visual={VISUAL_EVOLUCAO} titulo={titulo} descricao={DESCRICAO_EVOLUCAO} />
       {carregando ? (
-        <div className="py-6"><Carregando /></div>
+        <div aria-hidden className="space-y-2">
+          <Skeleton className="h-[76px] w-full rounded-2xl" />
+          <Skeleton className="h-9 w-full rounded-xl" />
+          <Skeleton className="h-9 w-full rounded-xl" />
+        </div>
       ) : erro ? (
-        <p className="py-6 text-center text-sm text-zinc-400">Não foi possível carregar.</p>
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-rose-200 px-4 py-6 text-center dark:border-rose-500/30">
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">Não foi possível carregar.</p>
+          <Botao variante="secundario" tamanho="sm" onClick={recarregar}>Tentar de novo</Botao>
+        </div>
       ) : !campeao ? (
-        <p className="py-6 text-center text-sm text-zinc-400">{vazio}</p>
+        <PodioVazio texto={vazio} />
       ) : (
         <>
           <Link
             to={`/alunos/${campeao.aluno_id}/evolucao`}
-            className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 transition-colors hover:bg-emerald-50 dark:border-emerald-500/20 dark:bg-emerald-500/10"
+            className="flex items-center gap-3.5 rounded-2xl bg-gradient-to-br from-emerald-50 via-teal-50/60 to-white p-4 ring-1 ring-emerald-200/80 transition-shadow hover:shadow-cartao dark:from-emerald-500/15 dark:via-teal-500/5 dark:to-transparent dark:ring-emerald-500/25"
           >
-            <span className="text-2xl">🥇</span>
+            <Medalha posicao={1} tamanho={34} />
+            <Avatar nome={campeao.nome} chave={campeao.aluno_id} tamanho="lg" />
             <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{campeao.nome}</p>
-              {campeao.turma && <p className="text-xs text-zinc-500 dark:text-zinc-400">{campeao.turma}</p>}
+              <p title={campeao.nome} className="truncate text-[15px] font-semibold text-zinc-900 dark:text-white">{campeao.nome}</p>
+              {campeao.turma && <Chip className="mt-1 bg-white/90 dark:bg-zinc-800">{campeao.turma}</Chip>}
+              <p className="mt-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100/80 px-2.5 py-1 text-sm font-bold tabular-nums text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200">
+                  <TrendingUp size={14} aria-hidden /> {fmtNota(campeao.nota ?? 0)}
+                </span>
+              </p>
             </div>
-            <span className="shrink-0 inline-flex items-center gap-1 text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">
-              <TrendingUp size={13} /> {fmtNota(campeao.nota ?? 0)}
-            </span>
           </Link>
           {resto.length > 0 && (
             <ul className="mt-2 space-y-0.5">
               {resto.map((item) => (
                 <li key={item.aluno_id}>
                   <Link to={`/alunos/${item.aluno_id}/evolucao`}
-                        className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
-                    <span className="w-5 shrink-0 text-center">
-                      {MEDALHAS[item.posicao - 1] ?? <span className="text-xs text-zinc-400">{item.posicao}º</span>}
+                        className="flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
+                    <span className="flex w-7 shrink-0 justify-center">
+                      <MarcadorPosicao posicao={item.posicao} />
                     </span>
-                    <span className="min-w-0 flex-1 truncate">{item.nome}</span>
-                    <span className="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">{fmtNota(item.nota ?? 0)}</span>
+                    <Avatar nome={item.nome} chave={item.aluno_id} tamanho="sm" />
+                    <span className="min-w-0 flex-1">
+                      <span title={item.nome} className="block truncate font-medium text-zinc-800 dark:text-zinc-100">{item.nome}</span>
+                      {item.turma && (
+                        <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400" title={item.turma}>{item.turma}</span>
+                      )}
+                    </span>
+                    <span className="inline-flex shrink-0 items-center gap-1 font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">
+                      <TrendingUp size={13} aria-hidden /> {fmtNota(item.nota ?? 0)}
+                    </span>
                   </Link>
                 </li>
               ))}
@@ -461,21 +758,27 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
           {/* Mesma experiência das demais premiações: o cartão é o Top 5, o
               ranking completo abre sob demanda. A lista já veio inteira do
               endpoint de evolução — nenhuma consulta nova, nenhuma reordenação. */}
-          <button
-            type="button"
-            onClick={() => setRankingAberto(true)}
-            aria-label={`Ver ranking completo de ${titulo}`}
-            className="mt-3 self-start text-sm font-medium text-indigo-700 underline-offset-2 hover:underline dark:text-indigo-300"
-          >
-            Ver ranking completo
-            {elegiveis.length > podio.length && ` (${elegiveis.length} alunos)`}
-          </button>
+          <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
+            <BotaoRankingCompleto
+              titulo={titulo}
+              extra={elegiveis.length > podio.length ? ` (${elegiveis.length} alunos)` : undefined}
+              aoClicar={() => setRankingAberto(true)}
+            />
+            {aoGerarCertificados && (
+              <BotaoCertificados
+                titulo={titulo}
+                aoClicar={() => aoGerarCertificados(podio.map((item) => ({
+                  aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
+                })))}
+              />
+            )}
+          </div>
         </>
       )}
 
       {rankingAberto && (
         <ModalRankingEvolucao
-          itens={elegiveis} titulo={titulo} icone={icone}
+          itens={elegiveis} titulo={titulo}
           aoFechar={() => setRankingAberto(false)} />
       )}
     </Card>
@@ -486,15 +789,15 @@ function CartaoEvolucao({ escolaId, dimensao, titulo, icone, params, vazio }: {
  *  devolve a lista inteira, ordenada e com a posição de cada aluno carimbada
  *  pelo motor: aqui só se mostra mais linhas da MESMA lista que o cartão usou
  *  (nenhuma consulta nova, nenhum cálculo, nenhuma reordenação). */
-function ModalRankingEvolucao({ itens, titulo, icone, aoFechar }: {
-  itens: EvolucaoItem[]; titulo: string; icone: string; aoFechar: () => void;
+function ModalRankingEvolucao({ itens, titulo, aoFechar }: {
+  itens: EvolucaoItem[]; titulo: string; aoFechar: () => void;
 }) {
   const [limite, setLimite] = useState(PASSO_RANKING);
   const linhas = itens.slice(0, limite);
   return (
     <ModalRanking
-      titulo={titulo} icone={icone}
-      descricao="Quem mais CRESCEU no período (não o maior acumulado)"
+      titulo={titulo} visual={VISUAL_EVOLUCAO}
+      descricao={DESCRICAO_EVOLUCAO}
       rodape="Só entra quem cresceu no intervalo; o crescimento e a posição vêm do motor de evolução."
       linhas={linhas.map((item) => ({
         aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
@@ -512,11 +815,29 @@ function ModalRankingEvolucao({ itens, titulo, icone, aoFechar }: {
   );
 }
 
+/** Título de seção (h2) com uma linha de apoio. */
+function TituloSecao({ titulo, children }: { titulo: string; children?: ReactNode }) {
+  return (
+    <div className="mb-4">
+      <h2 className="text-lg font-bold tracking-tight text-zinc-900 dark:text-white">{titulo}</h2>
+      {children && <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">{children}</p>}
+    </div>
+  );
+}
+
 export default function Premiacoes() {
   const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  // Módulo fora do plano: o cartão de evolução dele some (o servidor recusa).
+  const modulos = useModulos();
+  // Certificados: a rota já barra a Secretaria (RotaSemSecretaria); o botão some
+  // também aqui, para nenhum caminho oferecer o que o backend recusa.
+  const { secretaria } = usePerfil();
+  const podeEmitir = !secretaria && escolaId != null;
   const [turmaId, setTurmaId] = useState("");
   // Premiação cujo ranking completo está aberto (null = só os cartões).
   const [rankingAberto, setRankingAberto] = useState<CategoriaPremiacao | null>(null);
+  // Emissão em lote aberta (lista da categoria + modelo + contexto).
+  const [certificados, setCertificados] = useState<PedidoCertificados | null>(null);
   const idMotivoTurno = useId();
 
   const { dados: turmas } = useApi<Turma[]>(
@@ -530,7 +851,7 @@ export default function Premiacoes() {
     ? `/escolas/${escolaId}/premiacoes?${q}${filtroTurma}${pedirTurnos}` : null;
   // URL da última resposta que CHEGOU (ver "Dados DO RECORTE ATUAL" no topo).
   const [urlCarregada, setUrlCarregada] = useState<string | null>(null);
-  const { dados: ultimaResposta, erro, carregando } = useApi<RespostaPremiacoes>(urlPremiacoes, {
+  const { dados: ultimaResposta, erro, carregando, recarregar } = useApi<RespostaPremiacoes>(urlPremiacoes, {
     aoSucesso: () => setUrlCarregada(urlPremiacoes),
   });
   const respostaAtual = urlCarregada === urlPremiacoes;
@@ -564,24 +885,41 @@ export default function Premiacoes() {
   const regua = dados?.regua_matematica;
   const avisoJanela = dados ? janelaDivergente(dados) : null;
 
+  // Chip do cabeçalho: só quando o período escolhido É o bimestre em curso
+  // ("Este bimestre" ou o número dele), pelo calendário oficial.
+  const bimestre = bimestreEmCurso(new Date());
+  const ehBimestreEmCurso = bimestre != null
+    && (periodo.preset === "bimestre" || periodo.preset === `bimestre_${bimestre.numero}`);
+
+  // De onde sai o Top N do lote (D7): a premiação, o período e o recorte da tela.
+  const nomeTurma = turmaId ? (turmas ?? []).find((t) => String(t.id) === turmaId)?.nome : undefined;
+  const recorte = nomeTurma ? ` · ${nomeTurma}` : grupoTurno ? ` · ${grupoTurno.turno_rotulo}` : "";
+  const contextoDe = (titulo: string) =>
+    `Premiações · ${titulo}${dados ? ` · ${dados.periodo.rotulo}` : ""}${recorte}`;
+
   return (
     <div>
       <PageHeader
         titulo="Premiações"
         descricao="Vencedores calculados apenas com os dados do período escolhido — por semana, mês, bimestre ou datas personalizadas."
+        acoes={ehBimestreEmCurso && bimestre
+          ? <ChipFimDoBimestre numero={bimestre.numero} dias={bimestre.diasParaOFim} />
+          : undefined}
       />
 
-      <Card className="mb-6 flex flex-wrap items-center gap-3 p-4">
+      <Card className="mb-6 flex flex-wrap items-center gap-3 p-3 sm:p-4">
         <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
-        <select
-          aria-label="Filtrar por turma"
-          className={`${estiloInput} w-auto`}
-          value={turmaId}
-          onChange={(e) => setTurmaId(e.target.value)}
-        >
-          <option value="">Todas as turmas</option>
-          {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
-        </select>
+        <MolduraPilula icone={Users}>
+          <select
+            aria-label="Filtrar por turma"
+            className={estiloSelectPilula}
+            value={turmaId}
+            onChange={(e) => setTurmaId(e.target.value)}
+          >
+            <option value="">Todas as turmas</option>
+            {(turmas ?? []).map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
+          </select>
+        </MolduraPilula>
         <SeletorTurno
           turmas={turmas ?? []}
           valor={turmaId ? TURNO_TODOS : turno}
@@ -597,34 +935,54 @@ export default function Premiacoes() {
           </span>
         )}
         {dados && (
-          <span className="ml-auto inline-flex items-center gap-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300">
-            <Trophy size={15} /> {dados.periodo.rotulo}
+          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200">
+            <Trophy size={15} aria-hidden /> {dados.periodo.rotulo}
             {grupoTurno && <> · {grupoTurno.turno_rotulo} ({grupoTurno.total})</>}
           </span>
         )}
       </Card>
 
+      {/* Data do dado: o backend já manda o bloco na resposta (sem pedido a
+          mais); só as dimensões contratadas aparecem. */}
+      {dados && <SeloFrescor frescor={dados.frescor} dimensoes={["leitura", "matematica"]} />}
+
       {avisoJanela && (
-        <p role="note" className="mb-4 text-sm text-amber-700 dark:text-amber-300">
+        <Faixa papel="note" tom="alerta" icone={AlertTriangle}>
           O período mostrado não é o intervalo usado na Matemática. {avisoJanela}.
-        </p>
+        </Faixa>
       )}
 
       {turnoSemRecorte && (
-        <p role="status" className="mb-4 text-sm text-amber-700 dark:text-amber-300">
+        <Faixa papel="status" tom="alerta" icone={Info}>
           Nenhum aluno matriculado no turno {rotuloTurno(turnoAtivo)} neste ano letivo; mostrando todos os turnos.
-        </p>
+        </Faixa>
       )}
 
       {aguardando ? (
-        <Carregando />
+        <>
+          <p role="status" className="sr-only">Carregando as premiações…</p>
+          <EsqueletoCartoes quantos={4} />
+        </>
       ) : erro ? (
-        <Vazio titulo="Não foi possível carregar as premiações" descricao={erro.message} />
+        <Card className="p-6">
+          <Erro titulo="Não foi possível carregar as premiações" descricao={erro.message} aoTentar={recarregar} />
+        </Card>
       ) : !dados ? (
-        <Vazio titulo="Não foi possível carregar as premiações" />
+        <Card className="p-6">
+          <Erro titulo="Não foi possível carregar as premiações" aoTentar={recarregar} />
+        </Card>
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-2">
+          <TituloSecao titulo="Pódios do período">
+            Top 5 de cada categoria, na ordem calculada pelo sistema.
+          </TituloSecao>
+          {grupoTurno && (
+            <p className="-mt-2 mb-4 flex items-start gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+              <Clock size={15} aria-hidden className="mt-0.5 shrink-0 text-indigo-600 dark:text-indigo-300" />
+              <span>Vencedores calculados só com os alunos do turno selecionado; a régua da Matemática é a da escola inteira.</span>
+            </p>
+          )}
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             {categorias.map((categoria) => (
               <CartaoCategoria
                 key={categoria.chave} categoria={categoria}
@@ -634,48 +992,80 @@ export default function Premiacoes() {
                 legenda={categoria.chave === "melhor_matematica"
                   ? "Média ajustada de estrelas por atividade no período (0 a 5)"
                   : undefined}
+                aviso={temValorOculto(categoria) ? notaIndiceOculto(regua) : undefined}
                 aoVerRanking={() => setRankingAberto(categoria)}
+                aoGerarCertificados={podeEmitir
+                  ? () => setCertificados({
+                      alunos: categoria.podio.map((item) => ({
+                        aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
+                      })),
+                      modelo: MODELO_DA_CATEGORIA[categoria.chave] ?? null,
+                      contexto: contextoDe(categoria.titulo),
+                    })
+                  : undefined}
               />
             ))}
           </div>
 
           {/* MELHOR EVOLUÇÃO — quem mais cresceu no período (mesmo período +
               turma + turno dos pódios acima). */}
-          <h2 className="mb-3 mt-8 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-            Melhor Evolução no período
-          </h2>
+          <div className="mt-10">
+            <TituloSecao titulo="Melhor Evolução no período">
+              Quem mais cresceu dentro do intervalo, com o mesmo período, turma e turno dos pódios.
+            </TituloSecao>
+          </div>
           {escolaId && (
-            <div className="grid gap-4 md:grid-cols-2">
-              <CartaoEvolucao
-                escolaId={escolaId} dimensao="leitura" params={paramsEvol}
-                titulo="Melhor Evolução — Leitura" icone="📚"
-                vazio="Sem dados suficientes para medir evolução de leitura no período." />
-              <CartaoEvolucao
-                escolaId={escolaId} dimensao="matematica" params={paramsEvol}
-                titulo="Melhor Evolução — Matemática" icone="🧮"
-                vazio="Sem dados suficientes no período para medir evolução de Matemática." />
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+              {modulos.leitura && (
+                <CartaoEvolucao
+                  escolaId={escolaId} dimensao="leitura" params={paramsEvol}
+                  titulo="Melhor Evolução — Leitura"
+                  vazio="Sem dados suficientes para medir evolução de leitura no período."
+                  aoGerarCertificados={podeEmitir
+                    ? (alunos) => setCertificados({
+                        alunos, modelo: "elefante", contexto: contextoDe("Melhor Evolução — Leitura"),
+                      })
+                    : undefined} />
+              )}
+              {modulos.matematica && (
+                <CartaoEvolucao
+                  escolaId={escolaId} dimensao="matematica" params={paramsEvol}
+                  titulo="Melhor Evolução — Matemática"
+                  vazio="Sem dados suficientes no período para medir evolução de Matemática."
+                  aoGerarCertificados={podeEmitir
+                    ? (alunos) => setCertificados({
+                        alunos, modelo: "matific", contexto: contextoDe("Melhor Evolução — Matemática"),
+                      })
+                    : undefined} />
+              )}
             </div>
           )}
         </>
       )}
 
-      <p className="mt-6 flex items-start gap-1.5 text-xs text-zinc-400">
-        <Award size={13} className="mt-0.5 shrink-0" />
-        <span>
-          Melhor Matemática divide as estrelas do período pelas atividades do período somadas a atividades extras sem estrela (20% da mediana de atividades da escola).
-          {" "}A régua é a da escola inteira, em qualquer filtro, e{" "}
-          {regua?.modo === "situacao_atual"
-            ? `vale o acumulado do ano letivo ${regua.ano_letivo} — “Todo o histórico” não recorta período.`
-            : regua
-              ? `só entram atividades feitas dentro do período, sempre recortado pelo ano letivo ${regua.ano_letivo}.`
-              : "só entram atividades feitas dentro do período."}
-          {" "}Evolução mede o crescimento dentro do intervalo, não o acumulado.
-        </span>
-      </p>
-      {grupoTurno && (
-        <p className="mt-1 text-xs text-zinc-400">
-          Vencedores calculados só com os alunos do turno selecionado; a régua da Matemática é a da escola inteira.
-        </p>
+      {/* "Como funciona": a fórmula e o recorte por ano letivo continuam na tela,
+          recolhidos (nada foi apagado). */}
+      {modulos.matematica && (
+        <SecaoRecolhivel
+          className="mt-10"
+          inicialAberto={false}
+          titulo="Como as premiações são calculadas"
+          icone={<IconePastel icone={Info} tom="neutro" tamanho="sm" />}
+        >
+          <p className="flex items-start gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <Award size={15} aria-hidden className="mt-0.5 shrink-0 text-ouro-600" />
+            <span>
+              Melhor Matemática divide as estrelas do período pelas atividades do período somadas a atividades extras sem estrela (20% da mediana de atividades da escola).
+              {" "}A régua é a da escola inteira, em qualquer filtro, e{" "}
+              {regua?.modo === "situacao_atual"
+                ? `vale o acumulado do ano letivo ${regua.ano_letivo} — “Todo o histórico” não recorta período.`
+                : regua
+                  ? `só entram atividades feitas dentro do período, sempre recortado pelo ano letivo ${regua.ano_letivo}.`
+                  : "só entram atividades feitas dentro do período."}
+              {" "}Evolução mede o crescimento dentro do intervalo, não o acumulado.
+            </span>
+          </p>
+        </SecaoRecolhivel>
       )}
 
       {/* Ranking completo: MESMA URL da aba (período, turma e turno já
@@ -692,9 +1082,24 @@ export default function Premiacoes() {
           categoria={rankingAberto}
           urlBase={urlPremiacoes}
           turnoChave={grupoTurno ? chaveTurno(grupoTurno.turno) : null}
+          regua={regua}
           aoFechar={() => setRankingAberto(null)}
         />
       )}
+
+      {/* Emissão em lote: o Top N sai da lista da categoria, na ordem da tela;
+          as guardas por aluno são as do backend (recusado não é substituído). */}
+      <GerarCertificados
+        escolaId={escolaId}
+        alunos={certificados?.alunos ?? []}
+        modeloInicial={certificados?.modelo ?? null}
+        contexto={certificados?.contexto ?? ""}
+        // Período de um bimestre (ex.: "3º bimestre" já fechado): o seletor do bimestre
+        // impresso abre nele, não no bimestre de hoje.
+        bimestreInicial={bimestreDoPeriodo(periodo.preset)}
+        aberto={certificados != null}
+        aoFechar={() => setCertificados(null)}
+      />
     </div>
   );
 }

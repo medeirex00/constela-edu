@@ -48,13 +48,15 @@ import {
   type TerritorioSaeb,
 } from "./ideb";
 
-// A rede em índigo, a meta em cinza TRACEJADA, o Brasil (mesma rede) em verde e a UF nas
-// redes municipais (se o arquivo trouxer) em âmbar. A legenda e a tabela dizem o nome.
-const COR = { rede: "#6366f1", meta: "#64748b", brasil: "#10b981", uf: "#f59e0b" };
-// Onze tons de um índigo só (do claro ao escuro): os níveis 0 a 10 do Saeb do 5º ano em
-// ordem, sem "cor boa × cor ruim"; a legenda e a tabela dizem o nível.
-const CORES_NIVEIS = ["#eef2ff", "#e0e7ff", "#c7d2fe", "#a5b4fc", "#818cf8", "#6366f1", "#4f46e5", "#4338ca",
-  "#3730a3", "#312e81", "#1e1b4b"];
+// Paleta de séries da v2: a rede no violeta da marca, a meta em ardósia TRACEJADA, o Brasil
+// (mesma rede) em vermelho e a UF nas redes municipais (se o arquivo trouxer) em âmbar. A
+// legenda e a tabela dizem o nome.
+const COR = { rede: "#6C5CE7", meta: "#64748B", brasil: "#DC2626", uf: "#D97706" };
+// Onze tons de um violeta só (do claro ao escuro — a escala 50 a 950 da `indigo` remapeada
+// do tailwind.config.js): os níveis 0 a 10 do Saeb do 5º ano em ordem, sem "cor boa × cor
+// ruim"; a legenda e a tabela dizem o nível.
+const CORES_NIVEIS = ["#F3F1FE", "#E8E4FD", "#D3CBFB", "#B5AAF7", "#9688F2", "#7F6FEC", "#6C5CE7", "#5A4AD4",
+  "#4637AE", "#1F2250", "#17193B"];
 const COMPONENTES = [{ valor: "lp" as const, texto: "Língua Portuguesa" }, { valor: "mt" as const, texto: "Matemática" }];
 type Componente = (typeof COMPONENTES)[number]["valor"];
 

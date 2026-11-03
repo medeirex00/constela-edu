@@ -3,9 +3,10 @@
 Mantidos em um módulo único nesta fase; ao crescer, dividir por domínio
 sem alterar os imports (o pacote reexporta tudo).
 """
+import math
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -52,18 +53,22 @@ class EscolaOut(ORMModel):
     status: str
 
 
+# Limites dos campos de texto = tamanho da coluna String(n) do modelo. Sem eles,
+# o SQLite aceita e o PostgreSQL recusa no commit (DataError → 500); com eles, a
+# API responde 422 antes de tocar o banco.
 class EscolaCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
-    cidade: str | None = None
+    cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
     ano_letivo_ativo: int = 2026
 
 
 class EscolaUpdate(BaseModel):
+    # O nome é validado na rota (2 a 200 depois de tirar os espaços das pontas).
     nome: str | None = None
-    cidade: str | None = None
+    cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
-    logotipo_url: str | None = None
+    logotipo_url: str | None = Field(default=None, max_length=500)
     ano_letivo_ativo: int | None = None
     # Um status fora do vocabulário faria a escola sumir de TODAS as listas
     # (o GET filtra por igualdade exata) sem caminho de volta pela interface.
@@ -80,9 +85,10 @@ class ProfessorOut(ORMModel):
 
 
 class ProfessorCreate(BaseModel):
-    nome: str
-    email: EmailStr | None = None
-    observacoes: str | None = None
+    nome: str = Field(max_length=200)
+    # O EmailStr aceita até 254 caracteres; a coluna (professor e conta) tem 200.
+    email: EmailStr | None = Field(default=None, max_length=200)
+    observacoes: str | None = Field(default=None, max_length=1000)
 
 
 class ProfessorUpdate(BaseModel):
@@ -90,7 +96,7 @@ class ProfessorUpdate(BaseModel):
     importação, ou corrigir o e-mail — que é o login e o vínculo com as turmas).
     Só os campos enviados mudam."""
     nome: str | None = Field(default=None, min_length=2, max_length=200)
-    email: EmailStr | None = None
+    email: EmailStr | None = Field(default=None, max_length=200)
 
 
 class ProfessorCompletoIn(BaseModel):
@@ -98,7 +104,7 @@ class ProfessorCompletoIn(BaseModel):
     acesso (cargo professor) com senha gerada. O e-mail é obrigatório porque
     é ele que liga a conta às turmas do professor (acesso restrito)."""
     nome: str = Field(min_length=2, max_length=200)
-    email: EmailStr
+    email: EmailStr = Field(max_length=200)
     turma_id: int | None = None
     criar_acesso: bool = True
 
@@ -166,7 +172,7 @@ class AlunoCreate(BaseModel):
     turma_id: int
     numero_chamada: int | None = None
     data_nascimento: date | None = None
-    observacoes: str | None = None
+    observacoes: str | None = Field(default=None, max_length=1000)  # = AlunoUpdate
     # Ficha cadastral (RA, responsável, telefone, endereço...): mesmas chaves
     # da planilha de matrículas; o backend guarda só as chaves conhecidas.
     ficha: dict[str, str] = {}
@@ -178,6 +184,16 @@ class AlunoUpdate(BaseModel):
     numero_chamada: int | None = None
     data_nascimento: date | None = None
     observacoes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("nome")
+    @classmethod
+    def _nome_nao_some(cls, nome: str | None) -> str | None:
+        """Omitir o campo = não mexe; mandar ``"nome": null`` apagaria o nome — a
+        coluna é NOT NULL, então isso virava 500 e o PostgreSQL copiava a linha
+        inteira do aluno no texto do erro. Agora é 422 antes de tocar o banco."""
+        if nome is None:
+            raise ValueError("O nome do aluno não pode ficar vazio.")
+        return nome
 
 
 class DimensaoAlunoOut(BaseModel):
@@ -249,6 +265,11 @@ class AcaoAlunos(BaseModel):
     acao: str = Field(
         pattern="^(arquivar|reativar|excluir|transferir|marcar_transferido)$")
     turma_id: int | None = None  # obrigatório quando acao == "transferir"
+    # Opcional, só em "transferir": a turma de cujo PAINEL a transferência parte
+    # (TurmaDetalhe). Com ela, só a matrícula do ano ativo que está NESSA turma se
+    # move (sem criar matrícula nova), e turma de outro ano letivo é 409. Sem ela
+    # (perfil do aluno), move a matrícula do ano ativo onde ela estiver.
+    turma_origem_id: int | None = None
 
 
 class ExclusaoPermanenteAlunos(BaseModel):
@@ -317,8 +338,10 @@ class LeituraNiveisOut(BaseModel):
 
 class AlunoPerfilOut(BaseModel):
     aluno: AlunoOut
-    nota_matific: float
-    nota_elefante: float
+    # `None` = módulo fora do plano da rede (mesma regra do Ranking Geral): a
+    # tela mostra "—", nunca um 0,0 que afirmaria desempenho.
+    nota_matific: float | None
+    nota_elefante: float | None
     # LEGADO: a composição entre dimensões. Não ordena mais nada e não é a
     # fonte oficial — `dimensoes` é. Preservado enquanto os clientes migram.
     nota_geral: float
@@ -343,6 +366,21 @@ class PesosOut(BaseModel):
 
 class PesosUpdate(BaseModel):
     valores: dict[str, float]
+
+    @field_validator("valores")
+    @classmethod
+    def _pesos_nao_negativos(cls, valores: dict[str, float]) -> dict[str, float]:
+        """Peso é a FATIA do indicador na nota: vai de 0 (indicador desligado) a
+        100. A rota só conferia a soma = 100, então ``{"livros": -10, "tempo":
+        45, ...}`` passava e o motor premiava quem lê MENOS. (``not 0 <= peso <
+        inf`` recusa também NaN e infinito.)"""
+        invalidos = sorted(chave for chave, peso in valores.items()
+                           if not 0 <= peso < math.inf)
+        if invalidos:
+            raise ValueError(
+                f"Peso não pode ser negativo nem infinito (use 0 para desligar o "
+                f"indicador): {', '.join(invalidos)}.")
+        return valores
 
 
 class NivelOut(ORMModel):
@@ -402,6 +440,25 @@ class ReferenciasUpdate(BaseModel):
     modo: str = Field(pattern="^(auto|manual)$")
     valores_manuais: dict[str, float] = {}
 
+    @field_validator("valores_manuais")
+    @classmethod
+    def _referencias_validas(cls, valores: dict[str, float]) -> dict[str, float]:
+        """A referência é o resultado que vale 100 — o DIVISOR da normalização.
+
+        ZERO continua valendo e quer dizer "nesta chave, use a referência
+        automática": é assim que o motor o lê (``manuais.get(chave) or
+        auto[chave]``) e é o que a tela de Referências envia para a plataforma
+        sem dado. NEGATIVO ou INFINITO zeravam o indicador de todos os alunos sem
+        aviso (``normalizar`` devolve 0 com referência <= 0; dividir por infinito
+        dá 0). (``not 0 <= valor < inf`` recusa também NaN.)"""
+        invalidas = sorted(chave for chave, valor in valores.items()
+                           if not 0 <= valor < math.inf)
+        if invalidas:
+            raise ValueError(
+                f"Valor de referência manual não pode ser negativo nem infinito "
+                f"(use 0 para seguir a referência automática): {', '.join(invalidas)}.")
+        return valores
+
 
 # --- Ranking e Dashboard ----------------------------------------------------
 
@@ -419,8 +476,10 @@ class RankingItemOut(BaseModel):
     nome: str
     turma: str | None
     ano_escolar: str | None
-    nota_matific: float
-    nota_elefante: float
+    # Nula quando o módulo da plataforma não está no plano da rede (o módulo
+    # não existe para ela); senão, o número de sempre.
+    nota_matific: float | None
+    nota_elefante: float | None
     # LEGADO: composição entre dimensões; não ordena mais nada.
     nota_geral: float
     # Discriminante de AFERIÇÃO por dimensão — carimbado SEMPRE, inclusive na

@@ -11,9 +11,10 @@
  */
 import { AlertTriangle, Info, Landmark } from "lucide-react";
 
-import { Badge, Card, Carregando, Mensagem } from "../../components/ui";
+import { Card, Carregando, Mensagem } from "../../components/ui";
 import { useApi } from "../../hooks/useApi";
 import AbaIDEB from "./AbaIDEB";
+import { CabecalhoIndicador } from "./visualIndicadores";
 import type { RespostaIDEB } from "./ideb";
 
 export type { RespostaIDEB } from "./ideb";
@@ -22,14 +23,9 @@ export default function CartaoIDEB({ redeId, ehGlobal }: { redeId: number; ehGlo
   const { dados, carregando, erro } = useApi<RespostaIDEB>(`/redes/${redeId}/indicadores/ideb`);
   return (
     <section data-testid="cartao-ideb" aria-label="IDEB e SAEB oficiais do INEP da rede e por escola">
-      <Card className="space-y-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Landmark size={16} className="text-indigo-600" /> IDEB e SAEB — oficial
-          </h2>
-          <Badge tom="destaque">INEP</Badge>
-        </div>
-        <p className="flex items-start gap-1.5 rounded-lg bg-indigo-50 p-2.5 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
+      <Card className="space-y-4 p-5 sm:p-6">
+        <CabecalhoIndicador icone={Landmark} tom="teal" fonte="INEP" titulo="IDEB e SAEB — oficial" />
+        <p className="flex items-start gap-1.5 rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
           <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
           <span>
             Índice de Desenvolvimento da Educação Básica (Ideb) e Saeb do 5º ano da rede municipal e por escola (anos

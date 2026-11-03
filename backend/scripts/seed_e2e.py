@@ -1,13 +1,20 @@
 """Seed DETERMINÍSTICO para os testes E2E (Playwright).
 
 Reseta o banco de teste e cria dados conhecidos:
-  * escola JORGE PASSOS + demonstração (turmas, alunos, snapshots e ranking
-    já calculado) — reaproveita o seed oficial (scripts/seed.py);
+  * escola de demonstração FICTÍCIA (``seed.ESCOLA_DEMO``) + demonstração
+    (turmas, alunos, snapshots e ranking já calculado) — reaproveita o seed
+    oficial (scripts/seed.py);
   * três contas com senhas FIXAS (de variáveis de ambiente) para exercitar
     login, cadastro, CRUD e permissões:
       - admin@constela.local  (admin global)   -> ADMIN_INITIAL_PASSWORD
       - coord@constela.local  (coordenador)    -> COORD_PASSWORD
       - prof@constela.local   (professor)      -> PROF_PASSWORD
+  * o Professor E2E como titular das turmas da professora "Mariana Lopes" do seed
+    (o vínculo é pelo e-mail do cadastro de Professor): a visão do professor tem
+    alunos de verdade, só os dessas turmas;
+  * os alunos da demonstração CONFIRMADOS na Lista Piloto (`da_lista_piloto`),
+    menos um (``ALUNO_SEM_LISTA_PILOTO``): o lote de certificados do E2E gera o PDF
+    dos confirmados e mostra a recusa, com o motivo, do que não está na lista.
 
 NUNCA rode este script em produção: as senhas são conhecidas por definição.
 Ele exige DATABASE_URL apontando para um SQLite de teste (ex.: ./e2e.db) e
@@ -37,15 +44,21 @@ if _URL.startswith("sqlite") and ":///" in _URL:
             except FileNotFoundError:
                 pass
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import select, update  # noqa: E402
 
 from app.core.database import SessionLocal, engine  # noqa: E402
 from app.core.migracoes import aplicar_migracoes  # noqa: E402
 from app.core.security import hash_senha  # noqa: E402
-from app.models import Usuario  # noqa: E402
+from app.models import Aluno, Professor, Usuario  # noqa: E402
 from scripts.seed import seed_base, seed_demo  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 COORD_EMAIL = "coord@constela.local"
+# Fica FORA da Lista Piloto: é o 1º do Ranking Geral do seed, então o Top 3 do lote
+# mostra os dois caminhos (aptos e uma recusa com motivo).
+ALUNO_SEM_LISTA_PILOTO = "Otávio Fernandes Cruz"
+# Cadastro de Professor do seed cujas turmas ficam com a conta prof@ (e-mail igual).
+PROFESSOR_DO_PROF_E2E = "Mariana Lopes"
 PROF_EMAIL = "prof@constela.local"
 
 
@@ -58,11 +71,24 @@ def _garantir_usuario(db, escola_id: int, nome: str, email: str, senha: str, car
 
 
 def main() -> None:
+    forcar_saida_utf8()
+    # O script APAGA e repovoa o banco com contas de senha conhecida (padrão
+    # publicado no repositório): só existe para o SQLite descartável do E2E.
+    from app.core.config import settings
+    if settings.em_producao or not settings.DATABASE_URL.startswith("sqlite"):
+        raise SystemExit("seed_e2e recusado: só roda fora de produção e com "
+                         "DATABASE_URL apontando para um SQLite de teste.")
     aplicar_migracoes(engine)
     db = SessionLocal()
     try:
         escola = seed_base(db)          # escola + admin global (ADMIN_INITIAL_PASSWORD)
         seed_demo(db, escola)           # turmas, alunos, snapshots e ranking calculado
+        db.execute(update(Aluno)
+                   .where(Aluno.escola_id == escola.id, Aluno.nome != ALUNO_SEM_LISTA_PILOTO)
+                   .values(da_lista_piloto=True))
+        db.execute(update(Professor)
+                   .where(Professor.escola_id == escola.id, Professor.nome == PROFESSOR_DO_PROF_E2E)
+                   .values(email=PROF_EMAIL))
         _garantir_usuario(db, escola.id, "Coordenadora E2E", COORD_EMAIL,
                           os.environ.get("COORD_PASSWORD", "CoordE2E@2026"), "coordenador")
         _garantir_usuario(db, escola.id, "Professor E2E", PROF_EMAIL,

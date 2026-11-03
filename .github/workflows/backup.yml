@@ -1,17 +1,18 @@
 # =============================================================================
 # Backup diário CIFRADO do Postgres de produção → artefato off-site (GitHub).
 #
+# NÃO É MAIS O BACKUP EM USO. Desde 13/10/2026 o backup diário roda no repositório
+# PRIVADO medeirex00/constela-backups (com ensaio de restauração a cada execução).
+# Este repositório (constela-edu) é PÚBLICO: os artefatos daqui podiam ser baixados
+# por qualquer conta logada do GitHub. Em 20/10/2026 a variável BACKUP_ENABLED foi
+# posta em 'false' aqui; além dela, o primeiro passo abaixo RECUSA rodar em
+# repositório público — religar a variável por engano não volta a publicar dump.
+#
 # DESLIGADO por padrão (fail-safe): só roda quando a variável de repositório
-# BACKUP_ENABLED == 'true'. Assim o arquivo pode ser mesclado sem começar a
-# tocar a produção antes de o dono configurar os segredos.
+# BACKUP_ENABLED == 'true' E o repositório for privado.
 #
-# Para ativar (uma vez), no GitHub → Settings:
-#   • Variables → BACKUP_ENABLED = true
-#   • Secrets → DATABASE_URL_RO   = string de conexão (idealmente read-only)
-#   • Secrets → BACKUP_PASSPHRASE = senha forte que cifra o dump
-#                                   (guarde-a num cofre, NÃO no repositório)
-#
-# Restauração e teste (“game day”): docs/DR-RUNBOOK.md
+# Restauração e teste (“game day”): docs/DR-RUNBOOK.md e o OPERACAO.md do
+# repositório privado.
 # =============================================================================
 name: Backup do banco (produção)
 
@@ -29,6 +30,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Conferir que este repositório é PRIVADO (antes de qualquer segredo)
+        # Dump da base inteira (dados de crianças) nunca vira artefato de repositório
+        # público. Mesma trava do repositório privado de backups.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          privado="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["private"])')"
+          [ "$privado" = "True" ] || { echo "::error::Este repositório NÃO é privado: o backup não roda aqui (use medeirex00/constela-backups)."; exit 1; }
+
       - uses: actions/checkout@v4
 
       - name: Instalar postgresql-client 17 (mesma major do Supabase)

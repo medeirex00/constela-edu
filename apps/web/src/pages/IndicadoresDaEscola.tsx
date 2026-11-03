@@ -19,7 +19,7 @@
 import { BadgeCheck } from "lucide-react";
 
 import SeloFonte, { fontesUnicas, type FonteOficial } from "../components/SeloFonte";
-import { Badge, Card, Carregando, Mensagem } from "../components/ui";
+import { Badge, Card, Carregando, IconePastel, Mensagem } from "../components/ui";
 import { useApi } from "../hooks/useApi";
 import { usePerfil } from "../hooks/usePerfil";
 import { Aviso, Bloco, Nota, Situacao } from "./rede/IdebBlocos";
@@ -144,7 +144,7 @@ function SarespEscola({ s }: { s: SarespDaEscola }) {
       {edicoes.length === 0 ? (
         <p className="text-sm text-zinc-500">Sem resultado oficial do SARESP importado para a escola.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full text-xs">
             <caption className="sr-only">SARESP oficial da escola por edição</caption>
             <thead>
@@ -197,7 +197,7 @@ function SarespEscola({ s }: { s: SarespDaEscola }) {
       )}
       {s.avisos.tps && edicoes.some((e) => e.tps?.valor === 0) && <Nota>{s.avisos.tps}</Nota>}
       {referencias.length > 0 && edRef != null && (
-        <div className="overflow-x-auto" data-testid="indicadores-escola-saresp-referencias">
+        <div className="relative overflow-x-auto" data-testid="indicadores-escola-saresp-referencias">
           <table className="w-full text-xs">
             <caption className="py-1 text-left text-xs font-medium text-zinc-600 dark:text-zinc-300">
               Referências — SARESP {edRef}
@@ -261,7 +261,7 @@ function IdebEscola({ d }: { d: IdebDaEscola }) {
       {serie.length === 0 ? (
         <p className="text-sm text-zinc-500">Sem resultado oficial do Ideb importado para a escola.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full text-xs">
             <caption className="sr-only">Ideb e Saeb oficiais da escola por edição</caption>
             <thead>
@@ -404,7 +404,7 @@ export function ConteudoIndicadoresEscola({ dados }: { dados: RespostaIndicadore
         </Aviso>
       )}
       {dados.rede && !dados.tem_dados && !semIbge && (
-        <p className="rounded-lg border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700"
+        <p className="rounded-2xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700"
            data-testid="indicadores-escola-vazio">
           Nenhum indicador oficial importado ainda para a escola nem para a rede.
         </p>
@@ -428,15 +428,18 @@ export default function IndicadoresDaEscola({ escolaId }: { escolaId: number | n
   const daEscola = dados && dados.escola.id === escolaId ? dados : null;
   return (
     <section className="mt-6" data-testid="indicadores-escola" aria-label="Indicadores oficiais da escola">
-      <Card className="space-y-5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold">
-              <BadgeCheck size={16} className="text-indigo-600" /> Indicadores oficiais da escola
-            </h2>
-            {daEscola && (
-              <p className="mt-0.5 text-xs text-zinc-500" data-testid="indicadores-escola-nome">{daEscola.escola.nome}</p>
-            )}
+      <Card className="space-y-5 p-5 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <IconePastel icone={BadgeCheck} tom="violeta" />
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+                Indicadores oficiais da escola
+              </h2>
+              {daEscola && (
+                <p className="mt-0.5 text-xs text-zinc-500" data-testid="indicadores-escola-nome">{daEscola.escola.nome}</p>
+              )}
+            </div>
           </div>
           <Badge tom="destaque">INEP · SEDUC-SP</Badge>
         </div>

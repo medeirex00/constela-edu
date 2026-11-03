@@ -6,13 +6,14 @@ bimestre do calendário civil. Em 01/10/2026 isso dava **01/09 a 31/10**, enquan
 o 3º bimestre oficial da rede é **24/07 a 04/10**: 61 dias contra 73, com apenas
 34 em comum.
 
-O efeito medido em produção naquele dia, no pódio de "Mais Livros Lidos":
+O efeito medido em produção naquele dia, no pódio de "Mais Livros Lidos" (cada
+letra é uma criança; os nomes não entram aqui):
 
-    escola  1  oficial: YASMIM 150   ·  preset da tela: CESAR 32
-    escola  7  oficial: VITOR   60   ·  preset da tela: KEVIN 38
-    escola  8  oficial: GABRIEL 162  ·  preset da tela: LAUARA 108
-    escola 11  oficial: KEMILY 115   ·  preset da tela: MARIA 65
-    escola 17  oficial: ALICE   79   ·  preset da tela: ALICE 50
+    escola  1  oficial: criança A 150  ·  preset da tela: criança B  32
+    escola  7  oficial: criança C  60  ·  preset da tela: criança D  38
+    escola  8  oficial: criança E 162  ·  preset da tela: criança F 108
+    escola 11  oficial: criança G 115  ·  preset da tela: criança H  65
+    escola 17  oficial: criança I  79  ·  preset da tela: criança I  50
 
 Quatro escolas de cinco coroariam a criança errada. Daí os dois travamentos
 abaixo: a janela vem de ``app.services.bimestres`` (fonte única), e existe um
@@ -88,7 +89,8 @@ def test_bimestre_anterior_no_primeiro_nao_explode_sem_calendario_do_ano_passado
     """2025 não tem calendário cadastrado: cai no legado, mas responde."""
     i, f, rotulo = _datas("bimestre_anterior", date(2026, 3, 1))
     assert i.year == 2025 and i < f
-    assert rotulo == "Bimestre anterior"
+    # Aproximado, e o rótulo DIZ isso (antes saía só "Bimestre anterior").
+    assert rotulo == "Bimestre anterior (aproximado: sem calendário oficial de 2025)"
 
 
 # ---------------------------------------------------------------------------

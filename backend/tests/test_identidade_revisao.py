@@ -138,13 +138,13 @@ def _previa(db, escola, plataforma, linhas):
 
 @pytest.fixture()
 def sala(db, escola_completa):
-    """5ºA com os três casos reais (nomes completos da Lista Piloto) + colegas."""
+    """5ºA com o padrão dos três casos reais (nomes completos fictícios) + colegas."""
     esc = escola_completa["escola"]
     t = _turma(db, esc, "5ºA", codigo="300300001")
     alunos = {
-        "heloisa": _aluno(db, esc, t, "HELOISA DEL GIUDICE DE SOUZA FIDELIX"),
-        "taufik": _aluno(db, esc, t, "TAUFIK DE OLIVEIRA SANTOS"),
-        "mathias": _aluno(db, esc, t, "MATHIAS RICARDO RODRIGUES MARADEI"),
+        "heloisa": _aluno(db, esc, t, "HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI"),
+        "tobias": _aluno(db, esc, t, "TOBIAS DE OTTOLINI SANTELLI"),
+        "mauro": _aluno(db, esc, t, "MAURO ROMUALDO RONCATTI MARZOLLI"),
         "heitor": _aluno(db, esc, t, "HEITOR DE SOUZA LIMA"),
         "maria": _aluno(db, esc, t, "MARIA CLARA SOUZA"),
         "joao": _aluno(db, esc, t, "JOÃO VÍTOR ARAÚJO"),
@@ -168,7 +168,7 @@ def test_chave_nome_e_a_unica_definicao_de_mesmo_nome():
 def test_heloisa_nome_do_meio_omitido_vai_para_a_ficha_completa(db, sala):
     esc, heloisa = sala["escola"], sala["heloisa"]
     antes = _n_alunos(db, esc)
-    linha = _elefante("HELOISA DE SOUZA FIDELIX", "5 ANO A MANHA ANUAL (300300001)", sid=9001)
+    linha = _elefante("HELOISA DE SIMULATTI FICTELLI", "5 ANO A MANHA ANUAL (300300001)", sid=9001)
 
     [corr] = _previa(db, esc, "elefante", [linha])
     assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", heloisa.id, "parcial")
@@ -181,8 +181,8 @@ def test_heloisa_nome_do_meio_omitido_vai_para_a_ficha_completa(db, sala):
 
 
 @pytest.mark.parametrize("chave,abreviado,uuid", [
-    ("taufik", "TAUFIK D", "u-taufik"),
-    ("mathias", "MATHIAS R", "u-mathias"),
+    ("tobias", "TOBIAS D", "u-tobias"),
+    ("mauro", "MAURO R", "u-mauro"),
 ])
 def test_nome_abreviado_do_matific_vai_para_a_ficha_completa(db, sala, chave, abreviado, uuid):
     esc, dono = sala["escola"], sala[chave]
@@ -200,10 +200,10 @@ def test_nome_abreviado_do_matific_vai_para_a_ficha_completa(db, sala, chave, ab
 
 def test_abreviado_com_dois_donos_possiveis_vai_para_revisao(db, sala):
     esc = sala["escola"]
-    _aluno(db, esc, sala["turma"], "MATHIAS ROCHA LIMA")
+    _aluno(db, esc, sala["turma"], "MAURO ROCHA LIMA")
     db.commit()
     antes = _n_alunos(db, esc)
-    linha = _matific("MATHIAS R", "5 ANO A", "u-mr")
+    linha = _matific("MAURO R", "5 ANO A", "u-mr")
 
     [corr] = _previa(db, esc, "matific", [linha])
     assert corr["status"] == "revisar" and corr["motivo"] == "candidatos_multiplos"
@@ -236,7 +236,7 @@ def test_nome_parcial_sem_o_ultimo_sobrenome_vai_para_revisao(db, sala):
     nome pode ser outra criança. Não associa, não cria."""
     esc = sala["escola"]
     antes = _n_alunos(db, esc)
-    linha = _elefante("HELOISA DEL GIUDICE", "5ºA", sid=9100)
+    linha = _elefante("HELOISA DORVANTE GRASSETTI", "5ºA", sid=9100)
     [corr] = _previa(db, esc, "elefante", [linha])
     assert corr["status"] == "revisar" and corr["motivo"] == "correspondencia_insegura"
     r = _confirmar(db, esc, sala["admin"], "elefante", [linha])
@@ -245,40 +245,59 @@ def test_nome_parcial_sem_o_ultimo_sobrenome_vai_para_revisao(db, sala):
 
 
 def test_matching_subconjunto_so_estrutural():
-    ficha = matching.Identidade(id=1, nome="HELOISA DEL GIUDICE DE SOUZA FIDELIX")
+    ficha = matching.Identidade(id=1, nome="HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI")
     assert matching.classificar_linha(
-        matching.Identidade(nome="HELOISA DE SOUZA FIDELIX"), [ficha],
+        matching.Identidade(nome="HELOISA DE SIMULATTI FICTELLI"), [ficha],
         permitir_subconjunto_unico=True).status == matching.VINCULADO
     assert matching.classificar_linha(
-        matching.Identidade(nome="HELOISA DE SOUZA"), [ficha],
+        matching.Identidade(nome="HELOISA DE SIMULATTI"), [ficha],
         permitir_subconjunto_unico=True).status == matching.REVISAR
 
 
-def test_variante_de_grafia_sem_corroboracao_vai_para_revisao(db, sala):
-    """"RICADO" × "RICARDO" (typo no nome do meio, pontas iguais): parecido não é
-    prova. Na plataforma não associa só pelo nome — revisão."""
-    esc, mathias = sala["escola"], sala["mathias"]
-    linha = _matific("MATHIAS RICADO RODRIGUES MARADEI", "5ºA", "u-ricado")
+def test_uma_letra_no_segundo_prenome_continua_em_revisao(db, sala):
+    """"ROMUADO" × "ROMUALDO" no 2º PRENOME, candidato ÚNICO na sala → REVISÃO.
+
+    Em 2026-10-07 o trabalho local passou a associar este caso (variação de grafia
+    num nome do meio). A revisão adversarial de 2026-10-11 mostrou que a mesma
+    regra liga prenomes DIFERENTES (ODETE ALICE × ODETE ALINE, gêmeas) e que não
+    há lista de prenomes confiável no cadastro. Regra vigente
+    (``identidade_aluno._grafia_segura``): grafia equivalente em qualquer palavra
+    do meio; erro de UMA letra só num SOBRENOME do meio. Automatizar o erro no
+    prenome é decisão do dono (com uma lista de prenomes de referência)."""
+    esc = sala["escola"]
+    otavio = _aluno(db, esc, sala["turma"], "OTAVIO ROMUALDO MENDES FARIAS")
+    db.commit()
+    linha = _matific("OTAVIO ROMUADO MENDES FARIAS", "5ºA", "u-romuado")
     [corr] = _previa(db, esc, "matific", [linha])
-    assert corr["status"] == "revisar" and corr["aluno_id"] == mathias.id
+    assert (corr["status"], corr["aluno_id"]) == ("revisar", otavio.id)
     antes = _n_alunos(db, esc)
     r = _confirmar(db, esc, sala["admin"], "matific", [linha])
     assert r.qtd_revisoes == 1 and _n_alunos(db, esc) == antes
-    assert _snap_matific(db, mathias.id) is None
+    assert _snap_matific(db, otavio.id) is None
+
+
+def test_uma_letra_num_sobrenome_do_meio_associa(db, sala):
+    esc = sala["escola"]
+    otavio = _aluno(db, esc, sala["turma"], "OTAVIO ROMUALDO MENDES FARIAS")
+    db.commit()
+    linha = _matific("OTAVIO ROMUALDO MANDES FARIAS", "5ºA", "u-mandes")
+    [corr] = _previa(db, esc, "matific", [linha])
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", otavio.id,
+                                                              "variante")
 
 
 def test_nome_que_so_casa_em_outra_turma_nao_vira_ficha_stub(db, sala):
-    """O padrão histórico dos stubs: "TAUFIK D" chegando por uma turma onde ele NÃO
-    está. Antes: ninguém na sala → criava a ficha "TAUFIK D". Agora: o nome casa
+    """O padrão histórico dos stubs: "TOBIAS D" chegando por uma turma onde ele NÃO
+    está. Antes: ninguém na sala → criava a ficha "TOBIAS D". Agora: o nome casa
     com aluno de OUTRA turma → revisão, nenhuma ficha nova."""
     esc = sala["escola"]
     _turma(db, esc, "5ºB")
     db.commit()
     antes = _n_alunos(db, esc)
-    linha = _matific("TAUFIK D", "5 ANO B", "u-tb")
+    linha = _matific("TOBIAS D", "5 ANO B", "u-tb")
     [corr] = _previa(db, esc, "matific", [linha])
     assert corr["status"] == "revisar" and corr["motivo"] == "nome_casa_em_outra_sala"
-    assert corr["aluno_id"] == sala["taufik"].id
+    assert corr["aluno_id"] == sala["tobias"].id
     r = _confirmar(db, esc, sala["admin"], "matific", [linha])
     assert r.qtd_revisoes == 1 and _n_alunos(db, esc) == antes
 
@@ -288,15 +307,15 @@ def test_nome_que_so_casa_em_outra_turma_nao_vira_ficha_stub(db, sala):
 def test_identidade_externa_decide_antes_do_nome(db, sala):
     """O Matific renomeou a conta e a turma do relatório é outra: o UUID já
     vinculado continua sendo a identidade."""
-    esc, taufik = sala["escola"], sala["taufik"]
-    _vincular(db, esc, taufik, "matific", "u-t1")
+    esc, tobias = sala["escola"], sala["tobias"]
+    _vincular(db, esc, tobias, "matific", "u-t1")
     db.commit()
     antes = _n_alunos(db, esc)
-    linha = _matific("TAUFIK OLIVEIRA", "4 ANO B", "u-t1")
+    linha = _matific("TOBIAS OTTOLINI", "4 ANO B", "u-t1")
     [corr] = _previa(db, esc, "matific", [linha])
-    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("exato", taufik.id, "identidade")
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("exato", tobias.id, "identidade")
     _confirmar(db, esc, sala["admin"], "matific", [linha])
-    assert _n_alunos(db, esc) == antes and _snap_matific(db, taufik.id) is not None
+    assert _n_alunos(db, esc) == antes and _snap_matific(db, tobias.id) is not None
 
 
 def test_identidade_de_ficha_inativa_vai_para_revisao_sem_ficha_nova(db, sala):
@@ -341,25 +360,25 @@ def test_ficha_excluida_nao_e_reutilizada(db, sala):
 
 def test_escolha_explicita_contra_a_identidade_de_outro_aluno_vai_para_revisao(db, sala):
     esc = sala["escola"]
-    _vincular(db, esc, sala["taufik"], "matific", "u-t2")
+    _vincular(db, esc, sala["tobias"], "matific", "u-t2")
     db.commit()
-    linha = _matific("TAUFIK D", "5ºA", "u-t2", aluno_id=sala["mathias"].id)
+    linha = _matific("TOBIAS D", "5ºA", "u-t2", aluno_id=sala["mauro"].id)
     r = _confirmar(db, esc, sala["admin"], "matific", [linha])
     assert r.qtd_alunos == 0 and r.qtd_revisoes == 1
     assert _pendentes(db, esc)[0].motivo == "identidade_de_outro_aluno"
-    assert _snap_matific(db, sala["mathias"].id) is None
-    assert _dono(db, esc, "matific", "u-t2") == sala["taufik"].id
+    assert _snap_matific(db, sala["mauro"].id) is None
+    assert _dono(db, esc, "matific", "u-t2") == sala["tobias"].id
 
 
 def test_student_id_do_elefante_percorre_parser_e_conector():
     resumo = svc.analisar_elefante_api({
         "courseSchoolDescriptors": {"courseName": "5 ANO A"},
-        "students": [{"studentId": 4242, "studentName": "HELOISA DE SOUZA FIDELIX",
+        "students": [{"studentId": 4242, "studentName": "HELOISA DE SIMULATTI FICTELLI",
                       "totalBooksRead": 3}]})
     assert resumo.linhas[0].dados["elefante_student_id"] == "4242"
     leituras = svc.analisar_elefante_api({
         "courseSchoolDescriptors": {"courseName": "5 ANO A"},
-        "leituras": [{"nome": "HELOISA DE SOUZA FIDELIX", "studentId": "4242",
+        "leituras": [{"nome": "HELOISA DE SIMULATTI FICTELLI", "studentId": "4242",
                       "bookTitle": "Livro", "lastReadWhen": "2026-09-01T10:00:00"}]})
     assert leituras.linhas[0].dados["elefante_student_id"] == "4242"
 
@@ -430,14 +449,14 @@ def test_duas_turmas_da_mesma_sala_nao_escolhem_arbitrariamente(db, escola_compl
 
 def test_revisar_preserva_a_linha_inteira_e_nao_duplica_a_pendencia(db, sala):
     esc = sala["escola"]
-    linha = _elefante("HELOISA DEL GIUDICE", "5 ANO A (300300001)", sid=9200, livros=12)
+    linha = _elefante("HELOISA DORVANTE GRASSETTI", "5 ANO A (300300001)", sid=9200, livros=12)
     r = _confirmar(db, esc, sala["admin"], "elefante", [linha])
-    assert r.qtd_revisoes == 1 and svc.chave_nome("HELOISA DEL GIUDICE") in r.ignorados
+    assert r.qtd_revisoes == 1 and svc.chave_nome("HELOISA DORVANTE GRASSETTI") in r.ignorados
 
     [rev] = _pendentes(db, esc)
     assert rev.plataforma == "elefante" and rev.formato == "resumo"
     assert rev.id_externo == "9200"
-    assert rev.nome_recebido == "HELOISA DEL GIUDICE"
+    assert rev.nome_recebido == "HELOISA DORVANTE GRASSETTI"
     assert rev.turma_informada == "5 ANO A (300300001)" and rev.turma_id == sala["turma"].id
     assert rev.motivo == "correspondencia_insegura"
     assert [c["aluno_id"] for c in rev.candidatos] == [sala["heloisa"].id]
@@ -451,7 +470,7 @@ def test_revisar_preserva_a_linha_inteira_e_nao_duplica_a_pendencia(db, sala):
 
     # Reimportar o mesmo relatório ATUALIZA a pendência (não empilha outra).
     _confirmar(db, esc, sala["admin"], "elefante", [_elefante(
-        "HELOISA DEL GIUDICE", "5 ANO A (300300001)", sid=9200, livros=13)])
+        "HELOISA DORVANTE GRASSETTI", "5 ANO A (300300001)", sid=9200, livros=13)])
     [rev2] = _pendentes(db, esc)
     assert rev2.id == rev.id and rev2.ocorrencias == 2 and rev2.linhas[0]["livros_unicos"] == 13
 
@@ -460,7 +479,7 @@ def test_resolucao_associa_ao_aluno_escolhido_e_a_proxima_sync_nao_duplica(
         db, sala, cliente, monkeypatch):
     esc, heloisa = sala["escola"], sala["heloisa"]
     _confirmar(db, esc, sala["admin"], "elefante",
-               [_elefante("HELOISA DEL GIUDICE", "5ºA", sid=9300, livros=15)])
+               [_elefante("HELOISA DORVANTE GRASSETTI", "5ºA", sid=9300, livros=15)])
     [rev] = _pendentes(db, esc)
     antes = _n_alunos(db, esc)
 
@@ -492,7 +511,7 @@ def test_resolucao_associa_ao_aluno_escolhido_e_a_proxima_sync_nao_duplica(
     # nova e sem ficha nova — mesmo com o nome parcial de sempre.
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
     payload = {"courseSchoolDescriptors": {"courseName": "5 ANO A"},
-               "students": [{"studentId": 9300, "studentName": "HELOISA DEL GIUDICE",
+               "students": [{"studentId": 9300, "studentName": "HELOISA DORVANTE GRASSETTI",
                              "totalBooksRead": 16}]}
     orchestrator.aplicar_arquivo(
         db, esc, ArquivoObtido(conteudo=json.dumps(payload).encode("utf-8"),
@@ -547,7 +566,7 @@ def test_resolucao_pode_criar_ficha_nova_explicitamente(db, sala, cliente):
 
 def test_descartar_revisao(db, sala, cliente):
     esc = sala["escola"]
-    _confirmar(db, esc, sala["admin"], "elefante", [_elefante("HELOISA DEL GIUDICE", "5ºA", sid=1)])
+    _confirmar(db, esc, sala["admin"], "elefante", [_elefante("HELOISA DORVANTE GRASSETTI", "5ºA", sid=1)])
     [rev] = _pendentes(db, esc)
     base = f"/api/v1/escolas/{esc.id}/importacoes/revisoes/{rev.id}"
     assert cliente.post(f"{base}/resolver", json={}).status_code == 400
@@ -562,32 +581,32 @@ def test_stub_existente_e_fusao_administrativa_sem_recriar(db, sala):
     """Enquanto a ficha-stub existir, a conta dela continua sendo dela (identidade
     primeiro). A FUSÃO é ação explícita do gestor; depois dela, a sincronização
     casa pela identidade transferida e não recria a duplicata."""
-    esc, taufik = sala["escola"], sala["taufik"]
-    stub = _aluno(db, esc, sala["turma"], "TAUFIK D", lp=False)
+    esc, tobias = sala["escola"], sala["tobias"]
+    stub = _aluno(db, esc, sala["turma"], "TOBIAS D", lp=False)
     _vincular(db, esc, stub, "matific", "u-tf")
     db.commit()
-    [corr] = _previa(db, esc, "matific", [_matific("TAUFIK D", "5 ANO A", "u-tf")])
+    [corr] = _previa(db, esc, "matific", [_matific("TOBIAS D", "5 ANO A", "u-tf")])
     assert corr["aluno_id"] == stub.id and corr["via"] == "identidade"
     # O nome completo, sem identidade, vai para a ficha de nome idêntico.
-    [corr] = _previa(db, esc, "elefante", [_elefante("TAUFIK DE OLIVEIRA SANTOS", "5ºA")])
-    assert corr["aluno_id"] == taufik.id
+    [corr] = _previa(db, esc, "elefante", [_elefante("TOBIAS DE OTTOLINI SANTELLI", "5ºA")])
+    assert corr["aluno_id"] == tobias.id
 
-    fundir_par(db, esc.id, taufik, stub, usuario_id=sala["admin"].id)
+    fundir_par(db, esc.id, tobias, stub, usuario_id=sala["admin"].id)
     db.commit()
     antes = _n_alunos(db, esc)
-    r = _confirmar(db, esc, sala["admin"], "matific", [_matific("TAUFIK D", "5 ANO A", "u-tf")])
+    r = _confirmar(db, esc, sala["admin"], "matific", [_matific("TOBIAS D", "5 ANO A", "u-tf")])
     assert r.qtd_revisoes == 0 and _n_alunos(db, esc) == antes
-    assert _snap_matific(db, taufik.id) is not None
+    assert _snap_matific(db, tobias.id) is not None
 
 
 # --- 8. prévia == confirmação -------------------------------------------------------
 
 CASOS = [
     ("MARIA CLARA* SOUZA", "u-1"),            # exato (asterisco)
-    ("TAUFIK D", "u-2"),                      # abreviação única
-    ("HELOISA DE SOUZA FIDELIX", "u-3"),      # parcial estrutural
-    ("HELOISA DEL GIUDICE", "u-4"),           # parcial não estrutural → revisão
-    ("MATHIAS R", "u-5"),                     # dois candidatos (com o extra) → revisão
+    ("TOBIAS D", "u-2"),                      # abreviação única
+    ("HELOISA DE SIMULATTI FICTELLI", "u-3"),     # parcial estrutural
+    ("HELOISA DORVANTE GRASSETTI", "u-4"),    # parcial não estrutural → revisão
+    ("MAURO R", "u-5"),                       # dois candidatos (com o extra) → revisão
     ("JOAO SILVA SANTOS", "u-6"),             # homônimo em outra série → revisão
     ("KAUA MENDES", "u-7"),                   # ninguém → cria
     ("QUALQUER NOME", "u-8"),                 # identidade vinculada → dono
@@ -598,7 +617,7 @@ CASOS = [
 @pytest.mark.parametrize("nome,uuid", CASOS)
 def test_previa_e_confirmacao_decidem_igual(db, sala, nome, uuid, modo):
     esc = sala["escola"]
-    _aluno(db, esc, sala["turma"], "MATHIAS ROCHA LIMA")
+    _aluno(db, esc, sala["turma"], "MAURO ROCHA LIMA")
     outra = _turma(db, esc, "4ºA", ano_escolar="4º Ano")
     _aluno(db, esc, outra, "JOAO SILVA SANTOS")
     _vincular(db, esc, sala["maria"], "matific", "u-8")
@@ -641,9 +660,9 @@ def test_criado_auto_registra_o_id_da_ficha(db, sala):
 
 def test_lista_piloto_chamada_renumerada_nao_cria_nem_inativa():
     ctx = matriculas.ContextoCasamento()
-    ctx.registrar(matching.Identidade(id=7, nome="HELOISA DEL GIUDICE DE SOUZA FIDELIX",
+    ctx.registrar(matching.Identidade(id=7, nome="HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI",
                                       chamada=11, da_lista_piloto=True), "5|A")
-    linha = matriculas.LinhaMatricula(nome="HELOISA DEL GIUDICE DE SOUZA FIDELIX", ra=None,
+    linha = matriculas.LinhaMatricula(nome="HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI", ra=None,
                                       nascimento=None, turma_id=1, chave_sala="5|A", chamada=12)
     d = matriculas.resolver_linha(linha, ctx)
     assert d.acao == matriculas.REVISAR and 7 in d.candidatos     # protegido do "fora da lista"
@@ -656,17 +675,17 @@ def test_lista_piloto_chamada_renumerada_ponta_a_ponta(db, escola_completa, clie
 
     esc = escola_completa["escola"]
     confirmar_lp(cliente, esc.id, _planilha(("5º ANO A", [
-        linha_lp("HELOISA DEL GIUDICE DE SOUZA FIDELIX", numero=11),
-        linha_lp("TAUFIK DE OLIVEIRA SANTOS", numero=12)])))
+        linha_lp("HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI", numero=11),
+        linha_lp("TOBIAS DE OTTOLINI SANTELLI", numero=12)])))
     db.expire_all()
     heloisa = db.execute(select(Aluno).where(
-        Aluno.nome == "HELOISA DEL GIUDICE DE SOUZA FIDELIX")).scalar_one()
+        Aluno.nome == "HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI")).scalar_one()
     antes = _n_alunos(db, esc)
 
     # Nova lista: a secretaria renumerou (Heloisa 11 → 12) e ninguém tem RA.
     confirmar_lp(cliente, esc.id, _planilha(("5º ANO A", [
-        linha_lp("TAUFIK DE OLIVEIRA SANTOS", numero=11),
-        linha_lp("HELOISA DEL GIUDICE DE SOUZA FIDELIX", numero=12)])))
+        linha_lp("TOBIAS DE OTTOLINI SANTELLI", numero=11),
+        linha_lp("HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI", numero=12)])))
     db.expire_all()
     assert _n_alunos(db, esc) == antes                             # nenhuma 2ª ficha
     assert db.get(Aluno, heloisa.id).status == "ativo"             # ficha correta intacta
@@ -677,7 +696,7 @@ def test_decisao_e_so_leitura(db, sala):
     esc = sala["escola"]
     ctx = ida.carregar_contexto(db, esc.id)
     antes = (_n_alunos(db, esc), len(_pendentes(db, esc)))
-    for nome in ("KAUA MENDES", "HELOISA DEL GIUDICE", "TAUFIK D"):
+    for nome in ("KAUA MENDES", "HELOISA DORVANTE GRASSETTI", "TOBIAS D"):
         ida.decidir(ctx, ida.linha_de_dados(nome, {"matific_uuid": "x"}, plataforma="matific",
                                             turma_nome="5ºA"))
     db.flush()
@@ -707,19 +726,19 @@ def test_sala_do_relatorio_casa_com_a_turma_unica_da_serie(db, escola_completa):
     """(A) "4 ANO A INTEGRAL (300…)" + única turma "4º Ano" → é a mesma sala."""
     esc, admin = escola_completa["escola"], escola_completa["admin"]
     quarto = _turma(db, esc, "4º Ano", ano_escolar="4º Ano")
-    isaac = _aluno(db, esc, quarto, "ISAAC ALMEIDA RODRIGUES")
+    isaias = _aluno(db, esc, quarto, "ISAIAS ALTOBELLI RONCONI")
     db.commit()
     antes = _n_alunos(db, esc)
-    linha = _matific("ISAAC A", "4 ANO A INTEGRAL (300309347)", "uuid-isaac")
+    linha = _matific("ISAIAS A", "4 ANO A INTEGRAL (300309347)", "uuid-isaias")
 
     [corr] = _previa(db, esc, "matific", [linha])
-    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", isaac.id,
+    assert (corr["status"], corr["aluno_id"], corr["via"]) == ("vinculado", isaias.id,
                                                               "abreviacao")
 
     r = _confirmar(db, esc, admin, "matific", [linha])
     assert (r.qtd_alunos, r.qtd_revisoes) == (1, 0) and _n_alunos(db, esc) == antes
-    assert _snap_matific(db, isaac.id) is not None
-    assert _dono(db, esc, "matific", "uuid-isaac") == isaac.id   # UUID fica vinculado
+    assert _snap_matific(db, isaias.id) is not None
+    assert _dono(db, esc, "matific", "uuid-isaias") == isaias.id   # UUID fica vinculado
 
 
 def test_sala_com_outra_letra_casa_com_a_turma_unica_da_serie(db, escola_completa):
@@ -851,14 +870,19 @@ def test_turma_arquivada_nao_serve_de_sala_unica(db, escola_completa):
     assert ctx.sala_efetiva("4|A", "4 ANO A INTEGRAL") == "4|A"
 
 
-def test_fase_e_ano_da_mesma_serie_nao_decidem(db, escola_completa):
-    """Escola 17 real: "1ª Fase" e "1º Ano" contam ambas como série 1 → sem fallback."""
+def test_fase_e_ano_da_mesma_serie_cada_um_na_sua_etapa(db, escola_completa):
+    """Escola 17 real: "1ª Fase" e "1º Ano" valem ambas série 1. Antes isso contava
+    como "duas turmas da série" e o 1º Ano inteiro ia para a revisão; agora a
+    turma única é contada DENTRO da etapa (sync-b, 22/10): o rótulo de ANO só
+    enxerga o 1º Ano, o de FASE só a 1ª Fase — e nunca um vira o outro."""
     esc = escola_completa["escola"]
-    _turma(db, esc, "1ª Fase", ano_escolar="1ª Fase")
-    _turma(db, esc, "1º Ano", ano_escolar="1º Ano")
+    fase = _turma(db, esc, "1ª Fase", ano_escolar="1ª Fase")
+    ano1 = _turma(db, esc, "1º Ano", ano_escolar="1º Ano")
     db.commit()
     ctx = ida.carregar_contexto(db, esc.id)
-    assert ctx.sala_efetiva("1|A", "1 ANO A TARDE ANUAL") == "1|A"
+    assert ctx.sala_efetiva("1|A", "1 ANO A TARDE ANUAL") == ida.chave_sala(ano1.nome)
+    assert ctx.sala_efetiva(ida.chave_sala("1ª FASE B"), "1ª FASE B") == ida.chave_sala(
+        fase.nome)
 
 
 def test_aluno_novo_nasce_na_turma_unica_da_serie(db, escola_completa):
@@ -958,14 +982,14 @@ def test_retrato_congelado_mais_antigo_nao_rebaixa_o_estado_atual(db, sala, clie
     esc, admin, heloisa = sala["escola"], sala["admin"], sala["heloisa"]
     # O que a sincronização de HOJE já gravou.
     _confirmar(db, esc, admin, "matific",
-               [_matific("HELOISA DEL GIUDICE DE SOUZA FIDELIX", "5ºA", uuid="U-9",
+               [_matific("HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI", "5ºA", uuid="U-9",
                          atividades=139, estrelas=580, aluno_id=heloisa.id)])
     db.commit()
     atual = _snaps_matific(db, heloisa.id)[-1]
     assert (atual.atividades, atual.estrelas) == (139, 580)
 
     # A pendência congelada ONTEM, com números menores.
-    rev = _pendencia(db, esc, id_externo="U-VELHO", nome="HELOISA D",
+    rev = _pendencia(db, esc, id_externo="U-VELHO", nome="HELOISA DOR",
                      linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "U-VELHO",
                               "atividades": 136, "estrelas": 567, "pontuacao_media": 4.17}])
 
@@ -987,24 +1011,31 @@ def test_retrato_congelado_mais_antigo_nao_rebaixa_o_estado_atual(db, sala, clie
 
 
 def test_retrato_do_mesmo_dia_nao_muda_o_atual_no_lugar(db, sala, cliente):
-    """2) Mesmo dia UTC: o pipeline atualizaria o retrato NO LUGAR e o valor novo
-    sumiria sem deixar linha. O guarda impede isso."""
-    esc, admin, taufik = sala["escola"], sala["admin"], sala["taufik"]
-    _confirmar(db, esc, admin, "matific",
-               [_matific("TAUFIK DE OLIVEIRA SANTOS", "5ºA", uuid="T-9",
-                         atividades=200, estrelas=800, aluno_id=taufik.id)])
-    db.commit()
-    atual = _snaps_matific(db, taufik.id)[-1]
-    hoje = atual.data_referencia.replace(hour=3, minute=0).isoformat()
+    """2) Mesmo dia (de Brasília): o pipeline atualizaria o retrato NO LUGAR e o
+    valor novo sumiria sem deixar linha. O guarda impede isso."""
+    from datetime import timezone
 
-    rev = _pendencia(db, esc, id_externo="T-VELHO", nome="TAUFIK D",
+    from app.core.tempo import para_br
+    esc, admin, tobias = sala["escola"], sala["admin"], sala["tobias"]
+    _confirmar(db, esc, admin, "matific",
+               [_matific("TOBIAS DE OTTOLINI SANTELLI", "5ºA", uuid="T-9",
+                         atividades=200, estrelas=800, aluno_id=tobias.id)])
+    db.commit()
+    atual = _snaps_matific(db, tobias.id)[-1]
+    # 00:00 de Brasília do MESMO dia do retrato atual (antes: 03:00 da data UTC,
+    # que das 21h à meia-noite BRT já é o dia seguinte em Brasília).
+    hoje = (para_br(atual.data_referencia)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc).replace(tzinfo=None).isoformat())
+
+    rev = _pendencia(db, esc, id_externo="T-VELHO", nome="TOBIAS D",
                      data_referencia=hoje,
                      linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "T-VELHO",
                               "atividades": 10, "estrelas": 20, "pontuacao_media": 2.0}])
 
-    assert _resolver(cliente, esc, rev.id, taufik.id).status_code == 200
+    assert _resolver(cliente, esc, rev.id, tobias.id).status_code == 200
     db.expire_all()
-    snaps = _snaps_matific(db, taufik.id)
+    snaps = _snaps_matific(db, tobias.id)
     assert [(s.atividades, s.estrelas) for s in snaps] == [(200, 800)]   # nada mutado
     assert db.get(RevisaoIdentidade, rev.id).resolucao["dados_superados"]["motivo"] \
         == "mesmo_dia_do_snapshot_atual"
@@ -1013,20 +1044,20 @@ def test_retrato_do_mesmo_dia_nao_muda_o_atual_no_lugar(db, sala, cliente):
 def test_retrato_sem_data_de_referencia_nao_vira_estado_atual(db, sala, cliente):
     """3) Sem data congelada o pipeline gravaria com a data de HOJE, e o número
     velho viraria o estado atual. É o pior caso: nunca reaplicar."""
-    esc, admin, mathias = sala["escola"], sala["admin"], sala["mathias"]
+    esc, admin, mauro = sala["escola"], sala["admin"], sala["mauro"]
     _confirmar(db, esc, admin, "matific",
-               [_matific("MATHIAS RICARDO RODRIGUES MARADEI", "5ºA", uuid="M-9",
-                         atividades=90, estrelas=360, aluno_id=mathias.id)])
+               [_matific("MAURO ROMUALDO RONCATTI MARZOLLI", "5ºA", uuid="M-9",
+                         atividades=90, estrelas=360, aluno_id=mauro.id)])
     db.commit()
 
-    rev = _pendencia(db, esc, id_externo="M-VELHO", nome="MATHIAS R",
+    rev = _pendencia(db, esc, id_externo="M-VELHO", nome="MAURO R",
                      data_referencia=None,
                      linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "M-VELHO",
                               "atividades": 5, "estrelas": 10, "pontuacao_media": 2.0}])
 
-    assert _resolver(cliente, esc, rev.id, mathias.id).status_code == 200
+    assert _resolver(cliente, esc, rev.id, mauro.id).status_code == 200
     db.expire_all()
-    assert [(s.atividades, s.estrelas) for s in _snaps_matific(db, mathias.id)] == [(90, 360)]
+    assert [(s.atividades, s.estrelas) for s in _snaps_matific(db, mauro.id)] == [(90, 360)]
     assert db.get(RevisaoIdentidade, rev.id).resolucao["dados_superados"]["motivo"] \
         == "data_referencia_ausente"
 
@@ -1230,15 +1261,15 @@ def test_identidade_vale_mesmo_quando_o_retrato_e_superado(db, sala, cliente):
     DUAS contas Matific, e a partir daí a próxima sincronização NÃO associa
     sozinha — ela abre revisão. O gestor decidiu QUEM é a criança; ninguém decidiu
     QUAIS números valem, e aplicar um dos dois sobrescreveria o outro em silêncio.
-    Era exatamente assim que a ficha da Allyce (139 atividades × 3) perdia dado."""
+    Era exatamente assim que uma ficha com duas contas da mesma plataforma perdia dado."""
     esc, admin, heloisa = sala["escola"], sala["admin"], sala["heloisa"]
     _confirmar(db, esc, admin, "matific",
-               [_matific("HELOISA DEL GIUDICE DE SOUZA FIDELIX", "5ºA", uuid="H-NOVO",
+               [_matific("HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI", "5ºA", uuid="H-NOVO",
                          atividades=150, estrelas=600, aluno_id=heloisa.id)])
     db.commit()
     snaps_antes = len(_snaps_matific(db, heloisa.id))
 
-    rev = _pendencia(db, esc, id_externo="H-VELHO", nome="HELOISA D",
+    rev = _pendencia(db, esc, id_externo="H-VELHO", nome="HELOISA DOR",
                      linhas=[{"turma_relatorio": "5ºA", "matific_uuid": "H-VELHO",
                               "atividades": 1, "estrelas": 2, "pontuacao_media": 2.0}])
     assert _resolver(cliente, esc, rev.id, heloisa.id).status_code == 200
@@ -1253,12 +1284,12 @@ def test_identidade_vale_mesmo_quando_o_retrato_e_superado(db, sala, cliente):
     # porque a ficha ficou com duas contas da mesma plataforma.
     ctx = ida.carregar_contexto(db, esc.id, ANO)
     assert ctx.identidade[("matific", "H-VELHO")] == heloisa.id
-    d = ida.decidir(ctx, ida.LinhaIdentidade(nome="HELOISA D", plataforma="matific",
+    d = ida.decidir(ctx, ida.LinhaIdentidade(nome="HELOISA DOR", plataforma="matific",
                                              id_externo="H-VELHO", turma_nome="5ºA"))
     assert d.acao == ida.REVISAR and d.aluno_id == heloisa.id and d.via == "identidade"
     assert d.motivo == "outra_identidade_na_plataforma"
     # A conta com UMA identidade só segue associando normalmente.
-    d_ok = ida.decidir(ctx, ida.LinhaIdentidade(nome="TAUFIK DE OLIVEIRA SANTOS",
+    d_ok = ida.decidir(ctx, ida.LinhaIdentidade(nome="TOBIAS DE OTTOLINI SANTELLI",
                                                 plataforma="matific",
                                                 turma_nome="5ºA"))
     assert d_ok.acao in (ida.ASSOCIAR, ida.REVISAR)   # não é afetada pela colisão

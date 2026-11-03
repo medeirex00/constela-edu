@@ -29,9 +29,13 @@
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
           { "context": "Lint (ruff + typecheck)" },
+          { "context": "Typecheck (core, quest-core, mobile) + testes do core" },
           { "context": "Testes backend (pytest + cobertura)" },
+          { "context": "Testes backend no PostgreSQL real (pytest -m postgres)" },
           { "context": "Migrações Alembic (PostgreSQL real)" },
           { "context": "Testes web (Vitest + cobertura)" },
+          { "context": "Testes mobile (Vitest — cifra, fila offline, retry)" },
+          { "context": "Testes quest (Vitest — telas do app dos alunos)" },
           { "context": "Build (web + quest)" },
           { "context": "E2E (Playwright)" },
           { "context": "Imagens Docker (validação de build)" },

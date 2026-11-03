@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 aprovado / approved
 - **Padrão / Standard:** [ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md) (16 partes)
-- **Fontes / Sources:** `INDICE.md` (bloco 14, subseções 14.1–14.45 + espelho de decisões em aberto), `_estado-atual/RELATORIO-2026-07-09.md` (as-is: Vercel+Railway, 1 instância, salas/rate-limit em memória, Redis planejado), `docs/quest/01-arquitetura.md` (escala A›B›C, gatilho de Redis, CDN Cloudflare R2), `backend/Dockerfile` + `backend/entrypoint.sh` (não-root, `$PORT`, `alembic upgrade` no boot via `scripts.migrate`), `backend/app/core/migracoes.py` + `backend/alembic/` (base `0001`, stamp-then-upgrade, revisões 0001–0005 (com 0002a de reparo)), `backend/app/core/config.py` (ENV `dev|producao` fail-closed, flag `DOCS_HABILITADOS`, pool de DB, `PUBLIC_BASE_URL`/`QUEST_BASE_URL`, envs de observabilidade), `backend/app/main.py` (`/api/health/live|ready`, `/api/health`, `/metrics`, docs gated por `DOCS_HABILITADOS`), `backend/app/core/observabilidade.py` (logs JSON, Prometheus, Sentry), `backend/app/core/security.py` (Fernet só na chave de API), `backend/app/core/rate_limit.py` (em memória), `docker-compose.yml` + `Caddyfile` + `vercel.json` + `apps/web/nginx.conf` (topologias de deploy), `.env.example` + `backend/.env.example` (catálogo de segredos), `.github/workflows/ci.yml` (CI) + `deploy.yml` (CD gated por DEPLOY_ENABLED, com aprovação manual), Seções [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md), memória de produção (`producao-urls`, `constela-alembic-migrations`)
+- **Fontes / Sources:** `INDICE.md` (bloco 14, subseções 14.1–14.45 + espelho de decisões em aberto), `_estado-atual/RELATORIO-2026-07-09.md` (as-is: Vercel+Railway, 1 instância, salas/rate-limit em memória, Redis planejado), `docs/quest/01-arquitetura.md` (escala A›B›C, gatilho de Redis, CDN Cloudflare R2), `backend/Dockerfile` + `backend/entrypoint.sh` (não-root, `$PORT`, `alembic upgrade` no boot via `scripts.migrate`), `backend/app/core/migracoes.py` + `backend/alembic/` (base `0001`, stamp-then-upgrade, revisões 0001–0005 (com 0002a de reparo)), `backend/app/core/config.py` (ENV `dev|producao` fail-closed, flag `DOCS_HABILITADOS`, pool de DB, `PUBLIC_BASE_URL`/`QUEST_BASE_URL`, envs de observabilidade), `backend/app/main.py` (`/api/health/live|ready`, `/api/health`, `/metrics`, docs gated por `DOCS_HABILITADOS`), `backend/app/core/observabilidade.py` (logs JSON, Prometheus, Sentry), `backend/app/core/security.py` (Fernet com a `DATA_ENCRYPTION_KEY` nos segredos em repouso), `backend/app/core/rate_limit.py` (em memória), `docker-compose.yml` + `Caddyfile` + `vercel.json` + `apps/web/nginx.conf` (topologias de deploy), `.env.example` + `backend/.env.example` (catálogo de segredos), `.github/workflows/ci.yml` (CI) + `deploy.yml` (CD gated por DEPLOY_ENABLED, com aprovação manual), Seções [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md), memória de produção (`producao-urls`, `constela-alembic-migrations`)
 - **Depende de / Depends on:** princípios (P13 servidor é autoridade · P14 ledger auditável · P15 isolamento por escola · P17 piso de desempenho · P18 sem tracking de terceiros) → [01](01-principios-imutaveis.md); **mecanismo** (token dois-mundos, WebSocket+Redis, outbox, ledger, autoridade do gabarito, rotas, caminho de escala A›B›C, desenho do Alembic, **revogação via `token_version`**) → [11](11-arquitetura.md); **política** (retenção legal, base legal, incidentes, **cadência** de rotação, **exigência** de cifrar/reter backup) **+ delegação da operação** de backup/DR/cripto-em-repouso/segredos → [12](12-seguranca-privacidade.md); **taxonomia** de telemetria e a **definição/lógica** do expurgo (a 14 fornece o **agendador** que o executa) → [17](17-telemetria-metricas.md); **valores** de config `quest.*` → [19](19-liveops.md); **pipeline/autoria** de assets (para storage+CDN) → [15](15-arte-audio-assets.md); **formatação** pt-BR de data/tempo → [16](16-localizacao-i18n.md); **ETL** de dados de escola → [20](20-migracao-importacao.md); **comunicação** de manutenção à escola → [21](21-suporte-operacao.md); **estratégia** de teste de carga → [18](18-qa-testes.md).
 
 > **Convenção / Convention:** "§N" = uma das 16 **partes deste capítulo** / one of the 16 **parts of this
@@ -47,9 +47,12 @@ No ecossistema **Hub → Edu → Quest**, o Quest **reusa a identidade do Edu** 
   por padrão** pela flag `DOCS_HABILITADOS=False` (aplicada em `main.py`, **independente do `ENV`**; ligados só
   explicitamente em dev). Segredos **só em env** (`.env` no `.gitignore`; `.env.example` documenta), **nenhum no
   código**.
-- **Cripto em repouso** — `security.py` usa **Fernet** (derivado da `SECRET_KEY`) **apenas** para a chave de API
-  externa do assistente; senhas = bcrypt; token de reset = SHA-256 uso único. **Não** há cifragem de coluna nem
-  do volume do Postgres pela app.
+- **Cripto em repouso** — `security.py` cifra com **Fernet** os segredos que precisam voltar a texto: credenciais
+  Matific/Elefante das escolas, chave de API externa do assistente e sessão salva do Matific. A chave é a
+  `DATA_ENCRYPTION_KEY` (obrigatória com `ENV=producao`); a `SECRET_KEY` só decifra as cifras legadas, e a
+  rotação usa o chaveiro + `scripts.recifrar_segredos` (ver [CONTINUIDADE.md](../CONTINUIDADE.md) §2). Senhas =
+  bcrypt; token de reset = SHA-256 uso único. Fora desses segredos, **não** há cifragem de coluna nem do volume do
+  Postgres pela app.
 - **Observabilidade** — `main.py` expõe `/api/health/live`, `/api/health/ready` (SELECT 1 → 503), `/api/health`,
   `/metrics` (Prometheus, gated); `observabilidade.py` (logs JSON com `request_id`/`escola_id`/rota via
   contextvars; prometheus-client; Sentry gated; tudo **degradável a no-op**). `rate_limit.py` = **em memória por
@@ -154,7 +157,7 @@ As **normas determinísticas de operação** (a fonte única; o **mecanismo** é
 | O7 | **Restore testado** | **game day** periódico prova RTO/RPO — *"backup não testado não conta"* | 14 |
 | O8 | **RPO/RTO** | alvo por **classe de dado** (ledger append-only × telemetria durável-mas-expurgável × estado cosmético) | 14 ⚠️ (números — §15) |
 | O9 | **Isolamento no backup** | restaurar/exportar **por `escola_id`** — direto onde a coluna existe; via `perfil_id`→`quest_perfis` na **tenancy transitiva** (Seção [11](11-arquitetura.md)); catálogo global de referência fica fora do escopo por-escola (P15) | 14 + [01](01-principios-imutaveis.md)/[11](11-arquitetura.md) |
-| O10 | **Cripto em repouso** | volume do Postgres + backups cifrados; Fernet-at-rest da chave de API (Q0) | 14 (operação delegada por [12](12-seguranca-privacidade.md)) |
+| O10 | **Cripto em repouso** | volume do Postgres + backups cifrados; Fernet-at-rest (`DATA_ENCRYPTION_KEY`) das credenciais das plataformas, da chave de IA e da sessão do Matific (Q0) | 14 (operação delegada por [12](12-seguranca-privacidade.md)) |
 | O11 | **Segredos** | **nunca no código** (`.env`/cofre); **procedimento** operacional de rotação de `SECRET_KEY`/JWT/Fernet/senha do DB (janela/passos). A rotação da chave de assinatura **invalida os tokens**; `token_version` é o mecanismo de **revogação** da Seção [11](11-arquitetura.md) | 14 (operação); mecanismo = [11](11-arquitetura.md); política/cadência = [12](12-seguranca-privacidade.md) |
 | O12 | **Observabilidade** | logs JSON + `/metrics` + Sentry (Q0); **alertas** de recurso (CPU/RAM/disco/pool/uptime) | 14 ⚠️ (stack/SLO — §15) |
 | O13 | **SLI/SLO** | metas de disponibilidade/latência + error budget (login do aluno, submissão) | 14 ⚠️ (números — §15) |
@@ -184,8 +187,9 @@ A topologia real e o mapeamento ao código (contratos → Apêndice B):
 - **Migração** — `migracoes.py`/`alembic` (stamp-then-upgrade); a 14 opera o **quando/como** no deploy.
 - **Observabilidade** — `observabilidade.py` (logs JSON, Prometheus, Sentry) + `main.py` (health/`/metrics`); a
   14 define a **operação** (agregador, alertas, scrape seguro).
-- **Cripto/segredos** — `security.py` (Fernet at-rest hoje só p/ a chave de IA); a 14 estende p/ **volume/backup
-  cifrados** e **cofre** (operação delegada pela Seção [12](12-seguranca-privacidade.md)).
+- **Cripto/segredos** — `security.py` (Fernet at-rest com a `DATA_ENCRYPTION_KEY` p/ credenciais das
+  plataformas, chave de IA e sessão do Matific); a 14 estende p/ **volume/backup cifrados** e **cofre** (operação
+  delegada pela Seção [12](12-seguranca-privacidade.md)).
 - **Escala A›B›C** (mecanismo = Seção [11](11-arquitetura.md)): **A** = 1 instância Railway + rate-limit/salas em
   memória (hoje); **B** = **Redis** (rate-limit e estado ao vivo distribuídos; réplicas stateless); **C** =
   extração de serviços. A 14 define o **gatilho** e a **operação**, não o desenho.
@@ -371,9 +375,12 @@ single FastAPI backend). **Current state (Q0) — already-mature infra foundatio
   requires `SECRET_KEY≥32` and non-sqlite `DATABASE_URL`). `/docs`, `/redoc` and `/openapi.json` are **off by
   default** via the `DOCS_HABILITADOS=False` flag (applied in `main.py`, **independent of `ENV`**; enabled only
   explicitly in dev). Secrets **only in env** (`.env` gitignored; `.env.example` documents), **none in code**.
-- **Encryption at rest** — `security.py` uses **Fernet** (derived from `SECRET_KEY`) **only** for the external
-  assistant API key; passwords = bcrypt; reset token = single-use SHA-256. **No** column encryption nor Postgres
-  volume encryption by the app.
+- **Encryption at rest** — `security.py` encrypts with **Fernet** the secrets that must be read back as text:
+  the schools' Matific/Elefante credentials, the external assistant API key and the saved Matific session. The key
+  is `DATA_ENCRYPTION_KEY` (mandatory with `ENV=producao`); `SECRET_KEY` only decrypts legacy ciphertexts, and
+  rotation uses the key ring + `scripts.recifrar_segredos` (see [CONTINUIDADE.md](../CONTINUIDADE.md) §2).
+  Passwords = bcrypt; reset token = single-use SHA-256. Apart from those secrets, **no** column encryption nor
+  Postgres volume encryption by the app.
 - **Observability** — `main.py` exposes `/api/health/live`, `/api/health/ready` (SELECT 1 → 503), `/api/health`,
   `/metrics` (Prometheus, gated); `observabilidade.py` (JSON logs with `request_id`/`escola_id`/route via
   contextvars; prometheus-client; gated Sentry; all **degradable to no-op**). `rate_limit.py` = **in-memory
@@ -476,7 +483,7 @@ the **policy** Section [12](12-seguranca-privacidade.md)'s):
 | O7 | **Tested restore** | periodic **game day** proves RTO/RPO — *"an untested backup does not count"* | 14 |
 | O8 | **RPO/RTO** | target per **data class** (append-only ledger × durable-but-purgeable telemetry × cosmetic state) | 14 ⚠️ (numbers — §15) |
 | O9 | **Backup isolation** | restore/export **per `escola_id`** — directly where the column exists; via `perfil_id`→`quest_perfis` for **transitive tenancy** (Section [11](11-arquitetura.md)); the global reference catalog stays outside the per-school scope (P15) | 14 + [01](01-principios-imutaveis.md)/[11](11-arquitetura.md) |
-| O10 | **Encryption at rest** | Postgres volume + encrypted backups; Fernet-at-rest of the API key (Q0) | 14 (operation delegated by [12](12-seguranca-privacidade.md)) |
+| O10 | **Encryption at rest** | Postgres volume + encrypted backups; Fernet-at-rest (`DATA_ENCRYPTION_KEY`) of the platform credentials, the AI key and the Matific session (Q0) | 14 (operation delegated by [12](12-seguranca-privacidade.md)) |
 | O11 | **Secrets** | **never in code** (`.env`/vault); operational **procedure** to rotate `SECRET_KEY`/JWT/Fernet/DB password (window/steps). Rotating the signing key **invalidates the tokens**; `token_version` is Section [11](11-arquitetura.md)'s **revocation** mechanism | 14 (operation); mechanism = [11](11-arquitetura.md); policy/cadence = [12](12-seguranca-privacidade.md) |
 | O12 | **Observability** | JSON logs + `/metrics` + Sentry (Q0); resource **alerts** (CPU/RAM/disk/pool/uptime) | 14 ⚠️ (stack/SLO — §15) |
 | O13 | **SLI/SLO** | availability/latency targets + error budget (student login, submission) | 14 ⚠️ (numbers — §15) |
@@ -507,8 +514,9 @@ The real topology and its mapping to code (contracts → Appendix B):
 - **Migration** — `migracoes.py`/`alembic` (stamp-then-upgrade); 14 operates the **when/how** at deploy.
 - **Observability** — `observabilidade.py` (JSON logs, Prometheus, Sentry) + `main.py` (health/`/metrics`); 14
   defines the **operation** (aggregator, alerts, secure scrape).
-- **Crypto/secrets** — `security.py` (Fernet at-rest today only for the AI key); 14 extends to **encrypted
-  volume/backups** and a **vault** (operation delegated by Section [12](12-seguranca-privacidade.md)).
+- **Crypto/secrets** — `security.py` (Fernet at-rest with `DATA_ENCRYPTION_KEY` for the platform credentials,
+  the AI key and the Matific session); 14 extends to **encrypted volume/backups** and a **vault** (operation
+  delegated by Section [12](12-seguranca-privacidade.md)).
 - **Scale A›B›C** (mechanism = Section [11](11-arquitetura.md)): **A** = 1 Railway instance + in-memory
   rate-limit/rooms (today); **B** = **Redis** (distributed rate-limit and live state; stateless replicas); **C** =
   service extraction. 14 defines the **trigger** and the **operation**, not the design.

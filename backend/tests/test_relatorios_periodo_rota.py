@@ -8,6 +8,7 @@ segunda régua discordando da cerimônia sobre o mesmo mês.
 """
 from datetime import date, datetime
 
+import pytest
 from sqlalchemy import select
 
 from app.models import (Aluno, EventoAluno, Leitura, Livro, LogAuditoria,
@@ -19,6 +20,16 @@ from app.services.eventos import chave_evento
 
 ROTA = "/api/v1/escolas/{eid}/relatorios/periodo"
 HOJE = date(2026, 10, 5)
+
+
+@pytest.fixture(autouse=True)
+def _hoje_fixo(monkeypatch):
+    """A rota resolve "mês anterior" a partir de HOJE. O dado semeado é de setembro:
+    sem fixar o dia, os testes da rota passavam em outubro e quebravam em 01/11."""
+    from app.routers import rankings as rota_rankings
+
+    monkeypatch.setattr(rota_rankings, "hoje_br", lambda: HOJE)
+    monkeypatch.setattr(rp, "hoje_br", lambda: HOJE)
 
 
 def _semear(db, escola_id, aluno_id, titulo, quando, tempo, nivel="D"):

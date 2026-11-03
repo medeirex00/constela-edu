@@ -235,12 +235,19 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
         # medição — é ausência. O próprio módulo escreveu a regra lá em cima:
         # zero é uma afirmação. Aqui ela vale também para o acumulado.
         tent, cert = ele.get("questoes_tentativas"), ele.get("questoes_acertos")
-        ninguem = (ele.get("alunos_sem_retrato") or 0) >= (
-            (dados.get("alunos") or {}).get("considerados") or 0) > 0
-        linhas.append(("Questões tentadas", SEM_DADO if ninguem else _num(tent),
-                       "nenhuma coleta na janela" if ninguem
-                       else "diferença entre coletas"))
-        linhas.append(("Questões corretas", SEM_DADO if ninguem else _num(cert), ""))
+        considerados = (dados.get("alunos") or {}).get("considerados") or 0
+        vazio = considerados == 0
+        ninguem = not vazio and (ele.get("alunos_sem_retrato") or 0) >= considerados
+        sem_numero = vazio or ninguem or tent is None
+        cob = ele.get("cobertura_questoes") or {}
+        fonte = ("nenhum estudante no recorte" if vazio
+                 else "nenhuma coleta na janela" if ninguem
+                 else "uma coleta só por estudante: sem diferença a medir" if tent is None
+                 else "COBERTURA PARCIAL - ver nota" if cob.get("status") == "parcial"
+                 else "INCLUI antes do início - ver nota" if cob.get("status") == "ampliada"
+                 else "diferença entre coletas")
+        linhas.append(("Questões tentadas", SEM_DADO if sem_numero else _num(tent), fonte))
+        linhas.append(("Questões corretas", SEM_DADO if sem_numero else _num(cert), ""))
         linhas.append(("Sem coleta na janela", _num(ele.get("alunos_sem_retrato")),
                        "ausência de coleta, não zero"))
         linhas.append(("Tempo por registro de leitura", SEM_SUPORTE,
@@ -248,9 +255,19 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
 
     mat = dados.get("matific")
     if mat is not None:
-        linhas.append(("Atividades (Matific)", _num(mat.get("atividades")),
-                       "ganho entre coletas"))
-        linhas.append(("Estrelas (Matific)", _num(mat.get("estrelas")), ""))
+        estado_m = (mat.get("cobertura") or {}).get("status")
+        # Uma coleta só por estudante: a regra oficial dá 0, mas esse 0 não mede
+        # o período — o documento não o imprime como número.
+        sem_medida = estado_m == "sem_intervalo"
+        ressalva_m = ("COBERTURA PARCIAL - ver nota" if estado_m == "parcial"
+                      else "uma coleta só: o 0 oficial não mede" if sem_medida
+                      else "regra oficial - ver nota" if estado_m == "regra_oficial"
+                      else "ganho entre coletas")
+        linhas.append(("Atividades (Matific)",
+                       SEM_DADO if sem_medida else _num(mat.get("atividades")), ressalva_m))
+        linhas.append(("Estrelas (Matific)",
+                       SEM_DADO if sem_medida else _num(mat.get("estrelas")),
+                       ressalva_m if estado_m in ("parcial", "sem_intervalo") else ""))
         linhas.append(("Estudantes com ganho", _num(mat.get("alunos_com_atividade")), ""))
         linhas.append(("Sem coleta na janela (Matific)", _num(mat.get("alunos_sem_retrato")),
                        "ausência de coleta, não zero"))
@@ -283,7 +300,9 @@ def _tiles(dados: dict) -> list[tuple[str, str]]:
                      if mat is None else
                      (_num(ele.get("livros_com_atividade")), "livros com atividade"))
     if mat is not None:
-        tiles.append((_num(mat.get("atividades")), "atividades de matemática"))
+        sem_medida = (mat.get("cobertura") or {}).get("status") == "sem_intervalo"
+        tiles.append((SEM_DADO if sem_medida else _num(mat.get("atividades")),
+                      "atividades de matemática"))
     return tiles[:5]
 
 
@@ -357,6 +376,175 @@ def _avisos_janela(dados: dict) -> list[tuple[str, str, str]]:
     return saida
 
 
+def _duracao(horas) -> str:
+    if horas is None:
+        return ""
+    horas = int(horas)
+    return f"{horas} h" if horas < 48 else f"{horas // 24} dias"
+
+
+def _avisos_cobertura(dados: dict) -> list[dict]:
+    """PERÍODO PEDIDO × COBERTURA DAS COLETAS de cada número de retrato — a
+    mesma regra da tela (``AvisoCobertura`` em RelatorioPeriodo.tsx). O período
+    pedido é a referência; quando as coletas não o cobrem exatamente, o
+    documento diz o que falta (ou sobra) e por quê.
+
+    ``motivos``: frases inteiras (vitrine). ``curtos``: pares (valor, detalhe)
+    para a reserva, com a cláusula decisiva NA FRENTE — a célula do fpdf corta o
+    fim, e um motivo cortado antes de "não está na conta" não diz nada."""
+    saida = []
+    for bloco, rotulo, chave in (
+            (dados.get("elefante"), "Questões do Elefante", "cobertura_questoes"),
+            (dados.get("matific"), "Matific", "cobertura")):
+        c = (bloco or {}).get(chave)
+        if not c:
+            continue
+        oficial = c.get("regra") == "oficial_matific"
+        ini, fim = c.get("periodo_inicio"), c.get("periodo_fim")
+        efetivo = c.get("periodo_fim_efetivo")
+        pedido_curto = f"{_data(ini)} a {_data(fim)}" if ini else (
+            f"todo o histórico (até {_data(efetivo)})" if efetivo else "todo o histórico")
+        andamento = (f"em andamento, até {_data(efetivo)}"
+                     if ini and efetivo and fim and efetivo < fim else "")
+        pedido = pedido_curto + (f" ({andamento})" if andamento else "")
+        de = _data_hora(c["coleta_inicio"]) if c.get("coleta_inicio") else "o início do contador"
+        ate = _data_hora(c.get("coleta_fim")) if c.get("coleta_fim") else SEM_DADO
+        medidos = c.get("alunos_medidos")
+        if medidos is None:      # API anterior ao campo
+            medidos = ((c.get("alunos_cobertura_completa") or 0)
+                       + (c.get("alunos_cobertura_parcial") or 0) + (c.get("alunos_ampliados") or 0))
+        motivos, curtos = [], []
+
+        def para(n):
+            return f" para {_num(n)} estudante(s)" if n and n < medidos else ""
+
+        def qtd(n):
+            return f" ({_num(n)} est.)" if n and n < medidos else ""
+
+        if not c.get("inicio_coberto") and c.get("alunos_sem_inicio"):
+            tardio = c.get("coleta_inicio_mais_tardio")
+            if c.get("inicio_do_contador_anual") and not tardio:
+                motivos.append("o contador do Matific é do ano letivo: o que veio antes "
+                               "de 01/01 não entra na conta")
+                curtos.append(("NÃO está na conta", "antes de 01/01 (contador anual)"))
+            else:
+                motivos.append(
+                    f"sem coleta no início do período{para(c.get('alunos_sem_inicio'))}: "
+                    f"o que foi feito de {_data(ini)} até a primeira coleta"
+                    + (f" (até {_data_hora(tardio)})" if tardio else "")
+                    + " não está na conta: o contador que o Constela coleta é acumulado "
+                      "desde o início da conta e não diz quando cada questão foi "
+                      "respondida, então esse trecho não sai das coletas"
+                    + (f" (a primeira coleta já trazia {_num(c['acumulado_na_primeira_coleta'])} "
+                       "questões acumuladas, de datas que o contador não informa)"
+                       if c.get("acumulado_na_primeira_coleta") else "")
+                    + ("" if oficial else
+                       ". O Elefante guarda o histórico datado por aluno (Questões "
+                       "Respondidas), que o Constela ainda não coleta"))
+                curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_inicio")),
+                               f"{_data(ini)} até {_data_hora(tardio) if tardio else 'a 1a coleta'}"))
+        if not c.get("fim_coberto") and c.get("alunos_sem_fim"):
+            cedo = _data_hora(c.get("coleta_fim_mais_cedo") or c.get("coleta_fim"))
+            motivos.append(
+                f"a última coleta{para(c.get('alunos_sem_fim'))} é de {cedo}: o que veio "
+                f"depois, até {_data(efetivo or fim)}, não está na conta")
+            curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_fim")), f"depois de {cedo}"))
+        if c.get("inclui_antes_do_inicio"):
+            motivos.append(
+                f"não há coleta perto do início{para(c.get('alunos_ampliados'))}: a "
+                f"coleta-base é de {de}, {_duracao(c.get('antecedencia_max_horas'))} antes "
+                f"de {_data(ini)} - o número INCLUI a atividade desse intervalo")
+            curtos.append(("INCLUI antes do início" + qtd(c.get("alunos_ampliados")), f"desde {de}"))
+        n_sem = c.get("alunos_sem_intervalo") or 0
+        if n_sem:
+            if oficial:
+                motivos.append(
+                    f"{_num(n_sem)} estudante(s) com uma única coleta no período entram "
+                    "com 0 pela regra oficial (a mesma das premiações): esse 0 não "
+                    "mede o período")
+                curtos.append((f"{_num(n_sem)} com 0 oficial", "uma coleta só: NÃO mede"))
+            elif (c.get("alunos_sem_intervalo_so_inicio") or 0) >= n_sem:
+                motivos.append(
+                    f"{_num(n_sem)} estudante(s) só têm a coleta que mede o início do "
+                    "período - a próxima medirá o que veio depois; até lá ficam fora "
+                    "da conta (não contam como zero)")
+                curtos.append((f"{_num(n_sem)} sem intervalo", "só a coleta do início"))
+            else:
+                motivos.append(
+                    f"{_num(n_sem)} estudante(s) com uma única coleta no período ficam "
+                    "fora da conta (não contam como zero)")
+                curtos.append((f"{_num(n_sem)} sem intervalo", "fora da conta, NÃO é zero"))
+        if c.get("alunos_contador_regrediu"):
+            n = c["alunos_contador_regrediu"]
+            motivos.append(
+                f"{_num(n)} estudante(s) com o contador da plataforma DIMINUINDO no "
+                "período (contas trocadas ou fundidas na mesma ficha) ficam fora da conta")
+            curtos.append((f"{_num(n)} contador caiu", "fora da conta"))
+        if c.get("alunos_sem_coleta_no_periodo"):
+            n = c["alunos_sem_coleta_no_periodo"]
+            motivos.append(
+                f"{_num(n)} estudante(s) coletados antes e depois do período, mas sem "
+                "nenhuma coleta dentro dele, ficam fora da conta")
+            curtos.append((f"{_num(n)} sem coleta no período", "fora da conta"))
+        if c.get("alunos_coleta_interrompida"):
+            n = c["alunos_coleta_interrompida"]
+            motivos.append(
+                f"{_num(n)} estudante(s) coletados antes do período e sem nenhuma "
+                "coleta que entre na conta (a coleta parou ou falhou para eles) "
+                "ficam fora da conta")
+            curtos.append((f"{_num(n)} coleta interrompida", "fora da conta"))
+        turmas_sem = c.get("turmas_sem_coleta") or []
+        if turmas_sem:
+            nomes = ", ".join(str(t.get("turma") or t.get("turma_id")) for t in turmas_sem)
+            motivos.append(f"turma(s) sem nenhuma coleta no período, fora da conta: {nomes}")
+            curtos.append((f"{_num(len(turmas_sem))} turma(s) sem coleta", nomes))
+        saida.append({"rotulo": rotulo, "status": c.get("status"), "oficial": oficial,
+                      "pedido": pedido, "pedido_curto": pedido_curto, "andamento": andamento,
+                      "so_inicio": (c.get("alunos_sem_intervalo_so_inicio") or 0) >= n_sem > 0,
+                      "de": de, "ate": ate,
+                      "em_andamento": bool(c.get("em_andamento")),
+                      "motivos": motivos, "curtos": curtos})
+    return saida
+
+
+def _cobertura_html(aviso: dict) -> str:
+    rotulo, pedido = _esc_html(aviso["rotulo"]), _esc_html(aviso["pedido"])
+    disponivel = f'{_esc_html(aviso["de"])} a {_esc_html(aviso["ate"])}'
+    motivos = "".join(f" {_esc_html(m[0].upper() + m[1:])}." for m in aviso["motivos"])
+    status = aviso["status"]
+    if status == "sem_intervalo":
+        if aviso["oficial"]:
+            return (f'<div class="rp-nota"><b>{rotulo}: sem intervalo medido para '
+                    f'{pedido}.</b> O 0 da regra oficial (a mesma das premiações) vem de '
+                    'uma única coleta por estudante no período e nenhuma antes — ele '
+                    'NÃO quer dizer que não houve atividade.</div>')
+        if aviso["so_inicio"]:
+            return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido} ainda.</b> '
+                    'A única coleta do período é a que mede o início; a próxima medirá o '
+                    'que veio depois (não é zero).</div>')
+        return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido}.</b> Há uma '
+                'única coleta por estudante no período e nenhuma antes — não existe '
+                'diferença a medir (não é zero).</div>')
+    if status == "completa":
+        fim = (f" Em andamento: os dados vão até a coleta de {_esc_html(aviso['ate'])}."
+               if aviso["em_andamento"] else "")
+        return (f'<div class="rp-nota"><b>{rotulo}:</b> período solicitado {pedido}, '
+                f'medido pelas coletas de {disponivel}.{fim}</div>')
+    if status == "regra_oficial":
+        return (f'<div class="rp-nota"><b>{rotulo}:</b> período solicitado {pedido}. O '
+                'número segue a regra oficial do Matific (a mesma das premiações): '
+                f'diferença entre a coleta-base, {_esc_html(aviso["de"])}, e a última '
+                f'coleta considerada, {_esc_html(aviso["ate"])} — as bordas do período '
+                f'não são verificadas aqui.{motivos}</div>')
+    if status == "ampliada":
+        return (f'<div class="rp-nota"><b>{rotulo}: o valor INCLUI atividade de antes do '
+                f'período.</b> Período solicitado: {pedido}. Intervalo medido pelas '
+                f'coletas do Constela: {disponivel}.{motivos}</div>')
+    return (f'<div class="rp-nota"><b>{rotulo}: COBERTURA PARCIAL — o valor NÃO '
+            f'representa o período completo.</b> Período solicitado: {pedido}. '
+            f'Intervalo medido pelas coletas do Constela: {disponivel}.{motivos}</div>')
+
+
 def _ressalvas(dados: dict) -> list[tuple[str, str]]:
     """(indicador, ressalva) de tudo que o motor qualificou."""
     saida = []
@@ -371,18 +559,23 @@ def _ressalvas(dados: dict) -> list[tuple[str, str]]:
 
 def _janela_efetiva_html(dados: dict) -> str:
     """Avisa quando um número veio de diferença entre COLETAS e, por isso, cobre
-    um intervalo diferente do pedido. Esconder isso seria mentir sobre o recorte."""
+    um intervalo diferente do pedido. Esconder isso seria mentir sobre o recorte.
+
+    Com a ``cobertura`` (API atual), o aviso é PERÍODO PEDIDO × COBERTURA; o
+    aviso antigo ("a conta vai de ... a ...") só sobra para dado sem ela."""
+    avisos = _avisos_cobertura(dados)
+    cobertos = {a["rotulo"] for a in avisos}
     observacoes = {
         "Questões do Elefante": ((dados.get("elefante") or {})
                                  .get("janela_efetiva_questoes") or {}).get("observacao"),
         "Matific": ((dados.get("matific") or {})
                     .get("janela_efetiva") or {}).get("observacao"),
     }
-    return "".join(
+    return "".join(_cobertura_html(a) for a in avisos) + "".join(
         f'<div class="rp-nota"><b>{_esc_html(rotulo)}:</b> a conta vai de '
         f'{_esc_html(de)} a {_esc_html(ate)} — '
         f'{_esc_html(observacoes.get(rotulo) or "")}</div>'
-        for rotulo, de, ate in _avisos_janela(dados))
+        for rotulo, de, ate in _avisos_janela(dados) if rotulo not in cobertos)
 
 
 _SELO = {"SUPORTADO": "ok", "SUPORTADO COM RESSALVA": "res", "NÃO SUPORTADO": "nao"}
@@ -662,6 +855,20 @@ def _reserva(dados: dict, cor: str) -> bytes:
     # que não é zero — entrega um documento que parece completo e não está.
     for rotulo, de, ate in _avisos_janela(dados):
         linhas.append([_curto("Janela efetiva · " + rotulo, 30), "de " + de, "a " + ate])
+    for aviso in _avisos_cobertura(dados):
+        estado = {"completa": "cobertura completa", "parcial": "COBERTURA PARCIAL",
+                  "ampliada": "INCLUI ANTES DO INÍCIO", "regra_oficial": "regra oficial",
+                  "sem_intervalo": "SEM INTERVALO MEDIDO"}.get(aviso["status"], "")
+        linhas.append([_curto("Cobertura · " + aviso["rotulo"], 30), estado,
+                       _curto("pedido " + aviso["pedido_curto"], 44)])
+        if aviso["andamento"]:
+            linhas.append(["", "em andamento", aviso["andamento"].replace("em andamento, ", "")])
+        if aviso["status"] == "parcial":
+            linhas.append(["", "valor NÃO é o período completo", ""])
+        elif aviso["status"] == "ampliada":
+            linhas.append(["", "valor NÃO é só o período", ""])
+        for valor, detalhe in aviso["curtos"]:
+            linhas.append(["", valor, _curto(detalhe, 44)])
     for nome, s_ in _ressalvas(dados):
         linhas.append(["Ressalva · " + nome, "", _primeira_frase(s_, 72)])
 

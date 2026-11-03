@@ -1,5 +1,6 @@
-"""Utilidades transversais: pesquisa global (§21), notificações (§22) e
-simulador de pontuação (§44)."""
+"""Utilidades transversais: pesquisa global (§21), notificações (§22),
+simulador de pontuação (§44) e o diagnóstico operacional (admin global)."""
+import time
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Query
@@ -7,12 +8,93 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, get_usuario_atual
+from app.core.deps import escola_autorizada, exigir_admin_global, get_usuario_atual
 from app.models import Aluno, Escola, Livro, LogAuditoria, Matricula, Professor, Turma, Usuario
 from app.services import dificuldade_livro, permissoes, scoring
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Sistema"])
+# Fora do escopo de escola: diagnóstico do PROCESSO (infra), só admin global.
+router_diagnostico = APIRouter(prefix="/sistema", tags=["Sistema"])
+
+
+# --- Diagnóstico operacional (antes público em /api/health) ---------------------
+
+def _bloco_cifra(db: Session) -> dict:
+    """Prontidão da cifra em repouso (A1 L3 e §3.2): booleanos e números — nenhum
+    valor de chave nem de segredo. ``contagens`` é o mesmo ``--contar`` do
+    scripts.recifrar_segredos (None se a leitura falhar: nunca derruba o resto)."""
+    import logging
+
+    from app.core.security import diagnostico_cifra
+    from app.services import recifragem
+
+    bloco = diagnostico_cifra()
+    try:
+        contagens = recifragem.contar(db)
+        bloco["contagens"] = contagens
+        bloco["pendentes"] = recifragem.pendentes(contagens)
+    except Exception as exc:  # noqa: BLE001 — diagnóstico nunca vira 500
+        db.rollback()
+        logging.getLogger("constela").warning(
+            "Diagnóstico da cifra: contagem indisponível (%s).", type(exc).__name__)
+        bloco["contagens"] = None
+        bloco["pendentes"] = None
+    return bloco
+
+
+@router_diagnostico.get("/diagnostico")
+def diagnostico(_: Usuario = Depends(exigir_admin_global), db: Session = Depends(get_db)):
+    """Estado operacional do processo — o que /api/health expunha a qualquer um.
+
+    O IP/ASN/cidade de SAÍDA do robô e o diagnóstico das páginas de login
+    ajudam a investigar o reCAPTCHA do Matific, mas mapeiam a infraestrutura para
+    quem quiser atacá-la: ficam só para o admin global. Nenhum segredo sai daqui
+    (nem DATABASE_URL, nem tokens: de METRICS_TOKEN só se diz se existe)."""
+    from app.core import armazenamento, automacao
+    from app.core import observabilidade as obs
+    from app.core.database import engine
+    from app.core.prontidao import INICIO, prontidao
+    from app.sync import scheduler as sync_scheduler
+
+    pronto, motivo, estado = prontidao.avaliar(engine)
+    robo = automacao.status()
+    return {
+        "app": settings.APP_NAME,
+        "versao": settings.APP_VERSION,
+        "modo": "producao" if settings.em_producao else "dev",
+        "uptime_s": round(time.time() - INICIO, 1),
+        "banco": "inacessivel" if motivo == "banco_inacessivel" else "ok",
+        "schema": {
+            "pronto": pronto, "motivo": motivo,
+            "revisoes_banco": list(estado.banco) if estado else None,
+            "revisoes_codigo": list(estado.codigo) if estado else None,
+            "desconhecidas": list(estado.desconhecidas) if estado else None,
+        },
+        "sentry": obs.sentry_ativo(),
+        # true/false = robô abre o Chromium; null = ainda verificando no boot ou, com
+        # AUTOMACAO_VERIFICAR_NO_BOOT=false (testes e E2E), verificação desligada: aí
+        # fica null para sempre e o automacao_detalhe diz que foi desligada.
+        "automacao_navegador": robo["navegador"],
+        "automacao_detalhe": robo.get("detalhe"),
+        # Diagnóstico (sem credenciais) das páginas de login das plataformas.
+        "login_paginas": robo.get("login"),
+        # IP/ASN de saída do robô (evidência: datacenter x residencial).
+        "egress": robo.get("egress"),
+        # Agendador de sincronização: habilitado (env) e efetivamente rodando.
+        # Se habilitado=true e ativo=false, o processo precisa ser reiniciado.
+        "scheduler_sync": {"habilitado": settings.SYNC_SCHEDULER_ENABLED,
+                           "ativo": sync_scheduler.ativo()},
+        "metricas": {"habilitadas": settings.METRICS_ENABLED,
+                     "token_configurado": bool(settings.METRICS_TOKEN.strip()),
+                     "publico_sem_token": settings.METRICS_PUBLICO and not settings.em_producao},
+        "docs_habilitados": settings.DOCS_HABILITADOS,
+        "armazenamento": armazenamento.diagnostico(settings),
+        # DEK ativa/longa/distinta, chaves anteriores ainda configuradas, SECRET_KEY
+        # efêmera e as cifras por chave (primaria/anterior/ilegivel/vazio).
+        "cifra": _bloco_cifra(db),
+    }
 
 
 # --- Pesquisa global (PRD §21) --------------------------------------------------

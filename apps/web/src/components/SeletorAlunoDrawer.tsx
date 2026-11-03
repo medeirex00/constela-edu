@@ -1,13 +1,14 @@
 /** Painel lateral: escolher a turma, achar o aluno (busca + alfabética) e
  *  confirmar o vínculo de um relatório individual. Usado na importação
  *  de um PDF e na importação em lote. */
-import { ChevronRight, Search, UserCheck } from "lucide-react";
+import { ChevronRight, FileText, UserCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useApi } from "../hooks/useApi";
 import { normalizar } from "../lib/nomes";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
-import { Botao, Campo, Card, Carregando, Drawer, estiloInput } from "./ui";
+import { AvatarAluno, CampoBusca, SelectNativo } from "./PessoasUi";
+import { Botao, Campo, Carregando, Chip, Drawer, IconePastel, RotuloSecao } from "./ui";
 
 export default function SeletorAlunoDrawer({
   escolaId,
@@ -47,38 +48,44 @@ export default function SeletorAlunoDrawer({
   const filtrados = (pagina?.itens ?? [])
     .filter((a) => normalizar(a.nome).includes(normalizar(busca)))
     .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  // A consulta traz até 100 alunos: numa turma maior, a lista avisa que está cortada.
+  const cortada = pagina != null && pagina.total > pagina.itens.length;
 
   return (
     <Drawer titulo="Alterar aluno" aberto={aberto} aoFechar={aoFechar}>
       {selecionado ? (
         <div className="space-y-4">
           <p className="text-sm text-zinc-600 dark:text-zinc-300">Este relatório será vinculado ao aluno:</p>
-          <Card className="p-4">
-            <p className="text-lg font-semibold tracking-tight">{selecionado.nome}</p>
-            <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Turma: {turmaNome}</p>
-          </Card>
+          <div className="flex items-center gap-4 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 dark:border-indigo-500/20 dark:bg-indigo-500/10">
+            <AvatarAluno nome={selecionado.nome} chave={selecionado.id} foto={selecionado.foto_url} tamanho="lg" />
+            <div className="min-w-0">
+              <p className="text-lg font-bold leading-tight tracking-tight text-zinc-900 dark:text-white">{selecionado.nome}</p>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Turma: {turmaNome}</p>
+            </div>
+          </div>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             As leituras, a pontuação e todo o histórico do PDF passarão a pertencer a este aluno.
           </p>
-          <div className="flex justify-end gap-2">
-            <Botao variante="neutro" onClick={() => setSelecionado(null)}>Cancelar</Botao>
+          <div className="flex justify-end gap-2.5">
+            <Botao variante="secundario" onClick={() => setSelecionado(null)}>Cancelar</Botao>
             <Botao onClick={() => aoConfirmar(selecionado, turmaNome)}>
-              <UserCheck size={15} /> Confirmar
+              <UserCheck size={16} aria-hidden /> Confirmar
             </Botao>
           </div>
         </div>
       ) : (
-        <div className="space-y-4">
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              Aluno do relatório (PDF)
-            </p>
-            <p className="text-sm font-medium">{nomePdf || "—"}</p>
+        <div className="space-y-5">
+          <div className="flex items-center gap-3 rounded-2xl bg-zinc-50 p-3.5 dark:bg-zinc-800/50">
+            <IconePastel icone={FileText} tom="violeta" tamanho="sm" />
+            <div className="min-w-0">
+              <RotuloSecao>Aluno do relatório (PDF)</RotuloSecao>
+              <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100" title={nomePdf || "—"}>{nomePdf || "—"}</p>
+            </div>
           </div>
 
           <Campo rotulo="1. Selecione a turma">
-            <select
-              className={estiloInput}
+            <SelectNativo
+              className="w-full"
               value={turmaId ?? ""}
               onChange={(e) => setTurmaId(Number(e.target.value))}
             >
@@ -86,31 +93,35 @@ export default function SeletorAlunoDrawer({
               {turmas.map((turma) => (
                 <option key={turma.id} value={turma.id}>{turma.nome}</option>
               ))}
-            </select>
+            </SelectNativo>
           </Campo>
 
           <div>
             <p className="mb-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">2. Escolha o aluno</p>
-            <label className="relative block">
-              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-              <input
-                className={`${estiloInput} pl-9`}
-                placeholder="Pesquisar por nome..."
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-              />
-            </label>
+            <CampoBusca
+              rotulo="Pesquisar aluno por nome"
+              placeholder="Pesquisar por nome..."
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+            />
           </div>
 
-          <div className="max-h-[45vh] overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+          {cortada && pagina && (
+            <p role="note" className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              Esta turma tem {pagina.total} alunos e a lista mostra só os {pagina.itens.length} primeiros.
+              Se não achar o aluno, confira a turma escolhida.
+            </p>
+          )}
+
+          <div className="max-h-[45vh] overflow-y-auto rounded-2xl border border-zinc-200/80 dark:border-zinc-800">
             {carregando ? (
               <Carregando />
             ) : erro ? (
-              <p className="py-8 text-center text-sm text-rose-500 dark:text-rose-400">
+              <p role="alert" className="py-8 text-center text-sm text-rose-600 dark:text-rose-400">
                 {erro.message}
               </p>
             ) : filtrados.length === 0 ? (
-              <p className="py-8 text-center text-sm text-zinc-400">
+              <p className="py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                 {busca ? "Nenhum aluno encontrado." : "Turma sem alunos."}
               </p>
             ) : (
@@ -118,18 +129,16 @@ export default function SeletorAlunoDrawer({
                 {filtrados.map((aluno) => (
                   <li key={aluno.id}>
                     <button
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                      type="button"
+                      className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-indigo-50/60 dark:hover:bg-zinc-800/60"
                       onClick={() => setSelecionado(aluno)}
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
-                        {aluno.foto_url ? (
-                          <img src={aluno.foto_url} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          aluno.nome.slice(0, 1).toUpperCase()
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{aluno.nome}</span>
-                      <ChevronRight size={15} className="shrink-0 text-zinc-300 dark:text-zinc-600" />
+                      <AvatarAluno nome={aluno.nome} chave={aluno.id} foto={aluno.foto_url} tamanho="sm" />
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100" title={aluno.nome}>{aluno.nome}</span>
+                      {aluno.numero_chamada != null && (
+                        <Chip className="shrink-0 tabular-nums">Nº {aluno.numero_chamada}</Chip>
+                      )}
+                      <ChevronRight size={16} aria-hidden className="shrink-0 text-zinc-400" />
                     </button>
                   </li>
                 ))}

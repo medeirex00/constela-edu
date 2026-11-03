@@ -575,7 +575,7 @@ describe("Aba IDEB e SAEB — série de uma escola", () => {
     // A primeira por nome com resultado: a Alfa.
     expect(screen.getByLabelText("Escola")).toHaveDisplayValue("EMEF Sintética Alfa");
     const gIdeb = screen.getByTestId("ideb-grafico-ideb");
-    expect(trechos(gIdeb, "#6366f1").map((t) => t.length)).toEqual([3]);       // 2019–2023 ligados
+    expect(trechos(gIdeb, "#6C5CE7").map((t) => t.length)).toEqual([3]);       // 2019–2023 ligados
     const meta = gIdeb.querySelectorAll('polyline[stroke-dasharray="6 4"]');
     expect(meta).toHaveLength(1);
     expect((meta[0].getAttribute("points") ?? "").trim().split(/\s+/)).toHaveLength(2);   // 2019 e 2021
@@ -607,7 +607,7 @@ describe("Aba IDEB e SAEB — série de uma escola", () => {
       "EMEF Sintética Alfa", "EMEF Sintética Beta", "EMEF Sintética Delta"]);   // Gama e Zeta sem número
     await u.selectOptions(seletor, "EMEF Sintética Beta");
     const gIdeb = screen.getByTestId("ideb-grafico-ideb");
-    expect(trechos(gIdeb, "#6366f1").map((t) => t.length)).toEqual([1]);       // só 2019: lacuna depois
+    expect(trechos(gIdeb, "#6C5CE7").map((t) => t.length)).toEqual([1]);       // só 2019: lacuna depois
     const tabela = screen.getByRole("table", { name: /Números dos gráficos: .* EMEF Sintética Beta/ });
     expect(linhaDa(tabela, "2023")).toHaveTextContent("Ideb não divulgado");
     expect(linhaDa(tabela, "2023").textContent).not.toMatch(/(^|\s)0(,0)?(\s|$)/);
@@ -711,10 +711,10 @@ describe("Aba IDEB e SAEB — rede municipal", () => {
     expect(screen.getByRole("tab", { name: "Rede municipal" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "Ideb da rede municipal (2019–2025)" })).toBeInTheDocument();
     const g = screen.getByTestId("ideb-rede-grafico");
-    // A rede (índigo, com a lacuna de 2023), a meta TRACEJADA e o Brasil (verde); sem a UF pública.
-    expect(trechos(g, "#6366f1").map((t) => t.length)).toEqual([2, 1]);
+    // A rede (violeta, com a lacuna de 2023), a meta TRACEJADA e o Brasil (vermelho); sem a UF pública.
+    expect(trechos(g, "#6C5CE7").map((t) => t.length)).toEqual([2, 1]);
     expect(g.querySelectorAll('polyline[stroke-dasharray="6 4"]')).toHaveLength(1);
-    expect(trechos(g, "#10b981").map((t) => t.length)).toEqual([4]);
+    expect(trechos(g, "#DC2626").map((t) => t.length)).toEqual([4]);
     expect(within(g).getByText("Brasil — redes municipais")).toBeInTheDocument();
     expect(within(g).queryByText(/São Paulo/)).toBeNull();
     expect(g.querySelector("svg")).toHaveAttribute("aria-label", expect.stringContaining("(mesma rede)"));
@@ -897,7 +897,7 @@ describe("Aba IDEB e SAEB — rede municipal", () => {
     const g = screen.getByTestId("ideb-rede-grafico");
     expect(g.querySelector("figcaption")?.textContent).toBe("Ideb da rede e meta (tracejada)");
     expect(g.querySelector("svg")?.getAttribute("aria-label")).not.toMatch(/Brasil|mesma rede/);
-    expect(trechos(g, "#10b981")).toEqual([]);
+    expect(trechos(g, "#DC2626")).toEqual([]);
     expect(within(tabelaIdebRede()).getAllByRole("columnheader").map((th) => th.textContent)).toEqual([
       "Edição", "Rede municipal"]);
     expect(within(g).queryByText(/Brasil/)).toBeNull();

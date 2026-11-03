@@ -75,8 +75,11 @@ class NavegadorFake:
     async def coletar_respostas(self, url, timeout_s=25):
         # API real do Elefante: /course/get-courses-students traz cada turma com
         # seus alunos aninhados (id da turma + student[].id).
+        # Suposição (captura de jul/2026, não confirmada pelo Elefante): cada turma
+        # traz a escola (schoolId). Sem ela, e sem active-schools, a coleta é
+        # recusada (escola_nao_identificada).
         return [{"url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/course/get-courses-students",
-                 "json": [{"id": 511434, "name": "5 ANO B",
+                 "json": [{"id": 511434, "name": "5 ANO B", "schoolId": 23952,
                            "student": [{"id": 4427356, "name": "Aluno X"}]}]}]
     async def coletar_apos_acao(self, acao, timeout_s=20):
         try:
@@ -174,8 +177,10 @@ def test_testar_credenciais_erro_cru_do_navegador_nao_propaga(plataforma):
     'erro_navegador') em vez de estourar — a causa raiz do 500 em produção."""
     class NavegadorQuebra(NavegadorFake):
         async def preencher(self, seletor, valor):
-            # imita o erro do Playwright: cita o seletor, nunca o valor digitado
-            raise RuntimeError(f"Timeout 30000ms waiting for selector {seletor}")
+            # imita o erro do Playwright 1.48: o "Call log" cita o seletor E o
+            # valor digitado (fill("…")); a resposta não pode repeti-lo
+            raise RuntimeError("Locator.fill: Timeout 30000ms exceeded.\nCall log:\n"
+                               f'waiting for locator("{seletor}")\n  -   fill("{valor}")')
 
     Classe = type(connectors.obter(plataforma))
     res = asyncio.run(Classe(_fabrica(NavegadorQuebra()))
@@ -797,8 +802,12 @@ def test_executar_sucesso_cria_snapshot_e_logs(db, escola_completa, monkeypatch)
 
 
 def test_executar_erro_recuperavel_reenfileira_com_backoff(db, escola_completa, monkeypatch):
+    from app.core.config import settings
     from app.models.sincronizacao import SincronizacaoAlerta, SincronizacaoExecucao
     from app.sync import connectors, service, vault
+    # A nova tentativa com backoff é do AGENDADOR (é ele quem a roda); com ele
+    # desligado não se programa nada — ver test_sync_repeticao_e_frescor.py.
+    monkeypatch.setattr(settings, "SYNC_SCHEDULER_ENABLED", True)
     escola = escola_completa["escola"]
     vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
     erro = ErroConector("timeout", codigo="timeout", recuperavel=True)
@@ -845,7 +854,10 @@ def test_calcular_proxima_cadencias(db, escola_completa):
     diaria = SincronizacaoConfig(escola_id=1, plataforma="matific",
                                  ativo=True, cadencia="diaria", hora_local="03:00")
     prox = service.calcular_proxima(diaria, base)
-    assert prox.hour == 3 and prox.day == 12  # próximo dia às 03:00
+    # "03:00" é horário de BRASÍLIA: 10:00 UTC (07:00 BRT) de 11/07 → próximo dia
+    # às 03:00 BRT = 06:00 UTC (o resultado é UTC naive, como o banco guarda).
+    # Antes dava 03:00 UTC — meia-noite em Brasília.
+    assert prox.hour == 6 and prox.day == 12
 
 
 # --------------------------------------------------------------------------
@@ -911,10 +923,13 @@ def test_api_salvar_credenciais_nunca_500_em_erro_de_navegador(
     assert corpo["codigo"] == "erro_navegador"
     assert "senha-secreta" not in (corpo["mensagem"] or "")
 
-    # a credencial FOI gravada (fica como configurada/invalida, revalidável)
+    # a credencial FOI gravada (fica configurada e revalidável). Navegador que
+    # quebrou NÃO prova senha errada: 'nao_validada' (antes 'invalida', e a tela
+    # dizia "senha recusada pela plataforma").
     st = cliente.get(f"/api/v1/escolas/{e}/sync/status").json()
     matific = next(p for p in st["plataformas"] if p["plataforma"] == "matific")
-    assert matific["credencial_status"] == "invalida"
+    assert matific["credencial_status"] == "nao_validada"
+    assert matific["conectada"] is False
     assert st["integracao_configurada"] is True
 
 
@@ -1098,6 +1113,10 @@ def test_scheduler_liga_e_desliga(monkeypatch):
     monkeypatch.setattr(settings, "SYNC_SCHEDULER_ENABLED", True)
     monkeypatch.setattr(settings, "SYNC_POLL_S", 1)
     monkeypatch.setattr(scheduler, "_uma_rodada", lambda: None)  # não toca banco real
+    # Ligado, o agendador agora só sobe com os pré-requisitos críticos ok (P3, com
+    # teste próprio em test_sync_agendador_prerequisitos.py); aqui o que se mede é
+    # só o liga/desliga da thread, então o portão é dado como liberado.
+    monkeypatch.setattr(scheduler, "_liberado_pelos_prerequisitos", lambda: True)
     try:
         assert scheduler.iniciar() is True
         assert scheduler.ativo() is True
@@ -1227,9 +1246,12 @@ def test_credencial_indecifravel_vira_none(db, escola_completa):
     assert vault.obter_credencial(db, e, "matific") is None
 
 
-def test_executar_credencial_ilegivel_marca_invalida(db, escola_completa, monkeypatch):
-    """Execução com credencial ilegível falha de forma limpa (senha_invalida,
-    não recuperável) e marca a credencial como inválida — sem retry infinito."""
+def test_executar_credencial_ilegivel_falha_sem_marcar_invalida(db, escola_completa,
+                                                                monkeypatch):
+    """Execução com credencial ilegível falha de forma limpa (não recuperável, sem
+    retry infinito) com o motivo próprio 'credencial_ilegivel'. A plataforma não
+    recusou nada: a credencial NÃO é regravada como 'invalida' (antes era — resíduo
+    do e97 marco 2; o /status já deriva 'ilegivel')."""
     from app.models.sincronizacao import SincronizacaoExecucao
     from app.sync import connectors, service, vault
     e = escola_completa["escola"].id
@@ -1240,7 +1262,9 @@ def test_executar_credencial_ilegivel_marca_invalida(db, escola_completa, monkey
     ex = service.enfileirar(db, e, "matific", origem="scheduler")
     service.executar(db, ex)
     assert ex.status == "erro"
-    assert vault.obter_linha(db, e, "matific").status == "invalida"
+    assert ex.motivo == vault.CODIGO_CREDENCIAL_ILEGIVEL
+    assert vault.obter_linha(db, e, "matific").status == "nao_validada"   # o gravado fica
+    assert vault.status_efetivo(vault.obter_linha(db, e, "matific")) == "ilegivel"
     assert db.query(SincronizacaoExecucao).filter_by(
         escola_id=e, tentativa=2).first() is None   # não recuperável
 

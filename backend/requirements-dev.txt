@@ -1,0 +1,7 @@
+# Dependências SÓ de desenvolvimento e teste — nunca vão para a imagem de produção
+# (o Dockerfile instala apenas requirements.txt). Instale as duas listas juntas:
+#   pip install -r requirements.txt -r requirements-dev.txt
+# A lista não inclui o requirements.txt por "-r" de propósito: o pip-audit do
+# security.yml audita os dois arquivos lado a lado, com a mesma allowlist.
+pytest==8.3.4
+pytest-cov==6.0.0

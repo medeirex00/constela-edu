@@ -11,7 +11,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime, time as hora_zero, timedelta, timezone
+from datetime import date, datetime, time as hora_zero, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -32,6 +32,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import settings
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis
+from app.core.tempo import FUSO_BR, para_br
 from app.services.eventos import chave_evento, ingerir_eventos
 from app.models import (
     Aluno,
@@ -69,13 +70,17 @@ from app.services import elegibilidade, identidade_aluno as ida
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
 from app.services import dificuldade_livro, professores, push, scoring
-from app.services import identidade_efetiva, triagem_revisoes
+from app.services import identidade_efetiva, politica_sync, triagem_revisoes
+from app.services import turma_arquivada
+from app.services import modulos as svc_modulos
 from app.services.audit import registrar
 from app.models.base import agora
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
 
 logger = logging.getLogger("constela.importacao")
+# O que só acontece na importação feita PELA SINCRONIZAÇÃO vai para o log dela.
+logger_sync = logging.getLogger("constela.sync")
 
 
 def _num(valor, tipo):
@@ -131,38 +136,318 @@ def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
         return None
 
 
-def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo):
+def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo, *, ate=None):
     # Ordena por data_referencia (id desempata): importar um relatório de um
     # período ANTIGO (backfill mensal do Matific) não pode virar o "estado
-    # atual" só por ter id maior.
+    # atual" só por ter id maior. ``ate`` (UTC naive): ignora retratos datados
+    # depois dele — ver ``_teto_retrato_valido``.
+    consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
+    if ate is not None:
+        consulta = consulta.where(modelo.data_referencia <= ate)
     return db.execute(
-        select(modelo)
-        .where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
-        .order_by(modelo.data_referencia.desc(), modelo.id.desc())
-        .limit(1)
+        consulta.order_by(modelo.data_referencia.desc(), modelo.id.desc()).limit(1)
     ).scalar_one_or_none()
+
+
+# Uma execução de sincronização "executando" sem fim registrado (processo caiu)
+# não vale como janela para sempre.
+_JANELA_MAX_SINCRONIZACAO = timedelta(hours=12)
+_FOLGA_JANELA_SINCRONIZACAO = timedelta(minutes=1)
+# Retrato datado acima de agora + esta folga não conta como "o retrato atual" ao
+# decidir o que é retrodatado e de onde herdar (``_teto_retrato_valido``).
+_FOLGA_DATA_FUTURA = timedelta(minutes=10)
+
+
+def _agora_utc() -> datetime:
+    """Agora em UTC naive (a convenção do ``data_referencia`` gravado). Ponto ÚNICO
+    do relógio nas regras de data do /confirmar — os testes o fixam."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _teto_retrato_valido(agora_utc: datetime) -> datetime:
+    """Até quando um retrato gravado vale como dado JÁ ACONTECIDO. Retrato datado
+    no futuro é legado (o servidor aceitava qualquer data no upload manual): se
+    contasse como o atual, a coleta de hoje viraria "retrodatada" — e a
+    sincronização da escola inteira era recusada com um diagnóstico errado."""
+    return agora_utc + _FOLGA_DATA_FUTURA
+
+
+def _dia_em_brasilia(momento) -> date | None:
+    """O dia (de Brasília) de um instante, ou None se a conversão estoura o
+    calendário (ano 1 com fuso positivo, 9999 com -14:00): data absurda vira 422,
+    nunca 500."""
+    try:
+        return para_br(momento).date()
+    except (OverflowError, ValueError):
+        return None
+
+
+def _inicio_do_dia_em_brasilia(momento) -> datetime | None:
+    """A meia-noite (de Brasília) do dia deste instante, em UTC naive."""
+    dia = _dia_em_brasilia(momento)
+    if dia is None:
+        return None
+    try:
+        meia_noite = datetime.combine(dia, hora_zero(0, 0), tzinfo=FUSO_BR)
+        return meia_noite.astimezone(timezone.utc).replace(tzinfo=None)
+    except (OverflowError, ValueError):
+        return None
+
+
+def _janela_antes(momento: datetime) -> datetime:
+    """``momento`` menos ``_JANELA_MAX_SINCRONIZACAO``, sem passar do início do
+    calendário: o retrato legado do dia 0001-01-01 de Brasília (meia-noite às 03h UTC)
+    estourava a subtração com OverflowError — 500 no upload manual sem data. Para
+    filtrar execuções, "desde o início do calendário" é o mesmo que "desde sempre"."""
+    return max(momento, datetime.min + _JANELA_MAX_SINCRONIZACAO) - _JANELA_MAX_SINCRONIZACAO
+
+
+def _dia_txt(dia: date) -> str:
+    # À mão: o %Y do strftime não preenche anos com menos de 4 dígitos em todo SO.
+    return f"{dia.day:02d}/{dia.month:02d}/{dia.year:04d}"
+
+
+def _primeiro_dia_aceito(escola, agora_utc: datetime) -> date:
+    """Piso da data do relatório: 1º de janeiro do ano letivo ANTERIOR ao ativo da
+    escola (sem ano letivo, o anterior ao de hoje em Brasília). Antes disso é quase
+    sempre erro de digitação — 2006 em vez de 2026 — e o ponto viraria a base de
+    toda janela sem retrato anterior."""
+    ano = getattr(escola, "ano_letivo_ativo", None) or para_br(agora_utc).year
+    return date(max(ano - 1, 1), 1, 1)
+
+
+def _conferir_data_do_relatorio(data_referencia: datetime, escola,
+                                agora_utc: datetime, *, com_piso: bool = True) -> datetime:
+    """Regras da DATA DO RELATÓRIO informada no upload manual (a sincronização não
+    manda data). Recusa (422) data absurda ou anterior ao piso e dia de Brasília
+    depois de hoje. Do dia de HOJE mas adiantada (relógio do aparelho à frente, e
+    a tela manda "agora" quando a data é hoje), grava com o agora — antes, a 10 min
+    de folga recusava o "hoje" de um notebook com o relógio errado. Devolve o
+    instante a gravar. ``com_piso=False``: a data não foi digitada agora (ver
+    ``piso_da_data`` em ``_confirmar_sem_commit``) — só a data absurda é recusada."""
+    dia = _dia_em_brasilia(data_referencia)
+    piso = _primeiro_dia_aceito(escola, agora_utc)
+    if dia is None or (com_piso and dia < piso):
+        quando = f"{_dia_txt(dia)} é anterior a {_dia_txt(piso)}" if dia else "fora do calendário"
+        raise HTTPException(
+            422,
+            f"A data do relatório parece errada: {quando}. Confira o ano (o relatório "
+            "precisa ser do ano letivo da escola ou do anterior). Nada foi gravado.")
+    if dia > para_br(agora_utc).date():
+        raise HTTPException(
+            422,
+            "A data do relatório está no futuro. Informe a data em que o relatório "
+            "foi gerado na plataforma (hoje ou antes). Nada foi gravado.")
+    if _instante_utc(data_referencia) > agora_utc:
+        return agora_utc.replace(tzinfo=timezone.utc)
+    return data_referencia
+
+
+def _conferir_periodo_do_relatorio(dados: ImportacaoConfirm, escola,
+                                   agora_utc: datetime, *, com_piso: bool = True) -> None:
+    """O piso de ``_primeiro_dia_aceito`` também vale para o "Intervalo de datas"
+    do Matific no upload manual: um início no ano 1 estourava o calendário (500) ao
+    datar o retrato-base na véspera, e um de 1990 criava esse retrato em 1990. As
+    datas do intervalo são as do calendário impresso (sem fuso), como na importação
+    por período. ``com_piso=False`` (a pendência LEGADA reaplicada pelo /resolver,
+    ver ``piso_da_data``): só o dia sem véspera no calendário (0001-01-01) é
+    recusado — 422, em vez do OverflowError (500) ao datar o retrato-base."""
+    if dados.plataforma != "matific" or dados.periodo_inicio is None \
+            or dados.periodo_fim is None:
+        return
+    piso = _primeiro_dia_aceito(escola, agora_utc) if com_piso else date(1, 1, 2)
+    for momento in (dados.periodo_inicio, dados.periodo_fim):
+        dia = momento.replace(tzinfo=None).date()
+        if dia < piso:
+            quando = (f"{_dia_txt(dia)} é anterior a {_dia_txt(piso)}" if com_piso
+                      else f"{_dia_txt(dia)} está fora do calendário")
+            raise HTTPException(
+                422,
+                f"O intervalo de datas do relatório parece errado: {quando}. Confira o "
+                "ano. Nada foi gravado.")
+
+
+def _importacoes_da_sincronizacao(db: Session, escola_id: int, plataforma: str,
+                                  importacao_ids) -> set[int]:
+    """Quais destas importações vieram da SINCRONIZAÇÃO automática (não do upload
+    manual). A importação não tem coluna de origem (e isto não pede migração): a
+    prova é a própria execução da sincronização — a importação registrada nela, ou
+    criada DENTRO da janela de uma execução desta escola e plataforma (a
+    sincronização importa cada arquivo pelo mesmo /confirmar, no meio da execução).
+    Um upload manual feito durante uma sincronização da mesma escola conta como
+    dela: o erro, se houver, é pedir a data a mais, nunca gravar por cima."""
+    from app.models import SincronizacaoExecucao as Execucao
+
+    ids = {i for i in importacao_ids if i is not None}
+    if not ids:
+        return set()
+    criadas = {
+        imp_id: _instante_utc(criada)
+        for imp_id, criada in db.execute(
+            select(Importacao.id, Importacao.created_at)
+            .where(Importacao.escola_id == escola_id, Importacao.id.in_(ids)))
+        if criada is not None
+    }
+    if not criadas:
+        return set()
+    primeira = min(criadas.values()) - _JANELA_MAX_SINCRONIZACAO - _FOLGA_JANELA_SINCRONIZACAO
+    ultima = max(criadas.values()) + _FOLGA_JANELA_SINCRONIZACAO
+    execucoes = db.execute(
+        select(Execucao.importacao_id, Execucao.iniciada_em, Execucao.finalizada_em)
+        .where(Execucao.escola_id == escola_id, Execucao.plataforma == plataforma,
+               Execucao.iniciada_em.isnot(None),
+               Execucao.iniciada_em >= primeira, Execucao.iniciada_em <= ultima)
+    ).all()
+    diretas = {e.importacao_id for e in execucoes if e.importacao_id in criadas}
+    janelas = []
+    for e in execucoes:
+        inicio = _instante_utc(e.iniciada_em)
+        teto = inicio + _JANELA_MAX_SINCRONIZACAO
+        fim = _instante_utc(e.finalizada_em) if e.finalizada_em is not None else teto
+        janelas.append((inicio - _FOLGA_JANELA_SINCRONIZACAO,
+                        min(fim, teto) + _FOLGA_JANELA_SINCRONIZACAO))
+    return diretas | {imp_id for imp_id, criada in criadas.items()
+                      if any(ini <= criada <= fim for ini, fim in janelas)}
+
+
+def _alunos_com_sincronizacao_desde_o_retrato(db: Session, escola_id: int, plataforma: str,
+                                              retratos: dict) -> set[int]:
+    """Alunos cujo retrato ATUAL é de um dia (de Brasília) em que uma execução da
+    sincronização desta escola e plataforma ainda RODAVA, ou de ANTES dela. Não
+    depende de quem gravou o retrato por último: um upload COM data do mesmo dia
+    complementa o retrato da sync no lugar e troca o ``importacao_id`` para o manual
+    — sem esta regra, o upload SEM data seguinte passava e trocava, "como hoje", o
+    que a sync coletou. Conta a JANELA da execução (até o fim dela, no máximo
+    ``_JANELA_MAX_SINCRONIZACAO`` depois do início), não só o início: a sync que
+    começa às 23h58 e grava o retrato às 00h02 é do dia do retrato — contando só o
+    início, ela era "de ontem" e escapava. Qualquer execução conta (até a que
+    falhou, ou a que caiu sem fim registrado): o erro, se houver, é pedir a data a
+    mais, nunca gravar por cima."""
+    from app.models import SincronizacaoExecucao as Execucao
+
+    inicios = {}
+    for aluno_id, snap in retratos.items():
+        if snap is None or snap.data_referencia is None:
+            continue
+        inicio = _inicio_do_dia_em_brasilia(snap.data_referencia)
+        if inicio is not None:
+            inicios[aluno_id] = inicio
+    if not inicios:
+        return set()
+    # Uma execução termina no máximo ``_JANELA_MAX_SINCRONIZACAO`` depois de começar:
+    # a que chega ao dia mais antigo começou, no máximo, essa janela antes dele.
+    filtro = (Execucao.escola_id == escola_id, Execucao.plataforma == plataforma,
+              Execucao.iniciada_em.isnot(None),
+              Execucao.iniciada_em >= _janela_antes(min(inicios.values())))
+    ultima = db.scalar(select(func.max(Execucao.iniciada_em)).where(*filtro))
+    if ultima is None:
+        return set()
+    # O fim mais tardio está entre as execuções iniciadas na janela antes da última
+    # (o fim de cada uma fica entre o início e início + janela): poucas linhas,
+    # nunca o histórico inteiro de sincronizações da escola. O início da última já é
+    # um fim mínimo (a regra de antes, pelo início, continua contida nesta).
+    fins = [_instante_utc(ultima)]
+    for iniciada, finalizada in db.execute(
+            select(Execucao.iniciada_em, Execucao.finalizada_em)
+            .where(*filtro,
+                   Execucao.iniciada_em >= _janela_antes(_instante_utc(ultima)))):
+        iniciada = _instante_utc(iniciada)
+        teto = iniciada + _JANELA_MAX_SINCRONIZACAO
+        fim = min(_instante_utc(finalizada), teto) if finalizada is not None else teto
+        fins.append(max(fim, iniciada))
+    ultimo_fim = max(fins)
+    return {aluno_id for aluno_id, inicio in inicios.items() if inicio <= ultimo_fim}
 
 
 # Sentinela: "não pré-carregado — consulte o snapshot você mesmo".
 _SEM_PRECARGA = object()
 
 
-def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo) -> dict:
+def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo, *,
+                         ate=None) -> dict:
     """Último snapshot (por data_referencia, id) de CADA aluno, numa ÚNICA
     consulta. Equivale a chamar _snapshot_atual por aluno, sem o N+1: ordena
     ascendente e o último visto por aluno é o mais recente. Como a sessão usa
-    autoflush=False, é semanticamente idêntico ao SELECT por aluno."""
+    autoflush=False, é semanticamente idêntico ao SELECT por aluno. ``ate`` (UTC
+    naive): ignora retratos datados depois dele (``_teto_retrato_valido``)."""
     ids = list(aluno_ids)
     if not ids:
         return {}
     mapa: dict = {}
+    consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids))
+    if ate is not None:
+        consulta = consulta.where(modelo.data_referencia <= ate)
     for snap in db.execute(
-        select(modelo)
-        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids))
-        .order_by(modelo.data_referencia.asc(), modelo.id.asc())
+        consulta.order_by(modelo.data_referencia.asc(), modelo.id.asc())
     ).scalars():
         mapa[snap.aluno_id] = snap
     return mapa
+
+
+def _retrodatado(atual, data_referencia) -> bool:
+    """O relatório é de um DIA (de Brasília) ANTERIOR ao do retrato atual do aluno?
+    Do mesmo dia ou mais novo, vale o de sempre: complementa/atualiza no lugar o
+    retrato do dia, ou nasce o retrato novo herdando do atual."""
+    if atual is None or atual.data_referencia is None or data_referencia is None:
+        return False
+    return (not _mesmo_dia(atual.data_referencia, data_referencia)
+            and _instante_utc(data_referencia) < _instante_utc(atual.data_referencia))
+
+
+def _mapa_retrato_na_data(db: Session, escola_id: int, aluno_ids, modelo,
+                          data_referencia, *, ate=None) -> dict:
+    """O retrato que VALIA na data do relatório, de cada aluno, numa ÚNICA consulta:
+    o do MESMO DIA (de Brasília) — que o relatório complementa no lugar, como faz
+    com o retrato atual do dia — ou, sem ele, o último ANTES dessa data. Aluno sem
+    nenhum fica fora do mapa: não há de onde herdar o que o relatório não traz.
+    ``ate`` (UTC naive): retrato datado depois dele não vale (``_teto_retrato_valido``)."""
+    ids = list(aluno_ids)
+    if not ids:
+        return {}
+    ref = _instante_utc(data_referencia)
+    # O dia de Brasília do relatório acaba menos de 24 h depois do instante dele.
+    limite = ref + timedelta(days=1)
+    if ate is not None:
+        limite = min(limite, ate)
+    antes: dict = {}
+    do_dia: dict = {}
+    for snap in db.execute(
+        select(modelo)
+        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids),
+               modelo.data_referencia <= limite)
+        .order_by(modelo.data_referencia.asc(), modelo.id.asc())
+    ).scalars():
+        if _mesmo_dia(snap.data_referencia, data_referencia):
+            do_dia[snap.aluno_id] = snap
+        elif _instante_utc(snap.data_referencia) <= ref:
+            antes[snap.aluno_id] = snap
+    return {**antes, **do_dia}
+
+
+# Rótulos (sem PII) dos campos de retrato que um relatório pode não trazer.
+_ROTULO_CAMPO_RETRATO = {
+    "atividades": "atividades", "estrelas": "estrelas", "pontuacao_media": "pontuação média",
+    "livros_unicos": "livros lidos", "livros_por_nivel": "livros por nível",
+    "tempo_leitura_min": "tempo de leitura", "questoes_tentativas": "questões respondidas",
+    "questoes_acertos": "questões aprovadas",
+}
+
+
+def _campos_herdados(plataforma: str, dados: dict) -> list[str]:
+    """Campos que a linha NÃO traz e que ``_importar_matific`` /
+    ``_importar_elefante_resumo`` completariam com o retrato anterior — a mesma
+    regra de "ausente" de cada um (chave fora do dicionário; no Elefante, níveis e
+    livros como ``None``, e livros só herdam sem a distribuição por nível)."""
+    if plataforma == "matific":
+        return [c for c in ("atividades", "estrelas", "pontuacao_media") if c not in dados]
+    faltam = []
+    if dados.get("livros_por_nivel") is None:
+        faltam.append("livros_por_nivel")
+    if dados.get("livros_unicos") is None and not dados.get("livros_por_nivel"):
+        faltam.append("livros_unicos")
+    faltam.extend(c for c in ("tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
+                  if c not in dados)
+    return faltam
 
 
 # --- Etapa 1: prévia (PRD §51) ------------------------------------------------
@@ -180,6 +465,12 @@ async def analisar(
     if plataforma not in (None, "", "matific", "elefante"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Plataforma desconhecida.")
     plataforma = plataforma or None
+    # CONTRATO: plataforma de módulo fora do plano da rede não é importada
+    # (minimização). Escolhida no formulário → 403 antes de ler o arquivo;
+    # detectada pelo parser → 403 depois da análise, ANTES de arquivar o original
+    # e de casar nomes (nada da prévia fica no disco nem no banco).
+    modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
+    svc_modulos.exigir_plataforma(modulos, plataforma)
 
     # Rejeita corpos gigantes pelo Content-Length antes de ler o arquivo.
     declarado = request.headers.get("content-length")
@@ -189,6 +480,7 @@ async def analisar(
 
     arquivo_token = None
     arquivo_nome = None
+    guardar_como = None     # extensão do original a arquivar (depois do contrato)
     if arquivo is not None:
         conteudo = await arquivo.read()
         if len(conteudo) > TAMANHO_MAXIMO:
@@ -205,10 +497,15 @@ async def analisar(
             _limpar_temporarios_orfaos()
             try:
                 # Parsing CPU-bound (openpyxl) fora do event loop — não trava os
-                # demais requests durante a leitura da planilha.
+                # demais requests durante a leitura da planilha. O teto do
+                # DESCOMPRIMIDO (bomba de descompressão: o limite de 10 MB acima é do
+                # arquivo COMPRIMIDO) e o orçamento de leitura ficam dentro do parser
+                # e chegam aqui como PlanilhaRecusada.
                 analise = await run_in_threadpool(
                     planilhas.analisar_planilha,
                     conteudo, plataforma, nome_arquivo=arquivo_nome or "")
+            except planilhas.PlanilhaRecusada as exc:
+                raise HTTPException(exc.status_http, str(exc)) from exc
             except ValueError as exc:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 — planilha inesperada
@@ -220,17 +517,22 @@ async def analisar(
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler a planilha. O arquivo está íntegro?") from exc
-            arquivo_token = _guardar_temporario(conteudo, "xlsx")
+            guardar_como = "xlsx"
             tipo = "xlsx"
         elif eh_pdf:
             _limpar_temporarios_orfaos()
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
                 # genéricas de texto como rede de segurança.
-                # Parsing CPU-bound (pdfplumber/pypdf) fora do event loop.
+                # Parsing CPU-bound (pdfplumber/pypdf) fora do event loop. O teto do
+                # DESCOMPRIMIDO e das páginas (bomba de descompressão: o limite de 10 MB
+                # acima é do arquivo COMPRIMIDO) fica dentro do parser, antes do
+                # pdfplumber, e chega aqui como PdfRecusado (413/422).
                 analise = await run_in_threadpool(
                     perfis_pdf.analisar_pdf, conteudo, plataforma,
                     nome_arquivo=arquivo_nome or "")
+            except perfis_pdf.PdfRecusado as exc:
+                raise HTTPException(exc.status_http, str(exc)) from exc
             except HTTPException:
                 raise  # mensagem útil do parser genérico chega ao usuário
             except Exception as exc:
@@ -240,7 +542,7 @@ async def analisar(
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     "Não foi possível ler o PDF. O arquivo está íntegro?") from exc
-            arquivo_token = _guardar_temporario(conteudo, "pdf")
+            guardar_como = "pdf"
             tipo = "pdf"
         else:
             texto = conteudo.decode("utf-8", errors="replace")
@@ -256,12 +558,22 @@ async def analisar(
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
+    svc_modulos.exigir_plataforma(modulos, analise.plataforma)
+    if guardar_como:
+        arquivo_token = _guardar_temporario(conteudo, guardar_como)
     if analise.linhas:
         # PRÉVIA = CONFIRMAÇÃO: a mesma porta única de identidade do /confirmar.
         svc.casar_nomes(db, escola_id, analise.linhas, plataforma=analise.plataforma,
                         turma_padrao=analise.turma_detectada)
 
     nomes_unicos = {svc.chave_nome(l.nome) for l in analise.linhas if l.nome}
+    # A escola do relatório × a cadastrada: só AVISO (nomes variam; a identidade
+    # das contas é que barra a conta de outra escola — ``marcar_ids_de_outra_escola``).
+    from app.sync import escola_externa
+    escola_cadastrada = db.get(Escola, escola_id)
+    escola_detectada = str(getattr(analise, "escola_detectada", "") or "").strip()
+    aviso_escola = escola_externa.aviso_de_nome(
+        escola_detectada, escola_cadastrada.nome if escola_cadastrada else "")
     return AnaliseOut(
         plataforma=analise.plataforma,
         formato=analise.formato,
@@ -271,9 +583,12 @@ async def analisar(
         estrategia=analise.estrategia,
         mensagem_deteccao=analise.mensagem_deteccao,
         turma_detectada=analise.turma_detectada,
+        escola_detectada=escola_detectada[:200],
+        aviso_escola=aviso_escola,
         origem_nome=analise.origem_nome,
         periodo_inicio=analise.periodo_inicio,
         periodo_fim=analise.periodo_fim,
+        criacao_bloqueada_por_politica=not politica_sync.pode_criar_aluno(db, escola_id),
         total_alunos=len(nomes_unicos),
         total_linhas=len(analise.linhas),
         total_erros=sum(1 for l in analise.linhas if l.erros) + len(analise.erros_gerais),
@@ -460,8 +775,8 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
 def _ra_forte(valor) -> str:
     """RA utilizável como IDENTIDADE, normalizado (``lista_piloto.ra_util``): tira
     pontuação/caixa e devolve "" para placeholders ('0', 'S/RA'...). Usado nos DOIS
-    lados de toda comparação — se um lado viesse cru ("123.100.026-0") e o outro
-    normalizado ("1231000260"), o motor leria RAs "divergentes" e vetaria o
+    lados de toda comparação — se um lado viesse cru ("901.000.001-0") e o outro
+    normalizado ("9010000010"), o motor leria RAs "divergentes" e vetaria o
     casamento da MESMA criança (duplicata), e dois placeholders "0" iguais
     "corroborariam" crianças diferentes."""
     return ida.ra_forte(valor)
@@ -585,17 +900,27 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                     plataforma: str | None = None,
                     ctx: "ida.Contexto | None" = None,
                     revisoes: "ida.ColetorRevisoes | None" = None,
-                    usuario_id: int | None = None) -> Aluno | None:
+                    usuario_id: int | None = None,
+                    encerrar_revisoes: bool = True,
+                    descartes: dict | None = None) -> Aluno | None:
     """Aplica à linha a decisão da PORTA ÚNICA de identidade
     (``identidade_aluno.decidir``) — a MESMA que a prévia mostrou:
 
       * ASSOCIAR → devolve a ficha e grava a identidade externa (UUID do Matific /
-        studentId do Elefante) nela, para a próxima sincronização casar direto;
+        studentId do Elefante) nela, para a próxima sincronização casar direto; e
+        ENCERRA a revisão pendente desta mesma identidade e do mesmo tipo de dado,
+        que a linha acabou de responder (``_encerrar_revisoes_respondidas`` —
+        ``encerrar_revisoes=False`` só no /resolver, que fecha as pendências ele
+        mesmo);
       * REVISAR  → NÃO associa e NÃO cria: a linha vai INTEIRA para a fila de
         revisão (``RevisaoIdentidade``), com candidatos e motivo, e é devolvida em
         ``ignorados`` (a sync não avança o cursor desse aluno);
       * CRIAR    → só quando não há candidato algum: cria a ficha na turma da sala
         (decidida sem chute) e grava a identidade externa já na criação.
+
+    Linha que a ESCOLA já decidiu não aplicar (``MOTIVOS_DESCARTE_DECIDIDO`` —
+    conta aposentada) é contada em ``descartes[motivo]`` quando o chamador passa o
+    dict: o núcleo a tira de ``ignorados`` e de 'sem_vinculo'.
 
     ``ctx``/``revisoes`` vêm do /confirmar (estado carregado 1x, fila gravada no
     fim); chamado avulso, carrega o próprio estado e grava a revisão na hora."""
@@ -633,6 +958,8 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                 "nesta plataforma, e a escola escolheu qual vale. A linha não foi "
                 "aplicada e o histórico dela continua guardado. (A conta segue "
                 "existindo na plataforma: a aposentadoria é interna do Constela.)")
+            if descartes is not None:
+                descartes[decisao.motivo] = descartes.get(decisao.motivo, 0) + 1
             return None
         avisos.append(f"Linha “{linha.nome}”: "
                       + ("aluno não pertence a esta escola" if decisao.motivo == "aluno_de_outra_escola"
@@ -647,8 +974,24 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
 
     if decisao.acao == ida.ASSOCIAR:
         aluno = ctx.alunos[decisao.aluno_id]
-        _vincular_identidade(db, escola_id, aluno.id, ident.plataforma, ident.id_externo,
-                             ctx=ctx, usuario_id=usuario_id)
+        vinculou = _vincular_identidade(db, escola_id, aluno.id, ident.plataforma,
+                                        ident.id_externo, ctx=ctx, usuario_id=usuario_id)
+        outra_escola = (ctx.ids_de_outra_escola.get((ident.plataforma, ident.id_externo))
+                        if decisao.via == "explicito" and ident.id_externo else None)
+        if outra_escola is not None and vinculou:
+            # D10 na importação manual: a escolha explícita de uma conta EFETIVA em
+            # outra escola só chega aqui com o Admin Global (``decidir``, passo 0;
+            # a da gestão da escola foi para a revisão). Aviso do efeito lá e trilha
+            # própria (quem, qual conta, qual outra escola) — como no /resolver.
+            avisos.append(f"“{linha.nome}”: {ida.AVISO_CONTA_DE_OUTRA_ESCOLA}")
+            registrar(db, "identidade.importacao_outra_escola_confirmada",
+                      escola_id=escola_id, usuario_id=usuario_id, entidade="aluno",
+                      entidade_id=aluno.id,
+                      detalhes={"plataforma": ident.plataforma,
+                                "id_externo": ident.id_externo,
+                                "outra_escola_id": outra_escola,
+                                "importacao_id": getattr(revisoes, "importacao_id", None),
+                                "aviso": "conta continua efetiva na outra escola"})
         _marcar_via(linha, decisao.via)
         chave_log = (svc.chave_nome(linha.nome), aluno.id)
         if (decisao.via not in ("identidade", "exato", "explicito", "ra", "revisao")
@@ -656,13 +999,27 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             # AUDITORIA (regra §17): vínculo decidido pelo motor sem nome idêntico
             # (abreviação, parcial estrutural, grafia segura, identificador).
             turma = ctx.turma_do_aluno(aluno.id)
+            detalhes = {"origem": linha.nome, "aluno": aluno.nome,
+                        "turma": turma.nome if turma is not None else turma_nome,
+                        "confianca": "alta", "candidatos": 1,
+                        "correspondencia": decisao.via,
+                        "motivo": "único candidato plausível na mesma sala"}
+            if decisao.preteridos:
+                # DESEMPATE "oficial × duplicata" (``lista_piloto_unica``): havia
+                # MAIS de um candidato na sala. O rastro diz quantos, quem perdeu e
+                # por quê — "1 candidato" seria falso e esconderia as fichas que a
+                # fusão administrativa ainda precisa juntar à oficial.
+                detalhes.update(
+                    candidatos=1 + len(decisao.preteridos),
+                    preteridos=_preteridos(ctx, decisao.preteridos),
+                    motivo=_MOTIVO_DESEMPATE)
             registrar(db, "aluno.vinculado_auto", escola_id=escola_id,
                       usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
-                      detalhes={"origem": linha.nome, "aluno": aluno.nome,
-                                "turma": turma.nome if turma is not None else turma_nome,
-                                "confianca": "alta", "candidatos": 1,
-                                "correspondencia": decisao.via,
-                                "motivo": "único candidato plausível na mesma sala"})
+                      detalhes=detalhes)
+        if encerrar_revisoes:
+            _encerrar_revisoes_respondidas(
+                db, escola_id, ctx, ident, decisao, aluno, avisos,
+                coletor=revisoes, usuario_id=usuario_id)
         if criados is not None:
             criados[chave_log] = aluno
         return aluno
@@ -687,6 +1044,28 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             return None
         ctx.registrar_turma(turma)
 
+    # REDE DE SEGURANÇA da turma de destino, qualquer que tenha sido o caminho até
+    # ela (porta única, código externo do relatório, turma escolhida): ficha e
+    # matrícula NOVAS só nascem em turma ATIVA do ANO LETIVO ATIVO. A criança que já
+    # está numa turma arquivada continua recebendo dados pelo ASSOCIAR acima — isto
+    # só barra a criação.
+    # Também a ETAPA: "1 ANO A …" não nasce na "1ºA" de ano_escolar "1ª Fase" (é o
+    # nome que ``nome_turma_exibicao`` dá a "Fase 1A"/"Pré 1 A"): série e letra
+    # batem, a etapa não — antes a ficha nascia na Educação Infantil, sem revisão.
+    motivo_turma = ("turma_fora_do_ano_letivo" if turma.ano_letivo != ano
+                    else "turma_arquivada" if not ida.turma_ativa(turma)
+                    else "turma_de_outra_etapa" if (
+                        str(turma_nome).strip()
+                        and matriculas.etapa_da_sala(str(turma_nome))
+                        != matriculas.etapa_da_sala(turma.nome, turma.ano_escolar or ""))
+                    else "")
+    if motivo_turma:
+        _enfileirar_revisao(db, escola_id, ctx, ident,
+                            replace(decisao, acao=ida.REVISAR, motivo=motivo_turma,
+                                    turma_id=None),
+                            dados, avisos, revisoes, usuario_id)
+        return None
+
     # POLÍTICA DE MATRÍCULA (``services/politica_sync``): numa escola cuja fonte
     # de matrícula é a Lista Piloto, a plataforma NÃO cria criança. Aqui, e não
     # antes, porque "sem turma" e "turma fora do cadastro" já têm o caminho e o
@@ -704,7 +1083,7 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                 c["nome"] for c in ida.descrever_candidatos(ctx, decisao.vetados))
             avisos.append(
                 f"“{linha.nome}”: a política desta escola não deixa a "
-                f"sincronização criar ficha. Atenção: {quem} tem nome "
+                f"plataforma criar ficha. Atenção: {quem} tem nome "
                 "compatível mas foi DESCARTADO porque o RA, o nascimento ou a "
                 "conta da plataforma provam ser outra criança — confira na Lista "
                 "Piloto antes de decidir.")
@@ -746,6 +1125,335 @@ def _marcar_via(linha, via: str) -> None:
         pass
 
 
+# O motivo VERDADEIRO do desempate "oficial × duplicata" (``identidade_aluno.
+# _oficial_entre_duplicatas``), para a auditoria e para a revisão encerrada.
+_MOTIVO_DESEMPATE = ("única ficha da Lista Piloto compatível na sala; as outras são "
+                     "duplicatas dela (mesmo nome ou abreviado), fora da Lista Piloto")
+
+# A regra de cada via de ASSOCIAR, em uma frase: é o "por quê" gravado na revisão
+# que o sistema encerra sozinho — quem abrir a fila depois entende a decisão sem
+# precisar ler o código.
+_REGRA_DA_VIA = {
+    "identidade": "vínculo pela conta da plataforma",
+    "uuid": "vínculo pela conta da plataforma",
+    "ra": "RA da escola, com nome compatível",
+    "exato": "nome idêntico, candidato único",
+    "identificador": "nº de chamada, RA ou nascimento confirmando o candidato da sala",
+    "abreviacao": "nome abreviado, candidato único na sala",
+    "parcial": "nome do meio omitido, candidato único na sala",
+    "variante": "grafia segura num nome do meio, candidato único na sala",
+    "typo": "grafia segura num nome do meio, candidato único na sala",
+    "lista_piloto_unica": ("única ficha da Lista Piloto compatível; as demais são "
+                           "duplicatas dela (mesmo nome ou abreviado), fora da Lista Piloto"),
+    "revisao": "mesma escolha de uma revisão já resolvida desta identidade",
+}
+
+# Quando quem confirmou FIXOU a ficha da linha (prévia aceita ou alternativa
+# escolhida na tela): a revisão é encerrada por essa pessoa, não pelo sistema.
+_REGRA_ESCOLHA_HUMANA = ("ficha fixada por quem confirmou a importação "
+                         "(prévia aceita ou alternativa escolhida)")
+
+# Vias que NÃO casam pelo nome — a conta da plataforma, a escolha explícita e a
+# memória de uma decisão humana. Só nas outras o sufixo de turma retirado do nome
+# ("… RIBEIRO 2B") fez parte do casamento e cabe na regra.
+_VIAS_SEM_NOME = frozenset({"identidade", "uuid", "explicito", "revisao"})
+
+# Motivos cuja PERGUNTA é o próprio vínculo da conta: quem confirmou disse que a
+# linha da conta U é de BRUNA, mas U está na ficha de BEATRIZ. A sincronização que
+# casa por essa MESMA conta só repete o estado contestado — não responde nada.
+# Só o /resolver, que pode transferir a conta, encerra essa pendência.
+_SO_O_GESTOR_ENCERRA = frozenset({"identidade_de_outro_aluno"})
+
+# D10/D11: pendência de conta EFETIVA em outra escola do Constela — de QUALQUER
+# motivo — a gestão da escola não encerra pela importação manual com a ficha
+# fixada; só o Admin Global. Não entra em ``_SO_O_GESTOR_ENCERRA`` (estático,
+# por motivo) porque depende do estado de AGORA da conta, e a sincronização ainda
+# encerra sozinha quando a conta deixa de ser de outra escola, ou pela memória da
+# decisão do Admin Global — ver ``_retida_pelo_d10``.
+
+
+def _preteridos(ctx: "ida.Contexto", ids) -> list[dict]:
+    """As fichas deixadas de lado no desempate: id e nome (o nome é o que deixa a
+    auditoria legível; a anonimização LGPD do log o alcança dentro da lista)."""
+    return [{"aluno_id": c["aluno_id"], "nome": c["nome"]}
+            for c in ida.descrever_candidatos(ctx, ids)]
+
+
+def _instante(texto) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(texto)) if texto else None
+    except ValueError:
+        return None
+
+
+def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[str],
+                                 coletor: "ida.ColetorRevisoes") -> bool:
+    """Esta linha traz o MESMO dado que a pendência guardava, tão novo quanto ou
+    mais? Só então encerrar sem aplicar o congelado não perde nada — é o mesmo
+    juízo que o /resolver faz com ``_retrato_superado``, antecipado.
+
+      * MESMO TIPO DE DADO: a ``chave`` da pendência (identidade + formato +
+        período) é a que esta linha atualizaria se fosse para a revisão. A irmã de
+        OUTRO tipo (leituras numa importação de resumo, outro período do Matific)
+        guarda dado que esta importação não traz: continua pendente até chegar
+        uma linha do tipo dela, ou até o gestor resolvê-la (o /resolver aplica).
+        Caso real (backup de 05/10): o cursor incremental do Elefante já tinha o
+        total de livros de crianças em revisão, então a sincronização diária traz
+        só o resumo delas — encerrar a irmã de leituras ali deixaria de fora
+        livros que só a pendência guardava;
+      * conta contestada (``_SO_O_GESTOR_ENCERRA``): nunca por aqui;
+      * LEITURAS: só a sincronização encerra — o conector busca a lista de livros
+        da criança no período LIFETIME (``elefante._corpo_relatorio``), que contém
+        tudo o que a pendência acumulou. Um arquivo manual pode trazer só parte
+        dos livros: a pendência fica para o gestor;
+      * RETRATO (resumo, placar): a pendência guarda o retrato da importação que a
+        abriu. Se ele é de um dia POSTERIOR ao desta importação (relatório antigo
+        importado à mão), ele é o mais novo — fica para o /resolver aplicá-lo. O
+        DIA é o de Brasília, o critério de ``_mesmo_dia`` (o mesmo com que o
+        /resolver descarta o retrato do mesmo dia em ``_retrato_superado``): antes
+        comparava a data UTC, e das 21h à meia-noite (BRT) a linha das 22h "era
+        do dia seguinte" — encerrava a pendência de um retrato da 00h30 do dia
+        seguinte (BRT), mais novo, e deixava pendente a de um retrato das 22h do
+        mesmo dia, que o /resolver nunca reaplicaria. Data LEGADA fora do
+        calendário (``0001-01-01T00:00:00+00:00``, que estoura na conversão para
+        Brasília): a pendência fica para o gestor — antes o ``OverflowError``
+        derrubava a sincronização da escola inteira."""
+    if rev.chave not in chaves_da_linha or rev.motivo in _SO_O_GESTOR_ENCERRA:
+        return False
+    if rev.formato == "leituras":
+        return coletor.origem == "sincronizacao"
+    congelada = _instante((rev.contexto or {}).get("data_referencia"))
+    if congelada is None:
+        return True          # sem data: o /resolver nunca reaplicaria esse retrato
+    if coletor.origem != "sincronizacao" and not (coletor.contexto or {}).get("data_informada"):
+        # Arquivo enviado à mão sem a data do relatório: a "data desta importação"
+        # é só o relógio de agora, e o relatório pode ser antigo. Fica para o
+        # /resolver, que compara com o retrato mais recente de verdade.
+        return False
+    atual = _instante((coletor.contexto or {}).get("data_referencia"))
+    dia_atual = _dia_em_brasilia(atual) if atual is not None else None
+    dia_congelado = _dia_em_brasilia(congelada)
+    return dia_atual is not None and dia_congelado is not None and dia_atual >= dia_congelado
+
+
+def _motor_escolheria(ctx: "ida.Contexto", ident: "ida.LinhaIdentidade",
+                      aluno: Aluno) -> "ida.Decisao | None":
+    """A ficha FIXADA por quem confirmou é a mesma que o motor escolheria sozinho?
+    Então foi a sugestão da prévia aceita como veio — não uma escolha de gente —
+    e a pendência encerra como AUTOMÁTICA (não vira memória que desligaria, nas
+    próximas importações, a guarda de homônimo novo e a de ficha inativa).
+    Devolve a decisão do motor nesse caso (para gravar a regra DELE), senão None.
+
+    A conta da plataforma acabou de ser gravada nesta mesma linha e sempre
+    "concordaria"; por isso o motor decide pelo NOME — mas as travas da CONTA
+    valem antes: conta aposentada ou OUTRA conta desta plataforma na ficha
+    fixada são situações em que o motor nunca associaria sozinho (é gente
+    passando por cima da trava), e a escolha é humana."""
+    if ident.id_externo:
+        if (ident.plataforma, ident.id_externo) in ctx.aposentadas:
+            return None
+        if ctx.ids_do_aluno.get((aluno.id, ident.plataforma), set()) - {ident.id_externo}:
+            return None
+    dec = ida.decidir(ctx, replace(ident, aluno_id=None, id_externo=""))
+    return dec if dec.acao == ida.ASSOCIAR and dec.aluno_id == aluno.id else None
+
+
+def _retida_pelo_d10(db: Session, escola_id: int, ctx: "ida.Contexto",
+                     ident: "ida.LinhaIdentidade", rev: RevisaoIdentidade,
+                     cache: dict[tuple[str, str], bool]) -> bool:
+    """A pendência desta linha fica na fila porque a conta é de outra escola (D10/D11)?
+
+    Caso (4ª revisão de integração do e97): a conta U já vale aqui na ficha da
+    Ana, e o Admin Global a confirmou também na outra escola. A coleta seguinte
+    daqui manda U para a revisão ``identidade_de_outra_escola``, e o /resolver
+    dela é 403 para a gestão. Mas a importação manual com a ficha da Ana fixada
+    cai no passo 0 de ``decidir`` (``dono == aluno`` → ASSOCIAR via
+    ``identidade``, sem a trava do D10, que só vale quando a conta ainda não está
+    ligada aqui), e esta função encerrava a pendência pela gestão. Com nome não
+    idêntico, o encerramento era DECISÃO HUMANA, virava memória
+    (``carregar_contexto``) e a coleta seguinte associava U sozinha: a
+    confirmação do D10 feita sem o Admin Global, sem aviso e sem auditoria.
+
+    QUALQUER motivo (marco 3 do e97): a pendência da mesma conta aberta por
+    outro motivo ANTES de a conta virar efetiva na outra escola (ex.:
+    ``identidade_de_ficha_inativa`` — a Ana transferida daqui) dava o mesmo
+    atalho. Encerrada pela gestão com nome não idêntico, virava a mesma memória
+    que o passo 0d (``_confirmado_por_humano``) da coleta seguinte respeita. O
+    /resolver já barra a gestão em qualquer motivo (o D10 dele olha a conta, não
+    o motivo); esta trava agora também.
+
+    Retida: ficha FIXADA na linha (escolha de quem confirmou) por quem NÃO é o
+    Admin Global (``ctx.confirma_conta_de_outra_escola``), com a conta ainda
+    efetiva em outra escola (``ida.efetivas_em_outra_escola``, a regra única). O
+    dado da linha continua aplicado (a conta que já vale aqui não é barrada); só
+    a pendência não fecha. Seguem a regra geral: a sincronização (linha sem ficha
+    fixada — só associa essa conta com a memória da decisão do Admin Global, ou
+    depois que ela deixou de ser de outra escola) e o Admin Global."""
+    if ident.aluno_id is None or ctx.confirma_conta_de_outra_escola:
+        return False
+    plataforma = rev.plataforma or ident.plataforma
+    id_externo = rev.id_externo or ident.id_externo
+    if not plataforma or not id_externo:
+        return False
+    chave = (plataforma, id_externo)
+    if chave not in cache:
+        cache[chave] = id_externo in ida.efetivas_em_outra_escola(
+            db, escola_id, plataforma, [id_externo])
+    return cache[chave]
+
+
+def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contexto",
+                                   ident: "ida.LinhaIdentidade", decisao: "ida.Decisao",
+                                   aluno: Aluno, avisos: list[str], *,
+                                   coletor: "ida.ColetorRevisoes | None",
+                                   usuario_id: int | None) -> list[int]:
+    """A linha acabou de ser ASSOCIADA: a revisão PENDENTE da MESMA identidade
+    (mesma escola, mesma ``chave_identidade``) e do MESMO tipo de dado perguntava
+    exatamente isto, e a pergunta foi respondida. Sem este passo ela ficava
+    "pendente" para sempre, porque só o /resolver e o /descartar mudam o status —
+    a fila acumulava casos já decididos.
+
+    Encerra como RESOLVIDA: ``aluno_escolhido_id`` = o associado; ``resolucao``
+    com a via, a regra (e os preteridos do desempate) e ``dados_superados`` (o
+    congelado não é aplicado — ver abaixo).
+      * decisão do SISTEMA (linha sem ficha fixada — a sincronização):
+        ``resolvida_por_id`` None, ``automatica: true``, auditoria
+        ``revisao.encerrada_automaticamente``;
+      * ficha FIXADA por quem confirmou (prévia aceita, alternativa escolhida):
+        é decisão dessa pessoa — ``resolvida_por_id`` = ela, ``automatica:
+        false``, auditoria ``identidade.revisao_resolvida`` (a mesma do /resolver).
+    A escolha entra em ``ctx.resolvidas`` para as próximas linhas DESTA
+    importação. A encerrada pelo sistema não volta como memória nas próximas
+    (``identidade_aluno.carregar_contexto``): lá a linha é decidida de novo pela
+    regra — e a que tem conta da plataforma casa pelo vínculo gravado na ficha.
+
+    Os DADOS CONGELADOS na revisão NÃO são aplicados: só se encerra a pendência
+    cujo dado ESTA linha substitui (``_linha_substitui_o_congelado`` — mesmo tipo
+    de dado, retrato não mais antigo, leituras só pela sincronização). Retrato:
+    vale o desta linha, e o /resolver descartaria o congelado
+    (``_retrato_superado``). Leituras: a lista LIFETIME da sincronização contém
+    os livros guardados (e a UNIQUE de Leitura impede duplicar). Pendência que esta
+    linha NÃO substitui continua na fila, intacta. A pendência (de qualquer
+    motivo) com a ficha fixada pela gestão da escola, de conta ainda efetiva em
+    outra escola, também fica (``_retida_pelo_d10``): só o Admin Global a
+    encerra.
+
+    Pendências vêm de ``ctx.pendentes`` (lidas UMA vez por importação) e saem de
+    lá na primeira linha ASSOCIADA da identidade: nenhuma consulta por linha. A
+    PRÉVIA nunca passa por aqui (``importacao.casar_nomes`` só chama ``decidir``),
+    e sem o coletor da importação (que diz o tipo de dado) nada é encerrado.
+    Devolve os ids encerrados."""
+    if coletor is None:
+        return []
+    # A chave sob a sala RECONHECIDA e, quando difere, a da sala do RELATÓRIO
+    # (pendências gravadas antes de ``sala_efetiva`` existir) — o mesmo par que
+    # ``Contexto.decisao_humana`` consulta. Linha com identidade externa tem uma
+    # chave só (não depende da sala). [:400]: o tamanho gravado na revisão.
+    chaves = list(dict.fromkeys(
+        c[:400] for c in (ida.chave_identidade(ident, decisao.chave_sala),
+                          ida.chave_identidade(ident, ida.chave_sala(ident.turma_nome)))))
+    ids = [rid for c in chaves for rid in ctx.pendentes.pop(c, [])]
+    if not ids:
+        return []
+    contexto = coletor.contexto or {}
+    chaves_da_linha = {ida.chave_pendencia(c, coletor.formato,
+                                           str(contexto.get("periodo_inicio") or ""),
+                                           str(contexto.get("periodo_fim") or ""))
+                       for c in chaves}
+    motor = _motor_escolheria(ctx, ident, aluno) if ident.aluno_id is not None else None
+    humana = ident.aluno_id is not None and motor is None
+    if motor is not None:
+        decisao = motor        # a regra gravada é a do motor, não "explicito"
+    if humana:
+        regra = _REGRA_ESCOLHA_HUMANA
+    else:
+        regra = _REGRA_DA_VIA.get(decisao.via, f"decisão automática ({decisao.via})")
+        if (decisao.via not in _VIAS_SEM_NOME
+                and ida._nome_para_casar(ident.nome, decisao.chave_sala,
+                                         ida.chave_sala(ident.turma_nome)) != ident.nome):
+            # "… RIBEIRO 2B" casou como nome idêntico: a regra diz que o sufixo saiu.
+            regra += ", sem o sufixo de turma digitado junto do nome"
+    preteridos = _preteridos(ctx, decisao.preteridos)
+    momento = agora()
+    encerradas: list[int] = []
+    ficaram: list[RevisaoIdentidade] = []
+    retidas_d10: list[RevisaoIdentidade] = []
+    contas_de_outra_escola: dict[tuple[str, str], bool] = {}
+    for rid in ids:
+        rev = db.get(RevisaoIdentidade, rid)
+        if rev is None or rev.escola_id != escola_id or rev.status != "pendente":
+            continue                     # já decidida por outro caminho: não mexe
+        if _retida_pelo_d10(db, escola_id, ctx, ident, rev, contas_de_outra_escola):
+            retidas_d10.append(rev)      # D10/D11: só o Admin Global encerra
+            continue
+        if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor):
+            ficaram.append(rev)
+            continue
+        dados_superados = {"motivo": "substituidos_pela_linha_desta_importacao",
+                           "formato": rev.formato, "plataforma": rev.plataforma,
+                           "data_congelada": (rev.contexto or {}).get("data_referencia") or None,
+                           "data_desta_importacao": contexto.get("data_referencia") or None}
+        resolucao = {"acao": "associar", "aluno_id": aluno.id, "automatica": not humana,
+                     "via": decisao.via, "regra": regra, "dados_superados": dados_superados}
+        if humana:
+            resolucao["resolvida_na"] = "confirmacao_da_importacao"
+        if preteridos:
+            # Só o id: a revisão não passa pela redação LGPD da exclusão
+            # permanente (os logs passam, e lá o nome fica).
+            resolucao["preteridos"] = [{"aluno_id": p["aluno_id"]} for p in preteridos]
+        if coletor.importacao_id is not None:
+            resolucao["importacao_id"] = coletor.importacao_id
+        rev.status = "resolvida"
+        rev.aluno_escolhido_id = aluno.id
+        rev.resolvida_por_id = usuario_id if humana else None
+        rev.resolvida_em = momento
+        rev.resolucao = resolucao
+        ctx.resolvidas[rev.chave_identidade] = aluno.id
+        candidatos = [c.get("aluno_id") for c in (rev.candidatos or [])]
+        if humana:
+            registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
+                      usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
+                                "formato": rev.formato, "motivo": rev.motivo,
+                                "acao": "associar", "origem": rev.nome_recebido,
+                                "dados_superados": dados_superados,
+                                "candidatos": candidatos,
+                                "resolvida_na": "confirmacao_da_importacao",
+                                "via": decisao.via,
+                                "importacao_id": coletor.importacao_id})
+        else:
+            registrar(db, "revisao.encerrada_automaticamente", escola_id=escola_id,
+                      usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
+                                "formato": rev.formato, "motivo": rev.motivo,
+                                "origem": rev.nome_recebido, "aluno": aluno.nome,
+                                "via": decisao.via, "regra": regra,
+                                "preteridos": preteridos,
+                                "dados_superados": dados_superados,
+                                "importacao_id": coletor.importacao_id,
+                                "candidatos": candidatos})
+        encerradas.append(rev.id)
+    if encerradas:
+        como = ("resolvidas pela sua confirmação" if humana
+                else f"encerradas automaticamente ({regra})")
+        aviso = (f"“{ident.nome}”: {len(encerradas)} pendência(s) de revisão desta "
+                 f"identidade foram {como} — o dado desta importação foi para "
+                 f"{aluno.nome} e substitui o que elas guardavam.")
+        if ficaram:
+            tipos = ", ".join(sorted({r.formato or "resumo" for r in ficaram}))
+            aviso += (f" Continuam na fila {len(ficaram)} pendência(s) dela ({tipos}) "
+                      "que esta linha não responde.")
+        avisos.append(aviso)
+    if retidas_d10:
+        avisos.append(
+            f"“{ident.nome}”: o dado desta importação foi para {aluno.nome}, mas "
+            f"{len(retidas_d10)} pendência(s) de revisão desta conta continuam na "
+            "fila: a conta está vinculada também a um aluno de OUTRA escola do "
+            "Constela, e só o Admin Global encerra essa pendência, em Revisão de "
+            "identidade.")
+    return encerradas
+
+
 def _enfileirar_revisao(db: Session, escola_id: int, ctx: "ida.Contexto",
                         ident: "ida.LinhaIdentidade", decisao: "ida.Decisao",
                         dados: dict, avisos: list[str],
@@ -779,7 +1487,7 @@ def _enfileirar_revisao(db: Session, escola_id: int, ctx: "ida.Contexto",
         _gravar_revisoes(db, escola_id, coletor, usuario_id)
 
 
-_MOTIVOS_DE_TURMA = frozenset({"sem_turma", "turma_nao_cadastrada", "turma_ambigua"})
+_MOTIVOS_DE_TURMA = ida.MOTIVOS_DE_TURMA
 
 
 def _gravar_revisoes(db: Session, escola_id: int, coletor: "ida.ColetorRevisoes",
@@ -859,14 +1567,23 @@ def _turma_existente_por_tokens(db: Session, escola_id: int, ano: int,
     do resto do sistema (``overlap_turma``). Ex.: "5 ANO B MANHA ANUAL" casa com
     "5º Ano B". NUNCA cria turma. Devolve None se nenhuma casar de forma
     INEQUÍVOCA (nenhuma ≥2, ou empate no melhor overlap) — porque mover criança
-    de sala sem supervisão exige certeza."""
+    de sala sem supervisão exige certeza.
+
+    Só serve de destino turma ATIVA e da MESMA ETAPA do rótulo do Matific
+    (``matriculas.etapa_da_sala``): "1 ANO A …" e "1ª Fase A" partilham série e
+    letra, mas mover para a Fase (ou para uma turma arquivada) é matricular a
+    criança onde ela não está."""
     alvo = svc.tokens_turma(klass_nome)
     if not alvo:
         return None
+    etapa = matriculas.etapa_da_sala(klass_nome)
     candidatas: list[tuple[int, Turma]] = []
     for turma in db.execute(
         select(Turma).where(Turma.escola_id == escola_id,
                             Turma.ano_letivo == ano)).scalars():
+        if (not ida.turma_ativa(turma)
+                or matriculas.etapa_da_sala(turma.nome, turma.ano_escolar or "") != etapa):
+            continue
         ov = matriculas.overlap_turma(alvo, svc.tokens_turma(turma.nome))
         if ov >= 2:                       # série + letra em comum
             candidatas.append((ov, turma))
@@ -879,7 +1596,9 @@ def _turma_existente_por_tokens(db: Session, escola_id: int, ano: int,
 
 
 def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
-                               resolvidos: dict, avisos: list[str]) -> int:
+                               resolvidos: dict, avisos: list[str], *,
+                               ctx: "ida.Contexto | None" = None,
+                               movidos_ids: list[int] | None = None) -> int:
     """Na sync AUTOMÁTICA do Matific: vincula o UUID (identificação confiável) e
     MOVE a matrícula quando a turma reportada mudou. Regras de segurança (mexe em
     dado de criança, sem humano no loop):
@@ -892,10 +1611,26 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
       quando já existe a "5º Ano B";
     * só move entre turmas JÁ CADASTRADAS e de forma INEQUÍVOCA. Se o Matific
       apontar uma turma que não casa com nenhuma cadastrada, NÃO move nem cria —
-      só registra um aviso para revisão humana.
+      só registra um aviso para revisão humana;
+    * a sala reconhecida pela série (``Contexto.sala_efetiva`` — "4 ANO A
+      INTEGRAL" × "4º Ano", única turma ativa da série e da etapa) é a MESMA
+      turma: não move nem avisa (antes saía um aviso falso a cada coleta);
+    * destino só turma ATIVA e da mesma ETAPA (``_turma_existente_por_tokens``);
+    * com a política ``bloquear`` (``politica_sync.pode_mover_matricula``) a
+      matrícula segue a Lista Piloto, pela mesma regra que impede a sync de criar
+      ficha (a plataforma não matricula; P15 é a recomendação de 26/10, aplicada por
+      decorrer dessa regra — o dono pode objetar): vincula o UUID, mas NÃO move — a
+      turma divergente vira aviso. Antes a coleta movia e o reenvio da Lista
+      Piloto devolvia: a matrícula ia e voltava. A trava fica AQUI, e não só no
+      chamador, para nenhum caminho que chame esta rotina furar a política.
 
-    Devolve quantos alunos foram movidos."""
+    Devolve quantos alunos foram movidos; ``movidos_ids`` (quando passado) recebe
+    os ids — a matrícula movida é dado alterado (ranking por turma, posição), e o
+    /confirmar os conta como aplicados para a sync recalcular as notas."""
     movidos = 0
+    mover: bool | None = None   # a política só é lida quando há o que mover
+    if ctx is None and resolvidos:
+        ctx = ida.carregar_contexto(db, escola_id, ano)
     for aluno, linhas in resolvidos.values():
         linha = linhas[-1]
         uuid = str((linha.dados or {}).get("matific_uuid") or "").strip()
@@ -907,6 +1642,8 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         _vincular_identidade(db, escola_id, aluno.id, "matific", uuid)  # idempotente
         if via != "identidade":
             continue  # 1ª vez (casou por nome): só vincula; move pela identidade
+        if (linha.dados or {}).get("turma_ambigua"):
+            continue  # a conta veio em mais de uma turma do Placar: turma incerta
         turma_nome = str((linha.dados or {}).get("turma_relatorio") or "").strip()
         if not turma_nome:
             continue
@@ -916,9 +1653,13 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         if matricula is None:
             continue
         atual = db.get(Turma, matricula.turma_id)
-        # Mesma turma (tokens série+letra) → nada a fazer (evita turma-fantasma).
-        if atual is not None and matriculas.overlap_turma(
-                svc.tokens_turma(atual.nome), svc.tokens_turma(turma_nome)) >= 2:
+        # Mesma turma (tokens série+letra, ou a sala reconhecida pela série) →
+        # nada a fazer (evita turma-fantasma e aviso falso).
+        if atual is not None and (
+                matriculas.overlap_turma(
+                    svc.tokens_turma(atual.nome), svc.tokens_turma(turma_nome)) >= 2
+                or ctx.sala_efetiva(ida.chave_sala(turma_nome), turma_nome)
+                == ida.chave_sala(atual.nome)):
             continue
         nova = _turma_existente_por_tokens(db, escola_id, ano, turma_nome)
         if nova is None:
@@ -929,6 +1670,15 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
             continue
         if nova.id == matricula.turma_id:
             continue
+        if mover is None:
+            mover = politica_sync.pode_mover_matricula(db, escola_id)
+        if not mover:
+            # Política 'bloquear': a matrícula vem da Lista Piloto (a planilha é a
+            # fonte da verdade). A plataforma não move: só avisa.
+            avisos.append(
+                f"{aluno.nome}: o Matific indica a turma “{nova.nome}”; a matrícula "
+                "segue a Lista Piloto (política 'bloquear') — não movi.")
+            continue
         antiga = atual.nome if atual is not None else "—"
         matricula.turma_id = nova.id
         db.flush()
@@ -938,6 +1688,8 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         avisos.append(f"{aluno.nome}: movido de “{antiga}” para “{nova.nome}” "
                       "(mudança de turma detectada no Matific).")
         movidos += 1
+        if movidos_ids is not None:
+            movidos_ids.append(aluno.id)
     return movidos
 
 
@@ -947,7 +1699,9 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
     # estrelas tem "estrelas"; o Excel por turma NÃO tem. Preservamos o valor
     # anterior de cada campo AUSENTE — assim os dois relatórios se COMPLEMENTAM
     # (nunca zeram um campo que outro relatório já preencheu).
-    # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1).
+    # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1) — e,
+    # num relatório RETRODATADO, é o retrato que valia NA DATA dele
+    # (``_mapa_retrato_na_data``), nunca o mais novo.
     if anterior is _SEM_PRECARGA:
         anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
     atividades = (_num(dados["atividades"], int) if "atividades" in dados
@@ -962,34 +1716,87 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
     # herda o anterior" — o relatório mais recente é a fonte autoritativa (o
     # Excel por turma pode legitimamente corrigir as atividades para MENOS sem
     # que as estrelas do PDF anterior se percam).
+    # Devolve se o dado do aluno MUDOU (novo retrato com valor diferente do atual,
+    # ou primeiro retrato) — é a conta de "alunos aplicados" da sincronização. Um
+    # retrato novo com os mesmos números continua sendo gravado (série diária),
+    # mas não conta como atualização.
+    mudou = anterior is None or (anterior.atividades, anterior.estrelas,
+                                 anterior.pontuacao_media) != (atividades, estrelas, media)
     if anterior is not None and _mesmo_dia(anterior.data_referencia, data_referencia):
         anterior.atividades = atividades
         anterior.estrelas = estrelas
         anterior.pontuacao_media = media
         anterior.importacao_id = importacao.id
-        return
+        _avancar_data(anterior, data_referencia)
+        return mudou
     db.add(SnapshotMatific(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
         atividades=atividades, estrelas=estrelas, pontuacao_media=media,
     ))
+    return mudou
 
 
 def _sem_fuso(momento):
     return momento.replace(tzinfo=None) if momento.tzinfo else momento
 
 
+def _instante_utc(momento):
+    """O MESMO instante em UTC naive, para comparar "antes/depois": naive é UTC (a
+    convenção do ``data_referencia`` gravado, ver ``app.sync.fuso``); com fuso, é
+    CONVERTIDO. ``_sem_fuso`` só tira o fuso: "14h -03:00" (17h UTC) virava "14h"
+    e perdia para "16h" UTC — erro de até 3 h na ordem de dois instantes."""
+    if momento.tzinfo is None:
+        return momento
+    return momento.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _instante_utc_no_calendario(momento) -> datetime | None:
+    """``_instante_utc`` para data que vem do banco ou de dado LEGADO: None se ela
+    não existe no calendário em UTC ou no dia de Brasília (0001-01-01 com fuso
+    positivo, ou antes das 03h UTC; 9999-12-31 com fuso negativo) — em vez do
+    OverflowError que virava 500."""
+    try:
+        utc = _instante_utc(momento)
+    except (OverflowError, ValueError):
+        return None
+    return utc if _dia_em_brasilia(utc) is not None else None
+
+
+def _avancar_data(snapshot, data_referencia) -> None:
+    """Na reescrita NO LUGAR do retrato do dia, a data acompanha o valor novo
+    (nunca recua). Antes o valor das 13h de 23/10 ficava com a data das 21h30 de
+    22/10 (Brasília) — o cartaz e o certificado imprimiam o dia anterior, e um
+    período que termina em 22/10 passava a incluir atividade de 23/10. A ordem é
+    a dos INSTANTES (``_instante_utc``), não a da hora de parede."""
+    if data_referencia is None or snapshot.data_referencia is None:
+        return
+    if _instante_utc(data_referencia) > _instante_utc(snapshot.data_referencia):
+        snapshot.data_referencia = data_referencia
+
+
 def _mesmo_dia(a, b) -> bool:
-    """True se dois instantes caem no MESMO dia (ignora fuso). Usado para tornar
-    reimportações do mesmo dia idempotentes: em vez de empilhar um segundo ponto
-    no histórico diário, o snapshot do dia é atualizado no lugar."""
+    """True se dois instantes caem no MESMO dia de BRASÍLIA (o dia da escola).
+    Usado para tornar reimportações do mesmo dia idempotentes: em vez de empilhar
+    um segundo ponto no histórico diário, o snapshot do dia é atualizado no lugar.
+
+    Naive = UTC (a convenção do ``data_referencia`` gravado, ver
+    ``app.sync.fuso``); com fuso, convertido. Antes comparava a data UTC crua: das
+    21h à meia-noite (BRT) o UTC já é o dia seguinte — a coleta das 22h e a da
+    manhã seguinte colapsavam num retrato só (o da noite sumia do histórico),
+    enquanto a das 20h e a das 22h do MESMO dia viravam dois.
+
+    Data legada fora do calendário (retrato de 0001-01-01, que estoura na conversão
+    para Brasília) não é "o mesmo dia" de nada: antes o ``OverflowError`` derrubava
+    a sincronização da escola inteira e o upload manual dava 500."""
     if a is None or b is None:
         return False
-    return _sem_fuso(a).date() == _sem_fuso(b).date()
+    dia_a = _dia_em_brasilia(a)
+    return dia_a is not None and dia_a == _dia_em_brasilia(b)
 
 
 def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
-                              inicio, fim, serie, contadores):
+                              inicio, fim, serie, contadores, *, em_andamento: bool = False):
     """Relatório Matific POR PERÍODO ("Intervalo de datas" no leaderboard).
 
     Os números do relatório são o que o aluno fez DENTRO do intervalo — nada
@@ -1054,6 +1861,9 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
     else:
         novo_media = cand_media
 
+    # Mudou = nasce um retrato do período (não havia um datado neste fim) ou o
+    # que havia muda de valor (ver "mudou" em ``_importar_matific``).
+    mudou = True
     if base is None:
         # Snapshot-base na véspera do início valendo (novo − ganhos): o delta
         # do período é exatamente o ganho do relatório, e um acumulado antigo
@@ -1075,12 +1885,33 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
     for snap in serie:
         if _sem_fuso(snap.data_referencia) == fim:
             mesmo_fim = snap
+    if (mesmo_fim is None and em_andamento and ultimo_ate_fim is not None
+            and _sem_fuso(ultimo_ate_fim.data_referencia) >= inicio
+            and _mesmo_dia(ultimo_ate_fim.data_referencia, fim)):
+        # Período EM ANDAMENTO: o fim foi cortado em "agora", então cada coleta
+        # tem um fim diferente e nunca batia com o retrato anterior — cada
+        # repetição SEM mudança empilhava um retrato e saía "N alunos com dado
+        # novo" (recálculo, notificação, último sucesso renovado). O retrato do
+        # MESMO DIA dentro do período é atualizado no lugar (como no acumulado),
+        # com a data acompanhando.
+        mesmo_fim = ultimo_ate_fim
     if mesmo_fim is not None:
+        mudou = base is None or (mesmo_fim.atividades, mesmo_fim.estrelas,
+                                 mesmo_fim.pontuacao_media) != (novo_ativ, novo_estrelas,
+                                                                novo_media)
         mesmo_fim.atividades = novo_ativ
         mesmo_fim.estrelas = novo_estrelas
         mesmo_fim.pontuacao_media = novo_media
         mesmo_fim.importacao_id = importacao.id
+        _avancar_data(mesmo_fim, fim)
     else:
+        # Retrato novo: "mudou" só se o valor difere do último até o fim (antes,
+        # sempre True — uma coleta de período em andamento no dia seguinte, sem
+        # nenhuma atividade nova, contava todos os alunos como atualizados).
+        if base is not None:
+            mudou = ultimo_ate_fim is None or (
+                ultimo_ate_fim.atividades, ultimo_ate_fim.estrelas,
+                ultimo_ate_fim.pontuacao_media) != (novo_ativ, novo_estrelas, novo_media)
         db.add(SnapshotMatific(
             escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
             data_referencia=fim,
@@ -1091,11 +1922,14 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
         contadores["reimportados"] += 1
     if posteriores:
         contadores["historico"] += 1
+    return mudou
 
 
 def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia,
                               anterior=_SEM_PRECARGA, avisos: list | None = None):
-    # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1).
+    # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1) — e,
+    # num relatório RETRODATADO, é o retrato que valia NA DATA dele
+    # (``_mapa_retrato_na_data``), nunca o mais novo.
     if anterior is _SEM_PRECARGA:
         anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
     por_nivel = dados.get("livros_por_nivel")
@@ -1125,6 +1959,12 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
     # (idempotente). Semântica COMPLEMENTAR: os campos já foram resolvidos acima
     # como "presente vence; ausente herda o anterior" — o relatório mais recente
     # é a fonte autoritativa.
+    # Mudou? (a mesma régua de ``_importar_matific``: primeiro retrato ou valor
+    # diferente do atual).
+    mudou = anterior is None or (
+        anterior.livros_unicos, anterior.tempo_leitura_min, anterior.questoes_tentativas,
+        anterior.questoes_acertos, anterior.livros_por_nivel or {},
+    ) != (livros_unicos, tempo, tentativas, acertos, por_nivel or {})
     if anterior is not None and _mesmo_dia(anterior.data_referencia, data_referencia):
         anterior.livros_unicos = livros_unicos
         anterior.tempo_leitura_min = tempo
@@ -1132,7 +1972,8 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
         anterior.questoes_acertos = acertos
         anterior.livros_por_nivel = por_nivel
         anterior.importacao_id = importacao.id
-        return
+        _avancar_data(anterior, data_referencia)
+        return mudou
     db.add(SnapshotElefante(
         escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
         data_referencia=data_referencia,
@@ -1142,6 +1983,7 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
         questoes_acertos=acertos,
         livros_por_nivel=por_nivel,
     ))
+    return mudou
 
 
 # Vocabulário OFICIAL de níveis do Elefante (escada A3 AA…Z + tier Z+ e A+). Sem
@@ -1469,6 +2311,24 @@ def _ja_lidos_por_aluno(db, aluno_ids) -> dict:
     return mapa
 
 
+def _data_do_retrato_das_leituras(data_referencia, ultima_leitura):
+    """Data do retrato DERIVADO do relatório individual: max(data do relatório,
+    leitura mais nova do aluno), nunca depois de agora. O retrato é o TOTAL de todas
+    as leituras registradas: datado antes da mais nova, contaria uma leitura de
+    outubro num ponto de agosto (relatório individual com data passada, só pela
+    API, e sem retrato válido posterior). Leitura com data no futuro (ou absurda)
+    não leva o retrato para o futuro. ``Leitura.data`` é naive (UTC, a convenção do
+    ``data_referencia``). Na sincronização e no upload sem data, a data do relatório
+    já é o agora do início da importação: só uma leitura datada depois disso a
+    moveria, e no máximo até agora."""
+    if ultima_leitura is None:
+        return data_referencia
+    candidata = min(_instante_utc(ultima_leitura), _agora_utc())
+    if candidata <= _instante_utc(data_referencia):
+        return data_referencia
+    return candidata.replace(tzinfo=timezone.utc)
+
+
 def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
                                 data_referencia, avisos, catalogo, ja_lidos,
                                 codigos_faixa):
@@ -1607,22 +2467,26 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
             "livro_id": (livro.id if livro is not None else None),
             "dados": ({"genero": genero} if genero else {}),
         })
-    ingerir_eventos(db, aluno.id, "elefante", eventos)
+    n_eventos = ingerir_eventos(db, aluno.id, "elefante", eventos)
 
     # Snapshot derivado do total de leituras registradas. O nível de CADA
     # leitura é o CONGELADO (``Leitura.nivel_codigo``, gravado na importação que
     # a criou); só leitura anterior a esta versão (nível nulo) cai no nível atual
     # do livro. Assim renivelar um livro depois não muda, sozinha, a
     # distribuição por nível do aluno numa reimportação.
-    leituras = db.execute(
-        select(func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo))
+    # A data de cada leitura vem na MESMA consulta: a mais nova data o retrato.
+    registradas = db.execute(
+        select(func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo), Leitura.data)
         .select_from(Leitura)
         .join(Livro, Leitura.livro_id == Livro.id)
         .where(Leitura.aluno_id == aluno.id)
-    ).scalars().all()
+    ).all()
+    leituras = [codigo for codigo, _ in registradas]
     por_nivel: dict[str, int] = {}
     for codigo in leituras:
         por_nivel[codigo] = por_nivel.get(codigo, 0) + 1
+    data_retrato = _data_do_retrato_das_leituras(
+        data_referencia, max((d for _, d in registradas if d is not None), default=None))
 
     # Avisa se algum nível de letra não está em nenhuma faixa cadastrada: na
     # regra global (v1) toda letra AA–Z/Z+/A+ PONTUA pela régua A3 — a letra só
@@ -1636,24 +2500,55 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
             "cadastrada — pontuam pela régua global, mas não aparecem no gráfico "
             "por faixa (e não pontuam na régua personalizada) até serem incluídos "
             "em Métricas → Dificuldade.")
-    anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante)
+    # Retrato datado no futuro (legado) não é o atual — ver ``_teto_retrato_valido``.
+    anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotElefante,
+                               ate=_teto_retrato_valido(_agora_utc()))
     # O resumo do relatório individual COMPLEMENTA o tempo de leitura de quem
     # ainda não tem snapshot; nunca rebaixa o valor vindo do relatório da turma.
     tempo_relatorio = max(
         (_num(l.dados.get("tempo_leitura_min", 0) or 0, int) for l in linhas), default=0)
-    db.add(SnapshotElefante(
-        escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
-        data_referencia=data_referencia,
-        # O contador da plataforma (relatório da turma) pode ser maior que o
-        # histórico listado — o detalhamento individual nunca rebaixa a conta.
-        livros_unicos=max(len(leituras),
-                          anterior.livros_unicos if anterior else 0),
-        tempo_leitura_min=max(anterior.tempo_leitura_min if anterior else 0,
-                              tempo_relatorio),
-        questoes_tentativas=anterior.questoes_tentativas if anterior else 0,
-        questoes_acertos=anterior.questoes_acertos if anterior else 0,
-        livros_por_nivel=por_nivel,
-    ))
+    # O contador da plataforma (relatório da turma) pode ser maior que o
+    # histórico listado — o detalhamento individual nunca rebaixa a conta.
+    livros_unicos = max(len(leituras), anterior.livros_unicos if anterior else 0)
+    tempo = max(anterior.tempo_leitura_min if anterior else 0, tempo_relatorio)
+    retrato_mudou = anterior is None or (
+        anterior.livros_unicos, anterior.tempo_leitura_min, anterior.livros_por_nivel or {},
+    ) != (livros_unicos, tempo, por_nivel or {})
+    if anterior is not None and (_mesmo_dia(anterior.data_referencia, data_retrato)
+                                 or _retrodatado(anterior, data_retrato)):
+        # MESMO DIA (de Brasília): o retrato do dia é atualizado NO LUGAR, como no
+        # resumo e no Matific — e só se algo mudou. Antes cada arquivo de leituras
+        # EMPILHAVA um retrato: a coleta gravava dois por aluno (resumo + leituras)
+        # e a 2ª coleta do dia, sem mudança nenhuma, somava mais um (A2 §3.18). As
+        # questões ficam as do retrato do dia (vêm do resumo); livros e tempo
+        # nunca baixam (máximo acima); a data acompanha o valor novo.
+        # DATA ANTERIOR ao retrato atual (relatório individual com data passada,
+        # só pela API): também no lugar, com a data max(relatório, atual) — o
+        # retrato derivado é o TOTAL de todas as leituras registradas, não o que
+        # valia naquela data. Antes nascia um ponto NA DATA com livros, tempo e
+        # questões do retrato mais novo (os números de outubro num ponto de
+        # agosto). A data passada fica nas Leituras e nos EventoAluno.
+        # A data do retrato derivado nunca fica antes da leitura mais nova
+        # (``_data_do_retrato_das_leituras``).
+        if retrato_mudou:
+            anterior.livros_unicos = livros_unicos
+            anterior.tempo_leitura_min = tempo
+            anterior.livros_por_nivel = por_nivel
+            anterior.importacao_id = importacao.id
+            _avancar_data(anterior, data_retrato)
+    else:
+        db.add(SnapshotElefante(
+            escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
+            data_referencia=data_retrato,
+            livros_unicos=livros_unicos,
+            tempo_leitura_min=tempo,
+            questoes_tentativas=anterior.questoes_tentativas if anterior else 0,
+            questoes_acertos=anterior.questoes_acertos if anterior else 0,
+            livros_por_nivel=por_nivel,
+        ))
+    # Mudou = leitura nova, evento novo da linha do tempo ou retrato com outro
+    # valor (a conta de "alunos aplicados" da sincronização).
+    return bool(novas) or n_eventos > 0 or retrato_mudou
 
 
 def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str) -> int:
@@ -1662,22 +2557,48 @@ def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str) -> int:
     /confirmar (recalcular=true) e pelo /recalcular (fim do lote), para os dois
     nunca divergirem no que fazem ao terminar."""
     n = scoring.recalcular_escola(db, escola_id)
+    # Recálculo que deu certo fecha a pendência que uma sincronização deixou
+    # (dado gravado, notas não recalculadas) — vale também para o /recalcular.
+    from app.sync import service as sync_service
+    if sync_service.resolver_recalculo_pendente(db, escola_id):
+        db.commit()
     _pos_commit_importacao(db, escola_id, corpo=corpo)
     return n
 
 
-def _pos_commit_importacao(db: Session, escola_id: int, *, corpo: str) -> None:
+def _pos_commit_importacao(db: Session, escola_id: int, *, corpo: str,
+                           aluno_id: int | None = None) -> None:
     """Efeitos que NÃO pertencem à transação: cache em memória do processo e push
     para os aparelhos. Ficam DEPOIS do commit de propósito — notificar antes de
     a transação fechar avisaria sobre dado que pode nem existir, e o próprio
     ``notificar_escola`` commita ao limpar token morto (o que abriria a transação
-    do chamador no meio). Não é reversível por rollback: é melhor esforço."""
+    do chamador no meio). Não é reversível por rollback: é melhor esforço.
+
+    ``aluno_id``: o aviso é de UMA criança (leva o primeiro nome) e só vai a quem a
+    enxerga pela API (``push.notificar_escola``)."""
     from app.routers.publico import invalidar_cache_painel
 
     invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
     push.notificar_escola(
         db, escola_id, titulo="Novos dados no Constela Edu",
-        corpo=corpo, dados={"tela": "ranking"})
+        corpo=corpo, dados={"tela": "ranking"}, aluno_id=aluno_id)
+
+
+class _ConfirmacaoDaSincronizacao(ImportacaoConfirm):
+    """O MESMO pedido de importação, montado pelo ORQUESTRADOR da sincronização
+    automática (``confirmacao_da_sincronizacao``). O tipo é o sinal do SERVIDOR de
+    que a importação vem da coleta: nunca chega pelo corpo HTTP (a rota declara
+    ``ImportacaoConfirm``). ``sincronizar_turma`` não serve de prova — é um campo
+    aberto do schema, que qualquer admin/coordenador pode mandar pela API."""
+
+
+def confirmacao_da_sincronizacao(dados: ImportacaoConfirm) -> ImportacaoConfirm:
+    """Marca o pedido montado pela sincronização automática (só o orquestrador
+    chama). Os valores já foram validados ao montar ``dados``: nada é revalidado e
+    os campos informados continuam os mesmos."""
+    return _ConfirmacaoDaSincronizacao.model_construct(
+        _fields_set=set(dados.model_fields_set),
+        **{campo: getattr(dados, campo) for campo in ImportacaoConfirm.model_fields})
 
 
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
@@ -1691,23 +2612,48 @@ def confirmar(
     ``_confirmar_sem_commit``; aqui só se fecha a transação, recalcula quando
     pedido e dispara os efeitos de pós-commit. Quem precisa de uma transação
     MAIOR (o ``/resolver`` de revisão, que aplica várias irmãs) chama o núcleo
-    direto e commita uma vez só."""
-    nucleo = _confirmar_sem_commit(dados=dados, escola_id=escola_id,
-                                   usuario=usuario, db=db)
+    direto e commita uma vez só.
+
+    Plataforma de módulo fora do plano da rede → 403, antes de gravar qualquer
+    coisa (a mesma trava da prévia; a sincronização tem a dela no serviço)."""
+    svc_modulos.exigir_plataforma(
+        svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)), dados.plataforma)
+    nucleo = _confirmar_sem_commit(
+        dados=dados, escola_id=escola_id, usuario=usuario, db=db,
+        da_sincronizacao=isinstance(dados, _ConfirmacaoDaSincronizacao))
     db.commit()
 
     # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
     # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
+    # "Atualizados" = alunos cujo dado MUDOU (``alunos_aplicados_ids``); os demais
+    # foram conferidos sem mudança. Antes, repetir o mesmo relatório dizia (e
+    # notificava) "N alunos atualizados" com nada novo.
+    n_aplicados = len(nucleo.alunos_aplicados_ids)
+    conferidos = max(0, nucleo.qtd_alunos - n_aplicados)
+    resto = (f" ({conferidos} aluno(s) conferido(s) sem mudança)" if conferidos else "")
     if dados.recalcular:
         plataforma_nome = "Matific" if dados.plataforma == "matific" else "Elefante Letrado"
-        _finalizar_importacao(
-            db, escola_id,
-            corpo=f"{nucleo.qtd_alunos} alunos atualizados na {plataforma_nome}. "
-                  "As notas já foram recalculadas.")
-        mensagem = (f"Importação concluída: {nucleo.qtd_alunos} alunos atualizados. "
+        # Sem aluno com dado novo (o mesmo relatório de novo), o push não diz "0 alunos
+        # atualizados" a todos os aparelhos: diz que as notas foram recalculadas com o
+        # que já estava gravado (o mesmo texto da sync, ``_recalcular_ao_final``). A
+        # finalização segue igual (recálculo, pendência, cache do painel público).
+        if n_aplicados:
+            corpo = (f"{n_aplicados} alunos atualizados na {plataforma_nome}. "
+                     "As notas já foram recalculadas.")
+        else:
+            corpo = f"Notas recalculadas com os dados já gravados da {plataforma_nome}."
+        _finalizar_importacao(db, escola_id, corpo=corpo)
+        mensagem = (f"Importação concluída: {n_aplicados} alunos atualizados{resto}. "
                     "Notas recalculadas automaticamente.")
     else:
-        mensagem = f"{nucleo.qtd_alunos} aluno(s) importado(s)."
+        mensagem = f"{n_aplicados} aluno(s) com dado novo importado(s){resto}."
+    if nucleo.criacao_bloqueada:
+        # O MOTIVO na frase principal (a tela a mostra em destaque): a política
+        # 'bloquear' barrou a ficha nova — não é falha da importação.
+        mensagem += (f" {nucleo.criacao_bloqueada} aluno(s) sem ficha não foram criados: a "
+                     "política desta escola não deixa a plataforma criar ficha (a "
+                     "matrícula vem da Lista Piloto). Eles ficaram em Revisão de "
+                     "identidade para um gestor apontar a ficha certa.")
 
     return ImportacaoResultadoOut(
         mensagem=mensagem,
@@ -1717,6 +2663,14 @@ def confirmar(
         avisos=nucleo.avisos,
         ignorados=nucleo.ignorados,
         qtd_revisoes=nucleo.qtd_revisoes,
+        alunos_aplicados_ids=nucleo.alunos_aplicados_ids,
+        linhas_recebidas=nucleo.linhas_recebidas,
+        linhas_em_revisao=nucleo.linhas_em_revisao,
+        linhas_descartadas=nucleo.linhas_descartadas,
+        avisos_criticos=nucleo.avisos_criticos,
+        contas_em_revisao=nucleo.contas_em_revisao,
+        ids_de_outra_escola=nucleo.ids_de_outra_escola,
+        criacao_bloqueada=nucleo.criacao_bloqueada,
     )
 
 
@@ -1729,6 +2683,52 @@ class _NucleoImportacao:
     avisos: list[str]
     ignorados: list[dict]
     qtd_revisoes: int
+    # Contabilidade HONESTA (a sync decide o status por ela): alunos cujo dado
+    # mudou de fato (retrato novo com outro valor, leitura/evento novo), linhas
+    # recebidas, linhas que foram para a fila de revisão e linhas que não viraram
+    # dado, por motivo ('sem_vinculo', 'campos_ausentes', 'identidade_aposentada'
+    # — esta é decisão da escola, não pendência nem defeito). ``avisos_criticos``
+    # são códigos estáveis sem PII (ex.: 'campos_ausentes:atividades').
+    alunos_aplicados_ids: list[int] = field(default_factory=list)
+    linhas_recebidas: int = 0
+    linhas_em_revisao: int = 0
+    linhas_descartadas: dict = field(default_factory=dict)
+    avisos_criticos: list[str] = field(default_factory=list)
+    # Contas DISTINTAS (por nome normalizado) que foram para a revisão — uma
+    # criança sem ficha com 5 livros é 1 conta e 5 linhas.
+    contas_em_revisao: int = 0
+    # Ids externos que já são efetivos em OUTRA escola (revisão própria).
+    ids_de_outra_escola: list[str] = field(default_factory=list)
+    # Pendências 'criacao_bloqueada_por_politica' (ficha nova barrada pela política).
+    criacao_bloqueada: int = 0
+
+
+# Campos SEM os quais uma linha da SINCRONIZAÇÃO não vira retrato: o retrato
+# herdaria o valor anterior com a data de hoje ("congela com data nova" — o caso
+# de um campo renomeado na API). Na importação manual nada muda: os relatórios se
+# COMPLEMENTAM (o Excel do Matific não tem estrelas) e há prévia com um humano.
+# Só os campos-título de cada plataforma: tempo e questões do Elefante podem
+# faltar (a API e os relatórios antigos nem sempre os mandam) e seguem herdados.
+CAMPOS_ESSENCIAIS_SYNC: dict[tuple[str, str], tuple[str, ...]] = {
+    ("matific", "resumo"): ("atividades", "estrelas"),
+    ("elefante", "resumo"): ("livros_unicos",),
+}
+
+
+def campos_essenciais_ausentes(plataforma: str, formato: str, linhas) -> tuple[list, list[str]]:
+    """(linhas com todos os campos essenciais, campos ausentes em alguma linha)."""
+    exigidos = CAMPOS_ESSENCIAIS_SYNC.get((plataforma or "", formato or ""))
+    if not exigidos:
+        return list(linhas), []
+    validas, ausentes = [], set()
+    for linha in linhas:
+        dados_linha = getattr(linha, "dados", None) or {}
+        faltam = [c for c in exigidos if dados_linha.get(c) is None]
+        if faltam:
+            ausentes.update(faltam)
+        else:
+            validas.append(linha)
+    return validas, sorted(ausentes)
 
 
 def _confirmar_sem_commit(
@@ -1737,21 +2737,56 @@ def _confirmar_sem_commit(
     escola_id: int,
     usuario: Usuario,
     db: Session,
+    encerrar_revisoes: bool = True,
+    da_sincronizacao: bool = False,
+    piso_da_data: bool = True,
 ) -> _NucleoImportacao:
     """TODO o trabalho do /confirmar, SEM commit e SEM efeito externo.
 
     É aqui que a importação acontece: identidade, turmas, snapshots, leituras,
     eventos e a fila de revisão. Nada de ``db.commit()`` — quem chama decide
     quando fechar. Assim o ``/resolver`` aplica várias pendências irmãs e fecha
-    tudo numa transação única: falhou no meio, nada fica."""
+    tudo numa transação única: falhou no meio, nada fica.
+
+    ``encerrar_revisoes``: linha ASSOCIADA encerra a revisão pendente da mesma
+    identidade e do mesmo tipo de dado (``_encerrar_revisoes_respondidas``). O
+    /resolver passa False — é ele quem fecha as pendências (todas as irmãs, com o
+    gestor como autor e o dado congelado aplicado); encerrá-las aqui, no meio da
+    reaplicação, deixaria uma segunda auditoria, sem o resultado dele.
+
+    ``da_sincronizacao``: sinal INTERNO (fora do schema público) de que o pedido
+    vem da sincronização automática — o /confirmar o liga só para o pedido montado
+    pelo orquestrador (``confirmacao_da_sincronizacao``). Dispensa as regras do
+    upload MANUAL: a data do relatório (coleta usa o relógio de agora), as regras
+    da data informada (``_conferir_data_do_relatorio``) e a recusa do relatório
+    retrodatado sem base (a sync grava como antes, com aviso no log).
+
+    ``piso_da_data``: o /resolver passa False — a data da pendência é a que a
+    importação original gravou (registro do servidor, não digitada agora): uma
+    pendência antiga não fica sem solução porque a escola avançou o ano letivo."""
     inicio = time.monotonic()
     from app.models import Escola
 
+    # O Matific não tem relatório individual: nenhum analisador nem a sincronização
+    # produzem essa combinação, e ela ia para ``_importar_matific`` escapando das
+    # regras do total acumulado (a recusa sem data olha o formato "resumo").
+    if dados.plataforma == "matific" and dados.formato == "leituras":
+        raise HTTPException(422, "O Matific não tem relatório individual de leituras.")
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     if not dados.linhas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nenhuma linha para importar.")
+    agora_utc = _agora_utc()
+    # DATA DO RELATÓRIO (upload manual): no futuro, o retrato viraria o "atual" até
+    # lá, por cima de toda coleta; de 1990 (ou do ano 1, que estourava em 500),
+    # viraria a base de toda janela. A tela limita o campo ao mesmo intervalo.
+    data_informada = dados.data_referencia
+    if not da_sincronizacao:
+        if data_informada is not None:
+            data_informada = _conferir_data_do_relatorio(data_informada, escola, agora_utc,
+                                                         com_piso=piso_da_data)
+        _conferir_periodo_do_relatorio(dados, escola, agora_utc, com_piso=piso_da_data)
 
     # Serializa importações concorrentes desta escola. A trava (Postgres; no-op
     # em SQLite) garante que o 2º envio sobreposto leia o que o 1º commitou;
@@ -1760,12 +2795,23 @@ def _confirmar_sem_commit(
     # do MESMO relatório reaproveita em vez de duplicar turmas/alunos.
     bloquear_escola_para_importacao(db, escola_id)
 
-    data_referencia = dados.data_referencia or datetime.now(timezone.utc)
+    data_referencia = data_informada or agora_utc.replace(tzinfo=timezone.utc)
     avisos: list[str] = []
+    # SYNC: linha sem campo ESSENCIAL não vira retrato herdado com data nova
+    # (``CAMPOS_ESSENCIAIS_SYNC``). A identidade dela é resolvida como sempre (o
+    # vínculo/a revisão valem), mas nenhum dado é gravado: fica contada, com
+    # aviso crítico. Na importação manual nada muda.
+    exigidos = (CAMPOS_ESSENCIAIS_SYNC.get((dados.plataforma, dados.formato))
+                if getattr(dados, "sincronizar_turma", False) else None)
+    ausentes_sync: set[str] = set()
+    linhas_descartadas: dict[str, int] = {}
     # O que a fila de revisão guarda para reaplicar a linha depois (mesmo pipeline).
     contexto_revisao = {
         "tipo": dados.tipo,
         "data_referencia": data_referencia.isoformat(),
+        # A data veio do relatório (ou da sincronização)? Sem ela, a acima é o
+        # relógio de agora — ver ``_linha_substitui_o_congelado``.
+        "data_informada": dados.data_referencia is not None,
         "periodo_inicio": dados.periodo_inicio.isoformat() if dados.periodo_inicio else "",
         "periodo_fim": dados.periodo_fim.isoformat() if dados.periodo_fim else "",
     }
@@ -1774,6 +2820,7 @@ def _confirmar_sem_commit(
     # o limite EXCLUSIVO do leaderboard — o snapshot é datado na véspera
     # (23:59:59), caindo dentro do mês/semana a que os dados pertencem.
     periodo_inicio = periodo_fim = None
+    periodo_em_andamento = False
     if (dados.plataforma == "matific"
             and dados.periodo_inicio is not None and dados.periodo_fim is not None):
         periodo_inicio = dados.periodo_inicio.replace(tzinfo=None)
@@ -1783,9 +2830,10 @@ def _confirmar_sem_commit(
         # Período EM ANDAMENTO (relatório do mês corrente): o snapshot é
         # datado agora, nunca no futuro — uma data futura ficaria acima de
         # qualquer edição manual feita depois, escondendo-a dos rankings.
-        agora_ref = datetime.now(timezone.utc).replace(tzinfo=None)
+        agora_ref = agora_utc
         if periodo_fim > agora_ref:
             periodo_fim = agora_ref
+            periodo_em_andamento = True
         if periodo_fim <= periodo_inicio:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Intervalo de datas do relatório inválido.")
@@ -1793,8 +2841,12 @@ def _confirmar_sem_commit(
 
     # Move o arquivo original de /temporarios para a pasta definitiva (§15).
     # arquivo_token e arquivo_nome vêm do cliente: ambos são saneados contra
-    # path traversal antes de tocar o disco (nunca escapar de UPLOADS_DIR).
+    # path traversal antes de tocar o disco (nunca escapar de UPLOADS_DIR). O
+    # caminho é validado AQUI, mas o arquivo só é movido depois das recusas da
+    # importação (``mover_original``): recusada, o original fica em /temporarios e
+    # o mesmo token serve para confirmar de novo (ex.: com a data do relatório).
     arquivo_final = None
+    mover_original: tuple[Path, Path] | None = None
     if dados.arquivo_token:
         if not _TOKEN_VALIDO.match(dados.arquivo_token):
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -1817,8 +2869,7 @@ def _confirmar_sem_commit(
             if not destino.is_relative_to(base_uploads):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                     "Nome de arquivo inválido.")
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(origem), str(destino))
+            mover_original = (origem, destino)
             arquivo_final = f"uploads/{dados.plataforma}/{nome}"
 
     importacao = Importacao(
@@ -1838,34 +2889,108 @@ def _confirmar_sem_commit(
     # PORTA ÚNICA de identidade: estado da escola lido UMA vez (e mantido vivo a
     # cada aluno criado/identidade gravada) e a fila de revisão desta importação.
     ctx_identidade = ida.carregar_contexto(db, escola_id, escola.ano_letivo_ativo)
+    # Id externo repetido NESTE relatório com nomes diferentes: nenhuma das linhas
+    # aplica número (revisão "id_externo_duplicado") — a mesma marca da prévia.
+    ida.marcar_ids_em_conflito(ctx_identidade, dados.linhas, dados.plataforma)
+    # Conta já EFETIVA em OUTRA escola do Constela: nenhuma linha dela aplica
+    # número aqui (revisão "identidade_de_outra_escola") — a mesma marca da prévia.
+    ida.marcar_ids_de_outra_escola(db, ctx_identidade, dados.linhas, dados.plataforma)
+    # D10: só o Admin Global fixa a ficha de uma conta dessas na confirmação (com
+    # aviso e auditoria em ``_resolver_aluno``); a escolha da gestão da escola vai
+    # para a revisão, como no /resolver.
+    ctx_identidade.confirma_conta_de_outra_escola = bool(getattr(usuario, "is_global", False))
     coletor = ida.ColetorRevisoes(
         formato=dados.formato, contexto=contexto_revisao,
         origem="sincronizacao" if getattr(dados, "sincronizar_turma", False) else "importacao",
         importacao_id=importacao.id)
+    linhas_em_revisao = 0
+    contas_em_revisao: set[str] = set()   # contas DISTINTAS (uma criança, N livros)
+    # POLÍTICA DE MATRÍCULA (``services/politica_sync``, decisão D5): vale para o
+    # upload manual de relatório de plataforma e para a sincronização. Com
+    # 'bloquear' (a matrícula vem da Lista Piloto) a importação NÃO cria ficha —
+    # a linha sem candidato seguro vai para a revisão
+    # 'criacao_bloqueada_por_politica'. O corpo só pode RESTRINGIR (False); um
+    # True explícito não fura a política, que é do Admin Global. E turma nova só
+    # nasce para receber ficha nova: sem ficha, nada de turma vazia pelo nome do
+    # relatório (a linha fica 'turma_nao_cadastrada', como na sincronização).
+    pode_criar_aluno = (politica_sync.pode_criar_aluno(db, escola_id)
+                        and getattr(dados, "permitir_criar_aluno", None) is not False)
+    pode_criar_turma = bool(getattr(dados, "permitir_criar_turma", True)) and pode_criar_aluno
     for linha in dados.linhas:
+        faltam = [c for c in exigidos or () if (linha.dados or {}).get(c) is None]
+        if faltam:
+            # Linha sem campo ESSENCIAL não vira dado: a identidade dela só vale
+            # para quem JÁ tem ficha (vínculo da conta). Nada nasce dela — nem
+            # ficha, nem matrícula, nem pendência que um dia reaplicaria um número
+            # que não veio (antes nascia a ficha, sem dado e sem recálculo). A
+            # revisão que ela tentaria abrir vai para um coletor descartado.
+            _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
+                            [], criados, turmas_novas,   # avisos de pendência: descartados
+                            permitir_criar_turma=False, permitir_criar_aluno=False,
+                            plataforma=dados.plataforma, ctx=ctx_identidade,
+                            revisoes=ida.ColetorRevisoes(
+                                formato=dados.formato, contexto=contexto_revisao,
+                                origem="sincronizacao", importacao_id=importacao.id),
+                            usuario_id=usuario.id, encerrar_revisoes=False)
+            ausentes_sync.update(faltam)
+            linhas_descartadas["campos_ausentes"] = linhas_descartadas.get("campos_ausentes", 0) + 1
+            continue
+        na_fila = sum(len(p.linhas) for p in coletor.pendencias.values())
+        decididas = sum(linhas_descartadas.get(m, 0) for m in ida.MOTIVOS_DESCARTE_DECIDIDO)
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
                                 avisos, criados, turmas_novas,
-                                permitir_criar_turma=getattr(
-                                    dados, "permitir_criar_turma", True),
-                                permitir_criar_aluno=getattr(
-                                    dados, "permitir_criar_aluno", True),
+                                permitir_criar_turma=pode_criar_turma,
+                                permitir_criar_aluno=pode_criar_aluno,
                                 plataforma=dados.plataforma, ctx=ctx_identidade,
-                                revisoes=coletor, usuario_id=usuario.id)
+                                revisoes=coletor, usuario_id=usuario.id,
+                                encerrar_revisoes=encerrar_revisoes,
+                                descartes=linhas_descartadas)
         if aluno is None:
+            if sum(linhas_descartadas.get(m, 0)
+                   for m in ida.MOTIVOS_DESCARTE_DECIDIDO) > decididas:
+                # A ESCOLA já decidiu (conta aposentada): descarte com motivo
+                # próprio, já contado. Fora de ``ignorados`` — o nome da conta
+                # aposentada é o da criança, e a sync desfazia o cursor DELA a
+                # cada coleta — e fora de 'sem_vinculo' (pendência permanente que
+                # nunca deixava a integração chegar a "nada mudou").
+                continue
             chave_ign = svc.chave_nome(linha.nome)
             if chave_ign not in ignorados:
                 ignorados.append(chave_ign)
+            # Foi para a fila de revisão (linha preservada) ou ficou sem vínculo?
+            if sum(len(p.linhas) for p in coletor.pendencias.values()) > na_fila:
+                linhas_em_revisao += 1
+                contas_em_revisao.add(chave_ign)
+            else:
+                linhas_descartadas["sem_vinculo"] = linhas_descartadas.get("sem_vinculo", 0) + 1
             continue
         resolvidos.setdefault(aluno.id, (aluno, []))[1].append(linha)
     revisoes_gravadas = _gravar_revisoes(db, escola_id, coletor, usuario.id)
+    ids_de_outra_escola = sorted({p.id_externo for p in coletor.pendencias.values()
+                                  if p.motivo == "identidade_de_outra_escola"
+                                  and p.id_externo})
+    # Alunos (pendências distintas) que virariam ficha nova e a política barrou.
+    criacao_bloqueada = sum(1 for p in coletor.pendencias.values()
+                            if p.motivo == "criacao_bloqueada_por_politica")
+    avisos_criticos: list[str] = []
+    if ausentes_sync:
+        avisos_criticos.append("campos_ausentes:" + ",".join(sorted(ausentes_sync)))
+        avisos.append(
+            f"{linhas_descartadas['campos_ausentes']} linha(s) sem "
+            f"{', '.join(sorted(ausentes_sync))} na resposta da plataforma — dado não "
+            "gravado (o valor anterior não é repetido com a data de hoje).")
 
     # MUDANÇA AUTOMÁTICA DE TURMA (só na sync automática do Matific): vincula o
-    # UUID e move a matrícula de quem trocou de sala. Antes do recálculo para o
-    # ranking já refletir a turma nova.
+    # UUID e move a matrícula de quem trocou de sala — só com a política
+    # 'permitir'; com 'bloquear' a matrícula segue a Lista Piloto e a turma
+    # divergente vira aviso (P15). Antes do recálculo para o ranking já refletir a
+    # turma nova.
+    movidos_ids: list[int] = []
     if getattr(dados, "sincronizar_turma", False) and dados.plataforma == "matific" \
             and resolvidos:
         _sincronizar_turma_matific(
-            db, escola_id, escola.ano_letivo_ativo, resolvidos, avisos)
+            db, escola_id, escola.ano_letivo_ativo, resolvidos, avisos,
+            ctx=ctx_identidade, movidos_ids=movidos_ids)
 
     # Import por período: as séries de snapshots dos alunos envolvidos vêm
     # numa ÚNICA consulta (212 alunos = 1 ida ao banco, não 212).
@@ -1883,13 +3008,118 @@ def _confirmar_sem_commit(
     # Snapshot ANTERIOR de cada aluno numa ÚNICA consulta (o caminho por período
     # já fazia isso com `series`; aqui cobrimos o comum matific/elefante-resumo,
     # que antes chamava _snapshot_atual 1x por aluno = N+1). None em `.get` já é
-    # o valor certo (aluno sem snapshot anterior).
+    # o valor certo (aluno sem snapshot anterior). Retrato datado no futuro (legado)
+    # não conta como o atual (``_teto_retrato_valido``), na sync e no upload manual.
+    teto_retrato = _teto_retrato_valido(agora_utc)
     anteriores: dict = {}
     if resolvidos:
         if dados.plataforma == "matific" and periodo_inicio is None:
-            anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotMatific)
+            anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotMatific,
+                                              ate=teto_retrato)
         elif dados.plataforma != "matific" and dados.formato != "leituras":
-            anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotElefante)
+            anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotElefante,
+                                              ate=teto_retrato)
+
+    # UPLOAD MANUAL SEM A DATA DO RELATÓRIO, no total acumulado: a data seria só o
+    # relógio de agora e o relatório pode ser antigo. Se o retrato atual de algum
+    # aluno veio da SINCRONIZAÇÃO, gravar viraria "o dado de hoje" por cima de um
+    # dado coletado (talvez mais novo) — ou o sobrescreveria no lugar, se for do
+    # mesmo dia. Recusa ANTES de gravar qualquer retrato, pedindo a data. Entre
+    # uploads manuais (o Excel complementando o PDF no mesmo dia) nada muda. A
+    # sincronização (``da_sincronizacao``, sinal do servidor — nunca o campo
+    # ``sincronizar_turma`` do corpo, que qualquer cliente da API manda), o
+    # relatório por período (que traz as próprias datas) e o relatório individual
+    # (leituras, que só somam) seguem.
+    # "Veio da sincronização" tem duas provas: a importação do retrato (registrada
+    # na execução, ou criada na janela dela) e — porque um upload COM data do mesmo
+    # dia complementa o retrato no lugar e apaga a primeira — uma execução da sync
+    # iniciada no dia do retrato atual, ou depois (``_alunos_com_sincronizacao_desde_o_retrato``).
+    if (dados.data_referencia is None and not da_sincronizacao and periodo_inicio is None
+            and (dados.formato == "resumo" or dados.plataforma == "matific") and anteriores):
+        da_sync = _importacoes_da_sincronizacao(
+            db, escola_id, dados.plataforma,
+            {snap.importacao_id for snap in anteriores.values() if snap is not None})
+        cobertos = {aid for aid, snap in anteriores.items()
+                    if snap is not None and snap.importacao_id in da_sync}
+        cobertos |= _alunos_com_sincronizacao_desde_o_retrato(
+            db, escola_id, dados.plataforma, anteriores)
+        if cobertos:
+            raise HTTPException(
+                422,
+                "Informe a data do relatório para importar este arquivo. "
+                f"{len(cobertos)} aluno(s) têm dados trazidos pela sincronização automática "
+                "ou anteriores à última sincronização; sem a data em que o relatório foi "
+                "gerado na plataforma, um arquivo antigo passaria por dado de hoje e "
+                "apagaria o que foi coletado. Nada foi gravado.")
+
+    # RELATÓRIO RETRODATADO: de um dia (de Brasília) anterior ao retrato atual do
+    # aluno — com a data do relatório, que a tela agora exige, é o caso normal de um
+    # arquivo antigo. O que ele NÃO traz (o Excel por turma do Matific não tem
+    # estrelas; o relatório da turma do Elefante não tem os livros por nível) vem
+    # do retrato que VALIA naquela data — o do mesmo dia, complementado no lugar,
+    # ou o último antes dela —, NUNCA do mais novo: as estrelas de outubro iam
+    # parar num ponto de agosto, e a evolução, os rankings e as premiações de
+    # setembro (base = último retrato antes do início, ``evolucao._janela``)
+    # ficavam errados para sempre. Sem retrato naquela data nem antes, não há de
+    # onde herdar com segurança (zero também falsearia o ganho dos períodos
+    # seguintes): recusa ANTES de gravar e de mover o original. Relatório do mesmo
+    # dia do retrato atual, ou mais novo: o de sempre (herda do atual).
+    # Na SINCRONIZAÇÃO a coleta é de agora: só fica "retrodatada" diante de um
+    # retrato válido (até ``teto_retrato``) do dia seguinte de Brasília — e, sem
+    # base, NÃO recusa a escola: grava como antes (herda do retrato mais novo
+    # válido), com aviso no log. Recusar parava a coleta da escola todo dia, com
+    # o diagnóstico errado ("relatório mais antigo… confira a data informada").
+    base_retrato = dict(anteriores)
+    retro = {aid for aid, snap in anteriores.items() if _retrodatado(snap, data_referencia)}
+    if retro:
+        modelo_retrato = SnapshotMatific if dados.plataforma == "matific" else SnapshotElefante
+        na_data = _mapa_retrato_na_data(db, escola_id, retro, modelo_retrato, data_referencia,
+                                        ate=teto_retrato)
+        sem_base: set[int] = set()
+        campos_sem_base: set[str] = set()
+        for aid in retro:
+            base = na_data.get(aid)
+            faltam = ([] if base is not None
+                      else _campos_herdados(dados.plataforma, resolvidos[aid][1][-1].dados or {}))
+            if faltam:
+                # Fica com o retrato mais novo válido como base: só a sync segue.
+                sem_base.add(aid)
+                campos_sem_base.update(faltam)
+            else:
+                base_retrato[aid] = base
+        if sem_base and da_sincronizacao:
+            # Sem nome de aluno no log: só contagem e campos.
+            logger_sync.warning(
+                "Sincronização da escola %s (%s): %d aluno(s) com retrato mais novo que "
+                "a coleta e sem retrato anterior de onde completar %s; gravado como "
+                "antes (herdando do retrato mais novo válido), sem recusar a escola.",
+                escola_id, dados.plataforma, len(sem_base),
+                ", ".join(sorted(campos_sem_base)))
+        elif sem_base:
+            rotulos = ", ".join(rotulo for campo, rotulo in _ROTULO_CAMPO_RETRATO.items()
+                                if campo in campos_sem_base)
+            if dados.data_referencia is None:
+                # Sem data no pedido (só pela API): o relatório seria datado de agora.
+                raise HTTPException(
+                    422,
+                    "Informe a data do relatório para importar este arquivo. Sem ela, "
+                    f"ele seria gravado como de hoje ({_dia_txt(para_br(data_referencia).date())}), "
+                    f"mas {len(sem_base)} aluno(s) já têm dados com data posterior e o "
+                    f"arquivo não traz: {rotulos}. Nada foi gravado.")
+            raise HTTPException(
+                422,
+                f"O relatório de {_dia_txt(para_br(data_referencia).date())} é mais antigo "
+                f"que os dados que {len(sem_base)} aluno(s) já têm e não traz: {rotulos}. "
+                "Esses alunos não têm retrato nessa data (nem antes) de onde completar o "
+                "que falta, e usar os números mais novos poria dados de outra época no "
+                "histórico (evolução, rankings e premiações). Para registrar este "
+                "relatório, importe antes, com a mesma data, um relatório que traga esses "
+                "dados, ou confira a data informada. Nada foi gravado.")
+
+    if mover_original is not None:
+        origem, destino = mover_original
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(origem), str(destino))
 
     # PERFORMANCE das leituras (Elefante): catálogo de livros, faixas de nível e
     # "já lidos" carregados UMA vez para o arquivo inteiro — antes eram relidos
@@ -1900,25 +3130,34 @@ def _confirmar_sem_commit(
         cod_faixa = _codigos_faixa_escola(db, escola_id)
         ja_lidos_map = _ja_lidos_por_aluno(db, [a.id for a, _ in resolvidos.values()])
 
+    aplicados: list[int] = []        # alunos cujo dado MUDOU nesta importação
     for aluno, linhas_aluno in resolvidos.values():
         if dados.plataforma == "matific" and periodo_inicio is not None:
-            _importar_matific_periodo(db, escola_id, importacao, aluno,
-                                      linhas_aluno[-1].dados,
-                                      periodo_inicio, periodo_fim,
-                                      series.get(aluno.id, []), contadores)
+            mudou = _importar_matific_periodo(db, escola_id, importacao, aluno,
+                                              linhas_aluno[-1].dados,
+                                              periodo_inicio, periodo_fim,
+                                              series.get(aluno.id, []), contadores,
+                                              em_andamento=periodo_em_andamento)
         elif dados.plataforma == "matific":
-            _importar_matific(db, escola_id, importacao, aluno,
-                              linhas_aluno[-1].dados, data_referencia,
-                              anterior=anteriores.get(aluno.id))
-        elif dados.formato == "leituras":
-            _importar_elefante_leituras(db, escola_id, importacao, aluno,
-                                        linhas_aluno, data_referencia, avisos,
-                                        cat_livros, ja_lidos_map.get(aluno.id, set()),
-                                        cod_faixa)
-        else:
-            _importar_elefante_resumo(db, escola_id, importacao, aluno,
+            mudou = _importar_matific(db, escola_id, importacao, aluno,
                                       linhas_aluno[-1].dados, data_referencia,
-                                      anterior=anteriores.get(aluno.id), avisos=avisos)
+                                      anterior=base_retrato.get(aluno.id))
+        elif dados.formato == "leituras":
+            mudou = _importar_elefante_leituras(db, escola_id, importacao, aluno,
+                                                linhas_aluno, data_referencia, avisos,
+                                                cat_livros, ja_lidos_map.get(aluno.id, set()),
+                                                cod_faixa)
+        else:
+            mudou = _importar_elefante_resumo(db, escola_id, importacao, aluno,
+                                              linhas_aluno[-1].dados, data_referencia,
+                                              anterior=base_retrato.get(aluno.id),
+                                              avisos=avisos)
+        if mudou:
+            aplicados.append(aluno.id)
+    # Matrícula movida pela sync também é dado alterado (turma do ranking,
+    # posição): sem isto, a troca de turma sem número novo terminava "nada mudou"
+    # e as notas ficavam com a turma antiga até a próxima mudança de número.
+    aplicados.extend(i for i in movidos_ids if i not in aplicados)
 
     if cat_livros is not None:
         # Auditoria agregada dos vínculos à identidade oficial (1 linha por import).
@@ -1961,6 +3200,14 @@ def _confirmar_sem_commit(
         avisos=avisos,
         ignorados=ignorados,
         qtd_revisoes=len(revisoes_gravadas),
+        alunos_aplicados_ids=aplicados,
+        linhas_recebidas=len(dados.linhas),
+        linhas_em_revisao=linhas_em_revisao,
+        linhas_descartadas=linhas_descartadas,
+        avisos_criticos=avisos_criticos,
+        contas_em_revisao=len(contas_em_revisao),
+        ids_de_outra_escola=ids_de_outra_escola,
+        criacao_bloqueada=criacao_bloqueada,
     )
 
 
@@ -1993,7 +3240,24 @@ async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tup
     if not (ehxls or ehzip or nome.lower().endswith((".xls", ".xlsx", ".xlsm"))):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie a planilha de matrículas em Excel (.xls ou .xlsx).")
+    if not ehxls:
+        # Teto do DESCOMPRIMIDO antes do openpyxl. Aqui, e não só no serviço: lá a
+        # falha de leitura vira aviso com 200; a planilha inflada merece a recusa.
+        try:
+            await run_in_threadpool(planilhas.exigir_xlsx_contido, conteudo)
+        except planilhas.PlanilhaRecusada as exc:
+            raise HTTPException(exc.status_http, str(exc)) from exc
     return conteudo, nome
+
+
+async def _analisar_lista_piloto(conteudo: bytes, nome: str):
+    """A análise do serviço. A planilha que estoura o orçamento de leitura (linhas
+    e células percorridas, ``planilhas.OrcamentoLeitura``) também é recusada com a
+    mensagem (413), e não vira aviso com 200."""
+    try:
+        return await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+    except planilhas.PlanilhaRecusada as exc:
+        raise HTTPException(exc.status_http, str(exc)) from exc
 
 
 # Os helpers puros de nome/turma migraram para services/matriculas.py (testáveis
@@ -2013,25 +3277,44 @@ async def analisar_matriculas(
     """Prévia da planilha de matrículas: turmas e alunos detectados, com quais
     turmas já existem — nada é gravado."""
     conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
-    analise = await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+    analise = await _analisar_lista_piloto(conteudo, nome)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     ano = escola.ano_letivo_ativo
-    existentes = {
-        _chave_turma(t.nome) for t in db.execute(
-            select(Turma).where(Turma.escola_id == escola_id, Turma.ano_letivo == ano)
-        ).scalars()
-    }
-    turmas = [
-        MatriculaTurmaOut(
-            nome=t.nome, ano_escolar=t.ano_escolar, turno=t.turno,
+    cadastradas = db.execute(
+        select(Turma).where(Turma.escola_id == escola_id, Turma.ano_letivo == ano)
+    ).scalars().all()
+    existentes = {_chave_turma(t.nome) for t in cadastradas}
+    # Chaves cuja ÚNICA turma cadastrada está arquivada: a confirmação não aplica
+    # as linhas delas (``_persistir_linhas``) — a prévia já avisa.
+    so_arquivadas = existentes - {_chave_turma(t.nome) for t in cadastradas
+                                  if ida.turma_ativa(t)}
+    avisos_arquivadas = [
+        matriculas.aviso_turma_arquivada(
+            next(c.nome for c in cadastradas if _chave_turma(c.nome) == _chave_turma(t.nome)),
+            len(t.alunos), previa=True)
+        for t in analise.turmas if _chave_turma(t.nome) in so_arquivadas]
+    # Turma NOVA que não cabe nas colunas: a prévia avisa o mesmo que a
+    # confirmação fará (``_resolver_turmas``) e mostra a série como será gravada.
+    avisos_colunas: list[str] = []
+    turmas: list[MatriculaTurmaOut] = []
+    criaveis: set[str] = set()
+    for t in analise.turmas:
+        chave = _chave_turma(t.nome)
+        serie = t.ano_escolar
+        if chave not in existentes and chave not in criaveis:
+            conferida, avisos_turma = lista_piloto.conferir_turma_nova(t, previa=True)
+            avisos_colunas.extend(avisos_turma)
+            if conferida is not None:
+                serie = conferida
+                criaveis.add(chave)
+        turmas.append(MatriculaTurmaOut(
+            nome=t.nome, ano_escolar=serie, turno=t.turno,
             professor=t.professor, sed=t.sed, total_alunos=len(t.alunos),
-            ja_existe=_chave_turma(t.nome) in existentes,
+            ja_existe=chave in existentes,
             exemplos=[a.nome for a in t.alunos[:4]],
-        )
-        for t in analise.turmas
-    ]
+        ))
     # Alunos DISTINTOS (o que será realmente cadastrado): o mesmo aluno pode
     # aparecer em duas turmas; conta uma vez (por RA válido, senão nome+turma).
     identidades: set = set()
@@ -2067,7 +3350,8 @@ async def analisar_matriculas(
         total_registros=analise.total_alunos,
         alunos_novos=len(identidades) - atualizar, alunos_atualizar=atualizar,
         turmas_existentes=sum(1 for t in turmas if t.ja_existe),
-        turmas=turmas, avisos=analise.avisos,
+        turmas=turmas,
+        avisos=list(analise.avisos) + avisos_colunas + avisos_arquivadas,
     )
 
 
@@ -2141,24 +3425,39 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
     return _EstadoEscola(alunos_por_id, matricula_ano, ctx)
 
 
-def _resolver_turmas(db: Session, escola_id: int, ano: int,
-                     turmas_analise) -> tuple[list[Turma], int, int]:
+def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
+                     avisos: list[str] | None = None,
+                     ) -> tuple[list[Turma | None], int, int]:
     """Cria as turmas que faltam (chave insensível a º/acento/caixa) e devolve,
     na ordem da análise, a Turma resolvida de cada uma + quantas turmas foram
-    criadas + quantas CONTAS de professor foram criadas automaticamente."""
+    criadas + quantas CONTAS de professor foram criadas automaticamente.
+
+    A turma NOVA que não cabe nas colunas (``lista_piloto.conferir_turma_nova``:
+    nome longo demais, ou série que não dá para cortar sem mudar a leitura) não
+    é criada: sai ``None`` na posição dela e o motivo vai para ``avisos`` — no
+    PostgreSQL ela derrubava o arquivo inteiro com 500."""
     turmas_por_nome: dict[str, Turma] = {}
-    for t in db.execute(select(Turma).where(Turma.escola_id == escola_id,
-                                            Turma.ano_letivo == ano)).scalars():
+    # Duas turmas com a mesma chave (uma arquivada, outra ativa): vale a ATIVA —
+    # a arquivada não recebe matrícula nova (ver ``_persistir_linhas``).
+    existentes = db.execute(select(Turma).where(Turma.escola_id == escola_id,
+                                                Turma.ano_letivo == ano)).scalars().all()
+    for t in sorted(existentes, key=lambda t: (not ida.turma_ativa(t), t.id)):
         turmas_por_nome.setdefault(_chave_turma(t.nome), t)
     criadas = 0
     profs_criados = 0
-    resolvidas: list[Turma] = []
+    resolvidas: list[Turma | None] = []
     for t in turmas_analise:
         chave = _chave_turma(t.nome)
         turma = turmas_por_nome.get(chave)
         if turma is None:
+            serie, avisos_turma = lista_piloto.conferir_turma_nova(t)
+            if avisos is not None:
+                avisos.extend(avisos_turma)
+            if serie is None:
+                resolvidas.append(None)       # não cabe: a aba fica de fora
+                continue
             turma, criada = _inserir_turma(
-                db, escola_id, ano, t.nome, t.ano_escolar, turno=t.turno,
+                db, escola_id, ano, t.nome, serie, turno=t.turno,
                 observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None),
                 codigo_externo=(t.sed or None))
             turmas_por_nome[chave] = turma
@@ -2199,6 +3498,60 @@ class _Resultado:
     em_revisao: int = 0
     vistos: set[int] = field(default_factory=set)
     avisos: list[str] = field(default_factory=list)
+    # Linhas NÃO aplicadas por estarem numa turma ARQUIVADA: turma_id → (turma, n).
+    em_turma_arquivada: dict[int, tuple[Turma, int]] = field(default_factory=dict)
+    # Fichas EXCLUÍDAS que a linha reativaria, mas cuja conta da plataforma hoje é
+    # a identidade efetiva de um aluno de OUTRA escola (D10): não reativadas.
+    retidas_conta_de_outra_escola: set[int] = field(default_factory=set)
+
+    @property
+    def linhas_em_turma_arquivada(self) -> int:
+        return sum(n for _t, n in self.em_turma_arquivada.values())
+
+
+def _reter_reativacao_conta_de_outra_escola(
+        db: Session, escola_id: int, usuario: Usuario, res: _Resultado, existente: Aluno,
+        turma: Turma, conflitos: list["identidade_efetiva.ContaDeOutraEscola"]) -> None:
+    """D10 pela ficha, no caminho AUTOMÁTICO (Lista Piloto). A linha reconheceu
+    pelo RA uma ficha EXCLUÍDA e a reativaria, mas a conta da plataforma dessa
+    ficha hoje é a identidade efetiva de um aluno de OUTRA escola
+    (``identidade_efetiva.contas_de_outra_escola_da_ficha``). Reativar faria a
+    conta valer nas duas escolas sem ninguém decidir.
+
+    Opção escolhida (a mais segura das três avaliadas): a linha vai para REVISÃO
+    no sentido da Lista Piloto — não cria e NÃO altera nada (status, nome, ficha,
+    matrícula e identidade ficam como estavam), avisa e audita. Descartadas:
+      * aposentar a conta aqui e reativar a ficha: criaria um estado que a API
+        nunca cria (a conta única aposentada, que ``definir_efetiva`` recusa), e
+        a coleta seguinte desta escola descartaria a conta EM SILÊNCIO
+        (``MOTIVOS_DESCARTE_DECIDIDO``) mesmo que a criança tenha mesmo voltado —
+        uma decisão de identidade tomada por uma planilha, sem motivo humano;
+      * reativar a ficha e só avisar: é o defeito (a conta vale nas duas).
+    A reativação legítima não se perde: se a criança voltou, o Admin Global
+    confere com as duas escolas e reativa em Alunos (``/alunos/acoes``, com aviso
+    e auditoria); quando a conta deixar de valer na outra escola (a ficha de lá
+    excluída), o próximo envio da planilha reativa e aplica a linha sozinho. As
+    outras linhas do arquivo seguem normalmente. Vale para qualquer usuário: a
+    planilha não é uma decisão do Admin Global sobre a conta.
+
+    A ficha entra em ``vistos`` (está na lista; a reconciliação não mexe em
+    excluída de qualquer forma) e o aviso/auditoria saem uma vez por ficha, mesmo
+    que ela apareça em mais de uma turma."""
+    res.vistos.add(existente.id)
+    if existente.id in res.retidas_conta_de_outra_escola:
+        return
+    res.retidas_conta_de_outra_escola.add(existente.id)
+    res.avisos.append(matriculas.aviso_reativacao_retida_conta_de_outra_escola(
+        existente.nome, turma.nome))
+    for c in conflitos:
+        registrar(db, "aluno.reativacao_retida_conta_de_outra_escola",
+                  escola_id=escola_id, usuario_id=usuario.id, entidade="aluno",
+                  entidade_id=existente.id,
+                  detalhes={"plataforma": c.plataforma, "id_externo": c.id_externo,
+                            "outra_escola_id": c.outra_escola_id,
+                            "turma_id": turma.id, "status": existente.status,
+                            "acao": "nada alterado: a ficha continua excluída",
+                            "origem": "importacao_matriculas"})
 
 
 def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
@@ -2214,7 +3567,13 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
     Antes desta função havia um 2º motor de identidade (índices de RA/nome-exato+
     turma/abreviado-posicional e um ``Aluno(...)`` direto quando os três falhavam):
     variação de grafia sem RA virava uma 2ª ficha, calada. Agora existem só três
-    desfechos — REUSAR, REVISAR (não cria, não altera, avisa) e CRIAR."""
+    desfechos — REUSAR, REVISAR (não cria, não altera, avisa) e CRIAR.
+
+    D10 pela ficha (revisão de integração do e97): o REUSAR que reativaria uma
+    ficha EXCLUÍDA (o RA a reconhece) cuja conta da plataforma hoje é a
+    identidade efetiva de um aluno de OUTRA escola NÃO reativa nada — vale para
+    qualquer usuário, inclusive o Admin Global, porque a planilha não é uma
+    decisão sobre a conta. Ver ``_reter_reativacao_conta_de_outra_escola``."""
     res = _Resultado()
     ja_alocado: set[int] = set()
     planas = [_linha_matricula(turma, parsed) for turma, parsed in linhas]
@@ -2247,6 +3606,20 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                                 "fonte": "importacao_matriculas"})
             continue
 
+        if not ida.turma_ativa(turma):
+            # TURMA ARQUIVADA: a linha não é aplicada — nem ficha nova, nem
+            # matrícula nova, nem troca de turma, nem alteração na ficha de quem
+            # já está nela (as matrículas existentes ficam como estão). Quem a
+            # linha RECONHECE continua "visto" na lista: a reconciliação não o
+            # marca "fora da lista" só porque a turma dele foi arquivada. O aviso
+            # (um por turma, no fim) diz como reativar.
+            _t, n = res.em_turma_arquivada.get(turma.id, (turma, 0))
+            res.em_turma_arquivada[turma.id] = (turma, n + 1)
+            if decisao.acao == matriculas.REUSAR and decisao.aluno_id is not None:
+                res.vistos.add(decisao.aluno_id)
+                estado.ctx.reivindicados.add(decisao.aluno_id)
+            continue
+
         nasc = matriculas.parse_nascimento(parsed.data_nascimento)
         if decisao.acao == matriculas.CRIAR:
             aluno = Aluno(escola_id=escola_id, nome=parsed.nome, status="ativo",
@@ -2272,6 +3645,16 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
 
         existente = estado.alunos_por_id[decisao.aluno_id]   # REUSAR
         estado.ctx.reivindicados.add(existente.id)
+        if (existente.status == identidade_efetiva.EXCLUIDO
+                and elegibilidade.participa_de_premiacao(turma.ano_escolar)):
+            # Esta linha REATIVARIA a ficha excluída (ver o bloco de status
+            # abaixo). D10: se a conta dela hoje vale em outra escola, nada muda.
+            conflitos = identidade_efetiva.contas_de_outra_escola_da_ficha(
+                db, escola_id, [existente], "ativo")
+            if conflitos:
+                _reter_reativacao_conta_de_outra_escola(
+                    db, escola_id, usuario, res, existente, turma, conflitos)
+                continue
         nome_antigo = existente.nome
         # O Excel é a fonte da verdade do nome — exceto para ENCURTAR: uma linha
         # abreviada ("MARIA E. SILVA") não pode apagar o nome completo já
@@ -2355,6 +3738,12 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             estado.registrar(existente, linha.chave_sala)
         else:
             estado.registrar(existente)    # 2ª turma: identidade sim, sala não
+    for turma, n in res.em_turma_arquivada.values():
+        res.avisos.append(matriculas.aviso_turma_arquivada(turma.nome, n))
+        registrar(db, "matriculas.turma_arquivada_ignorada", escola_id=escola_id,
+                  usuario_id=usuario.id, entidade="turma", entidade_id=turma.id,
+                  detalhes={"turma": turma.nome, "linhas_nao_aplicadas": n,
+                            "origem": "importacao_matriculas"})
     return res
 
 
@@ -2407,7 +3796,7 @@ async def confirmar_matriculas(
     é inseguro e só cria quando não há candidato. Orquestra: analisar → travar a
     escola → carregar estado → criar turmas → persistir → recalcular."""
     conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
-    analise = await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+    analise = await _analisar_lista_piloto(conteudo, nome)
     if not analise.turmas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma turma reconhecida na planilha.")
@@ -2423,9 +3812,11 @@ async def confirmar_matriculas(
     bloquear_escola_para_importacao(db, escola_id)
     estado = _carregar_estado(db, escola_id, ano)
     resolvidas, turmas_criadas, profs_criados = _resolver_turmas(
-        db, escola_id, ano, analise.turmas)
+        db, escola_id, ano, analise.turmas, avisos)
+    # A turma nova que não coube nas colunas (``None``) fica de fora inteira.
     linhas = [(resolvidas[i], parsed)
-              for i, t in enumerate(analise.turmas) for parsed in t.alunos]
+              for i, t in enumerate(analise.turmas) if resolvidas[i] is not None
+              for parsed in t.alunos]
 
     # FASE 1 — identidade + matrícula, linha a linha, pela PORTA ÚNICA.
     persistido = _persistir_linhas(db, escola_id, ano, usuario, linhas, estado)
@@ -2436,8 +3827,15 @@ async def confirmar_matriculas(
 
     # FASE 2 — reconciliação incremental: quem saiu da lista vira "fora da lista
     # piloto" (nunca apagado). Escopo = SÓ as turmas enviadas neste arquivo, para
-    # que subir uma turma só não afete as demais. Idempotente.
-    turmas_import = {t.id for t in resolvidas}
+    # que subir uma turma só não afete as demais. Idempotente. Turma ARQUIVADA
+    # fica fora: as linhas dela não foram aplicadas, então ninguém dela sai da
+    # lista por causa deste envio. A turma com linha PULADA por não caber nas
+    # colunas (``TurmaMatriculas.linhas_puladas``) também: a criança daquela
+    # linha não foi vista e sumiria das visões como "fora da lista".
+    com_linha_pulada = {resolvidas[i].id for i, t in enumerate(analise.turmas)
+                        if resolvidas[i] is not None and t.linhas_puladas}
+    turmas_import = {t.id for t in resolvidas
+                     if t is not None and ida.turma_ativa(t)} - com_linha_pulada
     alunos_fora_lista = _marcar_fora_da_lista(
         db, escola_id, ano, usuario, estado, persistido.vistos, turmas_import)
 
@@ -2449,7 +3847,10 @@ async def confirmar_matriculas(
                         "alunos_atualizados": alunos_atualizados,
                         "alunos_vinculados": alunos_vinculados,
                         "alunos_em_revisao": persistido.em_revisao,
-                        "alunos_fora_lista": alunos_fora_lista})
+                        "alunos_reativacao_retida_conta_de_outra_escola":
+                            len(persistido.retidas_conta_de_outra_escola),
+                        "alunos_fora_lista": alunos_fora_lista,
+                        "linhas_em_turma_arquivada": persistido.linhas_em_turma_arquivada})
     db.commit()
 
     scoring.recalcular_escola(db, escola_id)
@@ -2459,8 +3860,8 @@ async def confirmar_matriculas(
              "o nome completo.") if alunos_vinculados else ""
     if profs_criados:
         extra += (f" {profs_criados} professor(es) ganharam conta de acesso "
-                  "automática (usuário = NomeSobrenome, senha = Primeiro nome + 123 "
-                  "— peça para trocarem no primeiro acesso).")
+                  "automática (usuário = NomeSobrenome). A conta nasce sem senha: "
+                  "para o primeiro acesso, gere o link de redefinição em Usuários.")
     if alunos_fora_lista:
         extra += (f" {alunos_fora_lista} aluno(s) que não constam mais na lista "
                   "foram marcados como “fora da lista piloto” — continuam "
@@ -2470,6 +3871,16 @@ async def confirmar_matriculas(
         extra += (f" {persistido.em_revisao} linha(s) ficaram para REVISÃO: parecem "
                   "ser alunos já cadastrados, mas a correspondência não é segura — "
                   "nada foi criado nelas (senão viraria ficha duplicada). Veja os "
+                  "avisos abaixo.")
+    if persistido.retidas_conta_de_outra_escola:
+        extra += (f" {len(persistido.retidas_conta_de_outra_escola)} ficha(s) excluída(s) "
+                  "NÃO foram reativadas: a conta da plataforma delas hoje é a "
+                  "identidade de um aluno de outra escola do Constela, e nada foi "
+                  "alterado nelas. Veja os avisos abaixo.")
+    if persistido.em_turma_arquivada:
+        extra += (f" {persistido.linhas_em_turma_arquivada} linha(s) estão em turma "
+                  "ARQUIVADA e não foram aplicadas (nenhuma matrícula existente foi "
+                  "alterada) — reative a turma e envie a planilha de novo. Veja os "
                   "avisos abaixo.")
     return MatriculasResultadoOut(
         mensagem=(f"{turmas_criadas} turma(s) criada(s), {alunos_criados} aluno(s) "
@@ -2570,28 +3981,40 @@ def _retrato_superado(db: Session, escola_id: int, aluno_id: int,
     Devolve ``None`` quando o payload deve ser aplicado, ou um dicionário com o
     motivo (vai para a auditoria e para ``rev.resolucao``). Não compara CONTADORES
     e não usa ``max()``: a comparação é de DATA, porque retrato é substituível e
-    quem vale é o mais recente — que já está no banco."""
+    quem vale é o mais recente — que já está no banco.
+
+    Data LEGADA fora do calendário (``0001-01-01T00:00:00+03:00``, ou o ano 1 antes
+    das 03h UTC, que em Brasília ainda é o ano 0): nunca reaplicar, com ou sem
+    retrato gravado. Antes a conversão estourava aqui (OverflowError → 500) e, sem
+    retrato, o pipeline recusava a data (422): a pendência nunca saía da fila."""
     if rev.formato == "leituras":
         return None
     modelo = SnapshotMatific if rev.plataforma == "matific" else SnapshotElefante
     snap = _snapshot_atual(db, escola_id, aluno_id, modelo)
-    if snap is None:
-        return None                      # nada gravado: o congelado é o que há
     congelada_txt = (rev.contexto or {}).get("data_referencia") or ""
-    atual_txt = snap.data_referencia.isoformat() if snap.data_referencia else None
+    atual_txt = (snap.data_referencia.isoformat()
+                 if snap is not None and snap.data_referencia else None)
     base = {"formato": rev.formato, "plataforma": rev.plataforma,
             "data_congelada": congelada_txt or None, "data_snapshot_atual": atual_txt}
     try:
         congelada = datetime.fromisoformat(congelada_txt) if congelada_txt else None
     except ValueError:
         congelada = None
+    if congelada is not None and _instante_utc_no_calendario(congelada) is None:
+        return {**base, "motivo": "data_referencia_fora_do_calendario"}
+    if snap is None:
+        return None                      # nada gravado: o congelado é o que há
     if congelada is None:
         # Sem data, o pipeline gravaria com a data de HOJE e a linha velha viraria
         # o estado atual. É o pior caso: nunca reaplicar.
         return {**base, "motivo": "data_referencia_ausente"}
-    atual = _sem_fuso(snap.data_referencia)
-    congelada = _sem_fuso(congelada)
-    if _mesmo_dia(snap.data_referencia, congelada):
+    # Os dois INSTANTES, convertidos (naive = UTC; com fuso, para UTC). Antes o
+    # fuso era só cortado: a data congelada "01h de 24/10 -03:00" (04h UTC, dia 24
+    # em Brasília) virava "01h UTC" — dia 23 em Brasília e mais antiga que um
+    # retrato das 02h UTC, e a pendência MAIS NOVA era descartada como superada.
+    atual = _instante_utc(snap.data_referencia)
+    congelada = _instante_utc(congelada)
+    if _mesmo_dia(atual, congelada):
         # Mesmo dia: o pipeline atualizaria o retrato NO LUGAR, e o valor novo
         # desapareceria sem deixar linha no histórico. É o caso mais perigoso,
         # por isso é diagnosticado ANTES do simples "mais recente".
@@ -2612,6 +4035,9 @@ def resolver_revisao(
     """Decisão EXPLÍCITA do gestor sobre uma pendência: ``aluno_id`` (a ficha dona
     dos dados) OU ``criar_em_turma_id`` (é outra criança: ficha nova nessa turma).
 
+    0. conta da plataforma já EFETIVA em outra escola do Constela (decisão D10):
+       só o Admin Global confirma (403 para a gestão da escola), com aviso na
+       resposta e auditoria ``identidade.revisao_outra_escola_confirmada``;
     1. a identidade externa da linha passa a apontar para o aluno escolhido (se
        estava em outra ficha, é transferida — e isso fica auditado);
     2. os dados guardados são aplicados pelo pipeline normal de importação —
@@ -2622,7 +4048,17 @@ def resolver_revisao(
        leituras) é marcada como resolvida, com quem decidiu e quando. Falhar no
        meio deixa tudo pendente e o gestor tenta de novo pela tela;
     4. a próxima sincronização casa pela identidade e não recria a duplicata.
-    Nunca funde fichas."""
+    Nunca funde fichas.
+
+    D17: ``criar_em_turma_id`` de turma ARQUIVADA é 409 antes de gravar
+    (``turma_arquivada.exigir_turma_ativa``) — a ficha nova nasce "ativa", e a
+    fila não pode desfazer a rede de segurança do /confirmar (motivo
+    ``turma_arquivada``) que a criou. Turma ATIVA de OUTRO ano letivo também é
+    409 antes de gravar (``turma_arquivada.exigir_destino_do_ano_ativo``, a mesma
+    trava de cadastrar e transferir): a ficha nova nasce com a matrícula do ano
+    ativo, que numa turma de outro ano contaria na escola e sumiria das turmas do
+    ano — a criança chegava à Secretaria por subtração. A pendência continua
+    pendente e o gestor escolhe uma turma do ano."""
     if (corpo.aluno_id is None) == (corpo.criar_em_turma_id is None):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Informe o aluno escolhido OU a turma da ficha nova.")
@@ -2651,6 +4087,27 @@ def resolver_revisao(
                 "recebe dados. Para voltar a usá-la, reative-a explicitamente "
                 "em Identidades do aluno.")
 
+    # D10 (risco V): conta da plataforma que já é a identidade EFETIVA de um aluno
+    # de OUTRA escola do Constela (a revisão 'identidade_de_outra_escola', ou
+    # outra pendência da mesma conta). Confirmar aqui faz a conta valer nas duas
+    # escolas, e a coleta seguinte da outra escola manda a criança de lá para a
+    # revisão (deixa de atualizar, com alerta crítico). Só o Admin Global decide,
+    # com aviso na resposta e auditoria própria; a outra escola não é alterada.
+    outra_escola = None
+    if rev.id_externo:
+        outra_escola = ida.efetivas_em_outra_escola(
+            db, escola_id, rev.plataforma, [rev.id_externo]).get(rev.id_externo)
+    if outra_escola is not None:
+        if not usuario.is_global:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Esta conta da plataforma já está vinculada a um aluno de OUTRA escola "
+                "do Constela. Confirmá-la aqui faria a criança de lá deixar de ser "
+                "atualizada (a conta cai em revisão na próxima coleta daquela escola): "
+                "só o Admin Global confirma, depois de conferir com as duas escolas. Se "
+                "a conta não é de uma criança desta escola, descarte a pendência.")
+        avisos.append(ida.AVISO_CONTA_DE_OUTRA_ESCOLA)
+
     if corpo.aluno_id is not None:
         aluno = db.get(Aluno, corpo.aluno_id)
         if aluno is None or aluno.escola_id != escola_id:
@@ -2668,6 +4125,13 @@ def resolver_revisao(
         turma = db.get(Turma, corpo.criar_em_turma_id)
         if turma is None or turma.escola_id != escola_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida.")
+        # D17: a ficha nova nasce "ativa" — turma arquivada não a recebe (a mesma
+        # recusa de transferir, cadastrar e reativar; a trava da escola já foi
+        # tomada no topo). 409 antes de gravar: a pendência continua pendente, e
+        # o gestor escolhe uma turma ativa ou reativa a turma.
+        turma_arquivada.exigir_turma_ativa(turma)
+        # Nem turma de OUTRO ano letivo: a matrícula que nasce é a do ano ativo.
+        turma_arquivada.exigir_destino_do_ano_ativo(turma, escola.ano_letivo_ativo)
         aluno = Aluno(escola_id=escola_id, nome=rev.nome_recebido.strip())
         db.add(aluno)
         db.flush()
@@ -2698,6 +4162,15 @@ def resolver_revisao(
             avisos.append("A conta da plataforma estava ligada a outra ficha e foi "
                           "transferida para a ficha escolhida.")
         db.flush()
+        if outra_escola is not None:
+            # D10: a confirmação do Admin Global de uma conta efetiva noutra escola
+            # fica com trilha própria (quem, qual conta, qual outra escola).
+            registrar(db, "identidade.revisao_outra_escola_confirmada", escola_id=escola_id,
+                      usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+                      detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
+                                "id_externo": rev.id_externo, "motivo": rev.motivo,
+                                "acao": acao, "outra_escola_id": outra_escola,
+                                "aviso": "conta continua efetiva na outra escola"})
 
     # A mesma identidade pode ter mais de uma pendência (resumo, leituras, períodos
     # do Matific): a decisão do gestor vale para todas.
@@ -2719,9 +4192,29 @@ def resolver_revisao(
     for r in resolvidas:
         if not r.linhas:
             continue
+        if r.motivo == "id_externo_duplicado" and ida.linhas_divergentes(r.linhas):
+            # O mesmo id veio em linhas de retrato com números DIFERENTES: qualquer
+            # uma que se aplicasse seria um chute (o pipeline fica com a última).
+            # Vale só o vínculo; os números entram numa coleta em que a conta venha
+            # uma vez só.
+            superadas[r.id] = {"formato": r.formato, "plataforma": r.plataforma,
+                               "motivo": "linhas_divergentes_do_mesmo_id"}
+            avisos.append(
+                f"Os dados guardados nesta pendência ({r.plataforma}/{r.formato}) "
+                "vieram em mais de uma linha com números diferentes para a mesma "
+                "conta: só o vínculo de identidade foi aplicado, sem escolher "
+                "números. O retrato desta conta entra na próxima sincronização em "
+                "que ela vier uma vez só e sem outra pendência de id duplicado.")
+            continue
         motivo_superado = _retrato_superado(db, escola_id, aluno.id, r)
         if motivo_superado is None:
             com_dados.append(r)
+        elif motivo_superado["motivo"] == "data_referencia_fora_do_calendario":
+            superadas[r.id] = motivo_superado
+            avisos.append(
+                f"Os dados guardados nesta pendência ({r.plataforma}/{r.formato}) têm "
+                "uma data fora do calendário (registro antigo): só o vínculo de "
+                "identidade foi aplicado, e o retrato atual do aluno ficou como estava.")
         else:
             superadas[r.id] = motivo_superado
             avisos.append(
@@ -2737,8 +4230,12 @@ def resolver_revisao(
     importacoes: list[int] = []
     for r in com_dados:
         conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
+        # encerrar_revisoes=False: estas pendências são fechadas logo abaixo, pelo
+        # gestor — não como "encerradas automaticamente".
+        # piso_da_data=False: a data é a da importação original (registro do servidor).
         nucleo = _confirmar_sem_commit(dados=conf, escola_id=escola_id,
-                                       usuario=usuario, db=db)
+                                       usuario=usuario, db=db, encerrar_revisoes=False,
+                                       piso_da_data=False)
         importacoes.append(nucleo.importacao_id)
         avisos.extend(nucleo.avisos)
 
@@ -2771,9 +4268,8 @@ def resolver_revisao(
     # o próprio push commita ao limpar token morto.
     if com_dados:
         _pos_commit_importacao(
-            db, escola_id,
-            corpo=f"{aluno.nome} teve os dados da plataforma atualizados. "
-                  "As notas já foram recalculadas.")
+            db, escola_id, corpo=push.corpo_dados_atualizados(aluno.nome),
+            aluno_id=aluno.id)
     db.refresh(rev)
     return ResolucaoRevisaoOut(
         revisao=_revisao_out(rev), aluno_id=aluno.id,
@@ -2821,17 +4317,21 @@ def definir_identidade_efetiva(
 
     Isto é decisão INTERNA do Constela: a conta continua existindo na plataforma
     externa, e nada é desativado lá. A operação é reversível (``/reativar``) e
-    fica auditada com quem decidiu, quando, o estado anterior e o posterior."""
+    fica auditada com quem decidiu, quando, o estado anterior e o posterior.
+
+    D10: escolher uma conta APOSENTADA que já é efetiva em OUTRA escola do
+    Constela é só do Admin Global (403 para a gestão da escola); ele segue com
+    ``avisos`` na resposta e auditoria própria."""
     bloquear_escola_para_importacao(db, escola_id)
     try:
         r = identidade_efetiva.definir_efetiva(
             db, escola_id, aluno_id=corpo.aluno_id, plataforma=plataforma,
             id_externo_efetivo=corpo.id_externo_efetivo,
             aposentar=list(corpo.aposentar), motivo=corpo.motivo,
-            usuario_id=usuario.id)
+            usuario_id=usuario.id, admin_global=bool(usuario.is_global))
     except identidade_efetiva.ErroIdentidade as exc:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        raise HTTPException(_status_erro_identidade(exc), str(exc)) from exc
     db.commit()
     return {**r.como_dict(),
             "observacao": ("Decisão interna do Constela: a conta aposentada "
@@ -2846,17 +4346,32 @@ def reativar_identidade(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    """Desfaz uma aposentadoria — só quando isso não deixa duas contas efetivas."""
+    """Desfaz uma aposentadoria — só quando isso não deixa duas contas efetivas.
+
+    D10 (risco V): reativar uma conta que já é a identidade efetiva de um aluno de
+    OUTRA escola do Constela faria a conta valer nas duas — e a coleta seguinte da
+    outra escola mandaria a criança de lá para a revisão. Só o Admin Global
+    reativa (403 para a gestão da escola), com ``avisos`` na resposta e auditoria
+    ``identidade.reativacao_outra_escola_confirmada``; a outra escola não muda."""
     bloquear_escola_para_importacao(db, escola_id)
     try:
         r = identidade_efetiva.reativar(
             db, escola_id, aluno_id=corpo.aluno_id, plataforma=plataforma,
-            id_externo=corpo.id_externo, motivo=corpo.motivo, usuario_id=usuario.id)
+            id_externo=corpo.id_externo, motivo=corpo.motivo, usuario_id=usuario.id,
+            admin_global=bool(usuario.is_global))
     except identidade_efetiva.ErroIdentidade as exc:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        raise HTTPException(_status_erro_identidade(exc), str(exc)) from exc
     db.commit()
     return r.como_dict()
+
+
+def _status_erro_identidade(exc: "identidade_efetiva.ErroIdentidade") -> int:
+    """403 só para a trava do D10 (conta efetiva em outra escola, sem Admin
+    Global); as demais validações continuam 400."""
+    if exc.codigo == identidade_efetiva.CODIGO_CONTA_DE_OUTRA_ESCOLA:
+        return status.HTTP_403_FORBIDDEN
+    return status.HTTP_400_BAD_REQUEST
 
 
 @router.post("/revisoes/{revisao_id}/descartar", response_model=RevisaoIdentidadeOut)

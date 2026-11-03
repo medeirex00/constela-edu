@@ -45,10 +45,10 @@ def _ctx(*pares) -> ContextoCasamento:
 # --- parse_nascimento ------------------------------------------------------
 
 def test_parse_nascimento():
-    assert m.parse_nascimento("2019-09-18") == date(2019, 9, 18)
+    assert m.parse_nascimento("2019-08-14") == date(2019, 8, 14)
     assert m.parse_nascimento(None) is None
     assert m.parse_nascimento("") is None
-    assert m.parse_nascimento("18/09/2019") is None    # formato inválido → None
+    assert m.parse_nascimento("14/08/2019") is None    # formato inválido → None
     assert m.parse_nascimento("2019-13-40") is None     # data impossível → None
 
 
@@ -96,25 +96,25 @@ def test_overlap_turma_ignora_palavras_ubiquas():
 # --- nomes_compativeis -----------------------------------------------------
 
 def test_nomes_compativeis():
-    assert m.nomes_compativeis("AGATHA VITORIA", "AGATHA VITORIA")
-    assert m.nomes_compativeis("AGATHA V", "AGATHA VITORIA MOURA")   # abreviação
-    assert not m.nomes_compativeis("JOAO PEDRO SILVA", "MARIA SOUZA LIMA")  # 1º token difere
+    assert m.nomes_compativeis("AGATHA VIOLETA", "AGATHA VIOLETA")
+    assert m.nomes_compativeis("AGATHA V", "AGATHA VIOLETA MONTESTELLI")   # abreviação
+    assert not m.nomes_compativeis("JOAO PEDRO TESTELLI", "MARIA SOUZA LIMA")  # 1º token difere
     assert m.nomes_compativeis("", "QUALQUER")                       # vazio → conservador
 
 
 # --- resolver_linha: RA (identificador mais forte) --------------------------
 
 def test_ra_reusa_o_cadastro_da_escola_inteira():
-    ctx = _ctx((_ident(1, "AGATHA VITORIA MOURA", ra="123"), "5º Ano B"))
-    d = m.resolver_linha(_linha("AGATHA VITORIA MOURA DA SILVA", ra="123"), ctx)
+    ctx = _ctx((_ident(1, "AGATHA VIOLETA MONTESTELLI", ra="123"), "5º Ano B"))
+    d = m.resolver_linha(_linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", ra="123"), ctx)
     assert (d.acao, d.aluno_id, d.motivo) == (m.REUSAR, 1, "ra")
 
 
 def test_ra_de_outra_pessoa_nao_reusa():
     """RA colidindo com nome de outra pessoa (placeholder digitado pela
     secretaria) não identifica ninguém — cai no roster e vira aluno novo."""
-    ctx = _ctx((_ident(1, "AGATHA VITORIA MOURA", ra="123"), "1º Ano A"))
-    d = m.resolver_linha(_linha("JOAO PEDRO SILVA", ra="123"), ctx)
+    ctx = _ctx((_ident(1, "AGATHA VIOLETA MONTESTELLI", ra="123"), "1º Ano A"))
+    d = m.resolver_linha(_linha("JOAO PEDRO TESTELLI", ra="123"), ctx)
     assert d.acao == m.CRIAR
 
 
@@ -127,7 +127,7 @@ def test_nome_exato_na_sala_reusa():
 
 def test_abreviacao_na_sala_reusa():
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"))
-    d = m.resolver_linha(_linha("AGATHA VITORIA MOURA DA SILVA"), ctx)
+    d = m.resolver_linha(_linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA"), ctx)
     assert (d.acao, d.aluno_id) == (m.REUSAR, 1)
 
 
@@ -135,12 +135,12 @@ def test_sala_divergente_nao_casa_por_abreviacao():
     """Abreviação em OUTRA sala é evidência fraca demais para atravessar a
     fronteira da turma — cria (e a fusão manual continua disponível)."""
     ctx = _ctx((_ident(1, "AGATHA V"), "5º Ano B"))
-    assert m.resolver_linha(_linha("AGATHA VITORIA MOURA"), ctx).acao == m.CRIAR
+    assert m.resolver_linha(_linha("AGATHA VIOLETA MONTESTELLI"), ctx).acao == m.CRIAR
 
 
 def test_veta_nascimento_divergente_e_cria():
     ctx = _ctx((_ident(1, "AGATHA V", nasc=date(2018, 3, 1)), "1º Ano A"))
-    d = m.resolver_linha(_linha("AGATHA VITORIA MOURA", nasc=date(2019, 7, 10)), ctx)
+    d = m.resolver_linha(_linha("AGATHA VIOLETA MONTESTELLI", nasc=date(2019, 7, 10)), ctx)
     assert d.acao == m.CRIAR       # identidade prova ser outra criança
 
 
@@ -153,45 +153,45 @@ def test_nome_parcial_vai_para_revisao():
 
 
 def test_recusa_subsequencia_nao_posicional():
-    # "ELOA S" não abrevia "ELOA VITORIA DA SILVA MARADEI" (S não é o 2º token).
+    # "ELOA S" não abrevia "ELOA FICTICIA DA SERRA TESTELLI" (S não é o 2º token).
     ctx = _ctx((_ident(1, "ELOA S"), "1º Ano A"))
-    assert m.resolver_linha(_linha("ELOA VITORIA DA SILVA MARADEI"), ctx).acao == m.CRIAR
+    assert m.resolver_linha(_linha("ELOA FICTICIA DA SERRA TESTELLI"), ctx).acao == m.CRIAR
 
 
 def test_variante_segura_de_nome_do_meio_reusa():
     """LUÍS↔LUIZ (nome do meio, pontas idênticas) é a mesma criança — a MESMA
     regra dos imports de plataforma (matching.vincula_por_nome_unico)."""
-    ctx = _ctx((_ident(1, "ABRAAO LUIZ DIAS"), "1º Ano A"))
-    d = m.resolver_linha(_linha("ABRAÃO LUÍS DIAS"), ctx)
+    ctx = _ctx((_ident(1, "SEBASTIAO LUIZ FICTICIO"), "1º Ano A"))
+    d = m.resolver_linha(_linha("SEBASTIÃO LUÍS FICTICIO"), ctx)
     assert (d.acao, d.aluno_id) == (m.REUSAR, 1)
 
 
 def test_variante_no_sobrenome_vai_para_revisao():
     """SOUZA/SOUSA (último token) pode ser outra família: nunca auto-vincula. E
     também não cria mais às cegas — vai para revisão."""
-    ctx = _ctx((_ident(1, "GABRIEL PEDRO SOUSA"), "1º Ano A"))
-    assert m.resolver_linha(_linha("GABRIEL PEDRO SOUZA"), ctx).acao == m.REVISAR
+    ctx = _ctx((_ident(1, "GABRIEL TESTELLI SOUSA"), "1º Ano A"))
+    assert m.resolver_linha(_linha("GABRIEL TESTELLI SOUZA"), ctx).acao == m.REVISAR
 
 
 def test_veta_variante_com_nascimento_divergente():
-    ctx = _ctx((_ident(1, "ABRAAO LUIZ DIAS", nasc=date(2017, 5, 1)), "1º Ano A"))
-    d = m.resolver_linha(_linha("ABRAÃO LUÍS DIAS", nasc=date(2018, 9, 20)), ctx)
+    ctx = _ctx((_ident(1, "SEBASTIAO LUIZ FICTICIO", nasc=date(2017, 5, 1)), "1º Ano A"))
+    d = m.resolver_linha(_linha("SEBASTIÃO LUÍS FICTICIO", nasc=date(2018, 9, 20)), ctx)
     assert d.acao == m.CRIAR
 
 
 def test_dois_candidatos_na_sala_vao_para_revisao():
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"), (_ident(2, "AGATHA V"), "1º Ano A"))
-    d = m.resolver_linha(_linha("AGATHA VITORIA MOURA"), ctx)
+    d = m.resolver_linha(_linha("AGATHA VIOLETA MONTESTELLI"), ctx)
     assert d.acao == m.REVISAR and set(d.candidatos) == {1, 2}
 
 
 def test_chamada_diferente_com_mesmo_nascimento_e_renumeracao_nao_duplicata():
     """A secretaria renumera a turma quando alguém sai. Nome igual + nascimento
     igual + chamada diferente é RENUMERAÇÃO, não outra criança."""
-    ctx = _ctx((_ident(1, "MARIA EDUARDA SILVA", nasc=date(2015, 3, 1), chamada=5),
+    ctx = _ctx((_ident(1, "MARIA EDUARDA TESTELLI", nasc=date(2015, 3, 1), chamada=5),
                 "1º Ano A"))
     d = m.resolver_linha(
-        _linha("MARIA EDUARDA SILVA", nasc=date(2015, 3, 1), chamada=4), ctx)
+        _linha("MARIA EDUARDA TESTELLI", nasc=date(2015, 3, 1), chamada=4), ctx)
     assert (d.acao, d.aluno_id) == (m.REUSAR, 1)
 
 
@@ -222,7 +222,7 @@ def test_chamada_diferente_separa_homonimos_quando_a_ficha_ja_tem_dono_no_arquiv
 
 def test_candidato_que_abrevia_duas_linhas_e_disputado():
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"))
-    linhas = [_linha("AGATHA VITORIA MOURA"), _linha("AGATHA VALENTINA LIMA")]
+    linhas = [_linha("AGATHA VIOLETA MONTESTELLI"), _linha("AGATHA VALENTINA LIMA")]
     assert m.candidatos_disputados(linhas, ctx) == {1}
 
 
@@ -230,7 +230,7 @@ def test_disputa_manda_as_duas_linhas_para_revisao_em_vez_de_chutar():
     """Sem isto, a 1ª linha do arquivo levava o cadastro (e os dados de
     plataforma presos a ele) — 50% de chance de grudar na criança errada."""
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"))
-    linhas = [_linha("AGATHA VITORIA MOURA"), _linha("AGATHA VALENTINA LIMA")]
+    linhas = [_linha("AGATHA VIOLETA MONTESTELLI"), _linha("AGATHA VALENTINA LIMA")]
     disputados = m.candidatos_disputados(linhas, ctx)
     for linha in linhas:
         d = m.arbitrar_disputa(m.resolver_linha(linha, ctx), disputados)
@@ -239,7 +239,7 @@ def test_disputa_manda_as_duas_linhas_para_revisao_em_vez_de_chutar():
 
 def test_uma_linha_so_nao_e_disputa():
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"))
-    linhas = [_linha("AGATHA VITORIA MOURA")]
+    linhas = [_linha("AGATHA VIOLETA MONTESTELLI")]
     assert m.candidatos_disputados(linhas, ctx) == set()
     d = m.arbitrar_disputa(m.resolver_linha(linhas[0], ctx), set())
     assert (d.acao, d.aluno_id) == (m.REUSAR, 1)
@@ -248,9 +248,9 @@ def test_uma_linha_so_nao_e_disputa():
 def test_mesmo_ra_em_duas_linhas_nao_e_disputa():
     """Duas linhas do MESMO aluno (mesmo RA, ex.: aparece em duas turmas do
     arquivo) são a mesma criança — não podem virar revisão."""
-    ctx = _ctx((_ident(1, "MARIA EDUARDA SILVA", ra="123"), "1º Ano A"))
-    linhas = [_linha("MARIA EDUARDA SILVA", ra="123"),
-              _linha("MARIA EDUARDA SILVA", ra="123", turma="1º Ano B")]
+    ctx = _ctx((_ident(1, "MARIA EDUARDA TESTELLI", ra="123"), "1º Ano A"))
+    linhas = [_linha("MARIA EDUARDA TESTELLI", ra="123"),
+              _linha("MARIA EDUARDA TESTELLI", ra="123", turma="1º Ano B")]
     assert m.candidatos_disputados(linhas, ctx) == set()
 
 
@@ -258,7 +258,7 @@ def test_mesma_linha_repetida_nao_e_disputa():
     """Duas linhas com o MESMO nome apontando para o mesmo cadastro é repetição,
     não disputa: só nomes DIFERENTES caracterizam o 1:N."""
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"))
-    linhas = [_linha("AGATHA VITORIA MOURA"), _linha("AGATHA VITORIA MOURA")]
+    linhas = [_linha("AGATHA VIOLETA MONTESTELLI"), _linha("AGATHA VIOLETA MONTESTELLI")]
     assert m.candidatos_disputados(linhas, ctx) == set()
 
 
@@ -267,9 +267,9 @@ def test_mesma_linha_repetida_nao_e_disputa():
 def test_mudanca_de_sala_com_prova_reusa():
     """Trocar de turma não faz de ninguém uma pessoa nova: nome idêntico + prova
     de identidade (nascimento) → é a mesma criança, só a matrícula muda."""
-    ctx = _ctx((_ident(1, "MARIA EDUARDA SILVA", nasc=date(2015, 3, 1)), "1º Ano A"))
+    ctx = _ctx((_ident(1, "MARIA EDUARDA TESTELLI", nasc=date(2015, 3, 1)), "1º Ano A"))
     d = m.resolver_linha(
-        _linha("MARIA EDUARDA SILVA", turma="1º Ano B", nasc=date(2015, 3, 1)), ctx)
+        _linha("MARIA EDUARDA TESTELLI", turma="1º Ano B", nasc=date(2015, 3, 1)), ctx)
     assert (d.acao, d.aluno_id, d.motivo) == (m.REUSAR, 1, "mudanca_de_sala")
 
 
@@ -306,13 +306,13 @@ def test_aluno_sem_matricula_no_ano_e_reconhecido():
 
 def test_registrar_move_o_aluno_de_sala_e_de_nome():
     ctx = _ctx((_ident(1, "AGATHA V"), "1º Ano A"))
-    ctx.registrar(_ident(1, "AGATHA VITORIA MOURA"), m.chave_turma("1º Ano B"))
+    ctx.registrar(_ident(1, "AGATHA VIOLETA MONTESTELLI"), m.chave_turma("1º Ano B"))
     assert ctx.roster(m.chave_turma("1º Ano A")) == []
     assert [i.id for i in ctx.roster(m.chave_turma("1º Ano B"))] == [1]
-    assert [i.id for i in ctx.mesmo_nome("AGATHA VITORIA MOURA")] == [1]
+    assert [i.id for i in ctx.mesmo_nome("AGATHA VIOLETA MONTESTELLI")] == [1]
     assert ctx.mesmo_nome("AGATHA V") == []      # nome antigo sai do índice
 
 
 def test_aviso_revisao_menciona_fundir():
-    msg = m.aviso_revisao("AGATHA VITORIA", "1º Ano A", "AGATHA V, AGATHA VALENTINA")
-    assert "AGATHA VITORIA" in msg and "Fundir duplicatas" in msg
+    msg = m.aviso_revisao("AGATHA VIOLETA", "1º Ano A", "AGATHA V, AGATHA VALENTINA")
+    assert "AGATHA VIOLETA" in msg and "Fundir duplicatas" in msg

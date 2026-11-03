@@ -21,7 +21,18 @@ import json
 import re
 from datetime import datetime, timezone
 
-from app.sync.connectors.base import ConectorNavegador
+from app.services.importacao import _int_api, student_id_elefante
+from app.sync import escola_externa, fuso
+from app.sync.connectors.base import (
+    ConectorNavegador,
+    codigo_do_http,
+    codigo_dominante,
+    http_ok,
+    juntar_escolas,
+    registrar_descarte_coleta,
+    registrar_falha_coleta,
+    resolver_escola_externa,
+)
 from app.sync.connectors.navegador import Navegador
 from app.sync.interfaces import (
     ArquivoObtido,
@@ -32,15 +43,107 @@ from app.sync.interfaces import (
     RelatorioDisponivel,
 )
 
+def _assinatura_aluno_resumo(al: dict) -> tuple:
+    return tuple(al.get(c) for c in ("studentName", "totalBooksRead", "qtdBooksRead",
+                                     "totalReadTime", "responses", "approvedResponses"))
+
+
+def _separar_ids_em_varias_turmas(arquivos: list, contexto, log) -> list:
+    """O MESMO ``studentId`` em mais de uma turma da coleta (a plataforma lista a
+    criança na turma antiga e na nova; ou duas contas coladas). Cada turma vira um
+    arquivo próprio e a conferência de id repetido só olha DENTRO do arquivo: a
+    2ª turma aplicava os números dela por cima da 1ª, sem revisão.
+
+    Forma segura enquanto a semântica da API não está confirmada:
+      * números IGUAIS nas turmas → o aluno fica só na PRIMEIRA turma (o dado é o
+        mesmo; nada se perde e nada é aplicado duas vezes);
+      * números DIFERENTES → o aluno sai de todas as turmas desta coleta (resumo e
+        livros), contado no descarte 'id_em_varias_turmas' (aviso 'coleta_parcial'):
+        não dá para saber quais números são dele. O cursor dele não avança."""
+    pacotes = []
+    for arq in arquivos:
+        try:
+            payload = json.loads(arq.conteudo.decode("utf-8"))
+        except (ValueError, AttributeError, UnicodeDecodeError):
+            payload = None
+        pacotes.append(payload if isinstance(payload, dict) else None)
+    assinaturas: dict[str, set] = {}
+    turmas_do_id: dict[str, list] = {}
+    for arq, payload in zip(arquivos, pacotes):
+        if payload is None or not isinstance(payload.get("students"), list):
+            continue
+        for al in payload["students"]:
+            # Regra ÚNICA do studentId (``importacao.student_id_elefante``, a que
+            # grava a identidade): " 123 " numa turma e 123.0 noutra são a MESMA
+            # conta "123" — antes eram dois ids e a repetição passava despercebida.
+            sid = student_id_elefante(al.get("studentId")) if isinstance(al, dict) else ""
+            if not sid:
+                continue
+            turmas_do_id.setdefault(sid, []).append(arq.metadados.get("course_id"))
+            assinaturas.setdefault(sid, set()).add(_assinatura_aluno_resumo(al))
+    repetidos = {sid for sid, turmas in turmas_do_id.items() if len(set(turmas)) > 1}
+    if not repetidos:
+        return arquivos
+    divergentes = {sid for sid in repetidos if len(assinaturas[sid]) > 1}
+    primeira = {sid: turmas_do_id[sid][0] for sid in repetidos - divergentes}
+
+    def fica(sid: str, course_id) -> bool:
+        if sid in divergentes:
+            return False
+        return sid not in primeira or primeira[sid] == course_id
+
+    saida = []
+    for arq, payload in zip(arquivos, pacotes):
+        chave = ("students" if payload is not None and isinstance(payload.get("students"), list)
+                 else "leituras" if payload is not None
+                 and isinstance(payload.get("leituras"), list) else None)
+        if chave is None:
+            saida.append(arq)
+            continue
+        cid = arq.metadados.get("course_id")
+        itens = [it for it in payload[chave]
+                 if not isinstance(it, dict) or fica(student_id_elefante(it.get("studentId")),
+                                                     cid)]
+        if len(itens) == len(payload[chave]):
+            saida.append(arq)
+            continue
+        if not itens:
+            continue
+        saida.append(ArquivoObtido(
+            conteudo=json.dumps({**payload, chave: itens}, ensure_ascii=False).encode("utf-8"),
+            nome_arquivo=arq.nome_arquivo, plataforma=arq.plataforma,
+            content_type=arq.content_type, formato_hint=arq.formato_hint,
+            periodo_inicio=arq.periodo_inicio, periodo_fim=arq.periodo_fim,
+            metadados=dict(arq.metadados)))
+    if divergentes:
+        registrar_descarte_coleta(contexto, "id_em_varias_turmas",
+                                  sum(len(set(turmas_do_id[s])) for s in divergentes))
+        novos = getattr(contexto, "contadores_novos", None)
+        for sid in divergentes:
+            if novos is not None:
+                novos.pop(sid, None)
+    log("download", "warn",
+        f"[Elefante] {len(repetidos)} aluno(s) aparecem em mais de uma turma: "
+        f"{len(repetidos) - len(divergentes)} com os mesmos números (ficaram só na "
+        f"primeira turma) e {len(divergentes)} com números diferentes (não aplicados "
+        "nesta coleta — confira a turma da criança no Elefante).")
+    return saida
+
+
 # --- Contrato de UI com o Elefante (verificado em jul/2026) ------------------
 # O login mudou para o subdomínio "login.elefanteletrado.com.br/welcome" (o
 # antigo "/login" hoje dá 404). É um SPA Angular em 2 passos: primeiro escolhe
 # o perfil "Sou professor ou gestor", depois mostra o formulário (campos
-# name=Username / name=Password). Endereço configurável via extra['url_login'].
+# name=Username / name=Password). Endereço configurável via extra['url_login']
+# — só https e host de DOMINIOS_LOGIN (ver base.url_na_lista).
 # Vai DIRETO para o login de professor/gestor ("/manager"). O "/welcome" pede
 # antes o perfil; se por acaso cair nele, o passo de escolher perfil (abaixo) é
 # executado como fallback.
 _URL_LOGIN = "https://login.elefanteletrado.com.br/manager"
+# Domínio do site do Elefante: login (login.), área logada (admin.) e API
+# (prod-ecs-apiadmin.) são subdomínios dele — e o login já trocou de subdomínio
+# uma vez, por isso vale o domínio com qualquer subdomínio.
+DOMINIOS_LOGIN = ("elefanteletrado.com.br",)
 # Área LOGADA fica em admin.elefanteletrado.com.br (mapeado por prints do gestor,
 # jul/2026) — NÃO no www marketing. Relatórios parametrizados por URL:
 #   turma:  /reports/course?period=PERIODS.LIFETIME&products=1&courseId={id}
@@ -188,6 +291,10 @@ class ConectorElefante(ConectorNavegador):
     plataforma = "elefante"
     versao = "1.0.0"
     estrategia = Estrategia.NAVEGADOR
+    dominios_login = DOMINIOS_LOGIN
+    # O serviço exige que a coleta diga de qual escola da plataforma ela é (ver
+    # ``resolver_escola_externa``); sem isso, recusa antes de aplicar.
+    confere_escola_externa = True
     justificativa = (
         "Sem API pública anunciada; obtenção reproduz o portal (login → "
         "relatórios de leitura → exportar). SSO Google é ponto de extensão. "
@@ -482,12 +589,99 @@ class ConectorElefante(ConectorNavegador):
                         return str(e["id"])
         return ""
 
+    # ---- ESCOLA EXTERNA (vínculo: sync/escola_externa.py) --------------------
+    @staticmethod
+    def _escolas_ativas(caps: list) -> list[dict]:
+        """As escolas que a conta enxerga, pela resposta /school/active-schools
+        ([{id, fantasyName…}] — SUPOSIÇÃO: é a lista das escolas da conta; ver
+        docs/SINCRONIZACAO.md). Sem PII: id e nome da escola."""
+        saida: list[dict] = []
+        for c in caps or []:
+            if "active-schools" not in str(c.get("url", "")) or not isinstance(c.get("json"), list):
+                continue
+            for e in c["json"]:
+                if isinstance(e, dict) and str(e.get("id", "")).isdigit():
+                    nome = (e.get("fantasyName") or e.get("name") or e.get("schoolName") or "")
+                    saida.append({"id": str(e["id"]), "nome": str(nome).strip()})
+        return juntar_escolas(saida)
+
+    @staticmethod
+    def _escolas_dos_cursos(caps: list) -> dict[str, dict]:
+        """{course_id: {id, nome}} da escola de CADA turma do roster
+        (``get-courses-students`` traz ``schoolId``/``schoolName`` por turma —
+        SUPOSIÇÃO a confirmar; turma sem ``schoolId`` fica com id '')."""
+        saida: dict[str, dict] = {}
+        for c in caps or []:
+            if "get-courses-students" not in str(c.get("url", "")) or not isinstance(c.get("json"), list):
+                continue
+            for curso in c["json"]:
+                if not isinstance(curso, dict):
+                    continue
+                cid = curso.get("id")
+                if not (isinstance(cid, (int, str)) and str(cid).isdigit()):
+                    continue
+                sid = curso.get("schoolId")
+                sid = str(sid) if isinstance(sid, (int, str)) and str(sid).isdigit() else ""
+                saida.setdefault(str(cid), {"id": sid,
+                                            "nome": str(curso.get("schoolName") or "").strip()})
+        return saida
+
+    @staticmethod
+    def _so_da_escola(mapa: dict, escolas_cursos: dict, alvo: dict, n_visiveis: int,
+                      contexto: Contexto, log, *, registrar: bool = True) -> dict:
+        """Só as turmas da escola ``alvo``. Turma com ``schoolId`` de OUTRA escola
+        da conta fica de fora (é o vínculo funcionando: a conta enxerga as duas).
+        Turma SEM ``schoolId`` numa conta que enxerga mais de uma escola é
+        RECUSADA — não dá para saber de qual escola ela é — e registrada como
+        unidade com falha (``escola_nao_identificada``).
+        ``registrar=False``: só filtra (a lista ainda pode ser trocada pela da API
+        direta; o registro acontece uma vez, sobre a lista que vai ser coletada)."""
+        fica: dict = {}
+        outras: list[str] = []
+        sem_escola: list[str] = []
+        for cid, sids in mapa.items():
+            escola = str((escolas_cursos.get(str(cid)) or {}).get("id") or "")
+            if escola and escola != alvo["id"]:
+                outras.append(str(cid))
+            elif not escola and n_visiveis > 1:
+                sem_escola.append(str(cid))
+            else:
+                fica[cid] = sids
+        if not registrar:
+            return fica
+        coleta = getattr(contexto, "coleta", None)
+        if outras:
+            if coleta is not None:
+                coleta["turmas_de_outra_escola"] = (
+                    int(coleta.get("turmas_de_outra_escola") or 0) + len(outras))
+            log("navegacao", "info",
+                f"[Elefante] {len(outras)} turma(s) de outra(s) escola(s) da conta "
+                f"ignorada(s) (escola vinculada: {alvo['id']}).")
+        for cid in sem_escola:
+            registrar_falha_coleta(contexto, "turma", cid,
+                                   escola_externa.ESCOLA_NAO_IDENTIFICADA)
+        if sem_escola:
+            log("navegacao", "warn",
+                f"[Elefante] {len(sem_escola)} turma(s) sem a escola (schoolId) numa conta "
+                f"que enxerga {n_visiveis} escolas: RECUSADA(S), nada delas foi coletado.")
+        return fica
+
+    async def _detectar_escolas(self, nav, contexto: Contexto) -> list | None:
+        """"Testar conexão": as escolas que a conta enxerga (active-schools e a
+        escola das turmas do roster), sem segredo."""
+        await nav.ir_para(_URL_REPORTS_MENU)
+        caps = await nav.coletar_respostas(f"{_URL_APP}/reports/course", timeout_s=15)
+        return juntar_escolas(self._escolas_ativas(caps),
+                              list(self._escolas_dos_cursos(caps).values()))
+
     @staticmethod
     def _corpo_relatorio(**extra) -> dict:
         """Corpo POST dos endpoints /report/* (formato capturado por DevTools do
         gestor): período LIFETIME com datas amplas + fuso do Brasil. `extra` traz
         studentId/schoolId/etc."""
-        hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # "Hoje" no fuso da escola (o mesmo do timezoneOffset=180 abaixo): pelo
+        # relógio UTC, das 21h à meia-noite o fim do período já era amanhã.
+        hoje = fuso.hoje_local().strftime("%Y-%m-%d")
         corpo = {"startPeriodCustom": "2010-01-01", "endPeriodCustom": hoje,
                  "timezoneOffset": 180, "languageId": 1, "period": _PERIODO_TUDO}
         corpo.update(extra)
@@ -649,13 +843,34 @@ class ConectorElefante(ConectorNavegador):
                 "aceita_datas_personalizadas": True,
                 "periodos_no_trafego": periodos, "endpoints": endpoints}
 
-    async def _cursos_alunos_via_api(self, nav, log, caps: list) -> dict:
+    async def _cursos_alunos_via_api(self, nav, log, caps: list,
+                                     diag: dict | None = None, *, escola_alvo: str = "",
+                                     so_por_escola: bool = False) -> dict:
         """FALLBACK robusto: quando o SPA não disparou /course/get-courses-students
         (depende de selecionar escola + Pesquisar — corrida), chama a API interna
         DIRETO da página autenticada. Descobre host + token do tráfego que SEMPRE
         dispara (/school/active-schools) e reusa o MESMO Authorization. Sem clicar
-        em nada. Devolve {course_id: [student_ids]} (ou {})."""
+        em nada. Devolve {course_id: [student_ids]} (ou {}).
+
+        ``diag`` (opcional) recebe ``base`` (a API foi descoberta?) e ``status``
+        (o HTTP de cada tentativa) — é o que separa "a plataforma respondeu 2xx
+        sem turma" (sem dados, legítimo) de "a plataforma recusou/falhou" (erro)
+        — e ``escolas_dos_cursos`` (a escola de cada turma devolvida).
+
+        ``escola_alvo``: pede as turmas só DESTA escola (a vinculada). Com
+        ``so_por_escola`` (a conta enxerga mais de uma escola) a chamada SEM
+        ``schoolId`` não é feita: ela devolve as turmas da escola que o token
+        carrega, que pode ser outra."""
         base, headers, creds, auth = self._base_e_auth(caps)
+        if diag is not None:
+            diag["base"] = bool(base)
+            diag["status"] = []
+            diag["escolas_dos_cursos"] = {}
+            # 2xx com LISTA VAZIA é o único "sem turma" legítimo. 2xx fora do
+            # formato (objeto, corpo não-JSON como uma página HTML, lista que não
+            # se lê como turmas) é a API que mudou — não "sem dados".
+            diag["lista_vazia_2xx"] = False
+            diag["fora_do_formato_2xx"] = False
         if not base:
             return {}
         # Escolas (id) de /school/active-schools — a maioria das contas tem 1.
@@ -670,9 +885,11 @@ class ConectorElefante(ConectorNavegador):
         # Candidatos (o 1º que trouxer ALUNO vence): sem params (o JWT já carrega a
         # escola); por escola; e por escola COM os filtros que a UI usa (period/
         # products) — os alunos aninhados podem só popular com esses parâmetros.
+        if escola_alvo:
+            escolas = [escola_alvo]
         ep = f"{base}{_EP_CURSOS}"
         filtros = f"period={_PERIODO_TUDO}&products=1"
-        candidatos = [("GET", ep)]
+        candidatos = [] if (so_por_escola and escolas) else [("GET", ep)]
         for sid in escolas:
             candidatos.append(("GET", f"{ep}?schoolId={sid}"))
             candidatos.append(("GET", f"{ep}?schoolId={sid}&{filtros}"))
@@ -685,17 +902,28 @@ class ConectorElefante(ConectorNavegador):
         for metodo, url in candidatos:
             res = await nav.avaliar(self._js_fetch(url, metodo, headers, creds))
             res = res if isinstance(res, dict) else {}
+            if diag is not None:
+                diag["status"].append(res.get("status"))
             det = f"{res.get('status')}/{res.get('tipo')}({res.get('n')})"
             if res.get("erro"):                       # CORS/rede: mostra a causa real
                 det += f" {res['erro']}"
             resumo.append(f"{metodo} …{url.split('elefanteletrado.com.br')[-1][:44]}"
                           f" → {det}")
             corpo = res.get("body")
+            if diag is not None and http_ok(res.get("status")):
+                if isinstance(corpo, list) and not corpo:
+                    diag["lista_vazia_2xx"] = True
+                elif not isinstance(corpo, list) or not self._parse_courses_students(
+                        [{"url": ep, "json": corpo}]):
+                    diag["fora_do_formato_2xx"] = True
             if isinstance(corpo, list) and corpo:
                 mapa = self._parse_courses_students([{"url": ep, "json": corpo}])
                 # Só é SUCESSO se veio ALUNO — {cid: []} é truthy mas inútil; nesse
                 # caso segue tentando o próximo candidato (ex.: ?schoolId=).
                 if mapa and any(mapa.values()):
+                    if diag is not None:
+                        diag["escolas_dos_cursos"] = self._escolas_dos_cursos(
+                            [{"url": ep, "json": corpo}])
                     total = sum(len(v) for v in mapa.values())
                     log("navegacao", "info",
                         f"[Elefante] cursos via API direta: {len(mapa)} turma(s), "
@@ -714,6 +942,9 @@ class ConectorElefante(ConectorNavegador):
                 f"forma={melhor_forma} host={base} tentativas={resumo}")
             # Devolve as turmas (com lista de alunos vazia): o id da turma basta
             # para o relatório de turma coletar os dados por aluno.
+            if diag is not None:
+                diag["escolas_dos_cursos"] = self._escolas_dos_cursos(
+                    [{"url": ep, "json": melhor_corpo}])
             return self._parse_courses_students([{"url": ep, "json": melhor_corpo}])
         log("navegacao", "warn",
             f"[Elefante] API direta não trouxe turmas. host={base} "
@@ -846,12 +1077,50 @@ class ConectorElefante(ConectorNavegador):
             # turma.id + turma.student[].
             caps = await nav.coletar_respostas(f"{_URL_APP}/reports/course", timeout_s=25)
             await self._assentar(nav)
-            mapa = self._parse_courses_students(caps)
+            mapa_trafego = self._parse_courses_students(caps)
+            escolas_trafego = self._escolas_dos_cursos(caps)
+            # ESCOLA EXTERNA, antes de pedir qualquer dado de turma: as escolas que
+            # a conta enxerga (active-schools + a escola de cada turma do roster)
+            # contra o vínculo desta escola. Conta de duas escolas sem vínculo,
+            # escola vinculada fora do alcance da conta: recusa aqui, nada coletado.
+            visiveis = juntar_escolas(self._escolas_ativas(caps),
+                                      list(escolas_trafego.values()))
+            alvo = (resolver_escola_externa(visiveis, contexto, "Elefante")
+                    if visiveis else None)
+            mapa, escolas_cursos = mapa_trafego, escolas_trafego
+            # O tráfego do painel pode trazer só as turmas da escola que o SPA
+            # abriu (numa conta de duas escolas, talvez a outra): sem turma da
+            # escola vinculada nele, a lista vem da API direta, pedida por escola.
+            sem_turma_da_escola = alvo is not None and not self._so_da_escola(
+                mapa_trafego, escolas_trafego, alvo, len(visiveis), contexto, log,
+                registrar=False)
             # Sem NENHUMA turma (nem o id) → tenta a API direta. Basta o id da
             # turma: o overall-course-report devolve os alunos por nome, então a
             # coleta NÃO depende da enumeração de alunos do roster.
-            if not mapa:
-                mapa = await self._cursos_alunos_via_api(nav, log, caps)
+            diag: dict = {}
+            if not mapa or sem_turma_da_escola:
+                mapa = await self._cursos_alunos_via_api(
+                    nav, log, caps, diag, escola_alvo=(alvo or {}).get("id", ""),
+                    so_por_escola=len(visiveis) > 1)
+                escolas_cursos = diag.get("escolas_dos_cursos") or {}
+                todas = juntar_escolas(visiveis, list(escolas_cursos.values()))
+                if mapa and (alvo is None or len(todas) > len(visiveis)):
+                    # A lista de turmas revelou a escola (ou uma escola A MAIS que a
+                    # conta enxerga): decide de novo com tudo o que a conta mostrou.
+                    alvo = resolver_escola_externa(todas, contexto, "Elefante")
+                visiveis = todas
+            if alvo is not None and mapa:
+                # As turmas que vão ser coletadas: só as da escola vinculada; a
+                # turma sem escola numa conta de várias escolas é recusada.
+                mapa = self._so_da_escola(mapa, escolas_cursos, alvo, len(visiveis),
+                                          contexto, log)
+                if not mapa:
+                    raise ErroConector(
+                        "Nenhuma turma do Elefante pôde ser atribuída à escola vinculada "
+                        f"({escola_externa.descrever([alvo])}): a conta enxerga "
+                        f"{len(visiveis)} escolas e as turmas vieram sem a escola (ou de "
+                        "outra escola). Nada foi aplicado.",
+                        codigo=escola_externa.ESCOLA_NAO_IDENTIFICADA, recuperavel=False)
             if not mapa:
                 formas = [(c["url"].split("elefanteletrado.com.br")[-1].split("?")[0],
                            self._forma_json(c.get("json")))
@@ -859,7 +1128,47 @@ class ConectorElefante(ConectorNavegador):
                 log("navegacao", "warn",
                     "[Elefante] Não achei /course/get-courses-students. API: "
                     + json.dumps(formas, ensure_ascii=False)[:1000])
+                # 'Sem dados' só quando a plataforma RESPONDEU 2xx sem turma. Sem
+                # a API descoberta, ou com toda tentativa recusada/falhando, a
+                # coleta não aconteceu — antes as duas coisas viravam "sem dados".
+                status = [s for s in diag.get("status") or []]
+                if not diag.get("base"):
+                    raise ErroConector(
+                        "Não descobri a API de dados do Elefante (o tráfego do painel "
+                        "não revelou o endereço/token). Tente novamente ou use a "
+                        "importação manual do relatório.",
+                        codigo="falha_download", recuperavel=True)
+                if status and not any(http_ok(s) for s in status):
+                    codigo = ("sem_acesso_ao_dado"
+                              if any(s in (401, 403) for s in status) else "falha_download")
+                    raise ErroConector(
+                        "A lista de turmas do Elefante não respondeu com sucesso "
+                        f"(HTTP {', '.join(str(s) for s in status[:4])}).",
+                        codigo=codigo, recuperavel=codigo == "falha_download")
+                # Basta uma tentativa 2xx para não ser "recusa total" — mas 2xx só
+                # prova "plataforma sem turma" com corpo LISTA VAZIA. Com 401/403
+                # na escola (e a chamada sem escola devolvendo vazio) a conta não
+                # enxerga as turmas; com 2xx fora do formato a API mudou. Antes os
+                # dois casos viravam 'sem_dados' com a credencial carimbada válida.
+                if any(s in (401, 403) for s in status):
+                    raise ErroConector(
+                        "A lista de turmas do Elefante foi recusada para a escola "
+                        f"(HTTP {', '.join(str(s) for s in status[:4])}): a conta não "
+                        "enxerga as turmas.", codigo="sem_acesso_ao_dado", recuperavel=False)
+                if not diag.get("lista_vazia_2xx"):
+                    raise ErroConector(
+                        "A lista de turmas do Elefante respondeu fora do formato conhecido "
+                        "(não veio a lista de turmas) — a API pode ter mudado. Verifique o "
+                        "conector.", codigo="parser_incompativel", recuperavel=False)
+                if alvo is None:
+                    # 2xx sem turma e sem nenhuma escola identificável: não dá para
+                    # dizer de QUAL escola é o "sem dados" (levanta).
+                    resolver_escola_externa(visiveis, contexto, "Elefante")
                 return []
+            if alvo is None:
+                # Turmas vieram, mas nenhuma resposta disse de qual escola elas são
+                # (sem active-schools e sem schoolId nas turmas): recusa (levanta).
+                alvo = resolver_escola_externa(visiveis, contexto, "Elefante")
             total = sum(len(v) for v in mapa.values())
             log("navegacao", "info",
                 f"[Elefante] {len(mapa)} turma(s), {total} aluno(s) no total.")
@@ -870,14 +1179,36 @@ class ConectorElefante(ConectorNavegador):
             # turma. O orquestrador importa pelo MESMO pipeline (casar nome + resumo
             # + scoring), como um upload manual do relatório de turma.
             base, headers, creds, _auth = self._base_e_auth(caps)
-            escola = self._school_id(caps)
+            # O relatório de turma é pedido com o schoolId da escola VINCULADA (antes
+            # ia o da 1ª escola de active-schools, que numa conta de duas escolas
+            # podia ser a outra).
+            escola = alvo["id"]
+            nomes_relatorio: set[str] = set()
             if not base:
                 log("navegacao", "warn", "[Elefante] sem base da API p/ os dados.")
-                return arquivos
+                raise ErroConector(
+                    f"Achei {len(mapa)} turma(s) no Elefante, mas não a API de dados "
+                    "(endereço/token) para coletá-las. Tente novamente ou use a "
+                    "importação manual do relatório.",
+                    codigo="falha_download", recuperavel=True)
             primeiro_sid = ""   # studentId (do course-report) p/ sondar o per-aluno
+            # COLETA PARCIAL VISÍVEL: cada turma/lote/aluno que não chegou vira uma
+            # falha anotada no contexto (o serviço decide parcial × erro e abre o
+            # alerta). Antes só um aviso no log, e a execução saía "concluída".
+            tentadas = coletadas = 0
+            falhas_turma: list[dict] = []
+            # studentId de TODOS os alunos que os relatórios de turma trouxeram
+            # (independe do cursor): o serviço confere as contas já vinculadas
+            # que não vieram (``_avisar_contas_ausentes``). Normalizado pela MESMA
+            # regra que grava a identidade (``importacao.student_id_elefante``:
+            # sem espaços, sem o sufixo ".0", nunca só zeros). Antes era
+            # str(...)+isdigit(): " 123 " e 123.0 gravavam a conta "123" e não
+            # entravam aqui, e a coleta completa avisava "ausente" por engano.
+            sids_relatorio: set[str] = set()
             for cid in mapa:
                 if contexto.cancelado():
                     break
+                tentadas += 1
                 corpo = self._corpo_relatorio(courseId=int(cid), useCache=True,
                                               selectedProducts="")
                 if escola.isdigit():
@@ -888,14 +1219,35 @@ class ConectorElefante(ConectorNavegador):
                 except Exception as exc:  # noqa: BLE001 — uma turma não derruba as demais
                     log("download", "warn",
                         f"[Elefante] turma {cid}: falha na API ({str(exc)[:80]}).")
+                    falhas_turma.append({"codigo": "falha_download"})
+                    registrar_falha_coleta(contexto, "turma", cid, "falha_download")
                     continue
                 res = res if isinstance(res, dict) else {}
                 body = res.get("body")
                 alunos = body.get("students") if isinstance(body, dict) else None
-                if res.get("status") != 200 or not isinstance(alunos, list) or not alunos:
+                status_t = res.get("status")
+                if not http_ok(status_t) or not isinstance(alunos, list):
+                    codigo = (codigo_do_http(status_t) if not http_ok(status_t)
+                              else "parser_incompativel")
                     log("download", "warn",
                         f"[Elefante] turma {cid}: overall-course-report "
-                        f"{res.get('status')} ({len(alunos or [])} aluno(s)).")
+                        f"{status_t} ({'sem a lista de alunos' if http_ok(status_t) else 'erro'}"
+                        ") — turma NÃO coletada.")
+                    falhas_turma.append({"codigo": codigo})
+                    registrar_falha_coleta(contexto, "turma", cid, codigo, http=status_t)
+                    continue
+                coletadas += 1
+                sids_relatorio.update(
+                    s for s in (student_id_elefante(al.get("studentId")) for al in alunos
+                                if isinstance(al, dict)) if s)
+                descritores = body.get("courseSchoolDescriptors")
+                if isinstance(descritores, dict) and descritores.get("schoolName"):
+                    # Só para AVISO (nomes variam): o serviço compara com o cadastro.
+                    nomes_relatorio.add(str(descritores["schoolName"]).strip()[:200])
+                if not alunos:
+                    log("download", "info",
+                        f"[Elefante] turma {cid}: overall-course-report {status_t} "
+                        "sem nenhum aluno.")
                     continue
                 # Só id + descritores + alunos no arquivo (menos peso, mesmo dado).
                 # courseId garante um nome de turma mesmo se courseName vier vazio.
@@ -908,10 +1260,9 @@ class ConectorElefante(ConectorNavegador):
                     plataforma="elefante", content_type=_CT_API,
                     formato_hint="resumo",
                     metadados={"origem": "api", "course_id": cid}))
-                if not primeiro_sid:
-                    cand = str((alunos[0] or {}).get("studentId") or "") if isinstance(alunos[0], dict) else ""
-                    if cand.isdigit():
-                        primeiro_sid = cand
+                if not primeiro_sid and isinstance(alunos[0], dict):
+                    # Mesma regra da identidade: " 123 " e 123.0 são o id "123".
+                    primeiro_sid = student_id_elefante(alunos[0].get("studentId"))
                 log("download", "info",
                     f"[Elefante] turma {cid}: {len(alunos)} aluno(s) coletado(s).")
 
@@ -929,14 +1280,28 @@ class ConectorElefante(ConectorNavegador):
                 for al in alunos:
                     if not isinstance(al, dict):
                         continue
-                    s = str(al.get("studentId") or "")
+                    # CHAVE do cursor, da busca de livros e do nome: a regra ÚNICA
+                    # que grava a identidade (``importacao.student_id_elefante``).
+                    # Antes, str()+isdigit(): " 123 " e 123.0 ficavam de fora — sem
+                    # cursor e sem livros datados, embora a conta "123" fosse
+                    # gravada pelo resumo.
+                    s = student_id_elefante(al.get("studentId"))
                     nome_al = str(al.get("studentName") or "")
-                    if not s.isdigit() or not nome_al:
+                    if not s or not nome_al:
                         continue
-                    total = int(al.get("totalBooksRead") or al.get("qtdBooksRead") or 0)
-                    totais_vistos[s] = total
+                    # A MESMA leitura do analisador (``importacao._int_api``, com o
+                    # ``qtdBooksRead`` só quando o total NÃO veio): '2.0' é 2. Antes,
+                    # ``int()`` cru fora de qualquer try: um total em texto decimal
+                    # derrubava a coleta INTEIRA em 'erro_inesperado'. Total
+                    # ilegível: os livros do aluno são buscados e o cursor dele NÃO
+                    # avança (fica fora de ``totais_vistos``).
+                    total = _int_api(al.get("totalBooksRead", al.get("qtdBooksRead")), None)
                     if nome_por_sid is not None:
                         nome_por_sid[s] = nome_al
+                    if total is None:
+                        sid_nome[s] = nome_al
+                        continue
+                    totais_vistos[s] = total
                     try:
                         inalterado = int(anteriores.get(s, -1)) == total
                     except (TypeError, ValueError):
@@ -949,27 +1314,63 @@ class ConectorElefante(ConectorNavegador):
                     else:
                         sid_nome[s] = nome_al
                 if sid_nome and not contexto.cancelado():
+                    lote_falhou = False
                     try:
                         lote = await nav.avaliar(self._js_fetch_lote(
                             f"{base}/report/{_EP_BOOKS_READ}", headers, creds,
                             self._corpo_relatorio(), [int(s) for s in sid_nome]))
                     except Exception as exc:  # noqa: BLE001
                         lote = None
+                        lote_falhou = True
                         log("download", "warn",
-                            f"[Elefante] turma {cid}: falha nos livros ({str(exc)[:60]}).")
+                            f"[Elefante] turma {cid}: falha nos livros ({str(exc)[:60]}) "
+                            f"— livros de {len(sid_nome)} aluno(s) NÃO coletados.")
+                        registrar_falha_coleta(contexto, "lote", cid, "falha_download")
+                    if not lote_falhou and not isinstance(lote, list):
+                        lote_falhou = True
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: resposta dos livros fora do formato "
+                            f"— livros de {len(sid_nome)} aluno(s) NÃO coletados.")
+                        registrar_falha_coleta(contexto, "lote", cid, "parser_incompativel")
+                        lote = None
                     leituras: list[dict] = []
+                    datas_com_fuso = 0
+                    livros_sem_titulo = 0
                     entregues: set[str] = set()   # alunos cujos livros CHEGARAM
+                    falhos: set[str] = set()      # alunos cujo pedido de livros FALHOU
                     for item in (lote or []):
                         if not isinstance(item, dict):
                             continue
-                        sid = str(item.get("studentId") or "")
+                        # A resposta ecoa o id pedido (int): a MESMA regra o devolve
+                        # à chave de ``sid_nome`` (e do cursor).
+                        sid = student_id_elefante(item.get("studentId"))
                         nome_al = sid_nome.get(sid, "")
                         livros = item.get("books")
-                        if not nome_al or not isinstance(livros, list):
+                        if not nome_al:
+                            continue
+                        if not isinstance(livros, list):
+                            # HTTP de erro do aluno ({studentId, status}), exceção do
+                            # fetch ({studentId, erro}) ou corpo que não é lista.
+                            if sid not in falhos:
+                                falhos.add(sid)
+                                st = item.get("status")
+                                codigo = (codigo_do_http(st) if isinstance(st, int)
+                                          else ("falha_download" if item.get("erro")
+                                                else "parser_incompativel"))
+                                registrar_falha_coleta(contexto, "aluno", sid, codigo,
+                                                       http=st)
                             continue
                         entregues.add(sid)
                         for b in livros:
+                            if isinstance(b, dict) and not b.get("bookTitle"):
+                                livros_sem_titulo += 1
                             if isinstance(b, dict) and b.get("bookTitle"):
+                                # DIA DA LEITURA no fuso da escola: data com fuso
+                                # explícito (Z/+00:00) vira o horário de Brasília;
+                                # sem fuso, já é o local e passa intacta.
+                                quando, com_fuso = fuso.instante_para_horario_local(
+                                    b.get("lastReadWhen"))
+                                datas_com_fuso += int(com_fuso)
                                 item_l = {
                                     "nome": nome_al,
                                     # IDENTIDADE do aluno no Elefante: a
@@ -980,7 +1381,7 @@ class ConectorElefante(ConectorNavegador):
                                     "levelName": b.get("levelName"),
                                     "genre": b.get("genre"), "theme": b.get("theme"),
                                     "totalTimeSpent": b.get("totalTimeSpent"),
-                                    "lastReadWhen": b.get("lastReadWhen")}
+                                    "lastReadWhen": quando}
                                 # IDENTIDADE OFICIAL do livro (``bookId`` do
                                 # catálogo do Elefante), quando a API a expõe: o
                                 # importador casa por ela antes do título. SÓ
@@ -999,7 +1400,25 @@ class ConectorElefante(ConectorNavegador):
                     # cursor de quem o `confirmar` não conseguiu vincular.)
                     if novos is not None:
                         for s in entregues:
-                            novos[s] = totais_vistos[s]
+                            if s in totais_vistos:      # total ilegível: sem cursor novo
+                                novos[s] = totais_vistos[s]
+                    if not lote_falhou:
+                        # Pedido de livros que não voltou nem como erro: também falhou.
+                        for s in sid_nome:
+                            if s not in entregues and s not in falhos:
+                                falhos.add(s)
+                                registrar_falha_coleta(contexto, "aluno", s, "falha_download")
+                    if falhos:
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: livros de {len(falhos)} aluno(s) "
+                            "NÃO coletados (erro na resposta) — o cursor deles não "
+                            "avança e a próxima sincronização tenta de novo.")
+                    if livros_sem_titulo:
+                        registrar_descarte_coleta(contexto, "livro_sem_titulo",
+                                                  livros_sem_titulo)
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: {livros_sem_titulo} livro(s) sem "
+                            "título na resposta — não importado(s).")
                     if leituras:
                         payload_l = {
                             "courseId": body.get("courseId") or cid,
@@ -1013,8 +1432,33 @@ class ConectorElefante(ConectorNavegador):
                             metadados={"origem": "api", "course_id": cid, "tipo": "leituras"}))
                         log("download", "info",
                             f"[Elefante] turma {cid}: {len(leituras)} leitura(s) datada(s).")
+                    if datas_com_fuso:
+                        # Sinal para a operação: o histórico ANTERIOR desta escola
+                        # pode ter sido gravado com o relógio UTC (ver
+                        # docs/operacao/COLETA-PLATAFORMAS.md, "Fuso").
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: {datas_com_fuso} data(s) de "
+                            "leitura vieram com fuso explícito e foram convertidas "
+                            "para o horário de Brasília.")
             log("download", "info",
-                f"[Elefante] {len(arquivos)} turma(s) coletada(s) via API interna.")
+                f"[Elefante] {coletadas} de {tentadas} turma(s) coletada(s) via API "
+                f"interna ({len(arquivos)} arquivo(s)).")
+            if nomes_relatorio and getattr(contexto, "coleta", None) is not None:
+                contexto.coleta["nomes_escola_relatorio"] = sorted(nomes_relatorio)
+            if (tentadas and coletadas == tentadas == len(mapa) and not contexto.cancelado()
+                    and getattr(contexto, "coleta", None) is not None):
+                # Só com TODAS as turmas respondendo: aluno de uma turma que falhou
+                # "não veio" pela falha (já é 'parcial'), não por sumir do relatório.
+                contexto.coleta["ids_recebidos"] = sorted(sids_relatorio)
+            if tentadas and not coletadas and falhas_turma:
+                # NENHUMA turma chegou: não há coleta parcial a aplicar — é falha.
+                codigo = codigo_dominante(falhas_turma)
+                raise ErroConector(
+                    f"Nenhuma das {tentadas} turma(s) do Elefante respondeu com os "
+                    "dados" + (" (acesso ao dado recusado)."
+                               if codigo == "sem_acesso_ao_dado" else "."),
+                    codigo=codigo, recuperavel=codigo == "falha_download")
+            arquivos = _separar_ids_em_varias_turmas(arquivos, contexto, log)
 
             # SONDA por aluno (1x) com o studentId CERTO do course-report: descobre
             # os dados GRANULARES (livros com data + questões com data) p/ o prêmio

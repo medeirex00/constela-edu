@@ -7,16 +7,22 @@
  * Sem isto, a rede só existia por seed. A segurança real é no backend
  * (todas as rotas exigem admin global); esta tela é só a interface.
  */
-import { ArrowRight, Blocks, Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users } from "lucide-react";
+import {
+  ArrowRight, Blocks, Building2, Landmark, LocateFixed, MapPin, Plus, ScanLine, Save, Users,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  Avatar,
   Badge,
   Botao,
   Campo,
   Card,
   Carregando,
+  Chip,
+  Erro,
+  IconePastel,
   Mensagem,
   Modal,
   PageHeader,
@@ -176,6 +182,33 @@ type RespostaContrato = {
   };
 };
 
+/** Cargo em linguagem de gente (antes aparecia o valor cru do banco). */
+function rotuloCargo(u: { cargo: string; rede_id: number | null }): string {
+  if (u.cargo === "admin") return "Administrador";
+  if (u.cargo === "coordenador") return u.rede_id != null ? "Secretaria" : "Coordenador";
+  if (u.cargo === "professor") return "Professor";
+  return u.cargo;
+}
+
+/** Interruptor visual sobre um checkbox de verdade (os testes e o leitor de tela
+ *  continuam vendo role=checkbox com o mesmo nome). */
+function VisualChave({ marcado }: { marcado: boolean }) {
+  return (
+    <>
+      <span
+        aria-hidden
+        className={`h-7 w-12 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2 peer-disabled:opacity-60 ${
+          marcado ? "bg-indigo-600 shadow-pilula" : "bg-zinc-300 dark:bg-zinc-700"}`}
+      />
+      <span
+        aria-hidden
+        className={`pointer-events-none absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+          marcado ? "translate-x-5" : ""}`}
+      />
+    </>
+  );
+}
+
 export function ModulosDaRede({ redeId }: { redeId: number }) {
   const { dados, erro, carregando, recarregar } =
     useApi<{ chave: string; nome: string; produto: string; icone: string; ativo: boolean }[]>(
@@ -284,30 +317,37 @@ export function ModulosDaRede({ redeId }: { redeId: number }) {
           Nenhum módulo contratado: a rede fica sem indicadores. Ligue pelo menos um.
         </Mensagem>
       )}
-      <div className="space-y-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {(dados ?? []).map((m) => (
           <label
             key={m.chave}
-            className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+            className={`flex items-center justify-between gap-3 rounded-2xl border p-4 transition-colors ${
+              m.ativo
+                ? "border-indigo-200 bg-indigo-50/50 dark:border-indigo-500/30 dark:bg-indigo-500/10"
+                : "border-zinc-200 dark:border-zinc-800"} ${salvando !== null ? "cursor-wait" : "cursor-pointer"}`}
           >
             <span className="min-w-0">
-              <span className="block text-sm font-medium">
+              <span className="block text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                 {m.icone} {m.nome}
               </span>
-              <span className="block text-xs text-zinc-500">{m.produto}</span>
-            </span>
-            <span className="flex items-center gap-2">
-              <span className={`text-xs font-medium ${m.ativo ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-400"}`}>
+              <span className="block text-xs text-zinc-500 dark:text-zinc-400">{m.produto}</span>
+              <span className={`mt-1.5 inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                m.ativo
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                  : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>
                 {m.ativo ? "Contratado" : "Não contratado"}
               </span>
+            </span>
+            <span className="relative inline-flex shrink-0">
               <input
                 type="checkbox"
-                className="h-5 w-5 accent-indigo-600"
+                className="peer sr-only"
                 aria-label={`${m.nome} contratado`}
                 checked={m.ativo}
                 disabled={salvando !== null}
                 onChange={(e) => alternar(m.chave, e.target.checked)}
               />
+              <VisualChave marcado={m.ativo} />
             </span>
           </label>
         ))}
@@ -386,11 +426,32 @@ export default function RedeGestao() {
   );
 
   if (!usuario?.is_global) {
-    return <Vazio titulo="Somente o administrador global"
-                  descricao="A gestão de redes é exclusiva da conta global." />;
+    return (
+      <div>
+        <PageHeader titulo="Gestão de redes" />
+        <Card>
+          <Vazio icone={Landmark} titulo="Somente o administrador global"
+                 descricao="A gestão de redes é exclusiva da conta global." />
+        </Card>
+      </div>
+    );
   }
-  if (carregando && !dados) return <Carregando texto="Carregando as redes..." />;
-  if (erro && !dados) return <Vazio titulo="Não foi possível carregar" descricao={erro.message} />;
+  if (carregando && !dados) {
+    return (
+      <div>
+        <PageHeader titulo="Gestão de redes" />
+        <Carregando texto="Carregando as redes..." />
+      </div>
+    );
+  }
+  if (erro && !dados) {
+    return (
+      <div>
+        <PageHeader titulo="Gestão de redes" />
+        <Card><Erro titulo="Não foi possível carregar" descricao={erro.message} aoTentar={recarregar} /></Card>
+      </div>
+    );
+  }
 
   function alternar(conjunto: Set<number>, id: number): Set<number> {
     const proximo = new Set(conjunto);
@@ -674,41 +735,50 @@ export default function RedeGestao() {
       )}
 
       {dados && dados.redes.length === 0 ? (
-        <Vazio titulo="Nenhuma rede ainda"
-               descricao="Crie a primeira rede para habilitar o painel da Secretaria." />
+        <Card>
+          <Vazio icone={Landmark} titulo="Nenhuma rede ainda"
+                 descricao="Crie a primeira rede para habilitar o painel da Secretaria." />
+        </Card>
       ) : (
         <>
-          {/* Seletor de rede. Clicar na rede JÁ selecionada abre o painel dela
-              (a tela com "Avaliações externas"); clicar em outra a seleciona. */}
-          <Card className="flex flex-wrap items-center gap-2 p-3">
-            <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-500">
-              <Landmark size={15} /> Rede:
+          {/* Seletor de rede: a pílula SÓ seleciona (antes, clicar na selecionada
+              navegava — uma ação escondida); abrir o painel é um botão explícito. */}
+          <Card className="flex flex-wrap items-center gap-3 p-4">
+            <span className="flex items-center gap-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+              <IconePastel icone={Landmark} tom="violeta" tamanho="sm" /> Rede
             </span>
-            {dados?.redes.map((r) => (
-              <button
-                key={r.id}
-                onClick={() => (r.id === redeSel ? navegar("/rede") : setRedeSel(r.id))}
-                title={r.id === redeSel ? "Abrir o painel desta rede" : "Selecionar para gerenciar"}
-                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
-                  r.id === redeSel
-                    ? "bg-indigo-600 text-white hover:bg-indigo-500"
-                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                }`}
-              >
-                {r.nome}{r.status !== "ativa" ? " (inativa)" : ""}
-                {r.id === redeSel && <ArrowRight size={14} className="opacity-80" />}
-              </button>
-            ))}
-            <span className="text-xs text-zinc-400">— clique na rede selecionada para abrir o painel</span>
+            <div role="group" aria-label="Rede a gerenciar"
+                 className="inline-flex max-w-full flex-wrap gap-1 rounded-2xl border border-zinc-200/80 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900">
+              {dados?.redes.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  aria-pressed={r.id === redeSel}
+                  onClick={() => setRedeSel(r.id)}
+                  className={`inline-flex items-center gap-1 rounded-xl px-3.5 py-2 text-sm font-semibold transition-colors ${
+                    r.id === redeSel
+                      ? "bg-indigo-600 text-white shadow-pilula"
+                      : "text-zinc-600 hover:bg-white hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
+                  }`}
+                >
+                  {r.nome}{r.status !== "ativa" ? " (inativa)" : ""}
+                </button>
+              ))}
+            </div>
+            {redeSel !== null && (
+              <Botao variante="secundario" tamanho="sm" className="sm:ml-auto" onClick={() => navegar("/rede")}>
+                Abrir painel da rede <ArrowRight size={14} aria-hidden />
+              </Botao>
+            )}
           </Card>
 
           {redeAtual && (
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {/* --- Escolas da rede --- */}
-              <Card className="p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="flex items-center gap-2 text-sm font-semibold">
-                    <Landmark size={16} className="text-indigo-600" /> Escolas da rede
+              <Card className="min-w-0 p-5 sm:p-6">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+                    <IconePastel icone={Building2} tom="violeta" tamanho="sm" /> Escolas da rede
                   </h2>
                   <Botao onClick={salvarEscolas} disabled={ocupado}>
                     <Save size={14} /> Salvar vínculos
@@ -723,15 +793,21 @@ export default function RedeGestao() {
                     const emOutraRede = e.rede_id != null && e.rede_id !== redeSel;
                     return (
                       <li key={e.id}>
-                        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
+                        <label className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
                           <input
                             type="checkbox"
-                            className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
+                            className="h-4 w-4 shrink-0 rounded border-zinc-300 accent-indigo-600"
                             checked={escolasSel.has(e.id)}
                             onChange={() => setEscolasSel((s) => alternar(s, e.id))}
                           />
-                          <span className="flex-1 truncate text-sm">{e.nome}</span>
-                          {e.status !== "ativa" && <Badge tom="neutro">inativa</Badge>}
+                          <span aria-hidden className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${
+                            e.status === "ativa"
+                              ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300"
+                              : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+                            <Building2 size={15} />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-800 dark:text-zinc-100" title={e.nome}>{e.nome}</span>
+                          {e.status !== "ativa" && <Badge tom="neutro">Inativa</Badge>}
                           {emOutraRede && <Badge tom="alerta">em outra rede</Badge>}
                         </label>
                       </li>
@@ -741,10 +817,10 @@ export default function RedeGestao() {
               </Card>
 
               {/* --- Secretaria (usuários) --- */}
-              <Card className="p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="flex items-center gap-2 text-sm font-semibold">
-                    <Users size={16} className="text-indigo-600" /> Acesso da Secretaria
+              <Card className="p-5 sm:p-6">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+                    <IconePastel icone={Users} tom="teal" tamanho="sm" /> Acesso da Secretaria
                   </h2>
                   <Botao onClick={salvarUsuarios} disabled={ocupado}>
                     <Save size={14} /> Salvar acessos
@@ -757,26 +833,29 @@ export default function RedeGestao() {
                 <ul className="max-h-80 space-y-0.5 overflow-y-auto">
                   {usuarios.filter((u) => !u.is_global).map((u) => (
                     <li key={u.id}>
-                      <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
+                      <label className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/60">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 rounded border-zinc-300 text-indigo-600"
+                          className="h-4 w-4 shrink-0 rounded border-zinc-300 accent-indigo-600"
                           checked={usuariosSel.has(u.id)}
                           onChange={() => setUsuariosSel((s) => alternar(s, u.id))}
                         />
-                        <span className="flex-1 truncate text-sm">
-                          {u.nome} <span className="text-zinc-400">· {u.email}</span>
+                        <Avatar nome={u.nome} chave={u.id} tamanho="sm" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-zinc-800 dark:text-zinc-100" title={u.nome}>{u.nome}</span>
+                          <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400" title={u.email}>{u.email}</span>
                         </span>
-                        <Badge tom="neutro">{u.cargo}</Badge>
+                        <Chip>{rotuloCargo(u)}</Chip>
                       </label>
                     </li>
                   ))}
                 </ul>
               </Card>
 
-              {/* --- Localização no mapa --- */}
+              {/* --- Módulos contratados (largura inteira: antes ficava sozinho numa coluna) --- */}
               <SecaoRecolhivel
-                icone={<Blocks size={16} className="text-indigo-600" />}
+                className="lg:col-span-2"
+                icone={<IconePastel icone={Blocks} tom="violeta" tamanho="sm" />}
                 titulo="Módulos contratados"
               >
                 {/* `key` obriga a remontagem ao trocar de rede: sem ela o aviso
@@ -785,10 +864,13 @@ export default function RedeGestao() {
                 <ModulosDaRede key={redeSel!} redeId={redeSel!} />
               </SecaoRecolhivel>
 
+              {/* --- Localização no mapa --- */}
               <SecaoRecolhivel
                 className="lg:col-span-2"
-                icone={<MapPin size={16} className="text-indigo-600" />}
-                titulo="Localização no mapa"
+                icone={<IconePastel icone={MapPin} tom="azul" tamanho="sm" />}
+                // Título sem quebra: quando não cabem título e botões na mesma linha, os
+                // BOTÕES descem (o cabeçalho quebra), em vez de espremer o título em duas.
+                titulo={<span className="whitespace-nowrap">Localização no mapa</span>}
                 acoes={
                   <>
                     <Botao variante="neutro" onClick={geocodificar} disabled={ocupado || escolasNaRede.length === 0}>
@@ -818,6 +900,7 @@ export default function RedeGestao() {
                       confira e clique em <b>Salvar localizações</b>.
                     </p>
                     <textarea
+                      aria-label="Localizações das escolas, uma por linha"
                       className={`${estiloInput} h-28 w-full font-mono text-xs`}
                       placeholder={"Jorge Passos; Jaraguazinho; -23.61590; -45.43217\nBenedito Inácio Soares; Massaguaçu; -23.58121; -45.33248"}
                       value={colar}
@@ -848,22 +931,28 @@ export default function RedeGestao() {
                     {escolasNaRede.map((e) => {
                       const c = coords[e.id] ?? { cidade: "", bairro: "", uf: "", lat: "", lng: "" };
                       return (
-                        <div key={e.id} className="flex flex-wrap items-center gap-2">
-                          <span className="w-40 truncate text-sm font-medium">{e.nome}</span>
+                        <div key={e.id} className="flex flex-wrap items-center gap-2 rounded-xl px-1 py-1">
+                          {/* No celular o rótulo ocupa a linha toda e o nome aparece inteiro
+                              (quebra linha): com o `w-40` de sempre, escolas de prefixo igual
+                              ("EMEF Fictícia…") ficavam indistinguíveis. Do `sm` para cima, igual. */}
+                          <span className="w-full truncate text-sm font-semibold text-zinc-800 max-sm:whitespace-normal max-sm:break-words sm:w-40 dark:text-zinc-100" title={e.nome}>{e.nome}</span>
                           <input
                             className={`${estiloInput} w-36`}
+                            aria-label={`Cidade de ${e.nome}`}
                             placeholder="cidade"
                             value={c.cidade}
                             onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, cidade: ev.target.value } }))}
                           />
                           <input
                             className={`${estiloInput} w-40`}
+                            aria-label={`Bairro de ${e.nome}`}
                             placeholder="bairro (para o mapa)"
                             value={c.bairro}
                             onChange={(ev) => setCoords((m) => ({ ...m, [e.id]: { ...c, bairro: ev.target.value } }))}
                           />
                           <input
                             className={`${estiloInput} w-14`}
+                            aria-label={`UF de ${e.nome}`}
                             placeholder="UF"
                             maxLength={2}
                             value={c.uf}
@@ -871,6 +960,7 @@ export default function RedeGestao() {
                           />
                           <input
                             className={`${estiloInput} w-28`}
+                            aria-label={`Latitude de ${e.nome}`}
                             placeholder="latitude"
                             inputMode="decimal"
                             value={c.lat}
@@ -878,6 +968,7 @@ export default function RedeGestao() {
                           />
                           <input
                             className={`${estiloInput} w-28`}
+                            aria-label={`Longitude de ${e.nome}`}
                             placeholder="longitude"
                             inputMode="decimal"
                             value={c.lng}
@@ -896,15 +987,15 @@ export default function RedeGestao() {
               {/* --- Códigos INEP (para casar avaliações oficiais) --- */}
               <SecaoRecolhivel
                 className="lg:col-span-2"
-                icone={<ScanLine size={16} className="text-indigo-600" />}
-                titulo="Códigos INEP das escolas"
+                icone={<IconePastel icone={ScanLine} tom="ambar" tamanho="sm" />}
+                titulo={<span className="whitespace-nowrap">Códigos INEP das escolas</span>}
                 acoes={
                   <>
-                    <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 ${ocupado || escolasNaRede.length === 0 ? "pointer-events-none opacity-50" : ""}`}>
+                    <label className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-800 shadow-cartao hover:border-zinc-300 hover:bg-zinc-50 focus-within:ring-2 focus-within:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 ${ocupado || escolasNaRede.length === 0 ? "pointer-events-none opacity-50" : ""}`}>
                       <ScanLine size={14} /> Preencher automaticamente
                       {/* Só o que o backend lê (o mesmo leitor das avaliações): o .xls
                           antigo voltaria uma proposta vazia, sem erro. */}
-                      <input type="file" accept=".xlsx,.csv,.zip" className="hidden"
+                      <input type="file" accept=".xlsx,.csv,.zip" className="sr-only"
                              onChange={(ev) => { const f = ev.target.files?.[0]; if (f) preencherInep(f); ev.target.value = ""; }} />
                     </label>
                     <Botao onClick={salvarInep} disabled={ocupado || escolasNaRede.length === 0}>
@@ -928,10 +1019,14 @@ export default function RedeGestao() {
                     {escolasNaRede.map((e) => {
                       const p = propostas[e.id];
                       return (
-                        <div key={e.id} className="flex flex-wrap items-center gap-2">
-                          <span className="w-40 truncate text-sm font-medium">{e.nome}</span>
+                        <div key={e.id} className="flex flex-wrap items-center gap-2 rounded-xl px-1 py-1">
+                          {/* No celular o rótulo ocupa a linha toda e o nome aparece inteiro
+                              (quebra linha): com o `w-40` de sempre, escolas de prefixo igual
+                              ("EMEF Fictícia…") ficavam indistinguíveis. Do `sm` para cima, igual. */}
+                          <span className="w-full truncate text-sm font-semibold text-zinc-800 max-sm:whitespace-normal max-sm:break-words sm:w-40 dark:text-zinc-100" title={e.nome}>{e.nome}</span>
                           <input
                             className={`${estiloInput} w-32`}
+                            aria-label={`Código INEP de ${e.nome}`}
                             placeholder="código INEP"
                             inputMode="numeric"
                             value={inep[e.id] ?? ""}

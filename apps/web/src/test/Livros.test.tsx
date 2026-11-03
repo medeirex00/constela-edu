@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import Livros from "../pages/Livros";
 import {
@@ -202,21 +202,25 @@ describe("Livros", () => {
     await corrigirNivel(u);
     await u.click(screen.getByRole("checkbox", { name: /Aplicar também ao histórico/ }));
 
-    // Recusar a confirmação não envia nada — o passado não muda por engano.
-    const recusa = vi.spyOn(window, "confirm").mockReturnValue(false);
+    // A confirmação é a janela da própria tela (identidade v2; antes, window.confirm):
+    // ela diz o livro e o nível ANTES de enviar. Recusar não envia nada — o passado
+    // não muda por engano.
     await u.click(screen.getByRole("button", { name: "Salvar" }));
-    expect(recusa).toHaveBeenCalled();
+    const recusa = await screen.findByRole("dialog", { name: "Aplicar a correção ao histórico?" });
+    expect(within(recusa).getByText(/Laerte, o Gato Inerte/)).toBeInTheDocument();
     expect(chamadas("PATCH", `${URL_LIVROS}/7`)).toHaveLength(0);
-    recusa.mockRestore();
+    await u.click(within(recusa).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog", { name: "Aplicar a correção ao histórico?" })).toBeNull();
+    expect(chamadas("PATCH", `${URL_LIVROS}/7`)).toHaveLength(0);
 
-    const aceite = vi.spyOn(window, "confirm").mockReturnValue(true);
     await u.click(screen.getByRole("button", { name: "Salvar" }));
+    const aceite = await screen.findByRole("dialog", { name: "Aplicar a correção ao histórico?" });
+    await u.click(within(aceite).getByRole("button", { name: "Aplicar ao histórico" }));
     await waitFor(() => expect(chamadas("PATCH", `${URL_LIVROS}/7`)).toHaveLength(1));
     expect(corpoDoPatch()).toMatchObject({ nivel_codigo: "B", aplicar_ao_historico: true });
     expect(await screen.findByText(/aplicada também ao HISTÓRICO/)).toBeInTheDocument();
     // Depois de aplicar ao histórico a escola já foi recalculada pelo servidor.
     expect(screen.queryByRole("button", { name: "Recalcular a escola agora" })).toBeNull();
-    aceite.mockRestore();
   });
 
   it("mostra em texto o erro do servidor ao salvar", async () => {
@@ -232,5 +236,37 @@ describe("Livros", () => {
     await u.click(screen.getByRole("button", { name: "Salvar" }));
 
     expect(await screen.findByText("Já existe um livro com este título no catálogo.")).toBeInTheDocument();
+  });
+
+  it("excluir pede confirmação na tela: cancelar não apaga; confirmar envia o DELETE", async () => {
+    responder("GET", URL_LIVROS, paginaFake([livroFake({ editavel: true })]));
+    responder("DELETE", `${URL_LIVROS}/7`, { ok: true });
+    renderComApp(<Livros />, { rota: "/livros", usuario: ADMIN_GLOBAL });
+
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Excluir Laerte, o Gato Inerte" }));
+    const janela = await screen.findByRole("dialog", { name: "Excluir livro do catálogo" });
+    expect(within(janela).getByText(/Laerte, o Gato Inerte/)).toBeInTheDocument();
+    await u.click(within(janela).getByRole("button", { name: "Cancelar" }));
+    expect(chamadas("DELETE", `${URL_LIVROS}/7`)).toHaveLength(0);
+
+    await u.click(screen.getByRole("button", { name: "Excluir Laerte, o Gato Inerte" }));
+    const outra = await screen.findByRole("dialog", { name: "Excluir livro do catálogo" });
+    await u.click(within(outra).getByRole("button", { name: "Excluir" }));
+    await waitFor(() => expect(chamadas("DELETE", `${URL_LIVROS}/7`)).toHaveLength(1));
+    expect(await screen.findByText(/foi excluído do catálogo/)).toBeInTheDocument();
+  });
+
+  it("falha ao excluir aparece na tela (não some num alerta do navegador)", async () => {
+    responder("GET", URL_LIVROS, paginaFake([livroFake({ editavel: true })]));
+    responderErro("DELETE", `${URL_LIVROS}/7`, 409, "Livro com leituras registradas não pode ser excluído.");
+    renderComApp(<Livros />, { rota: "/livros", usuario: ADMIN_GLOBAL });
+
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Excluir Laerte, o Gato Inerte" }));
+    const janela = await screen.findByRole("dialog", { name: "Excluir livro do catálogo" });
+    await u.click(within(janela).getByRole("button", { name: "Excluir" }));
+    expect(await screen.findByText("Livro com leituras registradas não pode ser excluído.")).toBeInTheDocument();
+    expect(screen.getByText("Laerte, o Gato Inerte")).toBeInTheDocument();
   });
 });

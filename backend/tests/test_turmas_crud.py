@@ -130,15 +130,17 @@ def test_excluir_bloqueado_com_alunos_vinculados(cliente, db, escola_completa):
                for t in cliente.get(f"{_url(escola.id)}?todas=true").json())
 
 
-def test_excluir_turma_com_alunos_apaga_tudo(cliente, db, escola_completa):
-    """com_alunos=true: exclui a turma E os alunos com todos os dados."""
+def test_excluir_turma_com_alunos_apaga_tudo(cliente, cliente_global, db, escola_completa):
+    """com_alunos=true: exclui a turma E os alunos com todos os dados (Admin
+    Global — D19; o admin da escola recebe 403, ver
+    test_turma_excluir_com_alunos_admin_global)."""
     from app.models import Aluno, Matricula
 
     escola = escola_completa["escola"]
     turma = escola_completa["turma"]                     # 3 alunos matriculados
     aluno_ids = [a.id for a in escola_completa["alunos"]]
 
-    resp = cliente.delete(f"{_url(escola.id)}/{turma.id}?com_alunos=true")
+    resp = cliente_global.delete(f"{_url(escola.id)}/{turma.id}?com_alunos=true")
     assert resp.status_code == 200, resp.text
     corpo = resp.json()
     assert corpo["excluidas"] == 1
@@ -153,7 +155,7 @@ def test_excluir_turma_com_alunos_apaga_tudo(cliente, db, escola_completa):
     assert db.query(Matricula).filter(Matricula.turma_id == turma.id).count() == 0
 
 
-def test_excluir_massa_com_alunos(cliente, db, escola_completa):
+def test_excluir_massa_com_alunos(cliente, cliente_global, db, escola_completa):
     """Exclusão em massa (POST /turmas/excluir) com com_alunos=true remove todas
     as turmas selecionadas e todos os alunos delas."""
     from app.models import Aluno, Turma
@@ -166,7 +168,7 @@ def test_excluir_massa_com_alunos(cliente, db, escola_completa):
                         json={"nome": "Novo Aluno Teste",
                               "turma_id": turma2["id"]}).status_code == 201
 
-    resp = cliente.post(f"{_url(escola.id)}/excluir", json={
+    resp = cliente_global.post(f"{_url(escola.id)}/excluir", json={
         "turma_ids": [turma1.id, turma2["id"]], "com_alunos": True})
     assert resp.status_code == 200, resp.text
     corpo = resp.json()
@@ -201,7 +203,7 @@ def test_excluir_massa_sem_alunos_mantem_as_que_tem_alunos(cliente, escola_compl
 
 
 def test_excluir_turma_com_alunos_preserva_aluno_ainda_em_outra_turma(
-        cliente, db, escola_completa):
+        cliente_global, db, escola_completa):
     """Excluir uma turma antiga 'com alunos e dados' NÃO apaga o aluno que ainda
     tem matrícula em outra turma (ex.: o ano ativo) — ele é só DESVINCULADO."""
     from app.models import Aluno, Matricula, Turma
@@ -218,7 +220,7 @@ def test_excluir_turma_com_alunos_preserva_aluno_ainda_em_outra_turma(
                      turma_id=antiga.id, ano_letivo=2025))
     db.commit()
 
-    resp = cliente.delete(f"{_url(escola.id)}/{antiga.id}?com_alunos=true")
+    resp = cliente_global.delete(f"{_url(escola.id)}/{antiga.id}?com_alunos=true")
     assert resp.status_code == 200, resp.text
     corpo = resp.json()
     assert corpo["excluidas"] == 1
@@ -236,7 +238,8 @@ def test_excluir_turma_com_alunos_preserva_aluno_ainda_em_outra_turma(
         Matricula.turma_id == antiga.id).count() == 0
 
 
-def test_total_matriculas_conta_cruas_e_bloqueia_arquivados(cliente, db, escola_completa):
+def test_total_matriculas_conta_cruas_e_bloqueia_arquivados(cliente, cliente_global, db,
+                                                            escola_completa):
     """total_matriculas reflete matrículas CRUAS (inclui alunos arquivados); a
     exclusão simples continua bloqueada mesmo com total_alunos (filtrado) = 0."""
     from app.models import Aluno
@@ -256,8 +259,8 @@ def test_total_matriculas_conta_cruas_e_bloqueia_arquivados(cliente, db, escola_
     # total_matriculas para NÃO chamar a turma de "vazia".
     assert cliente.delete(f"{_url(escola.id)}/{turma.id}").status_code == 409
 
-    # com_alunos=true apaga os 3 (nenhum está em outra turma)
-    ok = cliente.delete(f"{_url(escola.id)}/{turma.id}?com_alunos=true")
+    # com_alunos=true apaga os 3 (nenhum está em outra turma) — Admin Global
+    ok = cliente_global.delete(f"{_url(escola.id)}/{turma.id}?com_alunos=true")
     assert ok.status_code == 200, ok.text
     assert ok.json()["alunos_excluidos"] == 3
 

@@ -17,17 +17,21 @@ import {
   Layers,
   Medal,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { numero } from "../lib/formato";
+import { EsqueletoLista } from "./PessoasUi";
 import {
   periodoParaQuery,
   SeletorPeriodo,
   type Periodo,
 } from "./SeletorPeriodo";
-import { Badge, Card, Carregando, StatCard, Vazio } from "./ui";
+import { Badge, Botao, Card, Erro, IconePastel, Mensagem, StatCard, Vazio } from "./ui";
+import type { TomPastel } from "./ui";
 
 interface Evento {
   id: number;
@@ -73,6 +77,19 @@ const ROTULO_PLATAFORMA: Record<string, string> = {
   matific: "Matific",
 };
 
+/** Cor do quadrado pastel por plataforma (Elefante violeta, Matific verde-azulado). */
+const TOM_PLATAFORMA: Record<string, TomPastel> = {
+  elefante: "violeta",
+  matific: "teal",
+};
+
+const ICONE_TIPO: Record<string, LucideIcon> = {
+  leitura: BookOpen,
+  atividade: Gamepad2,
+  questao: CheckCircle2,
+  medalha: Medal,
+};
+
 /** Data ISO → partes locais (a hora guardada já é local, sem fuso). */
 function partes(iso: string): { dia: string; diaLabel: string; hora: string | null } {
   const [d, t] = iso.split("T");
@@ -91,18 +108,9 @@ function tempo(seg: number | null): string | null {
   return `${s}s`;
 }
 
-function IconeTipo({ tipo }: { tipo: string }) {
-  const props = { size: 15 };
-  if (tipo === "leitura") return <BookOpen {...props} />;
-  if (tipo === "atividade") return <Gamepad2 {...props} />;
-  if (tipo === "questao") return <CheckCircle2 {...props} />;
-  if (tipo === "medalha") return <Medal {...props} />;
-  return <Layers {...props} />;
-}
-
-function Chip({ children }: { children: React.ReactNode }) {
+function Etiqueta({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-1.5 py-0.5 text-xs tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+    <span className="inline-flex items-center gap-1 rounded-lg bg-zinc-100 px-2 py-0.5 text-xs font-medium tabular-nums text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
       {children}
     </span>
   );
@@ -113,31 +121,32 @@ function EventoCard({ ev }: { ev: Evento }) {
   const t = tempo(ev.tempo_segundos);
   const genero = typeof ev.dados?.genero === "string" ? ev.dados.genero : null;
   return (
-    <div className="flex gap-3 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900/40">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
-        <IconeTipo tipo={ev.tipo_evento} />
-      </div>
+    <div className="flex gap-3 rounded-2xl border border-zinc-200/80 bg-white p-3.5 transition-colors hover:border-indigo-200 dark:border-zinc-800 dark:bg-zinc-900/40 dark:hover:border-indigo-500/30">
+      <IconePastel
+        icone={ICONE_TIPO[ev.tipo_evento] ?? Layers}
+        tom={TOM_PLATAFORMA[ev.plataforma] ?? "neutro"}
+      />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-medium">
+          <span className="font-semibold text-zinc-900 dark:text-zinc-100">
             {ev.conteudo_titulo || ROTULO_TIPO[ev.tipo_evento] || ev.tipo_evento}
           </span>
           <Badge>{ROTULO_PLATAFORMA[ev.plataforma] ?? ev.plataforma}</Badge>
           {ev.nivel_codigo && <Badge tom="destaque">Nível {ev.nivel_codigo}</Badge>}
         </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {hora && (
-            <Chip>
-              <Clock size={11} /> {hora}
-            </Chip>
+            <Etiqueta>
+              <Clock size={11} aria-hidden /> {hora}
+            </Etiqueta>
           )}
-          {t && <Chip>{t}</Chip>}
-          {ev.acertos != null && <Chip>{numero(ev.acertos)} acertos</Chip>}
-          {ev.erros != null && <Chip>{numero(ev.erros)} erros</Chip>}
-          {ev.tentativas != null && <Chip>{numero(ev.tentativas)} tentativas</Chip>}
-          {ev.pontuacao != null && <Chip>{numero(ev.pontuacao)} pts</Chip>}
-          {ev.habilidade && <Chip>{ev.habilidade}</Chip>}
-          {genero && <Chip>{genero}</Chip>}
+          {t && <Etiqueta>{t}</Etiqueta>}
+          {ev.acertos != null && <Etiqueta>{numero(ev.acertos)} acertos</Etiqueta>}
+          {ev.erros != null && <Etiqueta>{numero(ev.erros)} erros</Etiqueta>}
+          {ev.tentativas != null && <Etiqueta>{numero(ev.tentativas)} tentativas</Etiqueta>}
+          {ev.pontuacao != null && <Etiqueta>{numero(ev.pontuacao)} pts</Etiqueta>}
+          {ev.habilidade && <Etiqueta>{ev.habilidade}</Etiqueta>}
+          {genero && <Etiqueta>{genero}</Etiqueta>}
         </div>
       </div>
     </div>
@@ -175,6 +184,9 @@ export default function LinhaDoTempoAluno({ escolaId, alunoId }: {
         setCursor(r.proximo_cursor);
         setTemMais(Boolean(r.proximo_cursor));
       } catch (e) {
+        // Recomeço (troca de período) que falha não pode deixar a lista do período
+        // ANTERIOR na tela como se fosse deste.
+        if (reset) setItens([]);
         setErro(e instanceof Error ? e.message : "Não foi possível carregar a linha do tempo.");
       } finally {
         setCarregando(false);
@@ -201,11 +213,11 @@ export default function LinhaDoTempoAluno({ escolaId, alunoId }: {
   const esp = resumo?.espelho;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
         {esp && (
-          <span className="text-sm text-zinc-500 dark:text-zinc-400">
+          <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-zinc-600 shadow-cartao dark:bg-zinc-900 dark:text-zinc-300">
             {Object.entries(esp.por_plataforma)
               .map(([p, n]) => `${ROTULO_PLATAFORMA[p] ?? p}: ${numero(n)}`)
               .join(" · ") || "sem eventos"}
@@ -214,54 +226,59 @@ export default function LinhaDoTempoAluno({ escolaId, alunoId }: {
       </div>
 
       {esp && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <StatCard icone={<Layers size={15} />} rotulo="Atividades registradas"
-                    valor={numero(esp.total_eventos)} />
-          <StatCard icone={<Clock size={15} />} rotulo="Tempo total"
-                    valor={tempo(esp.tempo_total_segundos) ?? "—"} />
-          <StatCard icone={<CalendarClock size={15} />} rotulo="Primeira atividade"
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+          {/* O resumo é do histórico INTEIRO do aluno (não segue o período da lista). */}
+          <StatCard icone={<Layers size={20} />} tom="violeta" rotulo="Atividades registradas"
+                    valor={numero(esp.total_eventos)} detalhe="Desde o primeiro registro" />
+          <StatCard icone={<Clock size={20} />} tom="azul" rotulo="Tempo total"
+                    valor={tempo(esp.tempo_total_segundos) ?? "—"} detalhe="Desde o primeiro registro" />
+          <StatCard icone={<CalendarClock size={20} />} tom="verde" rotulo="Primeira atividade"
                     valor={esp.primeira_atividade ? partes(esp.primeira_atividade).diaLabel : "—"} />
         </div>
       )}
 
-      <Card>
+      <Card className="p-5">
         {carregando && itens.length === 0 ? (
-          <Carregando />
-        ) : erro ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erro} />
+          <EsqueletoLista texto="Carregando a linha do tempo..." />
+        ) : erro && itens.length === 0 ? (
+          <Erro descricao={erro} aoTentar={() => carregar(null, true)} />
         ) : itens.length === 0 ? (
           <Vazio
+            icone={CalendarClock}
             titulo="Nenhuma atividade no período"
             descricao="Ajuste o período ou importe o relatório individual do Elefante Letrado — cada leitura vira um ponto na linha do tempo."
           />
         ) : (
-          <div className="space-y-6 p-1">
+          <div className="space-y-6">
             {grupos.map((g) => (
               <div key={g.diaLabel} className="relative">
-                <div className="sticky top-0 z-[1] mb-2 flex items-center gap-2 bg-white/90 py-1 backdrop-blur dark:bg-zinc-900/80">
-                  <CalendarClock size={14} className="text-zinc-400" />
-                  <span className="text-sm font-semibold tabular-nums">{g.diaLabel}</span>
-                  <span className="text-xs text-zinc-400">
+                <div className="sticky top-0 z-[1] mb-3 flex items-center gap-2 bg-white/90 py-1 backdrop-blur dark:bg-zinc-900/80">
+                  <span aria-hidden className="h-2.5 w-2.5 rounded-full bg-indigo-600 ring-4 ring-indigo-100 dark:ring-indigo-500/20" />
+                  <span className="text-sm font-bold tabular-nums text-zinc-900 dark:text-white">{g.diaLabel}</span>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
                     {g.eventos.length} {g.eventos.length === 1 ? "atividade" : "atividades"}
                   </span>
                 </div>
-                <div className="space-y-2 border-l-2 border-zinc-100 pl-3 dark:border-zinc-800">
+                <div className="ml-[5px] space-y-2.5 border-l-2 border-indigo-100 pl-4 dark:border-zinc-800">
                   {g.eventos.map((ev) => (
                     <EventoCard key={ev.id} ev={ev} />
                   ))}
                 </div>
               </div>
             ))}
+            {/* Falha ao carregar MAIS: a lista já carregada continua na tela. */}
+            {erro && (
+              <Mensagem tipo="erro">Não foi possível carregar mais atividades: {erro}</Mensagem>
+            )}
             {temMais && (
               <div className="pt-1 text-center">
-                <button
-                  type="button"
+                <Botao
+                  variante="secundario"
                   onClick={() => carregar(cursor, false)}
                   disabled={carregando}
-                  className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                 >
                   {carregando ? "Carregando…" : "Carregar mais"}
-                </button>
+                </Botao>
               </div>
             )}
           </div>

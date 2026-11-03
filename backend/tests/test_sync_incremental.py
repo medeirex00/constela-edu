@@ -43,8 +43,11 @@ def test_conector_pula_aluno_inalterado(monkeypatch):
         async def fechar(self): pass
 
         async def coletar_respostas(self, url, timeout_s=25):
+            # Suposição (captura de jul/2026, não confirmada pelo Elefante): cada
+            # turma traz a escola (schoolId). Sem ela, e sem active-schools, a
+            # coleta é recusada (escola_nao_identificada).
             return [{"url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/course/get-courses-students",
-                     "json": [{"id": 511434, "name": "5B", "student": [
+                     "json": [{"id": 511434, "name": "5B", "schoolId": 23952, "student": [
                          {"id": 4427356, "name": "Aluno X"}, {"id": 9999, "name": "Aluno Novo"}]}]}]
 
         async def avaliar(self, expressao):

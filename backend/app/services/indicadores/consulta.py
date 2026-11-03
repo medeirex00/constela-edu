@@ -20,9 +20,10 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AvaliacaoExterna, ImportacaoIndicador, IndicadorReferencia, Rede
+from app.models import ImportacaoIndicador, IndicadorReferencia, Rede
 from app.services.avaliacoes import CATALOGO
 from app.services.indicadores import aeeb, ica
+from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.pipeline import (CHAVE_AVALIACAO, casas_do_detalhe,
                                                codigo_ibge_da_rede)
 
@@ -185,8 +186,7 @@ def ica_da_rede(db: Session, rede: Rede) -> dict:
     if codigo is None:
         return saida
     codigos = {"municipio": codigo, "uf": codigo[:2], "brasil": ica.CODIGO_BRASIL}
-    av = db.execute(select(AvaliacaoExterna).where(
-        AvaliacaoExterna.chave == CHAVE_AVALIACAO)).scalar_one_or_none()
+    av = leituras.avaliacao(db, CHAVE_AVALIACAO)
     linhas: list[IndicadorReferencia] = []
     if av is not None:
         # Só a MESMA rede de ensino em cada nível: municipal no município, pública
@@ -203,8 +203,7 @@ def ica_da_rede(db: Session, rede: Rede) -> dict:
                 ("uf", codigos["uf"], "municipal"),
                 ("brasil", codigos["brasil"], "publica")}]
     ids = {i for ln in linhas for i in (ln.importacao_id, ln.detalhe_importacao_id) if i}
-    imps = {i.id: i for i in db.execute(select(ImportacaoIndicador).where(
-        ImportacaoIndicador.id.in_(ids))).scalars()} if ids else {}
+    imps = leituras.importacoes_por_id(db, ids)
     nomes = {}
     for imp in sorted(imps.values(), key=lambda i: i.id):
         nomes.update((imp.resumo or {}).get("territorios") or {})

@@ -26,7 +26,7 @@
 import { FileUp, RotateCcw, Upload } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
-import { Badge, Botao, Campo, Card, Mensagem, estiloInput } from "../../components/ui";
+import { Badge, Botao, Campo, Card, Confirmacao, IconePastel, Mensagem, estiloInput } from "../../components/ui";
 import { useApi } from "../../hooks/useApi";
 import { ApiError, api, apiUpload } from "../../lib/api";
 import { dataHora } from "../../lib/formato";
@@ -373,7 +373,7 @@ function Previa({ previa, fonte, resposta, aoResponder }: {
         <p className="text-xs text-zinc-500">Edições no arquivo: {(previa.edicoes ?? []).join(", ")}.</p>
       )}
 
-      <ul className="grid gap-x-4 gap-y-0.5 text-xs text-zinc-700 sm:grid-cols-2 dark:text-zinc-300"
+      <ul className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-zinc-700 sm:grid-cols-2 dark:text-zinc-300"
           aria-label="Contadores da prévia">
         {CONTADORES.map(([chave, rotulo]) => {
           const valor = valorDe(chave);
@@ -441,7 +441,7 @@ function Previa({ previa, fonte, resposta, aoResponder }: {
           <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">
             Ver o que muda, número a número ({contagem(mudancas.length)})
           </summary>
-          <div className="mt-1 overflow-x-auto">
+          <div className="relative mt-1 overflow-x-auto">
             <table className="w-full">
               <caption className="sr-only">O que mudaria</caption>
               <thead>
@@ -538,6 +538,9 @@ function Importador({ redeId, versaoRede, aoMudar }: {
   const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [faltaCodmun, setFaltaCodmun] = useState(false);
   const [faltaIbge, setFaltaIbge] = useState(false);
+  // As duas confirmações (nada é gravado nem desfeito antes do "sim" no diálogo).
+  const [confirmandoAplicar, setConfirmandoAplicar] = useState(false);
+  const [paraDesfazer, setParaDesfazer] = useState<ImportacaoOficial | null>(null);
 
   function limparPrevia() {
     setPrevia(null); setArquivo(null); setResposta(null);
@@ -591,14 +594,14 @@ function Importador({ redeId, versaoRede, aoMudar }: {
       faltaResposta ? " Responda a pergunta da troca de números para poder aplicar." : ""}`
     : "";
 
-  async function aplicar() {
+  /** "Aplicar esta prévia" só abre a confirmação, que resume a prévia e a resposta da troca. */
+  function pedirAplicar() {
     if (!previa || !arquivo || !fonte || !base || faltaResposta) return;
-    const troca = FAMILIAS[fonte.familia].troca;
-    const decisao = nTrocas > 0
-      ? `\n\nSua resposta: “${resposta === "sim" ? troca.sim : troca.nao}” (${nTrocas} número(s)).` : "";
-    if (!window.confirm(`Aplicar a prévia #${previa.id} (“${previa.arquivo_nome}”, ${
-      ROTULO_PARSER[previa.parser] ?? previa.parser}) na rede “${nomeRede}”?${decisao}\n\n`
-      + "Os números passam a valer nas telas da rede. Dá para desfazer depois, pela lista de importações.")) return;
+    setConfirmandoAplicar(true);
+  }
+
+  async function aplicar() {
+    if (!previa || !arquivo || !fonte || !base || faltaResposta) { setConfirmandoAplicar(false); return; }
     setOcupado(true); setMsg(null);
     const fd = new FormData();
     fd.append("previa_id", String(previa.id));
@@ -618,13 +621,13 @@ function Importador({ redeId, versaoRede, aoMudar }: {
       aoMudar();
     } catch (e) {
       setMsg({ tipo: "erro", texto: explicar(e, "Aplicação recusada", "Não foi possível aplicar") });
-    } finally { setOcupado(false); }
+    } finally { setOcupado(false); setConfirmandoAplicar(false); }
   }
 
-  async function desfazer(imp: ImportacaoOficial) {
-    if (!base) return;
-    if (!window.confirm(`Desfazer a importação #${imp.id} (“${imp.arquivo_nome}”)? Os números voltam exatamente `
-      + "ao estado anterior a ela (inclusive as médias que ela tenha trocado).")) return;
+  /** Só depois do "Desfazer importação" da confirmação. */
+  async function desfazer() {
+    const imp = paraDesfazer;
+    if (!base || !imp) { setParaDesfazer(null); return; }
     setOcupado(true); setMsg(null);
     try {
       await api(`${base}/importacoes/${imp.id}/desfazer`, { method: "POST" });
@@ -633,7 +636,7 @@ function Importador({ redeId, versaoRede, aoMudar }: {
       aoMudar();
     } catch (e) {
       setMsg({ tipo: "erro", texto: explicar(e, "Desfazer recusado", "Não foi possível desfazer") });
-    } finally { setOcupado(false); }
+    } finally { setOcupado(false); setParaDesfazer(null); }
   }
 
   function codmunGravado() {
@@ -653,8 +656,8 @@ function Importador({ redeId, versaoRede, aoMudar }: {
     <section data-testid="importar-oficiais" aria-label="Importar indicadores oficiais">
       <Card className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <FileUp size={16} className="text-indigo-600" aria-hidden="true" />
+          <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+            <IconePastel icone={FileUp} tom="violeta" tamanho="sm" />
             Importar indicadores oficiais para a rede “{nomeRede}”
           </h2>
           <Badge tom="destaque">só admin global</Badge>
@@ -672,7 +675,7 @@ function Importador({ redeId, versaoRede, aoMudar }: {
           <legend className="mb-1 text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Qual arquivo você vai enviar?
           </legend>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {FONTES.map((f) => (
               <label key={f.chave}
                      className={`flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 text-sm ${
@@ -752,7 +755,7 @@ function Importador({ redeId, versaoRede, aoMudar }: {
                data-testid="oficiais-previa">
             <Previa previa={previa} fonte={fonte} resposta={resposta} aoResponder={setResposta} />
             <div className="flex flex-wrap items-center gap-2">
-              <Botao onClick={aplicar} disabled={ocupado || faltaResposta}
+              <Botao onClick={pedirAplicar} disabled={ocupado || faltaResposta}
                      aria-describedby={faltaResposta ? idFaltaResposta : undefined}>
                 Aplicar esta prévia
               </Botao>
@@ -776,7 +779,7 @@ function Importador({ redeId, versaoRede, aoMudar }: {
             ) : (lista.dados ?? []).length === 0 ? (
               <p className="text-xs text-zinc-500">Nenhuma importação do {familia.rotulo} nesta rede ainda.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full text-xs">
                   <caption className="sr-only">Importações do {familia.rotulo} desta rede</caption>
                   <thead>
@@ -803,7 +806,7 @@ function Importador({ redeId, versaoRede, aoMudar }: {
                         <td className="py-1 text-right">
                           {i.pode_desfazer ? (
                             <Botao variante="neutro" className="px-2 py-1 text-xs" disabled={ocupado}
-                                   aria-label={`Desfazer a importação #${i.id}`} onClick={() => desfazer(i)}>
+                                   aria-label={`Desfazer a importação #${i.id}`} onClick={() => setParaDesfazer(i)}>
                               <RotateCcw size={13} aria-hidden="true" /> Desfazer
                             </Botao>
                           ) : i.status === "aplicada" && i.bloqueada_por ? (
@@ -821,6 +824,47 @@ function Importador({ redeId, versaoRede, aoMudar }: {
           </div>
         )}
       </Card>
+
+      {/* Fora do Card: as confirmações não herdam o espaçamento entre os blocos dele. */}
+      <Confirmacao
+        titulo="Aplicar esta prévia?"
+        aberto={confirmandoAplicar && previa !== null}
+        aoFechar={() => setConfirmandoAplicar(false)}
+        aoConfirmar={() => void aplicar()}
+        rotuloConfirmar={ocupado ? "Aplicando..." : "Aplicar"}
+        ocupado={ocupado}
+      >
+        {previa && (
+          <>
+            <p>
+              Aplicar a prévia <strong>#{previa.id}</strong> (“{previa.arquivo_nome}”, {
+                ROTULO_PARSER[previa.parser] ?? previa.parser}) na rede “{nomeRede}”?
+            </p>
+            {nTrocas > 0 && familia && (
+              <p>
+                Sua resposta: “{resposta === "sim" ? familia.troca.sim : familia.troca.nao}” ({nTrocas} número(s)).
+              </p>
+            )}
+            <p>Os números passam a valer nas telas da rede. Dá para desfazer depois, pela lista de importações.</p>
+          </>
+        )}
+      </Confirmacao>
+      <Confirmacao
+        titulo="Desfazer a importação?"
+        aberto={paraDesfazer !== null}
+        aoFechar={() => setParaDesfazer(null)}
+        aoConfirmar={() => void desfazer()}
+        rotuloConfirmar={ocupado ? "Desfazendo..." : "Desfazer importação"}
+        variante="perigo"
+        ocupado={ocupado}
+      >
+        {paraDesfazer && (
+          <p>
+            Desfazer a importação <strong>#{paraDesfazer.id}</strong> (“{paraDesfazer.arquivo_nome}”)? Os números
+            voltam exatamente ao estado anterior a ela (inclusive as médias que ela tenha trocado).
+          </p>
+        )}
+      </Confirmacao>
     </section>
   );
 }

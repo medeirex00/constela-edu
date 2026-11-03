@@ -52,13 +52,20 @@ def _rotulo_intervalo(inicio: date | None, fim: date | None) -> str:
     return "Todo o histórico"
 
 
+def _aproximado(rotulo: str, ano: int) -> str:
+    """Rótulo de um bimestre SEM calendário oficial: a janela é a aproximação por
+    meses e quem lê o cabeçalho precisa saber disso — antes saía "3º bimestre"
+    como se fosse o oficial."""
+    return f"{rotulo} (aproximado: sem calendário oficial de {ano})"
+
+
 def _bimestre_legado(numero_par: int, ano: int, rotulo: str):
     """Bimestre de CALENDÁRIO (jan/fev, mar/abr, ...) — a conta antiga, usada só
     em ano sem calendário oficial cadastrado em :mod:`app.services.bimestres`.
-    Aproximada por construção; existe para 2027 não quebrar antes de alguém
-    cadastrar as datas."""
+    Aproximada por construção (e o rótulo diz isso); existe para 2027 não quebrar
+    antes de alguém cadastrar as datas."""
     m1 = numero_par * 2 + 1
-    return _ini(_primeiro(ano, m1)), _fim(_ultimo(ano, m1 + 1)), rotulo
+    return _ini(_primeiro(ano, m1)), _fim(_ultimo(ano, m1 + 1)), _aproximado(rotulo, ano)
 
 
 def _bimestre(preset: str, hoje: date):
@@ -86,29 +93,33 @@ def _bimestre(preset: str, hoje: date):
             # Inverso do mapa legado por mês (1–4→1º, 5–7→2º, 8–9→3º, 10–12→4º).
             meses = [m for m in range(1, 13) if bimestres.por_mes_legado(m) == numero]
             return (_ini(_primeiro(ano, meses[0])), _fim(_ultimo(ano, meses[-1])),
-                    bimestres.rotulo(numero))
+                    _aproximado(bimestres.rotulo(numero), ano))
     else:
         ano = hoje.year
-        if not bimestres.ano_com_calendario(ano):
+        anterior = preset == "bimestre_anterior"
+        if bimestres.ano_com_calendario(ano):
+            numero = bimestres.bimestre_sugerido(hoje)
+            volta_um_ano = anterior and numero == 1
+            if anterior and numero > 1:
+                numero -= 1
+        else:
             # Sem calendário oficial: a conta antiga, com o rótulo antigo.
             bim = (hoje.month - 1) // 2
-            if preset == "bimestre_anterior":
-                if bim == 0:
-                    return _bimestre_legado(5, ano - 1, "Bimestre anterior")
-                bim -= 1
-            return _bimestre_legado(
-                bim, ano,
-                "Bimestre anterior" if preset == "bimestre_anterior" else "Este bimestre")
-        numero = bimestres.bimestre_sugerido(hoje)
-        if preset == "bimestre_anterior":
-            if numero == 1:
-                # O 4º do ano passado. Sem calendário dele, cai no legado.
-                if bimestres.ano_com_calendario(ano - 1):
-                    ano, numero = ano - 1, 4
-                else:
-                    return _bimestre_legado(5, ano - 1, "Bimestre anterior")
-            else:
-                numero -= 1
+            volta_um_ano = anterior and bim == 0
+            if not volta_um_ano:
+                return _bimestre_legado(
+                    bim - 1 if anterior else bim, ano,
+                    "Bimestre anterior" if anterior else "Este bimestre")
+        if volta_um_ano:
+            # O anterior é o 4º do ano PASSADO, pelo calendário DELE — que pode
+            # existir mesmo sem o deste ano. Antes, em jan/fev de um ano sem
+            # calendário (2027), caía sempre no legado nov/dez com o rótulo "sem
+            # calendário oficial de 2026": 27 dias de outubro a menos e um
+            # cabeçalho negando o calendário que 2026 tem. Só sem o calendário do
+            # ano passado é que a aproximação entra.
+            if not bimestres.ano_com_calendario(ano - 1):
+                return _bimestre_legado(5, ano - 1, "Bimestre anterior")
+            ano, numero = ano - 1, 4
     inicio, fim = bimestres.intervalo(numero, ano)
     return _ini(inicio), _fim(fim), (f"{bimestres.rotulo(numero)} "
                                     f"({inicio:%d/%m} a {fim:%d/%m})")

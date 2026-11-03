@@ -44,7 +44,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import bloquear_escola_para_recalculo
-from app.services import elegibilidade
+from app.services import elegibilidade, matific_destaque
 from app.models import (
     Aluno,
     Configuracao,
@@ -59,6 +59,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+from app.models.base import agora
 
 # Pontos extras "por livro lido NA ESCOLA": a janela de horário é definida pelo
 # TURNO da turma (horário de Brasília, como já vem no relatório individual do
@@ -260,6 +261,9 @@ INDICADORES_VOLUME = {"atividades", "estrelas", "livros", "tempo", "tentativas"}
 # Estatística robusta (P90/mediana) só é confiável com amostra suficiente;
 # abaixo disso a escola cai na escala simples por máximo (comportamento antigo).
 MIN_ALUNOS_ROBUSTO = 8
+# Percentil da REFERÊNCIA robusta (o 100 da escala): os 10% mais altos não
+# definem a régua sozinhos. Fonte única — o motor e a explicação leem daqui.
+PERCENTIL_REFERENCIA = 0.90
 
 # DIMENSÃO de cada indicador. Existe para uma garantia estrutural (Arquitetura 2,
 # item 6): a nota de LEITURA só pode nascer de dado do Elefante e a de MATEMÁTICA
@@ -388,7 +392,7 @@ def referencias_robustas(
         # A amostra que liga o modo robusto (``n_alunos``) não muda.
         ativos = _ativos_finitos(valores)
         if usar_robusto and len(ativos) >= 2:
-            refs[chave] = _percentil(ativos, 0.90)
+            refs[chave] = _percentil(ativos, PERCENTIL_REFERENCIA)
             if indicador in INDICADORES_VOLUME:
                 k_vol[indicador] = _percentil(ativos, 0.50)
         else:
@@ -507,34 +511,58 @@ def obter_pesos_brutos(db: Session, escola_id: int, namespace: str) -> dict[str,
 # Estado atual dos alunos (snapshots mais recentes)
 # ---------------------------------------------------------------------------
 
-def _snapshots_atuais(db: Session, escola_id: int, modelo):
+def _snapshots_atuais(db: Session, escola_id: int, modelo, janela=None):
     """Último snapshot de cada aluno para a plataforma indicada.
 
     "Último" pela DATA DE REFERÊNCIA (id desempata), não pelo id: importar um
     relatório de um período antigo (backfill mensal do Matific) registra o
     histórico sem rebaixar o estado atual dos rankings. A seleção acontece no
     banco (window function) — snapshots são imutáveis e só crescem; varrer
-    todos como objetos ORM a cada recálculo não escala."""
-    ids = ids_snapshots_atuais(modelo, escola_id)
+    todos como objetos ORM a cada recálculo não escala.
+
+    ``janela`` (opcional, ``(início, fim)`` inclusivos): só snapshots com
+    ``data_referencia`` dentro dela concorrem a "último" — ver
+    ``ids_snapshots_atuais``."""
+    ids = ids_snapshots_atuais(modelo, escola_id, janela=janela)
     rows = db.execute(select(modelo).where(modelo.id.in_(ids))).scalars().all()
     return {row.aluno_id: row for row in rows}
 
 
-def ids_snapshots_atuais(modelo, escola_id: int):
+def ids_snapshots_atuais(modelo, escola_id: int, janela=None):
     """Subquery com o id do snapshot mais recente (data_referencia, id) de
-    cada aluno da escola."""
-    numerado = (
-        select(
-            modelo.id.label("snap_id"),
-            func.row_number().over(
-                partition_by=modelo.aluno_id,
-                order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
-            ).label("posicao"),
-        )
-        .where(modelo.escola_id == escola_id)
-        .subquery()
-    )
+    cada aluno da escola.
+
+    ``janela`` = ``(início, fim)`` inclusivos: o recorte é aplicado ANTES de
+    numerar, então o "atual" passa a ser o último snapshot DENTRO da janela (e
+    quem não tem nenhum nela simplesmente não aparece). É o que permite tratar
+    contadores DO ANO (Matific) — ``matific_destaque.janela_ano_letivo`` — sem
+    duplicar a window function. Sem ``janela``, o comportamento de sempre."""
+    consulta = select(
+        modelo.id.label("snap_id"),
+        func.row_number().over(
+            partition_by=modelo.aluno_id,
+            order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
+        ).label("posicao"),
+    ).where(modelo.escola_id == escola_id)
+    if janela is not None:
+        inicio, fim = janela
+        consulta = consulta.where(modelo.data_referencia >= inicio,
+                                  modelo.data_referencia <= fim)
+    numerado = consulta.subquery()
     return select(numerado.c.snap_id).where(numerado.c.posicao == 1).scalar_subquery()
+
+
+def snapshots_matific_do_ano(db: Session, escola_id: int, ano_letivo: int):
+    """Último snapshot do Matific de cada aluno DENTRO do ano letivo.
+
+    MATIFIC É CONTADOR DO ANO: é a DEFINIÇÃO de "aferido em Matemática" — quem
+    só tem coleta de outro ano não é aferido (ausência no ano, não zero). Mora
+    num lugar só porque o motor e todo consumidor que faz MÉDIA de Matemática
+    (painel da rede, dashboard da escola, resumo de turma/escola, comparador)
+    têm de decidir "aferido" do mesmo jeito: se o motor deixa a criança de fora
+    e a média a conta, ela entra na média como o 0,0 que o motor gravou."""
+    return _snapshots_atuais(db, escola_id, SnapshotMatific,
+                             janela=matific_destaque.janela_ano_letivo(ano_letivo))
 
 
 def _chaves_do_nivel(nivel: NivelDificuldade) -> list[str]:
@@ -833,7 +861,7 @@ def _referencias_auto(
         usar_robusto = (n_por_dimensao[DIMENSAO_DO_INDICADOR[indicador]]
                         >= MIN_ALUNOS_ROBUSTO)
         if usar_robusto and len(ativos) >= 2:
-            refs[chave] = _percentil(ativos, 0.90)        # régua robusta (top 10%)
+            refs[chave] = _percentil(ativos, PERCENTIL_REFERENCIA)        # régua robusta (top 10%)
             if indicador in INDICADORES_VOLUME:
                 k_vol[indicador] = _percentil(ativos, 0.50)  # meia-saturação = mediana
         else:
@@ -1106,7 +1134,14 @@ def _carregar_contexto(db: Session, escola_id: int):
     # ser pontuado: arquivar um aluno (operação rotineira, que dispara recálculo)
     # mudava as notas e as posições de todos os ativos.
     ids_pontuados = {m.aluno_id for m, _t in matriculas}
-    matific = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotMatific).items()
+    # MATIFIC É CONTADOR DO ANO (atividades/estrelas do ``this-year``): um
+    # snapshot de outro ano letivo não diz nada sobre este — nem como estado
+    # atual. O "atual" do motor é o último snapshot DENTRO do ano letivo (a mesma
+    # janela de ``matific_destaque.ganho_no_periodo`` e de ``/ranking/matematica``);
+    # quem só tem coleta de ano anterior NÃO é aferido em Matemática (ausência no
+    # ano, não zero). O Elefante NÃO recebe este corte: o contador dele é
+    # vitalício (livros lidos não "zeram" na virada do ano).
+    matific = {aid: s for aid, s in snapshots_matific_do_ano(db, escola_id, ano).items()
                if aid in ids_pontuados}
     elefante = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
                 if aid in ids_pontuados}
@@ -1595,6 +1630,14 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     )
     resultados.sort(key=lambda r: _chave_ordenacao(r, criterios))
 
+    # INSTANTE deste recálculo — um só para a escola inteira, atribuído
+    # EXPLICITAMENTE em cada linha abaixo. O `default=agora` da coluna só vale no
+    # INSERT: a linha reaproveitada (o caso comum) ficava com a data da PRIMEIRA
+    # gravação, e a tela afirmava "calculada em" um dia em que aquele número nem
+    # existia. Atribuição explícita, e não `onupdate`: este carimbo não pode
+    # depender de o flush detectar mudança em outra coluna — recálculo idêntico
+    # também é recálculo.
+    instante = agora()
     # Carrega TODAS as notas do ano numa query só (era 1 SELECT por aluno).
     notas_existentes = {
         n.aluno_id: n for n in db.execute(
@@ -1624,9 +1667,10 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
         # default 0,0 e sem backfill) NÃO vira "zero" na média: fica PENDENTE de
         # recálculo até `scripts.recalcular_institucional --pendentes`.
         # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
-        # recalcular duas vezes não pode gerar UPDATE; o instante fica em
-        # `Nota.calculada_em`.)
+        # recalcular duas vezes não pode mudar nota, posição nem detalhes; o
+        # instante fica SÓ em `Nota.calculada_em`, logo abaixo.)
         nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
+        nota_row.calculada_em = instante
 
     if commit:
         db.commit()

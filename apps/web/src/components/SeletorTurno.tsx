@@ -15,7 +15,7 @@ import { Clock } from "lucide-react";
 
 import { TURNO_TODOS, chaveTurno, rotuloTurno, turnosDasTurmas } from "../lib/turnos";
 import type { Turma } from "../lib/types";
-import { estiloInput } from "./ui";
+import { MolduraPilula, estiloSelectPilula } from "./SeletorPilula";
 
 export function SeletorTurno({
   turmas,
@@ -43,23 +43,25 @@ export function SeletorTurno({
   const atual = existe ? valor : TURNO_TODOS;
 
   return (
-    <span className={`inline-flex items-center gap-2 ${className}`} title={title}>
-      <Clock size={15} className="text-zinc-400" />
-      <select
-        aria-label="Turno"
-        className={`${estiloInput} w-auto disabled:opacity-60`}
-        value={atual}
-        disabled={disabled}
-        aria-describedby={descricaoId}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value={TURNO_TODOS}>Todos os turnos</option>
-        {opcoes.map((t) => (
-          <option key={chaveTurno(t) || "_sem"} value={chaveTurno(t)}>
-            {rotuloTurno(t)}
-          </option>
-        ))}
-      </select>
+    // Identidade v2: a mesma pílula do seletor de período (select nativo por baixo).
+    <span className={`inline-flex items-center ${className}`} title={title}>
+      <MolduraPilula icone={Clock}>
+        <select
+          aria-label="Turno"
+          className={estiloSelectPilula}
+          value={atual}
+          disabled={disabled}
+          aria-describedby={descricaoId}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value={TURNO_TODOS}>Todos os turnos</option>
+          {opcoes.map((t) => (
+            <option key={chaveTurno(t) || "_sem"} value={chaveTurno(t)}>
+              {rotuloTurno(t)}
+            </option>
+          ))}
+        </select>
+      </MolduraPilula>
     </span>
   );
 }

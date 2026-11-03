@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import Aluno, Configuracao, Escola, Usuario
 from app.services import gamificacao as svc
-from app.services import permissoes
+from app.services import elegibilidade, permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/gamificacao", tags=["Gamificação"])
@@ -26,7 +26,13 @@ def mural(
     Vitrine da ESCOLA TODA — professor não acessa (gamificação só dos seus).
     Bloqueado para a Secretaria: destaca NOMES de crianças (PII/LGPD)."""
     permissoes.negar_dado_individual(db, escola_id, usuario)
-    return svc.mural(db, escola_id)
+    # AS FASES NÃO CONCORREM: o "Aluno do Dia/Semana/Mês" e os eventos recortam
+    # as turmas premiáveis, como o telão e o mural do app (`/sincronizacao`).
+    # Sem o recorte, o mesmo gestor via a criança da Educação Infantil em
+    # destaque na web e não a via no app.
+    escola = db.get(Escola, escola_id)
+    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, escola.ano_letivo_ativo)
+    return svc.mural(db, escola_id, turma_ids=premiaveis)
 
 
 @router.get("/ranking-xp")
@@ -44,6 +50,9 @@ def ranking_xp(
         alunos = permissoes.alunos_permitidos(db, escola_id,
                                               escola.ano_letivo_ativo, permitidas)
         itens = permissoes.filtrar_por_aluno(itens, alunos)
+        # Posição DENTRO do recorte (1..N), como o Ranking Geral do professor: a da
+        # escola inteira contaria quantas crianças de fora estão à frente.
+        itens = [{**item, "posicao": posicao} for posicao, item in enumerate(itens, start=1)]
     return itens
 
 

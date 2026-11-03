@@ -266,7 +266,7 @@ def test_pdf_com_nome_longo_nao_quebra(cliente, db, escola_completa):
     _dados_basicos(db, escola_completa)
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
-    ana.nome = "AGATHA VITORYA LOURENÇO PEREIRA DOS SANTOS DE OLIVEIRA"
+    ana.nome = "VALENTINA FICÇÃO TESTELLI ARRUDELLI DOS TESTES DE FICTICIA"
     ana.da_lista_piloto = True       # ver nota em test_certificado_pdf
     db.commit()
     scoring.recalcular_escola(db, escola.id)

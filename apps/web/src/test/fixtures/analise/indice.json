@@ -1,0 +1,133 @@
+{
+  "dados": "INVENTADOS (decisão D13) — gerados por backend/tests/test_analise_fixtures.py",
+  "exemplos": [
+    {
+      "arquivo": "indicadores.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores",
+      "params": {},
+      "descricao": "Catálogo da rede: indicadores, destaques, estimativas, escolas e alertas"
+    },
+    {
+      "arquivo": "indicador_ica.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/ica",
+      "params": {},
+      "descricao": "ICA da rede: 2023 sem resultado (participação baixa), 2024 empate com a meta (inconclusivo), SP e Brasil como contexto"
+    },
+    {
+      "arquivo": "indicador_saresp_serie.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/saresp",
+      "params": {
+        "etapa": "5_ano",
+        "componente": "lp"
+      },
+      "descricao": "SARESP 5º ano LP: rede municipal, Estado (mesma rede) e rede estadual (contexto)"
+    },
+    {
+      "arquivo": "indicador_saresp_escola.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/saresp",
+      "params": {
+        "etapa": "2_ano",
+        "componente": "mt",
+        "escola_id": 2
+      },
+      "descricao": "SARESP de uma escola (sem número: motivo) com a rede de referência e as quebras de escala do 2º ano"
+    },
+    {
+      "arquivo": "indicador_saresp_escolas.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/saresp",
+      "params": {
+        "visao": "escolas",
+        "edicao": 2025
+      },
+      "descricao": "Visão por escolas (ordem de nome, instável com TPS = 0, ausências com motivo)"
+    },
+    {
+      "arquivo": "indicador_ideb.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/ideb",
+      "params": {},
+      "descricao": "Ideb da rede: metas só até 2021, 2023 sem meta"
+    },
+    {
+      "arquivo": "indicador_ideb_escolas.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/ideb",
+      "params": {
+        "visao": "escolas",
+        "edicao": 2023
+      },
+      "descricao": "Ideb 2023 por escola: o número gravado antes, sem o registro do arquivo oficial, aparece marcado (proveniencia = sem_registro); ausências com motivo"
+    },
+    {
+      "arquivo": "indicador_iee_escolas.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/iee",
+      "params": {
+        "visao": "escolas",
+        "edicao": 2025
+      },
+      "descricao": "IEE por escola com a meta e o ICM oficial"
+    },
+    {
+      "arquivo": "erro_ica_por_escola.json",
+      "rota": "GET /api/v1/redes/1/analise/indicadores/ica",
+      "params": {
+        "escola_id": 2
+      },
+      "descricao": "400: o ICA não existe por escola"
+    },
+    {
+      "arquivo": "plataformas.json",
+      "rota": "GET /api/v1/redes/1/analise/plataformas",
+      "params": {},
+      "descricao": "Elefante e Matific por escola × série (célula pequena suprimida com motivo único e a vizinha junto, blocos só das séries visíveis, escola sem coleta com métrica nula)"
+    },
+    {
+      "arquivo": "plataformas_serie_3.json",
+      "rota": "GET /api/v1/redes/1/analise/plataformas",
+      "params": {
+        "serie": 3
+      },
+      "descricao": "Plataformas só do 3º ano"
+    },
+    {
+      "arquivo": "relacao_nao_calculavel.json",
+      "rota": "GET /api/v1/redes/1/analise/relacao",
+      "params": {
+        "indicador": "saresp",
+        "componente": "mt",
+        "metrica": "estrelas_por_aluno"
+      },
+      "descricao": "Relação recusada (SARESP 2025 × plataformas 2026), com os pares lado a lado e o motivo próprio de cada escola"
+    },
+    {
+      "arquivo": "relacao_ica.json",
+      "rota": "GET /api/v1/redes/1/analise/relacao",
+      "params": {
+        "indicador": "ica"
+      },
+      "descricao": "Relação recusada: o ICA é da rede"
+    },
+    {
+      "arquivo": "relacao_calculavel.json",
+      "rota": "GET /api/v1/redes/2/analise/relacao",
+      "params": {
+        "indicador": "saresp",
+        "etapa": "5_ano",
+        "componente": "lp",
+        "edicao": 2026,
+        "metrica": "livros_por_aluno"
+      },
+      "descricao": "Relação calculável (cenário SINTÉTICO do mesmo ano: SARESP 2026 inventado × Elefante 2026)"
+    },
+    {
+      "arquivo": "escola.json",
+      "rota": "GET /api/v1/escolas/2/analise",
+      "params": {},
+      "descricao": "Análise de uma escola: indicadores dela, rede de referência, plataformas"
+    },
+    {
+      "arquivo": "escola_sem_inep.json",
+      "rota": "GET /api/v1/escolas/5/analise",
+      "params": {},
+      "descricao": "Análise de uma escola sem código INEP"
+    }
+  ]
+}

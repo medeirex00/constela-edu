@@ -2,7 +2,7 @@
  * Mock manual de `../lib/api` (usado automaticamente por `vi.mock` no setup).
  *
  * TODA tela e todo hook consomem a API por este módulo (`api`, `apiUpload`,
- * `loginRequest`, `apiDownload` + helpers de token). Interceptando aqui, os
+ * `loginRequest`, `apiDownload`, `apiDownloadPost` + helpers de token). Interceptando aqui, os
  * testes rodam sem rede, de forma determinística, exercitando o componente REAL
  * e os hooks REAIS (useApi/useMutation) — só o transporte HTTP é falso.
  *
@@ -90,6 +90,13 @@ export const loginRequest = vi.fn(async (_email: string, _senha: string) => ({
 /** Download de arquivo — no-op observável (asserção via toHaveBeenCalledWith). */
 export const apiDownload = vi.fn(async (_caminho: string): Promise<void> => undefined);
 
+/** Download por POST (ex.: lote de certificados) — no-op observável que devolve o nome
+ *  com que o arquivo "foi salvo" (o padrão pedido). Asserção via toHaveBeenCalledWith;
+ *  falha com mockRejectedValueOnce(new ApiError(...)). */
+const downloadPostPadrao = async (_caminho: string, _corpo: unknown, nomePadrao = "arquivo"): Promise<string> =>
+  nomePadrao;
+export const apiDownloadPost = vi.fn(downloadPostPadrao);
+
 // --- Adaptadores de token (equivalentes síncronos da versão web real) --------
 export function obterToken(): string | null {
   return tokenEmMemoria;
@@ -122,6 +129,10 @@ export function resetApiMock(): void {
   api.mockClear();
   apiUpload.mockClear();
   apiDownload.mockClear();
+  // mockReset (não só Clear): um mockRejectedValueOnce não consumido não vaza para o
+  // próximo teste; a implementação padrão volta logo em seguida.
+  apiDownloadPost.mockReset();
+  apiDownloadPost.mockImplementation(downloadPostPadrao);
   loginRequest.mockClear();
   loginRequest.mockResolvedValue({ access_token: "token-de-teste", token_type: "bearer" });
 }

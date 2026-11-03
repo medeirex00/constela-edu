@@ -4,12 +4,14 @@ import Importacoes from "../pages/Importacoes";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import type { Analise, Importacao, ResultadoImportacao } from "../lib/types";
 import {
+  api,
   renderComApp,
   responder,
   responderErro,
   screen,
   turmaFake,
   userEvent,
+  within,
 } from "./utils";
 
 const URL_HIST = "/escolas/1/importacoes";
@@ -99,6 +101,28 @@ describe("Importacoes", () => {
     expect(screen.getByText("Prof. Mariana")).toBeInTheDocument();
     expect(screen.getByText("37")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Histórico" })).toBeInTheDocument();
+    // Sem a referência ao documento interno de requisitos ("PRD §15") no texto da escola.
+    const subtitulo = screen.getByText(/Toda importação fica registrada com autor, quantidade e tempo/);
+    expect(subtitulo.textContent).toBe("Toda importação fica registrada com autor, quantidade e tempo.");
+    expect(subtitulo.textContent).not.toMatch(/PRD/);
+  });
+
+  it("o passo a passo tem as três etapas, numa lista ordenada, com a atual marcada", async () => {
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    // A página abre em "Matrículas da escola"; o passo a passo aqui é o do envio individual.
+    await userEvent.click(await screen.findByRole("button", { name: /Um por vez/ }));
+
+    const passos = await screen.findByRole("list", { name: "Etapas da importação" });
+    const itens = within(passos).getAllByRole("listitem");
+    expect(itens.map((li) => li.textContent)).toEqual([
+      "1Enviar o relatório", "2Conferir a prévia", "3Confirmar e gravar",
+    ]);
+    expect(itens[0]).toHaveAttribute("aria-current", "step");
+    expect(itens[1]).not.toHaveAttribute("aria-current");
   });
 
   it("mostra o estado vazio quando não há importações", async () => {
@@ -155,11 +179,17 @@ describe("Importacoes", () => {
     expect(screen.getByText("Ana Beatriz Souza")).toBeInTheDocument();
     expect(screen.getByText("Vinculado automaticamente")).toBeInTheDocument();
 
-    // Confirma e vê a mensagem de sucesso da gravação.
+    // "Sim, importar" abre a confirmação (nada gravado ainda): ela resume o que vai
+    // ser gravado e só o "Gravar importação" chama o /confirmar.
     await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent("1 vinculado(s) a um aluno já cadastrado");
+    expect(api.mock.calls.some(([caminho]) => caminho === URL_CONFIRMAR)).toBe(false);
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
     expect(
       await screen.findByText("Importação concluída com sucesso."),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Gravar esta importação?" })).toBeNull();
   });
 
   async function previaComCorrespondencia(corr: Analise["linhas"][number]["correspondencia"]) {
@@ -191,6 +221,83 @@ describe("Importacoes", () => {
     const destino = screen.getByRole("combobox",
       { name: /Destino de/ }) as HTMLSelectElement;
     expect(destino.value).toBe("criar");
+  });
+
+  it("nome da escola do relatório diferente do cadastro: só aviso, a prévia segue", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = analiseFake();
+    analise.escola_detectada = "EMEF OUTRA ESCOLA";
+    analise.aviso_escola = "Aviso: o relatório é da escola “EMEF OUTRA ESCOLA” e esta escola está cadastrada como “ESCOLA TESTE”.";
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    expect(await screen.findByText(/o relatório é da escola “EMEF OUTRA ESCOLA”/)).toBeInTheDocument();
+    // Não bloqueia: a confirmação continua disponível.
+    expect(screen.getByRole("button", { name: "Sim, importar" })).toBeEnabled();
+  });
+
+  it("escola com a política 'bloquear': a prévia avisa que quem não casar não ganha ficha", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = analiseFake();
+    analise.criacao_bloqueada_por_politica = true;
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    expect(
+      await screen.findByText(/A matrícula desta escola vem da Lista Piloto/),
+    ).toBeInTheDocument();
+    // Só aviso: a confirmação continua disponível (o backend manda para a revisão).
+    expect(screen.getByRole("button", { name: "Sim, importar" })).toBeEnabled();
+  });
+
+  it("sem a política 'bloquear', a prévia não mostra o aviso", async () => {
+    await previaComCorrespondencia(analiseFake().linhas[0].correspondencia);
+    expect(screen.queryByText(/A matrícula desta escola vem da Lista Piloto/)).toBeNull();
+  });
+
+  it("criação barrada pela política: o resultado diz o motivo e leva às revisões", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, analiseFake());
+    const resultado: ResultadoImportacao = {
+      mensagem:
+        "0 aluno(s) com dado novo importado(s). 1 aluno(s) sem ficha não foram criados: a "
+        + "política desta escola não deixa a plataforma criar ficha (a matrícula vem da "
+        + "Lista Piloto). Eles ficaram em Revisão de identidade para um gestor apontar a "
+        + "ficha certa.",
+      importacao_id: 99,
+      qtd_alunos: 0,
+      qtd_erros: 1,
+      avisos: [],
+      qtd_revisoes: 1,
+      criacao_bloqueada: 1,
+    };
+    responder("POST", URL_CONFIRMAR, resultado);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    await u.click(await screen.findByRole("button", { name: "Gravar importação" }));
+    expect(
+      await screen.findByText(/a política desta escola não deixa a plataforma criar ficha/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/1 aluno aguarda/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
+      .toHaveAttribute("href", "/revisoes-identidade");
   });
 
   it("'bloqueado por conflito' aparece com o rótulo certo", async () => {

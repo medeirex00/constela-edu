@@ -41,6 +41,18 @@ const Rankings = lazy(() => import("./pages/Rankings"));
 const RedeDashboard = lazy(() => import("./pages/rede/RedeDashboard"));
 const RedeGestao = lazy(() => import("./pages/rede/RedeGestao"));
 const RedeAvaliacoes = lazy(() => import("./pages/rede/RedeAvaliacoes"));
+// Análise educacional integrada (indicadores oficiais × plataformas), só leitura.
+const AnaliseEducacional = lazy(() => import("./pages/analise/AnaliseEducacional"));
+// As telas PRINCIPAIS da Secretaria (DESENHO2 §2.3): conclusão primeiro, cada indicador
+// explicado, avaliações externas e plataformas separadas. Só leitura, sem PII.
+const PanoramaSecretaria = lazy(() => import("./pages/rede/secretaria/PanoramaSecretaria"));
+const AcompanhamentoRede = lazy(() => import("./pages/rede/secretaria/AcompanhamentoRede"));
+// A tela Escolas (lista e comparação lado a lado; o arquivo guarda o nome antigo) e a ficha.
+const CompararEscolas = lazy(() => import("./pages/rede/secretaria/CompararEscolas"));
+const FichaEscolaRede = lazy(() => import("./pages/rede/secretaria/FichaEscolaRede"));
+const AvaliacoesExternasRede = lazy(() => import("./pages/rede/secretaria/AvaliacoesExternasRede"));
+const PlataformasRedePagina = lazy(() => import("./pages/rede/secretaria/PlataformasRedePagina"));
+const RelatoriosRedePagina = lazy(() => import("./pages/rede/secretaria/RelatoriosRedePagina"));
 // Relatórios é UMA área com duas abas (oficiais | por período). As duas rotas
 // abaixo apontam para a mesma tela; o caminho decide a aba.
 const RelatoriosArea = lazy(() => import("./pages/RelatoriosArea"));
@@ -49,6 +61,7 @@ const Escolas = lazy(() => import("./pages/Escolas"));
 const SessoesAtivas = lazy(() => import("./pages/SessoesAtivas"));
 const Simulador = lazy(() => import("./pages/Simulador"));
 const Sincronizacao = lazy(() => import("./pages/Sincronizacao"));
+const Suporte = lazy(() => import("./pages/Suporte"));
 const DiagnosticoElefante = lazy(() => import("./pages/DiagnosticoElefante"));
 const TurmaDetalhe = lazy(() => import("./pages/TurmaDetalhe"));
 const Turmas = lazy(() => import("./pages/Turmas"));
@@ -102,6 +115,22 @@ function RotaGlobal({ children }: { children: React.ReactNode }) {
   return global ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+/** Só ADMINISTRADOR — Admin Global ou admin da escola (`usePerfil().admin`, o
+ *  mesmo `is_global || cargo === "admin"` da tela de Configurações Gerais e do
+ *  `exigir_papeis("admin")` do backend); a Secretaria não opera escolas.
+ *
+ *  Por que a coordenação não entra em /configuracoes: tudo o que a tela oferece
+ *  a ela é título sem conteúdo (Backup), leitura do que não pode mudar (cor,
+ *  brasão e logos da identidade institucional, pesos legados) ou um "Salvar
+ *  dados da escola" que o backend recusa com 403 (`PATCH /escolas/{id}` exige
+ *  admin). O que ela PODE fazer ali — editar as medalhas — ganhou item próprio
+ *  no menu (Gestão › Regras de pontuação → Editar conquistas), e
+ *  /configuracoes/conquistas segue aberta a ela. O backend continua sendo a trava real. */
+export function RotaAdmin({ children }: { children: React.ReactNode }) {
+  const { admin, secretaria } = usePerfil();
+  return admin && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
+}
+
 /** Só a Secretaria (usuário com rede vinculada) ou o admin global entra em
  *  /rede — o painel municipal com o mapa. Professor/escola cai no Dashboard. */
 function RotaRede({ children }: { children: React.ReactNode }) {
@@ -109,18 +138,32 @@ function RotaRede({ children }: { children: React.ReactNode }) {
   return rede ? <>{children}</> : <Navigate to="/" replace />;
 }
 
-/** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding): a
+/** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding) e telas de
+ *  gestão com dado NOMINAL de criança (Matific, Elefante, Comparador): a
  *  Secretaria (rede vinculada, não-global) acompanha os resultados da rede mas
  *  NÃO opera as escolas — é mandada ao Dashboard. Coordenador de escola (sem
- *  rede) e admin global entram. O backend também barra (deps.negar_secretaria). */
+ *  rede) e admin global entram. O backend também barra (deps.negar_secretaria;
+ *  nas telas nominais, turmas_permitidas = [] devolve a lista vazia). */
 function RotaEscolaOp({ children }: { children: React.ReactNode }) {
   const { gestor, secretaria } = usePerfil();
   return gestor && !secretaria ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+/** Telas de DADO INDIVIDUAL de criança abertas também ao professor (lista e ficha
+ *  de aluno, premiações, insights, relatórios) e a de usuários: fora do menu da
+ *  Secretaria, que é mandada ao Dashboard. Sem esta trava ela as abria pelo
+ *  endereço e via a escola "vazia" — "0 alunos", pódio sem ninguém — porque o
+ *  backend nunca lhe devolve nome de criança (turmas_permitidas = [], 404 na
+ *  ficha, 403 em relatórios e usuários). Professor e gestão de escola passam. */
+function RotaSemSecretaria({ children }: { children: React.ReactNode }) {
+  const { secretaria } = usePerfil();
+  return secretaria ? <Navigate to="/" replace /> : <>{children}</>;
+}
+
 /** Tela de um MÓDULO contratado (SaaS): quem não assinou o produto é mandado ao
  *  Dashboard em vez de ver uma tela vazia de algo que não faz parte do plano.
- *  O backend também recusa (deps.exigir_modulo) — aqui é só a camada de UX. */
+ *  O backend também recusa (deps.exigir_modulo_da_escola nas rotas do módulo; as
+ *  leituras mistas tiram o pedaço do módulo) — aqui é só a camada de UX. */
 function RotaModulo({ modulo, children }: { modulo: string; children: React.ReactNode }) {
   const { tem } = useModulos();
   return tem(modulo) ? <>{children}</> : <Navigate to="/" replace />;
@@ -142,7 +185,9 @@ export default function App() {
         {/* Vitrine pública da Secretaria (top 5 escolas), também sem login */}
         <Route path="/rede/p/:token" element={<PainelPublicoRede />} />
         <Route element={<AreaProtegida />}>
-          {/* --- Abertas ao professor (dados já filtrados pelas turmas dele) --- */}
+          {/* --- Abertas ao professor (dados já filtrados pelas turmas dele). As de
+              dado individual de criança ficam fora do alcance da Secretaria
+              (RotaSemSecretaria): o backend não lhe devolve nome de criança. --- */}
           {/* "/" (Dashboard) adapta o CONTEÚDO ao perfil internamente: rede →
               panorama consolidado; escola → Dashboard da escola. */}
           <Route path="/" element={<Dashboard />} />
@@ -152,56 +197,79 @@ export default function App() {
           <Route path="/evolucao" element={<Navigate to="/ranking?ver=evolucao" replace />} />
           <Route path="/ranking-leitura" element={<Navigate to="/ranking?ver=leitura" replace />} />
           <Route path="/ranking-matematica" element={<Navigate to="/ranking?ver=matematica" replace />} />
-          <Route path="/premiacoes" element={<Premiacoes />} />
-          <Route path="/alunos" element={<Alunos />} />
-          <Route path="/alunos/:id" element={<PerfilAluno />} />
+          <Route path="/premiacoes" element={<RotaSemSecretaria><Premiacoes /></RotaSemSecretaria>} />
+          <Route path="/alunos" element={<RotaSemSecretaria><Alunos /></RotaSemSecretaria>} />
+          <Route path="/alunos/:id" element={<RotaSemSecretaria><PerfilAluno /></RotaSemSecretaria>} />
           <Route path="/conquistas/biblioteca" element={<BibliotecaConquistas />} />
-          <Route path="/insights" element={<Insights />} />
+          <Route path="/insights" element={<RotaSemSecretaria><Insights /></RotaSemSecretaria>} />
           {/* Relatórios: professor exporta o ranking e a lista das turmas dele
               (o backend filtra por turmas_permitidas). */}
-          <Route path="/relatorios" element={<RelatoriosArea />} />
+          <Route path="/relatorios" element={<RotaSemSecretaria><RelatoriosArea /></RotaSemSecretaria>} />
           {/* Relatório por PERÍODO: a MESMA tela, aberta na aba "Por período".
               A rota é preservada inteira — já estava publicada, e link salvo,
               histórico e atalho continuam valendo. Mesma guarda do /relatorios
               (o endpoint nega a Secretaria e recorta o professor por
               turmas_permitidas); não gera documento oficial. */}
-          <Route path="/relatorios/periodo" element={<RelatoriosArea />} />
-          {/* Usuários: professor entra mas o backend só devolve a própria conta. */}
-          <Route path="/usuarios" element={<Usuarios />} />
+          <Route path="/relatorios/periodo" element={<RotaSemSecretaria><RelatoriosArea /></RotaSemSecretaria>} />
+          {/* Usuários: professor entra mas o backend só devolve a própria conta; a
+              Secretaria recebe 403 do router de administração (negar_secretaria). */}
+          <Route path="/usuarios" element={<RotaSemSecretaria><Usuarios /></RotaSemSecretaria>} />
           {/* Minha conta (autoatendimento): QUALQUER autenticado vê a própria
               conta (reusa /auth/me). Sem guard de gestão — é o caminho da
               Secretaria/professor para os próprios dados, sem tocar /usuarios. */}
           <Route path="/minha-conta" element={<MinhaConta />} />
+          {/* Suporte: todos os perfis (o conteúdo se adapta ao perfil). */}
+          <Route path="/suporte" element={<Suporte />} />
 
           {/* --- Secretaria (rede) ou admin global: painel municipal + mapa --- */}
           <Route path="/rede" element={<RotaRede><RedeDashboard /></RotaRede>} />
           {/* Provisionar redes (criar, vincular escolas + coords, designar Secretaria)
               é ação de admin GLOBAL — uma rede cruza várias escolas. */}
           <Route path="/rede/gerenciar" element={<RotaGlobal><RedeGestao /></RotaGlobal>} />
-          {/* Avaliações externas (SAEB/IDEB/...) × engajamento — Secretaria ou global. */}
+          {/* Indicadores oficiais: detalhes, cobertura e fontes (rastreabilidade) — Secretaria
+              ou global; importar e desfazer só o global. A análise integrada é /rede/analise. */}
           <Route path="/rede/avaliacoes" element={<RotaRede><RedeAvaliacoes /></RotaRede>} />
+          {/* Análise educacional integrada: indicadores oficiais lado a lado com o uso das
+              plataformas (abas por ?ver=). Secretaria ou global; só leitura, sem PII. */}
+          <Route path="/rede/analise" element={<RotaRede><AnaliseEducacional /></RotaRede>} />
           {/* Ranking da Rede: todas as escolas em 4 visões (Geral/Leitura/
               Matemática/Engajamento), comparação PER CAPITA. Agregado por escola. */}
           {/* Ranking da Rede: a MESMA tela de Rankings, aberta na categoria Escolas.
               A Secretaria (sem escola) continua vendo só a página da rede. */}
           <Route path="/rede/ranking" element={<RotaRede><Rankings /></RotaRede>} />
+          {/* Telas PRINCIPAIS da Secretaria (a mesma guarda da análise; só endpoints que já
+              existem, todos `exigir_rede`). A Visão da rede é o Panorama da Secretaria (que ela
+              abre em "/") para o admin global, com o seletor de rede. */}
+          <Route path="/rede/visao" element={<RotaRede><PanoramaSecretaria /></RotaRede>} />
+          <Route path="/rede/acompanhamento" element={<RotaRede><AcompanhamentoRede /></RotaRede>} />
+          <Route path="/rede/escolas" element={<RotaRede><CompararEscolas /></RotaRede>} />
+          {/* A ficha de UMA escola da rede (a escola vem do endereço, não do contexto): a mesma
+              guarda; a tela confere que a escola é da rede e o backend barra as outras. */}
+          <Route path="/rede/escolas/:escolaId" element={<RotaRede><FichaEscolaRede /></RotaRede>} />
+          <Route path="/rede/avaliacoes-externas" element={<RotaRede><AvaliacoesExternasRede /></RotaRede>} />
+          <Route path="/rede/plataformas" element={<RotaRede><PlataformasRedePagina /></RotaRede>} />
+          <Route path="/rede/relatorios" element={<RotaRede><RelatoriosRedePagina /></RotaRede>} />
 
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
-          <Route path="/comparador" element={<RotaGestao><Comparador /></RotaGestao>} />
+          <Route path="/comparador" element={<RotaEscolaOp><Comparador /></RotaEscolaOp>} />
           <Route path="/escola" element={<RotaGestao><VisaoEscola /></RotaGestao>} />
           {/* Evolução por aluno: coordenador/admin veem qualquer aluno; o
               professor vê os das turmas dele — o backend (exigir_aluno_permitido)
-              é quem escopa (404 fora do alcance). Sem guard de gestão aqui. */}
-          <Route path="/alunos/:id/evolucao" element={<EvolucaoAluno />} />
+              é quem escopa (404 fora do alcance — a Secretaria sempre). Sem guard
+              de gestão aqui; só a Secretaria é desviada. */}
+          <Route path="/alunos/:id/evolucao" element={<RotaSemSecretaria><EvolucaoAluno /></RotaSemSecretaria>} />
           <Route path="/turmas" element={<RotaGestao><Turmas /></RotaGestao>} />
           <Route path="/turmas/:id" element={<RotaGestao><TurmaDetalhe /></RotaGestao>} />
           <Route path="/professores" element={<RotaGestao><Professores /></RotaGestao>} />
           <Route path="/metricas" element={<RotaGestao><Metricas /></RotaGestao>} />
-          <Route path="/configuracoes" element={<RotaGestao><Configuracoes /></RotaGestao>} />
+          {/* Configurações Gerais: só administrador (ver RotaAdmin). O editor de
+              medalhas logo abaixo continua com a coordenação (o backend deixa
+              admin e coordenador gravarem as definições). */}
+          <Route path="/configuracoes" element={<RotaGestao><RotaAdmin><Configuracoes /></RotaAdmin></RotaGestao>} />
           <Route path="/configuracoes/conquistas" element={<RotaGestao><ConfigConquistas /></RotaGestao>} />
           {/* Telas de PRODUTO: só existem para a rede que contratou o módulo. */}
-          <Route path="/matific" element={<RotaGestao><RotaModulo modulo="matematica"><Matific /></RotaModulo></RotaGestao>} />
-          <Route path="/elefante" element={<RotaGestao><RotaModulo modulo="leitura"><Elefante /></RotaModulo></RotaGestao>} />
+          <Route path="/matific" element={<RotaEscolaOp><RotaModulo modulo="matematica"><Matific /></RotaModulo></RotaEscolaOp>} />
+          <Route path="/elefante" element={<RotaEscolaOp><RotaModulo modulo="leitura"><Elefante /></RotaModulo></RotaEscolaOp>} />
           <Route path="/livros" element={<RotaGestao><RotaModulo modulo="leitura"><Livros /></RotaModulo></RotaGestao>} />
           <Route path="/comecar" element={<RotaEscolaOp><Comecar /></RotaEscolaOp>} />
           <Route path="/importacoes" element={<RotaEscolaOp><Importacoes /></RotaEscolaOp>} />

@@ -22,7 +22,7 @@ def test_montar_consulta_usa_campos_preenchidos():
 
 def test_montar_consulta_prefere_bairro_ao_nome():
     # Com bairro, busca pelo BAIRRO (o OSM acha) — não pelo nome da escola.
-    e = Escola(nome="EMEF Jorge Passos", cidade="Caraguatatuba", estado="SP",
+    e = Escola(nome="EMEF Fictícia Aurora", cidade="Caraguatatuba", estado="SP",
                bairro="Jaraguazinho")
     assert svc.montar_consulta(e) == "Jaraguazinho, Caraguatatuba, SP, Brasil"
     # Com endereço + bairro, refina ainda mais.

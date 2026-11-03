@@ -1,0 +1,289 @@
+{
+  "indicador": {
+    "chave": "ica",
+    "nome": "Indicador Criança Alfabetizada (ICA)",
+    "orgao": "INEP",
+    "oficial": true,
+    "unidade": "%",
+    "escala": "percentual",
+    "disponivel": true,
+    "motivo_indisponivel": null,
+    "texto_indisponivel": null,
+    "abrangencias": [
+      "rede"
+    ],
+    "por_escola": false,
+    "etapas": [
+      "2_ano"
+    ],
+    "componentes": [
+      "lp"
+    ],
+    "rotulos_etapas": {
+      "2_ano": "2º ano"
+    },
+    "rotulos_componentes": {
+      "lp": "Língua Portuguesa"
+    },
+    "edicoes": [
+      2024,
+      2025
+    ],
+    "edicao_mais_recente": 2025,
+    "tem_meta": true,
+    "avisos": [
+      "O ICA é o indicador da REDE municipal: o INEP não publica o ICA por escola. Ele não serve para comparar nem ordenar escolas.",
+      "SP e Brasil: o INEP publica o ICA na rede PÚBLICA (estadual e municipal) — outra rede, só contexto. A comparação na mesma rede é com a UF nas redes municipais.",
+      "Resultado × meta na precisão divulgada: o empate é “inconclusivo” (23 × 23 pode ser 22,6 × 23,3), não “atingiu”."
+    ]
+  },
+  "filtros": {
+    "etapa": "2_ano",
+    "componente": "lp",
+    "escola_id": null,
+    "de": null,
+    "ate": null,
+    "visao": "serie",
+    "edicao": null
+  },
+  "opcoes": {
+    "etapas": [
+      "2_ano"
+    ],
+    "componentes": [
+      "lp"
+    ],
+    "edicoes": [
+      2023,
+      2024,
+      2025
+    ],
+    "escolas": []
+  },
+  "series": [
+    {
+      "id": "rede_municipal",
+      "rotulo": "Município Fictício — rede municipal",
+      "papel": "principal",
+      "abrangencia": "rede",
+      "escola_id": null,
+      "rede_ensino": "municipal",
+      "mesma_rede": true,
+      "comparavel": true,
+      "motivo_nao_comparavel": null,
+      "etapa": "2_ano",
+      "componente": "lp",
+      "pontos": [
+        {
+          "edicao": 2023,
+          "valor": null,
+          "casas": null,
+          "valor_detalhado": null,
+          "casas_detalhe": null,
+          "motivo_ausencia": "participacao_baixa",
+          "texto_ausencia": "sem resultado: participação abaixo de 70%",
+          "meta": null,
+          "meta_casas": null,
+          "operador_meta": null,
+          "motivo_sem_meta": "sem_meta_na_edicao",
+          "texto_sem_meta": "não há meta oficial para esta edição",
+          "diferenca_meta": null,
+          "diferenca_casas": null,
+          "diferenca_meta_detalhe": null,
+          "situacao_meta": null,
+          "instavel": false,
+          "fonte_id": 1,
+          "fonte_meta_id": null,
+          "fonte_detalhe_id": null,
+          "proveniencia": null,
+          "texto_proveniencia": null,
+          "difere_do_oficial": false
+        },
+        {
+          "edicao": 2024,
+          "valor": 55.0,
+          "casas": 0,
+          "valor_detalhado": null,
+          "casas_detalhe": null,
+          "motivo_ausencia": null,
+          "texto_ausencia": null,
+          "meta": 55.0,
+          "meta_casas": 0,
+          "operador_meta": null,
+          "motivo_sem_meta": null,
+          "texto_sem_meta": null,
+          "diferenca_meta": 0.0,
+          "diferenca_casas": 0,
+          "diferenca_meta_detalhe": null,
+          "situacao_meta": "inconclusivo",
+          "instavel": false,
+          "fonte_id": 1,
+          "fonte_meta_id": 1,
+          "fonte_detalhe_id": null,
+          "proveniencia": "oficial",
+          "texto_proveniencia": null,
+          "difere_do_oficial": false
+        },
+        {
+          "edicao": 2025,
+          "valor": 58.0,
+          "casas": 0,
+          "valor_detalhado": 58.37,
+          "casas_detalhe": 2,
+          "motivo_ausencia": null,
+          "texto_ausencia": null,
+          "meta": 60.0,
+          "meta_casas": 0,
+          "operador_meta": null,
+          "motivo_sem_meta": null,
+          "texto_sem_meta": null,
+          "diferenca_meta": -2.0,
+          "diferenca_casas": 0,
+          "diferenca_meta_detalhe": null,
+          "situacao_meta": "nao_atingiu",
+          "instavel": false,
+          "fonte_id": 1,
+          "fonte_meta_id": 1,
+          "fonte_detalhe_id": 1,
+          "proveniencia": "oficial",
+          "texto_proveniencia": null,
+          "difere_do_oficial": false
+        }
+      ],
+      "metas": [
+        {
+          "edicao": 2024,
+          "valor": 55.0,
+          "casas": 0,
+          "operador": null,
+          "motivo_ausencia": null,
+          "fonte_id": 1
+        },
+        {
+          "edicao": 2025,
+          "valor": 60.0,
+          "casas": 0,
+          "operador": null,
+          "motivo_ausencia": null,
+          "fonte_id": 1
+        },
+        {
+          "edicao": 2026,
+          "valor": 63.0,
+          "casas": 0,
+          "operador": null,
+          "motivo_ausencia": null,
+          "fonte_id": 1
+        }
+      ]
+    },
+    {
+      "id": "uf_rede_publica",
+      "rotulo": "UF 35 — rede pública",
+      "papel": "contexto",
+      "abrangencia": "uf",
+      "escola_id": null,
+      "rede_ensino": "publica",
+      "mesma_rede": false,
+      "comparavel": false,
+      "motivo_nao_comparavel": "Outra rede: o INEP publica este território na rede PÚBLICA (estadual e municipal). Só contexto — não é comparação com a rede municipal.",
+      "etapa": "2_ano",
+      "componente": "lp",
+      "pontos": [
+        {
+          "edicao": 2025,
+          "valor": 61.0,
+          "casas": 0,
+          "valor_detalhado": null,
+          "casas_detalhe": null,
+          "motivo_ausencia": null,
+          "texto_ausencia": null,
+          "meta": null,
+          "meta_casas": null,
+          "operador_meta": null,
+          "motivo_sem_meta": "sem_meta_na_edicao",
+          "texto_sem_meta": "não há meta oficial para esta edição",
+          "diferenca_meta": null,
+          "diferenca_casas": null,
+          "diferenca_meta_detalhe": null,
+          "situacao_meta": null,
+          "instavel": false,
+          "fonte_id": 1,
+          "fonte_meta_id": null,
+          "fonte_detalhe_id": null,
+          "proveniencia": "oficial",
+          "texto_proveniencia": null,
+          "difere_do_oficial": false
+        }
+      ],
+      "metas": []
+    },
+    {
+      "id": "brasil_rede_publica",
+      "rotulo": "Brasil — rede pública",
+      "papel": "contexto",
+      "abrangencia": "brasil",
+      "escola_id": null,
+      "rede_ensino": "publica",
+      "mesma_rede": false,
+      "comparavel": false,
+      "motivo_nao_comparavel": "Outra rede: o INEP publica este território na rede PÚBLICA (estadual e municipal). Só contexto — não é comparação com a rede municipal.",
+      "etapa": "2_ano",
+      "componente": "lp",
+      "pontos": [
+        {
+          "edicao": 2025,
+          "valor": 57.0,
+          "casas": 0,
+          "valor_detalhado": null,
+          "casas_detalhe": null,
+          "motivo_ausencia": null,
+          "texto_ausencia": null,
+          "meta": null,
+          "meta_casas": null,
+          "operador_meta": null,
+          "motivo_sem_meta": "sem_meta_na_edicao",
+          "texto_sem_meta": "não há meta oficial para esta edição",
+          "diferenca_meta": null,
+          "diferenca_casas": null,
+          "diferenca_meta_detalhe": null,
+          "situacao_meta": null,
+          "instavel": false,
+          "fonte_id": 1,
+          "fonte_meta_id": null,
+          "fonte_detalhe_id": null,
+          "proveniencia": "oficial",
+          "texto_proveniencia": null,
+          "difere_do_oficial": false
+        }
+      ],
+      "metas": []
+    }
+  ],
+  "escolas": [],
+  "quebras": [],
+  "avisos": [
+    "O ICA é o indicador da REDE municipal: o INEP não publica o ICA por escola. Ele não serve para comparar nem ordenar escolas.",
+    "SP e Brasil: o INEP publica o ICA na rede PÚBLICA (estadual e municipal) — outra rede, só contexto. A comparação na mesma rede é com a UF nas redes municipais.",
+    "Resultado × meta na precisão divulgada: o empate é “inconclusivo” (23 × 23 pode ser 22,6 × 23,3), não “atingiu”."
+  ],
+  "fontes": {
+    "1": {
+      "importacao_id": 1,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "arquivo_ficticio.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2025,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "inep_ica_municipios",
+      "modo": "upload",
+      "notas": []
+    }
+  }
+}

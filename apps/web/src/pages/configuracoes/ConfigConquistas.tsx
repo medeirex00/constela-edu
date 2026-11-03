@@ -1,29 +1,44 @@
 /**
  * Configurações → Conquistas — nada de critério fixo no código.
  *
- * O administrador cria, edita, reordena, ativa/desativa e remove
- * conquistas. Ao salvar, as regras passam a valer imediatamente para
+ * A gestão da escola (administrador ou coordenação — o backend libera as
+ * definições para `admin` e `coordenador`) cria, edita, reordena,
+ * ativa/desativa e remove conquistas. Ao salvar, as regras passam a valer imediatamente para
  * todos os alunos: XP, mural, biblioteca, perfil e painel público.
+ *
+ * Identidade visual v2 (docs/design/IDENTIDADE-VISUAL-V2.md), no padrão da tela de
+ * Critérios: cada conquista é uma linha-cartão (emoji em quadrado pastel na cor da
+ * raridade, selos, critério e XP em "caixas", interruptor de ativa com a semântica
+ * de checkbox) e o "Salvar alterações" fica numa barra grudada na base. O contrato
+ * com o backend é o mesmo: o PUT manda a lista INTEIRA, a ordem do array é a ordem
+ * de exibição, `codigo` vazio cria conquista nova (o servidor gera o código),
+ * trocar o critério zera a plataforma (o servidor deduz) e trocar a raridade aplica
+ * o XP sugerido. Não existe "restaurar padrão" (não há rota para isso).
  */
-import { ArrowDown, ArrowLeft, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, CheckCircle2, CircleAlert, Medal, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { BadgeRaridade, ChipPlataforma, NOME_PLATAFORMA, PilulaXp, QuadradoEmoji } from "../../components/ConquistasUi";
 import {
-  Badge,
   Botao,
+  BotaoIcone,
   Campo,
   Card,
-  Carregando,
+  Confirmacao,
+  Erro,
   Mensagem,
   Modal,
   PageHeader,
+  RotuloSecao,
+  Skeleton,
+  Vazio,
   estiloInput,
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { usePerfil } from "../../hooks/usePerfil";
 import { ApiError, api } from "../../lib/api";
-import { BadgeRaridade, NOME_PLATAFORMA } from "../BibliotecaConquistas";
 
 interface Definicao {
   codigo: string;
@@ -59,16 +74,84 @@ const NOVA: Definicao = {
   raridade: "comum", ativa: true, criada_em: "",
 };
 
+/** Atalhos de ícone (os emojis das conquistas padrão e alguns de celebração). O
+ *  campo continua livre: qualquer emoji de até 8 caracteres vale. */
+const SUGESTOES_ICONE = ["🏅", "📖", "📚", "🥉", "🥈", "🥇", "⏱️", "🎯", "🧩", "🧮", "✖️", "🏆", "⭐", "🌌", "🚀", "🔥"];
+
+/** Setas de reordenar: 28 px no tablet e no desktop; 40 px no celular (alvo de toque). */
+const CLASSE_SETA =
+  "grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-30 max-sm:h-10 max-sm:w-10 dark:hover:bg-zinc-800 dark:hover:text-zinc-100";
+
+/** Interruptor visual sobre um checkbox NATIVO (a semântica e o rótulo continuam os
+ *  de checkbox: "Ativar {nome}"); o estado também aparece em texto. */
+function InterruptorAtiva({ ligado, rotulo, aoMudar }: {
+  ligado: boolean; rotulo: string; aoMudar: (ligado: boolean) => void;
+}) {
+  return (
+    <label className="inline-flex cursor-pointer select-none items-center gap-2.5">
+      <span className="relative inline-flex shrink-0">
+        <input
+          type="checkbox"
+          aria-label={rotulo}
+          className="peer sr-only"
+          checked={ligado}
+          onChange={(e) => aoMudar(e.target.checked)}
+        />
+        <span
+          aria-hidden
+          className="h-7 w-12 rounded-full bg-zinc-400 transition-colors peer-checked:bg-indigo-600 peer-checked:shadow-pilula peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2 dark:bg-zinc-500 dark:peer-focus-visible:ring-offset-zinc-900"
+        />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5 motion-reduce:transition-none"
+        />
+      </span>
+      <span aria-hidden className={`w-12 text-xs font-semibold ${ligado ? "text-indigo-700 dark:text-indigo-300" : "text-zinc-500 dark:text-zinc-400"}`}>
+        {ligado ? "Ativa" : "Inativa"}
+      </span>
+    </label>
+  );
+}
+
+function EsqueletoLista() {
+  return (
+    <div aria-hidden className="space-y-3">
+      {[0, 1, 2, 3].map((i) => (
+        <Card key={i} className="flex items-center gap-4 p-5">
+          <Skeleton className="h-14 w-14 rounded-2xl" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-4 w-1/3" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
+          <Skeleton className="hidden h-12 w-40 rounded-xl sm:block" />
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export default function ConfigConquistas() {
   const { escolaId } = useApp();
+  // O caminho de volta é o de quem CHEGOU aqui: o administrador vem do cartão
+  // dentro de Configurações Gerais; a coordenação — que não abre aquela tela
+  // (RotaAdmin) — vem do grupo "Regras de pontuação" do menu (Gestão), cuja
+  // primeira página é Critérios (/metricas). O mural (/conquistas) mora em outro
+  // grupo (Escola › Reconhecimento): voltar para ele levava a coordenação a uma
+  // seção por onde ela não passou.
+  const { admin } = usePerfil();
+  const volta = admin
+    ? { para: "/configuracoes", rotulo: "Configurações" }
+    : { para: "/metricas", rotulo: "Critérios" };
   const [lista, setLista] = useState<Definicao[]>([]);
   const [alterado, setAlterado] = useState(false);
   const [emEdicao, setEmEdicao] = useState<{ indice: number | null; item: Definicao } | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
+  // Remoção pede confirmação (só vale de verdade depois de "Salvar alterações").
+  const [removendo, setRemovendo] = useState<number | null>(null);
 
   // Leitura única das definições — o hook cuida de cancelamento, timeout e retry.
-  const { dados, erro } = useApi<Definicoes>(
+  const { dados, erro, recarregar } = useApi<Definicoes>(
     escolaId ? `/escolas/${escolaId}/gamificacao/conquistas/definicoes` : null,
     {
       // Semeia a lista editável a cada busca bem-sucedida.
@@ -79,9 +162,21 @@ export default function ConfigConquistas() {
     },
   );
 
+  // Alterações pendentes: o navegador avisa antes de fechar ou recarregar a aba.
+  useEffect(() => {
+    if (!alterado) return;
+    const aoSair = (evento: BeforeUnloadEvent) => {
+      evento.preventDefault();
+      evento.returnValue = "";
+    };
+    window.addEventListener("beforeunload", aoSair);
+    return () => window.removeEventListener("beforeunload", aoSair);
+  }, [alterado]);
+
   function alterar(nova: Definicao[]) {
     setLista(nova);
     setAlterado(true);
+    setMensagem(null);
   }
 
   function mover(indice: number, direcao: -1 | 1) {
@@ -127,126 +222,145 @@ export default function ConfigConquistas() {
     setEmEdicao(null);
   }
 
+  /** Atualiza um campo do item em edição. */
+  function editar(campos: Partial<Definicao>) {
+    if (!emEdicao || !edicao) return;
+    setEmEdicao({ ...emEdicao, item: { ...edicao, ...campos } });
+  }
+
+  const novaConquista = () => setEmEdicao({ indice: null, item: { ...NOVA } });
+  const aRemover = removendo != null ? lista[removendo] : null;
+  // Plataforma exibida: a gravada ou, vazia, a que o servidor deduz do critério.
+  const plataformaDe = (c: Definicao) =>
+    c.plataforma || dados?.indicadores[c.indicador]?.plataforma || "geral";
+
   return (
     <div className="space-y-6">
       <div>
         <Link
-          to="/configuracoes"
-          className="mb-3 inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          to={volta.para}
+          className="mb-3 inline-flex items-center gap-1.5 rounded-lg text-sm font-medium text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          <ArrowLeft size={15} /> Configurações
+          <ArrowLeft size={15} aria-hidden /> {volta.rotulo}
         </Link>
+        {/* O MESMO nome do item de menu que abre esta tela (Regras de pontuação →
+            "Editar conquistas"): "Conquistas" sozinho é o mural (/conquistas). */}
         <PageHeader
-          titulo="Conquistas"
+          titulo="Editar conquistas"
           descricao="Crie e ajuste as medalhas da escola — critérios, XP, raridade e ordem — sem tocar no código. Novas conquistas valem na hora."
           acoes={
-            <div className="flex gap-2">
-              <Botao variante="neutro" onClick={() => setEmEdicao({ indice: null, item: { ...NOVA } })}>
-                <Plus size={15} /> Nova conquista
-              </Botao>
-              <Botao onClick={salvar} disabled={!alterado || salvando}>
-                {salvando ? "Salvando..." : "Salvar alterações"}
-              </Botao>
-            </div>
+            <Botao variante="secundario" onClick={novaConquista} disabled={!dados}>
+              <Plus size={15} aria-hidden /> Nova conquista
+            </Botao>
           }
         />
       </div>
 
       {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
-      {alterado && (
-        <Mensagem tipo="erro">
-          Há alterações não salvas — clique em “Salvar alterações” para aplicá-las.
-        </Mensagem>
-      )}
 
-      <Card>
-        {erro ? (
-          <Mensagem tipo="erro">{erro.message}</Mensagem>
-        ) : dados === null ? (
-          <Carregando />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-3 py-2 font-medium">Ordem</th>
-                  <th className="px-3 py-2 font-medium">Conquista</th>
-                  <th className="hidden px-3 py-2 font-medium md:table-cell">Critério</th>
-                  <th className="px-3 py-2 text-right font-medium">XP</th>
-                  <th className="hidden px-3 py-2 font-medium sm:table-cell">Raridade</th>
-                  <th className="hidden px-3 py-2 font-medium lg:table-cell">Plataforma</th>
-                  <th className="px-3 py-2 font-medium">Ativa</th>
-                  <th className="px-3 py-2 text-right font-medium">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lista.map((conquista, indice) => (
-                  <tr
-                    key={`${conquista.codigo}-${indice}`}
-                    className={`border-b border-zinc-100 last:border-0 dark:border-zinc-800/60 ${conquista.ativa ? "" : "opacity-50"}`}
+      {erro ? (
+        <Card className="p-6">
+          <Erro descricao={erro.message} aoTentar={recarregar} />
+        </Card>
+      ) : dados === null ? (
+        <EsqueletoLista />
+      ) : lista.length === 0 ? (
+        <Card className="p-6">
+          <Vazio
+            icone={Medal}
+            titulo="Nenhuma conquista na lista"
+            descricao="Crie a primeira com “Nova conquista”. Ela só passa a valer depois de salvar."
+            acao={<Botao onClick={novaConquista}><Plus size={15} aria-hidden /> Nova conquista</Botao>}
+          />
+        </Card>
+      ) : (
+        <ol aria-label="Conquistas da escola, na ordem de exibição" className="space-y-3">
+          {lista.map((conquista, indice) => (
+            <li
+              key={`${conquista.codigo}-${indice}`}
+              className={`card flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center ${
+                conquista.ativa ? "" : "bg-zinc-50 dark:bg-zinc-900/60"
+              }`}
+            >
+              <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
+                {/* Setas de ordem: no celular 40 px e 8 px entre elas (com 28 px coladas era
+                    fácil tocar "Descer" querendo "Subir"). */}
+                <div className="flex shrink-0 flex-col gap-1 max-sm:gap-2">
+                  <button
+                    type="button"
+                    aria-label={`Subir ${conquista.nome}`}
+                    className={CLASSE_SETA}
+                    disabled={indice === 0}
+                    onClick={() => mover(indice, -1)}
                   >
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-0.5">
-                        <button aria-label="Subir" className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-30 dark:hover:bg-zinc-800" disabled={indice === 0} onClick={() => mover(indice, -1)}>
-                          <ArrowUp size={14} />
-                        </button>
-                        <button aria-label="Descer" className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-30 dark:hover:bg-zinc-800" disabled={indice === lista.length - 1} onClick={() => mover(indice, 1)}>
-                          <ArrowDown size={14} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className="mr-2 text-lg leading-none">{conquista.icone}</span>
-                      <span className="font-medium">{conquista.nome}</span>
-                    </td>
-                    <td className="hidden px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400 md:table-cell">
-                      {dados.indicadores[conquista.indicador]?.rotulo ?? conquista.indicador} ≥ {conquista.limite}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium text-amber-600 dark:text-amber-400">
-                      {conquista.xp}
-                    </td>
-                    <td className="hidden px-3 py-2 sm:table-cell">
-                      <BadgeRaridade raridade={conquista.raridade} rotulo={dados.raridades[conquista.raridade]} />
-                    </td>
-                    <td className="hidden px-3 py-2 text-zinc-500 dark:text-zinc-400 lg:table-cell">
-                      {NOME_PLATAFORMA[conquista.plataforma] ?? conquista.plataforma}
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="checkbox"
-                        aria-label={`Ativar ${conquista.nome}`}
-                        className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
-                        checked={conquista.ativa}
-                        onChange={(e) =>
-                          alterar(lista.map((atual, i) =>
-                            i === indice ? { ...atual, ativa: e.target.checked } : atual))
-                        }
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex justify-end gap-1">
-                        <button
-                          className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                          onClick={() => setEmEdicao({ indice, item: { ...conquista } })}
-                        >
-                          editar
-                        </button>
-                        <button
-                          aria-label={`Remover ${conquista.nome}`}
-                          className="ml-1 rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
-                          onClick={() => alterar(lista.filter((_, i) => i !== indice))}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                    <ArrowUp size={15} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Descer ${conquista.nome}`}
+                    className={CLASSE_SETA}
+                    disabled={indice === lista.length - 1}
+                    onClick={() => mover(indice, 1)}
+                  >
+                    <ArrowDown size={15} aria-hidden />
+                  </button>
+                </div>
+                <QuadradoEmoji
+                  emoji={conquista.icone} raridade={conquista.ativa ? conquista.raridade : "comum"} tamanho="lg"
+                  className={conquista.ativa ? "" : "grayscale"}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold leading-snug text-zinc-900 dark:text-white">{conquista.nome}</p>
+                  {conquista.descricao && (
+                    <p className="mt-0.5 line-clamp-2 text-sm text-zinc-500 dark:text-zinc-400" title={conquista.descricao}>
+                      {conquista.descricao}
+                    </p>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <BadgeRaridade raridade={conquista.raridade} rotulo={dados.raridades[conquista.raridade]} />
+                    <ChipPlataforma plataforma={plataformaDe(conquista)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Caixas de critério e de XP com LARGURA FIXA: o XP, o interruptor e as
+                  ações ficam em colunas alinhadas de um cartão para o outro (antes a
+                  borda da caixa de critério variava ~150 px e a lista ficava serrilhada).
+                  Na linha única (≥ 1024 px) o bloco não encolhe: quem cede espaço é o
+                  texto da conquista, que quebra linha. */}
+              <div className="flex flex-wrap items-center gap-3 pl-[3.25rem] sm:pl-11 lg:shrink-0 lg:flex-nowrap lg:pl-0">
+                <div className="w-60 max-w-full shrink-0 rounded-xl bg-zinc-50 px-3.5 py-2 ring-1 ring-zinc-100 dark:bg-zinc-800/60 dark:ring-zinc-800">
+                  <RotuloSecao>Critério</RotuloSecao>
+                  <p className="break-words text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                    {dados.indicadores[conquista.indicador]?.rotulo ?? conquista.indicador} ≥ {conquista.limite}
+                  </p>
+                </div>
+                <div className="min-w-[4.5rem] shrink-0 rounded-xl bg-ouro-50 px-3.5 py-2 ring-1 ring-ouro-100 dark:bg-ouro-400/10 dark:ring-ouro-400/20">
+                  <RotuloSecao>XP</RotuloSecao>
+                  <p className="text-sm font-bold tabular-nums text-marinho-900 dark:text-ouro-200">{conquista.xp}</p>
+                </div>
+                <InterruptorAtiva
+                  ligado={conquista.ativa}
+                  rotulo={`Ativar ${conquista.nome}`}
+                  aoMudar={(ativa) => alterar(lista.map((atual, i) => (i === indice ? { ...atual, ativa } : atual)))}
+                />
+                <div className="flex items-center gap-2">
+                  <BotaoIcone rotulo={`Editar ${conquista.nome}`} onClick={() => setEmEdicao({ indice, item: { ...conquista } })}>
+                    <Pencil size={16} aria-hidden />
+                  </BotaoIcone>
+                  <BotaoIcone
+                    rotulo={`Remover ${conquista.nome}`}
+                    className="hover:!text-rose-600 dark:hover:!text-rose-300"
+                    onClick={() => setRemovendo(indice)}
+                  >
+                    <Trash2 size={16} aria-hidden />
+                  </BotaoIcone>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
 
       <p className="text-xs text-zinc-500 dark:text-zinc-400">
         Desativar esconde a conquista dos alunos sem apagar a regra. Remover exclui a
@@ -254,34 +368,107 @@ export default function ConfigConquistas() {
         ordem de exibição em todo o sistema.
       </p>
 
+      {/* Barra grudada na base: o estado do que foi editado e o "Salvar". */}
+      {dados && (
+        <div className="sticky bottom-4 z-10">
+          <Card className="flex flex-wrap items-center gap-3 px-4 py-3 shadow-flutuante sm:px-5">
+            {alterado ? (
+              <p role="status" className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-300">
+                <CircleAlert size={16} aria-hidden className="shrink-0" />
+                <span>Há alterações não salvas — clique em “Salvar alterações” para aplicá-las.</span>
+              </p>
+            ) : (
+              <p className="flex min-w-0 flex-1 items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+                <CheckCircle2 size={16} aria-hidden className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <span>Nenhuma alteração pendente.</span>
+              </p>
+            )}
+            <Botao onClick={salvar} disabled={!alterado || salvando} aria-busy={salvando}>
+              {salvando ? "Salvando..." : "Salvar alterações"}
+            </Botao>
+          </Card>
+        </div>
+      )}
+
+      {/* --- Remover (confirmação) --- */}
+      <Confirmacao
+        titulo="Remover conquista?"
+        aberto={aRemover != null}
+        aoFechar={() => setRemovendo(null)}
+        aoConfirmar={() => {
+          if (removendo != null) alterar(lista.filter((_, i) => i !== removendo));
+          setRemovendo(null);
+        }}
+        rotuloConfirmar="Remover"
+        variante="perigo"
+      >
+        <p>
+          “{aRemover?.nome}” sai da lista. A remoção só vale para os alunos depois de
+          “Salvar alterações”.
+        </p>
+      </Confirmacao>
+
       {/* --- Editor --- */}
       <Modal
         titulo={emEdicao?.indice === null ? "Nova conquista" : `Editar ${edicao?.nome ?? ""}`}
         aberto={emEdicao !== null}
         aoFechar={() => setEmEdicao(null)}
+        largura="max-w-2xl"
       >
         {edicao && dados && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* Prévia do cartão com o que está no formulário. */}
+            <div className="flex items-center gap-4 rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-100 dark:bg-zinc-800/60 dark:ring-zinc-800 sm:col-span-2">
+              <QuadradoEmoji emoji={edicao.icone} raridade={edicao.raridade} tamanho="lg" />
+              <div className="min-w-0">
+                <RotuloSecao>Prévia</RotuloSecao>
+                <p className="truncate font-semibold text-zinc-900 dark:text-white" title={edicao.nome.trim() || "Sem nome ainda"}>
+                  {edicao.nome.trim() || "Sem nome ainda"}
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <BadgeRaridade raridade={edicao.raridade} rotulo={dados.raridades[edicao.raridade]} />
+                  <ChipPlataforma plataforma={infoIndicador?.plataforma ?? "geral"} />
+                  <PilulaXp>+{edicao.xp} XP</PilulaXp>
+                </div>
+              </div>
+            </div>
             <div className="sm:col-span-2">
               <Campo rotulo="Nome *">
                 <input className={estiloInput} value={edicao.nome} autoFocus
-                       onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, nome: e.target.value } })} />
+                       onChange={(e) => editar({ nome: e.target.value })} />
               </Campo>
             </div>
-            <Campo rotulo="Ícone (emoji)">
-              <input className={estiloInput} value={edicao.icone} maxLength={8}
-                     onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, icone: e.target.value } })} />
-            </Campo>
+            <div>
+              <Campo rotulo="Ícone (emoji)">
+                <input className={estiloInput} value={edicao.icone} maxLength={8}
+                       onChange={(e) => editar({ icone: e.target.value })} />
+              </Campo>
+              <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label="Sugestões de ícone">
+                {SUGESTOES_ICONE.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    aria-label={`Usar o ícone ${emoji}`}
+                    aria-pressed={edicao.icone === emoji}
+                    onClick={() => editar({ icone: emoji })}
+                    className={`grid h-8 w-8 place-items-center rounded-lg text-base transition-colors ${
+                      edicao.icone === emoji
+                        ? "bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/20"
+                        : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    <span aria-hidden>{emoji}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <Campo rotulo="Raridade">
               <select
                 className={estiloInput}
                 value={edicao.raridade}
                 onChange={(e) => {
                   const raridade = e.target.value;
-                  setEmEdicao({
-                    ...emEdicao!,
-                    item: { ...edicao, raridade, xp: dados.xp_sugerido[raridade] ?? edicao.xp },
-                  });
+                  editar({ raridade, xp: dados.xp_sugerido[raridade] ?? edicao.xp });
                 }}
               >
                 {Object.entries(dados.raridades).map(([chave, rotulo]) => (
@@ -292,22 +479,20 @@ export default function ConfigConquistas() {
             <div className="sm:col-span-2">
               <Campo rotulo="Descrição (aparece no cartão da conquista)">
                 <input className={estiloInput} value={edicao.descricao} maxLength={300}
-                       onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, descricao: e.target.value } })} />
+                       onChange={(e) => editar({ descricao: e.target.value })} />
               </Campo>
             </div>
             <div className="sm:col-span-2">
               <Campo rotulo="Objetivo pedagógico (opcional)">
                 <input className={estiloInput} value={edicao.objetivo} maxLength={300}
-                       onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, objetivo: e.target.value } })} />
+                       onChange={(e) => editar({ objetivo: e.target.value })} />
               </Campo>
             </div>
             <Campo rotulo="Critério (o que é medido)">
               <select
                 className={estiloInput}
                 value={edicao.indicador}
-                onChange={(e) =>
-                  setEmEdicao({ ...emEdicao!, item: { ...edicao, indicador: e.target.value, plataforma: "" } })
-                }
+                onChange={(e) => editar({ indicador: e.target.value, plataforma: "" })}
               >
                 {Object.entries(dados.indicadores).map(([chave, info]) => (
                   <option key={chave} value={chave}>{info.rotulo}</option>
@@ -316,28 +501,34 @@ export default function ConfigConquistas() {
             </Campo>
             <Campo rotulo={`Quantidade necessária${infoIndicador ? ` (${infoIndicador.unidade})` : ""}`}>
               <input className={estiloInput} type="number" min={1} value={edicao.limite}
-                     onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, limite: Number(e.target.value) } })} />
+                     aria-invalid={!(edicao.limite > 0)}
+                     onChange={(e) => editar({ limite: Number(e.target.value) })} />
             </Campo>
             <Campo rotulo="XP concedido">
               <input className={estiloInput} type="number" min={0} value={edicao.xp}
-                     onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, xp: Number(e.target.value) } })} />
+                     aria-invalid={!(edicao.xp >= 0)}
+                     onChange={(e) => editar({ xp: Number(e.target.value) })} />
             </Campo>
-            <div className="flex items-end pb-2">
-              <label className="flex cursor-pointer items-center gap-2 text-sm">
-                <input type="checkbox" className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
-                       checked={edicao.ativa}
-                       onChange={(e) => setEmEdicao({ ...emEdicao!, item: { ...edicao, ativa: e.target.checked } })} />
-                Conquista ativa
-              </label>
+            <div className="flex items-end pb-1">
+              <InterruptorAtiva
+                ligado={edicao.ativa}
+                rotulo="Conquista ativa"
+                aoMudar={(ativa) => editar({ ativa })}
+              />
             </div>
             <div className="sm:col-span-2">
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Plataforma: <Badge tom="destaque">{NOME_PLATAFORMA[infoIndicador?.plataforma ?? "geral"]}</Badge>{" "}
+                Plataforma: <span className="font-semibold text-zinc-700 dark:text-zinc-200">{NOME_PLATAFORMA[infoIndicador?.plataforma ?? "geral"]}</span>{" "}
                 (definida pelo critério escolhido)
               </p>
             </div>
-            <div className="flex justify-end gap-2 sm:col-span-2">
-              <Botao variante="neutro" onClick={() => setEmEdicao(null)}>Cancelar</Botao>
+            {!edicaoValida && (
+              <p className="text-xs text-amber-800 dark:text-amber-300 sm:col-span-2">
+                Para continuar: nome com pelo menos 2 letras, quantidade maior que zero e XP de zero para cima.
+              </p>
+            )}
+            <div className="flex justify-end gap-2.5 border-t border-zinc-100 pt-4 dark:border-zinc-800 sm:col-span-2">
+              <Botao variante="secundario" onClick={() => setEmEdicao(null)}>Cancelar</Botao>
               <Botao disabled={!edicaoValida} onClick={confirmarEdicao}>
                 {emEdicao?.indice === null ? "Adicionar" : "Aplicar"}
               </Botao>

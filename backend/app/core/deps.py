@@ -96,34 +96,26 @@ def exigir_papeis_escola(*papeis: str):
     return dependencia
 
 
-def exigir_modulo(modulo: str):
-    """Barra o acesso quando a rede do usuário NÃO contratou o módulo (SaaS).
+def exigir_modulo_da_escola(modulo: str):
+    """Barra a rota quando a rede DA ESCOLA do path NÃO contratou o módulo (SaaS).
 
     É a trava de SERVIDOR do modelo de módulos: a interface esconde o que não foi
     contratado, mas a API precisa recusar sozinha — senão bastaria digitar a URL.
-    Aplicada no registro do router (``include_router(dependencies=[...])``), no
-    mesmo molde de ``negar_secretaria``.
+    Vai no DECORADOR de cada rota ``/escolas/{escola_id}/...`` específica de uma
+    plataforma (``dependencies=[Depends(exigir_modulo_da_escola("..."))]``). As
+    leituras MISTAS (evolução, perfil, painel público) não levam esta trava: tiram
+    da resposta o pedaço do módulo fora do plano (``services/modulos``).
 
-    Regras de resolução (ver ``services/modulos``): ausência de configuração =
-    contratado; escola sem rede = tudo contratado; admin global vê o catálogo
-    inteiro (ele administra todas as redes)."""
-    def dependencia(usuario: Usuario = Depends(get_usuario_atual),
-                    db: Session = Depends(get_db)) -> Usuario:
-        from app.services import modulos as svc_modulos
-        svc_modulos.exigir(svc_modulos.modulos_do_usuario(db, usuario), modulo)
-        return usuario
+    Resolve pela ESCOLA, nunca pelo usuário: o admin global opera escolas de
+    QUALQUER rede, e o módulo tem de ser o da rede DAQUELA escola, não o catálogo
+    inteiro. (A variante por usuário, ``exigir_modulo``, dizia-se "aplicada no
+    registro do router" e não estava em rota nenhuma: foi removida.)
 
-    return dependencia
-
-
-def exigir_modulo_da_escola(modulo: str):
-    """Como ``exigir_modulo``, mas resolve pela ESCOLA da rota (``escola_id``).
-
-    Necessária porque o admin global — que passa em ``exigir_modulo`` — opera
-    escolas de QUALQUER rede: o módulo tem de ser o da rede DAQUELA escola, não o
-    catálogo inteiro. Usada nas rotas ``/escolas/{escola_id}/...`` específicas de
-    uma plataforma."""
-    def dependencia(escola_id: int = Path(...),
+    Resolve ``escola_autorizada`` ANTES de olhar o contrato: dependência de
+    decorador roda antes das do endpoint, e sem isto um pedido SEM login (ou de
+    outra escola) recebia "o módulo não faz parte do plano" — ficava sabendo o
+    que a rede daquela escola contratou antes de ser barrado."""
+    def dependencia(escola_id: int = Depends(escola_autorizada),
                     db: Session = Depends(get_db)) -> int:
         from app.services import modulos as svc_modulos
         escola = db.get(Escola, escola_id)

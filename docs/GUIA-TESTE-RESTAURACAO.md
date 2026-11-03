@@ -1,100 +1,104 @@
 # Guia passo a passo: testar a restauração do backup (para quem nunca fez)
 
-Objetivo: provar, uma vez, que **conseguimos recuperar o banco a partir de um
-backup** — o item que o encarregado de dados (DPO) da Secretaria vai perguntar.
-Você **não precisa saber programar**. É copiar, colar e ler o resultado.
+Objetivo: provar que **conseguimos recuperar o banco a partir do backup guardado**.
+É o item que o encarregado de dados (DPO) da Secretaria vai perguntar. Você **não
+precisa saber programar**: é copiar, colar e ler o resultado.
 
-> ⏱️ ~30 minutos. Feito no **staging** (ou num banco de teste descartável),
-> **nunca** na produção. Nada aqui apaga ou altera dados reais.
+> ⏱️ Cerca de 20 minutos, no seu computador. Nada aqui lê nem altera a produção. O
+> banco de teste é um banco **descartável e local**, apagado no fim. A senha é
+> digitada só no seu terminal, **sem aparecer na tela**. Nunca cole a senha em
+> chat, e-mail ou documento, nem no próprio comando.
+
+Este guia é a versão "para iniciantes" do §3 do [`DR-RUNBOOK.md`](DR-RUNBOOK.md).
+Cada bloco abaixo começa redefinindo as pastas: se você fechar e reabrir o Git Bash
+no meio, é só colar o próximo bloco.
 
 ---
 
 ## Antes de começar — o que você vai precisar
 
-1. Acesso ao **Supabase** (onde fica o banco).
-2. O **Git Bash** já instalado neste computador (é onde você digita os comandos).
-3. A senha de cifra do backup (a `BACKUP_PASSPHRASE` que você definir).
-
-Se ainda não instalou o cliente do Postgres, faça uma vez:
-- Baixe o **PostgreSQL versão 17 (ou mais nova)** em
-  <https://www.postgresql.org/download/windows/> e, no instalador, deixe marcado
-  **"Command Line Tools"** (é o que traz `pg_dump` e `psql`). Não precisa instalar
-  o servidor; só as ferramentas de linha de comando. **A versão precisa ser 17+**
-  porque o banco do Supabase é o Postgres 17 (uma versão mais antiga recusa o
-  backup).
+1. Acesso ao repositório **privado** de backups: `github.com/medeirex00/constela-backups`.
+   O backup fica **só** lá. Neste repositório (`constela-edu`) não há backup em uso,
+   e não se dispara backup aqui.
+2. Um clone desse repositório privado no computador (é onde estão os scripts de conferência).
+3. O **Git Bash**.
+4. O **PostgreSQL 17** (cliente e servidor). Baixe em
+   <https://www.postgresql.org/download/windows/>. O teste cria um banco próprio e
+   descartável; ele **não usa** nenhum PostgreSQL que já esteja rodando na máquina.
+5. A senha do backup, do seu gerenciador de senhas.
 
 ---
 
-## Passo 1 — Criar um banco de teste "descartável" (dr_scratch)
+## Passo 1 — Baixar o backup do dia
 
-Um banco vazio, separado, só para o teste. No **Supabase**:
+No repositório **privado**: **Actions** › "Backup do banco (produção)". Abra a execução
+**verde** mais recente e baixe o artefato `backup-postgres-…`. Salve-o na pasta
+`restauracao-teste`, dentro da sua pasta de usuário (crie a pasta se precisar).
 
-1. Entre no projeto → menu **Database** → **… (mais opções)** ou o SQL Editor.
-2. Rode este comando no **SQL Editor** para criar o banco de teste:
-   ```sql
-   CREATE DATABASE dr_scratch;
-   ```
-   (Se o seu plano não deixar criar outro banco, crie um **projeto Supabase
-   novo e gratuito** chamado `constela-dr-teste` e use o banco dele.)
-3. Guarde a **connection string** desse banco de teste. No Supabase:
-   **Project Settings → Database → Connection string → URI**. Vai parecer:
-   ```
-   postgresql://postgres:SUA_SENHA@db.xxxx.supabase.co:5432/postgres
-   ```
+> O arquivo é cifrado, mas é a base inteira. A pasta é apagada no Passo 5.
 
-## Passo 2 — Pegar a connection string do banco de ORIGEM
+## Passo 2 — Conferir que o arquivo chegou inteiro e que a SUA senha abre o backup
 
-O de origem é o **staging** (ou, na falta dele, o próprio banco de produção —
-o teste **só lê**, não altera). Pegue a URI do mesmo jeito (Passo 1.2), do
-projeto certo.
-
-## Passo 3 — Rodar o teste (um comando só)
-
-Abra o **Git Bash** na pasta do projeto (clique direito na pasta → *Git Bash
-Here*) e cole isto, **trocando os três valores** pelas suas strings/senha:
+Abra o **Git Bash** na pasta do clone do repositório privado e cole:
 
 ```bash
-SRC_DATABASE_URL="postgresql://postgres:SENHA@db.ORIGEM.supabase.co:5432/postgres" \
-DR_SCRATCH_URL="postgresql://postgres:SENHA@db.TESTE.supabase.co:5432/dr_scratch" \
-BACKUP_PASSPHRASE="a-senha-de-cifra-que-voce-escolher" \
-  bash backend/scripts/dr_drill.sh
+T="$HOME/restauracao-teste"
+unzip -q "$T"/backup-postgres-*.zip -d "$T" && (cd "$T" && sha256sum -c SHA256SUMS)
+ARQ="$(ls "$T"/constela_*.sql.gz.enc | head -1)"
+bash scripts/conferir_senha_local.sh "$ARQ" "$T/SHA256SUMS"
 ```
 
-Aperte **Enter**. O script vai, sozinho:
-1. fazer um backup do banco de origem;
-2. cifrar e decifrar (prova que a cifra funciona);
-3. restaurar no banco de teste `dr_scratch`;
-4. comparar quantas escolas, alunos, notas etc. existem nos dois;
-5. mostrar o resultado.
+O script pede a senha **sem mostrar o que você digita**. O resultado esperado é:
+`OK: a senha do cofre abre …, o gzip está íntegro e o dump está completo.`
 
-## Passo 4 — Ler o resultado
+## Passo 3 — Criar o banco de teste descartável
 
-No final aparece uma tabela e uma dessas linhas:
-
-- ✅ **`VEREDITO: PASSOU`** → o backup restaura **íntegro e completo**. É isso que
-  queremos. Anote no `docs/DR-RUNBOOK.md` (seção 6) a **data de hoje** e quanto
-  tempo levou (esse tempo é o seu **RTO**).
-- ❌ **`VEREDITO: FALHOU`** → algo divergiu. **Me mande o texto que apareceu** que
-  eu diagnostico. Não confie no backup até resolvermos.
-
-## Passo 5 — Limpar (opcional)
-
-O banco `dr_scratch` era só para o teste. Pode apagá-lo no Supabase:
-```sql
-DROP DATABASE dr_scratch;
+```bash
+T="$HOME/restauracao-teste"; PG17="/c/Program Files/PostgreSQL/17/bin"
+"$PG17/initdb" -D "$T/cluster" -U restauracao --auth=trust -E UTF8
+"$PG17/pg_ctl" -D "$T/cluster" -o "-p 55433 -c listen_addresses=127.0.0.1" -l "$T/pg.log" -w start
+"$PG17/createdb" -h 127.0.0.1 -p 55433 -U restauracao restauracao_teste
 ```
-(Ou deixe lá para o próximo teste — ele é sobrescrito a cada execução.)
+
+## Passo 4 — Restaurar e conferir
+
+```bash
+T="$HOME/restauracao-teste"; PG17="/c/Program Files/PostgreSQL/17/bin"; ARQ="$(ls "$T"/constela_*.sql.gz.enc | head -1)"
+read -rsp "Senha do backup: " BACKUP_PASSPHRASE; echo; export BACKUP_PASSPHRASE
+PATH="$PG17:$PATH" RESTORE_DATABASE_URL="postgresql://restauracao@127.0.0.1:55433/restauracao_teste" \
+  bash scripts/verificar_restauracao.sh "$ARQ"
+unset BACKUP_PASSPHRASE
+```
+
+- ✅ Termina com **`OK: o backup decifra, aplica sem erro e traz o schema com a versão de
+  migração.`** e mostra quantas tabelas e linhas voltaram. Compare esses dois números com
+  os que aparecem no passo "Ensaio de restauração" da mesma execução no Actions. Anote no
+  `DR-RUNBOOK.md` (§7) a **data** e quanto tempo levou: esse é o seu **RTO**.
+- ❌ Aparece **`FALHOU`**: não confie no backup até resolver. O script mostra só um código
+  de erro, nunca o conteúdo; repasse esse código.
+
+## Passo 5 — Limpar (obrigatório)
+
+```bash
+T="$HOME/restauracao-teste"; PG17="/c/Program Files/PostgreSQL/17/bin"
+"$PG17/pg_ctl" -D "$T/cluster" stop -m fast; rm -rf "$T"; ls "$T" 2>/dev/null || echo "limpo"
+```
+
+A última linha tem de dizer **`limpo`**. Se aparecer algum arquivo, rode o bloco de novo.
 
 ---
 
 ## Perguntas comuns
 
-**"Deu erro `pg_dump: command not found`."** → As ferramentas do Postgres não
-estão instaladas. Faça a instalação do "Antes de começar".
+**"Deu `command not found` em `initdb`, `pg_ctl` ou `psql`."** → O PostgreSQL 17 não está
+instalado, ou está em outra pasta: ajuste o `PG17`. Veja "Antes de começar".
 
-**"Posso rodar na produção?"** → A origem pode ser produção (o script só LÊ dela).
-Mas o **destino** (`DR_SCRATCH_URL`) tem de ser o banco de teste, nunca a
-produção — o script se recusa a rodar se os dois forem iguais.
+**"Posso usar a produção ou o Supabase como banco de teste?"** → Não. O teste restaura
+num banco **local, vazio e com 'restaura' ou 'test' no nome**. O próprio script recusa
+qualquer outro.
 
-**"Preciso repetir?"** → Sim: uma vez agora, e de novo sempre que houver uma
-mudança grande de banco. É rápido depois da primeira vez.
+**"E o `dr_drill.sh`?"** → Não use: ele está quebrado e não testa o backup guardado. Ver o
+`DR-RUNBOOK.md` (§6).
+
+**"Preciso repetir?"** → Sim: a cada mudança grande de banco, e pelo menos uma vez por
+mês durante o piloto.

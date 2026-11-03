@@ -295,7 +295,7 @@ def _banco_na_0031(engine) -> dict:
             "turma": _inserir(c, meta, "turmas", escola_id=e, nome="5ºA",
                               ano_escolar="5º Ano", ano_letivo=2026),
             "aluno": _inserir(c, meta, "alunos", escola_id=e, status="ativo",
-                              nome="HELOISA DEL GIUDICE DE SOUZA FIDELIX"),
+                              nome="HELOISA DORVANTE GRASSETTI DE SIMULATTI FICTELLI"),
             "importacao": _inserir(c, meta, "importacoes", escola_id=e,
                                    plataforma="elefante", tipo="texto"),
         }
@@ -325,7 +325,7 @@ def _conferir_0032(engine, ids: dict) -> None:
             c, meta, "revisoes_identidade", escola_id=ids["escola"],
             chave="elefante|id:9|resumo||", chave_identidade="elefante|id:9",
             plataforma="elefante", formato="resumo", id_externo="9",
-            nome_recebido="HELOISA DE SOUZA FIDELIX", turma_id=ids["turma"],
+            nome_recebido="HELOISA DE SIMULATTI FICTELLI", turma_id=ids["turma"],
             motivo="correspondencia_insegura",
             candidatos=[{"aluno_id": ids["aluno"], "nome": "HELOISA", "status": "ativo"}],
             linhas=[{"livros_unicos": 3, "elefante_student_id": "9"}],
@@ -754,9 +754,10 @@ def test_0035_recusa_no_boot_desde_a_0033_nao_deixa_a_0034_pela_metade_no_sqlite
         with engine.begin() as c:
             c.execute(text("UPDATE escolas SET codigo_inep = NULL WHERE nome = :n"), {"n": "B"})
         aplicar_migracoes(engine)                                    # corrigido, sobe
+        heads = set(ScriptDirectory.from_config(_config()).get_heads())
         with engine.connect() as c:
             assert {r[0] for r in c.execute(text("SELECT version_num FROM alembic_version"))
-                    } == {REVISAO_0035}
+                    } == heads
     finally:
         engine.dispose()
 

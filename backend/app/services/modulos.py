@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,42 @@ def modulos_da_escola(db: Session, escola: Escola | None) -> set[str]:
     if escola is None:
         return set(TODOS)
     return modulos_da_rede(db, escola.rede_id)
+
+
+def modulos_por_escola(db: Session, escola_ids) -> dict[int, set[str]]:
+    """``modulos_da_escola`` de VÁRIAS escolas numa consulta só: a escola junto
+    com as linhas ``ativo=False`` da rede dela. Mesmas regras (escola sem rede,
+    rede sem linha ou escola inexistente → tudo ligado). Para quem precisa do
+    contrato de muitas escolas na mesma requisição (o painel global, por agenda
+    vencida) ou de uma escola cujo objeto não está carregado (o "Sincronizar
+    agora"): escola e contrato custam UMA ida ao banco, não até duas por escola."""
+    desligados: dict[int, set[str]] = {eid: set() for eid in escola_ids}
+    if not desligados:
+        return {}
+    for eid, modulo in db.execute(
+            select(Escola.id, ModuloRede.modulo)
+            .join(ModuloRede, ModuloRede.rede_id == Escola.rede_id)
+            .where(Escola.id.in_(sorted(desligados)), ModuloRede.ativo.is_(False))).all():
+        desligados[eid].add(modulo)
+    return {eid: {chave for chave in TODOS if chave not in fora}
+            for eid, fora in desligados.items()}
+
+
+def colunas_do_contrato(rede_id) -> list:
+    """Uma coluna por módulo do catálogo (na ordem de ``TODOS``), verdadeira
+    quando a rede ``rede_id`` (a coluna da escola na consulta que já a lê) tem
+    linha explícita ``ativo=False`` — o contrato vem na MESMA consulta da escola,
+    sem ida própria. ``modulos_das_colunas`` traduz os valores."""
+    return [exists().where(ModuloRede.rede_id == rede_id, ModuloRede.modulo == chave,
+                           ModuloRede.ativo.is_(False)) for chave in TODOS]
+
+
+def modulos_das_colunas(desligados) -> set[str]:
+    """Os módulos ativos a partir dos valores de ``colunas_do_contrato`` — a regra
+    de ``modulos_da_rede`` (só sai o módulo com linha ``ativo=False``; a escola sem
+    rede não casa linha nenhuma e fica com tudo)."""
+    return {chave for chave, desligado in zip(TODOS, desligados, strict=True)
+            if not desligado}
 
 
 def modulos_do_usuario(db: Session, usuario) -> set[str]:
@@ -187,9 +223,18 @@ def recalcular_rede(db: Session, rede_id: int) -> dict:
     demais de ficarem corretas. A lista de falhas volta no retorno para a
     interface mostrar o que precisa ser refeito.
     """
+    return recalcular_escolas(db, escolas_da_rede(db, rede_id), f"rede {rede_id}")
+
+
+def recalcular_escolas(db: Session, escolas: list[tuple[int, str]],
+                       contexto: str) -> dict:
+    """O laço de ``recalcular_rede`` para uma lista qualquer de
+    ``(escola_id, nome)`` — também usado quando a escola ENTRA ou SAI de uma rede
+    (``PUT /redes/{id}/escolas``): o contrato que vale para ela muda junto. Mesmo
+    isolamento por escola e o mesmo formato de retorno. ``contexto`` só entra
+    no log da falha."""
     from app.services import scoring
 
-    escolas = escolas_da_rede(db, rede_id)
     recalculadas: list[dict] = []
     falhas: list[dict] = []
     for escola_id, nome in escolas:
@@ -198,7 +243,7 @@ def recalcular_rede(db: Session, rede_id: int) -> dict:
             recalculadas.append({"escola_id": escola_id, "nome": nome, "alunos": alunos})
         except Exception as erro:  # noqa: BLE001 — uma escola ruim não derruba a rede
             db.rollback()
-            _log.exception("Falha ao recalcular a escola %s da rede %s", escola_id, rede_id)
+            _log.exception("Falha ao recalcular a escola %s (%s)", escola_id, contexto)
             falhas.append({"escola_id": escola_id, "nome": nome, "erro": str(erro)[:300]})
     return {
         "escolas": len(escolas),
@@ -264,3 +309,31 @@ def exigir(modulos: set[str], modulo: str) -> None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             f"O módulo {meta.get('nome', modulo)} não faz parte do plano desta rede.")
+
+
+# --- Por PLATAFORMA (o nome técnico do dado: snapshots, eventos, conectores) ---
+# Plataforma que NÃO pertence a módulo nenhum do catálogo (o fallback "manual",
+# uma origem futura) não é barrada aqui: a trava é do CONTRATO, e só existe
+# contrato para o que está no catálogo.
+
+def plataforma_contratada(modulos: set[str], plataforma: str | None) -> bool:
+    """A plataforma pertence a um módulo contratado? Plataforma fora do catálogo
+    (ou vazia) → True (ver o bloco acima)."""
+    modulo = PLATAFORMA_MODULO.get(plataforma or "")
+    return modulo is None or modulo in modulos
+
+
+def plataformas_fora_do_plano(modulos: set[str]) -> set[str]:
+    """Plataformas dos módulos que a rede NÃO contratou — o que as leituras
+    mistas (evolução, linha do tempo, espelho, perfil, painel público) tiram da
+    resposta. Vazio quando tudo está contratado (escola avulsa, sem rede)."""
+    return {plataforma for plataforma, modulo in PLATAFORMA_MODULO.items()
+            if modulo not in modulos}
+
+
+def exigir_plataforma(modulos: set[str], plataforma: str | None) -> None:
+    """``exigir`` pelo nome da plataforma (coleta, importação, filtro por
+    plataforma): 403 se ela é de um módulo fora do plano."""
+    modulo = PLATAFORMA_MODULO.get(plataforma or "")
+    if modulo is not None:
+        exigir(modulos, modulo)

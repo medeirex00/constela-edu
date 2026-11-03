@@ -30,7 +30,7 @@ def _xlsx(alunos, *, cabecalho=None, totais_rotulo="Toda a turma",
     ws.append(["Relatório de Atividade do Aluno", None, "Exportado em: 7 jul 2026"])
     ws.append([])
     ws.append(["Turma", "5 ANO B MANHA ANUAL (300397500)"])
-    ws.append(["Professor(a)", "Andressa Evangelista"])
+    ws.append(["Professor(a)", "Marta Simulatti"])
     ws.append(["Tópico", "Tópicos da Matific"])
     ws.append(["Datas", "6 jun 2026 - 7 jul 2026"])
     ws.append([])
@@ -48,10 +48,10 @@ def _xlsx(alunos, *, cabecalho=None, totais_rotulo="Toda a turma",
 
 
 ALUNOS_PADRAO = [
-    ["CARLOS EDUARDO RODRIGUES SANTOS", 0, 0, "-", "-", "-", "-"],   # conta vazia
-    ["Carlos Eduardo Rodrigues Santos", 30, 22, "2 h 4 min", 0.48, 0.6, "-"],  # real
-    ["EMANUELLE MOREIRA SOARES", 7, 5, "53 min", 0.64, "-", "-"],
-    ["VERONICA OLIVEIRA MARCOLINO GOES", 0, 0, "-", "-", "-", "-"],
+    ["TEOBALDO AMANCIO TESTELLI FICTICIO", 0, 0, "-", "-", "-", "-"],   # conta vazia
+    ["Teobaldo Amancio Testelli Ficticio", 30, 22, "2 h 4 min", 0.48, 0.6, "-"],  # real
+    ["ROSALVINA SIMULATTI PROVATTI", 7, 5, "53 min", 0.64, "-", "-"],
+    ["LEOCADIA EXEMPLARI MODELLI INVENTINI", 0, 0, "-", "-", "-", "-"],
 ]
 
 
@@ -63,36 +63,36 @@ def test_planilha_matific_le_alunos_turma_e_pontuacao():
     assert analise.formato == "resumo"
     assert analise.estrategia == "planilha_matific"
     assert analise.turma_detectada == "5 ANO B MANHA ANUAL"  # código () removido
-    assert analise.professor_detectado == "Andressa Evangelista"
+    assert analise.professor_detectado == "Marta Simulatti"
     nomes = [l.nome for l in analise.linhas]
-    # 4 linhas → 3 alunos (Carlos duplicado colapsa; "Toda a turma" fora).
+    # 4 linhas → 3 alunos (Teobaldo duplicado colapsa; "Toda a turma" fora).
     assert len(analise.linhas) == 3
     assert "Toda a turma" not in nomes
 
 
 def test_planilha_deduplica_mantendo_conta_com_mais_atividades():
     analise = analisar_planilha(_xlsx(ALUNOS_PADRAO))
-    carlos = [l for l in analise.linhas if "carlos" in l.nome.casefold()]
-    assert len(carlos) == 1
+    teobaldo = [l for l in analise.linhas if "teobaldo" in l.nome.casefold()]
+    assert len(teobaldo) == 1
     # Mantém a conta real (30 atividades), não a duplicata zerada.
-    assert carlos[0].dados["atividades"] == 30.0
+    assert teobaldo[0].dados["atividades"] == 30.0
     # Pontuação 0.48 (escala 0–1) alinhada à escala 0–5 do PDF: ×5 = 2.4.
-    assert carlos[0].dados["pontuacao_media"] == 2.4
-    assert carlos[0].dados["turma_relatorio"] == "5 ANO B MANHA ANUAL"
+    assert teobaldo[0].dados["pontuacao_media"] == 2.4
+    assert teobaldo[0].dados["turma_relatorio"] == "5 ANO B MANHA ANUAL"
 
 
 def test_planilha_pontuacao_alinhada_a_escala_do_pdf():
     """A pontuação do Excel (0–1) é multiplicada por 5 para casar com a escala
     0–5 do relatório GERAL em PDF (senão o scoring rebaixaria ~5× o Excel)."""
     analise = analisar_planilha(_xlsx(ALUNOS_PADRAO))
-    emanuelle = next(l for l in analise.linhas if l.nome.startswith("EMANUELLE"))
-    assert emanuelle.dados["pontuacao_media"] == 3.2  # 0.64 × 5
+    rosalvina = next(l for l in analise.linhas if l.nome.startswith("ROSALVINA"))
+    assert rosalvina.dados["pontuacao_media"] == 3.2  # 0.64 × 5
 
 
 def test_planilha_nao_confunde_atividades_unicas_com_total():
     analise = analisar_planilha(_xlsx(ALUNOS_PADRAO))
-    emanuelle = next(l for l in analise.linhas if l.nome.startswith("EMANUELLE"))
-    assert emanuelle.dados["atividades"] == 7.0     # "Total de atividades", não 5
+    rosalvina = next(l for l in analise.linhas if l.nome.startswith("ROSALVINA"))
+    assert rosalvina.dados["atividades"] == 7.0     # "Total de atividades", não 5
 
 
 def test_planilha_rotulo_curto_atividades_ainda_e_o_total():
@@ -109,10 +109,10 @@ def test_planilha_rotulo_curto_atividades_ainda_e_o_total():
 
 def test_planilha_celula_traco_nao_vira_erro():
     analise = analisar_planilha(_xlsx(ALUNOS_PADRAO))
-    veronica = next(l for l in analise.linhas if l.nome.startswith("VERONICA"))
-    assert veronica.dados.get("atividades") == 0.0
-    assert "pontuacao_media" not in veronica.dados
-    assert veronica.avisos == []
+    leocadia = next(l for l in analise.linhas if l.nome.startswith("LEOCADIA"))
+    assert leocadia.dados.get("atividades") == 0.0
+    assert "pontuacao_media" not in leocadia.dados
+    assert leocadia.avisos == []
 
 
 def test_planilha_preserva_homonimos_reais_com_aviso():
@@ -196,8 +196,8 @@ def test_confirmar_xlsx_cria_alunos_e_snapshots(cliente, db, escola_completa):
     assert resposta.status_code == 200, resposta.text
     assert resposta.json()["qtd_alunos"] == 3
     from app.models import Aluno
-    carlos = db.query(Aluno).filter(Aluno.nome.ilike("carlos%")).one()
-    snap = db.query(SnapshotMatific).filter_by(aluno_id=carlos.id).one()
+    teobaldo = db.query(Aluno).filter(Aluno.nome.ilike("teobaldo%")).one()
+    snap = db.query(SnapshotMatific).filter_by(aluno_id=teobaldo.id).one()
     assert snap.atividades == 30
     assert snap.pontuacao_media == pytest.approx(2.4)
     assert snap.estrelas == 0  # o Excel não traz estrelas

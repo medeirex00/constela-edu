@@ -1,9 +1,9 @@
 """Bug de dados em produção: aluno com atividade REAL numa plataforma aparece com a
-dimensão em 0,0 no ranking (HELOISA: Matific 0 / Leitura 99,94; TAUFIK: Matific 96,61 /
+dimensão em 0,0 no ranking (LIVIA: Matific 0 / Leitura 99,94; TOBIAS: Matific 96,61 /
 Leitura 0).
 
 CAUSA RAIZ (provada com o código real): o nome do export da plataforma é um SUBCONJUNTO
-do nome da Lista Piloto — "HELOISA FIDELIX" ⊂ "HELOISA DE SOUZA FIDELIX". Com 1 ÚNICO
+do nome da Lista Piloto — "LIVIA FIORELLI" ⊂ "LIVIA DE SOUZA FIORELLI". Com 1 ÚNICO
 candidato na turma, o subconjunto ia a REVISAR (guard-rail antigo "dono ausente") →
 ``_resolver_aluno`` devolvia ``None`` → o laço de import descartava a linha → NENHUM
 SnapshotMatific/SnapshotElefante era criado → a dimensão ficava 0 no ranking.
@@ -49,7 +49,7 @@ def _conta_alunos(db, escola_id):
 
 
 def _cenario(db, extras=()):
-    """Escola com a turma '5º Ano B' e a HELOISA da Lista Piloto (nome completo).
+    """Escola com a turma '5º Ano B' e a LIVIA da Lista Piloto (nome completo).
     ``extras`` matricula homônimos adicionais para os testes de ambiguidade."""
     esc = Escola(nome="EMEF Piloto", ano_letivo_ativo=2026, status="ativa")
     db.add(esc)
@@ -71,55 +71,55 @@ def _cenario(db, extras=()):
                          ano_letivo=2026))
         return a
 
-    heloisa = matricular("HELOISA DE SOUZA FIDELIX")
+    livia = matricular("LIVIA DE SOUZA FIORELLI")
     for nome in extras:
         matricular(nome)
     db.commit()
-    return esc, turma, heloisa, adm
+    return esc, turma, livia, adm
 
 
 # ---------------------------------------------------------------------------
-# 1) O CASO HELOISA — subconjunto de nome, 1 candidato → o dado CHEGA
+# 1) O CASO LIVIA — subconjunto de nome, 1 candidato → o dado CHEGA
 # ---------------------------------------------------------------------------
-def test_heloisa_subconjunto_unico_vincula_e_nao_descarta(db):
-    esc, turma, heloisa, _ = _cenario(db)
+def test_livia_subconjunto_unico_vincula_e_nao_descarta(db):
+    esc, turma, livia, _ = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
-    # Matific manda "HELOISA FIDELIX" (larga "DE SOUZA") → ANTES ia a revisão e o
+    # Matific manda "LIVIA FIORELLI" (larga "DE SOUZA") → ANTES ia a revisão e o
     # dado sumia; AGORA vincula ao único candidato da turma.
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("HELOISA FIDELIX", "5 ANO B",
-                               dados={"matific_uuid": "u-heloisa"}),
+                        _linha("LIVIA FIORELLI", "5 ANO B",
+                               dados={"matific_uuid": "u-livia"}),
                         [], {}, {})
-    assert r is not None and r.id == heloisa.id       # ATRIBUÍDO ao dono
+    assert r is not None and r.id == livia.id       # ATRIBUÍDO ao dono
     assert _conta_alunos(db, esc.id) == antes          # não criou duplicata
 
 
-def test_heloisa_vincula_uuid_para_convergir(db):
+def test_livia_vincula_uuid_para_convergir(db):
     """Ao casar o subconjunto, o UUID do Matific é VINCULADO → a próxima sync casa
     direto por UUID (convergência), sem redepender do nome parcial."""
-    esc, turma, heloisa, _ = _cenario(db)
+    esc, turma, livia, _ = _cenario(db)
     _resolver_aluno(db, esc.id, 2026,
-                    _linha("HELOISA FIDELIX", "5 ANO B",
-                           dados={"matific_uuid": "u-heloisa"}), [], {}, {})
+                    _linha("LIVIA FIORELLI", "5 ANO B",
+                           dados={"matific_uuid": "u-livia"}), [], {}, {})
     db.flush()
     vinc = db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == esc.id,
         IdentidadeExterna.plataforma == "matific",
-        IdentidadeExterna.id_externo == "u-heloisa")).scalars().first()
-    assert vinc is not None and vinc.aluno_id == heloisa.id
+        IdentidadeExterna.id_externo == "u-livia")).scalars().first()
+    assert vinc is not None and vinc.aluno_id == livia.id
 
 
 # ---------------------------------------------------------------------------
-# 3) REVERSO (TAUFIK): a mesma correção vale para a LEITURA (Elefante, sem UUID)
+# 3) REVERSO (TOBIAS): a mesma correção vale para a LEITURA (Elefante, sem UUID)
 # ---------------------------------------------------------------------------
 def test_reverso_elefante_subconjunto_unico_vincula(db):
-    esc, turma, heloisa, _ = _cenario(db)
+    esc, turma, livia, _ = _cenario(db)
     antes = _conta_alunos(db, esc.id)
     # Elefante manda o subconjunto (sem UUID de plataforma) → vincula ao único dono.
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("HELOISA FIDELIX", "5 ANO B"), [], {}, {})
-    assert r is not None and r.id == heloisa.id
+                        _linha("LIVIA FIORELLI", "5 ANO B"), [], {}, {})
+    assert r is not None and r.id == livia.id
     assert _conta_alunos(db, esc.id) == antes
 
 
@@ -127,14 +127,14 @@ def test_reverso_elefante_subconjunto_unico_vincula(db):
 # 5) SEGURANÇA: um aluno de uma plataforma NÃO é atribuído à criança errada
 # ---------------------------------------------------------------------------
 def test_subconjunto_com_dois_candidatos_nao_funde(db):
-    """DOIS 'HELOISA … FIDELIX' na turma → o subconjunto "HELOISA FIDELIX" é AMBÍGUO
+    """DOIS 'LIVIA … FIORELLI' na turma → o subconjunto "LIVIA FIORELLI" é AMBÍGUO
     → NÃO atribui às cegas (vai a revisão). O guard-rail 'nunca fundir crianças
     diferentes' continua valendo — a correção só age com candidato ÚNICO."""
-    esc, turma, heloisa, _ = _cenario(db, extras=("HELOISA CRISTINA FIDELIX",))
+    esc, turma, livia, _ = _cenario(db, extras=("LIVIA CRISTINA FIORELLI",))
     antes = _conta_alunos(db, esc.id)
     avisos: list[str] = []
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("HELOISA FIDELIX", "5 ANO B",
+                        _linha("LIVIA FIORELLI", "5 ANO B",
                                dados={"matific_uuid": "u-x"}), avisos, {}, {})
     assert r is None                                   # não atribui nem cria
     assert _conta_alunos(db, esc.id) == antes
@@ -142,24 +142,24 @@ def test_subconjunto_com_dois_candidatos_nao_funde(db):
 
 
 def test_variacao_de_sobrenome_unico_continua_em_revisao(db):
-    """Guard-rail preservado: variação de grafia no SOBRENOME (FIDELIX/FIDELIS) com 1
+    """Guard-rail preservado: variação de grafia no SOBRENOME (FIORELLI/FIORELLO) com 1
     candidato NÃO é subconjunto → continua em REVISAR (pode ser outra criança). A
     correção do subconjunto NÃO afrouxa isto."""
-    esc, turma, heloisa, _ = _cenario(db)
+    esc, turma, livia, _ = _cenario(db)
     antes = _conta_alunos(db, esc.id)
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("HELOISA DE SOUZA FIDELIS", "5 ANO B"), [], {}, {})
+                        _linha("LIVIA DE SOUZA FIORELLO", "5 ANO B"), [], {}, {})
     assert r is None                                   # segue para o gestor decidir
     assert _conta_alunos(db, esc.id) == antes
 
 
 def test_aluno_de_fora_do_roster_nao_rouba_candidato_existente(db):
     """Um nome que NÃO subconjunta ninguém não é colado no aluno existente — vira novo
-    (ou revisão), nunca 'rouba' a HELOISA."""
-    esc, turma, heloisa, _ = _cenario(db)
+    (ou revisão), nunca 'rouba' a LIVIA."""
+    esc, turma, livia, _ = _cenario(db)
     r = _resolver_aluno(db, esc.id, 2026,
                         _linha("MARIANA COSTA LIMA", "5 ANO B"), [], {}, {})
-    assert r is not None and r.id != heloisa.id and r.nome == "MARIANA COSTA LIMA"
+    assert r is not None and r.id != livia.id and r.nome == "MARIANA COSTA LIMA"
 
 
 # ---------------------------------------------------------------------------
@@ -170,15 +170,15 @@ def test_classificar_linha_subconjunto_so_vincula_com_opt_in_de_plataforma():
     conservador) e só VINCULADO com o opt-in de plataforma. E com 2+ candidatos NEM o
     opt-in vincula — o guard-rail 'nunca fundir crianças diferentes' fica intacto."""
     from app.services import matching
-    linha = matching.Identidade(nome="HELOISA FIDELIX")
-    roster = [matching.Identidade(id=1, nome="HELOISA DE SOUZA FIDELIX")]
+    linha = matching.Identidade(nome="LIVIA FIORELLI")
+    roster = [matching.Identidade(id=1, nome="LIVIA DE SOUZA FIORELLI")]
     # padrão (Lista Piloto): subconjunto NÃO auto-vincula
     assert matching.classificar_linha(linha, roster).status == matching.REVISAR
     # opt-in (plataforma): candidato único subconjunto vincula
     r = matching.classificar_linha(linha, roster, permitir_subconjunto_unico=True)
     assert r.status == matching.VINCULADO and r.aluno_id == 1
     # 2+ candidatos: nem com o opt-in (ambiguidade continua em revisão)
-    roster2 = roster + [matching.Identidade(id=2, nome="HELOISA CRISTINA FIDELIX")]
+    roster2 = roster + [matching.Identidade(id=2, nome="LIVIA CRISTINA FIORELLI")]
     assert matching.classificar_linha(
         linha, roster2, permitir_subconjunto_unico=True).status == matching.REVISAR
 
@@ -188,14 +188,14 @@ def test_subconjunto_vinculado_fica_auditado_como_parcial(db):
     correspondencia='parcial' — é a LISTA que o dono valida/reverte
     (scripts/diagnostico_dimensao_zero.py --subconjunto)."""
     from app.models import LogAuditoria
-    esc, turma, heloisa, _ = _cenario(db)
+    esc, turma, livia, _ = _cenario(db)
     _resolver_aluno(db, esc.id, 2026,
-                    _linha("HELOISA FIDELIX", "5 ANO B",
-                           dados={"matific_uuid": "u-heloisa"}), [], {}, {})
+                    _linha("LIVIA FIORELLI", "5 ANO B",
+                           dados={"matific_uuid": "u-livia"}), [], {}, {})
     db.flush()
     log = db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "aluno.vinculado_auto",
-        LogAuditoria.entidade_id == heloisa.id)).scalars().first()
+        LogAuditoria.entidade_id == livia.id)).scalars().first()
     assert log is not None and log.detalhes.get("correspondencia") == "parcial"
 
 
@@ -210,22 +210,22 @@ def test_preview_igual_confirmacao_com_homonimo_arquivado(db):
     (mesmo filtro + mesma Identidade) → AMBOS vão a REVISÃO. Trava o requisito 4."""
     from app.models import Matricula as _Matricula
     from app.services.importacao import LinhaImportacao, casar_nomes
-    esc, turma, heloisa, _ = _cenario(db)                 # HELOISA DE SOUZA FIDELIX (ativo)
-    arq = Aluno(escola_id=esc.id, nome="HELOISA FIDELIX SANTOS", status="arquivado")
+    esc, turma, livia, _ = _cenario(db)                 # LIVIA DE SOUZA FIORELLI (ativo)
+    arq = Aluno(escola_id=esc.id, nome="LIVIA FIORELLI SANTOS", status="arquivado")
     db.add(arq)
     db.flush()
     db.add(_Matricula(escola_id=esc.id, aluno_id=arq.id, turma_id=turma.id, ano_letivo=2026))
     db.commit()
 
-    # "HELOISA FIDELIX" é subconjunto dos DOIS → 2 candidatos no roster completo.
+    # "LIVIA FIORELLI" é subconjunto dos DOIS → 2 candidatos no roster completo.
     # CONFIRMAÇÃO: não vincula (revisão).
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("HELOISA FIDELIX", "5 ANO B",
+                        _linha("LIVIA FIORELLI", "5 ANO B",
                                dados={"matific_uuid": "u-x"}), [], {}, {})
     assert r is None
     # PRÉVIA: a mesma linha → "revisar" (o roster da prévia agora inclui o arquivado),
     # NUNCA "vinculado" pré-selecionado só na prévia.
-    linha = LinhaImportacao(numero=1, nome="HELOISA FIDELIX",
+    linha = LinhaImportacao(numero=1, nome="LIVIA FIORELLI",
                             dados={"turma_relatorio": "5 ANO B"})
     casar_nomes(db, esc.id, [linha])
     assert linha.correspondencia["status"] == "revisar"
@@ -246,12 +246,12 @@ def _importar_matific(db, esc, adm, nome, dados):
 def test_ausencia_real_permanece_zero_sem_fabricar(db):
     """Aluno que NÃO está em nenhum export → sem snapshot → nota 0 nas duas dimensões.
     A correção não inventa dado para quem não tem atividade."""
-    esc, turma, heloisa, adm = _cenario(db)
+    esc, turma, livia, adm = _cenario(db)
     # ninguém importado: recalcula do zero
 
     scoring.recalcular_escola(db, esc.id)
     db.commit()
-    nota = db.execute(select(Nota).where(Nota.aluno_id == heloisa.id)).scalars().first()
+    nota = db.execute(select(Nota).where(Nota.aluno_id == livia.id)).scalars().first()
     # sem snapshot → não aferido → 0 legítimo (não é bug, não vira erro)
     assert (nota is None) or (
         nota.nota_matific == 0 and nota.nota_elefante == 0
@@ -259,22 +259,22 @@ def test_ausencia_real_permanece_zero_sem_fabricar(db):
 
 
 def test_uma_dimensao_presente_outra_ausente_zero_legitimo(db):
-    """HELOISA com Matific presente e Leitura AUSENTE: Matific aferido (>0 possível),
+    """LIVIA com Matific presente e Leitura AUSENTE: Matific aferido (>0 possível),
     Leitura NÃO aferida (0 legítimo, `—` na tela) — exatamente o retrato do bug
     invertido, mas agora com o Matific chegando pelo subconjunto."""
-    esc, turma, heloisa, adm = _cenario(db)
-    _importar_matific(db, esc, adm, "HELOISA FIDELIX",
+    esc, turma, livia, adm = _cenario(db)
+    _importar_matific(db, esc, adm, "LIVIA FIORELLI",
                       {"atividades": 50, "estrelas": 30, "pontuacao_media": 80.0,
-                       "matific_uuid": "u-heloisa", "turma_relatorio": "5 ANO B"})
+                       "matific_uuid": "u-livia", "turma_relatorio": "5 ANO B"})
     db.commit()
-    # snapshot de Matific existe para a HELOISA (dado chegou); Elefante não existe
+    # snapshot de Matific existe para a LIVIA (dado chegou); Elefante não existe
     smat = db.execute(select(SnapshotMatific).where(
-        SnapshotMatific.aluno_id == heloisa.id)).scalars().first()
+        SnapshotMatific.aluno_id == livia.id)).scalars().first()
     self_ele = db.execute(select(SnapshotElefante).where(
-        SnapshotElefante.aluno_id == heloisa.id)).scalars().first()
+        SnapshotElefante.aluno_id == livia.id)).scalars().first()
     assert smat is not None                            # Matific chegou
     assert self_ele is None                            # Leitura genuinamente ausente
-    nota = db.execute(select(Nota).where(Nota.aluno_id == heloisa.id)).scalars().first()
+    nota = db.execute(select(Nota).where(Nota.aluno_id == livia.id)).scalars().first()
     assert nota is not None and nota.aferido_matematica is True
     assert nota.aferido_leitura is False               # 0 de leitura é LEGÍTIMO aqui
 
@@ -283,28 +283,28 @@ def test_uma_dimensao_presente_outra_ausente_zero_legitimo(db):
 # 6) REGRESSÃO PONTA A PONTA: nota_matific vai de 0 (descartado) → valor real
 # ---------------------------------------------------------------------------
 def test_pipeline_ponta_a_ponta_nota_matific_de_zero_para_valor(db):
-    """O antes/depois do bug: sem o import a HELOISA tem Matific 0; ao importar o
+    """O antes/depois do bug: sem o import a LIVIA tem Matific 0; ao importar o
     export de Matific com o nome SUBCONJUNTO, o snapshot é criado, o recálculo roda e
     a nota de Matific passa a refletir a atividade real (>0). Nada de leitura é tocado
     (continua ausente/0), provando que só o pipeline de dados mudou."""
-    esc, turma, heloisa, adm = _cenario(db)
+    esc, turma, livia, adm = _cenario(db)
 
     # ANTES: nenhum snapshot → Matific 0
 
     scoring.recalcular_escola(db, esc.id)
     db.commit()
-    nota0 = db.execute(select(Nota).where(Nota.aluno_id == heloisa.id)).scalars().first()
+    nota0 = db.execute(select(Nota).where(Nota.aluno_id == livia.id)).scalars().first()
     assert nota0 is None or nota0.nota_matific == 0
 
     # DEPOIS: importa Matific com o nome subconjunto → snapshot criado + recálculo
-    _importar_matific(db, esc, adm, "HELOISA FIDELIX",
+    _importar_matific(db, esc, adm, "LIVIA FIORELLI",
                       {"atividades": 50, "estrelas": 30, "pontuacao_media": 80.0,
-                       "matific_uuid": "u-heloisa", "turma_relatorio": "5 ANO B"})
+                       "matific_uuid": "u-livia", "turma_relatorio": "5 ANO B"})
     db.commit()
 
     snap = db.execute(select(SnapshotMatific).where(
-        SnapshotMatific.aluno_id == heloisa.id)).scalars().first()
+        SnapshotMatific.aluno_id == livia.id)).scalars().first()
     assert snap is not None                            # o dado chegou ao snapshot
-    nota1 = db.execute(select(Nota).where(Nota.aluno_id == heloisa.id)).scalars().first()
+    nota1 = db.execute(select(Nota).where(Nota.aluno_id == livia.id)).scalars().first()
     assert nota1 is not None and nota1.nota_matific > 0   # 0 → valor real
     assert nota1.aferido_matematica is True

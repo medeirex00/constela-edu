@@ -53,10 +53,11 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import (AvaliacaoExterna, Escola, ImportacaoIndicador, IndicadorReferencia, Rede,
+from app.models import (AvaliacaoExterna, ImportacaoIndicador, IndicadorReferencia, Rede,
                         ResultadoAvaliacao)
 from app.services.avaliacoes import CATALOGO, normalizar_inep
 from app.services.indicadores import consulta_ideb_rede, ica, ideb, saeb_planilha, seduc
+from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.consulta import _fonte
 # As regras de meta valem para a escola e para o território (``consulta_ideb_rede``).
 from app.services.indicadores.consulta_ideb_rede import (SEM_META_ANTES_DO_CICLO,  # noqa: F401
@@ -119,7 +120,7 @@ def _avisos(edicoes: list[int]) -> dict:
             "detalhes nas notas técnicas do INEP). O aviso vale para a série TODA, não só "
             "para 2021: compare edições com cuidado."),
         "pandemia": ("2021 foi aplicado na pandemia: o INEP publicou uma nota própria sobre o "
-                     "impacto no Ideb e no Saeb (ver as notas do arquivo oficial)."),
+                     "modo de ler o Ideb e o Saeb dessa edição (ver as notas do arquivo oficial)."),
         "sem_ranking": ("A tabela por escola está em ordem alfabética: não é ranking e não "
                         "serve para ordenar escolas."),
         "ausencia": ("Sem resultado não é zero: “não divulgado” é o “-” ou o “ND” do arquivo "
@@ -166,10 +167,8 @@ def _nome_do_municipio(db: Session, codigo: str | None,
         return None
     parsers = _PARSERS_COM_NOME if aplicadas_ideb is None else tuple(
         p for p in _PARSERS_COM_NOME if p != ideb.PARSER)
-    lidas = list(aplicadas_ideb or []) + list(db.execute(select(ImportacaoIndicador).where(
-        ImportacaoIndicador.status == "aplicada",
-        ImportacaoIndicador.parser.in_(parsers),
-        ImportacaoIndicador.codigo_territorio_alvo == codigo)).scalars())
+    lidas = list(aplicadas_ideb or []) + leituras.aplicadas_do_territorio(db, codigo,
+                                                                          tuple(parsers))
     nome = None
     for imp in sorted(lidas, key=lambda i: (i.edicao_arquivo, i.id)):
         nome = ((imp.resumo or {}).get("territorios") or {}).get(codigo) or nome
@@ -177,8 +176,7 @@ def _nome_do_municipio(db: Session, codigo: str | None,
 
 
 def _avaliacao(db: Session, chave: str) -> AvaliacaoExterna | None:
-    return db.execute(select(AvaliacaoExterna).where(
-        AvaliacaoExterna.chave == chave)).scalar_one_or_none()
+    return leituras.avaliacao(db, chave)
 
 
 def _casas(valor: float | None, campo: str) -> int | None:
@@ -200,11 +198,8 @@ def _aplicadas(db: Session, codigo: str | None) -> list[ImportacaoIndicador]:
     """As importações APLICADAS do Ideb por escola para o município da rede."""
     if codigo is None:
         return []
-    return sorted(db.execute(select(ImportacaoIndicador).where(
-        ImportacaoIndicador.parser == ideb.PARSER,
-        ImportacaoIndicador.status == "aplicada",
-        ImportacaoIndicador.codigo_territorio_alvo == codigo)).scalars(),
-        key=lambda i: (i.aplicado_em or datetime.min, i.id))
+    return sorted(leituras.aplicadas_do_territorio(db, codigo, (ideb.PARSER,)),
+                  key=lambda i: (i.aplicado_em or datetime.min, i.id))
 
 
 def _arquivo_da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int):
@@ -328,7 +323,7 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
 
     # ORDEM POR NOME (sem ranking), a mesma no SQLite e no PostgreSQL: sem acento e
     # sem caixa, no Python (a ordenação do banco depende da collation).
-    escolas = sorted(db.execute(select(Escola).where(Escola.rede_id == rede.id)).scalars(),
+    escolas = sorted(leituras.escolas_da_rede(db, rede.id),
                      key=lambda e: (seduc.sem_acento(e.nome or "").casefold(), e.id))
     inep_de = {e.id: normalizar_inep(e.codigo_inep) for e in escolas}
     ineps = {i for i in inep_de.values() if i}
@@ -381,8 +376,7 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
     imps = {i.id: i for i in aplicadas}
     faltam = ids - set(imps)
     if faltam:
-        imps.update({i.id: i for i in db.execute(select(ImportacaoIndicador).where(
-            ImportacaoIndicador.id.in_(faltam))).scalars()})
+        imps.update(leituras.importacoes_por_id(db, faltam))
 
     edicoes = sorted({ed for (_, ed, _) in resultados}
                      | {ed for (_, ed, ind, _) in referencia if ind != ideb.IND_META}

@@ -22,11 +22,20 @@
  * refutou tanto a soma quanto a diferença). Um zero silencioso num relatório
  * de gestão é pior que uma lacuna declarada — a diretora agiria sobre ele.
  */
-import { BookOpen, CalendarRange, Clock, FileDown, Info, RefreshCw, Sigma, Star } from "lucide-react";
+import {
+  BookOpen, CalendarRange, Clock, FileDown, Info, Layers, Loader2, RefreshCw, School, Sigma, SlidersHorizontal, Star,
+  UserRound, Users,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { IconePlataforma } from "../components/identidadePlataforma";
 import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
-import { Botao, Card, Carregando, Mensagem, PageHeader, SecaoRecolhivel, StatCard, Vazio, estiloInput } from "../components/ui";
+import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
+import { TabelaRolavel } from "../components/TabelaRolavel";
+import {
+  Avatar, Badge, Botao, Card, Chip, Erro, IconePastel, Mensagem, PageHeader, RotuloSecao, SecaoRecolhivel, Skeleton,
+  StatCard, Vazio, classesTabela,
+} from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { apiDownload } from "../lib/api";
@@ -50,6 +59,52 @@ interface JanelaEfetiva {
   observacao: string;
 }
 
+/** PERÍODO PEDIDO × COBERTURA DAS COLETAS (backend `_cobertura`). Datas do
+ *  período em dias de Brasília ("AAAA-MM-DD"); instantes de coleta em UTC sem
+ *  fuso (como todo `data_referencia`, convertidos por `dataHora`). */
+interface Cobertura {
+  periodo_inicio: string | null;
+  periodo_fim: string | null;
+  periodo_fim_efetivo: string | null;
+  coleta_inicio: string | null;
+  coleta_inicio_mais_tardio: string | null;
+  coleta_fim: string | null;
+  coleta_fim_mais_cedo: string | null;
+  inicio_coberto: boolean;
+  fim_coberto: boolean;
+  inclui_antes_do_inicio: boolean;
+  inicio_do_contador_anual?: boolean;
+  antecedencia_max_horas: number | null;
+  /** `diferenca_de_coletas` (Elefante) ou `oficial_matific` (a regra das
+   *  premiações: as bordas não são verificadas, "completa" nunca é afirmado). */
+  regra: "diferenca_de_coletas" | "oficial_matific";
+  em_andamento: boolean;
+  status: "completa" | "ampliada" | "parcial" | "regra_oficial" | "sem_intervalo";
+  completa: boolean;
+  alunos_cobertura_completa: number;
+  alunos_cobertura_parcial: number;
+  alunos_sem_inicio: number;
+  alunos_sem_fim: number;
+  alunos_ampliados: number;
+  alunos_sem_intervalo: number;
+  /** Dos "sem intervalo": a única coleta do período é a que mede o INÍCIO. */
+  alunos_sem_intervalo_so_inicio?: number;
+  /** Contador que diminuiu (contas misturadas na ficha): fora da conta. */
+  alunos_contador_regrediu?: number;
+  /** Coletados antes e depois do período, mas não dentro dele: lacuna. */
+  alunos_sem_coleta_no_periodo?: number;
+  /** Coletados ANTES do período e sem coleta que entre na conta: a coleta
+   *  parou ou falhou para eles (o número é parcial, nunca "completo"). */
+  alunos_coleta_interrompida?: number;
+  /** Turmas (já coletadas alguma vez) sem nenhuma coleta na janela. */
+  turmas_sem_coleta?: { turma_id: number; turma: string | null; alunos: number }[];
+  /** Denominador de "para N aluno(s)": quem tem intervalo medido. */
+  alunos_medidos?: number;
+  /** (Elefante) contador vitalício que a primeira coleta já trazia, para quem
+   *  não tem coleta no início: histórico SEM data, fora da conta. */
+  acumulado_na_primeira_coleta?: number | null;
+}
+
 interface BlocoElefante {
   livros_novos: number;
   tempo_min: number;
@@ -63,6 +118,8 @@ interface BlocoElefante {
   questoes_acertos: number | null;
   alunos_sem_retrato: number;
   janela_efetiva_questoes: JanelaEfetiva | null;
+  /** Ausente em API anterior a esta versão: a tela cai no aviso antigo. */
+  cobertura_questoes?: Cobertura | null;
   sem_atividade: number;
   primeiro_evento_da_escola: string | null;
   suporte: Record<string, Suporte>;
@@ -75,6 +132,7 @@ interface BlocoMatific {
   alunos_sem_retrato: number;
   questoes: null;
   janela_efetiva: JanelaEfetiva | null;
+  cobertura?: Cobertura | null;
   sem_atividade: number;
   /** O bloco do Matific tem UM suporte (atividades/estrelas) e, dentro dele, o
    *  de `questoes` — que é a métrica inexistente. Daí o tipo não ser um mapa. */
@@ -127,27 +185,31 @@ const PLATAFORMAS = [
   { valor: "matific", rotulo: "Somente Matific" },
 ] as const;
 
-const TOM_CLASSIFICACAO: Record<Classificacao, string> = {
-  SUPORTADO: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  "SUPORTADO COM RESSALVA": "bg-amber-50 text-amber-700 ring-amber-200",
-  "NÃO SUPORTADO": "bg-zinc-100 text-zinc-600 ring-zinc-300",
+const TOM_CLASSIFICACAO: Record<Classificacao, "ok" | "alerta" | "neutro"> = {
+  SUPORTADO: "ok",
+  "SUPORTADO COM RESSALVA": "alerta",
+  "NÃO SUPORTADO": "neutro",
 };
 
 /** Etiqueta da classificação — o vocabulário é o do backend, não um apelido. */
 function Selo({ classificacao }: { classificacao: Classificacao }) {
-  return (
-    <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ${TOM_CLASSIFICACAO[classificacao]}`}>
-      {classificacao}
-    </span>
-  );
+  return <Badge tom={TOM_CLASSIFICACAO[classificacao]}>{classificacao}</Badge>;
 }
+
+/* Caixas dos avisos de cobertura (a FORMA mudou; o texto é o mesmo de antes). */
+const CAIXA_ALERTA =
+  "rounded-2xl border border-ouro-200 bg-ouro-50 px-4 py-3 text-xs text-zinc-800 dark:border-ouro-400/25 dark:bg-ouro-400/10 dark:text-zinc-100";
+const CAIXA_INFO =
+  "rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-200";
+const ICONE_ALERTA = "mt-0.5 shrink-0 text-ouro-700 dark:text-ouro-300";
+const ICONE_INFO = "mt-0.5 shrink-0 text-sky-600 dark:text-sky-300";
 
 /** Intervalo REAL que um número vindo de retratos cobre. Só aparece quando o
  *  backend o devolve — e ele só devolve quando houve retrato na janela. */
 function AvisoJanelaEfetiva({ janela, titulo }: { janela: JanelaEfetiva; titulo: string }) {
   return (
-    <p className="mt-2 flex gap-2 text-xs text-amber-700">
-      <Info size={14} className="mt-0.5 shrink-0" />
+    <p className={`flex gap-2 ${CAIXA_ALERTA}`}>
+      <Info size={14} aria-hidden className={ICONE_ALERTA} />
       <span>
         <strong>{titulo}:</strong> a conta vai de{" "}
         {dataHora(janela.data_base_mais_antiga)} a {dataHora(janela.data_atual_mais_recente)} —{" "}
@@ -156,6 +218,186 @@ function AvisoJanelaEfetiva({ janela, titulo }: { janela: JanelaEfetiva; titulo:
     </p>
   );
 }
+
+/** "2026-09-01" → "01/09/2026". Data do PERÍODO, já em dias de Brasília: não
+ *  passa por conversão de fuso (um `new Date` a puxaria para 31/08). */
+function diaDoPeriodo(iso: string | null): string {
+  if (!iso) return "—";
+  const [a, m, d] = iso.slice(0, 10).split("-");
+  return d && m && a ? `${d}/${m}/${a}` : iso;
+}
+
+/** O período PEDIDO é a referência; o que as coletas cobrem vem ao lado. Se
+ *  não cobrem exatamente, a tela diz o que falta (ou sobra) e por quê — nunca
+ *  troca uma coisa pela outra. Mesma regra do PDF (`_avisos_cobertura`). */
+function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo: string }) {
+  const oficial = c.regra === "oficial_matific";
+  const periodo = c.periodo_inicio
+    ? `${diaDoPeriodo(c.periodo_inicio)} a ${diaDoPeriodo(c.periodo_fim)}`
+    : `todo o histórico${c.periodo_fim_efetivo ? ` (até ${diaDoPeriodo(c.periodo_fim_efetivo)})` : ""}`;
+  const emAndamento = !!(c.periodo_inicio && c.periodo_fim_efetivo && c.periodo_fim
+    && c.periodo_fim_efetivo < c.periodo_fim);
+  const pedido = emAndamento ? `${periodo} (em andamento, até hoje ${diaDoPeriodo(c.periodo_fim_efetivo)})` : periodo;
+  const de = c.coleta_inicio ? dataHora(c.coleta_inicio) : "o início do contador";
+  const disponivel = `${de} a ${dataHora(c.coleta_fim)}`;
+  const medidos = c.alunos_medidos
+    ?? c.alunos_cobertura_completa + c.alunos_cobertura_parcial + c.alunos_ampliados;
+  const soInicio = c.alunos_sem_intervalo > 0
+    && (c.alunos_sem_intervalo_so_inicio ?? 0) >= c.alunos_sem_intervalo;
+  const para = (n: number) => (n && n < medidos ? ` para ${numero(n)} aluno(s)` : "");
+
+  if (c.status === "sem_intervalo") {
+    return (
+      <div role="status" className={`flex gap-2 ${CAIXA_ALERTA}`}>
+        <Info size={14} aria-hidden className={ICONE_ALERTA} />
+        <span>
+          {oficial ? (
+            <>
+              <strong>{titulo}: sem intervalo medido para {pedido}.</strong> O 0 da regra oficial (a mesma das
+              premiações) vem de uma única coleta por aluno no período e nenhuma antes — ele NÃO quer dizer que
+              não houve atividade.
+            </>
+          ) : soInicio ? (
+            <>
+              <strong>{titulo}: sem número para {pedido} ainda.</strong> A única coleta do período é a que mede
+              o início; a próxima medirá o que veio depois (não é zero).
+            </>
+          ) : (
+            <>
+              <strong>{titulo}: sem número para {pedido}.</strong> Há uma única coleta por aluno no período e
+              nenhuma antes — não existe diferença a medir (não é zero).
+            </>
+          )}
+        </span>
+      </div>
+    );
+  }
+  if (c.status === "completa") {
+    return (
+      <p className={`flex gap-2 ${CAIXA_INFO}`}>
+        <Info size={14} aria-hidden className={ICONE_INFO} />
+        <span>
+          <strong>{titulo}:</strong> período solicitado {pedido}, medido pelas coletas de {disponivel}.
+          {c.em_andamento && ` Em andamento: os dados vão até a coleta de ${dataHora(c.coleta_fim)}.`}
+        </span>
+      </p>
+    );
+  }
+  if (c.status === "regra_oficial") {
+    return (
+      <p className={`flex gap-2 ${CAIXA_INFO}`}>
+        <Info size={14} aria-hidden className={ICONE_INFO} />
+        <span>
+          <strong>{titulo}:</strong> período solicitado {pedido}. O número segue a regra oficial do Matific (a
+          mesma das premiações): diferença entre a coleta-base, {de}, e a última coleta considerada,{" "}
+          {dataHora(c.coleta_fim)} — as bordas do período não são verificadas aqui.
+        </span>
+      </p>
+    );
+  }
+  const ampliada = c.status === "ampliada";
+  const antecedencia = c.antecedencia_max_horas == null ? ""
+    : c.antecedencia_max_horas < 48 ? `${c.antecedencia_max_horas} h` : `${Math.floor(c.antecedencia_max_horas / 24)} dias`;
+  return (
+    <div role="status" className={CAIXA_ALERTA}>
+      <p className="flex gap-2 font-semibold">
+        <Info size={14} aria-hidden className={ICONE_ALERTA} />
+        {ampliada
+          ? `${titulo}: o valor INCLUI atividade de antes do período — não é só o período pedido.`
+          : `${titulo}: cobertura parcial — o valor NÃO representa o período completo.`}
+      </p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-xl bg-white/70 px-3 py-2 dark:bg-zinc-900/40">
+        <dt className="font-medium">Período solicitado</dt>
+        <dd>{pedido}</dd>
+        <dt className="font-medium">Intervalo medido pelas coletas</dt>
+        <dd>{disponivel}</dd>
+      </dl>
+      <ul className="mt-2 list-disc space-y-1 pl-5">
+        {!c.inicio_coberto && c.alunos_sem_inicio > 0 && (
+          c.inicio_do_contador_anual && !c.coleta_inicio_mais_tardio ? (
+            <li>O contador do Matific é do ano letivo: o que veio antes de 01/01 não entra na conta.</li>
+          ) : (
+            <li>
+              Sem coleta no início do período{para(c.alunos_sem_inicio)}: o que foi feito de{" "}
+              {diaDoPeriodo(c.periodo_inicio)} até a primeira coleta
+              {c.coleta_inicio_mais_tardio ? ` (até ${dataHora(c.coleta_inicio_mais_tardio)})` : ""} não está na
+              conta: o contador que o Constela coleta é acumulado desde o início da conta e não diz quando cada
+              questão foi respondida, então esse trecho não sai das coletas
+              {c.acumulado_na_primeira_coleta
+                ? ` (a primeira coleta já trazia ${numero(c.acumulado_na_primeira_coleta)} questões acumuladas, de datas que o contador não informa)`
+                : ""}.
+              {!oficial && " O Elefante guarda o histórico datado por aluno (Questões Respondidas), que o Constela ainda não coleta."}
+            </li>
+          )
+        )}
+        {!c.fim_coberto && c.alunos_sem_fim > 0 && (
+          <li>
+            A última coleta{para(c.alunos_sem_fim)} é de {dataHora(c.coleta_fim_mais_cedo ?? c.coleta_fim)}: o que
+            veio depois, até {diaDoPeriodo(c.periodo_fim_efetivo ?? c.periodo_fim)}, não está na conta.
+          </li>
+        )}
+        {c.inclui_antes_do_inicio && (
+          <li>
+            Não há coleta perto do início{para(c.alunos_ampliados)}: a coleta-base é de {de}
+            {antecedencia ? `, ${antecedencia} antes de ${diaDoPeriodo(c.periodo_inicio)}` : ""} — o número INCLUI
+            a atividade desse intervalo.
+          </li>
+        )}
+        {c.alunos_sem_intervalo > 0 && (
+          <li>
+            {oficial
+              ? `${numero(c.alunos_sem_intervalo)} aluno(s) com uma única coleta no período entram com 0 pela regra oficial (a mesma das premiações): esse 0 não mede o período.`
+              : soInicio
+                ? `${numero(c.alunos_sem_intervalo)} aluno(s) só têm a coleta que mede o início do período — a próxima medirá o que veio depois; até lá ficam fora da conta (não contam como zero).`
+                : `${numero(c.alunos_sem_intervalo)} aluno(s) com uma única coleta no período ficam fora da conta (não contam como zero).`}
+          </li>
+        )}
+        {(c.alunos_contador_regrediu ?? 0) > 0 && (
+          <li>
+            {numero(c.alunos_contador_regrediu ?? 0)} aluno(s) com o contador da plataforma DIMINUINDO no período
+            (contas trocadas ou fundidas na mesma ficha) ficam fora da conta.
+          </li>
+        )}
+        {(c.alunos_sem_coleta_no_periodo ?? 0) > 0 && (
+          <li>
+            {numero(c.alunos_sem_coleta_no_periodo ?? 0)} aluno(s) coletados antes e depois do período, mas sem
+            nenhuma coleta dentro dele, ficam fora da conta.
+          </li>
+        )}
+        {(c.alunos_coleta_interrompida ?? 0) > 0 && (
+          <li>
+            {numero(c.alunos_coleta_interrompida ?? 0)} aluno(s) coletados antes do período e sem nenhuma coleta
+            que entre na conta (a coleta parou ou falhou para eles) ficam fora da conta.
+          </li>
+        )}
+        {(c.turmas_sem_coleta?.length ?? 0) > 0 && (
+          <li>
+            Turma(s) sem nenhuma coleta no período, fora da conta:{" "}
+            {c.turmas_sem_coleta!.map((t) => t.turma ?? `#${t.turma_id}`).join(", ")}.
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
+/** Os cartões de indicador (4 do Elefante e 4 do Matific): 2 por linha já no celular,
+ *  com recuo e espaço menores abaixo de 640 px (em uma coluna eram ~1.600 px de rolagem
+ *  antes das tabelas). O recuo vem pelo filho direto: o StatCard não recebe classe. */
+const GRADE_INDICADORES = "grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4 max-sm:[&>*]:p-4";
+
+/* Tabelas "Por turma" e "Por aluno" (até oito colunas). Mais compactas que a
+ * `classesTabela` padrão para as colunas do Matific (Atividades, Estrelas) caberem
+ * inteiras já a partir de 768 px:
+ *   - menos espaço entre colunas e cabeçalho sem espaçamento extra entre as letras
+ *     abaixo de 1024 px;
+ *   - o cabeçalho de duas palavras pode quebrar ("Livros / novos") quando falta
+ *     largura — com largura sobrando ele fica numa linha só, como antes;
+ *   - número nunca se parte (whitespace-nowrap), sempre alinhado à direita.
+ * A primeira e a última coluna mantêm a margem de 16 px da borda do cartão. */
+const TH_TABELA =
+  "px-2.5 py-3 text-left align-bottom text-[11px] font-semibold uppercase leading-snug tracking-normal text-zinc-500 first:pl-4 last:pr-4 lg:px-3 lg:tracking-[0.08em] dark:text-zinc-400";
+const TD_TABELA = "px-2.5 py-3.5 text-zinc-700 first:pl-4 last:pr-4 lg:px-3 dark:text-zinc-200";
 
 export default function RelatorioPeriodo() {
   // O PERÍODO é global (AppContext): o recorte que o gestor escolheu aqui
@@ -193,7 +435,7 @@ export default function RelatorioPeriodo() {
   const url = consulta ? `/escolas/${escolaId}/relatorios/periodo?${consulta}` : null;
   const urlPdf = consulta ? `/escolas/${escolaId}/relatorios/periodo.pdf?${consulta}` : null;
 
-  const { dados, erro, carregando } = useApi<RelatorioPeriodoT>(url);
+  const { dados, erro, carregando, recarregar } = useApi<RelatorioPeriodoT>(url);
 
   // O PDF é gerado sob demanda e devolvido na resposta — nada é guardado no
   // servidor. Quem nomeia o arquivo é o backend (Content-Disposition).
@@ -218,6 +460,8 @@ export default function RelatorioPeriodo() {
 
   const ele = dados?.elefante;
   const mat = dados?.matific;
+  // Uma coleta só por aluno: a regra oficial dá 0, mas esse 0 não mede o período.
+  const matSemMedida = mat?.cobertura?.status === "sem_intervalo";
   // O espelho de eventos nasceu na migração 0010: janela anterior a ele devolve
   // zero por FALTA DE HISTÓRICO, não por inatividade. Dizer isso é o que separa
   // "ninguém leu" de "o sistema ainda não registrava".
@@ -225,6 +469,16 @@ export default function RelatorioPeriodo() {
     ele?.primeiro_evento_da_escola && dados?.periodo.inicio
       ? dados.periodo.inicio < ele.primeiro_evento_da_escola
       : false;
+
+  // Ao trocar o recorte, o relatório anterior fica na tela até o novo chegar: o aviso
+  // "Atualizando" diz que os números ainda são do recorte de antes.
+  const atualizando = carregando && Boolean(dados);
+  const rotuloFiltro = "mb-1.5 block text-xs font-semibold text-zinc-600 dark:text-zinc-300";
+  // Coluna flex: o campo vira item de flex (sem a folga de linha de um elemento
+  // inline embaixo), então os quatro rótulos ficam na mesma altura.
+  const campoFiltro = "flex min-w-0 max-w-full flex-col items-start";
+  const th = (direita = false) => `${TH_TABELA} ${direita ? "text-right" : ""}`;
+  const td = (direita = false) => `${TD_TABELA} ${direita ? "whitespace-nowrap text-right tabular-nums" : ""}`;
 
   return (
     <div className="space-y-6">
@@ -237,109 +491,159 @@ export default function RelatorioPeriodo() {
             disabled={!urlPdf || gerandoPdf || carregando}
             aria-busy={gerandoPdf}
           >
-            <FileDown size={15} className="mr-1.5 inline" />
+            <FileDown size={15} aria-hidden />
             {gerandoPdf ? "Gerando PDF..." : "Gerar PDF"}
           </Botao>
         }
       />
       {erroPdf && <Mensagem tipo="erro">{erroPdf}</Mensagem>}
 
-      <Card>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-zinc-500">Período</label>
+      <Card className="p-5">
+        <div className="mb-4 flex items-center gap-2.5">
+          <IconePastel icone={SlidersHorizontal} tom="violeta" tamanho="sm" />
+          <RotuloSecao>Recorte do relatório</RotuloSecao>
+        </div>
+        {/* Os quatro filtros com a MESMA pílula da v2 (ícone, chevron, 40 px de altura):
+            antes só o Período tinha esse estilo e os outros três usavam a seta nativa,
+            com outra borda e outra altura, desalinhando a linha. Continuam <select>
+            nativos (mesmos ids, rótulos e opções). */}
+        <div className="flex flex-wrap items-end gap-4">
+          <div className={campoFiltro}>
+            <label className={rotuloFiltro}>Período</label>
             <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
           </div>
-          <div>
-            <label htmlFor="rp-plataformas" className="mb-1 block text-xs font-medium text-zinc-500">
+          <div className={campoFiltro}>
+            <label htmlFor="rp-plataformas" className={rotuloFiltro}>
               Plataforma
             </label>
-            <select
-              id="rp-plataformas"
-              className={`${estiloInput} w-auto`}
-              value={plataformas}
-              onChange={(e) => setPlataformas(e.target.value)}
-            >
-              {PLATAFORMAS.map((p) => (
-                <option key={p.valor} value={p.valor}>{p.rotulo}</option>
-              ))}
-            </select>
+            <MolduraPilula icone={Layers}>
+              <select
+                id="rp-plataformas"
+                className={estiloSelectPilula}
+                value={plataformas}
+                onChange={(e) => setPlataformas(e.target.value)}
+              >
+                {PLATAFORMAS.map((p) => (
+                  <option key={p.valor} value={p.valor}>{p.rotulo}</option>
+                ))}
+              </select>
+            </MolduraPilula>
           </div>
-          <div>
-            <label htmlFor="rp-turma" className="mb-1 block text-xs font-medium text-zinc-500">
+          <div className={campoFiltro}>
+            <label htmlFor="rp-turma" className={rotuloFiltro}>
               Turma
             </label>
-            <select
-              id="rp-turma"
-              className={`${estiloInput} w-auto`}
-              value={turmaId ?? ""}
-              onChange={(e) => {
-                setTurmaId(e.target.value ? Number(e.target.value) : null);
-                setAlunoId(null);
-              }}
-            >
-              <option value="">Toda a escola</option>
-              {(turmas ?? []).map((t) => (
-                <option key={t.id} value={t.id}>{t.nome}</option>
-              ))}
-            </select>
+            <MolduraPilula icone={Users}>
+              <select
+                id="rp-turma"
+                className={estiloSelectPilula}
+                value={turmaId ?? ""}
+                onChange={(e) => {
+                  setTurmaId(e.target.value ? Number(e.target.value) : null);
+                  setAlunoId(null);
+                }}
+              >
+                <option value="">Toda a escola</option>
+                {(turmas ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.nome}</option>
+                ))}
+              </select>
+            </MolduraPilula>
           </div>
-          <div>
-            <label htmlFor="rp-aluno" className="mb-1 block text-xs font-medium text-zinc-500">
+          <div className={campoFiltro}>
+            <label htmlFor="rp-aluno" className={rotuloFiltro}>
               Aluno
             </label>
-            <select
-              id="rp-aluno"
-              className={`${estiloInput} w-auto`}
-              value={alunoId ?? ""}
-              disabled={!turmaId}
-              onChange={(e) => setAlunoId(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">Toda a turma</option>
-              {(paginaAlunos?.itens ?? []).map((a) => (
-                <option key={a.id} value={a.id}>{a.nome}</option>
-              ))}
-            </select>
+            <MolduraPilula icone={UserRound}>
+              <select
+                id="rp-aluno"
+                className={estiloSelectPilula}
+                value={alunoId ?? ""}
+                disabled={!turmaId}
+                onChange={(e) => setAlunoId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Toda a turma</option>
+                {(paginaAlunos?.itens ?? []).map((a) => (
+                  <option key={a.id} value={a.id}>{a.nome}</option>
+                ))}
+              </select>
+            </MolduraPilula>
           </div>
         </div>
         {personalizadoIncompleto && (
-          <p className="mt-3 text-xs text-zinc-500">
+          <p className="mt-4 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+            <CalendarRange size={14} aria-hidden className="shrink-0 text-indigo-500" />
             Escolha a data inicial e a final para gerar o relatório personalizado.
           </p>
         )}
       </Card>
 
-      {erro && <Mensagem tipo="erro">{erro.message}</Mensagem>}
-      {carregando && !dados && <Carregando texto="Montando o relatório..." />}
+      {erro && !dados && (
+        <Card className="p-2">
+          <Erro titulo="Não foi possível montar o relatório" descricao={erro.message} aoTentar={recarregar} />
+        </Card>
+      )}
+      {erro && dados && <Mensagem tipo="erro">{erro.message}</Mensagem>}
+      {carregando && !dados && (
+        <div className="space-y-5" aria-busy="true">
+          <p className="sr-only" role="status">Montando o relatório...</p>
+          <Skeleton className="h-28 rounded-cartao" />
+          <div className={GRADE_INDICADORES}>
+            {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-36 rounded-cartao" />)}
+          </div>
+        </div>
+      )}
 
       {dados && (
         <>
-          <Card>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="flex items-center gap-2 text-sm font-semibold text-zinc-800">
-                  <CalendarRange size={16} className="text-zinc-400" />
-                  {dados.periodo.rotulo}
-                </p>
-                <p className="mt-0.5 text-xs text-zinc-500">
-                  {dados.plataformas_rotulo} · {dados.escola.nome} · ano letivo {dados.escola.ano_letivo}
-                  {dados.periodo.inclusivo && " · intervalo inclusivo nas duas datas"}
-                </p>
+          <Card className="p-6">
+            <div className="flex flex-wrap items-center justify-between gap-5">
+              <div className="flex min-w-0 items-start gap-4">
+                <IconePastel icone={CalendarRange} tom="violeta" tamanho="lg" />
+                <div className="min-w-0">
+                  <p className="flex flex-wrap items-baseline gap-x-2 text-lg font-bold tracking-tight text-zinc-900 dark:text-white">
+                    <span>{dados.periodo.rotulo}</span>
+                    {/* No celular a data vai para a linha própria, sem o "·" na frente
+                        (antes a linha quebrada começava pelo separador). */}
+                    {dados.periodo.inicio && (
+                      <span className="text-sm font-medium text-zinc-500 max-sm:basis-full dark:text-zinc-400">
+                        <span className="max-sm:hidden">· </span>{diaDoPeriodo(dados.periodo.inicio)} a {diaDoPeriodo(dados.periodo.fim)}
+                      </span>
+                    )}
+                  </p>
+                  {/* Ícone e texto lado a lado, sem quebra entre eles: com flex-wrap o
+                      texto longo descia inteiro e o ícone ficava sozinho na linha de cima. */}
+                  <p className="mt-1 flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    <School size={13} aria-hidden className="mt-px shrink-0" />
+                    <span className="min-w-0">
+                      {dados.plataformas_rotulo} · {dados.escola.nome} · ano letivo {dados.escola.ano_letivo}
+                      {dados.periodo.inclusivo && " · intervalo inclusivo nas duas datas"}
+                    </span>
+                  </p>
+                  {atualizando && (
+                    <p role="status" className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                      <Loader2 size={13} aria-hidden className="animate-spin motion-reduce:animate-none" />
+                      Atualizando o relatório…
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-zinc-500">
-                <strong className="text-zinc-800">{numero(dados.alunos.considerados)}</strong>{" "}
+              <p className="rounded-2xl bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-300">
+                <strong className="mr-0.5 text-2xl font-bold tabular-nums text-zinc-900 dark:text-white">
+                  {numero(dados.alunos.considerados)}
+                </strong>{" "}
                 {dados.alunos.considerados === 1 ? "aluno ativo" : "alunos ativos"} no recorte ·{" "}
                 {numero(dados.alunos.com_atividade)} com atividade
               </p>
             </div>
             {dados.escopo.restrito_a_turmas && (
-              <p className="mt-2 text-xs text-zinc-500">
+              <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">
                 Você vê as turmas vinculadas ao seu cadastro ({dados.escopo.restrito_a_turmas.length}).
               </p>
             )}
             {antesDoHistorico && (
-              <p className="mt-2 flex gap-2 text-xs text-amber-700">
-                <Info size={14} className="mt-0.5 shrink-0" />
+              <p className={`mt-4 flex gap-2 ${CAIXA_ALERTA}`}>
+                <Info size={14} aria-hidden className={ICONE_ALERTA} />
                 <span>
                   O histórico de atividade desta escola começa em{" "}
                   {dataHora(ele?.primeiro_evento_da_escola ?? null)}. Antes disso o relatório
@@ -350,140 +654,165 @@ export default function RelatorioPeriodo() {
           </Card>
 
           {ele && (
-            <section className="space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-700">Elefante Letrado</h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <section className="space-y-4">
+              <div className="flex items-center gap-3">
+                <IconePlataforma plataforma="elefante" />
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-zinc-900 dark:text-white">Elefante Letrado</h2>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">Leitura</p>
+                </div>
+              </div>
+              <div className={GRADE_INDICADORES}>
                 <StatCard
-                  icone={<BookOpen size={18} />}
+                  tom="violeta"
+                  icone={<BookOpen size={20} />}
                   rotulo="Livros novos"
                   valor={numero(ele.livros_novos)}
                   detalhe={`${numero(ele.alunos_com_livro_novo)} aluno(s) · mesmo número da premiação`}
                 />
                 <StatCard
-                  icone={<Clock size={18} />}
+                  tom="violeta"
+                  icone={<Clock size={20} />}
                   rotulo="Tempo de leitura"
                   valor={tempoLeitura(ele.tempo_min)}
                   detalhe="tempo informado por livro novo"
                 />
                 <StatCard
-                  icone={<RefreshCw size={18} />}
+                  tom="violeta"
+                  icone={<RefreshCw size={20} />}
                   rotulo="Livros com atividade"
                   valor={numero(ele.livros_com_atividade)}
                   detalhe={`${numero(ele.livros_relidos)} relido(s) · inclui releitura`}
                 />
                 <StatCard
-                  icone={<Sigma size={18} />}
+                  tom="violeta"
+                  icone={<Sigma size={20} />}
                   rotulo="Questões"
                   valor={
                     ele.questoes_tentativas === null
                       ? "—"
-                      : `${numero(ele.questoes_acertos ?? 0)}/${numero(ele.questoes_tentativas)}`
+                      // Espaço de largura zero depois da barra: no cartão estreito do
+                      // celular "1.234/2.345" quebra depois da barra em vez de vazar.
+                      : `${numero(ele.questoes_acertos ?? 0)}/\u200B${numero(ele.questoes_tentativas)}`
                   }
-                  detalhe={
-                    ele.alunos_sem_retrato
-                      ? `${numero(ele.alunos_sem_retrato)} sem coleta na janela (não contam como zero)`
-                      : "acertos sobre tentativas"
-                  }
+                  detalhe={[
+                    ele.cobertura_questoes?.status === "parcial" && "cobertura parcial do período — veja o aviso",
+                    ele.cobertura_questoes?.status === "ampliada" && "inclui antes do período — veja o aviso",
+                    ele.alunos_sem_retrato > 0
+                      && `${numero(ele.alunos_sem_retrato)} sem coleta na janela (não contam como zero)`,
+                  ].filter(Boolean).join(" · ") || "acertos sobre tentativas"}
                 />
               </div>
-              {ele.janela_efetiva_questoes && (
-                <Card>
-                  <AvisoJanelaEfetiva janela={ele.janela_efetiva_questoes} titulo="Questões" />
-                </Card>
+              {ele.cobertura_questoes ? (
+                <AvisoCobertura cobertura={ele.cobertura_questoes} titulo="Questões" />
+              ) : ele.janela_efetiva_questoes && (
+                <AvisoJanelaEfetiva janela={ele.janela_efetiva_questoes} titulo="Questões" />
               )}
             </section>
           )}
 
           {mat && (
-            <section className="space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-700">Matific</h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <section className="space-y-4">
+              <div className="flex items-center gap-3">
+                <IconePlataforma plataforma="matific" />
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-zinc-900 dark:text-white">Matific</h2>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">Matemática</p>
+                </div>
+              </div>
+              <div className={GRADE_INDICADORES}>
                 <StatCard
-                  icone={<Sigma size={18} />}
+                  tom="teal"
+                  icone={<Sigma size={20} />}
                   rotulo="Atividades"
-                  valor={numero(mat.atividades)}
-                  detalhe={`${numero(mat.alunos_com_atividade)} aluno(s) com ganho no período`}
+                  valor={matSemMedida ? "—" : numero(mat.atividades)}
+                  detalhe={matSemMedida
+                    ? "sem intervalo medido — veja o aviso"
+                    : mat.cobertura?.status === "parcial"
+                      ? "cobertura parcial do período — veja o aviso"
+                      : `${numero(mat.alunos_com_atividade)} aluno(s) com ganho no período`}
                 />
                 <StatCard
-                  icone={<Star size={18} />}
+                  tom="teal"
+                  icone={<Star size={20} />}
                   rotulo="Estrelas"
-                  valor={numero(mat.estrelas)}
-                  detalhe="ganho entre coletas"
+                  valor={matSemMedida ? "—" : numero(mat.estrelas)}
+                  detalhe={matSemMedida ? "sem intervalo medido — veja o aviso" : "ganho entre coletas"}
                 />
                 <StatCard
-                  icone={<Info size={18} />}
+                  tom="neutro"
+                  icone={<Info size={20} />}
                   rotulo="Sem coleta na janela"
                   valor={numero(mat.alunos_sem_retrato)}
                   detalhe="ausência de dado, não zero"
                 />
                 <StatCard
-                  icone={<Sigma size={18} />}
+                  tom="neutro"
+                  icone={<Sigma size={20} />}
                   rotulo="Questões"
                   valor="—"
                   detalhe="não existe este contador no Matific"
                 />
               </div>
-              {mat.janela_efetiva && (
-                <Card>
-                  <AvisoJanelaEfetiva janela={mat.janela_efetiva} titulo="Matific" />
-                </Card>
+              {mat.cobertura ? (
+                <AvisoCobertura cobertura={mat.cobertura} titulo="Matific" />
+              ) : mat.janela_efetiva && (
+                <AvisoJanelaEfetiva janela={mat.janela_efetiva} titulo="Matific" />
               )}
             </section>
           )}
 
-          <SecaoRecolhivel titulo="Como ler estes números" icone={<Info size={16} />} inicialAberto={false}>
-            <div className="space-y-4 text-sm">
+          <SecaoRecolhivel
+            titulo="Como ler estes números"
+            icone={<IconePastel icone={Info} tom="azul" tamanho="sm" />}
+            inicialAberto={false}
+          >
+            <div className="space-y-5 text-sm">
               {ele && (
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    Elefante Letrado
-                  </p>
+                <div className="space-y-2.5">
+                  <RotuloSecao>Elefante Letrado</RotuloSecao>
                   {Object.entries(ele.suporte).map(([chave, s]) => (
-                    <div key={chave} className="rounded border border-zinc-200 p-3">
+                    <div key={chave} className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
                       <p className="flex flex-wrap items-center gap-2">
-                        <strong className="text-zinc-800">{chave.replace(/_/g, " ")}</strong>
+                        <strong className="text-zinc-800 dark:text-zinc-100">{chave.replace(/_/g, " ")}</strong>
                         <Selo classificacao={s.classificacao} />
-                        {s.campo && <code className="text-[11px] text-zinc-500">{s.campo}</code>}
+                        {s.campo && <code className="text-[11px] text-zinc-500 dark:text-zinc-400">{s.campo}</code>}
                       </p>
-                      <p className="mt-1 text-xs text-zinc-600">{s.por_que}</p>
+                      <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{s.por_que}</p>
                       {s.ressalva && (
-                        <p className="mt-1 text-xs text-amber-700">Ressalva: {s.ressalva}</p>
+                        <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Ressalva: {s.ressalva}</p>
                       )}
                     </div>
                   ))}
                 </div>
               )}
               {mat && (
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    Matific
-                  </p>
-                  <div className="rounded border border-zinc-200 p-3">
+                <div className="space-y-2.5">
+                  <RotuloSecao>Matific</RotuloSecao>
+                  <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
                     <p className="flex flex-wrap items-center gap-2">
-                      <strong className="text-zinc-800">atividades e estrelas</strong>
+                      <strong className="text-zinc-800 dark:text-zinc-100">atividades e estrelas</strong>
                       <Selo classificacao={mat.suporte.classificacao} />
                       {mat.suporte.campo && (
-                        <code className="text-[11px] text-zinc-500">{mat.suporte.campo}</code>
+                        <code className="text-[11px] text-zinc-500 dark:text-zinc-400">{mat.suporte.campo}</code>
                       )}
                     </p>
-                    <p className="mt-1 text-xs text-zinc-600">{mat.suporte.por_que}</p>
+                    <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{mat.suporte.por_que}</p>
                     {mat.suporte.ressalva && (
-                      <p className="mt-1 text-xs text-amber-700">Ressalva: {mat.suporte.ressalva}</p>
+                      <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Ressalva: {mat.suporte.ressalva}</p>
                     )}
                   </div>
                 </div>
               )}
               {dados.nao_suportado.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    O que este relatório NÃO responde
-                  </p>
+                <div className="space-y-2.5">
+                  <RotuloSecao>O que este relatório NÃO responde</RotuloSecao>
                   {dados.nao_suportado.map((n) => (
-                    <div key={`${n.plataforma}-${n.metrica}`} className="rounded bg-zinc-50 p-3">
-                      <p className="text-xs font-medium text-zinc-700">
+                    <div key={`${n.plataforma}-${n.metrica}`} className="rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                      <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
                         {n.plataforma} · {n.metrica.replace(/_/g, " ")}
                       </p>
-                      <p className="mt-1 text-xs text-zinc-600">{n.por_que}</p>
+                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{n.por_que}</p>
                     </div>
                   ))}
                 </div>
@@ -492,79 +821,103 @@ export default function RelatorioPeriodo() {
           </SecaoRecolhivel>
 
           {dados.por_turma && dados.por_turma.length > 0 && (
-            <Card>
-              <h2 className="mb-3 text-sm font-semibold text-zinc-700">Por turma</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+            <Card className="overflow-hidden">
+              <div className="flex items-center gap-3 px-6 pb-2 pt-5">
+                <IconePastel icone={Users} tom="azul" tamanho="sm" />
+                <h2 className="text-[17px] font-semibold text-zinc-900 dark:text-white">Por turma</h2>
+              </div>
+              <TabelaRolavel rotulo="Tabela por turma">
+                <table className={classesTabela.tabela}>
                   <thead>
-                    <tr className="border-b border-zinc-200 text-left text-xs text-zinc-500">
-                      <th className="py-2 pr-3">Turma</th>
-                      <th className="py-2 pr-3 text-right">Alunos</th>
-                      <th className="py-2 pr-3 text-right">Com atividade</th>
-                      {ele && <th className="py-2 pr-3 text-right">Livros novos</th>}
-                      {ele && <th className="py-2 pr-3 text-right">Tempo</th>}
-                      {ele && <th className="py-2 pr-3 text-right">Relidos</th>}
-                      {mat && <th className="py-2 pr-3 text-right">Atividades</th>}
-                      {mat && <th className="py-2 text-right">Estrelas</th>}
+                    <tr>
+                      <th className={th()}>Turma</th>
+                      <th className={th(true)}>Alunos</th>
+                      <th className={th(true)}>Com atividade</th>
+                      {ele && <th className={th(true)}>Livros novos</th>}
+                      {ele && <th className={th(true)}>Tempo</th>}
+                      {ele && <th className={th(true)}>Relidos</th>}
+                      {mat && <th className={th(true)}>Atividades</th>}
+                      {mat && <th className={th(true)}>Estrelas</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {dados.por_turma.map((t) => (
-                      <tr key={t.turma_id} className="border-b border-zinc-100">
-                        <td className="py-2 pr-3">
-                          {t.turma}
-                          <span className="ml-1 text-xs text-zinc-400">{t.turno ?? ""}</span>
+                      <tr key={t.turma_id} className={classesTabela.tr}>
+                        <td className={td()}>
+                          {/* O turno desce para baixo do chip quando falta largura. */}
+                          <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <Chip className="whitespace-nowrap">{t.turma}</Chip>
+                            <span className="text-xs text-zinc-500 dark:text-zinc-400">{t.turno ?? ""}</span>
+                          </span>
                         </td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{numero(t.alunos)}</td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{numero(t.com_atividade)}</td>
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{numero(t.elefante.livros_novos)}</td>}
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{tempoLeitura(t.elefante.tempo_min)}</td>}
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{numero(t.elefante.livros_relidos)}</td>}
-                        {mat && <td className="py-2 pr-3 text-right tabular-nums">{numero(t.matific.atividades)}</td>}
-                        {mat && <td className="py-2 text-right tabular-nums">{numero(t.matific.estrelas)}</td>}
+                        <td className={td(true)}>{numero(t.alunos)}</td>
+                        <td className={td(true)}>{numero(t.com_atividade)}</td>
+                        {ele && <td className={td(true)}>{numero(t.elefante.livros_novos)}</td>}
+                        {ele && <td className={td(true)}>{tempoLeitura(t.elefante.tempo_min)}</td>}
+                        {ele && <td className={td(true)}>{numero(t.elefante.livros_relidos)}</td>}
+                        {mat && <td className={td(true)}>{numero(t.matific.atividades)}</td>}
+                        {mat && <td className={td(true)}>{numero(t.matific.estrelas)}</td>}
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TabelaRolavel>
             </Card>
           )}
 
-          <Card>
-            <h2 className="mb-3 text-sm font-semibold text-zinc-700">Por aluno</h2>
+          <Card className="overflow-hidden">
+            <div className="flex items-center gap-3 px-6 pb-2 pt-5">
+              <IconePastel icone={Users} tom="violeta" tamanho="sm" />
+              <h2 className="text-[17px] font-semibold text-zinc-900 dark:text-white">Por aluno</h2>
+            </div>
             {dados.por_aluno.length === 0 ? (
-              <Vazio titulo="Nenhum aluno no recorte" descricao="Confira a turma escolhida e o ano letivo." />
+              <Vazio icone={Users} titulo="Nenhum aluno no recorte" descricao="Confira a turma escolhida e o ano letivo." />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <TabelaRolavel rotulo="Tabela por aluno">
+                <table className={classesTabela.tabela}>
                   <thead>
-                    <tr className="border-b border-zinc-200 text-left text-xs text-zinc-500">
-                      <th className="py-2 pr-3">Aluno</th>
-                      <th className="py-2 pr-3">Turma</th>
-                      {ele && <th className="py-2 pr-3 text-right">Livros novos</th>}
-                      {ele && <th className="py-2 pr-3 text-right">Tempo</th>}
-                      {ele && <th className="py-2 pr-3 text-right">Com atividade</th>}
-                      {ele && <th className="py-2 pr-3 text-right">Relidos</th>}
-                      {mat && <th className="py-2 pr-3 text-right">Atividades</th>}
-                      {mat && <th className="py-2 text-right">Estrelas</th>}
+                    <tr>
+                      {/* A turma vai no chip sob o nome (era uma coluna à parte): a coluna a
+                          menos é o que deixa Atividades e Estrelas caberem a partir de 768 px. */}
+                      <th className={th()}>Aluno</th>
+                      {ele && <th className={th(true)}>Livros novos</th>}
+                      {ele && <th className={th(true)}>Tempo</th>}
+                      {ele && <th className={th(true)}>Com atividade</th>}
+                      {ele && <th className={th(true)}>Relidos</th>}
+                      {mat && <th className={th(true)}>Atividades</th>}
+                      {mat && <th className={th(true)}>Estrelas</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {dados.por_aluno.map((a) => (
-                      <tr key={a.aluno_id} className={`border-b border-zinc-100 ${a.sem_atividade ? "text-zinc-400" : ""}`}>
-                        <td className="py-2 pr-3">{a.nome}</td>
-                        <td className="py-2 pr-3 text-xs">{a.turma}</td>
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{numero(a.elefante?.livros_novos ?? 0)}</td>}
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{tempoLeitura(a.elefante?.tempo_min ?? 0)}</td>}
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{numero(a.elefante?.livros_com_atividade ?? 0)}</td>}
-                        {ele && <td className="py-2 pr-3 text-right tabular-nums">{numero(a.elefante?.livros_relidos ?? 0)}</td>}
-                        {mat && <td className="py-2 pr-3 text-right tabular-nums">{numero(a.matific?.atividades ?? 0)}</td>}
-                        {mat && <td className="py-2 text-right tabular-nums">{numero(a.matific?.estrelas ?? 0)}</td>}
+                      <tr key={a.aluno_id} className={classesTabela.tr}>
+                        <td className={td()}>
+                          {/* No celular o avatar decorativo sai e o nome fica mais estreito
+                              (até duas linhas): cabe mais uma coluna numérica à vista. */}
+                          <span className="flex min-w-[10rem] items-center gap-2.5 max-sm:min-w-[8.5rem]">
+                            <Avatar nome={a.nome} chave={a.aluno_id} tamanho="sm" className="max-sm:hidden" />
+                            <span className="min-w-0">
+                              <span className={`block font-medium ${a.sem_atividade ? "text-zinc-500 dark:text-zinc-400" : "text-zinc-900 dark:text-zinc-100"}`}>{a.nome}</span>
+                              <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                <Chip className="whitespace-nowrap">{a.turma}</Chip>
+                                {a.sem_atividade && (
+                                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400">sem atividade no período</span>
+                                )}
+                              </span>
+                            </span>
+                          </span>
+                        </td>
+                        {ele && <td className={td(true)}>{numero(a.elefante?.livros_novos ?? 0)}</td>}
+                        {ele && <td className={td(true)}>{tempoLeitura(a.elefante?.tempo_min ?? 0)}</td>}
+                        {ele && <td className={td(true)}>{numero(a.elefante?.livros_com_atividade ?? 0)}</td>}
+                        {ele && <td className={td(true)}>{numero(a.elefante?.livros_relidos ?? 0)}</td>}
+                        {mat && <td className={td(true)}>{numero(a.matific?.atividades ?? 0)}</td>}
+                        {mat && <td className={td(true)}>{numero(a.matific?.estrelas ?? 0)}</td>}
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TabelaRolavel>
             )}
           </Card>
         </>

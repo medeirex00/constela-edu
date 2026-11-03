@@ -19,7 +19,7 @@ fez, o quê, quando, sobre qual registro) — anonimizar não é apagar a audito
 import pytest
 from sqlalchemy import select
 
-from app.models import Aluno, LogAuditoria, Notificacao
+from app.models import Aluno, LogAuditoria, Notificacao, Usuario
 from app.services.audit import registrar
 
 pytestmark = pytest.mark.usefixtures("cliente")
@@ -78,7 +78,7 @@ def _semeia_logs_como_a_producao(db, escola_id, aluno_id, nome, usuario_id):
 
 # --- 1. O esquecimento de fato ------------------------------------------------
 
-def test_nome_do_menor_nao_sobrevive_em_nenhuma_linha_do_log(cliente, db, escola_completa):
+def test_nome_do_menor_nao_sobrevive_em_nenhuma_linha_do_log(cliente_global, db, escola_completa):
     """O teste central do C-07, feito como a auditoria fez: varredura total."""
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
@@ -90,8 +90,8 @@ def test_nome_do_menor_nao_sobrevive_em_nenhuma_linha_do_log(cliente, db, escola
     antes = [l for l in _todos_os_logs(db, escola_id) if ana_nome in str(l.detalhes)]
     assert len(antes) >= 5, "pré-condição: as 5 formas gravam o nome"
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -102,12 +102,12 @@ def test_nome_do_menor_nao_sobrevive_em_nenhuma_linha_do_log(cliente, db, escola
         + ", ".join(f"{l.acao}(entidade_id={l.entidade_id})" for l in sobreviventes))
 
 
-def test_esquecimento_pega_variacao_de_acento_e_caixa(cliente, db, escola_completa):
-    """A planilha escreve “ABRAAO”, a base tem “Abraão”. Se o esquecimento
+def test_esquecimento_pega_variacao_de_acento_e_caixa(cliente_global, db, escola_completa):
+    """A planilha escreve “TRISTAO”, a base tem “Tristão”. Se o esquecimento
     comparasse string crua, o nome ficaria no log."""
     escola_id = escola_completa["escola"].id
     turma = escola_completa["turma"]
-    aluno = Aluno(escola_id=escola_id, nome="Abraão Lopes Rocha")
+    aluno = Aluno(escola_id=escola_id, nome="Tristão Simulatti Fictelli")
     db.add(aluno)
     db.flush()
     from app.models import Matricula
@@ -118,23 +118,23 @@ def test_esquecimento_pega_variacao_de_acento_e_caixa(cliente, db, escola_comple
 
     registrar(db, "aluno.criado_auto", escola_id=escola_id, entidade="aluno",
               entidade_id=None,
-              detalhes={"origem": "ABRAAO LOPES ROCHA", "turma": "3º Ano A"})
+              detalhes={"origem": "TRISTAO SIMULATTI FICTELLI", "turma": "3º Ano A"})
     registrar(db, "aluno.revisao_necessaria", escola_id=escola_id, entidade="aluno",
               entidade_id=None,
-              detalhes={"origem": "  abraão   lopes rocha  ", "turma": "3º Ano A"})
+              detalhes={"origem": "  tristão   simulatti fictelli  ", "turma": "3º Ano A"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [aluno_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [aluno_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
     for log in _todos_os_logs(db, escola_id):
         texto = str(log.detalhes).casefold()
-        assert "abraao" not in texto and "abraão" not in texto, log.acao
+        assert "tristao" not in texto and "tristão" not in texto, log.acao
 
 
-def test_esquecimento_alcanca_nome_aninhado_da_fusao(cliente, db, escola_completa):
+def test_esquecimento_alcanca_nome_aninhado_da_fusao(cliente_global, db, escola_completa):
     """``aluno.fundido`` guarda ``foto_pre_fusao`` — um retrato ANINHADO do
     cadastro apagado. O nome está a dois níveis de profundidade."""
     escola_id = escola_completa["escola"].id
@@ -152,8 +152,8 @@ def test_esquecimento_alcanca_nome_aninhado_da_fusao(cliente, db, escola_complet
                         "leituras_movidas": 3})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -161,7 +161,7 @@ def test_esquecimento_alcanca_nome_aninhado_da_fusao(cliente, db, escola_complet
         assert ana_nome not in str(log.detalhes), log.acao
 
 
-def test_esquecimento_pega_nome_solto_dentro_de_lista(cliente, db, escola_completa):
+def test_esquecimento_pega_nome_solto_dentro_de_lista(cliente_global, db, escola_completa):
     """Nome sem chave própria (item de lista) também precisa cair."""
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
@@ -172,8 +172,8 @@ def test_esquecimento_pega_nome_solto_dentro_de_lista(cliente, db, escola_comple
               detalhes={"fusoes": 1, "envolvidos": [ana_nome, "Outra Criança"]})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -181,7 +181,7 @@ def test_esquecimento_pega_nome_solto_dentro_de_lista(cliente, db, escola_comple
         assert ana_nome not in str(log.detalhes), log.acao
 
 
-def test_exclusao_de_turma_com_alunos_tambem_esquece(cliente, db, escola_completa):
+def test_exclusao_de_turma_com_alunos_tambem_esquece(cliente_global, db, escola_completa):
     """O outro caminho que apaga criança em definitivo usa a mesma função —
     o esquecimento não pode depender da porta por onde se entrou."""
     escola_id = escola_completa["escola"].id
@@ -191,7 +191,8 @@ def test_exclusao_de_turma_com_alunos_tambem_esquece(cliente, db, escola_complet
     _semeia_logs_como_a_producao(db, escola_id, ana.id, ana_nome,
                                  escola_completa["admin"].id)
 
-    r = cliente.delete(f"{_base(escola_id)}/turmas/{turma.id}?com_alunos=true")
+    # Excluir turma com alunos é do Admin Global (D19).
+    r = cliente_global.delete(f"{_base(escola_id)}/turmas/{turma.id}?com_alunos=true")
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -201,7 +202,7 @@ def test_exclusao_de_turma_com_alunos_tambem_esquece(cliente, db, escola_complet
         assert ana_nome not in str(log.detalhes), log.acao
 
 
-def test_esquecimento_pega_nome_abreviado_da_planilha(cliente, db, escola_completa):
+def test_esquecimento_pega_nome_abreviado_da_planilha(cliente_global, db, escola_completa):
     """O caso que motivou o casamento aproximado: a planilha trouxe “ANA B.
     SOUZA” e a base tem “Ana Beatriz Souza”. Normalizar não iguala as duas —
     é por isso que a redação por CHAVE existe."""
@@ -216,8 +217,8 @@ def test_esquecimento_pega_nome_abreviado_da_planilha(cliente, db, escola_comple
                         "motivo": "único candidato plausível na mesma turma"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -230,7 +231,7 @@ def test_esquecimento_pega_nome_abreviado_da_planilha(cliente, db, escola_comple
     assert log.detalhes["confianca"] == "alta"
 
 
-def test_procedencia_nao_e_confundida_com_nome(cliente, db, escola_completa):
+def test_procedencia_nao_e_confundida_com_nome(cliente_global, db, escola_completa):
     """``origem`` é sobrecarregada: ora é nome da planilha, ora é a PROCEDÊNCIA
     do dado. Apagar “matific”/“importacao” seria sobre-redação — o auditor
     perde de onde veio a mudança sem que ninguém ganhe privacidade."""
@@ -246,8 +247,8 @@ def test_procedencia_nao_e_confundida_com_nome(cliente, db, escola_completa):
               detalhes={"de": "3º Ano A", "para": "3º Ano B", "origem": "matific"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -258,7 +259,7 @@ def test_procedencia_nao_e_confundida_com_nome(cliente, db, escola_completa):
     assert logs["aluno.turma_alterada"].detalhes["para"] == "3º Ano B"
 
 
-def test_esquecimento_pega_nome_citado_dentro_de_uma_frase(cliente, db, escola_completa):
+def test_esquecimento_pega_nome_citado_dentro_de_uma_frase(cliente_global, db, escola_completa):
     """Defesa para o futuro: se alguém passar a guardar um aviso em texto
     corrido no ``detalhes``, o nome no meio da frase não pode escapar."""
     escola_id = escola_completa["escola"].id
@@ -271,8 +272,8 @@ def test_esquecimento_pega_nome_citado_dentro_de_uma_frase(cliente, db, escola_c
                                  "na turma 3º Ano A.", "turma": "3º Ano A"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -280,7 +281,7 @@ def test_esquecimento_pega_nome_citado_dentro_de_uma_frase(cliente, db, escola_c
         assert ana_nome not in str(log.detalhes), log.acao
 
 
-def test_nome_curto_nao_colide_com_nome_maior_de_outra_crianca(cliente, db, escola_completa):
+def test_nome_curto_nao_colide_com_nome_maior_de_outra_crianca(cliente_global, db, escola_completa):
     """Colisão real: “Ana Souza” é substring de “Mari*ana Souza* Silva”. Sem
     fronteira de palavra, excluir uma criança apagaria o nome de outra que
     continua matriculada."""
@@ -305,8 +306,8 @@ def test_nome_curto_nao_colide_com_nome_maior_de_outra_crianca(cliente, db, esco
               detalhes={"aviso": "“Mariana Souza Silva” já está cadastrada."})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -317,7 +318,7 @@ def test_nome_curto_nao_colide_com_nome_maior_de_outra_crianca(cliente, db, esco
     assert db.get(Aluno, mariana_id) is not None
 
 
-def test_nome_de_uma_palavra_so_nao_causa_sobre_redacao(cliente, db, escola_completa):
+def test_nome_de_uma_palavra_so_nao_causa_sobre_redacao(cliente_global, db, escola_completa):
     """O contrário do teste acima: um nome de uma palavra só não pode ser
     caçado dentro de outras palavras — “Ana” não torna “Susana” um alvo."""
     from app.models import Matricula
@@ -336,8 +337,8 @@ def test_nome_de_uma_palavra_so_nao_causa_sobre_redacao(cliente, db, escola_comp
               entidade_id=99, detalhes={"nome": "Susana Ananias Ribeiro"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -346,7 +347,7 @@ def test_nome_de_uma_palavra_so_nao_causa_sobre_redacao(cliente, db, escola_comp
     assert log.detalhes["nome"] == "Susana Ananias Ribeiro"
 
 
-def test_esquecimento_alcanca_o_nome_escolhido_no_quest(cliente, db, escola_completa):
+def test_esquecimento_alcanca_o_nome_escolhido_no_quest(cliente_global, db, escola_completa):
     """``quest.nome_escolhido`` guarda como a criança pediu para ser chamada —
     normalmente só o primeiro nome. Também é nome civil de menor."""
     escola_id = escola_completa["escola"].id
@@ -357,8 +358,8 @@ def test_esquecimento_alcanca_o_nome_escolhido_no_quest(cliente, db, escola_comp
               entidade_id=ana_id, detalhes={"nome": "Ana"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -369,7 +370,8 @@ def test_esquecimento_alcanca_o_nome_escolhido_no_quest(cliente, db, escola_comp
 
 # --- 2. Referências indiretas -------------------------------------------------
 
-def test_avisos_da_crianca_excluida_nao_ficam_apontando_para_ela(cliente, db, escola_completa):
+def test_avisos_da_crianca_excluida_nao_ficam_apontando_para_ela(
+        cliente_global, db, escola_completa):
     """``Notificacao.aluno_id`` sobrevive à exclusão (não tem FK). É ponteiro
     para uma criança que pediu para ser esquecida — e o banco reaproveita IDs,
     então o aviso passaria a apontar para outra criança."""
@@ -383,8 +385,8 @@ def test_avisos_da_crianca_excluida_nao_ficam_apontando_para_ela(cliente, db, es
                        titulo="Nova importação de dados concluída", rota="/importacoes"))
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -397,7 +399,8 @@ def test_avisos_da_crianca_excluida_nao_ficam_apontando_para_ela(cliente, db, es
 
 # --- 3. O outro lado: a auditoria continua útil -------------------------------
 
-def test_trilha_de_auditoria_continua_util_depois_do_esquecimento(cliente, db, escola_completa):
+def test_trilha_de_auditoria_continua_util_depois_do_esquecimento(
+        cliente_global, db, escola_completa):
     """Anonimizar ≠ apagar a auditoria. Depois do esquecimento, o log ainda
     responde: QUEM fez, O QUÊ, QUANDO e sobre QUAL registro (id anônimo)."""
     escola_id = escola_completa["escola"].id
@@ -407,8 +410,8 @@ def test_trilha_de_auditoria_continua_util_depois_do_esquecimento(cliente, db, e
     _semeia_logs_como_a_producao(db, escola_id, ana_id, ana_nome, admin.id)
     quantos_antes = len(_todos_os_logs(db, escola_id))
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -430,9 +433,11 @@ def test_trilha_de_auditoria_continua_util_depois_do_esquecimento(cliente, db, e
     assert revisao.detalhes["turma"] == "3º Ano A"          # contexto operacional fica
     assert revisao.detalhes["decisao"] == "REVIEW_REQUIRED"
 
-    # E a própria exclusão fica registrada, com autor e alvo.
+    # E a própria exclusão fica registrada, com autor e alvo. O autor é o Admin
+    # Global: a exclusão física de aluno é só dele (D19).
     exclusao = por_acao["aluno.excluido_permanente"]
-    assert exclusao.usuario_id == admin.id and exclusao.entidade_id == ana_id
+    autor = db.execute(select(Usuario).where(Usuario.is_global.is_(True))).scalar_one()
+    assert exclusao.usuario_id == autor.id and exclusao.entidade_id == ana_id
 
     # O que sumiu foi só o nome — trocado por marca explícita, não por vazio
     # (some o dado pessoal, fica a evidência de que ali havia um nome).
@@ -440,7 +445,7 @@ def test_trilha_de_auditoria_continua_util_depois_do_esquecimento(cliente, db, e
     assert vinculo.detalhes["nome_novo"] == "[removido]"
 
 
-def test_esquecimento_nao_atinge_aluno_que_continua_na_escola(cliente, db, escola_completa):
+def test_esquecimento_nao_atinge_aluno_que_continua_na_escola(cliente_global, db, escola_completa):
     """Sobre-redação também é defeito: apagar o nome de quem NÃO foi excluído
     destrói a auditoria de uma criança que continua matriculada."""
     escola_id = escola_completa["escola"].id
@@ -453,8 +458,8 @@ def test_esquecimento_nao_atinge_aluno_que_continua_na_escola(cliente, db, escol
               entidade_id=None, detalhes={"origem": joao_nome, "turma": "3º Ano A"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -463,7 +468,7 @@ def test_esquecimento_nao_atinge_aluno_que_continua_na_escola(cliente, db, escol
     assert logs["aluno.revisao_necessaria"].detalhes["origem"] == joao_nome
 
 
-def test_esquecimento_nao_vaza_para_outra_escola(cliente, db, escola_completa):
+def test_esquecimento_nao_vaza_para_outra_escola(cliente_global, db, escola_completa):
     """Escopo: o log de outra escola com um homônimo não pode ser tocado."""
     from app.models import Escola
 
@@ -477,8 +482,8 @@ def test_esquecimento_nao_vaza_para_outra_escola(cliente, db, escola_completa):
               entidade_id=4242, detalhes={"nome": ana_nome})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -487,7 +492,7 @@ def test_esquecimento_nao_vaza_para_outra_escola(cliente, db, escola_completa):
     assert outro_log.detalhes["nome"] == ana_nome
 
 
-def test_exclusao_em_lote_esquece_todos(cliente, db, escola_completa):
+def test_exclusao_em_lote_esquece_todos(cliente_global, db, escola_completa):
     escola_id = escola_completa["escola"].id
     ana, joao = escola_completa["alunos"][0], escola_completa["alunos"][1]
     nomes = [ana.nome, joao.nome]
@@ -496,8 +501,8 @@ def test_exclusao_em_lote_esquece_todos(cliente, db, escola_completa):
                   entidade_id=None, detalhes={"origem": aluno.nome, "turma": "3º Ano A"})
     db.commit()
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana.id, joao.id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana.id, joao.id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()

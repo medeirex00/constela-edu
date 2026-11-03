@@ -394,16 +394,16 @@ def test_fusao_legitima_segue_funcionando(mundo):
     escola segue fundindo (apaga a duplicada, padroniza a que fica)."""
     db = mundo.db
     adm = mundo.cli("admin_x")
-    curta = Usuario(escola_id=mundo.ids["x"], nome="PAULA", email="paula@constela-sint.com.br",
+    curta = Usuario(escola_id=mundo.ids["x"], nome="TELMA", email="telma@constela-sint.com.br",
                     senha_hash=hash_senha(SENHA), cargo="professor")
-    cheia = Usuario(escola_id=mundo.ids["x"], nome="PAULA SINT NOGUEIRA",
-                    email="paula.nogueira@constela-sint.com.br",
+    cheia = Usuario(escola_id=mundo.ids["x"], nome="TELMA SINT TESTELLI",
+                    email="telma.testelli@constela-sint.com.br",
                     senha_hash=hash_senha(SENHA), cargo="professor")
     db.add_all([curta, cheia])
     db.commit()
     curta_id = curta.id
-    loser = _legado(mundo, "PAULA", "paula@constela-sint.com.br")
-    _legado(mundo, "PAULA SINT NOGUEIRA", "paula.nogueira@constela-sint.com.br")
+    loser = _legado(mundo, "TELMA", "telma@constela-sint.com.br")
+    _legado(mundo, "TELMA SINT TESTELLI", "telma.testelli@constela-sint.com.br")
     r = adm.post(_url(mundo, "/professores/duplicados/corrigir"), json={"loser_ids": [loser]})
     assert r.status_code == 200, r.text
     folha = r.json()["folha"]

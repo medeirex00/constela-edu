@@ -3,7 +3,8 @@
  * Alunos, ficha do aluno): menu ⋮ com Visualizar, Editar dados (nome,
  * nº de chamada, nascimento, observações E turma), Arquivar/Reativar,
  * Marcar como transferido (saiu da escola — o histórico fica preservado),
- * Excluir (reversível) e Excluir permanentemente (dupla confirmação).
+ * Excluir (reversível) e Excluir permanentemente (dupla confirmação; só o
+ * Admin Global — D19).
  * Usa os endpoints já existentes do painel da turma.
  */
 import {
@@ -17,7 +18,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
@@ -25,6 +26,7 @@ import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
 import MenuSuspenso, { ItemMenu } from "./MenuSuspenso";
+import { AvatarAluno } from "./PessoasUi";
 import { Botao, Campo, Mensagem, Modal, estiloInput } from "./ui";
 
 type Janela = "editar" | "fundir" | "excluir" | "permanente" | null;
@@ -32,9 +34,10 @@ type Janela = "editar" | "fundir" | "excluir" | "permanente" | null;
 export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostrarVisualizar = true }: {
   aluno: Aluno;
   escolaId: number;
-  /** Chamado após qualquer alteração (para a tela recarregar os dados). */
+  /** Chamado após qualquer alteração (para a tela recarregar os dados). Se a
+   *  resposta trouxer avisos, só depois que o usuário fechar a janela deles. */
   aoMudar: () => void;
-  /** Chamado após exclusão (ex.: sair da ficha do aluno). */
+  /** Chamado após exclusão (ex.: sair da ficha do aluno) — mesma regra dos avisos. */
   aoExcluir?: () => void;
   mostrarVisualizar?: boolean;
 }) {
@@ -43,26 +46,55 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
   // Secretaria (rede vinculada, não-global): só visualiza — sem ações de escrita
   // (editar, transferir turma, fundir, arquivar, excluir). O backend também barra.
   const secretaria = !usuario?.is_global && usuario?.rede_id != null;
+  // Exclusão FÍSICA do aluno (apaga a ficha e todos os dados) é exclusiva do
+  // Admin Global (D19 — a API responde 403 para os demais): para admin e
+  // coordenação da escola o menu não oferece “Excluir permanentemente”.
+  const podeApagarAlunos = usuario?.is_global === true;
   const [janela, setJanela] = useState<Janela>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
   // Erro de Arquivar/Reativar: essas ações partem direto do menu, sem modal,
   // então precisam de um lugar PRÓPRIO para aparecer — senão a falha some.
   const [erroAcao, setErroAcao] = useState("");
+  // Avisos da ação concluída (D10: o Admin Global tirou de "excluído" uma ficha
+  // cuja conta da plataforma vale em outra escola) — nunca silenciosos.
+  const [avisosAcao, setAvisosAcao] = useState<string[]>([]);
+  // Com aviso, a tela só é avisada (aoMudar/aoExcluir) quando o usuário FECHA a
+  // janela: quem recarrega pode desmontar este componente — o PerfilAluno troca
+  // o conteúdo por <Carregando/> — e o aviso sumiria junto, sem ser lido.
+  const concluirAoFecharAvisos = useRef<(() => void) | null>(null);
   const inativo = aluno.status !== "ativo";
 
+  function fecharAvisos() {
+    setAvisosAcao([]);
+    const concluir = concluirAoFecharAvisos.current;
+    concluirAoFecharAvisos.current = null;
+    concluir?.();
+  }
+
   async function acaoStatus(acao: "arquivar" | "reativar" | "excluir" | "marcar_transferido") {
+    // Defensivo: uma ação nova com o aviso anterior ainda aberto (o menu atrás
+    // da janela segue alcançável pelo teclado) conclui o anterior antes.
+    if (concluirAoFecharAvisos.current) fecharAvisos();
     setOcupado(true);
     setErro("");
     setErroAcao("");
     try {
-      await api(`/escolas/${escolaId}/alunos/acoes`, {
+      const r = await api<{ avisos?: string[] }>(`/escolas/${escolaId}/alunos/acoes`, {
         method: "POST",
         body: JSON.stringify({ aluno_ids: [aluno.id], acao }),
       });
       setJanela(null);
-      if (acao === "excluir") aoExcluir?.();
-      aoMudar();
+      const concluir = () => {
+        if (acao === "excluir") aoExcluir?.();
+        aoMudar();
+      };
+      if (r?.avisos?.length) {
+        concluirAoFecharAvisos.current = concluir;
+        setAvisosAcao(r.avisos);
+      } else {
+        concluir();
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Não foi possível concluir a ação.";
       // "excluir" roda dentro do modal (que mostra `erro`); arquivar/reativar
@@ -131,8 +163,10 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
                   <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
                   <ItemMenu icone={<Trash2 size={15} />} rotulo="Excluir" destrutiva
                             onClick={escolher(() => setJanela("excluir"))} />
-                  <ItemMenu icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva
-                            onClick={escolher(() => setJanela("permanente"))} />
+                  {podeApagarAlunos && (
+                    <ItemMenu icone={<TriangleAlert size={15} />} rotulo="Excluir permanentemente" destrutiva
+                              onClick={escolher(() => setJanela("permanente"))} />
+                  )}
                 </>
               )}
             </>
@@ -167,12 +201,14 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Tem certeza de que deseja excluir <strong>{aluno.nome}</strong>? O aluno sai
             das listas e rankings; os dados são mantidos e podem ser restaurados depois.
-            Para apagar tudo de vez, use “Excluir permanentemente”.
+            {podeApagarAlunos
+              ? " Para apagar tudo de vez, use “Excluir permanentemente”."
+              : " Apagar tudo de vez é exclusivo do Admin Global."}
           </p>
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-          <div className="mt-5 flex justify-end gap-2">
-            <Botao variante="neutro" onClick={() => setJanela(null)} disabled={ocupado}>Cancelar</Botao>
-            <Botao className="!bg-red-600 hover:!bg-red-500" disabled={ocupado}
+          <div className="mt-6 flex justify-end gap-2.5">
+            <Botao variante="secundario" onClick={() => setJanela(null)} disabled={ocupado}>Cancelar</Botao>
+            <Botao variante="perigo" disabled={ocupado}
                    onClick={() => acaoStatus("excluir")}>
               {ocupado ? "Excluindo..." : "Excluir"}
             </Botao>
@@ -180,7 +216,7 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
         </Modal>
       )}
 
-      {janela === "permanente" && (
+      {janela === "permanente" && podeApagarAlunos && (
         <ModalPermanenteUm
           nome={aluno.nome}
           ocupado={ocupado}
@@ -195,8 +231,27 @@ export default function AcoesAluno({ aluno, escolaId, aoMudar, aoExcluir, mostra
       {erroAcao && (
         <Modal titulo="Não foi possível concluir a ação" aberto aoFechar={() => setErroAcao("")}>
           <Mensagem tipo="erro">{erroAcao}</Mensagem>
-          <div className="mt-5 flex justify-end">
-            <Botao variante="neutro" onClick={() => setErroAcao("")}>Fechar</Botao>
+          <div className="mt-6 flex justify-end">
+            <Botao variante="secundario" onClick={() => setErroAcao("")}>Fechar</Botao>
+          </div>
+        </Modal>
+      )}
+
+      {/* Ação concluída COM aviso (ex.: a conta da plataforma desta ficha continua
+          valendo em outra escola): fica aberto até o usuário fechar, e só então
+          a tela recarrega (fecharAvisos → aoMudar). */}
+      {avisosAcao.length > 0 && (
+        <Modal titulo="Ação concluída — atenção" aberto aoFechar={fecharAvisos}>
+          <div className="space-y-2">
+            {avisosAcao.map((a) => (
+              <p key={a} className="flex gap-2.5 rounded-xl bg-amber-50 px-3.5 py-3 text-sm text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
+                <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
+                <span>{a}</span>
+              </p>
+            ))}
+          </div>
+          <div className="mt-6 flex justify-end">
+            <Botao variante="secundario" onClick={fecharAvisos}>Entendi</Botao>
           </div>
         </Modal>
       )}
@@ -291,8 +346,8 @@ export function ModalEditarAluno({ aluno, escolaId, aoFechar, aoSalvo }: {
         </Campo>
       </div>
       {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-      <div className="mt-5 flex justify-end gap-2">
-        <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+      <div className="mt-6 flex justify-end gap-2.5">
+        <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
         <Botao disabled={ocupado || nome.trim().length < 2} onClick={salvar}>
           {ocupado ? "Salvando..." : "Salvar"}
         </Botao>
@@ -381,9 +436,10 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
       {!outro ? (
         <div className="mt-3">
           <div className="relative">
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+            <Search size={15} aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
             <input
-              className={`${estiloInput} pl-8`}
+              aria-label="Buscar o cadastro duplicado pelo nome"
+              className={`${estiloInput} pl-10`}
               placeholder="Buscar o cadastro duplicado pelo nome..."
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
@@ -391,15 +447,17 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
             />
           </div>
           {resultados.length > 0 && (
-            <ul className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+            <ul className="mt-2 max-h-56 divide-y divide-zinc-100 overflow-y-auto rounded-2xl border border-zinc-200/80 dark:divide-zinc-800 dark:border-zinc-700">
               {resultados.map((a) => (
                 <li key={a.id}>
                   <button
-                    className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    type="button"
+                    className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left text-sm transition-colors hover:bg-indigo-50/60 dark:hover:bg-zinc-800"
                     onClick={() => setOutro(a)}
                   >
-                    <span className="font-medium">{a.nome}</span>
-                    <span className="text-xs text-zinc-400">{a.turma ?? "sem turma"}</span>
+                    <AvatarAluno nome={a.nome} chave={a.id} foto={a.foto_url} tamanho="sm" />
+                    <span className="min-w-0 flex-1 truncate font-semibold" title={a.nome}>{a.nome}</span>
+                    <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">{a.turma ?? "sem turma"}</span>
                   </button>
                 </li>
               ))}
@@ -410,19 +468,19 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
             <div className="mt-2"><Mensagem tipo="erro">Não foi possível buscar: {erroBusca.message}</Mensagem></div>
           )}
           {buscaAtiva && !carregandoBusca && !erroBusca && resultados.length === 0 && (
-            <p className="mt-2 text-xs text-zinc-400">Nenhum outro aluno encontrado.</p>
+            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Nenhum outro aluno encontrado.</p>
           )}
         </div>
       ) : (
         <>
-          <div className="mt-3 space-y-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="mt-3 space-y-2 rounded-2xl border border-zinc-200/80 bg-zinc-50/60 p-4 dark:border-zinc-700 dark:bg-zinc-800/40">
             <div className="flex items-center justify-between gap-2 text-sm">
               <span>
                 <span className="text-zinc-500 dark:text-zinc-400">Fica como principal: </span>
                 <strong>{principal?.nome}</strong>
-                {principal?.turma && <span className="text-zinc-400"> · {principal.turma}</span>}
+                {principal?.turma && <span className="text-zinc-500 dark:text-zinc-400"> · {principal.turma}</span>}
               </span>
-              <button className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              <button type="button" className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-300"
                       onClick={() => setManterAtual((v) => !v)}>
                 trocar
               </button>
@@ -430,9 +488,9 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
             <div className="text-sm">
               <span className="text-zinc-500 dark:text-zinc-400">Será absorvido e removido: </span>
               <strong>{absorvido?.nome}</strong>
-              {absorvido?.turma && <span className="text-zinc-400"> · {absorvido.turma}</span>}
+              {absorvido?.turma && <span className="text-zinc-500 dark:text-zinc-400"> · {absorvido.turma}</span>}
             </div>
-            <button className="text-xs text-zinc-500 hover:underline dark:text-zinc-400"
+            <button type="button" className="text-xs font-medium text-zinc-600 hover:underline dark:text-zinc-300"
                     onClick={() => {
                       setOutro(null); setConfirmacao(""); setManterAtual(true);
                       setConflito(false); setConfirmaConflito(""); setErro("");
@@ -460,10 +518,10 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
       )}
 
       {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-      <div className="mt-5 flex justify-end gap-2">
-        <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+      <div className="mt-6 flex justify-end gap-2.5">
+        <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
         <Botao disabled={ocupado || !liberado} onClick={fundir}>
-          <Merge size={15} /> {ocupado ? "Fundindo..." : "Fundir cadastros"}
+          <Merge size={15} aria-hidden /> {ocupado ? "Fundindo..." : "Fundir cadastros"}
         </Botao>
       </div>
     </Modal>
@@ -481,8 +539,8 @@ function ModalPermanenteUm({ nome, ocupado, erro, aoFechar, aoConfirmar }: {
   const liberado = texto.trim().toUpperCase() === "EXCLUIR";
   return (
     <Modal titulo="Excluir permanentemente" aberto aoFechar={aoFechar}>
-      <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
-        <TriangleAlert size={18} className="mt-0.5 shrink-0" />
+      <div className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
+        <TriangleAlert size={18} aria-hidden className="mt-0.5 shrink-0" />
         <div>
           <p className="font-semibold">Esta ação é irreversível.</p>
           <p className="mt-1">
@@ -498,11 +556,11 @@ function ModalPermanenteUm({ nome, ocupado, erro, aoFechar, aoConfirmar }: {
         </Campo>
       </div>
       {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-      <div className="mt-5 flex justify-end gap-2">
-        <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
-        <Botao className="!bg-red-600 hover:!bg-red-500" disabled={ocupado || !liberado}
+      <div className="mt-6 flex justify-end gap-2.5">
+        <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+        <Botao variante="perigo" disabled={ocupado || !liberado}
                onClick={() => aoConfirmar(texto.trim())}>
-          <TriangleAlert size={15} /> {ocupado ? "Excluindo..." : "Excluir para sempre"}
+          <TriangleAlert size={15} aria-hidden /> {ocupado ? "Excluindo..." : "Excluir para sempre"}
         </Botao>
       </div>
     </Modal>

@@ -121,8 +121,12 @@ def test_analisar_matific_api_campo_ausente_nao_vira_zero():
 
 def test_api_com_campo_ausente_preserva_snapshot_valido(db, escola_completa, monkeypatch):
     """Sync 1 grava 42 livros / 200 min. Sync 2 (mesmo dia) vem SEM totalBooksRead e
-    SEM totalReadTime (campo renomeado na API): livros e tempo ficam 42/200 — não 0;
-    só as questões (presentes) atualizam."""
+    SEM totalReadTime (campo renomeado na API): livros e tempo ficam 42/200 — não 0.
+
+    Etapa 2 (S9): sem o campo ESSENCIAL (livros) em nenhuma linha, a resposta é
+    incompatível e NADA dela é aplicado — antes as questões (presentes) entravam
+    num retrato que repetia livros e tempo antigos com a data nova. O arquivo
+    volta marcado como ``parser_incompativel`` (o serviço abre o alerta crítico)."""
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     monkeypatch.setattr(orchestrator.imp, "_guardar_temporario", lambda *a, **k: None)
@@ -138,10 +142,14 @@ def test_api_com_campo_ausente_preserva_snapshot_valido(db, escola_completa, mon
 
     aplicar([{"studentId": 1, "studentName": ana.nome, "totalBooksRead": 42,
               "totalReadTime": 12000, "responses": 30, "approvedResponses": 25}])
-    aplicar([{"studentId": 1, "studentName": ana.nome, "responses": 31, "approvedResponses": 26}])
+    res = aplicar([{"studentId": 1, "studentName": ana.nome, "responses": 31,
+                    "approvedResponses": 26}])
     snap = db.execute(select(SnapshotElefante).where(SnapshotElefante.aluno_id == ana.id)).scalar_one()
     assert snap.livros_unicos == 42 and snap.tempo_leitura_min == 200
-    assert snap.questoes_tentativas == 31 and snap.questoes_acertos == 26
+    assert snap.questoes_tentativas == 30 and snap.questoes_acertos == 25
+    assert res["parser_incompativel"] is True
+    assert res["avisos_criticos"] == ["campos_ausentes:livros_unicos"]
+    assert res["alunos_aplicados_ids"] == []
 
 
 

@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 
 import { useApp } from "../context/AppContext";
 import { usePerfil } from "../hooks/usePerfil";
-import { Botao } from "./ui";
+import { Botao, IconePastel } from "./ui";
 import UsuariosDaEscola from "./UsuariosDaEscola";
 
 export default function AcessoUsuariosDaEscola() {
@@ -39,13 +39,14 @@ export default function AcessoUsuariosDaEscola() {
     );
   }
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-3">
-      <Botao variante="neutro" onClick={() => setAberto(true)}>
-        <UserCog size={15} /> Usuários
-      </Botao>
-      <span className="text-xs text-zinc-500 dark:text-zinc-400">
+    <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200/80 bg-white px-4 py-3 shadow-cartao dark:border-zinc-800 dark:bg-zinc-900">
+      <IconePastel icone={UserCog} tom="violeta" tamanho="sm" />
+      <span className="min-w-0 flex-1 text-sm text-zinc-600 dark:text-zinc-300">
         Contas de acesso desta escola — o coordenador pode ser criado antes de turmas, alunos e Lista Piloto.
       </span>
+      <Botao variante="secundario" tamanho="sm" onClick={() => setAberto(true)}>
+        Usuários
+      </Botao>
     </div>
   );
 }

@@ -391,20 +391,20 @@ def _cabecalho_matific() -> list:
 def test_matific_nome_em_tres_linhas_nao_trunca():
     """O nome do aluno pode quebrar em 3 linhas visuais (o registro nasce na do
     meio): as pontas ficam a ~16pt e não podem ser descartadas pelo limiar de
-    proximidade da turma (12pt), senão o nome sai truncado ('MICKAELLYN')."""
+    proximidade da turma (12pt), senão o nome sai truncado ('FABRIELLYN')."""
     palavras = _cabecalho_matific() + [
-        P("KEMILLYN", 84.7, 540.0),                                   # ponta de cima
+        P("JOSIELLYN", 84.7, 540.0),                                  # ponta de cima
         P("2", 191.2, 548.0), P("ANO", 199.5, 548.0), P("B", 224.2, 548.0),
         P("TARDE", 232.5, 548.0),                                     # turma acima
-        P("2", 51.7, 555.7), P("MICKAELLYN", 84.7, 555.7),           # linha de dados
+        P("2", 51.7, 555.7), P("FABRIELLYN", 84.7, 555.7),           # linha de dados
         P("4", 299.9, 555.7), P("4.50", 384.9, 555.7), P("18", 459.9, 555.7),
         P("ANUAL", 191.2, 564.0), P("(698)", 225.7, 564.0),          # turma abaixo
-        P("BARBOSA", 84.7, 571.5), P("D", 132.0, 571.5),             # ponta de baixo
+        P("TESTELLI", 84.7, 571.5), P("D", 132.0, 571.5),            # ponta de baixo
     ]
     analise = PerfilMatific().analisar([Pagina(numero=1, palavras=palavras)])
     assert len(analise.linhas) == 1
     aluno = analise.linhas[0]
-    assert aluno.nome == "KEMILLYN MICKAELLYN BARBOSA D"  # nome completo, não truncado
+    assert aluno.nome == "JOSIELLYN FABRIELLYN TESTELLI D"  # nome completo, não truncado
     assert aluno.dados["estrelas"] == 18
     assert aluno.dados["turma_relatorio"] == "2 ANO B TARDE ANUAL"
 

@@ -80,16 +80,24 @@ No editor que abre (`nano`), preencha e salve (Ctrl+O, Enter, Ctrl+X):
 
 ```
 POSTGRES_PASSWORD=uma-senha-forte-e-unica
-SECRET_KEY=outra-chave-longa-e-aleatoria-diferente
+SECRET_KEY=
+DATA_ENCRYPTION_KEY=
 DOMINIO=constela.seudominio.com.br
 PUBLIC_BASE_URL=https://constela.seudominio.com.br
 WEB_BIND=127.0.0.1
 AI_PROVIDER=local
 ```
 
-> Para gerar chaves fortes: `openssl rand -hex 32` (rode duas vezes).
-> O sistema **recusa subir em produção** com a `SECRET_KEY` de exemplo — isso
-> é proposital.
+> `SECRET_KEY` e `DATA_ENCRYPTION_KEY` vêm **vazias** no `.env.example`: rode
+> `openssl rand -hex 32` duas vezes e cole uma saída em cada (as duas têm de ser
+> diferentes; use o mesmo comando para a senha do PostgreSQL). Vazias, o
+> `docker compose` nem sobe; com menos de 32 caracteres, iguais entre si ou com um
+> valor de exemplo publicado no repositório, o sistema **recusa subir em produção**
+> — isso é proposital.
+>
+> **`POSTGRES_PASSWORD` só com letras e dígitos** (vai crua na `DATABASE_URL` do
+> compose): um `%41` vira outra senha em silêncio e um `@` desloca o host. A saída
+> do `openssl rand -hex 32` já é só letras e dígitos.
 >
 > **`WEB_BIND=127.0.0.1` é importante com HTTPS:** o Docker abre portas
 > publicadas *antes* do `ufw`, então sem essa linha a porta 8080 ficaria
@@ -164,8 +172,22 @@ servidor não protege contra perda do servidor.
 ### Escala horizontal e limite de tentativas (quando o Redis passa a ser necessário)
 
 O limitador de tentativas de login — a trava contra força-bruta de senhas de
-adultos e de códigos das crianças — guarda os contadores **em memória, por
-processo**. Isso é adequado (e é o recomendado) para o cenário deste guia:
+adultos e de códigos das crianças — tem duas partes:
+
+* **No banco** (tabela `quest_limites_acesso`; vale entre *workers*/réplicas e
+  sobrevive ao deploy): os limites do login por código das crianças (Quest) e, no
+  login dos adultos (Edu), os tetos de **falhas por IP** (padrão: 50 em 5 min, em
+  qualquer conta; IPv6 conta pela rede /64) e **global** (padrão: 400 em 5 min,
+  todos os IPs somados; atingido, o login de todas as contas responde 429 até o fim
+  da janela — as sessões já abertas seguem valendo). São as dimensões
+  `edu_login_ip_falha` e `edu_login_global_falha`; teto e janela são configuráveis
+  pelas variáveis `EDU_LOGIN_TETO_IP_FALHAS`, `EDU_LOGIN_TETO_IP_JANELA_S`,
+  `EDU_LOGIN_TETO_GLOBAL_FALHAS` e `EDU_LOGIN_TETO_GLOBAL_JANELA_S` (lidas no boot;
+  ver `backend/.env.example`).
+* **Em memória, por processo**: os limites do login dos adultos por **(conta, IP)**
+  (8 falhas em 5 min) e por **conta** (20 em 15 min).
+
+A parte em memória é adequada (e é o recomendado) para o cenário deste guia:
 
 * **uma única instância** do backend (um servidor), com um ou poucos *workers*.
   Os contadores são consistentes o bastante para frear ataques online de
@@ -187,8 +209,10 @@ processo**. Isso é adequado (e é o recomendado) para o cenário deste guia:
 Enquanto o sistema roda em **uma instância** (crescendo **verticalmente** — mais
 CPU/RAM no mesmo servidor, que atende milhares de alunos de escola sem problema),
 **nada precisa mudar**. Ao migrar para **várias réplicas**, troque o
-armazenamento do limitador por um **contador compartilhado** entre instâncias
-(ex.: Redis com `INCR`+`EXPIRE`). A interface do limitador em
+armazenamento dos limites que ainda estão só em memória (por conta e por conta+IP)
+por um **contador compartilhado** entre instâncias (ex.: Redis com
+`INCR`+`EXPIRE`, ou a mesma tabela que os tetos por IP e global já usam). A
+interface do limitador em
 `backend/app/core/rate_limit.py` (`bloqueado` / `registrar_falha` / `limpar`) foi
 mantida pequena de propósito justamente para permitir essa troca sem tocar no
 restante do sistema.

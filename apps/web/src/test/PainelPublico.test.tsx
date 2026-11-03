@@ -77,3 +77,71 @@ test("erro transitório APÓS carregar mantém o último quadro (o telão não p
     vi.useRealTimers();
   }
 });
+
+test("usa o fundo COMPARTILHADO com a vitrine (aria-hidden, sem o SVG esticado) e o nome inteiro no h1", async () => {
+  responder("GET", /\/publico\/.+\/painel/, {
+    ...painelFake(),
+    escola: { nome: "EMEI/EMEF PROFª ESCOLA INVENTADA DO TELÃO COM NOME LONGO", cor_primaria: "#123456" },
+  });
+  abrirPainel();
+
+  const h1 = await screen.findByRole("heading", { level: 1 });
+  // Nome inteiro no DOM (leitor de tela) e no title; o visual quebra em até 2 linhas.
+  expect(h1).toHaveTextContent("EMEI/EMEF PROFª ESCOLA INVENTADA DO TELÃO COM NOME LONGO");
+  expect(h1).toHaveAttribute("title", "EMEI/EMEF PROFª ESCOLA INVENTADA DO TELÃO COM NOME LONGO");
+  expect(h1).toHaveClass("line-clamp-2");
+  expect(h1).not.toHaveClass("truncate");
+  // Fim da cópia duplicada do fundo: o telão monta o FundoConstela da vitrine.
+  const fundos = document.querySelectorAll("[data-fundo-constela]");
+  expect(fundos).toHaveLength(1);
+  expect(fundos[0]).toHaveAttribute("aria-hidden", "true");
+  expect(document.querySelector('svg[preserveAspectRatio="none"]')).toBeNull();
+});
+
+test("valor ausente aparece como ausência ('—', 'sem dado'), nunca como 0 — e a tela não quebra", async () => {
+  responder("GET", /\/publico\/.+\/painel/, {
+    ...painelFake(),
+    slides: ["evolucao"],
+    // A 2ª criança chega SEM o valor (campo ausente): antes virava "0,0" e barra de 6%.
+    evolucao: [
+      { posicao: 1, aluno_id: 1, nome: "Aluna Teste A", turma: null, nota_evolucao: 12.5 },
+      { posicao: 2, aluno_id: 2, nome: "Aluno Teste B", turma: null },
+    ],
+    // Plataforma sem coleta: a faixa diz "—", não "0 livros lidos".
+    estatisticas: { alunos: 30, atividades: 120, estrelas: 400, livros: null },
+  });
+  abrirPainel();
+
+  const linhaB = (await screen.findByText("Aluno Teste B")).parentElement as HTMLElement;
+  expect(linhaB).toHaveTextContent("sem dado");
+  expect(linhaB).not.toHaveTextContent(/\b0,0\b/);
+  expect((linhaB.querySelector("[data-barra]") as HTMLElement).style.width).toBe("0%");
+  const numeros = screen.getByRole("region", { name: "Números da escola" });
+  expect(numeros).toHaveTextContent("Livros lidos");
+  expect(numeros).toHaveTextContent("sem dado");
+  expect(numeros).toHaveTextContent("400");
+});
+
+test("posições em texto para o leitor de tela; o ponto do slide atual tem aria-current", async () => {
+  responder("GET", /\/publico\/.+\/painel/, {
+    ...painelFake(),
+    slides: ["evolucao", "mural"],
+    evolucao: [1, 2, 3, 4].map((p) => ({
+      posicao: p, aluno_id: p, nome: `Aluna Teste ${p}`, turma: null, nota_evolucao: 20 - p,
+    })),
+  });
+  abrirPainel();
+  await screen.findByText("Aluna Teste 1");
+  // Medalha = emoji decorativo + "Nº lugar" oculto (aria-label num <span> não é lido).
+  expect(screen.getByText("1º lugar")).toHaveClass("sr-only");
+  expect(screen.getByText("3º lugar")).toHaveClass("sr-only");
+  expect((screen.getByText("Aluna Teste 4").parentElement as HTMLElement)).toHaveTextContent("4º lugar");
+  expect(screen.getByRole("button", { name: "Ir para Quem mais cresceu" })).toHaveAttribute("aria-current", "true");
+  expect(screen.getByRole("button", { name: "Ir para Mural da Escola" })).not.toHaveAttribute("aria-current");
+});
+
+test("o aviso de erro é anunciado (role=status)", async () => {
+  responderErro("GET", /\/publico\/.+\/painel/, 404, "not found");
+  abrirPainel();
+  expect(await screen.findByText(/não encontrado ou desativado/i)).toHaveAttribute("role", "status");
+});

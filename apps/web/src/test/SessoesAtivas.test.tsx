@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { corDoAvatar } from "../components/ui";
+import { dataHora } from "../lib/formato";
 import SessoesAtivas from "../pages/SessoesAtivas";
-import { renderComApp, responder, screen, userEvent } from "./utils";
+import { renderComApp, responder, screen, userEvent, within } from "./utils";
 
 const URL = "/presenca/sessoes";
 
@@ -48,6 +50,32 @@ describe("SessoesAtivas (monitor de presença)", () => {
     expect(screen.getByText("Escola Modelo")).toBeInTheDocument();
     expect(screen.getByText("agora mesmo")).toBeInTheDocument();
     expect(screen.getByText("há 3 h")).toBeInTheDocument();
+  });
+
+  it("4 colunas: a escola vai sob o cargo e o último acesso sob a última atividade (nada some)", async () => {
+    responder("GET", URL, corpo());
+    renderComApp(<SessoesAtivas />, { rota: "/sessoes" });
+
+    const marta = await screen.findByText("Professora Marta");
+    const linha = marta.closest("tr") as HTMLElement;
+    expect(screen.getAllByRole("columnheader").map((c) => c.textContent)).toEqual([
+      "Usuário", "Status", "Cargo e escola", "Última atividade",
+    ]);
+    const [, , cargo, atividade] = within(linha).getAllByRole("cell");
+    expect(cargo).toHaveTextContent("Professor");
+    expect(cargo).toHaveTextContent("Escola Modelo");
+    expect(atividade).toHaveTextContent("há 3 h");
+    expect(atividade).toHaveTextContent(`Último acesso: ${dataHora("2026-07-30T15:00:00+00:00")}`);
+    // O global sem escola continua dizendo "Todas (global)".
+    const chefe = screen.getByText("Chefe Global").closest("tr") as HTMLElement;
+    expect(within(chefe).getAllByRole("cell")[2]).toHaveTextContent("Todas (global)");
+    // E-mail inteiro na tela (quebra só onde precisa, sem reticências) e avatar com a cor do id.
+    const email = within(linha).getByText("marta@escola.com");
+    expect(email).toHaveClass("[overflow-wrap:anywhere]");
+    expect(email).not.toHaveClass("truncate");
+    // Quando não cabe, quebra antes do "@" (sem letra sozinha na linha de baixo).
+    expect(email.querySelector("wbr")?.nextSibling?.textContent).toBe("@escola.com");
+    expect(within(linha).getByText("PM")).toHaveClass(corDoAvatar(2));
   });
 
   it("filtra por 'Apenas online'", async () => {

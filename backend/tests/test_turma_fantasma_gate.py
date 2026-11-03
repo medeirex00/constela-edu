@@ -1,5 +1,5 @@
 """Item 4 — a sincronização automática NÃO cria turma que não existe no cadastro da
-escola (turma-fantasma). Caso EMEF Prof. Jorge Passos: a escola tem 4ºA/4ºB mas o
+escola (turma-fantasma). Caso da escola 1: a escola tem 4ºA/4ºB mas o
 relatório da plataforma trazia 4ºC/4ºD, e o sistema as criava. Com
 permitir_criar_turma=False (sync), a turma desconhecida vira aviso e nenhum aluno é
 criado nela. A turma EXISTENTE continua sendo reaproveitada (regressão do b273824), e
@@ -19,8 +19,8 @@ def _linha(nome, turma_nome):
                            dados={})
 
 
-def _escola_jorge_passos(db):
-    esc = Escola(nome="EMEF Prof. Jorge Passos", ano_letivo_ativo=2026, status="ativa")
+def _escola_4a_4b(db):
+    esc = Escola(nome="EMEF Fictícia Aurora", ano_letivo_ativo=2026, status="ativa")
     db.add(esc)
     db.flush()
     for nome, ae in [("4ºA", "4º Ano"), ("4ºB", "4º Ano")]:
@@ -41,8 +41,8 @@ def _conta_alunos(db, esc_id):
 
 
 def test_sync_nao_cria_turma_inexistente(db):
-    """4ºC não existe na Jorge Passos → a sync NÃO cria a turma nem o aluno; avisa."""
-    esc = _escola_jorge_passos(db)
+    """4ºC não existe na escola → a sync NÃO cria a turma nem o aluno; avisa."""
+    esc = _escola_4a_4b(db)
     turmas_antes = _conta_turmas(db, esc.id)
     avisos: list[str] = []
 
@@ -58,7 +58,7 @@ def test_sync_nao_cria_turma_inexistente(db):
 def test_sync_matricula_em_turma_existente(db):
     """Turma que EXISTE (4ºA, mesmo no formato longo da plataforma) → reaproveita e
     cria o aluno nela — a sincronização legítima segue funcionando."""
-    esc = _escola_jorge_passos(db)
+    esc = _escola_4a_4b(db)
     turmas_antes = _conta_turmas(db, esc.id)
 
     r = _resolver_aluno(db, esc.id, 2026,
@@ -77,7 +77,7 @@ def test_sync_matricula_em_turma_existente(db):
 def test_import_manual_cria_turma_com_opt_in(db):
     """Importação MANUAL (permitir_criar_turma=True, o default) ainda cria a turma —
     é o opt-in explícito do gestor, não a criação silenciosa da sync."""
-    esc = _escola_jorge_passos(db)
+    esc = _escola_4a_4b(db)
     turmas_antes = _conta_turmas(db, esc.id)
 
     r = _resolver_aluno(db, esc.id, 2026, _linha("PEDRO LIMA", "4ºD"),

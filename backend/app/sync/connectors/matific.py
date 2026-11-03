@@ -21,9 +21,18 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from app.sync.connectors.base import ConectorNavegador
+from app.core.config import settings
+from app.sync import escola_externa
+from app.sync.connectors.base import (
+    ConectorNavegador,
+    codigo_do_http,
+    http_ok,
+    registrar_descarte_coleta,
+    registrar_falha_coleta,
+    resolver_escola_externa,
+)
 from app.sync.connectors.navegador import Navegador
 from app.sync.interfaces import (
     ArquivoObtido,
@@ -70,6 +79,51 @@ def _js_get(url: str) -> str:
     return _JS_GET.replace("__URL__", json.dumps(url))
 
 
+def _separar_uuids_em_varias_turmas(alunos: list[dict], contexto, log) -> list[dict]:
+    """O MESMO uuid em mais de uma turma do Placar. A sync divide o Placar em um
+    arquivo por turma e a conferência de id repetido só olha DENTRO do arquivo:
+    a 2ª turma aplicava os números dela e MOVIA a matrícula (e, com números
+    iguais, a matrícula ia e voltava a cada coleta).
+
+    Forma segura enquanto a semântica do Placar não está confirmada:
+      * números IGUAIS → fica só a primeira linha, marcada ``turma_ambigua`` (a
+        importação não move a matrícula por ela);
+      * números DIFERENTES → o uuid sai desta coleta, contado no descarte
+        'id_em_varias_turmas' (aviso 'coleta_parcial'): não dá para saber quais
+        números são da criança."""
+    turmas: dict[str, set] = {}
+    numeros: dict[str, set] = {}
+    for a in alunos:
+        uuid = a.get("uuid") or ""
+        if uuid:
+            turmas.setdefault(uuid, set()).add(a.get("turma"))
+            numeros.setdefault(uuid, set()).add((a.get("estrelas"), a.get("atividades")))
+    repetidos = {u for u, ts in turmas.items() if len(ts) > 1}
+    if not repetidos:
+        return alunos
+    divergentes = {u for u in repetidos if len(numeros[u]) > 1}
+    saida, vistos, descartadas = [], set(), 0
+    for a in alunos:
+        uuid = a.get("uuid") or ""
+        if uuid in divergentes:
+            descartadas += 1
+            continue
+        if uuid in repetidos:
+            if uuid in vistos:
+                continue
+            vistos.add(uuid)
+            a = {**a, "turma_ambigua": True}
+        saida.append(a)
+    if descartadas and contexto is not None:
+        registrar_descarte_coleta(contexto, "id_em_varias_turmas", descartadas)
+    log("download", "warn",
+        f"[Matific] {len(repetidos)} conta(s) aparecem em mais de uma turma do Placar: "
+        f"{len(repetidos) - len(divergentes)} com os mesmos números (aplicadas uma vez, "
+        f"sem mudar a turma) e {len(divergentes)} com números diferentes (não aplicadas "
+        "nesta coleta — confira a turma da criança no Matific).")
+    return saida
+
+
 # Cabeçalhos das requisições HTTP DIRETAS (sem navegador): imitam o Chrome do
 # robô para que a API interna aceite o cookie de sessão same-origin. GET a
 # endpoint DRF com SessionAuthentication não exige CSRF.
@@ -102,13 +156,55 @@ def _parse_data(s: str):
     except (TypeError, ValueError):
         return None
 
+
+# --- Semântica do ``end_date`` do Placar (MATIFIC_END_DATE) -------------------
+# NÃO confirmada com a plataforma. O pedido da escola é sempre "de I a F, os dois
+# dias inclusive" (a rota aceita início = fim). Como isso vira o filtro e a data do
+# retrato depende do que o Matific faz com o end_date:
+#   desconhecida (padrão): end_date=F e o retrato fica na véspera de F (o
+#       comportamento de sempre, que trata F como limite exclusivo); 1 dia é
+#       RECUSADO — com I = F não há intervalo para datar.
+#   inclusiva: end_date=F (o Matific inclui F) e o retrato fica em F 23:59:59.
+#   exclusiva: end_date=F+1 (o Matific exclui o end_date) e o retrato em F 23:59:59.
+# A sync (aqui) e o placar ao vivo (``aovivo.mapa_filtro``) usam as MESMAS funções.
+SEMANTICAS_FIM = ("desconhecida", "inclusiva", "exclusiva")
+MSG_UM_DIA = ("A semântica do fim de período do Matific ainda não foi confirmada; "
+              "escolha pelo menos 2 dias.")
+
+
+def semantica_fim() -> str:
+    """'desconhecida' | 'inclusiva' | 'exclusiva' (valor fora da lista → desconhecida)."""
+    valor = str(getattr(settings, "MATIFIC_END_DATE", "") or "").strip().lower()
+    return valor if valor in SEMANTICAS_FIM else "desconhecida"
+
+
+def periodo_um_dia_permitido() -> bool:
+    """Período de 1 dia (início = fim) só com a semântica do fim CONFIRMADA."""
+    return semantica_fim() != "desconhecida"
+
+
+def end_date_do_filtro(fim: date) -> date:
+    """Data que vai no ``end_date`` do Placar para um pedido que termina em ``fim``
+    (inclusive): F+1 se o Matific trata o end_date como exclusivo; F nos demais."""
+    return fim + timedelta(days=1) if semantica_fim() == "exclusiva" else fim
+
+
+def limite_exclusivo_do_retrato(fim: datetime) -> datetime:
+    """Limite EXCLUSIVO (00:00) que a importação por período recebe como
+    ``periodo_fim`` — ela data o retrato 1 s antes. Com a semântica confirmada, o
+    retrato cai em F 23:59:59; com 'desconhecida', na véspera de F (como sempre)."""
+    return fim if semantica_fim() == "desconhecida" else fim + timedelta(days=1)
+
 # --- Contrato de UI com o Matific (verificado em jul/2026) -------------------
 # A página de login mudou de "/account/login/" (que hoje redireciona p/ a home
 # de marketing) para "/login-page/". Campos: #username-input / #password-input;
 # botão "Continuar" (#login-button). Um aviso de cookies aparece antes e é
 # apenas DISPENSADO (nunca "Aceitar Todos"). Endereço configurável via
-# extra['url_login'].
+# extra['url_login'] — só https e host de DOMINIOS_LOGIN (ver base.url_na_lista).
 _URL_LOGIN = "https://www.matific.com/bra/pt-br/login-page/"
+# Domínio do site do Matific (login, área do professor e API interna em
+# www.matific.com). O host do endereço de login vale também com subdomínio.
+DOMINIOS_LOGIN = ("matific.com",)
 _URL_LEADERBOARD = "https://www.matific.com/bra/pt-br/teachers/admin/school-leaderboard/"
 # Só DISPENSAR o aviso de cookies (privacidade): "Mais tarde"/fechar (X). Nunca
 # "Aceitar Todos" — o robô não dá consentimento de cookies pela escola. Se
@@ -133,6 +229,10 @@ class ConectorMatific(ConectorNavegador):
     plataforma = "matific"
     versao = "1.0.0"
     estrategia = Estrategia.NAVEGADOR
+    dominios_login = DOMINIOS_LOGIN
+    # O serviço exige que a coleta diga de qual escola da plataforma ela é (ver
+    # ``resolver_escola_externa``); sem isso, recusa antes de aplicar.
+    confere_escola_externa = True
     justificativa = (
         "Sem API oficial self-serve de data-out; obtenção reproduz o portal do "
         "professor (login → school leaderboard → exportar). Trocável por API "
@@ -206,6 +306,43 @@ class ConectorMatific(ConectorNavegador):
         return school_id, comp_id
 
     @staticmethod
+    def _school_ids_do_trafego(caps: list) -> list[str]:
+        """TODOS os school_id distintos das requisições do Placar (o fallback de
+        quando o accounts/current não informa a escola): mais de um é conta que
+        enxerga várias escolas — não se escolhe "o primeiro"."""
+        vistos: list[str] = []
+        for c in caps or []:
+            url = (c or {}).get("url", "") if isinstance(c, dict) else ""
+            for m in _RE_SCHOOL_ID.finditer(url):
+                sid = m.group(1)
+                if sid.lower() not in {v.lower() for v in vistos}:
+                    vistos.append(sid)
+        return vistos
+
+    @staticmethod
+    def _escola_do_current(body) -> dict | None:
+        """{id, nome} da escola da conta pelo ``accounts/current`` (SUPOSIÇÃO: o
+        ``school_id`` dele é a escola da conta logada; o nome só se a resposta o
+        trouxer — ver docs/SINCRONIZACAO.md). None se não veio."""
+        if not isinstance(body, dict):
+            return None
+        sid = str(body.get("school_id") or "").strip()
+        if not sid:
+            return None
+        nome = body.get("school_name") or body.get("schoolName") or ""
+        return {"id": sid, "nome": str(nome).strip()[:200]}
+
+    async def _detectar_escolas(self, nav, contexto: Contexto) -> list | None:
+        """"Testar conexão": a escola da conta (accounts/current), sem segredo."""
+        await nav.ir_para(_URL_LEADERBOARD)
+        try:
+            res = await nav.avaliar(_js_get(_EP_CURRENT))
+        except Exception:  # noqa: BLE001 — acessório do teste
+            return None
+        escola = self._escola_do_current(res.get("body") if isinstance(res, dict) else None)
+        return [escola] if escola else []
+
+    @staticmethod
     def _mapa_nomes(res) -> dict:
         """student-leaderboard → {uuid: nome COMPLETO}. Resolve o nome abreviado
         do Placar (account_id = 'ANTONELLA D') para o nome cheio matriculável."""
@@ -223,10 +360,17 @@ class ConectorMatific(ConectorNavegador):
         return nomes
 
     @staticmethod
-    def _parse_school_student(res, nomes: dict) -> list[dict]:
+    def _parse_school_student(res, nomes: dict,
+                              descartes: dict | None = None) -> list[dict]:
         """school_student → [{nome, uuid, turma, estrelas, atividades}]. Usa o
         nome COMPLETO (via ``nomes``) quando houver; senão, o abreviado do Placar.
-        Pula linhas-fantasma (sem nome/turma — vêm zeradas no fim do relatório)."""
+        Pula linhas-fantasma (sem nome, turma NEM uuid — vêm zeradas no fim do
+        relatório). Linha com só parte disso é DEFEITO: não entra e é contada em
+        ``descartes['sem_nome_ou_turma']`` (quando o chamador passa o dict).
+
+        Campo numérico AUSENTE (não "zero": a chave não veio — ex.: renomeado no
+        Placar) fica listado em ``ausentes`` do aluno; a sync o manda como nulo e
+        a importação NÃO grava retrato herdado com data nova (ver importacoes)."""
         res = res if isinstance(res, dict) else {}
         body = res.get("body")
         # O corpo é uma lista com UM objeto {..., data:[...]}.
@@ -239,16 +383,57 @@ class ConectorMatific(ConectorNavegador):
             uuid = str(it.get("uuid") or "").strip()
             abrev = str(it.get("account_id") or "").strip()
             turma = str(it.get("klassName") or "").strip()
-            if not abrev or not turma:   # fantasma (uuid vazio / turma vazia)
-                continue
+            if not abrev or not turma:
+                if (abrev or turma or uuid) and descartes is not None:
+                    descartes["sem_nome_ou_turma"] = descartes.get("sem_nome_ou_turma", 0) + 1
+                continue                 # fantasma (tudo vazio) ou linha com defeito
             nome = nomes.get(uuid) or abrev
-            alunos.append({
+            aluno = {
                 "nome": nome, "nome_abrev": abrev, "uuid": uuid, "turma": turma,
                 "serie": str(it.get("grade_code") or "").strip(),
                 "estrelas": _para_int(it.get("score")),
                 "atividades": _para_int(it.get("activities_completed")),
-            })
+            }
+            ausentes = [campo for campo, chave in (("estrelas", "score"),
+                                                   ("atividades", "activities_completed"))
+                        if chave not in it]
+            if ausentes:
+                aluno["ausentes"] = ausentes
+            alunos.append(aluno)
         return alunos
+
+    @staticmethod
+    def _corpo_leaderboard_valido(res) -> bool:
+        """O corpo 2xx do student-leaderboard tem a forma conhecida
+        (``{leaderboard: [...]}``)?"""
+        body = res.get("body") if isinstance(res, dict) else None
+        return isinstance(body, dict) and isinstance(body.get("leaderboard"), list)
+
+    @staticmethod
+    def _corpo_school_student_valido(res) -> bool:
+        """O corpo 2xx do school_student tem a forma conhecida? Lista vazia é
+        "nenhum aluno" (legítimo); objeto sem ``data`` (ou corpo não-JSON) é a API
+        que mudou — interpretar isso como "0 alunos" esconderia a quebra."""
+        body = res.get("body") if isinstance(res, dict) else None
+        if isinstance(body, list):
+            return not body or (isinstance(body[0], dict)
+                                and isinstance(body[0].get("data"), list))
+        return isinstance(body, dict) and isinstance(body.get("data"), list)
+
+    @staticmethod
+    def _conferir_escola_do_corpo(res, school_id: str) -> None:
+        """J: o corpo do school_student traz ``school_id`` (MATIFIC_API §4.1). Se
+        ele disser OUTRA escola (ou mais de uma), nada é aplicado. Sem o campo, não
+        há o que conferir (segue como antes)."""
+        body = res.get("body") if isinstance(res, dict) else None
+        itens = body if isinstance(body, list) else [body]
+        do_corpo = {str(i.get("school_id")).strip().lower() for i in itens
+                    if isinstance(i, dict) and i.get("school_id")}
+        if do_corpo and do_corpo != {str(school_id).strip().lower()}:
+            raise ErroConector(
+                "O Placar do Matific respondeu com dados de outra escola da plataforma "
+                f"({len(do_corpo)} escola(s) no corpo, diferente da pedida). Nada foi "
+                "aplicado.", codigo=escola_externa.ESCOLA_TROCADA, recuperavel=False)
 
     async def _buscar_json_campo(self, nav, url: str, campo: str) -> str:
         """GET in-page (cookie) e devolve um campo string do corpo (dict). '' se falhar."""
@@ -274,42 +459,94 @@ class ConectorMatific(ConectorNavegador):
         alvo = ao_vivo or (comps[0] if comps else None)
         return str(alvo.get("id")).strip() if alvo else ""
 
-    async def _coletar_do_placar(self, nav, filtro: str, log) -> list[dict]:
+    async def _coletar_do_placar(self, nav, filtro: str, log,
+                                 contexto: Contexto | None = None, *,
+                                 conferir_escola: Contexto | None = None) -> list[dict]:
         """Estando LOGADO em www.matific.com, coleta o Placar da Escola pela API
         interna para o ``filtro`` (``duration=…`` OU ``start_date=…&end_date=…``):
         resolve school_id/competition_id, busca os nomes completos e o
         ``school_student``, cruza por uuid e devolve
         ``[{nome, nome_abrev, uuid, turma, serie, estrelas, atividades}]``.
 
-        Levanta ``ErroConector(codigo='sem_escola')`` se não achar a escola — o
-        chamador decide: a sync cai no upload manual; a consulta ao vivo mostra o
-        erro. Núcleo COMPARTILHADO pela sync (por turma) e pela consulta ao vivo."""
+        Levanta ``ErroConector(codigo='sem_escola')`` se não achar a escola. HTTP
+        que não é 2xx no ``school_student`` também levanta (401/403 →
+        ``sem_acesso_ao_dado``; outros → ``falha_download``): antes virava "0
+        alunos" e a execução terminava 'sem_dados' com a credencial carimbada
+        válida. Corpo 2xx fora da forma conhecida → ``parser_incompativel``. O
+        ``student-leaderboard`` (só os nomes completos) é acessório: a falha dele
+        é anotada como unidade com falha e a coleta segue (ver abaixo). Núcleo
+        COMPARTILHADO pela sync (por turma) e pela consulta ao vivo (caminho pelo
+        navegador).
+
+        ESCOLA EXTERNA: a escola da conta é conferida contra o vínculo desta escola
+        (``resolver_escola_externa``, com ``conferir_escola`` ou ``contexto``)
+        ANTES de pedir os alunos — escola diferente da vinculada, ou várias escolas
+        no tráfego sem vínculo, levantam e nada é coletado."""
         # same-origin para os fetches com cookie de sessão; NÃO dependemos das
         # chamadas que a própria tela dispara (school_id vem do accounts/current).
         await nav.ir_para(_URL_LEADERBOARD)
-        school_id = await self._buscar_json_campo(nav, _EP_CURRENT, "school_id")
+        try:
+            res_cur = await nav.avaliar(_js_get(_EP_CURRENT))
+        except Exception:  # noqa: BLE001 — sem o current, cai no fallback do tráfego
+            res_cur = None
+        escola_cur = self._escola_do_current(
+            res_cur.get("body") if isinstance(res_cur, dict) else None)
+        visiveis = [escola_cur] if escola_cur else []
         comp_id = await self._primeira_competicao(nav)
-        if not school_id:  # fallback: requisições que a página do Placar dispara
+        if not visiveis:  # fallback: requisições que a página do Placar dispara
             caps = await nav.coletar_respostas(_URL_LEADERBOARD, timeout_s=20)
-            cap_school, cap_comp = self._ids_do_placar(caps)
-            school_id = school_id or cap_school
+            _cap_school, cap_comp = self._ids_do_placar(caps)
+            visiveis = [{"id": s, "nome": ""} for s in self._school_ids_do_trafego(caps)]
             comp_id = comp_id or cap_comp
-        if not school_id:
+        if not visiveis:
             raise ErroConector(
                 "[Matific] não localizei a escola do usuário (accounts/current).",
                 codigo="sem_escola", recuperavel=True)
+        conferir = conferir_escola or contexto
+        if conferir is not None:
+            school_id = resolver_escola_externa(visiveis, conferir, "Matific")["id"]
+        else:
+            school_id = visiveis[0]["id"]
         log("navegacao", "info", "[Matific] Escola localizada — coletando o Placar.")
 
-        # Nomes completos (uuid → nome) da competição, quando houver.
+        # Nomes completos (uuid → nome) da competição, quando houver. É endpoint
+        # ACESSÓRIO: os números vêm do school_student e quem já está vinculado
+        # casa pelo uuid; sem o nome cheio, a conta ainda não vinculada vai para a
+        # revisão "nome_incompleto" (nunca vira ficha abreviada). Por isso uma
+        # falha aqui NÃO derruba a coleta (antes derrubava a escola inteira, e o
+        # placar ao vivo): vira uma unidade com falha ('endpoint') — a execução
+        # termina 'parcial' com o alerta 'coleta_parcial' —, e uma resposta 2xx
+        # fora do formato é anotada como 'parser_incompativel' (alerta crítico),
+        # em vez de seguir calada com nomes vazios.
         nomes: dict = {}
         if comp_id:
             url_lb = (f"{_API_BASE}/api/v2/competition-v2/{comp_id}"
                       f"/school/{school_id}/student-leaderboard/")
+            codigo_lb, status_lb = None, None
             try:
-                nomes = self._mapa_nomes(await nav.avaliar(_js_get(url_lb)))
-            except Exception as exc:  # noqa: BLE001 — nome cheio é um plus, não bloqueia
+                res_lb = await nav.avaliar(_js_get(url_lb))
+            except Exception as exc:  # noqa: BLE001
+                res_lb, codigo_lb = None, "falha_download"
                 log("download", "warn",
-                    f"[Matific] student-leaderboard falhou ({str(exc)[:80]}).")
+                    f"[Matific] student-leaderboard falhou ({str(exc)[:80]}): sigo sem "
+                    "os nomes completos.")
+            if codigo_lb is None:
+                status_lb = res_lb.get("status") if isinstance(res_lb, dict) else None
+                if not http_ok(status_lb):
+                    codigo_lb = codigo_do_http(status_lb)
+                    log("download", "warn",
+                        f"[Matific] student-leaderboard respondeu HTTP {status_lb}: sigo "
+                        "sem os nomes completos (conta não vinculada vai para revisão).")
+                elif not self._corpo_leaderboard_valido(res_lb):
+                    codigo_lb = "parser_incompativel"
+                    log("download", "warn",
+                        "[Matific] student-leaderboard fora do formato conhecido (sem a "
+                        "lista 'leaderboard'): sigo sem os nomes completos.")
+                else:
+                    nomes = self._mapa_nomes(res_lb)
+            if codigo_lb is not None and contexto is not None:
+                registrar_falha_coleta(contexto, "endpoint", "student-leaderboard",
+                                       codigo_lb, http=status_lb)
 
         # Dados por aluno (estrelas/atividades) DENTRO do período pedido.
         url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
@@ -320,11 +557,29 @@ class ConectorMatific(ConectorNavegador):
             raise ErroConector(
                 f"Placar do Matific falhou na API ({str(exc)[:80]}).",
                 codigo="falha_download", recuperavel=True) from exc
-        alunos = self._parse_school_student(res, nomes)
+        status_ss = res.get("status") if isinstance(res, dict) else None
+        if not http_ok(status_ss):
+            codigo = codigo_do_http(status_ss)
+            raise ErroConector(
+                f"Placar do Matific respondeu HTTP {status_ss} no school_student"
+                + (" (acesso ao dado recusado)." if codigo == "sem_acesso_ao_dado"
+                   else "."), codigo=codigo, recuperavel=codigo == "falha_download")
+        if not self._corpo_school_student_valido(res):
+            raise ErroConector(
+                "Resposta do Placar do Matific fora do formato conhecido (sem a lista "
+                "'data') — a API pode ter mudado. Verifique o conector.",
+                codigo="parser_incompativel", recuperavel=False)
+        self._conferir_escola_do_corpo(res, school_id)
+        descartes: dict = {}
+        alunos = self._parse_school_student(res, nomes, descartes)
+        for motivo, n in descartes.items():
+            if contexto is not None:
+                registrar_descarte_coleta(contexto, motivo, n)
+            log("download", "warn",
+                f"[Matific] {n} linha(s) do Placar sem nome ou sem turma — não importada(s).")
         if not alunos:
             log("download", "warn",
-                f"[Matific] Placar sem alunos no período (status "
-                f"{(res or {}).get('status') if isinstance(res, dict) else '?'}).")
+                f"[Matific] Placar sem alunos no período (HTTP {status_ss}).")
         return alunos
 
     async def _sessao_valida(self, nav) -> bool:
@@ -356,14 +611,22 @@ class ConectorMatific(ConectorNavegador):
                 out[str(c["name"])] = str(c.get("value") or "")
         return out
 
-    def coletar_via_http(self, storage_state: dict | None, filtro: str) -> list[dict]:
+    def coletar_via_http(self, storage_state: dict | None, filtro: str, *,
+                         escola_esperada: str = "",
+                         escolas_recusadas: frozenset = frozenset()) -> list[dict]:
         """Coleta o Placar pela API interna por HTTP DIRETO — SEM navegador —,
         reusando o cookie de sessão do ``storage_state``. É o caminho preferencial
         (item de arquitetura): rápido e sem abrir o Chromium.
 
         Levanta ``ErroConector('sessao_invalida')`` se a sessão não serve (sem
         cookie / 401 / 403 / redirecionou para o login) — o chamador então usa o
-        navegador SÓ para autenticar e tenta de novo por HTTP. Não faz login aqui."""
+        navegador SÓ para autenticar e tenta de novo por HTTP. Não faz login aqui.
+
+        ``escola_esperada`` (o vínculo da escola): a escola do accounts/current
+        diferente dela levanta ``escola_externa_trocada`` ANTES de pedir os alunos
+        (o placar ao vivo mostraria os nomes de crianças de outra escola);
+        ``escolas_recusadas`` (as vinculadas a OUTRAS escolas do Constela): a
+        escola da conta entre elas levanta ``escola_externa_em_outra_escola``."""
         import httpx
 
         cookies = self._cookies_de(storage_state)
@@ -395,6 +658,19 @@ class ConectorMatific(ConectorNavegador):
                 if not school_id:
                     raise ErroConector("HTTP: não achei o school_id (accounts/current).",
                                        codigo="sessao_invalida", recuperavel=True)
+                esperada = (escola_esperada or "").strip().lower()
+                if esperada and school_id.lower() != esperada:
+                    raise ErroConector(
+                        f"A conta do Matific cadastrada nesta escola é da escola {school_id} "
+                        f"da plataforma, mas esta escola está vinculada à {esperada}. Nada "
+                        "foi consultado: confira se a credencial é desta escola.",
+                        codigo=escola_externa.ESCOLA_TROCADA, recuperavel=False)
+                if school_id.lower() in {str(s).lower() for s in escolas_recusadas or ()}:
+                    raise ErroConector(
+                        f"A conta do Matific cadastrada nesta escola é da escola {school_id} "
+                        "da plataforma, já vinculada a outra escola do Constela. Nada foi "
+                        "consultado: confira se a credencial é desta escola.",
+                        codigo=escola_externa.ESCOLA_EM_OUTRA_ESCOLA, recuperavel=False)
                 # competition_id (nomes completos) — ACESSÓRIO: engole QUALQUER
                 # falha (inclusive um 403/non-JSON que _get mapeia p/ sessao_
                 # invalida). A sessão de verdade é validada por accounts/current
@@ -420,7 +696,9 @@ class ConectorMatific(ConectorNavegador):
                         nomes = {}
                 url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
                           f"?{filtro}&school_id={school_id}")
-                return self._parse_school_student(_get(client, url_ss), nomes)
+                res_ss = _get(client, url_ss)
+                self._conferir_escola_do_corpo(res_ss, school_id)
+                return self._parse_school_student(res_ss, nomes)
         except ErroConector:
             raise
         except httpx.HTTPError as exc:
@@ -474,7 +752,8 @@ class ConectorMatific(ConectorNavegador):
                              "[Matific] Sessão reaproveitada — sem novo login.")
             else:
                 await self._login(nav, cred, contexto)
-            alunos = await self._coletar_do_placar(nav, filtro, contexto.log)
+            alunos = await self._coletar_do_placar(nav, filtro, contexto.log,
+                                                   conferir_escola=contexto)
             try:
                 novo_estado = await nav.estado_sessao()
             except Exception:  # noqa: BLE001 — sem estado, só perde o atalho
@@ -488,7 +767,11 @@ class ConectorMatific(ConectorNavegador):
         school_student (com o período) + student-leaderboard (nomes completos),
         cruza por uuid e emite UM ArquivoObtido (JSON) por turma. O orquestrador
         importa cada um pelo mesmo ``confirmar`` do Excel (atividades/estrelas/
-        média). Idempotente. Falha aqui NÃO derruba a sync (cai no upload manual).
+        média). Idempotente.
+
+        Placar que respondeu 2xx sem nenhum aluno devolve ``[]`` (o serviço
+        registra 'sem_dados'); escola não localizada ou HTTP de erro LEVANTAM
+        (o serviço registra 'erro' com alerta) — antes os dois viravam "sem dados".
         """
         log = contexto.log
         arquivos: list[ArquivoObtido] = []
@@ -498,31 +781,51 @@ class ConectorMatific(ConectorNavegador):
         pi = str(extra.get("matific_start_date") or "").strip()
         pf = str(extra.get("matific_end_date") or "").strip()
         duration = str(extra.get("matific_duration") or "").strip() or _DURATION_PADRAO
+        dt_i, dt_f = _parse_data(pi), _parse_data(pf)
         if pi and pf:
-            filtro = f"start_date={pi}&end_date={pf}"
+            if dt_i is None or dt_f is None:
+                # Data que não existe (2026-02-31) ou fora do formato: sem ela o
+                # arquivo sairia SEM período e o pipeline gravaria os números do
+                # período como ACUMULADO (sem a trava de queda). A rota já recusa;
+                # esta trava cobre uma execução antiga na fila ou de outro caminho.
+                raise ErroConector(f"Período inválido: {pi} a {pf} (data inexistente).",
+                                   codigo="periodo_invalido", recuperavel=False)
+            if dt_i is not None and dt_f is not None and dt_i == dt_f \
+                    and not periodo_um_dia_permitido():
+                # A rota já recusa; esta trava cobre uma execução antiga na fila
+                # (ou criada por outro caminho) com início = fim.
+                raise ErroConector(MSG_UM_DIA, codigo="periodo_invalido", recuperavel=False)
+            fim_filtro = (end_date_do_filtro(dt_f.date()).isoformat()
+                          if dt_f is not None else pf)
+            filtro = f"start_date={pi}&end_date={fim_filtro}"
             rotulo_periodo = f"{pi} a {pf}"
+            # A importação por período data o retrato 1 s antes deste limite.
+            dt_f = limite_exclusivo_do_retrato(dt_f) if dt_f is not None else None
         else:
             filtro = f"duration={duration}"
             rotulo_periodo = duration
         async with self._sessao(contexto) as nav:
             await self._login(nav, cred, contexto)
-            try:
-                alunos = await self._coletar_do_placar(nav, filtro, log)
-            except ErroConector as exc:
-                # Sem escola localizada: cai no upload manual (não derruba a sync).
-                if exc.codigo == "sem_escola":
-                    log("navegacao", "warn",
-                        f"{exc} Usando o upload manual do relatório.")
-                    return arquivos
-                raise
+            alunos = await self._coletar_do_placar(nav, filtro, log, contexto)
+            if not (pi and pf) and getattr(contexto, "coleta", None) is not None:
+                # Acumulado do ano: o serviço confere quais contas JÁ vinculadas
+                # não vieram (resposta parcial do Placar não pode passar calada).
+                contexto.coleta["ids_recebidos"] = sorted(
+                    {a["uuid"] for a in alunos if a.get("uuid")})
             if not alunos:
                 return arquivos
 
+            alunos = _separar_uuids_em_varias_turmas(alunos, contexto, log)
+            if not alunos:
+                return arquivos
             # UM ArquivoObtido por turma (reusa o pipeline do Excel do Matific).
             por_turma: dict[str, list] = {}
             for a in alunos:
+                # Campo numérico que NÃO veio vai NULO (não 0): a importação
+                # reconhece o campo ausente e não grava retrato herdado.
+                for campo in a.pop("ausentes", None) or ():
+                    a[campo] = None
                 por_turma.setdefault(a["turma"], []).append(a)
-            dt_i, dt_f = _parse_data(pi), _parse_data(pf)
             for turma, lista in por_turma.items():
                 payload = {"turma": turma, "alunos": lista,
                            "periodo_inicio": pi, "periodo_fim": pf}

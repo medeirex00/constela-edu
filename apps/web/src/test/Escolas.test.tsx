@@ -14,6 +14,8 @@ import {
   screen,
   userEvent,
   usuarioFake,
+  waitFor,
+  within,
 } from "./utils";
 
 // A tela é exclusiva do administrador GLOBAL da rede.
@@ -175,6 +177,109 @@ describe("Escolas", () => {
     expect(screen.queryByText(/criado como/)).toBeNull();
     // o modal continua aberto para corrigir
     expect(screen.getByRole("button", { name: "Criar usuário" })).toBeInTheDocument();
+  });
+
+  // --- Desativar pede confirmação (antes desativava num clique) -----------------
+
+  /** PATCH /escolas/{id} já feitos pela tela, com o corpo de cada um. */
+  function patchesDeStatus(): { caminho: string; corpo: unknown }[] {
+    return api.mock.calls
+      .filter(([, opcoes]) => (opcoes as RequestInit | undefined)?.method === "PATCH")
+      .map(([caminho, opcoes]) => ({
+        caminho: String(caminho),
+        corpo: JSON.parse(String((opcoes as RequestInit).body)),
+      }));
+  }
+
+  it("Desativar abre a confirmação com o nome da escola e o efeito, sem chamar a API", async () => {
+    const u = userEvent.setup();
+    responder("PATCH", "/escolas/2", { ...NOVA, status: "inativa" });
+    renderComApp(<Escolas />, { rota: "/escolas", usuario: ADMIN, escolas: [ALPHA, NOVA] });
+    await screen.findByText("Escola Nova");
+
+    await u.click(screen.getByRole("button", { name: "Desativar Escola Nova" }));
+
+    const dialogo = await screen.findByRole("dialog", { name: "Desativar a escola?" });
+    expect(dialogo).toHaveTextContent("Escola Nova");
+    expect(dialogo).toHaveTextContent(/seletor de escolas/);
+    expect(dialogo).toHaveTextContent(/telão dela \(Painel Público\) para de abrir/);
+    expect(dialogo).toHaveTextContent(/não bloqueia o acesso de quem já tem conta/);
+    expect(patchesDeStatus()).toEqual([]);
+  });
+
+  it("confirmar a desativação faz o MESMO PATCH de antes e atualiza a lista", async () => {
+    const u = userEvent.setup();
+    let status = "ativa";
+    responder("PATCH", "/escolas/2", (_caminho, opcoes) => {
+      status = JSON.parse(String((opcoes as RequestInit).body)).status;
+      return { ...NOVA, status };
+    });
+    renderComApp(<Escolas />, { rota: "/escolas", usuario: ADMIN, escolas: [ALPHA, NOVA] });
+    // Depois da sessão: a lista da tela passa a refletir o status gravado.
+    responder("GET", /incluir_inativas/, () => [ALPHA, { ...NOVA, status }]);
+    await screen.findByText("Escola Nova");
+
+    await u.click(screen.getByRole("button", { name: "Desativar Escola Nova" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Desativar a escola?" });
+    await u.click(within(dialogo).getByRole("button", { name: "Desativar escola" }));
+
+    expect(await screen.findByText("Escola desativada.")).toBeInTheDocument();
+    expect(patchesDeStatus()).toEqual([{ caminho: "/escolas/2", corpo: { status: "inativa" } }]);
+    expect(api).toHaveBeenCalledWith("/escolas/2", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "inativa" }),
+    });
+    expect(screen.queryByRole("dialog", { name: "Desativar a escola?" })).toBeNull();
+    // Recarregada: a escola aparece como inativa, com a ação de reativar.
+    expect(await screen.findByRole("button", { name: "Reativar Escola Nova" })).toBeInTheDocument();
+  });
+
+  it("cancelar a desativação não chama a API e a escola segue ativa", async () => {
+    const u = userEvent.setup();
+    responder("PATCH", "/escolas/2", { ...NOVA, status: "inativa" });
+    renderComApp(<Escolas />, { rota: "/escolas", usuario: ADMIN, escolas: [ALPHA, NOVA] });
+    await screen.findByText("Escola Nova");
+
+    await u.click(screen.getByRole("button", { name: "Desativar Escola Nova" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Desativar a escola?" });
+    await u.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+
+    expect(screen.queryByRole("dialog", { name: "Desativar a escola?" })).toBeNull();
+    expect(patchesDeStatus()).toEqual([]);
+    expect(screen.queryByText("Escola desativada.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Desativar Escola Nova" })).toBeInTheDocument();
+  });
+
+  it("enquanto a desativação roda, o botão da linha fica desabilitado", async () => {
+    const u = userEvent.setup();
+    let liberar: (valor: unknown) => void = () => undefined;
+    responder("PATCH", "/escolas/2", () => new Promise((resolver) => { liberar = resolver; }));
+    renderComApp(<Escolas />, { rota: "/escolas", usuario: ADMIN, escolas: [ALPHA, NOVA] });
+    await screen.findByText("Escola Nova");
+
+    await u.click(screen.getByRole("button", { name: "Desativar Escola Nova" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Desativar a escola?" });
+    await u.click(within(dialogo).getByRole("button", { name: "Desativar escola" }));
+
+    const botaoLinha = screen.getByRole("button", { name: "Desativar Escola Nova" });
+    await waitFor(() => expect(botaoLinha).toBeDisabled());
+    expect(botaoLinha).toHaveAttribute("aria-busy", "true");
+    liberar({ ...NOVA, status: "inativa" });
+    expect(await screen.findByText("Escola desativada.")).toBeInTheDocument();
+  });
+
+  it("Reativar continua num clique, sem confirmação", async () => {
+    const u = userEvent.setup();
+    const BETA = escolaFake({ id: 3, nome: "Escola Beta", status: "inativa" });
+    responder("PATCH", "/escolas/3", { ...BETA, status: "ativa" });
+    renderComApp(<Escolas />, { rota: "/escolas", usuario: ADMIN, escolas: [ALPHA, BETA] });
+    await screen.findByText("Escola Beta");
+
+    await u.click(screen.getByRole("button", { name: "Reativar Escola Beta" }));
+
+    expect(await screen.findByText("Escola reativada.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(patchesDeStatus()).toEqual([{ caminho: "/escolas/3", corpo: { status: "ativa" } }]);
   });
 
   it("depois de cadastrar uma escola, já abre a seção Usuários dela (criar escola → criar coordenador)", async () => {

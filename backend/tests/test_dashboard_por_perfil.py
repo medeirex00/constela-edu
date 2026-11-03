@@ -4,7 +4,7 @@
   * Coordenador → a ESCOLA INTEIRA (posição global, todos os alunos).
   * Secretaria  → o agregado da REDE + Ranking Geral agregado POR ESCOLA, mas
                   NUNCA PII individual de criança (ranking nominal vazio; ficha/
-                  evolução por aluno → 403).
+                  evolução por aluno → 404).
   * Admin Global→ a consolidação de TODAS as redes, com drill-down (rede →
                   escola) e retorno à visão consolidada.
 
@@ -83,7 +83,7 @@ def _cenario(db):
     rede = Rede(nome="Rede Municipal de Caraguatatuba", uf="SP", status="ativa")
     db.add(rede)
     db.flush()
-    esc = Escola(nome="EM JORGE PASSOS", ano_letivo_ativo=2026, rede_id=rede.id,
+    esc = Escola(nome="EM FICTÍCIA AURORA", ano_letivo_ativo=2026, rede_id=rede.id,
                  status="ativa")
     db.add(esc)
     db.flush()
@@ -178,7 +178,7 @@ def test_secretaria_ve_rede_e_ranking_agregado_sem_pii(db):
     rk = sec.get(f"/api/v1/redes/{c['rede']}/ranking?metrica=geral")
     assert rk.status_code == 200, rk.text
     escolas = rk.json()
-    assert [e["nome"] for e in escolas] == ["EM JORGE PASSOS"]
+    assert [e["nome"] for e in escolas] == ["EM FICTÍCIA AURORA"]
     for nome in ("Ana", "Bruno", "Carla"):
         assert nome not in rk.text
 
@@ -187,9 +187,13 @@ def test_secretaria_ve_rede_e_ranking_agregado_sem_pii(db):
     nominal = sec.get(f"/api/v1/escolas/{c['escola']}/ranking")
     assert nominal.status_code == 200 and nominal.json() == []
 
-    # 4) BLOQUEIO DE PII: a ficha/evolução individual da criança → 403.
+    # 4) BLOQUEIO DE PII: a evolução individual da criança fica INACESSÍVEL para a
+    #    Secretaria — 404 (fora do escopo dela, via exigir_aluno_permitido), nunca
+    #    os dados da criança. (A abertura da evolução foi só para o PROFESSOR, nas
+    #    turmas dele; a Secretaria segue sem dado individual.)
     r = sec.get(f"/api/v1/escolas/{c['escola']}/alunos/{c['alunos_a'][0]}/evolucao")
-    assert r.status_code == 403
+    assert r.status_code == 404
+    assert "Ana" not in r.text
 
     # 5) A Secretaria NÃO acessa a visão global (é uma camada acima dela).
     assert sec.get("/api/v1/redes/panorama-global").status_code == 403
@@ -227,7 +231,7 @@ def test_admin_global_multirrede_drill_down_e_volta(db):
     # Cada escola do top carrega o nome da SUA rede (não vazio, não trocado).
     por_escola = {e["nome"]: e["rede_nome"] for e in jg["top_escolas"]}
     assert por_escola == {
-        "EM JORGE PASSOS": "Rede Municipal de Caraguatatuba",
+        "EM FICTÍCIA AURORA": "Rede Municipal de Caraguatatuba",
         "EM UBATUBA CENTRO": "Rede Municipal de Ubatuba"}
     for nome in ("Ana", "Bruno", "Carla", "Duda"):
         assert nome not in glob.text                          # consolidado sem PII

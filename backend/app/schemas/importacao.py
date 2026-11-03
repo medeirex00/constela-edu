@@ -32,11 +32,19 @@ class AnaliseOut(BaseModel):
     estrategia: str = ""            # tabela | cabecalho_vertical | rotulos | posicional
     mensagem_deteccao: str = ""     # "Este arquivo pertence ao Matific."
     turma_detectada: str = ""       # turma lida do PDF (cabeçalho do Elefante)
+    # Escola lida do relatório (cabeçalho do PDF / schoolName do Elefante) e o
+    # AVISO quando o nome não parece o da escola cadastrada (só aviso: nomes variam).
+    escola_detectada: str = ""
+    aviso_escola: str = ""
     origem_nome: str = ""           # arquivo | conteudo | nenhum (como o nome foi achado)
     # "Intervalo de datas" impresso no relatório (Matific): datas ISO. O
     # frontend devolve estes valores no /confirmar para datar os dados.
     periodo_inicio: str = ""
     periodo_fim: str = ""
+    # A política da escola é 'bloquear' (a matrícula vem da Lista Piloto): o
+    # /confirmar NÃO cria ficha para quem não casa — a linha vai para a Revisão de
+    # identidade. A prévia avisa ANTES de o gestor escolher "criar".
+    criacao_bloqueada_por_politica: bool = False
     total_alunos: int = 0           # nomes únicos encontrados
     total_linhas: int
     total_erros: int
@@ -85,12 +93,15 @@ class ImportacaoConfirm(BaseModel):
     # desconhecida NÃO é criada, vira aviso; só a Lista Piloto e o manual criam.
     permitir_criar_turma: bool = True
     # Permite CRIAR a FICHA DO ALUNO quando a linha não casa com ninguém.
-    # Default True = comportamento histórico (upload manual e escolas sem
-    # política). A sincronização passa o que a POLÍTICA da escola disser
-    # (``services/politica_sync``): numa escola cuja matrícula vem da Lista
-    # Piloto, a plataforma não é fonte de matrícula e a linha sem candidato
-    # seguro vira PENDÊNCIA DE REVISÃO em vez de ficha nova.
-    permitir_criar_aluno: bool = True
+    # Padrão (None) = a POLÍTICA da escola (``services/politica_sync``), no upload
+    # manual de relatório de plataforma e na sincronização: numa escola cuja
+    # matrícula vem da Lista Piloto ('bloquear'), a plataforma não é fonte de
+    # matrícula e a linha sem candidato seguro vira PENDÊNCIA DE REVISÃO
+    # ('criacao_bloqueada_por_politica') em vez de ficha nova. ``False`` nunca
+    # cria; ``True`` NÃO fura 'bloquear' (a política é do Admin Global). Escola
+    # sem política ('permitir') cria, como sempre. A Lista Piloto (/matriculas)
+    # não passa por aqui: ela É a fonte.
+    permitir_criar_aluno: bool | None = None
 
 
 class ImportacaoOut(ORMModel):
@@ -119,6 +130,24 @@ class ImportacaoResultadoOut(BaseModel):
     # Pendências abertas/atualizadas na fila de revisão de identidade por esta
     # importação (linhas preservadas, não associadas nem criadas).
     qtd_revisoes: int = 0
+    # Contabilidade da importação (a sincronização decide o status por ela):
+    # alunos cujo dado MUDOU de fato, linhas recebidas, linhas que foram para a
+    # fila de revisão, linhas que não viraram dado (motivo → n) e avisos
+    # críticos em código estável, sem nome de aluno (ex.: 'campos_ausentes:x').
+    alunos_aplicados_ids: list[int] = []
+    linhas_recebidas: int = 0
+    linhas_em_revisao: int = 0
+    linhas_descartadas: dict[str, int] = {}
+    avisos_criticos: list[str] = []
+    # Contas DISTINTAS que foram para a revisão (uma criança com 5 livros = 1).
+    contas_em_revisao: int = 0
+    # Contas (id da plataforma) que já são EFETIVAS em OUTRA escola do Constela e
+    # foram para a revisão 'identidade_de_outra_escola' — nada delas aplicado aqui.
+    ids_de_outra_escola: list[str] = []
+    # Alunos SEM ficha que a importação criaria e que a política 'bloquear' da
+    # escola mandou para a revisão ('criacao_bloqueada_por_politica') — a tela
+    # mostra o motivo e o caminho (Revisão de identidade).
+    criacao_bloqueada: int = 0
 
 
 # --- Fila de revisão de identidade --------------------------------------------

@@ -3,7 +3,8 @@
  *
  * 1. Os USOS ANTIGOS ficam idênticos: o markup do `GraficoLinha` chamado como na
  *    evolução do aluno (uma série por índice, eixo a partir de 0) e com duas séries
- *    foi gravado ANTES da extensão da etapa E3 — qualquer diferença quebra aqui.
+ *    foi gravado ANTES da extensão da etapa E3 — qualquer diferença quebra aqui. Em
+ *    31/10/2026 só as CORES passaram à paleta de séries da identidade v2.
  * 2. As extensões (E3, aba do ICA): eixo X por categoria (anos desalinhados e
  *    lacunas — valor nulo OU ano sem ponto quebram a linha, "sem resultado" ≠ 0),
  *    série tracejada, eixo Y que não começa em 0, mais cores, texto alternativo.
@@ -25,7 +26,7 @@ const PONTOS = [
 describe("GraficoLinha — usos antigos (markup gravado antes da E3)", () => {
   it("uma série (evolução do aluno): igual ao de antes", () => {
     const { container } = render(<GraficoLinha series={[{ nome: "Livros lidos", pontos: PONTOS }]} />);
-    expect(container.innerHTML).toMatchInlineSnapshot(`"<div><svg viewBox="0 0 500 180" class="w-full" role="img" aria-label="Gráfico de evolução"><g><line x1="46" x2="488" y1="154" y2="154" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="158" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">0</text></g><g><line x1="46" x2="488" y1="92" y2="92" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="96" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">6</text></g><g><line x1="46" x2="488" y1="30" y2="30" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="34" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">13</text></g><g><polyline fill="none" stroke="#6366f1" stroke-width="2" points="46,124.24 193.33333333333331,84.56 340.66666666666663,84.56 488,30"></polyline><g><circle cx="46" cy="124.24" r="3" fill="#6366f1"><title>Livros lidos — jan: 3</title></circle><text x="46" y="117.24" text-anchor="start" class="text-[13px] font-semibold tabular-nums" fill="#6366f1">3</text></g><g><circle cx="193.33333333333331" cy="84.56" r="3" fill="#6366f1"><title>Livros lidos — fev: 7</title></circle><text x="193.33333333333331" y="77.56" text-anchor="middle" class="text-[13px] font-semibold tabular-nums" fill="#6366f1">7</text></g><g><circle cx="340.66666666666663" cy="84.56" r="3" fill="#6366f1"><title>Livros lidos — mar: 7</title></circle></g><g><circle cx="488" cy="30" r="3" fill="#6366f1"><title>Livros lidos — abr: 12,5</title></circle><text x="488" y="23" text-anchor="end" class="text-[13px] font-semibold tabular-nums" fill="#6366f1">12,5</text></g></g><text x="46" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">jan</text><text x="193.33333333333331" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">fev</text><text x="340.66666666666663" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">mar</text><text x="488" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">abr</text></svg><div class="mt-1 flex flex-wrap gap-3"><span class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400"><span class="h-2 w-2 rounded-full" style="background: rgb(99, 102, 241);"></span>Livros lidos</span></div></div>"`);
+    expect(container.innerHTML).toMatchInlineSnapshot(`"<div><svg viewBox="0 0 500 180" class="w-full" role="img" aria-label="Gráfico de evolução"><g><line x1="46" x2="488" y1="154" y2="154" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="158" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">0</text></g><g><line x1="46" x2="488" y1="92" y2="92" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="96" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">6</text></g><g><line x1="46" x2="488" y1="30" y2="30" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="34" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">13</text></g><g><polyline fill="none" stroke="#6C5CE7" stroke-width="2" points="46,124.24 193.33333333333331,84.56 340.66666666666663,84.56 488,30"></polyline><g><circle cx="46" cy="124.24" r="3" fill="#6C5CE7"><title>Livros lidos — jan: 3</title></circle><text x="46" y="117.24" text-anchor="start" class="text-[13px] font-semibold tabular-nums" fill="#6C5CE7">3</text></g><g><circle cx="193.33333333333331" cy="84.56" r="3" fill="#6C5CE7"><title>Livros lidos — fev: 7</title></circle><text x="193.33333333333331" y="77.56" text-anchor="middle" class="text-[13px] font-semibold tabular-nums" fill="#6C5CE7">7</text></g><g><circle cx="340.66666666666663" cy="84.56" r="3" fill="#6C5CE7"><title>Livros lidos — mar: 7</title></circle></g><g><circle cx="488" cy="30" r="3" fill="#6C5CE7"><title>Livros lidos — abr: 12,5</title></circle><text x="488" y="23" text-anchor="end" class="text-[13px] font-semibold tabular-nums" fill="#6C5CE7">12,5</text></g></g><text x="46" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">jan</text><text x="193.33333333333331" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">fev</text><text x="340.66666666666663" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">mar</text><text x="488" y="172" text-anchor="middle" class="fill-zinc-400 text-[12px]">abr</text></svg><div class="mt-1 flex flex-wrap gap-3"><span class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400"><span class="h-2 w-2 rounded-full" style="background: rgb(108, 92, 231);"></span>Livros lidos</span></div></div>"`);
   });
 
   it("duas séries com altura própria: igual ao de antes", () => {
@@ -38,7 +39,7 @@ describe("GraficoLinha — usos antigos (markup gravado antes da E3)", () => {
         ]}
       />,
     );
-    expect(container.innerHTML).toMatchInlineSnapshot(`"<div><svg viewBox="0 0 500 185" class="w-full" role="img" aria-label="Gráfico de evolução"><g><line x1="46" x2="488" y1="159" y2="159" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="163" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">0</text></g><g><line x1="46" x2="488" y1="94.5" y2="94.5" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="98.5" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">6</text></g><g><line x1="46" x2="488" y1="30" y2="30" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="34" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">13</text></g><g><polyline fill="none" stroke="#6366f1" stroke-width="2" points="46,128.04000000000002 193.33333333333331,86.75999999999999 340.66666666666663,86.75999999999999 488,30"></polyline><g><circle cx="46" cy="128.04000000000002" r="3" fill="#6366f1"><title>Escola — jan: 3</title></circle></g><g><circle cx="193.33333333333331" cy="86.75999999999999" r="3" fill="#6366f1"><title>Escola — fev: 7</title></circle></g><g><circle cx="340.66666666666663" cy="86.75999999999999" r="3" fill="#6366f1"><title>Escola — mar: 7</title></circle></g><g><circle cx="488" cy="30" r="3" fill="#6366f1"><title>Escola — abr: 12,5</title></circle></g></g><g><polyline fill="none" stroke="#10b981" stroke-width="2" points="46,107.39999999999999 193.33333333333331,117.72"></polyline><g><circle cx="46" cy="107.39999999999999" r="3" fill="#10b981"><title>Rede — jan: 5</title></circle></g><g><circle cx="193.33333333333331" cy="117.72" r="3" fill="#10b981"><title>Rede — fev: 4</title></circle></g></g><text x="46" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">jan</text><text x="193.33333333333331" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">fev</text><text x="340.66666666666663" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">mar</text><text x="488" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">abr</text></svg><div class="mt-1 flex flex-wrap gap-3"><span class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400"><span class="h-2 w-2 rounded-full" style="background: rgb(99, 102, 241);"></span>Escola</span><span class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400"><span class="h-2 w-2 rounded-full" style="background: rgb(16, 185, 129);"></span>Rede</span></div></div>"`);
+    expect(container.innerHTML).toMatchInlineSnapshot(`"<div><svg viewBox="0 0 500 185" class="w-full" role="img" aria-label="Gráfico de evolução"><g><line x1="46" x2="488" y1="159" y2="159" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="163" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">0</text></g><g><line x1="46" x2="488" y1="94.5" y2="94.5" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="98.5" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">6</text></g><g><line x1="46" x2="488" y1="30" y2="30" class="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1"></line><text x="40" y="34" text-anchor="end" class="fill-zinc-400 text-[13px] tabular-nums">13</text></g><g><polyline fill="none" stroke="#6C5CE7" stroke-width="2" points="46,128.04000000000002 193.33333333333331,86.75999999999999 340.66666666666663,86.75999999999999 488,30"></polyline><g><circle cx="46" cy="128.04000000000002" r="3" fill="#6C5CE7"><title>Escola — jan: 3</title></circle></g><g><circle cx="193.33333333333331" cy="86.75999999999999" r="3" fill="#6C5CE7"><title>Escola — fev: 7</title></circle></g><g><circle cx="340.66666666666663" cy="86.75999999999999" r="3" fill="#6C5CE7"><title>Escola — mar: 7</title></circle></g><g><circle cx="488" cy="30" r="3" fill="#6C5CE7"><title>Escola — abr: 12,5</title></circle></g></g><g><polyline fill="none" stroke="#0D9488" stroke-width="2" points="46,107.39999999999999 193.33333333333331,117.72"></polyline><g><circle cx="46" cy="107.39999999999999" r="3" fill="#0D9488"><title>Rede — jan: 5</title></circle></g><g><circle cx="193.33333333333331" cy="117.72" r="3" fill="#0D9488"><title>Rede — fev: 4</title></circle></g></g><text x="46" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">jan</text><text x="193.33333333333331" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">fev</text><text x="340.66666666666663" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">mar</text><text x="488" y="177" text-anchor="middle" class="fill-zinc-400 text-[12px]">abr</text></svg><div class="mt-1 flex flex-wrap gap-3"><span class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400"><span class="h-2 w-2 rounded-full" style="background: rgb(108, 92, 231);"></span>Escola</span><span class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400"><span class="h-2 w-2 rounded-full" style="background: rgb(13, 148, 136);"></span>Rede</span></div></div>"`);
   });
 
   it("sem pontos: a mesma mensagem de antes", () => {
@@ -131,11 +132,73 @@ describe("GraficoLinha — extensões da E3 (eixo por ano, lacunas, tracejada, e
       <GraficoLinha eixoX={["2023"]} series={["A", "B", "C", "D", "E"].map((n, i) => serie(n, 10 + i))} />,
     );
     const cores = [...container.querySelectorAll("circle")].map((c) => c.getAttribute("fill"));
-    expect(cores).toEqual(["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#0ea5e9"]);
+    expect(cores).toEqual(["#6C5CE7", "#0D9488", "#D97706", "#DC2626", "#0284C7"]);
     const { container: c2 } = render(<GraficoLinha series={[serie("Nula", null), serie("Ok", 3)]} />);
     expect(c2.textContent).not.toContain("Nula");
     const { container: c3 } = render(<GraficoLinha series={[serie("Nula", null)]} />);
     expect(c3.textContent).toBe("Sem dados suficientes para o gráfico.");
+  });
+});
+
+describe("GraficoLinha — larguraViewBox (celular; prop aditiva, sem ela os snapshots acima)", () => {
+  const datas = ["01/10", "02/10", "03/10", "04/10", "05/10", "06/10", "07/10", "08/10"];
+  const oito = [{ nome: "Atividades", pontos: datas.map((rotulo, i) => ({ rotulo, valor: 10 + i * 5 })) }];
+
+  it("viewBox na largura real (1:1: texto no tamanho nominal) e só as datas que cabem", () => {
+    const { container } = render(<GraficoLinha series={oito} altura={185} larguraViewBox={280} />);
+    const svg = container.querySelector("svg") as SVGSVGElement;
+    expect(svg).toHaveAttribute("viewBox", "0 0 280 185");
+    // 222 de área útil: até 5 datas (uma a cada ~52) — de 8, uma sim, uma não.
+    const eixoX = [...container.querySelectorAll("svg > text")];
+    expect(eixoX.map((t) => t.textContent)).toEqual(["01/10", "03/10", "05/10", "07/10"]);
+    // A primeira data se alinha pela borda esquerda: não encosta no "0"/mínimo do eixo Y.
+    expect(eixoX[0]).toHaveAttribute("text-anchor", "start");
+    expect(eixoX[1]).toHaveAttribute("text-anchor", "middle");
+    // Todos os pontos continuam (com a dica), só o eixo fica mais limpo.
+    expect(container.querySelectorAll("circle")).toHaveLength(8);
+    const eixoY = [...container.querySelectorAll("svg > g > text")];
+    expect(eixoY[0]).toHaveClass("text-[13px]");
+  });
+
+  it("a última data, quando aparece, se alinha pela borda direita (não é cortada)", () => {
+    const tres = [{ nome: "Estrelas", pontos: datas.slice(0, 3).map((rotulo, i) => ({ rotulo, valor: i })) }];
+    const { container } = render(<GraficoLinha series={tres} larguraViewBox={300} />);
+    const eixoX = [...container.querySelectorAll("svg > text")];
+    expect(eixoX.map((t) => t.getAttribute("text-anchor"))).toEqual(["start", "middle", "end"]);
+    expect(Number(eixoX[2].getAttribute("x"))).toBe(300 - 12);
+  });
+
+  it("um ponto só: a data começa na margem esquerda (não fica sob o \"0\" do eixo Y)", () => {
+    const um = [{ nome: "Atividades", pontos: [{ rotulo: "01/11", valor: 4 }] }];
+    const { container } = render(<GraficoLinha series={um} larguraViewBox={300} />);
+    const eixoX = [...container.querySelectorAll("svg > text")];
+    expect(eixoX.map((t) => t.getAttribute("text-anchor"))).toEqual(["start"]);
+    // Sem a prop (desktop), o ponto único continua com a data centrada nele.
+    const { container: semProp } = render(<GraficoLinha series={um} />);
+    expect(semProp.querySelector("svg > text")).toHaveAttribute("text-anchor", "middle");
+  });
+
+  it("série que muda todo dia no celular: rótulo de valor só no primeiro, no último e no maior", () => {
+    const trinta = [{
+      nome: "Atividades",
+      pontos: Array.from({ length: 30 }, (_, i) => ({ rotulo: `${String(i + 1).padStart(2, "0")}/10`, valor: i === 14 ? 99 : 10 + i })),
+    }];
+    const { container } = render(<GraficoLinha series={trinta} larguraViewBox={300} />);
+    const rotulosValor = [...container.querySelectorAll("svg > g > g > text")].map((t) => t.textContent);
+    expect(rotulosValor).toEqual(["10", "99", "39"]);
+    // Todos os pontos continuam com a dica (title).
+    expect(container.querySelectorAll("circle")).toHaveLength(30);
+    // Sem a prop (desktop), o desenho de sempre: rótulo em todo ponto que muda.
+    const { container: semProp } = render(<GraficoLinha series={trinta} />);
+    expect(semProp.querySelectorAll("svg > g > g > text")).toHaveLength(30);
+  });
+
+  it("sem a prop, as 8 datas e a âncora no meio, como sempre", () => {
+    const { container } = render(<GraficoLinha series={oito} altura={185} />);
+    expect(container.querySelector("svg")).toHaveAttribute("viewBox", "0 0 500 185");
+    const eixoX = [...container.querySelectorAll("svg > text")];
+    expect(eixoX).toHaveLength(8);
+    expect(eixoX.every((t) => t.getAttribute("text-anchor") === "middle")).toBe(true);
   });
 });
 

@@ -86,3 +86,26 @@ describe("Explicação da Nota Geral", () => {
     expect(texto).toContain("= 88,0");
   });
 });
+
+describe("Perfil com a Matemática fora do plano da rede", () => {
+  it("nota_matific null vira '—' (sem quebrar a tela nem inventar 0,0)", async () => {
+    // O servidor anula a nota e tira o passo a passo do Matific (mesma regra do
+    // Ranking Geral): a tela não pode chamar `nota(null)` nem mostrar um zero.
+    const dados = perfil({ elefante: 100 }, 70);
+    const semMatific = { elefante: dados.detalhes.elefante, geral: dados.detalhes.geral };
+    responder("GET", "/escolas/1/alunos/10/perfil",
+      { ...dados, nota_matific: null, detalhes: semMatific });
+    responder("GET", "/escolas/1/gamificacao/alunos/10", null);
+    renderComApp(
+      <Routes>
+        <Route path="/alunos/:id" element={<PerfilAluno />} />
+      </Routes>,
+      { rota: "/alunos/10", usuario: usuarioFake({ cargo: "coordenador" }) },
+    );
+    const rotulo = await screen.findByText("Nota Matific");
+    expect(rotulo.parentElement?.textContent).toContain("—");
+    expect(rotulo.parentElement?.textContent).not.toContain("0,0");
+    expect(screen.getByText("Nota Elefante Letrado").parentElement?.textContent)
+      .toContain("70,0");
+  });
+});

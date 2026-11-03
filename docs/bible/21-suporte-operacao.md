@@ -2,7 +2,7 @@
 
 - **Status:** 🟢 aprovado / approved
 - **Padrão / Standard:** [ADR-0002](decisoes/ADR-0002-padrao-de-capitulo.md) (16 partes)
-- **Fontes / Sources:** `INDICE.md` (bloco 21, subseções 21.1–21.41), `_estado-atual/RELATORIO-2026-07-09.md`, e o **código Q0**: `backend/app/routers/admin.py` (gestão de contas/papéis; **reset por token** de uso único `POST /usuarios/{uid}/redefinir-senha`, `RESET_SENHA_EXPIRA_MIN=60`; anti-lockout do **último admin ativo**; troca de senha de terceiro incrementa `token_version`), `backend/app/routers/escolas.py` (`POST /escolas` **exclusivo de admin global**, cria **só a linha Escola**), `backend/app/routers/academico.py` (`criar_professor_completo` = professor+turma+conta com senha legível devolvida uma vez; ciclo de vida `ativo|arquivado|excluido`), `backend/app/quest/routers/professor.py` (cartões por turma/individual; `GET .../acessos`; **cartão individual não derruba a turma**; `gerar_cartao_individual`: aluno inativo → **422** "Aluno inativo não recebe cartão"), `backend/app/quest/routers/auth.py` (login da criança inativa → **403** "Seu cartão está descansando"; o **401** é para código/QR inexistente, "Não encontrei esse código"), `backend/app/quest/services/credenciais.py` (`regenerar` mantém o `codigo_login`, troca o `qr_token`, incrementa `token_version`), `backend/scripts/seed.py` (padrões pedagógicos semeados **só para 'JORGE PASSOS'**), `backend/app/services/audit.py` (`LogAuditoria`), `backend/app/main.py` (`/api/health*`, `/metrics`, `X-Request-ID` exposto "útil no relato de suporte"), Seções [08](08-onboarding-ftue.md)/[09](09-social.md)/[10](10-professor-familia.md)/[11](11-arquitetura.md)/[12](12-seguranca-privacidade.md)/[14](14-infra-deploy-dr.md)/[17](17-telemetria-metricas.md)/[19](19-liveops.md)/[20](20-migracao-importacao.md)/[22](22-monetizacao.md)/[23](23-roadmap.md), Apêndice F
+- **Fontes / Sources:** `INDICE.md` (bloco 21, subseções 21.1–21.41), `_estado-atual/RELATORIO-2026-07-09.md`, e o **código Q0**: `backend/app/routers/admin.py` (gestão de contas/papéis; **reset por token** de uso único `POST /usuarios/{uid}/redefinir-senha`, `RESET_SENHA_EXPIRA_MIN=60`; anti-lockout do **último admin ativo**; troca de senha de terceiro incrementa `token_version`), `backend/app/routers/escolas.py` (`POST /escolas` **exclusivo de admin global**, cria **só a linha Escola**), `backend/app/routers/academico.py` (`criar_professor_completo` = professor+turma+conta com senha legível devolvida uma vez; ciclo de vida `ativo|arquivado|excluido`), `backend/app/quest/routers/professor.py` (cartões por turma/individual; `GET .../acessos`; **cartão individual não derruba a turma**; `gerar_cartao_individual`: aluno inativo → **422** "Aluno inativo não recebe cartão" na reimpressão; com `regenerar`, o cartão dele é revogado sem emitir outro → **204**; o `regenerar` da turma revoga também o cartão dos inativos — integração 5 do e97 — e o de quem estava numa folha da turma e trocou de turma, pelos `aluno_ids` da auditoria `quest.cartoes_gerados` — integração 6 do e97), `backend/app/quest/routers/auth.py` (login da criança inativa → **403** "Seu cartão está descansando"; o **401** é para código/QR inexistente, "Não encontrei esse código"), `backend/app/quest/services/credenciais.py` (`regenerar` troca o `codigo_login` **e** o `qr_token` e incrementa `token_version` — revisão e97), `backend/scripts/seed.py` (padrões pedagógicos semeados **só para a escola de demonstração (fictícia) do seed**), `backend/app/services/audit.py` (`LogAuditoria`), `backend/app/main.py` (`/api/health*`, `/metrics`, `X-Request-ID` exposto "útil no relato de suporte"), Seções [08](08-onboarding-ftue.md)/[09](09-social.md)/[10](10-professor-familia.md)/[11](11-arquitetura.md)/[12](12-seguranca-privacidade.md)/[14](14-infra-deploy-dr.md)/[17](17-telemetria-metricas.md)/[19](19-liveops.md)/[20](20-migracao-importacao.md)/[22](22-monetizacao.md)/[23](23-roadmap.md), Apêndice F
 - **Depende de / Depends on:** princípios (P1 login código-só · P6 erro nunca pune · P15 isolamento por escola · P16 identidade da criança vive no Edu) → [01](01-principios-imutaveis.md); **papéis** (admin/coordenador/professor/responsável) + portais + geração de cartões → [10](10-professor-familia.md); **mecânica** de incidente técnico/health/status/janela de manutenção → [14](14-infra-deploy-dr.md); **política** LGPD (base legal, retenção, erasure, auditoria) cujo **fluxo operacional** esta seção executa → [12](12-seguranca-privacidade.md); **provisionamento técnico** e **estratégia de cutover** → [20](20-migracao-importacao.md); **FTUE do aluno** (não confundir) → [08](08-onboarding-ftue.md); **regra da denúncia** → [09](09-social.md); **valores de config** `quest.*` → [19](19-liveops.md); **taxonomia** das métricas de sucesso → [17](17-telemetria-metricas.md); **planos/contratos** → [22](22-monetizacao.md); **mecanismo** (`token_version`/rate-limit/isolamento) → [11](11-arquitetura.md); **checklists operacionais** que esta seção alimenta → Apêndice F.
 
 > **Convenção / Convention:** "§N" = uma das 16 **partes deste capítulo** / one of the 16 **parts of this
@@ -42,12 +42,15 @@ atual (Q0) — há mecânica de operação, mas nada de helpdesk formal:**
   link (e a senha legível do professor recém-criado) **volta na resposta HTTP** para **entrega manual** — **não há
   e-mail automático nem autoatendimento** (o modelo prevê "autoatendimento futuro", desligado).
 - **Suporte ao login da criança** — login **código-só** (`PALAVRA+NNNN`); o professor gera **cartões PDF** por turma
-  ou **individual** (o individual **não derruba a turma**); `regenerar` **mantém o código** que a criança decorou e
-  **troca o QR** (revogação por `token_version`); aluno inativo → **"cartão descansando"** (não pune, P6); situação
+  ou **individual** (o individual **não derruba a turma**); `regenerar` **revoga o cartão**: troca **código e
+  QR** e derruba as sessões (`token_version`) — sem parâmetro é reimpressão do mesmo cartão; aluno inativo → **"cartão descansando"** (não pune, P6)
+  e, se ninguém pedir revogação, volta com o mesmo cartão; `regenerar` (da turma ou individual) **revoga também o
+  cartão de quem está inativo** — sem emitir cartão novo — e a reativação não reabre o cartão revogado; o da turma
+  revoga também o cartão de **quem estava numa folha dela e depois trocou de turma** (§12); situação
   de acesso por aluno em `GET .../acessos`.
 - **Onboarding de escola** — **manual e fragmentado**: `POST /escolas` é **exclusivo de admin global** e cria **só a
   linha Escola** (um **casco parcial**: sem admin local, sem turmas, e **sem os padrões pedagógicos** — níveis de
-  dificuldade, `ReferenciaNormalizacao`, `Configuracao` — que o `seed` cria **só para 'JORGE PASSOS'**). Não há
+  dificuldade, `ReferenciaNormalizacao`, `Configuracao` — que o `seed` cria **só para a escola de demonstração (fictícia) do seed**). Não há
   signup self-service.
 - **Observabilidade para suporte** — `/api/health*`, `/metrics`, `X-Request-ID` exposto ("útil no relato de
   suporte"), e **tudo auditado** em `logs_auditoria` (`usuario.reset_solicitado`, `quest.cartoes_gerados`, `login.falhou/bloqueado`).
@@ -112,8 +115,10 @@ do dono** (§15). A 21 define **o que** cada superfície de suporte deve fazer; 
 
 ### 7. UX
 A UX é do **adulto**: **procedimentos curtos e acionáveis**, **árvores de decisão** ("a criança não entra → aluno
-**ativo**? — se **não**, é **"cartão descansando"**: reativar a matrícula se a criança voltou, **nunca** tentar
-regenerar (o sistema recusa com 422); se **sim** → cartão certo? → regenerar individual"), **comunicação honesta**
+**ativo**? — se **não**, é **"cartão descansando"**: reativar a matrícula se a criança voltou (o cartão dela
+continua o mesmo), **sem** regenerar por isso — a reimpressão de inativo é recusada com 422; regenerar a ficha
+inativa só se o cartão dela se perdeu ou caiu em mãos erradas (revoga sem emitir cartão novo); se **sim** → cartão
+certo? → regenerar individual"), **comunicação honesta**
 (sem jargão técnico), e **materiais em
 pt-BR** com linguagem simples. Todo roteiro que **toca a criança** (o corredor de login) usa o **vocabulário
 canônico** (Seção [02](02-vocabulario.md)) e respeita as **palavras proibidas** na experiência infantil.
@@ -133,9 +138,9 @@ técnico = Seção [14](14-infra-deploy-dr.md), política LGPD = Seção [12](12
 | S1 | **Três onboardings distintos** | onboarding da **escola** (21: tenant+admin+padrões+1ª aula) ≠ onboarding do **aluno** no jogo (Seção [08](08-onboarding-ftue.md), FTUE) ≠ **provisionamento técnico**/ETL (Seção [20](20-migracao-importacao.md)) | 21; FTUE = [08](08-onboarding-ftue.md); ETL = [20](20-migracao-importacao.md) |
 | S2 | **Autosserviço × suporte** | o dia a dia (regenerar cartão, ligar social, gerar cartões, arquivar aluno) é **autosserviço**; o suporte trata o excepcional e **escala** o técnico à engenharia | 21; papéis = [10](10-professor-familia.md) |
 | S3 | **Onboarding operacional da escola** | jornada do "go" à 1ª aula jogável: criar escola → padrões → 1º admin → turmas → matrículas ([20](20-migracao-importacao.md)) → cartões → consentimento; **checklist** no Apêndice F | 21 → Apêndice F |
-| S4 | **Provisionar a escola nova** | a escola nova precisa dos **padrões pedagógicos** (níveis, `ReferenciaNormalizacao`, config) e de um **1º admin local**; hoje `POST /escolas` é **casco parcial** (só a linha Escola) e os padrões só existem para 'JORGE PASSOS' | 21 ⚠️ (auto-provisionar? — §15) |
+| S4 | **Provisionar a escola nova** | a escola nova precisa dos **padrões pedagógicos** (níveis, `ReferenciaNormalizacao`, config) e de um **1º admin local**; hoje `POST /escolas` é **casco parcial** (só a linha Escola) e os padrões só existem para a escola de demonstração do seed | 21 ⚠️ (auto-provisionar? — §15) |
 | S5 | **Reset de acesso do adulto** | mecanismo Q0: **link de token** de uso único (60 min, hash SHA-256), invalidando links anteriores; **quem pode**: admin→todos, coordenador→si+professores, professor→si; **e-mail automático/convite** é decisão do dono | 21 (procedimento) ⚠️ (e-mail — §15); mecanismo = [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md) |
-| S6 | **Suporte ao login da criança** | cartão perdido → **regenerar individual** (não derruba a turma); roubo/vazamento → **revogar QR** (`token_version`) mantendo o **código** que a criança decorou; aluno transferido → **"cartão descansando"** (P6) | 21; mecanismo `token_version` = [11](11-arquitetura.md) |
+| S6 | **Suporte ao login da criança** | cartão esquecido → consultar o código na folha do professor; cartão perdido, roubado ou QR vazado → **regenerar individual** (código **e** QR novos, sessões derrubadas por `token_version`; não derruba a turma) — revogar só o QR não basta: o cartão traz os dois e a sessão aberta pelo QR lê o código; aluno transferido → **"cartão descansando"** (P6) | 21; mecanismo `token_version` = [11](11-arquitetura.md) |
 | S7 | **Árvores de troubleshooting** | roteiros de 1ª linha: **criança não entra** (aluno ativo? cartão certo?), **"É você?"/conta trocada** (tablet compartilhado), **app não abre/cache do PWA**, **áudio/narração não toca** | 21 |
 | S8 | **Incidente: detectar → escalar → comunicar** | a 21 **detecta/tria** e **escala** o técnico à Seção [14](14-infra-deploy-dr.md); **comunica** à escola em **tom adulto, não técnico**; a **mecânica interna** (severidade/on-call, sinais de health/status) é da 14, mas a **status page voltada ao cliente** (comunicação de status às escolas) é da 21 (delegação 14→21) | 21 (voz + status ao cliente); mecânica = [14](14-infra-deploy-dr.md) |
 | S9 | **Comunicação de manutenção & cutover** | a 21 **comunica** a janela de manutenção (a Seção [14](14-infra-deploy-dr.md) **agenda/opera** a mecânica; a 21 pode **propor** um horário sensível ao calendário como insumo) e **comunica/agenda** o **cutover** da migração (estratégia técnica = Seção [20](20-migracao-importacao.md)), respeitando o **calendário letivo** | 21 (comunicação); janela = [14](14-infra-deploy-dr.md); cutover = [20](20-migracao-importacao.md) |
@@ -153,9 +158,9 @@ Onde a operação **toca** o código (Q0 real, salvo ▢):
 - **Contas/reset** — `admin.py` (CRUD de usuário; `POST /usuarios/{uid}/redefinir-senha` → token; anti-lockout;
   `token_version`); `auth.py` (`/redefinir-senha` público). **Mecanismo** de token/`token_version` = Seção [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md).
 - **Escola/provisionamento** — `escolas.py` (`POST /escolas`, admin global — **casco parcial**); `academico.py`
-  (`criar_professor_completo`, ciclo de vida do aluno); `seed.py` (padrões só p/ 'JORGE PASSOS' — **gap S4**).
+  (`criar_professor_completo`, ciclo de vida do aluno); `seed.py` (padrões só p/ a escola de demonstração — **gap S4**).
 - **Cartões** — `quest/routers/professor.py` (turma/individual; `GET .../acessos`); `credenciais.py` (`regenerar`
-  mantém código, troca QR).
+  troca código e QR).
 - **Observabilidade** — `main.py` (`/api/health*`, `/metrics`, `X-Request-ID`); `audit.py` (`logs_auditoria`). **A
   operação** (health/status/on-call) é da Seção [14](14-infra-deploy-dr.md).
 - **A construir (▢)** — ferramenta de helpdesk/tickets, status page ao cliente, e-mail/convite, endpoint de leitura de
@@ -185,10 +190,22 @@ gating; se a Seção [12](12-seguranca-privacidade.md) fechar **erasure**, a 21 
 
 ### 12. Casos extremos (Edge Cases)
 - **Criança não entra** → aluno **ativo**? Se **não** (transferido/arquivado) → é **"cartão descansando"**: reativar
-  a matrícula (ação de admin) se a criança voltou, **nunca** tentar regenerar (o sistema recusa com **422**, P6). Se
-  **sim** → cartão **certo**? senão → regenerar **individual** (S6/S7).
+  a matrícula (ação de admin) se a criança voltou — o cartão dela continua o mesmo —, **sem** regenerar por isso (a
+  reimpressão de inativo é recusada com **422**, P6). Se **sim** → cartão **certo**? senão → regenerar **individual**
+  (S6/S7).
+- **Cartão perdido de criança inativa** (ou folha da turma perdida com inativos nela) → regenerar revoga mesmo com a
+  ficha inativa: o individual responde **204** sem PDF (auditado como `quest.cartao_revogado_inativo`) e o da turma
+  revoga o cartão dos inativos fora do PDF (`revogados_inativos` na auditoria). A reativação depois — botão Reativar ou
+  a Lista Piloto seguinte — **não** reabre o código, o QR nem as sessões antigas; a criança usa o cartão novo.
+- **Folha da turma perdida com criança que já trocou de turma** (Lista Piloto ou troca manual, ficha ativa) →
+  o regenerar da turma revoga também o cartão de quem estava numa folha dela impressa desde a última revogação e não
+  está mais matriculado nela: a auditoria de cada folha (`quest.cartoes_gerados`) guarda os `aluno_ids` do PDF, e a
+  do regenerar traz `revogados_fora_da_turma` e os ids. Essa criança não entra no PDF: o cartão novo dela sai na
+  turma em que ela está agora (a reimpressão de lá já traz o código novo). Folha impressa antes desse registro não
+  diz quem estava nela — para quem saiu da turma antes, regenerar o **individual**.
 - **Tablet compartilhado, "É você?" com nome errado** → o fluxo "quem vai jogar" troca de perfil; não é bug (S7).
-- **Cartão perdido/roubado** → revogar QR (`token_version`) **mantendo o código** decorado (S6).
+- **Cartão perdido/roubado ou QR vazado** → regenerar o cartão **individual**: código e QR novos, sessões derrubadas
+  (`token_version`); o código antigo deixa de entrar (S6).
 - **App não abre / tela velha** → cache do PWA (a API nunca é cacheada; forçar atualização) (S7).
 - **Escola nova sem níveis de dificuldade** → a pontuação por nível fica **sem base** até alguém cadastrar (o casco
   parcial do `POST /escolas` — **gap S4**, §15).
@@ -217,7 +234,7 @@ gating; se a Seção [12](12-seguranca-privacidade.md) fechar **erasure**, a 21 
 - [ ] **Jornada de onboarding da escola** (do "go" à 1ª aula) + checklist no Apêndice F (S3).
 - [ ] ⚠️ **Provisionar a escola nova** (padrões + 1º admin local) — decidir auto-provisionar (gap S4).
 - [x] **Reset de acesso** por link de token (60 min) — ⚠️ e-mail automático a decidir (S5).
-- [x] **Suporte ao login da criança** (regenerar individual, revogar QR, "cartão descansando") (S6).
+- [x] **Suporte ao login da criança** (regenerar individual = código e QR novos, "cartão descansando") (S6).
 - [ ] **Árvores de troubleshooting** de 1ª linha (login/"É você?"/PWA/áudio) (S7).
 - [ ] **Fluxo de incidente** (detectar→escalar→comunicar), tom adulto (S8).
 - [ ] **Comunicação de manutenção & cutover** respeitando o calendário letivo (S9).
@@ -310,12 +327,15 @@ P7/Section [22](22-monetizacao.md)), and support talks to **adults** (manager, c
   Today the link (and the freshly-created teacher's readable password) **comes back in the HTTP response** for
   **manual delivery** — there is **no automatic e-mail nor self-service** (the model foresees "future self-service", off).
 - **Child login support** — **code-only** login (`PALAVRA+NNNN`); the teacher generates **PDF cards** per class or
-  **individually** (the individual one **does not take down the class**); `regenerar` **keeps the code** the child
-  memorized and **swaps the QR** (revocation via `token_version`); an inactive student → **"resting card"** (does not
-  punish, P6); per-student access status at `GET .../acessos`.
+  **individually** (the individual one **does not take down the class**); `regenerar` **revokes the card**: it swaps
+  **code and QR** and drops sessions (`token_version`) — no parameter means reprinting the same card; an inactive student → **"resting card"** (does not
+  punish, P6) and, if nobody asks for revocation, comes back with the same card; `regenerar` (class or individual)
+  **also revokes the card of whoever is inactive** — without issuing a new one — and reactivation does not reopen the
+  revoked card; the class one also revokes the card of **whoever was on one of its sheets and later changed class**
+  (§12); per-student access status at `GET .../acessos`.
 - **School onboarding** — **manual and fragmented**: `POST /escolas` is **global-admin only** and creates **just the
   Escola row** (a **partial shell**: no local admin, no classes, and **no pedagogical defaults** — difficulty levels,
-  `ReferenciaNormalizacao`, `Configuracao` — which `seed` creates **only for 'JORGE PASSOS'**). There is no self-service signup.
+  `ReferenciaNormalizacao`, `Configuracao` — which `seed` creates **only for the seed's (fictitious) demo school**). There is no self-service signup.
 - **Observability for support** — `/api/health*`, `/metrics`, `X-Request-ID` exposed ("useful in the support
   report"), and **everything audited** in `logs_auditoria` (`usuario.reset_solicitado`, `quest.cartoes_gerados`, `login.falhou/bloqueado`).
 - **Multi-tenant without plan/contract** — the `Escola` has name/city/state/logo/school-year/status; **nothing** of a
@@ -379,8 +399,10 @@ decision** (§15). 21 defines **what** each support surface must do; the **layou
 
 ### 7. UX
 The UX is the **adult's**: **short, actionable procedures**, **decision trees** ("the child can't enter → **active**
-student? — if **not**, it's a **"resting card"**: reactivate the enrollment if the child returned, **never** try to
-regenerate (the system refuses with 422); if **yes** → right card? → regenerate individually"), **honest
+student? — if **not**, it's a **"resting card"**: reactivate the enrollment if the child returned (their card stays
+the same), **without** regenerating for that — reprinting an inactive student's card is refused with 422; regenerate
+an inactive record only if its card was lost or fell into the wrong hands (it revokes without issuing a new card); if
+**yes** → right card? → regenerate individually"), **honest
 communication** (no technical jargon), and **materials in pt-BR** with plain language. Every script that **touches
 the child** (the login corridor) uses the **canonical
 vocabulary** (Section [02](02-vocabulario.md)) and respects the **forbidden words** in the child experience.
@@ -400,9 +422,9 @@ technical incident = Section [14](14-infra-deploy-dr.md), LGPD policy = Section 
 | S1 | **Three distinct onboardings** | **school** onboarding (21: tenant+admin+defaults+first class) ≠ **student** onboarding in the game (Section [08](08-onboarding-ftue.md), FTUE) ≠ **technical provisioning**/ETL (Section [20](20-migracao-importacao.md)) | 21; FTUE = [08](08-onboarding-ftue.md); ETL = [20](20-migracao-importacao.md) |
 | S2 | **Self-service × support** | the day-to-day (regenerate a card, turn social on, generate cards, archive a student) is **self-service**; support handles the exceptional and **escalates** the technical to engineering | 21; roles = [10](10-professor-familia.md) |
 | S3 | **School operational onboarding** | the journey from "go" to a playable first class: create school → defaults → 1st admin → classes → enrollments ([20](20-migracao-importacao.md)) → cards → consent; **checklist** in Appendix F | 21 → Appendix F |
-| S4 | **Provision the new school** | a new school needs the **pedagogical defaults** (levels, `ReferenciaNormalizacao`, config) and a **1st local admin**; today `POST /escolas` is a **partial shell** (just the Escola row) and defaults exist only for 'JORGE PASSOS' | 21 ⚠️ (auto-provision? — §15) |
+| S4 | **Provision the new school** | a new school needs the **pedagogical defaults** (levels, `ReferenciaNormalizacao`, config) and a **1st local admin**; today `POST /escolas` is a **partial shell** (just the Escola row) and defaults exist only for the seed's demo school | 21 ⚠️ (auto-provision? — §15) |
 | S5 | **Adult access reset** | Q0 mechanism: a single-use **token link** (60 min, SHA-256 hash), invalidating previous links; **who can**: admin→all, coordinator→self+teachers, teacher→self; **automatic e-mail/invite** is an owner decision | 21 (procedure) ⚠️ (e-mail — §15); mechanism = [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md) |
-| S6 | **Child login support** | lost card → **regenerate individually** (does not take down the class); theft/leak → **revoke QR** (`token_version`) keeping the **code** the child memorized; transferred student → **"resting card"** (P6) | 21; `token_version` mechanism = [11](11-arquitetura.md) |
+| S6 | **Child login support** | forgotten card → look the code up on the teacher sheet; lost or stolen card, or leaked QR → **regenerate individually** (new code **and** QR, sessions dropped via `token_version`; does not take down the class) — revoking only the QR is not enough: the card carries both and a session opened by the QR reads the code; transferred student → **"resting card"** (P6) | 21; `token_version` mechanism = [11](11-arquitetura.md) |
 | S7 | **Troubleshooting trees** | first-line scripts: **child can't enter** (active student? right card?), **"É você?"/swapped account** (shared tablet), **app won't open/PWA cache**, **audio/narration won't play** | 21 |
 | S8 | **Incident: detect → escalate → communicate** | 21 **detects/triages** and **escalates** the technical to Section [14](14-infra-deploy-dr.md); **communicates** to the school in an **adult, non-technical tone**; the **internal mechanics** (severity/on-call, health/status signals) are 14's, but the **customer-facing status page** (status communication to schools) is 21's (14→21 delegation) | 21 (voice + customer status); mechanics = [14](14-infra-deploy-dr.md) |
 | S9 | **Maintenance & cutover communication** | 21 **communicates** the maintenance window (Section [14](14-infra-deploy-dr.md) **schedules/operates** the mechanics; 21 may **propose** a calendar-sensitive time as input) and **communicates/schedules** the migration **cutover** (technical strategy = Section [20](20-migracao-importacao.md)), respecting the **school calendar** | 21 (communication); window = [14](14-infra-deploy-dr.md); cutover = [20](20-migracao-importacao.md) |
@@ -420,9 +442,9 @@ Where operation **touches** code (real Q0, except ▢):
 - **Accounts/reset** — `admin.py` (user CRUD; `POST /usuarios/{uid}/redefinir-senha` → token; anti-lockout;
   `token_version`); `auth.py` (public `/redefinir-senha`). The token/`token_version` **mechanism** = Section [11](11-arquitetura.md)/[12](12-seguranca-privacidade.md).
 - **School/provisioning** — `escolas.py` (`POST /escolas`, global admin — **partial shell**); `academico.py`
-  (`criar_professor_completo`, student lifecycle); `seed.py` (defaults only for 'JORGE PASSOS' — **gap S4**).
-- **Cards** — `quest/routers/professor.py` (class/individual; `GET .../acessos`); `credenciais.py` (`regenerar` keeps
-  the code, swaps the QR).
+  (`criar_professor_completo`, student lifecycle); `seed.py` (defaults only for the demo school — **gap S4**).
+- **Cards** — `quest/routers/professor.py` (class/individual; `GET .../acessos`); `credenciais.py` (`regenerar` swaps
+  both the code and the QR).
 - **Observability** — `main.py` (`/api/health*`, `/metrics`, `X-Request-ID`); `audit.py` (`logs_auditoria`). **The
   operation** (health/status/on-call) is Section [14](14-infra-deploy-dr.md)'s.
 - **To build (▢)** — a helpdesk/ticket tool, a customer status page, e-mail/invite, a read endpoint for the audit log
@@ -452,10 +474,23 @@ and gating; if Section [12](12-seguranca-privacidade.md) closes **erasure**, 21 
 
 ### 12. Edge cases
 - **Child can't enter** → **active** student? If **not** (transferred/archived) → it's a **"resting card"**:
-  reactivate the enrollment (an admin action) if the child returned, **never** try to regenerate (the system refuses
-  with **422**, P6). If **yes** → **right** card? otherwise → regenerate **individually** (S6/S7).
+  reactivate the enrollment (an admin action) if the child returned — their card stays the same —, **without**
+  regenerating for that (reprinting an inactive student's card is refused with **422**, P6). If **yes** → **right**
+  card? otherwise → regenerate **individually** (S6/S7).
+- **Lost card of an inactive child** (or a lost class sheet with inactive students on it) → regenerating revokes even
+  with the record inactive: the individual one answers **204** without a PDF (audited as
+  `quest.cartao_revogado_inativo`) and the class one revokes the inactive students' cards outside the PDF
+  (`revogados_inativos` in the audit). Reactivating later — the Reactivate button or the next Lista Piloto — does
+  **not** reopen the old code, QR or sessions; the child uses the new card.
+- **Lost class sheet with a child who has since changed class** (Lista Piloto or manual change, active record) →
+  regenerating the class also revokes the card of whoever was on one of its sheets printed since its last revocation
+  and is no longer enrolled in it: the audit of each sheet (`quest.cartoes_gerados`) keeps the PDF's `aluno_ids`,
+  and the regeneration's audit carries `revogados_fora_da_turma` and the ids. That child is not in the PDF: their
+  new card comes from the class they are in now (reprinting there already carries the new code). A sheet printed
+  before this record does not say who was on it — for whoever left the class before, regenerate the **individual** one.
 - **Shared tablet, "É você?" with wrong name** → the "who's playing" flow switches profile; not a bug (S7).
-- **Lost/stolen card** → revoke the QR (`token_version`) **keeping the memorized code** (S6).
+- **Lost/stolen card or leaked QR** → regenerate the **individual** card: new code and QR, sessions dropped
+  (`token_version`); the old code stops working (S6).
 - **App won't open / stale screen** → PWA cache (the API is never cached; force a refresh) (S7).
 - **New school with no difficulty levels** → per-level scoring has **no basis** until someone registers them (the
   `POST /escolas` partial shell — **gap S4**, §15).
@@ -484,7 +519,7 @@ and gating; if Section [12](12-seguranca-privacidade.md) closes **erasure**, 21 
 - [ ] **School onboarding journey** (from "go" to the first class) + checklist in Appendix F (S3).
 - [ ] ⚠️ **Provision the new school** (defaults + 1st local admin) — decide to auto-provision (gap S4).
 - [x] **Access reset** via token link (60 min) — ⚠️ automatic e-mail to decide (S5).
-- [x] **Child login support** (regenerate individually, revoke QR, "resting card") (S6).
+- [x] **Child login support** (regenerate individually = new code and QR, "resting card") (S6).
 - [ ] **Troubleshooting trees** first-line (login/"É você?"/PWA/audio) (S7).
 - [ ] **Incident flow** (detect→escalate→communicate), adult tone (S8).
 - [ ] **Maintenance & cutover communication** respecting the school calendar (S9).

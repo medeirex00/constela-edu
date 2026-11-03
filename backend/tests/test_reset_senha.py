@@ -3,7 +3,7 @@
 Garantias exercitadas:
   * admin gera um LINK (não uma senha): token único, com validade;
   * matriz: admin redefine de todos; coordenador de professores e a própria;
-    professor só a própria;
+    professor só a própria (a própria só com a senha atual);
   * token de USO ÚNICO e que EXPIRA; ao gerar um novo, o anterior é invalidado;
   * ao redefinir, a senha nova funciona e as sessões antigas caem;
   * a senha original NUNCA é recuperável (o endpoint antigo sumiu) nem fica em
@@ -33,9 +33,11 @@ def _login(email: str, senha: str):
                                 data={"username": email, "password": senha})
 
 
-def _gerar_link(cliente, escola_id, alvo_id):
+def _gerar_link(cliente, escola_id, alvo_id, senha_atual=None):
+    """Para a PRÓPRIA conta a rota exige a senha atual (``senha_atual``)."""
+    corpo = {"json": {"senha_atual": senha_atual}} if senha_atual else {}
     return cliente.post(
-        f"/api/v1/escolas/{escola_id}/usuarios/{alvo_id}/redefinir-senha")
+        f"/api/v1/escolas/{escola_id}/usuarios/{alvo_id}/redefinir-senha", **corpo)
 
 
 @pytest.fixture()
@@ -76,7 +78,8 @@ def test_admin_gera_link_e_usuario_define_nova_senha(db, contas):
     # A tela confere o link antes de mostrar o formulário.
     checagem = TestClient(app).get(f"/api/v1/auth/redefinir-senha/{token}")
     assert checagem.status_code == 200
-    assert checagem.json() == {"valido": True, "nome": "Prof Carla"}
+    # Rota pública (basta o link): só o PRIMEIRO nome, para a saudação.
+    assert checagem.json() == {"valido": True, "nome": "Prof"}
 
     # A pessoa escolhe a nova senha.
     troca = TestClient(app).post("/api/v1/auth/redefinir-senha",
@@ -158,12 +161,17 @@ def test_matriz_de_quem_pode_redefinir(db, contas):
 
     coord = _cliente_como("coord@teste.local", "s3nh4!!!")
     assert _gerar_link(coord, escola_id, contas["carla"].id).status_code == 200        # professor
-    assert _gerar_link(coord, escola_id, contas["coordenador"].id).status_code == 200  # a própria
+    # a própria: só com a senha atual (a sessão sozinha não basta)
+    assert _gerar_link(coord, escola_id, contas["coordenador"].id).status_code == 422
+    assert _gerar_link(coord, escola_id, contas["coordenador"].id,
+                       senha_atual="s3nh4!!!").status_code == 200
     assert _gerar_link(coord, escola_id, contas["admin"].id).status_code == 403        # admin, não
 
     prof = _cliente_como("carla@teste.local", "s3nh4!!!")
     assert _gerar_link(prof, escola_id, contas["bruno"].id).status_code == 403          # outro professor
-    assert _gerar_link(prof, escola_id, contas["carla"].id).status_code == 200          # a própria
+    assert _gerar_link(prof, escola_id, contas["carla"].id).status_code == 422          # a própria, sem a atual
+    assert _gerar_link(prof, escola_id, contas["carla"].id,
+                       senha_atual="s3nh4!!!").status_code == 200                       # a própria
 
 
 # --- Entradas inválidas --------------------------------------------------------

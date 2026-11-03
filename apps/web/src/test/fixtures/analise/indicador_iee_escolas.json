@@ -1,0 +1,271 @@
+{
+  "indicador": {
+    "chave": "iee",
+    "nome": "Índice de Excelência Educacional (IEE)",
+    "orgao": "SEDUC-SP",
+    "oficial": true,
+    "unidade": "índice",
+    "escala": "indice_iee",
+    "disponivel": true,
+    "motivo_indisponivel": null,
+    "texto_indisponivel": null,
+    "abrangencias": [
+      "escola"
+    ],
+    "por_escola": true,
+    "etapas": [
+      "anos_iniciais"
+    ],
+    "componentes": [],
+    "rotulos_etapas": {
+      "anos_iniciais": "anos iniciais (1º ao 5º ano)"
+    },
+    "rotulos_componentes": {},
+    "edicoes": [
+      2025
+    ],
+    "edicao_mais_recente": 2025,
+    "tem_meta": true,
+    "avisos": [
+      "O IEE (Índice de Excelência Educacional, SEDUC-SP) é um índice POR ESCOLA, calculado a partir do SARESP do 2º e do 5º ano: não é proficiência e não existe para a rede.",
+      "Meta cumprida ou não: o ICM (Índice de Cumprimento de Meta) oficial da SEDUC (1 = cumpriu). A diferença IEE − meta é só a conta na precisão publicada.",
+      "IEE de escola com TPS = 0 (participação abaixo do mínimo do SARESP): o índice é o oficial, mas foi calculado com médias instáveis — ele fica fora da relação com as plataformas."
+    ]
+  },
+  "filtros": {
+    "etapa": "anos_iniciais",
+    "componente": null,
+    "escola_id": null,
+    "de": null,
+    "ate": null,
+    "visao": "escolas",
+    "edicao": 2025
+  },
+  "opcoes": {
+    "etapas": [
+      "anos_iniciais"
+    ],
+    "componentes": [],
+    "edicoes": [
+      2025
+    ],
+    "escolas": [
+      {
+        "id": 6,
+        "nome": "EMEF Ébano Fictícia",
+        "codigo_inep": "35990105",
+        "tem_dado": true
+      },
+      {
+        "id": 2,
+        "nome": "EMEF Fictícia Alfa",
+        "codigo_inep": "35990101",
+        "tem_dado": true
+      },
+      {
+        "id": 3,
+        "nome": "EMEF Fictícia Beta",
+        "codigo_inep": "35990102",
+        "tem_dado": true
+      },
+      {
+        "id": 4,
+        "nome": "EMEF Fictícia Delta",
+        "codigo_inep": "35990104",
+        "tem_dado": false
+      },
+      {
+        "id": 5,
+        "nome": "EMEF Fictícia Gama",
+        "codigo_inep": null,
+        "tem_dado": false
+      }
+    ]
+  },
+  "series": [],
+  "escolas": [
+    {
+      "escola_id": 6,
+      "nome": "EMEF Ébano Fictícia",
+      "codigo_inep": "35990105",
+      "pendencia": null,
+      "edicao": 2025,
+      "valor": 5.0,
+      "casas": 2,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": null,
+      "texto_ausencia": null,
+      "meta": 5.0,
+      "meta_casas": 2,
+      "operador_meta": null,
+      "motivo_sem_meta": null,
+      "texto_sem_meta": null,
+      "diferenca_meta": 0.0,
+      "diferenca_casas": 2,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": "atingiu",
+      "instavel": false,
+      "fonte_id": 3,
+      "fonte_meta_id": 3,
+      "fonte_detalhe_id": null,
+      "proveniencia": "oficial",
+      "texto_proveniencia": null,
+      "difere_do_oficial": false,
+      "icm": 1.0,
+      "tps_zero": false
+    },
+    {
+      "escola_id": 2,
+      "nome": "EMEF Fictícia Alfa",
+      "codigo_inep": "35990101",
+      "pendencia": null,
+      "edicao": 2025,
+      "valor": 5.12,
+      "casas": 2,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": null,
+      "texto_ausencia": null,
+      "meta": 5.46,
+      "meta_casas": 2,
+      "operador_meta": null,
+      "motivo_sem_meta": null,
+      "texto_sem_meta": null,
+      "diferenca_meta": -0.34,
+      "diferenca_casas": 2,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": "nao_atingiu",
+      "instavel": false,
+      "fonte_id": 3,
+      "fonte_meta_id": 3,
+      "fonte_detalhe_id": null,
+      "proveniencia": "oficial",
+      "texto_proveniencia": null,
+      "difere_do_oficial": false,
+      "icm": 0.0,
+      "tps_zero": false
+    },
+    {
+      "escola_id": 3,
+      "nome": "EMEF Fictícia Beta",
+      "codigo_inep": "35990102",
+      "pendencia": null,
+      "edicao": 2025,
+      "valor": 4.8,
+      "casas": 2,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": null,
+      "texto_ausencia": null,
+      "meta": 4.5,
+      "meta_casas": 2,
+      "operador_meta": null,
+      "motivo_sem_meta": null,
+      "texto_sem_meta": null,
+      "diferenca_meta": 0.3,
+      "diferenca_casas": 2,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": "atingiu",
+      "instavel": false,
+      "fonte_id": 3,
+      "fonte_meta_id": 3,
+      "fonte_detalhe_id": null,
+      "proveniencia": "oficial",
+      "texto_proveniencia": null,
+      "difere_do_oficial": false,
+      "icm": 1.0,
+      "tps_zero": true
+    },
+    {
+      "escola_id": 4,
+      "nome": "EMEF Fictícia Delta",
+      "codigo_inep": "35990104",
+      "pendencia": null,
+      "edicao": 2025,
+      "valor": null,
+      "casas": null,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": "fora_do_arquivo",
+      "texto_ausencia": "a escola não está no arquivo oficial importado desta edição",
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "sem_meta_na_edicao",
+      "texto_sem_meta": "não há meta oficial para esta edição",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": null,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": null,
+      "texto_proveniencia": null,
+      "difere_do_oficial": false,
+      "icm": null,
+      "tps_zero": false
+    },
+    {
+      "escola_id": 5,
+      "nome": "EMEF Fictícia Gama",
+      "codigo_inep": null,
+      "pendencia": "sem_codigo_inep",
+      "edicao": 2025,
+      "valor": null,
+      "casas": null,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": "sem_codigo_inep",
+      "texto_ausencia": "a escola está sem código INEP no cadastro",
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "sem_meta_na_edicao",
+      "texto_sem_meta": "não há meta oficial para esta edição",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": null,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": null,
+      "texto_proveniencia": null,
+      "difere_do_oficial": false,
+      "icm": null,
+      "tps_zero": false
+    }
+  ],
+  "quebras": [],
+  "avisos": [
+    "O IEE (Índice de Excelência Educacional, SEDUC-SP) é um índice POR ESCOLA, calculado a partir do SARESP do 2º e do 5º ano: não é proficiência e não existe para a rede.",
+    "Meta cumprida ou não: o ICM (Índice de Cumprimento de Meta) oficial da SEDUC (1 = cumpriu). A diferença IEE − meta é só a conta na precisão publicada.",
+    "IEE de escola com TPS = 0 (participação abaixo do mínimo do SARESP): o índice é o oficial, mas foi calculado com médias instáveis — ele fica fora da relação com as plataformas.",
+    "A tabela por escola está em ordem alfabética: não é ranking e não serve para ordenar escolas."
+  ],
+  "fontes": {
+    "3": {
+      "importacao_id": 3,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "iee_ficticio_2025-2026.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2025,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "seduc_iee",
+      "modo": "upload",
+      "notas": [],
+      "data_arquivo": "2026-01-12",
+      "data_arquivo_origem": "interna"
+    }
+  }
+}

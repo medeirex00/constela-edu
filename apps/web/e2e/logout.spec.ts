@@ -7,9 +7,10 @@ test.describe("Logout", () => {
 
   test("sair encerra a sessão e volta ao login", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByLabel("Selecionar escola")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Menu do usuário" })).toBeVisible();
 
-    await page.getByLabel("Sair do sistema").click();
+    await page.getByRole("button", { name: "Menu do usuário" }).click();
+    await page.getByRole("menuitem", { name: "Sair" }).click();
     await expect(page).toHaveURL(/\/login$/);
   });
 });

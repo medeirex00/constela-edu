@@ -1,14 +1,22 @@
 """Paridade dos PESOS exibidos à escola com os pesos oficiais do motor.
 
-A explicação "Como funciona?" (apps/web/src/components/ComoFuncionaPontuacao.tsx)
-mostra à escola quanto cada indicador pesa na Nota de Leitura e na Nota de
-Matemática. Esses números são TEXTO fixo no front; a fonte da verdade é
-``scoring.PESOS_PADRAO`` (régua institucional). Se alguém mudar um lado sem o
-outro, a escola passa a ler uma regra que não é a usada na conta — este teste
-falha antes disso chegar à tela.
+Até 31/10/2026 a explicação "Como funciona?"
+(apps/web/src/components/ComoFuncionaPontuacao.tsx) mostrava os pesos da Nota de
+Leitura e da Nota de Matemática como TEXTO fixo no front (constantes
+``PESOS_LEITURA``/``PESOS_MATEMATICA``), e este teste comparava esse espelho com
+``scoring.PESOS_PADRAO``.
 
-Formato esperado no front (uma linha por indicador):
-    ["livros únicos", 35],
+Na identidade visual v2 o espelho deixou de existir: a tela de Critérios, o
+"Como funciona?", o Suporte e as Configurações leem os pesos EFETIVOS do motor em
+``GET /escolas/{id}/configuracoes/pontuacao/regra`` — e
+``tests/test_regra_pontuacao.py`` prova que essa rota devolve exatamente
+``scoring.PESOS_PADRAO`` na régua institucional. A paridade passou a ser garantida
+pela FONTE ÚNICA, não por comparação de cópias.
+
+O que este arquivo trava agora é a volta do espelho: um peso escrito à mão no
+front (no formato antigo ``["livros únicos", 35]`` ou numa constante
+``PESOS_LEITURA``/``PESOS_MATEMATICA``) volta a poder divergir do motor sem
+ninguém perceber. Se a tela precisar de um peso, ele vem da rota.
 """
 import pathlib
 import re
@@ -16,76 +24,51 @@ import re
 from app.services import scoring
 
 RAIZ_REPO = pathlib.Path(__file__).resolve().parents[2]
-ARQUIVO_FRONT = RAIZ_REPO / "apps" / "web" / "src" / "components" / "ComoFuncionaPontuacao.tsx"
+WEB_SRC = RAIZ_REPO / "apps" / "web" / "src"
+ARQUIVO_FRONT = WEB_SRC / "components" / "ComoFuncionaPontuacao.tsx"
 
-MSG = "a explicação Como funciona? da escola ficou desatualizada"
+MSG = "a explicação dos pesos da escola voltou a ter números escritos à mão"
 
-# Rótulo exibido na tela → chave em PESOS_PADRAO (mapeamento EXPLÍCITO).
-LEITURA = {
-    "livros únicos": "livros",
-    "dificuldade dos livros": "dificuldade",
-    "questões": "questoes",
-    "tempo de leitura": "tempo",
-}
-MATEMATICA = {
-    "atividades finalizadas": "atividades",
-    "pontuação média": "media",
-    "estrelas": "estrelas",
-}
-
-_RE_PAR = re.compile(r'\[\s*"([^"]+)"\s*,\s*(\d+(?:\.\d+)?)\s*\]')
+# Rótulos que a tela usa para cada indicador (os mesmos do espelho antigo).
+ROTULOS = ("livros únicos", "dificuldade dos livros", "questões", "tempo de leitura",
+           "atividades finalizadas", "pontuação média", "estrelas")
+_RE_PAR = re.compile(r'\[\s*"(' + "|".join(map(re.escape, ROTULOS)) + r')"\s*,\s*\d')
+_RE_CONSTANTE = re.compile(r"\bconst\s+PESOS_(LEITURA|MATEMATICA)\b")
 
 
-def _constante(fonte: str, nome: str) -> dict[str, float]:
-    """Extrai ``const NOME: ... = [ ["rótulo", n], ... ];`` como {rótulo: n}."""
-    bloco = re.search(rf"const\s+{nome}\s*(?::[^=]*)?=\s*\[(.*?)\]\s*;", fonte, re.DOTALL)
-    assert bloco, (f"{MSG}: constante {nome} não encontrada em {ARQUIVO_FRONT} "
-                   "(o formato mudou? esperado `[\"rótulo\", número],`)")
-    pares = _RE_PAR.findall(bloco.group(1))
-    assert pares, f"{MSG}: {nome} sem pares [\"rótulo\", número] reconhecíveis"
-    rotulos = [r for r, _ in pares]
-    assert len(rotulos) == len(set(rotulos)), f"{MSG}: rótulo repetido em {nome}: {rotulos}"
-    return {rotulo: float(valor) for rotulo, valor in pares}
+def _fontes_do_app() -> list[pathlib.Path]:
+    """Código do app web (sem testes nem mocks: fixtures podem citar pesos)."""
+    return [
+        p for p in sorted(WEB_SRC.rglob("*"))
+        if p.suffix in (".ts", ".tsx")
+        and "test" not in p.parts and "__mocks__" not in p.parts
+    ]
 
 
-def _fonte() -> str:
-    assert ARQUIVO_FRONT.is_file(), f"{MSG}: arquivo não encontrado: {ARQUIVO_FRONT}"
-    return ARQUIVO_FRONT.read_text(encoding="utf-8")
+def test_o_motor_ainda_tem_os_pesos_que_a_rota_devolve():
+    # Âncora: a rota /pontuacao/regra (test_regra_pontuacao.py) devolve estes
+    # dicionários na régua institucional; se as chaves sumirem, a tela fica sem peso.
+    assert set(scoring.PESOS_PADRAO["pesos.elefante"]) == {
+        "livros", "dificuldade", "questoes", "tempo"}
+    assert set(scoring.PESOS_PADRAO["pesos.matific"]) == {
+        "atividades", "media", "estrelas"}
 
 
-def _conferir(nome: str, no_front: dict[str, float], mapa: dict[str, str],
-              oficial: dict[str, float]) -> None:
-    assert set(no_front) == set(mapa), (
-        f"{MSG}: {nome} tem os rótulos {sorted(no_front)}, esperado {sorted(mapa)}")
-    assert set(mapa.values()) == set(oficial), (
-        f"{MSG}: o mapeamento de {nome} cobre {sorted(mapa.values())}, "
-        f"mas o motor usa {sorted(oficial)}")
-    divergentes = {
-        rotulo: (no_front[rotulo], float(oficial[chave]))
-        for rotulo, chave in mapa.items()
-        if abs(no_front[rotulo] - float(oficial[chave])) > 1e-9
-    }
-    assert not divergentes, (
-        f"{MSG}: {nome} diverge do motor (rótulo: (tela, motor)) {divergentes}")
+def test_como_funciona_le_os_pesos_da_rota_e_nao_de_constante():
+    fonte = ARQUIVO_FRONT.read_text(encoding="utf-8")
+    assert "pontuacao/regra" in fonte, (
+        f"{MSG}: ComoFuncionaPontuacao.tsx deixou de citar a rota /pontuacao/regra "
+        "como origem dos pesos")
+    assert not _RE_CONSTANTE.search(fonte), f"{MSG}: constante PESOS_* voltou"
+    assert not _RE_PAR.search(fonte), f"{MSG}: par [\"rótulo\", número] voltou"
 
 
-def test_pesos_de_leitura_batem_com_o_motor():
-    _conferir("PESOS_LEITURA", _constante(_fonte(), "PESOS_LEITURA"), LEITURA,
-              scoring.PESOS_PADRAO["pesos.elefante"])
-
-
-def test_pesos_de_matematica_batem_com_o_motor():
-    _conferir("PESOS_MATEMATICA", _constante(_fonte(), "PESOS_MATEMATICA"), MATEMATICA,
-              scoring.PESOS_PADRAO["pesos.matific"])
-
-
-def test_extrator_detecta_divergencia():
-    """O teste não pode passar em branco: um peso trocado na tela é pego."""
-    fonte = _fonte().replace('["livros únicos", 35]', '["livros únicos", 36]')
-    try:
-        _conferir("PESOS_LEITURA", _constante(fonte, "PESOS_LEITURA"), LEITURA,
-                  scoring.PESOS_PADRAO["pesos.elefante"])
-    except AssertionError as exc:
-        assert MSG in str(exc)
-    else:  # pragma: no cover - só falha se o extrator ficar cego
-        raise AssertionError("a divergência de peso não foi detectada")
+def test_nenhuma_tela_espelha_os_pesos_do_motor():
+    achados = []
+    for caminho in _fontes_do_app():
+        texto = caminho.read_text(encoding="utf-8", errors="ignore")
+        if _RE_CONSTANTE.search(texto) or _RE_PAR.search(texto):
+            achados.append(caminho.relative_to(RAIZ_REPO).as_posix())
+    assert not achados, (
+        f"{MSG}: {achados}. Leia os pesos de GET /configuracoes/pontuacao/regra "
+        "(fonte única, ver tests/test_regra_pontuacao.py).")

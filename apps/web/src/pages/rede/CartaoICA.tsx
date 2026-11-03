@@ -23,13 +23,15 @@
  * microdados de <data>". O selo é o `SeloFonte` reutilizável. As abas seguem o
  * padrão de `RelatoriosArea` (aba → `aria-controls` → `tabpanel` rotulado).
  */
-import { AlertTriangle, Info, Landmark } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, Info } from "lucide-react";
 import { useId, useState } from "react";
 
 import SeloFonte, { ehMicrodados, textoDetalhe } from "../../components/SeloFonte";
+import { TabelaRolavel } from "../../components/TabelaRolavel";
 import { Badge, Card, Carregando, Mensagem } from "../../components/ui";
 import { useApi } from "../../hooks/useApi";
 import AbaICA from "./AbaICA";
+import { CabecalhoIndicador, classeAba, classeTrilhoAbas } from "./visualIndicadores";
 import ImportarICA from "./ImportarICA";
 import {
   MOTIVOS,
@@ -177,39 +179,43 @@ function TabelaSerie({ t }: { t: TerritorioICA }) {
 function Comparacao({ territorios }: { territorios: TerritorioICA[] }) {
   const anos = [...new Set(territorios.flatMap((t) => t.resultados.map((r) => r.edicao)))].sort((a, b) => a - b);
   if (anos.length === 0) return null;
+  // Território + 3 anos + meta não cabem em 375 px (passava 12 px da tela): a tabela rola
+  // dentro do cartão, como as outras tabelas largas da v2.
   return (
-    <table className="w-full text-sm">
-      <caption className="sr-only">ICA do município, do estado e do Brasil</caption>
-      <thead>
-        <tr className="text-left text-xs text-zinc-500">
-          <th className="py-1 pr-3 font-medium">Território</th>
-          {anos.map((a) => <th key={a} className="py-1 pr-3 font-medium">{a}</th>)}
-          <th className="py-1 font-medium">Meta (ano do último resultado)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {territorios.map((t) => {
-          const porAno = new Map(t.resultados.map((r) => [r.edicao, r]));
-          return (
-            <tr key={t.abrangencia} className="border-t border-zinc-100 align-top dark:border-zinc-800">
-              <td className="py-1.5 pr-3">
-                {t.nome} <span className="text-xs text-zinc-500">({REDE_DO_TERRITORIO[t.abrangencia]})</span>
-              </td>
-              {anos.map((a) => <td key={a} className="py-1.5 pr-3"><Celula n={porAno.get(a)} /></td>)}
-              <td className="py-1.5">
-                {t.destaque?.meta ? (
-                  // Cada território pode estar num ano diferente: a meta diz o dela.
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="tabular-nums">{percentual(t.destaque.meta)} ({t.destaque.meta.edicao})</span>
-                    <Situacao c={t.destaque.comparacao} />
-                  </span>
-                ) : t.tem_dados ? "—" : <span className="text-xs text-zinc-500">sem resultado importado</span>}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <TabelaRolavel rotulo="ICA do município, do estado e do Brasil: tabela completa">
+      <table className="w-full text-sm">
+        <caption className="sr-only">ICA do município, do estado e do Brasil</caption>
+        <thead>
+          <tr className="text-left text-xs text-zinc-500">
+            <th className="py-1 pr-3 font-medium">Território</th>
+            {anos.map((a) => <th key={a} className="py-1 pr-3 font-medium">{a}</th>)}
+            <th className="py-1 font-medium">Meta (ano do último resultado)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {territorios.map((t) => {
+            const porAno = new Map(t.resultados.map((r) => [r.edicao, r]));
+            return (
+              <tr key={t.abrangencia} className="border-t border-zinc-100 align-top dark:border-zinc-800">
+                <td className="py-1.5 pr-3">
+                  {t.nome} <span className="text-xs text-zinc-500">({REDE_DO_TERRITORIO[t.abrangencia]})</span>
+                </td>
+                {anos.map((a) => <td key={a} className="py-1.5 pr-3"><Celula n={porAno.get(a)} /></td>)}
+                <td className="py-1.5">
+                  {t.destaque?.meta ? (
+                    // Cada território pode estar num ano diferente: a meta diz o dela.
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="tabular-nums">{percentual(t.destaque.meta)} ({t.destaque.meta.edicao})</span>
+                      <Situacao c={t.destaque.comparacao} />
+                    </span>
+                  ) : t.tem_dados ? "—" : <span className="text-xs text-zinc-500">sem resultado importado</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </TabelaRolavel>
   );
 }
 
@@ -244,14 +250,10 @@ export default function CartaoICA({ redeId, ehGlobal, aoMudar }: {
 
   return (
     <section data-testid="cartao-ica" aria-label="Indicador Criança Alfabetizada oficial do INEP">
-    <Card className="space-y-4 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <Landmark size={16} className="text-indigo-600" /> Indicador Criança Alfabetizada (ICA) — oficial
-        </h2>
-        <Badge tom="destaque">INEP</Badge>
-      </div>
-      <p className="flex items-start gap-1.5 rounded-lg bg-indigo-50 p-2.5 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
+    <Card className="space-y-4 p-5 sm:p-6">
+      <CabecalhoIndicador icone={BookOpenCheck} tom="rosa" fonte="INEP"
+                          titulo="Indicador Criança Alfabetizada (ICA) — oficial" />
+      <p className="flex items-start gap-1.5 rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
         <Info size={14} className="mt-0.5 shrink-0" />
         <span>
           {dados?.aviso_rede ?? "O ICA é o indicador da REDE municipal: o INEP não publica o ICA por escola."}
@@ -274,16 +276,11 @@ export default function CartaoICA({ redeId, ehGlobal, aoMudar }: {
             </p>
           )}
           {comAbas && (
-            <div role="tablist" aria-label="Partes do ICA"
-                 className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
+            <div role="tablist" aria-label="Partes do ICA" className={classeTrilhoAbas}>
               {ABAS.map(([chave, rotulo]) => (
                 <button key={chave} id={idAba(chave)} type="button" role="tab" aria-selected={aba === chave}
                         aria-controls={idPainel} onClick={() => setAba(chave)}
-                        className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                          aba === chave
-                            ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
-                            : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                        }`}>
+                        className={classeAba(aba === chave)}>
                   {rotulo}
                 </button>
               ))}

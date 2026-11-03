@@ -60,7 +60,7 @@ def _planilha(*turmas) -> bytes:
         ws.append(["Escola:", None, "EMEF TESTE", None, None, None, None,
                    "Lista Piloto:", ANO])
         ws.append([])
-        ws.append(["Professor:", None, "PAULA", None, "Ano:", nome_turma,
+        ws.append(["Professor:", None, "PROFESSORA A", None, "Ano:", nome_turma,
                    "Turno:       TARDE", None, "N.º da Classe (SED):",
                    300396600 + i])
         ws.append([])
@@ -124,9 +124,9 @@ def test_a_mesma_lista_cinco_vezes_da_um_aluno_cada(cliente, db, escola_completa
     com RA, sem RA (só nascimento) e sem RA nem nascimento (só nome + chamada)."""
     escola_id = escola_completa["escola"].id
     conteudo = _planilha(("1º Ano A", [
-        _aluno("AGATHA VITORIA MOURA DA SILVA", numero=1, ra="123.100.026-0",
-               nasc=date(2019, 9, 18)),
-        _aluno("ALICE DE ALMEIDA LEAL", numero=2, nasc=date(2019, 5, 2)),
+        _aluno("AGATHA VIOLETA MONTESTELLI DA FICTICIA", numero=1, ra="901.000.001-0",
+               nasc=date(2019, 8, 14)),
+        _aluno("ALICE DE ARRUDA TESTELLI", numero=2, nasc=date(2019, 4, 6)),
         _aluno("BRENO CASTRO LIMA", numero=3),
     ]))
 
@@ -137,7 +137,7 @@ def test_a_mesma_lista_cinco_vezes_da_um_aluno_cada(cliente, db, escola_completa
         assert corpo["alunos_fora_lista"] == 0, f"volta {volta}"
 
     nomes = [a.nome for a in _alunos(db, escola_id)]
-    for esperado in ["AGATHA VITORIA MOURA DA SILVA", "ALICE DE ALMEIDA LEAL",
+    for esperado in ["AGATHA VIOLETA MONTESTELLI DA FICTICIA", "ALICE DE ARRUDA TESTELLI",
                      "BRENO CASTRO LIMA"]:
         assert nomes.count(esperado) == 1, f"{esperado} virou {nomes.count(esperado)} fichas"
     for aluno in _alunos(db, escola_id, prefixo=None):
@@ -175,8 +175,8 @@ def test_a2_renumeracao_da_chamada_nao_abre_ficha_nova(cliente, db, escola_compl
 def test_b_lista_elefante_lista_da_um_aluno(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     lista = _planilha(("1º Ano A", [
-        _aluno("AGATHA VITORIA MOURA DA SILVA", numero=1, ra="123.100.026-0",
-               nasc=date(2019, 9, 18))]))
+        _aluno("AGATHA VIOLETA MONTESTELLI DA FICTICIA", numero=1, ra="901.000.001-0",
+               nasc=date(2019, 8, 14))]))
     _confirmar(cliente, escola_id, lista)
 
     # Elefante escreve o nome abreviado e chama a sala pelo rótulo do relatório.
@@ -186,13 +186,13 @@ def test_b_lista_elefante_lista_da_um_aluno(cliente, db, escola_completa):
 
     _confirmar(cliente, escola_id, lista)
     assert _conta(db, escola_id, "AGATHA") == 1
-    assert _alunos(db, escola_id, "AGATHA")[0].nome == "AGATHA VITORIA MOURA DA SILVA"
+    assert _alunos(db, escola_id, "AGATHA")[0].nome == "AGATHA VIOLETA MONTESTELLI DA FICTICIA"
 
 
 def test_c_lista_matific_lista_da_um_aluno(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     lista = _planilha(("1º Ano A", [
-        _aluno("MARIA EDUARDA SILVA", numero=1, nasc=date(2015, 3, 1))]))
+        _aluno("MARIA EDUARDA TESTELLI", numero=1, nasc=date(2015, 3, 1))]))
     _confirmar(cliente, escola_id, lista)
 
     _plataforma(cliente, escola_id, "matific", [
@@ -203,7 +203,7 @@ def test_c_lista_matific_lista_da_um_aluno(cliente, db, escola_completa):
 
     _confirmar(cliente, escola_id, lista)
     marias = _alunos(db, escola_id, "MARIA")
-    assert len(marias) == 1 and marias[0].nome == "MARIA EDUARDA SILVA"
+    assert len(marias) == 1 and marias[0].nome == "MARIA EDUARDA TESTELLI"
     # O UUID ficou preso a UMA pessoa (identidade externa não se multiplica).
     assert db.execute(select(func.count()).select_from(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == escola_id)).scalar_one() == 1
@@ -221,22 +221,22 @@ def test_d_variacoes_de_nome_nao_duplicam_e_o_inseguro_vai_para_revisao(
     escola_id = escola_completa["escola"].id
     turma = "5º Ano C"
     _confirmar(cliente, escola_id, _planilha((turma, [
-        _aluno("MARIA EDUARDA SILVA", numero=1, nasc=date(2015, 3, 1))])))
+        _aluno("MARIA EDUARDA TESTELLI", numero=1, nasc=date(2015, 3, 1))])))
     original = _alunos(db, escola_id, "MARIA")[0]
     antes = _conta(db, escola_id)
 
-    for variacao in ["Maria Eduarda Silva",      # caixa
-                     "MARIA  EDUARDA   SILVA",   # espaços
-                     "MARIA EDUARDA SILVA",      # idêntico
-                     "Maria E. Silva"]:          # abreviação posicional
+    for variacao in ["Maria Eduarda Testelli",      # caixa
+                     "MARIA  EDUARDA   TESTELLI",   # espaços
+                     "MARIA EDUARDA TESTELLI",      # idêntico
+                     "Maria E. Testelli"]:          # abreviação posicional
         corpo = _confirmar(cliente, escola_id, _planilha((turma, [
             _aluno(variacao, numero=1, nasc=date(2015, 3, 1))])))
         assert corpo["alunos_criados"] == 0, variacao
         assert _conta(db, escola_id) == antes, variacao
-    # A abreviação casou, mas NÃO encurtou o cadastro: gravar "Maria E. Silva"
+    # A abreviação casou, mas NÃO encurtou o cadastro: gravar "Maria E. Testelli"
     # por cima degradaria a identidade e quebraria o casamento seguinte.
     db.expire_all()
-    assert db.get(Aluno, original.id).nome == "MARIA EDUARDA SILVA"
+    assert db.get(Aluno, original.id).nome == "MARIA EDUARDA TESTELLI"
 
     # INSEGURO: nome parcial, sem nº de chamada, sem nascimento, sem RA — nada
     # corrobora. Não cria (seria a 2ª ficha) e não altera (poderia ser outra
@@ -249,7 +249,7 @@ def test_d_variacoes_de_nome_nao_duplicam_e_o_inseguro_vai_para_revisao(
     assert _conta(db, escola_id) == antes
     db.expire_all()
     atual = db.get(Aluno, original.id)
-    assert atual.nome == "MARIA EDUARDA SILVA"     # nada foi alterado
+    assert atual.nome == "MARIA EDUARDA TESTELLI"     # nada foi alterado
     # A linha em revisão PROTEGE o candidato da reconciliação: a lista disse que
     # alguém daquele grupo está na turma — marcá-lo "fora da lista" seria errado.
     assert atual.status == "ativo"
@@ -272,7 +272,7 @@ def test_d2_cadastro_disputado_por_duas_linhas_nao_e_entregue_a_primeira(
     antes = _conta(db, escola_id)
 
     corpo = _confirmar(cliente, escola_id, _planilha(("1º Ano A", [
-        _aluno("AGATHA VITORIA MOURA DA SILVA", numero=1),
+        _aluno("AGATHA VIOLETA MONTESTELLI DA FICTICIA", numero=1),
         _aluno("AGATHA VALENTINA LIMA", numero=2),
     ])))
     assert corpo["alunos_criados"] == 0
@@ -323,13 +323,13 @@ def test_e2_homonimos_sem_ra_sao_colapsados_ANTES_pelo_parser(cliente, db,
     não surpresa — o motor de identidade em si separa por chamada (ver E3)."""
     escola_id = escola_completa["escola"].id
     conteudo = _planilha(("6º Ano B", [
-        _aluno("PEDRO HENRIQUE COSTA", numero=1),
-        _aluno("PEDRO HENRIQUE COSTA", numero=2),
+        _aluno("PEDRO HENRIQUE FICTICIO", numero=1),
+        _aluno("PEDRO HENRIQUE FICTICIO", numero=2),
     ]))
     corpo = _confirmar(cliente, escola_id, conteudo)
     assert corpo["alunos_criados"] == 1
     assert any("mais de uma vez" in av for av in corpo["avisos"])
-    assert _conta(db, escola_id, "PEDRO HENRIQUE COSTA") == 1
+    assert _conta(db, escola_id, "PEDRO HENRIQUE FICTICIO") == 1
 
 
 def test_e3_numero_de_chamada_separa_homonimos_no_motor(db, escola_completa):
@@ -404,7 +404,7 @@ def test_g_mudanca_de_turma_move_a_matricula_sem_criar_identidade(
     prova) — nos dois casos a criança é a mesma; o que muda é onde ela estuda."""
     escola_id = escola_completa["escola"].id
     _confirmar(cliente, escola_id, _planilha(("3º Ano B", [
-        _aluno("MARIA EDUARDA SILVA", numero=1, ra="123.100.026-0",
+        _aluno("MARIA EDUARDA TESTELLI", numero=1, ra="901.000.001-0",
                nasc=date(2015, 3, 1)),
         _aluno("PEDRO LUCAS SANTOS", numero=2, nasc=date(2015, 7, 9)),
     ])))
@@ -412,13 +412,13 @@ def test_g_mudanca_de_turma_move_a_matricula_sem_criar_identidade(
     antes = _conta(db, escola_id)
 
     corpo = _confirmar(cliente, escola_id, _planilha(("3º Ano C", [
-        _aluno("MARIA EDUARDA SILVA", numero=7, ra="123.100.026-0",
+        _aluno("MARIA EDUARDA TESTELLI", numero=7, ra="901.000.001-0",
                nasc=date(2015, 3, 1)),
         _aluno("PEDRO LUCAS SANTOS", numero=8, nasc=date(2015, 7, 9)),
     ])))
     assert corpo["alunos_criados"] == 0
     assert _conta(db, escola_id) == antes
-    for nome in ["MARIA EDUARDA SILVA", "PEDRO LUCAS SANTOS"]:
+    for nome in ["MARIA EDUARDA TESTELLI", "PEDRO LUCAS SANTOS"]:
         assert _turma_de(db, ids[nome]) == "3º Ano C", nome
 
 
@@ -451,10 +451,10 @@ def test_h_integracao_lista_elefante_matific_lista_elefante_sync(
     escola_id = escola_completa["escola"].id
     rotulo_turma = "1 ANO A TARDE ANUAL (300396600)"
     lista = _planilha(("1º Ano A", [
-        _aluno("AGATHA VITORIA MOURA DA SILVA", numero=1, ra="123.100.026-0",
-               nasc=date(2019, 9, 18)),
-        _aluno("ABRAÃO LUÍS DIAS", numero=2, nasc=date(2019, 3, 4)),
-        _aluno("MARIA EDUARDA SILVA", numero=3, nasc=date(2019, 6, 7)),
+        _aluno("AGATHA VIOLETA MONTESTELLI DA FICTICIA", numero=1, ra="901.000.001-0",
+               nasc=date(2019, 8, 14)),
+        _aluno("SEBASTIÃO LUÍS FICTICIO", numero=2, nasc=date(2019, 3, 4)),
+        _aluno("MARIA EDUARDA TESTELLI", numero=3, nasc=date(2019, 6, 7)),
     ]))
     assert _confirmar(cliente, escola_id, lista)["alunos_criados"] == 3
     base = _conta(db, escola_id)
@@ -463,7 +463,7 @@ def test_h_integracao_lista_elefante_matific_lista_elefante_sync(
     _plataforma(cliente, escola_id, "elefante", [
         {"nome": "AGATHA V", "dados": {"livros_unicos": 3},
          "criar_em_turma_nome": rotulo_turma},
-        {"nome": "ABRAAO LUIZ DIAS", "dados": {"livros_unicos": 5},
+        {"nome": "SEBASTIAO LUIZ FICTICIO", "dados": {"livros_unicos": 5},
          "criar_em_turma_nome": rotulo_turma},
     ])
     # Matific: abreviação + UUID.
@@ -475,10 +475,10 @@ def test_h_integracao_lista_elefante_matific_lista_elefante_sync(
     ])
     # Lista Piloto de novo (renumerada, como a secretaria faz).
     _confirmar(cliente, escola_id, _planilha(("1º Ano A", [
-        _aluno("MARIA EDUARDA SILVA", numero=1, nasc=date(2019, 6, 7)),
-        _aluno("AGATHA VITORIA MOURA DA SILVA", numero=2, ra="123.100.026-0",
-               nasc=date(2019, 9, 18)),
-        _aluno("ABRAÃO LUÍS DIAS", numero=3, nasc=date(2019, 3, 4)),
+        _aluno("MARIA EDUARDA TESTELLI", numero=1, nasc=date(2019, 6, 7)),
+        _aluno("AGATHA VIOLETA MONTESTELLI DA FICTICIA", numero=2, ra="901.000.001-0",
+               nasc=date(2019, 8, 14)),
+        _aluno("SEBASTIÃO LUÍS FICTICIO", numero=3, nasc=date(2019, 3, 4)),
     ])))
     # Elefante de novo.
     _plataforma(cliente, escola_id, "elefante", [
@@ -494,8 +494,8 @@ def test_h_integracao_lista_elefante_matific_lista_elefante_sync(
         sincronizar_turma=True, permitir_criar_turma=False)
 
     assert _conta(db, escola_id) == base, "alguém virou duas fichas no caminho"
-    for nome in ["AGATHA VITORIA MOURA DA SILVA", "ABRAÃO LUÍS DIAS",
-                 "MARIA EDUARDA SILVA"]:
+    for nome in ["AGATHA VIOLETA MONTESTELLI DA FICTICIA", "SEBASTIÃO LUÍS FICTICIO",
+                 "MARIA EDUARDA TESTELLI"]:
         iguais = [a for a in _alunos(db, escola_id) if a.nome == nome]
         assert len(iguais) == 1, f"{nome}: {len(iguais)} fichas"
         assert len(_matriculas(db, iguais[0].id)) == 1, f"{nome}: matrícula duplicada"
@@ -503,7 +503,7 @@ def test_h_integracao_lista_elefante_matific_lista_elefante_sync(
     vinculos = db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == escola_id)).scalars().all()
     assert len(vinculos) == 1
-    assert db.get(Aluno, vinculos[0].aluno_id).nome == "MARIA EDUARDA SILVA"
+    assert db.get(Aluno, vinculos[0].aluno_id).nome == "MARIA EDUARDA TESTELLI"
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +552,7 @@ def _corrida(Sessao, escola_id, *, serializar: bool):
     erros: list[str] = []
 
     parsed = lista_piloto.AlunoMatricula(
-        nome="MARIA EDUARDA SILVA", numero_chamada=1,
+        nome="MARIA EDUARDA TESTELLI", numero_chamada=1,
         data_nascimento="2015-03-01", ficha={})
 
     def worker(indice: int):

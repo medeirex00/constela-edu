@@ -7,8 +7,11 @@ implementa o que é ESPECÍFICO dela: URLs, seletores e o passo de login.
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
+from app.sync import escola_externa
 from app.sync.connectors.navegador import FabricaNavegador, Navegador, abrir_playwright
 from app.sync.interfaces import Conector, Contexto, Credenciais, ErroConector
 
@@ -41,9 +44,189 @@ _SEL_MFA = (
     "input[name*='verification' i], input[name*='authcode' i]")
 
 
+# --- Endereço de login configurável (opções avançadas: extra['url_login']) ---
+# O Chromium do servidor abre esse endereço. Sem trava, um gestor de escola
+# apontava o robô para QUALQUER lugar (rede interna, metadados da nuvem,
+# file://, página com JavaScript de terceiros) — SSRF. Só vale https para um
+# host do site da PRÓPRIA plataforma (``ConectorNavegador.dominios_login``: o
+# domínio e os subdomínios dele, porque a plataforma já trocou o subdomínio do
+# login antes). A checagem roda ao salvar (schemas.CredenciaisIn) e de novo
+# antes de navegar (``_executar_login``), para as credenciais já gravadas.
+URL_LOGIN_MAX = 500
+# Host só ASCII, rótulos de letras/dígitos/hífen separados por ponto. Fecha os
+# truques de parser: barra invertida (o Chromium lê "\" como "/", então
+# "https://mau.invalid\.matific.com" abriria mau.invalid), IP v6 entre
+# colchetes, %-escapes e caracteres Unicode que o navegador normaliza.
+_HOST_VALIDO = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
+
+
+def host_da_lista(host: str, dominios) -> bool:
+    """O host é um dos ``dominios`` ou subdomínio de um deles?"""
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in dominios or ())
+
+
+def url_na_lista(url, dominios) -> bool:
+    """True só para ``https://<host da lista>[:443]/...``, sem usuário/senha no
+    endereço, sem espaço, barra invertida ou caractere fora do ASCII. Qualquer
+    outra coisa (http, file:, javascript:, IP, host de fora) é False."""
+    if not isinstance(url, str) or not url or len(url) > URL_LOGIN_MAX:
+        return False
+    if any(c == "\\" or not (0x20 < ord(c) < 0x7f) for c in url):
+        return False              # espaço, controle, barra invertida, não ASCII
+    try:
+        partes = urlsplit(url)
+        porta = partes.port
+    except ValueError:            # porta que não é número, colchete solto…
+        return False
+    if partes.scheme != "https" or "@" in partes.netloc or porta not in (None, 443):
+        return False
+    host = partes.hostname or ""
+    return bool(_HOST_VALIDO.match(host)) and host_da_lista(host, dominios)
+
+
+def http_ok(status) -> bool:
+    """Resposta 2xx? (o fetch in-page devolve ``status`` 0 em falha de rede)."""
+    return isinstance(status, int) and not isinstance(status, bool) and 200 <= status < 300
+
+
+def codigo_do_http(status) -> str:
+    """Código estável de uma resposta NÃO 2xx do endpoint de DADOS: 401/403 é a
+    plataforma recusando o acesso ao dado (permissão/sessão), o resto é falha de
+    download (5xx, 404, rede, tempo esgotado no fetch)."""
+    return "sem_acesso_ao_dado" if status in (401, 403) else "falha_download"
+
+
+def registrar_falha_coleta(contexto: Contexto, unidade: str, identificador,
+                           codigo: str, http=None) -> None:
+    """Anota no contexto uma UNIDADE esperada que não chegou (turma, lote de
+    livros, aluno, endpoint) — o serviço transforma isso em 'parcial'/'erro' e
+    no alerta 'coleta_parcial'. Só ids da plataforma e códigos (sem nome)."""
+    coleta = getattr(contexto, "coleta", None)
+    if coleta is None:
+        return
+    coleta.setdefault("falhas", []).append({
+        "unidade": unidade, "id": str(identificador)[:40], "codigo": codigo,
+        "http": http if isinstance(http, int) else None})
+
+
+def registrar_descarte_coleta(contexto: Contexto, motivo: str, n: int = 1) -> None:
+    """Anota linhas que a plataforma mandou com DEFEITO e que não viram dado
+    (ex.: livro sem título) — contadas por motivo, para não sumirem em silêncio."""
+    coleta = getattr(contexto, "coleta", None)
+    if coleta is None or n <= 0:
+        return
+    descartes = coleta.setdefault("descartes", {})
+    descartes[motivo] = int(descartes.get(motivo, 0)) + int(n)
+
+
+def codigo_dominante(falhas: list[dict]) -> str:
+    """O código que explica um conjunto de falhas: acesso recusado em TODAS →
+    'sem_acesso_ao_dado'; interpretação em todas → 'parser_incompativel'; senão
+    'falha_download'."""
+    codigos = {f.get("codigo") for f in falhas or []}
+    if codigos == {"sem_acesso_ao_dado"}:
+        return "sem_acesso_ao_dado"
+    if codigos == {"parser_incompativel"}:
+        return "parser_incompativel"
+    if len(codigos) == 1 and next(iter(codigos)) in escola_externa.CODIGOS:
+        # Turma recusada por não se saber de qual escola ela é (ver
+        # ``resolver_escola_externa``): o motivo diz isso, não "falha ao baixar".
+        return next(iter(codigos))
+    return "falha_download"
+
+
+def juntar_escolas(*listas) -> list[dict]:
+    """Une listas de escolas [{id, nome}] por id, na ordem em que apareceram,
+    ficando com o primeiro nome não vazio de cada uma."""
+    saida: dict[str, dict] = {}
+    for lista in listas:
+        for e in lista or ():
+            if not isinstance(e, dict):
+                continue
+            eid = str(e.get("id") or "").strip()
+            if not eid:
+                continue
+            atual = saida.setdefault(eid, {"id": eid, "nome": ""})
+            if not atual["nome"] and e.get("nome"):
+                atual["nome"] = str(e["nome"]).strip()[:200]
+    return list(saida.values())
+
+
+def resolver_escola_externa(visiveis: list[dict], contexto: Contexto, nome: str) -> dict:
+    """QUAL escola da plataforma esta coleta lê — antes de pedir qualquer dado de
+    turma. ``visiveis`` = as escolas que a conta enxerga ([{id, nome}]);
+    ``contexto.escola_externa`` = o vínculo gravado (ou None). Regras em
+    ``sync/escola_externa.py``. Anota em ``contexto.coleta`` as visíveis e a
+    escolhida (o serviço aprende o vínculo dela); levanta ``ErroConector`` com
+    código próprio quando não dá para saber com segurança — nada é coletado."""
+    visiveis = juntar_escolas(visiveis)
+    coleta = getattr(contexto, "coleta", None)
+    if coleta is not None:
+        coleta["escolas_externas"] = [dict(e) for e in visiveis]
+    vinculo = getattr(contexto, "escola_externa", None) or {}
+    vinculado = str(vinculo.get("id") or "").strip().lower()
+    if vinculado:
+        # uuid do Matific comparado sem caixa; o id da plataforma segue como veio.
+        alvo = next((e for e in visiveis if e["id"].lower() == vinculado), None)
+        if alvo is None and not visiveis:
+            raise ErroConector(
+                f"Não identifiquei, na resposta do {nome}, a escola que a conta enxerga "
+                f"(esta escola está vinculada à escola {escola_externa.descrever([vinculo])} "
+                "da plataforma). Nada foi aplicado: a plataforma pode ter mudado a resposta.",
+                codigo=escola_externa.ESCOLA_NAO_IDENTIFICADA, recuperavel=True)
+        if alvo is None:
+            raise ErroConector(
+                f"A conta do {nome} cadastrada nesta escola enxerga a(s) escola(s) "
+                f"{escola_externa.descrever(visiveis)}, mas esta escola está vinculada à "
+                f"escola {escola_externa.descrever([vinculo])} da plataforma. Nada foi "
+                "aplicado: confira se a credencial é desta escola. Se a escola trocou de "
+                "conta de propósito, o Admin Global refaz o vínculo.",
+                codigo=escola_externa.ESCOLA_TROCADA, recuperavel=False)
+    elif len(visiveis) == 1:
+        alvo = visiveis[0]
+    elif visiveis:
+        raise ErroConector(
+            f"A conta do {nome} enxerga {len(visiveis)} escolas na plataforma "
+            f"({escola_externa.descrever(visiveis)}) e esta escola ainda não tem a escola "
+            "externa vinculada. Nada foi aplicado: o Admin Global escolhe qual delas é "
+            "esta escola (vínculo da escola externa).",
+            codigo=escola_externa.CONTA_MULTIESCOLA, recuperavel=False)
+    else:
+        raise ErroConector(
+            f"Não identifiquei, na resposta do {nome}, a escola que a conta enxerga. Nada "
+            "foi aplicado: sem saber a escola, os dados podem ser de outra.",
+            codigo=escola_externa.ESCOLA_NAO_IDENTIFICADA, recuperavel=True)
+    ocupadas = {str(i).lower() for i in getattr(contexto, "externas_de_outras_escolas", ()) or ()}
+    if alvo["id"].lower() in ocupadas:
+        # A conta lê uma escola da plataforma que já alimenta OUTRA escola do
+        # Constela: a credencial cadastrada aqui é (provavelmente) a de lá.
+        raise ErroConector(
+            f"A conta desta credencial lê a escola {escola_externa.descrever([alvo])} do "
+            f"{nome}, que já está vinculada a outra escola do Constela. Nada foi aplicado: "
+            "confira se a credencial cadastrada é desta escola.",
+            codigo=escola_externa.ESCOLA_EM_OUTRA_ESCOLA, recuperavel=False)
+    if coleta is not None:
+        coleta["escola_externa"] = {"id": alvo["id"], "nome": alvo.get("nome") or ""}
+    return alvo
+
+
 class ConectorNavegador(Conector):
     """Conector com sessão de navegador. Subclasses definem ``_login`` e os
     métodos da ``Conector`` (localizar/obter), usando ``_sessao``."""
+
+    # Domínios do site da plataforma (o host vale também com subdomínio). Só
+    # para eles o robô aceita um endereço de login configurado (extra['url_login'])
+    # e só endereços deles aparecem nas mensagens. Vazio = nenhum aceito.
+    dominios_login: tuple[str, ...] = ()
+
+    def _endereco_exibivel(self, url, nome: str) -> str:
+        """O endereço para a mensagem/log que o gestor lê: o próprio, se é do site
+        da plataforma; senão, só o aviso (não repete endereço de fora da lista)."""
+        if url_na_lista(url, self.dominios_login):
+            return url
+        return f"um endereço fora do site do {nome}, não exibido"
 
     def __init__(self, fabrica_navegador: FabricaNavegador | None = None) -> None:
         # A fábrica é injetável: os testes passam um NavegadorFake e exercitam
@@ -89,11 +272,35 @@ class ConectorNavegador(Conector):
         senha inválida / CAPTCHA / não confirmado). Nunca vaza a senha nos logs.
         As subclasses só informam URL e seletores."""
         log = contexto.log
-        alvo = cred.extra.get("url_login") or url
-        log("login", "info", f"[{nome}] Abrindo a página de login ({alvo})…")
+        exibir = self._endereco_exibivel
+        url_login = (cred.extra or {}).get("url_login")
+        if url_login and not url_na_lista(url_login, self.dominios_login):
+            # Credencial gravada antes da trava (ou por outro caminho) com endereço
+            # de fora do site da plataforma: o robô NÃO abre. O endereço não é
+            # repetido; a correção é salvar as credenciais de novo.
+            log("login", "erro", f"[{nome}] O endereço de login salvo nas opções "
+                "avançadas não é do site da plataforma; nada foi aberto.")
+            sites = ", ".join(self.dominios_login) or "da própria plataforma"
+            raise ErroConector(
+                f"O endereço de login salvo nas opções avançadas do {nome} não é "
+                f"aceito: ele precisa começar com https:// e ser do site do {nome} "
+                f"({sites}). Por segurança, nada foi aberto. Salve as credenciais de "
+                "novo deixando o campo ‘Endereço de login’ das opções avançadas em "
+                "branco (o sistema usa o endereço oficial) ou informe um endereço do "
+                f"site do {nome}.",
+                codigo="pagina_login", recuperavel=False)
+        alvo = url_login or url
+        log("login", "info", f"[{nome}] Abrindo a página de login ({exibir(alvo, nome)})…")
         await nav.ir_para(alvo)
         atual = await nav.url_atual()
-        log("login", "info", f"[{nome}] Página carregada: {atual}")
+        log("login", "info", f"[{nome}] Página carregada: {exibir(atual, nome)}")
+        # Prova de que o navegador DESTE servidor abriu e a página respondeu: o serviço
+        # fecha o alerta de quando ele não subia ('plataforma_indisponivel') mesmo que
+        # a coleta falhe depois (401/403 no dado, download, escola externa…). Não nasce
+        # antes (a fábrica que devolve um navegador que cai na 1ª página não prova nada).
+        coleta = getattr(contexto, "coleta", None)
+        if coleta is not None:
+            coleta["navegador_abriu"] = True
 
         if await nav.visivel(_SEL_BLOQUEIO):
             log("login", "erro", f"[{nome}] Verificação de segurança (CAPTCHA) na abertura.")
@@ -115,10 +322,11 @@ class ConectorNavegador(Conector):
                     f"O {nome} pediu verificação de segurança (CAPTCHA) e não "
                     "mostrou o formulário. Use a importação manual do relatório.",
                     codigo="captcha", recuperavel=True)
-            log("login", "erro", f"[{nome}] Formulário de login não apareceu ({atual}).")
+            onde = exibir(atual, nome)
+            log("login", "erro", f"[{nome}] Formulário de login não apareceu ({onde}).")
             raise ErroConector(
                 f"Não encontrei o formulário de login do {nome} (endereço atual: "
-                f"{atual}). O endereço pode ter mudado, a página redirecionou, ou "
+                f"{onde}). O endereço pode ter mudado, a página redirecionou, ou "
                 "exigiu verificação de segurança. Informe o endereço correto em "
                 "‘url de login’ nas opções avançadas, ou use a importação manual.",
                 codigo="pagina_login", recuperavel=True)
@@ -145,10 +353,11 @@ class ConectorNavegador(Conector):
                         f"Usuário do {nome} não reconhecido.",
                         codigo="senha_invalida", recuperavel=False)
                 atual = await nav.url_atual()
-                log("login", "erro", f"[{nome}] Campo de senha não apareceu ({atual}).")
+                onde = exibir(atual, nome)
+                log("login", "erro", f"[{nome}] Campo de senha não apareceu ({onde}).")
                 raise ErroConector(
                     f"Não consegui avançar para a senha no {nome} (endereço atual: "
-                    f"{atual}). A página pode ter mudado. Tente novamente ou use a "
+                    f"{onde}). A página pode ter mudado. Tente novamente ou use a "
                     "importação manual do relatório.",
                     codigo="pagina_login", recuperavel=True)
 
@@ -168,7 +377,8 @@ class ConectorNavegador(Conector):
         rota = (atual or "").split("?")[0].rstrip("/")
         if (url_logado and any(marca in rota for marca in url_logado)
                 and "login" not in rota.rsplit("/", 1)[-1].lower()):
-            log("login", "info", f"[{nome}] Login confirmado (área logada pela URL: {atual}).")
+            log("login", "info",
+                f"[{nome}] Login confirmado (área logada pela URL: {exibir(atual, nome)}).")
             return
         if await nav.visivel(sel_erro):
             log("login", "warn", f"[{nome}] Mensagem de erro de login detectada.")
@@ -176,8 +386,9 @@ class ConectorNavegador(Conector):
                 f"Usuário ou senha do {nome} inválidos. Se as credenciais estão "
                 "corretas e funcionam no navegador, a plataforma pode estar "
                 "recusando o acesso automatizado do servidor por proteção "
-                "anti-robô (reCAPTCHA) — nesse caso é preciso um IP residencial "
-                "(configurar SYNC_PROXY_URL).",
+                "anti-robô (reCAPTCHA). O Constela não contorna essa proteção: "
+                "envie o relatório exportado pela escola em Importações ou peça "
+                "ao fornecedor um acesso oficial aos dados.",
                 codigo="senha_invalida", recuperavel=False)
         if await nav.visivel(_SEL_BLOQUEIO):
             raise ErroConector(
@@ -195,11 +406,12 @@ class ConectorNavegador(Conector):
         # A conta pode ser Google-only (SSO) sem senha direta: aí o login
         # tradicional falha sem "área logada" nem erro explícito. Damos o
         # endereço final e orientamos definir senha direta / usar import manual.
-        log("login", "erro", f"[{nome}] Não confirmei a área logada nem erro ({atual}).")
+        onde = exibir(atual, nome)
+        log("login", "erro", f"[{nome}] Não confirmei a área logada nem erro ({onde}).")
         raise ErroConector(
             f"Não foi possível confirmar o login no {nome}: enviei as credenciais "
             "mas não reconheci nem a área logada nem uma mensagem de erro (o "
-            f"endereço final foi {atual}). A conta pode usar login pelo Google (SSO) "
+            f"endereço final foi {onde}). A conta pode usar login pelo Google (SSO) "
             "sem senha direta, ter verificação extra, ou a página pode ter mudado. "
             "Defina uma senha direta na conta (ex.: ‘Esqueci a senha’) ou use a "
             "importação manual do relatório.",
@@ -255,25 +467,46 @@ class ConectorNavegador(Conector):
                     r["bloqueio_detectado"] = await nav.visivel(_SEL_BLOQUEIO)
         except Exception as exc:  # noqa: BLE001
             r["erro"] = f"{type(exc).__name__}: {str(exc)[:140]}"
-            logger.warning("Diagnóstico de login %s: %s", self.plataforma, r["erro"])
+            # No log vai a EXCEÇÃO, não o texto já montado: o formatador tira dela o
+            # dado pessoal (observabilidade.redigir_dados_pessoais); o "%.140s" corta
+            # como antes. Sem dado pessoal, a linha é a mesma de antes.
+            logger.warning("Diagnóstico de login %s: %s: %.140s", self.plataforma,
+                           type(exc).__name__, exc)
         return r
 
     async def testar_credenciais(self, cred, contexto):
         from app.sync.interfaces import ResultadoValidacao
         contexto.log("autenticacao", "info",
                      f"Validando credenciais em {self.plataforma}…")
+        escolas = None
         try:
             async with self._sessao(contexto) as nav:
                 await self._login(nav, cred, contexto)
+                # Login OK: qual(is) escola(s) a conta enxerga? Só para o gestor
+                # conferir (sem segredo). Falhar aqui não invalida o login.
+                try:
+                    escolas = await self._detectar_escolas(nav, contexto)
+                except Exception as exc:  # noqa: BLE001 — acessório do teste
+                    logger.warning("Detecção da escola externa falhou (%s): %s",
+                                   self.plataforma, type(exc).__name__)
+                    escolas = None
         except ErroConector as exc:
-            contexto.log("autenticacao", "warn", f"Credencial recusada: {exc}")
+            if exc.codigo == "navegador_indisponivel":
+                # O NOSSO navegador não abriu: a credencial nem chegou à plataforma,
+                # e "recusada" seria mentira (a mensagem já diz o que houve).
+                contexto.log("autenticacao", "erro", f"Credencial não testada: {exc}")
+            else:
+                contexto.log("autenticacao", "warn", f"Credencial recusada: {exc}")
             return ResultadoValidacao(ok=False, mensagem=str(exc), codigo=exc.codigo)
         except Exception as exc:  # noqa: BLE001
             # Qualquer falha INESPERADA do navegador/site (seletor mudou,
             # timeout, bloqueio anti-bot, página fora do ar) é convertida em um
             # resultado claro — validar credencial NUNCA deve derrubar o request
-            # (500). Log técnico p/ diagnóstico; a mensagem de Playwright cita o
-            # seletor/timeout, não o valor preenchido, então não vaza a senha.
+            # (500). Log técnico p/ diagnóstico. O erro do Playwright ao preencher
+            # traz o VALOR no "Call log" (fill("…")) e o value do campo na prévia
+            # do elemento: o navegador o relança sem o valor (preencher) e o
+            # formatador do log redige a exceção (redigir_valor_digitado), então
+            # nem o usuário nem a senha vão para o log.
             logger.warning(
                 "Falha inesperada ao validar %s (escola %s): %s: %s",
                 self.plataforma, getattr(contexto, "escola_id", "?"),
@@ -292,4 +525,9 @@ class ConectorNavegador(Conector):
                 codigo="erro_navegador")
         contexto.log("autenticacao", "info", "Credenciais válidas.")
         return ResultadoValidacao(ok=True, mensagem="Conexão bem-sucedida.",
-                                  codigo="ok")
+                                  codigo="ok", escolas_externas=escolas)
+
+    async def _detectar_escolas(self, nav: Navegador, contexto: Contexto) -> list | None:
+        """Escolas que a conta logada enxerga ([{id, nome}]) — para o "Testar
+        conexão". None = a plataforma não informa. Subclasses sobrescrevem."""
+        return None

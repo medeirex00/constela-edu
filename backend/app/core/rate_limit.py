@@ -1,10 +1,16 @@
 """Limitador de tentativas em memória (defesa de aplicação contra força bruta).
 
-Janela deslizante simples por chave (ex.: e-mail+IP). É a segunda linha de
-defesa: em produção o nginx aplica limit_req por IP na frente (apps/web/
-nginx.conf).
+Janela deslizante simples por chave (ex.: e-mail+IP). O limit_req por IP do
+nginx (apps/web/nginx.conf) só existe no docker-compose: na topologia real (web
+na Vercel chamando a API no Railway direto) NÃO há limite de borda. Por isso o
+/auth/login tem, além dos limites por (conta, IP) e por conta, um teto de FALHAS
+por IP e um teto GLOBAL (``limitador_ip_falha_login`` e
+``limitador_global_falha_login``, abaixo), que o router também grava no banco
+(valem entre workers e sobrevivem ao deploy — ver routers/auth.py). Teto e janela
+desses dois vêm das variáveis EDU_LOGIN_TETO_* (config.py).
 
-LIMITAÇÃO DE ESCALA (conhecida e aceita): o contador é POR PROCESSO. Com N
+LIMITAÇÃO DE ESCALA (conhecida e aceita): o contador DESTE módulo é POR PROCESSO
+— para os limites por (conta, IP) e por conta, é o único que existe. Com N
 workers/réplicas o orçamento efetivo por chave é multiplicado por N e o estado
 não é compartilhado entre instâncias. É aceitável para frear dicionário online
 num deploy pequeno; para ESCALA HORIZONTAL (várias réplicas atrás do
@@ -18,9 +24,14 @@ Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expirad
 """
 from __future__ import annotations
 
+import ipaddress
 import threading
 import time
 from collections import deque
+
+# Só para os tetos de falha do login (fim do arquivo). config.py não importa nada do
+# app, então não há ciclo; o import tardio de ``ip_do_cliente`` fica como estava.
+from app.core.config import settings
 
 # Teto de chaves vivas por limitador: barra exaustão de memória por chaves
 # atacante-controladas. ~centenas de KB no pior caso; muito acima do uso legítimo.
@@ -137,6 +148,46 @@ def mascarar_ip(ip: str) -> str:
     return "desconhecido"
 
 
+def _como_endereco(valor: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """O endereço IP em ``valor`` (tolera ``[v6]:porta``, ``v4:porta`` e a zona
+    ``%eth0``), ou None se não for IP."""
+    texto = (valor or "").strip()
+    if texto.startswith("["):
+        texto = texto[1:].split("]", 1)[0]
+    elif texto.count(":") == 1:
+        texto = texto.rsplit(":", 1)[0]
+    texto = texto.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(texto)
+    except ValueError:
+        return None
+
+
+def rede_para_limite(ip: str, prefixo_ipv6: int = 64) -> str:
+    """Valor que identifica o CLIENTE nas chaves dos limitadores por IP.
+
+    IPv6: o provedor entrega a um único assinante um /64 inteiro (2^64
+    endereços, e muitas nuvens dão /64 por máquina). Contar por endereço deixava
+    o atacante trocar de "IP" de graça a cada palpite, e o teto por IP deixava de
+    valer. Por isso o IPv6 vira a rede ``<prefixo>::/<prefixo_ipv6>`` (padrão
+    /64). IPv4: o próprio endereço, como antes (o NAT da escola já é um IP só, e
+    agrupar /24 puniria vizinhos sem relação). IPv4 mapeado em IPv6
+    (``::ffff:a.b.c.d``) é tratado como o IPv4. O que não é IP
+    ("desconhecido", "testclient") passa intacto. Nunca levanta.
+
+    Só para CHAVE de limite: o log de auditoria segue com ``mascarar_ip``.
+    """
+    endereco = _como_endereco(ip)
+    if endereco is None:
+        return ip
+    if isinstance(endereco, ipaddress.IPv6Address):
+        if endereco.ipv4_mapped is not None:
+            return str(endereco.ipv4_mapped)
+        prefixo = min(128, max(0, int(prefixo_ipv6)))
+        return str(ipaddress.ip_network(f"{endereco}/{prefixo}", strict=False))
+    return str(endereco)
+
+
 # 8 falhas por 5 min por (e-mail, IP): trava dicionário online sem punir
 # um usuário que erra a senha uma ou duas vezes.
 limitador_login = LimitadorTentativas(max_tentativas=8, janela_s=300)
@@ -146,3 +197,29 @@ limitador_login = LimitadorTentativas(max_tentativas=8, janela_s=300)
 # (Trade-off conhecido: 20 falhas em 15 min bloqueiam a conta por 15 min —
 # possível lockout intencional de uma conta-alvo, limitado no tempo.)
 limitador_conta = LimitadorTentativas(max_tentativas=20, janela_s=900)
+# Terceira camada, POR IP (só FALHAS, em qualquer conta, exista ela ou não):
+# freia a PULVERIZAÇÃO de senhas — um único IP testando poucas senhas em MUITAS
+# contas, que escapa das duas camadas acima (cada conta fica abaixo do seu teto).
+# A chave é ``rede_para_limite(ip)``: IPv6 agrupado em /64, IPv4 por endereço.
+# Generoso para uma escola inteira atrás do mesmo NAT errando a senha de vez em
+# quando. O router confere ANTES de procurar a conta e grava também no banco.
+# Teto e janela: EDU_LOGIN_TETO_IP_FALHAS / EDU_LOGIN_TETO_IP_JANELA_S (padrão 50
+# em 5 min; config.py). Lidos no import, como os do Quest: mudar exige reiniciar.
+limitador_ip_falha_login = LimitadorTentativas(
+    max_tentativas=settings.EDU_LOGIN_TETO_IP_FALHAS,
+    janela_s=settings.EDU_LOGIN_TETO_IP_JANELA_S)
+# Teto GLOBAL de falhas do /auth/login (todos os IPs somados, chave única): freia
+# a pulverização distribuída que fica abaixo do teto de cada IP. Ao chegar nele, o
+# login da API inteira responde 429 até o fim do bloqueio e sai um log de alerta
+# (``login.limite_global_atingido``). Trade-off aceito, o mesmo do Quest: sob
+# ataque, as contas legítimas também esperam a janela (as sessões já abertas
+# seguem valendo). Por isso o teto fica muito acima das falhas do uso real.
+# Teto e janela: EDU_LOGIN_TETO_GLOBAL_FALHAS / EDU_LOGIN_TETO_GLOBAL_JANELA_S
+# (padrão 400 em 5 min) — a produção pode subir o teto sem mudar o código.
+limitador_global_falha_login = LimitadorTentativas(
+    max_tentativas=settings.EDU_LOGIN_TETO_GLOBAL_FALHAS,
+    janela_s=settings.EDU_LOGIN_TETO_GLOBAL_JANELA_S)
+# No máximo UM alerta do teto global por janela em cada processo (sob ataque, toda
+# falha acima do teto chegaria ao alerta).
+alerta_global_login = LimitadorTentativas(
+    max_tentativas=1, janela_s=settings.EDU_LOGIN_TETO_GLOBAL_JANELA_S)

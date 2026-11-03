@@ -37,7 +37,10 @@ import {
 } from "./ica";
 import { NOTA_INEP_ITENS, notaInepItensSeAplica } from "./notaInepItens";
 
-const COR = { municipio: "#6366f1", meta: "#64748b", ufPublica: "#10b981", ufMunicipal: "#f59e0b", brasil: "#ef4444" };
+// Paleta de séries da v2 (>= 3:1 sobre o branco e sobre o fundo escuro): o município no
+// violeta da marca, a meta em ardósia TRACEJADA, a UF pública em teal, a UF nas redes
+// municipais em âmbar e o Brasil em vermelho. A legenda e a tabela dizem o nome.
+const COR = { municipio: "#6C5CE7", meta: "#64748B", ufPublica: "#0D9488", ufMunicipal: "#D97706", brasil: "#DC2626" };
 
 function fontesDe(numeros: (NumeroICA | null | undefined)[]): (FonteICA | null)[] {
   return numeros.flatMap((n) => (n ? [n.fonte, n.detalhe?.fonte ?? null] : []));

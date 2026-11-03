@@ -154,19 +154,29 @@ def _pontos(db, escola_id, aluno_id):
 
 
 def test_ordem_dos_imports_nao_muda_a_dificuldade(cliente, db, escola_completa):
-    """leituras→resumo (snapshot por faixa atual), resumo→leituras (snapshot por
-    faixa atual) e resumo antigo→leituras (snapshot por letra atual) dão o MESMO
-    número: os 2 livros D itemizados, uma vez só."""
+    """leituras→resumo (snapshot por faixa atual), resumo→leituras do mesmo dia
+    (snapshot por letra atual) e resumo antigo→leituras (snapshot por letra atual)
+    dão o MESMO número: os 2 livros D itemizados, uma vez só."""
     esc = escola_completa["escola"]
     ana, joao, sofia = escola_completa["alunos"]
     titulos = ["A loja do mestre André", "Curiosidades 6"]
     regra = dl.RegraV1()
     esperado = sum(regra.valor_livro("D", t, "3º Ano") for t in titulos)
-    # A) leituras primeiro, resumo por faixa depois (snapshot atual = faixa)
+    # A) leituras primeiro, resumo por faixa depois (snapshot atual = faixa). Sem a
+    # data do relatório, o resumo vale como de hoje — o dia do retrato das leituras —
+    # e o complementa no lugar. (Antes ia datado de 31/12/2026: no futuro, hoje 422.)
     _leituras(cliente, esc.id, ana, titulos)
-    _resumo(cliente, esc.id, ana, {"nivel_2": 2}, "2026-12-31T00:00:00")
-    # B) resumo por faixa primeiro, leituras depois (snapshot atual = faixa)
-    _resumo(cliente, esc.id, joao, {"nivel_2": 2}, "2026-12-31T00:00:00")
+    _resumo(cliente, esc.id, ana, {"nivel_2": 2}, None)
+    # B) resumo por faixa primeiro, leituras depois. As leituras do MESMO dia
+    # atualizam no lugar o retrato do dia com a distribuição POR LETRA das leituras
+    # registradas (como sempre): o snapshot atual vira {"D": 2}. O antigo "snapshot
+    # atual = faixa" depois das leituras dependia do resumo datado no FUTURO
+    # (31/12/2026) — e de leituras com data anterior criarem um ponto no passado.
+    # Hoje não há caminho para ele: a data futura dá 422, o retrato futuro legado não
+    # conta como o atual e leituras com data anterior ao retrato atual também o
+    # atualizam no lugar (item E da rodada 3 do achado [10]). O cruzamento faixa ×
+    # letra segue provado em A (e nas fórmulas acima); B prova a ordem inversa.
+    _resumo(cliente, esc.id, joao, {"nivel_2": 2}, None)
     _leituras(cliente, esc.id, joao, titulos)
     # C) resumo antigo, leituras depois (snapshot atual = por letra)
     _resumo(cliente, esc.id, sofia, {"nivel_2": 2}, "2026-01-01T00:00:00")
@@ -174,7 +184,7 @@ def test_ordem_dos_imports_nao_muda_a_dificuldade(cliente, db, escola_completa):
     snaps = {s.aluno_id: s.livros_por_nivel for s in db.execute(
         select(SnapshotElefante).where(SnapshotElefante.id.in_(
             scoring.ids_snapshots_atuais(SnapshotElefante, esc.id)))).scalars()}
-    assert snaps[ana.id] == {"nivel_2": 2} and snaps[joao.id] == {"nivel_2": 2} and snaps[sofia.id] == {"D": 2}
+    assert snaps[ana.id] == {"nivel_2": 2} and snaps[joao.id] == {"D": 2} and snaps[sofia.id] == {"D": 2}
     for aluno in (ana, joao, sofia):
         assert _pontos(db, esc.id, aluno.id) == pytest.approx(esperado, abs=0.02), aluno.nome
     # e a nota gravada pelo recálculo do import bate com o contexto

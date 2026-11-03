@@ -1,9 +1,9 @@
 import { useApp } from "../context/AppContext";
 import { useApi } from "./useApi";
 
-interface EscolaStatus {
+/** GET /escolas/{id}/sync/onboarding — só o sinal do "Comece aqui". */
+interface EscolaOnboarding {
   lista_piloto_importada: boolean;
-  // demais campos de /sync/status são ignorados aqui
 }
 
 export interface EstadoOnboarding {
@@ -26,6 +26,11 @@ export interface EstadoOnboarding {
  * Só vale para quem opera a escola (admin/coordenador). A Secretaria acompanha
  * a rede, mas não configura escolas, e o professor entra numa escola que o
  * coordenador já preparou — para ambos, `precisaConfigurar` é sempre falso.
+ *
+ * Lê o endpoint LEVE `/sync/onboarding` (uma consulta), não o `/sync/status`
+ * inteiro — o mais caro da API, que a barra lateral pagava a cada montagem só
+ * por este booleano. O `/sync/status` fica com a tela de Integrações (e o
+ * "Comece aqui", que usa os demais campos).
  */
 export function useOnboarding(): EstadoOnboarding {
   const { usuario, escolaId } = useApp();
@@ -34,8 +39,8 @@ export function useOnboarding(): EstadoOnboarding {
   const secretaria = !usuario?.is_global && usuario?.rede_id != null;
   const podeConfigurar = gestor && !secretaria;
 
-  const { dados, carregando } = useApi<EscolaStatus>(
-    podeConfigurar && escolaId ? `/escolas/${escolaId}/sync/status` : null,
+  const { dados, carregando } = useApi<EscolaOnboarding>(
+    podeConfigurar && escolaId ? `/escolas/${escolaId}/sync/onboarding` : null,
   );
 
   const conhecido = dados != null;

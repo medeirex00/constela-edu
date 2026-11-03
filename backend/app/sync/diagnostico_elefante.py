@@ -9,6 +9,7 @@ admin/coordenador e o resultado só aparece na tela de Diagnóstico.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 
 from sqlalchemy import select
@@ -16,11 +17,64 @@ from sqlalchemy.orm import Session
 
 from app.models.configuracao import Configuracao
 from app.sync import connectors, vault
+from app.sync.connectors.navegador import (
+    FALHA_CONHECIDA,
+    FALHA_NOSSA,
+    FALHA_TEMPO,
+    classificar_falha_da_coleta,
+    erro_conector_de_dentro,
+)
 from app.sync.interfaces import Contexto, ErroConector
+
+logger = logging.getLogger("constela.sync")
 
 _NS = "elefante_inventario"
 _CHAVE = "ultimo"
 _TIMEOUT_S = 180
+
+_DEMOROU = "O diagnóstico do Elefante demorou demais. Tente de novo."
+_FORA_DO_AR = ("Não foi possível rodar o diagnóstico agora: a conexão com o site do "
+               "Elefante falhou ou ele não respondeu. Tente de novo em alguns minutos.")
+
+
+def _erro_da_coleta(exc: BaseException) -> Exception | None:
+    """O que levantar no lugar de uma falha no meio da coleta, pelo critério único
+    de ``navegador.classificar_falha_da_coleta`` (o mesmo do placar ao vivo do
+    Matific, ``aovivo._erro_da_consulta``):
+
+    * REDE (DNS, conexão recusada, TLS, página que não abriu — o ``OSError`` da rede,
+      a exceção do Playwright/httpx que não é nenhuma das abaixo) vira um
+      ``ErroConector`` que diz que foi o Elefante (502), e o tempo esgotado, 504 —
+      não um 500 "Erro interno" que põe a culpa no Constela. O detalhe fica no log
+      WARNING; a resposta não leva nada interno;
+    * o NOSSO navegador que caiu no meio da coleta (``TargetClosedError``, "Page
+      crashed", o driver do Playwright morto) vira 503 ``navegador_indisponivel``,
+      sem culpar o Elefante: o ``ErroConector`` vem de ``erro_conector_de_dentro``,
+      que grava o log ERROR (a falha é do servidor). O que NÃO ABRIU já chega como
+      esse ``ErroConector`` (``abrir_playwright``, também com log ERROR);
+    * um ``ErroConector`` de dentro de um grupo de exceções passa com a mensagem dele;
+    * DEFEITO NOSSO (KeyError, TypeError, AttributeError…) vai para o log ERROR (o
+      Sentry o vê) e devolve None: quem chama relança a exceção crua (500). O
+      ``asyncio.CancelledError`` de dentro do conector também é nosso, mas não pode
+      subir cru (é BaseException: escaparia do tratamento de erro da rota) — volta um
+      ``RuntimeError`` com ele como causa."""
+    tipo = classificar_falha_da_coleta(exc)
+    if tipo == FALHA_NOSSA:
+        logger.exception("Diagnóstico do Elefante falhou na coleta por um defeito do "
+                         "Constela (%s).", type(exc).__name__)
+        if isinstance(exc, asyncio.CancelledError):
+            return RuntimeError("A coleta do diagnóstico do Elefante foi cancelada por "
+                                "dentro do conector, sem tempo esgotado.")
+        return None
+    if tipo == FALHA_CONHECIDA:
+        return erro_conector_de_dentro(exc)
+    demorou = tipo == FALHA_TEMPO
+    logger.warning("Diagnóstico do Elefante falhou na coleta (%s): %s",
+                   "tempo esgotado" if demorou else "rede",
+                   type(exc).__name__, exc_info=True)
+    if demorou:
+        return ErroConector(_DEMOROU, codigo="timeout", recuperavel=True)
+    return ErroConector(_FORA_DO_AR, codigo="indisponivel_externo", recuperavel=True)
 
 
 def _linha(db: Session, escola_id: int) -> Configuracao | None:
@@ -76,10 +130,22 @@ def _comparar(anterior: dict | None, atual: dict) -> dict:
 
 def executar(db: Session, escola_id: int, *, agora: datetime | None = None) -> dict:
     """Roda o diagnóstico ao vivo, persiste e devolve inventário + diff + avisos.
-    Levanta ``ErroConector`` (o router traduz em HTTP)."""
+    Levanta ``ErroConector`` (o router traduz em HTTP): o do próprio conector passa
+    com a mensagem dele; na COLETA, tempo esgotado vira ``timeout`` (504), falha de
+    REDE (DNS, conexão, TLS, página que não abriu) vira ``indisponivel_externo``
+    (502, log WARNING) e o NOSSO navegador que caiu ou não abriu vira
+    ``navegador_indisponivel`` (503, log ERROR — o que caiu, por
+    ``erro_conector_de_dentro``; o que não abriu, por ``abrir_playwright``).
+    Defeito nosso — dentro da coleta (com log ERROR) ou fora dela — não é traduzido
+    (segue 500)."""
     agora = agora or datetime.utcnow()
     cred = vault.obter_credencial(db, escola_id, "elefante")
     if cred is None:
+        if vault.obter_linha(db, escola_id, "elefante") is not None:
+            # A credencial existe, mas a cifra não abre (status 'ilegivel'):
+            # "não configurada" seria mentira. Recadastro, sem detalhe da falha.
+            raise ErroConector(vault.mensagem_credencial_ilegivel(["elefante"]),
+                               codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
         raise ErroConector(
             "As credenciais do Elefante não estão configuradas. Configure em "
             "Sincronização automática → Elefante.", codigo="sem_credencial",
@@ -93,15 +159,26 @@ def executar(db: Session, escola_id: int, *, agora: datetime | None = None) -> d
     contexto = Contexto(escola_id=escola_id, execucao_id=None, timeout_s=_TIMEOUT_S,
                         log=lambda e, n, m: eventos.append(f"{n}: {m}"))  # noqa: ARG005
 
-    async def _rodar():
-        return await asyncio.wait_for(
-            conector.diagnosticar_endpoints(cred, contexto), timeout=_TIMEOUT_S)
+    async def _coletar():
+        # Só a COLETA (login + sondagem no site do Elefante) é protegida: o que vem
+        # depois (diff, gravação) segue sendo erro nosso, e não do Elefante.
+        try:
+            return await asyncio.wait_for(
+                conector.diagnosticar_endpoints(cred, contexto), timeout=_TIMEOUT_S)
+        except ErroConector:
+            raise           # já diz o que houve (CAPTCHA, senha, navegador ausente…)
+        except asyncio.CancelledError as exc:
+            tarefa = asyncio.current_task()
+            if tarefa is not None and tarefa.cancelling():
+                raise       # cancelada de FORA (o próprio teto já virou TimeoutError)
+            raise _erro_da_coleta(exc) from exc     # de dentro do conector: nosso
+        except Exception as exc:  # noqa: BLE001 — classificada em _erro_da_coleta
+            erro = _erro_da_coleta(exc)
+            if erro is None:
+                raise       # defeito nosso: sobe cru (500), já no log ERROR
+            raise erro from exc
 
-    try:
-        inventario = asyncio.run(_rodar())
-    except asyncio.TimeoutError as exc:
-        raise ErroConector("O diagnóstico do Elefante demorou demais. Tente de novo.",
-                           codigo="timeout", recuperavel=True) from exc
+    inventario = asyncio.run(_coletar())
 
     inventario["gerado_em"] = agora.isoformat() + "Z"
     # Solta a conexão do banco (o robô rodou fora dela); relê para o diff/salvar.

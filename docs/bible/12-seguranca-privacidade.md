@@ -59,7 +59,8 @@ O sentimento-alvo é de **confiança** (o "usuário" aqui é a escola/família/d
   juridiquês, e um caminho de exclusão pela escola.
 - **Criança — protegida sem sentir:** ela nunca vê tela de segurança; o cuidado é invisível.
 - **Momento de verdade técnico:** um adulto malicioso tenta acessar dado de **outra escola** e o **isolamento**
-  barra; um cartão perdido tem o **QR regenerado** e as sessões derrubadas (o código exposto é o risco residual aceito).
+  barra; um cartão perdido ou roubado é **regenerado** — **código e QR novos**, sessões derrubadas — e o cartão
+  antigo para de entrar (o risco residual aceito é a janela até a regeneração).
 
 ### 5. Fluxo completo
 Os fluxos de segurança/privacidade (login defensivo; consentimento; direitos; anonimização; incidente):
@@ -109,12 +110,17 @@ exercê-los**; os itens que dependem de confirmação jurídica ficam em §15.
 entram apenas como **leitura de ameaça** (por que existem, o que mitigam), sem redefinir o mecanismo.
 
 ### 9. Regras de negócio
-- **Modelo de ameaça do login código-só (Princípio 1; decidido):** o código impresso é **exposto por design**.
+- **Modelo de ameaça do login código-só (Princípio 1; decidido — o vetor do cartão roubado/perdido mudou na
+  revisão e97 e aguarda a ratificação do dono, §15):** o código impresso é **exposto por design**.
   Matriz **vetor → defesa**: **força bruta/adivinhação** → limitador por `(código, IP)` + teto por IP + a
   **entropia** do código; **enumeração em massa** → teto por IP; **erro de digitação da criança** → normalização
-  tolerante (regras = Seção [11](11-arquitetura.md)) e **aluno inativo não pune**; **cartão roubado/perdido** →
-  **risco residual aceito** (o código **não é rotacionado** — a criança o decora); a regeneração troca só o **QR**
-  + `token_version` (derruba sessões antigas), não remedia um código já lido (mecanismo = Seção [11](11-arquitetura.md)).
+  tolerante (regras = Seção [11](11-arquitetura.md)) e **aluno inativo não pune**; **cartão roubado/perdido ou QR
+  vazado** → **regenerar o cartão individual**: troca **código e QR** e incrementa o `token_version` (derruba toda
+  sessão do aluno, aberta por código ou por QR), e o cartão antigo para de entrar — revogar só o QR não basta,
+  porque o cartão traz os dois e a sessão aberta pelo QR lê o código; a criança passa a usar (e decorar) o código
+  novo. **Risco residual aceito:** a janela entre a perda e a regeneração (o perfil de jogo daquela criança).
+  **Cartão esquecido** não pede regeneração: o professor consulta o código na **folha "só do professor"**
+  (mecanismo = Seção [11](11-arquitetura.md); operação = Seção [21](21-suporte-operacao.md) S6).
   Sempre com **escopo mínimo** do papel aluno. Os **valores** dos limites e o **mecanismo distribuído** são das
   Seções [11](11-arquitetura.md)/[19](19-liveops.md); a 12 fixa o **requisito e a razão**.
 - **Espaço/entropia do código (decidido — alvo a ratificar):** o formato `PALAVRA+NNNN` deve ter **entropia
@@ -192,8 +198,11 @@ Este capítulo **alimenta:** o **DoD de segurança** que todas as seções segue
 executa. **Dá origem a:** o termo de consentimento, a política de privacidade pública e o processo de incidente.
 
 ### 12. Casos extremos (Edge Cases)
-- **Cartão perdido/roubado:** **regenerado sem expor dado** (mecanismo de regeneração/invalidação de sessão =
-  Seção [11](11-arquitetura.md)); **risco residual aceito**; mensagem acolhedora ao aluno (UI = Seção [07](07-ux-fluxos-navegacao.md)).
+- **Cartão perdido/roubado ou QR vazado:** **regenerar o cartão individual**, **sem expor dado** — **código e QR
+  novos**, sessões derrubadas (`token_version`), o código antigo deixa de entrar e a turma não cai (mecanismo de
+  regeneração/invalidação de sessão = Seção [11](11-arquitetura.md)); **risco residual aceito** = a janela até a
+  regeneração; mensagem acolhedora ao aluno (UI = Seção [07](07-ux-fluxos-navegacao.md)). **Cartão esquecido:**
+  consultar o código na **folha** do professor (nada a revogar).
 - **Força bruta/enumeração no código:** o **rate-limit** (duas camadas) + a **entropia** limitam; o fluxo é
   confirmatório (não anti-enumeração — §7), então a defesa é a **cadência**, não o sigilo da existência.
 - **Criança digita errado:** a **normalização tolerante** (regras = Seção [11](11-arquitetura.md)) nunca pune.
@@ -247,6 +256,13 @@ e calibrações dependentes de outra seção:
 - ⚠️ **Encarregado (DPO) designado** + **política de privacidade pública** a publicar.
 - ⚠️ **Processo formal de incidente** e de **direitos do titular** (prazos, quem executa) — Seção [21](21-suporte-operacao.md).
 - ⚠️ **Entropia-alvo do código** de login (comprimento/alfabeto) contra enumeração.
+- ⚠️ **Ratificar a troca do código na regeneração (revisão e97):** a regra **decidida** do §9 dizia que o código
+  **não era rotacionado** (a criança o decora) e que a regeneração trocava só o QR + `token_version`. A revisão e97
+  mostrou que isso não revogava nada: o código impresso no mesmo cartão (e o lido por quem só teve o QR) abria
+  sessão nova logo depois da "revogação". Desde a correção, `regenerar` troca **código e QR** e derruba as sessões
+  (§9/§12; Seção [21](21-suporte-operacao.md) S6; Apêndice B); o custo é a criança decorar um código novo depois de
+  perder o cartão. A regra foi substituída **por força da tarefa** — o dono ratifica (ou decide outra forma de
+  revogar que não troque o código).
 - ⚠️ **Rotação de segredos** (chave JWT, chave Fernet): cadência e procedimento — política aqui, mecanismo/operação
   na Seção [11](11-arquitetura.md)/[14](14-infra-deploy-dr.md).
 - ⚠️ **Criptografia/retenção dos backups** de dado de criança — a 12 **exige**; a Seção [14](14-infra-deploy-dr.md)
@@ -266,7 +282,8 @@ e calibrações dependentes de outra seção:
 **Decisões registradas por este capítulo:**
 1. **Privacidade por design + coleta mínima** (LGPD Art. 14; Princípio 3): nada além do Edu; sem foto/localização/biometria.
 2. **Modelo de ameaça do login código-só (Princípio 1):** exposto por design; matriz vetor→defesa (força bruta →
-   limitador `(código, IP)` + teto por IP + entropia; cartão roubado → risco residual + regeneração); aluno
+   limitador `(código, IP)` + teto por IP + entropia; cartão roubado/perdido → regenerar troca código e QR e
+   derruba as sessões, risco residual = a janela até regenerar — revisão e97, a ratificar, §15); aluno
    inativo não pune (valores/mecanismo = Seções [11](11-arquitetura.md)/[19](19-liveops.md)).
 3. **Sem texto livre ao aluno** (Princípio 2); exceção única = **`nome_exibicao`** validado (2–20, letras =
    Princípio 2; lista negra = §15); fora da turma só o **`apelido`** (pseudônimo, LGPD).
@@ -332,7 +349,8 @@ The target feeling is **trust** (the "user" here is the school/family/dev; the c
   legalese, and a deletion path via the school.
 - **Child — protected without noticing:** they never see a security screen; the care is invisible.
 - **Technical moment of truth:** a malicious adult tries to reach **another school's** data and **isolation**
-  blocks it; a lost card has its **QR regenerated** and sessions dropped (the exposed code is the accepted residual risk).
+  blocks it; a lost or stolen card is **regenerated** — **new code and QR**, sessions dropped — and the old card
+  stops working (the accepted residual risk is the window until regeneration).
 
 ### 5. Complete flow
 The security/privacy flows (defensive login; consent; rights; anonymization; incident):
@@ -384,14 +402,20 @@ here they appear only as a **threat reading** (why they exist, what they mitigat
 mechanism.
 
 ### 9. Business rules
-- **Code-only login threat model (Principle 1; decided):** the printed code is **exposed by design**. The
+- **Code-only login threat model (Principle 1; decided — the stolen/lost card vector changed in the e97 review
+  and awaits the owner's ratification, §15):** the printed code is **exposed by design**. The
   **vector → defense** matrix: **brute force/guessing** → limiter per `(code, IP)` + IP cap + the code's
   **entropy**; **mass enumeration** → IP cap; **a child's typo** → tolerant normalization (rules = Section
-  [11](11-arquitetura.md)) and **an inactive student is not punished**; **stolen/lost card** → **accepted residual
-  risk** (the code is **not rotated** — the child memorizes it); regeneration only swaps the **QR** + `token_version`
-  (drops old sessions), it doesn't remedy an already-read code (mechanism = Section [11](11-arquitetura.md)). Always with the
-  **minimal scope** of the student role. The limit **values** and the **distributed mechanism** are Sections
-  [11](11-arquitetura.md)/[19](19-liveops.md)'s; 12 fixes the **requirement and the rationale**.
+  [11](11-arquitetura.md)) and **an inactive student is not punished**; **stolen/lost card or leaked QR** →
+  **regenerate the individual card**: it swaps **code and QR** and bumps `token_version` (drops every session of
+  the student, opened by code or by QR), and the old card stops working — revoking only the QR is not enough,
+  because the card carries both and a session opened by the QR reads the code; the child moves on to (and
+  memorizes) the new code. **Accepted residual risk:** the window between the loss and the regeneration (that
+  child's game profile). A **forgotten card** needs no regeneration: the teacher looks the code up on the
+  **"teacher only" sheet** (mechanism = Section [11](11-arquitetura.md); operation = Section
+  [21](21-suporte-operacao.md) S6). Always with the **minimal scope** of the student role. The limit **values**
+  and the **distributed mechanism** are Sections [11](11-arquitetura.md)/[19](19-liveops.md)'s; 12 fixes the
+  **requirement and the rationale**.
 - **Code space/entropy (decided — target to ratify):** the `PALAVRA+NNNN` format must have **enough entropy**
   against systematic guessing **within the school**, under the rate-limit; the **exact target entropy**
   (length/alphabet) is an owner calibration (§15).
@@ -466,9 +490,11 @@ This chapter **feeds:** the **security DoD** every section follows, the **transp
 executes. **Spawns:** the consent form, the public privacy policy and the incident process.
 
 ### 12. Edge cases
-- **Lost/stolen card:** the **QR is regenerated** and sessions drop (`token_version`); the **code is not rotated** —
-  its exposure is the **accepted residual risk** (mechanism = Section [11](11-arquitetura.md)); a welcoming message
-  (UI = Section [07](07-ux-fluxos-navegacao.md)).
+- **Lost/stolen card or leaked QR:** **regenerate the individual card**, **without exposing data** — **new code and
+  QR**, sessions dropped (`token_version`), the old code stops working and the class is not taken down (mechanism =
+  Section [11](11-arquitetura.md)); the **accepted residual risk** is the window until regeneration; a welcoming
+  message (UI = Section [07](07-ux-fluxos-navegacao.md)). **Forgotten card:** look the code up on the teacher's
+  **sheet** (nothing to revoke).
 - **Brute force/enumeration on the code:** the **rate-limit** (two layers) + the **entropy** limit it; the flow is
   confirmatory (not anti-enumeration — §7), so the defense is **cadence**, not hiding existence.
 - **Child mistypes:** **tolerant normalization** (rules = Section [11](11-arquitetura.md)) never punishes.
@@ -523,6 +549,13 @@ calibrations that depend on another section:
 - ⚠️ **Designated DPO** + **public privacy policy** to publish.
 - ⚠️ **Formal incident process** and **data-subject rights** (deadlines, who executes) — Section [21](21-suporte-operacao.md).
 - ⚠️ **Target code entropy** (length/alphabet) against enumeration.
+- ⚠️ **Ratify the code swap on regeneration (e97 review):** the **decided** rule in §9 said the code **was not
+  rotated** (the child memorizes it) and that regeneration only swapped the QR + `token_version`. The e97 review
+  showed this revoked nothing: the code printed on the same card (and the one read by whoever only had the QR)
+  opened a new session right after the "revocation". Since the fix, `regenerar` swaps **code and QR** and drops
+  the sessions (§9/§12; Section [21](21-suporte-operacao.md) S6; Appendix B); the cost is the child memorizing a new
+  code after losing the card. The rule was replaced **by force of the task** — the owner ratifies it (or decides on
+  another way to revoke that does not swap the code).
 - ⚠️ **Secrets rotation** (JWT key, Fernet key): cadence and procedure — policy here, mechanism/ops in Section
   [11](11-arquitetura.md)/[14](14-infra-deploy-dr.md).
 - ⚠️ **Encryption/retention of backups** of child data — 12 **requires**; Section [14](14-infra-deploy-dr.md)
@@ -542,7 +575,8 @@ calibrations that depend on another section:
 **Decisions recorded by this chapter:**
 1. **Privacy by design + minimal collection** (LGPD Art. 14; Principle 3): nothing beyond Edu; no photo/location/biometrics.
 2. **Code-only login threat model (Principle 1):** exposed by design; vector→defense matrix (brute force → limiter
-   `(code, IP)` + IP cap + entropy; stolen card → residual risk + regeneration); inactive student not punished
+   `(code, IP)` + IP cap + entropy; stolen/lost card → regenerating swaps code and QR and drops the sessions,
+   residual risk = the window until regeneration — e97 review, to ratify, §15); inactive student not punished
    (values/mechanism = Sections [11](11-arquitetura.md)/[19](19-liveops.md)).
 3. **No free text to the student** (Principle 2); sole exception = validated **`nome_exibicao`** (2–20, letters =
    Principle 2; blacklist = §15); outside the class only the **`apelido`** (pseudonym, LGPD).

@@ -6,9 +6,12 @@
  * sai do ranking e aparece na lista de ação, que é onde a coordenação precisa
  * vê-lo.
  *
- * Extraído do Ranking Geral (que agora fica só com a ordem única) para ser o
- * TOPO das abas Leitura e Matemática. Os filtros (turma/série e o turno global)
- * chegam por props — a tela dona é quem tem os seletores; aqui só se consulta.
+ * Extraído do Ranking Geral (que agora fica só com a ordem única) para as abas
+ * Leitura e Matemática, onde vive como seção SECUNDÁRIA recolhível (`recolhivel`):
+ * o bloco principal da aba é o ranking do período, com o pódio. Os filtros
+ * (turma/série e o turno global) chegam por props — a tela dona é quem tem os
+ * seletores; aqui só se consulta. Recolhida, a seção continua montada (as
+ * consultas e a lista de não aferidos seguem valendo) e o resumo fica à vista.
  *
  * Endpoints: `/ranking?dimensao=...` e `/nao-aferidos`, ambos com os mesmos
  * filtros (turma_id | ano_escolar, turno). O denominador exibido é o
@@ -19,8 +22,9 @@
  * usa turma, série nem turno, o botão fica desabilitado (com o motivo) quando
  * algum desses filtros está aplicado, para não parecer que baixa o recorte.
  */
-import { Download } from "lucide-react";
+import { BookOpen, Calculator, Download, UserX } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
@@ -30,11 +34,13 @@ import { apiDownload } from "../lib/api";
 import { nota, numero } from "../lib/formato";
 import { TURNO_TODOS, aplicarTurno } from "../lib/turnos";
 import type { Dimensao, NaoAferidos, RankingItem } from "../lib/types";
-import { Badge, Botao, Card, Carregando, Mensagem, Vazio } from "./ui";
+import { CelulaAluno, PosicaoRanking, SecaoRanking, tabelaRanking as t } from "./RankingUi";
+import { TabelaRolavel } from "./TabelaRolavel";
+import { Avatar, Botao, Card, Carregando, Chip, Erro, IconePastel, Mensagem, Vazio } from "./ui";
 
-const MATERIAS: Record<Dimensao, { rotulo: string; dados: string; rotuloDados: string }> = {
-  leitura: { rotulo: "Leitura", dados: "livros_unicos", rotuloDados: "Livros" },
-  matematica: { rotulo: "Matemática", dados: "atividades", rotuloDados: "Atividades" },
+const MATERIAS: Record<Dimensao, { rotulo: string; dados: string; rotuloDados: string; plataforma: string }> = {
+  leitura: { rotulo: "Leitura", dados: "livros_unicos", rotuloDados: "Livros", plataforma: "Elefante Letrado" },
+  matematica: { rotulo: "Matemática", dados: "atividades", rotuloDados: "Atividades", plataforma: "Matific" },
 };
 
 /** Filtros da classificação: turma OU série (nunca os dois) + turno global. */
@@ -45,9 +51,13 @@ export interface FiltrosDimensao {
   turno: string;
 }
 
-export function DesempenhoDimensao({ dimensao, filtros }: {
+export function DesempenhoDimensao({ dimensao, filtros, recolhivel = false, aviso }: {
   dimensao: Dimensao;
   filtros: FiltrosDimensao;
+  /** Seção secundária recolhível (fechada ao abrir a aba). Padrão: bloco aberto. */
+  recolhivel?: boolean;
+  /** Aviso da tela dona sobre os filtros (ex.: turma fora do cadastro). */
+  aviso?: ReactNode;
 }) {
   const { escolaId } = useApp();
   // O cartaz (pôster) é documento de vitrine — só gestão (admin/coordenador/
@@ -104,117 +114,143 @@ export function DesempenhoDimensao({ dimensao, filtros }: {
     }
   }
 
-  return (
-    <div>
-      <div className="mb-1 flex flex-wrap items-center gap-2">
-        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Classificação oficial — {materia.rotulo}
-        </h2>
-        {gestor && (
-          <Botao
-            variante="neutro"
-            onClick={baixarCartaz}
-            disabled={baixandoCartaz || cartazIndisponivel !== ""}
-            title={cartazIndisponivel
-              || `Gera um pôster em PDF com os alunos aferidos em ${materia.rotulo} na escola inteira`}
-            className="ml-auto"
-          >
-            <Download size={15} />
-            {baixandoCartaz ? "Gerando cartaz…" : `Baixar cartaz de ${materia.rotulo}`}
-          </Botao>
-        )}
-      </div>
-      {erroCartaz && <div className="mb-2"><Mensagem tipo="erro">{erroCartaz}</Mensagem></div>}
+  const titulo = <>Classificação oficial — {materia.rotulo}</>;
+  const icone = dimensao === "leitura" ? BookOpen : Calculator;
+  const tom = dimensao === "leitura" ? "violeta" : "teal";
+  // O DENOMINADOR precisa estar visível: sem ele, um "3º" em Leitura e um "3º" em
+  // Matemática parecem comparáveis, e não são. Vem da API (conjunto filtrado).
+  const denominador = !carregando && !erro && lista.length > 0
+    ? <>{numero(lista[0]?.n_aferidos ?? lista.length)} alunos aferidos em {materia.rotulo}</>
+    : null;
+  const subtitulo = (
+    <>
+      Nota oficial (0–100) do ano letivo, só de quem tem dado do {materia.plataforma}
+      {denominador && <> · <span className="font-semibold text-zinc-700 dark:text-zinc-200">{denominador}</span></>}
+    </>
+  );
+  const cartaz = gestor && (
+    <Botao
+      variante="secundario"
+      tamanho="sm"
+      onClick={baixarCartaz}
+      disabled={baixandoCartaz || cartazIndisponivel !== ""}
+      title={cartazIndisponivel
+        || `Gera um pôster em PDF com os alunos aferidos em ${materia.rotulo} na escola inteira`}
+    >
+      <Download size={14} aria-hidden />
+      {baixandoCartaz ? "Gerando cartaz…" : `Baixar cartaz de ${materia.rotulo}`}
+    </Botao>
+  );
+
+  const corpo = (
+    <>
+      {aviso}
+      {erroCartaz && <div className="mb-3"><Mensagem tipo="erro">{erroCartaz}</Mensagem></div>}
       <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-        Nota oficial (0–100) do ano letivo. Só entram os alunos com dado da
-        plataforma de {materia.rotulo}; quem ainda não tem dado aparece abaixo,
-        sem nota e sem posição.
+        Só entram os alunos com dado da plataforma de {materia.rotulo}; quem ainda não tem dado
+        aparece abaixo, sem nota e sem posição. Não usa o período escolhido: é o ano letivo inteiro.
       </p>
 
-      <Card>
-        {carregando ? (
-          <Carregando />
-        ) : erro ? (
-          <Vazio titulo="Não foi possível carregar a classificação oficial" descricao={erro.message}
-                 acao={<Botao variante="neutro" onClick={recarregar}>Tentar de novo</Botao>} />
-        ) : lista.length === 0 ? (
-          <Vazio titulo={`Nenhum aluno aferido em ${materia.rotulo} ainda`}
-                 descricao="Importe ou sincronize os dados da plataforma para gerar a classificação." />
-        ) : (
-          <div className="overflow-x-auto">
-            {/* O DENOMINADOR precisa estar visível: sem ele, um "3º" em Leitura
-                e um "3º" em Matemática parecem comparáveis, e não são. Vem da
-                API (conjunto filtrado), não da contagem local. */}
-            <p className="border-b border-zinc-100 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800/60 dark:text-zinc-400">
-              {numero(lista[0]?.n_aferidos ?? lista.length)} alunos aferidos em {materia.rotulo}
-            </p>
-            <table className="w-full text-sm tabular-nums">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium">#</th>
-                  <th className="px-4 py-2 font-medium">Aluno</th>
-                  <th className="hidden px-4 py-2 font-medium md:table-cell">Turma</th>
-                  <th className="px-4 py-2 text-right font-medium">Nota de {materia.rotulo}</th>
-                  <th className="hidden px-4 py-2 text-right font-medium sm:table-cell">{materia.rotuloDados}</th>
-                  <th className="hidden px-4 py-2 text-right font-medium sm:table-cell">Adoção</th>
+      {carregando ? (
+        <Carregando />
+      ) : erro ? (
+        <Erro titulo="Não foi possível carregar a classificação oficial" descricao={erro.message} aoTentar={recarregar} />
+      ) : lista.length === 0 ? (
+        <Vazio
+          icone={icone}
+          titulo={`Nenhum aluno aferido em ${materia.rotulo} ainda`}
+          descricao="Importe ou sincronize os dados da plataforma para gerar a classificação."
+        />
+      ) : (
+        // Celular: a NOTA (o que ordena) fica presa à direita; o cabeçalho dela quebra
+        // em duas linhas ("Nota de / Matemática") para a coluna presa não cobrir o aluno.
+        <TabelaRolavel rotulo={`Classificação oficial — ${materia.rotulo}: tabela completa`} className="-mx-5">
+          <table className={t.tabela}>
+            <thead className={t.thead}>
+              <tr>
+                <th className={t.th}>#</th>
+                <th className={t.th}>Aluno</th>
+                <th className={t.th}>Turma</th>
+                <th className={`${t.thNum} ${t.thPresa} ${t.thQuebraCelular}`}>Nota de {materia.rotulo}</th>
+                <th className={t.thNum}>{materia.rotuloDados}</th>
+                <th className={t.thNum}>Adoção</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map((item) => (
+                <tr key={item.aluno_id} className={t.tr}>
+                  <td className={t.td}><PosicaoRanking posicao={item.posicao} /></td>
+                  <td className={t.td}>
+                    <CelulaAluno nome={item.nome} href={`/alunos/${item.aluno_id}`} chave={item.aluno_id} />
+                  </td>
+                  <td className={t.tdCurto}>{item.turma ? <Chip>{item.turma}</Chip> : "—"}</td>
+                  <td className={`${t.tdForte} ${t.tdPresa}`}>{nota(item.nota ?? 0)}</td>
+                  <td className={t.tdNum}>{numero(item.dados?.[materia.dados] ?? 0)}</td>
+                  <td className={`${t.tdNum} text-zinc-500 dark:text-zinc-400`}>
+                    {item.adocao == null ? "—" : `${Math.round(item.adocao)}%`}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {lista.map((item) => (
-                  <tr key={item.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-4 py-2.5">
-                      {item.posicao <= 3 ? <Badge tom="destaque">{item.posicao}º</Badge> : `${item.posicao}º`}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <Link to={`/alunos/${item.aluno_id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
-                        {item.nome}
-                      </Link>
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{item.turma}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold">{nota(item.nota ?? 0)}</td>
-                    <td className="hidden px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400 sm:table-cell">
-                      {numero(item.dados?.[materia.dados] ?? 0)}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400 sm:table-cell">
-                      {item.adocao == null ? "—" : `${Math.round(item.adocao)}%`}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+              ))}
+            </tbody>
+          </table>
+        </TabelaRolavel>
+      )}
 
       {/* NÃO é rodapé decorativo: é a lista de ação da coordenação. Quem nunca
           foi alcançado deixou de aparecer em último lugar com 0,0 (a leitura
           mais injusta que o sistema produzia) e passa a aparecer aqui, sem nota
           e sem posição — porque não há o que medir, não porque foi mal. */}
       {semDado && semDado.alunos.length > 0 && (
-        <Card className="mt-4">
-          <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-            <h3 className="text-sm font-semibold">
-              Ainda não aferidos em {materia.rotulo} ({numero(semDado.alunos.length)})
-            </h3>
-            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-              Sem dado importado desta plataforma. Não entram no ranking nem na
-              média — ausência não é nota zero.
-            </p>
+        <Card className="mt-5 overflow-hidden bg-zinc-50/70 shadow-none dark:bg-zinc-800/30">
+          <div className="flex items-start gap-3 border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-800">
+            <IconePastel icone={UserX} tom="ambar" tamanho="sm" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
+                Ainda não aferidos em {materia.rotulo} ({numero(semDado.alunos.length)})
+              </h3>
+              <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                Sem dado importado desta plataforma. Não entram no ranking nem na
+                média — ausência não é nota zero.
+              </p>
+            </div>
           </div>
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+          <ul className="grid grid-cols-1 gap-x-4 divide-y divide-zinc-200/70 px-4 sm:grid-cols-2 sm:divide-y-0 dark:divide-zinc-800">
             {semDado.alunos.map((aluno) => (
-              <li key={aluno.aluno_id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+              <li key={aluno.aluno_id} className="flex min-w-0 items-center gap-2.5 py-2 text-sm">
+                <Avatar nome={aluno.nome} chave={aluno.aluno_id} tamanho="sm" />
                 <Link to={`/alunos/${aluno.aluno_id}`}
-                      className="min-w-0 flex-1 truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
+                      className="min-w-0 flex-1 truncate font-medium text-zinc-800 hover:text-indigo-700 hover:underline dark:text-zinc-100 dark:hover:text-indigo-300" title={aluno.nome}>
                   {aluno.nome}
                 </Link>
-                <span className="shrink-0 text-xs text-zinc-400">{aluno.turma}</span>
-                <span className="w-6 shrink-0 text-right text-zinc-300 dark:text-zinc-600">—</span>
+                {aluno.turma && <Chip className="shrink-0 bg-white dark:bg-zinc-900">{aluno.turma}</Chip>}
+                <span aria-hidden className="w-5 shrink-0 text-right text-zinc-400">—</span>
               </li>
             ))}
           </ul>
         </Card>
       )}
-    </div>
+    </>
+  );
+
+  if (recolhivel) {
+    return (
+      <SecaoRanking titulo={titulo} subtitulo={subtitulo} icone={icone} tom={tom} acoes={cartaz || undefined}>
+        {corpo}
+      </SecaoRanking>
+    );
+  }
+
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex flex-wrap items-start gap-3 px-5 py-4">
+        <IconePastel icone={icone} tom={tom} />
+        <div className="min-w-0 flex-1 basis-56">
+          <h2 className="text-[15px] font-semibold leading-snug text-zinc-900 dark:text-white">{titulo}</h2>
+          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{subtitulo}</p>
+        </div>
+        {cartaz}
+      </div>
+      <div className="border-t border-zinc-100 px-5 pb-5 pt-4 dark:border-zinc-800">{corpo}</div>
+    </section>
   );
 }

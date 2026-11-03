@@ -26,17 +26,17 @@ function revisaoFake(over: Partial<RevisaoIdentidade> = {}): RevisaoIdentidade {
     id: 7,
     plataforma: "matific",
     formato: "resumo",
-    id_externo: "5869165b-1c2d-4e3f-8a9b-0c1d2e3f4a5b",
-    nome_recebido: "TAUFIK D",
+    id_externo: "00000000-0000-4000-8000-0000000000a7",
+    nome_recebido: "TOBIAS D",
     turma_informada: "5 ANO B",
     turma_id: 2,
     motivo: "candidatos_multiplos",
     motivo_texto: "mais de um aluno plausível na sala",
     candidatos: [
-      { aluno_id: 31, nome: "TAUFIK DE OLIVEIRA SANTOS", status: "ativo", turma: "5ºB" },
-      { aluno_id: 32, nome: "TAUFIK DUARTE LIMA", status: "arquivado", turma: "5ºB" },
+      { aluno_id: 31, nome: "TOBIAS DE OTTOLINI SANTELLI", status: "ativo", turma: "5ºB" },
+      { aluno_id: 32, nome: "TOBIAS DUARTE LIMA", status: "arquivado", turma: "5ºB" },
     ],
-    linhas: [{ turma_relatorio: "5 ANO B", matific_uuid: "5869165b-1c2d-4e3f-8a9b-0c1d2e3f4a5b",
+    linhas: [{ turma_relatorio: "5 ANO B", matific_uuid: "00000000-0000-4000-8000-0000000000a7",
                estrelas: 120, atividades: 30, pontuacao_media: 4 }],
     contexto: { tipo: "texto", data_referencia: "2026-09-20T12:00:00",
                 periodo_inicio: "2026-09-01T00:00:00", periodo_fim: "2026-09-30T23:59:59" },
@@ -97,21 +97,21 @@ function contarGets(caminhoPrefixo: string) {
     ([c, o]) => String(c).startsWith(caminhoPrefixo) && !((o as RequestInit)?.method)).length;
 }
 
-async function abrirDetalhe(u: ReturnType<typeof userEvent.setup>, nome = "TAUFIK D") {
+async function abrirDetalhe(u: ReturnType<typeof userEvent.setup>, nome = "TOBIAS D") {
   await u.click(await screen.findByRole("button", { name: `Ver revisão de ${nome}` }));
   return screen.findByRole("dialog", { name: "Revisão de identidade" });
 }
 
 describe("Revisões de identidade — lista", () => {
   it("carrega a fila: mostra 'Carregando…' e depois o contador e os itens", async () => {
-    filaMock([revisaoFake(), revisaoFake({ id: 8, nome_recebido: "MATHIAS R", plataforma: "elefante",
+    filaMock([revisaoFake(), revisaoFake({ id: 8, nome_recebido: "MAURO R", plataforma: "elefante",
       id_externo: "4242", formato: "leituras", ocorrencias: 1 })]);
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
 
     expect(screen.getByText("Carregando revisões…")).toBeInTheDocument();
     expect(await screen.findByText("2 pendências")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ver revisão de TAUFIK D" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ver revisão de MATHIAS R" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ver revisão de MAURO R" })).toBeInTheDocument();
     expect(screen.queryByText("Carregando revisões…")).toBeNull();
   });
 
@@ -128,12 +128,12 @@ describe("Revisões de identidade — lista", () => {
     filaMock([revisaoFake()]);
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
 
-    const item = (await screen.findByRole("button", { name: "Ver revisão de TAUFIK D" }))
+    const item = (await screen.findByRole("button", { name: "Ver revisão de TOBIAS D" }))
       .closest("li") as HTMLElement;
     const q = within(item);
-    expect(q.getByText("TAUFIK D")).toBeInTheDocument();
+    expect(q.getByText("TOBIAS D")).toBeInTheDocument();
     expect(q.getByText("Matific")).toBeInTheDocument();
-    expect(q.getByText("5869165b-1c2d-4e3f-8a9b-0c1d2e3f4a5b")).toBeInTheDocument();
+    expect(q.getByText("00000000-0000-4000-8000-0000000000a7")).toBeInTheDocument();
     expect(q.getByText("5 ANO B")).toBeInTheDocument();
     expect(q.getByText("5º Ano")).toBeInTheDocument();            // série da turma cadastrada
     expect(q.getByText("01/09/2026 a 30/09/2026")).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("Revisões de identidade — lista", () => {
       contexto: { tipo: "texto" }, ocorrencias: 1 })]);
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
 
-    const item = (await screen.findByRole("button", { name: "Ver revisão de TAUFIK D" }))
+    const item = (await screen.findByRole("button", { name: "Ver revisão de TOBIAS D" }))
       .closest("li") as HTMLElement;
     expect(within(item).queryByText("Identidade:")).toBeNull();
     expect(within(item).getByText("não informada")).toBeInTheDocument();
@@ -158,7 +158,7 @@ describe("Revisões de identidade — lista", () => {
     const u = userEvent.setup();
     filaMock([
       revisaoFake(),
-      revisaoFake({ id: 8, nome_recebido: "MATHIAS R", plataforma: "elefante", id_externo: "4242" }),
+      revisaoFake({ id: 8, nome_recebido: "MAURO R", plataforma: "elefante", id_externo: "4242" }),
       revisaoFake({ id: 9, nome_recebido: "ANA LIMA", status: "resolvida", aluno_escolhido_id: 31,
         resolvida_em: "2026-09-19T08:00:00" }),
     ]);
@@ -167,15 +167,15 @@ describe("Revisões de identidade — lista", () => {
     expect(screen.queryByRole("button", { name: "Ver revisão de ANA LIMA" })).toBeNull();
 
     await u.selectOptions(screen.getByLabelText("Plataforma"), "elefante");
-    expect(screen.queryByRole("button", { name: "Ver revisão de TAUFIK D" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Ver revisão de MATHIAS R" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Ver revisão de MAURO R" })).toBeInTheDocument();
 
     await u.selectOptions(screen.getByLabelText("Plataforma"), "todas");
     await u.selectOptions(screen.getByLabelText("Situação"), "resolvida");
     expect(await screen.findByRole("button", { name: "Ver revisão de ANA LIMA" })).toBeInTheDocument();
     expect(screen.getByText("Resolvida")).toBeInTheDocument();
     expect(api).toHaveBeenCalledWith(`${BASE}?situacao=resolvida`, expect.anything());
-    expect(screen.queryByRole("button", { name: "Ver revisão de TAUFIK D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
     // O contador continua sendo o de PENDENTES.
     expect(screen.getByText("2 pendências")).toBeInTheDocument();
   });
@@ -204,7 +204,7 @@ describe("Revisões de identidade — lista", () => {
     responderErro("GET", (c) => c.startsWith(BASE), 500, "Banco indisponível");
     await u.click(screen.getByRole("button", { name: "Atualizar" }));
     expect(await screen.findByText(/Não foi possível atualizar a lista: Banco indisponível/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ver revisão de TAUFIK D" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeInTheDocument();
     expect(screen.queryByText(/A lista foi atualizada com a situação atual/)).toBeNull();
 
     await u.selectOptions(screen.getByLabelText("Situação"), "resolvida");
@@ -243,9 +243,9 @@ describe("Revisões de identidade — detalhe", () => {
 
     // A. identidade recebida — só o que o backend informou
     const identidade = q.getByRole("region", { name: "Identidade recebida" });
-    expect(within(identidade).getByText("TAUFIK D")).toBeInTheDocument();
+    expect(within(identidade).getByText("TOBIAS D")).toBeInTheDocument();
     expect(within(identidade).getByText("UUID do Matific:")).toBeInTheDocument();
-    expect(within(identidade).getByText("5869165b-1c2d-4e3f-8a9b-0c1d2e3f4a5b")).toBeInTheDocument();
+    expect(within(identidade).getByText("00000000-0000-4000-8000-0000000000a7")).toBeInTheDocument();
     expect(within(identidade).getByText("5 ANO B")).toBeInTheDocument();
     expect(within(identidade).getByText("5º Ano")).toBeInTheDocument();
     expect(within(identidade).getByText("01/09/2026 a 30/09/2026")).toBeInTheDocument();
@@ -256,12 +256,12 @@ describe("Revisões de identidade — detalhe", () => {
 
     // B. candidatos — nome, turma, série, situação da ficha e o botão de vincular
     const candidatos = q.getByRole("region", { name: "Candidatos encontrados" });
-    expect(within(candidatos).getByText("TAUFIK DE OLIVEIRA SANTOS")).toBeInTheDocument();
+    expect(within(candidatos).getByText("TOBIAS DE OTTOLINI SANTELLI")).toBeInTheDocument();
     expect(within(candidatos).getAllByText("5ºB · 5º Ano")).toHaveLength(2);
     expect(within(candidatos).getByText("Ficha ativa")).toBeInTheDocument();
     expect(within(candidatos).getByText("Ficha arquivada")).toBeInTheDocument();
-    expect(within(candidatos).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" })).toBeInTheDocument();
-    expect(within(candidatos).getByRole("button", { name: "Vincular este aluno: TAUFIK DUARTE LIMA" })).toBeInTheDocument();
+    expect(within(candidatos).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" })).toBeInTheDocument();
+    expect(within(candidatos).getByRole("button", { name: "Vincular este aluno: TOBIAS DUARTE LIMA" })).toBeInTheDocument();
 
     // C. dados pendentes — legíveis, sem as chaves técnicas
     const dados = q.getByRole("region", { name: "Dados que aguardam associação" });
@@ -274,17 +274,45 @@ describe("Revisões de identidade — detalhe", () => {
     expect(api.mock.calls.some(([, o]) => (o as RequestInit)?.method === "POST")).toBe(false);
   });
 
+  // Motivos novos da sincronização (frente B): o texto do motivo vem do backend;
+  // a tela diz ao gestor o que decidir.
+  it.each([
+    ["nome_incompleto", "a plataforma mandou só o nome abreviado", /Não crie ficha com o nome abreviado/],
+    // D10: a conta efetiva em outra escola só é vinculada aqui pelo Admin Global.
+    ["identidade_de_outra_escola",
+      "a conta da plataforma já está vinculada a um aluno de OUTRA escola do Constela",
+      /só o Admin Global vincula a conta à ficha dela aqui/],
+    // D11 (item E): a importação manual não encerra a pendência; decide-se aqui.
+    ["identidade_de_outra_escola",
+      "a conta da plataforma já está vinculada a um aluno de OUTRA escola do Constela",
+      /importação manual não encerra esta pendência: a decisão é feita aqui/],
+    ["id_externo_duplicado", "o mesmo identificador da plataforma veio em mais de uma linha",
+      /só o vínculo é gravado agora/],
+    ["turma_arquivada", "a turma do relatório está arquivada no cadastro",
+      /Turmas › Mostrar turmas arquivadas › Reativar/],
+    ["turma_fora_do_ano_letivo", "a turma escolhida não é do ano letivo ativo da escola",
+      /numa turma do ano letivo atual/],
+  ])("motivo %s mostra o texto do backend e a orientação", async (motivo, texto, orientacao) => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({ motivo, motivo_texto: texto })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const identidade = within(dialogo).getByRole("region", { name: "Identidade recebida" });
+    expect(within(identidade).getByText(`Motivo: ${texto}`)).toBeInTheDocument();
+    expect(within(identidade).getByText(orientacao)).toBeInTheDocument();
+  });
+
   it("leituras (livro a livro) aparecem como tabela", async () => {
     const u = userEvent.setup();
     filaMock([revisaoFake({ plataforma: "elefante", formato: "leituras", id_externo: "4242",
-      nome_recebido: "HELOISA DEL GIUDICE", motivo: "correspondencia_insegura",
+      nome_recebido: "HELOISA DORVANTE GRASSETTI", motivo: "correspondencia_insegura",
       motivo_texto: "nome parecido, mas a correspondência não é segura",
       linhas: [
         { livro: "O Pequeno Príncipe", nivel: "D", data: "2026-09-02T10:00:00", elefante_student_id: "4242" },
         { livro: "A Casa Amarela", nivel: "E", data: "2026-09-05T10:00:00", elefante_student_id: "4242" },
       ] })]);
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
-    const dialogo = await abrirDetalhe(u, "HELOISA DEL GIUDICE");
+    const dialogo = await abrirDetalhe(u, "HELOISA DORVANTE GRASSETTI");
     const dados = within(dialogo).getByRole("region", { name: "Dados que aguardam associação" });
     expect(within(dados).getByText("2 leituras")).toBeInTheDocument();
     expect(within(dados).getByRole("cell", { name: "O Pequeno Príncipe" })).toBeInTheDocument();
@@ -294,7 +322,7 @@ describe("Revisões de identidade — detalhe", () => {
 
   it("vincular a aluno existente: confirmação explícita → POST {aluno_id} → feedback → some da fila", async () => {
     const u = userEvent.setup();
-    const mock = filaMock([revisaoFake(), revisaoFake({ id: 8, nome_recebido: "MATHIAS R" })]);
+    const mock = filaMock([revisaoFake(), revisaoFake({ id: 8, nome_recebido: "MAURO R" })]);
     responder("POST", `${BASE}/7/resolver`, (_c, o) => {
       const corpo = JSON.parse(String((o as RequestInit).body));
       const rev = mock.resolvida(7, corpo.aluno_id);
@@ -306,26 +334,26 @@ describe("Revisões de identidade — detalhe", () => {
     const dialogo = await abrirDetalhe(u);
     const getsAntes = contarGets(BASE);
 
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     // Nada enviado antes da confirmação.
     expect(api.mock.calls.some(([, o]) => (o as RequestInit)?.method === "POST")).toBe(false);
     const confirmacao = await screen.findByRole("heading", { name: "Vincular a este aluno?" });
     const modal = confirmacao.parentElement as HTMLElement;
     expect(within(modal).getByText(/Você está vinculando esta identidade ao aluno/)).toBeInTheDocument();
-    expect(within(modal).getByText("TAUFIK DE OLIVEIRA SANTOS")).toBeInTheDocument();
+    expect(within(modal).getByText("TOBIAS DE OTTOLINI SANTELLI")).toBeInTheDocument();
     expect(within(modal).getByText(/Os dados pendentes .* serão aplicados a esta ficha/)).toBeInTheDocument();
     expect(within(modal).getByText(/Esta ação ficará registrada na auditoria/)).toBeInTheDocument();
 
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
 
     expect(corpoDoPost(`${BASE}/7/resolver`)).toEqual({ aluno_id: 31 });
-    expect(await screen.findByText(/Revisão resolvida: os dados de “TAUFIK D” foram vinculados a TAUFIK DE OLIVEIRA SANTOS\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Revisão resolvida: os dados de “TOBIAS D” foram vinculados a TOBIAS DE OTTOLINI SANTELLI\./)).toBeInTheDocument();
     // Painel fechou, fila relida do backend (sem reload), contador e lista atualizados.
     expect(screen.queryByRole("dialog", { name: "Revisão de identidade" })).toBeNull();
     await waitFor(() => expect(contarGets(BASE)).toBe(getsAntes + 1));   // 1 releitura, sem duplicar
     expect(await screen.findByText("1 pendência")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Ver revisão de TAUFIK D" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Ver revisão de MATHIAS R" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Ver revisão de MAURO R" })).toBeInTheDocument();
   });
 
   it("vincular a ficha inativa avisa que o aluno só volta ao ranking quando reativado; irmãs resolvidas e avisos do backend aparecem", async () => {
@@ -333,11 +361,11 @@ describe("Revisões de identidade — detalhe", () => {
     const mock = filaMock([revisaoFake()]);
     responder("POST", `${BASE}/7/resolver`, () => ({
       revisao: mock.resolvida(7, 32), aluno_id: 32, revisoes_resolvidas: [7, 12], importacoes: [91, 92],
-      avisos: ["TAUFIK DUARTE LIMA está com a ficha “arquivado”: os dados foram aplicados, mas ele só volta ao ranking quando for reativado em Alunos."],
+      avisos: ["TOBIAS DUARTE LIMA está com a ficha “arquivado”: os dados foram aplicados, mas ele só volta ao ranking quando for reativado em Alunos."],
     }));
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DUARTE LIMA" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DUARTE LIMA" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     expect(within(modal).getByText(/A ficha está “Ficha arquivada”/)).toBeInTheDocument();
     expect(within(modal).getByText(/A conta da plataforma \(UUID do Matific/)).toBeInTheDocument();
@@ -377,7 +405,7 @@ describe("Revisões de identidade — detalhe", () => {
     await u.click(within(modal).getByRole("button", { name: "Confirmar criação" }));
 
     expect(corpoDoPost(`${BASE}/7/resolver`)).toEqual({ criar_em_turma_id: 2 });
-    expect(await screen.findByText(/Revisão resolvida: uma ficha nova \(5ºB\) foi criada para “TAUFIK D” e recebeu os dados\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Revisão resolvida: uma ficha nova \(5ºB\) foi criada para “TOBIAS D” e recebeu os dados\./)).toBeInTheDocument();
     expect(await screen.findByText("Nenhuma pendência")).toBeInTheDocument();
   });
 
@@ -405,7 +433,7 @@ describe("Revisões de identidade — detalhe", () => {
     await u.click(within(modal).getByRole("button", { name: "Confirmar descarte" }));
 
     expect(corpoDoPost(`${BASE}/7/descartar`)).toEqual({ motivo: "conta de teste" });
-    expect(await screen.findByText(/Revisão descartada: os dados de “TAUFIK D” não foram associados a nenhum aluno\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Revisão descartada: os dados de “TOBIAS D” não foram associados a nenhum aluno\./)).toBeInTheDocument();
     expect(await screen.findByText("Nenhuma pendência")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Revisão de identidade" })).toBeNull();
   });
@@ -416,7 +444,7 @@ describe("Revisões de identidade — detalhe", () => {
     responderErro("POST", `${BASE}/7/resolver`, 500, "Falha ao aplicar os dados.");
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
 
@@ -435,7 +463,7 @@ describe("Revisões de identidade — detalhe", () => {
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
 
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     let modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
     expect(await within(modal).findByRole("alert")).toHaveTextContent(
@@ -457,7 +485,7 @@ describe("Revisões de identidade — detalhe", () => {
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
     mock.resolvida(7, 31);                         // outra pessoa resolveu no servidor
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
 
@@ -473,7 +501,7 @@ describe("Revisões de identidade — detalhe", () => {
     responderErro("POST", `${BASE}/7/resolver`, 400, "O aluno escolhido não pertence a esta escola.");
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
     expect(await within(modal).findByRole("alert")).toHaveTextContent(
@@ -486,8 +514,8 @@ describe("Revisões de identidade — detalhe", () => {
     const mock = filaMock([revisaoFake({ candidatos: [] })]);
     responder("GET", (c) => c.startsWith("/escolas/1/alunos?busca="), (caminho) => {
       const busca = new URL(`http://x${caminho}`).searchParams.get("busca");
-      return { total: 1, pagina: 1, por_pagina: 20, itens: busca === "taufik"
-        ? [{ id: 31, nome: "TAUFIK DE OLIVEIRA SANTOS", foto_url: null, numero_chamada: 4,
+      return { total: 1, pagina: 1, por_pagina: 20, itens: busca === "tobias"
+        ? [{ id: 31, nome: "TOBIAS DE OTTOLINI SANTELLI", foto_url: null, numero_chamada: 4,
              status: "ativo", turma: "5ºA", ano_escolar: "5º Ano" }] : [] };
     });
     responder("POST", `${BASE}/7/resolver`, (_c, o) => {
@@ -500,17 +528,17 @@ describe("Revisões de identidade — detalhe", () => {
     const q = within(dialogo);
     expect(q.queryByLabelText("Buscar aluno pelo nome")).toBeNull();     // nada sugerido sozinho
     await u.click(q.getByRole("button", { name: /Buscar outro aluno da escola/ }));
-    await u.type(q.getByLabelText("Buscar aluno pelo nome"), "taufik");
+    await u.type(q.getByLabelText("Buscar aluno pelo nome"), "tobias");
     await u.click(q.getByRole("button", { name: "Buscar" }));
     const resultado = await q.findByRole("list", { name: "Resultado da busca" });
-    expect(within(resultado).getByText("TAUFIK DE OLIVEIRA SANTOS")).toBeInTheDocument();
+    expect(within(resultado).getByText("TOBIAS DE OTTOLINI SANTELLI")).toBeInTheDocument();
     expect(within(resultado).getByText("5ºA · 5º Ano")).toBeInTheDocument();
 
-    await u.click(within(resultado).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(resultado).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
     expect(corpoDoPost(`${BASE}/7/resolver`)).toEqual({ aluno_id: 31 });
-    expect(await screen.findByText(/foram vinculados a TAUFIK DE OLIVEIRA SANTOS/)).toBeInTheDocument();
+    expect(await screen.findByText(/foram vinculados a TOBIAS DE OTTOLINI SANTELLI/)).toBeInTheDocument();
   });
 
   it("revisão resolvida/descartada abre só para leitura: sem botões de ação e com a decisão tomada", async () => {
@@ -518,7 +546,7 @@ describe("Revisões de identidade — detalhe", () => {
     filaMock([
       revisaoFake({ status: "resolvida", aluno_escolhido_id: 31, resolvida_por_id: 1,
         resolvida_em: "2026-09-21T09:00:00", resolucao: { acao: "associar", aluno_id: 31, revisao_origem: 7 } }),
-      revisaoFake({ id: 8, nome_recebido: "MATHIAS R", status: "descartada", resolvida_por_id: 1,
+      revisaoFake({ id: 8, nome_recebido: "MAURO R", status: "descartada", resolvida_por_id: 1,
         resolvida_em: "2026-09-21T09:30:00", resolucao: { acao: "descartar", motivo: "conta de teste" } }),
       revisaoFake({ id: 9, nome_recebido: "KAUA MENDES", candidatos: [], status: "resolvida",
         aluno_escolhido_id: 99, resolvida_por_id: 1, resolvida_em: "2026-09-21T10:00:00",
@@ -529,14 +557,14 @@ describe("Revisões de identidade — detalhe", () => {
 
     const dialogo = await abrirDetalhe(u);
     expect(within(dialogo).getByText(/^Resolvida em/)).toBeInTheDocument();
-    expect(within(dialogo).getByText(/Vinculada: TAUFIK DE OLIVEIRA SANTOS/)).toBeInTheDocument();
+    expect(within(dialogo).getByText(/Vinculada: TOBIAS DE OTTOLINI SANTELLI/)).toBeInTheDocument();
     expect(within(dialogo).getByRole("link", { name: "abrir ficha" })).toHaveAttribute("href", "/alunos/31");
     expect(within(dialogo).queryByRole("button", { name: /Vincular este aluno/ })).toBeNull();
     expect(within(dialogo).queryByRole("button", { name: "Criar novo aluno" })).toBeNull();
     expect(within(dialogo).queryByRole("button", { name: "Descartar revisão" })).toBeNull();
     await u.click(within(dialogo).getByRole("button", { name: "Fechar" }));
 
-    const outra = await abrirDetalhe(u, "MATHIAS R");
+    const outra = await abrirDetalhe(u, "MAURO R");
     expect(within(outra).getByText(/^Descartada em/)).toBeInTheDocument();
     expect(within(outra).getByText("Justificativa: conta de teste")).toBeInTheDocument();
     await u.click(within(outra).getByRole("button", { name: "Fechar" }));
@@ -545,6 +573,65 @@ describe("Revisões de identidade — detalhe", () => {
     const criada = await abrirDetalhe(u, "KAUA MENDES");
     expect(within(criada).getByText(/Uma ficha nova foi criada \(aluno nº 99\)/)).toBeInTheDocument();
     expect(within(criada).getByRole("link", { name: "abrir ficha" })).toHaveAttribute("href", "/alunos/99");
+  });
+
+  it("decisão do Admin Global fora da fila (D10) aparece como resolvida, com a origem legível", async () => {
+    // A reativação de ficha excluída / conta aposentada de uma conta que vale em
+    // outra escola grava a memória da decisão como revisão resolvida (origem
+    // "confirmacao_admin", sem candidatos nem linhas): a tela não mostra o código cru.
+    const u = userEvent.setup();
+    filaMock([
+      revisaoFake({ origem: "confirmacao_admin", motivo: "identidade_de_outra_escola",
+        motivo_texto: "conta já vinculada a um aluno de outra escola", candidatos: [], linhas: [],
+        contexto: {}, turma_informada: null, ocorrencias: 1, status: "resolvida",
+        aluno_escolhido_id: 31, resolvida_por_id: 1, resolvida_em: "2026-10-24T09:00:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: false, resolvida_na: "reativar" } }),
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await u.selectOptions(await screen.findByLabelText("Situação"), "todas");
+
+    const dialogo = await abrirDetalhe(u);
+    expect(within(dialogo).getByText("Confirmação do Admin Global (reativação)")).toBeInTheDocument();
+    expect(within(dialogo).queryByText("confirmacao_admin")).toBeNull();
+    expect(within(dialogo).getByText(/^Resolvida em/)).toBeInTheDocument();
+    expect(within(dialogo).getByRole("link", { name: "abrir ficha" })).toHaveAttribute("href", "/alunos/31");
+  });
+
+  it("revisão encerrada pelo sistema diz 'Encerrada automaticamente' e a regra; a humana segue 'Resolvida'", async () => {
+    const u = userEvent.setup();
+    filaMock([
+      revisaoFake({ status: "resolvida", aluno_escolhido_id: 31, resolvida_por_id: null,
+        resolvida_em: "2026-10-11T09:00:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: true, via: "abreviacao",
+          regra: "nome abreviado, candidato único na sala" } }),
+      revisaoFake({ id: 8, nome_recebido: "MAURO R", status: "resolvida", aluno_escolhido_id: 31,
+        resolvida_por_id: 1, resolvida_em: "2026-10-11T09:30:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: false, via: "explicito",
+          regra: "ficha fixada por quem confirmou a importação (prévia aceita ou alternativa escolhida)" } }),
+      revisaoFake({ id: 9, nome_recebido: "KAUA MENDES", status: "resolvida", aluno_escolhido_id: 31,
+        resolvida_por_id: null, resolvida_em: "2026-10-11T10:00:00",
+        resolucao: { acao: "associar", aluno_id: 31, automatica: true } }),
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await u.selectOptions(await screen.findByLabelText("Situação"), "todas");
+
+    const automatica = await abrirDetalhe(u);
+    expect(within(automatica).getByText(/^Encerrada automaticamente em/)).toBeInTheDocument();
+    expect(within(automatica).getByText("Regra: nome abreviado, candidato único na sala")).toBeInTheDocument();
+    expect(within(automatica).queryByText(/^Resolvida em/)).toBeNull();
+    expect(within(automatica).getByText(/Vinculada: TOBIAS DE OTTOLINI SANTELLI/)).toBeInTheDocument();
+    await u.click(within(automatica).getByRole("button", { name: "Fechar" }));
+
+    // Decisão de uma pessoa (automatica: false): continua "Resolvida", sem a regra.
+    const humana = await abrirDetalhe(u, "MAURO R");
+    expect(within(humana).getByText(/^Resolvida em/)).toBeInTheDocument();
+    expect(within(humana).queryByText(/^Regra:/)).toBeNull();
+    await u.click(within(humana).getByRole("button", { name: "Fechar" }));
+
+    // Automática sem regra gravada: o título muda, a linha da regra não aparece.
+    const semRegra = await abrirDetalhe(u, "KAUA MENDES");
+    expect(within(semRegra).getByText(/^Encerrada automaticamente em/)).toBeInTheDocument();
+    expect(within(semRegra).queryByText(/^Regra:/)).toBeNull();
   });
 
   it("Esc numa confirmação fecha só a confirmação (a revisão e o texto digitado ficam)", async () => {
@@ -577,7 +664,7 @@ describe("Revisões de identidade — detalhe", () => {
     }));
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     const confirmar = within(modal).getByRole("button", { name: "Confirmar vínculo" });
     await u.click(confirmar);
@@ -590,28 +677,28 @@ describe("Revisões de identidade — detalhe", () => {
     expect(api.mock.calls.filter(([, o]) => (o as RequestInit)?.method === "POST")).toHaveLength(1);
 
     liberar!();
-    expect(await screen.findByText(/foram vinculados a TAUFIK DE OLIVEIRA SANTOS/)).toBeInTheDocument();
+    expect(await screen.findByText(/foram vinculados a TOBIAS DE OTTOLINI SANTELLI/)).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Revisão de identidade" })).toBeNull();
   });
 
   it("resolver com o filtro 'Todas' relê as duas listas e o item passa a 'Resolvida'", async () => {
     const u = userEvent.setup();
-    const mock = filaMock([revisaoFake(), revisaoFake({ id: 8, nome_recebido: "MATHIAS R" })]);
+    const mock = filaMock([revisaoFake(), revisaoFake({ id: 8, nome_recebido: "MAURO R" })]);
     responder("POST", `${BASE}/7/resolver`, () => ({
       revisao: mock.resolvida(7, 31), aluno_id: 31, revisoes_resolvidas: [7], importacoes: [91], avisos: [] }));
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     await u.selectOptions(await screen.findByLabelText("Situação"), "todas");
-    await screen.findByRole("button", { name: "Ver revisão de MATHIAS R" });
+    await screen.findByRole("button", { name: "Ver revisão de MAURO R" });
     const getsAntes = contarGets(BASE);
 
     const dialogo = await abrirDetalhe(u);
-    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TAUFIK DE OLIVEIRA SANTOS" }));
+    await u.click(within(dialogo).getByRole("button", { name: "Vincular este aluno: TOBIAS DE OTTOLINI SANTELLI" }));
     const modal = (await screen.findByRole("heading", { name: "Vincular a este aluno?" })).parentElement as HTMLElement;
     await u.click(within(modal).getByRole("button", { name: "Confirmar vínculo" }));
 
     expect(await screen.findByText("1 pendência")).toBeInTheDocument();
     await waitFor(() => expect(contarGets(BASE)).toBe(getsAntes + 2));   // pendentes + todas
-    const item = screen.getByRole("button", { name: "Ver revisão de TAUFIK D" }).closest("li") as HTMLElement;
+    const item = screen.getByRole("button", { name: "Ver revisão de TOBIAS D" }).closest("li") as HTMLElement;
     expect(within(item).getByText("Resolvida")).toBeInTheDocument();
   });
 
@@ -640,7 +727,7 @@ describe("Revisões de identidade — aviso de duas contas na mesma ficha", () =
       motivo: "outra_identidade_na_plataforma",
       motivo_texto: "o aluno encontrado já tem outra conta nesta plataforma",
       candidatos: [
-        { aluno_id: 31, nome: "ALLYCE CRISTINA BARBOSA DE ALMEIDA", status: "ativo", turma: "5ºB" },
+        { aluno_id: 31, nome: "ARIELLE CRISTINA TESTELLI DE AMARO", status: "ativo", turma: "5ºB" },
       ],
     });
 
@@ -672,7 +759,7 @@ describe("Revisões de identidade — aviso de duas contas na mesma ficha", () =
     const dialogo = await abrirDetalhe(u);
     expect(
       within(dialogo).getByRole("button", {
-        name: "Vincular este aluno: ALLYCE CRISTINA BARBOSA DE ALMEIDA",
+        name: "Vincular este aluno: ARIELLE CRISTINA TESTELLI DE AMARO",
       }),
     ).toBeEnabled();
   });
@@ -712,7 +799,7 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
       motivo: "outra_identidade_na_plataforma",
       motivo_texto: "o aluno encontrado já tem outra conta nesta plataforma",
       candidatos: [
-        { aluno_id: 31, nome: "ALLYCE CRISTINA BARBOSA DE ALMEIDA", status: "ativo", turma: "5ºB" },
+        { aluno_id: 31, nome: "ARIELLE CRISTINA TESTELLI DE AMARO", status: "ativo", turma: "5ºB" },
       ],
     });
 

@@ -39,6 +39,72 @@ test("falha ao REATIVAR (mesmo caminho) também aparece", async () => {
   expect(await screen.findByText("Não foi possível reativar agora.")).toBeInTheDocument();
 });
 
+test("403 do D10 ao reativar ficha excluída aparece com o motivo", async () => {
+  responderErro("POST", /\/alunos\/acoes/, 403,
+    "A ficha excluída de “Ana Souza” tem uma conta da plataforma que hoje é a " +
+    "identidade de um aluno de OUTRA escola do Constela. […] só o Admin Global decide.");
+  const aoMudar = vi.fn();
+  renderComApp(
+    <AcoesAluno aluno={{ ...aluno, status: "excluido" }} escolaId={1} aoMudar={aoMudar} />,
+  );
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Reativar"));
+  expect(await screen.findByText(/só o Admin Global decide/)).toBeInTheDocument();
+  expect(aoMudar).not.toHaveBeenCalled();
+});
+
+const AVISO_D10 = "Atenção: esta conta da plataforma continua vinculada a um aluno de " +
+  "outra escola do Constela, que não foi alterada.";
+
+test("reativar com aviso na resposta mostra o aviso até o usuário fechar", async () => {
+  responder("POST", /\/alunos\/acoes/,
+    { mensagem: "1 aluno(s) reativado(s).", afetados: 1, avisos: [AVISO_D10] });
+  const aoMudar = vi.fn();
+  renderComApp(
+    <AcoesAluno aluno={{ ...aluno, status: "excluido" }} escolaId={1} aoMudar={aoMudar} />,
+  );
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Reativar"));
+
+  expect(await screen.findByText(AVISO_D10)).toBeInTheDocument();
+  // A tela só recarrega depois do "Entendi": recarregar antes desmontaria este
+  // componente (PerfilAluno → <Carregando/>) e o aviso sumiria sem ser lido.
+  expect(aoMudar).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Entendi" }));
+  expect(screen.queryByText(AVISO_D10)).toBeNull();
+  expect(aoMudar).toHaveBeenCalledTimes(1);
+});
+
+test("fechar o aviso pelo fundo da janela também avisa a tela uma única vez", async () => {
+  responder("POST", /\/alunos\/acoes/,
+    { mensagem: "1 aluno(s) reativado(s).", afetados: 1, avisos: [AVISO_D10] });
+  const aoMudar = vi.fn();
+  renderComApp(
+    <AcoesAluno aluno={{ ...aluno, status: "excluido" }} escolaId={1} aoMudar={aoMudar} />,
+  );
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Reativar"));
+
+  expect(await screen.findByText(AVISO_D10)).toBeInTheDocument();
+  expect(aoMudar).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Fechar janela" }));
+  expect(screen.queryByText(AVISO_D10)).toBeNull();
+  expect(aoMudar).toHaveBeenCalledTimes(1);
+});
+
+test("ação sem aviso não abre a janela de atenção", async () => {
+  responder("POST", /\/alunos\/acoes/,
+    { mensagem: "1 aluno(s) reativado(s).", afetados: 1, avisos: [] });
+  const aoMudar = vi.fn();
+  renderComApp(
+    <AcoesAluno aluno={{ ...aluno, status: "arquivado" }} escolaId={1} aoMudar={aoMudar} />,
+  );
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Reativar"));
+  await vi.waitFor(() => expect(aoMudar).toHaveBeenCalled());
+  expect(screen.queryByText(/Ação concluída — atenção/)).toBeNull();
+});
+
 test("arquivar com sucesso avisa a tela e não mostra erro", async () => {
   responder("POST", /\/alunos\/acoes/, { ok: true });
   const aoMudar = vi.fn();

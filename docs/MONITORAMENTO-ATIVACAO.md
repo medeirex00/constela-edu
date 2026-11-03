@@ -24,8 +24,15 @@ ativo: uma queda é descoberta pela escola reclamando”.
    | `SENTRY_TRACES_SAMPLE_RATE` | `0.1` (10% de tracing; opcional) |
 
 3. Redeploy. Pronto: exceções passam a chegar no Sentry com alerta por e-mail.
-   Nenhum dado pessoal de aluno é enviado — a redação já está no código
-   (`app/core/observabilidade.py::configurar_sentry`).
+   A redação de dado pessoal já está no código
+   (`app/core/observabilidade.py::configurar_sentry` e `higienizar_evento_sentry`): todo
+   texto do evento passa pela mesma redação do log, com custo limitado por evento. Ela
+   reduz o risco, não o elimina: é uma heurística por forma, e ficam, por exemplo, um nome
+   sozinho ou todo em minúsculas, um número no `extra`, as `tags` e os contextos (lista
+   completa no comentário "Risco residual" de `observabilidade.py`). Num evento com muitos
+   textos longos diferentes (consultas, breadcrumbs), os que passam do limite chegam como
+   `<omitido>` (o tempo de cada consulta continua lá); a mesma consulta repetida chega
+   redigida em todos os spans.
 
 ## 2. Monitor de uptime externo (10 min)
 

@@ -3,10 +3,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import exigir_admin_global, exigir_papeis, get_usuario_atual
+from app.core.deps import (
+    exigir_admin_global,
+    exigir_papeis,
+    get_usuario_atual,
+    negar_secretaria,
+)
 from app.models import Escola, Nota, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
-from app.services import provisionamento
+from app.services import permissoes, provisionamento
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas", tags=["Escolas"])
@@ -71,13 +76,51 @@ def atualizar(
     dados: EscolaUpdate,
     usuario: Usuario = Depends(exigir_papeis("admin")),
     db: Session = Depends(get_db),
+    _sem_secretaria: Usuario = Depends(negar_secretaria),
 ):
+    # A Secretaria não altera escola (a regra central de `escola_autorizada`):
+    # a conta promovida a Secretaria guarda o cargo e o `escola_id` de origem, e
+    # sem o `negar_secretaria` renomeava ou inativava a escola de onde veio.
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    # A Secretaria não altera escola (mesma régua de `deps.escola_autorizada`, que
+    # esta rota não usa). Sem isto, a conta PROMOVIDA a partir de um admin de escola
+    # — guarda cargo e `escola_id` de origem — renomeava ou inativava a escola.
+    if permissoes.e_secretaria(usuario):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "A Secretaria acompanha os dados da rede, mas não altera dados da escola.")
     if not usuario.is_global and usuario.escola_id != escola_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Acesso negado a esta escola.")
     alteracoes = dados.model_dump(exclude_unset=True)
+    # `status` e `ano_letivo_ativo` são NOT NULL: um `null` explícito passava
+    # pelas travas abaixo (que olham só valor presente) e virava 500 no commit.
+    nulos = [campo for campo in ("status", "ano_letivo_ativo")
+             if campo in alteracoes and alteracoes[campo] is None]
+    if nulos:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"Campo(s) que não aceitam vazio: {', '.join(nulos)}.")
+    novo_status = alteracoes.get("status")
+    if novo_status is not None and novo_status != escola.status and not usuario.is_global:
+        # ATIVAR/INATIVAR é decisão da rede, como o ano letivo: a tela que faz isso
+        # (Escolas) é só do Admin Global. Antes, o admin LOCAL desfazia pela API a
+        # inativação feita pelo global (ou inativava a própria escola). Mandar o
+        # status que a escola já tem segue aceito (cliente que reenvia o objeto).
+        # O que "inativa" significa para o ACESSO (hoje só some das listas e do
+        # painel público) é decisão pendente: docs/operacao/STATUS-ESCOLA-REDE.md.
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Só o administrador global ativa ou inativa escolas.")
+    if "nome" in alteracoes:
+        # Nome vazio (ou só espaços, ou null) deixava a escola sem nome no seletor
+        # e nos relatórios; acima de 200 caracteres o PostgreSQL recusa a coluna
+        # com 500. Mesmo limite do cadastro (``EscolaCreate``: 2 a 200). Unicidade
+        # NÃO é exigida na edição: só o cadastro tem essa regra (decisão do dono).
+        nome = (alteracoes["nome"] or "").strip()
+        if not 2 <= len(nome) <= 200:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "O nome da escola precisa ter de 2 a 200 caracteres.")
+        alteracoes["nome"] = nome
     novo_ano = alteracoes.get("ano_letivo_ativo")
     if novo_ano is not None and novo_ano != escola.ano_letivo_ativo:
         # HISTÓRICO PROTEGIDO: o recálculo grava as Notas do ANO ATIVO com os

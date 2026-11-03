@@ -3,7 +3,7 @@
 A sync entrega as linhas da plataforma ao MESMO pipeline do upload manual, e
 esse pipeline cria a ficha da criança quando não acha candidato. Numa escola
 cuja matrícula vem da Lista Piloto isso está errado na raiz, e o preço é alto:
-um nome truncado pelo relatório ("ANNA E"), uma criança de outra unidade, ou um
+um nome truncado pelo relatório ("HANNA E"), uma criança de outra unidade, ou um
 RA divergente que VETA o candidato certo viram ficha ativa, sem RA e sem
 nascimento, já pesando no ranking e na régua da escola. E não existe desfazer.
 
@@ -12,12 +12,15 @@ O que estes testes travam:
   * com ``bloquear``, a sync não cria Aluno, nem Matrícula, nem IdentidadeExterna;
   * a linha bloqueada NÃO se perde: vira pendência de identidade com nome,
     plataforma, id externo, turma e motivo, e continua resolvível;
-  * o upload manual e o cadastro pela tela seguem intactos;
+  * o upload manual de relatório de plataforma SEGUE a política (decisão D5 —
+    antes criava ficha mesmo com ``bloquear``; ver também
+    ``test_importacao_manual_politica``); o cadastro pela tela segue intacto;
   * casamento seguro continua associando — a política não torna tudo pendência.
 
-Os nomes dos casos vêm da escola 11 (Debora Pilon), onde o dry-run real mostrou
-7 criações: 5 pelo Elefante e 2 pelo Matific — estas com o nome TRUNCADO das
-mesmas crianças, ou seja duplicidade nascendo dentro da própria execução.
+Os casos reproduzem, com nomes FICTÍCIOS, o dry-run real da escola 11, que
+mostrou 7 criações: 5 pelo Elefante e 2 pelo Matific — estas com o
+nome TRUNCADO das mesmas crianças, ou seja duplicidade nascendo dentro da
+própria execução.
 """
 import pytest
 from sqlalchemy import func, select
@@ -29,10 +32,10 @@ from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
 from app.services import politica_sync
 
 # As 5 que o Elefante criaria e as 2 que o Matific criaria (truncadas).
-CINCO_ELEFANTE = ["ANA LUIZA SILVA DOS SANTOS", "ANNA ELOAH DE SOUZA MORAIS LEITE",
-                  "ANTONHY BORGES DOS SANTOS", "ENZO LUCAS ALVES PRADO",
-                  "MIGUEL BORGES DOS SANTOS"]
-DUAS_MATIFIC = ["ANNA E", "ENZO L"]
+CINCO_ELEFANTE = ["NAIR ELZA SIMULATTI DOS PROVATTI", "HANNA ELISA DE EXEMPLARI MODELLI FICTICIO",
+                  "ANTHONY INVENTINI DOS TESTELLI", "ODORICO LUCAS ENSAIOTTI PRADINI",
+                  "MIGUEL INVENTINI DOS TESTELLI"]
+DUAS_MATIFIC = ["HANNA E", "ODORICO L"]
 
 
 def _usuario(db, escola_completa):
@@ -114,26 +117,26 @@ def test_valor_corrompido_cai_no_padrao(db, escola_completa):
 def test_a_permitir_criar_mantem_o_comportamento_antigo(db, escola_completa, cena):
     """TESTE A — ALLOW_CREATE + sem correspondência → cria, como sempre."""
     antes = _conta(db, Aluno)
-    _confirmar(db, escola_completa, [_linha("ANA LUIZA SILVA DOS SANTOS", cena["rotulo"])],
+    _confirmar(db, escola_completa, [_linha("NAIR ELZA SIMULATTI DOS PROVATTI", cena["rotulo"])],
                permitir_criar_aluno=True)
     db.commit()
     assert _conta(db, Aluno) == antes + 1
     nova = db.execute(select(Aluno).where(
-        Aluno.nome == "ANA LUIZA SILVA DOS SANTOS")).scalars().first()
+        Aluno.nome == "NAIR ELZA SIMULATTI DOS PROVATTI")).scalars().first()
     assert nova is not None and nova.da_lista_piloto is False
 
 
 def test_b_c_d_bloquear_nao_cria_aluno_matricula_nem_identidade(db, escola_completa, cena):
     """TESTES B, C e D — nada nasce: nem ficha, nem matrícula, nem identidade."""
     antes = (_conta(db, Aluno), _conta(db, Matricula), _conta(db, IdentidadeExterna))
-    _confirmar(db, escola_completa, [_linha("ANA LUIZA SILVA DOS SANTOS", cena["rotulo"],
+    _confirmar(db, escola_completa, [_linha("NAIR ELZA SIMULATTI DOS PROVATTI", cena["rotulo"],
                                             sid="7777")],
                permitir_criar_aluno=False)
     db.commit()
     assert (_conta(db, Aluno), _conta(db, Matricula),
             _conta(db, IdentidadeExterna)) == antes
     assert db.execute(select(Aluno).where(
-        Aluno.nome == "ANA LUIZA SILVA DOS SANTOS")).scalars().first() is None
+        Aluno.nome == "NAIR ELZA SIMULATTI DOS PROVATTI")).scalars().first() is None
     assert db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.id_externo == "7777")).scalars().first() is None
 
@@ -143,7 +146,7 @@ def test_e_a_linha_bloqueada_vira_pendencia_auditavel(db, escola_completa, cena)
 
     Sem isto a trava seria pior que o problema: a criança desapareceria do
     radar em vez de nascer com ficha errada."""
-    _confirmar(db, escola_completa, [_linha("MIGUEL BORGES DOS SANTOS", cena["rotulo"],
+    _confirmar(db, escola_completa, [_linha("MIGUEL INVENTINI DOS TESTELLI", cena["rotulo"],
                                             sid="5150")],
                permitir_criar_aluno=False)
     db.commit()
@@ -152,7 +155,7 @@ def test_e_a_linha_bloqueada_vira_pendencia_auditavel(db, escola_completa, cena)
     r = rev[0]
     assert r.status == "pendente"
     assert r.motivo == "criacao_bloqueada_por_politica"
-    assert r.nome_recebido == "MIGUEL BORGES DOS SANTOS"
+    assert r.nome_recebido == "MIGUEL INVENTINI DOS TESTELLI"
     assert r.plataforma == "elefante"
     assert r.id_externo == "5150"                  # o id externo NÃO se perde
     assert cena["rotulo"] in (r.turma_informada or "")
@@ -176,7 +179,7 @@ def test_g_pendencia_bloqueada_continua_resolvivel(db, escola_completa, cena):
     """TESTE G — a pendência não é um beco sem saída: o gestor resolve pela
     rota oficial, apontando a ficha certa."""
     aluno = escola_completa["alunos"][1]
-    _confirmar(db, escola_completa, [_linha("ANTONHY BORGES DOS SANTOS", cena["rotulo"],
+    _confirmar(db, escola_completa, [_linha("ANTHONY INVENTINI DOS TESTELLI", cena["rotulo"],
                                             sid="3131")],
                permitir_criar_aluno=False)
     db.commit()
@@ -211,21 +214,57 @@ def test_h_cadastro_manual_pela_tela_continua_funcionando(cliente, db, escola_co
         Aluno.nome == "CRIANCA NOVA DA SECRETARIA")).scalars().first() is not None
 
 
-def test_upload_manual_nao_e_afetado_pela_politica(db, escola_completa, cena):
-    """O corpo do upload manual não manda a flag, então ela fica True — a
-    política vale para a SYNC, que a envia explicitamente."""
+def test_upload_manual_segue_a_politica_bloquear(db, escola_completa, cena):
+    """D5 (A2 §3.3), invertido: o corpo do upload manual não manda a flag, e
+    antes ela valia True — a ficha nascia mesmo com ``bloquear``. Agora o padrão
+    É a política da escola: nada nasce e a linha vira pendência com o motivo."""
+    politica_sync.definir(db, escola_completa["escola"].id, "bloquear")
+    db.commit()
+    antes = (_conta(db, Aluno), _conta(db, Matricula), _conta(db, IdentidadeExterna))
+    corpo = ImportacaoConfirm(          # igual ao que a tela envia
+        plataforma="elefante", formato="resumo", tipo="texto",
+        linhas=[_linha("ODORICO LUCAS ENSAIOTTI PRADINI", cena["rotulo"], sid="8080")],
+        recalcular=False)
+    assert corpo.permitir_criar_aluno is None          # padrão = a política
+    nucleo = _confirmar_sem_commit(dados=corpo, escola_id=escola_completa["escola"].id,
+                                   usuario=escola_completa["admin"], db=db)
+    db.commit()
+    assert (_conta(db, Aluno), _conta(db, Matricula),
+            _conta(db, IdentidadeExterna)) == antes
+    rev = db.execute(select(RevisaoIdentidade)).scalars().one()
+    assert rev.motivo == "criacao_bloqueada_por_politica"
+    assert rev.origem == "importacao" and rev.id_externo == "8080"
+    assert nucleo.criacao_bloqueada == 1
+
+
+def test_upload_manual_sem_politica_continua_criando(db, escola_completa, cena):
+    """Escola que nunca configurou a política ('permitir'): o upload manual cria
+    como sempre — a trava é opt-in, por escola."""
+    antes = _conta(db, Aluno)
+    corpo = ImportacaoConfirm(
+        plataforma="elefante", formato="resumo", tipo="texto",
+        linhas=[_linha("ODORICO LUCAS ENSAIOTTI PRADINI", cena["rotulo"], sid="8080")],
+        recalcular=False)
+    nucleo = _confirmar_sem_commit(dados=corpo, escola_id=escola_completa["escola"].id,
+                                   usuario=escola_completa["admin"], db=db)
+    db.commit()
+    assert _conta(db, Aluno) == antes + 1
+    assert nucleo.criacao_bloqueada == 0
+
+
+def test_flag_true_no_corpo_nao_fura_a_politica(db, escola_completa, cena):
+    """A política é do Admin Global: um ``permitir_criar_aluno=True`` explícito no
+    corpo (de quem chama a API direto) não cria ficha numa escola 'bloquear'."""
     politica_sync.definir(db, escola_completa["escola"].id, "bloquear")
     db.commit()
     antes = _conta(db, Aluno)
-    corpo = ImportacaoConfirm(          # igual ao que a tela envia
-        plataforma="elefante", formato="resumo", tipo="texto",
-        linhas=[_linha("ENZO LUCAS ALVES PRADO", cena["rotulo"], sid="8080")],
-        recalcular=False)
-    assert corpo.permitir_criar_aluno is True
-    _confirmar_sem_commit(dados=corpo, escola_id=escola_completa["escola"].id,
-                          usuario=escola_completa["admin"], db=db)
+    _confirmar(db, escola_completa,
+               [_linha("ODORICO LUCAS ENSAIOTTI PRADINI", cena["rotulo"], sid="8080")],
+               permitir_criar_aluno=True)
     db.commit()
-    assert _conta(db, Aluno) == antes + 1
+    assert _conta(db, Aluno) == antes
+    rev = db.execute(select(RevisaoIdentidade)).scalars().one()
+    assert rev.motivo == "criacao_bloqueada_por_politica"
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +287,7 @@ def test_k_elefante_nao_cria_as_cinco_fichas(db, escola_completa, cena):
 
 
 def test_j_matific_nao_cria_os_nomes_truncados(db, escola_completa, cena):
-    """TESTE J — "ANNA E" e "ENZO L" são truncamentos das mesmas crianças: o
+    """TESTE J — "HANNA E" e "ODORICO L" são truncamentos das mesmas crianças: o
     sync criaria duplicidade dentro da própria execução."""
     linhas = [_linha(nome, cena["rotulo"], sid="u-%d" % i, plataforma="matific")
               for i, nome in enumerate(DUAS_MATIFIC)]
@@ -263,28 +302,28 @@ def test_j_matific_nao_cria_os_nomes_truncados(db, escola_completa, cena):
     assert len(pend) == 2 and {r.plataforma for r in pend} == {"matific"}
 
 
-def test_l_kemily_continua_virando_revisao_e_nao_ficha_nova(db, escola_completa, cena):
+def test_l_nome_abreviado_continua_virando_revisao_e_nao_ficha_nova(db, escola_completa, cena):
     """TESTE L — o caso que motivou tudo: nome ABREVIADO da plataforma contra o
     nome oficial completo. Já era revisão antes da política (candidato único,
     correspondência insegura) e tem de continuar sendo — a trava não pode
     transformar o caso dela em criação nem em associação arbitrária."""
     oficial = escola_completa["alunos"][2]
-    oficial.nome = "KEMILY DA SILVA FERNANDES CARDOSO"
+    oficial.nome = "KELMIRA DA TESTELLI FICTICIO MORANDI"
     oficial.da_lista_piloto = True
     db.commit()
 
     _confirmar(db, escola_completa,
-               [_linha("KEMILY DA SILVA FERNANDES", cena["rotulo"], sid="4427532")],
+               [_linha("KELMIRA DA TESTELLI FICTICIO", cena["rotulo"], sid="7650001")],
                permitir_criar_aluno=False)
     db.commit()
     rev = db.execute(select(RevisaoIdentidade)).scalars().one()
     assert rev.motivo == "correspondencia_insegura"      # NÃO a trava: o motivo real
-    assert rev.id_externo == "4427532"
+    assert rev.id_externo == "7650001"
     assert [c.get("aluno_id") for c in (rev.candidatos or [])] == [oficial.id]
     assert db.execute(select(Aluno).where(
-        Aluno.nome == "KEMILY DA SILVA FERNANDES")).scalars().first() is None
+        Aluno.nome == "KELMIRA DA TESTELLI FICTICIO")).scalars().first() is None
     assert db.execute(select(IdentidadeExterna).where(
-        IdentidadeExterna.id_externo == "4427532")).scalars().first() is None
+        IdentidadeExterna.id_externo == "7650001")).scalars().first() is None
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +356,7 @@ def test_o_orquestrador_envia_a_flag_que_a_politica_manda(db, escola_completa,
                         lambda *a, **k: "tok")
     monkeypatch.setattr(orchestrator, "_parsear", lambda arq: (
         type("A", (), {"linhas": [type("L", (), {
-            "nome": "ANA LUIZA SILVA DOS SANTOS",
+            "nome": "NAIR ELZA SIMULATTI DOS PROVATTI",
             "dados": {"turma_relatorio": escola_completa["turma"].nome}})()],
             "plataforma": "elefante", "formato": "resumo",
             "turma_detectada": escola_completa["turma"].nome,
@@ -424,9 +463,14 @@ def test_homonimo_vetado_nao_vira_candidato_mas_e_nomeado_no_aviso(db, escola_co
 def test_sem_turma_conserva_o_motivo_proprio_mesmo_com_a_trava(db, escola_completa):
     """A trava NÃO pode roubar o diagnóstico de quem já tinha o seu. Linha com
     turma fora do cadastro continua sendo “turma_nao_cadastrada” — motivo e
-    categoria de auditoria preservados, trava ligada ou não."""
+    categoria de auditoria preservados, trava ligada ou não.
+
+    A linha traz o campo essencial do resumo (``livros_unicos``): pelo caminho da
+    sincronização, linha SEM ele não vira dado nem pendência (revisão e93, dados
+    9 — nada nasce dela), e o teste é sobre o motivo da pendência."""
     linha = LinhaConfirmacao(nome="CRIANCA DE TURMA DESCONHECIDA", dados={
-        "elefante_student_id": "1212", "turma_relatorio": "9 ANO Z NOTURNO"},
+        "elefante_student_id": "1212", "turma_relatorio": "9 ANO Z NOTURNO",
+        "livros_unicos": 2},
         criar_em_turma_nome="9 ANO Z NOTURNO")
     _confirmar(db, escola_completa, [linha], permitir_criar_aluno=False)
     db.commit()

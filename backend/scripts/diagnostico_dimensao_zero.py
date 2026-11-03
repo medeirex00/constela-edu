@@ -1,5 +1,5 @@
 """Diagnóstico READ-ONLY: quantos alunos aparecem com UMA dimensão em 0 por AUSÊNCIA
-de snapshot (o retrato do bug HELOISA/TAUFIK) e quantos é 0 legítimo.
+de snapshot (o retrato do bug LIVIA/TOBIAS) e quantos é 0 legítimo.
 
 NÃO grava nada. NÃO chama plataforma. Só lê o banco: para cada aluno ATIVO
 matriculado no ANO LETIVO ATIVO, verifica se existe SnapshotMatific e SnapshotElefante.
@@ -7,7 +7,7 @@ matriculado no ANO LETIVO ATIVO, verifica se existe SnapshotMatific e SnapshotEl
 As três semânticas do zero (spec §12.4):
   * AMBAS ausentes      -> aluno sem nenhuma plataforma (0/0 legítimo);
   * SÓ Matific presente -> Leitura 0 é ausência (candidato ao bug se ele LÊ no Elefante);
-  * SÓ Elefante presente-> Matific 0 é ausência (candidato ao bug — é o caso HELOISA);
+  * SÓ Elefante presente-> Matific 0 é ausência (candidato ao bug — é o caso LIVIA);
   * AMBAS presentes     -> completo.
 
 O "candidato ao bug" (uma dimensão presente, outra ausente) é o que a correção do
@@ -37,6 +37,7 @@ from app.core.database import SessionLocal  # noqa: E402
 from app.models import (  # noqa: E402
     Aluno, Escola, LogAuditoria, Matricula, SnapshotElefante, SnapshotMatific, Turma,
 )
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 
 def _subconjuntos_vinculados(db, escola_id: int) -> list[tuple]:
@@ -84,7 +85,7 @@ def _diagnostico_escola(db, escola_id: int, nome: str, ano: int, listar: int) ->
         elif m and not e:
             so_matific.append((anome, tnome))       # Leitura 0 (ausente)
         elif e and not m:
-            so_elefante.append((anome, tnome))       # Matific 0 (ausente) — caso HELOISA
+            so_elefante.append((anome, tnome))       # Matific 0 (ausente) — caso LIVIA
         else:
             nenhuma += 1
 
@@ -94,7 +95,7 @@ def _diagnostico_escola(db, escola_id: int, nome: str, ano: int, listar: int) ->
     print(f"  com Elefante (aferido leitura) .... {len(com_ele & {l[0] for l in linhas})}")
     print(f"  AMBAS as dimensões ................ {ambas}")
     print(f"  SÓ Matific  -> Leitura 0 (ausente) . {len(so_matific)}")
-    print(f"  SÓ Elefante -> Matific 0 (ausente) . {len(so_elefante)}   <- retrato do caso HELOISA")
+    print(f"  SÓ Elefante -> Matific 0 (ausente) . {len(so_elefante)}   <- retrato do caso LIVIA")
     print(f"  nenhuma dimensão (0/0) ............ {nenhuma}")
     afetados = len(so_matific) + len(so_elefante)
     print(f"  --> UMA dimensão presente, outra AUSENTE (candidatos ao bug): {afetados}")
@@ -114,6 +115,7 @@ def _diagnostico_escola(db, escola_id: int, nome: str, ano: int, listar: int) ->
 
 
 def main() -> int:
+    forcar_saida_utf8()
     p = argparse.ArgumentParser(description="Diagnóstico read-only de dimensão 0 por ausência de snapshot.")
     p.add_argument("--escola", type=int, default=None)
     p.add_argument("--rede", type=int, default=None)

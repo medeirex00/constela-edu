@@ -10,8 +10,9 @@ from app.core.deps import escola_autorizada, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import Aluno, Escola, Usuario
 from app.services import evolucao as svc
+from app.services import grupo_pequeno as svc_grupo
 from app.services import modulos as svc_modulos
-from app.services import periodos, permissoes, timeline
+from app.services import elegibilidade, periodos, permissoes, timeline
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
 
@@ -27,18 +28,25 @@ def evolucao_do_aluno(
     """Linha do tempo completa + variação no período (PRD §67–§71).
     Coordenador/admin veem qualquer aluno da escola; o PROFESSOR vê a evolução
     dos alunos das TURMAS DELE (404 fora do escopo); a Secretaria não vê dado
-    individual (404)."""
+    individual (404).
+
+    Leitura MISTA (as duas plataformas): a do módulo que a rede não contratou
+    sai da resposta — série vazia na linha do tempo e nenhum indicador dela no
+    resumo —, em vez de 403 na rota inteira."""
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     escola = db.get(Escola, escola_id)
     permissoes.exigir_aluno_permitido(
         db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
+    fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
     return {
         "aluno_id": aluno_id,
         "nome": aluno.nome,
-        "linha_do_tempo": svc.linha_do_tempo(db, escola_id, aluno_id, dias),
-        "resumo": svc.resumo_evolucao(db, escola_id, aluno_id, dias),
+        "linha_do_tempo": svc.linha_do_tempo(db, escola_id, aluno_id, dias,
+                                             plataformas_fora=fora),
+        "resumo": svc.resumo_evolucao(db, escola_id, aluno_id, dias,
+                                      plataformas_fora=fora),
     }
 
 
@@ -55,13 +63,17 @@ def evolucao_leitura_do_aluno(
     """Evolução das LEITURAS no tempo (livros/pontos/tempo/nível médio por
     semana, mês ou bimestre), respeitando o período escolhido.
     Coordenador/admin: qualquer aluno da escola; PROFESSOR: os alunos das turmas
-    dele (404 fora do escopo); Secretaria: 404 (sem dado individual)."""
+    dele (404 fora do escopo); Secretaria: 404 (sem dado individual).
+    Rede que não contratou Leitura → 403 (o módulo não existe para ela). A trava
+    do módulo vem DEPOIS do escopo: quem não pode ver o aluno recebe 404, com o
+    módulo ligado ou não."""
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     escola = db.get(Escola, escola_id)
     permissoes.exigir_aluno_permitido(
         db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
+    svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), "leitura")
     try:
         preset = "personalizado" if (inicio or fim) else "tudo"
         ini, fim_dt, _ = periodos.resolver(
@@ -88,14 +100,21 @@ def linha_do_tempo_do_aluno(
 ):
     """Linha do tempo cronológica (evento a evento) do aluno, do mais recente ao
     mais antigo, paginada por cursor. Sem período informado, traz o histórico
-    TODO. Dado detalhado: professor restrito não acessa."""
+    TODO. Dado detalhado: professor restrito não acessa.
+
+    Módulo fora do plano da rede: ``?plataforma=`` dele → 403 (a mesma régua das
+    rotas inteiras de um módulo); sem filtro, os eventos dele não entram no feed.
+    A trava vem DEPOIS do escopo (perfil e aluno), como nas demais rotas."""
     permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    escola = db.get(Escola, escola_id)
+    modulos = svc_modulos.modulos_da_escola(db, escola)
+    if plataforma:
+        svc_modulos.exigir_plataforma(modulos, plataforma)
     ini = fim_dt = None
     if inicio or fim:
-        escola = db.get(Escola, escola_id)
         try:
             ini, fim_dt, _ = periodos.resolver(
                 "personalizado", hoje_br(), escola.ano_letivo_ativo,
@@ -105,7 +124,8 @@ def linha_do_tempo_do_aluno(
                                 "Data inválida (use AAAA-MM-DD).") from exc
     dados = timeline.linha_do_tempo(
         db, escola_id, aluno_id, plataforma=plataforma, tipo_evento=tipo,
-        inicio=ini, fim=fim_dt, cursor=cursor, limite=limite)
+        inicio=ini, fim=fim_dt, cursor=cursor, limite=limite,
+        plataformas_fora=svc_modulos.plataformas_fora_do_plano(modulos))
     return {"aluno_id": aluno_id, "nome": aluno.nome, **dados}
 
 
@@ -118,13 +138,15 @@ def espelho_do_aluno(
 ):
     """Resumo do 'espelho' de dados do aluno (contadores por tipo/plataforma,
     primeira/última atividade, tempo total). Dado detalhado: professor não
-    acessa."""
+    acessa. Os eventos da plataforma de módulo fora do plano não são contados."""
     permissoes.negar_dado_individual(db, escola_id, usuario)
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
+    fora = svc_modulos.plataformas_fora_do_plano(
+        svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)))
     return {"aluno_id": aluno_id, "nome": aluno.nome,
-            "espelho": timeline.espelho(db, escola_id, aluno_id)}
+            "espelho": timeline.espelho(db, escola_id, aluno_id, plataformas_fora=fora)}
 
 
 @router.get("/ranking-evolucao")
@@ -158,6 +180,12 @@ def ranking_evolucao(
     Sem ``dimensao``, devolve a ordem ÚNICA (legado), que o telão público, o
     mural e o /insights ainda consomem — já com o C-01 aplicado, sem o teto
     de 50 que existia nesta tela.
+
+    AS FASES NÃO CONCORREM (``services.elegibilidade``, 1º–5º ano): só as turmas
+    premiáveis aparecem, renumeradas entre quem concorre. É o MESMO recorte que
+    o telão público já faz (``publico._dados_publicos``): ``turma_ids`` só
+    recorta a lista — a régua continua a da escola inteira, então a nota de cada
+    criança é a mesma do sistema.
     """
     escola = db.get(Escola, escola_id)
     if dimensao is not None:
@@ -168,6 +196,14 @@ def ranking_evolucao(
         # 403 (e não 404) para módulo não contratado: mesma régua das demais
         # rotas por dimensão — some o produto, não a existência da rota.
         svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
+    # Quem APARECE = turmas permitidas ao usuário (professor; `None` = gestão) ∩
+    # turmas que concorrem. A interseção mantém o escopo de acesso exatamente
+    # como era — ninguém passa a ver turma que não via — e só tira as Fases.
+    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, escola.ano_letivo_ativo)
+    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    concorrem = set(premiaveis)
+    recorte = (premiaveis if permitidas is None
+               else [t for t in permitidas if t in concorrem])
     ini = None
     fim_dt = None
     if periodo or inicio or fim:
@@ -179,14 +215,12 @@ def ranking_evolucao(
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Data inválida (use AAAA-MM-DD).") from exc
         dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar,
-                                     turno=turno,
-                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
+                                     turno=turno, turma_ids=recorte,
                                      base_no_periodo=True)
     else:
         dados = svc.ranking_evolucao(db, escola_id, turma_id=turma_id,
                                      ano_escolar=ano_escolar, dias=dias, turno=turno,
-                                     turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario),
-                                     base_no_periodo=True)
+                                     turma_ids=recorte, base_no_periodo=True)
     if dimensao:
         dados = sorted((i for i in dados if i.aferido.get(dimensao)),
                        key=lambda i: i.posicao_dimensao[dimensao])
@@ -246,9 +280,14 @@ def resumo_escola(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
-    """Página da escola: comparação entre turmas (PRD §78) — gestão apenas."""
+    """Página da escola: comparação entre turmas (PRD §78) — gestão apenas.
+
+    Para a Secretaria, a matéria de turma com menos de
+    ``grupo_pequeno.K_MINIMO_TURMA`` alunos aferidos sai com média e indicadores
+    nulos e a marca ``grupo_pequeno``/``oculto`` (senão o número seria o de uma
+    criança); a gestão da escola e o Admin Global recebem o resumo de sempre."""
     permissoes.negar_restrito(db, escola_id, usuario)
-    return svc.resumo_escola(db, escola_id)
+    return svc_grupo.resumo_escola_do_usuario(db, escola_id, usuario)
 
 
 @router.get("/comparar")
@@ -277,8 +316,14 @@ def comparar(
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 "Comparar outra escola é exclusivo de administradores da rede.")
-    resultado = svc.comparar(db, escola_id, tipo_a, id_a, tipo_b, id_b)
+    secretaria = permissoes.e_secretaria(usuario)
+    resultado = svc.comparar(db, escola_id, tipo_a, id_a, tipo_b, id_b,
+                             com_contagem_aferidos=secretaria)
     if resultado is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "Aluno, turma ou escola não encontrado.")
-    return resultado
+    # Secretaria: o lado TURMA com grupo pequeno sai sem os números (a mesma
+    # decisão do resumo da escola), e o lado ESCOLA com menos de k alunos com
+    # dado numa matéria também (a regra do cartão da rede); os outros perfis
+    # recebem tudo.
+    return svc_grupo.proteger_comparacao(db, escola_id, usuario, resultado)

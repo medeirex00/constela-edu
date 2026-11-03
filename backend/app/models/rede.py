@@ -56,7 +56,9 @@ class ModuloRede(Base):
     estado contratado por rede.
 
     NÃO confundir com:
-      * ``Rede.status`` (ativa/inativa) — é vida ou morte do cliente inteiro;
+      * ``Rede.status`` (ativa/inativa) — o cliente inteiro; HOJE só tira a rede
+        das listas, não revoga acesso (decisão pendente do dono:
+        docs/operacao/STATUS-ESCOLA-REDE.md);
       * ``SincronizacaoConfig.ativo`` — é "agenda de coleta ligada" por escola;
       * "sem dados" — módulo contratado que ainda não recebeu importação segue
         contratado, e a interface mostra estado vazio (não some).

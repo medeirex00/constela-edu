@@ -23,7 +23,7 @@ COLUNAS = ["N.º", "RM", "RA", "Nome", "Data de Nasc.", "Responsável",
 
 def _aba(ws, turma, turno, professor, sed, alunos):
     ws.append([None, None, None, "PREFEITURA MUNICIPAL DE CARAGUATATUBA"])
-    ws.append(["Escola:", None, "EMEF PROFESSOR JORGE PASSOS", None, None,
+    ws.append(["Escola:", None, "EMEF PROFESSOR TEODORO FICTÍCIO", None, None,
                None, None, "Lista Piloto:", 2026])
     ws.append([])
     ws.append(["Professor:", None, professor, None, "Ano:", turma,
@@ -38,19 +38,19 @@ def _planilha() -> bytes:
     wb = openpyxl.Workbook()
     a = wb.active
     a.title = "1º Ano A"
-    _aba(a, "1º Ano A", "TARDE", "PAULA", 300396614, [
-        [1, 4446, "123.100.026-0", "AGATHA VITORIA MOURA DA SILVA",
-         date(2019, 9, 18), "BRENDA", "RUA X, 178", "JARAGUAZINHO",
-         "12-98109-4185", "66.4-1", "574.900.168-78", "700 1", "F", "PARDA", "SIM"],
-        [2, 4447, "121.721.835-X", "ALICE DE ALMEIDA LEAL",
-         date(2019, 5, 2), "MICHELLE", "RUA Y, 918", "JARAGUAZINHO",
-         "99753-5290", "", "", "", "F", "BRANCA", "NÃO"],
+    _aba(a, "1º Ano A", "TARDE", "PROFESSORA A", 300396614, [
+        [1, 9001, "901.000.001-0", "AGATHA VIOLETA MONTESTELLI DA FICTICIA",
+         date(2019, 8, 14), "RESPONSAVEL A", "RUA X, 1", "BAIRRO FICTICIO",
+         "12-90000-0001", "00.0-1", "111.222.333-00", "000 1", "F", "BRANCA", "NÃO"],
+        [2, 9002, "902.000.002-X", "ALICE DE ARRUDA TESTELLI",
+         date(2019, 4, 6), "RESPONSAVEL B", "RUA Y, 2", "BAIRRO FICTICIO",
+         "90000-0002", "", "", "", "F", "PARDA", "SIM"],
     ])
     b = wb.create_sheet("1º Ano B")
-    _aba(b, "1º ANO B", "TARDE", "MAIARA", 300396635, [
-        [1, 4468, "121.521.972-6", "ADRYAN RIBEIRO VALERIANO",
-         date(2018, 3, 10), "PRISCILA", "RUA Z, 453", "RIO DO OURO",
-         "12 99608-2283", "65.8-X", "569.950.318-81", "700 0", "M", "BRANCA", "SIM"],
+    _aba(b, "1º ANO B", "TARDE", "PROFESSORA B", 300396635, [
+        [1, 9003, "903.000.003-6", "ADRIEL RIBEIRO FICTICIO",
+         date(2018, 2, 21), "RESPONSAVEL C", "RUA Z, 3", "BAIRRO TESTE",
+         "12 90000-0003", "00.0-X", "444.555.666-00", "000 0", "M", "PARDA", "NÃO"],
     ])
     qe = wb.create_sheet("QE")  # resumo — sem coluna "Nome" → ignorado
     qe.append(["Nr. Classe", "Matriculados", "Transferidos", "Ativos"])
@@ -67,17 +67,17 @@ def _upload(nome="Lista Piloto 2026.xlsx"):
 def test_parser_reconhece_turmas_alunos_e_ficha():
     from app.services.lista_piloto import analisar_matriculas
     a = analisar_matriculas(_planilha(), "Lista Piloto 2026.xlsx")
-    assert a.escola_detectada.startswith("EMEF PROFESSOR JORGE PASSOS")
+    assert a.escola_detectada.startswith("EMEF PROFESSOR TEODORO FICTÍCIO")
     assert a.ano_letivo == 2026
     assert [t.nome for t in a.turmas] == ["1º Ano A", "1º Ano B"]   # QE ignorada
     t = a.turmas[0]
     assert t.ano_escolar == "1º Ano" and t.turno == "tarde"
-    assert t.professor == "PAULA" and t.sed == "300396614"
+    assert t.professor == "PROFESSORA A" and t.sed == "300396614"
     al = t.alunos[0]
-    assert al.nome == "AGATHA VITORIA MOURA DA SILVA"
-    assert al.numero_chamada == 1 and al.data_nascimento == "2019-09-18"
+    assert al.nome == "AGATHA VIOLETA MONTESTELLI DA FICTICIA"
+    assert al.numero_chamada == 1 and al.data_nascimento == "2019-08-14"
     # Minimização (LGPD): só o RA é guardado; sensíveis/documentos são ignorados.
-    assert al.ficha == {"ra": "123.100.026-0"}
+    assert al.ficha == {"ra": "901.000.001-0"}
     assert "cpf" not in al.ficha and "raca_cor" not in al.ficha
     assert "sus" not in al.ficha and "responsavel" not in al.ficha
 
@@ -88,23 +88,23 @@ def test_marcador_de_rodape_no_nome_e_removido():
     Matific/Elefante falharia (a nota não colaria nele). O marcador deve sair só
     das pontas, preservando hífen, apóstrofo e acento do miolo."""
     from app.services.lista_piloto import _limpar_nome, analisar_matriculas
-    assert _limpar_nome("LAURA GAGLIANO DA SILVA*") == "LAURA GAGLIANO DA SILVA"
-    assert _limpar_nome("ANA JULIA CAMARGO DOMICIANO *") == "ANA JULIA CAMARGO DOMICIANO"
+    assert _limpar_nome("LAURA TESTELLI DA FICTICIA*") == "LAURA TESTELLI DA FICTICIA"
+    assert _limpar_nome("ANA JULIA FICTICIA TESTELLI *") == "ANA JULIA FICTICIA TESTELLI"
     assert _limpar_nome("* PEDRO") == "PEDRO"
     assert _limpar_nome("  JOÃO   D'ÁVILA  ") == "JOÃO D'ÁVILA"      # miolo intacto
-    assert _limpar_nome("MARIA-CLARA DOS SANTOS") == "MARIA-CLARA DOS SANTOS"
+    assert _limpar_nome("MARIA-CLARA DOS TESTES") == "MARIA-CLARA DOS TESTES"
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "5º Ano A"
-    _aba(ws, "5º Ano A", "MANHÃ", "SUELI", 300396700, [
-        [1, 5001, "111.111.111-1", "THEO LUCAS SOARES DOS SANTOS*",
+    _aba(ws, "5º Ano A", "MANHÃ", "PROFESSORA C", 300396700, [
+        [1, 5001, "111.111.111-1", "BENTO FICTICIO TESTELLI DOS REIS*",
          date(2015, 1, 1), "MÃE", "RUA A, 1", "CENTRO",
          "", "", "", "", "M", "PARDA", "SIM"],
     ])
     buf = io.BytesIO(); wb.save(buf)
     a = analisar_matriculas(buf.getvalue(), "Lista.xlsx")
-    assert a.turmas[0].alunos[0].nome == "THEO LUCAS SOARES DOS SANTOS"
+    assert a.turmas[0].alunos[0].nome == "BENTO FICTICIO TESTELLI DOS REIS"
 
 
 def test_analisar_marca_turmas_existentes(cliente, db, escola_completa):
@@ -117,7 +117,7 @@ def test_analisar_marca_turmas_existentes(cliente, db, escola_completa):
     nomes = {t["nome"]: t for t in corpo["turmas"]}
     # A fixture já tem "3º Ano A"; as da planilha são novas.
     assert nomes["1º Ano A"]["ja_existe"] is False
-    assert nomes["1º Ano A"]["exemplos"][0] == "AGATHA VITORIA MOURA DA SILVA"
+    assert nomes["1º Ano A"]["exemplos"][0] == "AGATHA VIOLETA MONTESTELLI DA FICTICIA"
 
 
 def test_previa_resume_novos_atualizar_e_duplicidade(cliente, db, escola_completa):
@@ -153,10 +153,10 @@ def test_confirmar_cria_turmas_alunos_matriculas_e_ficha(cliente, db, escola_com
                                            Turma.nome == "1º Ano A")).scalar_one()
     assert turma.turno == "tarde"
     aluno = db.execute(select(Aluno).where(
-        Aluno.nome == "AGATHA VITORIA MOURA DA SILVA")).scalar_one()
+        Aluno.nome == "AGATHA VIOLETA MONTESTELLI DA FICTICIA")).scalar_one()
     assert aluno.numero_chamada == 1
-    assert aluno.data_nascimento == date(2019, 9, 18)
-    assert aluno.ficha == {"ra": "123.100.026-0"}   # minimização LGPD: só RA
+    assert aluno.data_nascimento == date(2019, 8, 14)
+    assert aluno.ficha == {"ra": "901.000.001-0"}   # minimização LGPD: só RA
     assert "cpf" not in aluno.ficha and "responsavel" not in aluno.ficha
     # Matriculado na turma certa, no ano ativo.
     mat = db.execute(select(Matricula).where(Matricula.aluno_id == aluno.id)).scalar_one()
@@ -164,7 +164,7 @@ def test_confirmar_cria_turmas_alunos_matriculas_e_ficha(cliente, db, escola_com
 
     # A ficha aparece no perfil (gestor), minimizada: só o RA, sem sensíveis.
     perfil = cliente.get(f"/api/v1/escolas/{escola_id}/alunos/{aluno.id}/perfil").json()
-    assert perfil["ficha"] == {"ra": "123.100.026-0"}
+    assert perfil["ficha"] == {"ra": "901.000.001-0"}
 
 
 def _planilha_com_duplicado() -> bytes:
@@ -173,14 +173,14 @@ def _planilha_com_duplicado() -> bytes:
     wb = openpyxl.Workbook()
     a = wb.active
     a.title = "1º Ano A"
-    _aba(a, "1º Ano A", "TARDE", "PAULA", 300396614, [
-        [1, 4446, "999.111.222-3", "OLIVER VALENTIN DE BARROS",
+    _aba(a, "1º Ano A", "TARDE", "PROFESSORA A", 300396614, [
+        [1, 9001, "999.111.222-3", "OLIVER FICTICIO DE TESTELLI",
          date(2019, 1, 1), "MAE", "RUA A, 1", "CENTRO",
          "12-90000-0000", "", "", "", "M", "PARDA", "NÃO"],
     ])
     b = wb.create_sheet("1º Ano B")
-    _aba(b, "1º ANO B", "TARDE", "MAIARA", 300396635, [
-        [7, 4470, "999.111.222-3", "OLIVER VALENTIN DE BARROS",
+    _aba(b, "1º ANO B", "TARDE", "PROFESSORA B", 300396635, [
+        [7, 9007, "999.111.222-3", "OLIVER FICTICIO DE TESTELLI",
          date(2019, 1, 1), "MAE", "RUA A, 1", "CENTRO",
          "12-90000-0000", "", "", "", "M", "PARDA", "NÃO"],
     ])
@@ -210,7 +210,7 @@ def test_aluno_em_duas_turmas_cadastra_uma_vez_na_primeira(cliente, db, escola_c
 
     db.expire_all()
     oliver = db.execute(select(Aluno).where(
-        Aluno.nome == "OLIVER VALENTIN DE BARROS")).scalars().all()
+        Aluno.nome == "OLIVER FICTICIO DE TESTELLI")).scalars().all()
     assert len(oliver) == 1                          # sem duplicar
     mats = db.execute(select(Matricula).where(
         Matricula.aluno_id == oliver[0].id, Matricula.ano_letivo == 2026)).scalars().all()
@@ -238,7 +238,7 @@ def test_reimportar_atualiza_sem_duplicar(cliente, db, escola_completa):
     assert r2.json()["alunos_atualizados"] == 3
     # Uma Agatha só (sem duplicar).
     n = db.execute(select(func.count()).select_from(Aluno).where(
-        Aluno.nome == "AGATHA VITORIA MOURA DA SILVA")).scalar_one()
+        Aluno.nome == "AGATHA VIOLETA MONTESTELLI DA FICTICIA")).scalar_one()
     assert n == 1
 
 
@@ -254,7 +254,7 @@ def _planilha_piloto(nome_turma, alunos):
     linhas = [[num, 4000 + i, ra, nome, date(2018, 1, 1), "RESP", "RUA X",
                "BAIRRO", "", "", "", "", "M", "PARDA", "SIM"]
               for i, (num, ra, nome) in enumerate(alunos)]
-    _aba(ws, nome_turma, "TARDE", "PAULA", 300396614, linhas)
+    _aba(ws, nome_turma, "TARDE", "PROFESSORA A", 300396614, linhas)
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
@@ -419,17 +419,17 @@ def _confirmar(cliente, escola_id, conteudo):
 def test_predicado_abreviado_posicional():
     T = tokens_nome
     # Casos que DEVEM casar (abreviação posicional real do Matific/Elefante).
-    assert casa_abreviado_posicional(T("AGATHA V"), T("AGATHA VITORIA MOURA DA SILVA"))
-    assert casa_abreviado_posicional(T("AGATHA VITORIA M"), T("AGATHA VITORIA MOURA DA SILVA"))
-    assert casa_abreviado_posicional(T("ELOA S"), T("ELOA SILVEIRA VASSAO"))
+    assert casa_abreviado_posicional(T("AGATHA V"), T("AGATHA VIOLETA MONTESTELLI DA FICTICIA"))
+    assert casa_abreviado_posicional(T("AGATHA VIOLETA M"), T("AGATHA VIOLETA MONTESTELLI DA FICTICIA"))
+    assert casa_abreviado_posicional(T("ELOA S"), T("ELOA SERAFIM TESTELLI"))
     assert casa_abreviado_posicional(T("PEDRO L"), T("PEDRO LUCAS SANTOS"))
     # NÃO pode casar por subsequência nem por primeiro nome diferente.
-    assert not casa_abreviado_posicional(T("ELOA S"), T("ELOA VITORIA DA SILVA MARADEI"))
-    assert not casa_abreviado_posicional(T("PEDRO L"), T("PEDRO ARTHUR DOURADO"))
+    assert not casa_abreviado_posicional(T("ELOA S"), T("ELOA FICTICIA DA SERRA TESTELLI"))
+    assert not casa_abreviado_posicional(T("PEDRO L"), T("PEDRO HENRIQUE TESTELLI"))
     assert not casa_abreviado_posicional(T("ANA E"), T("MARIANA EMANUELLY"))
     # Nome idêntico vai pelo caminho nome-exato, não pelo abreviado.
     assert not casa_abreviado_posicional(
-        T("AGATHA VITORIA MOURA DA SILVA"), T("AGATHA VITORIA MOURA DA SILVA"))
+        T("AGATHA VIOLETA MONTESTELLI DA FICTICIA"), T("AGATHA VIOLETA MONTESTELLI DA FICTICIA"))
 
 
 def test_casa_antigo_abreviado_recebe_nome_completo_e_preserva_uploads(cliente, db, escola_completa):
@@ -439,7 +439,7 @@ def test_casa_antigo_abreviado_recebe_nome_completo_e_preserva_uploads(cliente, 
     aid = antigo.id
 
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("AGATHA VITORIA MOURA DA SILVA", "123.100.026-0", date(2019, 9, 18))])
+        _linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", "901.000.001-0", date(2019, 8, 14))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 0        # casou o antigo, não criou
@@ -449,8 +449,8 @@ def test_casa_antigo_abreviado_recebe_nome_completo_e_preserva_uploads(cliente, 
         Aluno.escola_id == escola_id, Aluno.nome.like("AGATHA%"))).scalars().all()
     assert len(agathas) == 1                       # não duplicou
     atual = db.get(Aluno, aid)
-    assert atual.nome == "AGATHA VITORIA MOURA DA SILVA"   # nome completo do Excel
-    assert atual.ficha["ra"] == "123.100.026-0"
+    assert atual.nome == "AGATHA VIOLETA MONTESTELLI DA FICTICIA"   # nome completo do Excel
+    assert atual.ficha["ra"] == "901.000.001-0"
     # Upload preservado — mesmo aluno_id.
     snaps = db.execute(select(func.count()).select_from(SnapshotMatific).where(
         SnapshotMatific.aluno_id == aid)).scalar_one()
@@ -478,7 +478,7 @@ def test_ambiguidade_vai_para_revisao_e_nao_cria(cliente, db, escola_completa):
     antes = db.execute(select(func.count()).select_from(Aluno).where(
         Aluno.escola_id == escola_id)).scalar_one()
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("AGATHA VITORIA MOURA DA SILVA", "111.111.111-1", date(2019, 9, 18))])
+        _linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", "111.111.111-1", date(2019, 8, 14))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 0        # ambíguo → NÃO cria
@@ -497,7 +497,7 @@ def test_veto_nascimento_nao_casa(cliente, db, escola_completa):
     turma = _turma(db, escola_id, "1º Ano A", "1º Ano")
     antigo = _antigo(db, escola_id, "AGATHA V", turma, nasc=date(2018, 3, 1))
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("AGATHA VITORIA MOURA DA SILVA", "111.111.111-1", date(2019, 7, 10))])
+        _linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", "111.111.111-1", date(2019, 7, 10))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 1        # nascimento diverge → não casa
@@ -508,11 +508,11 @@ def test_veto_nascimento_nao_casa(cliente, db, escola_completa):
 def test_ra_precede_abreviado(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     turma = _turma(db, escola_id, "1º Ano A", "1º Ano")
-    cheio = _antigo(db, escola_id, "AGATHA VITORIA MOURA DA SILVA", turma,
-                    ra="123.100.026-0", com_upload=False)
+    cheio = _antigo(db, escola_id, "AGATHA VIOLETA MONTESTELLI DA FICTICIA", turma,
+                    ra="901.000.001-0", com_upload=False)
     abrev = _antigo(db, escola_id, "AGATHA V", turma)     # sem RA, com upload
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("AGATHA VITORIA MOURA DA SILVA", "123.100.026-0", date(2019, 9, 18))])
+        _linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", "901.000.001-0", date(2019, 8, 14))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 0        # casou o cheio por RA
@@ -525,7 +525,7 @@ def test_turma_divergente_nao_casa(cliente, db, escola_completa):
     turma_b = _turma(db, escola_id, "5º Ano B", "5º Ano")
     antigo = _antigo(db, escola_id, "AGATHA V", turma_b)
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("AGATHA VITORIA MOURA DA SILVA", "111.111.111-1", date(2019, 9, 18))])
+        _linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", "111.111.111-1", date(2019, 8, 14))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 1        # overlap de turma < 2 → não casa
@@ -548,12 +548,12 @@ def test_cadastro_sem_upload_tambem_e_reconhecido(cliente, db, escola_completa):
     turma = _turma(db, escola_id, "1º Ano A", "1º Ano")
     antigo = _antigo(db, escola_id, "AGATHA V", turma, com_upload=False)
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("AGATHA VITORIA MOURA DA SILVA", "111.111.111-1", date(2019, 9, 18))])
+        _linha("AGATHA VIOLETA MONTESTELLI DA FICTICIA", "111.111.111-1", date(2019, 8, 14))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 0        # reconheceu o cadastro existente
     db.expire_all()
-    assert db.get(Aluno, antigo.id).nome == "AGATHA VITORIA MOURA DA SILVA"
+    assert db.get(Aluno, antigo.id).nome == "AGATHA VIOLETA MONTESTELLI DA FICTICIA"
     assert db.execute(select(func.count()).select_from(Aluno).where(
         Aluno.escola_id == escola_id, Aluno.nome.like("AGATHA%"))).scalar_one() == 1
 
@@ -561,7 +561,7 @@ def test_cadastro_sem_upload_tambem_e_reconhecido(cliente, db, escola_completa):
 def test_placeholder_ra_nao_colapsa_alunos_distintos(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     conteudo = _planilha_turma("1º Ano A", [
-        _linha("JOAO PEDRO SILVA", "0", date(2019, 1, 1)),
+        _linha("JOAO PEDRO TESTELLI", "0", date(2019, 1, 1)),
         [2, 4001, "0", "MARIA SOUZA LIMA", date(2019, 2, 2), "MAE", "RUA", "B",
          "12-9", "", "", "", "F", "PARDA", "NÃO"],
     ])
@@ -571,12 +571,12 @@ def test_placeholder_ra_nao_colapsa_alunos_distintos(cliente, db, escola_complet
     db.expire_all()
     nomes = {a.nome for a in db.execute(select(Aluno).where(
         Aluno.escola_id == escola_id)).scalars()}
-    assert "JOAO PEDRO SILVA" in nomes and "MARIA SOUZA LIMA" in nomes
+    assert "JOAO PEDRO TESTELLI" in nomes and "MARIA SOUZA LIMA" in nomes
 
 
 def test_overlap_turma_nao_une_anos_diferentes(cliente, db, escola_completa):
     """Um antigo com matrículas em '2º Ano A' (2026) e '3º Ano B' (2025) NÃO pode
-    casar com 'LUCAS SANTOS' importado em '2º Ano B' — nenhuma turma isolada tem
+    casar com 'LUCAS SERAFIM' importado em '2º Ano B' — nenhuma turma isolada tem
     série+letra em comum; só a UNIÃO das duas fabricaria o overlap (bug)."""
     escola_id = escola_completa["escola"].id
     t2a = _turma(db, escola_id, "2º Ano A", "2º Ano")
@@ -595,7 +595,7 @@ def test_overlap_turma_nao_une_anos_diferentes(cliente, db, escola_completa):
     db.commit()
 
     conteudo = _planilha_turma("2º Ano B", [
-        _linha("LUCAS SANTOS OLIVEIRA", "333.333.333-3", date(2018, 5, 5))])
+        _linha("LUCAS SERAFIM TESTELLI", "333.333.333-3", date(2018, 5, 5))])
     r = _confirmar(cliente, escola_id, conteudo)
     assert r.status_code == 200, r.text
     assert r.json()["alunos_criados"] == 1        # não casou (anos/turmas distintos)
@@ -628,10 +628,10 @@ def test_planilha_inchada_e_aba_auxiliar():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "1º Ano A"
-    _aba(ws, "1º Ano A", "TARDE", "PAULA", 300396614, [
-        [1, 4446, "123.100.026-0", "AGATHA VITORIA MOURA DA SILVA",
-         date(2019, 9, 18), "BRENDA", "RUA X, 178", "JARAGUAZINHO",
-         "12-98109-4185", "", "", "", "F", "PARDA", "SIM"],
+    _aba(ws, "1º Ano A", "TARDE", "PROFESSORA A", 300396614, [
+        [1, 9001, "901.000.001-0", "AGATHA VIOLETA MONTESTELLI DA FICTICIA",
+         date(2019, 8, 14), "RESPONSAVEL A", "RUA X, 1", "BAIRRO FICTICIO",
+         "12-90000-0001", "", "", "", "F", "BRANCA", "NÃO"],
     ])
     # Inchaço: um valor lá na coluna 16384 (XFD) infla max_column; dado real mínimo.
     inchada = wb.create_sheet("RM REVISADA")

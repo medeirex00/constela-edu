@@ -30,6 +30,10 @@ apps/web/test-results/
 apps/web/blob-report/
 backend/e2e.db
 backend/e2e.db-*
+# Varredura visual (playwright.visual.config.ts): banco do seed e capturas
+backend/visual.db
+backend/visual.db-*
+apps/web/e2e-visual/saida/
 
 # Tauri (Rust)
 apps/desktop/src-tauri/target/

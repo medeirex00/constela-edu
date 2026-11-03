@@ -408,15 +408,16 @@ def test_reserva_nao_corta_numero(db, cenario):
     plataforma tem a sua coluna na reserva — e isto aqui guarda a decisão.
     """
     dados = _dados(db, cenario["escola"].id, plataformas=("elefante", "matific"))
-    # pior caso REAL: nome comprido da rede + números de 6 dígitos. O nome é o
-    # que mais rouba largura das colunas de número ao lado.
+    # pior caso REAL: nome (fictício) do tamanho do mais comprido da rede +
+    # números de 6 dígitos. O nome é o que mais rouba largura das colunas de
+    # número ao lado.
     for linha in dados.get("por_turma") or []:
         linha["turma"] = "5º Ano A - Integral Manhã"
         linha["elefante"] = {"livros_novos": 7777, "tempo_min": 99999,
                              "livros_com_atividade": 8888, "livros_relidos": 4567}
         linha["matific"] = {"atividades": 554321, "estrelas": 999999}
     for linha in dados.get("por_aluno") or []:
-        linha["nome"] = "KAMILLY EMANUELLY ARAÚJO DA SILVA NASCIMENTO"
+        linha["nome"] = "KETELLY RAFAELY TESTÚLIO DA FICTICIA MODELLI"
         linha["turma"] = "5º Ano A - Integral Manhã"
         linha["elefante"] = {"livros_novos": 1118, "tempo_min": 12345,
                              "livros_com_atividade": 1400, "livros_relidos": 9222}

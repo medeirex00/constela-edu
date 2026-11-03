@@ -29,10 +29,19 @@ escola — e o escopo mínimo do papel aluno. O fluxo:
    traje; o Quest passa a chamá-la por esse nome em toda fala.
 4. Ao reabrir o app com sessão guardada, SEMPRE aparece "É você, {nome}?" —
    a criança do turno seguinte nunca herda a conta da anterior.
-5. Cartão perdido: regeneração **individual** por aluno (não derruba a
-   turma); o código nunca muda (a criança decora), só o QR.
+5. Cartão esquecido: o professor consulta o código na página "só do
+   professor" (nada a revogar). Cartão perdido, roubado ou com o QR
+   vazado: regeneração **individual** por aluno (não derruba a turma) —
+   código e QR novos e as sessões caem (`token_version`); o cartão antigo
+   para de entrar e a criança passa a usar o código novo. Revogar só o QR
+   não basta: o cartão traz os dois (revisão e97; regra a ratificar —
+   bible, Seção 12 §15).
 6. Aluno transferido/arquivado recebe mensagem própria ("cartão
-   descansando") — nunca "código errado", que a faria se culpar.
+   descansando") — nunca "código errado", que a faria se culpar. Se
+   ninguém pedir revogação, volta com o mesmo cartão. Se o cartão dele se
+   perdeu, regenerar (individual ou da turma) revoga mesmo com a ficha
+   inativa, sem emitir cartão novo, e a reativação não reabre o cartão
+   revogado.
 
 ## Sincronização Quest → Edu
 

@@ -3,8 +3,8 @@
 Núcleo reusado tanto pela fusão manual de 1 par (POST /alunos/fundir) quanto
 pela fusão em LOTE (Fundir duplicatas). Junta no ``manter`` TUDO do ``remover``
 (snapshots Matific/Elefante, leituras, matrículas, notas, linha do tempo de
-eventos, vínculo de identidade externa/UUID, ficha cadastral e o lado Quest) e
-apaga o ``remover``.
+eventos, vínculo de identidade externa/UUID, memória das decisões de identidade,
+ficha cadastral e o lado Quest) e apaga o ``remover``.
 
 Garantias de segurança (a regra do dono: nunca perder dado, nunca dobrar ponto):
   * cada relação resolve a própria UNICIDADE (migra o que falta, descarta o
@@ -33,6 +33,7 @@ from app.models import (
     Leitura,
     Matricula,
     Nota,
+    RevisaoIdentidade,
     SnapshotElefante,
     SnapshotMatific,
 )
@@ -310,6 +311,20 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     if remover.da_lista_piloto and not manter.da_lista_piloto:
         manter.da_lista_piloto = True
 
+    # MEMÓRIA DAS DECISÕES HUMANAS (``RevisaoIdentidade.aluno_escolhido_id``): a
+    # escolha de um gestor/Admin Global para uma identidade segue a criança. Sem
+    # isto, o delete do `remover` zerava a coluna (FK ``ondelete=SET NULL``), o
+    # ``carregar_contexto`` deixava de ler a memória, e a coleta seguinte mandava
+    # de novo para a revisão a conta que o Admin Global confirmou (D10, passo 0d
+    # de ``decidir``) — e a gestão leva 403 no /resolver. ``resolucao`` não muda:
+    # é o registro do que foi escolhido na época.
+    decisoes_movidas = db.execute(
+        update(RevisaoIdentidade)
+        .where(RevisaoIdentidade.escola_id == escola_id,
+               RevisaoIdentidade.aluno_escolhido_id == remover.id)
+        .values(aluno_escolhido_id=manter.id)
+    ).rowcount
+
     manter_id = manter.id
     contagens = {
         "leituras_movidas": leituras_movidas,
@@ -332,6 +347,7 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
               detalhes={"mantido": {"id": manter_id, "nome": manter_nome},
                         "removido": {"id": remover.id, "nome": remover_nome},
                         "foto_pre_fusao": foto,
+                        "decisoes_de_identidade_movidas": decisoes_movidas,
                         **contagens})
     # Grava as reatribuições ANTES do delete — o cascade não pega o que foi movido.
     db.flush()

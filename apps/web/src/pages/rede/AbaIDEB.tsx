@@ -37,6 +37,7 @@ import { dataHora } from "../../lib/formato";
 import { numeroBR } from "./ica";
 import { Aviso, Bloco, Nota, Seletor, Situacao } from "./IdebBlocos";
 import RedeIDEB from "./RedeIDEB";
+import { classeAba, classeTrilhoAbas } from "./visualIndicadores";
 import {
   MOTIVOS_IDEB,
   diferencaIDEB,
@@ -57,9 +58,10 @@ import {
   type RespostaIDEB,
 } from "./ideb";
 
-// Ideb em índigo e a meta em cinza TRACEJADA; no Saeb, LP em índigo e MT em âmbar. A
-// legenda e a tabela dizem o nome (a cor não é o único código).
-const COR = { ideb: "#6366f1", meta: "#64748b", lp: "#6366f1", mt: "#f59e0b" };
+// Ideb no violeta da marca e a meta em ardósia TRACEJADA; no Saeb, LP em violeta e MT em
+// âmbar (paleta de séries da v2). A legenda e a tabela dizem o nome (a cor não é o único
+// código).
+const COR = { ideb: "#6C5CE7", meta: "#64748B", lp: "#6C5CE7", mt: "#D97706" };
 
 // --- Células ---------------------------------------------------------------------
 
@@ -349,7 +351,7 @@ function ParteSerie({ dados }: { dados: RespostaIDEB }) {
                opcoes={comDado.map((l) => ({ valor: l.escola_id, texto: l.nome }))}
                aoMudar={setEscolhida} />
       <Bloco titulo={`Série de ${escola.nome} (${periodo})`} testId="ideb-serie">
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <figure className="min-w-0 space-y-1" data-testid="ideb-grafico-ideb">
             <figcaption className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Ideb e meta (tracejada)</figcaption>
             <GraficoLinha series={ideb} eixoX={eixoX} minimo={fIdeb.minimo} maximo={fIdeb.maximo} altura={200}
@@ -563,16 +565,11 @@ export default function AbaIDEB({ dados }: { dados: RespostaIDEB }) {
         </p>
       </Aviso>
       <Pendentes dados={dados} />
-      <div role="tablist" aria-label="Partes do IDEB e do SAEB"
-           className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
+      <div role="tablist" aria-label="Partes do IDEB e do SAEB" className={classeTrilhoAbas}>
         {PARTES.map(([chave, rotulo]) => (
           <button key={chave} id={idAba(chave)} type="button" role="tab" aria-selected={parte === chave}
                   aria-controls={idPainel} onClick={() => setParte(chave)}
-                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                    parte === chave
-                      ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
-                      : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                  }`}>
+                  className={classeAba(parte === chave)}>
             {rotulo}
           </button>
         ))}

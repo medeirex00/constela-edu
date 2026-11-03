@@ -1,7 +1,7 @@
 """A Lista Piloto OFICIAL traz as abas da Educação Infantil junto com as do
 Fundamental — e elas não concorrem.
 
-Isto não é hipótese: o arquivo real da EMEI / EMEF João Thimóteo do Rosário tem
+Isto não é hipótese: o arquivo real da escola 17 tem
 sete abas, ``1ª FASE``, ``2ª FASE``, ``1º ANO`` … ``5º ANO``. O parser lê as sete
 e entrega o rótulo fiel; quem decide quem concorre é ``services.elegibilidade``.
 
@@ -80,7 +80,7 @@ def _turma_de(db, aluno_id):
     return db.get(Turma, m.turma_id) if m else None
 
 
-# A planilha da João Thimóteo em miniatura: duas Fases e dois anos.
+# A planilha da escola 17 em miniatura: duas Fases e dois anos.
 LISTA = _planilha(
     ("1ª FASE", [_linha("BIA DA EDUCACAO INFANTIL", numero=1, ra="111.100.011-0",
                         nasc=date(2021, 2, 1))]),

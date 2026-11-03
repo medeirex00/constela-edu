@@ -20,8 +20,20 @@
   body {
     @apply antialiased bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
   }
+  /* Foco visível (WCAG 2.4.7) por OUTLINE, não por ring: o contorno acompanha o raio
+     do elemento e não depende da cor do fundo (lavanda, cartão branco ou a barra
+     lateral marinho) — o ring-offset antigo, fixo no zinc-50, fazia um halo claro
+     sobre o fundo escuro. Violeta sobre marinho = 3,4:1 (mínimo de 3:1 para UI). */
   :focus-visible {
-    @apply outline-none ring-2 ring-indigo-500 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950 rounded;
+    outline: 2px solid #6c5ce7;
+    outline-offset: 2px;
+  }
+  .dark :focus-visible {
+    outline-color: #9688f2;
+  }
+  /* Números alinhados em tabelas e indicadores (Poppins tem algarismos tabulares). */
+  table {
+    font-variant-numeric: tabular-nums;
   }
 
   /* iOS Safari dá zoom ao focar campos com fonte < 16px. Em telas de toque,
@@ -54,15 +66,104 @@
 }
 
 @layer components {
+  /* Cartão da identidade v2: raio de 20 px, borda quase invisível e sombra difusa. */
   .card {
-    @apply rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900;
+    @apply rounded-cartao border border-zinc-200/80 bg-white shadow-cartao dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-none;
+  }
+
+  /* Sombra de rolagem horizontal (moldura das tabelas, `classesTabela.moldura`): uma
+     sombra suave aparece na borda esquerda/direita SÓ quando há colunas escondidas
+     daquele lado. CSS puro, sem script: as duas sombras ficam presas à moldura
+     (attachment `scroll`) e duas "coberturas" na cor do cartão andam com o conteúdo
+     (`local`); quando a tabela encosta numa borda, a cobertura dela tapa a sombra.
+     Só imagens de fundo (nada de background-color): a moldura continua transparente
+     e um `bg-*` da tela segue valendo. Cartão branco no claro e #1A1C38 (zinc-900)
+     no escuro. Não cria rolagem nova: só desenha no fundo da área que já rola. */
+  .sombra-rolagem-x {
+    background-image:
+      linear-gradient(to right, #ffffff 30%, rgba(255, 255, 255, 0)),
+      linear-gradient(to left, #ffffff 30%, rgba(255, 255, 255, 0)),
+      linear-gradient(to right, rgba(26, 28, 56, 0.14), rgba(26, 28, 56, 0)),
+      linear-gradient(to left, rgba(26, 28, 56, 0.14), rgba(26, 28, 56, 0));
+    background-position: left center, right center, left center, right center;
+    background-size: 2.5rem 100%, 2.5rem 100%, 0.875rem 100%, 0.875rem 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+  .dark .sombra-rolagem-x {
+    background-image:
+      linear-gradient(to right, #1a1c38 30%, rgba(26, 28, 56, 0)),
+      linear-gradient(to left, #1a1c38 30%, rgba(26, 28, 56, 0)),
+      linear-gradient(to right, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0)),
+      linear-gradient(to left, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+  }
+
+  /* Coluna que não pode sumir no celular (nota do ranking, índice, ações): abaixo de
+     640 px fica presa à direita da tabela que rola, com uma sombra à esquerda. */
+  @media (max-width: 639.98px) {
+    .presa-celular {
+      position: sticky;
+      right: 0;
+      z-index: 1;
+      background-color: #ffffff;
+      box-shadow: -10px 0 10px -10px rgba(23, 25, 59, 0.35);
+    }
+    .dark .presa-celular {
+      background-color: #1a1c38;
+      box-shadow: -10px 0 10px -10px rgba(0, 0, 0, 0.7);
+    }
+    /* A célula presa (sticky + z-index) vira contexto de empilhamento: o menu ⋮ e as
+       janelas (Modal) que abrem DENTRO dela ficariam presos no z-1, por baixo das
+       células presas das linhas seguintes e do cabeçalho fixo (z-20). Com algo aberto
+       dentro, a célula sobe acima do cabeçalho. */
+    .presa-celular:has([aria-expanded="true"]),
+    .presa-celular:has([role="menu"]),
+    .presa-celular:has([role="dialog"]) {
+      z-index: 60;
+    }
+    /* Irmã à ESQUERDA: a 1ª coluna (turma, série) fica presa enquanto os números
+       rolam por baixo dela. */
+    .presa-esquerda-celular {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background-color: #ffffff;
+      box-shadow: 10px 0 10px -10px rgba(23, 25, 59, 0.35);
+    }
+    .dark .presa-esquerda-celular {
+      background-color: #1a1c38;
+      box-shadow: 10px 0 10px -10px rgba(0, 0, 0, 0.7);
+    }
+  }
+
+  /* Abas segmentadas no celular (`classesAbas.lista`, em ui.tsx): abaixo de 640 px a
+     lista é uma linha só que rola de lado (as classes max-sm: da própria lista) e a
+     sombra de borda vem de `.sombra-rolagem-x`. Aqui: some a barra de rolagem (fina
+     ou não, ela riscava a pílula), o arrasto lateral não vaza para o "voltar" do
+     navegador e, sem "reduzir movimento", o ajuste até a aba ativa desliza. Do sm em
+     diante nada disto vale (a lista quebra linha como sempre). */
+  @media (max-width: 639.98px) {
+    .abas-rolaveis {
+      scrollbar-width: none;
+      overscroll-behavior-x: contain;
+    }
+    .abas-rolaveis::-webkit-scrollbar {
+      display: none;
+    }
+  }
+  @media (max-width: 639.98px) and (prefers-reduced-motion: no-preference) {
+    .abas-rolaveis {
+      scroll-behavior: smooth;
+    }
   }
 }
 
 /* ---------------------------------------------------------------------------
    Painel Público (telão da escola) — animações de celebração.
    CSS plano (fora de @layer) para o Tailwind NÃO purgar; classes com prefixo
-   "painel-" para não colidir com utilitárias. Tudo desliga em reduced-motion.
+   "painel-" para não colidir com utilitárias. Em reduced-motion desligam os
+   efeitos de UI; o cintilar das estrelas do telão segue de propósito (ver o
+   bloco @media (prefers-reduced-motion) abaixo).
 --------------------------------------------------------------------------- */
 /* Cintilar das estrelas: oscilação AMPLA de opacidade (0.3↔1) para piscar de
    forma visível no navegador e no Android (antes era 0.5↔0.82, imperceptível).
@@ -76,16 +177,18 @@
 .painel-estrela { animation: painel-cintila 4s ease-in-out infinite; }
 /* Estrela cadente: um rastro fino que surge, corre na diagonal e some. Com
    ciclos longos e atrasos diferentes, aparecem esporádicas (não em enxame). */
+/* Tamanhos em rem: na TV 4K (escala do <html> em .tela-publica) o rastro cresce
+   junto com o resto; em qualquer outra tela 1rem = 16px (mesmos 150/320 px). */
 @keyframes painel-cadente {
-  0%   { opacity: 0; transform: rotate(202deg) translateX(-40px); }
+  0%   { opacity: 0; transform: rotate(202deg) translateX(-2.5rem); }
   5%   { opacity: 0.9; }
   17%  { opacity: 0.9; }
-  27%  { opacity: 0; transform: rotate(202deg) translateX(320px); }
-  100% { opacity: 0; transform: rotate(202deg) translateX(320px); }
+  27%  { opacity: 0; transform: rotate(202deg) translateX(20rem); }
+  100% { opacity: 0; transform: rotate(202deg) translateX(20rem); }
 }
 .painel-cadente {
   position: absolute;
-  width: 150px;
+  width: 9.375rem;
   height: 2px;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0), #ffffff);
@@ -126,7 +229,7 @@
   0%   { transform: translate(0, 0); opacity: 0; }
   8%   { opacity: 0.5; }
   90%  { opacity: 0.5; }
-  100% { transform: translate(360px, -130px); opacity: 0; }
+  100% { transform: translate(22.5rem, -8.125rem); opacity: 0; }
 }
 .painel-satelite {
   position: absolute;
@@ -161,6 +264,374 @@
   .painel-pulso,
   .painel-brilho::after {
     animation: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Telas públicas (vitrine da rede /rede/p/:token e telão da escola /p/:token).
+   A página pública marca o <html> com "tela-publica" enquanto está montada
+   (useTelaPublica em components/FundoConstela.tsx):
+   - fundo escuro no html/body: sem "flash" claro nem sobra branca ao rolar;
+   - foco visível no tema noite (contorno âmbar; não briga com os ring-* dos
+     botões, que usam box-shadow);
+   - escala tipográfica fluida ACIMA de 1920 px (TV 4K com DPR 1): o font-size
+     do <html> cresce com a tela (teto 30px), então todo rem cresce junto e o
+     3840×2160 vira o 1920×1080 ampliado — não uma "ilha" no meio da TV.
+--------------------------------------------------------------------------- */
+html.tela-publica,
+html.tela-publica body {
+  background-color: #0f1626;
+  color-scheme: dark;
+}
+@media (min-width: 1921px) {
+  html.tela-publica {
+    font-size: clamp(16px, min(0.8333vw, 1.4815vh), 30px);
+  }
+}
+html.tela-publica :focus-visible {
+  outline: 3px solid #fcd34d;
+  outline-offset: 3px;
+}
+
+/* ---------------------------------------------------------------------------
+   Telão da escola (PainelPublico.tsx) — modo COMPACTO POR ALTURA.
+   Numa TV/projetor em paisagem com menos de 1000 px de altura (HD 1366×768 e
+   1280×720, projetor 1024×768, notebook 1440×900, TV-stick 960×540) o pódio
+   "Estrelas em Destaque" não cabia no palco e a rolagem invisível escondia
+   nomes, evolução e as bases 2/1/3. Aqui só TAMANHOS e ESPAÇOS passam a seguir
+   a altura da tela (vh): mesmas cores, mesma ordem (2-1-3, a mesma do lg),
+   mesmo conteúdo. Os ganhos do período (MicroGanhos) saem só nas alturas
+   baixas (< 820 px), onde não cabem. As classes painel-* ficam ao lado das
+   utilitárias do Tailwind; o prefixo `.tela-publica` (classe do <html> nas
+   telas públicas) dá a especificidade para vencer também as variantes sm:/xl:,
+   que o Tailwind emite no FIM da folha — e só dentro destas media queries.
+   Todas exigem `(min-width: 640px) and (min-height: 500px)` — a MESMA condição
+   de TV do PainelPublico.tsx (MEDIA_TELAO_TV). Fora dela (celular, inclusive
+   deitado: 667×375, 844×390, 932×430) o telão é uma página rolável com os
+   tamanhos normais e o pódio empilhado; nada aqui pode espremê-lo pela altura.
+--------------------------------------------------------------------------- */
+@media (orientation: landscape) and (min-width: 640px) and (min-height: 500px) and (max-height: 999px) {
+  /* Moldura do palco: cabeçalho, título do slide, números e rodapé mais baixos. */
+  .tela-publica .painel-cabecalho { padding-top: 1.6vh; padding-bottom: 1.6vh; }
+  .tela-publica .painel-nome-escola { font-size: clamp(1.25rem, min(2.1vw, 3.8vh), 4rem); }
+  .tela-publica .painel-area { padding-top: 1.8vh; }
+  .tela-publica .painel-titulo-bloco { margin-bottom: 1.4vh; }
+  .tela-publica .painel-titulo { font-size: clamp(1.5rem, min(3vw, 5vh), 4rem); line-height: 1.2; }
+  .tela-publica .painel-legenda { margin-top: 0.2vh; line-height: 1.35; }
+  .tela-publica .painel-numeros { padding-top: 1vh; padding-bottom: 1vh; }
+  .tela-publica .painel-numero { font-size: clamp(1.1rem, min(2.2vw, 3.6vh), 3rem); }
+  .tela-publica .painel-rodape { padding-top: 1.2vh; padding-bottom: 1.2vh; }
+}
+@media (orientation: landscape) and (min-width: 900px) and (min-height: 500px) and (max-height: 999px) {
+  /* Pódio em 3 colunas (como no lg), tudo pela altura. */
+  .tela-publica .painel-podio-grade { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.4vh; }
+  .tela-publica .painel-podio-col-2 { order: 1; }
+  .tela-publica .painel-podio-col-1 { order: 2; transform: translateY(-1.2vh); }
+  .tela-publica .painel-podio-col-3 { order: 3; }
+  .tela-publica .painel-podio-cartao-campeao { padding: 2.4vh 1.5rem 2.2vh; }
+  .tela-publica .painel-podio-cartao { padding: 2.6vh 1.25rem 2vh; }
+  .tela-publica .painel-podio-coroa { width: 4.8vh; height: 4.8vh; margin-bottom: 0.6vh; }
+  .tela-publica .painel-podio-coroa > svg { width: 4.4vh; height: 4.4vh; }
+  .tela-publica .painel-podio-avatar-campeao { width: 14vh; height: 14vh; }
+  .tela-publica .painel-podio-avatar { width: 10.5vh; height: 10.5vh; }
+  .tela-publica .painel-podio-iniciais-campeao { font-size: 5.6vh; line-height: 1; }
+  .tela-publica .painel-podio-iniciais { font-size: 4vh; line-height: 1; }
+  .tela-publica .painel-podio-medalha-campeao { width: 4.6vh; height: 4.6vh; font-size: 2.3vh; }
+  .tela-publica .painel-podio-medalha { width: 3.8vh; height: 3.8vh; font-size: 1.9vh; }
+  .tela-publica .painel-podio-rotulo { margin-top: 1.2vh; }
+  .tela-publica .painel-podio-nome-campeao { margin-top: 0.6vh; font-size: clamp(1.2rem, min(2.5vw, 4vh), 3.8rem); }
+  .tela-publica .painel-podio-nome { margin-top: 0.6vh; font-size: clamp(1rem, min(1.7vw, 3vh), 2.6rem); }
+  .tela-publica .painel-podio-chips { margin-top: 1vh; }
+  .tela-publica .painel-podio-base-campeao { height: 7vh; }
+  .tela-publica .painel-podio-base { height: 5vh; }
+  .tela-publica .painel-podio-base-num-campeao { font-size: 4.6vh; line-height: 1; }
+  .tela-publica .painel-podio-base-num { font-size: 3.2vh; line-height: 1; }
+}
+@media (orientation: landscape) and (min-width: 900px) and (min-height: 500px) and (max-height: 819px) {
+  .tela-publica .painel-podio-ganhos { display: none; }
+}
+/* TV-stick 960×540 e alturas ainda menores: a faixa de números, a dica e as
+   linhas do mural também encolhem, para o ranking e o mural mostrarem as 3
+   primeiras linhas + a linha "+ N" (o mínimo de 3 garante as 3 medalhas) sem
+   nada escondido na rolagem invisível do palco; o pódio aperta mais um pouco. */
+@media (orientation: landscape) and (min-width: 640px) and (min-height: 500px) and (max-height: 600px) {
+  .tela-publica .painel-numeros { padding-top: 0.6vh; padding-bottom: 0.6vh; }
+  .tela-publica .painel-numero-emoji { font-size: 4vh; }
+  .tela-publica .painel-numero { font-size: max(1rem, 3.4vh); }
+  .tela-publica .painel-dica { font-size: 0.75rem; }
+  .tela-publica .painel-mural-item { padding-top: 1.4vh; padding-bottom: 1.4vh; }
+  .tela-publica .painel-mural-icone { width: 6.4vh; height: 6.4vh; font-size: 3.6vh; }
+}
+@media (orientation: landscape) and (min-width: 900px) and (min-height: 500px) and (max-height: 600px) {
+  .tela-publica .painel-podio-cartao-campeao { padding: 2vh 1.5rem 1.8vh; }
+  .tela-publica .painel-podio-coroa { width: 4.2vh; height: 4.2vh; }
+  .tela-publica .painel-podio-coroa > svg { width: 3.8vh; height: 3.8vh; }
+  .tela-publica .painel-podio-avatar-campeao { width: 12.5vh; height: 12.5vh; }
+}
+
+/* ---------------------------------------------------------------------------
+   Vitrine pública da rede (PainelPublicoRede.tsx) — as melhores escolas.
+   Dois modos, só por CSS:
+   1) Padrão (celular, tablet em pé, telas estreitas): cartões em 1 coluna e
+      nomes de escola INTEIROS (quebram linha; nada de reticências que deixem
+      "EMEI/EMEF P…" iguais). Rolagem vertical é aceitável.
+   2) Modo TV (paisagem com ≥ 800 × 440 px: TV, projetor — inclusive o SVGA
+      800×600 e o painel 854×480 —, notebook, tablet deitado; celular deitado,
+      com menos de 440 px de altura, continua no modo 1):
+      2 cartões lado a lado e tudo medido em --u (1% da altura útil, limitado
+      pela largura em 16:9 e por 0.675rem) — cabeçalho + 5 + 5 escolas + rodapé
+      cabem numa tela de 800×600 a 3840×2160 sem rolar. Nome em até 2 linhas
+      (texto completo no DOM e no `title`).
+   3) Totem (tela grande em retrato, ≥ 1000 × 1500 px: TV 1080×1920 ou 4K
+      2160×3840 de pé): as mesmas regras do modo TV, mas em 1 coluna que ocupa
+      ~90% da largura e com --u = 1% da LARGURA (a tipografia escala pela
+      largura, não vira uma "ilha" de 56rem no meio da tela).
+   Pisos (max(…rem, …)) mantêm o texto pequeno legível em TV-stick 960×540.
+--------------------------------------------------------------------------- */
+.vitrine {
+  padding: clamp(1.5rem, 4vh, 4rem) 1rem;
+}
+.vitrine-conteudo {
+  max-width: min(118rem, 94vw);
+}
+/* Halo escuro em volta das letras do cabeçalho e do rodapé (que ficam direto
+   sobre o céu): uma estrela que cair atrás do texto não "fura" a letra. */
+.vitrine-cabecalho,
+.vitrine-rodape {
+  text-shadow: 0 0 0.2em #0f1626, 0 0 0.55em rgba(15, 22, 38, 0.85);
+}
+.vitrine-cabecalho {
+  max-width: min(64rem, 100%);
+  margin: 0 auto 2rem;
+}
+.vitrine-logo {
+  width: clamp(2.2rem, 3vw, 3.5rem);
+  height: clamp(2.2rem, 3vw, 3.5rem);
+  margin: 0 auto 0.75rem;
+}
+.vitrine-sobretitulo {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  letter-spacing: 0.16em;
+}
+.vitrine-titulo {
+  margin-top: 0.25rem;
+  font-size: clamp(1.8rem, 4vw, 4.5rem);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.vitrine-subtitulo {
+  margin-top: 0.5rem;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+.vitrine-cartoes {
+  display: grid;
+  gap: 1.5rem;
+  justify-content: center;
+  /* Teto de 56rem por cartão (nunca esticado). Com auto-fit e máximo definido,
+     a contagem de colunas usa o MÁXIMO: 1 coluna até caber 2 × 56rem + vão; o
+     modo TV (abaixo) força as 2 colunas. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 56rem));
+}
+/* Vidro escuro: o véu branco de 5% de sempre sobre uma base azul-noite quase
+   opaca — o céu continua aparecendo nas bordas, mas estrelas e cadentes não
+   brilham ATRÁS dos nomes e valores (contraste do texto preservado). */
+.vitrine-cartao {
+  min-width: 0;
+  padding: 1rem;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.05)),
+    rgba(13, 20, 37, 0.76);
+}
+.vitrine-cartao-titulo {
+  gap: 0.625rem;
+  font-size: clamp(1.2rem, 2.4vw, 2.8rem);
+  line-height: 1.25;
+}
+.vitrine-icone {
+  width: clamp(1.6rem, 2.4vw, 2.6rem);
+  height: clamp(1.6rem, 2.4vw, 2.6rem);
+}
+.vitrine-unidade {
+  margin-top: 0.25rem;
+  font-size: clamp(0.75rem, 1vw, 1.1rem);
+  line-height: 1.4;
+  letter-spacing: 0.16em;
+}
+.vitrine-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 1rem;
+}
+.vitrine-linha {
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+}
+.vitrine-medalha {
+  width: 2rem;
+  font-size: clamp(1.4rem, 2vw, 2.4rem);
+  line-height: 1;
+}
+.vitrine-nome {
+  font-size: clamp(0.95rem, 1.7vw, 2.2rem);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.vitrine-valor {
+  min-width: 3.5ch;
+  font-size: clamp(1rem, 1.7vw, 2.4rem);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.vitrine-vazio {
+  padding: 2.5rem 0;
+}
+.vitrine-rodape {
+  margin-top: 2.5rem;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.vitrine-rodape-logo {
+  width: 1rem;
+  height: 1rem;
+}
+@media (max-width: 359px) {
+  .vitrine { padding-inline: 0.75rem; }
+  .vitrine-cartao { padding: 0.75rem; }
+  .vitrine-linha { gap: 0.5rem; padding: 0.625rem; }
+  /* A medalha (emoji) a 1,4rem tem ~31 px de largura: na coluna de 1,75rem (28 px)
+     ela vazava da própria coluna. A 1,25rem cabe (~28 px). */
+  .vitrine-medalha { width: 1.75rem; font-size: 1.25rem; }
+}
+@media (min-width: 640px) {
+  .vitrine-sobretitulo { letter-spacing: 0.28em; }
+  .vitrine-cartao { padding: 1.5rem; }
+  .vitrine-linha { gap: 1rem; padding: 0.75rem 1.25rem; }
+  .vitrine-medalha { width: 2.75rem; }
+}
+@media (min-width: 1280px) {
+  .vitrine-cartoes { gap: 2.5rem; }
+  .vitrine-medalha { width: 4rem; }
+}
+
+/* Modo TV: paisagem larga (e não um celular deitado: ≥ 440 px de altura). Tudo
+   em --u para caber na altura sem rolar. O totem (retrato grande) reaproveita
+   estas regras e só troca --u e as colunas no bloco seguinte. */
+@media (orientation: landscape) and (min-width: 800px) and (min-height: 440px),
+  (orientation: portrait) and (min-width: 1000px) and (min-height: 1500px) {
+  .vitrine {
+    --u: min(1vh, 0.5625vw, 0.675rem);
+    padding: calc(3 * var(--u)) 1rem;
+  }
+  .vitrine-cabecalho {
+    max-width: min(100%, calc(130 * var(--u)));
+    margin-bottom: calc(2.8 * var(--u));
+  }
+  .vitrine-logo {
+    width: calc(5 * var(--u));
+    height: calc(5 * var(--u));
+    margin-bottom: var(--u);
+  }
+  .vitrine-sobretitulo {
+    font-size: max(0.75rem, calc(1.5 * var(--u)));
+    letter-spacing: 0.28em;
+  }
+  .vitrine-titulo {
+    margin-top: calc(0.4 * var(--u));
+    font-size: calc(4.4 * var(--u));
+  }
+  .vitrine-subtitulo {
+    margin-top: calc(0.6 * var(--u));
+    font-size: max(0.8rem, calc(1.7 * var(--u)));
+    line-height: 1.35;
+  }
+  .vitrine-cartoes {
+    gap: calc(2.6 * var(--u));
+    grid-template-columns: repeat(2, minmax(0, 56rem));
+  }
+  .vitrine-cartao {
+    padding: calc(2.2 * var(--u));
+  }
+  .vitrine-cartao-titulo {
+    gap: var(--u);
+    font-size: calc(3 * var(--u));
+  }
+  .vitrine-icone {
+    width: calc(3.2 * var(--u));
+    height: calc(3.2 * var(--u));
+  }
+  .vitrine-unidade {
+    margin-top: calc(0.4 * var(--u));
+    font-size: max(0.7rem, calc(1.3 * var(--u)));
+  }
+  .vitrine-lista {
+    gap: var(--u);
+    margin-top: calc(1.6 * var(--u));
+  }
+  .vitrine-linha {
+    gap: calc(1.4 * var(--u));
+    padding: calc(1.1 * var(--u)) calc(1.6 * var(--u));
+  }
+  .vitrine-medalha {
+    width: calc(4.4 * var(--u));
+    font-size: calc(3.2 * var(--u));
+  }
+  .vitrine-nome {
+    font-size: max(0.8rem, calc(2.4 * var(--u)));
+    /* 1.3: o acento das maiúsculas (Á, Ê) do Poppins não é cortado pelo clamp. */
+    line-height: 1.3;
+    /* Até 2 linhas; o texto inteiro segue no DOM (leitor de tela) e no title. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .vitrine-valor {
+    font-size: max(0.85rem, calc(2.5 * var(--u)));
+  }
+  .vitrine-vazio {
+    padding: calc(4 * var(--u)) 0;
+  }
+  .vitrine-rodape {
+    margin-top: calc(2.6 * var(--u));
+    gap: calc(0.8 * var(--u));
+    font-size: max(0.7rem, calc(1.3 * var(--u)));
+  }
+  .vitrine-rodape-logo {
+    width: max(0.875rem, calc(1.6 * var(--u)));
+    height: max(0.875rem, calc(1.6 * var(--u)));
+  }
+}
+/* Totem: 1 coluna larga (~90% da tela) e tudo pela largura. */
+@media (orientation: portrait) and (min-width: 1000px) and (min-height: 1500px) {
+  .vitrine {
+    --u: 1vw;
+  }
+  .vitrine-conteudo {
+    max-width: 92vw;
+  }
+  /* Cabeçalho centralizado com folga nas laterais: as estrelas dos cantos de
+     cima (vitrine, telas largas) ficam fora do bloco de texto. */
+  .vitrine-cabecalho {
+    max-width: 70vw;
+  }
+  .vitrine-cartoes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Rede com UM módulo no plano (o cartão do outro não aparece): no modo TV em
+   paisagem a grade fixa 2 colunas e o cartão único ficaria na metade esquerda.
+   Uma coluna com o mesmo teto de 56rem o centraliza. Fora do modo TV o auto-fit
+   já centraliza, e o totem (retrato, bloco acima) já é 1 coluna larga. */
+@media (orientation: landscape) and (min-width: 800px) and (min-height: 440px) {
+  .vitrine-cartoes-um {
+    grid-template-columns: minmax(0, 56rem);
   }
 }
 

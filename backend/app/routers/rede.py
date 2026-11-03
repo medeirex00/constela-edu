@@ -9,14 +9,16 @@ from datetime import datetime, timezone
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
                      UploadFile, status)
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
-from app.models import Escola, Rede, Usuario
+from app.core.tempo import hoje_br
+from app.models import Escola, Rede, TokenResetSenha, Usuario
+from app.routers.admin import _invalidar_links_emitidos
+from app.routers.publico import base_do_link_publico
 from app.schemas import (
     EscolaLocalIn,
     MetaRedeIn,
@@ -29,8 +31,11 @@ from app.schemas import (
 )
 from app.services import avaliacoes as svc_avaliacoes
 from app.services import casamento_inep as svc_inep
+from app.services import frescor_ranking
 from app.services import geocodificacao as svc_geo
 from app.services import modulos as svc_modulos
+from app.services import permissoes
+from app.services import push as svc_push
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
@@ -210,7 +215,18 @@ def definir_escolas(
 ):
     """Define o conjunto de escolas da rede. Idempotente: as escolas da lista
     passam a pertencer à rede; as que estavam nela e não vieram são
-    desvinculadas (rede_id = NULL). Ignora ids de escola inexistentes."""
+    desvinculadas (rede_id = NULL). Ignora ids de escola inexistentes.
+
+    **Recalcula as notas das escolas cujo CONTRATO mudou com o vínculo**: a
+    escola que entra, sai (sem rede = todos os módulos) ou troca de rede e,
+    com isso, passa a ter outro conjunto de módulos. A Nota gravada precisa
+    acompanhar o contrato, como em ``PUT /redes/{id}/modulos``; o módulo é a
+    única entrada do motor que vem da rede. Quem já era da rede, ou mudou de
+    rede sem mudar de módulos, não é recalculado (vincular uma rede inteira com
+    o contrato padrão não roda o motor). O retorno traz ``recalculo`` (mesmo
+    formato do PUT de módulos). Uma falha não desfaz o vínculo e o perfil já
+    filtra pelo contrato de agora; como o reenvio não muda mais o vínculo, quem
+    acerta a escola que falhou é o recálculo dela (ou o PUT de módulos)."""
     rede = db.get(Rede, rede_id)
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
@@ -223,15 +239,31 @@ def definir_escolas(
     atuais = db.execute(
         select(Escola).where(Escola.rede_id == rede_id)
     ).scalars().all()
+    # {escola_id: (nome, rede de antes, rede de depois)} de quem muda de rede.
+    mudaram: dict[int, tuple[str, int | None, int | None]] = {}
     for escola in atuais:
         if escola.id not in ids_validos:
+            mudaram[escola.id] = (escola.nome, escola.rede_id, None)
             escola.rede_id = None
     for escola in validas:
+        if escola.rede_id != rede_id:
+            mudaram[escola.id] = (escola.nome, escola.rede_id, rede_id)
         escola.rede_id = rede_id
     registrar(db, "rede.escolas_definidas", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"escola_ids": sorted(ids_validos)})
-    db.commit()
-    return {"rede_id": rede_id, "escola_ids": sorted(ids_validos)}
+    db.commit()  # o VÍNCULO é a fonte da verdade; daqui para baixo é cache
+    contratos: dict[int | None, set[str]] = {}
+
+    def _contrato(rid: int | None) -> set[str]:
+        if rid not in contratos:
+            contratos[rid] = svc_modulos.modulos_da_rede(db, rid)
+        return contratos[rid]
+
+    a_recalcular = sorted((eid, nome) for eid, (nome, de, para) in mudaram.items()
+                          if _contrato(de) != _contrato(para))
+    recalculo = svc_modulos.recalcular_escolas(
+        db, a_recalcular, f"vínculo com a rede {rede_id}")
+    return {"rede_id": rede_id, "escola_ids": sorted(ids_validos), "recalculo": recalculo}
 
 
 def _exigir_inep_livre(db: Session, escola: Escola, codigo: str) -> None:
@@ -331,6 +363,16 @@ def definir_usuarios(
     `admin._usuario_alvo`, que recusa qualquer alvo com `rede_id` para ator não
     global — e o router de administração inteiro nega a Secretaria
     (`deps.negar_secretaria`), independentemente do cargo dela.
+
+    A conta que PASSA A TER o `rede_id` desta rede (promovida a Secretaria, ou
+    vinda de outra rede) muda de alcance: as sessões abertas dela caem
+    (`token_version`) e os links de redefinição pendentes deixam de valer — os
+    dela e os que ela GEROU para outras contas da escola (a Secretaria não os
+    poderia gerar; sem isto voltavam a valer se ela deixasse a rede) —, e
+    nenhum token emitido para o alcance antigo sobrevive à promoção. Os
+    aparelhos registrados por ela para o push da escola também são apagados
+    (`dispositivos_removidos`). Cada promoção fica na auditoria
+    (`usuario.promovido_a_secretaria`). A senha NÃO é trocada aqui.
     """
     rede = db.get(Rede, rede_id)
     if rede is None:
@@ -346,10 +388,36 @@ def definir_usuarios(
     for alvo_u in atuais:
         if alvo_u.id not in ids_validos:
             alvo_u.rede_id = None
+    agora = datetime.now(timezone.utc)
+    promovidas: list[int] = []
     for alvo_u in validos:
+        if alvo_u.rede_id != rede_id:
+            # Promoção: alcance novo = sessões antigas caem e links pendentes morrem.
+            rede_anterior = alvo_u.rede_id
+            alvo_u.token_version = (alvo_u.token_version or 0) + 1
+            links = db.execute(
+                update(TokenResetSenha)
+                .where(TokenResetSenha.usuario_id == alvo_u.id,
+                       TokenResetSenha.usado_em.is_(None))
+                .values(usado_em=agora)
+                .execution_options(synchronize_session=False)).rowcount
+            emitidos = _invalidar_links_emitidos(db, alvo_u.id, agora)
+            # Os aparelhos registrados no alcance antigo (push da ESCOLA, com o
+            # primeiro nome de criança) saem junto: a Secretaria não é equipe
+            # da escola.
+            aparelhos = svc_push.remover_aparelhos_da_conta(db, alvo_u.id)
+            promovidas.append(alvo_u.id)
+            registrar(db, "usuario.promovido_a_secretaria", escola_id=alvo_u.escola_id,
+                      usuario_id=usuario.id, entidade="usuario", entidade_id=alvo_u.id,
+                      detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior,
+                                "sessoes_encerradas": True,
+                                "links_pendentes_invalidados": links,
+                                "links_emitidos_invalidados": emitidos,
+                                "dispositivos_removidos": aparelhos})
         alvo_u.rede_id = rede_id
     registrar(db, "rede.usuarios_definidos", usuario_id=usuario.id, entidade="rede",
-              entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos)})
+              entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos),
+                                             "promovidas": sorted(promovidas)})
     db.commit()
     return {"rede_id": rede_id, "usuario_ids": sorted(ids_validos)}
 
@@ -410,12 +478,21 @@ def geocodificar(
 @router.get("/{rede_id}/dashboard")
 def dashboard(
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Painel municipal: totais da rede, equidade entre escolas, escolas em
     atenção e o cartão de cada escola (com lat/lng para o mapa). Só dados
-    agregados por escola — nada de PII de criança."""
-    return svc_rede.dashboard_rede(db, rede_id)
+    agregados por escola — nada de PII de criança.
+
+    SECRETARIA: a matéria de escola com menos de ``grupo_pequeno.K_MINIMO_TURMA``
+    alunos com dado, ou com só 1 ou 2 que somam num total (ou com nota > 0),
+    sai do cartão (nula, com ``grupo_pequeno``/``oculto``) e dos totais da rede,
+    e a resposta ganha ``ocultas`` e ``totais.grupo_pequeno`` (ver
+    ``rede.dashboard_rede``). O cartão da Secretaria não traz
+    ``com_livros_premiaveis``/``com_estrelas_premiaveis``. O Admin Global recebe
+    o painel de sempre."""
+    return svc_rede.dashboard_rede(db, rede_id, secretaria=permissoes.e_secretaria(usuario))
 
 
 @router.get("/{rede_id}/ranking")
@@ -427,11 +504,62 @@ def ranking(
         pattern="^(geral|leitura|matematica|matific|elefante|engajamento|livros|estrelas"
                 "|livros_aluno|estrelas_aluno|atividades_aluno"
                 "|indice_geral|indice_leitura|indice_matematica)$"),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Ranking municipal POR ESCOLA (privacidade: não expõe ranking individual de
-    crianças entre escolas). A SEDUC escolhe o critério em ``metrica``."""
-    return svc_rede.ranking_escolas(db, rede_id, limite=limite, metrica=metrica)
+    crianças entre escolas). A SEDUC escolhe o critério em ``metrica``.
+
+    SECRETARIA: a escola cujo número desta métrica está escondido (grupo
+    pequeno) sai da lista; a lista de quem ficou de fora vem em ``ocultas`` do
+    ``/dashboard`` (ver ``rede.ranking_escolas``)."""
+    return svc_rede.ranking_escolas(db, rede_id, limite=limite, metrica=metrica,
+                                    secretaria=permissoes.e_secretaria(usuario))
+
+
+@router.get("/{rede_id}/ranking/frescor")
+def ranking_frescor(
+    rede_id: int = Depends(exigir_rede),
+    db: Session = Depends(get_db),
+):
+    """DE QUANDO é o dado de CADA escola do ranking da rede, por dimensão.
+
+    Comparar uma escola cuja última coleta foi ontem com outra parada há três
+    semanas é comparar retratos de épocas diferentes — o ranking per capita não
+    tem como dizer isso sozinho. Esta rota devolve, por escola, o bloco de
+    ``frescor_ranking`` (datas, estado e a última sincronização concluída) e o
+    ``limite_dias``. Rota própria porque ``/ranking`` devolve uma LISTA (um
+    envelope novo quebraria quem a consome). Só datas e contagens agregadas por
+    escola — nenhum dado de criança. Mesmo isolamento por rede (``exigir_rede``)."""
+    hoje = hoje_br()
+    escolas = svc_rede.escolas_da_rede(db, rede_id)
+    por_escola = frescor_ranking.frescor_das_escolas(
+        db, escolas, hoje, contratados=svc_modulos.modulos_da_rede(db, rede_id))
+    return {
+        "limite_dias": frescor_ranking.LIMITE_DIAS_DADO_ATUAL,
+        "hoje": hoje.isoformat(),
+        "escolas": [{"escola_id": e.id, "nome": e.nome, **por_escola[e.id]}
+                    for e in escolas],
+    }
+
+
+@router.get("/{rede_id}/destaques")
+def destaques(
+    rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """ESCOLAS EM DESTAQUE da rede (Panorama da Rede): as mesmas da vitrine
+    pública, pelo mesmo critério (``rede._top_escolas``), com o ``escola_id``
+    para a tela levar à ficha de cada uma. Por matéria contratada (a outra sai
+    ``null``): ``{escolas: [{escola_id, nome, valor}], fora_por_protecao}``,
+    mais ``modulos``, ``limite`` e ``k_minimo``. Só agregado por escola — nada
+    de dado de criança. Mesmo isolamento do ``/dashboard`` (``exigir_rede``).
+
+    SECRETARIA: a escola com a matéria escondida no cartão dela (grupo pequeno)
+    sai da lista dessa matéria e entra na contagem ``fora_por_protecao`` (ver
+    ``rede.destaques_rede``). O Admin Global recebe a lista inteira."""
+    return svc_rede.destaques_rede(db, rede_id, secretaria=permissoes.e_secretaria(usuario))
 
 
 @router.get("/panorama-global")
@@ -445,14 +573,26 @@ def panorama_global(
     return svc_rede.dashboard_global(db)
 
 
+def _metas(db: Session, rede_id: int, usuario: Usuario) -> list[dict]:
+    """Progresso das metas sobre os MESMOS totais do painel que o perfil vê: o
+    "atual" da Secretaria vem dos totais sem as matérias escondidas (grupo
+    pequeno) — com os totais cheios, a meta devolveria por subtração o que o
+    painel esconde."""
+    if not permissoes.e_secretaria(usuario):
+        return svc_rede.metas_com_progresso(db, rede_id)
+    return svc_rede.metas_com_progresso(
+        db, rede_id, dados=svc_rede.dashboard_rede(db, rede_id, secretaria=True))
+
+
 @router.get("/{rede_id}/metas")
 def listar_metas(
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Metas da rede + PROGRESSO real (valor atual da rede / alvo). Sem meta
     cadastrada, devolve lista vazia — a UI mostra o convite para definir."""
-    return svc_rede.metas_com_progresso(db, rede_id)
+    return _metas(db, rede_id, usuario)
 
 
 @router.put("/{rede_id}/metas")
@@ -468,7 +608,7 @@ def definir_meta(
     registrar(db, "rede.meta_definida", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"metrica": dados.metrica, "alvo": dados.alvo})
     db.commit()
-    return svc_rede.metas_com_progresso(db, rede_id)
+    return _metas(db, rede_id, usuario)
 
 
 @router.delete("/{rede_id}/metas/{metrica}")
@@ -483,7 +623,7 @@ def remover_meta(
     registrar(db, "rede.meta_removida", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"metrica": metrica})
     db.commit()
-    return svc_rede.metas_com_progresso(db, rede_id)
+    return _metas(db, rede_id, usuario)
 
 
 @router.get("/{rede_id}/avaliacoes/opcoes")
@@ -508,37 +648,70 @@ def avaliacoes_correlacao(
     # aceita como opção explícita, mas não é comparável (régua interna da escola).
     metrica: str = Query(default="pontuacao_geral",
                          pattern="^(pontuacao_geral|media_geral|adocao)$"),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Cruza, por escola, a avaliação oficial × o engajamento nas plataformas:
     pontos do gráfico, correlação de Pearson e a evolução histórica. Sem afirmar
     causalidade (a tela deixa explícito). Só dados agregados por escola."""
-    return svc_avaliacoes.correlacao_rede(
+    resultado = svc_avaliacoes.correlacao_rede(
         db, rede_id, avaliacao_chave=avaliacao, indicador=indicador, edicao=edicao,
         etapa=etapa, componente=componente, metrica=metrica)
+    if permissoes.e_secretaria(usuario):
+        _correlacao_da_secretaria(db, rede_id, resultado, metrica)
+    return resultado
 
 
-def _painel_publico_saida(rede: Rede | None) -> dict:
+def _correlacao_da_secretaria(db: Session, rede_id: int, resultado: dict,
+                              metrica: str) -> None:
+    """O eixo X da Secretaria sai dos cartões que ELA vê (grupo pequeno,
+    ``rede.cartoes_da_rede``): o índice e a média geral da escola com uma
+    matéria escondida são os das matérias visíveis, e a escola sem nenhuma
+    visível sai do gráfico. Com o X de ``_kpis_da_rede`` (o número cheio), o
+    ponto da escola, ao lado do cartão dela no painel, devolveria a matéria
+    escondida. A correlação é refeita sobre os pontos que sobram. IN PLACE."""
+    # A métrica que o serviço de fato usou (ele normaliza a desconhecida).
+    metrica = resultado.get("metrica", metrica)
+    cartoes = {c["escola_id"]: c
+               for c in svc_rede.cartoes_da_rede(db, rede_id, secretaria=True)}
+    pontos = []
+    for ponto in resultado.get("pontos", []):
+        x = (cartoes.get(ponto["escola_id"]) or {}).get(metrica)
+        if x is None:
+            continue
+        pontos.append({**ponto, "x": round(float(x), 1)})
+    resultado["pontos"] = pontos
+    resultado["n"] = len(pontos)
+    # Mesma conta do serviço (Pearson; None com menos de 3 pontos).
+    resultado["pearson"] = svc_avaliacoes._pearson([(p["x"], p["y"]) for p in pontos])
+
+
+def _painel_publico_saida(rede: Rede | None, origem: str | None = None) -> dict:
+    """Estado da vitrine com o link — a base é a mesma do telão da escola
+    (``publico.base_do_link_publico``): quem decide é o servidor, e ``origem`` (a origem
+    da tela) só vale em loopback, sem ``PUBLIC_BASE_URL`` definido de propósito."""
     token = rede.token_publico if rede else None
     return {
         "ativo": bool(token),
         "token": token,
-        "url": f"{settings.PUBLIC_BASE_URL}/rede/p/{token}" if token else None,
+        "url": f"{base_do_link_publico(origem)}/rede/p/{token}" if token else None,
     }
 
 
 @router.get("/{rede_id}/publico")
 def painel_publico_config(
+    origem: str | None = None,
     rede_id: int = Depends(exigir_rede),
     db: Session = Depends(get_db),
 ):
     """Estado da vitrine pública da rede (ligada/desligada + link)."""
-    return _painel_publico_saida(db.get(Rede, rede_id))
+    return _painel_publico_saida(db.get(Rede, rede_id), origem)
 
 
 @router.put("/{rede_id}/publico")
 def painel_publico_definir(
     dados: RedePublicoIn,
+    origem: str | None = None,
     rede_id: int = Depends(exigir_rede),
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
@@ -550,7 +723,7 @@ def painel_publico_definir(
     registrar(db, "rede.painel_publico", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"ativo": dados.ativo})
     db.commit()
-    return _painel_publico_saida(db.get(Rede, rede_id))
+    return _painel_publico_saida(db.get(Rede, rede_id), origem)
 
 
 @router.get("/{rede_id}/boletim")
@@ -564,7 +737,8 @@ def boletim(
     dados AGREGADOS por escola (sem PII de criança). Acesso: a própria Secretaria
     (``exigir_rede``) ou o admin global."""
     rede = db.get(Rede, rede_id)
-    dados = svc_rede.dashboard_rede(db, rede_id)
+    # O MESMO painel que o perfil vê na tela (Secretaria: sem os grupos pequenos).
+    dados = svc_rede.dashboard_rede(db, rede_id, secretaria=permissoes.e_secretaria(usuario))
     conteudo = svc_relatorios.gerar_boletim_rede(rede.nome, dados)
     registrar(db, "rede.boletim_exportado", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"escolas": dados["totais"]["escolas"]})

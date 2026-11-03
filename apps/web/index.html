@@ -30,6 +30,10 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=5" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Tema antes do primeiro desenho: login e páginas públicas sempre escuros; nas
+         internas, a preferência de quem tem sessão (src/lib/tema.ts). Arquivo à parte
+         porque a CSP não aceita script inline; vite-ignore: servido como está, de public/. -->
+    <script src="/tema-inicial.js" vite-ignore></script>
   </head>
   <body>
     <div id="root"></div>

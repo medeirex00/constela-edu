@@ -3,16 +3,18 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useState,
   type ReactNode,
 } from "react";
+import { useLocation } from "react-router-dom";
 
 import type { Periodo } from "../components/SeletorPeriodo";
 import { ApiError, api, guardarToken, limparToken, loginRequest, obterToken } from "../lib/api";
+import { ehTelaPublica } from "../lib/pwaAtualizacao";
+import { htmlEscuro, tokenVivo, type Tema } from "../lib/tema";
 import { TURNO_TODOS } from "../lib/turnos";
 import type { Escola, Usuario } from "../lib/types";
-
-type Tema = "claro" | "escuro";
 
 // Período TEMPORAL global (intervalo de datas). É um contexto único para que a
 // escolha do usuário ("01/08 → 20/08", "Este mês", "Ano letivo") ACOMPANHE a
@@ -105,8 +107,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [carregando, setCarregando] = useState(true);
   const [falhaSessao, setFalhaSessao] = useState(false);
 
+  // A preferência só pinta as páginas internas com a sessão aberta, abrindo ou à espera de
+  // reconectar (token que ainda vale): login, redefinição de senha, telão e vitrine ficam
+  // sempre escuros (lib/tema.ts). Layout effect: troca antes do desenho, sem piscar.
+  const { pathname } = useLocation();
+  const comSessao = usuario !== null || ((carregando || falhaSessao) && tokenVivo(obterToken()));
+  const escuro = htmlEscuro(pathname, tema, comSessao);
+  useLayoutEffect(() => {
+    document.documentElement.classList.toggle("dark", escuro);
+  }, [escuro]);
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", tema === "escuro");
     localStorage.setItem("sgpe_tema", tema);
   }, [tema]);
 
@@ -139,6 +149,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const iniciarSessao = useCallback(async () => {
     setFalhaSessao(false); // limpa antes do early-return: "Tentar de novo" sem
     if (!obterToken()) {   // token deve cair em /login, não travar em Reconectar
+      setCarregando(false);
+      return;
+    }
+    // Telão (/p/…) e vitrine (/rede/p/…) são páginas SEM login: não restauram a sessão
+    // guardada. Antes, um token vencido no navegador (a TV que religa no dia seguinte, a
+    // Secretaria que abre a vitrine na mesma janela) fazia o /auth/me dar 401 e a página
+    // pública virava a tela de login — a vitrine "não abria".
+    if (ehTelaPublica(window.location.pathname)) {
       setCarregando(false);
       return;
     }

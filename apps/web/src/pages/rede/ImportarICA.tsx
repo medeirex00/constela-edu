@@ -14,7 +14,7 @@
 import { FileUp, RotateCcw, Upload } from "lucide-react";
 import { useState } from "react";
 
-import { Botao, Campo, Mensagem, estiloInput } from "../../components/ui";
+import { Botao, Campo, Confirmacao, Mensagem, estiloInput } from "../../components/ui";
 import { useApi } from "../../hooks/useApi";
 import { ApiError, api, apiUpload } from "../../lib/api";
 import { dataHora } from "../../lib/formato";
@@ -122,6 +122,8 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [pedeCodigo, setPedeCodigo] = useState(false);
+  /** A importação cujo "Desfazer" foi pedido: abre a confirmação (nada é desfeito antes). */
+  const [paraDesfazer, setParaDesfazer] = useState<Importacao | null>(null);
 
   function atualizar() {
     lista.recarregar();
@@ -161,8 +163,10 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
     } finally { setOcupado(false); }
   }
 
-  async function desfazer(imp: Importacao) {
-    if (!window.confirm(`Desfazer a importação #${imp.id} (“${imp.arquivo_nome}”)? Os números voltam exatamente ao estado anterior a ela.`)) return;
+  /** Só depois do "Desfazer importação" da confirmação. O resultado (ou a recusa) fica na tela. */
+  async function desfazer() {
+    const imp = paraDesfazer;
+    if (!imp) return;
     setOcupado(true); setMsg(null);
     try {
       await api(`/redes/${redeId}/indicadores/importacoes/${imp.id}/desfazer`, { method: "POST" });
@@ -170,7 +174,7 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
       atualizar();
     } catch (e) {
       setMsg({ tipo: "erro", texto: mensagemDe(e, "Não foi possível desfazer.") });
-    } finally { setOcupado(false); }
+    } finally { setOcupado(false); setParaDesfazer(null); }
   }
 
   const c = previa?.contadores ?? {};
@@ -183,7 +187,7 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
         Suba a planilha do INEP como baixada — por município (resultados_e_metas_municipios_*.xlsx) ou
         por UF e Brasil (resultados_e_metas_ufs_*.xlsx) — ou o <b>pacote dos microdados</b>{" "}
         (pacote_ica_aeeb_*.zip, média de LP e níveis 0–8), gerado nesta máquina com{" "}
-        <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">python -m app.services.indicadores.preparar</code>.
+        <code className="rounded bg-zinc-100 px-1 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">python -m app.services.indicadores.preparar</code>.
         Primeiro vem a <b>prévia</b>: nada é gravado até você aplicar. Entre arquivos, a capa é a planilha mais
         recente; as casas decimais dos outros (inclusive dos microdados) aparecem como detalhe.
       </p>
@@ -299,8 +303,9 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
                 <td className="py-1 pr-2">{dataHora(i.aplicado_em ?? i.created_at)}</td>
                 <td className="py-1 text-right">
                   {i.pode_desfazer ? (
-                    <Botao variante="neutro" className="px-2 py-1 text-xs" disabled={ocupado} onClick={() => desfazer(i)}>
-                      <RotateCcw size={13} /> Desfazer
+                    <Botao variante="neutro" className="px-2 py-1 text-xs" disabled={ocupado}
+                           aria-label={`Desfazer a importação #${i.id}`} onClick={() => setParaDesfazer(i)}>
+                      <RotateCcw size={13} aria-hidden="true" /> Desfazer
                     </Botao>
                   ) : i.status === "aplicada" && i.bloqueada_por ? (
                     <span className="text-zinc-500">para desfazer, desfaça antes a #{i.bloqueada_por}</span>
@@ -311,6 +316,23 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
           </tbody>
         </table>
       )}
+
+      <Confirmacao
+        titulo="Desfazer a importação?"
+        aberto={paraDesfazer !== null}
+        aoFechar={() => setParaDesfazer(null)}
+        aoConfirmar={() => void desfazer()}
+        rotuloConfirmar={ocupado ? "Desfazendo..." : "Desfazer importação"}
+        variante="perigo"
+        ocupado={ocupado}
+      >
+        {paraDesfazer && (
+          <p>
+            Desfazer a importação <strong>#{paraDesfazer.id}</strong> (“{paraDesfazer.arquivo_nome}”)? Os números
+            voltam exatamente ao estado anterior a ela.
+          </p>
+        )}
+      </Confirmacao>
     </div>
   );
 }

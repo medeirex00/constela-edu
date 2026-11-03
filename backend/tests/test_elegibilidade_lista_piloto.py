@@ -4,7 +4,7 @@ Este arquivo nasceu de uma auditoria das 118 fichas que estão nos rankings da
 rede sem ``da_lista_piloto=True``. A conclusão mudou o que parecia óbvio, e por
 isso virou teste: **o flag não serve de porteiro do ranking**.
 
-Medido contra a Lista Piloto OFICIAL da EMEF Prof. Jorge Passos (a única em
+Medido contra a Lista Piloto OFICIAL da escola 1 (a única em
 disco): das 40 fichas sem o flag naquela escola, **27 correspondem a alunos que
 estão na lista** — e todas as 27 são DUPLICATAS de uma ficha que já tem o flag.
 O flag só é escrito em dois lugares (a importação da lista e a fusão), então
@@ -162,7 +162,7 @@ def _ctx(db, escola):
 def test_nome_truncado_com_UM_candidato_segue_a_regra_existente(db, escola_completa):
     escola = escola_completa["escola"]
     t = _turma(db, escola, "4º Ano R", "4º Ano")
-    alvo = _aluno(db, escola, t, "HEITOR OLIVEIRA DE SOUSA", piloto=True)
+    alvo = _aluno(db, escola, t, "HEITOR ORLANDO DE TESTELLI", piloto=True)
     db.commit()
 
     d = ida.decidir(_ctx(db, escola),
@@ -176,11 +176,11 @@ def test_nome_truncado_com_DOIS_candidatos_nao_e_vinculado_sozinho(db,
     """A regra de segurança: "DAVI L" com dois Davis na turma não escolhe.
 
     Na rede real isso aparece 7 vezes; o pior caso tem 12 candidatos na escola e
-    2 na mesma turma (a ficha 1534 da EMEF Prof.ª Debora Valle da Silva Pilon)."""
+    2 na mesma turma (um caso real da escola 11)."""
     escola = escola_completa["escola"]
     t = _turma(db, escola, "5º Ano Q", "5º Ano")
-    _aluno(db, escola, t, "DAVI LUCCA SILVA PIRES", piloto=True)
-    _aluno(db, escola, t, "DAVI LUIS CAMARGO MAGGIONI VIEIRA", piloto=True)
+    _aluno(db, escola, t, "DAVI LUCCA FICTICIO TESTELLI", piloto=True)
+    _aluno(db, escola, t, "DAVI LUIS TESTELLI FICTICIO MONTESTELLI", piloto=True)
     db.commit()
 
     d = ida.decidir(_ctx(db, escola),
@@ -193,7 +193,7 @@ def test_nome_truncado_com_DOIS_candidatos_nao_e_vinculado_sozinho(db,
 def test_nome_truncado_sem_candidato_nao_inventa_vinculo(db, escola_completa):
     escola = escola_completa["escola"]
     t = _turma(db, escola, "1º Ano P", "1º Ano")
-    outro = _aluno(db, escola, t, "MARIA EDUARDA BRIET DOS SANTOS", piloto=True)
+    outro = _aluno(db, escola, t, "LARA FICTICIA TESTELLI DOS REIS", piloto=True)
     db.commit()
 
     d = ida.decidir(_ctx(db, escola),

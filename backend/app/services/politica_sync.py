@@ -4,7 +4,7 @@ O PROBLEMA QUE ISTO RESOLVE. A sincronização entrega as linhas da plataforma a
 mesmo pipeline do upload manual, e esse pipeline, quando não encontra candidato
 seguro, CRIA a ficha da criança. Para uma escola cujas matrículas vêm da Lista
 Piloto oficial, isso está errado na raiz: a plataforma não é fonte de matrícula.
-Um nome truncado pelo relatório ("ANNA E"), uma criança de outra unidade que
+Um nome truncado pelo relatório ("HANNA E"), uma criança de outra unidade que
 aparece na turma, ou um RA divergente que VETA o candidato certo viram ficha
 nova — ativa, sem RA, sem nascimento, já contando no ranking e mexendo na régua
 da escola inteira. E não existe desfazer.
@@ -20,12 +20,26 @@ turma do relatório, candidatos e motivo —, e o dado só entra quando alguém
 apontar a ficha certa (ou criar a ficha deliberadamente, pela própria tela de
 revisão). O caminho da Lista Piloto continua criando normalmente: ele É a fonte.
 
+``bloquear`` também vale para a TURMA, porque decorre da mesma regra: a plataforma
+não matricula, a matrícula vem da Lista Piloto (é o que a tela da política diz:
+"A plataforma não matricula ninguém nesta escola … A matrícula vem da Lista
+Piloto"). A sincronização do Matific não MOVE a matrícula para a turma que o Placar
+mostra — só vincula a conta, grava os números e avisa. Antes, a coleta levava a
+criança para a turma do Matific e o reenvio seguinte da Lista Piloto a devolvia: a
+matrícula ia e voltava. Com ``permitir`` a sync continua movendo (aprovado em
+14/07). É o item P15: recomendação de 26/10, aplicada por decorrer dessa regra; o
+dono pode objetar (reverter = 1 commit).
+
 DEFAULT = ``permitir``. Escola sem política configurada se comporta exatamente
 como antes desta mudança — a trava é opt-in, por escola, e nunca retroativa.
 
-Isto vale só para o pipeline de SINCRONIZAÇÃO. O upload manual do gestor não
-passa por aqui (``ImportacaoConfirm.permitir_criar_aluno`` continua ``True`` por
-padrão) e o cadastro pela tela de Alunos nem toca neste caminho.
+Vale para TODO dado de plataforma: a sincronização e o upload manual de
+relatório do Elefante/Matific (decisão D5). O padrão do /confirmar
+(``ImportacaoConfirm.permitir_criar_aluno`` = ``None``) é esta política; o corpo
+só pode restringir, nunca furar o ``bloquear``. Antes, o upload manual criava
+ficha mesmo com ``bloquear`` (a tela nem mandava o campo). Ficam de fora a Lista
+Piloto (/matriculas — ela É a fonte), o cadastro pela tela de Alunos e a ficha
+criada deliberadamente na tela de revisão.
 """
 from __future__ import annotations
 
@@ -65,11 +79,27 @@ def obter(db: Session, escola_id: int) -> dict:
 
 
 def pode_criar_aluno(db: Session, escola_id: int) -> bool:
-    """A sincronização desta escola pode criar ficha de aluno?
+    """O dado de plataforma (sincronização ou relatório enviado à mão) pode criar
+    ficha de aluno nesta escola?
 
-    É a única pergunta que o orquestrador faz. Valor desconhecido ou corrompido
+    É a pergunta que o orquestrador e o /confirmar fazem para criar ficha (e a
+    prévia, para avisar antes); a da turma é ``pode_mover_matricula``. Valor
+    desconhecido ou corrompido
     cai no PADRÃO (``permitir``) de propósito: uma configuração ilegível não
     pode, sozinha, mudar o comportamento de uma escola que ninguém configurou.
+    """
+    return obter(db, escola_id)["criar_aluno"] == PERMITIR
+
+
+def pode_mover_matricula(db: Session, escola_id: int) -> bool:
+    """A sincronização pode MOVER a matrícula de uma criança para a turma que a
+    plataforma mostra?
+
+    Só com ``permitir`` (e sem política, o padrão). Com ``bloquear`` a matrícula
+    segue a Lista Piloto — a plataforma não matricula, a mesma regra que impede a
+    sync de criar ficha: a sync vincula a conta e grava os números, mas não troca a
+    turma. Mesma leitura e mesmo padrão de ``pode_criar_aluno``. (P15: recomendação
+    de 26/10, aplicada por decorrer dessa regra; o dono pode objetar.)
     """
     return obter(db, escola_id)["criar_aluno"] == PERMITIR
 

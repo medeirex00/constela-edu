@@ -1,15 +1,48 @@
-import { ArrowLeft, BookOpen, TrendingUp } from "lucide-react";
-import { useState } from "react";
+import {
+  ArrowLeft,
+  BookOpen,
+  Calculator,
+  Clock,
+  Flame,
+  History,
+  IdCard,
+  LineChart,
+  Sigma,
+  Sparkles,
+  Star,
+  Trophy,
+  TrendingUp,
+  UserRound,
+} from "lucide-react";
+import { useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import AcoesAluno from "../components/AcoesAluno";
 import EvolucaoAlunoAba from "../components/EvolucaoAlunoAba";
 import HistoricoLeituras from "../components/HistoricoLeituras";
 import LinhaDoTempoAluno from "../components/LinhaDoTempoAluno";
-import { Badge, Card, Carregando, Vazio } from "../components/ui";
+import { AvatarAluno, PilulaSituacao } from "../components/PessoasUi";
+import { TabelaRolavel } from "../components/TabelaRolavel";
+import {
+  Abas,
+  Badge,
+  BarraProgresso,
+  Card,
+  Chip,
+  ESTILOS_BOTAO,
+  Erro,
+  IconePastel,
+  SecaoRecolhivel,
+  Skeleton,
+  StatCard,
+  TAMANHOS_BOTAO,
+  Vazio,
+  classesTabela,
+} from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
-import { nota, numero } from "../lib/formato";
+import { useModulos } from "../hooks/useModulos";
+import { dataHora, nota, notaDaMateria, numero } from "../lib/formato";
 import type { LeituraNiveis, LinhaCalculo, PerfilAluno as Perfil } from "../lib/types";
 
 // Ficha cadastral MINIMIZADA (LGPD): o produto guarda só o RA como identidade.
@@ -19,49 +52,70 @@ const ROTULOS_FICHA: Record<string, string> = {
   ra: "RA",
 };
 
-/** Dados cadastrais do aluno (minimizados: só o RA). */
-function FichaCadastral({ ficha }: { ficha: Record<string, string> }) {
+/** Situação da ficha que merece aviso no topo (ativo não leva pílula). */
+const SITUACAO_FICHA: Record<string, { tom: "neutro" | "alerta" | "erro"; texto: string }> = {
+  arquivado: { tom: "neutro", texto: "Arquivado" },
+  excluido: { tom: "erro", texto: "Na lixeira" },
+  fora_lista_piloto: { tom: "alerta", texto: "Fora da lista piloto" },
+  transferido: { tom: "neutro", texto: "Transferido" },
+};
+
+/** Cores das posições 1–3 (medalhas); da 4ª em diante, pílula neutra. */
+const COR_POSICAO: Record<number, string> = {
+  1: "bg-medalha-ouro text-[#5B3B00]",
+  2: "bg-medalha-prata text-[#2B3350]",
+  3: "bg-medalha-bronze text-[#4A2306]",
+};
+
+/** Campos da ficha que podem aparecer (rótulo, valor). */
+function itensDaFicha(ficha: Record<string, string> | null | undefined): Array<readonly [string, string]> {
   const itens: Array<readonly [string, string]> = [];
+  if (!ficha) return itens;
   // Só campos EXPLICITAMENTE permitidos aparecem — sem fallback que exibiria
   // qualquer chave residual da ficha (defesa em profundidade de privacidade).
   for (const chave of Object.keys(ROTULOS_FICHA)) {
     if (ficha[chave]) itens.push([ROTULOS_FICHA[chave], ficha[chave]] as const);
   }
+  return itens;
+}
+
+/** Dados cadastrais do aluno (minimizados: só o RA). */
+function FichaCadastral({ itens }: { itens: Array<readonly [string, string]> }) {
   if (itens.length === 0) return null;
   return (
-    <section>
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-        Ficha cadastral
-      </h2>
-      <Card className="p-4">
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-          {itens.map(([rotulo, valor]) => (
-            <div key={rotulo} className="min-w-0">
-              <dt className="text-xs uppercase tracking-wide text-zinc-400">{rotulo}</dt>
-              <dd className="mt-0.5 break-words text-sm text-zinc-800 dark:text-zinc-100">{valor}</dd>
-            </div>
-          ))}
-        </dl>
-      </Card>
-    </section>
+    <Card className="p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <IconePastel icone={IdCard} tom="azul" />
+        <h2 className="text-base font-semibold tracking-tight">Ficha cadastral</h2>
+      </div>
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+        {itens.map(([rotulo, valor]) => (
+          <div key={rotulo} className="min-w-0 rounded-xl bg-zinc-50 px-3.5 py-2.5 dark:bg-zinc-800/50">
+            <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">{rotulo}</dt>
+            <dd className="mt-0.5 break-words text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{valor}</dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 
-/** Gráfico de barras horizontais dos livros concluídos por faixa (PRD §38). */
+/** Barras horizontais dos livros concluídos por faixa de dificuldade (PRD §38). */
 function LeituraPorNivel({ dados }: { dados: LeituraNiveis }) {
   const maxQtd = Math.max(1, ...dados.faixas.map((f) => f.quantidade));
   return (
-    <Card className="p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-        <span className="flex items-center gap-1.5 font-medium">
-          <BookOpen size={15} className="text-indigo-500" /> Leitura por nível de dificuldade
-        </span>
-        <span className="text-zinc-500 dark:text-zinc-400">
-          {numero(dados.total_livros)} livro{dados.total_livros === 1 ? "" : "s"} ·{" "}
-          <span className="font-medium text-indigo-600 dark:text-indigo-400">
-            {numero(dados.pontos_dificuldade)} pontos de dificuldade
-          </span>
-        </span>
+    <Card className="p-5">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <IconePastel icone={BookOpen} tom="violeta" />
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold tracking-tight">Leitura por nível</h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            {numero(dados.total_livros)} livro{dados.total_livros === 1 ? "" : "s"} ·{" "}
+            <span className="font-semibold text-indigo-700 dark:text-indigo-300">
+              {numero(dados.pontos_dificuldade)} pontos de dificuldade
+            </span>
+          </p>
+        </div>
         {dados.faixa_predominante && (
           <span className="ml-auto">
             <Badge tom="destaque">Predominante: {dados.faixa_predominante}</Badge>
@@ -70,33 +124,34 @@ function LeituraPorNivel({ dados }: { dados: LeituraNiveis }) {
       </div>
 
       {dados.total_livros === 0 ? (
-        <p className="py-4 text-center text-sm text-zinc-400">
+        <p className="rounded-xl bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500 dark:bg-zinc-800/40 dark:text-zinc-400">
           Nenhum livro registrado ainda. Informe os livros por nível na tela Elefante Letrado
           ou importe um relatório.
         </p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
+          {/* Celular (< 640 px): rótulo e valor na 1ª linha e a barra na linha inteira
+              de baixo (antes ficava com ~60 px, espremida entre os dois, e barras de 1 e 2
+              livros quase não se distinguiam). Do sm em diante, uma linha só, como antes. */}
           {dados.faixas.map((faixa) => (
-            <div key={faixa.codigo} className="flex items-center gap-3 text-sm">
-              <span className="w-24 shrink-0 truncate text-zinc-600 dark:text-zinc-300">{faixa.nome}</span>
-              <div className="flex-1">
-                <div className="h-5 overflow-hidden rounded-md bg-zinc-100 dark:bg-zinc-800">
-                  <div
-                    className="flex h-full items-center justify-end rounded-md bg-indigo-500 px-1.5 text-xs font-medium text-white transition-all dark:bg-indigo-500"
-                    style={{ width: `${Math.max(faixa.quantidade ? 8 : 0, (faixa.quantidade / maxQtd) * 100)}%` }}
-                  >
-                    {faixa.quantidade > 0 ? faixa.quantidade : ""}
-                  </div>
+            <div key={faixa.codigo} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 text-sm sm:grid-cols-[6.5rem_1fr_auto]">
+              <span className="truncate font-medium text-zinc-700 dark:text-zinc-200" title={faixa.nome}>{faixa.nome}</span>
+              <div className="h-6 overflow-hidden rounded-lg bg-zinc-100 max-sm:order-last max-sm:col-span-2 dark:bg-zinc-800">
+                <div
+                  className="flex h-full items-center justify-end rounded-lg bg-gradient-to-r from-indigo-400 to-indigo-600 px-2 text-xs font-semibold text-white transition-all"
+                  style={{ width: `${Math.max(faixa.quantidade ? 8 : 0, (faixa.quantidade / maxQtd) * 100)}%` }}
+                >
+                  {faixa.quantidade > 0 ? faixa.quantidade : ""}
                 </div>
               </div>
-              <span className="w-28 shrink-0 text-right tabular-nums text-xs text-zinc-500 dark:text-zinc-400">
+              <span className="w-28 shrink-0 text-right text-xs tabular-nums text-zinc-500 max-sm:w-auto dark:text-zinc-400">
                 {faixa.percentual}% · {numero(faixa.pontos)} pts
               </span>
             </div>
           ))}
-          <p className="pt-1 text-xs text-zinc-400">
+          <p className="pt-1 text-xs text-zinc-500 dark:text-zinc-400">
             Pontos por livro: {dados.faixas.map((f) => `${f.nome} = ${numero(f.pontos_por_livro)}`).join(" · ")}.
-            Configuráveis em Métricas.
+            Configuráveis em Critérios.
           </p>
         </div>
       )}
@@ -106,38 +161,40 @@ function LeituraPorNivel({ dados }: { dados: LeituraNiveis }) {
 
 function TabelaCalculo({ titulo, linhas, notaFinal }: { titulo: string; linhas: LinhaCalculo[]; notaFinal: number }) {
   return (
-    <Card>
-      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+    <div className="overflow-hidden rounded-2xl border border-zinc-200/80 dark:border-zinc-800">
+      <div className="flex items-center justify-between bg-zinc-50 px-4 py-3 dark:bg-zinc-800/40">
         <h3 className="text-sm font-semibold">{titulo}</h3>
-        <span className="text-sm font-semibold tabular-nums">{nota(notaFinal)}</span>
+        <span className="text-sm font-bold tabular-nums">{nota(notaFinal)}</span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm tabular-nums">
+      {/* Celular (< 640 px): rola de lado com o aviso em texto acima da tabela, e a
+          Contribuição (o que soma na nota) fica presa à direita (`presa-celular`). */}
+      <TabelaRolavel rotulo={`${titulo}: tabela do cálculo`}>
+        <table className={`${classesTabela.tabela} tabular-nums`}>
           <thead>
-            <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-              <th className="px-4 py-2 font-medium">Indicador</th>
-              <th className="px-4 py-2 text-right font-medium">Valor</th>
-              <th className="px-4 py-2 text-right font-medium">Referência</th>
-              <th className="px-4 py-2 text-right font-medium">Normalizado</th>
-              <th className="px-4 py-2 text-right font-medium">Peso</th>
-              <th className="px-4 py-2 text-right font-medium">Contribuição</th>
+            <tr>
+              <th className={classesTabela.th}>Indicador</th>
+              <th className={`text-right ${classesTabela.th}`}>Valor</th>
+              <th className={`text-right ${classesTabela.th}`}>Referência</th>
+              <th className={`text-right ${classesTabela.th}`}>Normalizado</th>
+              <th className={`text-right ${classesTabela.th}`}>Peso</th>
+              <th className={`text-right ${classesTabela.th} presa-celular`}>Contribuição</th>
             </tr>
           </thead>
           <tbody>
             {linhas.map((linha) => (
-              <tr key={linha.indicador} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                <td className="px-4 py-2.5">{linha.indicador}</td>
-                <td className="px-4 py-2.5 text-right">{nota(linha.valor)}</td>
-                <td className="px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400">{nota(linha.referencia)}</td>
-                <td className="px-4 py-2.5 text-right">{nota(linha.normalizado)}</td>
-                <td className="px-4 py-2.5 text-right text-zinc-500 dark:text-zinc-400">{linha.peso}%</td>
-                <td className="px-4 py-2.5 text-right font-medium">{nota(linha.contribuicao)}</td>
+              <tr key={linha.indicador} className={classesTabela.tr}>
+                <td className={`${classesTabela.td} font-medium`}>{linha.indicador}</td>
+                <td className={`${classesTabela.td} text-right`}>{nota(linha.valor)}</td>
+                <td className={`${classesTabela.td} text-right text-zinc-500 dark:text-zinc-400`}>{nota(linha.referencia)}</td>
+                <td className={`${classesTabela.td} text-right`}>{nota(linha.normalizado)}</td>
+                <td className={`${classesTabela.td} text-right text-zinc-500 dark:text-zinc-400`}>{linha.peso}%</td>
+                <td className={`${classesTabela.td} presa-celular text-right font-semibold text-zinc-900 dark:text-zinc-100`}>{nota(linha.contribuicao)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
-    </Card>
+      </TabelaRolavel>
+    </div>
   );
 }
 
@@ -167,17 +224,6 @@ interface Gamificacao {
   conquistas: ConquistaAluno[];
 }
 
-function BarraProgresso({ pct }: { pct: number }) {
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-      <div
-        className="h-full rounded-full bg-indigo-600 transition-all dark:bg-indigo-500"
-        style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
-      />
-    </div>
-  );
-}
-
 function valorCurto(valor: number): string {
   return Number.isInteger(valor) ? String(valor) : nota(valor);
 }
@@ -191,17 +237,185 @@ function textoFaltam(conquista: ConquistaAluno): string {
   return `Faltam apenas ${quanto} ${conquista.unidade} para desbloquear esta conquista.`;
 }
 
+/** Bloco "Conquistas": nível, XP, sequência, as mais próximas e a grade completa. */
+function Conquistas({ gamificacao }: { gamificacao: Gamificacao }) {
+  const atingidas = gamificacao.conquistas.filter((c) => c.atingida).length;
+  const proximas = gamificacao.conquistas
+    .filter((c) => !c.atingida && c.progresso > 0)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 3);
+  return (
+    <Card className="p-5">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <IconePastel icone={Trophy} tom="ambar" />
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold tracking-tight">Conquistas</h2>
+          <p className="text-sm tabular-nums text-zinc-500 dark:text-zinc-400">
+            {atingidas} de {gamificacao.conquistas.length} desbloqueada{gamificacao.conquistas.length === 1 ? "" : "s"}
+          </p>
+        </div>
+        <Link
+          to="/conquistas/biblioteca"
+          className="ml-auto text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-300"
+        >
+          Ver a Biblioteca de Conquistas →
+        </Link>
+      </div>
+
+      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="flex items-center gap-3 rounded-2xl bg-indigo-50 px-4 py-3 dark:bg-indigo-500/10">
+          <IconePastel icone={Star} tom="violeta" tamanho="sm" className="bg-white dark:bg-zinc-900" />
+          <div>
+            <p className="text-lg font-bold leading-tight tabular-nums text-indigo-800 dark:text-indigo-200">Nível {gamificacao.nivel}</p>
+            <p className="text-xs text-indigo-800/80 dark:text-indigo-200/80">faltam {gamificacao.xp_para_proximo} XP para o próximo nível</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 rounded-2xl bg-ouro-50 px-4 py-3 dark:bg-ouro-400/10">
+          <IconePastel icone={Sparkles} tom="ambar" tamanho="sm" className="bg-white dark:bg-zinc-900" />
+          <div>
+            <p className="text-lg font-bold leading-tight tabular-nums text-marinho-900 dark:text-ouro-200">
+              {gamificacao.xp.toLocaleString("pt-BR")} XP
+            </p>
+            <p className="text-xs text-ouro-700 dark:text-ouro-300">
+              {gamificacao.xp_conquistas > 0
+                ? `${gamificacao.xp_conquistas.toLocaleString("pt-BR")} de conquistas`
+                : "pontos de experiência acumulados"}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 rounded-2xl bg-rose-50 px-4 py-3 dark:bg-rose-500/10">
+          <IconePastel icone={Flame} tom="rosa" tamanho="sm" className="bg-white dark:bg-zinc-900" />
+          <div>
+            <p className="text-lg font-bold leading-tight tabular-nums text-rose-800 dark:text-rose-200">
+              {gamificacao.sequencia_semanas} semana{gamificacao.sequencia_semanas === 1 ? "" : "s"}
+            </p>
+            <p className="text-xs text-rose-800/80 dark:text-rose-200/80">
+              {gamificacao.sequencia_semanas === 1
+                ? "seguida com atividade"
+                : gamificacao.sequencia_semanas > 1
+                  ? "seguidas com atividade"
+                  : "sem sequência ativa agora"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Próximas conquistas: as mais perto de desbloquear (§ progresso) */}
+      {proximas.length > 0 && (
+        <div className="mb-5">
+          <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
+            Próximas conquistas
+          </p>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            {proximas.map((conquista) => (
+              <div key={conquista.codigo} className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 dark:border-indigo-500/20 dark:bg-indigo-500/5">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="min-w-0 break-words text-sm font-semibold leading-snug" title={conquista.nome}>
+                    <span aria-hidden>{conquista.icone}</span> {conquista.nome}
+                  </p>
+                  <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-bold tabular-nums text-indigo-700 dark:bg-zinc-900 dark:text-indigo-300">
+                    {Math.round(conquista.pct)}%
+                  </span>
+                </div>
+                <p className="mb-2 mt-0.5 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                  {valorCurto(conquista.progresso)} de {valorCurto(conquista.limite)} {conquista.unidade}
+                </p>
+                <BarraProgresso valor={conquista.pct} />
+                <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">{textoFaltam(conquista)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        {gamificacao.conquistas.map((conquista) => (
+          <div
+            key={conquista.codigo}
+            className={`flex items-start gap-3 rounded-2xl border p-3 ${
+              conquista.atingida
+                ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5"
+                : "border-zinc-200/80 dark:border-zinc-800"
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-lg leading-none ${
+                conquista.atingida ? "bg-white dark:bg-zinc-900" : "bg-zinc-100 opacity-60 dark:bg-zinc-800"
+              }`}
+            >
+              {conquista.icone}
+            </span>
+            <div className="min-w-0 flex-1">
+              {/* Nome e "+N XP" na mesma linha quando cabem; se não, o selo desce
+                  (antes o selo espremia o nome, uma palavra por linha). */}
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                <p className={`text-sm font-semibold ${conquista.atingida ? "" : "text-zinc-600 dark:text-zinc-300"}`}>
+                  {conquista.nome}
+                </p>
+                <span className="shrink-0 whitespace-nowrap text-xs font-bold text-ouro-700 dark:text-ouro-300">
+                  +{conquista.xp} XP
+                </span>
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{conquista.descricao}</p>
+              {!conquista.atingida && (
+                <div className="mt-2">
+                  <BarraProgresso valor={conquista.pct} />
+                  <p className="mt-1 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                    {valorCurto(conquista.progresso)} / {valorCurto(conquista.limite)} {conquista.unidade}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/** Esqueleto do perfil enquanto carrega. */
+function EsqueletoPerfil() {
+  return (
+    <div role="status" className="space-y-6">
+      <span className="sr-only">Carregando...</span>
+      <Skeleton className="h-4 w-20" />
+      <Card className="flex items-center gap-5 p-6">
+        <Skeleton className="h-[72px] w-[72px] rounded-full" />
+        <div className="flex-1 space-y-3">
+          <Skeleton className="h-7 w-64 max-w-full" />
+          <Skeleton className="h-5 w-40" />
+        </div>
+      </Card>
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => <Skeleton key={i} className="h-36 rounded-cartao" />)}
+      </div>
+    </div>
+  );
+}
+
+type Aba = "perfil" | "linha_do_tempo" | "historico" | "evolucao";
+
+const ABAS: { valor: Aba; rotulo: string; icone: typeof UserRound }[] = [
+  { valor: "perfil", rotulo: "Perfil", icone: UserRound },
+  { valor: "linha_do_tempo", rotulo: "Linha do tempo", icone: Clock },
+  { valor: "historico", rotulo: "Histórico de Leituras", icone: History },
+  { valor: "evolucao", rotulo: "Evolução", icone: LineChart },
+];
+
 export default function PerfilAluno() {
   const { id } = useParams();
   const { escolaId, usuario } = useApp();
   const navegar = useNavigate();
+  const idPainel = useId();
   // Professor vê a versão SUPERFICIAL: notas, posição e gamificação — sem
   // histórico de leituras, evolução detalhada nem ações de gestão.
   const gestor = Boolean(usuario?.is_global) ||
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
-  const [aba, setAba] = useState<
-    "perfil" | "linha_do_tempo" | "historico" | "evolucao"
-  >("perfil");
+  // O Histórico de Leituras é do Elefante Letrado: sem o módulo de leitura no
+  // plano da rede, a aba não aparece (módulo fora do plano não aparece nem vazio).
+  const { leitura } = useModulos();
+  const [aba, setAba] = useState<Aba>("perfil");
 
   // Leitura via hook único: cuida de cancelamento, timeout e retry. Fica
   // ocioso (null) enquanto escolaId/id não existirem.
@@ -222,10 +436,23 @@ export default function PerfilAluno() {
     recarregarGamificacao();
   };
 
-  if (carregando) return <Carregando />;
-  // Não engole o erro: mostra estado discreto em vez de "Aluno não encontrado".
-  if (erroPerfil) return <Vazio titulo="Não foi possível carregar" descricao={erroPerfil.message} />;
-  if (!perfil) return <Vazio titulo="Aluno não encontrado" />;
+  if (carregando) return <EsqueletoPerfil />;
+  // Não engole o erro: mostra o motivo e deixa tentar de novo.
+  if (erroPerfil) {
+    return (
+      <Card>
+        <Erro descricao={erroPerfil.message} aoTentar={recarregar} />
+      </Card>
+    );
+  }
+  if (!perfil) {
+    return (
+      <Card>
+        <Vazio icone={UserRound} titulo="Aluno não encontrado"
+               descricao="Volte à lista de alunos e abra o perfil de novo." />
+      </Card>
+    );
+  }
 
   const { aluno, detalhes } = perfil;
   // As parcelas da Nota Geral saem do que o MOTOR de fato usou (detalhes.geral.
@@ -245,71 +472,25 @@ export default function PerfilAluno() {
       peso: Number(peso),
       valor: chave === "matific" ? perfil.nota_matific : perfil.nota_elefante,
     }));
+  // Quando o servidor manda o desempenho por dimensão, o `aferido` decide o "—"
+  // (sem snapshot ≠ zero). Sem o campo, mostra o número que veio (notaDaMateria).
+  const aferidoDe = (dimensao: string) =>
+    perfil.dimensoes?.find((d) => d.dimensao === dimensao)?.aferido;
+  const temCalculo = Boolean(detalhes.matific || detalhes.elefante);
+  const situacao = SITUACAO_FICHA[aluno.status];
+  const itensFicha = itensDaFicha(perfil.ficha);
+  const temFicha = itensFicha.length > 0;
+  const abasVisiveis = ABAS.filter((item) =>
+    (gestor || item.valor === "perfil") && (leitura || item.valor !== "historico"));
+  const rotuloAba = abasVisiveis.find((item) => item.valor === aba)?.rotulo ?? "Perfil";
 
-  return (
-    <div className="space-y-6">
-      <div>
-        <Link to="/alunos" className="mb-3 inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
-          <ArrowLeft size={15} /> Alunos
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">{aluno.nome}</h1>
-          {perfil.posicao && <Badge tom="destaque">{perfil.posicao}º no ranking</Badge>}
-          {detalhes.modo_normalizacao && (
-            <Badge>Normalização: {detalhes.modo_normalizacao === "auto" ? "automática" : "manual"}</Badge>
-          )}
-          {gestor && (
-            <Link
-              to={`/alunos/${aluno.id}/evolucao`}
-              className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              <TrendingUp size={14} /> Ver evolução
-            </Link>
-          )}
-          {gestor && escolaId && (
-            <span className="ml-auto">
-              {/* Editar dados, trocar turma, arquivar, excluir — direto da ficha */}
-              <AcoesAluno
-                aluno={aluno}
-                escolaId={escolaId}
-                aoMudar={recarregar}
-                aoExcluir={() => navegar("/alunos")}
-                mostrarVisualizar={false}
-              />
-            </span>
-          )}
-        </div>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          {aluno.turma} · {aluno.ano_escolar}
-        </p>
-      </div>
-
-      <div role="tablist" className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
-        {/* Professor: só a aba Perfil (histórico e evolução detalhada são de gestão) */}
-        {([["perfil", "Perfil"], ["linha_do_tempo", "Linha do tempo"], ["historico", "Histórico de Leituras"], ["evolucao", "Evolução"]] as const)
-          .filter(([chave]) => gestor || chave === "perfil")
-          .map(([chave, rotulo]) => (
-          <button
-            key={chave}
-            role="tab"
-            aria-selected={aba === chave}
-            onClick={() => setAba(chave)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-              aba === chave
-                ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
-                : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-            }`}
-          >
-            {rotulo}
-          </button>
-        ))}
-      </div>
-
+  const conteudo = (
+    <>
       {gestor && aba === "linha_do_tempo" && escolaId && id && (
         <LinhaDoTempoAluno escolaId={escolaId} alunoId={id} />
       )}
 
-      {gestor && aba === "historico" && escolaId && id && (
+      {gestor && leitura && aba === "historico" && escolaId && id && (
         <HistoricoLeituras escolaId={escolaId} alunoId={id} />
       )}
 
@@ -318,166 +499,187 @@ export default function PerfilAluno() {
       )}
 
       {aba === "perfil" && (
-        <>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Nota Matific</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_matific)}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Nota Elefante Letrado</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_elefante)}</p>
-        </Card>
-        <Card className="border-indigo-200 p-4 dark:border-indigo-500/30">
-          <p className="text-xs font-medium uppercase tracking-wide text-indigo-600 dark:text-indigo-400">Nota Geral</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{nota(perfil.nota_geral)}</p>
-        </Card>
-      </div>
-
-      {perfil.ficha && Object.keys(perfil.ficha).length > 0 && (
-        <FichaCadastral ficha={perfil.ficha} />
-      )}
-
-      {gamificacao && (
-        <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Conquistas
-          </h2>
-          <Card className="p-4">
-            <div className="mb-4 flex flex-wrap items-center gap-4 text-sm">
-              <Badge tom="destaque">Nível {gamificacao.nivel}</Badge>
-              <span className="tabular-nums text-zinc-600 dark:text-zinc-300">
-                {gamificacao.xp.toLocaleString("pt-BR")} XP
-                {gamificacao.xp_conquistas > 0 && (
-                  <span className="text-amber-600 dark:text-amber-400"> ({gamificacao.xp_conquistas.toLocaleString("pt-BR")} de conquistas)</span>
-                )}
-                <span className="text-zinc-400"> · faltam {gamificacao.xp_para_proximo} para o próximo nível</span>
-              </span>
-              {gamificacao.sequencia_semanas > 0 && (
-                <Badge tom="alerta">🔥 {gamificacao.sequencia_semanas} semana{gamificacao.sequencia_semanas > 1 ? "s" : ""} seguidas</Badge>
-              )}
-              <Link
-                to="/conquistas/biblioteca"
-                className="ml-auto text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-              >
-                Ver a Biblioteca de Conquistas →
-              </Link>
+        <div className="space-y-6">
+          <div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-5 max-sm:[&>*:last-child:nth-child(odd)]:col-span-2">
+              <StatCard
+                icone={<BookOpen size={20} />}
+                tom="violeta"
+                rotulo="Nota Elefante Letrado"
+                valor={notaDaMateria(perfil.nota_elefante, aferidoDe("leitura"))}
+                detalhe="Leitura · de 0 a 100"
+              />
+              <StatCard
+                icone={<Calculator size={20} />}
+                tom="teal"
+                rotulo="Nota Matific"
+                /* `null` = Matemática fora do plano da rede: "—", nunca um 0,0 falso. */
+                valor={notaDaMateria(perfil.nota_matific, aferidoDe("matematica"))}
+                detalhe="Matemática · de 0 a 100"
+              />
+              <StatCard
+                icone={<Trophy size={20} />}
+                tom="ambar"
+                rotulo="Nota Geral"
+                valor={nota(perfil.nota_geral)}
+                detalhe="Composição das plataformas · veja o cálculo abaixo"
+              />
             </div>
+            {perfil.calculada_em && (
+              <p className="mt-2.5 text-xs text-zinc-500 dark:text-zinc-400">
+                Notas calculadas em {dataHora(perfil.calculada_em)}.
+              </p>
+            )}
+          </div>
 
-            {/* Próximas conquistas: as mais perto de desbloquear (§ progresso) */}
-            {(() => {
-              const proximas = gamificacao.conquistas
-                .filter((c) => !c.atingida && c.progresso > 0)
-                .sort((a, b) => b.pct - a.pct)
-                .slice(0, 3);
-              if (proximas.length === 0) return null;
-              return (
-                <div className="mb-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                    Próximas conquistas
-                  </p>
-                  <div className="grid gap-3 lg:grid-cols-3">
-                    {proximas.map((conquista) => (
-                      <div key={conquista.codigo} className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3 dark:border-indigo-500/20 dark:bg-indigo-500/5">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-semibold">
-                            {conquista.icone} {conquista.nome}
-                          </p>
-                          <span className="shrink-0 text-xs font-semibold tabular-nums text-indigo-700 dark:text-indigo-300">
-                            {Math.round(conquista.pct)}%
-                          </span>
-                        </div>
-                        <p className="mb-1.5 mt-0.5 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
-                          {valorCurto(conquista.progresso)} de {valorCurto(conquista.limite)} {conquista.unidade}
-                        </p>
-                        <BarraProgresso pct={conquista.pct} />
-                        <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{textoFaltam(conquista)}</p>
-                      </div>
-                    ))}
-                  </div>
+          {gamificacao && <Conquistas gamificacao={gamificacao} />}
+
+          {(perfil.leitura_niveis || temFicha) && (
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              {/* Sem ficha para mostrar, a Leitura por nível ocupa a largura toda
+                  (antes reservava a 3ª coluna e deixava um buraco ao lado). */}
+              {perfil.leitura_niveis && (
+                <div className={temFicha ? "lg:col-span-2" : "lg:col-span-3"}>
+                  <LeituraPorNivel dados={perfil.leitura_niveis} />
                 </div>
-              );
-            })()}
+              )}
+              {temFicha && (
+                <div className={perfil.leitura_niveis ? "" : "lg:col-span-3"}>
+                  <FichaCadastral itens={itensFicha} />
+                </div>
+              )}
+            </div>
+          )}
 
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {gamificacao.conquistas.map((conquista) => (
-                <div
-                  key={conquista.codigo}
-                  className={`flex items-start gap-2.5 rounded-lg border p-2.5 ${
-                    conquista.atingida
-                      ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5"
-                      : "border-zinc-200 dark:border-zinc-800"
+          {/* Transparência total do cálculo (PRD §45, §54). O professor também vê o
+              passo a passo (das crianças da turma dele); o backend só envia o
+              `detalhes` de quem ele pode acessar. Recolhível para a ficha não
+              parecer um relatório técnico — nada foi removido. */}
+          <SecaoRecolhivel
+            titulo="Como esta nota foi calculada"
+            icone={<IconePastel icone={Sigma} tom="neutro" tamanho="sm" />}
+            inicialAberto={!temCalculo}
+          >
+            <div className="space-y-4">
+              {detalhes.modo_normalizacao && (
+                <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                  Normalização dos indicadores:{" "}
+                  <strong>{detalhes.modo_normalizacao === "auto" ? "automática" : "manual"}</strong>.
+                </p>
+              )}
+              {detalhes.matific && (
+                <TabelaCalculo titulo="Matific" linhas={detalhes.matific.indicadores} notaFinal={detalhes.matific.nota} />
+              )}
+              {detalhes.elefante && (
+                <TabelaCalculo titulo="Elefante Letrado" linhas={detalhes.elefante.indicadores} notaFinal={detalhes.elefante.nota} />
+              )}
+              {detalhes.geral && parcelasGerais.length > 0 && (
+                <div className="rounded-2xl bg-ouro-50 p-4 text-sm dark:bg-ouro-400/10">
+                  <p className="font-semibold text-marinho-900 dark:text-ouro-200">Nota Geral</p>
+                  <p className="mt-1 tabular-nums text-zinc-700 dark:text-zinc-200">
+                    {parcelasGerais.map((p, i) => (
+                      <span key={p.chave}>
+                        {i > 0 && " + "}
+                        {p.rotulo} {notaDaMateria(p.valor)} × {p.peso}%
+                      </span>
+                    ))}
+                    {" = "}
+                    <span className="font-bold text-zinc-900 dark:text-zinc-100">{nota(perfil.nota_geral)}</span>
+                  </p>
+                </div>
+              )}
+              {!temCalculo && (
+                <Vazio
+                  icone={Calculator}
+                  titulo="Ainda não há nota calculada para este aluno"
+                  descricao="Importe dados das plataformas para gerar a primeira nota."
+                />
+              )}
+            </div>
+          </SecaoRecolhivel>
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <div className="space-y-6">
+      <Link
+        to="/alunos"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 transition-colors hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-300"
+      >
+        <ArrowLeft size={15} aria-hidden /> Alunos
+      </Link>
+
+      {/* Cabeçalho do aluno: avatar grande, nome, turma em chip e as ações. */}
+      <Card className="relative overflow-hidden p-6">
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-indigo-100/70 blur-2xl dark:bg-indigo-500/10"
+        />
+        <div className="relative flex flex-wrap items-center gap-5">
+          <AvatarAluno nome={aluno.nome} chave={aluno.id} foto={aluno.foto_url} tamanho="xl" />
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold leading-tight tracking-tight text-zinc-900 dark:text-white sm:text-[28px]">
+              {aluno.nome}
+            </h1>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+              {aluno.turma && <Chip>{aluno.turma}</Chip>}
+              {aluno.ano_escolar && <span>{aluno.ano_escolar}</span>}
+              {aluno.numero_chamada != null && (
+                <span className="tabular-nums">· Nº {aluno.numero_chamada}</span>
+              )}
+              {situacao && <PilulaSituacao tom={situacao.tom}>{situacao.texto}</PilulaSituacao>}
+              {perfil.posicao != null && perfil.posicao > 0 && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold tabular-nums ${
+                    COR_POSICAO[perfil.posicao] ?? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
                   }`}
                 >
-                  <span className={`text-xl leading-none ${conquista.atingida ? "" : "opacity-50"}`}>{conquista.icone}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className={`text-sm font-medium ${conquista.atingida ? "" : "text-zinc-500 dark:text-zinc-400"}`}>
-                        {conquista.nome}
-                      </p>
-                      <span className="shrink-0 text-xs font-semibold text-amber-600 dark:text-amber-400">
-                        +{conquista.xp} XP
-                      </span>
-                    </div>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">{conquista.descricao}</p>
-                    {!conquista.atingida && (
-                      <div className="mt-1.5">
-                        <BarraProgresso pct={conquista.pct} />
-                        <p className="mt-1 text-xs tabular-nums text-zinc-400">
-                          {valorCurto(conquista.progresso)} / {valorCurto(conquista.limite)} {conquista.unidade}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </section>
-      )}
-
-      {perfil.leitura_niveis && (
-        <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Leitura por nível
-          </h2>
-          <LeituraPorNivel dados={perfil.leitura_niveis} />
-        </section>
-      )}
-
-      {/* Transparência total do cálculo (PRD §45, §54). O professor também vê o
-          passo a passo (das crianças da turma dele); o backend só envia o
-          `detalhes` de quem ele pode acessar. */}
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Como esta nota foi calculada
-        </h2>
-        {detalhes.matific && (
-          <TabelaCalculo titulo="Matific" linhas={detalhes.matific.indicadores} notaFinal={detalhes.matific.nota} />
-        )}
-        {detalhes.elefante && (
-          <TabelaCalculo titulo="Elefante Letrado" linhas={detalhes.elefante.indicadores} notaFinal={detalhes.elefante.nota} />
-        )}
-        {detalhes.geral && parcelasGerais.length > 0 && (
-          <Card className="p-4 text-sm">
-            <p className="font-medium">Nota Geral</p>
-            <p className="mt-1 tabular-nums text-zinc-600 dark:text-zinc-300">
-              {parcelasGerais.map((p, i) => (
-                <span key={p.chave}>
-                  {i > 0 && " + "}
-                  {p.rotulo} {nota(p.valor)} × {p.peso}%
+                  {perfil.posicao}º no ranking
                 </span>
-              ))}
-              {" = "}
-              <span className="font-semibold text-zinc-900 dark:text-zinc-100">{nota(perfil.nota_geral)}</span>
-            </p>
-          </Card>
-        )}
-        {!detalhes.matific && !detalhes.elefante && (
-          <Vazio titulo="Ainda não há nota calculada para este aluno" descricao="Importe dados das plataformas para gerar a primeira nota." />
-        )}
-      </section>
+              )}
+            </div>
+          </div>
+          {gestor && (
+            <div className="flex items-center gap-2">
+              <Link
+                to={`/alunos/${aluno.id}/evolucao`}
+                className={`inline-flex items-center justify-center font-semibold transition-colors ${TAMANHOS_BOTAO.md} ${ESTILOS_BOTAO.secundario}`}
+              >
+                <TrendingUp size={16} aria-hidden /> Ver evolução
+              </Link>
+              {escolaId && (
+                // Editar dados, trocar turma, arquivar, excluir — direto da ficha
+                <AcoesAluno
+                  aluno={aluno}
+                  escolaId={escolaId}
+                  aoMudar={recarregar}
+                  aoExcluir={() => navegar("/alunos")}
+                  mostrarVisualizar={false}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Professor: só a aba Perfil (histórico e evolução detalhada são de gestão) */}
+      {abasVisiveis.length > 1 ? (
+        <>
+          <Abas
+            itens={abasVisiveis.map(({ valor, rotulo, icone }) => ({ valor, rotulo, icone }))}
+            valor={aba}
+            aoMudar={setAba}
+            rotulo="Seções do perfil do aluno"
+            idPainel={idPainel}
+          />
+          <div role="tabpanel" id={idPainel} aria-label={rotuloAba}>
+            {conteudo}
+          </div>
         </>
+      ) : (
+        conteudo
       )}
     </div>
   );

@@ -23,19 +23,54 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+from app.models import Aluno, Turma
 from app.services.importacao import chave_nome, normalizar_nome
+from app.services.planilhas import (
+    MAX_COLUNAS_LIDAS,
+    OrcamentoLeitura,
+    PlanilhaRecusada,
+    exigir_xlsx_contido,
+    limitar_celula,
+    linhas_contidas,
+)
 
-# Teto de células COM CONTEÚDO: uma escola tem centenas/milhares de alunos; muito
+# Teto de células do arquivo: uma escola tem centenas/milhares de alunos; muito
 # acima disso é planilha inválida ou tentativa de exaustão de memória (uma
 # .xlsx é um zip e pode inflar muito). Barra antes de materializar tudo.
-# IMPORTANTE: conta só células NÃO vazias — é comum um Excel real declarar a
-# planilha inteira (ex.: formatação aplicada nas 16.384 colunas de uma aba),
-# o que inflaria o total com milhões de células vazias e barraria o arquivo à toa.
+# Conta o PERCORRIDO em cada linha com conteúdo (.xlsx e .xls) — até a última
+# célula preenchida, inclusive as vazias no meio (``planilhas.OrcamentoLeitura``).
+# Linha vazia e colunas vazias à direita não contam: é comum um Excel real declarar
+# a planilha inteira (ex.: formatação aplicada nas 16.384 colunas de uma aba), e
+# isso não pode barrar o arquivo à toa.
 _MAX_CELULAS = 2_000_000
 # Ignora colunas/linhas muito além de qualquer lista de matrícula real (uma
 # formatação de coluna/linha inteira não deve ser lida nem contada).
-_MAX_COLS = 256
+_MAX_COLS = MAX_COLUNAS_LIDAS
 _MAX_LINHAS = 50_000
+# Linhas percorridas no arquivo inteiro (todas as abas, inclusive as vazias que o
+# leitor completa entre duas linhas do XML): uma Lista Piloto tem dezenas de abas
+# de dezenas de linhas.
+_MAX_LINHAS_ARQUIVO = 500_000
+
+# Tamanho das COLUNAS onde a importação grava. A Lista Piloto grava direto no
+# banco (não passa pelos schemas com ``max_length``) e o corte de célula
+# (``planilhas.MAX_TEXTO_CELULA``, 1000) fica acima de todas elas: no PostgreSQL o
+# valor maior que a coluna era DataError no commit, e o arquivo inteiro caía com
+# 500, sem dizer qual célula (o SQLite aceita qualquer tamanho e não via). Os
+# tetos saem dos MODELOS — fonte única — e o excesso vira AVISO:
+#   * nome do aluno acima da coluna → a LINHA fica de fora;
+#   * nº de chamada fora do INTEGER → o número é ignorado, o aluno entra;
+#   * nº da classe (SED) acima da coluna → o código é ignorado, a turma entra;
+#   * turma NOVA com nome acima da coluna → a ABA fica de fora;
+#   * turma NOVA com série acima da coluna → a série é cortada, se o corte não
+#     mudar a leitura dela (série, premiação, etapa); senão a ABA fica de fora.
+# Turma que JÁ existe não grava nome nem série (``conferir_turma_nova``).
+MAX_NOME_ALUNO = Aluno.__table__.c.nome.type.length              # 200
+MAX_NOME_TURMA = Turma.__table__.c.nome.type.length              # 100
+MAX_SERIE = Turma.__table__.c.ano_escolar.type.length            # 30
+MAX_CODIGO_SED = Turma.__table__.c.codigo_externo.type.length    # 40
+#: ``Aluno.numero_chamada`` é INTEGER: 32 bits com sinal no PostgreSQL.
+MAX_NUMERO_CHAMADA = 2**31 - 1
 
 # --------------------------------------------------------------------------
 # Estruturas de resultado
@@ -57,6 +92,10 @@ class TurmaMatriculas:
     professor: str = ""
     sed: str = ""
     alunos: list[AlunoMatricula] = field(default_factory=list)
+    aba: str = ""                 # título da aba, para os avisos
+    # Linhas de aluno que ficaram de fora por não caberem nas colunas: com
+    # alguma, a reconciliação não marca ninguém desta turma "fora da lista".
+    linhas_puladas: int = 0
 
 
 @dataclass
@@ -87,55 +126,68 @@ def _abrir_xls(conteudo: bytes) -> list[tuple[str, list[list]]]:
     import xlrd
     from xlrd.xldate import xldate_as_datetime
 
-    wb = xlrd.open_workbook(file_contents=conteudo)
+    # ragged_rows: sem ele, o xlrd completa TODA linha até a coluna mais à direita da
+    # aba — uma célula em (65535, 255), ou um intervalo mesclado até lá, criava 16,7
+    # milhões de células (um .xls de 5,6 KB levava 33 s e +259 MB, e97). Com ele,
+    # cada linha termina na última célula escrita, e o orçamento é o do .xlsx.
+    wb = xlrd.open_workbook(file_contents=conteudo, ragged_rows=True)
+    vazias = (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK)
+    orcamento = OrcamentoLeitura(_MAX_LINHAS_ARQUIVO, _MAX_CELULAS)
     abas: list[tuple[str, list[list]]] = []
-    total = 0
     for s in wb.sheets():
-        ncols = min(s.ncols, _MAX_COLS)
-        nrows = min(s.nrows, _MAX_LINHAS)
         linhas = []
-        for r in range(nrows):
+        for r in range(min(s.nrows, _MAX_LINHAS)):
+            orcamento.linhas += 1
+            if orcamento.linhas > orcamento.max_linhas:
+                orcamento.recusar()
+            tipos = s.row_types(r, 0, min(s.row_len(r), _MAX_COLS))
+            fim = len(tipos)
+            while fim and tipos[fim - 1] in vazias:
+                fim -= 1
+            if not fim:
+                continue                           # linha vazia some, como no .xlsx
+            orcamento.celulas += fim
+            if orcamento.celulas > orcamento.max_celulas:
+                orcamento.recusar()
             celulas = []
-            for c in range(ncols):
-                tipo = s.cell_type(r, c)
-                valor = s.cell_value(r, c)
-                if tipo == xlrd.XL_CELL_DATE:
+            for tipo, valor in zip(tipos[:fim], s.row_values(r, 0, fim)):
+                if tipo in vazias:
+                    valor = None                   # vazia como no .xlsx
+                elif tipo == xlrd.XL_CELL_DATE:
                     valor = xldate_as_datetime(valor, wb.datemode).date()
                 elif tipo == xlrd.XL_CELL_NUMBER and valor == int(valor):
                     valor = int(valor)
-                if valor not in (None, ""):        # só conteúdo conta pro teto
-                    total += 1
-                celulas.append(valor)
+                celulas.append(limitar_celula(valor))
             linhas.append(celulas)
-        if total > _MAX_CELULAS:
-            raise ValueError("planilha grande demais")
-        abas.append((s.name, linhas))
+        abas.append((limitar_celula(s.name), linhas))
     return abas
+
+
+def _data_sem_hora(valor):
+    return valor.date() if isinstance(valor, datetime) else valor
 
 
 def _abrir_xlsx(conteudo: bytes) -> list[tuple[str, list[list]]]:
     import openpyxl
 
+    # Teto do DESCOMPRIMIDO antes do openpyxl: o teto de células acima conta
+    # células, não bytes — uma única célula gigante na sharedStrings passava
+    # (300 KB enviados levaram o processo a +4,8 GB, e97).
+    exigir_xlsx_contido(conteudo)
     wb = openpyxl.load_workbook(io.BytesIO(conteudo), data_only=True, read_only=True)
+    # O orçamento conta o PERCORRIDO no arquivo inteiro: um .xlsx de 2 KB que
+    # declarava A1:XFD50000 com uma célula em A50000 levava 33 s, percorrendo 50.000
+    # linhas de 256 colunas vazias (e97). Linha vazia some (aqui a posição da linha
+    # não importa) e as colunas vazias à direita não contam.
+    orcamento = OrcamentoLeitura(_MAX_LINHAS_ARQUIVO, _MAX_CELULAS)
     abas: list[tuple[str, list[list]]] = []
-    total = 0
-    for aba in wb.worksheets:
-        linhas = []
-        # max_col/max_row limitam a leitura: uma aba com formatação nas 16.384
-        # colunas (inchaço comum de Excel) não é lida inteira nem conta pro teto.
-        for linha in aba.iter_rows(values_only=True, max_row=_MAX_LINHAS, max_col=_MAX_COLS):
-            total += sum(1 for valor in linha if valor is not None)  # só conteúdo
-            if total > _MAX_CELULAS:
-                wb.close()
-                raise ValueError("planilha grande demais")
-            celulas = []
-            for valor in linha:
-                if isinstance(valor, datetime):
-                    valor = valor.date()
-                celulas.append(valor)
-            linhas.append(list(celulas))
-        abas.append((aba.title, linhas))
-    wb.close()
+    try:
+        for aba in wb.worksheets:
+            linhas = linhas_contidas(aba, orcamento, _MAX_LINHAS, manter_vazias=False,
+                                     converter=_data_sem_hora)
+            abas.append((limitar_celula(aba.title), linhas))
+    finally:
+        wb.close()
     return abas
 
 
@@ -271,7 +323,7 @@ def _linha_cabecalho(linhas: list[list]) -> int | None:
     RECONHECIDA: uma planilha com 'DT. NASC.' e sem coluna de RA era recusada
     inteira, com o aviso enganoso de que faltava a coluna 'Nome'."""
     for i, linha in enumerate(linhas):
-        rotulos = {_rotulo(v) for v in linha}
+        rotulos = {_rotulo(v) for v in linha if v is not None}  # vazia não é rótulo
         tem_nascimento = any(p == s or p.startswith(s + " ")
                              for p in rotulos for s in _COLUNAS["nascimento"])
         if "nome" in rotulos and (tem_nascimento or "ra" in rotulos):
@@ -284,6 +336,8 @@ def _valor_apos_rotulo(linha: list, alvo: str, contains: bool = False) -> str:
     após ':' na própria célula, ex. 'Turno:       TARDE'). `contains`=True
     casa o rótulo em qualquer posição da célula (ex.: 'N.º da Classe (SED)')."""
     for idx, celula in enumerate(linha):
+        if celula is None:  # vazia nunca é rótulo
+            continue
         p = _rotulo(celula)
         casa = (alvo in p) if contains else p.startswith(alvo)
         if p and casa:
@@ -340,6 +394,8 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
     analise = ListaPilotoAnalise()
     try:
         abas = _abrir(conteudo)
+    except PlanilhaRecusada:
+        raise  # inflada ou grande demais: a rota recusa (413/400) com a mensagem
     except Exception as exc:  # noqa: BLE001 — arquivo ilegível vira aviso, não 500
         analise.avisos.append(f"Não foi possível ler a planilha: {exc}")
         return analise
@@ -367,6 +423,14 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
         # do bloco de matrícula. Não é uma turma de verdade — não importar.
         if not (turma.turno or turma.professor or turma.sed):
             continue
+        if len(turma.sed) > MAX_CODIGO_SED:
+            # Só o código some (é a chave de reimportação, cortá-lo inventaria
+            # outro): a turma continua sendo reconhecida pelo nome.
+            analise.avisos.append(
+                f"Aba “{turma.aba}”: o nº da classe (SED) tem {len(turma.sed)} "
+                f"dígitos (o máximo é {MAX_CODIGO_SED}) e é ignorado — a turma é "
+                "reconhecida pelo nome.")
+            turma.sed = ""
 
         # Mapa de colunas do cabeçalho.
         colunas: dict[str, int] = {}
@@ -380,12 +444,16 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
             continue
 
         vistos: set[str] = set()
-        for linha in linhas[hr + 1:]:
+        # ``posicao``: a linha PREENCHIDA abaixo dos títulos (a leitura descarta as
+        # vazias), para o aviso apontar a célula sem citar dado pessoal.
+        for posicao, linha in enumerate(linhas[hr + 1:], start=1):
             try:
                 aluno = _extrair_aluno(linha, colunas)
             except Exception:  # noqa: BLE001 — linha corrompida não derruba a aba
                 continue
             if aluno is None:
+                continue
+            if not _aluno_cabe_nas_colunas(analise, turma, posicao, aluno):
                 continue
             chave = (ra_util(aluno.ficha.get("ra")) or chave_nome(aluno.nome))
             if chave in vistos:
@@ -458,7 +526,83 @@ def _extrair_turma(nome_aba: str, topo: list[list]) -> TurmaMatriculas:
                 sed = v.strip()
     nome_turma, serie = _canonizar_turma(nome or nome_aba)
     return TurmaMatriculas(nome=nome_turma, ano_escolar=serie,
-                           turno=turno, professor=professor, sed=sed)
+                           turno=turno, professor=professor, sed=sed, aba=nome_aba)
+
+
+def _aluno_cabe_nas_colunas(analise: ListaPilotoAnalise, turma: TurmaMatriculas,
+                            posicao: int, aluno: AlunoMatricula) -> bool:
+    """Confere os campos do aluno contra as colunas onde a confirmação grava.
+
+    Nome acima de ``Aluno.nome``: a LINHA fica de fora (cortar o nome mudaria a
+    identidade da criança — o casamento é por nome). Como ela não é vista, a
+    reconciliação não marca ninguém desta turma "fora da lista" neste envio
+    (``turma.linhas_puladas``): a criança da linha pulada não some das visões.
+    Nº de chamada fora do INTEGER: não é número de chamada — fica sem ele.
+    O aviso aponta aba, posição e N.º; não cita nome, RA nem o valor da célula."""
+    onde = f"Aba “{turma.aba}”, {posicao}ª linha preenchida abaixo dos títulos"
+    if len(aluno.nome) > MAX_NOME_ALUNO:
+        turma.linhas_puladas += 1
+        numero = (f" (N.º {aluno.numero_chamada})"
+                  if aluno.numero_chamada is not None
+                  and aluno.numero_chamada <= MAX_NUMERO_CHAMADA else "")
+        analise.avisos.append(
+            f"{onde}{numero}: o nome do aluno tem {len(aluno.nome)} caracteres "
+            f"(o máximo é {MAX_NOME_ALUNO}) e a linha fica fora da importação. "
+            "Corrija a célula e envie de novo; até lá, ninguém desta turma é "
+            "marcado “fora da lista piloto”.")
+        return False
+    if aluno.numero_chamada is not None and aluno.numero_chamada > MAX_NUMERO_CHAMADA:
+        aluno.numero_chamada = None
+        analise.avisos.append(
+            f"{onde}: o N.º não é um número de chamada válido e é ignorado — o "
+            "aluno entra sem ele.")
+    return True
+
+
+def _leitura_da_serie(rotulo: str) -> tuple:
+    """O que o sistema LÊ de uma série: o número (fator de série do motor), a
+    série que concorre à premiação e a etapa fora dela. Cortar a série não pode
+    mudar nada disso — seria mudar critério pedagógico por causa do tamanho."""
+    # Import tardio: ``dificuldade_livro`` puxa o motor de pontuação.
+    from app.services import elegibilidade
+    from app.services.dificuldade_livro import serie_numero
+
+    return (serie_numero(rotulo), elegibilidade.ano_premiavel(rotulo),
+            elegibilidade.e_etapa_fora_da_premiacao(rotulo))
+
+
+def conferir_turma_nova(turma: TurmaMatriculas, *,
+                        previa: bool = False) -> tuple[str | None, list[str]]:
+    """(série a gravar, avisos) da turma que a importação vai CRIAR — ``None`` na
+    série quando a turma não cabe nas colunas e a ABA fica de fora.
+
+    Só para turma nova: a que já existe (mesma chave de turma) não grava nome nem
+    série, e recusá-la por tamanho quebraria um envio que hoje funciona.
+      * nome acima de ``Turma.nome`` → aba de fora (o nome é a identidade da
+        turma; cortá-lo poderia colar a aba noutra turma);
+      * série acima de ``Turma.ano_escolar`` → cortada no tamanho da coluna se o
+        corte não mudar a leitura (``_leitura_da_serie``); senão, aba de fora.
+    ``previa`` só muda o tempo verbal do aviso (a prévia não grava nada)."""
+    aba = turma.aba or turma.nome
+    sera = "será" if previa else "foi"
+    if len(turma.nome) > MAX_NOME_TURMA:
+        return None, [
+            f"Aba “{aba}”: o nome da turma tem {len(turma.nome)} caracteres (o "
+            f"máximo é {MAX_NOME_TURMA}) e a aba não {sera} importada. Encurte o "
+            "campo “Ano:” (ex.: “4º Ano B”) e envie de novo."]
+    serie = turma.ano_escolar
+    if len(serie) <= MAX_SERIE:
+        return serie, []
+    cortada = serie[:MAX_SERIE].rstrip()
+    if _leitura_da_serie(cortada) != _leitura_da_serie(serie):
+        return None, [
+            f"Aba “{aba}”: a série tem {len(serie)} caracteres (o máximo é "
+            f"{MAX_SERIE}) e, cortada, mudaria a série ou a premiação da turma — "
+            f"a aba não {sera} importada. Encurte o campo “Ano:” (ex.: “4º Ano "
+            "B”) e envie de novo."]
+    return cortada, [
+        f"Aba “{aba}”: a série tem {len(serie)} caracteres (o máximo é "
+        f"{MAX_SERIE}) e {sera} gravada como “{cortada}”."]
 
 
 def _extrair_aluno(linha: list, colunas: dict[str, int]) -> AlunoMatricula | None:

@@ -1,0 +1,507 @@
+{
+  "janela": {
+    "preset": "ano_letivo",
+    "rotulo": "Ano letivo 2026",
+    "inicio": "2026-01-01",
+    "fim": "2026-12-31",
+    "ano_letivo": 2026,
+    "anos_letivos": [
+      2026
+    ]
+  },
+  "modulos": {
+    "elefante": true,
+    "matific": true
+  },
+  "k_minimo": 5,
+  "filtros": {
+    "periodo": "ano_letivo",
+    "inicio": null,
+    "fim": null,
+    "serie": 3,
+    "escola_id": null
+  },
+  "rede": {
+    "alunos": 7,
+    "alunos_fora_do_recorte": 4,
+    "suprimido": false,
+    "motivo_supressao": null,
+    "texto_supressao": null,
+    "escolas_com_dado": {
+      "elefante": 1,
+      "matific": 1
+    },
+    "escopo_blocos": "escolas_visiveis",
+    "texto_blocos": "Os números do Elefante e do Matific da rede somam só as escolas e as séries mostradas, com a coleta em dia no período (ou cobrindo ao menos 90% dele): as que têm poucos alunos ficam de fora, para proteger as crianças.",
+    "elefante": {
+      "alunos_medidos": 7,
+      "alunos_sem_conta": 0,
+      "alunos_com_leitura": 5,
+      "participacao_pct": 71.4,
+      "livros_por_aluno": 1.14,
+      "minutos_por_aluno": 11.4,
+      "nivel_medio": "L",
+      "nivel_medio_posicao": 14.63,
+      "taxa_acerto_pct": 90.0,
+      "janela_questoes": {
+        "inicio": "2026-03-01T00:10:00-03:00",
+        "fim": "2026-09-30T00:10:00-03:00",
+        "observacao": null
+      },
+      "contador_regrediu": false,
+      "texto_contador_regrediu": null,
+      "coleta_parcial": false,
+      "coberto_ate": null,
+      "texto_cobertura": null,
+      "metricas_protegidas": [],
+      "texto_metricas_protegidas": null,
+      "motivo_sem_dado": null,
+      "texto_sem_dado": null
+    },
+    "matific": {
+      "alunos_medidos": 6,
+      "alunos_com_retrato": 6,
+      "alunos_sem_retrato": 1,
+      "participacao_pct": 100.0,
+      "atividades_por_aluno": 10.0,
+      "estrelas_por_aluno": 30.0,
+      "desempenho_medio": 3.0,
+      "janela_efetiva": {
+        "inicio": null,
+        "fim": "2026-09-30T00:20:00-03:00",
+        "observacao": "sem coleta antes do período: o contador do ano letivo parte do zero (início do ano)"
+      },
+      "coleta_parcial": false,
+      "coberto_ate": null,
+      "texto_cobertura": null,
+      "metricas_protegidas": [],
+      "texto_metricas_protegidas": null,
+      "motivo_sem_dado": null,
+      "texto_sem_dado": null
+    }
+  },
+  "escolas": [
+    {
+      "escola_id": 6,
+      "nome": "EMEF Ébano Fictícia",
+      "ano_letivo": 2026,
+      "cobertura": {
+        "elefante": "sem_alunos_no_recorte",
+        "matific": "sem_alunos_no_recorte"
+      },
+      "ultima_coleta": {
+        "elefante": null,
+        "matific": null
+      },
+      "coberto_ate": {
+        "elefante": null,
+        "matific": null
+      },
+      "dias_desde_ultima_coleta": {
+        "elefante": null,
+        "matific": null
+      },
+      "alunos": 0,
+      "suprimido": false,
+      "motivo_supressao": null,
+      "texto_supressao": null,
+      "blocos_parciais": false,
+      "texto_blocos": null,
+      "elefante": {
+        "alunos_medidos": null,
+        "alunos_sem_conta": null,
+        "alunos_com_leitura": null,
+        "participacao_pct": null,
+        "livros_por_aluno": null,
+        "minutos_por_aluno": null,
+        "nivel_medio": null,
+        "nivel_medio_posicao": null,
+        "taxa_acerto_pct": null,
+        "janela_questoes": null,
+        "contador_regrediu": null,
+        "texto_contador_regrediu": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_no_recorte",
+        "texto_sem_dado": "nenhum aluno ativo do 1º ao 5º ano matriculado no ano letivo"
+      },
+      "matific": {
+        "alunos_medidos": null,
+        "alunos_com_retrato": null,
+        "alunos_sem_retrato": null,
+        "participacao_pct": null,
+        "atividades_por_aluno": null,
+        "estrelas_por_aluno": null,
+        "desempenho_medio": null,
+        "janela_efetiva": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_no_recorte",
+        "texto_sem_dado": "nenhum aluno ativo do 1º ao 5º ano matriculado no ano letivo"
+      },
+      "series": []
+    },
+    {
+      "escola_id": 2,
+      "nome": "EMEF Fictícia Alfa",
+      "ano_letivo": 2026,
+      "cobertura": {
+        "elefante": "ok",
+        "matific": "ok"
+      },
+      "ultima_coleta": {
+        "elefante": "2026-09-30T00:10:00-03:00",
+        "matific": "2026-09-30T00:20:00-03:00"
+      },
+      "coberto_ate": {
+        "elefante": "2026-09-30T00:10:00-03:00",
+        "matific": "2026-09-30T00:20:00-03:00"
+      },
+      "dias_desde_ultima_coleta": {
+        "elefante": 5,
+        "matific": 5
+      },
+      "alunos": 7,
+      "suprimido": false,
+      "motivo_supressao": null,
+      "texto_supressao": null,
+      "blocos_parciais": false,
+      "texto_blocos": null,
+      "elefante": {
+        "alunos_medidos": 7,
+        "alunos_sem_conta": 0,
+        "alunos_com_leitura": 5,
+        "participacao_pct": 71.4,
+        "livros_por_aluno": 1.14,
+        "minutos_por_aluno": 11.4,
+        "nivel_medio": "L",
+        "nivel_medio_posicao": 14.63,
+        "taxa_acerto_pct": 90.0,
+        "janela_questoes": {
+          "inicio": "2026-03-01T00:10:00-03:00",
+          "fim": "2026-09-30T00:10:00-03:00",
+          "observacao": null
+        },
+        "contador_regrediu": false,
+        "texto_contador_regrediu": null,
+        "coleta_parcial": false,
+        "coberto_ate": "2026-09-30T00:10:00-03:00",
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": null,
+        "texto_sem_dado": null
+      },
+      "matific": {
+        "alunos_medidos": 6,
+        "alunos_com_retrato": 6,
+        "alunos_sem_retrato": 1,
+        "participacao_pct": 100.0,
+        "atividades_por_aluno": 10.0,
+        "estrelas_por_aluno": 30.0,
+        "desempenho_medio": 3.0,
+        "janela_efetiva": {
+          "inicio": null,
+          "fim": "2026-09-30T00:20:00-03:00",
+          "observacao": "sem coleta antes do período: o contador do ano letivo parte do zero (início do ano)"
+        },
+        "coleta_parcial": false,
+        "coberto_ate": "2026-09-30T00:20:00-03:00",
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": null,
+        "texto_sem_dado": null
+      },
+      "series": [
+        {
+          "serie": 3,
+          "alunos": 7,
+          "suprimido": false,
+          "motivo_supressao": null,
+          "texto_supressao": null,
+          "elefante": {
+            "alunos_medidos": 7,
+            "alunos_sem_conta": 0,
+            "alunos_com_leitura": 5,
+            "participacao_pct": 71.4,
+            "livros_por_aluno": 1.14,
+            "minutos_por_aluno": 11.4,
+            "nivel_medio": "L",
+            "nivel_medio_posicao": 14.63,
+            "taxa_acerto_pct": 90.0,
+            "janela_questoes": {
+              "inicio": "2026-03-01T00:10:00-03:00",
+              "fim": "2026-09-30T00:10:00-03:00",
+              "observacao": null
+            },
+            "contador_regrediu": false,
+            "texto_contador_regrediu": null,
+            "coleta_parcial": false,
+            "coberto_ate": "2026-09-30T00:10:00-03:00",
+            "texto_cobertura": null,
+            "metricas_protegidas": [],
+            "texto_metricas_protegidas": null,
+            "motivo_sem_dado": null,
+            "texto_sem_dado": null
+          },
+          "matific": {
+            "alunos_medidos": 6,
+            "alunos_com_retrato": 6,
+            "alunos_sem_retrato": 1,
+            "participacao_pct": 100.0,
+            "atividades_por_aluno": 10.0,
+            "estrelas_por_aluno": 30.0,
+            "desempenho_medio": 3.0,
+            "janela_efetiva": {
+              "inicio": null,
+              "fim": "2026-09-30T00:20:00-03:00",
+              "observacao": "sem coleta antes do período: o contador do ano letivo parte do zero (início do ano)"
+            },
+            "coleta_parcial": false,
+            "coberto_ate": "2026-09-30T00:20:00-03:00",
+            "texto_cobertura": null,
+            "metricas_protegidas": [],
+            "texto_metricas_protegidas": null,
+            "motivo_sem_dado": null,
+            "texto_sem_dado": null
+          }
+        }
+      ]
+    },
+    {
+      "escola_id": 3,
+      "nome": "EMEF Fictícia Beta",
+      "ano_letivo": 2026,
+      "cobertura": {
+        "elefante": "sem_coleta",
+        "matific": "ok"
+      },
+      "ultima_coleta": {
+        "elefante": null,
+        "matific": "2026-09-30T00:20:00-03:00"
+      },
+      "coberto_ate": {
+        "elefante": null,
+        "matific": "2026-09-30T00:20:00-03:00"
+      },
+      "dias_desde_ultima_coleta": {
+        "elefante": null,
+        "matific": 5
+      },
+      "alunos": 0,
+      "suprimido": false,
+      "motivo_supressao": null,
+      "texto_supressao": null,
+      "blocos_parciais": false,
+      "texto_blocos": null,
+      "elefante": {
+        "alunos_medidos": null,
+        "alunos_sem_conta": null,
+        "alunos_com_leitura": null,
+        "participacao_pct": null,
+        "livros_por_aluno": null,
+        "minutos_por_aluno": null,
+        "nivel_medio": null,
+        "nivel_medio_posicao": null,
+        "taxa_acerto_pct": null,
+        "janela_questoes": null,
+        "contador_regrediu": null,
+        "texto_contador_regrediu": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_na_serie",
+        "texto_sem_dado": "a escola não tem aluno ativo nesta série no ano letivo"
+      },
+      "matific": {
+        "alunos_medidos": null,
+        "alunos_com_retrato": null,
+        "alunos_sem_retrato": null,
+        "participacao_pct": null,
+        "atividades_por_aluno": null,
+        "estrelas_por_aluno": null,
+        "desempenho_medio": null,
+        "janela_efetiva": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_na_serie",
+        "texto_sem_dado": "a escola não tem aluno ativo nesta série no ano letivo"
+      },
+      "series": []
+    },
+    {
+      "escola_id": 4,
+      "nome": "EMEF Fictícia Delta",
+      "ano_letivo": 2026,
+      "cobertura": {
+        "elefante": "sem_alunos_no_recorte",
+        "matific": "sem_alunos_no_recorte"
+      },
+      "ultima_coleta": {
+        "elefante": null,
+        "matific": null
+      },
+      "coberto_ate": {
+        "elefante": null,
+        "matific": null
+      },
+      "dias_desde_ultima_coleta": {
+        "elefante": null,
+        "matific": null
+      },
+      "alunos": 0,
+      "suprimido": false,
+      "motivo_supressao": null,
+      "texto_supressao": null,
+      "blocos_parciais": false,
+      "texto_blocos": null,
+      "elefante": {
+        "alunos_medidos": null,
+        "alunos_sem_conta": null,
+        "alunos_com_leitura": null,
+        "participacao_pct": null,
+        "livros_por_aluno": null,
+        "minutos_por_aluno": null,
+        "nivel_medio": null,
+        "nivel_medio_posicao": null,
+        "taxa_acerto_pct": null,
+        "janela_questoes": null,
+        "contador_regrediu": null,
+        "texto_contador_regrediu": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_no_recorte",
+        "texto_sem_dado": "nenhum aluno ativo do 1º ao 5º ano matriculado no ano letivo"
+      },
+      "matific": {
+        "alunos_medidos": null,
+        "alunos_com_retrato": null,
+        "alunos_sem_retrato": null,
+        "participacao_pct": null,
+        "atividades_por_aluno": null,
+        "estrelas_por_aluno": null,
+        "desempenho_medio": null,
+        "janela_efetiva": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_no_recorte",
+        "texto_sem_dado": "nenhum aluno ativo do 1º ao 5º ano matriculado no ano letivo"
+      },
+      "series": []
+    },
+    {
+      "escola_id": 5,
+      "nome": "EMEF Fictícia Gama",
+      "ano_letivo": 2026,
+      "cobertura": {
+        "elefante": "sem_alunos_no_recorte",
+        "matific": "sem_alunos_no_recorte"
+      },
+      "ultima_coleta": {
+        "elefante": null,
+        "matific": null
+      },
+      "coberto_ate": {
+        "elefante": null,
+        "matific": null
+      },
+      "dias_desde_ultima_coleta": {
+        "elefante": null,
+        "matific": null
+      },
+      "alunos": 0,
+      "suprimido": false,
+      "motivo_supressao": null,
+      "texto_supressao": null,
+      "blocos_parciais": false,
+      "texto_blocos": null,
+      "elefante": {
+        "alunos_medidos": null,
+        "alunos_sem_conta": null,
+        "alunos_com_leitura": null,
+        "participacao_pct": null,
+        "livros_por_aluno": null,
+        "minutos_por_aluno": null,
+        "nivel_medio": null,
+        "nivel_medio_posicao": null,
+        "taxa_acerto_pct": null,
+        "janela_questoes": null,
+        "contador_regrediu": null,
+        "texto_contador_regrediu": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_no_recorte",
+        "texto_sem_dado": "nenhum aluno ativo do 1º ao 5º ano matriculado no ano letivo"
+      },
+      "matific": {
+        "alunos_medidos": null,
+        "alunos_com_retrato": null,
+        "alunos_sem_retrato": null,
+        "participacao_pct": null,
+        "atividades_por_aluno": null,
+        "estrelas_por_aluno": null,
+        "desempenho_medio": null,
+        "janela_efetiva": null,
+        "coleta_parcial": false,
+        "coberto_ate": null,
+        "texto_cobertura": null,
+        "metricas_protegidas": [],
+        "texto_metricas_protegidas": null,
+        "motivo_sem_dado": "sem_alunos_no_recorte",
+        "texto_sem_dado": "nenhum aluno ativo do 1º ao 5º ano matriculado no ano letivo"
+      },
+      "series": []
+    }
+  ],
+  "cobertura": {
+    "escopo": "escolas_visiveis",
+    "ultima_coleta": {
+      "elefante": "2026-09-30T00:10:00-03:00",
+      "matific": "2026-09-30T00:20:00-03:00"
+    },
+    "escolas_sem_coleta": [],
+    "escolas_sem_coleta_no_periodo": {
+      "elefante": [
+        3
+      ],
+      "matific": []
+    },
+    "escolas_coleta_parcial": {
+      "elefante": [],
+      "matific": []
+    },
+    "primeiro_evento_elefante": null,
+    "dias_desde_ultima_coleta": 5
+  },
+  "limitacoes": [
+    "Elefante — questões: o Elefante só informa o contador VITALÍCIO de cada aluno (desde a criação da conta). As questões do período vêm da diferença entre duas coletas, e o intervalo real é o das coletas, não o pedido.",
+    "Elefante — livros e tempo: valem pela data da leitura gravada na PRIMEIRA importação do livro (releitura não muda a data); o tempo é um piso (a fonte nem sempre o informa).",
+    "Matific: o contador é o acumulado do ANO ACADÊMICO do Matific (o calendário deles começa em 29/12), gravado uma vez por dia, na coleta; a atividade do período é a diferença entre coletas.",
+    "Alunos medidos: só entram na conta os alunos que a plataforma conhece no período — no Elefante, os que têm conta (alguma coleta); no Matific, os que têm coleta dentro do período. Quem ainda não tem conta fica fora do denominador: ausência não é zero.",
+    "Coleta atrasada: escola cuja última coleta é de mais de 7 dias antes do fim do período (ou de hoje) aparece como coleta parcial, com a data até onde os números valem. Ela entra na soma da rede só se a coleta cobre ao menos 90% do período (até hoje), com a data informada; abaixo disso fica fora. Na relação estatística, toda coleta parcial fica fora.",
+    "Datas: as coletas são gravadas em UTC e o período é contado no horário de Brasília (UTC−3). Leituras das 21h à meia-noite podem cair no dia seguinte, e a coleta da madrugada mede o dia anterior.",
+    "Coorte: alunos ATIVOS matriculados no ano letivo ativo, do 1º ao 5º ano. Aluno transferido ou inativo sai de todas as contas, com o histórico dele.",
+    "As plataformas só têm dados do ano letivo em curso; as avaliações oficiais por escola são de anos anteriores. Por isso a relação entre as duas só é calculada no mesmo ano letivo — e, mesmo assim, não mede causa e efeito."
+  ]
+}

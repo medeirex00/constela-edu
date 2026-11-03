@@ -1,8 +1,14 @@
-export function numero(valor: number): string {
+/** Número inteiro com separador de milhar. Sem valor vira "—" (o mesmo de `nota`). */
+export function numero(valor: number | null | undefined): string {
+  if (valor === null || valor === undefined) return "—";
   return valor.toLocaleString("pt-BR");
 }
 
-export function nota(valor: number): string {
+/** Nota com uma ou duas casas. Sem valor (`null`/`undefined`: o servidor não mandou a
+ *  média — ex.: grupo pequeno escondido da Secretaria) vira "—", nunca um 0 falso nem
+ *  uma tela quebrada. */
+export function nota(valor: number | null | undefined): string {
+  if (valor === null || valor === undefined) return "—";
   return valor.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 }
 
@@ -20,11 +26,17 @@ export function nota(valor: number): string {
  *  no item do Ranking Geral legado), com o qual um app já atualizado pode falar
  *  durante um rollout escalonado.
  *
+ *  `valor === null` = o servidor NÃO manda a nota daquela plataforma porque o
+ *  módulo está fora do plano da rede (`routers/rankings.py::_ranking`). O
+ *  `aferido_*` continua `true` nesse caso (o snapshot existe), então sem este
+ *  corte a tela mostraria "0,0" — um zero falso. Também vira "—".
+ *
  *  Vive no pacote compartilhado de propósito: web e app têm de dizer a MESMA
  *  coisa sobre a mesma criança. */
 export function notaDaMateria(valor: number | null | undefined,
                               aferido?: boolean | null): string {
-  return aferido === false ? "—" : nota(valor ?? 0);
+  if (aferido === false || valor === null) return "—";
+  return nota(valor ?? 0);
 }
 
 /** Fuso oficial do produto (escolas brasileiras). Mostrar sempre no horário de
@@ -54,7 +66,8 @@ export function dataHora(iso: string | null): string {
   });
 }
 
-export function tempoLeitura(minutos: number): string {
+export function tempoLeitura(minutos: number | null | undefined): string {
+  if (minutos === null || minutos === undefined) return "—";
   if (minutos < 60) return `${minutos} min`;
   const horas = Math.floor(minutos / 60);
   const resto = minutos % 60;

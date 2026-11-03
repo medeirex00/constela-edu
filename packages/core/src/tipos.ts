@@ -114,8 +114,9 @@ export interface RankingItem {
   nome: string;
   turma: string | null;
   ano_escolar: string | null;
-  nota_matific: number;
-  nota_elefante: number;
+  /** `null` quando o módulo da plataforma não está no plano da rede. */
+  nota_matific: number | null;
+  nota_elefante: number | null;
   /** LEGADO: composição entre dimensões. Não ordena mais nada. */
   nota_geral: number;
   /** DISCRIMINANTE das duas notas acima: `nota_matific`/`nota_elefante` chegam
@@ -236,8 +237,10 @@ export interface LeituraNiveis {
 
 export interface PerfilAluno {
   aluno: Aluno;
-  nota_matific: number;
-  nota_elefante: number;
+  /** `null` = módulo fora do plano da rede (o servidor não manda a nota daquela
+   *  plataforma, mesma regra do Ranking Geral): a tela mostra "—". */
+  nota_matific: number | null;
+  nota_elefante: number | null;
   /** LEGADO: composição entre dimensões — `dimensoes` é a fonte oficial. */
   nota_geral: number;
   posicao: number | null;
@@ -339,7 +342,11 @@ export interface PodioItem {
   aluno_id: number;
   nome: string;
   turma: string | null;
-  valor: number;
+  /** O valor da premiação, pronto do backend. `null` só na "Melhor Matemática"
+   *  com poucos alunos com atividade no período: o índice não é exibido (junto
+   *  das estrelas e das atividades, revelaria a mediana `k` da escola). A
+   *  posição e a ordem continuam as do índice. */
+  valor: number | null;
 }
 
 /** Uma categoria de premiação (com o pódio do período). */
@@ -435,11 +442,18 @@ export interface Analise {
   mensagem_deteccao: string;
   /** Turma lida do cabeçalho do PDF (relatórios do Elefante). */
   turma_detectada: string;
+  /** Escola lida do relatório e o AVISO de nome diferente do cadastro (opcionais). */
+  escola_detectada?: string;
+  aviso_escola?: string;
   /** Como o nome foi identificado: "arquivo" | "conteudo" | "nenhum" | "". */
   origem_nome: string;
   /** "Intervalo de datas" do relatório (Matific), ISO "AAAA-MM-DD" ou "". */
   periodo_inicio?: string;
   periodo_fim?: string;
+  /** A política da escola é "bloquear" (a matrícula vem da Lista Piloto): quem
+   *  não corresponder a um aluno cadastrado NÃO ganha ficha nova na confirmação —
+   *  vai para Revisão de identidade. */
+  criacao_bloqueada_por_politica?: boolean;
   total_alunos: number;
   total_linhas: number;
   total_erros: number;
@@ -454,6 +468,11 @@ export interface ResultadoImportacao {
   qtd_alunos: number;
   qtd_erros: number;
   avisos: string[];
+  /** Pendências abertas/atualizadas na Revisão de identidade por esta importação. */
+  qtd_revisoes?: number;
+  /** Alunos sem ficha que a política "bloquear" da escola não deixou criar
+   *  (foram para Revisão de identidade). */
+  criacao_bloqueada?: number;
 }
 
 export interface Importacao {

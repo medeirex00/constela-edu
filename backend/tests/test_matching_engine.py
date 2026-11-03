@@ -23,7 +23,7 @@ def ident(nome, **kw):
 # --- plausivel (veredito por nome) -------------------------------------------
 
 def test_plausivel_exato_ignora_acento_e_ordem():
-    assert plausivel("ABRAÃO LUÍS DIAS", "ABRAAO LUIS DIAS") == "forte"
+    assert plausivel("EUSTÁQUIO LUÍS FICTONI", "EUSTAQUIO LUIS FICTONI") == "forte"
     assert plausivel("MARIA SILVA", "SILVA MARIA") == "forte"
 
 
@@ -31,7 +31,7 @@ def test_plausivel_abreviacao_inicial_e_truncamento():
     assert plausivel("MARIA E", "MARIA EDUARDA SILVA") == "forte"
     assert plausivel("M. EDUARDA", "MARIA EDUARDA SILVA") == "forte"
     assert plausivel("MARIA EDU", "MARIA EDUARDA SILVA") == "forte"
-    assert plausivel("ABRAAO L", "ABRAÃO LUÍS DIAS") == "forte"
+    assert plausivel("EUSTAQUIO L", "EUSTÁQUIO LUÍS FICTONI") == "forte"
 
 
 def test_plausivel_parcial_subconjunto():
@@ -40,13 +40,13 @@ def test_plausivel_parcial_subconjunto():
 
 
 def test_plausivel_fraco_variante_e_typo():
-    assert plausivel("ABRAÃO LUÍS DIAS", "ABRAÃO LUIZ DIAS") == "fraco"     # variante
+    assert plausivel("EUSTÁQUIO LUÍS FICTONI", "EUSTÁQUIO LUIZ FICTONI") == "fraco"  # variante
     assert plausivel("GABRYEL SILVA", "GABRIEL SILVA") == "fraco"           # typo 1º nome
 
 
 def test_plausivel_nomes_diferentes_nao_casa():
     assert plausivel("MARIA E", "MARCOS EDUARDO SILVA") is None
-    assert plausivel("ABRAÃO LUÍS DIAS", "ABRAÃO LUCAS DIAS") is None       # LUÍS≠LUCAS
+    assert plausivel("EUSTÁQUIO LUÍS FICTONI", "EUSTÁQUIO LUCAS FICTONI") is None  # LUÍS≠LUCAS
 
 
 # --- vetos / corroborações ---------------------------------------------------
@@ -87,11 +87,11 @@ def test_parcial_unico_vai_para_revisao():
 
 
 def test_variante_segura_nome_do_meio_vincula():
-    """Caso real (Débora Pilon): variação no NOME DO MEIO com 1º nome e sobrenome
-    idênticos (ABRAÃO LUÍS/LUIZ DIAS), 1 único candidato → VINCULA na origem, sem
+    """Caso real (escola 11): variação no NOME DO MEIO com 1º nome e sobrenome
+    idênticos (EUSTÁQUIO LUÍS/LUIZ FICTONI), 1 único candidato → VINCULA na origem, sem
     criar 2ª ficha. É a decisão do dono (2026-08-04)."""
-    roster = [ident("ABRAÃO LUÍS DIAS", _id=1), ident("BEATRIZ SOUZA", _id=2)]
-    r = classificar_linha(ident("ABRAAO LUIZ DIAS"), roster)
+    roster = [ident("EUSTÁQUIO LUÍS FICTONI", _id=1), ident("BEATRIZ SOUZA", _id=2)]
+    r = classificar_linha(ident("EUSTAQUIO LUIZ FICTONI"), roster)
     assert r.status == VINCULADO and r.aluno_id == 1
 
 

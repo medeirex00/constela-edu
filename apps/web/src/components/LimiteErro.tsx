@@ -32,6 +32,8 @@ export class LimiteErro extends Component<Props, State> {
 
   render(): ReactNode {
     if (!this.state.erro) return this.props.children;
+    // Identidade v2 nos VALORES (fundo lavanda, Poppins, botão violeta), mas tudo
+    // continua inline: esta tela não pode depender do CSS que talvez tenha falhado.
     return (
       <div
         role="alert"
@@ -44,12 +46,35 @@ export class LimiteErro extends Component<Props, State> {
           gap: "0.75rem",
           padding: "2rem",
           textAlign: "center",
-          fontFamily: "Inter, system-ui, sans-serif",
-          color: "#1B2A4A",
+          fontFamily: "Poppins, Inter, system-ui, sans-serif",
+          background: "#F5F6FB",
+          color: "#1A1C38",
         }}
       >
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700 }}>Algo deu errado</h1>
-        <p style={{ maxWidth: "28rem", color: "#475569" }}>
+        <span
+          aria-hidden
+          style={{
+            display: "grid",
+            placeItems: "center",
+            width: "3.5rem",
+            height: "3.5rem",
+            marginBottom: "0.25rem",
+            borderRadius: "9999px",
+            background: "#F3F1FE",
+            color: "#6C5CE7",
+          }}
+        >
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        </span>
+        <h1 style={{ fontSize: "1.625rem", fontWeight: 700, letterSpacing: "-0.01em", margin: 0 }}>
+          Algo deu errado
+        </h1>
+        <p style={{ maxWidth: "28rem", color: "#545876", fontSize: "0.95rem", lineHeight: 1.55, margin: 0 }}>
           Tivemos um problema ao mostrar esta tela. Recarregue e tente de novo —
           seus dados estão salvos.
         </p>
@@ -57,12 +82,15 @@ export class LimiteErro extends Component<Props, State> {
           type="button"
           onClick={() => void recarregarLimpandoCache()}
           style={{
-            marginTop: "0.5rem",
-            padding: "0.6rem 1.25rem",
-            borderRadius: "0.5rem",
+            marginTop: "0.75rem",
+            padding: "0.7rem 1.4rem",
+            borderRadius: "0.75rem",
             border: "none",
-            background: "#1B2A4A",
+            background: "#6C5CE7",
+            boxShadow: "0 8px 18px -6px rgba(108, 92, 231, 0.55)",
             color: "#fff",
+            fontFamily: "inherit",
+            fontSize: "0.9rem",
             fontWeight: 600,
             cursor: "pointer",
           }}

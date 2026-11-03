@@ -10,6 +10,7 @@
  */
 import {
   AtSign,
+  Check,
   Copy,
   Eye,
   GraduationCap,
@@ -27,50 +28,47 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import MenuSuspenso, { ItemMenu } from "../components/MenuSuspenso";
+import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
-  Badge,
+  AvatarAluno,
+  CabecalhoCartao,
+  ChipCargo,
+  EsqueletoLista,
+  PilulaSituacao,
+  copiarTexto,
+  estiloCheckbox,
+  situacaoDaConta,
+  tempoRelativo,
+} from "../components/PessoasUi";
+import {
   Botao,
   Campo,
   Card,
   Carregando,
+  EmailQuebravel,
+  Erro,
+  Interruptor,
   Mensagem,
   Modal,
   PageHeader,
   Vazio,
+  classesTabela,
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { ApiError, api } from "../lib/api";
 import { CARGOS, rotuloCargo } from "../lib/cargos";
+import { dataHora } from "../lib/formato";
 import type { Turma, Usuario } from "../lib/types";
 
-function dataLegivel(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
-}
+// Tabela "Contas de acesso" no celular (< 640 px): células mais justas.
+const th = `${classesTabela.th} max-sm:px-3`;
+const td = `${classesTabela.td} max-sm:px-3`;
 
-/** Copia com fallback: em http na rede local (celular) o clipboard moderno
- *  não existe — sem o fallback o botão falharia em silêncio e o usuário
- *  fecharia o modal achando que copiou uma senha de uso único. */
-function copiarTexto(texto: string, aoCopiar: () => void) {
-  const legado = () => {
-    const area = document.createElement("textarea");
-    area.value = texto;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    try {
-      if (document.execCommand("copy")) aoCopiar();
-    } finally {
-      document.body.removeChild(area);
-    }
-  };
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(texto).then(aoCopiar).catch(legado);
-  } else {
-    legado();
-  }
+/** Data e hora no horário de Brasília (a API manda UTC sem sufixo — mesma regra
+ *  do `dataHora` compartilhado, usada também no "há X dias" da tabela). */
+function dataLegivel(iso: string | null | undefined): string {
+  return dataHora(iso ?? null);
 }
 
 type Acao =
@@ -111,6 +109,10 @@ function MenuAcoes({
   aoEscolher: (acao: Acao) => void;
 }) {
   const excluido = usuario.status === "excluido";
+  // Conta desativada: o backend recusa gerar o link (400 "reative a conta
+  // antes") e o link de conta inativa não vale no consumo. A ação fica visível,
+  // mas inerte, dizendo o que fazer.
+  const inativa = !excluido && (usuario.status ?? "ativo") !== "ativo";
 
   return (
     <MenuSuspenso ariaLabel={`Ações do usuário ${usuario.nome}`}>
@@ -123,7 +125,13 @@ function MenuAcoes({
           <>
             <ItemMenu icone={<Eye size={15} />} rotulo="Visualizar" onClick={() => escolher("visualizar")} />
             {!excluido && podeRedefinir && (
-              <ItemMenu icone={<KeyRound size={15} />} rotulo="Redefinir senha" onClick={() => escolher("redefinir")} />
+              <ItemMenu
+                icone={<KeyRound size={15} />}
+                rotulo="Redefinir senha"
+                desabilitado={inativa}
+                dica={inativa ? "Conta inativa: reative a conta antes" : undefined}
+                onClick={() => escolher("redefinir")}
+              />
             )}
             {/* Vincular turmas: admin OU coordenador (o professor pode ter várias). */}
             {!excluido && podeGerirTurmas && usuario.cargo === "professor" && (
@@ -182,28 +190,37 @@ function MenuAcoes({
 
 /** Gera um LINK de redefinição (uso único, com validade) e o mostra UMA vez
  *  para o gestor entregar ao usuário. Nenhuma senha é exibida ou recuperada:
- *  a própria pessoa escolhe a nova senha ao abrir o link. */
-function ModalRedefinirSenha({ alvo, base, aoFechar }: {
+ *  a própria pessoa escolhe a nova senha ao abrir o link.
+ *
+ *  Para a PRÓPRIA conta (`proprio`), o backend exige a senha atual: uma sessão
+ *  esquecida aberta não pode virar troca de senha (posse permanente da conta). */
+function ModalRedefinirSenha({ alvo, base, proprio, aoFechar }: {
   alvo: Usuario;
   base: string;
+  proprio: boolean;
   aoFechar: () => void;
 }) {
   const [dados, setDados] = useState<{ link: string; validade_min: number } | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
+  const [senhaAtual, setSenhaAtual] = useState("");
 
   async function gerar() {
     setOcupado(true);
     setErro("");
     try {
       const r = await api<{ link: string; validade_min: number }>(
-        `${base}/${alvo.id}/redefinir-senha`, { method: "POST" });
+        `${base}/${alvo.id}/redefinir-senha`,
+        proprio
+          ? { method: "POST", body: JSON.stringify({ senha_atual: senhaAtual }) }
+          : { method: "POST" });
       setDados(r);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : "Não foi possível gerar o link.");
     } finally {
       setOcupado(false);
+      setSenhaAtual("");   // a senha digitada não fica na memória da tela
     }
   }
 
@@ -216,10 +233,25 @@ function ModalRedefinirSenha({ alvo, base, aoFechar }: {
             uma senha nova. Ninguém — nem o sistema — vê a senha: só a própria pessoa a
             define. O link vale <strong>uma única vez</strong> e expira.
           </p>
+          {proprio && (
+            <div className="mt-3">
+              <Campo rotulo="Sua senha atual (para confirmar que é você)">
+                {/* current-password: é a conta de quem está logado. */}
+                <input
+                  type="password"
+                  className={estiloInput}
+                  value={senhaAtual}
+                  onChange={(e) => setSenhaAtual(e.target.value)}
+                  autoComplete="current-password"
+                  autoFocus
+                />
+              </Campo>
+            </div>
+          )}
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
           <div className="mt-4 flex justify-end gap-2">
-            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
-            <Botao disabled={ocupado} onClick={gerar}>
+            <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao disabled={ocupado || (proprio && senhaAtual.length === 0)} onClick={gerar}>
               <KeyRound size={15} /> {ocupado ? "Gerando..." : "Gerar link de redefinição"}
             </Botao>
           </div>
@@ -227,19 +259,24 @@ function ModalRedefinirSenha({ alvo, base, aoFechar }: {
       ) : (
         <>
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
-            Entregue este link a <strong>{alvo.nome}</strong> (WhatsApp, e-mail ou pessoalmente).
+            {proprio ? (
+              <>Abra este link para escolher a sua nova senha.</>
+            ) : (
+              <>Entregue este link a <strong>{alvo.nome}</strong> (WhatsApp, e-mail ou pessoalmente).</>
+            )}{" "}
             Vale <strong>uma única vez</strong> e expira em {dados.validade_min} minutos.
           </p>
-          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 dark:border-indigo-500/20 dark:bg-indigo-500/10">
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 dark:border-indigo-500/20 dark:bg-indigo-500/10">
             <code className="select-all break-all text-xs font-medium text-indigo-800 dark:text-indigo-200">
               {dados.link}
             </code>
-            <Botao variante="neutro" onClick={() => copiarTexto(dados.link, () => setCopiado(true))}>
+            <Botao variante="secundario" tamanho="sm" onClick={() => copiarTexto(dados.link, () => setCopiado(true))}>
+              {copiado ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
               {copiado ? "Copiado!" : "Copiar"}
             </Botao>
           </div>
           <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            Gerar um novo link invalida este. A ação fica no log de auditoria (sem a senha).
+            Gerar um novo link invalida este. A ação fica no histórico de alterações (sem a senha).
           </p>
           <div className="mt-4 flex justify-end">
             <Botao onClick={aoFechar}>Fechar</Botao>
@@ -346,21 +383,21 @@ function ModalTurmasProfessor({ alvo, escolaId, aoFechar, aoSalvar }: {
             return (
               <label
                 key={t.id}
-                className={`flex cursor-pointer items-center gap-3 rounded-lg border p-2.5 transition-colors ${
+                className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition-colors ${
                   marcada
-                    ? "border-indigo-400 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
+                    ? "border-indigo-300 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
                     : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
                 }`}
               >
                 <input
                   type="checkbox"
-                  className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                  className={estiloCheckbox}
                   checked={marcada}
                   onChange={() => alternar(t.id)}
                 />
                 <span className="text-sm">
-                  <span className="font-medium">{t.nome}</span>
-                  <span className="ml-2 text-xs text-zinc-400">{t.ano_escolar}</span>
+                  <span className="font-semibold">{t.nome}</span>
+                  <span className="ml-2 text-xs text-zinc-500 dark:text-zinc-400">{t.ano_escolar}</span>
                   {antiga && (
                     <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                       {t.ano_letivo}{t.status !== "ativa" ? " · arquivada" : ""}
@@ -379,7 +416,7 @@ function ModalTurmasProfessor({ alvo, escolaId, aoFechar, aoSalvar }: {
       )}
       {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
       <div className="mt-4 flex justify-end gap-2">
-        <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+        <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
         <Botao disabled={ocupado || lista === null} onClick={salvar}>
           <GraduationCap size={15} /> {ocupado ? "Salvando..." : "Salvar turmas"}
         </Botao>
@@ -413,8 +450,8 @@ interface CredencialProf {
 
 /** Propõe fusões de contas de professor duplicadas (nome curto do Matific +
  *  nome completo da Lista Piloto = a MESMA pessoa). Cada fusão tem sua CAIXA:
- *  as de confiança "revisar" (nome composto, ex.: "Ana Lucia" → "Ana Lucia
- *  Ferreira de Camargo") podem ser outra pessoa e o gestor confirma. Ao aplicar,
+ *  as de confiança "revisar" (nome composto, ex.: "Ivone Celia" → "Ivone Celia
+ *  Fortunelli de Ficticio") podem ser outra pessoa e o gestor confirma. Ao aplicar,
  *  devolve a folha de credenciais (@/senha) para entregar. */
 function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
   escolaId: number;
@@ -480,7 +517,7 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
             {folha.length} professor(es) unificado(s). Entregue as credenciais abaixo — no
             primeiro acesso, cada uma pode trocar a senha.
           </Mensagem>
-          <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+          <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-zinc-200/80 dark:border-zinc-800">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800">
@@ -495,7 +532,7 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
                     <td className="px-3 py-2">{c.nome}</td>
                     <td className="px-3 py-2 font-mono text-xs">@{c.usuario ?? "—"}</td>
                     <td className="px-3 py-2 select-all font-mono text-xs">
-                      {c.senha ?? <span className="text-zinc-400">senha mantida</span>}
+                      {c.senha ?? <span className="text-zinc-500 dark:text-zinc-400">senha mantida</span>}
                     </td>
                   </tr>
                 ))}
@@ -503,7 +540,7 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
             </table>
           </div>
           <div className="mt-4 flex justify-end gap-2">
-            <Botao variante="neutro" onClick={() => copiarTexto(textoFolha, () => setCopiado(true))}>
+            <Botao variante="secundario" onClick={() => copiarTexto(textoFolha, () => setCopiado(true))}>
               <Copy size={15} /> {copiado ? "Copiado!" : "Copiar lista"}
             </Botao>
             <Botao onClick={aoFechar}>Fechar</Botao>
@@ -511,8 +548,16 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
         </>
       ) : previa === null && !erro ? (
         <div className="mt-2"><Carregando /></div>
-      ) : previa && previa.total === 0 ? (
-        <Vazio titulo="Nenhuma duplicata" descricao="As contas de professor já estão únicas." />
+      ) : previa === null ? (
+        // A prévia não carregou: só o erro (sem "Encontrei  possível(is)…" com a contagem vazia).
+        <>
+          <Mensagem tipo="erro">{erro}</Mensagem>
+          <div className="mt-4 flex justify-end">
+            <Botao variante="secundario" onClick={aoFechar}>Fechar</Botao>
+          </div>
+        </>
+      ) : previa.total === 0 ? (
+        <Vazio icone={UsersRound} titulo="Nenhuma duplicata" descricao="As contas de professor já estão únicas." />
       ) : (
         // --- Prévia: MARQUE as fusões a aplicar ---
         <>
@@ -528,15 +573,15 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
               return (
                 <label
                   key={c.loser_id}
-                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-2.5 transition-colors ${
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
                     marcado
-                      ? "border-indigo-400 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
+                      ? "border-indigo-300 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
                       : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
                   }`}
                 >
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                    className={`mt-0.5 ${estiloCheckbox}`}
                     checked={marcado}
                     onChange={() => alternar(c.loser_id)}
                   />
@@ -545,7 +590,7 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
                       Unir <strong>{c.apagar}</strong> → <strong>{c.manter}</strong>{" "}
                       <span className="font-mono text-xs text-indigo-600 dark:text-indigo-400">@{c.usuario_novo}</span>
                       {c.senha_nova === null && (
-                        <span className="text-xs text-zinc-400"> (já ativa — senha mantida)</span>
+                        <span className="text-xs text-zinc-500 dark:text-zinc-400"> (já ativa — senha mantida)</span>
                       )}
                     </span>
                     {c.confianca === "revisar" && (
@@ -565,9 +610,9 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
           </div>
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
           <div className="mt-4 flex justify-end gap-2">
-            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
             <Botao
-              className="!bg-red-600 hover:!bg-red-500"
+              variante="perigo"
               disabled={ocupado || selecionados.size === 0}
               onClick={corrigir}
             >
@@ -584,7 +629,7 @@ function ModalProfessoresDuplicados({ escolaId, aoFechar, aoConcluir }: {
 // --- Padronizar o @ de todas as professoras ----------------------------------
 
 /** Coloca o @ de TODA conta de professor no padrão CamelCase (PrimeiroÚltimo).
- *  As contas antigas nasceram minúsculas (@paulanogueira); esta ação arruma
+ *  As contas antigas nasceram minúsculas (@telmatestelli); esta ação arruma
  *  todas. Quem já entrou mantém a senha (só o @ muda de caixa). */
 function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
   escolaId: number;
@@ -625,7 +670,7 @@ function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
               : `${folha.length} conta(s) ajustada(s). As com senha nova estão abaixo — entregue às professoras.`}
           </Mensagem>
           {folha.length > 0 && (
-            <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-zinc-200/80 dark:border-zinc-800">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800">
@@ -640,7 +685,7 @@ function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
                       <td className="px-3 py-2">{c.nome}</td>
                       <td className="px-3 py-2 font-mono text-xs">@{c.usuario ?? "—"}</td>
                       <td className="px-3 py-2 select-all font-mono text-xs">
-                        {c.senha ?? <span className="text-zinc-400">senha mantida</span>}
+                        {c.senha ?? <span className="text-zinc-500 dark:text-zinc-400">senha mantida</span>}
                       </td>
                     </tr>
                   ))}
@@ -650,7 +695,7 @@ function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
           )}
           <div className="mt-4 flex justify-end gap-2">
             {folha.length > 0 && (
-              <Botao variante="neutro" onClick={() => copiarTexto(textoFolha, () => setCopiado(true))}>
+              <Botao variante="secundario" onClick={() => copiarTexto(textoFolha, () => setCopiado(true))}>
                 <Copy size={15} /> {copiado ? "Copiado!" : "Copiar lista"}
               </Botao>
             )}
@@ -661,14 +706,14 @@ function ModalPadronizarUsuarios({ escolaId, aoFechar, aoConcluir }: {
         <>
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Coloca o <strong>@</strong> de todas as professoras no padrão{" "}
-            <strong>PrimeiroÚltimo</strong> com maiúsculas (ex.: <code>@PaulaNogueira</code>).
+            <strong>PrimeiroÚltimo</strong> com maiúsculas (ex.: <code>@TelmaTestelli</code>).
             Quem <strong>já entrou</strong> mantém a senha (muda só a caixa do @, o login aceita
             qualquer caixa); quem <strong>nunca entrou</strong> recebe @ e senha novos, que
             aparecem numa lista para você entregar.
           </p>
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
           <div className="mt-4 flex justify-end gap-2">
-            <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+            <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
             <Botao disabled={ocupado} onClick={padronizar}>
               <AtSign size={15} /> {ocupado ? "Padronizando..." : "Padronizar agora"}
             </Botao>
@@ -788,15 +833,15 @@ export default function Usuarios() {
           // O Admin Global opera várias escolas: deixa explícito QUAL escola
           // recebe a conta (o seletor do topo define a escola desta tela).
           (escolaAtual ? `Contas de acesso de ${escolaAtual.nome}. ` : "Contas de acesso desta escola. ")
-          + "Toda alteração fica no log de auditoria."
+          + "Toda alteração fica no histórico de alterações."
         }
         acoes={
           souAdmin ? (
             <div className="flex flex-wrap gap-2">
-              <Botao variante="neutro" onClick={() => setVerPadronizar(true)}>
+              <Botao variante="secundario" onClick={() => setVerPadronizar(true)}>
                 <AtSign size={15} /> Padronizar @
               </Botao>
-              <Botao variante="neutro" onClick={() => setVerDuplicados(true)}>
+              <Botao variante="secundario" onClick={() => setVerDuplicados(true)}>
                 <UsersRound size={15} /> Professores duplicados
               </Botao>
               <Botao onClick={abrirNovo}>
@@ -831,85 +876,119 @@ export default function Usuarios() {
         </div>
       )}
 
-      {souAdmin && (
-        <label className="mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
-            checked={mostrarExcluidos}
-            onChange={(e) => setMostrarExcluidos(e.target.checked)}
-          />
-          Mostrar usuários excluídos
-        </label>
-      )}
-
-      <Card>
+      <Card className="overflow-hidden">
+        <CabecalhoCartao
+          titulo="Contas de acesso"
+          contagem={usuarios && !erroLista
+            ? `${usuarios.length} conta${usuarios.length === 1 ? "" : "s"}`
+            : undefined}
+          acoes={souAdmin ? (
+            <span className="inline-flex items-center gap-2.5 text-sm text-zinc-600 dark:text-zinc-300">
+              {/* O nome acessível está no interruptor; o texto ao lado é só visual. */}
+              <span aria-hidden className="cursor-pointer select-none" onClick={() => setMostrarExcluidos((v) => !v)}>
+                Mostrar usuários excluídos
+              </span>
+              <Interruptor
+                ligado={mostrarExcluidos}
+                aoMudar={setMostrarExcluidos}
+                rotulo="Mostrar usuários excluídos"
+              />
+            </span>
+          ) : undefined}
+        />
         {usuarios === null ? (
-          <Carregando />
+          <EsqueletoLista texto="Carregando usuários..." />
+        ) : erroLista ? (
+          // A lista falhou: o motivo e "Tentar de novo" (o título é o de sempre).
+          <Erro titulo="Sem acesso ou nenhum usuário" descricao={erroLista} aoTentar={carregar} />
         ) : usuarios.length === 0 ? (
-          <Vazio titulo="Sem acesso ou nenhum usuário" descricao={erroLista}
-                 acao={erroLista ? <Botao variante="neutro" onClick={carregar}>Tentar de novo</Botao> : undefined} />
+          <Vazio icone={UsersRound} titulo="Sem acesso ou nenhum usuário"
+                 descricao="Nenhuma conta de acesso visível para o seu perfil nesta escola." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          // O e-mail fica sob o nome (era uma coluna própria, escondida no celular e que,
+          // espremida no tablet, quebrava o endereço letra a letra): sem quebra, com o
+          // endereço inteiro no title, e a tabela cabe até 768 px com as Ações à vista.
+          // Celular (< 640 px): a tabela rola de lado dentro do cartão, com o aviso em
+          // texto acima dela; o menu ⋮ (único caminho para gerir a conta) fica preso à
+          // direita (`presa-celular`) e o "Último acesso" vem com a rolagem (antes sumia
+          // abaixo de 768 px). De 640 a 767 px o menu não fica preso, então a coluna segue
+          // fora como antes, para as Ações caberem. O avatar (decorativo) some no celular.
+          <TabelaRolavel rotulo="Contas de acesso: tabela completa">
+            <table className={classesTabela.tabela}>
               <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium">Nome</th>
-                  <th className="hidden px-4 py-2 font-medium sm:table-cell">E-mail</th>
-                  <th className="px-4 py-2 font-medium">Cargo</th>
-                  <th className="px-4 py-2 font-medium">Situação</th>
-                  <th className="hidden px-4 py-2 font-medium md:table-cell">Último acesso</th>
-                  <th className="px-4 py-2 text-right font-medium">Ações</th>
+                <tr>
+                  <th className={th}>Nome</th>
+                  <th className={th}>Cargo</th>
+                  <th className={th}>Situação</th>
+                  <th className={`hidden max-sm:table-cell md:table-cell ${th}`}>Último acesso</th>
+                  <th className={`text-right ${th} presa-celular`}>Ações</th>
                 </tr>
               </thead>
               <tbody>
-                {usuarios.map((usuario) => (
-                  <tr key={usuario.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-4 py-2.5 font-medium">
-                      {usuario.nome}
-                      {usuario.id === usuarioLogado?.id && (
-                        <span className="ml-2 text-xs text-zinc-400">(você)</span>
-                      )}
-                      {usuario.is_global && (
-                        <span className="ml-2 text-xs text-indigo-500">global</span>
-                      )}
-                      {usuario.username && (
-                        <span className="block text-xs font-normal text-zinc-400">@{usuario.username}</span>
-                      )}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">
-                      {usuario.email}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <Badge tom="destaque">{rotuloCargo(usuario.cargo)}</Badge>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <Badge
-                        tom={usuario.status === "ativo" ? "ok" : usuario.status === "excluido" ? "alerta" : "neutro"}
-                      >
-                        {usuario.status === "excluido" ? "excluído" : usuario.status ?? "ativo"}
-                      </Badge>
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">
-                      {dataLegivel(usuario.ultimo_acesso)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      <MenuAcoes
-                        usuario={usuario}
-                        souEu={usuario.id === usuarioLogado?.id}
-                        souGlobal={souGlobal}
-                        souAdmin={souAdmin}
-                        podeGerirTurmas={souAdmin || souCoordenador}
-                        podeRedefinir={podeRedefinir(usuario)}
-                        podeExcluir={podeExcluir(usuario)}
-                        aoEscolher={(tipo) => abrir(tipo, usuario)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                {usuarios.map((usuario) => {
+                  const situacao = situacaoDaConta(usuario.status);
+                  const acesso = tempoRelativo(usuario.ultimo_acesso);
+                  return (
+                    <tr key={usuario.id} className={classesTabela.tr}>
+                      <td className={td}>
+                        <div className="flex items-center gap-3">
+                          {/* Chave de cor = o id, a mesma da barra lateral, de Minha conta e de
+                              Sessões (era `usuario-${id}` e a pessoa mudava de cor entre as telas). */}
+                          <span className="hidden shrink-0 sm:flex">
+                            <AvatarAluno nome={usuario.nome} chave={usuario.id} />
+                          </span>
+                          {/* Celular: base de 9rem — o nome não vira uma palavra por linha, os
+                              selos "(você)"/"global" seguem juntos e o e-mail cabe sem quebrar. */}
+                          <div className="min-w-0 max-sm:min-w-[9rem]">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-zinc-900 dark:text-zinc-100">{usuario.nome}</span>
+                              {usuario.id === usuarioLogado?.id && (
+                                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">(você)</span>
+                              )}
+                              {usuario.is_global && (
+                                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">global</span>
+                              )}
+                            </div>
+                            <span className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-zinc-500 dark:text-zinc-400">
+                              <span className="max-w-[11rem] [overflow-wrap:anywhere] xl:max-w-[15rem]"><EmailQuebravel email={usuario.email} /></span>
+                              {usuario.username && (
+                                <span className="whitespace-nowrap">@{usuario.username}</span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className={td}>
+                        <ChipCargo cargo={usuario.cargo}>{rotuloCargo(usuario.cargo)}</ChipCargo>
+                      </td>
+                      <td className={td}>
+                        <PilulaSituacao tom={situacao.tom}>{situacao.texto}</PilulaSituacao>
+                      </td>
+                      <td className={`hidden whitespace-nowrap text-zinc-500 max-sm:table-cell md:table-cell dark:text-zinc-400 ${td}`}>
+                        {acesso ? (
+                          <span title={acesso.completo}>{acesso.texto}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={`text-right ${td} presa-celular`}>
+                        <MenuAcoes
+                          usuario={usuario}
+                          souEu={usuario.id === usuarioLogado?.id}
+                          souGlobal={souGlobal}
+                          souAdmin={souAdmin}
+                          podeGerirTurmas={souAdmin || souCoordenador}
+                          podeRedefinir={podeRedefinir(usuario)}
+                          podeExcluir={podeExcluir(usuario)}
+                          aoEscolher={(tipo) => abrir(tipo, usuario)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </div>
+          </TabelaRolavel>
         )}
       </Card>
 
@@ -955,7 +1034,7 @@ export default function Usuarios() {
           </Campo>
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
+            <Botao variante="secundario" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
             <Botao
               disabled={ocupado || nome.trim().length < 2 || !email.includes("@") || senha.length < 8}
               onClick={() =>
@@ -983,7 +1062,7 @@ export default function Usuarios() {
               ["E-mail", alvo.email],
               ["Cargo", rotuloCargo(alvo.cargo)],
               ["Conta global", alvo.is_global ? "Sim" : "Não"],
-              ["Situação", alvo.status === "excluido" ? "excluído" : alvo.status ?? "ativo"],
+              ["Situação", situacaoDaConta(alvo.status).texto],
               ["Último acesso", dataLegivel(alvo.ultimo_acesso)],
               ["Criado em", dataLegivel(alvo.created_at)],
             ].map(([rotulo, valor]) => (
@@ -1015,7 +1094,7 @@ export default function Usuarios() {
           </Campo>
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+            <Botao variante="secundario" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
             <Botao
               disabled={ocupado || nome.trim().length < 2}
               onClick={() =>
@@ -1036,7 +1115,12 @@ export default function Usuarios() {
 
       {/* --- Redefinir senha: gera um link de uso único --- */}
       {acao?.tipo === "redefinir" && alvo && (
-        <ModalRedefinirSenha alvo={alvo} base={base} aoFechar={() => setAcao(null)} />
+        <ModalRedefinirSenha
+          alvo={alvo}
+          base={base}
+          proprio={alvo.id === usuarioLogado?.id}
+          aoFechar={() => setAcao(null)}
+        />
       )}
 
       {/* --- Alterar permissões --- */}
@@ -1045,9 +1129,9 @@ export default function Usuarios() {
           {CARGOS.map((c) => (
             <label
               key={c.valor}
-              className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+              className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition-colors ${
                 cargo === c.valor
-                  ? "border-indigo-400 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
+                  ? "border-indigo-300 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
                   : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
               }`}
             >
@@ -1066,7 +1150,7 @@ export default function Usuarios() {
           ))}
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
           <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+            <Botao variante="secundario" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
             <Botao
               disabled={ocupado || cargo === alvo?.cargo}
               onClick={() =>
@@ -1111,7 +1195,7 @@ export default function Usuarios() {
         </p>
         {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
         <div className="mt-4 flex justify-end gap-2">
-          <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+          <Botao variante="secundario" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
           <Botao
             disabled={ocupado}
             onClick={() =>
@@ -1138,9 +1222,9 @@ export default function Usuarios() {
         </p>
         {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
         <div className="mt-4 flex justify-end gap-2">
-          <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+          <Botao variante="secundario" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
           <Botao
-            className="!bg-red-600 hover:!bg-red-500"
+            variante="perigo"
             disabled={ocupado}
             onClick={() =>
               executar(`${base}/${alvo?.id}`, { method: "DELETE" }, "Usuário excluído.")
@@ -1153,7 +1237,7 @@ export default function Usuarios() {
 
       {/* --- Excluir Permanentemente (admin global) --- */}
       <Modal titulo="Excluir permanentemente" aberto={acao?.tipo === "permanente"} aoFechar={() => setAcao(null)}>
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
           <p className="flex items-center gap-2 font-medium">
             <TriangleAlert size={16} /> Ação definitiva e irreversível
           </p>
@@ -1175,9 +1259,9 @@ export default function Usuarios() {
         </div>
         {erroAcao && <div className="mt-3"><Mensagem tipo="erro">{erroAcao}</Mensagem></div>}
         <div className="mt-4 flex justify-end gap-2">
-          <Botao variante="neutro" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
+          <Botao variante="secundario" onClick={() => setAcao(null)} disabled={ocupado}>Cancelar</Botao>
           <Botao
-            className="!bg-red-600 hover:!bg-red-500"
+            variante="perigo"
             disabled={ocupado || confirmacao.trim().toLowerCase() !== alvo?.email}
             onClick={() =>
               executar(

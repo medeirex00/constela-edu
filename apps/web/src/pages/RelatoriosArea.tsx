@@ -31,25 +31,19 @@
  * `aria-controls` apontando para o painel, e o painel (`role="tabpanel"`)
  * rotulado pela aba ativa.
  */
+import { CalendarRange, FileText } from "lucide-react";
 import { useId } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { AbasLigadas } from "../components/AbasLigadas";
 import RelatorioPeriodo from "./RelatorioPeriodo";
 import Relatorios from "./Relatorios";
 
 const ABAS = [
-  { chave: "oficiais", rotulo: "Relatórios oficiais", caminho: "/relatorios" },
-  { chave: "periodo", rotulo: "Por período", caminho: "/relatorios/periodo" },
+  { chave: "oficiais", rotulo: "Relatórios oficiais", caminho: "/relatorios", icone: FileText },
+  { chave: "periodo", rotulo: "Por período", caminho: "/relatorios/periodo", icone: CalendarRange },
 ] as const;
 type Aba = (typeof ABAS)[number]["chave"];
-
-// Mesmo estilo de aba de `Rankings.tsx` — é o padrão da casa, não um novo.
-const estiloAba = (ativa: boolean) =>
-  `rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-    ativa
-      ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
-      : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-  }`;
 
 export default function RelatoriosArea() {
   const { pathname } = useLocation();
@@ -64,28 +58,21 @@ export default function RelatoriosArea() {
 
   return (
     <div>
-      <div
-        role="tablist"
-        aria-label="Tipo de relatório"
-        className="mb-4 flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60 sm:inline-flex"
-      >
-        {ABAS.map((a) => (
-          <button
-            key={a.chave}
-            id={idAba(a.chave)}
-            type="button"
-            role="tab"
-            aria-selected={aba === a.chave}
-            aria-controls={idPainel}
-            // `replace` para a troca de aba não empilhar histórico — voltar
-            // devolve o usuário à tela de onde ele veio, não à outra aba.
-            onClick={() => navigate(a.caminho, { replace: true })}
-            className={estiloAba(aba === a.chave)}
-          >
-            {a.rotulo}
-          </button>
-        ))}
-      </div>
+      {/* Controle segmentado da identidade v2 (pílula violeta na ativa), com setas,
+          Home e End. `replace` na troca: voltar devolve o usuário à tela de onde ele
+          veio, não à outra aba. */}
+      <AbasLigadas
+        itens={ABAS.map((a) => ({ valor: a.chave, rotulo: a.rotulo, icone: a.icone }))}
+        valor={aba}
+        aoMudar={(chave) => {
+          const destino = ABAS.find((a) => a.chave === chave);
+          if (destino) navigate(destino.caminho, { replace: true });
+        }}
+        rotulo="Tipo de relatório"
+        idDaAba={idAba}
+        idPainel={idPainel}
+        className="mb-6"
+      />
 
       <div role="tabpanel" id={idPainel} aria-labelledby={idAba(aba)}>
         {aba === "periodo" ? <RelatorioPeriodo /> : <Relatorios />}

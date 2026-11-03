@@ -195,8 +195,8 @@ def test_04_vinculo_e_depois_promocao_a_secretaria(mundo):
     assert antes[4] == "professor" and antes[5] == mundo.ids["x"] and antes[6] == mundo.ids["r1"]
 
     assert adm.patch(_url(mundo, f"/professores/{pa.id}"),
-                     json={"nome": "Paula Sint Vilela"}).status_code == 200
-    loser = _legado(mundo, "Paula", "prof_a@sint.local")
+                     json={"nome": "Telma Sint Varoni"}).status_code == 200
+    loser = _legado(mundo, "Telma", "prof_a@sint.local")
     r = adm.post(_url(mundo, "/professores/duplicados/corrigir"), json={"loser_ids": [loser]})
     assert r.status_code == 200, r.text
     print("\n[04] folha:", [(f['usuario'], bool(f['senha'])) for f in r.json()["folha"]])

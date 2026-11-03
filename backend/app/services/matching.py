@@ -29,7 +29,6 @@ from datetime import date
 from app.services.importacao import (
     _similaridade,
     casa_abreviado,
-    normalizar_nome,
     tokens_nome,
     variante_ortografica,
 )
@@ -63,7 +62,7 @@ def _variante_segura_para_vincular(nome_a: str, nome_b: str) -> bool:
     """Uma variação de grafia (plausivel='fraco') é segura para AUTO-VÍNCULO de
     candidato ÚNICO? SÓ quando o 1º nome E o último sobrenome são IDÊNTICOS e a
     divergência está num token do MEIO (nome com >=3 tokens). Aí é, na prática, a
-    MESMA pessoa: ABRAÃO LUÍS/LUIZ DIAS, AGATHA EMANUELE/EMANUELLE ... OLIVEIRA.
+    MESMA pessoa: LUÍS/LUIZ ou RAFAELE/RAFAELLE no nome do meio.
     Variação no SOBRENOME (SOUZA/SOUSA), no 1º nome ou no gênero (BRUNO/BRUNA,
     GABRYEL/GABRIEL) e nomes de <=2 tokens distinguem crianças DIFERENTES de
     altíssima frequência no Brasil → vão para REVISÃO, nunca auto-vínculo (achado do
@@ -113,8 +112,8 @@ def vincula_por_nome_unico(nome_a: str, nome_b: str) -> bool:
 
 def subconjunto_estrutural(nome_a: str, nome_b: str) -> bool:
     """Um nome é SUBCONJUNTO do outro com as PONTAS iguais — mesmo 1º nome e mesmo
-    último sobrenome, só o MEIO omitido: "HELOISA DE SOUZA FIDELIX" ⊂ "HELOISA DEL
-    GIUDICE DE SOUZA FIDELIX". "JOAO SANTOS" ⊂ "JOAO SANTOS OLIVEIRA" NÃO é: caiu o
+    último sobrenome, só o MEIO omitido: "LIVIA DE SOUZA FIORELLI" ⊂ "LIVIA DEL
+    FICTORE DE SOUZA FIORELLI". "JOAO SANTOS" ⊂ "JOAO SANTOS OLIVEIRA" NÃO é: caiu o
     último sobrenome, e o dono real desse nome pode ser outra criança."""
     ta, tb = tokens_nome(nome_a), tokens_nome(nome_b)
     if not ta or not tb or set(ta) == set(tb):
@@ -245,7 +244,7 @@ def classificar_linha(linha: Identidade, roster: list[Identidade],
     Matific/Elefante, NUNCA na criação de roster da Lista Piloto): a planilha da
     plataforma só contém alunos MATRICULADOS, então casar é ATRIBUIR a linha ao seu
     dono no roster, não criar identidade nova. Com 1 ÚNICO candidato plausível na
-    turma, um nome SUBCONJUNTO ("HELOISA FIDELIX" ⊂ "HELOISA DE SOUZA FIDELIX") não
+    turma, um nome SUBCONJUNTO ("LIVIA FIORELLI" ⊂ "LIVIA DE SOUZA FIORELLI") não
     tem a quem mais pertencer — o veto "dono ausente" do PARCIAL não se aplica (o dono
     ESTÁ na escola). Ambiguidade (2+ candidatos) e variação de grafia insegura
     (SOUZA/SOUSA, BRUNO/BRUNA) continuam em REVISAR — o guard-rail "nunca fundir
@@ -298,8 +297,8 @@ def classificar_linha(linha: Identidade, roster: list[Identidade],
 
     plausiveis: dict[int, Identidade] = {**fortes, **parciais, **fracos}
     # 1 ÚNICO candidato plausível na MESMA turma → VINCULA — decisão do dono
-    # (2026-08-04): fechar na ORIGEM os duplicados de grafia (ABRAÃO LUÍS×LUIZ, AGATHA
-    # EMANUELE×EMANUELLE) sem gerar ficha para fundir depois. MAS com dois guard-rails
+    # (2026-08-04): fechar na ORIGEM os duplicados de grafia no nome do meio (LUÍS×LUIZ,
+    # RAFAELE×RAFAELLE) sem gerar ficha para fundir depois. MAS com dois guard-rails
     # (red-team 2026-08-04, preserva "nunca fundir crianças diferentes"):
     #  - PARCIAL (subconjunto: "ANA"→"ANA JULIA") → REVISAR (cair um nome inteiro é
     #    ambíguo: sobrenome comum / dono ausente);

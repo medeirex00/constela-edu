@@ -49,12 +49,17 @@ def linha_do_tempo(db: Session, escola_id: int, aluno_id: int, *,
                    plataforma: str | None = None, tipo_evento: str | None = None,
                    inicio: datetime | None = None, fim: datetime | None = None,
                    cursor: str | None = None,
-                   limite: int = PAGINA_PADRAO) -> dict:
+                   limite: int = PAGINA_PADRAO,
+                   plataformas_fora: frozenset[str] | set[str] = frozenset()) -> dict:
     """Feed cronológico (mais recente primeiro) de eventos do aluno, paginado
-    por cursor. Filtros opcionais: plataforma, tipo_evento e período."""
+    por cursor. Filtros opcionais: plataforma, tipo_evento e período.
+    ``plataformas_fora``: eventos das plataformas de módulo fora do plano da rede
+    (``modulos.plataformas_fora_do_plano``) não entram no feed."""
     limite = max(1, min(limite, PAGINA_MAX))
     q = select(EventoAluno).where(
         EventoAluno.escola_id == escola_id, EventoAluno.aluno_id == aluno_id)
+    if plataformas_fora:
+        q = q.where(EventoAluno.plataforma.notin_(sorted(plataformas_fora)))
     if plataforma:
         q = q.where(EventoAluno.plataforma == plataforma)
     if tipo_evento:
@@ -81,11 +86,16 @@ def linha_do_tempo(db: Session, escola_id: int, aluno_id: int, *,
     return {"itens": [_serializar(e) for e in itens], "proximo_cursor": proximo}
 
 
-def espelho(db: Session, escola_id: int, aluno_id: int) -> dict:
+def espelho(db: Session, escola_id: int, aluno_id: int, *,
+            plataformas_fora: frozenset[str] | set[str] = frozenset()) -> dict:
     """Resumo consolidado do 'espelho' do aluno: contadores por tipo e por
-    plataforma, primeira/última atividade e tempo total — o topo da aba."""
+    plataforma, primeira/última atividade e tempo total — o topo da aba.
+    ``plataformas_fora`` (módulo fora do plano) sai de TODOS os contadores, não
+    só do ``por_plataforma``: o total e o tempo também contariam a plataforma."""
     onde = (EventoAluno.escola_id == escola_id,
             EventoAluno.aluno_id == aluno_id)
+    if plataformas_fora:
+        onde = (*onde, EventoAluno.plataforma.notin_(sorted(plataformas_fora)))
     por_tipo = dict(db.execute(
         select(EventoAluno.tipo_evento, func.count()).where(*onde)
         .group_by(EventoAluno.tipo_evento)).all())

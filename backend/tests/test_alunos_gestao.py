@@ -126,7 +126,8 @@ def test_transferir_exige_turma_destino(cliente, escola_completa):
 
 # --- Exclusão PERMANENTE (cascata) ------------------------------------------
 
-def test_exclusao_permanente_remove_todos_os_vinculos(cliente, db, escola_completa):
+def test_exclusao_permanente_remove_todos_os_vinculos(cliente, cliente_global, db,
+                                                       escola_completa):
     escola_id = escola_completa["escola"].id
     ana, joao = escola_completa["alunos"][0], escola_completa["alunos"][1]
     ana_id, ana_nome = ana.id, ana.nome
@@ -143,8 +144,10 @@ def test_exclusao_permanente_remove_todos_os_vinculos(cliente, db, escola_comple
     assert conta(Leitura, ana.id) >= 1
     assert conta(Nota, ana.id) == 1
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana.id], "confirmacao": "EXCLUIR"})
+    # Exclusão física de aluno é do Admin Global (D19 — ver
+    # test_aluno_exclusao_permanente_admin_global.py).
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana.id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
     assert r.json()["afetados"] == 1
 
@@ -169,7 +172,8 @@ def test_exclusao_permanente_remove_todos_os_vinculos(cliente, db, escola_comple
     assert ana_nome not in str(log.detalhes)
 
 
-def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, db, escola_completa):
+def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, cliente_global, db,
+                                                              escola_completa):
     """Direito ao esquecimento: ao excluir o aluno em definitivo, o nome civil
     do menor é anonimizado também nas entradas ANTERIORES do log (ex.: edição),
     não só omitido na entrada da exclusão.
@@ -198,8 +202,8 @@ def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, db, escol
     assert sum(ana_nome in str(l.detalhes) for l in logs_antes) >= 2, \
         "pré-condição: o nome aparece com e sem entidade_id"
 
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana_id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
 
     db.expire_all()
@@ -208,11 +212,11 @@ def test_exclusao_permanente_esquece_nome_nos_logs_anteriores(cliente, db, escol
         assert ana_nome not in str(log.detalhes), log.acao
 
 
-def test_exclusao_permanente_exige_confirmacao(cliente, db, escola_completa):
+def test_exclusao_permanente_exige_confirmacao(cliente_global, db, escola_completa):
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
-    r = cliente.post(f"{_base(escola_id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [ana.id], "confirmacao": "sim"})
+    r = cliente_global.post(f"{_base(escola_id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [ana.id], "confirmacao": "sim"})
     assert r.status_code == 400
     assert db.get(Aluno, ana.id) is not None  # nada foi apagado
 
@@ -422,7 +426,7 @@ def test_fundir_preserva_nota_de_ano_anterior(cliente, db, escola_completa):
                       .where(Nota.aluno_id == remover_id)).scalar_one() == 0
 
 
-def test_esquecimento_apaga_conversa_ia_que_cita_o_aluno(cliente, db, escola_completa):
+def test_esquecimento_apaga_conversa_ia_que_cita_o_aluno(cliente_global, db, escola_completa):
     """LGPD (direito ao esquecimento): excluir aluno permanentemente apaga as
     conversas do assistente que citam o nome COMPLETO dele; conversa que cita
     OUTRO aluno permanece."""
@@ -443,15 +447,16 @@ def test_esquecimento_apaga_conversa_ia_que_cita_o_aluno(cliente, db, escola_com
     db.commit()
     cita_id, naocita_id = cita.id, naocita.id
 
-    r = cliente.post(f"{_base(escola.id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [alvo.id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola.id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [alvo.id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
     vivas = set(db.execute(select(ConversaIA.id)).scalars())
     assert cita_id not in vivas        # esquecida (citava o excluído)
     assert naocita_id in vivas          # preservada (cita outro aluno)
 
 
-def test_esquecimento_e_case_insensitive_e_restrito_a_escola(cliente, db, escola_completa):
+def test_esquecimento_e_case_insensitive_e_restrito_a_escola(cliente_global, db,
+                                                             escola_completa):
     """A correspondência do nome ignora caixa; e o esquecimento não toca conversa
     de OUTRA escola (mesmo com nome homônimo)."""
     from app.core.security import hash_senha
@@ -479,8 +484,8 @@ def test_esquecimento_e_case_insensitive_e_restrito_a_escola(cliente, db, escola
     db.commit()
     minusc_id, homonimo_id = minusc.id, homonimo.id
 
-    r = cliente.post(f"{_base(escola.id)}/alunos/excluir-permanente",
-                     json={"aluno_ids": [alvo.id], "confirmacao": "EXCLUIR"})
+    r = cliente_global.post(f"{_base(escola.id)}/alunos/excluir-permanente",
+                            json={"aluno_ids": [alvo.id], "confirmacao": "EXCLUIR"})
     assert r.status_code == 200, r.text
     vivas = set(db.execute(select(ConversaIA.id)).scalars())
     assert minusc_id not in vivas       # caixa diferente também é apagada

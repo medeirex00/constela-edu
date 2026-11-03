@@ -2,9 +2,10 @@
 
 Cada cartão carrega o que a criança precisa para entrar: QR (1 leitura =
 entrou) e o código falável — SEM senha (decisão de produto, como no
-Elefante Letrado). Layout A4 em grade 2×4 com linhas de corte, mais uma
-página final "só do professor": tabela nome → código da turma inteira e o
-roteiro da primeira aula (cartão perdido deixa de ser suporte).
+Elefante Letrado). Layout A4 em grade 2×4 com linhas de corte, mais a parte
+final "só do professor" (uma folha ou mais, conforme a turma): tabela nome →
+código da turma inteira e o roteiro da primeira aula (cartão perdido deixa de
+ser suporte).
 
 Mesmas restrições dos demais PDFs do projeto (services/relatorios.py):
 fontes nativas latin-1.
@@ -129,9 +130,19 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
              "Guarde este cartao como um tesouro!")
 
 
-def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
-                      cartoes: list[dict]) -> None:
-    """Página final — cola de consulta rápida (não pendurar no mural)."""
+# Parte do professor: a quebra automática do PDF fica desligada (a grade dos
+# cartões é posicionada à mão), então a quebra aqui também é manual — nada é
+# desenhado abaixo de _LIMITE_INFERIOR (A4 de 297 mm, margem de 10 mm). O que
+# passasse da folha continuaria no arquivo, mas sumiria da tela e da impressão.
+_LIMITE_INFERIOR = 297.0 - 10.0
+_ALTURA_LINHA_TABELA = 6.5
+_ALTURA_LINHA_ROTEIRO = 5.5
+
+
+def _folha_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
+                     continuacao: bool) -> None:
+    """Abre uma folha da parte do professor com a faixa do topo. Toda folha leva
+    o aviso: impressas, elas se separam."""
     r, g, b = _hex_para_rgb(cor)
     pdf.add_page()
     pdf.set_fill_color(r, g, b)
@@ -139,13 +150,16 @@ def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("helvetica", "B", 13)
     pdf.set_xy(10, 5)
-    pdf.cell(0, 6, _latin1("SO DO PROFESSOR - nao pendurar no mural"))
+    titulo = "SO DO PROFESSOR - nao pendurar no mural"
+    pdf.cell(0, 6, _latin1(titulo + (" (continuacao)" if continuacao else "")))
     pdf.set_font("helvetica", "", 9)
     pdf.set_xy(10, 12)
     pdf.cell(0, 5, _latin1(f"{escola_nome} - {turma_nome} - códigos de acesso"))
-
-    # Tabela nome → código
     pdf.set_y(26)
+    pdf.set_text_color(30, 30, 30)
+
+
+def _cabecalho_tabela(pdf) -> None:
     pdf.set_text_color(30, 30, 30)
     pdf.set_font("helvetica", "B", 9)
     pdf.set_fill_color(238, 238, 238)
@@ -153,31 +167,50 @@ def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
     pdf.cell(50, 7, _latin1("Código"), border=1, fill=True)
     pdf.ln()
     pdf.set_font("helvetica", "", 9)
+
+
+def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
+                      cartoes: list[dict]) -> None:
+    """Parte final — cola de consulta rápida (não pendurar no mural). Ocupa
+    quantas folhas a turma pedir: a tabela nome → código continua na folha
+    seguinte (faixa e cabeçalho de novo, 39 linhas por folha) e o roteiro da 1ª
+    aula vai inteiro para a seguinte quando não cabe abaixo da tabela."""
+    _folha_professor(pdf, escola_nome, turma_nome, cor, continuacao=False)
+
+    # Tabela nome → código
+    _cabecalho_tabela(pdf)
     for cartao in cartoes:
+        if pdf.get_y() + _ALTURA_LINHA_TABELA > _LIMITE_INFERIOR:
+            _folha_professor(pdf, escola_nome, turma_nome, cor, continuacao=True)
+            _cabecalho_tabela(pdf)
         nome = _latin1(cartao["nome"])
         while pdf.get_string_width(nome) > 116 and len(nome) > 4:
             nome = nome[:-4] + "..."
-        pdf.cell(120, 6.5, nome, border=1)
+        pdf.cell(120, _ALTURA_LINHA_TABELA, nome, border=1)
         pdf.set_font("courier", "B", 10)
-        pdf.cell(50, 6.5, _latin1(cartao["codigo"]), border=1)
+        pdf.cell(50, _ALTURA_LINHA_TABELA, _latin1(cartao["codigo"]), border=1)
         pdf.set_font("helvetica", "", 9)
         pdf.ln()
 
-    # Roteiro da primeira aula
+    # Roteiro da primeira aula — inteiro na mesma folha
+    passos = [
+        f"1. Abra {_endereco_app()} nos tablets (ou aponte a camera para o QR do cartao).",
+        "2. Cada crianca digita o proprio codigo e confirma 'Sou eu!'. Na primeira vez,",
+        "   ela escolhe como quer ser chamada e a cor do traje do astronauta.",
+        # Regenerar troca código E QR (o cartão traz os dois): é o que revoga.
+        "3. Esqueceu o cartao? Consulte o codigo nesta folha. Perdeu ou caiu em maos erradas?",
+        "   Gere o cartao dela com 'regenerar': codigo e QR novos; os antigos param de entrar.",
+    ]
+    altura_roteiro = 4 + 7 + len(passos) * _ALTURA_LINHA_ROTEIRO
+    if pdf.get_y() + altura_roteiro > _LIMITE_INFERIOR:
+        _folha_professor(pdf, escola_nome, turma_nome, cor, continuacao=True)
     pdf.ln(4)
     pdf.set_font("helvetica", "B", 10)
     pdf.cell(0, 6, "Primeira aula em 3 passos")
     pdf.ln(7)
     pdf.set_font("helvetica", "", 9)
-    passos = [
-        f"1. Abra {_endereco_app()} nos tablets (ou aponte a camera para o QR do cartao).",
-        "2. Cada crianca digita o proprio codigo e confirma 'Sou eu!'. Na primeira vez,",
-        "   ela escolhe como quer ser chamada e a cor do traje do astronauta.",
-        "3. Cartao perdido? Consulte o codigo nesta folha - ele nao muda. So gere cartoes",
-        "   com 'regenerar' se um QR cair em maos erradas (isso troca o QR de todos).",
-    ]
     for linha in passos:
-        pdf.cell(0, 5.5, _latin1(linha))
+        pdf.cell(0, _ALTURA_LINHA_ROTEIRO, _latin1(linha))
         pdf.ln()
 
 

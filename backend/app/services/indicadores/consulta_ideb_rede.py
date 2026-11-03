@@ -39,8 +39,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AvaliacaoExterna, ImportacaoIndicador, IndicadorReferencia
+from app.models import AvaliacaoExterna, IndicadorReferencia
 from app.services.indicadores import escalas, ica, ideb, ideb_territorio, saeb_planilha
+from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.consulta import comparar
 
 ABR_MUNICIPIO, ABR_UF, ABR_BRASIL = "municipio", "uf", "brasil"
@@ -163,8 +164,7 @@ def comparar_meta(edicao: int, observado: dict | None, meta: dict | None) -> dic
 # --- Leitura ---------------------------------------------------------------------
 
 def _avaliacao(db: Session, chave: str) -> AvaliacaoExterna | None:
-    return db.execute(select(AvaliacaoExterna).where(
-        AvaliacaoExterna.chave == chave)).scalar_one_or_none()
+    return leituras.avaliacao(db, chave)
 
 
 def _alvos(codigo: str) -> dict[str, str]:
@@ -347,10 +347,7 @@ def _planilhas_da_rede(db: Session, codigo: str) -> list[int]:
     arquivo não traz linha do município (o pacote nem leva a aba sem o território): aí
     a planilha foi importada, só não tem número da rede."""
     edicoes: set[int] = set()
-    for imp in db.execute(select(ImportacaoIndicador).where(
-            ImportacaoIndicador.parser == saeb_planilha.PARSER,
-            ImportacaoIndicador.status == "aplicada",
-            ImportacaoIndicador.codigo_territorio_alvo == codigo)).scalars():
+    for imp in leituras.aplicadas_do_territorio(db, codigo, (saeb_planilha.PARSER,)):
         resumo = imp.resumo or {}
         if "5_ano" in (resumo.get("etapas_vistas") or []):
             edicoes.update(resumo.get("edicoes") or [imp.edicao_arquivo])

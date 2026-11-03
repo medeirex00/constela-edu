@@ -1,7 +1,7 @@
 """Certificado só sai para quem está na população ATIVA da escola.
 
-Descoberto na véspera da entrega dos certificados da EMEI / EMEF João Thimóteo do
-Rosário: ``GET /escolas/{id}/certificados/{aluno_id}`` não olhava
+Descoberto na véspera da entrega dos certificados da escola 17:
+``GET /escolas/{id}/certificados/{aluno_id}`` não olhava
 ``aluno.status``. A única guarda era ``nota_geral > 0`` — e três das cinco crianças
 TRANSFERIDAS daquela escola tinham nota (60,68, 36,72 e 38,49), então o endpoint
 emitiria um documento oficial, com brasão, em nome de quem já saiu.
@@ -55,11 +55,11 @@ def test_transferido_nao_recebe_certificado(cliente, db, escola_completa):
     """O caso real: criança com nota, mas que saiu da escola."""
     escola = escola_completa["escola"]
     turma = _turma(db, escola)
-    a = _com_nota(db, escola, turma, "MYRELLA QUE SAIU", "transferido", geral=60.68)
+    a = _com_nota(db, escola, turma, "ALUNA FICTICIA QUE SAIU", "transferido", geral=60.68)
 
     r = cliente.get(f"{API}/escolas/{escola.id}/certificados/{a.id}")
     assert r.status_code == 409, r.text
-    assert "MYRELLA QUE SAIU" in r.text
+    assert "ALUNA FICTICIA QUE SAIU" in r.text
     assert "transferido" in r.text
     assert "Reativar" in r.text, "a mensagem diz qual é o caminho"
 
@@ -204,7 +204,7 @@ def test_o_padrao_deixou_de_ser_o_mes_e_passou_a_ser_o_calendario(monkeypatch):
 
     A diferença entre os dois não é cosmética: entre 01/10 e 04/10 o mapa por mês
     diz 4 e o calendário diz 3. É uma janela de quatro dias por ano em que o
-    documento afirmava o período errado — e a entrega da João Thimóteo caiu
+    documento afirmava o período errado — e a entrega da escola 17 caiu
     exatamente dentro dela."""
     from datetime import datetime
 

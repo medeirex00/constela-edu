@@ -125,6 +125,14 @@ ALLOWLIST: dict[str, dict] = {
                    "`legado: True`), senão ele passaria a mentir."),
         "pode_sair": "junto com a parada de escrita no motor",
     },
+    "app/routers/configuracoes.py": {
+        "ocorrencias": 1, "papel": "contrato-api",
+        "porque": ("a regra da nota explicada à gestão (`GET /configuracoes/"
+                   "pontuacao/regra`, página Suporte) traz os pesos da COMPOSIÇÃO "
+                   "na chave `nota_geral`. Enquanto o motor compõe, a explicação "
+                   "tem de mostrar a composição — o mesmo motivo do Simulador."),
+        "pode_sair": "junto com a parada de escrita no motor (Gatilho 1)",
+    },
     "app/schemas/comum.py": {
         "ocorrencias": 3, "papel": "schema",
         "porque": "declara o campo nos três payloads acima.",
@@ -137,10 +145,31 @@ ALLOWLIST: dict[str, dict] = {
         "pode_sair": "quando o web ler `dimensoes` no comparador",
     },
     "app/services/relatorios.py": {
-        "ocorrencias": 1, "papel": "contrato-api",
-        "porque": ("a exportação CSV/PDF do Ranking Geral legado tem a coluna "
-                   "'Nota Geral'. `linhas_ranking_dimensao` é a forma nova."),
-        "pode_sair": "quando o cartaz/exportação padrão for por dimensão",
+        "ocorrencias": 8, "papel": "contrato-api + documento-legado",
+        "porque": ("(1) a exportação CSV/PDF do Ranking Geral legado tem a coluna "
+                   "'Nota Geral' (`linhas_ranking_dimensao` é a forma nova); "
+                   "(2) o certificado GERAL imprime 'nota geral X' e a posição "
+                   "única (`gerar_certificado` e os dois modelos). O que o "
+                   "documento afirma é decisão do dono (spec-arquitetura-2, "
+                   "Aprovações item 4); a guarda de emissão já é por dimensão."),
+        "pode_sair": ("quando o cartaz/exportação padrão for por dimensão E o "
+                      "dono decidir o item 4 (certificado por dimensão)"),
+    },
+    "app/routers/relatorios.py": {
+        "ocorrencias": 2, "papel": "documento-legado",
+        "porque": ("a rota do certificado GERAL repassa `nota_geral` (e a "
+                   "posição única) para o texto do documento. A GUARDA de "
+                   "emissão lê as dimensões (`dimensoes.com_desempenho`), não o "
+                   "legado; só o texto depende do item 4 das Aprovações."),
+        "pode_sair": "quando o dono decidir o item 4 (certificado por dimensão)",
+    },
+    "app/services/assistente.py": {
+        "ocorrencias": 2, "papel": "contexto-ia",
+        "porque": ("o contexto do Assistente lista cada aluno com 'geral X' "
+                   "(seção ### ALUNOS e o aluno citado). Mudar o conteúdo do "
+                   "prompt de uma feature de IA é item do dono — o mesmo achado "
+                   "registrado para a ordem dessa seção em ORDEM_UNICA_LEGADA."),
+        "pode_sair": "quando o dono aprovar o contexto da IA só por dimensão",
     },
 }
 
@@ -152,27 +181,127 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "porque": "tipos dos três payloads legados.",
     },
     "apps/web/src/pages/RankingGeral.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": "coluna 'Nota' da aba Geral (legada). A ordem vem do backend.",
+        "ocorrencias": 3, "papel": "exibição",
+        "porque": ("coluna 'Nota' da aba Geral (legada), o destaque do pódio e a "
+                   "coluna do CSV da lista exibida (identidade v2, 31/10/2026): a "
+                   "MESMA coluna em três formatos. A ordem vem do backend."),
+    },
+    "apps/web/src/lib/tiposCriterios.ts": {
+        "ocorrencias": 1, "papel": "schema",
+        "porque": ("tipo de GET /configuracoes/pontuacao/regra: a chave "
+                   "`nota_geral` da regra são os PESOS da composição, não a nota."),
+    },
+    "apps/web/src/pages/configuracoes/Configuracoes.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("aviso de qual régua decide a Nota Geral (legado), com os pesos "
+                   "lidos da regra efetiva em vez de afirmados no código "
+                   "(identidade v2, 31/10/2026). Sai junto com o cartão de pesos "
+                   "do Ranking Geral."),
+    },
+    "apps/web/src/pages/Suporte.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("Suporte › 'Como a nota é calculada': os pesos da composição "
+                   "(chave `nota_geral` da regra) enquanto o motor compõe."),
+    },
+    "apps/web/src/test/Suporte.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste", "porque": "payload falso da regra.",
     },
     "apps/web/src/pages/publico/PainelPublico.tsx": {
         "ocorrencias": 4, "papel": "exibição",
         "porque": "slide `ranking` do telão (legado, opt-in do dono).",
     },
     "apps/web/src/pages/publico/PerfilPublico.tsx": {
-        "ocorrencias": 1, "papel": "schema",
-        "porque": "tipo do perfil público legado.",
+        "ocorrencias": 2, "papel": "schema + exibição",
+        "porque": ("tipo e linha 'Geral' do perfil público legado (plano de "
+                   "retirada, item 6 — decisão do dono)."),
+    },
+    "apps/web/src/pages/Dashboard.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": ("Top 5 do painel da escola: vitrine na ordem única (pinado em "
+                   "`test_o_top10_do_painel_AINDA_segue_a_ordem_legada`; plano, "
+                   "item 7 — decisão do dono)."),
+    },
+    "apps/web/src/pages/PerfilAluno.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("cartão 'Nota Geral' e a linha do passo a passo do cálculo; o "
+                   "payload já traz `dimensoes[]` (plano, item 3). Sair da tela "
+                   "depende da Aprovação 2 da spec (a coluna some das telas?)."),
+    },
+    "apps/web/src/pages/TurmaDetalhe.tsx": {
+        "ocorrencias": 2, "papel": "exibição",
+        "porque": ("coluna de nota da lista da turma (plano, itens 2–3; mesma "
+                   "dependência da Aprovação 2 da spec)."),
+    },
+    "apps/mobile/src/telas/Painel.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": ("app em campo: só sai com versão de API (plano, item 11 — "
+                   "exige o Sensor 4)."),
+    },
+    "apps/mobile/src/telas/PerfilAluno.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": "app em campo (plano, item 11).",
+    },
+    "apps/mobile/src/telas/Ranking.tsx": {
+        "ocorrencias": 1, "papel": "exibição",
+        "porque": "app em campo (plano, item 11).",
     },
     "apps/web/src/test/utils.tsx": {
         "ocorrencias": 2, "papel": "fixture de teste", "porque": "payload falso.",
     },
+    "apps/web/src/test/Configuracoes.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": "payload falso da regra efetiva (pesos da composição).",
+    },
+    "apps/web/src/test/Metricas.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": "payload falso da regra efetiva (pesos da composição).",
+    },
+    "apps/web/src/test/PerfilAlunoAbas.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": "payload falso do perfil (o tipo exige o campo); o teste lê as abas.",
+    },
+    "apps/web/src/test/PerfilAlunoModulos.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("payload falso do perfil (o tipo exige o campo); o teste lê as abas "
+                   "com e sem o módulo de leitura."),
+    },
+    "apps/web/src/test/RankingCelular.test.tsx": {
+        "ocorrencias": 4, "papel": "fixture de teste",
+        "porque": ("itens falsos da aba Geral no celular (a coluna legada que a tela "
+                   "mostra) e o perfil falso do aluno."),
+    },
+    "apps/web/src/test/PessoasCelular.test.tsx": {
+        "ocorrencias": 2, "papel": "fixture de teste",
+        "porque": "payloads falsos de aluno e perfil (o tipo exige o campo); o teste lê o layout.",
+    },
+    "apps/web/src/test/RankingVisual.test.tsx": {
+        "ocorrencias": 3, "papel": "fixture de teste",
+        "porque": ("itens falsos da aba Geral para o pódio e o CSV (a coluna legada "
+                   "que a tela mostra)."),
+    },
     "apps/web/src/test/ExplicacaoDaNota.test.tsx": {
-        "ocorrencias": 1, "papel": "fixture de teste", "porque": "payload falso.",
+        "ocorrencias": 5, "papel": "fixture de teste",
+        "porque": "payloads falsos do perfil (o passo a passo ainda mostra a Geral).",
     },
     "apps/web/src/test/CompeticaoLeituraTurno.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
         "porque": ("`RankingItem` fake exige o campo `nota_geral`; o componente "
                    "nem o lê (usa `nota_elefante`)."),
+    },
+    "apps/web/src/test/PerfilAlunoAvisoD10.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("payload falso do perfil no teste do aviso do D10 (e97); o teste "
+                   "não lê a nota, só o aviso da reativação."),
+    },
+    "apps/web/src/test/TurmaDetalheAviso.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("aluno fake da lista da turma (o tipo exige o campo); o teste do "
+                   "aviso do D10 (e97) não lê a nota."),
+    },
+    "apps/web/e2e-publico/dados.ts": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("payload falso do slide `ranking` do telão nos testes Playwright "
+                   "do painel público (o contrato público ainda envia `nota_geral`)."),
     },
 }
 
@@ -193,6 +322,16 @@ ORDENACOES_LEGADAS: set[tuple[str, str]] = {
     ("app/routers/rankings.py", "ranking_leitura_por_turno"),
     # Coluna 'Nota Geral' da exportação legada (idem).
     ("app/services/relatorios.py", "linhas_ranking"),
+    # Certificado GERAL: o TEXTO ainda afirma 'nota geral X' e a posição única
+    # (o nome das funções dispara o vocabulário de premiação). A guarda de
+    # emissão já é por dimensão; o conteúdo do documento é decisão do dono
+    # (spec-arquitetura-2, Aprovações item 4) — não é conversão mecânica.
+    # Na rota, o MESMO sítio vive em `conteudo_certificado` desde que o corpo da
+    # rota individual virou funções reutilizadas pela emissão em lote (31/10/2026).
+    ("app/routers/relatorios.py", "conteudo_certificado"),
+    ("app/services/relatorios.py", "gerar_certificado"),
+    ("app/services/relatorios.py", "_certificado_html_pdf"),
+    ("app/services/relatorios.py", "_certificado_fpdf"),
 }
 
 # ---------------------------------------------------------------------------
@@ -222,6 +361,15 @@ ORDEM_UNICA_LEGADA: dict[tuple[str, str], str] = {
         "reordenam pela posição DA DIMENSÃO antes de escrever. Trocar por ordem "
         "alfabética é neutro e desejável, mas muda o prompt de uma feature de "
         "IA — item para o dono, não conversão mecânica.",
+}
+
+# Sítios em que o braço (b) acende com um ``["posicao"]`` que NÃO é a nota do
+# aluno: nada ali lê ``Nota``. Ficam declarados (em vez de sumir do radar) e
+# também precisam continuar existindo — se o código mudar, a lista é revista.
+POSICAO_QUE_NAO_E_NOTA: dict[tuple[str, str], str] = {
+    ("app/services/indicadores/consulta_ideb_rede.py", "_ideb"):
+        "`t[\"posicao\"]` é a ordem de EXIBIÇÃO do território no bloco do Ideb "
+        "(a definição do catálogo), não a posição de aluno.",
 }
 
 MENSAGEM = (
@@ -410,10 +558,14 @@ def test_ninguem_novo_ordena_pela_ordem_unica_legada():
                 continue
             achados.add((relativo, escopo.get(no.lineno, "<módulo>")))
 
-    novos = sorted(achados - set(ORDEM_UNICA_LEGADA))
+    novos = sorted(achados - set(ORDEM_UNICA_LEGADA) - set(POSICAO_QUE_NAO_E_NOTA))
     assert not novos, (
         f"consumidor NOVO da ordem única legada (`Nota.posicao`): {novos}."
         + MENSAGEM)
+    obsoletos = sorted(set(POSICAO_QUE_NAO_E_NOTA) - achados)
+    assert not obsoletos, (
+        f"{obsoletos} não acendem mais a varredura: remova-os de "
+        f"POSICAO_QUE_NAO_E_NOTA.")
     sumiram = sorted(set(ORDEM_UNICA_LEGADA) - achados)
     assert not sumiram, (
         f"{sumiram} deixaram de usar `Nota.posicao` — ótimo. Remova-os de "

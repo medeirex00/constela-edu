@@ -6,8 +6,8 @@ sobreviveu à fusão —, e o serviço reconfere tudo contra o banco, inclusive
 recalculando o hash da ``chave_natural``, que carrega dentro de si a ficha de
 ORIGEM do dado. Nenhum caminho aqui aceita "é provavelmente essa data".
 
-O caso real que originou o serviço: a fusão da ficha 1678 na 609 (Kemily,
-escola 11) manteve a linha do sobrevivente com a data VELHA, e 14 livros saíram
+O caso real que originou o serviço: a fusão da ficha 1678 na 609
+(escola 11) manteve a linha do sobrevivente com a data VELHA, e 14 livros saíram
 da janela do 3º bimestre. Os números deste arquivo são os daquele caso.
 """
 from datetime import datetime
@@ -435,7 +435,7 @@ def test_lote_vazio_e_recusado(db, escola_completa):
 
 
 def test_caso_real_14_livros_somam_58_minutos(db, escola_completa):
-    """O caso da Kemily em miniatura: 14 livros com data velha, cada um com a
+    """O caso real em miniatura: 14 livros com data velha, cada um com a
     evidência do primeiro evento da ficha absorvida. O lote tem que fechar nos
     três números — contagem, minutos e nada mais tocado."""
     escola = escola_completa["escola"]

@@ -1,5 +1,15 @@
 import { useApp } from "../context/AppContext";
 
+/** Nome das plataformas que a rede tem — o mesmo no menu da Secretaria e na aba da análise:
+ *  numa rede com um módulo só, "Elefante e Matific" nomearia um produto não contratado. */
+export function rotuloDasPlataformas(modulos: string[]): string {
+  const leitura = modulos.includes("leitura");
+  const matematica = modulos.includes("matematica");
+  if (leitura && !matematica) return "Elefante Letrado";
+  if (matematica && !leitura) return "Matific";
+  return "Elefante e Matific";
+}
+
 /**
  * MÓDULOS CONTRATADOS pela rede do usuário (modelo SaaS).
  *

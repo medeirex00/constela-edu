@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MatificAluno } from "../lib/types";
 import Matific from "../pages/Matific";
-import { api, renderComApp, responder, responderErro, screen, userEvent, waitFor } from "./utils";
+import { api, renderComApp, responder, responderErro, screen, userEvent, waitFor, within } from "./utils";
 
 const URL_MATIFIC = "/escolas/1/matific";
 
@@ -42,6 +42,36 @@ describe("Matific", () => {
     expect(screen.getByRole("link", { name: "João Pedro Barbosa" })).toBeInTheDocument();
     // Atividades da primeira linha (inteiro, sem formatação decimal frágil).
     expect(screen.getByText("42")).toBeInTheDocument();
+    // Sem jargão em inglês na descrição (revisão v2): "histórico de alterações", não "log".
+    expect(screen.getByText(/Edições manuais geram novo registro e ficam no histórico de alterações\./))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/log de auditoria/)).toBeNull();
+  });
+
+  it("celular: a turma vai no chip sob o nome, a Média fica presa e os filtros empilham", async () => {
+    // A coluna Turma sumia abaixo de 768 px e, no celular, Média e Editar ficavam fora
+    // da tela sem aviso. Agora a turma está sob o nome (uma vez só no DOM), a Média é a
+    // coluna presa à direita e o botão de editar tem 40 px no celular.
+    responder("GET", URL_MATIFIC, [...LINHAS, matificFake({ aluno_id: 12, nome: "Carla Dias", turma: "4º Ano B" })]);
+    renderComApp(<Matific />, { rota: "/matific" });
+
+    const link = await screen.findByRole("link", { name: "Ana Beatriz Souza" });
+    const tabela = screen.getByRole("table");
+    expect(within(tabela).queryByRole("columnheader", { name: "Turma" })).toBeNull();
+    const celulas = within(link.closest("tr") as HTMLElement).getAllByRole("cell");
+    expect(within(celulas[0]).getByText("3º Ano A")).toBeInTheDocument();
+    expect(within(tabela).getByRole("columnheader", { name: "Média" })).toHaveClass("presa-celular");
+    expect(celulas[3]).toHaveTextContent("87,5");
+    expect(celulas[3]).toHaveClass("presa-celular");
+    expect(screen.getByRole("button", { name: "Editar dados de Ana Beatriz Souza" }))
+      .toHaveClass("max-sm:h-10", "max-sm:w-10");
+
+    // Busca e turma: cada uma em linha inteira no celular; o select é nativo com a seta da v2.
+    const turma = screen.getByRole("combobox", { name: "Filtrar por turma" });
+    expect(turma).toHaveClass("appearance-none", "pr-10");
+    expect(turma.parentElement).toHaveClass("w-full", "sm:w-48");
+    expect(screen.getByRole("searchbox", { name: "Buscar aluno pelo nome" }).parentElement)
+      .toHaveClass("w-full", "sm:w-60");
   });
 
   it("mostra o estado vazio quando nenhum aluno está ativo", async () => {
@@ -134,5 +164,35 @@ describe("Matific", () => {
     await waitFor(() =>
       expect(screen.queryByText("Editar Matific — Ana Beatriz Souza")).not.toBeInTheDocument(),
     );
+    // Depois de salvar, a lista continua na tela.
+    expect(screen.getByRole("link", { name: "Ana Beatriz Souza" })).toBeInTheDocument();
+  });
+
+  it("busca pelo nome e filtra por turma só na tela (sem nova consulta)", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_MATIFIC, [
+      ...LINHAS,
+      matificFake({ aluno_id: 12, nome: "Carla Dias", turma: "4º Ano B", atividades: 7 }),
+    ]);
+    renderComApp(<Matific />, { rota: "/matific" });
+    await screen.findByRole("link", { name: "Ana Beatriz Souza" });
+    const consultas = api.mock.calls.length;
+
+    await u.type(screen.getByRole("searchbox", { name: "Buscar aluno pelo nome" }), "joao");
+    expect(screen.getByRole("link", { name: "João Pedro Barbosa" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Ana Beatriz Souza" })).toBeNull();
+    expect(screen.getByText("1 de 3 alunos")).toBeInTheDocument();
+
+    await u.clear(screen.getByRole("searchbox", { name: "Buscar aluno pelo nome" }));
+    await u.selectOptions(screen.getByRole("combobox", { name: "Filtrar por turma" }), "4º Ano B");
+    expect(screen.getByRole("link", { name: "Carla Dias" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "João Pedro Barbosa" })).toBeNull();
+
+    // Filtro sem resultado: estado vazio com "Limpar filtros", que devolve a lista.
+    await u.type(screen.getByRole("searchbox", { name: "Buscar aluno pelo nome" }), "zzz");
+    expect(screen.getByText("Nenhum aluno com esses filtros")).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "Limpar filtros" }));
+    expect(screen.getAllByRole("link")).toHaveLength(3);
+    expect(api.mock.calls.length).toBe(consultas);
   });
 });

@@ -10,6 +10,7 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from app.core.config import settings
 from app.core.security import hash_senha
 from app.main import app
 from app.models import (AvaliacaoExterna, Escola, FonteAvaliacao, Rede,
@@ -115,7 +116,8 @@ def test_coletar_fonte_reimporta_idempotente(db):
 
 # --- Serviço: agenda (coletar_pendentes) -------------------------------------
 
-def test_coletar_pendentes_pega_vencida_e_reagenda(db):
+def test_coletar_pendentes_pega_vencida_e_reagenda(db, monkeypatch):
+    monkeypatch.setattr(settings, "AVALIACOES_ROBO_HABILITADO", "true")   # robô desligado por padrão
     rede = Rede(nome="R", status="ativa"); db.add(rede); db.flush()
     _escola(db, rede.id, "EM Alfa", "35012345")
     db.commit()
@@ -130,7 +132,9 @@ def test_coletar_pendentes_pega_vencida_e_reagenda(db):
     assert f.proxima_coleta > svc._agora()         # reagendou ~+30d
 
 
-def test_coletar_pendentes_ignora_manual_e_futura_e_inativa(db):
+def test_coletar_pendentes_ignora_manual_e_futura_e_inativa(db, monkeypatch):
+    # Ligado: o "0" abaixo tem de vir da AGENDA, não do robô desligado.
+    monkeypatch.setattr(settings, "AVALIACOES_ROBO_HABILITADO", "true")
     rede = Rede(nome="R", status="ativa"); db.add(rede); db.flush()
     _escola(db, rede.id, "EM Alfa", "35012345")
     db.commit()
@@ -264,7 +268,8 @@ def test_baixar_url_bloqueia_nao_https_e_rede_interna():
     svc._exigir_destino_publico("https://200.0.0.1/x")   # não levanta
 
 
-def test_coletar_pendentes_respeita_teto_por_rodada(db):
+def test_coletar_pendentes_respeita_teto_por_rodada(db, monkeypatch):
+    monkeypatch.setattr(settings, "AVALIACOES_ROBO_HABILITADO", "true")
     # Achado da revisão: coleta roda embutida na thread do sync — sem teto, muitas
     # fontes estagnariam a fila. O teto limita por rodada; o resto vai na próxima.
     rede = Rede(nome="R", status="ativa"); db.add(rede); db.flush()
@@ -281,7 +286,8 @@ def test_coletar_pendentes_respeita_teto_por_rodada(db):
     assert len(restantes) == 2                           # 2 ainda vencidas p/ a próxima
 
 
-def test_reativar_fonte_mensal_reagenda_invariante(db):
+def test_reativar_fonte_mensal_reagenda_invariante(db, monkeypatch):
+    monkeypatch.setattr(settings, "AVALIACOES_ROBO_HABILITADO", "true")
     # Achado da revisão: reativar (só ?ativo=true) uma fonte mensal não podia
     # deixá-la com proxima_coleta=None (o scheduler a ignoraria em silêncio).
     c = _cliente_global(db)

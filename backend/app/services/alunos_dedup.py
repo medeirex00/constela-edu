@@ -10,7 +10,7 @@ Por isso o detector é conservador (prefere o falso-negativo):
   * nome idêntico + mesma turma → 🟢 "alta";
   * nome curto que é começo/abreviação de UM único nome mais completo, mesma
     turma → 🟡 "revisar" (o caso Matific-curto × Lista-Piloto-completo, ex.:
-    "AKEMI CAROLINA VIEIRA" ⊂ "AKEMI CAROLINA VIEIRA GOMES KARIYA");
+    "YASMIN CECILIA TESTELLI" ⊂ "YASMIN CECILIA TESTELLI FICTICIO SINTONI");
   * ambíguo (o curto caberia em DOIS nomes completos da turma) → não sugere.
 
 Nada funde automaticamente: isto só PRODUZ candidatos; o Admin Global/coordenador
@@ -49,8 +49,8 @@ def _expande(curto: str, completo: str) -> bool:
     """``completo`` é uma forma MAIS completa de ``curto`` (mesma pessoa)?
     Cobre os padrões de duplicata do Matific/Elefante:
       * subconjunto ESTRITO de tokens ('Maria Silva' ⊂ 'Maria Eduarda Silva');
-      * abreviação POSICIONAL com inicial em qualquer posição ('Agatha V' →
-        'Agatha Vitoria …', 'M. Eduarda' → 'Maria Eduarda …', 'Maria Edu' →
+      * abreviação POSICIONAL com inicial em qualquer posição ('Celina V' →
+        'Celina Valentina …', 'M. Eduarda' → 'Maria Eduarda …', 'Maria Edu' →
         'Maria Eduarda …'), sem casar 'Eloa S' com 'Eloa … Silva' (posicional)."""
     tc, tk = tokens(curto), tokens(completo)
     if tc and tc < tk:
@@ -64,7 +64,7 @@ def _conflito_forte(a: Aluno, b: Aluno) -> bool:
     preenchidos NOS DOIS cadastros e divergentes = duas crianças distintas.
 
     O RA passa pela MESMA regra do resto do sistema (``ra_util``): a ficha guarda
-    o RA como a secretaria digitou, então "123.269.537-3" e "1232695373" são o
+    o RA como a secretaria digitou, então "111.222.333-4" e "1112223334" são o
     MESMO RA e não podem ser lidos como prova de crianças diferentes. Comparar o
     texto cru aqui deixava a duplicata real invisível na tela de fusão, que é o
     oposto do que este veto existe para fazer. ``ra_util`` também anula
@@ -451,7 +451,7 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
 # NOTA (revisão adversarial, 2 rodadas): a AUTO-FUSÃO do passivo foi REMOVIDA por
 # não ser segura. Todo sinal automático pode fundir CRIANÇAS DIFERENTES:
 #   * nome idêntico → gêmeos/homônimos; * variante (LUÍS/LUIZ) → indistinguível de
-#   MARIA/MARTA; * abreviação ("ABRAÃO L") → o dono real da inicial pode não estar
+#   MARIA/MARTA; * abreviação (nome + inicial) → o dono real da inicial pode não estar
 #   no roster, então "1 candidato" é artefato de roster incompleto, não prova.
 # Como a fusão DELETA registros (irreversível), o passivo é resolvido SÓ pela
 # ferramenta MANUAL (detecção inteligente + "Selecionar todos" + avisos ⚠), onde

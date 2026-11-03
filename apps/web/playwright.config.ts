@@ -28,6 +28,9 @@ const BACKEND_ENV = {
   COORD_PASSWORD: process.env.COORD_PASSWORD || "CoordE2E@2026",
   PROF_PASSWORD: process.env.PROF_PASSWORD || "ProfE2E@2026",
   DOCS_HABILITADOS: "false",
+  // Sem o diagnóstico do robô no boot (GET a ipinfo.io/ipapi.co + Chromium nas
+  // páginas de login): o E2E não sai para a internet a partir do runner.
+  AUTOMACAO_VERIFICAR_NO_BOOT: "false",
 };
 
 export default defineConfig({

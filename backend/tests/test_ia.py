@@ -107,6 +107,10 @@ def test_alerta_queda_de_acertos(db, escola_completa):
     alertas = insights.alertas_da_escola(db, escola.id)
     assert any(a["tipo"] == "queda_acertos" and a["aluno_id"] == ana.id
                for a in alertas)
+    # O texto vai pronto para a tela: percentuais em pt-BR (vírgula decimal).
+    queda = next(a for a in alertas
+                 if a["tipo"] == "queda_acertos" and a["aluno_id"] == ana.id)
+    assert "caiu de 90,0% para 60,0%" in queda["texto"], queda["texto"]
 
 
 # --- Camada de IA (PRD §154) ------------------------------------------------------
@@ -298,7 +302,10 @@ def test_contexto_tem_rankings_por_plataforma(db, escola_completa):
 
 # --- Configuração do assistente pela interface --------------------------------------
 
-def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(cliente, db, escola_completa):
+def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(
+        cliente, cliente_global, db, escola_completa):
+    """Provedor externo e chave são gravados pelo Admin Global (P9); o admin da
+    escola lê o estado (sem a chave)."""
     escola_id = escola_completa["escola"].id
     base = f"/api/v1/escolas/{escola_id}/assistente"
 
@@ -306,10 +313,10 @@ def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(cliente, db, esco
     assert padrao == {"provedor": "local", "modelo": "", "chave_definida": False}
 
     # Provedor externo sem chave: recusa com orientação.
-    sem_chave = cliente.put(f"{base}/config", json={"provedor": "anthropic"})
+    sem_chave = cliente_global.put(f"{base}/config", json={"provedor": "anthropic"})
     assert sem_chave.status_code == 400
 
-    r = cliente.put(f"{base}/config", json={
+    r = cliente_global.put(f"{base}/config", json={
         "provedor": "anthropic", "api_key": "sk-ant-teste-123", "modelo": ""})
     assert r.status_code == 200, r.text
     corpo = r.json()
@@ -327,28 +334,67 @@ def test_config_assistente_salva_cifrado_e_nunca_devolve_chave(cliente, db, esco
     assert decifrar_segredo(row.valor["api_key_cifrada"]) == "sk-ant-teste-123"
 
     # Salvar de novo SEM informar chave mantém a atual.
-    r2 = cliente.put(f"{base}/config", json={"provedor": "anthropic",
-                                             "modelo": "claude-opus-4-8"})
+    r2 = cliente_global.put(f"{base}/config", json={"provedor": "anthropic",
+                                                    "modelo": "claude-opus-4-8"})
     assert r2.json()["chave_definida"] is True
     assert cliente.get(f"{base}/status").json()["provedor"] == "anthropic"
+    lido = cliente.get(f"{base}/config")
+    assert lido.json()["chave_definida"] is True and "sk-ant" not in lido.text
 
 
-def test_trocar_provedor_descarta_chave_do_anterior(cliente, db, escola_completa):
+def test_trocar_provedor_descarta_chave_do_anterior(cliente_global, db, escola_completa):
     """A chave de um fornecedor NUNCA é reaproveitada em outro: trocar de
-    provedor sem informar chave nova é recusado."""
+    provedor sem informar chave nova é recusado. (Quem troca é o Admin Global:
+    provedor externo é dele, P9.)"""
     escola_id = escola_completa["escola"].id
     base = f"/api/v1/escolas/{escola_id}/assistente/config"
-    assert cliente.put(base, json={"provedor": "anthropic",
-                                   "api_key": "sk-ant-abc"}).status_code == 200
+    assert cliente_global.put(base, json={"provedor": "anthropic",
+                                          "api_key": "sk-ant-abc"}).status_code == 200
     # Trocar para OpenAI mantendo a chave antiga: recusado (e a antiga cai).
-    r = cliente.put(base, json={"provedor": "openai"})
+    r = cliente_global.put(base, json={"provedor": "openai"})
     assert r.status_code == 400
     # Chave só de espaços também não vale.
-    assert cliente.put(base, json={"provedor": "openai",
-                                   "api_key": "   "}).status_code == 400
+    assert cliente_global.put(base, json={"provedor": "openai",
+                                          "api_key": "   "}).status_code == 400
     # Com a chave do novo provedor, funciona.
-    r2 = cliente.put(base, json={"provedor": "openai", "api_key": "sk-openai-x"})
+    r2 = cliente_global.put(base, json={"provedor": "openai", "api_key": "sk-openai-x"})
     assert r2.status_code == 200 and r2.json()["chave_definida"] is True
+
+
+def test_chave_ilegivel_depois_da_troca_da_dek_nao_conta_como_configurada(
+        cliente_global, db, escola_completa, monkeypatch):
+    """Troca da DATA_ENCRYPTION_KEY sem recadastro (OP-4 antes da OP-5): a cifra da chave
+    de IA continua gravada, mas nenhuma chave do anel a abre e o assistente cai no modo
+    local. A tela dizia "chave configurada" e salvar em branco "mantinha" a cifra morta.
+    Agora: chave_definida False, salvar em branco pede a chave (sem apagar a cifra, que
+    reabre se as chaves antigas voltarem) e recadastrar resolve. Chaves fictícias."""
+    import secrets
+
+    from app.core.config import settings
+
+    escola_id = escola_completa["escola"].id
+    base = f"/api/v1/escolas/{escola_id}/assistente/config"
+    dek0, dek1 = f"dek0-{secrets.token_urlsafe(40)}", f"dek1-{secrets.token_urlsafe(40)}"
+    monkeypatch.setattr(settings, "DATA_ENCRYPTION_KEY", dek0)
+    assert cliente_global.put(base, json={
+        "provedor": "anthropic", "api_key": "sk-ant-ficticia-dek0"}).status_code == 200
+    assert cliente_global.get(base).json()["chave_definida"] is True
+
+    monkeypatch.setattr(settings, "DATA_ENCRYPTION_KEY", dek1)          # DEK trocada
+    with pytest.raises(assistente.ErroProvedorIA):
+        assistente._provedor_da_escola(db, escola_id)                   # cai no local
+    assert cliente_global.get(base).json()["chave_definida"] is False
+    r = cliente_global.put(base, json={"provedor": "anthropic", "modelo": ""})
+    assert r.status_code == 400 and "de novo" in r.text and "sk-ant" not in r.text
+
+    monkeypatch.setattr(settings, "DATA_ENCRYPTION_KEY", dek0)          # nada foi apagado
+    assert cliente_global.get(base).json()["chave_definida"] is True
+
+    monkeypatch.setattr(settings, "DATA_ENCRYPTION_KEY", dek1)          # recadastro
+    r2 = cliente_global.put(base, json={"provedor": "anthropic",
+                                        "api_key": "sk-ant-ficticia-dek1"})
+    assert r2.status_code == 200 and r2.json()["chave_definida"] is True
+    assert cliente_global.get(base).json()["chave_definida"] is True
 
 
 def test_config_assistente_exige_admin(cliente, db, escola_completa):
@@ -367,14 +413,16 @@ def test_config_assistente_exige_admin(cliente, db, escola_completa):
     assert c2.get(f"/api/v1/escolas/{escola.id}/assistente/config").status_code == 403
 
 
-def test_provedor_externo_falhando_cai_no_local(cliente, db, escola_completa, monkeypatch):
+def test_provedor_externo_falhando_cai_no_local(cliente, cliente_global, db, escola_completa,
+                                                 monkeypatch):
     """Com chave inválida/sem rede, o assistente NUNCA sai do ar: responde local."""
     from app.services.ia import provedores
     from app.services.ia.base import ErroProvedorIA as Erro
 
     escola_id = escola_completa["escola"].id
-    cliente.put(f"/api/v1/escolas/{escola_id}/assistente/config",
-                json={"provedor": "anthropic", "api_key": "chave-invalida"})
+    ligado = cliente_global.put(f"/api/v1/escolas/{escola_id}/assistente/config",
+                                json={"provedor": "anthropic", "api_key": "chave-invalida"})
+    assert ligado.status_code == 200, ligado.text
 
     def explode(self, sistema, mensagens):
         raise Erro("chave recusada")
@@ -383,7 +431,7 @@ def test_provedor_externo_falhando_cai_no_local(cliente, db, escola_completa, mo
     r = cliente.post(f"/api/v1/escolas/{escola_id}/assistente",
                      json={"pergunta": "como está a escola?"})
     assert r.status_code == 200, r.text
-    assert "local" in r.json()["provedor"]
+    assert r.json()["provedor"] == "local (contingência)"
 
 
 def test_a3_provedor_externo_nao_recebe_nome_real_e_reidentifica(

@@ -10,6 +10,13 @@
  * `?ver=escolas`), o que mantém atalhos, redirects (/evolucao, /ranking-leitura)
  * e links diretos funcionando.
  *
+ * Identidade visual v2 (referência "Ranking"): cabeçalho com o período e a data
+ * do dado no subtítulo e as AÇÕES à direita — cada aba leva os próprios botões
+ * (Exportar lista, Gerar certificados, Baixar cartaz) para o espaço de ações do
+ * cabeçalho (`alvoAcoes`, por portal), porque é ela quem tem a lista exibida.
+ * Abas segmentadas violeta com ícone e a plataforma ao lado ("Leitura · Elefante
+ * Letrado"; o complemento é só visual, o nome acessível continua "Leitura").
+ *
  * Quem vê o quê (a permissão real continua sendo o backend; aqui só se
  * organiza o que cada perfil já podia abrir):
  *   - professor                → Alunos;
@@ -26,6 +33,10 @@
  * título de página. `/rede/ranking` é roteada para esta mesma tela (dentro da
  * guarda de rede) e, sem `?ver=`, abre em Escolas.
  *
+ * Celular (< 640 px): os botões do cabeçalho viram uma coluna de mesma largura, as
+ * abas de tipo uma grade 2 × 2 de colunas iguais e as de categoria uma linha de
+ * colunas iguais (sem pílulas soltas de larguras diferentes). No desktop nada muda.
+ *
  * Acessibilidade: as abas de categoria e de tipo apontam (`aria-controls`) para
  * o painel que controlam, e cada painel (`role="tabpanel"`) é rotulado pela aba
  * ativa (`aria-labelledby`).
@@ -33,13 +44,22 @@
  * "Escolar" (dados escolares próprios, em construção) saiu do seletor;
  * `RankingEscolar.tsx` fica no repositório, reservado, sem uso.
  */
-import { lazy, Suspense, useId, type ReactNode } from "react";
+import { lazy, Suspense, useId, useState, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
+import { BookOpen, Calculator, LayoutGrid, School, TrendingUp, Trophy, Users } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
+import {
+  ACOES_CELULAR,
+  AbasRanking,
+  DescricaoRanking,
+  rotuloDoPeriodo,
+} from "../components/RankingUi";
 import { Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
+import type { Dimensao } from "../lib/types";
 import RankingEvolucao from "./RankingEvolucao";
 import RankingGeral from "./RankingGeral";
 import RankingLeitura from "./RankingLeitura";
@@ -50,38 +70,33 @@ import RankingTurmas from "./RankingTurmas";
 // implementação), carregada sob demanda.
 const RankingRede = lazy(() => import("./rede/RankingRede"));
 
-const CATEGORIAS = [
-  { chave: "alunos", rotulo: "Alunos" },
-  { chave: "turmas", rotulo: "Turmas" },
-  { chave: "escolas", rotulo: "Escolas" },
-] as const;
+const CATEGORIAS: readonly { chave: "alunos" | "turmas" | "escolas"; rotulo: string; icone: LucideIcon }[] = [
+  { chave: "alunos", rotulo: "Alunos", icone: Users },
+  { chave: "turmas", rotulo: "Turmas", icone: LayoutGrid },
+  { chave: "escolas", rotulo: "Escolas", icone: School },
+];
 type Categoria = (typeof CATEGORIAS)[number]["chave"];
 
 // Sub-visões de ALUNOS: uma por FONTE de dados — Geral (ordem única), Leitura
 // (Elefante Letrado), Matemática (Matific) e Evolução.
 const VISOES_ALUNOS = [
-  { chave: "geral", rotulo: "Geral", modulo: null },
-  { chave: "leitura", rotulo: "Leitura", modulo: "leitura" },
-  { chave: "matematica", rotulo: "Matemática", modulo: "matematica" },
-  { chave: "evolucao", rotulo: "Evolução", modulo: null },
+  { chave: "geral", rotulo: "Geral", modulo: null, icone: Trophy, detalhe: undefined },
+  { chave: "leitura", rotulo: "Leitura", modulo: "leitura", icone: BookOpen, detalhe: "Elefante Letrado" },
+  { chave: "matematica", rotulo: "Matemática", modulo: "matematica", icone: Calculator, detalhe: "Matific" },
+  { chave: "evolucao", rotulo: "Evolução", modulo: null, icone: TrendingUp, detalhe: undefined },
 ] as const;
 type VisaoAlunos = (typeof VISOES_ALUNOS)[number]["chave"];
 
 /** Tudo o que `?ver=` pode valer. */
 type Ver = VisaoAlunos | "turmas" | "escolas";
 
-const estiloAba = (ativa: boolean) =>
-  `rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-    ativa
-      ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
-      : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-  }`;
-
 export default function Rankings() {
   const { global, secretaria, gestor } = usePerfil();
-  const { escolaId } = useApp();
+  const { escolaId, periodo } = useApp();
   const { tem } = useModulos();
   const [params, setParams] = useSearchParams();
+  // Espaço de ações do cabeçalho: a aba aberta põe ali os botões dela.
+  const [alvoAcoes, setAlvoAcoes] = useState<HTMLElement | null>(null);
   // /rede/ranking é o atalho "Ranking de Escolas" (menu do Admin Global e
   // "Ver ranking completo" do Painel da Rede): sem `?ver=` abre em Escolas.
   const { pathname } = useLocation();
@@ -105,7 +120,7 @@ export default function Rankings() {
   // cabeçalho (🏆 Ranking da Rede).
   if (!podeAlunos) {
     if (!podeEscolas) {
-      return <Vazio titulo="Nenhuma escola selecionada" descricao="Escolha uma escola para ver os rankings." />;
+      return <Vazio icone={Trophy} titulo="Nenhuma escola selecionada" descricao="Escolha uma escola para ver os rankings." />;
     }
     return (
       <Suspense fallback={<Carregando texto="Carregando o ranking da rede..." />}>
@@ -149,27 +164,23 @@ export default function Rankings() {
 
   const comNavCategorias = categorias.length > 1;
 
-  // 1º nível: CATEGORIA (só quando há mais de uma para o perfil).
+  // 1º nível: CATEGORIA (só quando há mais de uma para o perfil). Pílula clara: é
+  // a escolha secundária; a aba violeta é o tipo de ranking.
   const navCategorias = comNavCategorias && (
-    <div
-      role="tablist"
-      aria-label="Categoria do ranking"
-      className="mb-3 inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
-    >
-      {categorias.map((c) => (
-        <button
-          key={c.chave}
-          id={idAbaCategoria(c.chave)}
-          type="button"
-          role="tab"
-          aria-selected={categoria === c.chave}
-          aria-controls={idPainelCategoria}
-          onClick={() => trocar(c.chave === "alunos" ? "geral" : c.chave)}
-          className={estiloAba(categoria === c.chave)}
-        >
-          {c.rotulo}
-        </button>
-      ))}
+    <div className="mb-4 flex flex-wrap items-center gap-2.5">
+      <span aria-hidden className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
+        Classificar
+      </span>
+      <AbasRanking
+        itens={categorias.map((c) => ({ valor: c.chave, rotulo: c.rotulo, icone: c.icone }))}
+        valor={categoria}
+        aoMudar={(c) => trocar(c === "alunos" ? "geral" : c)}
+        rotulo="Categoria do ranking"
+        idAba={idAbaCategoria}
+        idPainel={idPainelCategoria}
+        variante="secundaria"
+        celular="linha"
+      />
     </div>
   );
 
@@ -196,11 +207,36 @@ export default function Rankings() {
     );
   }
 
+  // Subtítulo: o período que vale para a aba aberta e a data do dado. O Geral e o
+  // de Turmas são sempre do ano letivo (notas acumuladas); a Matemática fora do
+  // ano letivo é o placar consultado ao vivo no Matific.
+  const contratadas = (["leitura", "matematica"] as Dimensao[]).filter((d) => tem(d));
+  const rotuloPeriodo = rotuloDoPeriodo(periodo);
+  const descricao =
+    visao === "geral" ? (
+      <DescricaoRanking periodo="Ano letivo · classificação acumulada" dimensoes={contratadas} />
+    ) : visao === "turmas" ? (
+      <DescricaoRanking periodo="Ano letivo · média das notas oficiais" dimensoes={contratadas} />
+    ) : visao === "leitura" ? (
+      <DescricaoRanking periodo={rotuloPeriodo} dimensoes={["leitura"]} />
+    ) : visao === "matematica" ? (
+      <DescricaoRanking
+        periodo={rotuloPeriodo}
+        dimensoes={["matematica"]}
+        aoVivo={periodo.preset !== "ano_letivo"}
+      />
+    ) : (
+      <DescricaoRanking periodo={rotuloPeriodo} dimensoes={contratadas} />
+    );
+
   return (
     <div>
       <PageHeader
-        titulo="Ranking Geral"
-        descricao="Escolha o que classificar: alunos, turmas ou escolas. Os filtros de período, turma, série e turno ficam dentro de cada ranking."
+        // Em /rede/ranking (Alunos ou Turmas da escola escolhida) o título é o do item
+        // do menu e da trilha ("Ranking da Rede"); em /ranking, "Ranking Geral".
+        titulo={atalhoDaRede ? "Ranking da Rede" : "Ranking Geral"}
+        descricao={descricao}
+        acoes={<div ref={setAlvoAcoes} className={`flex flex-wrap items-center gap-2.5 ${ACOES_CELULAR}`} />}
       />
 
       {navCategorias}
@@ -209,36 +245,28 @@ export default function Rankings() {
         categoria === "alunos" ? (
           <>
             {/* 2º nível: TIPO de ranking de alunos (uma aba por fonte de dados). */}
-            <div
-              role="tablist"
-              aria-label="Tipo de ranking"
-              className="mb-4 flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60 sm:inline-flex"
-            >
-              {visoesAlunos.map((v) => (
-                <button
-                  key={v.chave}
-                  id={idAbaTipo(v.chave)}
-                  type="button"
-                  role="tab"
-                  aria-selected={visao === v.chave}
-                  aria-controls={idPainelTipo}
-                  onClick={() => trocar(v.chave)}
-                  className={estiloAba(visao === v.chave)}
-                >
-                  {v.rotulo}
-                </button>
-              ))}
-            </div>
+            <AbasRanking
+              itens={visoesAlunos.map((v) => ({
+                valor: v.chave, rotulo: v.rotulo, icone: v.icone, detalhe: v.detalhe,
+              }))}
+              valor={visao as VisaoAlunos}
+              aoMudar={(v) => trocar(v)}
+              rotulo="Tipo de ranking"
+              idAba={idAbaTipo}
+              idPainel={idPainelTipo}
+              celular="grade"
+              className="mb-5"
+            />
 
             <div role="tabpanel" id={idPainelTipo} aria-labelledby={idAbaTipo(visao)}>
-              {visao === "geral" && <RankingGeral embutido />}
-              {visao === "leitura" && tem("leitura") && <RankingLeitura embutido />}
-              {visao === "matematica" && tem("matematica") && <RankingMatematica embutido />}
-              {visao === "evolucao" && <RankingEvolucao embutido />}
+              {visao === "geral" && <RankingGeral embutido alvoAcoes={alvoAcoes} />}
+              {visao === "leitura" && tem("leitura") && <RankingLeitura embutido alvoAcoes={alvoAcoes} />}
+              {visao === "matematica" && tem("matematica") && <RankingMatematica embutido alvoAcoes={alvoAcoes} />}
+              {visao === "evolucao" && <RankingEvolucao embutido alvoAcoes={alvoAcoes} />}
             </div>
           </>
         ) : (
-          <RankingTurmas embutido />
+          <RankingTurmas embutido alvoAcoes={alvoAcoes} />
         ),
       )}
     </div>

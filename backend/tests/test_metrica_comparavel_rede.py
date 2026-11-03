@@ -185,6 +185,47 @@ def test_escola_sem_dado_nao_entra_no_alerta_por_desempenho(db):
     assert cartao["motivo_atencao"] == "Nenhum aluno com dados das plataformas ainda."
 
 
+
+def test_fase_nao_separa_o_cartao_da_rede_do_dashboard_da_escola(db):
+    """AS FASES NÃO CONCORREM — e a Nota antiga (carimbada) de uma criança da
+    Educação Infantil, que o motor já não atualiza, não pode entrar na média do
+    cartão da rede NEM na do dashboard da escola nem no lado "escola" do
+    comparador: os três prometem o mesmo número para a mesma escola."""
+    from app.models import Nota
+    from app.routers.rankings import _desempenho_da_escola
+    from app.services import evolucao
+
+    rede = _rede(db, "Rede Com Fase")
+    esc = _escola(db, rede.id, "EM Com Fase", livros_por_aluno=[10, 4])
+    fase = Turma(escola_id=esc.id, nome="1ª Fase A", ano_escolar="1ª Fase",
+                 ano_letivo=2026, status="ativa")
+    db.add(fase)
+    db.flush()
+    crianca = Aluno(escola_id=esc.id, nome="Crianca Da Fase", status="ativo")
+    db.add(crianca)
+    db.flush()
+    db.add(Matricula(escola_id=esc.id, aluno_id=crianca.id, turma_id=fase.id,
+                     ano_letivo=2026))
+    imp = db.query(Importacao).filter_by(escola_id=esc.id).first()
+    db.add(SnapshotElefante(escola_id=esc.id, aluno_id=crianca.id,
+                            importacao_id=imp.id, livros_unicos=40,
+                            tempo_leitura_min=800, livros_por_nivel={"D": 40}))
+    db.add(Nota(escola_id=esc.id, aluno_id=crianca.id, ano_letivo=2026,
+                nota_elefante=100.0, nota_elefante_institucional=100.0,
+                aferido_leitura=True, detalhes=scoring.carimbo_institucional()))
+    db.commit()
+
+    cartao = svc._kpis_da_rede(db, rede.id)[0]
+    painel = _desempenho_da_escola(db, esc.id, 2026,
+                                   scoring.dimensoes_contratadas(db, esc), None)
+    lado = evolucao._lado_escola(db, esc.id)["dimensoes"]["leitura"]
+    assert cartao["alunos_com_nota_elefante"] == 2
+    assert painel["n_leitura"] == lado["n_aferidos"] == 2
+    assert painel["media_leitura"] == cartao["media_elefante"] == lado["nota"]
+    # A cobertura continua contando a criança: ela usa a plataforma.
+    assert cartao["alunos_com_dados"] == 3
+    assert painel["com_dados"] == 3
+
 # --- Metas --------------------------------------------------------------------
 
 def test_meta_no_indice_conta_escolas_e_meta_na_media_nao_finge_comparar(

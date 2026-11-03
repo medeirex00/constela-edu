@@ -1,8 +1,9 @@
-"""Caso ABRAÃO (Debora Pilon): o import de Elefante/Matific VINCULA ao aluno da
-Lista Piloto em vez de criar um novo — mesmo com o nome abreviado ("ABRAAO L"),
-variação ortográfica ("ABRAAO LUIZ DIAS") e a turma em outro formato
-("4 ANO C INTEGRAL (300303525)"). E NUNCA funde nomes parecidos de crianças
-diferentes (ABRAÃO LUÍS × ABRAÃO LUCAS → ambíguo, fica para revisão).
+"""Caso de homônimos com nome abreviado (escola 11; nomes fictícios): o import de
+Elefante/Matific VINCULA ao aluno da Lista Piloto em vez de criar um novo — mesmo
+com o nome abreviado ("EUSTAQUIO L"), variação ortográfica ("EUSTAQUIO LUIZ
+FICTONI") e a turma em outro formato ("4 ANO C INTEGRAL (300303525)"). E NUNCA
+funde nomes parecidos de crianças diferentes (EUSTÁQUIO LUÍS × EUSTÁQUIO LUCAS →
+ambíguo, fica para revisão).
 """
 from types import SimpleNamespace
 
@@ -20,7 +21,7 @@ def _linha(nome, turma_nome, dados=None):
 
 
 def _cenario(db):
-    esc = Escola(nome="EMEF Debora Pilon", ano_letivo_ativo=2026, status="ativa")
+    esc = Escola(nome="EMEF Fictícia Bromélia", ano_letivo_ativo=2026, status="ativa")
     db.add(esc)
     db.flush()
     turma = Turma(escola_id=esc.id, nome="4ºC", ano_escolar="4º Ano",
@@ -36,9 +37,9 @@ def _cenario(db):
                          ano_letivo=2026))
         return a
 
-    abraao = matricular("ABRAÃO LUÍS DIAS")
+    eustaquio = matricular("EUSTÁQUIO LUÍS FICTONI")
     db.commit()
-    return esc, turma, abraao
+    return esc, turma, eustaquio
 
 
 def _conta_alunos(db, escola_id):
@@ -47,35 +48,39 @@ def _conta_alunos(db, escola_id):
 
 
 def test_elefante_abreviado_vincula_ao_aluno_da_lista_piloto(db):
-    esc, turma, abraao = _cenario(db)
+    esc, turma, eustaquio = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
-    # Elefante manda "ABRAAO L" na turma em formato SED → vincula, não cria.
+    # Elefante manda "EUSTAQUIO L" na turma em formato SED → vincula, não cria.
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("ABRAAO L", "4 ANO C INTEGRAL (300303525)"),
+                        _linha("EUSTAQUIO L", "4 ANO C INTEGRAL (300303525)"),
                         [], {}, {})
-    assert r is not None and r.id == abraao.id
+    assert r is not None and r.id == eustaquio.id
     assert _conta_alunos(db, esc.id) == antes                 # NENHUM aluno novo
 
 
-def test_matific_variante_ortografica_sem_corroboracao_vai_para_revisao(db):
-    """Porta única de identidade (2026-09-21, substitui a decisão de 2026-08-04 para
-    os imports de PLATAFORMA): variação de grafia (LUIZ vs LUÍS) de candidato único
-    SEM identificador corroborando não associa só pelo nome — vai para a fila de
-    revisão. Continua NÃO criando a 2ª ficha: a linha fica guardada até o gestor
-    escolher o aluno."""
+def test_matific_variante_segura_no_nome_do_meio_associa_sem_criar(db):
+    """Variação de grafia (LUIZ vs LUÍS) num nome do MEIO, 1º nome e último
+    sobrenome idênticos, candidato ÚNICO na sala → ASSOCIA, sem ficha nova e sem
+    revisão.
+
+    MUDANÇA DE DECISÃO EXPLÍCITA DO DONO (2026-10-07): de 2026-09-21 até aqui a
+    plataforma mandava esse caso para a revisão (``vincular_variante=False``) e o
+    dado da criança ficava parado a cada sincronização. Agora a plataforma usa o
+    MESMO critério único da Lista Piloto (``matching.vincula_por_nome_unico``,
+    aprovado em 2026-08-04). Variação no sobrenome ou no 1º nome continua em
+    revisão (``test_identidade_automatica.py``)."""
     from app.models import RevisaoIdentidade
 
-    esc, turma, abraao = _cenario(db)
+    esc, turma, eustaquio = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("ABRAAO LUIZ DIAS", "4 ANO C INTEGRAL"),
+                        _linha("EUSTAQUIO LUIZ FICTONI", "4 ANO C INTEGRAL"),
                         [], {}, {})
-    assert r is None                                      # não associa pelo nome
+    assert r is not None and r.id == eustaquio.id            # associa à ficha da sala
     assert _conta_alunos(db, esc.id) == antes             # nenhum aluno novo criado
-    rev = db.execute(select(RevisaoIdentidade)).scalars().one()
-    assert [c["aluno_id"] for c in rev.candidatos] == [abraao.id]
+    assert db.execute(select(RevisaoIdentidade)).scalars().first() is None
 
 
 def test_dois_homonimos_na_turma_vao_para_revisao(db):
@@ -102,9 +107,9 @@ def test_dois_homonimos_na_turma_vao_para_revisao(db):
 
 
 def test_ambiguo_entre_criancas_diferentes_nao_funde(db):
-    esc, turma, abraao = _cenario(db)
-    # Existe TAMBÉM um ABRAÃO LUCAS DIAS (outra criança) na mesma turma.
-    lucas = Aluno(escola_id=esc.id, nome="ABRAÃO LUCAS DIAS", status="ativo",
+    esc, turma, eustaquio = _cenario(db)
+    # Existe TAMBÉM um EUSTÁQUIO LUCAS FICTONI (outra criança) na mesma turma.
+    lucas = Aluno(escola_id=esc.id, nome="EUSTÁQUIO LUCAS FICTONI", status="ativo",
                   da_lista_piloto=True)
     db.add(lucas)
     db.flush()
@@ -114,16 +119,16 @@ def test_ambiguo_entre_criancas_diferentes_nao_funde(db):
     antes = _conta_alunos(db, esc.id)
     avisos: list[str] = []
 
-    # "ABRAAO L" serve aos DOIS → ambíguo → NÃO cria, NÃO funde, avisa.
+    # "EUSTAQUIO L" serve aos DOIS → ambíguo → NÃO cria, NÃO funde, avisa.
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("ABRAAO L", "4 ANO C INTEGRAL"), avisos, {}, {})
+                        _linha("EUSTAQUIO L", "4 ANO C INTEGRAL"), avisos, {}, {})
     assert r is None
     assert _conta_alunos(db, esc.id) == antes                 # nada criado nem fundido
     assert any("não é segura" in a for a in avisos)
 
 
 def test_aluno_genuinamente_novo_e_criado(db):
-    esc, turma, abraao = _cenario(db)
+    esc, turma, eustaquio = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
     r = _resolver_aluno(db, esc.id, 2026,
@@ -133,49 +138,49 @@ def test_aluno_genuinamente_novo_e_criado(db):
 
 
 def test_casar_no_roster_vincula_uuid_do_matific(db):
-    """Ao casar 'ABRAAO L' (Matific, com UUID) ao aluno da Lista Piloto, o UUID é
+    """Ao casar 'EUSTAQUIO L' (Matific, com UUID) ao aluno da Lista Piloto, o UUID é
     VINCULADO — a próxima sync casa direto por UUID (convergência), sem redepender
     do nome."""
     from app.models import IdentidadeExterna
-    esc, turma, abraao = _cenario(db)
+    esc, turma, eustaquio = _cenario(db)
 
     r = _resolver_aluno(db, esc.id, 2026,
-                        _linha("ABRAAO L", "4 ANO C INTEGRAL (300303525)",
-                               dados={"matific_uuid": "uuid-abraao-123"}),
+                        _linha("EUSTAQUIO L", "4 ANO C INTEGRAL (300303525)",
+                               dados={"matific_uuid": "uuid-eustaquio-123"}),
                         [], {}, {})
     db.flush()
-    assert r.id == abraao.id
+    assert r.id == eustaquio.id
     vinc = db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == esc.id,
         IdentidadeExterna.plataforma == "matific",
-        IdentidadeExterna.id_externo == "uuid-abraao-123")).scalars().first()
-    assert vinc is not None and vinc.aluno_id == abraao.id
+        IdentidadeExterna.id_externo == "uuid-eustaquio-123")).scalars().first()
+    assert vinc is not None and vinc.aluno_id == eustaquio.id
 
 
 def test_vinculacao_automatica_fica_no_log_de_auditoria(db):
     """Regra §17: toda vinculação automática registra o motivo (de onde veio, em
     qual aluno canônico casou, turma, confiança) — auditoria/depuração."""
     from app.models import LogAuditoria
-    esc, turma, abraao = _cenario(db)
+    esc, turma, eustaquio = _cenario(db)
 
     _resolver_aluno(db, esc.id, 2026,
-                    _linha("ABRAAO L", "4 ANO C INTEGRAL (300303525)"), [], {}, {})
+                    _linha("EUSTAQUIO L", "4 ANO C INTEGRAL (300303525)"), [], {}, {})
     db.flush()
     log = db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "aluno.vinculado_auto",
-        LogAuditoria.entidade_id == abraao.id)).scalars().first()
+        LogAuditoria.entidade_id == eustaquio.id)).scalars().first()
     assert log is not None
-    assert log.detalhes["origem"] == "ABRAAO L"
-    assert log.detalhes["aluno"] == "ABRAÃO LUÍS DIAS"
+    assert log.detalhes["origem"] == "EUSTAQUIO L"
+    assert log.detalhes["aluno"] == "EUSTÁQUIO LUÍS FICTONI"
     assert log.detalhes["confianca"] == "alta" and log.detalhes["candidatos"] == 1
 
 
 def test_reimport_do_mesmo_relatorio_e_idempotente(db):
-    esc, turma, abraao = _cenario(db)
+    esc, turma, eustaquio = _cenario(db)
     antes = _conta_alunos(db, esc.id)
 
-    for _ in range(3):                        # 3 reimports do MESMO "ABRAAO L"
+    for _ in range(3):                        # 3 reimports do MESMO "EUSTAQUIO L"
         _resolver_aluno(db, esc.id, 2026,
-                        _linha("ABRAAO L", "4 ANO C INTEGRAL (300303525)"),
+                        _linha("EUSTAQUIO L", "4 ANO C INTEGRAL (300303525)"),
                         [], {}, {})
     assert _conta_alunos(db, esc.id) == antes                 # nunca duplica

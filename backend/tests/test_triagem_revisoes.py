@@ -148,8 +148,8 @@ def test_multiplos_candidatos_sem_identidade_nao_escolhe_ninguem(db):
     """Nunca escolher "o primeiro da lista" nem o de nome mais parecido."""
     e = _escola(db)
     t = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
-    a1 = _aluno(db, e, t, "MARIA HELENA LIMA")
-    a2 = _aluno(db, e, t, "MARIA HELENA JESUS")
+    a1 = _aluno(db, e, t, "MARIA HELENA FICTELLI")
+    a2 = _aluno(db, e, t, "MARIA HELENA SIMULATTI")
     r = _revisao(db, e, nome="MARIA H", candidatos=(a1, a2))
 
     v = _triar(db, e)[r.id]
@@ -166,8 +166,8 @@ def test_multiplos_candidatos_com_identidade_vinculada_a_um_deles_desempata(db):
     e = _escola(db)
     t3 = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
     t1 = _turma(db, e, "1º Ano", "1º Ano", codigo="800")
-    a_certa = _aluno(db, e, t3, "MARIA HELENA DE JESUS")
-    a_outra = _aluno(db, e, t1, "MARIA HELENA LIMA")
+    a_certa = _aluno(db, e, t3, "MARIA HELENA DE SIMULATTI")
+    a_outra = _aluno(db, e, t1, "MARIA HELENA FICTELLI")
     _vincular(db, e, a_certa, "matific", "uuid-1")
     _vincular(db, e, a_outra, "matific", "uuid-outro")
     r = _revisao(db, e, nome="MARIA H", candidatos=(a_outra, a_certa))
@@ -200,7 +200,7 @@ def test_ficha_com_duas_contas_da_mesma_plataforma_vai_para_humano(db):
     """Nunca escolher entre duas contas — nem pela que tem mais atividades."""
     e = _escola(db)
     t = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
-    a = _aluno(db, e, t, "ALLYCE CRISTINA")
+    a = _aluno(db, e, t, "ARIELLE CRISTINA")
     _vincular(db, e, a, "matific", "uuid-1")
     _vincular(db, e, a, "matific", "uuid-2")
     r = _revisao(db, e, candidatos=(a,), linhas=[{"atividades": 999, "estrelas": 999}])
@@ -218,7 +218,7 @@ def test_duas_pendencias_abertas_disputando_a_mesma_ficha_bloqueiam_as_duas(db):
     primeira criaria a ficha com duas contas."""
     e = _escola(db)
     t = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
-    a = _aluno(db, e, t, "MELISSA DIAS")
+    a = _aluno(db, e, t, "MIRELA DIAS")
     r1 = _revisao(db, e, id_externo="uuid-A", candidatos=(a,))
     r2 = _revisao(db, e, id_externo="uuid-B", candidatos=(a,))
 
@@ -385,12 +385,12 @@ def test_ficha_inativa_nao_vira_identidade_diferente_mas_pede_gente(db, status):
 
 def test_pendencia_orfa_e_reconhecida_mesmo_com_o_nome_truncado(db):
     """O caso real da escola 17: a sincronização criou o vínculo depois que a
-    pendência nasceu, e o nome congelado é um prefixo ("SAMUEL Y")."""
+    pendência nasceu, e o nome congelado é um prefixo ("SAULO Y")."""
     e = _escola(db)
     t = _turma(db, e, "4º Ano", "4º Ano", codigo="910")
-    a = _aluno(db, e, t, "SAMUEL YUJRA AGUILERA")
-    _vincular(db, e, a, "matific", "uuid-samuel")
-    r = _revisao(db, e, id_externo="uuid-samuel", nome="SAMUEL Y",
+    a = _aluno(db, e, t, "SAULO YANNUZZI AGUILLARI")
+    _vincular(db, e, a, "matific", "uuid-saulo")
+    r = _revisao(db, e, id_externo="uuid-saulo", nome="SAULO Y",
                  candidatos=(a,), turma_informada="4 ANO A INTEGRAL (910)")
 
     v = _triar(db, e)[r.id]

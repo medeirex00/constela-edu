@@ -375,7 +375,7 @@ def test_secretaria_mantem_a_visao_agregada_da_rede(cenario):
 # C-05 — nenhum ambiente nasce com conta administrativa secreta
 # =============================================================================
 
-_EMAIL_ANTIGO_DO_CODIGO = "edumedeiros1405@gmail.com"
+_EMAIL_ANTIGO_DO_CODIGO = "dono.antigo.ficticio@exemplo.com"
 
 
 def test_email_do_dono_nao_esta_mais_cravado_no_codigo():
@@ -466,6 +466,8 @@ def test_admin_global_email_malformado_barra_producao(monkeypatch):
     conta (lista/curinga/espaço) falharia em SILÊNCIO — produção recusa subir."""
     monkeypatch.setenv("ENV", "producao")
     monkeypatch.setenv("SECRET_KEY", "x" * 48)
+    # Produção também exige uma DEK própria (test_config_producao.py).
+    monkeypatch.setenv("DATA_ENCRYPTION_KEY", "d" * 48)
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://x:y@localhost/z")
     for invalido in ("*", "a@b.com, c@d.com", "sem-arroba", "dono@exemplo.com extra"):
         monkeypatch.setenv("ADMIN_GLOBAL_EMAIL", invalido)

@@ -271,7 +271,8 @@ def test_rede_ignora_a_nota_local_mesmo_adulterada(db):
     assert inst_depois == inst_antes
     # E a fonte da média da rede é comprovadamente a coluna institucional.
     import inspect
-    fonte = inspect.getsource(svc_rede._kpis_da_rede)
+    # (as colunas são escolhidas onde os cartões leem o banco: ``_leituras_da_rede``)
+    fonte = inspect.getsource(svc_rede._leituras_da_rede)
     assert "nota_elefante_institucional" in fonte
     assert "Nota.nota_elefante)" not in fonte  # nunca a coluna LOCAL crua
 

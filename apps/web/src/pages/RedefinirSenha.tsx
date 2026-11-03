@@ -4,12 +4,19 @@
  * Abre com ?token=... vindo do link gerado por um gestor. Confere o token,
  * deixa a pessoa escolher uma nova senha e a define. O token é de uso único e
  * expira; a senha original nunca é recuperada, apenas substituída.
+ *
+ * Identidade v2: a mesma moldura do Login (painel marinho + cartão branco), com os
+ * campos e o botão do sistema. O "Ir para o login" é um LINK com cara de botão (antes
+ * era um botão dentro de um link — interativo dentro de interativo).
  */
 import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { KeyRound } from "lucide-react";
 
-import { LogoHorizontal } from "../components/Logo";
-import { Botao, Carregando, Mensagem } from "../components/ui";
+import { MolduraEntrada } from "../components/MolduraEntrada";
+import {
+  Botao, Campo, Carregando, ESTILOS_BOTAO, IconePastel, Mensagem, TAMANHOS_BOTAO, estiloInput,
+} from "../components/ui";
 import { useApi } from "../hooks/useApi";
 import { ApiError, api } from "../lib/api";
 
@@ -19,8 +26,8 @@ type Estado =
   | { fase: "formulario"; nome: string }
   | { fase: "concluido" };
 
-const inputCls =
-  "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950";
+/** Link com o visual do botão primário (sem aninhar <button> em <a>). */
+const LINK_BOTAO = `inline-flex w-full items-center justify-center font-semibold transition-colors ${TAMANHOS_BOTAO.lg} ${ESTILOS_BOTAO.primario}`;
 
 export default function RedefinirSenha() {
   const [params] = useSearchParams();
@@ -66,85 +73,88 @@ export default function RedefinirSenha() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="card w-full max-w-sm p-6">
-        <div className="mb-6 flex flex-col items-start gap-1.5">
-          <LogoHorizontal altura={44} />
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">Redefinição de senha</p>
+    <MolduraEntrada>
+      <div className="mb-7 flex items-center gap-3">
+        <IconePastel icone={KeyRound} tom="violeta" tamanho="lg" />
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">Redefinição de senha</h1>
+          <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Link de uso único, gerado por quem administra a sua conta.</p>
         </div>
-
-        {estado.fase === "verificando" && <Carregando texto="Conferindo o link..." />}
-
-        {estado.fase === "invalido" && (
-          <div className="space-y-4">
-            <Mensagem tipo="erro">
-              Este link é inválido ou expirou. Peça um novo ao administrador da escola.
-            </Mensagem>
-            <Link
-              to="/login"
-              className="block text-center text-sm text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              Voltar para o login
-            </Link>
-          </div>
-        )}
-
-        {estado.fase === "formulario" && (
-          <form onSubmit={enviar} className="space-y-4">
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">
-              {estado.nome ? <>Olá, <strong>{estado.nome}</strong>! </> : null}
-              Escolha uma nova senha (mínimo 8 caracteres).
-            </p>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium">Nova senha</span>
-              <input
-                type="password"
-                required
-                autoComplete="new-password"
-                minLength={8}
-                className={inputCls}
-                value={senha}
-                onChange={(e) => setSenha(e.target.value)}
-                autoFocus
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium">Repita a nova senha</span>
-              <input
-                type="password"
-                required
-                autoComplete="new-password"
-                minLength={8}
-                className={inputCls}
-                value={senha2}
-                onChange={(e) => setSenha2(e.target.value)}
-              />
-            </label>
-            {senha2 && senha !== senha2 && (
-              <p className="text-xs text-red-600 dark:text-red-400">As senhas não coincidem.</p>
-            )}
-            {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-            <Botao
-              type="submit"
-              className="w-full"
-              disabled={enviando || senha.length < 8 || senha !== senha2}
-            >
-              {enviando ? "Salvando..." : "Definir nova senha"}
-            </Botao>
-          </form>
-        )}
-
-        {estado.fase === "concluido" && (
-          <div className="space-y-4">
-            <Mensagem tipo="ok">
-              Senha redefinida! Você já pode entrar com a nova senha.
-            </Mensagem>
-            <Link to="/login">
-              <Botao className="w-full">Ir para o login</Botao>
-            </Link>
-          </div>
-        )}
       </div>
-    </div>
+
+      {estado.fase === "verificando" && <Carregando texto="Conferindo o link..." />}
+
+      {estado.fase === "invalido" && (
+        <div className="space-y-5">
+          <Mensagem tipo="erro">
+            {/* Genérico: a conta da Secretaria (e a global) recebe o link do Administrador
+                Global, não da escola; o GET do link não diz de quem é a conta. */}
+            Este link é inválido ou expirou. Peça um novo a quem administra a sua conta (na escola, o
+            administrador da escola; na Secretaria, o Administrador Global da plataforma).
+          </Mensagem>
+          <Link
+            to="/login"
+            className="block rounded-lg text-center text-sm font-semibold text-indigo-700 hover:underline dark:text-indigo-300"
+          >
+            Voltar para o login
+          </Link>
+        </div>
+      )}
+
+      {estado.fase === "formulario" && (
+        <form onSubmit={enviar} className="space-y-5">
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
+            {estado.nome ? <>Olá, <strong className="font-semibold text-zinc-900 dark:text-white">{estado.nome}</strong>! </> : null}
+            Escolha uma nova senha (mínimo 8 caracteres).
+          </p>
+          <Campo rotulo="Nova senha">
+            <input
+              type="password"
+              required
+              autoComplete="new-password"
+              minLength={8}
+              className={`${estiloInput} h-12`}
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              autoFocus
+            />
+          </Campo>
+          <Campo rotulo="Repita a nova senha">
+            <input
+              type="password"
+              required
+              autoComplete="new-password"
+              minLength={8}
+              className={`${estiloInput} h-12`}
+              value={senha2}
+              onChange={(e) => setSenha2(e.target.value)}
+            />
+          </Campo>
+          {senha2 && senha !== senha2 && (
+            <p className="text-xs font-medium text-rose-600 dark:text-rose-400">As senhas não coincidem.</p>
+          )}
+          {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
+          <Botao
+            type="submit"
+            tamanho="lg"
+            className="w-full"
+            disabled={enviando || senha.length < 8 || senha !== senha2}
+          >
+            {enviando ? "Salvando..." : "Definir nova senha"}
+          </Botao>
+        </form>
+      )}
+
+      {estado.fase === "concluido" && (
+        <div className="space-y-5">
+          <Mensagem tipo="ok">
+            Senha redefinida! Você já pode entrar com a nova senha.
+          </Mensagem>
+          <Link to="/login" className={LINK_BOTAO}>
+            Ir para o login
+          </Link>
+        </div>
+      )}
+    </MolduraEntrada>
   );
 }

@@ -1,0 +1,268 @@
+{
+  "indicador": {
+    "chave": "ideb",
+    "nome": "IDEB",
+    "orgao": "INEP",
+    "oficial": true,
+    "unidade": "índice",
+    "escala": "indice_ideb",
+    "disponivel": true,
+    "motivo_indisponivel": null,
+    "texto_indisponivel": null,
+    "abrangencias": [
+      "rede",
+      "escola"
+    ],
+    "por_escola": true,
+    "etapas": [
+      "anos_iniciais"
+    ],
+    "componentes": [],
+    "rotulos_etapas": {
+      "anos_iniciais": "anos iniciais (1º ao 5º ano)"
+    },
+    "rotulos_componentes": {},
+    "edicoes": [
+      2019,
+      2021,
+      2023
+    ],
+    "edicao_mais_recente": 2023,
+    "tem_meta": true,
+    "avisos": [
+      "A série do Ideb e do Saeb do 5º ano (2019–2023) não é comparável em todo o período: o universo avaliado e os critérios mudaram ao longo das edições (o mínimo de alunos, a entrada das escolas rurais, o critério de divulgação — detalhes nas notas técnicas do INEP). O aviso vale para a série TODA, não só para 2021: compare edições com cuidado.",
+      "2021 foi aplicado na pandemia: o INEP publicou uma nota própria sobre o modo de ler o Ideb e o Saeb dessa edição (ver as notas do arquivo oficial).",
+      "Metas do Ideb: só as do 1º ciclo, de 2007 a 2021. Depois de 2021 (de 2023 em diante) o INEP não definiu meta: o Constela não compara.",
+      "Atingiu ou não a meta: o Ideb e a meta comparados na precisão publicada pelo INEP (1 casa decimal). Ideb igual ou acima da meta nessa precisão = atingiu.",
+      "Números marcados “sem registro oficial” foram gravados antes, pelo botão de importação em 1 clique, sem prévia nem registro do arquivo. A importação oficial só os mantém quando são iguais aos do arquivo; um número diferente só é trocado com confirmação explícita."
+    ]
+  },
+  "filtros": {
+    "etapa": "anos_iniciais",
+    "componente": null,
+    "escola_id": null,
+    "de": null,
+    "ate": null,
+    "visao": "escolas",
+    "edicao": 2023
+  },
+  "opcoes": {
+    "etapas": [
+      "anos_iniciais"
+    ],
+    "componentes": [],
+    "edicoes": [
+      2019,
+      2021,
+      2023
+    ],
+    "escolas": [
+      {
+        "id": 6,
+        "nome": "EMEF Ébano Fictícia",
+        "codigo_inep": "35990105",
+        "tem_dado": false
+      },
+      {
+        "id": 2,
+        "nome": "EMEF Fictícia Alfa",
+        "codigo_inep": "35990101",
+        "tem_dado": true
+      },
+      {
+        "id": 3,
+        "nome": "EMEF Fictícia Beta",
+        "codigo_inep": "35990102",
+        "tem_dado": true
+      },
+      {
+        "id": 4,
+        "nome": "EMEF Fictícia Delta",
+        "codigo_inep": "35990104",
+        "tem_dado": true
+      },
+      {
+        "id": 5,
+        "nome": "EMEF Fictícia Gama",
+        "codigo_inep": null,
+        "tem_dado": false
+      }
+    ]
+  },
+  "series": [],
+  "escolas": [
+    {
+      "escola_id": 6,
+      "nome": "EMEF Ébano Fictícia",
+      "codigo_inep": "35990105",
+      "pendencia": null,
+      "edicao": 2023,
+      "valor": null,
+      "casas": null,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": "sem_resultado",
+      "texto_ausencia": "sem resultado nesta edição",
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "depois_do_1o_ciclo",
+      "texto_sem_meta": "o INEP não definiu meta do Ideb depois de 2021",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": null,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": null,
+      "texto_proveniencia": null,
+      "difere_do_oficial": false
+    },
+    {
+      "escola_id": 2,
+      "nome": "EMEF Fictícia Alfa",
+      "codigo_inep": "35990101",
+      "pendencia": null,
+      "edicao": 2023,
+      "valor": 6.3,
+      "casas": 1,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": null,
+      "texto_ausencia": null,
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "depois_do_1o_ciclo",
+      "texto_sem_meta": "o INEP não definiu meta do Ideb depois de 2021",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": 6,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": "oficial",
+      "texto_proveniencia": null,
+      "difere_do_oficial": false
+    },
+    {
+      "escola_id": 3,
+      "nome": "EMEF Fictícia Beta",
+      "codigo_inep": "35990102",
+      "pendencia": null,
+      "edicao": 2023,
+      "valor": 5.6,
+      "casas": 1,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": null,
+      "texto_ausencia": null,
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "depois_do_1o_ciclo",
+      "texto_sem_meta": "o INEP não definiu meta do Ideb depois de 2021",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": 6,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": "oficial",
+      "texto_proveniencia": null,
+      "difere_do_oficial": false
+    },
+    {
+      "escola_id": 4,
+      "nome": "EMEF Fictícia Delta",
+      "codigo_inep": "35990104",
+      "pendencia": null,
+      "edicao": 2023,
+      "valor": 7.7,
+      "casas": 1,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": null,
+      "texto_ausencia": null,
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "depois_do_1o_ciclo",
+      "texto_sem_meta": "o INEP não definiu meta do Ideb depois de 2021",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": null,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": "sem_registro",
+      "texto_proveniencia": "número gravado antes, sem o registro do arquivo oficial",
+      "difere_do_oficial": false
+    },
+    {
+      "escola_id": 5,
+      "nome": "EMEF Fictícia Gama",
+      "codigo_inep": null,
+      "pendencia": "sem_codigo_inep",
+      "edicao": 2023,
+      "valor": null,
+      "casas": null,
+      "valor_detalhado": null,
+      "casas_detalhe": null,
+      "motivo_ausencia": "sem_codigo_inep",
+      "texto_ausencia": "a escola está sem código INEP no cadastro",
+      "meta": null,
+      "meta_casas": null,
+      "operador_meta": null,
+      "motivo_sem_meta": "depois_do_1o_ciclo",
+      "texto_sem_meta": "o INEP não definiu meta do Ideb depois de 2021",
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "diferenca_meta_detalhe": null,
+      "situacao_meta": null,
+      "instavel": false,
+      "fonte_id": null,
+      "fonte_meta_id": null,
+      "fonte_detalhe_id": null,
+      "proveniencia": null,
+      "texto_proveniencia": null,
+      "difere_do_oficial": false
+    }
+  ],
+  "quebras": [],
+  "avisos": [
+    "A série do Ideb e do Saeb do 5º ano (2019–2023) não é comparável em todo o período: o universo avaliado e os critérios mudaram ao longo das edições (o mínimo de alunos, a entrada das escolas rurais, o critério de divulgação — detalhes nas notas técnicas do INEP). O aviso vale para a série TODA, não só para 2021: compare edições com cuidado.",
+    "2021 foi aplicado na pandemia: o INEP publicou uma nota própria sobre o modo de ler o Ideb e o Saeb dessa edição (ver as notas do arquivo oficial).",
+    "Metas do Ideb: só as do 1º ciclo, de 2007 a 2021. Depois de 2021 (de 2023 em diante) o INEP não definiu meta: o Constela não compara.",
+    "Atingiu ou não a meta: o Ideb e a meta comparados na precisão publicada pelo INEP (1 casa decimal). Ideb igual ou acima da meta nessa precisão = atingiu.",
+    "Números marcados “sem registro oficial” foram gravados antes, pelo botão de importação em 1 clique, sem prévia nem registro do arquivo. A importação oficial só os mantém quando são iguais aos do arquivo; um número diferente só é trocado com confirmação explícita.",
+    "A tabela por escola está em ordem alfabética: não é ranking e não serve para ordenar escolas."
+  ],
+  "fontes": {
+    "6": {
+      "importacao_id": 6,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "arquivo_ficticio.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2023,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "inep_ideb_escolas",
+      "modo": "upload",
+      "notas": []
+    }
+  }
+}

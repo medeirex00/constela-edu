@@ -12,7 +12,7 @@ import { diferencaIDEB, type ComparacaoMeta } from "./ideb";
 export function Bloco({ titulo, children, testId }: { titulo: string; children: ReactNode; testId?: string }) {
   return (
     <section className="space-y-2" aria-label={titulo} data-testid={testId}>
-      <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{titulo}</h3>
+      <h3 className="text-[15px] font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">{titulo}</h3>
       {children}
     </section>
   );
@@ -20,7 +20,7 @@ export function Bloco({ titulo, children, testId }: { titulo: string; children: 
 
 export function Aviso({ children, testId }: { children: ReactNode; testId?: string }) {
   return (
-    <div className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300"
+    <div className="flex items-start gap-2 rounded-xl border border-amber-200/70 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300"
          data-testid={testId}>
       <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
       <div className="min-w-0 space-y-1 break-words">{children}</div>
@@ -30,7 +30,7 @@ export function Aviso({ children, testId }: { children: ReactNode; testId?: stri
 
 export function Nota({ children, testId }: { children: ReactNode; testId?: string }) {
   return (
-    <div className="flex items-start gap-1.5 rounded-lg bg-indigo-50 p-2.5 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300"
+    <div className="flex items-start gap-2 rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300"
          data-testid={testId}>
       <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
       <div className="min-w-0 space-y-1 break-words">{children}</div>
@@ -51,7 +51,7 @@ export function Seletor<T extends string | number>({ rotulo, valor, opcoes, aoMu
                 const escolhida = opcoes.find((o) => String(o.valor) === e.target.value);
                 if (escolhida) aoMudar(escolhida.valor);
               }}
-              className="min-w-0 max-w-full rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+              className="min-w-0 max-w-full rounded-xl border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 transition-colors hover:border-zinc-400 focus:border-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
         {opcoes.map((o) => <option key={String(o.valor)} value={String(o.valor)}>{o.texto}</option>)}
       </select>
     </div>

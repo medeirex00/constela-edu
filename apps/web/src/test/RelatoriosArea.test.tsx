@@ -100,6 +100,18 @@ describe("Relatórios como área única", () => {
     expect(painel.getAttribute("aria-labelledby")).toBe(aba.id);
     expect(aba.getAttribute("aria-controls")).toBe(painel.id);
   });
+
+  it("setas trocam de aba e levam o foco junto (tabindex móvel)", async () => {
+    montar("/relatorios");
+    const oficiais = await screen.findByRole("tab", { name: "Relatórios oficiais" });
+    expect(oficiais).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: "Por período" })).toHaveAttribute("tabindex", "-1");
+    oficiais.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(await screen.findByText("Relatório por Período")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Por período" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Por período" })).toHaveFocus();
+  });
 });
 
 describe("barra lateral", () => {
@@ -114,11 +126,7 @@ describe("barra lateral", () => {
 
   /** Escola já configurada: é o estado em que o menu completo aparece. */
   function montarLayout(usuario = usuarioFake({ is_global: true, cargo: "admin" })) {
-    responder("GET", "/escolas/1/sync/status", {
-      escola_id: 1, escola_nome: "Escola Modelo Constela", qtd_alunos: 30,
-      qtd_turmas: 3, plataformas: [], lista_piloto_importada: true,
-      integracao_configurada: true,
-    });
+    responder("GET", "/escolas/1/sync/onboarding", { lista_piloto_importada: true });
     renderComApp(<LayoutReal />, {
       rota: "/relatorios",
       usuario,

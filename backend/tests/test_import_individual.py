@@ -55,8 +55,8 @@ def _pdf_individual(nome="MARIA CLARA TESTE", turma="9 ANO Z TESTE") -> bytes:
 def test_nome_do_arquivo_extrai_e_rejeita_lixo():
     from app.services.perfis_pdf import nome_do_arquivo
     assert nome_do_arquivo(
-        "Relatório de performance do estudante - ISABELA LOHANA DE JESUS LAVINSKY.pdf"
-    ) == "ISABELA LOHANA DE JESUS LAVINSKY"
+        "Relatório de performance do estudante - ISABELA LUANA DE TESTELLI FICTICIO.pdf"
+    ) == "ISABELA LUANA DE TESTELLI FICTICIO"
     # variação (desempenho/aluno) e nome com hífen
     assert nome_do_arquivo(
         "relatorio de desempenho do aluno - ANA - MARIA SOUSA.pdf") == "ANA - MARIA SOUSA"
@@ -81,7 +81,7 @@ def test_legenda_de_imagem_nao_vira_nome():
     from app.services.perfis_pdf import _parece_nome_pessoa
     assert not _parece_nome_pessoa("Imagem de perfil do aluno")
     assert not _parece_nome_pessoa("Logotipo Elefante Letrado")
-    assert _parece_nome_pessoa("Veronica Oliveira Marcolino Goes")
+    assert _parece_nome_pessoa("Leocadia Exemplari Modelli Inventini")
 
 
 def test_parser_individual_extrai_turma():

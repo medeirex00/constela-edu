@@ -170,7 +170,7 @@ def test_executar_ignora_o_cursor_quando_a_recoleta_e_devida(db, escola_completa
     ``contadores_anteriores`` VAZIO — é isso que faz o conector buscar os livros
     do aluno que o total parado estava escondendo."""
     escola, espiao, ex = _preparar(db, escola_completa, monkeypatch)
-    service._salvar_contadores(db, escola.id, PLAT, {"8157715": 27})
+    service._salvar_contadores(db, escola.id, PLAT, {"9870002": 27})
     db.commit()
 
     service.executar(db, ex)
@@ -182,18 +182,18 @@ def test_executar_passa_o_cursor_quando_a_marca_e_recente(db, escola_completa,
     """A otimização não é jogada fora: fora da janela de reconciliação o cursor
     continua valendo."""
     escola, espiao, ex = _preparar(db, escola_completa, monkeypatch)
-    service._salvar_contadores(db, escola.id, PLAT, {"8157715": 27})
+    service._salvar_contadores(db, escola.id, PLAT, {"9870002": 27})
     _marca(db, escola.id, service._agora() - timedelta(days=1))
 
     service.executar(db, ex)
-    assert espiao.cursor_recebido == {"8157715": 27}
+    assert espiao.cursor_recebido == {"9870002": 27}
 
 
 def test_recoleta_sem_dados_nao_reinicia_o_relogio(db, escola_completa, monkeypatch):
     """Uma recoleta que não gravou nada NÃO pode marcar "reconciliado" — senão a
     janela pularia e a perda voltaria a ser permanente por mais uma semana."""
     escola, espiao, ex = _preparar(db, escola_completa, monkeypatch, arquivos=[])
-    service._salvar_contadores(db, escola.id, PLAT, {"8157715": 27})
+    service._salvar_contadores(db, escola.id, PLAT, {"9870002": 27})
     db.commit()
 
     res = service.executar(db, ex)
@@ -209,7 +209,7 @@ def test_nao_ha_loop_a_recoleta_bem_sucedida_fecha_a_janela(db, escola_completa,
                                                             monkeypatch):
     """Sem isto a correção viraria recoleta completa em TODA execução."""
     escola = escola_completa["escola"]
-    service._salvar_contadores(db, escola.id, PLAT, {"8157715": 27})
+    service._salvar_contadores(db, escola.id, PLAT, {"9870002": 27})
     assert service._coleta_completa_devida(db, escola.id, PLAT)[0] is True
 
     # simula o que `executar` faz ao final de uma execução COM dados
@@ -221,7 +221,7 @@ def test_nao_ha_loop_a_recoleta_bem_sucedida_fecha_a_janela(db, escola_completa,
 
 
 # ---------------------------------------------------------------------------
-# O caso real: relatório de turma IDÊNTICO, livro novo escondido
+# O caso real (com valores sintéticos): relatório de turma IDÊNTICO, livro novo escondido
 # ---------------------------------------------------------------------------
 class _NavTotalParado:
     """Relatório de turma com o total PARADO (o caso medido) e um endpoint por
@@ -241,28 +241,31 @@ class _NavTotalParado:
     async def fechar(self): pass
 
     async def coletar_respostas(self, url, timeout_s=25):
+        # Suposição (captura de jul/2026, não confirmada pelo Elefante): cada turma
+        # traz a escola (schoolId). Sem ela, e sem active-schools, a coleta é
+        # recusada (escola_nao_identificada).
         return [{"url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/"
                         "course/get-courses-students",
-                 "json": [{"id": 511434, "name": "5B", "student": [
-                     {"id": 2751737, "name": "CESAR BENITO DINIZ ALVES"}]}]}]
+                 "json": [{"id": 900001, "name": "5B", "schoolId": 23952, "student": [
+                     {"id": 9870001, "name": "GERVASIO AUGUSTO TESTELLI FICTICIO"}]}]}]
 
     async def avaliar(self, expressao):
         if "fetch(" in expressao and "overall-course-report" in expressao:
             # TODOS os campos iguais ao que já está gravado: nenhum sinal muda.
             return {"ok": True, "status": 200, "tipo": "object", "n": 0, "body": {
-                "courseId": 511434,
+                "courseId": 900001,
                 "courseSchoolDescriptors": {"courseName": "5B"},
-                "students": [{"studentId": 2751737,
-                              "studentName": "CESAR BENITO DINIZ ALVES",
-                              "totalBooksRead": 184, "totalReadTime": 21600,
-                              "responses": 289, "approvedResponses": 172}]}}
+                "students": [{"studentId": 9870001,
+                              "studentName": "GERVASIO AUGUSTO TESTELLI FICTICIO",
+                              "totalBooksRead": 120, "totalReadTime": 14400,
+                              "responses": 240, "approvedResponses": 150}]}}
         if "fetch(" in expressao and "overall-student-books-read" in expressao:
             import re
             self.buscou_ids = [n for n in re.findall(r"\b(\d{3,})\b", expressao)
-                               if n == "2751737"]
-            return [{"studentId": 2751737, "n": 1, "books": [
+                               if n == "9870001"]
+            return [{"studentId": 9870001, "n": 1, "books": [
                 {"bookTitle": "Histórias do Mundo-O pavão e o corvo",
-                 "levelName": "E", "lastReadWhen": "2026-09-21T10:40:46",
+                 "levelName": "E", "lastReadWhen": "2026-09-15T14:00:00",
                  "totalTimeSpent": 120}]}]
         return {"n_selects": 0, "course_links": [], "student_links": [],
                 "tem_exportar": False}
@@ -292,12 +295,12 @@ def _coletar(cursor):
 
 
 def test_o_cursor_esconde_o_livro_quando_o_total_nao_muda(monkeypatch):
-    """Reprodução do bug: total 184 == cursor 184 → o aluno é pulado e o livro
-    de 21/09 não é nem pedido. Este é o comportamento ANTIGO, e é por isso que
+    """Reprodução do bug: total 120 == cursor 120 → o aluno é pulado e o livro
+    de 15/09 não é nem pedido. Este é o comportamento ANTIGO, e é por isso que
     a perda era permanente."""
     from app.sync.connectors import elefante
     monkeypatch.setattr(elefante, "_SETTLE_S", 0)
-    nav, _ctx, arquivos = _coletar({"2751737": 184})
+    nav, _ctx, arquivos = _coletar({"9870001": 120})
     assert nav.buscou_ids is None                       # nem foi pedido
     assert not [a for a in arquivos if a.formato_hint == "leituras"]
 
@@ -308,7 +311,7 @@ def test_a_recoleta_completa_encontra_o_livro_escondido(monkeypatch):
     from app.sync.connectors import elefante
     monkeypatch.setattr(elefante, "_SETTLE_S", 0)
     nav, ctx, arquivos = _coletar({})
-    assert nav.buscou_ids == ["2751737"]
+    assert nav.buscou_ids == ["9870001"]
     leituras = [a for a in arquivos if a.formato_hint == "leituras"]
     assert leituras, "a recoleta tem de produzir o arquivo de leituras"
     import json
@@ -316,7 +319,7 @@ def test_a_recoleta_completa_encontra_o_livro_escondido(monkeypatch):
     titulos = [x["bookTitle"] for x in payload["leituras"]]
     assert "Histórias do Mundo-O pavão e o corvo" in titulos
     # e o cursor novo é registrado para a próxima execução
-    assert ctx.contadores_novos == {"2751737": 184}
+    assert ctx.contadores_novos == {"9870001": 120}
 
 
 def test_a_recoleta_e_idempotente_no_conector(monkeypatch):

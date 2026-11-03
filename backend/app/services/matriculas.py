@@ -191,6 +191,31 @@ def serie_da_sala(nome: str, ano_escolar: str = "") -> int | None:
     return None
 
 
+#: As duas ETAPAS que a correspondência de sala distingue. ``serie_da_sala`` sozinha
+#: não basta: ``serie_da_sala("1ª Fase") == serie_da_sala("1º Ano") == 1``.
+ETAPA_FUNDAMENTAL = "fundamental"
+ETAPA_FORA_DO_FUNDAMENTAL = "fora_do_fundamental"   # Fase/EMEI/Pré/Maternal/EJA…
+
+
+def etapa_da_sala(nome: str, ano_escolar: str = "") -> str:
+    """ETAPA da sala: ``"fora_do_fundamental"`` quando o rótulo nomeia Educação
+    Infantil (ou outra etapa que não é o Fundamental — Fase, EMEI, Pré, Maternal,
+    EJA…), senão ``"fundamental"``.
+
+    Mesma regra da elegibilidade (``elegibilidade.e_etapa_fora_da_premiacao``),
+    para "Fase" querer dizer a mesma coisa na premiação e na correspondência de
+    sala. Lê os DOIS rótulos da turma cadastrada (``ano_escolar`` e ``nome``): se
+    qualquer um deles nomeia uma etapa fora do Fundamental, a sala é tratada como
+    tal — o rótulo já chegou ao banco mentindo ("1º Ano" derivado de "1 FASE A"),
+    e na dúvida a sala NÃO é dada como a mesma do relatório (a linha vai para
+    revisão em vez de cair na turma de outra etapa)."""
+    from app.services.elegibilidade import e_etapa_fora_da_premiacao
+    for rotulo in (ano_escolar, nome):
+        if rotulo and e_etapa_fora_da_premiacao(rotulo):
+            return ETAPA_FORA_DO_FUNDAMENTAL
+    return ETAPA_FUNDAMENTAL
+
+
 def overlap_turma(a: frozenset[str] | set[str], b: frozenset[str] | set[str]) -> int:
     """Tokens de turma em comum, ignorando palavras ubíquas — para "1º Ano A"
     casar com "1 ANO A MANHÃ" (série+letra) mas NÃO com "4º Ano A"."""
@@ -199,7 +224,7 @@ def overlap_turma(a: frozenset[str] | set[str], b: frozenset[str] | set[str]) ->
 
 def nome_menos_informativo(novo: str, atual: str) -> bool:
     """O nome `novo` é uma versão ENCURTADA do `atual` (abreviação posicional ou
-    subconjunto de tokens)? "MARIA E. SILVA" contra "MARIA EDUARDA SILVA" → True.
+    subconjunto de tokens)? "MARIA E. TESTELLI" contra "MARIA EDUARDA TESTELLI" → True.
 
     A planilha é a fonte da verdade do nome, mas NUNCA para encurtar: gravar a
     abreviação por cima do nome completo degrada a identidade e enfraquece o
@@ -304,7 +329,10 @@ class ContextoCasamento:
 
     def registrar_ra(self, ident: matching.Identidade) -> None:
         """Só o RA (usado por quem NÃO é candidato por nome — aluno excluído):
-        o RA continua identificando (reativa), o nome não."""
+        o RA continua identificando (reativa), o nome não. Reconhecer não é
+        reativar: a persistência não reativa a ficha excluída cuja conta da
+        plataforma hoje vale em outra escola (D10,
+        ``routers.importacoes._reter_reativacao_conta_de_outra_escola``)."""
         if ident.id is not None and ident.ra:
             self.por_ra.setdefault(ident.ra, ident)
 
@@ -408,7 +436,7 @@ def candidatos_disputados(linhas: list[LinhaMatricula],
 
     ``resolver_linha`` decide uma linha de cada vez e não enxerga as outras. Sem
     esta pré-passagem, um cadastro abreviado que serve a DUAS linhas ("AGATHA V"
-    para "AGATHA VITORIA MOURA" e "AGATHA VALENTINA LIMA") é entregue à PRIMEIRA
+    para "AGATHA VIOLETA MONTESTELLI" e "AGATHA VALENTINA LIMA") é entregue à PRIMEIRA
     do arquivo — um cara-ou-coroa que gruda os dados de plataforma de uma criança
     na ficha da outra. Aqui só se DETECTA a disputa; quem a resolve é
     ``arbitrar_disputa``, mandando as linhas envolvidas para revisão.
@@ -484,6 +512,46 @@ def aviso_transferido(nome: str, turma: str) -> str:
             "população ativa, para não desfazer essa decisão sozinha. Os dados "
             "dele continuam preservados. Se a criança de fato retornou, use "
             "Alunos › Reativar; a planilha, por si só, não é prova de retorno.")
+
+
+def aviso_reativacao_retida_conta_de_outra_escola(nome: str, turma: str) -> str:
+    """A planilha reconhece (pelo RA) um aluno EXCLUÍDO que ela reativaria, mas a
+    conta da plataforma da ficha dele hoje é a identidade de um aluno de OUTRA
+    escola do Constela (D10). A linha não é aplicada e o status não muda — ver
+    ``routers.importacoes._reter_reativacao_conta_de_outra_escola``."""
+    return (f"“{nome}” (turma {turma}) consta na planilha e está EXCLUÍDO nesta "
+            "escola, mas a conta da plataforma da ficha dele hoje é a identidade de "
+            "um aluno de OUTRA escola do Constela. A importação NÃO o reativou e não "
+            "alterou nada na ficha: reativar faria a conta valer nas duas escolas, e "
+            "a criança de lá deixaria de ser atualizada. Se a criança voltou mesmo "
+            "para esta escola, o Admin Global confere com as duas escolas e reativa "
+            "em Alunos › Reativar; depois disso (ou quando a conta deixar de valer "
+            "na outra escola), o próximo envio da planilha aplica esta linha.")
+
+
+def aviso_turma_arquivada(turma: str, linhas: int, *, previa: bool = False) -> str:
+    """A planilha traz alunos numa turma que está ARQUIVADA no cadastro.
+
+    Turma arquivada não recebe ficha nem matrícula nova — arquivar existe para
+    tirá-la de circulação sem apagar o histórico. Mas matricular "por cima" em
+    silêncio também não serve (foi assim que o 1º Ano arquivado da escola 17
+    deixou de receber crianças sem ninguém saber), e escolher outra turma por
+    conta própria seria pior. Então a importação não aplica as linhas dessa
+    turma, não mexe nas matrículas que já existem nela e diz como resolver.
+    ``previa=True`` é o texto da análise, antes de confirmar."""
+    if previa:
+        return (f"A turma “{turma}” está ARQUIVADA no cadastro: as {linhas} linha(s) "
+                "da planilha nessa turma NÃO serão aplicadas ao confirmar — nenhuma "
+                "ficha nem matrícula nova nasce em turma arquivada, e as matrículas "
+                "que já existem nela continuam como estão. Se a turma deve receber "
+                "alunos, reative-a antes em Turmas › “Mostrar turmas arquivadas e de "
+                "outros anos letivos” › Reativar.")
+    return (f"A turma “{turma}” está ARQUIVADA no cadastro: {linhas} linha(s) da "
+            "planilha nessa turma NÃO foram aplicadas — nenhuma ficha nem "
+            "matrícula nova foi criada nela, e as matrículas que já existiam "
+            "continuam como estavam. Se a turma deve receber alunos, reative-a em "
+            "Turmas › “Mostrar turmas arquivadas e de outros anos letivos” › "
+            "Reativar e envie a planilha de novo.")
 
 
 def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:

@@ -74,6 +74,7 @@ from app.core.database import SessionLocal  # noqa: E402
 from app.models import Escola, Leitura, Livro  # noqa: E402
 from app.services import dificuldade_livro  # noqa: E402
 from app.services.audit import registrar  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 
 @dataclass
@@ -270,24 +271,8 @@ def _imprimir_congelamento(relatorio: RelatorioCongelamento) -> None:
         print(f"    por nível: {por_nivel}")
 
 
-def _saida_tolerante() -> None:
-    """Não derrubar o relatório por causa do console.
-
-    No Windows o terminal costuma estar em ``cp1252``, que não tem ``→`` nem
-    ``≠``: o ``print`` do relatório de vínculo estourava ``UnicodeEncodeError`` e
-    matava a execução ANTES de chegar ao congelamento — e um dry-run que aborta
-    no meio é pior do que um caractere trocado. ``errors="replace"`` preserva a
-    codificação do terminal (acentos continuam certos) e degrada só o que não
-    couber. Em terminal UTF-8 nada muda."""
-    for fluxo in (sys.stdout, sys.stderr):
-        try:
-            fluxo.reconfigure(errors="replace")
-        except (AttributeError, OSError, ValueError):   # stream sem reconfigure
-            pass
-
-
 def main() -> int:
-    _saida_tolerante()
+    forcar_saida_utf8()
     parser = argparse.ArgumentParser(
         description="Vincula livros antigos ao catálogo oficial do Elefante (dry-run por padrão).")
     parser.add_argument("--escola", type=int, default=None, help="só esta escola")

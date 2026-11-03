@@ -14,11 +14,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # rodar de backend/
 
 from app.services import dificuldade_livro as dl  # noqa: E402
 from app.services import scoring  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 SEED = {"AA": 1, "BB": 1, "CC": 1, "DD": 1, "A": 2, "B": 2, "C": 2,
         **{c: 4 for c in "DEFGHIJ"}, **{c: 8 for c in "KLMNOPQR"},
@@ -39,6 +39,7 @@ def pct(v, p):
 
 
 def main(completo: bool = False) -> int:
+    forcar_saida_utf8()
     cat = dl.catalogo()
     regra = dl.RegraV1()
     livros = sorted(cat.por_id.values(), key=lambda b: (dl.posicao_nivel(b.nivel) or 0, b.word_count))

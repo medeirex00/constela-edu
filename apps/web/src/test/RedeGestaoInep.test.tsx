@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../lib/api";
 import RedeGestao from "../pages/rede/RedeGestao";
-import { api, renderComApp, responder, responderErro, screen, userEvent, usuarioFake } from "./utils";
+import { api, renderComApp, responder, responderErro, screen, userEvent, usuarioFake, within } from "./utils";
 
 const adminGlobal = usuarioFake({ nome: "Admin Global", cargo: "admin", is_global: true, escola_id: null });
 
@@ -225,5 +225,26 @@ describe("Gestão de redes — códigos INEP", () => {
     await u.click(screen.getByRole("button", { name: /Salvar códigos/ }));
     expect(await screen.findByText("1 código(s) salvo(s).")).toBeInTheDocument();
     expect(screen.queryByTestId("aviso-detalhes")).toBeNull();
+  });
+});
+
+describe("Gestão de redes — rótulo da escola nos campos, no celular", () => {
+  it("em Localização e em Códigos INEP o nome ocupa a linha no celular (inteiro) e mantém o w-40 do sm para cima", async () => {
+    const NOME = "EMEF Sintética Constelação do Vale Comprido";
+    responder("GET", "/redes/gerenciar", {
+      redes: [{ id: 1, nome: "Rede Sintética", uf: "SP", codigo_ibge: null, status: "ativa" }],
+      escolas: [escola(21, NOME, null)], usuarios: [],
+    });
+    responder("GET", "/redes/1/modulos", []);
+    renderComApp(<RedeGestao />, { usuario: adminGlobal });
+    await screen.findByText("Códigos INEP das escolas");
+
+    for (const campo of [`Cidade de ${NOME}`, `Código INEP de ${NOME}`]) {
+      const linha = screen.getByLabelText(campo).parentElement!;
+      const rotulo = within(linha).getByText(NOME);
+      expect(rotulo).toHaveAttribute("title", NOME);
+      expect(rotulo).toHaveClass("w-full", "max-sm:whitespace-normal", "sm:w-40", "truncate");
+      expect(rotulo).not.toHaveClass("w-40");
+    }
   });
 });

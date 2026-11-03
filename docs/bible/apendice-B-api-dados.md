@@ -96,11 +96,11 @@ Fonte: `routers/professor.py`. Papéis `admin`, `coordenador`, `professor` (`exi
 |--------|-------------------------|--------|---------|----------|-------|:----:|
 | GET | `/escolas/{escola_id}/quest/turmas/{turma_id}/acessos` | admin/coord/prof | — | `list[AcessoAlunoOut]` | 401/403, 404 (turma) | 🟢 |
 | POST | `/escolas/{escola_id}/quest/turmas/{turma_id}/cartoes` `?regenerar&rotacionar_codigo` | admin/coord/prof | — | **PDF** (cartões + página do professor) | 401/403, 404 (turma) | 🟢 |
-| POST | `/escolas/{escola_id}/quest/alunos/{aluno_id}/cartao` `?regenerar&rotacionar_codigo` | admin/coord/prof | — | **PDF** (cartão individual) | 401/403, 404 (aluno), 422 (inativo) | 🟢 |
+| POST | `/escolas/{escola_id}/quest/alunos/{aluno_id}/cartao` `?regenerar&rotacionar_codigo` | admin/coord/prof | — | **PDF** (cartão individual); **204** sem corpo quando revoga o cartão de aluno inativo | 401/403, 404 (aluno), 422 (reimpressão de inativo, ou inativo sem cartão) | 🟢 |
 
 **`AcessoAlunoOut`**: `aluno_id, nome, nome_exibicao (str|null), apelido (str|null), codigo_login (str|null), ultimo_acesso (datetime|null), tem_credencial (bool)`.
 
-> **Semântica** (donas [Seção 10](10-professor-familia.md)/[Seção 21](21-suporte-operacao.md)): `regenerar` troca o **QR** de todos e derruba sessões; `rotacionar_codigo` troca também o **código** (virada de ano / suspeita de vazamento). **Aspiracional** (sem router): panorama BNCC, erros comuns, trajetória, `POST atribuições` (Missão da Turma).
+> **Semântica** (donas [Seção 10](10-professor-familia.md)/[Seção 21](21-suporte-operacao.md)): `regenerar` revoga os cartões: troca **código e QR** e derruba sessões (o cartão traz os dois; revisão e97); `rotacionar_codigo` tem o mesmo efeito (mantido por compatibilidade; virada de ano). Sem parâmetro = reimpressão do mesmo cartão. A revogação vale também para quem está **inativo** (integração 5 do e97): a da turma revoga o cartão dos inativos fora do PDF (`revogados_inativos` na auditoria) e a individual responde 204 sem cartão novo; a reativação não reabre o cartão revogado. Sem revogação pedida, o inativo volta com o mesmo cartão. A da turma revoga também o cartão de quem estava numa folha dela impressa desde a última revogação e depois **trocou de turma** (integração 6 do e97): a auditoria de cada folha (`quest.cartoes_gerados`) guarda os `aluno_ids` do PDF, e a do regenerar traz `revogados_fora_da_turma` e os ids. **Aspiracional** (sem router): panorama BNCC, erros comuns, trajetória, `POST atribuições` (Missão da Turma).
 
 ### B.12 ⚠️ Contrato `/quest/familia` — 🔵 aspiracional Q3
 
@@ -235,7 +235,7 @@ Namespace das regras não-hardcoded em `configuracoes` (KV por escola). Chaves-a
 | **401** | sessão inválida/expirada; código inexistente | `entrar` com código desconhecido; `ver` ≠ token_version |
 | **403** | papel sem permissão; **aluno inativo** no login | `quem`/`entrar` de aluno `status != "ativo"` |
 | **404** | recurso fora do escopo | turma/aluno de outra escola |
-| **422** | validação Pydantic / regra de domínio | `nome` fora de 2–20; cartão de aluno inativo |
+| **422** | validação Pydantic / regra de domínio | `nome` fora de 2–20; reimpressão do cartão de aluno inativo |
 | **429** | rate-limit excedido | tentativas de login acima do teto por (código/IP) |
 
 Políticas: rate-limit anti-farm no login; **gabarito nunca no cliente**; isolamento por `escola_id` em toda rota adulta.
@@ -335,11 +335,11 @@ Source: `routers/professor.py`. Roles `admin`, `coordenador`, `professor` (`exig
 |--------|------------------------|-------|---------|----------|--------|:----:|
 | GET | `/escolas/{escola_id}/quest/turmas/{turma_id}/acessos` | admin/coord/teacher | — | `list[AcessoAlunoOut]` | 401/403, 404 (class) | 🟢 |
 | POST | `/escolas/{escola_id}/quest/turmas/{turma_id}/cartoes` `?regenerar&rotacionar_codigo` | admin/coord/teacher | — | **PDF** (cards + teacher page) | 401/403, 404 (class) | 🟢 |
-| POST | `/escolas/{escola_id}/quest/alunos/{aluno_id}/cartao` `?regenerar&rotacionar_codigo` | admin/coord/teacher | — | **PDF** (individual card) | 401/403, 404 (student), 422 (inactive) | 🟢 |
+| POST | `/escolas/{escola_id}/quest/alunos/{aluno_id}/cartao` `?regenerar&rotacionar_codigo` | admin/coord/teacher | — | **PDF** (individual card); **204** with no body when it revokes an inactive student's card | 401/403, 404 (student), 422 (reprint for an inactive student, or inactive without a card) | 🟢 |
 
 **`AcessoAlunoOut`**: `aluno_id, nome, nome_exibicao (str|null), apelido (str|null), codigo_login (str|null), ultimo_acesso (datetime|null), tem_credencial (bool)`.
 
-> **Semantics** (owners [Section 10](10-professor-familia.md)/[Section 21](21-suporte-operacao.md)): `regenerar` swaps everyone's **QR** and drops sessions; `rotacionar_codigo` also swaps the **code** (year rollover / suspected leak). **Aspirational** (no router): BNCC panorama, common mistakes, trajectory, `POST atribuições` (Class Mission).
+> **Semantics** (owners [Section 10](10-professor-familia.md)/[Section 21](21-suporte-operacao.md)): `regenerar` revokes the cards: it swaps **code and QR** and drops sessions (the card carries both; e97 review); `rotacionar_codigo` has the same effect (kept for compatibility; year rollover). No parameter = reprint of the same card. Revocation also applies to **inactive** students (e97 integration 5): the class one revokes the inactive students' cards outside the PDF (`revogados_inativos` in the audit) and the individual one answers 204 without a new card; reactivation does not reopen the revoked card. Without a revocation request, the inactive student comes back with the same card. The class one also revokes the card of whoever was on one of its sheets printed since its last revocation and later **changed class** (e97 integration 6): the audit of each sheet (`quest.cartoes_gerados`) keeps the PDF's `aluno_ids`, and the regeneration's audit carries `revogados_fora_da_turma` and the ids. **Aspirational** (no router): BNCC panorama, common mistakes, trajectory, `POST atribuições` (Class Mission).
 
 ### B.12 ⚠️ `/quest/familia` contract — 🔵 aspirational Q3
 
@@ -474,7 +474,7 @@ Namespace of non-hardcoded rules in `configuracoes` (per-school KV). Target keys
 | **401** | invalid/expired session; unknown code | `entrar` with an unknown code; `ver` ≠ token_version |
 | **403** | role lacks permission; **inactive student** at login | `quem`/`entrar` for a student with `status != "ativo"` |
 | **404** | resource out of scope | class/student from another school |
-| **422** | Pydantic validation / domain rule | `nome` outside 2–20; card for an inactive student |
+| **422** | Pydantic validation / domain rule | `nome` outside 2–20; reprinting an inactive student's card |
 | **429** | rate-limit exceeded | login attempts above the (code/IP) cap |
 
 Policies: anti-farm login rate-limit; **gabarito never on the client**; `escola_id` isolation on every adult route.

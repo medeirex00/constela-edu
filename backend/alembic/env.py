@@ -34,8 +34,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# A URL é SEMPRE a da aplicação — não a do .ini.
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# A URL é SEMPRE a da aplicação — não a do .ini. A Config do Alembic é um
+# ConfigParser com interpolação: um '%' solto (senha percent-codificada, como %40
+# para '@') levantava "invalid interpolation syntax" com a URL INTEIRA, senha junto,
+# no texto do erro (que ia para o log do deploy), e nada migrava. Dobrar o '%' é o
+# escape documentado pelo Alembic; get_section/engine_from_config devolvem a URL
+# original, e o modo offline usa settings.DATABASE_URL direto.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

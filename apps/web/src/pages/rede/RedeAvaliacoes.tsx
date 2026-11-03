@@ -1,29 +1,42 @@
 /**
- * Avaliações externas da rede (Secretaria): cruzar indicadores oficiais (SAEB/
- * IDEB/...) com o engajamento nas plataformas + importar os arquivos oficiais.
+ * Indicadores oficiais da rede: FONTES E ARQUIVOS OFICIAIS (rastreabilidade, o detalhe
+ * técnico) — e, para o admin global, a IMPORTAÇÃO. É a área documental: cada indicador
+ * (ICA, SARESP, Ideb/Saeb) com o detalhe dos números, a cobertura por escola e o arquivo de
+ * origem de cada número. Para a Secretaria fica DENTRO de "Avaliações externas" (o link
+ * "Arquivos oficiais de cada número"); o h1 continua "Fontes dos indicadores". Para ENTENDER
+ * os resultados, o lugar é "Avaliações externas" (`/rede/avaliacoes-externas`): o cartão do
+ * topo leva de volta para lá.
  *
- * PERFIS (decisões D4 e D5 do dono, 17/10): a Secretaria LÊ a rede inteira (cartões,
- * abas e correlação); importar, remover uma edição e o robô de coleta são SÓ do admin
- * global — a tela não mostra esses controles a mais ninguém (o backend também barra).
+ * PERFIS (decisões D4 e D5 do dono, 17/10): a Secretaria LÊ a rede inteira (cartões e
+ * abas); importar, remover uma edição e o robô de coleta são SÓ do admin global — a tela
+ * não mostra esses controles a mais ninguém (o backend também barra).
  *
- * Duas partes: (1) CORRELAÇÃO/EVOLUÇÃO — dispersão engajamento × avaliação por
- * escola, correlação de Pearson e a evolução histórica, SEM afirmar causalidade;
- * (2) IMPORTAÇÃO — upload do arquivo oficial → mapear colunas → conferir → gravar
- * (casa por código INEP). Só dados agregados por escola.
+ * A antiga correlação (dispersão, evolução e Pearson) SAIU daqui: ela misturava número
+ * oficial com estimativa, cruzava anos diferentes e fazia a "média da rede" pela média das
+ * escolas. A relação com as plataformas agora é a das Análises avançadas
+ * (`/rede/analise?ver=relacao`), com critérios documentados — esta página só aponta para lá,
+ * e só para o admin global (as Análises avançadas não estão no menu da Secretaria).
+ * A importação: upload do arquivo oficial → mapear colunas → conferir → gravar (casa por
+ * código INEP). Só dados agregados por escola.
  */
 import {
   AlertTriangle,
+  ArrowRight,
   Bot,
+  ClipboardCheck,
   Clock,
   FileUp,
   Info,
+  Landmark,
   Pause,
   Play,
   RefreshCw,
+  Settings2,
   Trash2,
   Upload,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
 import {
   Badge,
@@ -31,15 +44,20 @@ import {
   Campo,
   Card,
   Carregando,
+  Confirmacao,
+  ESTILOS_BOTAO,
+  Erro,
+  IconePastel,
   Mensagem,
   PageHeader,
+  TAMANHOS_BOTAO,
   Vazio,
   estiloInput,
 } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { ApiError, api, apiUpload } from "../../lib/api";
-import { nota } from "../../lib/formato";
+import { dataDia } from "../../lib/formato";
 import CartaoICA from "./CartaoICA";
 import CartaoIDEB from "./CartaoIDEB";
 import CartaoSARESP from "./CartaoSARESP";
@@ -48,13 +66,6 @@ import ImportarIndicadoresOficiais from "./ImportarIndicadoresOficiais";
 interface SerieOpcao {
   avaliacao: string; nome: string; tipo: string; indicador: string;
   etapa: string | null; componente: string | null; edicoes: number[];
-}
-interface PontoCorr { escola_id: number; nome: string; x: number; y: number }
-interface EvolPonto { edicao: number; media_valor: number; escolas: number }
-interface Correlacao {
-  nome: string; nome_curto?: string; tipo: string; indicador: string; etapa: string | null;
-  componente: string | null; edicao: number; metrica: string;
-  pontos: PontoCorr[]; n: number; pearson: number | null; evolucao: EvolPonto[];
 }
 interface CatalogoItem { chave: string; nome: string; tipo: string; orgao: string | null; descricao: string | null }
 interface Analise { linhas_lidas: number; n_colunas: number; primeiras_linhas: string[][] }
@@ -72,119 +83,70 @@ interface Fonte {
   ultimo_resumo: Record<string, unknown> | null;
 }
 
-// O eixo X padrão é o ÍNDICE per capita (0–1000), comparável entre escolas. A
-// média 0–100 continua disponível, mas é normalizada contra o P90 da própria
-// escola: cruzar o SAEB com ela media homogeneidade interna, não engajamento.
-const METRICAS: Record<string, string> = {
-  pontuacao_geral: "Índice da rede (0–1000, comparável)",
-  adocao: "Adoção (%)",
-  media_geral: "Média interna (0–100, não comparável)",
-};
 const rotuloSerie = (s: SerieOpcao) =>
   [s.nome, s.indicador, s.etapa, s.componente].filter(Boolean).join(" · ");
 
-// --- Gráficos SVG (sem dependência externa) ---------------------------------
+// --- Para entender os resultados: Avaliações externas ------------------------------
 
-// O rótulo do eixo vertical só tem a ALTURA do gráfico (~48 caracteres a 11px):
-// o SVG corta o que passa, nas duas pontas. A API manda um nome curto para isso;
-// se ainda assim não couber, encurta com "…" — o nome inteiro vai no <title>.
-const MAX_EIXO_Y = 46;
-const encurtar = (s: string, max: number) =>
-  s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
-
-function Dispersao({ pontos, rotuloX, rotuloY, tituloY }: {
-  pontos: PontoCorr[]; rotuloX: string; rotuloY: string; tituloY: string;
-}) {
-  const W = 460, H = 300, m = { l: 44, r: 16, t: 12, b: 36 };
-  if (pontos.length === 0) {
-    return <p className="py-10 text-center text-sm text-zinc-500">Sem escolas com os dois dados.</p>;
-  }
-  const xs = pontos.map((p) => p.x), ys = pontos.map((p) => p.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const px = (x: number) => m.l + (maxX === minX ? 0.5 : (x - minX) / (maxX - minX)) * (W - m.l - m.r);
-  const py = (y: number) => H - m.b - (maxY === minY ? 0.5 : (y - minY) / (maxY - minY)) * (H - m.t - m.b);
+/** O cartão-link de VOLTA para "Avaliações externas" (o resumo em linguagem simples de cada
+ *  avaliação e a comparação entre escolas) — esta página é o detalhe técnico. Só para o admin
+ *  global, um link secundário leva à relação com as plataformas (Análises avançadas), e a
+ *  rede mostrada vai junto. */
+function CartaoAvaliacoesExternas({ redeId, ehGlobal }: { redeId: number; ehGlobal: boolean }) {
+  const comRede = (caminho: string, extra = "") => {
+    const q = new URLSearchParams(extra);
+    if (ehGlobal) q.set("rede", String(redeId));
+    const texto = q.toString();
+    return texto ? `${caminho}?${texto}` : caminho;
+  };
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Dispersão engajamento × avaliação">
-      <line x1={m.l} y1={H - m.b} x2={W - m.r} y2={H - m.b} stroke="currentColor" className="text-zinc-300 dark:text-zinc-700" />
-      <line x1={m.l} y1={m.t} x2={m.l} y2={H - m.b} stroke="currentColor" className="text-zinc-300 dark:text-zinc-700" />
-      {pontos.map((p) => (
-        <g key={p.escola_id}>
-          <circle cx={px(p.x)} cy={py(p.y)} r={5} className="fill-indigo-500/80" />
-          <title>{p.nome}: engajamento {nota(p.x)} · avaliação {p.y}</title>
-        </g>
-      ))}
-      <text x={(W) / 2} y={H - 6} textAnchor="middle" className="fill-zinc-500 text-[11px]">{rotuloX} →</text>
-      <text x={12} y={H / 2} textAnchor="middle" transform={`rotate(-90 12 ${H / 2})`} className="fill-zinc-500 text-[11px]">
-        {encurtar(rotuloY, MAX_EIXO_Y)} →<title>{tituloY}</title>
-      </text>
-      <text x={m.l} y={H - m.b + 14} className="fill-zinc-400 text-[10px]">{nota(minX)}</text>
-      <text x={W - m.r} y={H - m.b + 14} textAnchor="end" className="fill-zinc-400 text-[10px]">{nota(maxX)}</text>
-      <text x={m.l - 6} y={H - m.b} textAnchor="end" className="fill-zinc-400 text-[10px]">{minY}</text>
-      <text x={m.l - 6} y={m.t + 8} textAnchor="end" className="fill-zinc-400 text-[10px]">{maxY}</text>
-    </svg>
+    <Card className="p-5 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-4" data-testid="cartao-avaliacoes-externas">
+        <div className="flex min-w-0 items-start gap-3">
+          <IconePastel icone={ClipboardCheck} tom="violeta" />
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-white">Avaliações externas</h2>
+            <p className="mt-0.5 max-w-2xl text-xs text-zinc-600 dark:text-zinc-400">
+              O que cada avaliação mede, a edição mais recente, a meta e a comparação entre as escolas, em linguagem
+              simples, ficam em Avaliações externas. Aqui está o detalhe técnico: os arquivos e a cobertura de cada número.
+              {/* As Análises avançadas saíram do menu da Secretaria (DESENHO3 §1, §5): o link
+                  para a relação com as plataformas fica só para o admin global. */}
+              {ehGlobal && (
+                <>
+                  {" "}A relação com o Elefante e o Matific fica nas{" "}
+                  <Link to={comRede("/rede/analise", "ver=relacao")}
+                        className="font-semibold text-indigo-700 hover:underline dark:text-indigo-300">
+                    Análises avançadas
+                  </Link>.
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+        <Link to={comRede("/rede/avaliacoes-externas")}
+              className={`inline-flex items-center justify-center font-semibold transition-colors ${TAMANHOS_BOTAO.md} ${ESTILOS_BOTAO.primario}`}>
+          Voltar para Avaliações externas <ArrowRight size={14} aria-hidden />
+        </Link>
+      </div>
+    </Card>
   );
 }
 
-function Evolucao({ pontos }: { pontos: EvolPonto[] }) {
-  const W = 460, H = 150, m = { l: 40, r: 16, t: 12, b: 26 };
-  if (pontos.length < 2) {
-    return <p className="py-6 text-center text-sm text-zinc-500">
-      Só uma edição importada — a evolução aparece quando houver duas ou mais.</p>;
-  }
-  const es = pontos.map((p) => p.edicao), vs = pontos.map((p) => p.media_valor);
-  const minE = Math.min(...es), maxE = Math.max(...es);
-  const minV = Math.min(...vs), maxV = Math.max(...vs);
-  const px = (e: number) => m.l + (maxE === minE ? 0.5 : (e - minE) / (maxE - minE)) * (W - m.l - m.r);
-  const py = (v: number) => H - m.b - (maxV === minV ? 0.5 : (v - minV) / (maxV - minV)) * (H - m.t - m.b);
-  const d = pontos.map((p, i) => `${i ? "L" : "M"}${px(p.edicao)},${py(p.media_valor)}`).join(" ");
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Evolução histórica">
-      <path d={d} fill="none" className="stroke-emerald-500" strokeWidth={2} />
-      {pontos.map((p) => (
-        <g key={p.edicao}>
-          <circle cx={px(p.edicao)} cy={py(p.media_valor)} r={4} className="fill-emerald-500" />
-          <text x={px(p.edicao)} y={H - 8} textAnchor="middle" className="fill-zinc-500 text-[10px]">{p.edicao}</text>
-          <text x={px(p.edicao)} y={py(p.media_valor) - 8} textAnchor="middle" className="fill-zinc-500 text-[10px]">{p.media_valor}</text>
-        </g>
-      ))}
-    </svg>
-  );
-}
+// --- Remover uma edição (só admin global) -------------------------------------------
 
-function forcaPearson(r: number): string {
-  const a = Math.abs(r);
-  const nivel = a >= 0.7 ? "forte" : a >= 0.4 ? "moderada" : a >= 0.2 ? "fraca" : "desprezível";
-  return `${nivel} ${r >= 0 ? "positiva" : "negativa"}`;
-}
-
-// --- Correlação --------------------------------------------------------------
-
-function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
-  redeId: number; opcoes: SerieOpcao[]; podeImportar: boolean; aoRemover: () => void;
-}) {
+/** Desfazer uma importação manual/1 clique errada: apaga só a série EXATA escolhida. */
+function RemoverEdicao({ opcoes, aoRemover }: { opcoes: SerieOpcao[]; aoRemover: () => void }) {
   const [idx, setIdx] = useState(0);
   const [edicao, setEdicao] = useState<number | null>(null);
-  const [metrica, setMetrica] = useState("pontuacao_geral");
   const [removendo, setRemovendo] = useState(false);
+  const [confirmando, setConfirmando] = useState(false);
   const [msgRemover, setMsgRemover] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
-  const serie = opcoes[idx];
+  const serie = opcoes[Math.min(idx, opcoes.length - 1)];
   const ed = edicao ?? serie?.edicoes[0] ?? null;
 
-  const url = serie && ed != null
-    ? `/redes/${redeId}/avaliacoes/correlacao?avaliacao=${serie.avaliacao}`
-      + `&indicador=${encodeURIComponent(serie.indicador)}&edicao=${ed}&metrica=${metrica}`
-      + (serie.etapa ? `&etapa=${encodeURIComponent(serie.etapa)}` : "")
-      + (serie.componente ? `&componente=${encodeURIComponent(serie.componente)}` : "")
-    : null;
-  const { dados, carregando, erro } = useApi<Correlacao>(url);
-
+  /** Só depois do "Remover edição" da confirmação (o botão da linha só a abre). */
   async function removerSerie() {
-    if (!serie || ed == null) return;
-    if (!window.confirm(
-      `Remover os resultados de “${rotuloSerie(serie)} · edição ${ed}”? `
-      + "Apaga só ESTA série (não afeta outras edições, etapas nem componentes). "
-      + "Use para desfazer uma importação errada.")) return;
+    if (!serie || ed == null) { setConfirmando(false); return; }
     setRemovendo(true); setMsgRemover(null);
     try {
       // Identifica a série EXATA (com etapa/componente) — não apaga as irmãs.
@@ -200,11 +162,18 @@ function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
       aoRemover();
     } catch (e) {
       setMsgRemover({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível remover." });
-    } finally { setRemovendo(false); }
+    } finally { setRemovendo(false); setConfirmando(false); }
   }
 
   return (
-    <Card className="space-y-4 p-5">
+    <Card className="space-y-3 p-5">
+      <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+        <IconePastel icone={Trash2} tom="rosa" tamanho="sm" /> Remover uma edição importada
+      </h2>
+      <p className="text-xs text-zinc-500">
+        Desfaz uma importação manual ou de 1 clique errada (apaga só a série escolhida). Uma série com número
+        de importação oficial (com prévia) não é apagada aqui: ela se desfaz pela própria importação.
+      </p>
       <div className="flex flex-wrap items-end gap-3">
         <Campo rotulo="Avaliação / indicador">
           <select className={estiloInput} value={idx}
@@ -217,13 +186,8 @@ function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
             {serie?.edicoes.map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
         </Campo>
-        <Campo rotulo="Engajamento">
-          <select className={estiloInput} value={metrica} onChange={(e) => setMetrica(e.target.value)}>
-            {Object.entries(METRICAS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-        </Campo>
-        {podeImportar && serie && ed != null && (
-          <button onClick={removerSerie} disabled={removendo}
+        {serie && ed != null && (
+          <button type="button" onClick={() => setConfirmando(true)} disabled={removendo}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:hover:bg-red-500/10"
                   title="Remover os resultados desta edição (desfazer importação errada)">
             <Trash2 size={14} /> {removendo ? "Removendo..." : `Remover edição ${ed}`}
@@ -231,50 +195,25 @@ function Correlacao({ redeId, opcoes, podeImportar, aoRemover }: {
         )}
       </div>
       {msgRemover && <Mensagem tipo={msgRemover.tipo}>{msgRemover.texto}</Mensagem>}
-
-      {erro && !dados && <Mensagem tipo="erro">{erro.message}</Mensagem>}
-      {carregando && !dados ? <Carregando /> : dados && (
-        <>
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div>
-              <h3 className="mb-1 text-sm font-semibold">Dispersão por escola</h3>
-              <p className="mb-2 text-xs text-zinc-500">
-                Cada ponto é uma escola: {METRICAS[dados.metrica]} (horizontal) × {dados.nome} (vertical).
-              </p>
-              <Dispersao pontos={dados.pontos} rotuloX={METRICAS[dados.metrica]}
-                         rotuloY={dados.nome_curto ?? dados.nome} tituloY={dados.nome} />
-            </div>
-            <div>
-              <h3 className="mb-1 text-sm font-semibold">Evolução da rede (média por edição)</h3>
-              <p className="mb-2 text-xs text-zinc-500">Média das escolas em {dados.nome}.</p>
-              <Evolucao pontos={dados.evolucao} />
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-800/50">
-            {dados.pearson != null ? (
-              <p>
-                Correlação (Pearson) entre engajamento e {dados.nome}:{" "}
-                <b className="tabular-nums">{dados.pearson}</b>{" "}
-                <span className="text-zinc-500">— {forcaPearson(dados.pearson)}, com {dados.n} escola(s)</span>.
-              </p>
-            ) : (
-              <p className="text-zinc-500">
-                Dados insuficientes para calcular a correlação (precisa de ao menos 3 escolas
-                com os dois dados e alguma variação).
-              </p>
-            )}
-            <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-              <span>
-                <b>Correlação não é causalidade.</b> O gráfico mostra que os indicadores caminham
-                juntos — não que o uso das plataformas causou o resultado oficial (ou o contrário).
-                As avaliações oficiais têm defasagem (bienais/anuais) e medem só o nível da escola.
-              </span>
+      <Confirmacao
+        titulo="Remover esta edição?"
+        aberto={confirmando && serie != null && ed != null}
+        aoFechar={() => setConfirmando(false)}
+        aoConfirmar={() => void removerSerie()}
+        rotuloConfirmar={removendo ? "Removendo..." : "Remover edição"}
+        variante="perigo"
+        ocupado={removendo}
+      >
+        {serie && ed != null && (
+          <>
+            <p>Remover os resultados de <strong>“{rotuloSerie(serie)} · edição {ed}”</strong>?</p>
+            <p>
+              Apaga só ESTA série (não afeta outras edições, etapas nem componentes). Use para desfazer uma
+              importação errada.
             </p>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </Confirmacao>
     </Card>
   );
 }
@@ -454,8 +393,8 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
 
   return (
     <Card className="space-y-4 p-5">
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <FileUp size={16} className="text-indigo-600" /> Importar resultado oficial
+      <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+        <IconePastel icone={FileUp} tom="violeta" tamanho="sm" /> Importar resultado oficial
       </h2>
       <p className="text-xs text-zinc-500">
         Suba o arquivo oficial (XLSX, CSV ou o ZIP) do INEP/SEDUC. O sistema mostra as primeiras linhas;
@@ -475,7 +414,7 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
 
       {analise && (
         <>
-          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+          <div className="relative overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
             <table className="min-w-full text-xs">
               <thead>
                 <tr className="bg-zinc-100 dark:bg-zinc-800">
@@ -499,7 +438,7 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
             A linha destacada é a <b>primeira linha de dados</b> (índice {linhaDados}). Ajuste abaixo.
           </p>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Campo rotulo="Avaliação">
               {/* Agrupado por ÓRGÃO (INEP, CAEd, SEDUC-SP…): o CAEd aparece como
                   categoria própria, pronta para receber Fluência Leitora, Diagnóstica
@@ -624,9 +563,7 @@ const _STATUS_TOM: Record<string, "ok" | "alerta" | "neutro"> = {
 };
 
 function quando(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  return dataDia(iso);
 }
 
 function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
@@ -635,6 +572,8 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
 }) {
   const [ocupada, setOcupada] = useState<number | null>(null);
   const [msg, setMsg] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  /** A fonte cujo "Remover" foi pedido: abre a confirmação (nada é apagado antes). */
+  const [paraExcluir, setParaExcluir] = useState<Fonte | null>(null);
 
   async function acao(fn: () => Promise<unknown>, id: number, okTxt: string) {
     setOcupada(id); setMsg(null);
@@ -653,16 +592,19 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
   const alternar = (f: Fonte) => acao(
     () => api<Fonte>(`/avaliacoes/fontes/${f.id}?ativo=${!f.ativo}`, { method: "PUT" }), f.id,
     f.ativo ? "Fonte pausada." : "Fonte reativada.");
-  const excluir = (f: Fonte) => {
-    if (!window.confirm(`Remover a fonte "${f.nome}"? Os resultados já importados permanecem.`)) return;
-    acao(() => api(`/avaliacoes/fontes/${f.id}`, { method: "DELETE" }), f.id, "Fonte removida.");
-  };
+  // Só depois do "Remover fonte" da confirmação; o diálogo fica aberto (ocupado) até a resposta.
+  async function excluir() {
+    const f = paraExcluir;
+    if (!f) return;
+    await acao(() => api(`/avaliacoes/fontes/${f.id}`, { method: "DELETE" }), f.id, "Fonte removida.");
+    setParaExcluir(null);
+  }
 
   return (
     <Card className="space-y-4 p-5">
       <div className="flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <Bot size={16} className="text-indigo-600" /> Coleta automática (robô)
+        <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+          <IconePastel icone={Bot} tom="azul" tamanho="sm" /> Coleta automática (robô)
         </h2>
         <button onClick={recarregar} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                 title="Atualizar" aria-label="Atualizar">
@@ -721,9 +663,9 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
                         title={f.ativo ? "Pausar" : "Reativar"} aria-label={f.ativo ? "Pausar" : "Reativar"}>
                   {f.ativo ? <Pause size={14} /> : <Play size={14} />}
                 </button>
-                <button onClick={() => excluir(f)} disabled={ocupada === f.id}
+                <button type="button" onClick={() => setParaExcluir(f)} disabled={ocupada === f.id}
                         className="rounded-lg border border-zinc-200 p-2 text-red-500 hover:bg-red-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-red-500/10"
-                        title="Remover" aria-label="Remover">
+                        title="Remover" aria-label={`Remover a fonte ${f.nome}`}>
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -731,6 +673,19 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
           ))}
         </ul>
       )}
+      <Confirmacao
+        titulo="Remover a fonte automática?"
+        aberto={paraExcluir !== null}
+        aoFechar={() => setParaExcluir(null)}
+        aoConfirmar={() => void excluir()}
+        rotuloConfirmar={paraExcluir && ocupada === paraExcluir.id ? "Removendo..." : "Remover fonte"}
+        variante="perigo"
+        ocupado={paraExcluir !== null && ocupada === paraExcluir.id}
+      >
+        {paraExcluir && (
+          <p>Remover a fonte <strong>“{paraExcluir.nome}”</strong>? Os resultados já importados permanecem.</p>
+        )}
+      </Confirmacao>
     </Card>
   );
 }
@@ -797,8 +752,8 @@ function ImportarUmClique({ aoImportar }: { aoImportar: () => void }) {
 
   return (
     <Card className="space-y-4 p-5">
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <FileUp size={16} className="text-indigo-600" /> Importar em 1 clique
+      <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+        <IconePastel icone={FileUp} tom="teal" tamanho="sm" /> Importar em 1 clique
       </h2>
       <p className="text-xs text-zinc-500">
         Escolha a base e suba o arquivo — o sistema <b>já sabe ler as colunas</b> e casa por código
@@ -836,6 +791,18 @@ function ImportarUmClique({ aoImportar }: { aoImportar: () => void }) {
 
 // --- Página ------------------------------------------------------------------
 
+/** Cabeçalho da página (o mesmo com e sem rede): título e a descrição de uma linha. */
+function Cabecalho({ ehGlobal }: { ehGlobal: boolean }) {
+  return (
+    <PageHeader
+      titulo={ehGlobal ? "Importações e fontes" : "Fontes dos indicadores"}
+      descricao={ehGlobal
+        ? "Fontes e arquivos oficiais (detalhe técnico): cada indicador oficial (ICA, SARESP, Ideb e Saeb) com o detalhe dos números, a cobertura por escola e o arquivo de origem — e a importação, a prévia e o desfazer."
+        : "Fontes e arquivos oficiais (detalhe técnico): cada indicador oficial (ICA, SARESP, Ideb e Saeb) com o detalhe dos números, a cobertura por escola e o arquivo de origem. Para entender os resultados, comece por Avaliações externas."}
+    />
+  );
+}
+
 function Painel({ redeId, podeImportar, ehGlobal }: {
   redeId: number; podeImportar: boolean; ehGlobal: boolean;
 }) {
@@ -846,7 +813,7 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
   // salvar uma fonte no bloco de importação (componente irmão) a atualize.
   const fontesApi = useApi<Fonte[]>(ehGlobal ? "/avaliacoes/fontes" : null);
   // Aplicar ou desfazer uma importação oficial (ou gravar o CODMUN) remonta os cartões do
-  // SARESP e do Ideb/Saeb e relê a correlação: eles mostram na hora o que mudou.
+  // SARESP e do Ideb/Saeb e relê as séries importadas: eles mostram na hora o que mudou.
   const [versaoOficiais, setVersaoOficiais] = useState(0);
   // A importação do ICA mudou algo da rede (inclusive o código IBGE, de que o SARESP e o
   // Ideb/Saeb também dependem): os dois cartões e a importação oficial releem.
@@ -854,10 +821,9 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        titulo="Avaliações externas"
-        descricao="Cruzar os indicadores oficiais (SAEB, IDEB, SARESP…) com o engajamento nas plataformas — evolução e correlação, por rede e escola."
-      />
+      <Cabecalho ehGlobal={ehGlobal} />
+
+      <CartaoAvaliacoesExternas redeId={redeId} ehGlobal={ehGlobal} />
 
       <CartaoICA redeId={redeId} ehGlobal={ehGlobal} aoMudar={() => setVersaoIca((v) => v + 1)} />
       <CartaoSARESP key={`saresp-${versaoOficiais}-${versaoIca}`} redeId={redeId} ehGlobal={ehGlobal} />
@@ -874,11 +840,11 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
           </Mensagem>
         </Card>
       ) : opcoes && opcoes.length > 0 ? (
-        <Correlacao redeId={redeId} opcoes={opcoes} podeImportar={podeImportar} aoRemover={recarregar} />
+        podeImportar && <RemoverEdicao opcoes={opcoes} aoRemover={recarregar} />
       ) : (
         <Card className="p-6">
-          <p className="flex items-center gap-2 text-sm text-zinc-500">
-            <Info size={16} /> Ainda não há resultados de avaliação importados para esta rede.
+          <p className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <Info size={16} aria-hidden className="shrink-0 text-indigo-500" /> Ainda não há resultados de avaliação importados para esta rede.
             {podeImportar
               ? " Importe um arquivo oficial abaixo para começar."
               : " Os resultados oficiais são importados pelo administrador global do Constela."}
@@ -903,9 +869,10 @@ function Painel({ redeId, podeImportar, ehGlobal }: {
 
 export default function RedeAvaliacoes() {
   const { usuario } = useApp();
+  const navegar = useNavigate();
   const redeDoUsuario = usuario?.rede_id ?? null;
-  const { dados: redes, carregando, erro: erroRedes } = useApi<{ id: number; nome: string }[]>(
-    redeDoUsuario == null ? "/redes" : null);
+  const { dados: redes, carregando, erro: erroRedes, recarregar: recarregarRedes } =
+    useApi<{ id: number; nome: string }[]>(redeDoUsuario == null ? "/redes" : null);
   const redeId = redeDoUsuario ?? redes?.[0]?.id ?? null;
   const ehGlobal = Boolean(usuario?.is_global);
   // Importar e desfazer (inclusive "Remover edição"): SÓ o admin global (decisão D4).
@@ -914,14 +881,43 @@ export default function RedeAvaliacoes() {
 
   const conteudo = useMemo(() => {
     if (redeId == null) {
+      // A página tem h1 (e a descrição) também sem rede (antes ficava sem título nenhum).
+      const cabecalho = <Cabecalho ehGlobal={ehGlobal} />;
+      // Carregando: sem h1 provisório (seria trocado pelo do painel logo em seguida).
       if (carregando) return <Carregando texto="Carregando as redes..." />;
-      if (erroRedes) return <Vazio titulo="Não foi possível carregar as redes"
-                                   descricao={erroRedes.message} />;
-      return <Vazio titulo="Nenhuma rede disponível"
-                    descricao="Sua conta não está vinculada a uma rede/Secretaria." />;
+      if (erroRedes) {
+        return (
+          <div>
+            {cabecalho}
+            <Card><Erro titulo="Não foi possível carregar as redes" descricao={erroRedes.message} aoTentar={recarregarRedes} /></Card>
+          </div>
+        );
+      }
+      // Admin Global sem rede nenhuma: a mesma mensagem e o mesmo "Gerenciar redes" das
+      // telas irmãs (/rede, /rede/analise, /rede/ranking) — antes dizia que a conta dele
+      // não estava vinculada a uma rede, sem ação nenhuma.
+      return (
+        <div>
+          {cabecalho}
+          <Card>
+            <Vazio
+              icone={ehGlobal ? Landmark : Info}
+              titulo="Nenhuma rede disponível"
+              descricao={ehGlobal
+                ? "Ainda não há redes cadastradas. Crie a primeira para habilitar as importações e as fontes da rede."
+                : "Sua conta não está vinculada a uma rede/Secretaria."}
+              acao={ehGlobal ? (
+                <Botao onClick={() => navegar("/rede/gerenciar")}>
+                  <Settings2 size={15} aria-hidden /> Gerenciar redes
+                </Botao>
+              ) : undefined}
+            />
+          </Card>
+        </div>
+      );
     }
     return <Painel redeId={redeId} podeImportar={podeImportar} ehGlobal={ehGlobal} />;
-  }, [redeId, carregando, erroRedes, podeImportar, ehGlobal]);
+  }, [redeId, carregando, erroRedes, podeImportar, ehGlobal, recarregarRedes, navegar]);
 
   return conteudo;
 }

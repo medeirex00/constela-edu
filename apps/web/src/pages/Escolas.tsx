@@ -4,20 +4,26 @@
  * (unidades com 1º ao 5º ano). Os nomes vêm curtos (ex.: "DEBORA PILON");
  * é só renomear os que não agradarem.
  */
-import { Building2, Pencil, Power, School, UserCog } from "lucide-react";
+import { Building2, CheckCircle2, PauseCircle, Pencil, Power, School, Search, UserCog } from "lucide-react";
 import { useState } from "react";
 
+import { TabelaRolavel } from "../components/TabelaRolavel";
 import UsuariosDaEscola from "../components/UsuariosDaEscola";
 import {
-  Badge,
   Botao,
   Campo,
   Card,
   Carregando,
+  Chip,
+  Confirmacao,
+  Erro,
+  IconePastel,
   Mensagem,
   Modal,
   PageHeader,
+  StatCard,
   Vazio,
+  classesTabela,
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -76,14 +82,27 @@ export default function Escolas() {
   const [nome, setNome] = useState("");
   const [renomear, setRenomear] = useState<Escola | null>(null);
   const [confirmarRede, setConfirmarRede] = useState(false);
+  // Desativar pede confirmação (a escola some das listas e o telão para de abrir);
+  // reativar não. `alternandoId` marca a linha cuja (des)ativação está rodando.
+  const [paraDesativar, setParaDesativar] = useState<Escola | null>(null);
+  const [alternandoId, setAlternandoId] = useState<number | null>(null);
   // Escola "aberta": mostra a seção Usuários dela logo abaixo da lista. NÃO
   // depende de turmas, alunos, Lista Piloto ou integrações — é justamente o
   // caminho para criar o primeiro coordenador de uma escola recém-cadastrada.
   const [escolaAberta, setEscolaAberta] = useState<Escola | null>(null);
+  // Busca só filtra o que se VÊ: a checagem da rede (faltantes) usa a lista inteira.
+  const [busca, setBusca] = useState("");
 
   if (!usuario?.is_global) {
-    return <Vazio titulo="Somente o administrador global"
-                  descricao="A gestão de escolas é exclusiva da conta global da rede." />;
+    return (
+      <div>
+        <PageHeader titulo="Escolas" />
+        <Card>
+          <Vazio icone={Building2} titulo="Somente o administrador global"
+                 descricao="A gestão de escolas é exclusiva da conta global da rede." />
+        </Card>
+      </div>
+    );
   }
 
   // Uma escola da rede conta como existente se TODOS os tokens do nome curto
@@ -152,6 +171,7 @@ export default function Escolas() {
 
   async function alternarStatus(escola: Escola) {
     setOcupado(true);
+    setAlternandoId(escola.id);
     try {
       const novoStatus = escola.status === "ativa" ? "inativa" : "ativa";
       await api(`/escolas/${escola.id}`, {
@@ -167,7 +187,14 @@ export default function Escolas() {
       setMensagem({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível alterar." });
     } finally {
       setOcupado(false);
+      setAlternandoId(null);
     }
+  }
+
+  async function confirmarDesativacao() {
+    if (!paraDesativar) return;
+    await alternarStatus(paraDesativar);
+    setParaDesativar(null);
   }
 
   async function salvarNome() {
@@ -189,97 +216,178 @@ export default function Escolas() {
     }
   }
 
+  const lista = escolas ?? [];
+  const ativas = lista.filter((e) => e.status === "ativa").length;
+  const alvoBusca = normalizar(busca.trim());
+  const visiveis = alvoBusca ? lista.filter((e) => normalizar(e.nome).includes(alvoBusca)) : lista;
+  // Celular (< 640 px): células mais justas; botões da linha com 40 px (alvo de toque).
+  const th = `${classesTabela.th} max-sm:px-3`;
+  const td = "px-4 py-3 max-sm:px-3";
+  const botaoCelular = "max-sm:h-10 max-sm:w-10 max-sm:justify-center max-sm:p-0";
+
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         titulo="Escolas"
-        descricao="Todas as escolas da rede. Troque de escola a qualquer momento pelo seletor no topo da tela."
+        // Na v2 o seletor saiu do topo: é o cartão "Escola" no fim do menu lateral
+        // (abaixo da largura da barra fixa, dentro do menu que abre pelo botão ☰).
+        descricao="Todas as escolas da rede. Troque de escola a qualquer momento pelo cartão “Escola”, no fim do menu lateral."
         acoes={
-          <div className="flex flex-wrap gap-2">
+          <>
             {faltantes.length > 0 && (
-              <Botao variante="neutro" onClick={() => setConfirmarRede(true)}>
-                <School size={15} /> Adicionar rede de Caraguatatuba ({faltantes.length})
+              <Botao variante="secundario" onClick={() => setConfirmarRede(true)}>
+                <School size={15} aria-hidden /> Adicionar rede de Caraguatatuba ({faltantes.length})
               </Botao>
             )}
             <Botao onClick={() => { setNome(""); setNovo(true); }}>
-              <Building2 size={15} /> Nova escola
+              <Building2 size={15} aria-hidden /> Nova escola
             </Botao>
-          </div>
+          </>
         }
       />
 
-      {mensagem && (
-        <div className="mb-4">
-          <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>
+      {/* Contadores reais da lista carregada (inclui as inativas). */}
+      {carregou && lista.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-5 max-sm:[&>*:last-child:nth-child(odd)]:col-span-2">
+          <StatCard icone={<Building2 size={20} />} tom="violeta" rotulo="Escolas cadastradas" valor={String(lista.length)} detalhe="ativas e inativas" />
+          <StatCard icone={<CheckCircle2 size={20} />} tom="verde" rotulo="Em funcionamento" valor={String(ativas)} detalhe="situação ativa" />
+          <StatCard icone={<PauseCircle size={20} />} tom="neutro" rotulo="Desativadas" valor={String(lista.length - ativas)} detalhe="podem ser reativadas" />
         </div>
       )}
 
-      <Card>
+      {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
+
+      <Card className="p-5 sm:p-6">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <h2 className="flex items-center gap-3 text-base font-semibold tracking-tight text-zinc-900 dark:text-white">
+            <IconePastel icone={School} tom="violeta" tamanho="sm" />
+            Escolas da rede
+          </h2>
+          {carregou && lista.length > 0 && (
+            <div className="relative w-full sm:ml-auto sm:w-64">
+              <Search size={15} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input
+                aria-label="Buscar escola"
+                className={`${estiloInput} pl-9`}
+                placeholder="Buscar escola…"
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
         {carregando ? (
           <Carregando />
         ) : erroLista ? (
-          <Vazio titulo="Não foi possível carregar as escolas"
-                 descricao={erroLista.message} />
+          <Erro titulo="Não foi possível carregar as escolas" descricao={erroLista.message} aoTentar={carregar} />
         ) : !escolas || escolas.length === 0 ? (
-          <Vazio titulo="Nenhuma escola" descricao="Crie a primeira escola da rede." />
+          <Vazio icone={Building2} titulo="Nenhuma escola" descricao="Crie a primeira escola da rede." />
+        ) : visiveis.length === 0 ? (
+          <Vazio icone={Search} titulo="Nenhuma escola encontrada" descricao="Nenhum nome corresponde à busca." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          // Celular (< 640 px): a tabela rola de lado dentro do cartão, com o aviso em
+          // texto acima dela, e as ações (Usuários, Renomear, Desativar) ficam presas à
+          // direita (`presa-celular`). O ícone decorativo some no celular para dar espaço
+          // ao nome; cidade, ano letivo e situação vêm com a rolagem.
+          <TabelaRolavel rotulo="Escolas da rede: tabela completa">
+            <table className={classesTabela.tabela}>
               <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium">Nome</th>
-                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Cidade</th>
-                  <th className="px-4 py-2 font-medium">Ano letivo</th>
-                  <th className="px-4 py-2 font-medium">Situação</th>
-                  <th className="w-28 px-4 py-2"></th>
+                <tr>
+                  <th scope="col" className={th}>Nome</th>
+                  <th scope="col" className={th}>Cidade</th>
+                  <th scope="col" className={th}>Ano letivo</th>
+                  <th scope="col" className={th}>Situação</th>
+                  <th scope="col" className={`${th} presa-celular`}><span className="sr-only">Ações</span></th>
                 </tr>
               </thead>
               <tbody>
-                {escolas.map((escola) => (
-                  <tr key={escola.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-4 py-2.5 font-medium">{escola.nome}</td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 sm:table-cell">
-                      {escola.cidade ?? "—"}{escola.estado ? ` / ${escola.estado}` : ""}
-                    </td>
-                    <td className="px-4 py-2.5">{escola.ano_letivo_ativo}</td>
-                    <td className="px-4 py-2.5">
-                      <Badge tom={escola.status === "ativa" ? "ok" : "neutro"}>{escola.status}</Badge>
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      <button
-                        aria-label={`Usuários de ${escola.nome}`}
-                        title="Usuários"
-                        aria-pressed={escolaAberta?.id === escola.id}
-                        className={`inline-flex items-center gap-1 rounded-md p-1.5 align-middle text-xs font-medium transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 ${
-                          escolaAberta?.id === escola.id
-                            ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
-                            : "text-zinc-500 dark:text-zinc-400"
-                        }`}
-                        onClick={() => setEscolaAberta(escolaAberta?.id === escola.id ? null : escola)}
-                      >
-                        <UserCog size={15} /> Usuários
-                      </button>
-                      <button
-                        aria-label={`Renomear ${escola.nome}`}
-                        className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                        onClick={() => { setNome(escola.nome); setRenomear(escola); }}
-                      >
-                        <Pencil size={15} />
-                      </button>
-                      <button
-                        aria-label={escola.status === "ativa" ? `Desativar ${escola.nome}` : `Reativar ${escola.nome}`}
-                        title={escola.status === "ativa" ? "Desativar" : "Reativar"}
-                        className="ml-1 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                        onClick={() => alternarStatus(escola)}
-                      >
-                        <Power size={15} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {visiveis.map((escola) => {
+                  const ativa = escola.status === "ativa";
+                  const aberta = escolaAberta?.id === escola.id;
+                  const alternando = alternandoId === escola.id;
+                  return (
+                    <tr key={escola.id} className={classesTabela.tr}>
+                      <td className={td}>
+                        <div className="flex items-center gap-3">
+                          <IconePastel icone={Building2} tom={ativa ? "violeta" : "neutro"} tamanho="sm" className="hidden sm:grid" />
+                          {/* Celular: base de 8,5rem — o nome quebra em poucas linhas, não uma
+                              palavra por linha. */}
+                          <span className="font-semibold text-zinc-900 max-sm:min-w-[8.5rem] dark:text-zinc-100">{escola.nome}</span>
+                        </div>
+                      </td>
+                      <td className={td}>
+                        {escola.cidade
+                          ? <Chip>{escola.cidade}{escola.estado ? ` / ${escola.estado}` : ""}</Chip>
+                          : <span className="text-zinc-500">—</span>}
+                      </td>
+                      <td className={`${td} tabular-nums text-zinc-700 dark:text-zinc-200`}>{escola.ano_letivo_ativo}</td>
+                      <td className={td}>
+                        {/* Rótulo humano (antes, o enum cru "ativa"/"inativa"). */}
+                        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                          ativa
+                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                            : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                          <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${ativa ? "bg-emerald-500" : "bg-zinc-400"}`} />
+                          {ativa ? "Ativa" : "Inativa"}
+                        </span>
+                      </td>
+                      <td className="presa-celular px-4 py-3 max-sm:px-1.5">
+                        {/* Abaixo de 1024 px os botões ficam só com o ícone (o nome completo
+                            continua no aria-label e no title): com o texto, a tabela passava
+                            da borda do cartão e o "Desativar" aparecia cortado. Nada sai. */}
+                        <div className="flex items-center justify-end gap-1 whitespace-nowrap max-sm:gap-0.5">
+                          <button
+                            type="button"
+                            aria-label={`Usuários de ${escola.nome}`}
+                            title="Usuários"
+                            aria-pressed={aberta}
+                            disabled={ocupado}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${botaoCelular} ${
+                              aberta
+                                ? "bg-indigo-600 text-white shadow-pilula"
+                                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
+                            }`}
+                            onClick={() => setEscolaAberta(aberta ? null : escola)}
+                          >
+                            <UserCog size={15} aria-hidden /> <span className="sr-only lg:not-sr-only">Usuários</span>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Renomear ${escola.nome}`}
+                            title="Renomear"
+                            disabled={ocupado}
+                            className={`rounded-lg p-2 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 max-sm:inline-flex max-sm:items-center ${botaoCelular} dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100`}
+                            onClick={() => { setNome(escola.nome); setRenomear(escola); }}
+                          >
+                            <Pencil size={15} aria-hidden />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={ativa ? `Desativar ${escola.nome}` : `Reativar ${escola.nome}`}
+                            title={ativa ? "Desativar a escola" : "Reativar a escola"}
+                            disabled={ocupado}
+                            aria-busy={alternando}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${botaoCelular} ${
+                              ativa
+                                ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                                : "text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-500/10"}`}
+                            onClick={() => (ativa ? setParaDesativar(escola) : void alternarStatus(escola))}
+                          >
+                            <Power size={14} aria-hidden />{" "}
+                            <span className="sr-only lg:not-sr-only">
+                              {alternando
+                                ? (ativa ? "Desativando..." : "Reativando...")
+                                : (ativa ? "Desativar" : "Reativar")}
+                            </span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </div>
+          </TabelaRolavel>
         )}
       </Card>
 
@@ -293,12 +401,12 @@ export default function Escolas() {
 
       {/* --- Nova escola --- */}
       <Modal titulo="Nova escola" aberto={novo} aoFechar={() => setNovo(false)}>
-        <div className="space-y-3">
+        <div className="space-y-4">
           <Campo rotulo="Nome da escola">
             <input className={estiloInput} value={nome} onChange={(e) => setNome(e.target.value)} autoFocus />
           </Campo>
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
+          <div className="flex justify-end gap-2.5 pt-1">
+            <Botao variante="secundario" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
             <Botao disabled={ocupado || nome.trim().length < 2} onClick={criarUma}>
               {ocupado ? "Criando..." : "Criar escola"}
             </Botao>
@@ -308,12 +416,12 @@ export default function Escolas() {
 
       {/* --- Renomear --- */}
       <Modal titulo={`Renomear ${renomear?.nome ?? ""}`} aberto={renomear !== null} aoFechar={() => setRenomear(null)}>
-        <div className="space-y-3">
+        <div className="space-y-4">
           <Campo rotulo="Novo nome">
             <input className={estiloInput} value={nome} onChange={(e) => setNome(e.target.value)} autoFocus />
           </Campo>
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setRenomear(null)} disabled={ocupado}>Cancelar</Botao>
+          <div className="flex justify-end gap-2.5 pt-1">
+            <Botao variante="secundario" onClick={() => setRenomear(null)} disabled={ocupado}>Cancelar</Botao>
             <Botao disabled={ocupado || nome.trim().length < 2} onClick={salvarNome}>
               {ocupado ? "Salvando..." : "Salvar"}
             </Botao>
@@ -327,21 +435,47 @@ export default function Escolas() {
           Serão criadas <strong>{faltantes.length}</strong> escolas da rede municipal com
           ensino fundamental do 1º ao 5º ano (nomes curtos — renomeie as que quiser depois):
         </p>
-        <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto text-sm">
+        <ul className="mt-3 max-h-64 space-y-1.5 overflow-y-auto text-sm">
           {faltantes.map((escola) => (
-            <li key={escola.nome} className="flex flex-col rounded-md bg-zinc-50 px-3 py-1.5 dark:bg-zinc-800/60">
-              <span className="font-medium">{escola.nome}</span>
+            <li key={escola.nome} className="flex flex-col rounded-xl bg-zinc-50 px-3 py-2 dark:bg-zinc-800/60">
+              <span className="font-semibold">{escola.nome}</span>
               <span className="text-xs text-zinc-500 dark:text-zinc-400">{escola.completo}</span>
             </li>
           ))}
         </ul>
-        <div className="mt-4 flex justify-end gap-2">
-          <Botao variante="neutro" onClick={() => setConfirmarRede(false)} disabled={ocupado}>Cancelar</Botao>
+        <div className="mt-5 flex justify-end gap-2.5">
+          <Botao variante="secundario" onClick={() => setConfirmarRede(false)} disabled={ocupado}>Cancelar</Botao>
           <Botao disabled={ocupado || faltantes.length === 0} onClick={criarRede}>
-            <School size={15} /> {ocupado ? "Criando..." : `Criar ${faltantes.length} escolas`}
+            <School size={15} aria-hidden /> {ocupado ? "Criando..." : `Criar ${faltantes.length} escolas`}
           </Botao>
         </div>
       </Modal>
+
+      {/* --- Desativar uma escola (reativar não pede confirmação) --- */}
+      <Confirmacao
+        titulo="Desativar a escola?"
+        aberto={paraDesativar !== null}
+        aoFechar={() => setParaDesativar(null)}
+        aoConfirmar={() => void confirmarDesativacao()}
+        rotuloConfirmar={ocupado ? "Desativando..." : "Desativar escola"}
+        variante="perigo"
+        ocupado={ocupado}
+      >
+        {paraDesativar && (
+          <>
+            <p>
+              <strong className="text-zinc-800 dark:text-zinc-100">{paraDesativar.nome}</strong> deixa
+              de aparecer no seletor de escolas e na vitrine pública da rede, e o telão dela
+              (Painel Público) para de abrir.
+            </p>
+            <p>
+              Nenhum dado é apagado e a escola pode ser reativada aqui mesmo. Desativar a escola
+              não bloqueia o acesso de quem já tem conta nela: para isso, desative os usuários
+              dela em “Usuários”.
+            </p>
+          </>
+        )}
+      </Confirmacao>
     </div>
   );
 }

@@ -1,12 +1,17 @@
 """Popula o banco com a configuração inicial do sistema.
 
 Uso:
-    python scripts/seed.py            # escola JORGE PASSOS + admin + padrões
+    python scripts/seed.py            # escola de demonstração + admin + padrões
     python scripts/seed.py --demo     # inclui turmas, alunos e dados de exemplo
 
 Todos os valores criados aqui (pesos, níveis, critérios) são apenas o
 ponto de partida descrito no PRD — depois do seed, a fonte da verdade é
 o banco, editável pela interface.
+
+Tudo o que o seed cria é FICTÍCIO, a começar pelo nome da escola
+(``ESCOLA_DEMO``): a demonstração e os E2E não mostram nome de escola
+real da rede (a matriz de prontidão, §4.1, proíbe nome real de escola em
+tela de dado fictício). ``tests/test_seed_ficticio.py`` trava isso.
 """
 import os
 import random
@@ -38,8 +43,14 @@ from app.models import (  # noqa: E402
     Usuario,
 )
 from app.services import scoring  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 ANO_LETIVO = 2026
+
+# Nome INVENTADO e inequivocamente fictício (a palavra está no nome). Antes era o
+# nome de uma escola real da rede, que aparecia na demonstração e nos E2E.
+ESCOLA_DEMO = "EMEF FICTÍCIA VILA CONSTELAÇÃO"
+ADMIN_EMAIL = "admin@constela.local"
 
 # Configuração inicial dos níveis de dificuldade (PRD §38).
 # (nome, código estável, códigos de letra agrupados, pontos por livro)
@@ -76,15 +87,34 @@ DEMO_LIVROS = [
 ]
 
 
-def seed_base(db) -> Escola:
+def _escola_ja_semeada(db) -> Escola | None:
+    """A escola de um seed anterior: pelo nome de hoje ou, num banco semeado
+    quando a escola de demonstração tinha OUTRO nome, pela escola do admin
+    inicial — o e-mail é único, então criar de novo quebraria na constraint em
+    vez de ser idempotente."""
     escola = db.execute(
-        select(Escola).where(Escola.nome == "JORGE PASSOS")
+        select(Escola).where(Escola.nome == ESCOLA_DEMO)
     ).scalar_one_or_none()
+    if escola is not None:
+        return escola
+    admin = db.execute(
+        select(Usuario).where(Usuario.email == ADMIN_EMAIL)
+    ).scalar_one_or_none()
+    if admin is None:
+        return None
+    if admin.escola_id is None:
+        raise SystemExit(f"Seed recusado: {ADMIN_EMAIL} já existe sem escola; "
+                         "não há escola de demonstração para reaproveitar.")
+    return db.get(Escola, admin.escola_id)
+
+
+def seed_base(db) -> Escola:
+    escola = _escola_ja_semeada(db)
     if escola is not None:
         print("Seed já executado anteriormente — nada a fazer.")
         return escola
 
-    escola = Escola(nome="JORGE PASSOS", ano_letivo_ativo=ANO_LETIVO)
+    escola = Escola(nome=ESCOLA_DEMO, ano_letivo_ativo=ANO_LETIVO)
     db.add(escola)
     db.flush()
 
@@ -95,7 +125,7 @@ def seed_base(db) -> Escola:
         Usuario(
             escola_id=escola.id,
             nome="Administrador",
-            email="admin@constela.local",
+            email=ADMIN_EMAIL,
             senha_hash=hash_senha(senha_admin),
             cargo="admin",
             is_global=True,
@@ -126,10 +156,10 @@ def seed_base(db) -> Escola:
 
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
     db.commit()
-    print(f"Escola JORGE PASSOS criada (id={escola.id}).")
+    print(f"Escola {ESCOLA_DEMO} criada (id={escola.id}).")
     print("=" * 60)
     print("  USUÁRIO INICIAL — anote agora (não será exibido de novo):")
-    print("    E-mail: admin@constela.local")
+    print(f"    E-mail: {ADMIN_EMAIL}")
     print(f"    Senha:  {senha_admin}")
     print("  Troque a senha no primeiro acesso, em Usuários.")
     print("=" * 60)
@@ -215,6 +245,7 @@ def seed_demo(db, escola: Escola) -> None:
 
 
 def main() -> None:
+    forcar_saida_utf8()
     aplicar_migracoes(engine)   # cria o schema (banco novo) já versionado no Alembic
     db = SessionLocal()
     try:

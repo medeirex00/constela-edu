@@ -78,8 +78,8 @@ def test_montar_ranking_ordena_e_calcula_media():
         {"nome": "Sem Atividade", "turma": "3º Ano A", "serie": "3",
          "estrelas": 0, "atividades": 0},
     ]
-    mapa = {aovivo._norm("Ana Beatriz Souza"): 7}
-    itens = aovivo._montar_ranking(alunos, mapa)
+    fichas = aovivo._FichasDaEscola(por_nome={aovivo._norm("Ana Beatriz Souza"): 7})
+    itens = aovivo._montar_ranking(alunos, fichas)
     assert [i["nome"] for i in itens] == ["Ana Beatriz Souza", "João Pedro Barbosa", "Sem Atividade"]
     assert [i["posicao"] for i in itens] == [1, 2, 3]
     assert itens[0]["pontuacao_media"] == 5.0        # 100/20

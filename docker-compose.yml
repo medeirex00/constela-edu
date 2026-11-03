@@ -33,9 +33,14 @@ services:
     restart: unless-stopped
     logging: *logging
     environment:
-      ENV: producao                # fail-closed: exige SECRET_KEY/DATABASE_URL
+      ENV: producao                # fail-closed: exige SECRET_KEY/DEK/DATABASE_URL
+      # POSTGRES_PASSWORD vai crua nesta URL: só letras e dígitos ("%41" vira outra
+      # senha em silêncio e "@" desloca o host).
       DATABASE_URL: postgresql+psycopg://constela:${POSTGRES_PASSWORD}@postgres:5432/constela
       SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      # Chave própria da cifra em repouso, diferente da SECRET_KEY (produção recusa
+      # subir sem ela). Dados já cifrados com a SECRET_KEY continuam legíveis.
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?defina DATA_ENCRYPTION_KEY no .env}
       UPLOADS_DIR: /dados/uploads
       EXPORTS_DIR: /dados/exports
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}

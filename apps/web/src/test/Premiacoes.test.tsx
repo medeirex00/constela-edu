@@ -7,11 +7,11 @@
  * a Matemática não tem snapshots suficientes). Aviso e evolução usam SÓ a
  * resposta do recorte atual.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import Premiacoes from "../pages/Premiacoes";
 import type { CategoriaPremiacao } from "../lib/types";
-import { ApiError, api, renderComApp, responder, screen, turmaFake, userEvent, waitFor, within } from "./utils";
+import { api, ApiError, renderComApp, responder, screen, turmaFake, userEvent, usuarioFake, waitFor, within } from "./utils";
 
 const URL_TURMAS = "/escolas/1/turmas";
 const URL_PREM = "/escolas/1/premiacoes";
@@ -30,7 +30,7 @@ const chamadasEvolucao = () =>
   api.mock.calls.map((c) => String(c[0])).filter((p) => p.startsWith(`${URL_EVOL}?`));
 
 function cat(chave: string, titulo: string, unidade: string,
-             podio: Array<[number, string, number]>): CategoriaPremiacao {
+             podio: Array<[number, string, number | null]>): CategoriaPremiacao {
   return {
     chave, titulo, icone: "🧮", descricao: "d", unidade,
     podio: podio.map(([aluno_id, nome, valor], i) => ({
@@ -126,6 +126,18 @@ describe("Premiações", () => {
     expect(screen.getByText("Evo Leitura")).toBeInTheDocument();
     expect(screen.getByText("Melhor Evolução — Matemática")).toBeInTheDocument();
     expect(screen.getByText(/Sem dados suficientes no período para medir evolução de Matemática/)).toBeInTheDocument();
+  });
+
+  it("professor: o campeão da Melhor Evolução leva à evolução do aluno (decisão do dono de 03/08)", async () => {
+    // O servidor escopa a evolução às turmas do professor; o link não desvia
+    // para o perfil.
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, { usuario: usuarioFake({ cargo: "professor", is_global: false }) });
+
+    const campeao = await screen.findByRole("link", { name: /Evo Leitura/ });
+    expect(campeao).toHaveAttribute("href", "/alunos/9/evolucao");
   });
 
   it("Melhor Evolução: pódio só com quem cresceu (nota > 0); só zeros mostra o aviso", async () => {
@@ -291,6 +303,101 @@ describe("Premiações", () => {
     expect(await screen.findByText(/vale o acumulado do ano letivo 2026/)).toBeInTheDocument();
     expect(screen.getByText(/sem recorte de período/)).toBeInTheDocument();
     expect(screen.queryByText(/só entram atividades feitas dentro do período/)).toBeNull();
+  });
+
+  // Com poucos alunos com atividade o backend devolve a régua SEM o `k` (e sem
+  // os zeros extras) — o mesmo corte de privacidade do exemplo da Pontuação.
+  // A tela não usa o `k`: pódio, valor e rodapé seguem iguais.
+  it("régua sem k (poucos alunos): o pódio da Matemática e o rodapé aparecem normalmente", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      turnos: [],
+      regua_matematica: { modo: "periodo", ano_letivo: 2026, coorte: "escola",
+                          inicio_efetivo: null, fim_efetivo: null,
+                          k_mediana_atividades: null, zeros_extras: null, alunos_com_atividade: 3 },
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Mat Manha")).toBeInTheDocument();
+    expect(screen.getByText("4,07 estrelas/atividade")).toBeInTheDocument();
+    expect(screen.getByText(/20% da mediana de atividades da escola/)).toBeInTheDocument();
+    expect(screen.queryByText(/null|NaN|undefined/)).toBeNull();
+  });
+
+  // Abaixo do mínimo, o backend também tira o ÍNDICE de cada linha da Matemática
+  // (`valor: null`): com estrelas e atividades ele devolveria o `k`. A tela põe
+  // "—" no lugar do número e diz por quê; nome, posição e ordem continuam.
+  const reguaPoucos = { modo: "periodo", ano_letivo: 2026, coorte: "escola",
+                        inicio_efetivo: null, fim_efetivo: null,
+                        k_mediana_atividades: null, zeros_extras: null, alunos_com_atividade: 2 };
+  const matematicaOculta = cat("melhor_matematica", "Melhor Matemática", "estrelas/atividade",
+                               [[2, "Mat Manha", null], [6, "Mat Segunda", null]]);
+
+  it("índice oculto (poucos alunos): o pódio da Matemática mostra '—' e a nota, sem número", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      categorias: [cat("melhor_leitor", "Melhor Leitor", "pontos", [[1, "Leo Manha", 30]]),
+                   matematicaOculta],
+      turnos: [],
+      regua_matematica: reguaPoucos,
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Mat Manha")).toBeInTheDocument();
+    expect(screen.getByText("Mat Segunda")).toBeInTheDocument();
+    const cartao = screen.getByText("Melhor Matemática").closest("div.flex-col") as HTMLElement;
+    // Um traço por linha no lugar do índice — nenhum número de estrelas/atividade.
+    expect(within(cartao).getAllByText("—")).toHaveLength(2);
+    expect(within(cartao).queryByText(/estrelas\/atividade$/)).toBeNull();
+    expect(within(cartao).getByRole("note"))
+      .toHaveTextContent(/Índice não exibido: só 2 alunos fizeram atividade no período/);
+    expect(within(cartao).getByRole("note")).toHaveTextContent(/A ordem do pódio é a mesma/);
+    // As outras premiações seguem com o número; nada de null/NaN/undefined na tela.
+    expect(screen.getByText("30 pontos")).toBeInTheDocument();
+    expect(screen.queryByText(/null|NaN|undefined/)).toBeNull();
+  });
+
+  it("índice presente (alunos suficientes): mostra o número e nenhuma nota de índice oculto", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      turnos: [],
+      regua_matematica: { ...reguaPoucos, k_mediana_atividades: 35, zeros_extras: 7,
+                          alunos_com_atividade: 6 },
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Mat Manha")).toBeInTheDocument();
+    expect(screen.getByText("4,07 estrelas/atividade")).toBeInTheDocument();
+    expect(screen.queryByText(/Índice não exibido/)).toBeNull();
+    expect(screen.queryByText("—")).toBeNull();
+  });
+
+  it("índice oculto: o ranking completo da Matemática também mostra '—' e diz por quê", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({
+      categorias: [{ ...matematicaOculta, total: 2 }],
+      turnos: [],
+      regua_matematica: reguaPoucos,
+    }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    renderComApp(<Premiacoes />);
+    await screen.findByText("Mat Manha");
+
+    await u.click(screen.getByRole("button", { name: "Ver ranking completo de Melhor Matemática" }));
+    const janela = (await screen.findByRole("heading", { level: 2, name: /Melhor Matemática/ }))
+      .closest("div") as HTMLElement;
+    expect(await within(janela).findByText("Mat Segunda")).toBeInTheDocument();
+    const linhas = within(janela).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(linhas[0]).toContain("Mat Manha");
+    expect(linhas[1]).toContain("Mat Segunda");
+    expect(linhas.every((texto) => texto.includes("—"))).toBe(true);
+    expect(within(janela).getByText(/Índice não exibido: só 2 alunos fizeram atividade/))
+      .toBeInTheDocument();
+    expect(within(janela).queryByText(/null|NaN|undefined/)).toBeNull();
   });
 
   it("escola sem turmas + turno guardado: evolução sem turno, seletor em 'Todos os turnos' e sem aviso", async () => {
@@ -859,5 +966,253 @@ describe("Premiações", () => {
     expect(within(caixaB).queryByText("Leitor 51")).not.toBeInTheDocument();
     // A janela antiga saiu de cena: só uma está montada.
     expect(screen.queryByRole("heading", { level: 2, name: /Melhor Leitor/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Premiações — rede sem um dos módulos", () => {
+  it("sem Matemática no plano, o backend não manda a categoria nem a régua e a tela mostra só as de Leitura", async () => {
+    const soLeitura = premiacoesResp().categorias.filter((c) => c.chave !== "melhor_matematica");
+    const resp = premiacoesResp({ categorias: soLeitura, turnos: [] });
+    delete (resp as Record<string, unknown>).regua_matematica;
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, resp);
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Melhor Leitor")).toBeInTheDocument();
+    expect(screen.getByText("Mais Livros Lidos")).toBeInTheDocument();
+    expect(screen.getByText("Mais Tempo de Leitura")).toBeInTheDocument();
+    // O cartão da categoria ausente simplesmente não existe (nada quebra).
+    expect(screen.queryByText("Melhor Matemática")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mat Manha")).not.toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("o cartão de evolução do módulo fora do plano some (o servidor o recusaria)", async () => {
+    const soLeitura = premiacoesResp().categorias.filter((c) => c.chave !== "melhor_matematica");
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({ categorias: soLeitura, turnos: [] }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, { usuario: usuarioFake({ modulos: ["leitura"] }) });
+
+    expect(await screen.findByText("Melhor Evolução — Leitura")).toBeInTheDocument();
+    expect(screen.queryByText("Melhor Evolução — Matemática")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Melhor Matemática divide as estrelas/)).not.toBeInTheDocument();
+  });
+
+  it("sem Leitura no plano, só a Melhor Matemática aparece", async () => {
+    const soMatematica = premiacoesResp().categorias.filter((c) => c.chave === "melhor_matematica");
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp({ categorias: soMatematica, turnos: [] }));
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+
+    expect(await screen.findByText("Melhor Matemática")).toBeInTheDocument();
+    expect(screen.queryByText("Melhor Leitor")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mais Livros Lidos")).not.toBeInTheDocument();
+  });
+});
+
+// --- Identidade visual v2: certificados do pódio e chip do bimestre -----------
+// "Certificados do pódio" abre a emissão EM LOTE (GerarCertificados) com a lista
+// da categoria NA ORDEM da tela e o modelo da plataforma (D7); some para quem
+// não emite (Secretaria). O chip "Fim do Nº bimestre" usa o calendário oficial
+// e só aparece quando o período é o bimestre em curso.
+
+/** Leitor com três alunos já ORDENADOS pelo backend, Matemática com um. */
+function premiacoesComPodio() {
+  const leitor: CategoriaPremiacao = {
+    chave: "melhor_leitor", titulo: "Melhor Leitor", icone: "📚", descricao: "d", unidade: "pontos",
+    podio: [
+      { posicao: 1, aluno_id: 31, nome: "Primeira Leitora", turma: "3A", valor: 90 },
+      { posicao: 2, aluno_id: 32, nome: "Segundo Leitor", turma: "3B", valor: 80 },
+      { posicao: 3, aluno_id: 33, nome: "Terceira Leitora", turma: "3A", valor: 70 },
+    ],
+  };
+  return premiacoesResp({
+    categorias: [leitor, cat("melhor_matematica", "Melhor Matemática", "estrelas/atividade", [[2, "Mat Manha", 4.07]])],
+    turnos: [],
+  });
+}
+
+/** Linhas da lista do lote dentro do modal de certificados, na ordem do DOM. */
+function linhasDoLote(dialogo: HTMLElement): string[] {
+  return within(within(dialogo).getByRole("list", { name: "Alunos do lote" }))
+    .getAllByRole("listitem").map((li) => li.textContent ?? "");
+}
+
+describe("Premiações — certificados do pódio", () => {
+  it("abre a emissão em lote com a lista da categoria, na ordem da tela, e o modelo do Elefante", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesComPodio());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    renderComApp(<Premiacoes />);
+    await screen.findByText("Primeira Leitora");
+
+    await u.click(screen.getByRole("button", { name: "Certificados do pódio de Melhor Leitor" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Gerar certificados" });
+    // O contexto diz DE ONDE sai o Top N: a premiação e o período da tela.
+    expect(within(dialogo).getByText("Premiações · Melhor Leitor · Este mês")).toBeInTheDocument();
+    expect(within(dialogo).getByRole("radio", { name: "Elefante Letrado" })).toBeChecked();
+    const linhas = linhasDoLote(dialogo);
+    expect(linhas).toHaveLength(3);
+    expect(linhas[0]).toContain("Primeira Leitora");
+    expect(linhas[1]).toContain("Segundo Leitor");
+    expect(linhas[2]).toContain("Terceira Leitora");
+  });
+
+  it("Melhor Matemática abre no modelo do Matific", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesComPodio());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    renderComApp(<Premiacoes />);
+    await screen.findByText("Mat Manha");
+
+    await u.click(screen.getByRole("button", { name: "Certificados do pódio de Melhor Matemática" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Gerar certificados" });
+    expect(within(dialogo).getByRole("radio", { name: "Matific" })).toBeChecked();
+    expect(linhasDoLote(dialogo)[0]).toContain("Mat Manha");
+  });
+
+  it("o contexto do lote leva o turno em exibição; a evolução de Leitura abre no Elefante", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    renderComApp(<Premiacoes />, { turno: "tarde" });
+    await screen.findByText("Evo Leitura Tarde");
+
+    await u.click(screen.getByRole("button", { name: "Certificados do pódio de Melhor Evolução — Leitura" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Gerar certificados" });
+    expect(within(dialogo).getByText("Premiações · Melhor Evolução — Leitura · Este mês · Tarde"))
+      .toBeInTheDocument();
+    expect(within(dialogo).getByRole("radio", { name: "Elefante Letrado" })).toBeChecked();
+    expect(linhasDoLote(dialogo)[0]).toContain("Evo Leitura Tarde");
+  });
+
+  it("cartão sem pódio não oferece certificados", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp());
+    // Matemática da evolução vem vazia (L1).
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />);
+    await screen.findByText("Evo Leitura");
+
+    expect(screen.getByRole("button", { name: "Certificados do pódio de Melhor Evolução — Leitura" }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Certificados do pódio de Melhor Evolução — Matemática" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("Secretaria não vê o botão de certificados (a emissão é da escola)", async () => {
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesComPodio());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, {
+      usuario: usuarioFake({ cargo: "coordenador", rede_id: 1, escola_id: null }),
+      escolaSelecionada: 1,
+    });
+
+    expect(await screen.findByText("Primeira Leitora")).toBeInTheDocument();
+    // O ranking completo continua; só a emissão some.
+    expect(screen.getByRole("button", { name: "Ver ranking completo de Melhor Leitor" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Certificados do pódio/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Premiações — chip do fim do bimestre", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Só o relógio é falso (timers de verdade: o userEvent e o useApi seguem normais). */
+  function hojeEm(data: Date) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data);
+  }
+
+  it("período 'Este bimestre': mostra quantos dias faltam para o fim do bimestre em curso", async () => {
+    hojeEm(new Date(2026, 9, 31, 12, 0, 0));
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, { periodo: { preset: "bimestre" } });
+
+    expect(await screen.findByText("Fim do 4º bimestre · em 61 dias")).toBeInTheDocument();
+    // Nunca uma "data de premiação" (não existe no sistema).
+    expect(screen.queryByText(/dias para a premiação/)).not.toBeInTheDocument();
+  });
+
+  it("o bimestre pelo número também conta como o bimestre em curso", async () => {
+    hojeEm(new Date(2026, 11, 30, 12, 0, 0));
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, { periodo: { preset: "bimestre_4" } });
+
+    expect(await screen.findByText("Fim do 4º bimestre · em 1 dia")).toBeInTheDocument();
+  });
+
+  it("outro período (bimestre já encerrado): sem o chip", async () => {
+    hojeEm(new Date(2026, 9, 31, 12, 0, 0));
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesResp());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    renderComApp(<Premiacoes />, { periodo: { preset: "bimestre_3" } });
+
+    await screen.findByText("Mat Manha");
+    expect(screen.queryByText(/Fim do \d+º bimestre/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/bimestre termina hoje/)).not.toBeInTheDocument();
+  });
+});
+
+// O bimestre impresso no lote segue o período da tela quando ele é um bimestre: o 3º
+// (já fechado) premiado em 31/10 sai como 3º, não como o bimestre de hoje (4º).
+describe("Premiações — bimestre impresso no lote", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function hojeEm(data: Date) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data);
+  }
+
+  it("período '3º bimestre' em 31/10: o modal abre com o 3º bimestre selecionado", async () => {
+    hojeEm(new Date(2026, 9, 31, 12, 0, 0));
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesComPodio());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    renderComApp(<Premiacoes />, { periodo: { preset: "bimestre_3" } });
+    await screen.findByText("Primeira Leitora");
+
+    await u.click(screen.getByRole("button", { name: "Certificados do pódio de Melhor Leitor" }));
+    const dialogo = await screen.findByRole("dialog", { name: "Gerar certificados" });
+    const bimestre = within(dialogo).getByLabelText("Bimestre impresso");
+    expect(bimestre).toHaveValue("3");
+    expect(within(bimestre).getByRole("option", { name: "3º bimestre", selected: true })).toBeInTheDocument();
+  });
+
+  it("período 'Bimestre passado' em 31/10: abre no 3º; 'Este mês' continua no bimestre de hoje", async () => {
+    hojeEm(new Date(2026, 9, 31, 12, 0, 0));
+    responder("GET", URL_TURMAS, turmasManhaTarde);
+    responder("GET", URL_PREM, premiacoesComPodio());
+    responder("GET", URL_EVOL, evolucaoPorDimensao);
+    const u = userEvent.setup();
+    const { unmount } = renderComApp(<Premiacoes />, { periodo: { preset: "bimestre_anterior" } });
+    await screen.findByText("Primeira Leitora");
+    await u.click(screen.getByRole("button", { name: "Certificados do pódio de Melhor Leitor" }));
+    let dialogo = await screen.findByRole("dialog", { name: "Gerar certificados" });
+    expect(within(dialogo).getByLabelText("Bimestre impresso")).toHaveValue("3");
+    unmount();
+
+    renderComApp(<Premiacoes />, { periodo: { preset: "mes" } });
+    await screen.findByText("Primeira Leitora");
+    await u.click(screen.getByRole("button", { name: "Certificados do pódio de Melhor Leitor" }));
+    dialogo = await screen.findByRole("dialog", { name: "Gerar certificados" });
+    expect(within(dialogo).getByLabelText("Bimestre impresso")).toHaveValue("4");
   });
 });

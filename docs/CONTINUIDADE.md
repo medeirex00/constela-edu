@@ -38,13 +38,14 @@ Bitwarden, Infisical — nunca por mensagem/e-mail).
 | 3 | **Vercel** (frontend) | deploy do web, domínios | vercel.com | Convidar a equipe ao projeto |
 | 4 | **Supabase** (Postgres) | banco de produção, RLS, backups do provedor | supabase.com | Convidar a equipe; guardar a connection string no cofre |
 | 5 | **Registrador do domínio** `constelaedu.com` | DNS, e-mail | (registrador) | Transferir/compartilhar acesso; anotar onde está o DNS |
-| 6 | **SECRET_KEY** de produção | assina sessões JWT | env do Railway | Cofre; rotacionar ao trocar de equipe (derruba sessões) |
-| 7 | **Credenciais Matific/Elefante das escolas** | coleta automática | **cifradas no banco** (Fernet), a chave vem da SECRET_KEY | Não precisam ser "transferidas" (ficam no banco); mas a SECRET_KEY sim |
-| 8 | **AI_API_KEY** (provedor de IA) | assistente | env do Railway (cifrada por escola no banco quando por escola) | Cofre |
-| 9 | **BACKUP_PASSPHRASE** | decifra os backups | (a definir — ver DR-RUNBOOK) | Cofre, **guardada separada dos backups** |
-| 10 | **Conta Sentry** (quando ativada) | erros | sentry.io | Convidar a equipe |
-| 11 | **Monitor de uptime** (quando ativado) | alertas de queda | (provedor externo) | Convidar a equipe |
-| 12 | **Contas Matific/Elefante do gestor** (para testes reais) | validar conectores | com o dono | Documentar credenciais de teste no cofre |
+| 6 | **SECRET_KEY** de produção | assina sessões JWT; na cifra em repouso só **decifra** as cifras legadas (gravadas antes da `DATA_ENCRYPTION_KEY`) | env do Railway | Cofre. Rotacionar ao trocar de equipe derruba todas as sessões **e**, fora do chaveiro, deixa ilegíveis as cifras legadas: **antes de rotacionar**, siga o chaveiro (a SECRET_KEY que sai fica em `CHAVE_CIFRA_LEGADA_ANTERIOR` até `python -m scripts.recifrar_segredos --executar`; sequência em `backend/scripts/recifrar_segredos.py` e §4 de [`operacao/PRODUCAO-ENV-E-MIGRACOES.md`](operacao/PRODUCAO-ENV-E-MIGRACOES.md)) |
+| 7 | **DATA_ENCRYPTION_KEY** (DEK) de produção | chave das cifras em repouso: credenciais Matific/Elefante das escolas, chave de IA por escola, sessão do robô (e o hash dos códigos de acesso do Quest) | env do Railway | Cofre — **obrigatória** (com `ENV=producao` o boot recusa sem ela). **Perdê-la torna ilegíveis as credenciais** cifradas (recadastro escola por escola) e os códigos do Quest gravados com ela deixam de conferir. Trocar **só pela rotação planejada**: a nova em `DATA_ENCRYPTION_KEY`, a que sai em `DATA_ENCRYPTION_KEYS_ANTERIORES`, deploy, `python -m scripts.recifrar_segredos --executar`, e só então apagar a anterior |
+| 8 | **Credenciais Matific/Elefante das escolas** | coleta automática | **cifradas no banco** (Fernet) com a `DATA_ENCRYPTION_KEY` (linha 7); a `SECRET_KEY` só decifra as legadas | Não precisam ser "transferidas" (ficam no banco); a `DATA_ENCRYPTION_KEY` (linha 7) e a `SECRET_KEY` (linha 6, por causa das legadas) sim |
+| 9 | **AI_API_KEY** (provedor de IA) | assistente | env do Railway (cifrada por escola no banco quando por escola) | Cofre |
+| 10 | **Senha dos backups** (`BACKUP_PASSPHRASE_COFRE`) | decifra os backups | secret do repositório **privado** `medeirex00/constela-backups` + cópia no gerenciador de senhas do dono | Cofre, **guardada separada dos backups**; nunca neste repositório (ver DR-RUNBOOK §1) |
+| 11 | **Conta Sentry** (quando ativada) | erros | sentry.io | Convidar a equipe |
+| 12 | **Monitor de uptime** (quando ativado) | alertas de queda | (provedor externo) | Convidar a equipe |
+| 13 | **Contas Matific/Elefante do gestor** (para testes reais) | validar conectores | com o dono | Documentar credenciais de teste no cofre |
 
 **Recomendação forte:** criar uma **conta de organização** (GitHub Org, Railway
 Team, Vercel Team) em vez de contas pessoais, para que a saída de qualquer pessoa
@@ -58,11 +59,12 @@ Segredos (🔑) vão no cofre; configs (⚙️) podem ficar no repositório/dash
 
 | Variável | Tipo | Observação |
 |----------|------|-----------|
-| `SECRET_KEY` | 🔑 | Assina JWT **e** deriva a cifra Fernet (ver `DATA_ENCRYPTION_KEY`) |
-| `DATA_ENCRYPTION_KEY` | 🔑 | (após deploy de A1/M3) cifra dedicada; opcional |
+| `SECRET_KEY` | 🔑 | Assina JWT; na cifra em repouso só **decifra** as cifras legadas (anteriores à `DATA_ENCRYPTION_KEY`). Trocar só seguindo o chaveiro (§2, linha 6) |
+| `DATA_ENCRYPTION_KEY` | 🔑 | Cifra dedicada dos segredos em repouso, **diferente** da `SECRET_KEY`; **obrigatória com `ENV=producao`** (o boot recusa sem ela, de exemplo ou igual à `SECRET_KEY`). Regras: §2.1 de [`operacao/PRODUCAO-ENV-E-MIGRACOES.md`](operacao/PRODUCAO-ENV-E-MIGRACOES.md) |
+| `DATA_ENCRYPTION_KEYS_ANTERIORES`, `CHAVE_CIFRA_LEGADA_ANTERIOR` | 🔑 | Só durante uma rotação PLANEJADA: só decifram (nunca JWT); apagar depois de `python -m scripts.recifrar_segredos --executar` |
 | `DATABASE_URL` | 🔑 | String do Supabase; usar o **pooler** (porta 6543) ao escalar |
 | `AI_API_KEY` | 🔑 | Chave do provedor de IA (se `AI_PROVIDER` externo) |
-| `BACKUP_PASSPHRASE` | 🔑 | Só nos secrets do backup/DR |
+| `BACKUP_PASSPHRASE_COFRE` | 🔑 | Só nos secrets do repositório **privado** de backups. Os secrets de backup antigos deste repositório (`BACKUP_PASSPHRASE`, `DATABASE_URL_RO`) são legado e não devem ser usados |
 | `SENTRY_DSN` | 🔑 | Vazio = Sentry desligado |
 | `METRICS_TOKEN` | 🔑 | Protege `/metrics` |
 | `SYNC_PROXY_URL` | 🔑 | Se usar proxy para a coleta |
@@ -70,6 +72,7 @@ Segredos (🔑) vão no cofre; configs (⚙️) podem ficar no repositório/dash
 | `PUBLIC_BASE_URL`, `QUEST_BASE_URL` | ⚙️ | URLs públicas (link/QR) |
 | `CORS_ORIGINS` | ⚙️ | Origens permitidas |
 | `SYNC_SCHEDULER_ENABLED` | ⚙️ | Liga o robô |
+| `AUTOMACAO_VERIFICAR_NO_BOOT` | ⚙️ | Diagnóstico do robô no boot (IP de saída + Chromium). Padrão ligado: **não definir em produção**; `false` só nos testes e no E2E |
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `EXPORTS_RETENCAO_DIAS`, `SYNC_*`, `LOG_*`, `METRICS_ENABLED`, `SENTRY_*` | ⚙️ | Ajustes; têm padrões seguros |
 
 O template comentado está em [`backend/.env.example`](../backend/.env.example).

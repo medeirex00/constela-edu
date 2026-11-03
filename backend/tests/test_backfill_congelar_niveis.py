@@ -150,11 +150,18 @@ def test_nivel_congelado_vazio_conta_como_congelado_e_nao_e_regravado(db, escola
     assert db.get(Leitura, vazia.id).nivel_codigo == ""
 
 
-def test_auditoria_valora_a_leitura_como_o_motor(db, escola_completa):
+def test_auditoria_valora_a_leitura_como_o_motor(db, escola_completa, monkeypatch):
     """RECONFERÊNCIA do ajuste 3 — ``auditar_notas_elefante._valor_da_leitura``
     tem de dar EXATAMENTE o mesmo valor que a régua dá ao item que o motor monta
     (id oficial antes do título; nível congelado com fallback só no NULO)."""
+    import os
+
     from app.models import Livro
+    # O script recusa importar sem DATABASE_URL (trava da linha de comando). O
+    # teste só usa a função de valoração, sem abrir sessão: um SQLite em memória
+    # basta — nenhum banco real é tocado (no CI a variável não existe).
+    if not os.environ.get("DATABASE_URL"):
+        monkeypatch.setenv("DATABASE_URL", "sqlite://")
     from scripts import auditar_notas_elefante as auditoria
 
     esc = escola_completa["escola"]
@@ -210,8 +217,10 @@ def test_relatorio_nao_quebra_em_console_cp1252(db, acervo, monkeypatch):
     Windows comum o ``print`` estourava ``UnicodeEncodeError`` e matava a execução
     ANTES do congelamento (o teste de ``main`` não via porque o ``capsys`` do
     pytest captura em UTF-8, e um dry-run contra banco vazio nunca chega a
-    imprimir o relatório por escola). ``_saida_tolerante`` degrada o caractere
-    em vez de abortar."""
+    imprimir o relatório por escola). ``forcar_saida_utf8`` (``scripts/_saida.py``,
+    o mesmo de todos os scripts) troca a saída para UTF-8 em vez de abortar — e,
+    ao contrário do antigo ``errors="replace"`` em cp1252, não troca ``→``/``≠``
+    por ``?``: o arquivo gravado sai inteiro em UTF-8."""
     import io
 
     class _SessaoSemFechar:
@@ -232,9 +241,9 @@ def test_relatorio_nao_quebra_em_console_cp1252(db, acervo, monkeypatch):
         console.flush()
         monkeypatch.undo()
 
-    saida = bruto.getvalue().decode("cp1252")
-    assert "divergências de nível" in saida          # a linha do `≠` saiu
-    assert "leitura(s) com nível congelado" in saida  # a linha do `→` saiu
+    saida = bruto.getvalue().decode("utf-8")         # estrito: tudo é UTF-8 válido
+    assert "divergências de nível (efetivo ≠ oficial)" in saida   # a linha do `≠` saiu
+    assert "→ 1 leitura(s) com nível congelado" in saida           # a linha do `→` saiu
     assert "ê" in saida                               # acento preservado
 
 

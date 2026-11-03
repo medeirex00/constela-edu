@@ -24,22 +24,42 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import ImportacaoMatriculas from "./ImportacaoMatriculas";
+import { identidadeDe, PilulaPlataforma } from "../components/identidadePlataforma";
+import { PassosImportacao } from "../components/PassosImportacao";
 import SeletorAlunoDrawer from "../components/SeletorAlunoDrawer";
+import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
+  Avatar,
   Badge,
   Botao,
   Campo,
   Card,
-  Carregando,
+  Confirmacao,
+  Erro,
+  IconePastel,
   Mensagem,
   PageHeader,
+  Skeleton,
   Vazio,
+  classesAbas,
+  classesTabela,
   estiloInput,
+  useAbaAtivaVisivel,
+  type TomPastel,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useImportacaoLote } from "../context/ImportacaoLoteContext";
 import { useApi } from "../hooks/useApi";
 import { api, apiUpload } from "../lib/api";
+import {
+  dataDoRelatorioValida,
+  diaPorExtenso,
+  exigeDataDoRelatorio,
+  hojeEmBrasilia,
+  instanteDoRelatorio,
+  primeiroDiaDoRelatorio,
+  problemaDaDataDoRelatorio,
+} from "../lib/dataRelatorio";
 import { dataHora } from "../lib/formato";
 import { acharTurmaPorNome, normalizar } from "../lib/nomes";
 import ImportacaoLote from "./ImportacaoLote";
@@ -63,30 +83,39 @@ const OCULTAR_NA_PREVIA = new Set(["turma_relatorio", "livro", "nivel", "genero"
 /** Como o nome do aluno foi identificado (define ícone, cor e texto do card). */
 const METODO_IDENTIFICACAO: Record<
   string,
-  { Icone: LucideIcon; cor: string; corTexto: string; classe: string; texto: string }
+  { Icone: LucideIcon; tom: TomPastel; corTexto: string; classe: string; texto: string }
 > = {
   arquivo: {
     Icone: CheckCircle2,
-    cor: "text-emerald-600 dark:text-emerald-400",
+    tom: "verde",
     corTexto: "text-emerald-700 dark:text-emerald-300",
     classe: "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/20 dark:bg-emerald-500/5",
     texto: "Aluno identificado pelo nome do arquivo",
   },
   conteudo: {
     Icone: AlertTriangle,
-    cor: "text-amber-600 dark:text-amber-400",
-    corTexto: "text-amber-700 dark:text-amber-300",
-    classe: "border-amber-200 bg-amber-50/60 dark:border-amber-500/20 dark:bg-amber-500/5",
+    tom: "ambar",
+    corTexto: "text-ouro-700 dark:text-ouro-300",
+    classe: "border-ouro-200 bg-ouro-50/70 dark:border-ouro-400/20 dark:bg-ouro-400/5",
     texto: "Aluno identificado pelo conteúdo do PDF",
   },
   nenhum: {
     Icone: XCircle,
-    cor: "text-red-600 dark:text-red-400",
-    corTexto: "text-red-700 dark:text-red-300",
-    classe: "border-red-200 bg-red-50/60 dark:border-red-500/20 dark:bg-red-500/5",
+    tom: "rosa",
+    corTexto: "text-rose-700 dark:text-rose-300",
+    classe: "border-rose-200 bg-rose-50/60 dark:border-rose-500/20 dark:bg-rose-500/5",
     texto: "Não foi possível identificar o aluno automaticamente",
   },
 };
+
+/** As etapas do envio individual (o passo a passo do topo). */
+const PASSOS_INDIVIDUAL = ["Enviar o relatório", "Conferir a prévia", "Confirmar e gravar"] as const;
+
+const MODOS_IMPORTACAO = [
+  { valor: "individual", Icone: FileUp, rotulo: "Um por vez" },
+  { valor: "lote", Icone: Layers, rotulo: "Em lote" },
+  { valor: "matriculas", Icone: Users, rotulo: "Matrículas da escola" },
+] as const;
 
 function resumoDados(dados: Record<string, unknown>): string {
   return Object.entries(dados)
@@ -168,7 +197,7 @@ function agrupar(analise: Analise): Grupo[] {
 }
 
 export default function Importacoes() {
-  const { escolaId, usuario } = useApp();
+  const { escolaId, escolaAtual, usuario } = useApp();
   // Escola VIVA: `analisar()` é assíncrona; se a escola mudar durante o upload,
   // a continuação descarta a resposta (resolvida contra o tenant anterior) em
   // vez de repovoar a prévia sob a nova escola.
@@ -191,6 +220,12 @@ export default function Importacoes() {
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null);
+  // "Sim, importar" abre a confirmação; só ela grava.
+  const [confirmando, setConfirmando] = useState(false);
+  // Data em que o relatório foi gerado na plataforma ("AAAA-MM-DD"). Obrigatória
+  // no total acumulado; começa VAZIA — nunca presume hoje (um relatório antigo
+  // datado de hoje passaria por dado novo e apagaria o que a sincronização trouxe).
+  const [dataRelatorio, setDataRelatorio] = useState("");
 
   // Por padrão a página abre em "Matrículas da escola" — é por onde se importa
   // a Lista Piloto (o fluxo mais comum). Só abre em "Em lote" quando já há um
@@ -199,6 +234,9 @@ export default function Importacoes() {
   const [modo, setModo] = useState<"individual" | "lote" | "matriculas">(
     faseLote !== "selecao" ? "lote" : "matriculas",
   );
+  // No celular os modos são uma linha que rola de lado (como as Abas), com o ativo à vista.
+  const { lista: listaModos, abas: botoesModos } = useAbaAtivaVisivel(
+    MODOS_IMPORTACAO.findIndex((m) => m.valor === modo));
 
   const grupos = useMemo(() => (analise ? agrupar(analise) : []), [analise]);
 
@@ -212,9 +250,11 @@ export default function Importacoes() {
     setTurmaNova("");
     setEditarGrupo(null);
     setResultado(null);
+    setConfirmando(false);
     setErro("");
     setArquivo(null);
     setTexto("");
+    setDataRelatorio("");
     if (inputArquivo.current) inputArquivo.current.value = "";
   }, [escolaId]);
 
@@ -245,6 +285,7 @@ export default function Importacoes() {
       // Trocou de escola durante o upload: descarta (o reset já limpou a tela).
       if (escolaIdRef.current !== escolaDaAnalise) return;
       setAnalise(resposta);
+      setDataRelatorio(""); // arquivo novo: a data é dele, informada de novo
 
       // Ação inicial POR GRUPO, já usando a turma lida do relatório.
       const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
@@ -316,6 +357,11 @@ export default function Importacoes() {
         );
         return;
       }
+      const dataReferencia = exigeData ? instanteDoRelatorio(dataRelatorio) : null;
+      if (exigeData && !dataReferencia) {
+        setErro("Informe a data do relatório (o dia em que ele foi gerado na plataforma).");
+        return;
+      }
       const resposta = await api<ResultadoImportacao>(
         `/escolas/${escolaDaConfirmacao}/importacoes/confirmar`,
         {
@@ -330,6 +376,9 @@ export default function Importacoes() {
             // acumulado e data o snapshot dentro do período.
             periodo_inicio: analise.periodo_inicio || null,
             periodo_fim: analise.periodo_fim || null,
+            // Total acumulado: a data do relatório informada (fim daquele dia em
+            // Brasília). Sem ela o servidor usaria o relógio de agora.
+            data_referencia: dataReferencia,
             linhas,
           }),
         },
@@ -339,6 +388,7 @@ export default function Importacoes() {
       if (escolaIdRef.current !== escolaDaConfirmacao) return;
       setResultado(resposta);
       setAnalise(null);
+      setDataRelatorio("");
       setTexto("");
       setArquivo(null);
       if (inputArquivo.current) inputArquivo.current.value = "";
@@ -347,6 +397,9 @@ export default function Importacoes() {
       setErro(excecao instanceof Error ? excecao.message : "Falha ao confirmar a importação.");
     } finally {
       setOcupado(false);
+      // Fecha a confirmação nos dois casos: o resultado (ou o erro, no rodapé da
+      // prévia) aparece na própria tela.
+      setConfirmando(false);
     }
   }
 
@@ -461,6 +514,31 @@ export default function Importacoes() {
   );
   const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
   const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
+  // Data do relatório: obrigatória no total acumulado (sem "Intervalo de datas").
+  const exigeData = analise ? exigeDataDoRelatorio(analise) : false;
+  const hoje = hojeEmBrasilia();
+  // Mínimo: 1º de janeiro do ano letivo anterior (a mesma regra do servidor).
+  const anoLetivo = escolaAtual?.ano_letivo_ativo ?? null;
+  const primeiroDia = primeiroDiaDoRelatorio(anoLetivo);
+  const dataOk = !exigeData || dataDoRelatorioValida(dataRelatorio, undefined, anoLetivo);
+
+  // Resumo do que a confirmação vai gravar (só contagem do que já está na tela).
+  const resumoConfirmacao = useMemo(() => {
+    let vincular = 0, criar = 0, criarNova = 0, ignorar = 0;
+    grupos.forEach((g, i) => {
+      const acao = acoes[i];
+      if (g.todasComErro || !acao || acao.tipo === "ignorar") { ignorar += 1; return; }
+      if (acao.tipo === "importar") vincular += 1;
+      else if (acao.tipo === "criar") criar += 1;
+      else criarNova += 1;
+    });
+    return { vincular, criar, criarNova, ignorar };
+  }, [grupos, acoes]);
+
+  // Etapa do passo a passo (estado REAL do fluxo): 0 envio, 1 conferência, 2
+  // confirmação (modal aberto), 3 = tudo feito (resultado na tela, sem prévia).
+  const etapa = analise ? (confirmando ? 2 : 1) : resultado ? 3 : 0;
+  const identidade = analise ? identidadeDe(analise.plataforma) : null;
 
   return (
     <div>
@@ -476,23 +554,29 @@ export default function Importacoes() {
       )}
 
       {podeImportar && (
-        <div className="mb-5 inline-flex rounded-xl border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-900">
-          {([
-            { valor: "individual", Icone: FileUp, rotulo: "Um por vez" },
-            { valor: "lote", Icone: Layers, rotulo: "Em lote" },
-            { valor: "matriculas", Icone: Users, rotulo: "Matrículas da escola" },
-          ] as const).map(({ valor, Icone, rotulo }) => (
+        // Controle segmentado (visual da identidade v2). Continua sendo um grupo de
+        // BOTÕES com aria-pressed — não abas: os testes e o E2E procuram o botão
+        // "Um por vez", e cada modo é uma ferramenta, não um painel da mesma coisa.
+        <div
+          ref={listaModos}
+          role="group"
+          aria-label="Modo de importação"
+          className={`mb-6 ${classesAbas.lista}`}
+        >
+          {MODOS_IMPORTACAO.map(({ valor, Icone, rotulo }, indice) => (
             <button
               key={valor}
+              ref={(el) => { botoesModos.current[indice] = el; }}
               type="button"
+              aria-pressed={modo === valor}
               onClick={() => setModo(valor)}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+              className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold transition-colors ${classesAbas.aba} ${
                 modo === valor
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  ? "bg-indigo-600 text-white shadow-pilula"
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
               }`}
             >
-              <Icone size={15} /> {rotulo}
+              <Icone size={16} aria-hidden /> {rotulo}
             </button>
           ))}
         </div>
@@ -503,17 +587,38 @@ export default function Importacoes() {
       )}
 
       {modo === "matriculas" && podeImportar && escolaId && (
-        <ImportacaoMatriculas escolaId={escolaId} aoConcluir={recarregarHistorico} />
+        <div className="mb-8">
+          <ImportacaoMatriculas escolaId={escolaId} aoConcluir={recarregarHistorico} />
+        </div>
+      )}
+
+      {modo === "individual" && podeImportar && (
+        <Card className="mb-5 px-6 py-4">
+          <PassosImportacao passos={PASSOS_INDIVIDUAL} atual={etapa} />
+        </Card>
       )}
 
       {modo === "individual" && resultado && (
-        <Card className="mb-4 p-4">
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={18} className="mt-0.5 text-emerald-600" />
-            <div>
-              <p className="text-sm font-medium">{resultado.mensagem}</p>
+        <Card className="mb-5 p-6">
+          <div className="flex items-start gap-4">
+            <IconePastel icone={CheckCircle2} tom="verde" tamanho="lg" />
+            <div className="min-w-0">
+              <p className="text-[15px] font-semibold text-zinc-900 dark:text-white">{resultado.mensagem}</p>
+              {(resultado.criacao_bloqueada ?? 0) > 0 && (
+                // A mensagem acima já diz o MOTIVO (a política "bloquear" da
+                // escola); aqui, o caminho para resolver.
+                <p className="mt-1.5 text-sm text-ouro-700 dark:text-ouro-300" role="status">
+                  {resultado.criacao_bloqueada === 1
+                    ? "1 aluno aguarda"
+                    : `${resultado.criacao_bloqueada} alunos aguardam`}{" "}
+                  a escolha da ficha certa.{" "}
+                  <Link to="/revisoes-identidade" className="font-semibold underline">
+                    Ver revisões de identidade
+                  </Link>
+                </p>
+              )}
               {resultado.avisos.length > 0 && (
-                <ul className="mt-1 list-inside list-disc text-xs text-amber-700 dark:text-amber-300">
+                <ul className="mt-2 list-inside list-disc space-y-0.5 text-xs text-ouro-700 dark:text-ouro-300">
                   {resultado.avisos.map((aviso) => (
                     <li key={aviso}>{aviso}</li>
                   ))}
@@ -525,8 +630,17 @@ export default function Importacoes() {
       )}
 
       {modo === "individual" && podeImportar && !analise && (
-        <Card className="mb-6 p-5">
-          <div className="grid gap-4 sm:grid-cols-2">
+        <Card className="mb-8 p-6">
+          <div className="mb-5 flex items-start gap-4">
+            <IconePastel icone={FileUp} tom="violeta" tamanho="lg" />
+            <div className="min-w-0">
+              <h2 className="text-[17px] font-semibold text-zinc-900 dark:text-white">Enviar o relatório</h2>
+              <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                Escolha o arquivo exportado da plataforma ou cole o texto. Primeiro vem a prévia.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Campo rotulo="Plataforma">
               <select className={estiloInput} value={plataforma} onChange={(e) => setPlataforma(e.target.value)}>
                 <option value="">Detectar automaticamente</option>
@@ -539,7 +653,7 @@ export default function Importacoes() {
                 ref={inputArquivo}
                 type="file"
                 accept=".pdf,.xlsx,.xlsm,.txt,.csv,.tsv,.json"
-                className={`${estiloInput} file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1 file:text-indigo-700 dark:file:bg-indigo-500/10 dark:file:text-indigo-300`}
+                className={`${estiloInput} cursor-pointer py-2 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100 dark:file:bg-indigo-500/15 dark:file:text-indigo-300`}
                 onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
               />
             </Campo>
@@ -554,27 +668,30 @@ export default function Importacoes() {
               />
             </Campo>
           </div>
-          {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-          <div className="mt-4 flex justify-end">
+          {erro && <div className="mt-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+            <span className="mr-auto text-xs text-zinc-500 dark:text-zinc-400">
+              Nada é gravado nesta etapa.
+            </span>
             <Botao onClick={analisar} disabled={ocupado || (!arquivo && !texto.trim())}>
-              <Sparkles size={15} /> {ocupado ? "Analisando..." : "Analisar e ver prévia"}
+              <Sparkles size={15} aria-hidden /> {ocupado ? "Analisando..." : "Analisar e ver prévia"}
             </Botao>
           </div>
         </Card>
       )}
 
       {modo === "individual" && analise && (
-        <Card className="mb-6">
-          <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-            <FileUp size={16} className="text-zinc-400" />
-            <span className="text-sm font-medium">Prévia da importação</span>
-            <Badge tom="destaque">{analise.plataforma === "matific" ? "Matific" : "Elefante Letrado"}</Badge>
+        <Card className="mb-8 overflow-hidden">
+          <div className="flex flex-wrap items-center gap-3 px-6 pb-4 pt-5">
+            <IconePastel icone={identidade?.icone ?? FileUp} tom={identidade?.tom ?? "neutro"} />
+            <span className="text-[17px] font-semibold text-zinc-900 dark:text-white">Prévia da importação</span>
+            <PilulaPlataforma plataforma={analise.plataforma} />
             {analise.formato === "leituras" && <Badge>relatório individual</Badge>}
             {analise.estrategia === "posicional" && <Badge tom="alerta">colunas por posição — confira</Badge>}
           </div>
 
-          <div className="border-b border-zinc-200 bg-indigo-50/50 px-4 py-3 text-sm dark:border-zinc-800 dark:bg-indigo-500/5">
-            <p className="font-medium text-indigo-800 dark:text-indigo-300">
+          <div className="mx-6 mb-4 rounded-2xl bg-indigo-50/70 px-4 py-3 text-sm dark:bg-indigo-500/10">
+            <p className="font-semibold text-indigo-800 dark:text-indigo-200">
               {analise.mensagem_deteccao || "Arquivo analisado."}
             </p>
             <p className="mt-0.5 text-zinc-600 dark:text-zinc-300">
@@ -587,10 +704,25 @@ export default function Importacoes() {
                 ? " · nenhum problema detectado"
                 : ` · ${analise.total_erros} erro(s), ${analise.total_avisos} aviso(s)`}
             </p>
+            {analise.aviso_escola && (
+              // Só AVISO (nomes de escola variam): não bloqueia a confirmação.
+              <p className="mt-1 text-ouro-700 dark:text-ouro-300" role="status">
+                {analise.aviso_escola}
+              </p>
+            )}
+            {analise.criacao_bloqueada_por_politica && (
+              // Política "bloquear" da escola: avisa ANTES de o gestor escolher
+              // "criar" — o backend manda essas linhas para a revisão.
+              <p className="mt-1 text-ouro-700 dark:text-ouro-300" role="status">
+                A matrícula desta escola vem da Lista Piloto: quem não corresponder a um
+                aluno cadastrado não ganha ficha nova nesta importação — vai para
+                Revisões de identidade, para um gestor apontar a ficha certa.
+              </p>
+            )}
           </div>
 
           {analise.erros_gerais.length > 0 && (
-            <div className="space-y-2 p-4">
+            <div className="space-y-2 px-6 pb-4">
               {analise.erros_gerais.map((mensagem) => (
                 <Mensagem key={mensagem} tipo="erro">{mensagem}</Mensagem>
               ))}
@@ -601,17 +733,17 @@ export default function Importacoes() {
               A cor/ícone refletem COMO o nome foi identificado (arquivo é o
               método preferencial); a linha de vínculo mostra o cadastro. */}
           {analise.formato === "leituras" && grupos.length > 0 && (
-            <div className="space-y-3 p-4">
+            <div className="space-y-3 px-6 pb-5">
               {grupos.map((grupo, gi) => {
                 const vinc = descreverVinculo(gi);
                 if (!vinc) return null;
                 const metodo = METODO_IDENTIFICACAO[analise.origem_nome] ?? METODO_IDENTIFICACAO.conteudo;
                 return (
-                  <div key={grupo.chave} className={`rounded-xl border p-4 ${metodo.classe}`}>
+                  <div key={grupo.chave} className={`rounded-2xl border p-4 ${metodo.classe}`}>
                     <div className="flex flex-wrap items-start gap-3">
-                      <metodo.Icone size={22} className={`mt-0.5 shrink-0 ${metodo.cor}`} />
+                      <IconePastel icone={metodo.Icone} tom={metodo.tom} />
                       <div className="min-w-0 flex-1">
-                        <p className={`text-xs font-semibold uppercase tracking-wide ${metodo.corTexto}`}>
+                        <p className={`text-[11px] font-semibold uppercase tracking-[0.08em] ${metodo.corTexto}`}>
                           {metodo.texto}
                         </p>
                         <p className="mt-0.5 text-lg font-semibold tracking-tight">{grupo.nome}</p>
@@ -619,8 +751,8 @@ export default function Importacoes() {
                           <span
                             className={
                               vinc.tom === "ok"
-                                ? "font-medium text-emerald-700 dark:text-emerald-300"
-                                : "font-medium text-amber-700 dark:text-amber-300"
+                                ? "font-semibold text-emerald-700 dark:text-emerald-300"
+                                : "font-semibold text-ouro-700 dark:text-ouro-300"
                             }
                           >
                             {vinc.titulo}
@@ -630,11 +762,11 @@ export default function Importacoes() {
                           {grupo.totalLivros > 0 && (
                             <span>· {grupo.totalLivros} livro{grupo.totalLivros === 1 ? "" : "s"}</span>
                           )}
-                          {vinc.detalhe && <span className="text-zinc-400">· {vinc.detalhe}</span>}
+                          {vinc.detalhe && <span className="text-zinc-500 dark:text-zinc-400">· {vinc.detalhe}</span>}
                         </p>
                       </div>
-                      <Botao variante="neutro" onClick={() => setEditarGrupo(gi)}>
-                        <Pencil size={15} /> Alterar aluno
+                      <Botao variante="secundario" onClick={() => setEditarGrupo(gi)}>
+                        <Pencil size={15} aria-hidden /> Alterar aluno
                       </Botao>
                     </div>
                   </div>
@@ -645,10 +777,10 @@ export default function Importacoes() {
 
           {/* Ação em massa: criar de uma vez os alunos ainda não cadastrados */}
           {analise.formato !== "leituras" && naoEncontrados.length > 0 && (
-            <div className="space-y-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/20 dark:bg-amber-500/10">
+            <div className="mx-6 mb-4 space-y-2.5 rounded-2xl border border-ouro-200 bg-ouro-50 px-4 py-3 text-sm dark:border-ouro-400/25 dark:bg-ouro-400/10">
               <div className="flex flex-wrap items-center gap-2">
-                <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
-                <span className="text-amber-800 dark:text-amber-200">
+                <UserPlus size={16} aria-hidden className="text-ouro-700 dark:text-ouro-300" />
+                <span className="text-zinc-800 dark:text-zinc-100">
                   <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
                   {analise.turma_detectada && acharTurmaPorNome(turmas, analise.turma_detectada)
                     ? " — já marcados para criar na turma do relatório."
@@ -659,15 +791,15 @@ export default function Importacoes() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {turmaNova && (
-                  <Botao variante="neutro" onClick={() => aplicarATodosOsNovos({ tipo: "criar_nova" })}>
-                    <UserPlus size={15} /> Aplicar a todos: turma do relatório (nova)
+                  <Botao variante="secundario" tamanho="sm" onClick={() => aplicarATodosOsNovos({ tipo: "criar_nova" })}>
+                    <UserPlus size={14} aria-hidden /> Aplicar a todos: turma do relatório (nova)
                   </Botao>
                 )}
                 {turmas.length > 0 && (
                   <>
                     <select
                       aria-label="Turma para os novos alunos"
-                      className="rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm dark:border-amber-500/30 dark:bg-zinc-900"
+                      className="rounded-lg border border-ouro-200 bg-white px-2.5 py-1.5 text-sm dark:border-ouro-400/30 dark:bg-zinc-900"
                       value={turmaAlvo ?? ""}
                       onChange={(e) => setTurmaEmMassa(Number(e.target.value))}
                     >
@@ -675,16 +807,16 @@ export default function Importacoes() {
                         <option key={turma.id} value={turma.id}>{turma.nome}</option>
                       ))}
                     </select>
-                    <Botao variante="neutro"
+                    <Botao variante="secundario" tamanho="sm"
                            onClick={() => turmaAlvo && aplicarATodosOsNovos({ tipo: "criar", turmaId: turmaAlvo })}>
-                      <UserPlus size={15} /> Aplicar a todos
+                      <UserPlus size={14} aria-hidden /> Aplicar a todos
                     </Botao>
                   </>
                 )}
                 {turmas.length === 0 && !turmaNova && (
-                  <span className="text-amber-800 dark:text-amber-200">
+                  <span className="text-zinc-800 dark:text-zinc-100">
                     Crie uma turma primeiro em{" "}
-                    <Link to="/turmas" className="font-medium underline">Turmas</Link>.
+                    <Link to="/turmas" className="font-semibold text-indigo-700 underline dark:text-indigo-300">Turmas</Link>.
                   </span>
                 )}
               </div>
@@ -692,14 +824,14 @@ export default function Importacoes() {
           )}
 
           {analise.formato !== "leituras" && grupos.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className={classesTabela.moldura}>
+              <table className={classesTabela.tabela}>
                 <thead>
-                  <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                    <th className="px-4 py-2 font-medium">Aluno no relatório</th>
-                    <th className="px-4 py-2 font-medium">Dados</th>
-                    <th className="px-4 py-2 font-medium">Correspondência</th>
-                    <th className="px-4 py-2 font-medium">Destino</th>
+                  <tr>
+                    <th className={classesTabela.th}>Aluno no relatório</th>
+                    <th className={classesTabela.th}>Dados</th>
+                    <th className={classesTabela.th}>Correspondência</th>
+                    <th className={classesTabela.th}>Destino</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -708,23 +840,28 @@ export default function Importacoes() {
                     const correspondencia = grupo.correspondencia;
                     const primeira = analise.linhas[grupo.indices[0]];
                     return (
-                      <tr key={grupo.chave} className="border-b border-zinc-100 align-top last:border-0 dark:border-zinc-800/60">
-                        <td className="px-4 py-2.5 font-medium">
-                          {grupo.nome || <em className="text-zinc-400">sem nome</em>}
+                      <tr key={grupo.chave} className={`${classesTabela.tr} align-top`}>
+                        <td className={`${classesTabela.td} font-medium text-zinc-900 dark:text-zinc-100`}>
+                          {grupo.nome ? (
+                            <span className="flex min-w-[10rem] items-center gap-2.5">
+                              <Avatar nome={grupo.nome} tamanho="sm" />
+                              <span>{grupo.nome}</span>
+                            </span>
+                          ) : <em className="text-zinc-500 dark:text-zinc-400">sem nome</em>}
                         </td>
-                        <td className="px-4 py-2.5 text-xs text-zinc-600 dark:text-zinc-300">
+                        <td className={`${classesTabela.td} text-xs text-zinc-600 dark:text-zinc-300`}>
                           {grupo.totalLivros > 0 ? (
                             <span className="inline-flex items-center gap-1">
-                              <BookMarked size={12} /> {grupo.resumo}
+                              <BookMarked size={12} aria-hidden /> {grupo.resumo}
                             </span>
                           ) : (
                             grupo.resumo
                           )}
                           {primeira.avisos.map((mensagem) => (
-                            <p key={mensagem} className="mt-1 text-amber-600 dark:text-amber-400">{mensagem}</p>
+                            <p key={mensagem} className="mt-1 text-ouro-700 dark:text-ouro-300">{mensagem}</p>
                           ))}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td className={classesTabela.td}>
                           {correspondencia && (
                             <div className="space-y-1">
                               <Badge tom={tomCorrespondencia[correspondencia.status]}>
@@ -741,11 +878,11 @@ export default function Importacoes() {
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td className={classesTabela.td}>
                           {grupo.todasComErro ? (
-                            <span className="text-xs text-zinc-400">sem dados válidos — não será importado</span>
+                            <span className="text-xs text-zinc-500 dark:text-zinc-400">sem dados válidos — não será importado</span>
                           ) : (
-                            <div className="flex flex-col gap-1.5">
+                            <div className="flex min-w-[12rem] flex-col gap-1.5">
                               <select
                                 aria-label={`Destino de ${grupo.nome}`}
                                 className={estiloInput}
@@ -801,20 +938,105 @@ export default function Importacoes() {
             </div>
           )}
 
-          {erro && <div className="p-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
-          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
-            <span className="mr-auto text-sm font-medium">
-              {totalSelecionados > 0
-                ? `${totalSelecionados} de ${gruposValidos.length} aluno(s) serão importados.`
-                : "Deseja importar estes dados?"}
+          {exigeData && (
+            // Total acumulado: os números entram NA DATA do relatório. Sem ela, um
+            // arquivo antigo viraria "o dado de hoje" (ranking, nota e frescor) e
+            // apagaria o retrato que a sincronização gravou.
+            <div className="mx-6 mt-4 rounded-2xl border border-ouro-200 bg-ouro-50 px-4 py-3 dark:border-ouro-400/25 dark:bg-ouro-400/10">
+              <div className="max-w-xs">
+                <Campo rotulo="Data do relatório (obrigatória)">
+                  <input
+                    type="date"
+                    className={estiloInput}
+                    value={dataRelatorio}
+                    min={primeiroDia}
+                    max={hoje}
+                    required
+                    aria-describedby="ajuda-data-relatorio"
+                    aria-invalid={dataRelatorio !== "" && !dataOk}
+                    onChange={(e) => setDataRelatorio(e.target.value)}
+                  />
+                </Campo>
+              </div>
+              <p id="ajuda-data-relatorio" className="mt-1.5 text-xs text-zinc-700 dark:text-zinc-200">
+                O dia em que o relatório foi gerado na plataforma (costuma estar no rodapé ou
+                na capa). Os números entram nessa data: um arquivo antigo não passa por dado
+                de hoje nem apaga o que a sincronização já trouxe.
+              </p>
+              {dataRelatorio !== "" && !dataOk && (
+                <p className="mt-1 text-xs font-semibold text-rose-700 dark:text-rose-300" role="alert">
+                  {problemaDaDataDoRelatorio(dataRelatorio, undefined, anoLetivo)}
+                </p>
+              )}
+            </div>
+          )}
+
+          {erro && <div className="px-6 pt-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-3 border-t border-zinc-100 bg-zinc-50/60 px-6 py-4 dark:border-zinc-800 dark:bg-zinc-800/30">
+            <span className="mr-auto text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+              {exigeData && !dataOk
+                ? "Informe a data do relatório para importar."
+                : totalSelecionados > 0
+                  ? `${totalSelecionados} de ${gruposValidos.length} aluno(s) serão importados.`
+                  : "Deseja importar estes dados?"}
             </span>
-            <Botao variante="neutro" onClick={() => setAnalise(null)} disabled={ocupado}>
+            <Botao variante="secundario" onClick={() => setAnalise(null)} disabled={ocupado}>
               Não, voltar
             </Botao>
-            <Botao onClick={confirmar} disabled={ocupado || totalSelecionados === 0}>
+            <Botao onClick={() => setConfirmando(true)} disabled={ocupado || totalSelecionados === 0 || !dataOk}>
+              <CheckCircle2 size={15} aria-hidden />
               {ocupado ? "Importando..." : "Sim, importar"}
             </Botao>
           </div>
+
+          {/* Confirmação ANTES de gravar: o que vai acontecer, em números da prévia. */}
+          <Confirmacao
+            titulo="Gravar esta importação?"
+            aberto={confirmando}
+            aoFechar={() => setConfirmando(false)}
+            aoConfirmar={() => { void confirmar(); }}
+            rotuloConfirmar={ocupado ? "Gravando..." : "Gravar importação"}
+            ocupado={ocupado}
+          >
+            <p>
+              {totalSelecionados} de {gruposValidos.length} aluno(s) do relatório{" "}
+              {identidade ? `do ${identidade.nome}` : ""} entram nesta importação:
+            </p>
+            {exigeData && dataOk && (
+              <p className="text-sm">
+                Data do relatório: <strong>{diaPorExtenso(dataRelatorio)}</strong>
+              </p>
+            )}
+            <ul className="space-y-1.5">
+              <li className="flex items-center gap-2">
+                <CheckCircle2 size={15} aria-hidden className="shrink-0 text-emerald-600" />
+                {resumoConfirmacao.vincular} vinculado(s) a um aluno já cadastrado
+              </li>
+              {resumoConfirmacao.criar + resumoConfirmacao.criarNova > 0 && (
+                <li className="flex items-center gap-2">
+                  <UserPlus size={15} aria-hidden className="shrink-0 text-ouro-700 dark:text-ouro-300" />
+                  {resumoConfirmacao.criar + resumoConfirmacao.criarNova} aluno(s) novo(s)
+                  {resumoConfirmacao.criarNova > 0 ? " (com a turma do relatório criada, se ainda não existir)" : ""}
+                </li>
+              )}
+              {resumoConfirmacao.ignorar > 0 && (
+                <li className="flex items-center gap-2">
+                  <XCircle size={15} aria-hidden className="shrink-0 text-zinc-500" />
+                  {resumoConfirmacao.ignorar} ignorado(s) — ficam de fora
+                </li>
+              )}
+            </ul>
+            {resumoConfirmacao.criar + resumoConfirmacao.criarNova > 0 && (
+              analise.criacao_bloqueada_por_politica ? (
+                <p className="text-xs">
+                  Pela política desta escola, quem não corresponder a uma ficha vai para Revisões de
+                  identidade — nenhuma ficha nova é criada por esta importação.
+                </p>
+              ) : (
+                <p className="text-xs">Ficha criada por importação não se desfaz sozinha: confira os nomes novos.</p>
+              )
+            )}
+          </Confirmacao>
 
           {escolaId && (
             <SeletorAlunoDrawer
@@ -830,43 +1052,67 @@ export default function Importacoes() {
         </Card>
       )}
 
-      <PageHeader titulo="Histórico" descricao="Toda importação fica registrada com autor, quantidade e tempo (PRD §15)." />
-      <Card>
+      {/* Histórico: h2 (a página tem um h1 só — o "Importações" lá em cima). */}
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 pb-3 pt-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <IconePastel icone={History} tom="azul" />
+            <div className="min-w-0">
+              <h2 className="text-[17px] font-semibold text-zinc-900 dark:text-white">Histórico</h2>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Toda importação fica registrada com autor, quantidade e tempo.
+              </p>
+            </div>
+          </div>
+        </div>
         {erroHistorico ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erroHistorico.message} />
+          <Erro descricao={erroHistorico.message} aoTentar={recarregarHistorico} />
         ) : historico === null ? (
-          <Carregando />
+          <div className="space-y-3 px-6 pb-6 pt-2" aria-busy="true">
+            <p className="sr-only" role="status">Carregando...</p>
+            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-10" />)}
+          </div>
         ) : historico.length === 0 ? (
-          <Vazio titulo="Nenhuma importação ainda" descricao="O histórico aparecerá aqui após a primeira importação." />
+          <Vazio icone={History} titulo="Nenhuma importação ainda" descricao="O histórico aparecerá aqui após a primeira importação." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm tabular-nums">
+          // Celular: rola dentro do cartão com o aviso escrito (Alunos e Erros ficam à direita).
+          <TabelaRolavel rotulo="Histórico de importações: tabela completa">
+            <table className={classesTabela.tabela}>
               <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium"><History size={13} className="inline" /> Data</th>
-                  <th className="px-4 py-2 font-medium">Plataforma</th>
-                  <th className="px-4 py-2 font-medium">Formato</th>
-                  <th className="px-4 py-2 text-right font-medium">Alunos</th>
-                  <th className="px-4 py-2 text-right font-medium">Erros</th>
-                  <th className="hidden px-4 py-2 font-medium md:table-cell">Por</th>
+                <tr>
+                  <th className={classesTabela.th}>Data</th>
+                  <th className={classesTabela.th}>Plataforma</th>
+                  <th className={classesTabela.th}>Formato</th>
+                  <th className={`${classesTabela.th} text-right`}>Alunos</th>
+                  <th className={`${classesTabela.th} text-right`}>Erros</th>
+                  <th className={`hidden md:table-cell ${classesTabela.th}`}>Por</th>
                 </tr>
               </thead>
               <tbody>
                 {historico.map((item) => (
-                  <tr key={item.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-4 py-2.5">{dataHora(item.created_at)}</td>
-                    <td className="px-4 py-2.5">
-                      <Badge tom="destaque">{item.plataforma === "matific" ? "Matific" : "Elefante"}</Badge>
+                  <tr key={item.id} className={classesTabela.tr}>
+                    <td className={`${classesTabela.td} whitespace-nowrap`}>{dataHora(item.created_at)}</td>
+                    <td className={classesTabela.td}>
+                      <PilulaPlataforma plataforma={item.plataforma} curto />
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-zinc-500 dark:text-zinc-400">{item.tipo}</td>
-                    <td className="px-4 py-2.5 text-right">{item.qtd_alunos}</td>
-                    <td className="px-4 py-2.5 text-right">{item.qtd_erros || "—"}</td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{item.usuario_nome ?? "—"}</td>
+                    <td className={`${classesTabela.td} text-xs text-zinc-500 dark:text-zinc-400`}>{item.tipo}</td>
+                    <td className={`${classesTabela.td} text-right font-semibold tabular-nums text-zinc-900 dark:text-white`}>{item.qtd_alunos}</td>
+                    <td className={`${classesTabela.td} text-right tabular-nums`}>
+                      {item.qtd_erros ? <Badge tom="erro">{item.qtd_erros}</Badge> : "—"}
+                    </td>
+                    <td className={`hidden md:table-cell ${classesTabela.td} text-zinc-600 dark:text-zinc-300`}>
+                      {item.usuario_nome ? (
+                        <span className="flex items-center gap-2">
+                          <Avatar nome={item.usuario_nome} tamanho="sm" />
+                          <span>{item.usuario_nome}</span>
+                        </span>
+                      ) : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TabelaRolavel>
         )}
       </Card>
     </div>

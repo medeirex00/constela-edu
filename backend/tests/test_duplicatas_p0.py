@@ -56,15 +56,15 @@ def _total(db, escola):
 def test_1_revisar_com_um_candidato_nao_cria(db, turma_com):
     """O caso que gerava a fila de fusão manual: nome PARCIAL, 1 candidato só."""
     escola, turma, criar = turma_com
-    criar("AGATHA EMANUELE DA SILVA OLIVEIRA")
+    criar("GLAUCIA RAFAELE DA SILVA FICTELLA")
 
-    linha = matching.Identidade(nome="AGATHA EMANUELE OLIVEIRA")
+    linha = matching.Identidade(nome="GLAUCIA RAFAELE FICTELLA")
     roster, _ = imp._roster_identidades(db, escola.id, 2026, turma.id)
     res = matching.classificar_linha(linha, roster)
     assert res.status == matching.REVISAR and len(res.candidatos) == 1, (
         "o cenário precisa ser REVISAR com UM candidato para o teste valer")
 
-    aluno, confianca = _casar(db, escola, turma, "AGATHA EMANUELE OLIVEIRA")
+    aluno, confianca = _casar(db, escola, turma, "GLAUCIA RAFAELE FICTELLA")
     assert confianca == "media", "REVISAR de 1 candidato tem de ir para revisão"
     assert aluno is None
 
@@ -145,11 +145,11 @@ def test_7_aluno_fora_da_lista_nao_gera_duplicata(db, turma_com, status):
     """Exatamente o caso reproduzido na investigação: o aluno cai da Lista Piloto
     e a importação seguinte da plataforma abria uma 2ª ficha."""
     escola, turma, criar = turma_com
-    existente = criar("ABRAÃO LUÍS DIAS", status=status)
+    existente = criar("EUSTÁQUIO LUÍS FICTONI", status=status)
     antes = _total(db, escola)
 
     # nome com pequena variação, como chega do Elefante
-    aluno, confianca = _casar(db, escola, turma, "ABRAAO LUIZ DIAS")
+    aluno, confianca = _casar(db, escola, turma, "EUSTAQUIO LUIZ FICTONI")
     assert confianca in ("alta", "media"), (
         f"aluno com status={status} sumiu do roster e viraria duplicata")
     if confianca == "alta":
@@ -161,9 +161,9 @@ def test_7b_resolver_identidade_nao_reativa_o_aluno(db, turma_com):
     """Identidade e matrícula são coisas separadas: reconhecer quem é NÃO pode
     reativar quem foi arquivado."""
     escola, turma, criar = turma_com
-    existente = criar("ABRAÃO LUÍS DIAS", status="fora_lista_piloto")
+    existente = criar("EUSTÁQUIO LUÍS FICTONI", status="fora_lista_piloto")
 
-    _casar(db, escola, turma, "ABRAÃO LUÍS DIAS")
+    _casar(db, escola, turma, "EUSTÁQUIO LUÍS FICTONI")
     db.refresh(existente)
     assert existente.status == "fora_lista_piloto"
 

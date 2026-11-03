@@ -1,14 +1,14 @@
 """Uma só semântica de RA, o cabeçalho real da rede, e a fusão manual com rede.
 
-Três fragilidades descobertas na investigação da duplicidade da Alice Fossenati
-(escola 17, set/2026), corrigidas juntas porque são a mesma família de problema:
+Três fragilidades descobertas na investigação da duplicidade da Celeste Testelli
+(nome fictício), corrigidas juntas porque são a mesma família de problema:
 o sistema tinha MAIS DE UMA definição do que é "o mesmo RA", lia mal o cabeçalho
 do modelo oficial, e deixava a porta destrutiva sem a rede que a porta automática
 tem.
 
 1. ``alunos_dedup._conflito_forte`` comparava o RA CRU (só ``.strip()``), enquanto
    todo o resto do sistema compara por ``ra_util``. Resultado: duas fichas da
-   mesma criança com o RA digitado "123.269.537-3" num lado e "1232695373" no
+   mesma criança com o RA digitado "904.000.004-3" num lado e "9040000043" no
    outro eram declaradas "crianças provadamente diferentes" e a duplicata REAL
    ficava invisível na tela de fusão — o oposto do que o veto existe para fazer.
 
@@ -64,7 +64,7 @@ def _planilha(rotulo_nasc, linhas, turma="3º Ano A"):
     ws.append(["Escola:", None, "EMEF TESTE", None, None, None, None,
                "Lista Piloto:", ANO])
     ws.append([])
-    ws.append(["Professor:", None, "PAULA", None, "Ano:", turma,
+    ws.append(["Professor:", None, "PROFESSORA A", None, "Ano:", turma,
                "Turno:       TARDE", None, "N.º da Classe (SED):", 300396600])
     ws.append([])
     ws.append(colunas)
@@ -100,9 +100,9 @@ def _aluno(db, escola_id, nome) -> Aluno:
 def test_1_ra_pontuado_e_nao_pontuado_sao_o_mesmo():
     """A regra oficial ignora pontuação. Antes, o veto da deduplicação lia o
     texto cru e declarava 'crianças diferentes' para o MESMO RA."""
-    assert ra_util("123.269.537-3") == ra_util("1232695373") == "1232695373"
-    a = _ficha("MARIA SILVA", ra="123.269.537-3")
-    b = _ficha("MARIA SILVA", ra="1232695373")
+    assert ra_util("904.000.004-3") == ra_util("9040000043") == "9040000043"
+    a = _ficha("MARIA SILVA", ra="904.000.004-3")
+    b = _ficha("MARIA SILVA", ra="9040000043")
     assert _conflito_forte(a, b) is False
     assert matching.conflito_identidade(
         identidade_do_aluno(a), identidade_do_aluno(b)) is False
@@ -111,8 +111,8 @@ def test_1_ra_pontuado_e_nao_pontuado_sao_o_mesmo():
 def test_2_ra_com_caixa_diferente_e_o_mesmo():
     """O verificador pode ser a letra X, e a planilha alterna maiúscula e
     minúscula. Caixa não é identidade."""
-    assert ra_util("121.545.238-X") == ra_util("121545238x") == "121545238x"
-    a, b = _ficha("JOAO LIMA", ra="121.545.238-X"), _ficha("JOAO LIMA", ra="121545238x")
+    assert ra_util("905.000.005-X") == ra_util("905000005x") == "905000005x"
+    a, b = _ficha("JOAO LIMA", ra="905.000.005-X"), _ficha("JOAO LIMA", ra="905000005x")
     assert _conflito_forte(a, b) is False
 
 
@@ -129,11 +129,11 @@ def test_4_ra_incompleto_continua_sendo_estado_distinto():
 
     O décimo caractere é o dígito verificador do RA paulista, mas nada no
     repositório declara isso, e truncá-lo juntaria identidades sem prova. Este
-    é exatamente o caso da Alice (2285 × 2297) e ele DEVE continuar vetado."""
-    assert ra_util("123269537") == "123269537"
-    assert ra_util("123.269.537-3") == "1232695373"
-    assert ra_util("123269537") != ra_util("123.269.537-3")
-    a, b = _ficha("ALICE F", ra="123269537"), _ficha("ALICE F", ra="123.269.537-3")
+    é exatamente o caso da Celeste (as duas fichas) e ele DEVE continuar vetado."""
+    assert ra_util("904000004") == "904000004"
+    assert ra_util("904.000.004-3") == "9040000043"
+    assert ra_util("904000004") != ra_util("904.000.004-3")
+    a, b = _ficha("CELESTE T", ra="904000004"), _ficha("CELESTE T", ra="904.000.004-3")
     assert _conflito_forte(a, b) is True
 
 
@@ -149,8 +149,8 @@ def test_4b_placeholder_de_ra_nao_prova_nada():
 def test_4c_a_deduplicacao_usa_a_mesma_regra_do_motor():
     """O objetivo da correção: não existir mais um cenário em que o motor de
     identidade diz 'mesmo RA' e a deduplicação diz 'RA diferente'."""
-    casos = ["123.269.537-3", "1232695373", "123269537", "121.545.238-X",
-             "121545238x", "0", "", "111.111.111-1"]
+    casos = ["904.000.004-3", "9040000043", "904000004", "905.000.005-X",
+             "905000005x", "0", "", "111.111.111-1"]
     for x in casos:
         for y in casos:
             a, b = _ficha("N N", ra=x), _ficha("N N", ra=y)
@@ -211,20 +211,20 @@ def test_7_planilha_sem_data_nao_apaga_a_data_da_ficha(cliente, db, escola_compl
 
 
 def test_8_data_divergente_nao_sobrescreve_e_gera_aviso(cliente, db, escola_completa):
-    """O caso da Alice: a MESMA criança com duas datas. O sistema não escolhe —
+    """O caso da Celeste: a MESMA criança com duas datas. O sistema não escolhe —
     preserva a que está na ficha e avisa, nominalmente."""
     escola_id = escola_completa["escola"].id
     _confirmar(cliente, escola_id, _planilha("DT. NASC.", [
-        _linha("HELENA PIRES SOUZA", numero=1, ra="444.100.001-0", nasc=date(2020, 7, 31)),
+        _linha("HELENA PIRES SOUZA", numero=1, ra="444.100.001-0", nasc=date(2020, 5, 17)),
     ]))
     corpo = _confirmar(cliente, escola_id, _planilha("DT. NASC.", [
-        _linha("HELENA PIRES SOUZA", numero=1, ra="444.100.001-0", nasc=date(2020, 7, 21)),
+        _linha("HELENA PIRES SOUZA", numero=1, ra="444.100.001-0", nasc=date(2020, 5, 7)),
     ]))
 
-    assert _aluno(db, escola_id, "HELENA PIRES SOUZA").data_nascimento == date(2020, 7, 31)
+    assert _aluno(db, escola_id, "HELENA PIRES SOUZA").data_nascimento == date(2020, 5, 17)
     avisos = [a for a in corpo["avisos"] if "HELENA PIRES SOUZA" in a]
     assert len(avisos) == 1, corpo["avisos"]
-    assert "2020-07-31" in avisos[0] and "2020-07-21" in avisos[0]
+    assert "2020-05-17" in avisos[0] and "2020-05-07" in avisos[0]
 
 
 def test_8b_data_igual_nao_gera_ruido(cliente, db, escola_completa):
@@ -255,7 +255,7 @@ def test_13_cabecalho_dt_nasc_sem_coluna_ra_e_reconhecido(cliente, db, escola_co
     ws.append(["Escola:", None, "EMEF TESTE", None, None, None, None,
                "Lista Piloto:", ANO])
     ws.append([])
-    ws.append(["Professor:", None, "PAULA", None, "Ano:", "5º Ano A",
+    ws.append(["Professor:", None, "PROFESSORA A", None, "Ano:", "5º Ano A",
                "Turno:       TARDE", None, "N.º da Classe (SED):", 300396699])
     ws.append([])
     ws.append(colunas)
@@ -299,15 +299,15 @@ def test_14_divergencia_de_nascimento_fica_no_log(cliente, db, escola_completa):
     assert _aluno(db, escola_id, "BRUNA CAMPOS REIS").data_nascimento == date(2019, 1, 10)
 
 
-def test_12b_o_parser_nao_inventa_data_para_a_alice():
+def test_12b_o_parser_nao_inventa_data_para_a_celeste():
     """A planilha oficial traz DUAS datas para a mesma criança. O importador lê
     as duas como estão; escolher é decisão humana, e o teste 8 garante o aviso."""
     conteudo = _planilha("DT. NASC.", [
-        _linha("ALICE VITORIA FOSSENATI DE JESUS", numero=2, ra="123.269.537-3",
-               nasc=date(2020, 7, 31)),
+        _linha("CELESTE BEATRIZ TESTELLI DE FICTICIA", numero=2, ra="904.000.004-3",
+               nasc=date(2020, 5, 17)),
     ], turma="1ª Fase")
     an = analisar_matriculas(conteudo, "L.xlsx")
     alunos = [a for t in an.turmas for a in t.alunos]
     assert len(alunos) == 1
-    assert alunos[0].data_nascimento == "2020-07-31"
-    assert alunos[0].ficha["ra"] == "123.269.537-3"
+    assert alunos[0].data_nascimento == "2020-05-17"
+    assert alunos[0].ficha["ra"] == "904.000.004-3"

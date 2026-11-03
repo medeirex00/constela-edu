@@ -1,0 +1,142 @@
+{
+  "calculavel": false,
+  "motivos": [
+    "indicador_so_da_rede"
+  ],
+  "textos": [
+    "O ICA é da rede municipal: o INEP não publica o ICA por escola, então ele não pode ser relacionado, escola a escola, com as plataformas."
+  ],
+  "avisos": [
+    "Correlação não é causalidade: escolas que leem mais podem ser diferentes em muitas outras coisas (turmas, frequência, contexto). A associação descreve as escolas, não o efeito da plataforma."
+  ],
+  "criterios": {
+    "metodo": "Spearman",
+    "n_minimo": 8,
+    "k_minimo_alunos": 5,
+    "exige_mesmo_ano_letivo": true,
+    "exige_mesma_serie": true,
+    "so_oficial": true,
+    "mesma_escala": true,
+    "unidade": "escola",
+    "ic": "Fisher z, EP = 1,06/√(n−3)",
+    "exclui_instavel": true,
+    "exige_coleta_em_dia": true
+  },
+  "indicador": {
+    "chave": "ica",
+    "nome": "Indicador Criança Alfabetizada (ICA)",
+    "orgao": "INEP",
+    "oficial": true,
+    "unidade": "%",
+    "escala": "percentual",
+    "disponivel": true,
+    "motivo_indisponivel": null,
+    "texto_indisponivel": null,
+    "abrangencias": [
+      "rede"
+    ],
+    "por_escola": false,
+    "etapas": [
+      "2_ano"
+    ],
+    "componentes": [
+      "lp"
+    ],
+    "rotulos_etapas": {
+      "2_ano": "2º ano"
+    },
+    "rotulos_componentes": {
+      "lp": "Língua Portuguesa"
+    },
+    "edicoes": [
+      2024,
+      2025
+    ],
+    "edicao_mais_recente": 2025,
+    "tem_meta": true,
+    "avisos": [
+      "O ICA é o indicador da REDE municipal: o INEP não publica o ICA por escola. Ele não serve para comparar nem ordenar escolas.",
+      "SP e Brasil: o INEP publica o ICA na rede PÚBLICA (estadual e municipal) — outra rede, só contexto. A comparação na mesma rede é com a UF nas redes municipais.",
+      "Resultado × meta na precisão divulgada: o empate é “inconclusivo” (23 × 23 pode ser 22,6 × 23,3), não “atingiu”."
+    ]
+  },
+  "metrica": {
+    "chave": "livros_por_aluno",
+    "rotulo": "Livros novos por aluno com conta (Elefante)",
+    "plataforma": "elefante"
+  },
+  "metricas_disponiveis": [
+    {
+      "chave": "livros_por_aluno",
+      "rotulo": "Livros novos por aluno com conta (Elefante)",
+      "plataforma": "elefante",
+      "componente": "lp"
+    },
+    {
+      "chave": "minutos_por_aluno",
+      "rotulo": "Minutos de leitura por aluno com conta (Elefante)",
+      "plataforma": "elefante",
+      "componente": "lp"
+    },
+    {
+      "chave": "participacao_elefante",
+      "rotulo": "Participação no Elefante (% dos alunos com conta que leram)",
+      "plataforma": "elefante",
+      "componente": "lp"
+    },
+    {
+      "chave": "taxa_acerto",
+      "rotulo": "Acerto nas questões do Elefante (%)",
+      "plataforma": "elefante",
+      "componente": "lp"
+    },
+    {
+      "chave": "nivel_medio",
+      "rotulo": "Nível médio dos livros lidos (Elefante; posição AA = 0 … Z = 29)",
+      "plataforma": "elefante",
+      "componente": "lp"
+    },
+    {
+      "chave": "atividades_por_aluno",
+      "rotulo": "Atividades por aluno com dado no período (Matific)",
+      "plataforma": "matific",
+      "componente": "mt"
+    },
+    {
+      "chave": "estrelas_por_aluno",
+      "rotulo": "Estrelas por aluno com dado no período (Matific)",
+      "plataforma": "matific",
+      "componente": "mt"
+    },
+    {
+      "chave": "desempenho_medio",
+      "rotulo": "Estrelas por atividade (Matific, 0 a 5)",
+      "plataforma": "matific",
+      "componente": "mt"
+    },
+    {
+      "chave": "participacao_matific",
+      "rotulo": "Participação no Matific (% dos alunos com dado no período que fizeram atividade)",
+      "plataforma": "matific",
+      "componente": "mt"
+    }
+  ],
+  "filtros": {
+    "indicador": "ica",
+    "etapa": null,
+    "componente": null,
+    "edicao": null,
+    "metrica": "livros_por_aluno",
+    "periodo": "ano_letivo",
+    "inicio": null,
+    "fim": null,
+    "serie": null
+  },
+  "janela": null,
+  "pares": [],
+  "n": 0,
+  "coeficiente": null,
+  "ic95": null,
+  "interpretacao": null,
+  "metodologia": "Unidade: a escola. Entram só números oficiais, com o registro do arquivo oficial (a Estimativa Constela e os números gravados antes, sem esse registro, ficam de fora), na mesma série dos dois lados (2º ano com 2º ano, 5º com 5º; Ideb e IEE com a escola inteira, do 1º ao 5º ano) e no mesmo ano letivo (o período das plataformas dentro do ano da avaliação). Cada escola precisa de pelo menos 5 alunos medidos na plataforma e da coleta em dia no período; médias instáveis (TPS = 0) e o IEE calculado com elas ficam de fora, e o acerto nas questões só vale se as coletas forem do mesmo ano letivo. São precisas pelo menos 8 escolas com os dois números e variação dos dois lados. Coeficiente: correlação de postos de Spearman (cada escola recebe a sua posição; empates ficam com a posição média). Intervalo de 95% aproximado pela transformação z de Fisher, com erro-padrão 1,06/√(n−3). Se o intervalo inclui o zero, não dá para afirmar que os dois números andam juntos. Correlação não é causalidade: a relação descreve as escolas, não o efeito da plataforma."
+}

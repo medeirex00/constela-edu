@@ -220,12 +220,12 @@ def test_matriculas_confirmar_solta_a_trava_antes_de_recalcular(
     ws.append(["Escola:", None, "EMEF TESTE", None, None, None, None,
                "Lista Piloto:", 2026])
     ws.append([])
-    ws.append(["Professor:", None, "PAULA", None, "Ano:", "1º Ano A",
+    ws.append(["Professor:", None, "PROFESSORA A", None, "Ano:", "1º Ano A",
                "Turno:       TARDE", None, "N.º da Classe (SED):", 300396614])
     ws.append([])
     ws.append(["N.º", "RM", "RA", "Nome", "Data de Nasc."])
-    ws.append([1, 4446, "123.100.026-0", "CRIANCA DA LISTA PILOTO",
-               date(2019, 9, 18)])
+    ws.append([1, 9001, "901.000.001-0", "CRIANCA DA LISTA PILOTO",
+               date(2019, 8, 14)])
     buffer = io.BytesIO()
     wb.save(buffer)
 

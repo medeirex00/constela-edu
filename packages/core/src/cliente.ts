@@ -129,6 +129,15 @@ async function tratarErro(resposta: Response): Promise<never> {
   );
 }
 
+/** Corpo JSON de uma resposta OK. 204 (No Content) e corpo vazio devolvem
+ *  `undefined`: `resposta.json()` lançava SyntaxError num sucesso sem corpo
+ *  (resolver alerta, remover credencial...) e a tela o tratava como falha. */
+async function lerCorpo<T>(resposta: Response): Promise<T> {
+  if (resposta.status === 204) return undefined as T;
+  const texto = await resposta.text();
+  return (texto.trim() ? JSON.parse(texto) : undefined) as T;
+}
+
 export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
   const token = await obterToken();
   const resposta = await buscar(`${base}${caminho}`, {
@@ -140,7 +149,7 @@ export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise
     },
   });
   if (!resposta.ok) await tratarErro(resposta);
-  return resposta.json() as Promise<T>;
+  return lerCorpo<T>(resposta);
 }
 
 /** Envio multipart (upload de arquivos) — a plataforma define o Content-Type. */
@@ -152,7 +161,7 @@ export async function apiUpload<T>(caminho: string, dados: FormData): Promise<T>
     body: dados,
   });
   if (!resposta.ok) await tratarErro(resposta);
-  return resposta.json() as Promise<T>;
+  return lerCorpo<T>(resposta);
 }
 
 /** Busca um recurso binário autenticado (PDF, XLSX...) e devolve o Blob. */

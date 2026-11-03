@@ -9,9 +9,11 @@ deploys (Railway Cron / sidecar do compose / cron do SO):
 """
 from app.core.database import SessionLocal
 from app.services.assistente import purgar_conversas_ia_expiradas
+from scripts._saida import forcar_saida_utf8
 
 
 def main() -> None:
+    forcar_saida_utf8()
     db = SessionLocal()
     try:
         removidas = purgar_conversas_ia_expiradas(db)

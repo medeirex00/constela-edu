@@ -138,12 +138,35 @@ def status_do_assistente(
 
 
 # --- Configuração do assistente (admin) — chave de API pela interface ---------
+#
+# Quem liga o provedor EXTERNO (P9, análogo ao D7): Anthropic/OpenAI recebem o
+# contexto pseudonimizado da escola (turmas, notas, índices, alertas) em
+# servidores fora do país. Ligar, reconfigurar (modelo) ou gravar a chave de um
+# provedor externo é exclusivo do Admin Global. O admin da escola continua
+# VENDO o estado (GET /config e /status) e pode DESLIGAR: salvar o provedor
+# `local` (sem rede), que ele já podia antes e que descarta a chave gravada.
 
 class ConfigAssistenteIn(BaseModel):
     provedor: str = Field(pattern="^(local|anthropic|openai)$")
     # Vazio/ausente mantém a chave já salva (a chave nunca volta ao navegador).
     api_key: str | None = Field(default=None, max_length=300)
     modelo: str | None = Field(default=None, max_length=100)
+
+
+_MSG_EXTERNO_SO_GLOBAL = (
+    "Ligar ou configurar um provedor de IA externo (Anthropic/OpenAI) e gravar "
+    "a chave de API é exclusivo do Admin Global: o assistente externo envia "
+    "dados pseudonimizados da escola para fora do país. O administrador da "
+    "escola pode manter ou voltar ao modo local (sem rede).")
+
+
+def _exigir_global_para_externo(dados: ConfigAssistenteIn, usuario: Usuario) -> None:
+    """403 para quem não é Admin Global e pede QUALQUER coisa além do modo local
+    sem chave. Roda antes de gravar: a configuração da escola fica intocada."""
+    if usuario.is_global:
+        return
+    if dados.provedor != "local" or (dados.api_key or "").strip():
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _MSG_EXTERNO_SO_GLOBAL)
 
 
 @router.get("/assistente/config")
@@ -163,7 +186,12 @@ def salvar_config_assistente(
     usuario: Usuario = Depends(exigir_papeis("admin")),
 ):
     """Salva o provedor de IA da escola. A chave é gravada CIFRADA e nunca é
-    devolvida — só o indicador de que existe."""
+    devolvida — só o indicador de que existe.
+
+    Provedor externo (anthropic/openai), o modelo dele e a chave: só o Admin
+    Global (403 aos demais, antes de gravar). O admin da escola só salva `local`
+    (desligar), o que descarta a chave do provedor externo anterior."""
+    _exigir_global_para_externo(dados, usuario)
     try:
         resultado = assistente.salvar_config_assistente(
             db, escola_id, dados.provedor, dados.api_key, dados.modelo)

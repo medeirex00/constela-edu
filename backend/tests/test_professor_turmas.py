@@ -37,7 +37,7 @@ def test_vincula_turma_e_professor_passa_a_ver_so_ela(cliente, db, escola_comple
     db.add(turma_b)
     db.commit()
 
-    prof = _prof_user(cliente, escola.id, "Paula Vilela", "paula@escola.com.br")
+    prof = _prof_user(cliente, escola.id, "Telma Varoni", "telma@escola.com.br")
 
     # Sem vínculo ainda → nenhuma turma marcada.
     r = cliente.get(_url(escola.id, f"/{prof['id']}/turmas"))
@@ -51,12 +51,12 @@ def test_vincula_turma_e_professor_passa_a_ver_so_ela(cliente, db, escola_comple
 
     # Criou o Professor emparelhado pelo e-mail e apontou a turma para ele.
     p = db.execute(select(Professor).where(
-        Professor.email == "paula@escola.com.br")).scalar_one()
+        Professor.email == "telma@escola.com.br")).scalar_one()
     db.refresh(turma_a)
     assert turma_a.professor_id == p.id
 
     # Fim do laço: o professor logado enxerga SÓ a turma A.
-    chaves = _login(cliente, "paula@escola.com.br")
+    chaves = _login(cliente, "telma@escola.com.br")
     turmas = cliente.get(f"/api/v1/escolas/{escola.id}/turmas", headers=chaves).json()
     assert [t["id"] for t in turmas] == [turma_a.id]
 
@@ -119,7 +119,7 @@ def test_coordenador_tambem_vincula_turmas(cliente, db, escola_completa):
 
     escola = escola_completa["escola"]
     turma_a = escola_completa["turma"]
-    prof = _prof_user(cliente, escola.id, "Paula Vilela", "paula.v@escola.com.br")
+    prof = _prof_user(cliente, escola.id, "Telma Varoni", "telma.v@escola.com.br")
     db.add(Usuario(escola_id=escola.id, nome="Coord Fulana", email="coord.f@escola.com.br",
                    senha_hash=hash_senha(SENHA), cargo="coordenador"))
     db.commit()

@@ -84,6 +84,18 @@ def janela_efetiva(inicio: datetime | None, fim: datetime | None,
     return ini, fim_ef
 
 
+def limitar_estrelas(atividades: float, estrelas: float) -> float:
+    """Estrelas que CONTAM: nunca mais que ``ESTRELAS_MAX_POR_ATIVIDADE`` (5) por
+    atividade — uma correção de relatório não cria estrela sem atividade.
+
+    Fonte única do teto: ``ganho_no_periodo`` aplica esta função ao ganho do
+    período, e o exemplo da Pontuação aplica a MESMA aos números digitados (sem
+    ela, 2 atividades com 50 estrelas dariam índice 5,0 no exemplo e 1,25 na
+    premiação real). Valores negativos contam como 0."""
+    return min(max(0.0, float(estrelas)),
+               ESTRELAS_MAX_POR_ATIVIDADE * max(0.0, float(atividades)))
+
+
 @dataclass(frozen=True)
 class GanhoMatific:
     """O que o aluno fez DENTRO do período (nunca o acumulado anterior)."""
@@ -184,8 +196,7 @@ def ganho_no_periodo(serie: Iterable, inicio: datetime | None,
     # Queda do contador: fica explícita na resposta em vez de virar um zero mudo.
     regrediu = base is not None and (ativ_atual < ativ_base or est_atual < est_base)
     atividades = max(0.0, ativ_atual - ativ_base)
-    estrelas = min(max(0.0, est_atual - est_base),
-                   ESTRELAS_MAX_POR_ATIVIDADE * atividades)
+    estrelas = limitar_estrelas(atividades, max(0.0, est_atual - est_base))
     return GanhoMatific(
         atividades=atividades, estrelas=estrelas,
         data_base=_data(base) if base is not None else None,

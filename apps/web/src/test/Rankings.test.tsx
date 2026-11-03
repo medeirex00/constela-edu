@@ -12,7 +12,7 @@ const URL_TURMAS = "/escolas/1/turmas";
 const URL_GERAL = "/escolas/1/ranking";
 const URL_LEITURA = "/escolas/1/ranking/leitura";
 const URL_MATEMATICA = "/escolas/1/sync/matific/placar-ao-vivo";
-const URL_RESUMO = "/escolas/1/resumo-escola";
+const URL_RANKING_TURMAS = "/escolas/1/ranking/turmas";
 
 const DASHBOARD_REDE = {
   rede_id: 1, modulos: ["leitura", "matematica"], totais: {}, equidade: {}, atencao: [], escolas: [],
@@ -206,13 +206,14 @@ describe("Rankings (tela única com seletor)", () => {
 
   it("categorias: coordenador vê Alunos e Turmas; ?ver=turmas abre o ranking de turmas", async () => {
     responder("GET", URL_TURMAS, [turmaFake({ id: 1, nome: "3º Ano A" })] as Turma[]);
-    responder("GET", URL_RESUMO, {
-      escola: { id: 1, nome: "Escola" },
-      turmas: [{
-        turma: { id: 1, nome: "3º Ano A", ano_escolar: "3º Ano" }, total_alunos: 20,
-        media_leitura: 71.5, n_leitura: 18, media_matematica: 60, n_matematica: 10,
-        media_elefante: 71.5, media_matific: 60,
+    // A ordem e a posição das turmas vêm prontas do backend.
+    responder("GET", URL_RANKING_TURMAS, {
+      dimensao: "leitura",
+      itens: [{
+        posicao: 1, turma_id: 1, nome: "3º Ano A", ano_escolar: "3º Ano", turno: "manha",
+        media: 71.5, n_aferidos: 18, total_alunos: 20,
       }],
+      frescor: null,
     });
 
     renderComApp(<Rankings />, { rota: "/ranking?ver=turmas" });
@@ -226,6 +227,30 @@ describe("Rankings (tela única com seletor)", () => {
     expect(screen.queryByRole("tab", { name: "Evolução" })).not.toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "3º Ano A" })).toBeInTheDocument();
     expect(screen.getByText("71,5")).toBeInTheDocument();
+  });
+
+  it("/rede/ranking?ver=turmas: o título é o do menu e da trilha (Ranking da Rede); em /ranking segue Ranking Geral", async () => {
+    responder("GET", URL_TURMAS, [turmaFake({ id: 1, nome: "3º Ano A" })] as Turma[]);
+    responder("GET", URL_RANKING_TURMAS, {
+      dimensao: "leitura",
+      itens: [{
+        posicao: 1, turma_id: 1, nome: "3º Ano A", ano_escolar: "3º Ano", turno: "manha",
+        media: 71.5, n_aferidos: 18, total_alunos: 20,
+      }],
+      frescor: null,
+    });
+    const admin = usuarioFake({ cargo: "admin", is_global: true, escola_id: null });
+
+    const { unmount } = renderComApp(<Rankings />, { rota: "/rede/ranking?ver=turmas", usuario: admin });
+    expect(await screen.findByRole("link", { name: "3º Ano A" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Ranking da Rede" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.queryByText("Ranking Geral")).not.toBeInTheDocument();
+    unmount();
+
+    renderComApp(<Rankings />, { rota: "/ranking?ver=turmas", usuario: admin });
+    expect(await screen.findByRole("link", { name: "3º Ano A" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Ranking Geral" })).toBeInTheDocument();
   });
 
   it("professor vê só a categoria Alunos (sem seletor de categoria) e ?ver=turmas cai no Geral", async () => {
@@ -243,6 +268,27 @@ describe("Rankings (tela única com seletor)", () => {
     expect(screen.queryByRole("tablist", { name: "Categoria do ranking" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Turmas" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Geral" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("professor: o nome do aluno no Ranking de Evolução abre a evolução dele (decisão do dono de 03/08)", async () => {
+    // O servidor só lista alunos das turmas do professor e escopa a evolução
+    // (aluno de fora = "não encontrado"); o link não desvia para o perfil.
+    responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
+    responder("GET", "/escolas/1/ranking-evolucao", [
+      {
+        posicao: 1, aluno_id: 40, nome: "Eva Evolucao Lima", turma: "3º Ano A",
+        nota_evolucao: 12,
+        ganhos: { atividades: 3, estrelas: 1, livros: 2, tempo_leitura_min: 10, acertos: 4 },
+      },
+    ]);
+
+    renderComApp(<Rankings />, {
+      rota: "/ranking?ver=evolucao",
+      usuario: usuarioFake({ cargo: "professor", is_global: false }),
+    });
+
+    const link = await screen.findByRole("link", { name: /Eva Evolucao Lima/ });
+    expect(link).toHaveAttribute("href", "/alunos/40/evolucao");
   });
 
   it("Admin Global com escola selecionada vê Alunos, Turmas e Escolas (antes só via Escolas)", async () => {

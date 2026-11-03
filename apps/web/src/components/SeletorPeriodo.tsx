@@ -7,7 +7,7 @@
  */
 import { CalendarRange } from "lucide-react";
 
-import { estiloInput } from "./ui";
+import { MolduraPilula, estiloDataPilula, estiloSelectPilula } from "./SeletorPilula";
 
 export interface Periodo {
   preset: string; // chave do preset, "personalizado" ou "dia"
@@ -53,40 +53,57 @@ export function periodoParaQuery(p: Periodo): string {
   return q.toString();
 }
 
-const estiloData = `${estiloInput} w-auto`;
+const estiloData = estiloDataPilula;
 
+/** As datas do "personalizado" (início e fim) e do "dia", no contrato do backend.
+ *  Fonte única: a pílula abaixo e o campo da Análise educacional só mudam o estilo. */
+export function DatasDoPeriodo({ valor, onChange, estilo, classeAte = "text-sm text-zinc-500 dark:text-zinc-400" }: {
+  valor: Periodo;
+  onChange: (p: Periodo) => void;
+  estilo: string;
+  classeAte?: string;
+}) {
+  if (valor.preset === "personalizado") {
+    return (
+      <>
+        <input type="date" aria-label="Data inicial" className={estilo}
+               value={valor.inicio ?? ""} onChange={(e) => onChange({ ...valor, inicio: e.target.value })} />
+        <span className={classeAte}>até</span>
+        <input type="date" aria-label="Data final" className={estilo}
+               value={valor.fim ?? ""} onChange={(e) => onChange({ ...valor, fim: e.target.value })} />
+      </>
+    );
+  }
+  if (valor.preset === "dia") {
+    return (
+      <input type="date" aria-label="Dia" className={estilo}
+             value={valor.inicio ?? ""} onChange={(e) => onChange({ ...valor, inicio: e.target.value })} />
+    );
+  }
+  return null;
+}
+
+/** Identidade v2: a pílula branca das referências ("4º bimestre"), com o <select>
+ *  nativo por baixo — mesmos presets, aria-labels e contrato com o backend. */
 export function SeletorPeriodo({ valor, onChange }: {
   valor: Periodo;
   onChange: (p: Periodo) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <CalendarRange size={15} className="text-zinc-400" />
-      <select
-        aria-label="Período de análise"
-        className={`${estiloInput} w-auto`}
-        value={valor.preset}
-        onChange={(e) => onChange({ ...valor, preset: e.target.value })}
-      >
-        {PRESETS_PERIODO.map((p) => (
-          <option key={p.valor} value={p.valor}>{p.rotulo}</option>
-        ))}
-      </select>
-
-      {valor.preset === "personalizado" && (
-        <>
-          <input type="date" aria-label="Data inicial" className={estiloData}
-                 value={valor.inicio ?? ""} onChange={(e) => onChange({ ...valor, inicio: e.target.value })} />
-          <span className="text-sm text-zinc-500">até</span>
-          <input type="date" aria-label="Data final" className={estiloData}
-                 value={valor.fim ?? ""} onChange={(e) => onChange({ ...valor, fim: e.target.value })} />
-        </>
-      )}
-
-      {valor.preset === "dia" && (
-        <input type="date" aria-label="Dia" className={estiloData}
-               value={valor.inicio ?? ""} onChange={(e) => onChange({ ...valor, inicio: e.target.value })} />
-      )}
+      <MolduraPilula icone={CalendarRange}>
+        <select
+          aria-label="Período de análise"
+          className={estiloSelectPilula}
+          value={valor.preset}
+          onChange={(e) => onChange({ ...valor, preset: e.target.value })}
+        >
+          {PRESETS_PERIODO.map((p) => (
+            <option key={p.valor} value={p.valor}>{p.rotulo}</option>
+          ))}
+        </select>
+      </MolduraPilula>
+      <DatasDoPeriodo valor={valor} onChange={onChange} estilo={estiloData} />
     </div>
   );
 }

@@ -9,7 +9,9 @@
  *    nem a apresenta como base oficial (decisão D1): o rótulo e o órgão vêm da API;
  *  - a recusa do backend (coluna da edição ausente) aparece para o gestor, e os
  *    códigos INEP não casados aparecem TODOS (com "ver todos");
- *  - o eixo do gráfico usa o nome curto (o inteiro não cabe na altura do SVG).
+ *  - a correlação antiga (dispersão com o eixo do nome curto, evolução e Pearson) SAIU
+ *    desta tela: ela misturava estimativa com oficial e cruzava anos diferentes; a relação
+ *    com as plataformas é a da Análise educacional (/rede/analise?ver=relacao).
  *
  * (O arquivo não se chama RedeAvaliacoes.test.tsx: esse caminho já existe, não
  * rastreado, no trabalho paralelo do working tree principal.)
@@ -22,6 +24,7 @@ import { describe, expect, it } from "vitest";
 
 import RedeAvaliacoes from "../pages/rede/RedeAvaliacoes";
 import {
+  api,
   apiUpload,
   renderComApp,
   responder,
@@ -29,6 +32,8 @@ import {
   screen,
   userEvent,
   usuarioFake,
+  waitFor,
+  within,
 } from "./utils";
 
 const ROTULO_ESTIMATIVA =
@@ -290,50 +295,48 @@ describe("Avaliações externas — importação", () => {
   });
 });
 
-describe("Avaliações externas — eixo do gráfico", () => {
+describe("Avaliações externas — a correlação saiu desta tela", () => {
   // Leitura: a Secretaria (que lê a rede) basta — não depende de importar.
   const secretaria = usuarioFake({ nome: "Secretaria", cargo: "coordenador", rede_id: 1, escola_id: null });
 
-  function semearCorrelacao(nome: string, nomeCurto?: string) {
+  function semearSeries(nome: string) {
     responder("GET", "/avaliacoes", []);
     responder("GET", "/avaliacoes/presets-import", []);
     responder("GET", "/redes/1/avaliacoes/opcoes", [{
       avaliacao: "crianca_alfabetizada", nome, tipo: "avaliacao",
       indicador: "taxa_alfabetizacao", etapa: "2_ano", componente: null, edicoes: [2025],
     }]);
-    responder("GET", "/redes/1/avaliacoes/correlacao", {
-      nome, nome_curto: nomeCurto, tipo: "avaliacao", indicador: "taxa_alfabetizacao",
-      etapa: "2_ano", componente: null, edicao: 2025, metrica: "pontuacao_geral",
-      pontos: [{ escola_id: 1, nome: "EM A", x: 500, y: 90 }, { escola_id: 2, nome: "EM B", x: 700, y: 96 }],
-      n: 2, pearson: null, evolucao: [],
-    });
   }
 
-  function eixoY(container: HTMLElement) {
-    const t = container.querySelector<SVGTextElement>('svg[aria-label^="Dispersão"] text[transform]');
-    expect(t).not.toBeNull();
-    // O que aparece é só o texto direto do <text> (o <title> é a dica do hover).
-    const texto = Array.from(t!.childNodes)
-      .filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join("");
-    return { texto, titulo: t!.querySelector("title")?.textContent };
-  }
-
-  it("usa o nome curto da API no eixo e deixa o nome inteiro no <title>", async () => {
-    semearCorrelacao(ROTULO_ESTIMATIVA, "Estimativa Constela (SARESP 2º ano)");
+  it("mesmo com série importada (inclusive a estimativa), não há dispersão nem correlação", async () => {
+    semearSeries(ROTULO_ESTIMATIVA);
     const { container } = renderComApp(<RedeAvaliacoes />, { usuario: secretaria });
-    await screen.findByText("Dispersão por escola");
-    const { texto, titulo } = eixoY(container);
-    expect(texto).toBe("Estimativa Constela (SARESP 2º ano) →");
-    expect(titulo).toBe(ROTULO_ESTIMATIVA);
+    expect(await screen.findByTestId("cartao-avaliacoes-externas")).toBeInTheDocument();
+    await waitFor(() => expect(api.mock.calls.some(([c]) => String(c) === "/redes/1/avaliacoes/opcoes")).toBe(true));
+    expect(container.querySelector('svg[aria-label^="Dispersão"]')).toBeNull();
+    expect(screen.queryByText("Dispersão por escola")).not.toBeInTheDocument();
+    expect(api.mock.calls.some(([c]) => String(c).includes("/avaliacoes/correlacao"))).toBe(false);
   });
 
-  it("sem nome curto, um nome longo é encurtado com reticências (não cortado pelo SVG)", async () => {
-    semearCorrelacao(ROTULO_ESTIMATIVA);
-    const { container } = renderComApp(<RedeAvaliacoes />, { usuario: secretaria });
-    await screen.findByText("Dispersão por escola");
-    const { texto, titulo } = eixoY(container);
-    expect(texto).toMatch(/^Estimativa Constela de alfabetização .*… →$/);
-    expect(texto.length).toBeLessThanOrEqual(46 + 2);
-    expect(titulo).toBe(ROTULO_ESTIMATIVA);
+  it("a página se diz a área de fontes e arquivos oficiais e o cartão volta a Avaliações externas", async () => {
+    semearSeries(ROTULO_ESTIMATIVA);
+    renderComApp(<RedeAvaliacoes />, { usuario: secretaria });
+    expect(await screen.findByRole("heading", { level: 1, name: "Fontes dos indicadores" })).toBeInTheDocument();
+    expect(screen.getByText(/Fontes e arquivos oficiais \(detalhe técnico\)/))
+      .toHaveTextContent("Para entender os resultados, comece por Avaliações externas.");
+    expect(await screen.findByRole("link", { name: /Voltar para Avaliações externas/ }))
+      .toHaveAttribute("href", "/rede/avaliacoes-externas");
+    // As Análises avançadas não estão no menu da Secretaria: o cartão não aponta para lá.
+    expect(screen.queryByRole("link", { name: "Análises avançadas" })).not.toBeInTheDocument();
+  });
+
+  it("o admin global continua com o link secundário para a relação (Análises avançadas), com a rede", async () => {
+    semearSeries(ROTULO_ESTIMATIVA);
+    responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética" }]);
+    responder("GET", "/avaliacoes/fontes", []);
+    renderComApp(<RedeAvaliacoes />, { usuario: admin });
+    expect(await screen.findByRole("heading", { level: 1, name: "Importações e fontes" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("cartao-avaliacoes-externas")).getByRole("link", { name: "Análises avançadas" }))
+      .toHaveAttribute("href", "/rede/analise?ver=relacao&rede=1");
   });
 });

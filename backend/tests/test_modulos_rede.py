@@ -388,6 +388,104 @@ def test_recalculo_alcanca_todas_as_escolas_da_rede_e_so_elas(db):
     assert svc.modulos_da_escola(db, avulsa) == {"leitura", "matematica"}
 
 
+# --- Vínculo escola × rede (PUT /redes/{id}/escolas) recalcula quem mudou ------
+
+def _rede_so_leitura(db) -> Rede:
+    rede = Rede(nome="Rede Ficticia So Leitura", status="ativa")
+    db.add(rede)
+    db.flush()
+    db.add(ModuloRede(rede_id=rede.id, modulo="matematica", ativo=False))
+    db.commit()
+    return rede
+
+
+def test_vincular_a_escola_a_rede_sem_matematica_recalcula_a_nota(db):
+    """A escola com Nota dos dois módulos passa, pelo PUT de escolas, para uma
+    rede só de Leitura: a Nota gravada passa a descrever o contrato novo (Geral
+    = Leitura, Matemática não contratada), como no PUT de módulos."""
+    _rede, esc = _cenario(db)
+    com_dois = _notas_gravadas(db, esc.id)
+    so_leitura = _rede_so_leitura(db)
+    root = _login("root@mod.local")
+    r = root.put(f"/api/v1/redes/{so_leitura.id}/escolas", json={"escola_ids": [esc.id]})
+    assert r.status_code == 200, r.text
+    assert r.json()["escola_ids"] == [esc.id]
+    rec = r.json()["recalculo"]
+    assert [x["escola_id"] for x in rec["recalculadas"]] == [esc.id]
+    assert rec["falhas"] == [] and rec["alunos"] == len(com_dois)
+    for aluno_id, (geral, ele, mat) in _notas_gravadas(db, esc.id).items():
+        assert geral == pytest.approx(ele, abs=0.01)          # Geral = Leitura
+        assert mat == com_dois[aluno_id][2]   # o DADO do Matific continua (reversível)
+    nota = db.query(Nota).filter(Nota.escola_id == esc.id).first()
+    assert nota.aferido_matematica is False
+    assert nota.detalhes["dimensoes"]["matematica"]["contratada"] is False
+
+
+def test_desvincular_a_escola_recalcula_com_todos_os_modulos(db):
+    """Sem rede = todos os módulos: a escola que sai de uma rede só de Leitura
+    volta a ter a Nota composta pelas duas plataformas."""
+    rede, esc = _cenario(db)
+    root = _login("root@mod.local")
+    assert root.put(f"/api/v1/redes/{rede.id}/modulos",
+                    json={"matematica": False}).status_code == 200
+    for geral, ele, _mat in _notas_gravadas(db, esc.id).values():
+        assert geral == pytest.approx(ele, abs=0.01)
+    r = root.put(f"/api/v1/redes/{rede.id}/escolas", json={"escola_ids": []})
+    assert r.status_code == 200, r.text
+    assert [x["escola_id"] for x in r.json()["recalculo"]["recalculadas"]] == [esc.id]
+    for geral, ele, mat in _notas_gravadas(db, esc.id).values():
+        assert geral == pytest.approx(0.5 * ele + 0.5 * mat, abs=0.01)
+
+
+def test_vinculo_sem_mudanca_de_contrato_nao_recalcula_ninguem(db, monkeypatch):
+    """Só quem teve o CONTRATO mudado é recalculado: reenviar a mesma lista, ou
+    vincular uma escola avulsa (todos os módulos) a uma rede com o contrato
+    padrão (todos os módulos), não dispara o motor."""
+    rede, esc = _cenario(db)
+    avulsa = Escola(nome="EM Avulsa Ficticia", ano_letivo_ativo=2026, status="ativa")
+    db.add(avulsa)
+    db.commit()
+    chamadas: list[int] = []
+    monkeypatch.setattr(scoring, "recalcular_escola",
+                        lambda _sessao, escola_id: chamadas.append(escola_id) or 0)
+    root = _login("root@mod.local")
+    for ids in ([esc.id], [esc.id, avulsa.id]):
+        r = root.put(f"/api/v1/redes/{rede.id}/escolas", json={"escola_ids": ids})
+        assert r.status_code == 200, r.text
+        assert r.json()["escola_ids"] == sorted(ids)
+        assert r.json()["recalculo"] == {"escolas": 0, "recalculadas": [], "falhas": [],
+                                         "alunos": 0}
+    assert chamadas == []
+    db.expire_all()
+    assert db.get(Escola, avulsa.id).rede_id == rede.id
+
+
+def test_falha_no_recalculo_do_vinculo_nao_desfaz_e_o_perfil_segue_no_plano(
+        db, monkeypatch):
+    """O vínculo é gravado antes do recálculo; se o recálculo da escola falhar,
+    a resposta diz qual ficou para trás e o perfil (que olha o contrato de
+    agora) já não traz o Matific, mesmo com a Nota atrasada."""
+    _rede, esc = _cenario(db)
+    so_leitura = _rede_so_leitura(db)
+
+    def quebra(_sessao, _escola_id):
+        raise RuntimeError("falha ficticia")
+
+    monkeypatch.setattr(scoring, "recalcular_escola", quebra)
+    root = _login("root@mod.local")
+    r = root.put(f"/api/v1/redes/{so_leitura.id}/escolas", json={"escola_ids": [esc.id]})
+    assert r.status_code == 200, r.text
+    assert [f["escola_id"] for f in r.json()["recalculo"]["falhas"]] == [esc.id]
+    db.expire_all()
+    assert db.get(Escola, esc.id).rede_id == so_leitura.id       # vínculo gravado
+    nota = db.query(Nota).filter(Nota.escola_id == esc.id).first()
+    assert nota.nota_geral != pytest.approx(nota.nota_elefante, abs=0.01)  # atrasada
+    corpo = root.get(f"/api/v1/escolas/{esc.id}/alunos/{nota.aluno_id}/perfil").json()
+    assert corpo["nota_matific"] is None and "matific" not in corpo["detalhes"]
+    mat = corpo["detalhes"]["dimensoes"]["matematica"]
+    assert mat["nota"] is None and mat["dados"] == {} and mat["snapshot_em"] is None
+
+
 # --- Contrato vazio é recusado na borda -------------------------------------
 
 def test_rede_nao_pode_ficar_sem_nenhum_modulo(db):

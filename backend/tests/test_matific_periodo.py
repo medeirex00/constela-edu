@@ -193,9 +193,9 @@ def test_criar_escola_recusa_nome_repetido(db):
                                   "password": "s3nh4root"})
     cliente.headers["Authorization"] = f"Bearer {resposta.json()['access_token']}"
 
-    primeira = cliente.post("/api/v1/escolas", json={"nome": "DEBORA PILON"})
+    primeira = cliente.post("/api/v1/escolas", json={"nome": "BROMELIA FICTICIA"})
     assert primeira.status_code == 201
-    repetida = cliente.post("/api/v1/escolas", json={"nome": "Debora Pilon"})
+    repetida = cliente.post("/api/v1/escolas", json={"nome": "Bromelia Ficticia"})
     assert repetida.status_code == 409
 
 

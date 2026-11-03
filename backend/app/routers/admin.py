@@ -43,11 +43,13 @@ from app.core.deps import (
     get_usuario_atual,
     negar_secretaria,
 )
+from app.core.rate_limit import limitador_conta
 from app.core.security import (
     gerar_token_reset,
     hash_senha,
     hash_token,
     validar_forca_senha,
+    verificar_senha,
 )
 from app.models import (
     Configuracao,
@@ -63,7 +65,9 @@ from app.models import (
 )
 from app.schemas import UsuarioOut
 from app.services import backup as svc_backup
+from app.services import identidade_efetiva
 from app.services import professores as prof_svc
+from app.services import push as svc_push
 from app.services import scoring
 from app.services.audit import registrar
 
@@ -112,7 +116,9 @@ def _normalizar_username(valor: str | None) -> str | None:
 
 class UsuarioCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
-    email: EmailStr
+    # O EmailStr aceita até 254 caracteres; a coluna tem 200 (acima disso o
+    # PostgreSQL recusava no commit com 500).
+    email: EmailStr = Field(max_length=200)
     username: str | None = None
     senha: str = Field(min_length=8, max_length=100)
     cargo: str = "professor"
@@ -120,7 +126,9 @@ class UsuarioCreate(BaseModel):
     @field_validator("senha")
     @classmethod
     def _forca(cls, valor: str, info) -> str:
-        erro = validar_forca_senha(valor, info.data.get("email"))
+        erro = validar_forca_senha(valor, info.data.get("email"),
+                                   nome=info.data.get("nome"),
+                                   usuario=info.data.get("username"))
         if erro:
             raise ValueError(erro)
         return valor
@@ -132,11 +140,14 @@ class UsuarioCreate(BaseModel):
 
 
 class UsuarioUpdate(BaseModel):
-    nome: str | None = None
+    nome: str | None = Field(default=None, max_length=200)  # = coluna e UsuarioCreate
     username: str | None = None
     cargo: str | None = None
     status: str | None = Field(default=None, pattern="^(ativo|inativo)$")
     senha: str | None = Field(default=None, min_length=8, max_length=100)
+    # Exigida só quando a conta editada é a de quem pede e vem `senha`
+    # (ver `_exigir_senha_atual`). Nunca é gravada nem vai para o log.
+    senha_atual: str | None = Field(default=None, max_length=100)
 
     @field_validator("senha")
     @classmethod
@@ -153,6 +164,12 @@ class UsuarioUpdate(BaseModel):
         return _normalizar_username(valor)
 
 
+class ReautenticacaoIn(BaseModel):
+    """Corpo (opcional) do pedido de link de redefinição: a senha ATUAL, exigida
+    só quando a pessoa gera o link para a PRÓPRIA conta."""
+    senha_atual: str | None = Field(default=None, max_length=100)
+
+
 class TurmasDoProfessor(BaseModel):
     """Ids das turmas designadas a um professor (vínculo do RBAC por turma)."""
     turma_ids: list[int] = Field(default_factory=list)
@@ -165,8 +182,8 @@ class CorrigirDuplicados(BaseModel):
 
 def _username_em_uso(db: Session, username: str, exceto_id: int | None = None) -> bool:
     # Comparação CASE-INSENSÍVEL: o @ das professoras é guardado em CamelCase
-    # (ex.: "PaulaNogueira") e o login casa por minúsculas — sem isto, um admin
-    # poderia criar "paulanogueira" ao lado de "PaulaNogueira" e o login veria
+    # (ex.: "TelmaTestelli") e o login casa por minúsculas — sem isto, um admin
+    # poderia criar "telmatestelli" ao lado de "TelmaTestelli" e o login veria
     # DUAS contas (MultipleResultsFound → 500). `username` já vem normalizado.
     consulta = select(Usuario).where(func.lower(Usuario.username) == username.lower())
     if exceto_id is not None:
@@ -227,6 +244,92 @@ def _e_ultimo_admin_ativo(db: Session, escola_id: int, alvo: Usuario) -> bool:
         )
     ).scalar_one()
     return ativos <= 1
+
+
+def _exigir_senha_atual(db: Session, ator: Usuario, senha_atual: str | None) -> None:
+    """Trocar a PRÓPRIA senha (PATCH com ``senha`` ou link de redefinição para
+    si) exige a senha atual. Sem isto, quem achasse uma sessão aberta (o
+    computador compartilhado da sala dos professores) trocava a senha da dona e
+    transformava as 8 h do token em posse permanente da conta.
+
+    As falhas contam no limitador da CONTA — o mesmo do /auth/login, pela mesma
+    chave (o e-mail) —, então a rota não vira um oráculo de força bruta fora do
+    teto do login: com o teto estourado responde 429 sem conferir a senha.
+
+    Chamar ANTES de qualquer alteração no alvo: a falha vai para a auditoria com
+    commit."""
+    identidade = ator.email
+    if limitador_conta.bloqueado(identidade):
+        espera = limitador_conta.segundos_restantes(identidade)
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            f"Muitas tentativas. Aguarde {max(1, espera // 60)} "
+                            "minuto(s) e tente novamente.")
+    if not senha_atual:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Para trocar a sua própria senha, informe a senha atual.")
+    if not verificar_senha(senha_atual, ator.senha_hash):
+        limitador_conta.registrar_falha(identidade)
+        registrar(db, "usuario.reautenticacao_falhou", escola_id=ator.escola_id,
+                  usuario_id=ator.id, entidade="usuario", entidade_id=ator.id,
+                  detalhes={"email": ator.email})   # a senha digitada NUNCA vai ao log
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Senha atual incorreta.")
+
+
+def _invalidar_links_pendentes(db: Session, usuario_id: int, agora: datetime) -> int:
+    """Marca como usados os links de redefinição ainda pendentes da conta.
+    Devolve quantos eram."""
+    return db.execute(
+        update(TokenResetSenha)
+        .where(TokenResetSenha.usuario_id == usuario_id,
+               TokenResetSenha.usado_em.is_(None))
+        .values(usado_em=agora)).rowcount
+
+
+def _invalidar_links_emitidos(db: Session, criador_id: int, agora: datetime) -> int:
+    """Marca como usados os links de redefinição ainda pendentes que a conta
+    GEROU para OUTRAS contas (``criado_por``). Devolve quantos eram.
+
+    ``auth._criador_ainda_pode`` só SUSPENDE esses links enquanto o autor está
+    inativo, excluído, com outro cargo ou na Secretaria: sem esta invalidação,
+    reativar, restaurar ou devolver o cargo ao autor dentro da validade
+    (``RESET_SENHA_EXPIRA_MIN``) fazia o MESMO link voltar a definir a senha da
+    outra conta — inclusive um link gerado numa sessão roubada, que o admin
+    achava ter derrubado ao desativar a conta. O link que a conta gerou para si
+    fica com ``_invalidar_links_pendentes``."""
+    return db.execute(
+        update(TokenResetSenha)
+        .where(TokenResetSenha.criado_por == criador_id,
+               TokenResetSenha.usuario_id != criador_id,
+               TokenResetSenha.usado_em.is_(None))
+        .values(usado_em=agora)).rowcount
+
+
+def _revogar_acessos(db: Session, alvo: Usuario) -> dict:
+    """Derruba as sessões abertas (``token_version``), os links de redefinição
+    pendentes da conta e os que ela gerou para outras contas — na troca de senha
+    pelo admin, em toda mudança de situação (desativar, reativar, restaurar) e na
+    exclusão lógica. Sem isto, reativar a conta ressuscitava os JWT emitidos
+    antes (válidos até o ``exp``) e os links que ela tinha gerado, e um link
+    entregue por engano seguia valendo depois de o admin definir a senha direto
+    ou desativar a conta. Mesmas revogações da promoção a Secretaria
+    (``rede.py``). Devolve as contagens para a auditoria.
+
+    Conta que SAI de "ativo" (desativada ou excluída — o status já vem trocado
+    por quem chama) perde também os aparelhos registrados para push
+    (``dispositivos_removidos``): sem isto, o celular de quem perdeu o acesso
+    seguia recebendo os avisos da escola, inclusive o primeiro nome da criança.
+    Reativar não traz o aparelho de volta; o app registra de novo no login."""
+    agora = datetime.now(timezone.utc)
+    alvo.token_version = (alvo.token_version or 0) + 1
+    revogacao = {
+        "sessoes_encerradas": True,
+        "links_pendentes_invalidados": _invalidar_links_pendentes(db, alvo.id, agora),
+        "links_emitidos_invalidados": _invalidar_links_emitidos(db, alvo.id, agora)}
+    if alvo.status != "ativo":
+        revogacao["dispositivos_removidos"] = svc_push.remover_aparelhos_da_conta(
+            db, alvo.id)
+    return revogacao
 
 
 @router.get("/usuarios", response_model=list[UsuarioOut])
@@ -322,6 +425,8 @@ def atualizar_usuario(
                     or (dados.cargo is not None and dados.cargo != "admin"))
     if remove_admin and _e_ultimo_admin_ativo(db, escola_id, alvo):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, MSG_ULTIMO_ADMIN)
+    if dados.senha is not None and alvo.id == usuario.id:
+        _exigir_senha_atual(db, usuario, dados.senha_atual)
 
     alteracoes: dict = {}
     if dados.nome is not None and dados.nome.strip() != alvo.nome:
@@ -333,21 +438,42 @@ def atualizar_usuario(
                                 f"O nome de usuário “@{dados.username}” já está em uso.")
         alteracoes["username"] = {"de": alvo.username, "para": dados.username}
         alvo.username = dados.username
+    cargo_mudou = dados.cargo is not None and dados.cargo != alvo.cargo
     if dados.cargo is not None:
         alteracoes["cargo"] = {"de": alvo.cargo, "para": dados.cargo}
         alvo.cargo = dados.cargo
+    revogar = False
     if dados.status is not None:
         alteracoes["status"] = {"de": alvo.status, "para": dados.status}
+        # Qualquer TRANSIÇÃO (desativar, reativar, restaurar) revoga: sem isto,
+        # reativar a conta ressuscitava os JWT emitidos antes da desativação.
+        revogar = dados.status != alvo.status
         alvo.status = dados.status
     if dados.senha is not None:
+        # Com o nome/@ JÁ atualizados acima: a convenção antiga é a do dono.
+        erro = validar_forca_senha(dados.senha, alvo.email, nome=alvo.nome,
+                                   usuario=alvo.username)
+        if erro:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, erro)
         alvo.senha_hash = hash_senha(dados.senha)
         # Trocar a senha invalida TODAS as sessões abertas da conta — inclusive a
         # PRÓPRIA e um eventual token roubado. Sem isto, "troquei a senha" não
         # revogava as outras sessões e o invasor mantinha acesso por até 8h.
         # Quem trocou re-entra com a nova senha (mesmo comportamento da
-        # redefinição por link, que também rotaciona o token_version).
-        alvo.token_version = (alvo.token_version or 0) + 1
+        # redefinição por link, que também rotaciona o token_version). O link de
+        # redefinição pendente também morre: senão quem o tivesse sobrescrevia a
+        # senha que o admin acabou de entregar.
+        revogar = True
         alteracoes["senha"] = "redefinida"
+    revogacao: dict = {}
+    if revogar:
+        revogacao = _revogar_acessos(db, alvo)
+    elif cargo_mudou:
+        # O cargo é o que dava o poder de gerar os links (``_pode_redefinir_senha``):
+        # mudou, os links que a conta gerou morrem de vez — senão voltavam a valer
+        # quando o cargo antigo fosse devolvido.
+        revogacao = {"links_emitidos_invalidados": _invalidar_links_emitidos(
+            db, alvo.id, datetime.now(timezone.utc))}
 
     # Nome da ação no log espelha o que de fato aconteceu (PRD §17)
     if set(alteracoes) == {"status"}:
@@ -366,7 +492,7 @@ def atualizar_usuario(
         acao = "usuario.atualizado"
     registrar(db, acao, escola_id=escola_id, usuario_id=usuario.id,
               entidade="usuario", entidade_id=alvo.id,
-              detalhes={**alteracoes, "email": alvo.email})
+              detalhes={**alteracoes, "email": alvo.email, **revogacao})
     try:
         db.commit()
     except IntegrityError:
@@ -381,7 +507,8 @@ def atualizar_usuario(
 def _pode_redefinir_senha(ator: Usuario, alvo: Usuario) -> bool:
     """Quem pode gerar um link de redefinição para `alvo`: admin, para todos da
     escola; coordenador, para si e para professores; professor, só para si. O
-    link NÃO revela senha — apenas deixa o dono da conta escolher uma nova."""
+    link NÃO revela senha — apenas deixa o dono da conta escolher uma nova.
+    Para si, a rota ainda exige a senha atual (``_exigir_senha_atual``)."""
     if ator.id == alvo.id:
         return True
     if ator.is_global or ator.cargo == "admin":
@@ -392,6 +519,7 @@ def _pode_redefinir_senha(ator: Usuario, alvo: Usuario) -> bool:
 @router.post("/usuarios/{usuario_id}/redefinir-senha", response_model=dict)
 def redefinir_senha(
     usuario_id: int,
+    dados: ReautenticacaoIn | None = None,
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
@@ -399,7 +527,8 @@ def redefinir_senha(
     """Gera um LINK de redefinição de senha (uso único, com validade) e o
     devolve UMA vez para ser entregue ao usuário. Nenhuma senha é exibida nem
     armazenada em texto — o próprio usuário escolhe a nova senha ao abrir o
-    link. Links anteriores ainda não usados são invalidados."""
+    link. Links anteriores ainda não usados são invalidados. O link para a
+    PRÓPRIA conta exige ``senha_atual`` no corpo."""
     alvo = _usuario_alvo(db, escola_id, usuario_id, usuario)
     if not _pode_redefinir_senha(usuario, alvo):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
@@ -407,14 +536,17 @@ def redefinir_senha(
     if alvo.status == "excluido":
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Usuário excluído — restaure a conta antes.")
+    if alvo.status != "ativo":
+        # O link de conta inativa não vale no consumo (auth.py) e a reativação
+        # o invalidaria: gerá-lo só entregaria um link morto.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Usuário inativo — reative a conta antes de gerar o link.")
+    if alvo.id == usuario.id:
+        _exigir_senha_atual(db, usuario, dados.senha_atual if dados else None)
 
     agora = datetime.now(timezone.utc)
     # Invalida links pendentes do mesmo usuário: só o mais novo vale.
-    db.execute(
-        update(TokenResetSenha)
-        .where(TokenResetSenha.usuario_id == alvo.id,
-               TokenResetSenha.usado_em.is_(None))
-        .values(usado_em=agora))
+    _invalidar_links_pendentes(db, alvo.id, agora)
 
     token = gerar_token_reset()
     expira = agora + timedelta(minutes=settings.RESET_SENHA_EXPIRA_MIN)
@@ -617,10 +749,14 @@ def excluir_usuario(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, MSG_ULTIMO_ADMIN)
 
     alvo.status = "excluido"
+    # Sessões e links pendentes (os da conta e os que ela gerou) morrem já:
+    # restaurar a conta depois não pode devolver a validade a um JWT ou link
+    # emitido antes da exclusão.
+    revogacao = _revogar_acessos(db, alvo)
     registrar(db, "usuario.excluido", escola_id=escola_id, usuario_id=usuario.id,
               entidade="usuario", entidade_id=alvo.id,
               detalhes={"tipo": "exclusao_logica", "email": alvo.email,
-                        "nome": alvo.nome, "cargo": alvo.cargo})
+                        "nome": alvo.nome, "cargo": alvo.cargo, **revogacao})
     db.commit()
     return {"mensagem": f"Usuário “{alvo.nome}” excluído. O histórico de ações "
                         "e importações foi preservado."}
@@ -733,6 +869,24 @@ async def restaurar_backup(
     que não é do admin da escola, do coordenador, do professor nem da Secretaria
     (esta já barrada na raiz do router). Baixar o backup (GET /backup) continua
     com o admin da escola.
+
+    Não toca nos segredos nem nas travas da sincronização (política de criação de
+    aluno e vínculo da escola externa: ``backup.PRESERVADAS_NA_RESTAURACAO``).
+    ``avisos`` traz o aviso do D10 quando alguma conta restaurada passou a valer
+    também aqui sendo efetiva em outra escola (``identidade_efetiva.
+    conferir_restauracao``) e o aviso de quantas crianças excluídas
+    permanentemente depois do backup, em qualquer escola, ficaram de fora
+    (``backup.restaurar``, LGPD art. 18); lista vazia nos demais casos. Isso vale
+    também para o arquivo gerado antes de outra restauração (que troca os ids das
+    fichas): ``backup.restaurado`` grava o mapa {id novo: id do arquivo} das fichas
+    (só números; preservado do expurgo), e a próxima restauração, nesta ou em outra
+    escola, segue essa linhagem. A ficha que o arquivo de outra escola criou aqui é a
+    mesma criança: excluída de vez lá, a daqui não volta com um backup gerado antes da
+    exclusão (e vice-versa); o aviso diz "nesta ou em outra escola". O backup gerado
+    depois da exclusão traz a ficha viva daqui como estava ("depois" pela marca do log
+    inteiro, ``log_ate``).
+    Ressalva: restauração registrada sem o mapa (anterior a ele) quebra a linhagem — a
+    criança excluída depois dela pode voltar sem aviso; confira a exclusão à mão.
     """
     conteudo = await arquivo.read()
     if len(conteudo) > TAMANHO_MAXIMO_BACKUP:
@@ -750,8 +904,13 @@ async def restaurar_backup(
     # "plantar" `personalizado`). Com a rota exclusiva do Admin Global esse ramo
     # ficou inalcançável e saiu; o Admin Global restaura o backup como está,
     # perfil incluído — o mesmo comportamento que ele sempre teve.
+    # LGPD (art. 18): a criança excluída de vez depois do backup não volta; o aviso
+    # (sem nome) vai em ``avisos``, ao lado do D10.
+    avisos_lgpd: list[str] = []
+    mapa_alunos: dict[int, int] = {}
     try:
-        contagem = svc_backup.restaurar(db, escola_id, dados)
+        contagem = svc_backup.restaurar(db, escola_id, dados, avisos=avisos_lgpd,
+                                        mapa_alunos=mapa_alunos)
     except svc_backup.RestauracaoBloqueada as bloqueio:
         # C-06: a operação destruiria dado que o arquivo não repõe (perfis do
         # Quest, responsáveis, ou tabelas ausentes num backup antigo). Recusar é
@@ -771,13 +930,23 @@ async def restaurar_backup(
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "O arquivo de backup contém dados inconsistentes ou duplicados.")
 
+    # D10: a restauração recria fichas e identidades do arquivo — uma ficha
+    # excluída depois do backup, cuja conta outra escola vinculou nesse meio-tempo,
+    # volta a valer aqui e a conta fica efetiva nas DUAS escolas. A rota já é só do
+    # Admin Global, então segue: auditoria própria por conta (sem nome) e o aviso
+    # em ``avisos`` (campo novo; lista vazia nos demais casos).
+    avisos = avisos_lgpd + list(identidade_efetiva.conferir_restauracao(
+        db, escola_id, usuario_id=usuario.id))
+    # A linhagem das fichas (só ids): sem ela, um arquivo anterior a ESTA restauração
+    # traria de volta a criança excluída de vez depois dela (LGPD art. 18).
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
-              detalhes={"tabelas": contagem})
+              detalhes={"tabelas": contagem, svc_backup.CHAVE_MAPA_ALUNOS: {
+                  str(novo): antigo for novo, antigo in mapa_alunos.items()}})
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     total = sum(contagem.values())
     return {"mensagem": f"Backup restaurado: {total} registros. Notas recalculadas.",
-            "tabelas": contagem}
+            "tabelas": contagem, "avisos": avisos}
 
 
 # --- Aparência (PRD §18) -------------------------------------------------------
@@ -836,6 +1005,36 @@ def salvar_aparencia(
 # apague. Entram no topo dos certificados/relatórios em PDF — automático por
 # escola/cidade (relatorios.logos_da_escola / _cabecalho_logos).
 _LOGO_MAX_BYTES = 3 * 1024 * 1024  # 3 MB no upload (antes de reduzir)
+# Só os formatos que a tela oferece (accept do input). O Image.open sem lista
+# tenta TODOS os decodificadores do Pillow (TIFF, EPS, PSD, ICO, PCX…), que são
+# a superfície das falhas de segurança do Pillow; com a lista, o resto é recusado
+# antes de qualquer decodificação.
+_LOGO_FORMATOS = ("PNG", "JPEG", "WEBP")
+# Teto de pixels conferido pelo cabeçalho, ANTES de decodificar: 3 MB comprimidos
+# podem virar gigabytes na memória (bomba de descompressão). PNG e JPEG: o
+# Image.open só lê o cabeçalho. WEBP: o Image.open já cria o decodificador, que
+# aloca o canvas declarado — por isso o cabeçalho do WEBP é lido antes, à mão.
+_LOGO_MAX_LADO = 4096
+_LOGO_GRANDE_DEMAIS = f"Imagem grande demais (máximo {_LOGO_MAX_LADO} × {_LOGO_MAX_LADO} pixels)."
+
+
+def _dimensoes_webp(conteudo: bytes) -> tuple[int, int] | None:
+    """Largura e altura declaradas no cabeçalho de um WEBP, sem decodificar nada.
+    None se não for WEBP (ou o cabeçalho for curto demais: o Pillow recusa depois)."""
+    if len(conteudo) < 30 or conteudo[:4] != b"RIFF" or conteudo[8:12] != b"WEBP":
+        return None
+    bloco = conteudo[12:16]
+    if bloco == b"VP8X":  # estendido/animado: o CANVAS (24 + 24 bits, menos 1)
+        return (1 + int.from_bytes(conteudo[24:27], "little"),
+                1 + int.from_bytes(conteudo[27:30], "little"))
+    if bloco == b"VP8L":  # sem perda: 14 + 14 bits depois da assinatura 0x2f
+        b = conteudo[21:25]
+        return (1 + (((b[1] & 0x3F) << 8) | b[0]),
+                1 + (((b[3] & 0x0F) << 10) | (b[2] << 2) | ((b[1] & 0xC0) >> 6)))
+    if bloco == b"VP8 ":  # com perda: 14 bits cada, depois do código de início 9d 01 2a
+        return (int.from_bytes(conteudo[26:28], "little") & 0x3FFF,
+                int.from_bytes(conteudo[28:30], "little") & 0x3FFF)
+    return None
 
 
 def _row_logos_aparencia(db: Session, escola_id: int) -> Configuracao:
@@ -864,29 +1063,42 @@ async def enviar_logo_aparencia(
     """Envia o brasão da cidade ou o logo da prefeitura DESTA escola. A imagem é
     reduzida (máx. 400 px) e guardada como data URI, entrando no topo de
     certificados e relatórios em PDF. PNG com fundo transparente fica melhor."""
-    conteudo = await arquivo.read()
+    # No máximo o teto + 1 byte na memória: o arquivo inteiro fica no temporário.
+    conteudo = await arquivo.read(_LOGO_MAX_BYTES + 1)
     if len(conteudo) > _LOGO_MAX_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Imagem muito grande (máximo 3 MB).")
     if not (arquivo.content_type or "").startswith("image/"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "Envie um arquivo de imagem (PNG, JPG, WEBP…).")
+                            "Envie uma imagem PNG, JPG ou WEBP.")
+    dimensoes_webp = _dimensoes_webp(conteudo)
+    if dimensoes_webp and max(dimensoes_webp) > _LOGO_MAX_LADO:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, _LOGO_GRANDE_DEMAIS)
     import base64
     import io
 
     from PIL import Image
     try:
-        imagem = Image.open(io.BytesIO(conteudo)).convert("RGBA")
+        imagem = Image.open(io.BytesIO(conteudo), formats=_LOGO_FORMATOS)
+        largura, altura = imagem.size
+        if largura > _LOGO_MAX_LADO or altura > _LOGO_MAX_LADO:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, _LOGO_GRANDE_DEMAIS)
+        imagem = imagem.convert("RGBA")
         imagem.thumbnail((400, 400))
         buffer = io.BytesIO()
-        imagem.save(buffer, format="PNG")
+        # Sem o perfil ICC do arquivo enviado: ele passaria intacto para o PNG
+        # (um JPEG de 16 px com 2 MB de perfil virava 2 MB no banco e em todo PDF).
+        imagem.save(buffer, format="PNG", icc_profile=None)
         data_uri = ("data:image/png;base64,"
                     + base64.b64encode(buffer.getvalue()).decode("ascii"))
     except HTTPException:
         raise
-    except Exception as exc:  # noqa: BLE001 — arquivo não é imagem válida
+    except Image.DecompressionBombError as exc:  # o Pillow recusou já no cabeçalho
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, _LOGO_GRANDE_DEMAIS) from exc
+    except Exception as exc:  # noqa: BLE001 — não é PNG/JPG/WEBP válido
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "Não foi possível ler a imagem enviada.") from exc
+                            "Não foi possível ler a imagem enviada. "
+                            "Envie uma imagem PNG, JPG ou WEBP.") from exc
 
     row = _row_logos_aparencia(db, escola_id)
     valor = dict(row.valor or {})

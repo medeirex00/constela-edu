@@ -18,9 +18,13 @@
 import {
   AlertTriangle,
   ArrowRight,
+  BookOpen,
+  Calculator,
   CheckCircle2,
+  Fingerprint,
   RefreshCw,
   Search,
+  ShieldCheck,
   Trash2,
   UserCheck,
   UserPlus,
@@ -29,6 +33,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import { BarraFiltros, SelectNativo } from "../components/PessoasUi";
 import {
   Badge,
   Botao,
@@ -36,6 +41,7 @@ import {
   Card,
   Carregando,
   Drawer,
+  IconePastel,
   Mensagem,
   Modal,
   PageHeader,
@@ -131,6 +137,10 @@ const ROTULO_FORMATO: Record<string, string> = {
 const ROTULO_ORIGEM: Record<string, string> = {
   sincronizacao: "Sincronização automática",
   importacao: "Importação manual",
+  // A decisão do Admin Global tomada fora da fila (reativar a ficha excluída ou a
+  // conta aposentada de uma conta que vale em outra escola, D10): o backend a
+  // guarda como revisão resolvida, a memória que a coleta seguinte respeita.
+  confirmacao_admin: "Confirmação do Admin Global (reativação)",
 };
 
 /** Situação da ficha do candidato (o `status` do aluno no backend). */
@@ -166,6 +176,23 @@ const ORIENTACAO: Record<string, string> = {
     "A turma do relatório não existe no cadastro. Se a criança já tem ficha, busque-a; se não, crie-a numa turma existente.",
   sem_turma:
     "O relatório não informa a turma. Se a criança já tem ficha, busque-a; se não, crie-a na turma certa.",
+  // Motivos da sincronização (identidade e turma, etapa 2).
+  nome_incompleto:
+    "A plataforma mandou só o nome abreviado. Se reconhece a criança, vincule à ficha dela: a conta fica vinculada e as próximas coletas entram sozinhas. Não crie ficha com o nome abreviado — confira o nome completo na plataforma antes.",
+  id_externo_duplicado:
+    "A mesma conta da plataforma veio em mais de uma linha, com nomes ou números diferentes. Confira na plataforma de quem é a conta e vincule à ficha certa; se os números das linhas divergem, só o vínculo é gravado agora, e os números entram numa próxima coleta em que a conta venha numa linha só.",
+  turma_arquivada:
+    "A turma do relatório está arquivada. Se ela deve receber alunos, reative-a em Turmas › Mostrar turmas arquivadas › Reativar; se a criança já tem ficha em outra turma, vincule.",
+  turma_fora_do_ano_letivo:
+    "A turma escolhida não é do ano letivo ativo. Vincule a uma ficha ou crie-a numa turma do ano letivo atual.",
+  turma_de_outra_etapa:
+    "A turma cadastrada que corresponde à sala do relatório é de outra etapa (ex.: Educação Infantil × Fundamental). Vincule à ficha certa ou crie a ficha numa turma da etapa da criança.",
+  // D10: confirmar conta efetiva em outra escola é só do Admin Global (o backend
+  // responde 403 à gestão da escola, com a mesma orientação). D11 (item E):
+  // escolher a ficha na importação manual NÃO encerra esta pendência — orientação,
+  // sem fluxo novo.
+  identidade_de_outra_escola:
+    "Esta conta da plataforma já está vinculada a um aluno de OUTRA escola do Constela. Confira se a credencial e a turma são desta escola. Se a criança mudou de escola, só o Admin Global vincula a conta à ficha dela aqui (a outra escola não é alterada, mas a conta cai em revisão lá na coleta seguinte); se a conta é de outra escola, descarte. Escolher a ficha na importação manual não encerra esta pendência: a decisão é feita aqui.",
 };
 
 /** Rótulos dos dados que ficaram aguardando (chaves de `linhas`). */
@@ -322,14 +349,24 @@ export default function RevisoesIdentidade() {
         titulo="Revisões de identidade"
         descricao="Linhas de importação que não foram associadas a nenhum aluno porque a correspondência não era segura. Nada foi criado nem vinculado até você decidir."
         acoes={
-          <div className="flex flex-wrap items-center gap-2">
+          <>
             {contador && (
-              <Badge tom={nPendentes ? "alerta" : "ok"}>{contador}</Badge>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold tabular-nums ${
+                  // ouro-50 (não 100): ouro-700 sobre ouro-100 dava 4,39:1 (< 4,5:1); sobre ouro-50, 4,72:1.
+                  nPendentes
+                    ? "bg-ouro-50 text-ouro-700 dark:bg-ouro-400/15 dark:text-ouro-300"
+                    : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                }`}
+              >
+                {nPendentes ? <AlertTriangle size={15} aria-hidden /> : <ShieldCheck size={15} aria-hidden />}
+                {contador}
+              </span>
             )}
-            <Botao variante="neutro" onClick={recarregarFila} disabled={lista.carregando}>
-              <RefreshCw size={15} /> Atualizar
+            <Botao variante="secundario" onClick={recarregarFila} disabled={lista.carregando}>
+              <RefreshCw size={16} aria-hidden /> Atualizar
             </Botao>
-          </div>
+          </>
         }
       />
 
@@ -352,29 +389,29 @@ export default function RevisoesIdentidade() {
         </Mensagem>
       )}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-full sm:w-48">
+      <BarraFiltros className="!mb-0 items-end">
+        <div className="w-full sm:w-52">
           <Campo rotulo="Situação">
-            <select className={estiloInput} value={situacao}
+            <SelectNativo className="w-full" value={situacao}
               onChange={(e) => setSituacao(e.target.value as Situacao)}>
               <option value="pendente">Pendentes</option>
               <option value="resolvida">Resolvidas</option>
               <option value="descartada">Descartadas</option>
               <option value="todas">Todas</option>
-            </select>
+            </SelectNativo>
           </Campo>
         </div>
-        <div className="w-full sm:w-48">
+        <div className="w-full sm:w-52">
           <Campo rotulo="Plataforma">
-            <select className={estiloInput} value={plataforma}
+            <SelectNativo className="w-full" value={plataforma}
               onChange={(e) => setPlataforma(e.target.value as FiltroPlataforma)}>
               <option value="todas">Todas</option>
               <option value="matific">Matific</option>
               <option value="elefante">Elefante Letrado</option>
-            </select>
+            </SelectNativo>
           </Campo>
         </div>
-      </div>
+      </BarraFiltros>
 
       {lista.erro && (
         lista.dados ? (
@@ -385,7 +422,8 @@ export default function RevisoesIdentidade() {
               ? "Sem permissão para ver as revisões de identidade"
               : "Não foi possível carregar as revisões de identidade"}
             descricao={mensagemDeErro(lista.erro)}
-            acao={<Botao variante="neutro" onClick={recarregarFila}>Tentar de novo</Botao>}
+            icone={AlertTriangle}
+            acao={<Botao variante="secundario" onClick={recarregarFila}>Tentar de novo</Botao>}
           />
         )
       )}
@@ -404,6 +442,7 @@ export default function RevisoesIdentidade() {
       {lista.dados && !lista.carregando && itens.length === 0 && (
         <Card>
           <Vazio
+            icone={ShieldCheck}
             titulo={situacao === "pendente" && plataforma === "todas"
               ? "Nenhuma revisão pendente"
               : "Nenhuma revisão com estes filtros"}
@@ -454,22 +493,26 @@ function ItemRevisao({ rev, turmas, aoAbrir }: {
   const periodo = periodoDa(rev);
   return (
     <li>
-      <Card className="p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 space-y-1.5">
+      <Card className="p-5 transition-shadow hover:shadow-flutuante">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <IconePastel
+            icone={rev.plataforma === "matific" ? Calculator : rev.plataforma === "elefante" ? BookOpen : Fingerprint}
+            tom={rev.plataforma === "matific" ? "teal" : rev.plataforma === "elefante" ? "violeta" : "neutro"}
+          />
+          <div className="min-w-0 flex-1 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="truncate text-sm font-semibold">{rev.nome_recebido}</p>
-              <Badge tom="destaque">{NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma}</Badge>
+              <p className="truncate text-[15px] font-semibold text-zinc-900 dark:text-white" title={rev.nome_recebido}>{rev.nome_recebido}</p>
+              <Badge tom={rev.plataforma === "matific" ? "info" : "destaque"}>{NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma}</Badge>
               {rev.status !== "pendente" && (
                 <Badge tom={rev.status === "resolvida" ? "ok" : "neutro"}>
                   {ROTULO_SITUACAO[rev.status] ?? rev.status}
                 </Badge>
               )}
             </div>
-            <dl className="grid grid-cols-1 gap-x-6 gap-y-0.5 text-xs text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-xs text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
               {rev.id_externo && (
                 <Linha rotulo="Identidade">
-                  <span className="break-all font-mono">{rev.id_externo}</span>
+                  <span className="break-all font-mono text-[11px] text-zinc-500 dark:text-zinc-400">{rev.id_externo}</span>
                 </Linha>
               )}
               <Linha rotulo="Turma informada">{rev.turma_informada || "não informada"}</Linha>
@@ -480,13 +523,13 @@ function ItemRevisao({ rev, turmas, aoAbrir }: {
                 <Linha rotulo="Ocorrências">{plural(rev.ocorrencias, "vez", "vezes")}</Linha>
               )}
             </dl>
-            <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <p className="inline-flex max-w-full items-start gap-1.5 rounded-xl bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+              <AlertTriangle size={13} aria-hidden className="mt-0.5 shrink-0" />
               <span>Motivo: {rev.motivo_texto || rev.motivo}</span>
             </p>
           </div>
-          <Botao variante="neutro" onClick={aoAbrir} aria-label={`Ver revisão de ${rev.nome_recebido}`}>
-            Ver revisão <ArrowRight size={15} />
+          <Botao variante="secundario" onClick={aoAbrir} aria-label={`Ver revisão de ${rev.nome_recebido}`}>
+            Ver revisão <ArrowRight size={16} aria-hidden />
           </Botao>
         </div>
       </Card>
@@ -565,7 +608,7 @@ function ContasDaPlataforma({
 
   return (
     <Bloco titulo={`Contas do aluno no ${rotulo}`}>
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
         <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma pode
         alimentar o retrato e a pontuação — a outra fica <strong>aposentada</strong>:
         preservada com todo o histórico, mas fora da importação.
@@ -597,7 +640,7 @@ function ContasDaPlataforma({
                     )}
                   </div>
                   {podeDecidir && efetiva && lista.length > 1 && (
-                    <Botao variante="neutro" disabled={definir.enviando}
+                    <Botao variante="secundario" disabled={definir.enviando}
                            onClick={() => { setEscolhida(c.id_externo); setMotivo(""); }}>
                       Usar só esta conta
                     </Botao>
@@ -629,7 +672,7 @@ function ContasDaPlataforma({
                    onClick={() => definir.executar(escolhida)}>
               {definir.enviando ? "Salvando…" : "Confirmar"}
             </Botao>
-            <Botao variante="neutro" disabled={definir.enviando}
+            <Botao variante="secundario" disabled={definir.enviando}
                    onClick={() => setEscolhida(null)}>Cancelar</Botao>
           </div>
         </Card>
@@ -650,7 +693,7 @@ function AvisoDuasContas({ plataforma }: { plataforma: string }) {
     <div
       role="note"
       aria-label="Atenção: duas contas da mesma plataforma"
-      className="mt-3 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100"
+      className="mt-3 rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100"
     >
       <p className="font-semibold">Atenção: esta ficha tem duas contas no {plataforma}.</p>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
@@ -679,7 +722,7 @@ function AvisoDuasContas({ plataforma }: { plataforma: string }) {
 function Bloco({ titulo, children }: { titulo: string; children: ReactNode }) {
   return (
     <section aria-label={titulo} className="space-y-2">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
         {titulo}
       </h3>
       {children}
@@ -806,7 +849,7 @@ function DetalheRevisao({
               </Linha>
             )}
           </dl>
-          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
             <p className="font-medium">Motivo: {rev.motivo_texto || rev.motivo}</p>
             {orientacao && pendente && <p className="mt-1 text-xs">{orientacao}</p>}
           </div>
@@ -840,7 +883,7 @@ function DetalheRevisao({
                         <div className="mt-1"><Badge tom={ficha.tom}>{ficha.texto}</Badge></div>
                       </div>
                       {pendente && (
-                        <Botao variante="neutro" disabled={resolver.enviando}
+                        <Botao variante="secundario" disabled={resolver.enviando}
                           aria-label={`Vincular este aluno: ${c.nome}`}
                           onClick={() => {
                             resolver.limparErro();
@@ -926,7 +969,7 @@ function DetalheRevisao({
                   {rev.id_externo && <Linha rotulo={rotuloId}>{rev.id_externo}</Linha>}
                 </dl>
               )}
-              <Botao variante="neutro" disabled={!turmaEscolhida || resolver.enviando}
+              <Botao variante="secundario" disabled={!turmaEscolhida || resolver.enviando}
                 onClick={() => {
                   if (!turmaEscolhida) return;
                   resolver.limparErro();
@@ -943,7 +986,7 @@ function DetalheRevisao({
               <p className="min-w-0 flex-1 text-xs text-zinc-500 dark:text-zinc-400">
                 Os dados não vão para nenhum aluno. Use para linhas de teste ou de quem não é da escola.
               </p>
-              <Botao variante="neutro" disabled={descartar.enviando}
+              <Botao variante="secundario" disabled={descartar.enviando}
                 onClick={() => { descartar.limparErro(); setDescartando(true); }}>
                 <Trash2 size={15} /> Descartar revisão
               </Botao>
@@ -1000,7 +1043,7 @@ function DetalheRevisao({
               </Mensagem>
             )}
             <div className="flex flex-wrap justify-end gap-2">
-              <Botao variante="neutro" disabled={resolver.enviando} onClick={() => setDestino(null)}>
+              <Botao variante="secundario" disabled={resolver.enviando} onClick={() => setDestino(null)}>
                 Cancelar
               </Botao>
               <Botao disabled={resolver.enviando} onClick={() => resolver.executar(destino)}>
@@ -1031,7 +1074,7 @@ function DetalheRevisao({
           </Campo>
           {descartar.erro && <Mensagem tipo="erro">{mensagemDeErro(descartar.erro)}</Mensagem>}
           <div className="flex flex-wrap justify-end gap-2">
-            <Botao variante="neutro" disabled={descartar.enviando} onClick={() => setDescartando(false)}>
+            <Botao variante="secundario" disabled={descartar.enviando} onClick={() => setDescartando(false)}>
               Cancelar
             </Botao>
             <Botao disabled={descartar.enviando} onClick={() => descartar.executar(justificativa.trim())}>
@@ -1044,17 +1087,27 @@ function DetalheRevisao({
   );
 }
 
-/** Resolvida/descartada: o que foi decidido (visto pelos filtros de situação). */
+/** Resolvida/descartada: o que foi decidido (visto pelos filtros de situação).
+ *  Revisão que o SISTEMA encerrou sozinho (`resolucao.automatica === true`,
+ *  gravado pelo vínculo automático seguro da importação) aparece como
+ *  "Encerrada automaticamente", com a regra usada quando ela vem gravada — a
+ *  decisão não foi de ninguém da escola. Sem o campo, "Resolvida" como antes. */
 function SituacaoFinal({ rev }: { rev: RevisaoIdentidade }) {
   const escolhido = rev.candidatos.find((c) => c.aluno_id === rev.aluno_escolhido_id);
   const justificativa = typeof rev.resolucao?.motivo === "string" ? rev.resolucao.motivo : "";
   const criou = rev.resolucao?.acao === "criar";
+  const automatica = rev.status === "resolvida" && rev.resolucao?.automatica === true;
+  const regra = automatica && typeof rev.resolucao?.regra === "string" ? rev.resolucao.regra : "";
   return (
-    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
       <p className="font-medium">
-        {rev.status === "resolvida" ? "Resolvida" : rev.status === "descartada" ? "Descartada" : rev.status}
+        {automatica ? "Encerrada automaticamente"
+          : rev.status === "resolvida" ? "Resolvida" : rev.status === "descartada" ? "Descartada" : rev.status}
         {rev.resolvida_em ? ` em ${dataHora(rev.resolvida_em)}` : ""}
       </p>
+      {regra && (
+        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Regra: {regra}</p>
+      )}
       {rev.status === "resolvida" && (
         <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
           {criou ? "Uma ficha nova foi criada" : "Vinculada"}
@@ -1150,7 +1203,7 @@ function BuscarOutroAluno({ escolaId, desabilitado, aoEscolher }: {
 
   if (!aberto) {
     return (
-      <button type="button" className="text-xs font-medium text-indigo-600 underline dark:text-indigo-400"
+      <button type="button" className="text-xs font-semibold text-indigo-600 underline underline-offset-2 hover:text-indigo-700 dark:text-indigo-300"
         onClick={() => setAberto(true)}>
         O aluno certo não está na lista? Buscar outro aluno da escola
       </button>
@@ -1165,7 +1218,7 @@ function BuscarOutroAluno({ escolaId, desabilitado, aoEscolher }: {
               placeholder="Digite ao menos 2 letras" />
           </Campo>
         </div>
-        <Botao type="submit" variante="neutro" disabled={texto.trim().length < 2}>
+        <Botao type="submit" variante="secundario" disabled={texto.trim().length < 2}>
           <Search size={15} /> Buscar
         </Botao>
       </form>
@@ -1184,7 +1237,7 @@ function BuscarOutroAluno({ escolaId, desabilitado, aoEscolher }: {
                   {a.turma ?? "sem turma"}{a.ano_escolar ? ` · ${a.ano_escolar}` : ""}
                 </p>
               </div>
-              <Botao variante="neutro" disabled={desabilitado}
+              <Botao variante="secundario" disabled={desabilitado}
                 aria-label={`Vincular este aluno: ${a.nome}`}
                 onClick={() => aoEscolher({ tipo: "aluno", alunoId: a.id, nome: a.nome, turma: a.turma, status: a.status })}>
                 <UserCheck size={15} /> Vincular este aluno

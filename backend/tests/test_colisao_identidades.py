@@ -97,14 +97,14 @@ def cena(db, escola_completa):
     gestor cria ao resolver a pendência da segunda conta."""
     esc, admin = escola_completa["escola"], escola_completa["admin"]
     t = _turma(db, esc)
-    allyce = _aluno(db, esc, t, "ALLYCE CRISTINA BARBOSA DE ALMEIDA")
+    arielle = _aluno(db, esc, t, "ARIELLE CRISTINA TESTELLI DE AMARO")
     outra = _aluno(db, esc, t, "BEATRIZ SOUZA LIMA")
-    _vincular(db, esc, allyce, "conta-A")
-    _vincular(db, esc, allyce, "conta-B")
+    _vincular(db, esc, arielle, "conta-A")
+    _vincular(db, esc, arielle, "conta-B")
     _vincular(db, esc, outra, "conta-C")
     db.commit()
     return {"escola": esc, "admin": admin, "turma": t.nome,
-            "allyce": allyce, "outra": outra}
+            "arielle": arielle, "outra": outra}
 
 
 # --- 1. identidade única continua funcionando -------------------------------
@@ -157,10 +157,10 @@ def test_2_duas_identidades_em_fichas_diferentes_nao_colidem(db, escola_completa
 def test_3_duas_contas_na_mesma_ficha_nao_gravam_snapshot(db, cena):
     """Nenhuma das duas entra: não dá para saber qual número é o da criança."""
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
-    assert _snaps(db, cena["allyce"].id) == []
+    assert _snaps(db, cena["arielle"].id) == []
     pend = _pendentes(db, cena["escola"])
     assert len(pend) == 2
     assert {p.motivo for p in pend} == {"outra_identidade_na_plataforma"}
@@ -171,8 +171,8 @@ def test_3b_cada_conta_guarda_o_proprio_payload_na_fila(db, cena):
     """Preservar de forma auditável: o número de CADA conta fica na pendência
     dela, nunca misturado."""
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
     por_conta = {p.id_externo: p.linhas[0] for p in _pendentes(db, cena["escola"])}
     assert (por_conta["conta-A"]["atividades"], por_conta["conta-A"]["estrelas"]) == (139, 523)
@@ -184,27 +184,27 @@ def test_3b_cada_conta_guarda_o_proprio_payload_na_fila(db, cena):
 def test_4_reimportacao_no_mesmo_dia_nao_muta_o_snapshot_existente(db, cena):
     """Antes, ``_mesmo_dia`` mutava a foto do dia NO LUGAR — a segunda conta
     apagava a primeira sem deixar linha nova no histórico."""
-    esc, admin, allyce = cena["escola"], cena["admin"], cena["allyce"]
+    esc, admin, arielle = cena["escola"], cena["admin"], cena["arielle"]
     # a ficha já tem um retrato gravado (de quando só havia uma conta)
-    _retrato_gravado(db, esc, allyce, 139, 523, 3.76)
-    antes = [(s.id, s.atividades, s.estrelas) for s in _snaps(db, allyce.id)]
+    _retrato_gravado(db, esc, arielle, 139, 523, 3.76)
+    antes = [(s.id, s.atividades, s.estrelas) for s in _snaps(db, arielle.id)]
 
     _importar(db, esc, admin, [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
     db.expire_all()
-    assert [(s.id, s.atividades, s.estrelas) for s in _snaps(db, allyce.id)] == antes
+    assert [(s.id, s.atividades, s.estrelas) for s in _snaps(db, arielle.id)] == antes
 
 
 # --- 5, 6 e 7. a ORDEM não decide nada --------------------------------------
 
 def _resultado_na_ordem(db, cena, ordem):
     linhas = {
-        "A": _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        "B": _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9),
+        "A": _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        "B": _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9),
     }
     _importar(db, cena["escola"], cena["admin"], [linhas[x] for x in ordem])
-    return ([(s.atividades, s.estrelas) for s in _snaps(db, cena["allyce"].id)],
+    return ([(s.atividades, s.estrelas) for s in _snaps(db, cena["arielle"].id)],
             sorted(p.id_externo for p in _pendentes(db, cena["escola"])))
 
 
@@ -223,11 +223,11 @@ def test_7_a_ordem_nao_determina_quem_vence(db, escola_completa):
     ``linhas_aluno[-1]`` fazia a última linha do arquivo vencer."""
     esc, admin = escola_completa["escola"], escola_completa["admin"]
     t = _turma(db, esc)
-    a = _aluno(db, esc, t, "ALLYCE CRISTINA BARBOSA DE ALMEIDA")
+    a = _aluno(db, esc, t, "ARIELLE CRISTINA TESTELLI DE AMARO")
     _vincular(db, esc, a, "conta-A")
     _vincular(db, esc, a, "conta-B")
     db.commit()
-    cena = {"escola": esc, "admin": admin, "turma": "3ºA", "allyce": a}
+    cena = {"escola": esc, "admin": admin, "turma": "3ºA", "arielle": a}
 
     ab = _resultado_na_ordem(db, cena, "AB")
     for p in _pendentes(db, esc):          # limpa a fila entre as duas rodadas
@@ -241,8 +241,8 @@ def test_7_a_ordem_nao_determina_quem_vence(db, escola_completa):
 
 def test_8_a_escola_e_avisada_em_vez_de_perder_dado_calado(db, cena):
     r = _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
     texto = " ".join(r.avisos)
     assert "outra conta nesta plataforma" in texto
@@ -254,20 +254,20 @@ def test_8_a_escola_e_avisada_em_vez_de_perder_dado_calado(db, cena):
 
 def test_9_nunca_soma_as_duas_contas(db, cena):
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
-    for s in _snaps(db, cena["allyce"].id):
+    for s in _snaps(db, cena["arielle"].id):
         assert (s.atividades, s.estrelas) != (142, 532)
-    assert _snaps(db, cena["allyce"].id) == []
+    assert _snaps(db, cena["arielle"].id) == []
 
 
 # --- 10. auditoria ----------------------------------------------------------
 
 def test_10_a_colisao_fica_auditada(db, cena):
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
     logs = db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "aluno.revisao_necessaria")).scalars().all()
@@ -282,15 +282,15 @@ def test_10_a_colisao_fica_auditada(db, cena):
 def test_11_scoring_nao_muda_arbitrariamente(db, cena):
     """Sem snapshot novo não há número novo: a nota fica exatamente como estava,
     em vez de passar a refletir uma conta escolhida por acaso."""
-    esc, allyce = cena["escola"], cena["allyce"]
-    _retrato_gravado(db, esc, allyce, 139, 523, 3.76)
+    esc, arielle = cena["escola"], cena["arielle"]
+    _retrato_gravado(db, esc, arielle, 139, 523, 3.76)
 
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)],
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)],
         recalcular=True)
 
     db.expire_all()
-    atual = _snaps(db, allyce.id)[-1]
+    atual = _snaps(db, arielle.id)[-1]
     assert (atual.atividades, atual.estrelas) == (139, 523)
 
 
@@ -299,31 +299,31 @@ def test_11_scoring_nao_muda_arbitrariamente(db, cena):
 def test_12_compativel_com_retrato_superado(db, cena):
     """``_retrato_superado`` compara DATAS e não é afetado pela trava: a
     pendência da colisão continua respondendo a ela normalmente."""
-    esc, allyce = cena["escola"], cena["allyce"]
+    esc, arielle = cena["escola"], cena["arielle"]
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523)])
     [rev] = _pendentes(db, esc)
     # sem snapshot gravado, não há retrato mais novo para superar nada
-    assert imp._retrato_superado(db, esc.id, allyce.id, rev) is None
+    assert imp._retrato_superado(db, esc.id, arielle.id, rev) is None
 
 
 # --- 13. irmãs (resumo + leituras) ------------------------------------------
 
 def test_13_a_trava_vale_por_plataforma_e_nao_atinge_as_irmas(db, cena):
     """Ter conta no Elefante NÃO é colisão: a trava é por plataforma."""
-    esc, allyce = cena["escola"], cena["allyce"]
-    _vincular(db, esc, allyce, "elefante-1", plataforma="elefante")
+    esc, arielle = cena["escola"], cena["arielle"]
+    _vincular(db, esc, arielle, "elefante-1", plataforma="elefante")
     db.commit()
 
     ctx = ida.carregar_contexto(db, esc.id, ANO)
     linha_ele = ida.linha_de_dados(
-        "ALLYCE CRISTINA BARBOSA DE ALMEIDA",
+        "ARIELLE CRISTINA TESTELLI DE AMARO",
         {"elefante_student_id": "elefante-1", "livros_unicos": 9},
         plataforma="elefante", turma_nome=cena["turma"])
     assert ida.decidir(ctx, linha_ele).acao == ida.ASSOCIAR
 
     linha_mat = ida.linha_de_dados(
-        "ALLYCE CRISTINA BARBOSA DE ALMEIDA",
+        "ARIELLE CRISTINA TESTELLI DE AMARO",
         {"matific_uuid": "conta-A", "atividades": 1}, plataforma="matific",
         turma_nome=cena["turma"])
     assert ida.decidir(ctx, linha_mat).acao == ida.REVISAR
@@ -333,15 +333,15 @@ def test_13_a_trava_vale_por_plataforma_e_nao_atinge_as_irmas(db, cena):
 
 def test_15_triagem_classifica_multi_identidade_mesmo_aluno(db, cena):
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
 
     saida = tri.triar_escola(db, cena["escola"].id)
     assert saida
     for v in saida.values():
         assert v.classificacao == tri.DECISAO_HUMANA
         assert v.motivo == tri.MULTI_IDENTIDADE
-        assert v.aluno_id == cena["allyce"].id
+        assert v.aluno_id == cena["arielle"].id
         assert any("outra(s) conta(s)" in c for c in v.conflitos)
 
 
@@ -351,13 +351,13 @@ def test_decisao_explicita_do_gestor_ainda_aplica_os_dados(db, cena):
     """A trava é contra a escolha AUTOMÁTICA. Quando um gestor escolhe a ficha
     (passo 0, que é o caminho do /resolver), os dados entram — auditados, e não
     em silêncio. Sem isso, a fila viraria um beco sem saída."""
-    esc, allyce = cena["escola"], cena["allyce"]
-    linha = _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523)
-    linha.aluno_id = allyce.id
+    esc, arielle = cena["escola"], cena["arielle"]
+    linha = _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523)
+    linha.aluno_id = arielle.id
 
     _importar(db, esc, cena["admin"], [linha])
 
-    [s] = _snaps(db, allyce.id)
+    [s] = _snaps(db, arielle.id)
     assert (s.atividades, s.estrelas) == (139, 523)
     assert _pendentes(db, esc) == []
 
@@ -379,8 +379,8 @@ def test_nenhuma_ficha_nova_e_criada_pela_colisao(db, cena):
     antes = db.scalar(select(func.count()).select_from(Aluno)
                       .where(Aluno.escola_id == cena["escola"].id))
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
     assert db.scalar(select(func.count()).select_from(Aluno)
                      .where(Aluno.escola_id == cena["escola"].id)) == antes
 
@@ -390,8 +390,8 @@ def test_nenhuma_identidade_e_transferida_pela_colisao(db, cena):
         select(IdentidadeExterna).where(
             IdentidadeExterna.escola_id == cena["escola"].id)).scalars()}
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-A", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-B", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-A", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-B", 3, 9)])
     db.expire_all()
     depois = {(i.id_externo, i.aluno_id) for i in db.execute(
         select(IdentidadeExterna).where(

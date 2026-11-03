@@ -66,12 +66,12 @@ def test_9_fusao_com_conflito_de_identidade_exige_confirmacao_especifica(
         cliente, db, escola_completa):
     """Não bloqueia — fundir é ato humano —, mas obriga a LER a divergência."""
     escola_id = escola_completa["escola"].id
-    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 7, 31), nasc_b=date(2021, 7, 31))
+    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 5, 17), nasc_b=date(2021, 5, 17))
     aid, bid = a.id, b.id
 
     r = _fundir(cliente, escola_id, aid, bid)
     assert r.status_code == 409, r.text
-    assert "2020-07-31" in r.text and "2021-07-31" in r.text
+    assert "2020-05-17" in r.text and "2021-05-17" in r.text
     assert CONFIRMA_CONFLITO in r.text
     assert _existe(db, bid), "nada pode ser apagado na recusa"
 
@@ -83,7 +83,7 @@ def test_9_fusao_com_conflito_de_identidade_exige_confirmacao_especifica(
 def test_9b_a_decisao_de_passar_por_cima_fica_auditada(cliente, db, escola_completa):
     from app.models import LogAuditoria
     escola_id = escola_completa["escola"].id
-    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 7, 31), nasc_b=date(2021, 7, 31))
+    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 5, 17), nasc_b=date(2021, 5, 17))
     assert _fundir(cliente, escola_id, a.id, b.id,
                    confirmar_conflito=CONFIRMA_CONFLITO).status_code == 200
 
@@ -97,7 +97,7 @@ def test_9b_a_decisao_de_passar_por_cima_fica_auditada(cliente, db, escola_compl
 def test_10_fusao_legitima_continua_passando_direto(cliente, db, escola_completa):
     """Sem prova de conflito, nada muda: um só 'FUNDIR' basta, como sempre."""
     escola_id = escola_completa["escola"].id
-    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 7, 31), nasc_b=date(2020, 7, 31))
+    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 5, 17), nasc_b=date(2020, 5, 17))
     aid, bid = a.id, b.id
     r = _fundir(cliente, escola_id, aid, bid)
     assert r.status_code == 200, r.text
@@ -108,8 +108,8 @@ def test_10b_ra_so_com_pontuacao_diferente_nao_atrapalha_a_fusao(
         cliente, db, escola_completa):
     """Antes da correção este par era 'prova de crianças diferentes'."""
     escola_id = escola_completa["escola"].id
-    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 7, 31), nasc_b=date(2020, 7, 31),
-                        ra_a="123.269.537-3", ra_b="1232695373")
+    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 5, 17), nasc_b=date(2020, 5, 17),
+                        ra_a="904.000.004-3", ra_b="9040000043")
     assert _fundir(cliente, escola_id, a.id, b.id).status_code == 200
 
 
@@ -117,7 +117,7 @@ def test_11_detector_e_rota_manual_concordam(cliente, db, escola_completa):
     """A mesma pergunta — 'há prova de serem crianças diferentes?' — tem de ter
     a mesma resposta nas duas portas."""
     escola_id = escola_completa["escola"].id
-    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 7, 31), nasc_b=date(2021, 7, 31))
+    a, b = _dois_alunos(db, escola_id, nasc_a=date(2020, 5, 17), nasc_b=date(2021, 5, 17))
 
     # detector: não sugere o par
     pares = plano_deduplicacao(db, escola_id)
@@ -129,19 +129,19 @@ def test_11_detector_e_rota_manual_concordam(cliente, db, escola_completa):
 
 
 # ---------------------------------------------------------------------------
-# 12. O CASO ALICE CONTINUA EXATAMENTE COMO ESTÁ
+# 12. O CASO CELESTE CONTINUA EXATAMENTE COMO ESTÁ
 # ---------------------------------------------------------------------------
 
-def test_12_alice_continua_com_duas_fichas_distintas(cliente, db, escola_completa):
-    """Reprodução fiel das fichas 2285 e 2297 de produção. Nenhuma correção
+def test_12_celeste_continua_com_duas_fichas_distintas(cliente, db, escola_completa):
+    """Reprodução de duas fichas reais de produção (dados fictícios). Nenhuma correção
     desta tarefa pode fundi-las, apagá-las ou alterar nascimento."""
     escola_id = escola_completa["escola"].id
     turma = db.execute(select(Turma).where(Turma.escola_id == escola_id)).scalars().first()
     fichas = []
     for nome, ra, nasc, status in [
-            ("Alice Vitoria Fossenati de Jesus", "123269537", date(2021, 7, 31),
+            ("Celeste Beatriz Testelli de Ficticia", "904000004", date(2021, 5, 17),
              "fora_lista_piloto"),
-            ("ALICE VITORIA FOSSENATI DE JESUS", "123.269.537-3", date(2020, 7, 31),
+            ("CELESTE BEATRIZ TESTELLI DE FICTICIA", "904.000.004-3", date(2020, 5, 17),
              "ativo")]:
         a = Aluno(escola_id=escola_id, nome=nome, status=status, numero_chamada=2,
                   ficha={"ra": ra}, da_lista_piloto=True)
@@ -152,29 +152,29 @@ def test_12_alice_continua_com_duas_fichas_distintas(cliente, db, escola_complet
                          ano_letivo=turma.ano_letivo))
         fichas.append(a)
     db.commit()
-    f2285, f2297 = fichas
+    ficha_a, ficha_b = fichas
 
     # (a) o RA continua provando conflito — 9 dígitos ≠ 10 dígitos
-    assert ra_forte("123269537") != ra_forte("123.269.537-3")
-    assert _conflito_forte(f2285, f2297) is True
+    assert ra_forte("904000004") != ra_forte("904.000.004-3")
+    assert _conflito_forte(ficha_a, ficha_b) is True
 
     # (b) o detector não oferece o par
     pares = plano_deduplicacao(db, escola_id)
     envolvidos = {i for c in pares for i in (c.get("manter_id"), c.get("remover_id"))}
-    assert f2285.id not in envolvidos and f2297.id not in envolvidos
+    assert ficha_a.id not in envolvidos and ficha_b.id not in envolvidos
 
     # (c) a porta manual recusa: primeiro pelo status, e — se estivesse ativa —
     #     pela confirmação específica do conflito
-    assert _fundir(cliente, escola_id, f2297.id, f2285.id).status_code == 400
-    f2285.status = "ativo"
+    assert _fundir(cliente, escola_id, ficha_b.id, ficha_a.id).status_code == 400
+    ficha_a.status = "ativo"
     db.commit()
-    assert _fundir(cliente, escola_id, f2297.id, f2285.id).status_code == 409
+    assert _fundir(cliente, escola_id, ficha_b.id, ficha_a.id).status_code == 409
 
     # (d) nada foi apagado nem alterado
     db.expire_all()
-    assert db.get(Aluno, f2285.id) is not None
-    assert db.get(Aluno, f2297.id) is not None
-    assert db.get(Aluno, f2285.id).data_nascimento == date(2021, 7, 31)
-    assert db.get(Aluno, f2297.id).data_nascimento == date(2020, 7, 31)
-    assert (db.get(Aluno, f2285.id).ficha or {}).get("ra") == "123269537"
-    assert (db.get(Aluno, f2297.id).ficha or {}).get("ra") == "123.269.537-3"
+    assert db.get(Aluno, ficha_a.id) is not None
+    assert db.get(Aluno, ficha_b.id) is not None
+    assert db.get(Aluno, ficha_a.id).data_nascimento == date(2021, 5, 17)
+    assert db.get(Aluno, ficha_b.id).data_nascimento == date(2020, 5, 17)
+    assert (db.get(Aluno, ficha_a.id).ficha or {}).get("ra") == "904000004"
+    assert (db.get(Aluno, ficha_b.id).ficha or {}).get("ra") == "904.000.004-3"

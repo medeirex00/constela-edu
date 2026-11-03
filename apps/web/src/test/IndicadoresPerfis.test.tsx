@@ -1,29 +1,37 @@
 /**
  * Indicadores oficiais por PERFIL (etapa E9 — decisões D4 e D5 do dono, 17/10):
  *
- *  - menu: "Avaliações Externas" aparece para a Secretaria (e para o admin global); o
- *    coordenador e o professor não têm o item;
- *  - tela da rede: a Secretaria LÊ (cartões e correlação), mas não vê importar, "Remover
- *    edição" nem o robô — só o admin global vê esses controles;
- *  - Visão da Escola: a seção "Indicadores oficiais da escola" mostra SÓ a escola (SARESP,
+ *  - menu: a área dos indicadores (/rede/avaliacoes) fica DENTRO de "Avaliações externas"
+ *    para a Secretaria (DESENHO3 §1: o menu dela tem só as três áreas) — ela chega lá pelo
+ *    link "Arquivos oficiais de cada número" e o item "Avaliações externas" continua aceso; o
+ *    h1 da tela continua "Fontes dos indicadores". O admin global tem o item ("Importações e
+ *    fontes"); o coordenador e o professor não têm;
+ *  - tela da rede: a Secretaria LÊ (cartões; nada de link para as Análises avançadas, que
+ *    saíram do menu dela), mas não vê importar, "Remover edição" nem o robô — só o admin
+ *    global vê esses controles;
+ *  - o componente "Indicadores oficiais da escola" mostra SÓ a escola (SARESP,
  *    Ideb/Saeb), as referências da rede/SP/Brasil e o ICA como indicador DA REDE, com o
  *    selo de fonte e o motivo de cada ausência (nunca 0); o professor não a vê (nem a
- *    API é chamada).
+ *    API é chamada). Na Visão da Escola, a seção agora é a "Análise educacional da escola"
+ *    (`AnaliseDaEscola`): a troca de escola continua sem mostrar números da anterior.
  *
  * Números, nomes, códigos, datas e arquivos SINTÉTICOS — os mesmos INVENTADOS dos testes
  * das abas (nada dos arquivos do INEP nem da SEDUC — D13).
  */
 import { describe, expect, it } from "vitest";
 
+import App from "../App";
 import Layout from "../components/Layout";
 import type { FonteOficial } from "../components/SeloFonte";
 import { useApp } from "../context/AppContext";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import IndicadoresDaEscola, { type RespostaIndicadoresEscola } from "../pages/IndicadoresDaEscola";
 import VisaoEscola from "../pages/VisaoEscola";
+import type { RespostaAnaliseEscola } from "../pages/analise/tipos";
 import RedeAvaliacoes from "../pages/rede/RedeAvaliacoes";
+import { semearSecretaria } from "./SecretariaFixtures";
 import {
-  api, escolaFake, renderComApp, responder, responderErro, screen, userEvent, usuarioFake, within,
+  api, escolaFake, renderComApp, responder, responderErro, screen, userEvent, usuarioFake, waitFor, within,
 } from "./utils";
 
 const secretaria = usuarioFake({ nome: "Secretaria", cargo: "coordenador", rede_id: 1, escola_id: null });
@@ -44,34 +52,63 @@ function LayoutReal() {
 }
 
 function escolaConfigurada() {
-  responder("GET", "/escolas/1/sync/status", {
-    escola_id: 1, escola_nome: "Escola Modelo Constela", qtd_alunos: 30, qtd_turmas: 3,
-    plataformas: [], lista_piloto_importada: true, integracao_configurada: true,
-  });
+  responder("GET", "/escolas/1/sync/onboarding", { lista_piloto_importada: true });
 }
 
-describe("Menu — Avaliações Externas por perfil (D5)", () => {
-  it("a Secretaria tem o item no menu, ao lado do Painel da Rede", async () => {
+describe("Menu — os indicadores da rede por perfil (D5)", () => {
+  // DESENHO3 §1: o menu da Secretaria tem só as três áreas. As fontes dos indicadores
+  // (/rede/avaliacoes) não têm item próprio: moram dentro de "Avaliações externas".
+  it("a Secretaria não tem item próprio das fontes nem o Painel da Rede: as fontes ficam em Avaliações externas", async () => {
     escolaConfigurada();
     renderComApp(<LayoutReal />, { rota: "/", usuario: secretaria, escolas: [escolaFake({ id: 1 })] });
-    const links = await screen.findAllByRole("link", { name: "Avaliações Externas" });
-    expect(links.length).toBeGreaterThan(0);
-    expect(links[0]).toHaveAttribute("href", "/rede/avaliacoes");
-    expect((await screen.findAllByRole("link", { name: "Painel da Rede" })).length).toBeGreaterThan(0);
+    const menu = await screen.findByRole("navigation", { name: "Menu principal" });
+    expect(await within(menu).findByRole("link", { name: "Avaliações externas" }))
+      .toHaveAttribute("href", "/rede/avaliacoes-externas");
+    const destinos = screen.queryAllByRole("link").map((l) => l.getAttribute("href"));
+    expect(destinos).not.toContain("/rede/avaliacoes");
+    expect(destinos).not.toContain("/rede");
+    expect(screen.queryAllByRole("link", { name: /Fontes e arquivos oficiais|Fontes dos indicadores|Importações e fontes/ }))
+      .toHaveLength(0);
+    expect(screen.queryAllByRole("link", { name: "Painel da Rede" })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: "Análises avançadas" })).toHaveLength(0);
+  });
+
+  it("a Secretaria chega às fontes pelo link 'Arquivos oficiais de cada número', com Avaliações externas acesa", async () => {
+    escolaConfigurada();
+    semearSecretaria();
+    semearRede([OPCAO]);
+    renderComApp(<App />, { rota: "/rede/avaliacoes-externas", usuario: secretaria, escolas: [escolaFake({ id: 1 })] });
+    const menu = await screen.findByRole("navigation", { name: "Menu principal" }, { timeout: 4000 });
+    const acesos = () => Array.from(menu.querySelectorAll("a[aria-current]")).map((a) => a.getAttribute("href"));
+    const fontes = await screen.findByRole("link", { name: /Arquivos oficiais de cada número/ }, { timeout: 4000 });
+    expect(fontes).toHaveAttribute("href", "/rede/avaliacoes");
+    expect(acesos()).toEqual(["/rede/avaliacoes-externas"]);
+    await userEvent.click(fontes);
+    expect(await screen.findByRole("heading", { level: 1, name: "Fontes dos indicadores" }, { timeout: 4000 }))
+      .toBeInTheDocument();
+    // Nas fontes, a área dela continua acesa e a trilha diz onde ela está.
+    expect(acesos()).toEqual(["/rede/avaliacoes-externas"]);
+    const trilha = screen.getByRole("navigation", { name: "Trilha de navegação" });
+    expect(Array.from(trilha.querySelectorAll("a, span")).map((el) => el.textContent))
+      .toEqual(["Panorama da Rede", "Rede municipal", "Fontes dos indicadores"]);
   });
 
   it("o admin global também tem o item", async () => {
     escolaConfigurada();
     renderComApp(<LayoutReal />, { rota: "/", usuario: admin, escolas: [escolaFake({ id: 1 })] });
-    expect((await screen.findAllByRole("link", { name: "Avaliações Externas" })).length).toBeGreaterThan(0);
+    const links = await screen.findAllByRole("link", { name: "Importações e fontes" });
+    expect(links[0]).toHaveAttribute("href", "/rede/avaliacoes");
   });
 
   it.each([["coordenador", coordenador], ["professor", professor]])(
     "o %s não tem o item (a escola lê os indicadores na Visão da Escola)", async (_nome, usuario) => {
       escolaConfigurada();
       renderComApp(<LayoutReal />, { rota: "/", usuario, escolas: [escolaFake({ id: 1 })] });
-      await screen.findAllByRole("link", { name: /Dashboard/ });
-      expect(screen.queryAllByRole("link", { name: "Avaliações Externas" })).toHaveLength(0);
+      // A sessão abriu (nome no cartão do usuário) e o menu do perfil está montado: a
+      // página inicial agora se chama "Visão geral" (D4, era "Dashboard"/"Meu Dashboard").
+      await screen.findAllByText(usuario.nome);
+      await screen.findAllByRole("link", { name: "Visão geral" });
+      expect(screen.queryAllByRole("link").map((l) => l.getAttribute("href"))).not.toContain("/rede/avaliacoes");
     });
 });
 
@@ -85,10 +122,6 @@ const OPCAO = { avaliacao: "ideb", nome: "IDEB", tipo: "indicador", indicador: "
 function semearRede(opcoes: unknown[] = []) {
   responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética" }]);
   responder("GET", "/redes/1/avaliacoes/opcoes", opcoes);
-  responder("GET", /\/redes\/1\/avaliacoes\/correlacao/, {
-    nome: "IDEB", tipo: "indicador", indicador: "ideb", etapa: "anos_iniciais", componente: null,
-    edicao: 2023, metrica: "pontuacao_geral", pontos: [], n: 0, pearson: null, evolucao: [],
-  });
   responder("GET", "/avaliacoes", [
     { chave: "ideb", nome: "IDEB", tipo: "indicador", orgao: "INEP", descricao: null },
   ]);
@@ -102,8 +135,13 @@ describe("Avaliações externas — controles de importação por perfil (D4)", 
   it("a Secretaria lê, mas não vê importar, remover edição nem o robô", async () => {
     semearRede([OPCAO]);
     const { container } = renderComApp(<RedeAvaliacoes />, { usuario: secretaria });
-    expect(await screen.findByRole("heading", { name: "Avaliações externas" })).toBeInTheDocument();
-    expect(await screen.findByText(/Dispersão por escola/)).toBeInTheDocument();     // a leitura continua
+    expect(await screen.findByRole("heading", { name: "Fontes dos indicadores" })).toBeInTheDocument();
+    // A leitura continua; o resumo é o de Avaliações externas. Nada de link para as Análises
+    // avançadas, que saíram do menu dela.
+    expect(await screen.findByRole("link", { name: /Voltar para Avaliações externas/ }))
+      .toHaveAttribute("href", "/rede/avaliacoes-externas");
+    expect(screen.queryByRole("link", { name: "Análises avançadas" })).not.toBeInTheDocument();
+    await waitFor(() => expect(api.mock.calls.some(([c]) => String(c) === "/redes/1/avaliacoes/opcoes")).toBe(true));
     expect(screen.queryByText("Importar em 1 clique")).not.toBeInTheDocument();
     expect(screen.queryByText("Importar resultado oficial")).not.toBeInTheDocument();
     expect(screen.queryByText("Coleta automática (robô)")).not.toBeInTheDocument();
@@ -445,17 +483,19 @@ function resumoEscola(id: number, turma: string) {
     total_alunos: 10, media_geral: 50, media_matific: 50, media_elefante: 50, indicadores: {} }] };
 }
 
-function respostaDe(id: number, marca: string): RespostaIndicadoresEscola {
-  return respostaEscola({
-    escola: { id, nome: `EMEF Sintética ${marca}`, codigo_inep: "35990001", status: "ativa", pendencia: null },
-    avisos: { escopo: `ESCOPO-DA-ESCOLA-${marca}` },
-  });
+/** A seção da Visão da Escola agora é a análise da escola (`GET /escolas/{id}/analise`). */
+function respostaDe(id: number, marca: string): RespostaAnaliseEscola {
+  return {
+    escola: { id, nome: `EMEF Sintética ${marca}`, codigo_inep: "35990001", pendencia: null },
+    rede: { id: 1, nome: "Rede Sintética" }, indicadores: [], plataformas: null,
+    comparacoes_indisponiveis: [{ tema: "ranking", texto: `ESCOPO-DA-ESCOLA-${marca}` }], fontes: {},
+  };
 }
 
 function montarVisao(usuario: ReturnType<typeof usuarioFake>) {
   responder("GET", "/escolas/1/resumo-escola", resumoEscola(1, "TURMA-DE-A"));
   responder("GET", "/escolas/2/resumo-escola", resumoEscola(2, "TURMA-DE-B"));
-  responder("GET", "/escolas/1/indicadores", respostaDe(1, "A"));
+  responder("GET", "/escolas/1/analise", respostaDe(1, "A"));
   renderComApp(<><TrocarParaB /><VisaoEscola /></>, {
     usuario, rota: "/escola", escolaSelecionada: 1,
     escolas: [escolaFake({ id: 1, nome: "Escola A" }), escolaFake({ id: 2, nome: "Escola B" })],
@@ -465,10 +505,10 @@ function montarVisao(usuario: ReturnType<typeof usuarioFake>) {
 describe("Visão da Escola — troca de escola com a seção aberta", () => {
   it.each([["admin global", admin], ["Secretaria", secretaria]])(
     "%s: se a leitura da escola B falha, mostra o erro — nunca os números da escola A", async (_nome, usuario) => {
-      responderErro("GET", "/escolas/2/indicadores", 500, "FALHA-DA-ESCOLA-B");
+      responderErro("GET", "/escolas/2/analise", 500, "FALHA-DA-ESCOLA-B");
       montarVisao(usuario);
       expect(await screen.findByText("ESCOPO-DA-ESCOLA-A")).toBeInTheDocument();
-      expect(screen.getByTestId("indicadores-escola-nome")).toHaveTextContent("EMEF Sintética A");
+      expect(screen.getByTestId("analise-escola-nome")).toHaveTextContent("EMEF Sintética A");
       await userEvent.click(screen.getByRole("button", { name: "trocar para a escola B" }));
       expect(await screen.findByText("TURMA-DE-B")).toBeInTheDocument();
       // Os números de A saem já no carregamento de B (sem esperar a resposta).
@@ -476,17 +516,17 @@ describe("Visão da Escola — troca de escola com a seção aberta", () => {
       // A falha de B (depois da retentativa do useApi) aparece.
       expect(await screen.findByText(/FALHA-DA-ESCOLA-B/, undefined, { timeout: 3000 })).toBeInTheDocument();
       expect(screen.queryByText("ESCOPO-DA-ESCOLA-A")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("indicadores-escola-saresp")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("indicadores-escola-nome")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("analise-escola-indisponiveis")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("analise-escola-nome")).not.toBeInTheDocument();
     });
 
   it("com sucesso, a seção passa a mostrar a escola B (com o nome dela)", async () => {
-    responder("GET", "/escolas/2/indicadores", respostaDe(2, "B"));
+    responder("GET", "/escolas/2/analise", respostaDe(2, "B"));
     montarVisao(admin);
     expect(await screen.findByText("ESCOPO-DA-ESCOLA-A")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "trocar para a escola B" }));
     expect(await screen.findByText("ESCOPO-DA-ESCOLA-B")).toBeInTheDocument();
-    expect(screen.getByTestId("indicadores-escola-nome")).toHaveTextContent("EMEF Sintética B");
+    expect(screen.getByTestId("analise-escola-nome")).toHaveTextContent("EMEF Sintética B");
     expect(screen.queryByText("ESCOPO-DA-ESCOLA-A")).not.toBeInTheDocument();
   });
 });

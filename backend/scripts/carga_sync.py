@@ -35,6 +35,7 @@ from sqlalchemy import delete, func, select, update  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
 from app.models import Escola, SincronizacaoExecucao  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 PREFIXO = "CARGA_TESTE_"
 
@@ -109,6 +110,7 @@ def _worker(claimed: list[int], lock: threading.Lock) -> None:
 
 
 def main() -> int:
+    forcar_saida_utf8()
     p = argparse.ArgumentParser()
     p.add_argument("--escolas", type=int, default=10)
     p.add_argument("--workers", type=int, default=4)

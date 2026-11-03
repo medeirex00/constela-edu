@@ -9,8 +9,13 @@ Arquitetura de fila em banco: hoje o worker roda embutido na API (deploy
 pequeno). Para escala horizontal, o MESMO código roda como serviço separado
 apontando para o mesmo banco — nada muda (a fila é a fonte da verdade).
 
-DESLIGADO por padrão (``SYNC_SCHEDULER_ENABLED``): fail-safe. Ligar em produção
-após configurar credenciais.
+DESLIGADO por padrão (``SYNC_SCHEDULER_ENABLED``): fail-safe. E, mesmo ligado
+pela variável, RECUSA subir quando um pré-requisito CRÍTICO falha
+(``app/sync/prerequisitos.py``: teto de tempo, status honesto, selo de frescor,
+nenhuma execução presa, credenciais legíveis, recálculo em dia, horário fora do
+backup e em Brasília, workers coerentes) — log claro e o app segue de pé. Só
+``SYNC_SCHEDULER_FORCAR=true`` (decisão do dono) passa por cima da recusa. A
+checklist da reativação está em ``docs/sync/REATIVAR-AGENDADOR.md``.
 """
 from __future__ import annotations
 
@@ -23,6 +28,11 @@ logger = logging.getLogger("constela.sync")
 
 _parar = threading.Event()
 _thread: threading.Thread | None = None
+# O que ESTE processo decidiu na última chamada de ``iniciar``: "desligado" (a
+# variável), "recusado" (pré-requisito crítico falho), "iniciado" ou "forcado"
+# (SYNC_SCHEDULER_FORCAR). None = ``iniciar`` ainda não rodou. O painel global
+# mostra, para "agendador desligado" não esconder o motivo.
+_decisao: str | None = None
 
 
 def _uma_rodada() -> None:
@@ -59,9 +69,15 @@ def _uma_rodada() -> None:
 
 def _coletar_avaliacoes_pendentes() -> None:
     """Coleta as fontes de avaliação externa com agenda vencida (o "robô" do IDEB).
-    Sessão própria e isolada: um erro aqui nunca afeta o worker de sync."""
-    from app.core.database import SessionLocal
+    Sessão própria e isolada: um erro aqui nunca afeta o worker de sync.
+
+    O robô é LEGADO (grava sem prévia) e fica DESLIGADO por padrão, atrás de
+    ``AVALIACOES_ROBO_HABILITADO`` — ligar este agendador NÃO o liga junto."""
     from app.services import avaliacoes
+
+    if not avaliacoes.robo_habilitado():
+        return
+    from app.core.database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -85,12 +101,69 @@ def _loop() -> None:
     logger.info("Scheduler de sincronização parado.")
 
 
+def _abrir_sessao():
+    """Sessão própria da verificação de pré-requisitos (ponto de troca nos testes)."""
+    from app.core.database import SessionLocal
+
+    return SessionLocal()
+
+
+def _avaliar_prerequisitos():
+    """Roda ``prerequisitos_agendador`` numa sessão própria, SÓ de leitura."""
+    from app.sync import prerequisitos
+
+    db = _abrir_sessao()
+    try:
+        return prerequisitos.prerequisitos_agendador(db, settings)
+    finally:
+        try:
+            db.rollback()
+        finally:
+            db.close()
+
+
+def _liberado_pelos_prerequisitos() -> bool:
+    """Pode subir? Com um pré-requisito CRÍTICO falho (ou a própria verificação
+    quebrada), NÃO — a menos que ``SYNC_SCHEDULER_FORCAR``. Nunca levanta: quem
+    chama é o import do ``app.main``, e o app tem de seguir de pé."""
+    global _decisao
+    from app.sync import prerequisitos
+
+    try:
+        falhos = prerequisitos.criticos_falhos(_avaliar_prerequisitos())
+        descricao = " | ".join(f"{v.id}: {v.motivo}" for v in falhos)
+    except Exception as exc:  # noqa: BLE001 — a verificação nunca derruba o boot
+        logger.exception("Pré-requisitos do agendador: a verificação falhou.")
+        falhos, descricao = None, f"verificação indisponível ({type(exc).__name__})"
+    if falhos == []:
+        _decisao = "iniciado"
+        logger.info("Agendador de sincronização: todos os pré-requisitos críticos ok.")
+        return True
+    if prerequisitos.forcar_habilitado(settings):
+        _decisao = "forcado"
+        logger.warning(
+            "Agendador de sincronização INICIADO À FORÇA (SYNC_SCHEDULER_FORCAR=true) "
+            "apesar de pré-requisito crítico falho — %s", descricao)
+        return True
+    _decisao = "recusado"
+    logger.error(
+        "Agendador de sincronização NÃO iniciado: pré-requisito crítico falho — %s. "
+        "Corrija e reinicie (ou, só por decisão do dono, SYNC_SCHEDULER_FORCAR=true). "
+        "Checklist: docs/sync/REATIVAR-AGENDADOR.md. O restante da API segue normal; "
+        "a coleta continua pelo \"Sincronizar agora\".", descricao)
+    return False
+
+
 def iniciar() -> bool:
-    """Sobe o worker se habilitado e ainda não rodando. Retorna se subiu."""
-    global _thread
+    """Sobe o worker se habilitado, ainda não rodando E com os pré-requisitos
+    críticos ok (ou forçado). Retorna se subiu."""
+    global _thread, _decisao
     if not settings.SYNC_SCHEDULER_ENABLED:
+        _decisao = "desligado"
         return False
     if _thread is not None and _thread.is_alive():
+        return False
+    if not _liberado_pelos_prerequisitos():
         return False
     _parar.clear()
     _thread = threading.Thread(target=_loop, name="sync-scheduler", daemon=True)
@@ -106,3 +179,8 @@ def parar(timeout: float = 5.0) -> None:
 
 def ativo() -> bool:
     return _thread is not None and _thread.is_alive()
+
+
+def decisao() -> str | None:
+    """A decisão da última chamada de ``iniciar`` neste processo (ver ``_decisao``)."""
+    return _decisao

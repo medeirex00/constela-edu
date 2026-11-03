@@ -7,6 +7,7 @@ texto livre acessível ao papel aluno — nem aqui.
 from __future__ import annotations
 
 import secrets
+import unicodedata
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -198,16 +199,28 @@ def obter_ou_criar_perfil(db: Session, aluno: Aluno) -> QuestPerfil:
 PREFERENCIAS_PERMITIDAS = {"som", "musica", "narracao", "reduzir_animacoes"}
 
 
+NOME_EXIBICAO_MAX = 20
+
+
 def validar_nome_exibicao(nome: str) -> str:
     """Nome que a criança escolheu na cerimônia ("como você quer ser
     chamado?"). Único texto livre do papel aluno: curto, só letras e
-    espaços, sem dígitos/símbolos/emojis — e Título Bonito na saída."""
+    espaços, sem dígitos/símbolos/emojis — e Título Bonito na saída.
+
+    O tamanho vale para o que VAI AO BANCO, não só para o que chegou: o
+    ``str.title()`` pode expandir o texto (a ligadura U+FB03 vira "Ffi"; o
+    U+0130 vira "i" + U+0307), e 20 letras de entrada chegavam a 41 numa coluna
+    String(40) — 500 no PostgreSQL. A saída é title() + NFC, com o mesmo teto
+    de 20 (ValueError → 422, nada gravado)."""
     limpo = " ".join((nome or "").split())
-    if not (2 <= len(limpo) <= 20):
+    if not (2 <= len(limpo) <= NOME_EXIBICAO_MAX):
         raise ValueError("O nome precisa ter entre 2 e 20 letras.")
     if not all(c.isalpha() or c == " " for c in limpo):
         raise ValueError("Use só letras, sem números ou símbolos.")
-    return limpo.title()
+    saida = unicodedata.normalize("NFC", limpo.title())
+    if not (2 <= len(saida) <= NOME_EXIBICAO_MAX):
+        raise ValueError("O nome precisa ter entre 2 e 20 letras.")
+    return saida
 
 
 def primeiro_nome_cadastro(nome_civil: str) -> str:

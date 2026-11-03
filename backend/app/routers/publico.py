@@ -10,23 +10,27 @@ Duas metades:
     do aluno sai ANONIMIZADO por padrão (primeiro nome + inicial), pois o link
     é público — a escola pode optar por nome completo (config `anonimizar`).
 """
+import ipaddress
+import re
 import secrets
 import time
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import escola_autorizada, exigir_papeis
+from app.core.deps import escola_autorizada, exigir_papeis, negar_secretaria
 from app.models import (
     Aluno, Configuracao, Escola, Matricula, Nota,
-    SnapshotElefante, SnapshotMatific, Turma, Usuario,
+    SnapshotElefante, Turma, Usuario,
 )
 from app.services import elegibilidade, evolucao as svc_evolucao
 from app.services import gamificacao as svc_gami
+from app.services import modulos as svc_modulos
 from app.services import relatorios as svc_relatorios
 from app.services import scoring
 from app.services.audit import registrar
@@ -127,8 +131,12 @@ def _escola_pelo_token(db: Session, token: str) -> tuple[Escola, dict] | None:
 # Configuração (autenticado)
 # ---------------------------------------------------------------------------
 
+# A Secretaria fica de fora (leitura também): a configuração traz o link com o
+# token do painel, e o painel pode exibir o nome completo das crianças — dado
+# individual que ela não vê (LGPD). Só a gestão da própria escola e o admin global.
 config_router = APIRouter(prefix="/escolas/{escola_id}/painel-publico",
-                          tags=["Painel Público"])
+                          tags=["Painel Público"],
+                          dependencies=[Depends(negar_secretaria)])
 
 
 class PainelConfigIn(BaseModel):
@@ -143,7 +151,83 @@ class PainelConfigIn(BaseModel):
     confirmar_exposicao: bool = False
 
 
-def _com_url(valores: dict) -> dict:
+# Host que o navegador põe na origem da tela (``window.location.origin``): nome ASCII em
+# minúsculas ou IPv6 — nada de ``%``, ``\``, ``@`` nem Unicode.
+_RE_HOST_DA_ORIGEM = re.compile(r"[a-z0-9.-]+|[0-9a-f:.]+")
+
+
+def _base_configurada() -> str | None:
+    """``PUBLIC_BASE_URL`` definido DE PROPÓSITO (no ambiente ou no ``.env``), sem a barra
+    final — None quando vale o padrão do código. O pydantic-settings só põe em
+    ``model_fields_set`` o valor que veio de fora; o padrão fica de fora."""
+    if "PUBLIC_BASE_URL" in settings.model_fields_set:
+        return settings.PUBLIC_BASE_URL.rstrip("/")
+    return None
+
+
+def _ip_de_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _origem_de_loopback(origem: str) -> str | None:
+    """A origem REMONTADA (``esquema://host[:porta]``, do host e da porta já validados)
+    quando ela é http(s) de loopback — ``localhost``, ``*.localhost`` menos
+    ``tauri.localhost``, IP de loopback — e nada além disso; senão None.
+
+    A origem tem de ser exatamente a remontada (no máximo com a barra final): ficam de
+    fora caminho, consulta, fragmento, credencial (mesmo vazia: ``http://:@``), barra
+    invertida, maiúscula e porta escrita de outro jeito (``:08050``) ou fora de 0–65535.
+    É o que impede o Python e o navegador de lerem hosts diferentes no mesmo texto: para
+    o navegador, ``http://evil.com\\.localhost`` é ``evil.com``."""
+    try:
+        partes = urlsplit(origem)
+        porta = partes.port          # ValueError: porta não numérica ou fora de 0–65535
+    except ValueError:
+        return None
+    host = partes.hostname or ""
+    nome = host.rstrip(".")
+    if (partes.scheme not in ("http", "https") or not _RE_HOST_DA_ORIGEM.fullmatch(host)
+            or not (nome == "localhost"
+                    or (nome.endswith(".localhost") and nome != "tauri.localhost")
+                    or _ip_de_loopback(nome))):
+        return None
+    netloc = f"[{host}]" if ":" in host else host
+    if porta is not None:
+        netloc = f"{netloc}:{porta}"
+    base = f"{partes.scheme}://{netloc}"
+    return base if origem in (base, f"{base}/") else None
+
+
+def base_do_link_publico(origem: str | None) -> str:
+    """Base do link público — o texto, o Copiar, o Abrir e o QR. QUEM DECIDE É O
+    SERVIDOR, nesta ordem:
+
+    1. ``PUBLIC_BASE_URL`` definido de propósito (ambiente ou ``.env``) vence SEMPRE: é o
+       endereço que o operador escolheu para os outros aparelhos (domínio da escola, IP
+       da rede local). A instalação pelo docker-compose cai sempre aqui.
+    2. Sem ele, a origem da tela, SÓ quando é http(s) de loopback (demo, ambiente de
+       teste, desenvolvimento) — senão o link de uma instalação local apontava para a
+       produção, onde o token local não existe. A base é remontada do host e da porta
+       validados (``_origem_de_loopback``); qualquer outra origem é IGNORADA, então este
+       parâmetro nunca põe um domínio de fora no link. O app de desktop
+       (``http://tauri.localhost`` no Windows) NÃO é loopback aqui — ele fala com o
+       servidor de verdade (mesma exceção de ``core.config.origem_de_desenvolvimento``).
+    3. Senão, o domínio publicado (o padrão do código).
+
+    Limite do passo 2: o link em loopback só abre neste computador (no celular,
+    ``localhost`` é o próprio celular). Para ler o QR com outro aparelho, defina
+    ``PUBLIC_BASE_URL``."""
+    configurada = _base_configurada()
+    if configurada is not None:
+        return configurada
+    local = _origem_de_loopback(origem) if origem else None
+    return local or settings.PUBLIC_BASE_URL.rstrip("/")
+
+
+def _com_url(valores: dict, origem: str | None = None) -> dict:
     token = valores.get("token")
     return {
         "ativo": valores.get("ativo", False),
@@ -151,22 +235,26 @@ def _com_url(valores: dict) -> dict:
         "intervalo_s": valores.get("intervalo_s", 12),
         "max_posicoes": valores.get("max_posicoes", 10),
         "anonimizar": valores.get("anonimizar", True),
-        "url": f"{settings.PUBLIC_BASE_URL}/p/{token}" if token else None,
+        "url": f"{base_do_link_publico(origem)}/p/{token}" if token else None,
     }
 
 
+# ``origem`` (consulta, opcional) em todo endpoint que devolve o link: a origem da tela,
+# que o servidor aceita ou ignora (``base_do_link_publico``).
 @config_router.get("")
 def obter_config(
+    origem: str | None = None,
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
-    return _com_url(_config(db, escola_id))
+    return _com_url(_config(db, escola_id), origem)
 
 
 @config_router.put("")
 def salvar_config(
     dados: PainelConfigIn,
+    origem: str | None = None,
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
@@ -207,11 +295,12 @@ def salvar_config(
                         "anonimizar": valores.get("anonimizar", True)})
     db.commit()
     invalidar_cache_painel(escola_id)   # reflete a nova config/token no telão já
-    return _com_url(valores)
+    return _com_url(valores, origem)
 
 
 @config_router.post("/novo-token")
 def trocar_token(
+    origem: str | None = None,
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
@@ -229,16 +318,18 @@ def trocar_token(
     registrar(db, "painel_publico.token_trocado", escola_id=escola_id, usuario_id=usuario.id)
     db.commit()
     invalidar_cache_painel(escola_id)   # o link antigo cai imediatamente
-    return _com_url(valores)
+    return _com_url(valores, origem)
 
 
 @config_router.get("/qr")
 def qr_code(
+    origem: str | None = None,
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
-    """QR code (SVG) apontando para o painel público (PRD §118)."""
+    """QR code (SVG) apontando para o painel público (PRD §118) — o mesmo link que o GET
+    devolve para a mesma ``origem`` (ver ``base_do_link_publico``)."""
     import segno
 
     valores = _config(db, escola_id)
@@ -246,7 +337,7 @@ def qr_code(
     if not valores.get("ativo") or not token:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Ative o painel público antes de gerar o QR code.")
-    url = f"{settings.PUBLIC_BASE_URL}/p/{token}"
+    url = f"{base_do_link_publico(origem)}/p/{token}"
     qr = segno.make(url, error="m")
     import io
     buffer = io.BytesIO()
@@ -262,7 +353,20 @@ def qr_code(
 # Acesso público (sem login) — somente dados pedagógicos
 # ---------------------------------------------------------------------------
 
-publico_router = APIRouter(prefix="/publico", tags=["Painel Público"])
+# Telão e vitrine são endereços SEM login feitos para circular (QR para as
+# famílias) e podem trazer nome de criança: nenhuma resposta daqui pode ser
+# indexada nem arquivada por buscador (a cópia guardada sobreviveria à troca do
+# token). As páginas do front que as consomem têm a mesma marca na borda
+# (vercel.json e nginx.conf, só nas rotas /p/ e /rede/p/) e no <meta robots>.
+NAO_INDEXAR = "noindex, nofollow, noarchive"
+
+
+def _sem_indexacao(response: Response) -> None:
+    response.headers["X-Robots-Tag"] = NAO_INDEXAR
+
+
+publico_router = APIRouter(prefix="/publico", tags=["Painel Público"],
+                           dependencies=[Depends(_sem_indexacao)])
 
 
 def _turmas_premiaveis(db: Session, escola: Escola) -> list[int]:
@@ -275,8 +379,59 @@ def _turmas_premiaveis(db: Session, escola: Escola) -> list[int]:
     return elegibilidade.turmas_premiaveis(db, escola.id, escola.ano_letivo_ativo)
 
 
+def _slides_ativos(config: dict) -> set[str]:
+    """Slides ligados pela escola. O servidor só monta o que eles exibem: o
+    token é público, então desligar o slide do ranking tem de tirar o ranking
+    da resposta (e o perfil público de quem só aparecia nele), não só do
+    carrossel."""
+    return set(config.get("slides", SLIDES_VALIDOS))
+
+
+def _com_algum_dado():
+    """Filtro do slide `ranking` (e do perfil público de quem aparece nele): só
+    a criança com dado de ALGUMA plataforma contratada.
+
+    AUSÊNCIA NÃO É ZERO (scoring.py, invariante 2): sem isto, a escola sem
+    coleta (ou com menos crianças com dado que o tamanho do ranking) montava no
+    telão sem login um pódio com nome, medalha e "0,00" de quem nunca abriu
+    plataforma nenhuma — e, com todas empatadas em zero, a ordem saía do
+    desempate alfabético. O SNAPSHOT ZERADO continua (invariante 3: abriu e
+    ainda não produziu é zero legítimo — `aferido_*` é a EXISTÊNCIA do
+    snapshot, nunca `nota > 0`). E é coerente com a trava de módulo: a dimensão
+    de módulo fora do plano é carimbada `aferido=False` pelo motor, então quem
+    só tem dado dela também fica de fora. A posição exibida segue a CARIMBADA
+    (`Nota.posicao`, a mesma do perfil e do Ranking Geral): pode pular um
+    número no fim da lista, entre os zerados — não é renumerada aqui."""
+    return or_(Nota.aferido_leitura.is_(True), Nota.aferido_matematica.is_(True))
+
+
+# Ganho do "Aluno do Dia/Semana/Mês" → plataforma (vocabulário de
+# ``modulos.PLATAFORMA_MODULO``): os chips "+N atividades" / "+N livros" de um
+# módulo fora do plano não saem no telão.
+_PLATAFORMA_DO_GANHO = {
+    "atividades": "matific", "estrelas": "matific",
+    "livros": "elefante", "tempo_leitura_min": "elefante", "acertos": "elefante",
+    "pontos_dificuldade": "elefante",
+}
+
+
+def _destaques_no_plano(destaques, fora: set[str]):
+    """Os destaques do telão sem os ganhos das plataformas ``fora`` do plano.
+    Só filtra a resposta; quem é destaque (e a nota dele) não muda."""
+    if not fora or not isinstance(destaques, dict):
+        return destaques
+    return {
+        janela: ({**item, "ganhos": {
+            chave: valor for chave, valor in (item.get("ganhos") or {}).items()
+            if _PLATAFORMA_DO_GANHO.get(chave) not in fora}}
+            if isinstance(item, dict) else item)
+        for janela, item in destaques.items()
+    }
+
+
 def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     limite = int(config.get("max_posicoes", 10))
+    ativos = _slides_ativos(config)
     # Telão sem login: nome anonimizado por padrão (primeiro nome + inicial).
     anonimizar = bool(config.get("anonimizar", True))
     nome_pub = (svc_gami.anonimizar_nome if anonimizar else (lambda n: n))
@@ -305,9 +460,11 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         # Pela MATRÍCULA, não por `Turma`: a segunda consulta não dá JOIN em
         # Turma, e um filtro por `Turma.id` ali viraria produto cartesiano.
         .where(Matricula.turma_id.in_(premiaveis))
+        # Ausência não é zero: só quem tem dado de alguma plataforma contratada.
+        .where(_com_algum_dado())
         .order_by(Nota.posicao)
         .limit(limite)
-    ).all()
+    ).all() if "ranking" in ativos else []
 
     # Telão PÚBLICO: base_no_periodo=True → só o crescimento DENTRO da janela
     # conta (regra justa das premiações). Sem isso, no começo do piloto o
@@ -321,17 +478,25 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         it for it in svc_evolucao.ranking_evolucao(
             db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
         if it.nota_evolucao > 0
-    ][:limite]
+    ][:limite] if "evolucao" in ativos else []
     # Destaques ("Aluno do Dia/Semana/Mês") e eventos do mural: o mesmo corte —
     # a Educação Infantil não disputa o pódio do telão nem é nomeada nele.
-    mural = svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True,
-                           turma_ids=premiaveis)
+    mural = (svc_gami.mural(db, escola.id, anonimizar=anonimizar, base_no_periodo=True,
+                            turma_ids=premiaveis)
+             if ativos & {"destaques", "mural"} else {"destaques": [], "eventos": []})
 
     # Estatísticas REAIS da escola (agregadas dos snapshots atuais — nada é
     # inventado): faixa de indicadores do painel. Custo absorvido pelo cache
     # TTL_PAINEL_S do endpoint.
-    snaps_m = scoring._snapshots_atuais(db, escola.id, SnapshotMatific)
-    snaps_e = scoring._snapshots_atuais(db, escola.id, SnapshotElefante)
+    # Matific é contador DO ANO (``scoring.snapshots_matific_do_ano``): o retrato
+    # de outro ano letivo não soma nas estrelas/atividades do telão.
+    # CONTRATO: a plataforma de módulo que a rede não contratou não aparece no
+    # telão — o número dela sai `null` (a faixa mostra "—") e nem é somado.
+    fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
+    snaps_m = ({} if "matific" in fora
+               else scoring.snapshots_matific_do_ano(db, escola.id, escola.ano_letivo_ativo))
+    snaps_e = ({} if "elefante" in fora
+               else scoring._snapshots_atuais(db, escola.id, SnapshotElefante))
     total_alunos = db.execute(
         select(func.count())
         .select_from(Matricula)
@@ -342,9 +507,12 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     ).scalar() or 0
     estatisticas = {
         "alunos": int(total_alunos),
-        "atividades": int(sum(s.atividades for s in snaps_m.values())),
-        "estrelas": int(sum(s.estrelas for s in snaps_m.values())),
-        "livros": int(sum(s.livros_unicos for s in snaps_e.values())),
+        "atividades": (None if "matific" in fora
+                       else int(sum(s.atividades for s in snaps_m.values()))),
+        "estrelas": (None if "matific" in fora
+                     else int(sum(s.estrelas for s in snaps_m.values()))),
+        "livros": (None if "elefante" in fora
+                   else int(sum(s.livros_unicos for s in snaps_e.values()))),
     }
 
     return {
@@ -374,11 +542,12 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             }
             for item in evolucao_itens
         ],
-        "destaques": mural["destaques"],
+        "destaques": (_destaques_no_plano(mural["destaques"], fora)
+                      if "destaques" in ativos else []),
         "estatisticas": estatisticas,
         "mural": [
             {"icone": evento["icone"], "texto": evento["texto"]}
-            for evento in mural["eventos"][:10]
+            for evento in (mural["eventos"][:10] if "mural" in ativos else [])
         ],
     }
 
@@ -386,12 +555,39 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
 # Cache em memória do painel público (por escola). O telão faz polling a cada
 # poucos segundos e a recomputação é cara (mural + rankings); um TTL curto
 # absorve os polls sem servir dados velhos. Por worker uvicorn — aceitável,
-# pois os dados mudam poucas vezes por semana.
+# pois os dados mudam poucas vezes por semana. Cada entrada guarda a
+# ASSINATURA da config que a gerou (`_assinatura_config`): o PUT da gestão só
+# invalida o cache do worker que o atendeu, então os outros workers têm de
+# perceber sozinhos que a config mudou (proteção do nome, slides, tamanho).
 TTL_PAINEL_S = 60
-_cache_painel: dict[int, tuple[float, dict]] = {}
+_cache_painel: dict[int, tuple[float, tuple, dict]] = {}
 # Ids exibidos no painel (por escola). Cacheados para o perfil público NÃO
 # recomputar a evolução da escola inteira a cada abertura de aluno (mesmo TTL).
-_cache_visiveis: dict[int, tuple[float, set[int]]] = {}
+_cache_visiveis: dict[int, tuple[float, tuple, set[int]]] = {}
+
+
+def _assinatura_config(config: dict) -> tuple:
+    """O que da config muda o que o telão publica (e quem pode ter o perfil
+    aberto). A config é relida do banco a cada requisição em
+    `_escola_pelo_token`, então comparar a assinatura custa zero e faz a
+    proteção do nome e o desligar de um slide valerem em TODOS os workers na
+    requisição seguinte, não só depois do TTL."""
+    return (
+        bool(config.get("anonimizar", True)),
+        tuple(config.get("slides", SLIDES_VALIDOS)),
+        int(config.get("max_posicoes", 10)),
+        config.get("intervalo_s", 12),
+    )
+
+
+def _do_cache(cache: dict, escola_id: int, agora: float, assinatura: tuple):
+    """A entrada do cache, se ainda vale: dentro do TTL e gerada pela MESMA
+    config. Senão, None (o chamador recalcula e regrava)."""
+    em_cache = cache.get(escola_id)
+    if (em_cache and agora - em_cache[0] < TTL_PAINEL_S
+            and em_cache[1] == assinatura):
+        return em_cache[2]
+    return None
 
 
 @publico_router.get("/{token}/painel")
@@ -402,12 +598,11 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
                             "Painel não encontrado ou desativado.")
     escola, config = resolvido
     agora = time.monotonic()
-    em_cache = _cache_painel.get(escola.id)
-    if em_cache and agora - em_cache[0] < TTL_PAINEL_S:
-        dados = em_cache[1]
-    else:
+    assinatura = _assinatura_config(config)
+    dados = _do_cache(_cache_painel, escola.id, agora, assinatura)
+    if dados is None:
         dados = _dados_publicos(db, escola, config)
-        _cache_painel[escola.id] = (agora, dados)
+        _cache_painel[escola.id] = (agora, assinatura, dados)
     # NUNCA cachear no navegador/CDN: DESLIGAR o painel (ou trocar o token) tem que
     # bloquear NA HORA, e o payload pode conter nome de criança (anonimizar=False).
     # O cache em memória (_cache_painel) já absorve os polls do telão no servidor.
@@ -440,14 +635,16 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     Resultado cacheado por TTL_PAINEL_S: sem cache, cada abertura de perfil
     recomputaria a evolução da escola inteira (consulta cara, sem login)."""
     agora = time.monotonic()
-    em_cache = _cache_visiveis.get(escola.id)
-    if em_cache and agora - em_cache[0] < TTL_PAINEL_S:
-        return em_cache[1]
+    assinatura = _assinatura_config(config)
+    em_cache = _do_cache(_cache_visiveis, escola.id, agora, assinatura)
+    if em_cache is not None:
+        return em_cache
     limite = int(config.get("max_posicoes", 10))
+    ativos = _slides_ativos(config)
     # AS FASES NÃO CONCORREM: o conjunto tem de casar com o que o telão exibe
     # (`_dados_publicos`), senão abriria o perfil de quem não está no telão.
     premiaveis = _turmas_premiaveis(db, escola)
-    ids = set(db.execute(
+    ids: set[int] = set() if "ranking" not in ativos else set(db.execute(
         select(Aluno.id)
         .join(Nota, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
@@ -464,6 +661,9 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
         # Pela MATRÍCULA, não por `Turma`: a segunda consulta não dá JOIN em
         # Turma, e um filtro por `Turma.id` ali viraria produto cartesiano.
         .where(Matricula.turma_id.in_(premiaveis))
+        # O mesmo corte do slide: quem não tem dado não está no telão, então o
+        # perfil público dele não abre.
+        .where(_com_algum_dado())
         .order_by(Nota.posicao)
         .limit(limite)
     ).scalars())
@@ -473,11 +673,14 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     # abre perfil de aluno que não aparece de fato no telão). Mesmo recorte das
     # Fases do payload: sem ele, a criança da Fase que lidera o crescimento
     # entraria aqui e o perfil público dela abriria (200).
+    if "evolucao" not in ativos:
+        _cache_visiveis[escola.id] = (agora, assinatura, ids)
+        return ids
     for item in [it for it in svc_evolucao.ranking_evolucao(
             db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
             if it.nota_evolucao > 0][:limite]:
         ids.add(item.aluno_id)
-    _cache_visiveis[escola.id] = (agora, ids)
+    _cache_visiveis[escola.id] = (agora, assinatura, ids)
     return ids
 
 
@@ -527,13 +730,18 @@ def perfil_publico(token: str, aluno_id: int, response: Response,
     # Estritamente pedagógico: nome, turma, notas e conquistas. O nome sai
     # anonimizado por padrão (mesma regra do telão) — este link é público.
     anonimizar = bool(config.get("anonimizar", True))
+    # CONTRATO: nota de plataforma de módulo fora do plano sai nula (mesma regra
+    # de ``rankings._ranking`` e do perfil autenticado).
+    fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
     return {
         "nome": svc_gami.anonimizar_nome(aluno.nome) if anonimizar else aluno.nome,
         # K-anonimato: turma omitida no modo anônimo (não reidentificar).
         "turma": None if anonimizar else (matricula[1].nome if matricula else None),
         "posicao": nota.posicao if nota else None,
-        "nota_matific": nota.nota_matific if nota else 0.0,
-        "nota_elefante": nota.nota_elefante if nota else 0.0,
+        "nota_matific": (None if "matific" in fora
+                         else (nota.nota_matific if nota else 0.0)),
+        "nota_elefante": (None if "elefante" in fora
+                          else (nota.nota_elefante if nota else 0.0)),
         "nota_geral": nota.nota_geral if nota else 0.0,
         "nivel": gamificacao["nivel"],
         "xp": gamificacao["xp"],

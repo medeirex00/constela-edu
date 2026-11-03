@@ -53,13 +53,32 @@ def _resposta_pdf(pdf: bytes, nome_arquivo: str) -> Response:
     )
 
 
+def _revogar_cartao_de_inativo(db: Session, escola_id: int, usuario: Usuario,
+                               aluno: Aluno, regenerar: bool) -> Response:
+    """Revogação pedida para ficha inativa: código e QR novos e sessões
+    derrubadas, SEM cartão novo (204). Sem credencial não há o que revogar, e a
+    ficha inativa não ganha uma: 422, como na reimpressão."""
+    credencial = svc.credencial_do_aluno(db, aluno.id)
+    if credencial is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Aluno inativo não recebe cartão.")
+    svc.revogar_cartao(db, credencial)
+    registrar(db, "quest.cartao_revogado_inativo", escola_id=escola_id,
+              usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+              detalhes={"regenerou": regenerar, "rotacionou_codigo": True,
+                        "status_aluno": aluno.status})
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 def _montar_cartoes(dados: list[dict]) -> list[dict]:
     return [{
         "nome": item["aluno"].nome,
         "apelido": item["perfil"].apelido,
         # No cartão da criança o código sai legível (LUA-FAROL-731); o valor
-        # armazenado/consultado continua o normalizado (sem hífen).
-        "codigo": svc.formatar_codigo_exibicao(item["credencial"].codigo_login),
+        # consultado no login é o HMAC do normalizado (sem hífen).
+        "codigo": svc.formatar_codigo_exibicao(
+            svc.codigo_para_exibicao(item["credencial"])),
         "qr_url": svc.url_qr(item["credencial"]),
     } for item in dados]
 
@@ -96,7 +115,8 @@ def acessos_da_turma(turma_id: int,
             nome=aluno.nome,
             nome_exibicao=perfil.nome_exibicao if perfil else None,
             apelido=perfil.apelido if perfil else None,
-            codigo_login=credencial.codigo_login if credencial else None,
+            codigo_login=(svc.codigo_para_exibicao(credencial)
+                          if credencial else None),
             ultimo_acesso=credencial.ultimo_acesso if credencial else None,
             tem_credencial=credencial is not None,
         ))
@@ -111,20 +131,37 @@ def gerar_cartoes(turma_id: int,
                   usuario: Usuario = Depends(PODE_GERAR),
                   db: Session = Depends(get_db)):
     """Gera (ou regenera) credenciais da turma e devolve o PDF dos cartões
-    + a página "só do professor" (tabela nome → código e roteiro da 1ª aula).
+    + a parte "só do professor" (tabela nome → código e roteiro da 1ª aula).
 
-    `regenerar=true` troca o QR de TODOS os alunos da turma e derruba as
-    sessões antigas — use apenas se cartões caírem em mãos erradas.
+    Sem parâmetro é reimpressão: código e QR de cada aluno continuam os mesmos.
 
-    `rotacionar_codigo=true` troca também o CÓDIGO de todos (novo código + QR +
-    derruba sessões). Uso deliberado: virada de ano letivo ou suspeita de
-    vazamento. Sem expiração automática durante o ano — a criança nunca perde
-    acesso sozinha.
+    `regenerar=true` revoga os cartões de TODOS os alunos da turma: código e QR
+    novos, sessões antigas derrubadas — os cartões impressos antes deixam de
+    entrar. Isso inclui quem está INATIVO naquela hora (arquivado, transferido,
+    fora da Lista Piloto): o cartão dele cai também, sem entrar no PDF, e a
+    reativação posterior não reabre o cartão nem as sessões antigas (a auditoria
+    conta os revogados inativos). E inclui quem estava numa folha da turma impressa
+    desde a última revogação dela e depois TROCOU de turma (a auditoria de cada
+    folha guarda os ``aluno_ids`` do PDF): o cartão dele cai também, sem entrar no
+    PDF — o novo sai na turma em que ele está agora —, e a auditoria traz
+    ``revogados_fora_da_turma`` (e os ids). Para um cartão perdido ou em mãos
+    erradas, use o individual (POST /alunos/{id}/cartao?regenerar=true), que não
+    derruba a turma.
+
+    `rotacionar_codigo=true` tem o mesmo efeito (nome mantido por
+    compatibilidade; virada de ano letivo). Sem expiração automática durante o
+    ano — a criança nunca perde acesso sozinha.
     """
     turma = _turma_da_escola(db, escola_id, turma_id)
     # Professor restrito não gera/regenera/rotaciona credenciais de turma alheia
     # (troca o QR/código de todos e derruba sessões — antes do efeito).
     permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
+    revogar = regenerar or rotacionar_codigo
+    revogados_inativos = (svc.revogar_cartoes_inativos_da_turma(db, escola_id, turma)
+                          if revogar else 0)
+    # Lê as folhas ANTERIORES (a auditoria desta ainda não foi gravada).
+    revogados_fora = (svc.revogar_cartoes_que_sairam_da_turma(db, escola_id, turma)
+                      if revogar else [])
     dados = svc.garantir_credenciais_turma(
         db, escola_id, turma, regenerar=regenerar,
         rotacionar_codigo=rotacionar_codigo)
@@ -136,10 +173,17 @@ def gerar_cartoes(turma_id: int,
         cartoes=_montar_cartoes(dados),
     )
 
-    registrar(db, "quest.cartoes_gerados", escola_id=escola_id,
+    # `regenerar` também troca o código: o log registra o que aconteceu. Os
+    # `aluno_ids` do PDF são a memória de quem esteve NESTA folha: o próximo
+    # regenerar da turma revoga quem saiu dela (a matrícula não guarda histórico).
+    registrar(db, svc.ACAO_FOLHA_DA_TURMA, escola_id=escola_id,
               usuario_id=usuario.id, entidade="turma", entidade_id=turma.id,
               detalhes={"alunos": len(dados), "regenerou": regenerar,
-                        "rotacionou_codigo": rotacionar_codigo})
+                        "rotacionou_codigo": revogar,
+                        "revogados_inativos": revogados_inativos,
+                        "revogados_fora_da_turma": len(revogados_fora),
+                        "revogados_fora_da_turma_ids": revogados_fora,
+                        "aluno_ids": svc.aluno_ids_da_folha(dados)})
     db.commit()
     return _resposta_pdf(pdf, f"cartoes-quest-{_slug_ascii(turma.nome)}.pdf")
 
@@ -153,20 +197,32 @@ def gerar_cartao_individual(aluno_id: int,
                             db: Session = Depends(get_db)):
     """Cartão de UM aluno — cartão perdido não derruba a turma inteira.
 
-    `rotacionar_codigo=true` troca também o CÓDIGO (suspeita de vazamento de um
-    aluno específico); o padrão só regenera o QR.
+    Sem parâmetro é reimpressão (mesmo código, mesmo QR). `regenerar=true` (ou
+    `rotacionar_codigo=true`, mesmo efeito) revoga o cartão desse aluno: código
+    e QR novos e as sessões dele caem; os colegas seguem intocados.
+
+    Aluno INATIVO não recebe cartão (422 na reimpressão — "cartão descansando").
+    Com `regenerar`/`rotacionar_codigo`, o cartão dele é revogado mesmo assim, sem
+    emitir cartão novo: 204, sem PDF. A reativação posterior não reabre o cartão
+    nem as sessões antigas; sem revogação pedida, a criança que volta segue com o
+    mesmo cartão.
     """
     aluno = db.get(Aluno, aluno_id)
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
-    if aluno.status != "ativo":
+    revogar = regenerar or rotacionar_codigo
+    inativo = aluno.status != "ativo"
+    if inativo and not revogar:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Aluno inativo não recebe cartão.")
     escola = db.get(Escola, escola_id)
     # Professor restrito só gera cartão de aluno das turmas dele (antes de criar,
-    # regenerar ou rotacionar a credencial).
+    # regenerar ou rotacionar a credencial). Para revogar o de quem está inativo,
+    # a matrícula na turma dele basta (o status não o tira da turma).
     permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
-                                      usuario, aluno_id)
+                                      usuario, aluno_id, incluir_inativos=inativo)
+    if inativo:
+        return _revogar_cartao_de_inativo(db, escola_id, usuario, aluno, regenerar)
 
     item = svc.garantir_credencial_aluno(db, escola_id, aluno,
                                          regenerar=regenerar,
@@ -182,6 +238,6 @@ def gerar_cartao_individual(aluno_id: int,
     registrar(db, "quest.cartao_individual", escola_id=escola_id,
               usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
               detalhes={"regenerou": regenerar,
-                        "rotacionou_codigo": rotacionar_codigo})
+                        "rotacionou_codigo": regenerar or rotacionar_codigo})
     db.commit()
     return _resposta_pdf(pdf, f"cartao-quest-{_slug_ascii(aluno.nome)}.pdf")

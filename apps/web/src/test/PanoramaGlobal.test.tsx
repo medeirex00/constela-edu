@@ -31,7 +31,7 @@ const admin = usuarioFake({ is_global: true, cargo: "admin", escola_id: null });
 
 function escolaCartao(over: Record<string, unknown> = {}) {
   return {
-    escola_id: 1, nome: "EM JORGE PASSOS", cidade: "Caraguatatuba", status: "ativa",
+    escola_id: 1, nome: "EM FICTÍCIA AURORA", cidade: "Caraguatatuba", status: "ativa",
     latitude: null, longitude: null, total_turmas: 3, total_professores: 2,
     total_alunos: 15, alunos_com_dados: 15, adocao: 100, media_geral: 73.5,
     media_matific: 70, media_elefante: 65, livros: 40, tempo_leitura_min: 100,
@@ -68,7 +68,7 @@ const GLOBAL = {
       media_geral: 60, posicao: 2 }),
   ],
   top_escolas: [
-    escolaCartao({ escola_id: 1, nome: "EM JORGE PASSOS",
+    escolaCartao({ escola_id: 1, nome: "EM FICTÍCIA AURORA",
       rede_id: 1, rede_nome: "Rede Municipal de Caraguatatuba" }),
     escolaCartao({ escola_id: 2, nome: "EM UBATUBA CENTRO", total_alunos: 2, media_geral: 60,
       rede_id: 2, rede_nome: "Rede Municipal de Ubatuba" }),
@@ -82,7 +82,7 @@ const REDE_1 = {
     alunos_com_dados: 15, adocao: 100, media_geral: 73.5, media_matific: 70,
     media_elefante: 65, escolas_em_atencao: 0, livros: 40, tempo_leitura_min: 100,
     atividades: 500, estrelas: 2000, ativos_matific: 15, ativos_elefante: 15,
-    livros_por_aluno: 2.7, melhor_escola: { nome: "EM JORGE PASSOS", media_geral: 73.5 },
+    livros_por_aluno: 2.7, melhor_escola: { nome: "EM FICTÍCIA AURORA", media_geral: 73.5 },
   },
   equidade: { gap_media: 0, escola_maior_media: 73.5, escola_menor_media: 73.5,
     escolas_abaixo_da_media: 0 },

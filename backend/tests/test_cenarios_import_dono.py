@@ -38,7 +38,7 @@ def _monta_escola(db):
         "maria": matricular(turmas["5ºA"], "MARIA EDUARDA SILVA",
                             chamada=10, nascimento=date(2015, 3, 1)),
         "gabriel": matricular(turmas["5ºA"], "GABRIEL SILVA"),
-        "abraao": matricular(turmas["5ºA"], "ABRAÃO LUÍS DIAS"),
+        "eustaquio": matricular(turmas["5ºA"], "EUSTÁQUIO LUÍS FICTONI"),
         "clara": matricular(turmas["5ºB"], "MARIA CLARA SANTOS"),
         "cecilia": matricular(turmas["5ºB"], "MARIA CECILIA LIMA"),
     }
@@ -99,7 +99,7 @@ def test_oito_cenarios_do_dono(db):
     print("-" * 90)
     # Cenário 5 (typo no 1º nome GABRYEL/GABRIEL, 2 tokens) → REVISAR: variação de 1º
     # nome não é "segura" p/ auto-vínculo (guard-rail do red-team 2026-08-04). A
-    # variação SEGURA de nome do meio (ex.: ABRAÃO LUÍS/LUIZ) é que vincula.
+    # variação SEGURA de nome do meio (ex.: EUSTÁQUIO LUÍS/LUIZ) é que vincula.
     esperado = ["vinculado_exato", "vinculado", "vinculado", "vinculado",
                 "revisar", "revisar", "bloqueado"]
     for (rotulo, nome, dados), linha, exp in zip(cenarios, linhas, esperado):

@@ -51,6 +51,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.models import Aluno, Escola, Nota  # noqa: E402
 from app.services import dificuldade_livro, rede, scoring  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 
 def escolas_com_versao_desatualizada(db: Session) -> list[int]:
@@ -79,6 +80,7 @@ def escolas_pendentes(db: Session) -> list[int]:
 
 
 def main() -> int:
+    forcar_saida_utf8()
     parser = argparse.ArgumentParser(description="Recálculo institucional pós-deploy.")
     parser.add_argument("--rede", type=int, default=None, help="recalcular só as escolas desta rede")
     parser.add_argument("--escola", type=int, default=None, help="recalcular só esta escola")

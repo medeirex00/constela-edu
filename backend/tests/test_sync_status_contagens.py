@@ -177,8 +177,9 @@ def test_escola_sem_ano_letivo_ativo_devolve_none(db, escola_completa):
     from app.sync import router as sync_router
 
     esc = escola_completa["escola"]
+    por_plataforma = sync_router._contagens_cobertura(db, esc.id, None, ["elefante", "matific"])
     for plataforma in ("elefante", "matific"):
-        campos = sync_router._contagens_plataforma(db, esc.id, None, plataforma)
+        campos = por_plataforma[plataforma]
         assert campos == {
             "alunos_com_dados": None,
             "alunos_sem_dados": None,

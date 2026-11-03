@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import ipaddress
+import logging
 import socket
 from datetime import datetime, timedelta, timezone
 from itertools import islice
@@ -24,6 +25,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao
+
+logger = logging.getLogger(__name__)
 
 # Teto rígido de linhas processadas na importação — barra decompression-bomb de
 # XLSX (arquivo pequeno comprimido que declara milhões de linhas). Muito acima de
@@ -634,17 +637,35 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
 
     # Evolução: média por (escola, edição) e DEPOIS média entre as escolas por
     # edição (ponderação por escola, não por linha) + contagem de escolas DISTINTAS.
-    sub = (_filtro(select(ResultadoAvaliacao.edicao.label("ed"),
-                          ResultadoAvaliacao.escola_id.label("eid"),
-                          func.avg(ResultadoAvaliacao.valor).label("v")))
-           .group_by(ResultadoAvaliacao.edicao, ResultadoAvaliacao.escola_id)
-           .subquery())
-    ev = db.execute(
-        select(sub.c.ed, func.avg(sub.c.v), func.count(sub.c.eid))
-        .group_by(sub.c.ed).order_by(sub.c.ed)
-    ).all()
-    evolucao = [{"edicao": e, "media_valor": round(float(m), 2), "escolas": int(n)}
+    #
+    # ESTE NÚMERO É DO CONSTELA, NÃO É OFICIAL: é a média SIMPLES das escolas da
+    # rede que têm resultado — não pondera por matrícula/participantes, e nenhum
+    # órgão publica "a média das escolas" como número da rede (o oficial da rede,
+    # quando existe, vem em ``indicadores_referencia``). E a série pode misturar
+    # linhas vindas da importação OFICIAL com prévia (``importacao_id``) e linhas
+    # da importação manual/robô legado (sem prévia). Por isso a saída rotula a
+    # origem do cálculo e separa por fonte (``evolucao_por_fonte``); ``evolucao``
+    # segue igual (todas as linhas com valor) para quem já a consome.
+    def _evolucao(filtro_extra=None) -> list[dict]:
+        base = _filtro(select(ResultadoAvaliacao.edicao.label("ed"),
+                              ResultadoAvaliacao.escola_id.label("eid"),
+                              func.avg(ResultadoAvaliacao.valor).label("v")))
+        if filtro_extra is not None:
+            base = base.where(filtro_extra)
+        sub = (base.group_by(ResultadoAvaliacao.edicao, ResultadoAvaliacao.escola_id)
+               .subquery())
+        ev = db.execute(
+            select(sub.c.ed, func.avg(sub.c.v), func.count(sub.c.eid))
+            .group_by(sub.c.ed).order_by(sub.c.ed)
+        ).all()
+        return [{"edicao": e, "media_valor": round(float(m), 2), "escolas": int(n)}
                 for e, m, n in ev]
+
+    evolucao = _evolucao()
+    evolucao_por_fonte = {
+        "importacao_oficial": _evolucao(ResultadoAvaliacao.importacao_id.isnot(None)),
+        "sem_previa": _evolucao(ResultadoAvaliacao.importacao_id.is_(None)),
+    }
 
     return {
         "avaliacao": av.chave, "nome": nome_exibicao(av.chave, av.nome), "tipo": av.tipo,
@@ -653,6 +674,13 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
         "edicao": edicao, "metrica": metrica,
         "pontos": pontos, "n": len(pontos), "pearson": pearson,
         "evolucao": evolucao,
+        "evolucao_por_fonte": evolucao_por_fonte,
+        "evolucao_origem": "calculado_constela",
+        "evolucao_rotulo": ("Média simples das escolas da rede com resultado, calculada "
+                            "pelo Constela — não é número oficial da rede."),
+        # A própria SÉRIE é uma estimativa do Constela (decisão D1: a
+        # "crianca_alfabetizada" por escola não é o indicador do INEP).
+        "serie_estimativa_constela": av.chave in _EXIBICAO,
     }
 
 
@@ -762,12 +790,48 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
     return {"status": fonte.ultimo_status, **(fonte.ultimo_resumo or {})}
 
 
+_VERDADEIRO = frozenset({"1", "true", "sim", "yes", "on"})
+_FALSO = frozenset({"", "0", "false", "nao", "não", "no", "off"})
+_valores_nao_reconhecidos: set[str] = set()
+
+
+def robo_habilitado() -> bool:
+    """O robô AUTOMÁTICO de avaliações externas pode rodar? DESLIGADO por padrão.
+
+    Por que existe: o robô (``fontes_avaliacao`` + ``coletar_pendentes``) grava
+    números SEM prévia e roda embutido no agendador do sync — ligar o agendador
+    (``SYNC_SCHEDULER_ENABLED``) ligaria o robô junto, sem ninguém decidir. Os
+    indicadores oficiais entram hoje pela importação COM prévia e desfazer
+    (``services/indicadores``). Para o robô voltar a rodar, é preciso pedir
+    explicitamente: ``AVALIACOES_ROBO_HABILITADO=true`` no ambiente.
+
+    Fonte ÚNICA: ``settings.AVALIACOES_ROBO_HABILITADO`` (ambiente ou ``.env``,
+    lido uma vez no boot). Antes, havia também a leitura direta de ``os.environ``
+    "até o campo existir" — o campo passou a existir e esse caminho morreu em
+    silêncio. É TEXTO e a interpretação é esta: valor fora da lista de "ligado"
+    deixa o robô DESLIGADO (fail-closed) e avisa no log uma vez, em vez de
+    derrubar o boot como o campo bool fazia com "sim"."""
+    valor = str(settings.AVALIACOES_ROBO_HABILITADO or "").strip().lower()
+    if valor in _VERDADEIRO:
+        return True
+    if valor not in _FALSO and valor not in _valores_nao_reconhecidos:
+        _valores_nao_reconhecidos.add(valor)
+        logger.warning("AVALIACOES_ROBO_HABILITADO com valor não reconhecido: o robô "
+                       "de avaliações fica DESLIGADO (use true/false).")
+    return False
+
+
 def coletar_pendentes(db: Session, baixador: Baixador | None = None,
                       limite: int | None = None) -> int:
     """Coleta as fontes ATIVAS com proxima_coleta vencida — chamado pelo scheduler.
     Devolve quantas foram coletadas. ``limite`` é o TETO por rodada (a coleta roda
     embutida na thread do sync; sem teto, muitas fontes — ou uma lenta — poderiam
-    estagnar a fila). O que sobrar vai na próxima rodada; a mais antiga vai primeiro."""
+    estagnar a fila). O que sobrar vai na próxima rodada; a mais antiga vai primeiro.
+
+    Com o robô DESLIGADO (``robo_habilitado``, o padrão) não coleta nada e devolve
+    0 — a agenda das fontes fica como está, para quando for religado."""
+    if not robo_habilitado():
+        return 0
     limite = settings.AVALIACOES_COLETA_POR_RODADA if limite is None else limite
     pendentes = db.execute(
         select(FonteAvaliacao).where(

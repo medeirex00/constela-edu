@@ -15,7 +15,22 @@ import { AlertTriangle, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
+import { estiloCheckbox } from "./PessoasUi";
 import { Botao, Carregando, Mensagem, Modal, Vazio } from "./ui";
+
+type TomFaixa = "alta" | "provavel" | "revisar";
+
+/** Selo de cor da faixa (verde/âmbar/vermelho). É reforço visual: o nome da faixa
+ *  sempre vem escrito ao lado (a cor nunca é o único portador da informação). */
+const COR_FAIXA: Record<TomFaixa, string> = {
+  alta: "bg-emerald-500",
+  provavel: "bg-amber-400",
+  revisar: "bg-rose-500",
+};
+
+function SeloFaixa({ tom }: { tom: TomFaixa }) {
+  return <span aria-hidden className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${COR_FAIXA[tom]}`} />;
+}
 
 interface Impacto {
   leituras: number;
@@ -236,40 +251,45 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   const cands = previa?.candidatos ?? [];
   const MOTIVOS_REV = ["variante", "nome_identico", "subconjunto", "abreviacao"];
   const especifica: {
-    chave: string; rotulo: string; dica: string; lote: boolean;
+    chave: string; rotulo: string; dica: string; lote: boolean; tom: TomFaixa;
     filtro: (c: CandidatoAluno) => boolean;
   }[] = [
     {
       chave: "alta",
-      rotulo: "🟢 Alta confiança — versão de plataforma do mesmo aluno",
+      rotulo: "Alta confiança — versão de plataforma do mesmo aluno",
+      tom: "alta",
       dica: "Já vêm marcadas. É a ficha do Matific/Elefante do mesmo aluno da sua lista.",
       lote: true,
       filtro: (c) => c.confianca === "alta",
     },
     {
       chave: "provavel",
-      rotulo: "🟡 Provável — abreviação de um aluno da sua lista",
+      rotulo: "Provável — abreviação de um aluno da sua lista",
+      tom: "provavel",
       dica: "O jeito rápido: clique em “Selecionar todos” e una o grupo de uma vez (confira antes se sua Lista Piloto está completa).",
       lote: true,
       filtro: (c) => c.confianca === "provavel",
     },
     {
       chave: "rev-variante",
-      rotulo: "🔴 Variação de grafia — confira par a par",
+      rotulo: "Variação de grafia — confira par a par",
+      tom: "revisar",
       dica: "São os MAIS arriscados: “LUÍS/LUIZ” é a mesma criança, mas “MARIA/MARTA” são crianças diferentes e se parecem igual. Leia cada par e marque só os que você confirma serem a mesma pessoa.",
       lote: false,
       filtro: (c) => c.confianca === "revisar" && c.motivo === "variante",
     },
     {
       chave: "rev-identico",
-      rotulo: "🔴 Nome idêntico — pode ser gêmeo/homônimo",
+      rotulo: "Nome idêntico — pode ser gêmeo/homônimo",
+      tom: "revisar",
       dica: "Mesmo nome exato, sem nascimento para corroborar. Confira nº de chamada/nascimento e marque só os confirmados.",
       lote: false,
       filtro: (c) => c.confianca === "revisar" && c.motivo === "nome_identico",
     },
     {
       chave: "rev-abreviacao",
-      rotulo: "🔴 Abreviação sem correspondência na sua lista",
+      rotulo: "Abreviação sem correspondência na sua lista",
+      tom: "revisar",
       dica: "Um nome curto que não achei na Lista Piloto. Confira quem é o cadastro certo e marque só os confirmados.",
       lote: false,
       filtro: (c) => c.confianca === "revisar"
@@ -277,7 +297,8 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
     },
     {
       chave: "rev-outros",
-      rotulo: "🔴 Outros — conferir um a um",
+      rotulo: "Outros — conferir um a um",
+      tom: "revisar",
       dica: "Casos que não se encaixam nas categorias acima. Confira cada par antes de marcar.",
       lote: false,
       filtro: (c) => c.confianca === "revisar" && !MOTIVOS_REV.includes(c.motivo),
@@ -288,7 +309,7 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
     .filter((g) => g.itens.length > 0);
 
   return (
-    <Modal titulo="Fundir duplicatas de alunos" aberto aoFechar={aoFechar}>
+    <Modal titulo="Fundir duplicatas de alunos" aberto aoFechar={aoFechar} largura="max-w-2xl">
       {resultado !== null ? (
         // --- Resultado ---
         <>
@@ -298,7 +319,7 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
               && ` ${resultado.falhas.length} não pôde(ram) ser fundido(s).`}
           </Mensagem>
           {resultado.falhas.length > 0 && (
-            <ul className="mt-3 space-y-1 text-xs text-amber-600 dark:text-amber-400">
+            <ul className="mt-3 space-y-1 text-xs text-amber-800 dark:text-amber-300">
               {resultado.falhas.map((f) => (
                 <li key={f.loser_id}>• Cadastro {f.loser_id}: {f.motivo}</li>
               ))}
@@ -310,8 +331,17 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
         </>
       ) : previa === null && !erro ? (
         <div className="mt-2"><Carregando /></div>
-      ) : previa && previa.total === 0 ? (
-        <Vazio titulo="Nenhuma duplicata encontrada"
+      ) : previa === null ? (
+        // A detecção falhou: só o erro — nada de "Encontrei  possível(is)…" com a
+        // contagem vazia (era o que aparecia antes).
+        <>
+          <Mensagem tipo="erro">{erro}</Mensagem>
+          <div className="mt-4 flex justify-end">
+            <Botao variante="secundario" onClick={aoFechar}>Fechar</Botao>
+          </div>
+        </>
+      ) : previa.total === 0 ? (
+        <Vazio icone={UsersRound} titulo="Nenhuma duplicata encontrada"
                descricao="Não achei alunos duplicados (mesmo nome/começo de nome na mesma turma)." />
       ) : (
         // --- Prévia + confirmação ---
@@ -319,42 +349,43 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Encontrei <strong>{previa?.total}</strong> possível(is) duplicata(s).{" "}
             {contaAlta > 0 && (
-              <>As 🟢 <strong>{contaAlta}</strong> de alta confiança já vêm marcadas. </>
+              <>As <SeloFaixa tom="alta" /> <strong>{contaAlta}</strong> de alta confiança já vêm marcadas. </>
             )}
-            As 🟡 <strong>{contaProvavel}</strong> prováveis você une <strong>em lote</strong>{" "}
-            com um clique em “Selecionar todos” — é o seu atalho grande. As 🔴{" "}
-            <strong>{contaRevisar}</strong> você <strong>confere par a par</strong> (organizei
+            As <SeloFaixa tom="provavel" /> <strong>{contaProvavel}</strong> prováveis você une <strong>em lote</strong>{" "}
+            com um clique em “Selecionar todos” — é o seu atalho grande. As <SeloFaixa tom="revisar" />{" "}
+            <strong>{contaRevisar}</strong> de revisão você <strong>confere par a par</strong> (organizei
             por tipo pra ficar mais rápido de ler). Ao unir, mantenho o cadastro principal e
             junto nele todos os dados (Matific, Elefante, leituras, histórico), sem perder nada.
           </p>
           {contaAlta === 0 && contaProvavel > 0 && (
             <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-              🟢 está vazia porque nada foi pré-marcado com segurança suficiente: o
+              A faixa de alta confiança está vazia porque nada foi pré-marcado com segurança suficiente: o
               Matific/Elefante costumam guardar o nome <strong>abreviado</strong> (“ANA J”,
-              “ABRAAO L”) e não trazem data de nascimento — e eu só pré-marco quando há um nome
+              “PEDRO L”) e não trazem data de nascimento — e eu só pré-marco quando há um nome
               completo idêntico <em>ou</em> nascimento igual para corroborar. No seu caso, os
-              pares seguros caem todos na 🟡 (abreviação que bate com um único aluno da lista).
+              pares seguros caem todos em “Provável” (abreviação que bate com um único aluno da lista).
             </p>
           )}
 
-          <div className="mt-3 max-h-72 space-y-3 overflow-y-auto pr-1">
+          <div className="mt-4 max-h-[50vh] space-y-3 overflow-y-auto pr-1">
             {grupos.filter((g) => g.itens.length > 0).map((grupo) => {
               const ids = grupo.itens.map((c) => c.loser_id);
               const todosMarcados = ids.every((id) => selecionados.has(id));
               return (
-              <div key={grupo.chave}>
-                <div className="mb-1 flex items-start justify-between gap-2">
+              <div key={grupo.chave} className="rounded-2xl border border-zinc-200/80 p-3 dark:border-zinc-800">
+                <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
-                      {grupo.rotulo} ({grupo.itens.length})
+                    <p className="flex items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                      <SeloFaixa tom={grupo.tom} />
+                      <span>{grupo.rotulo} ({grupo.itens.length})</span>
                     </p>
-                    <p className="text-xs text-zinc-400 dark:text-zinc-500">{grupo.dica}</p>
+                    <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{grupo.dica}</p>
                   </div>
                   {grupo.lote && (
                     <button
                       type="button"
                       onClick={() => marcarVarios(ids, !todosMarcados)}
-                      className="shrink-0 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                      className="shrink-0 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
                     >
                       {todosMarcados ? "Desmarcar todos" : "Selecionar todos"}
                     </button>
@@ -366,15 +397,15 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                     return (
                       <label
                         key={c.loser_id}
-                        className={`flex cursor-pointer items-start gap-3 rounded-lg border p-2.5 transition-colors ${
+                        className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
                           marcado
-                            ? "border-indigo-400 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
+                            ? "border-indigo-300 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/10"
                             : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
                         }`}
                       >
                         <input
                           type="checkbox"
-                          className="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-indigo-600"
+                          className={`mt-0.5 ${estiloCheckbox}`}
                           checked={marcado}
                           onChange={() => alternar(c.loser_id)}
                         />
@@ -386,7 +417,7 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                             </span>
                           </span>
                           {c.confianca === "revisar" && (
-                            <span className="mt-0.5 block text-xs text-amber-600 dark:text-amber-400">
+                            <span className="mt-0.5 block text-xs font-medium text-amber-800 dark:text-amber-300">
                               ⚠ confira: “{c.apagar}” pode ser outra criança ({motivoTexto(c)})
                             </span>
                           )}
@@ -406,9 +437,9 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
           {erro && <div className="mt-3"><Mensagem tipo="erro">{erro}</Mensagem></div>}
 
           {confirmando ? (
-            <div className="mt-4 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-500/40 dark:bg-red-500/10">
-              <p className="flex items-start gap-2 text-sm text-red-700 dark:text-red-300">
-                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-500/40 dark:bg-rose-500/10">
+              <p className="flex items-start gap-2 text-sm text-rose-800 dark:text-rose-200">
+                <AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0" />
                 <span>
                   Isto vai fundir <strong>{selecionados.size}</strong> par(es) de cadastros
                   num único aluno cada. Os dados são consolidados no principal.
@@ -423,24 +454,24 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
               </p>
               {ocupado && progresso && (
                 <div className="mt-3">
-                  <div className="mb-1 flex justify-between text-xs text-red-700 dark:text-red-300">
+                  <div className="mb-1.5 flex justify-between text-xs font-medium text-rose-800 dark:text-rose-200">
                     <span>Unindo…</span>
-                    <span>{progresso.feitos} de {progresso.total}</span>
+                    <span className="tabular-nums">{progresso.feitos} de {progresso.total}</span>
                   </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-red-200 dark:bg-red-500/20">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-rose-100 dark:bg-rose-500/20">
                     <div
-                      className="h-full rounded-full bg-red-600 transition-all"
+                      className="h-full rounded-full bg-gradient-to-r from-rose-400 to-rose-600 transition-all"
                       style={{ width: `${progresso.total ? (progresso.feitos / progresso.total) * 100 : 0}%` }}
                     />
                   </div>
                 </div>
               )}
               <div className="mt-3 flex justify-end gap-2">
-                <Botao variante="neutro" onClick={() => setConfirmando(false)} disabled={ocupado}>
+                <Botao variante="secundario" onClick={() => setConfirmando(false)} disabled={ocupado}>
                   Voltar
                 </Botao>
-                <Botao className="!bg-red-600 hover:!bg-red-500" onClick={fundir} disabled={ocupado}>
-                  <UsersRound size={15} />{" "}
+                <Botao variante="perigo" onClick={fundir} disabled={ocupado}>
+                  <UsersRound size={15} aria-hidden />{" "}
                   {ocupado
                     ? (progresso ? `Unindo ${progresso.feitos}/${progresso.total}…` : "Fundindo…")
                     : "Confirmar fusão"}
@@ -449,13 +480,13 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
             </div>
           ) : (
             <div className="mt-4 flex justify-end gap-2">
-              <Botao variante="neutro" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+              <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
               <Botao
-                className="!bg-red-600 hover:!bg-red-500"
+                variante="perigo"
                 disabled={ocupado || selecionados.size === 0}
                 onClick={() => setConfirmando(true)}
               >
-                <UsersRound size={15} /> Unir {selecionados.size} selecionada(s)
+                <UsersRound size={15} aria-hidden /> Unir {selecionados.size} selecionada(s)
               </Botao>
             </div>
           )}

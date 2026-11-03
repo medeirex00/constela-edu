@@ -1,30 +1,40 @@
-# Entrega contínua (CD): staging automático, produção com aprovação manual.
+# Deploy MANUAL pelo GitHub Actions (dormente) — NÃO é o caminho real de deploy.
 #
-# ATIVAÇÃO (fica DESLIGADO até você habilitar, para não falhar sem os segredos):
-#   1. Configure os segredos em Settings → Secrets and variables → Actions:
-#        RAILWAY_TOKEN, RAILWAY_SERVICE_STAGING, RAILWAY_SERVICE_PROD
-#        (e, se for deployar o front por aqui em vez do git da Vercel:
-#         VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID).
-#   2. Crie os Environments "staging" e "producao" (Settings → Environments).
-#        No "producao", marque "Required reviewers" — isso cria o PORTÃO DE
-#        APROVAÇÃO MANUAL: o deploy de produção PAUSA até alguém aprovar.
-#   3. Crie a variável de repositório DEPLOY_ENABLED = true.
+# COMO O DEPLOY ACONTECE DE VERDADE (out/2026):
+#   - backend: o Railway observa o repositório e faz build + deploy a cada push no
+#     `main` (healthcheck /api/health/ready). Nada aqui participa disso;
+#   - web: a integração Git da Vercel publica a cada push no `main`.
 #
-# Fluxo:
-#   - push na main            → deploy de STAGING (automático)
-#   - release publicada       → deploy de PRODUÇÃO (após aprovação do reviewer)
-#   - "Run workflow" (manual) → escolhe o ambiente
+# Por que este arquivo ficou só manual: com `push: [main]` e `release`, ele rodava em
+# todo push e FALHAVA sempre — o `if: secrets.VERCEL_TOKEN != ''` dos passos é
+# inválido (o contexto `secrets` não pode ser usado em `if:`), então o GitHub recusava
+# o arquivo inteiro ("workflow file issue") antes mesmo do portão DEPLOY_ENABLED. O
+# segredo agora passa por `env` do job e o `if:` testa `env.VERCEL_TOKEN`.
 #
-# Observação: o frontend na Vercel já pode fazer deploy automático pelo git
-# (integração da Vercel). Nesse caso, mantenha só o deploy do backend aqui e
-# remova os passos da Vercel — evita deploy duplicado.
-name: Deploy
+# Portão do CI: nenhum job de deploy roda sem o job `ci-verde`, que roda
+# backend/scripts/exigir_ci_verde.py — a execução mais recente do ci.yml DISPARADA POR
+# PUSH NO MAIN para o commit a publicar (o mesmo que o checkout baixa e o `railway up`
+# envia) tem de estar concluída com sucesso. Em andamento, reprovada, cancelada,
+# ausente, só de pull_request (que testou o merge commit, não este) ou de outro ramo =
+# deploy recusado; a ordem é a da data, não a da API. O MESMO portão é refeito como
+# 1º passo de cada job de deploy, depois da aprovação do Environment (que pode vir
+# horas depois do ci-verde). Isso vale só para ESTE workflow:
+# o Railway e a Vercel publicam pelo git sem passar por aqui — para eles, o mesmo
+# roteiro no Pre-deploy do Railway, o "Wait for CI" e a proteção do branch `main`
+# (decisão do dono; ver docs/operacao/PRODUCAO-ENV-E-MIGRACOES.md, passo 5).
+# Um "Run workflow" num ramo roda o deploy.yml DAQUELE ramo: a regra de ramos do
+# Environment (Deployment branches: main) só barra um ramo com o portão removido se os
+# segredos forem do ENVIRONMENT — segredo de repositório é lido por qualquer job.
+#
+# Para usar (opcional, decisão do dono): segredos RAILWAY_TOKEN,
+# RAILWAY_SERVICE_STAGING, RAILWAY_SERVICE_PROD (e VERCEL_* se for publicar o front
+# por aqui) SOMENTE como Environment secrets de "staging"/"producao" (nenhum em
+# Repository ou Organization secrets), os Environments com Deployment branches: main
+# (e Required reviewers no de produção) e a variável DEPLOY_ENABLED=true. Mesmo assim
+# só roda por "Run workflow".
+name: Deploy (manual)
 
 on:
-  push:
-    branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       ambiente:
@@ -37,51 +47,137 @@ permissions:
   contents: read
 
 jobs:
-  staging:
-    name: Deploy — staging
-    if: >-
-      ${{ vars.DEPLOY_ENABLED == 'true' &&
-          (github.event_name == 'push' ||
-           (github.event_name == 'workflow_dispatch' && inputs.ambiente == 'staging')) }}
+  ci-verde:
+    name: CI verde no commit a publicar
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exige o CI do push no main concluído com sucesso neste commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: python3 backend/scripts/exigir_ci_verde.py
+
+  # Backend e web em jobs SEPARADOS, cada um só depois do ci-verde: com o portão de CI
+  # ligado no Railway (EXIGIR_CI_VERDE=1), o `railway up` é recusado (não traz o
+  # commit), e o web não pode depender dele.
+  staging:
+    name: Deploy — staging (backend)
+    needs: ci-verde
+    if: ${{ vars.DEPLOY_ENABLED == 'true' && inputs.ambiente == 'staging' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     environment:
       name: staging
     steps:
       - uses: actions/checkout@v4
+      # O portão de novo, DEPOIS da aprovação do Environment: entre o ci-verde e a
+      # aprovação podem passar horas, e um re-run reprovado do CI desse commit nesse
+      # meio tempo passa a ser a execução mais recente — o deploy tem de parar.
+      - name: Exige de novo o CI verde (depois da aprovação)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: python3 backend/scripts/exigir_ci_verde.py
       - name: Deploy do backend (Railway — staging)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: npx -y @railway/cli up --service "${{ secrets.RAILWAY_SERVICE_STAGING }}" --detach
-      # Front na Vercel (opcional — remova se a Vercel já faz deploy pelo git):
-      - name: Deploy do web (Vercel — preview/staging)
-        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        run: npx -y @railway/cli up --service "${{ secrets.RAILWAY_SERVICE_STAGING }}"
+
+  staging-web:
+    name: Deploy — staging (web)
+    needs: ci-verde
+    if: ${{ vars.DEPLOY_ENABLED == 'true' && inputs.ambiente == 'staging' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    environment:
+      name: staging
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      # O portão de novo, DEPOIS da aprovação do Environment: entre o ci-verde e a
+      # aprovação podem passar horas, e um re-run reprovado do CI desse commit nesse
+      # meio tempo passa a ser a execução mais recente — o deploy tem de parar.
+      - name: Exige de novo o CI verde (depois da aprovação)
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: python3 backend/scripts/exigir_ci_verde.py
+      # Front na Vercel (opcional — a Vercel já publica pelo git):
+      - name: Deploy do web (Vercel — preview/staging)
+        if: ${{ env.VERCEL_TOKEN != '' }}
+        env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: npx -y vercel deploy --yes --token "$VERCEL_TOKEN"
 
   producao:
-    name: Deploy — produção (aprovação manual)
-    if: >-
-      ${{ vars.DEPLOY_ENABLED == 'true' &&
-          (github.event_name == 'release' ||
-           (github.event_name == 'workflow_dispatch' && inputs.ambiente == 'producao')) }}
+    name: Deploy — produção (backend, aprovação manual)
+    needs: ci-verde
+    if: ${{ vars.DEPLOY_ENABLED == 'true' && inputs.ambiente == 'producao' }}
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     # O Environment "producao" com Required reviewers PAUSA aqui até aprovação.
     environment:
       name: producao
       url: https://www.constelaedu.com
     steps:
       - uses: actions/checkout@v4
+      # O portão de novo, DEPOIS da aprovação do Environment: entre o ci-verde e a
+      # aprovação podem passar horas, e um re-run reprovado do CI desse commit nesse
+      # meio tempo passa a ser a execução mais recente — o deploy tem de parar.
+      - name: Exige de novo o CI verde (depois da aprovação)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: python3 backend/scripts/exigir_ci_verde.py
       - name: Deploy do backend (Railway — produção)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: npx -y @railway/cli up --service "${{ secrets.RAILWAY_SERVICE_PROD }}" --detach
-      - name: Deploy do web (Vercel — produção)
-        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        run: npx -y @railway/cli up --service "${{ secrets.RAILWAY_SERVICE_PROD }}"
+
+  producao-web:
+    name: Deploy — produção (web, aprovação manual)
+    needs: ci-verde
+    if: ${{ vars.DEPLOY_ENABLED == 'true' && inputs.ambiente == 'producao' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    environment:
+      name: producao
+      url: https://www.constelaedu.com
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      # O portão de novo, DEPOIS da aprovação do Environment: entre o ci-verde e a
+      # aprovação podem passar horas, e um re-run reprovado do CI desse commit nesse
+      # meio tempo passa a ser a execução mais recente — o deploy tem de parar.
+      - name: Exige de novo o CI verde (depois da aprovação)
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: python3 backend/scripts/exigir_ci_verde.py
+      - name: Deploy do web (Vercel — produção)
+        if: ${{ env.VERCEL_TOKEN != '' }}
+        env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: npx -y vercel deploy --prod --yes --token "$VERCEL_TOKEN"

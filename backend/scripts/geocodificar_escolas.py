@@ -27,9 +27,11 @@ from app.services.geocodificacao import (  # noqa: E402
     geocodificar_escola,
     montar_consulta,
 )
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 
 def main() -> None:
+    forcar_saida_utf8()
     parser = argparse.ArgumentParser(description="Geocodifica escolas (lat/lng) via OSM.")
     parser.add_argument("--forcar", action="store_true",
                         help="re-geocodifica também escolas que já têm coordenada")

@@ -10,6 +10,7 @@ import {
   userEvent,
   usuarioFake,
   waitFor,
+  within,
 } from "./utils";
 
 const URL_ELEFANTE = "/escolas/1/elefante";
@@ -75,6 +76,24 @@ describe("Elefante", () => {
     // Livros únicos como inteiro.
     expect(screen.getByText("12")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
+  });
+
+  it("celular: a turma vai no chip sob o nome e os botões de ação têm 40 px", async () => {
+    // A coluna Turma sumia abaixo de 768 px; agora ela é o chip sob o nome (uma vez só
+    // no DOM) e o avatar decorativo sai no celular para o nome não quebrar palavra a palavra.
+    responder("GET", URL_ELEFANTE, [alunoFake(), alunoFake({ aluno_id: 6, nome: "João Pedro Barbosa", turma: "4º Ano B" })]);
+    responder("GET", URL_DIFICULDADE, niveisFake());
+    renderComApp(<Elefante />, { rota: "/elefante" });
+
+    const link = await screen.findByRole("link", { name: "Ana Beatriz Souza" });
+    const tabela = screen.getByRole("table");
+    expect(within(tabela).queryByRole("columnheader", { name: "Turma" })).toBeNull();
+    const celulas = within(link.closest("tr") as HTMLElement).getAllByRole("cell");
+    expect(within(celulas[0]).getByText("3º Ano A")).toBeInTheDocument();
+    expect(screen.getAllByText("3º Ano A")).toHaveLength(1 + 1); // chip + opção do filtro de turma
+    for (const nome of ["Informar livros por nível de Ana Beatriz Souza", "Editar dados de Ana Beatriz Souza"]) {
+      expect(screen.getByRole("button", { name: nome })).toHaveClass("max-sm:h-10", "max-sm:w-10");
+    }
   });
 
   it("coordenadora não vê as sub-abas de configuração da dificuldade", async () => {
@@ -169,7 +188,7 @@ describe("Elefante", () => {
     renderComApp(<Elefante />, { rota: "/elefante" });
 
     const u = await abrirEdicao();
-    // O motivo é obrigatório (vai para o log de auditoria).
+    // O motivo é obrigatório (vai para o histórico de alterações).
     await u.type(screen.getByPlaceholderText("Ex.: correção de erro do relatório"), "correção do relatório");
     await u.click(screen.getByRole("button", { name: "Salvar e recalcular" }));
 
@@ -279,7 +298,7 @@ describe("Elefante", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/pesos configurados em Métricas/)).toBeNull();
 
-    // O motivo é obrigatório (vai para o log de auditoria).
+    // O motivo é obrigatório (vai para o histórico de alterações).
     await u.type(screen.getByPlaceholderText("Ex.: dados informados pela professora"), "dados da professora");
     await u.click(screen.getByRole("button", { name: "Salvar e recalcular" }));
 

@@ -40,10 +40,11 @@ from email.utils import parsedate_to_datetime
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import (AvaliacaoExterna, Escola, ImportacaoIndicador, IndicadorReferencia, Rede,
+from app.models import (AvaliacaoExterna, ImportacaoIndicador, IndicadorReferencia, Rede,
                         ResultadoAvaliacao)
 from app.services.avaliacoes import CATALOGO, normalizar_inep
 from app.services.indicadores import escalas, seduc
+from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.consulta import _fonte
 from app.services.indicadores.pipeline import codigo_ibge_da_rede
 
@@ -184,8 +185,7 @@ def _casas(valor: float | None, unidade: str | None) -> int | None:
 
 
 def _avaliacao(db: Session, chave: str) -> AvaliacaoExterna | None:
-    return db.execute(select(AvaliacaoExterna).where(
-        AvaliacaoExterna.chave == chave)).scalar_one_or_none()
+    return leituras.avaliacao(db, chave)
 
 
 # --- Blocos -------------------------------------------------------------------
@@ -266,10 +266,7 @@ def _ultimas_iee(db: Session, codigo: str | None) -> dict[int, ImportacaoIndicad
     """A importação APLICADA mais recente do IEE de cada edição, para esta rede."""
     if codigo is None:
         return {}
-    imps = db.execute(select(ImportacaoIndicador).where(
-        ImportacaoIndicador.parser == seduc.PARSER_IEE,
-        ImportacaoIndicador.status == "aplicada",
-        ImportacaoIndicador.codigo_territorio_alvo == codigo)).scalars().all()
+    imps = leituras.aplicadas_do_territorio(db, codigo, (seduc.PARSER_IEE,))
     saida: dict[int, ImportacaoIndicador] = {}
     for imp in sorted(imps, key=lambda i: (i.aplicado_em or datetime.min, i.id)):
         saida[imp.edicao_arquivo] = imp
@@ -387,7 +384,7 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
 
     # ORDEM POR NOME (sem ranking), a mesma no SQLite e no PostgreSQL: sem acento e
     # sem caixa, no Python (a ordenação do banco depende da collation).
-    escolas = sorted(db.execute(select(Escola).where(Escola.rede_id == rede.id)).scalars(),
+    escolas = sorted(leituras.escolas_da_rede(db, rede.id),
                      key=lambda e: (seduc.sem_acento(e.nome or "").casefold(), e.id))
     inep_de = {e.id: normalizar_inep(e.codigo_inep) for e in escolas}
     ineps = {i for i in inep_de.values() if i}
@@ -434,8 +431,7 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
                | {ln.importacao_id for lns in por_inep.values() for ln in lns}
                | {r.importacao_id for rs in oficiais.values() for r in rs}
                | {i.id for i in iee.values()}) - {None}
-    imps = {i.id: i for i in db.execute(select(ImportacaoIndicador).where(
-        ImportacaoIndicador.id.in_(ids_imp))).scalars()} if ids_imp else {}
+    imps = leituras.importacoes_por_id(db, ids_imp)
 
     nomes: dict[str, str] = {}
     for imp in sorted(imps.values(), key=lambda i: (i.edicao_arquivo, i.id)):

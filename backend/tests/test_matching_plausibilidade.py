@@ -36,7 +36,7 @@ def test_abreviado_truncamento_de_token():
 
 
 def test_abreviado_inicial_no_ultimo_token():
-    assert casa_abreviado(_t("ABRAAO L"), _t("ABRAAO LUIS DIAS"))
+    assert casa_abreviado(_t("EUSTAQUIO L"), _t("EUSTAQUIO LUIS FICTONI"))
 
 
 def test_abreviado_so_iniciais_sem_ancora_nao_casa():
@@ -53,7 +53,7 @@ def test_prefixo_puro_de_tokens_cheios_nao_e_abreviacao():
     # "JOAO SANTOS" ⊂ "JOAO SANTOS OLIVEIRA" é nome PARCIAL (token no fim), não
     # abreviação — casa_abreviado deve retornar False (vai p/ subconjunto/revisão).
     assert not casa_abreviado(_t("JOAO SANTOS"), _t("JOAO SANTOS OLIVEIRA"))
-    assert not casa_abreviado(_t("ABRAAO LUIS"), _t("ABRAAO LUIS DIAS"))
+    assert not casa_abreviado(_t("EUSTAQUIO LUIS"), _t("EUSTAQUIO LUIS FICTONI"))
 
 
 def test_abreviado_primeiro_nome_diferente_nao_casa():
@@ -139,7 +139,7 @@ def test_nome_parcial_subconjunto_no_import_de_plataforma_vincula(db):
     PARCIAL por subconjunto ('MARIA SILVA' ⊂ 'MARIA EDUARDA SILVA', 'JOAO SANTOS' ⊂
     'JOAO SANTOS OLIVEIRA') com 1 ÚNICO candidato na turma é ATRIBUIÇÃO determinística
     ao dono — ANTES ia a revisão e o snapshot da dimensão nunca era criado (bug
-    HELOISA/TAUFIK: dimensão 0). O guard-rail "nunca fundir crianças diferentes" fica
+    LIVIA/TOBIAS: dimensão 0). O guard-rail "nunca fundir crianças diferentes" fica
     na AMBIGUIDADE (2+ candidatos → media, ver test_nome_parcial_ambiguo_segura_sem_criar)
     e no veto de identidade. Fica no log como correspondencia='parcial' p/ validar/
     reverter. A criação de roster da Lista Piloto NÃO recebe este opt-in (segue
@@ -228,7 +228,7 @@ def test_previa_typo_primeiro_nome_mostra_revisar(db):
     """Variação no 1º NOME (GABRYEL/GABRIEL, 2 tokens) NÃO é variação SEGURA →
     'revisar' na PRÉVIA (não pré-seleciona). Protege crianças diferentes de 1º nome/
     gênero (guard-rail do red-team 2026-08-04). A variação SEGURA de nome do MEIO
-    (ABRAÃO LUÍS/LUIZ) é que vira 'vinculado'."""
+    (EUSTÁQUIO LUÍS/LUIZ) é que vira 'vinculado'."""
     esc, turma = _escola_turma(db)
     _matricular(db, esc, turma, "GABRIEL SILVA")
     db.commit()

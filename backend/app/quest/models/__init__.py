@@ -4,6 +4,7 @@ from app.quest.models.catalogo import (
     QuestMissao,
     QuestMundo,
 )
+from app.quest.models.limite import QuestLimiteAcesso
 from app.quest.models.perfil import (
     QuestCredencialAluno,
     QuestPerfil,
@@ -20,6 +21,7 @@ __all__ = [
     "QuestDesafio",
     "QuestHabilidade",
     "QuestJornada",
+    "QuestLimiteAcesso",
     "QuestMissao",
     "QuestMundo",
     "QuestPerfil",

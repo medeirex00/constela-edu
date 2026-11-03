@@ -6,8 +6,14 @@
  *
  * Emite `{ ano_escolar }` para uma série, `{ turma_id }` para uma turma, ou `{}`
  * para "todas" — pronto para virar query (`?ano_escolar=` ou `?turma_id=`).
+ *
+ * Identidade v2: a pílula branca com ícone das referências, com o <select>
+ * NATIVO por baixo (mesmo aria-label e mesmos valores "turma:<id>"/"serie:<rótulo>",
+ * que os testes e o teclado/leitor de tela usam).
  */
-import { estiloInput } from "./ui";
+import { Users } from "lucide-react";
+
+import { MolduraPilula, estiloSelectPilula } from "./SeletorPilula";
 import type { Turma } from "../lib/types";
 
 export type AlvoRanking = { turma_id?: string; ano_escolar?: string };
@@ -34,36 +40,38 @@ export function FiltroTurmaSerie({
       : "";
 
   return (
-    <select
-      aria-label="Filtrar por turma ou série"
-      className={`${estiloInput} w-auto ${className}`}
-      value={atual}
-      onChange={(e) => {
-        const v = e.target.value;
-        if (!v) onChange({});
-        else if (v.startsWith("serie:")) onChange({ ano_escolar: v.slice(6) });
-        else onChange({ turma_id: v.slice(6) });
-      }}
-    >
-      <option value="">Todas as turmas</option>
-      {series.length > 0 && (
-        <optgroup label="Séries — consolidado">
-          {series.map((s) => (
-            <option key={`s-${s}`} value={`serie:${s}`}>
-              {s} (todas as turmas)
-            </option>
-          ))}
-        </optgroup>
-      )}
-      {turmas.length > 0 && (
-        <optgroup label="Turmas">
-          {turmas.map((t) => (
-            <option key={`t-${t.id}`} value={`turma:${t.id}`}>
-              {t.nome}
-            </option>
-          ))}
-        </optgroup>
-      )}
-    </select>
+    <MolduraPilula icone={Users} className={className}>
+      <select
+        aria-label="Filtrar por turma ou série"
+        className={estiloSelectPilula}
+        value={atual}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (!v) onChange({});
+          else if (v.startsWith("serie:")) onChange({ ano_escolar: v.slice(6) });
+          else onChange({ turma_id: v.slice(6) });
+        }}
+      >
+        <option value="">Todas as turmas</option>
+        {series.length > 0 && (
+          <optgroup label="Séries — consolidado">
+            {series.map((s) => (
+              <option key={`s-${s}`} value={`serie:${s}`}>
+                {s} (todas as turmas)
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {turmas.length > 0 && (
+          <optgroup label="Turmas">
+            {turmas.map((t) => (
+              <option key={`t-${t.id}`} value={`turma:${t.id}`}>
+                {t.nome}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+    </MolduraPilula>
   );
 }

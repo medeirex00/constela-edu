@@ -1,9 +1,8 @@
 """Certificado não sai para ficha que a Lista Piloto nunca confirmou.
 
 Descoberto no gate da cerimônia do 3º bimestre de 2026, horas antes da entrega.
-Uma sincronização do Elefante criou duas fichas naquela manhã — 2351 LEONARDO
-MEZURARO MIGLIORI (EMEI/EMEF Benedito Inácio Soares) e 2352 ADRYEL LUCAS DA S J
-(EMEI/EMEF Prof. Bernardo Ferreira Louzada) — pelo passo 5 de
+Uma sincronização do Elefante criou duas fichas naquela manhã — a 2351 (escola 7)
+e a 2352 (escola 8) — pelo passo 5 de
 ``identidade_aluno.decidir``: nenhum candidato plausível em lugar nenhum, e a sala
 do relatório casava com uma turma cadastrada, então a ficha nasceu. Ela nasce com
 ``escola_id`` e ``nome`` e mais nada (``routers/importacoes.py``), portanto sem RA,

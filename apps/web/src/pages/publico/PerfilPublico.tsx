@@ -3,14 +3,16 @@ import { ArrowLeft } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { useApi } from "../../hooks/useApi";
-import { nota } from "../../lib/formato";
+import { useSemIndexacao } from "../../hooks/useSemIndexacao";
+import { notaDaMateria } from "../../lib/formato";
 
 interface PerfilPublicoDados {
   nome: string;
   turma: string | null;
   posicao: number | null;
-  nota_matific: number;
-  nota_elefante: number;
+  /** `null` = módulo fora do plano da rede: o telão mostra "—". */
+  nota_matific: number | null;
+  nota_elefante: number | null;
   nota_geral: number;
   nivel: number;
   xp: number;
@@ -19,6 +21,8 @@ interface PerfilPublicoDados {
 }
 
 export default function PerfilPublico() {
+  // Link sem login com nome de criança: buscador não indexa nem arquiva.
+  useSemIndexacao();
   const { token = "", id } = useParams();
   // Cliente compartilhado (base VITE_API_URL): fetch relativo só funciona
   // em dev — na Vercel devolveria o HTML do SPA no lugar do JSON.
@@ -69,7 +73,7 @@ export default function PerfilPublico() {
             ].map((item) => (
               <div key={item.rotulo} className="rounded-xl bg-white/5 p-4">
                 <p className="text-xs uppercase tracking-wide text-zinc-400">{item.rotulo}</p>
-                <p className="mt-1 text-2xl font-bold tabular-nums">{nota(item.valor)}</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">{notaDaMateria(item.valor)}</p>
               </div>
             ))}
           </div>

@@ -24,6 +24,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts._saida import forcar_saida_utf8  # noqa: E402
+
 SAIDA = Path(__file__).resolve().parent.parent / "app" / "dados" / "catalogo_elefante.json"
 CAMPOS = ("id", "title", "levelName", "levelId", "wordCount", "pageCount")
 
@@ -76,6 +80,7 @@ def consolidar(entradas: list[Path]) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    forcar_saida_utf8()
     if len(argv) < 2:
         print(__doc__)
         return 2

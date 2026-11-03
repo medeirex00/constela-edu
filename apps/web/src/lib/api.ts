@@ -8,7 +8,9 @@
  *   - base da API: proxy relativo "/api/v1" no web; no desktop (Tauri) não há
  *     proxy, então o build injeta VITE_API_URL apontando para o servidor.
  */
-import { apiBlob, configurarApi } from "@constela/core";
+import { ApiError, MENSAGEM_SEM_REDE, apiBlob, baseDaApi, configurarApi } from "@constela/core";
+
+import { ehTelaPublica } from "./pwaAtualizacao";
 
 export { api, apiUpload, loginRequest, ApiError } from "@constela/core";
 
@@ -43,6 +45,9 @@ configurarApi({
     remover: limparToken,
   },
   aoExpirarSessao: () => {
+    // Página pública (telão, vitrine): sem login — um 401 nunca a troca pela tela de login
+    // (o token vencido já foi limpo pelo core).
+    if (ehTelaPublica(window.location.pathname)) return;
     window.location.href = "/login";
   },
 });
@@ -58,4 +63,80 @@ export async function apiDownload(caminho: string): Promise<void> {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Erro de uma resposta não-OK: a mensagem é o `detail` do backend (texto, ou a lista
+ *  de validação do Pydantic), como no cliente compartilhado. O corpo JSON inteiro vai
+ *  em `corpo`, para a tela ler campos extras (ex.: `itens` do 422 do lote de
+ *  certificados) sem perder a mensagem. */
+async function erroDaResposta(resposta: Response): Promise<ApiError & { corpo?: unknown }> {
+  let corpo: unknown;
+  let mensagem = "Não foi possível completar a operação.";
+  try {
+    corpo = await resposta.json();
+    const detalhe = (corpo as { detail?: unknown } | null)?.detail;
+    if (typeof detalhe === "string") {
+      mensagem = detalhe;
+    } else if (Array.isArray(detalhe)) {
+      const mensagens = detalhe
+        .map((item: { msg?: unknown }) => (typeof item?.msg === "string" ? item.msg : ""))
+        .map((msg: string) => msg.replace(/^Value error,\s*/i, "").trim())
+        .filter(Boolean);
+      if (mensagens.length) mensagem = Array.from(new Set(mensagens)).join(" ");
+    }
+  } catch {
+    /* corpo não-JSON */
+  }
+  return Object.assign(new ApiError(resposta.status, mensagem), { corpo });
+}
+
+/**
+ * Baixa um arquivo gerado por POST (ex.: o PDF do lote de certificados) e dispara o
+ * download no navegador. Espelha o `apiDownload`: mesmo token, mesma reação à sessão
+ * expirada (401 → /login), mesma mensagem de erro (o `detail` do backend) e o nome do
+ * arquivo pelo Content-Disposition (`nomePadrao` quando o cabeçalho não traz).
+ * Devolve o nome com que o arquivo foi salvo.
+ */
+export async function apiDownloadPost(
+  caminho: string,
+  corpo: unknown,
+  nomePadrao = "arquivo",
+): Promise<string> {
+  const token = obterToken();
+  let resposta: Response;
+  try {
+    resposta = await fetch(`${baseDaApi()}${caminho}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(corpo),
+    });
+  } catch (erro) {
+    // Mesmo critério do cliente compartilhado: timeout/cancelamento propaga; falha de
+    // rede vira ApiError(0) com a mensagem amigável (nunca o "Failed to fetch" cru).
+    const nome = (erro as { name?: unknown } | null)?.name;
+    if (nome === "TimeoutError" || nome === "AbortError") throw erro;
+    throw new ApiError(0, MENSAGEM_SEM_REDE);
+  }
+  if (resposta.status === 401) {
+    // A mesma reação do `aoExpirarSessao` configurado acima.
+    limparToken();
+    window.location.href = "/login";
+    throw new ApiError(401, "Sessão expirada. Entre novamente.");
+  }
+  if (!resposta.ok) throw await erroDaResposta(resposta);
+  const disposicao = resposta.headers.get("Content-Disposition") ?? "";
+  const nomeArquivo = /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? nomePadrao;
+  const blob = await resposta.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nomeArquivo;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  return nomeArquivo;
 }

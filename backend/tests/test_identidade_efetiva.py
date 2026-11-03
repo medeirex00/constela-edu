@@ -77,10 +77,10 @@ def _estados(db, escola, aluno):
 
 @pytest.fixture()
 def cena(db, escola_completa):
-    """A ficha com DUAS contas Matific — o estado real da Allyce/Melissa."""
+    """A ficha com DUAS contas Matific — o padrão real do caso Arielle/Mirela (fictício)."""
     esc, admin = escola_completa["escola"], escola_completa["admin"]
     t = _turma(db, esc)
-    aluna = _aluno(db, esc, t, "ALLYCE CRISTINA BARBOSA DE ALMEIDA")
+    aluna = _aluno(db, esc, t, "ARIELLE CRISTINA TESTELLI DE AMARO")
     colega = _aluno(db, esc, t, "BEATRIZ SOUZA LIMA")
     _vincular(db, esc, aluna, "conta-principal")
     _vincular(db, esc, aluna, "conta-duplicada")
@@ -261,8 +261,8 @@ def test_a_decisao_fica_auditada_com_estado_antes_e_depois(db, cena):
 def test_so_a_efetiva_alimenta_o_retrato(db, cena):
     _decidir(db, cena)
     r = _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-principal", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-duplicada", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-principal", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-duplicada", 3, 9)])
 
     [s] = _snaps(db, cena["aluna"].id)
     assert (s.atividades, s.estrelas) == (139, 523)      # a EFETIVA venceu
@@ -276,7 +276,7 @@ def test_a_aposentada_sozinha_nao_grava_nada_nem_reabre_a_fila(db, cena):
     _decidir(db, cena)
     for _ in range(3):
         r = _importar(db, cena["escola"], cena["admin"], [
-            _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"],
+            _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"],
                    "conta-duplicada", 3, 9)])
         assert r.qtd_alunos == 0
     assert _snaps(db, cena["aluna"].id) == []
@@ -287,8 +287,8 @@ def test_a_ordem_das_linhas_nao_muda_o_resultado(db, cena):
     """Era exatamente isto que o `linhas_aluno[-1]` quebrava."""
     _decidir(db, cena)
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-duplicada", 3, 9),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-principal", 139, 523)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-duplicada", 3, 9),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-principal", 139, 523)])
     [s] = _snaps(db, cena["aluna"].id)
     assert (s.atividades, s.estrelas) == (139, 523)
 
@@ -305,7 +305,7 @@ def test_terceira_conta_nova_nao_e_aceita_sozinha(db, cena):
     """Aposentar uma não abre a porta para a próxima entrar sem decisão."""
     _decidir(db, cena)
     _importar(db, cena["escola"], cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-nova", 50, 200)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-nova", 50, 200)])
     pend = db.execute(select(RevisaoIdentidade).where(
         RevisaoIdentidade.status == "pendente")).scalars().all()
     assert [p.motivo for p in pend] == ["outra_identidade_na_plataforma"]
@@ -316,7 +316,7 @@ def test_terceira_conta_nova_nao_e_aceita_sozinha(db, cena):
 
 def test_com_a_duplicada_aposentada_a_efetiva_deixa_de_ser_colisao(db, cena):
     ctx = ida.carregar_contexto(db, cena["escola"].id, ANO)
-    linha = ida.linha_de_dados("ALLYCE", {"matific_uuid": "conta-principal"},
+    linha = ida.linha_de_dados("ARIELLE", {"matific_uuid": "conta-principal"},
                                plataforma="matific", turma_nome=cena["turma"])
     assert ida.decidir(ctx, linha).acao == ida.REVISAR      # antes: colisão
 
@@ -329,7 +329,7 @@ def test_com_a_duplicada_aposentada_a_efetiva_deixa_de_ser_colisao(db, cena):
 def test_a_aposentada_e_ignorada_e_nunca_reassociada(db, cena):
     _decidir(db, cena)
     ctx = ida.carregar_contexto(db, cena["escola"].id, ANO)
-    linha = ida.linha_de_dados("ALLYCE", {"matific_uuid": "conta-duplicada"},
+    linha = ida.linha_de_dados("ARIELLE", {"matific_uuid": "conta-duplicada"},
                                plataforma="matific", turma_nome=cena["turma"])
     d = ida.decidir(ctx, linha)
     assert d.acao == ida.IGNORAR and d.motivo == "identidade_aposentada"
@@ -340,7 +340,7 @@ def test_duas_efetivas_continuam_bloqueadas(db, cena):
     """Sem decisão, nada muda: o guard de colisão segue valendo."""
     ctx = ida.carregar_contexto(db, cena["escola"].id, ANO)
     for uuid in ("conta-principal", "conta-duplicada"):
-        linha = ida.linha_de_dados("ALLYCE", {"matific_uuid": uuid},
+        linha = ida.linha_de_dados("ARIELLE", {"matific_uuid": uuid},
                                    plataforma="matific", turma_nome=cena["turma"])
         d = ida.decidir(ctx, linha)
         assert d.acao == ida.REVISAR
@@ -350,7 +350,7 @@ def test_duas_efetivas_continuam_bloqueadas(db, cena):
 def test_identidade_de_outro_aluno_continua_bloqueada(db, cena):
     _decidir(db, cena)
     ctx = ida.carregar_contexto(db, cena["escola"].id, ANO)
-    linha = ida.linha_de_dados("ALLYCE CRISTINA BARBOSA DE ALMEIDA",
+    linha = ida.linha_de_dados("ARIELLE CRISTINA TESTELLI DE AMARO",
                                {"matific_uuid": "conta-colega"},
                                plataforma="matific", turma_nome=cena["turma"])
     d = ida.decidir(ctx, linha)
@@ -362,8 +362,8 @@ def test_identidade_de_outro_aluno_continua_bloqueada(db, cena):
 def test_a_pendencia_da_aposentada_e_encerrada_pela_decisao(db, cena):
     esc = cena["escola"]
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-principal", 139, 523),
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-duplicada", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-principal", 139, 523),
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-duplicada", 3, 9)])
     pend = {p.id_externo: p for p in db.execute(select(RevisaoIdentidade).where(
         RevisaoIdentidade.status == "pendente")).scalars()}
     assert set(pend) == {"conta-principal", "conta-duplicada"}
@@ -382,7 +382,7 @@ def test_a_pendencia_da_aposentada_e_encerrada_pela_decisao(db, cena):
 def test_triagem_reconhece_a_pendencia_de_conta_aposentada(db, cena):
     esc = cena["escola"]
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-duplicada", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-duplicada", 3, 9)])
     [pend] = db.execute(select(RevisaoIdentidade)).scalars().all()
     # decide SEM encerrar a pendência (simula uma que reabriu depois)
     efe.definir_efetiva(db, esc.id, aluno_id=cena["aluna"].id, plataforma="matific",
@@ -403,7 +403,7 @@ def test_resolver_uma_pendencia_de_conta_aposentada_e_recusado(db, cena, cliente
                                                                escola_completa):
     esc = cena["escola"]
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-duplicada", 3, 9)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-duplicada", 3, 9)])
     [pend] = db.execute(select(RevisaoIdentidade)).scalars().all()
     efe.definir_efetiva(db, esc.id, aluno_id=cena["aluna"].id, plataforma="matific",
                         id_externo_efetivo="conta-principal",
@@ -424,7 +424,7 @@ def test_resolver_uma_pendencia_de_conta_aposentada_e_recusado(db, cena, cliente
 def test_nada_do_historico_e_apagado_pela_decisao(db, cena):
     esc = cena["escola"]
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-principal", 139, 523)])
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-principal", 139, 523)])
     snaps_antes = [(s.id, s.atividades, s.estrelas) for s in _snaps(db, cena["aluna"].id)]
     ident_antes = db.scalar(select(func.count()).select_from(IdentidadeExterna))
 
@@ -441,7 +441,7 @@ def test_a_decisao_sozinha_nao_mexe_na_nota(db, cena):
     from app.models import Nota
     esc = cena["escola"]
     _importar(db, esc, cena["admin"], [
-        _linha("ALLYCE CRISTINA BARBOSA DE ALMEIDA", cena["turma"], "conta-principal", 139, 523)],
+        _linha("ARIELLE CRISTINA TESTELLI DE AMARO", cena["turma"], "conta-principal", 139, 523)],
         recalcular=True)
     db.expire_all()
     antes = {n.aluno_id: (n.nota_matific, n.nota_geral, n.posicao_matematica)

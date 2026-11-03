@@ -9,14 +9,17 @@
  *   • AvisoSemNiveis      — estado "sem faixas" com atalho de 1 clique para os
  *                           níveis padrão (fim do beco "cadastre na aba anterior").
  * ----------------------------------------------------------------------- */
-import { GripVertical, Info, Lock, Plus, Trash2 } from "lucide-react";
+import { Info, Lock, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge, Botao, Card, Carregando, Mensagem, estiloInput } from "../../components/ui";
+import { Badge, Botao, Card, Carregando, Confirmacao, Mensagem, classesTabela, estiloInput } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { api, ApiError } from "../../lib/api";
 import type { Nivel } from "../../lib/types";
+
+/** `estiloInput` sem a largura total: para campos curtos (pontos, turma). */
+const inputCurto = estiloInput.replace("w-full ", "");
 
 /** Códigos de letra digitados ("aa, bb  cc") → lista limpa (maiúsculo, únicos). */
 function parseCodigos(texto: string): string[] {
@@ -110,6 +113,8 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
   const [novo, setNovo] = useState<{ nome: string; codigos: string; pontos: string } | null>(null);
   const [ocupado, setOcupado] = useState<number | "novo" | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  // Nível à espera da confirmação de remoção.
+  const [paraRemover, setParaRemover] = useState<LinhaNivel | null>(null);
 
   // Semeia (e ressemeia) o formulário editável a partir dos níveis carregados.
   useEffect(() => {
@@ -164,7 +169,6 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
 
   async function excluir(l: LinhaNivel) {
     if (!escolaId) return;
-    if (!window.confirm(`Remover o nível “${l.nome}”? As pontuações que dependem dele serão recalculadas.`)) return;
     setOcupado(l.id);
     setMensagem(null);
     try {
@@ -176,6 +180,7 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
       setMensagem({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível remover." });
     } finally {
       setOcupado(null);
+      setParaRemover(null);
     }
   }
 
@@ -208,22 +213,22 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
     <div className="space-y-4">
       {/* Legenda: deixa claro que estes são valores de REFERÊNCIA (base) da
           premiação — não a pontuação final — e que a edição é do admin geral. */}
-      <div className="flex items-start gap-2.5 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 dark:border-indigo-500/25 dark:bg-indigo-500/10 dark:text-indigo-100">
-        <Info size={16} className="mt-0.5 shrink-0" />
+      <div className="flex items-start gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3.5 text-sm text-indigo-900 dark:border-indigo-500/25 dark:bg-indigo-500/10 dark:text-indigo-100">
+        <Info size={18} aria-hidden className="mt-0.5 shrink-0 text-indigo-600 dark:text-indigo-300" />
         <p>
           Estes números são valores de <strong>referência</strong> (base) para a premiação:
           representam a <strong>faixa de pontos</strong> de cada nível de dificuldade — do mínimo ao
           máximo. Eles <strong>não são a pontuação final</strong> que o aluno recebe; servem de base
           para você configurar a pontuação real em <strong>Dificuldade por turma</strong>.
           <span className="mt-1.5 flex items-center gap-1.5 font-medium">
-            <Lock size={13} /> A edição destes valores é exclusiva do administrador geral.
+            <Lock size={13} aria-hidden /> A edição destes valores é exclusiva do administrador geral.
           </span>
         </p>
       </div>
 
       <p className="text-sm text-zinc-500 dark:text-zinc-400">
         Cada faixa (Pré-Leitor, Nível 1, Nível 2…) reúne os códigos de nível dos livros (ex.:
-        <span className="mx-1 font-mono">AA, BB</span>) e define quantos pontos cada livro daquela
+        <span className="mx-1 rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">AA, BB</span>) e define quantos pontos cada livro daquela
         faixa vale como referência.
       </p>
 
@@ -233,37 +238,35 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
           {!somenteLeitura && (
             <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
               <Botao variante="neutro" onClick={() => setNovo({ nome: "", codigos: "", pontos: "1" })}>
-                <Plus size={15} /> Adicionar nível manualmente
+                <Plus size={15} aria-hidden /> Adicionar nível manualmente
               </Botao>
             </div>
           )}
         </Card>
       ) : (
-        <Card>
-          <table className="w-full text-sm">
+        <Card className="overflow-hidden">
+          <div className={classesTabela.moldura}>
+          <table className={`${classesTabela.tabela} min-w-[36rem]`}>
             <thead>
-              <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                <th className="px-4 py-2 font-medium">Nível</th>
-                <th className="px-4 py-2 font-medium">Códigos de nível</th>
-                <th className="px-4 py-2 text-right font-medium">Pontos/livro</th>
-                {!somenteLeitura && <th className="w-28 px-4 py-2" />}
+              <tr>
+                <th className={classesTabela.th}>Nível</th>
+                <th className={classesTabela.th}>Códigos de nível</th>
+                <th className={`${classesTabela.th} text-right`}>Pontos/livro</th>
+                {!somenteLeitura && <th className={`${classesTabela.th} w-28`} />}
               </tr>
             </thead>
             <tbody>
               {linhas.map((l) => (
-                <tr key={l.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                  <td className="px-4 py-2 align-middle">
-                    <span className="flex items-center gap-2">
-                      <GripVertical size={14} className="shrink-0 text-zinc-300 dark:text-zinc-600" />
-                      <input
-                        className={`${estiloInput} min-w-[9rem]`}
-                        value={l.nome}
-                        disabled={somenteLeitura || ocupado === l.id}
-                        onChange={(e) => alterar(l.id, "nome", e.target.value)}
-                      />
-                    </span>
+                <tr key={l.id} className={classesTabela.tr}>
+                  <td className="px-4 py-2.5 align-middle">
+                    <input
+                      className={`${estiloInput} min-w-[9rem]`}
+                      value={l.nome}
+                      disabled={somenteLeitura || ocupado === l.id}
+                      onChange={(e) => alterar(l.id, "nome", e.target.value)}
+                    />
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2.5">
                     <input
                       className={`${estiloInput} w-full font-mono`}
                       placeholder="AA, BB, CC"
@@ -272,21 +275,22 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
                       onChange={(e) => alterar(l.id, "codigos", e.target.value)}
                     />
                   </td>
-                  <td className="px-4 py-2 text-right">
+                  <td className="px-4 py-2.5 text-right">
                     <input
                       type="number"
                       min={0}
                       step="0.5"
-                      className={`${estiloInput} w-20 text-right tabular-nums`}
+                      className={`${inputCurto} w-24 text-right font-semibold tabular-nums`}
                       value={l.pontos}
                       disabled={somenteLeitura || ocupado === l.id}
                       onChange={(e) => alterar(l.id, "pontos", e.target.value)}
                     />
                   </td>
                   {!somenteLeitura && (
-                    <td className="px-4 py-2">
+                    <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-1">
                         <Botao
+                          tamanho="sm"
                           onClick={() => salvarLinha(l)}
                           disabled={ocupado === l.id || !mudou(l)}
                         >
@@ -297,10 +301,10 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
                           title="Remover nível"
                           aria-label={`Remover nível ${l.nome}`}
                           disabled={ocupado === l.id}
-                          onClick={() => excluir(l)}
-                          className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:hover:bg-red-500/10"
+                          onClick={() => setParaRemover(l)}
+                          className="grid h-9 w-9 place-items-center rounded-full text-zinc-500 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-rose-500/10"
                         >
-                          <Trash2 size={15} />
+                          <Trash2 size={15} aria-hidden />
                         </button>
                       </div>
                     </td>
@@ -309,8 +313,8 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
               ))}
 
               {novo && (
-                <tr className="border-b border-zinc-100 bg-indigo-50/40 last:border-0 dark:border-zinc-800/60 dark:bg-indigo-500/5">
-                  <td className="px-4 py-2">
+                <tr className="border-t border-zinc-100 bg-indigo-50/40 dark:border-zinc-800 dark:bg-indigo-500/5">
+                  <td className="px-4 py-2.5">
                     <input
                       className={`${estiloInput} min-w-[9rem]`}
                       placeholder="Nome (ex.: Nível 6)"
@@ -319,7 +323,7 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
                       onChange={(e) => setNovo({ ...novo, nome: e.target.value })}
                     />
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2.5">
                     <input
                       className={`${estiloInput} w-full font-mono`}
                       placeholder="AA, BB, CC"
@@ -327,22 +331,22 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
                       onChange={(e) => setNovo({ ...novo, codigos: e.target.value })}
                     />
                   </td>
-                  <td className="px-4 py-2 text-right">
+                  <td className="px-4 py-2.5 text-right">
                     <input
                       type="number"
                       min={0}
                       step="0.5"
-                      className={`${estiloInput} w-20 text-right tabular-nums`}
+                      className={`${inputCurto} w-24 text-right font-semibold tabular-nums`}
                       value={novo.pontos}
                       onChange={(e) => setNovo({ ...novo, pontos: e.target.value })}
                     />
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      <Botao onClick={criar} disabled={ocupado === "novo"}>
+                      <Botao tamanho="sm" onClick={criar} disabled={ocupado === "novo"}>
                         {ocupado === "novo" ? "…" : "Criar"}
                       </Botao>
-                      <Botao variante="neutro" onClick={() => setNovo(null)} disabled={ocupado === "novo"}>
+                      <Botao variante="neutro" tamanho="sm" onClick={() => setNovo(null)} disabled={ocupado === "novo"}>
                         Cancelar
                       </Botao>
                     </div>
@@ -351,6 +355,7 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
               )}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
 
@@ -358,8 +363,29 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
 
       {!somenteLeitura && linhas.length > 0 && !novo && (
         <Botao variante="neutro" onClick={() => setNovo({ nome: "", codigos: "", pontos: "1" })}>
-          <Plus size={15} /> Adicionar nível
+          <Plus size={15} aria-hidden /> Adicionar nível
         </Botao>
+      )}
+
+      {!somenteLeitura && (
+        <Confirmacao
+          titulo="Remover este nível?"
+          aberto={paraRemover !== null}
+          aoFechar={() => setParaRemover(null)}
+          aoConfirmar={() => {
+            if (paraRemover) void excluir(paraRemover);
+          }}
+          rotuloConfirmar={paraRemover && ocupado === paraRemover.id ? "Removendo..." : "Remover nível"}
+          variante="perigo"
+          ocupado={paraRemover !== null && ocupado === paraRemover.id}
+        >
+          {paraRemover && (
+            <p>
+              Remover o nível <strong className="text-zinc-800 dark:text-zinc-100">“{paraRemover.nome}”</strong>?
+              As pontuações que dependem dele serão recalculadas.
+            </p>
+          )}
+        </Confirmacao>
       )}
     </div>
   );
@@ -471,10 +497,11 @@ export function PontuacaoPorTurma() {
         turma pode ter a sua tabela; níveis não alterados usam o padrão da escola.
       </p>
 
-      <Card className="flex flex-wrap items-center gap-3 p-4">
-        <label className="text-sm font-medium">Turma</label>
+      <Card className="flex flex-wrap items-center gap-3 p-4 sm:p-5">
+        <label className="text-sm font-semibold" htmlFor="pontuacao-turma-escolhida">Turma</label>
         <select
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+          id="pontuacao-turma-escolhida"
+          className={`${inputCurto} w-auto min-w-[12rem]`}
           value={turmaId ?? ""}
           onChange={(e) => setTurmaId(Number(e.target.value))}
         >
@@ -490,12 +517,15 @@ export function PontuacaoPorTurma() {
             type="number"
             min={0}
             step="0.5"
+            aria-label="Pontos para aplicar a todos os níveis"
             value={aplicarTodos}
+            disabled={somenteLeitura}
             onChange={(e) => setAplicarTodos(e.target.value)}
-            className="w-20 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+            className={`${inputCurto} w-24 text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60`}
           />
           <Botao
             variante="neutro"
+            disabled={somenteLeitura}
             onClick={() => {
               const v = Number(aplicarTodos);
               if (aplicarTodos === "" || Number.isNaN(v) || v < 0) return;
@@ -508,25 +538,29 @@ export function PontuacaoPorTurma() {
       </Card>
 
       <Card>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1 p-4 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 p-4 sm:grid-cols-3 sm:p-5 lg:grid-cols-4">
           {dados.catalogo.map((c) => {
             const val = edit[c.codigo] ?? c.pontos_padrao;
             const custom = val !== c.pontos_padrao;
             return (
               <div key={c.codigo} className="flex items-center justify-between gap-2 py-1">
                 <span className="flex items-center gap-1.5 text-sm">
-                  <span className="font-medium tabular-nums">{c.codigo}</span>
+                  <span className="inline-flex min-w-[2.25rem] justify-center rounded-lg bg-zinc-100 px-1.5 py-1 text-xs font-bold tabular-nums text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                    {c.codigo}
+                  </span>
                   {custom && <Badge tom="destaque">alterado</Badge>}
                 </span>
                 <input
                   type="number"
                   min={0}
                   step="0.5"
+                  aria-label={`Pontos do nível ${c.codigo}`}
                   value={val}
+                  disabled={somenteLeitura}
                   onChange={(e) =>
                     setEdit((prev) => ({ ...prev, [c.codigo]: Number(e.target.value) }))
                   }
-                  className="w-16 rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-right text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                  className="w-20 rounded-xl border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-right text-sm font-semibold tabular-nums transition-colors focus:border-indigo-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800"
                 />
               </div>
             );
@@ -537,37 +571,44 @@ export function PontuacaoPorTurma() {
       {/* Replicar a MESMA config para outras turmas ANTES de salvar. Cada uma
           continua editável depois (basta trocar no seletor de turma). */}
       {!somenteLeitura && outrasTurmas.length > 0 && (
-        <Card className="p-4">
+        <Card className="p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-medium">
+            <p className="text-sm font-semibold">
               Aplicar estes mesmos níveis a outras turmas?{" "}
               <span className="font-normal text-zinc-500 dark:text-zinc-400">(opcional)</span>
             </p>
             {replicar.size > 0 && (
               <button
                 type="button"
-                className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-300"
                 onClick={() => setReplicar(new Set())}
               >
                 limpar seleção
               </button>
             )}
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3 lg:grid-cols-4">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {outrasTurmas.map((t) => (
-              <label key={t.turma_id} className="flex cursor-pointer items-center gap-2 text-sm">
+              <label
+                key={t.turma_id}
+                className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                  replicar.has(t.turma_id)
+                    ? "border-indigo-300 bg-indigo-50 text-indigo-900 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-100"
+                    : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700"
+                }`}
+              >
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border-zinc-300 accent-indigo-600"
                   checked={replicar.has(t.turma_id)}
                   onChange={() => alternarReplicar(t.turma_id)}
                 />
-                <span className="truncate">{t.nome}</span>
+                <span className="truncate" title={t.nome}>{t.nome}</span>
               </label>
             ))}
           </div>
           {replicar.size > 0 && (
-            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+            <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">
               A configuração atual vai <strong>sobrescrever</strong> a das {replicar.size} turma(s)
               marcada(s). Você pode ajustar cada uma depois.
             </p>
@@ -576,7 +617,7 @@ export function PontuacaoPorTurma() {
       )}
 
       {mensagem && <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Botao onClick={salvar} disabled={salvando || somenteLeitura}>
           {somenteLeitura ? "Somente leitura"
             : salvando ? "Salvando e recalculando..."

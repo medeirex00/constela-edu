@@ -1,0 +1,572 @@
+{
+  "rede": {
+    "id": 1,
+    "nome": "Rede Fictícia do Litoral",
+    "codigo_ibge": "3599901",
+    "codigo_municipio_estadual": "9991",
+    "municipio": "Municipio Ficticio"
+  },
+  "indicadores": [
+    {
+      "chave": "ica",
+      "nome": "Indicador Criança Alfabetizada (ICA)",
+      "orgao": "INEP",
+      "oficial": true,
+      "unidade": "%",
+      "escala": "percentual",
+      "disponivel": true,
+      "motivo_indisponivel": null,
+      "texto_indisponivel": null,
+      "abrangencias": [
+        "rede"
+      ],
+      "por_escola": false,
+      "etapas": [
+        "2_ano"
+      ],
+      "componentes": [
+        "lp"
+      ],
+      "rotulos_etapas": {
+        "2_ano": "2º ano"
+      },
+      "rotulos_componentes": {
+        "lp": "Língua Portuguesa"
+      },
+      "edicoes": [
+        2024,
+        2025
+      ],
+      "edicao_mais_recente": 2025,
+      "tem_meta": true,
+      "avisos": [
+        "O ICA é o indicador da REDE municipal: o INEP não publica o ICA por escola. Ele não serve para comparar nem ordenar escolas.",
+        "SP e Brasil: o INEP publica o ICA na rede PÚBLICA (estadual e municipal) — outra rede, só contexto. A comparação na mesma rede é com a UF nas redes municipais.",
+        "Resultado × meta na precisão divulgada: o empate é “inconclusivo” (23 × 23 pode ser 22,6 × 23,3), não “atingiu”."
+      ]
+    },
+    {
+      "chave": "saresp",
+      "nome": "SARESP",
+      "orgao": "SEDUC-SP",
+      "oficial": true,
+      "unidade": "pontos",
+      "escala": "escala_saresp",
+      "disponivel": true,
+      "motivo_indisponivel": null,
+      "texto_indisponivel": null,
+      "abrangencias": [
+        "rede",
+        "escola"
+      ],
+      "por_escola": true,
+      "etapas": [
+        "5_ano",
+        "2_ano"
+      ],
+      "componentes": [
+        "lp",
+        "mt"
+      ],
+      "rotulos_etapas": {
+        "5_ano": "5º ano",
+        "2_ano": "2º ano"
+      },
+      "rotulos_componentes": {
+        "lp": "Língua Portuguesa",
+        "mt": "Matemática"
+      },
+      "edicoes": [
+        2025
+      ],
+      "edicao_mais_recente": 2025,
+      "tem_meta": false,
+      "avisos": [
+        "O SARESP tem escala própria, da SEDUC-SP: as médias não se comparam com o Saeb nem com o ICA.",
+        "A comparação com o Estado é na MESMA rede: as redes municipais de São Paulo. A rede estadual (no município e no Estado) aparece à parte, só como contexto — é outra rede.",
+        "TPS = 0: a escola não atingiu a taxa mínima de participação do SARESP; a média dela é instável.",
+        "O SARESP do 2º ano NÃO é comparável ao ICA, o indicador de alfabetização do INEP: a escala e o corte são outros, e não está confirmado que a Língua Portuguesa do 2º ano do SARESP esteja na escala de alfabetização do Saeb. Não cruze os dois números.",
+        "Os pontos de corte dos níveis do SARESP (Abaixo do Básico, Básico, Adequado e Avançado) ainda não foram conferidos na fonte oficial (Sumário Executivo do SARESP, da FDE) para estas edições: o Constela não diz em que nível cai cada média nem a distância até o Adequado. Os dados abertos não trazem a distribuição dos alunos por nível."
+      ]
+    },
+    {
+      "chave": "iee",
+      "nome": "Índice de Excelência Educacional (IEE)",
+      "orgao": "SEDUC-SP",
+      "oficial": true,
+      "unidade": "índice",
+      "escala": "indice_iee",
+      "disponivel": true,
+      "motivo_indisponivel": null,
+      "texto_indisponivel": null,
+      "abrangencias": [
+        "escola"
+      ],
+      "por_escola": true,
+      "etapas": [
+        "anos_iniciais"
+      ],
+      "componentes": [],
+      "rotulos_etapas": {
+        "anos_iniciais": "anos iniciais (1º ao 5º ano)"
+      },
+      "rotulos_componentes": {},
+      "edicoes": [
+        2025
+      ],
+      "edicao_mais_recente": 2025,
+      "tem_meta": true,
+      "avisos": [
+        "O IEE (Índice de Excelência Educacional, SEDUC-SP) é um índice POR ESCOLA, calculado a partir do SARESP do 2º e do 5º ano: não é proficiência e não existe para a rede.",
+        "Meta cumprida ou não: o ICM (Índice de Cumprimento de Meta) oficial da SEDUC (1 = cumpriu). A diferença IEE − meta é só a conta na precisão publicada.",
+        "IEE de escola com TPS = 0 (participação abaixo do mínimo do SARESP): o índice é o oficial, mas foi calculado com médias instáveis — ele fica fora da relação com as plataformas."
+      ]
+    },
+    {
+      "chave": "ideb",
+      "nome": "IDEB",
+      "orgao": "INEP",
+      "oficial": true,
+      "unidade": "índice",
+      "escala": "indice_ideb",
+      "disponivel": true,
+      "motivo_indisponivel": null,
+      "texto_indisponivel": null,
+      "abrangencias": [
+        "rede",
+        "escola"
+      ],
+      "por_escola": true,
+      "etapas": [
+        "anos_iniciais"
+      ],
+      "componentes": [],
+      "rotulos_etapas": {
+        "anos_iniciais": "anos iniciais (1º ao 5º ano)"
+      },
+      "rotulos_componentes": {},
+      "edicoes": [
+        2019,
+        2021,
+        2023
+      ],
+      "edicao_mais_recente": 2023,
+      "tem_meta": true,
+      "avisos": [
+        "A série do Ideb e do Saeb do 5º ano (2019–2023) não é comparável em todo o período: o universo avaliado e os critérios mudaram ao longo das edições (o mínimo de alunos, a entrada das escolas rurais, o critério de divulgação — detalhes nas notas técnicas do INEP). O aviso vale para a série TODA, não só para 2021: compare edições com cuidado.",
+        "2021 foi aplicado na pandemia: o INEP publicou uma nota própria sobre o modo de ler o Ideb e o Saeb dessa edição (ver as notas do arquivo oficial).",
+        "Metas do Ideb: só as do 1º ciclo, de 2007 a 2021. Depois de 2021 (de 2023 em diante) o INEP não definiu meta: o Constela não compara.",
+        "Atingiu ou não a meta: o Ideb e a meta comparados na precisão publicada pelo INEP (1 casa decimal). Ideb igual ou acima da meta nessa precisão = atingiu.",
+        "Números marcados “sem registro oficial” foram gravados antes, pelo botão de importação em 1 clique, sem prévia nem registro do arquivo. A importação oficial só os mantém quando são iguais aos do arquivo; um número diferente só é trocado com confirmação explícita."
+      ]
+    },
+    {
+      "chave": "saeb",
+      "nome": "SAEB",
+      "orgao": "INEP",
+      "oficial": true,
+      "unidade": "pontos",
+      "escala": "escala_saeb",
+      "disponivel": true,
+      "motivo_indisponivel": null,
+      "texto_indisponivel": null,
+      "abrangencias": [
+        "rede",
+        "escola"
+      ],
+      "por_escola": true,
+      "etapas": [
+        "5_ano"
+      ],
+      "componentes": [
+        "lp",
+        "mt"
+      ],
+      "rotulos_etapas": {
+        "5_ano": "5º ano"
+      },
+      "rotulos_componentes": {
+        "lp": "Língua Portuguesa",
+        "mt": "Matemática"
+      },
+      "edicoes": [
+        2019,
+        2021,
+        2023
+      ],
+      "edicao_mais_recente": 2023,
+      "tem_meta": false,
+      "avisos": [
+        "O Saeb do 5º ano tem escala própria: não se compara com o SARESP nem com o ICA.",
+        "Média e distribuição por nível do Saeb do 5º ano pela planilha de resultados do INEP, na localização Total (escolas urbanas e rurais) e por rede (dependência administrativa). Não é a nota do Saeb do Ideb (só urbanas): são números diferentes, que não se cruzam.",
+        "O Saeb do 2º ano é AMOSTRAL: o INEP divulga só o estado e o Brasil, nunca a rede municipal nem a escola. Aqui é só contexto — não é número da rede.",
+        "O Saeb POR ESCOLA vem do arquivo do Ideb por escola; o da REDE, da planilha de resultados do INEP (localização Total).",
+        "Números marcados “sem registro oficial” foram gravados antes, pelo botão de importação em 1 clique, sem prévia nem registro do arquivo. A importação oficial só os mantém quando são iguais aos do arquivo; um número diferente só é trocado com confirmação explícita."
+      ]
+    }
+  ],
+  "destaques": [
+    {
+      "indicador": "ica",
+      "rotulo": "ICA da rede (2º ano)",
+      "etapa": "2_ano",
+      "componente": "lp",
+      "edicao": 2025,
+      "valor": 58.0,
+      "casas": 0,
+      "unidade": "%",
+      "meta": 60.0,
+      "meta_casas": 0,
+      "diferenca_meta": -2.0,
+      "diferenca_casas": 0,
+      "situacao_meta": "nao_atingiu",
+      "motivo_sem_meta": null,
+      "texto_sem_meta": null,
+      "fonte_id": 1,
+      "serie": [
+        {
+          "edicao": 2023,
+          "valor": null,
+          "casas": null,
+          "motivo_ausencia": "participacao_baixa"
+        },
+        {
+          "edicao": 2024,
+          "valor": 55.0,
+          "casas": 0,
+          "motivo_ausencia": null
+        },
+        {
+          "edicao": 2025,
+          "valor": 58.0,
+          "casas": 0,
+          "motivo_ausencia": null
+        }
+      ],
+      "quebras": []
+    },
+    {
+      "indicador": "saresp",
+      "rotulo": "SARESP da rede — 5º ano, Língua Portuguesa",
+      "etapa": "5_ano",
+      "componente": "lp",
+      "edicao": 2025,
+      "valor": 201.4,
+      "casas": 1,
+      "unidade": "pontos",
+      "meta": null,
+      "meta_casas": null,
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "situacao_meta": null,
+      "motivo_sem_meta": null,
+      "texto_sem_meta": null,
+      "fonte_id": 2,
+      "serie": [
+        {
+          "edicao": 2025,
+          "valor": 201.4,
+          "casas": 1,
+          "motivo_ausencia": null
+        }
+      ],
+      "quebras": []
+    },
+    {
+      "indicador": "ideb",
+      "rotulo": "Ideb da rede (anos iniciais)",
+      "etapa": "anos_iniciais",
+      "componente": null,
+      "edicao": 2023,
+      "valor": 6.1,
+      "casas": 1,
+      "unidade": "índice",
+      "meta": null,
+      "meta_casas": null,
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "situacao_meta": null,
+      "motivo_sem_meta": "depois_do_1o_ciclo",
+      "texto_sem_meta": "o INEP não definiu meta do Ideb depois de 2021",
+      "fonte_id": 4,
+      "serie": [
+        {
+          "edicao": 2019,
+          "valor": 5.8,
+          "casas": 1,
+          "motivo_ausencia": null
+        },
+        {
+          "edicao": 2021,
+          "valor": 5.4,
+          "casas": 1,
+          "motivo_ausencia": null
+        },
+        {
+          "edicao": 2023,
+          "valor": 6.1,
+          "casas": 1,
+          "motivo_ausencia": null
+        }
+      ],
+      "quebras": []
+    },
+    {
+      "indicador": "saeb",
+      "rotulo": "Saeb da rede — 5º ano, Língua Portuguesa",
+      "etapa": "5_ano",
+      "componente": "lp",
+      "edicao": 2021,
+      "valor": 210.0,
+      "casas": 2,
+      "unidade": "pontos",
+      "meta": null,
+      "meta_casas": null,
+      "diferenca_meta": null,
+      "diferenca_casas": null,
+      "situacao_meta": null,
+      "motivo_sem_meta": null,
+      "texto_sem_meta": null,
+      "fonte_id": 5,
+      "serie": [
+        {
+          "edicao": 2019,
+          "valor": 215.25,
+          "casas": 2,
+          "motivo_ausencia": null
+        },
+        {
+          "edicao": 2021,
+          "valor": 210.0,
+          "casas": 2,
+          "motivo_ausencia": null
+        }
+      ],
+      "quebras": []
+    }
+  ],
+  "estimativas": [
+    {
+      "chave": "crianca_alfabetizada",
+      "nome": "Estimativa Constela de alfabetização (SARESP 2º ano) — não é o indicador oficial",
+      "tipo": "estimativa_constela",
+      "oficial": false,
+      "edicoes": [
+        2025
+      ],
+      "escolas": 1
+    },
+    {
+      "chave": "saresp",
+      "nome": "SARESP — Estimativa Constela: médias por escola calculadas pelo Constela (não são o indicador oficial)",
+      "tipo": "estimativa_constela",
+      "oficial": false,
+      "edicoes": [
+        2025
+      ],
+      "escolas": 1
+    }
+  ],
+  "sem_registro_oficial": [
+    {
+      "chave": "ideb",
+      "nome": "IDEB — números gravados antes, sem o registro do arquivo oficial",
+      "tipo": "sem_registro",
+      "oficial": false,
+      "edicoes": [
+        2023
+      ],
+      "escolas_por_edicao": {
+        "2023": 1
+      },
+      "numeros": 1,
+      "difere_do_oficial": 0,
+      "texto": "Número gravado antes, sem o registro do arquivo oficial: aparece marcado nas séries e na visão por escolas e não entra nos destaques nem na relação com as plataformas."
+    }
+  ],
+  "escolas": [
+    {
+      "id": 6,
+      "nome": "EMEF Ébano Fictícia",
+      "codigo_inep": "35990105",
+      "status": "ativa",
+      "pendencia": null
+    },
+    {
+      "id": 2,
+      "nome": "EMEF Fictícia Alfa",
+      "codigo_inep": "35990101",
+      "status": "ativa",
+      "pendencia": null
+    },
+    {
+      "id": 3,
+      "nome": "EMEF Fictícia Beta",
+      "codigo_inep": "35990102",
+      "status": "ativa",
+      "pendencia": null
+    },
+    {
+      "id": 4,
+      "nome": "EMEF Fictícia Delta",
+      "codigo_inep": "35990104",
+      "status": "ativa",
+      "pendencia": null
+    },
+    {
+      "id": 5,
+      "nome": "EMEF Fictícia Gama",
+      "codigo_inep": null,
+      "status": "ativa",
+      "pendencia": "sem_codigo_inep"
+    }
+  ],
+  "alertas": [
+    {
+      "tipo": "cadastro",
+      "indicador": null,
+      "escolas": [
+        5
+      ],
+      "texto": "1 escola(s) sem código INEP no cadastro: os números oficiais dessas escolas não podem ser casados."
+    },
+    {
+      "tipo": "insuficiente",
+      "indicador": "saresp",
+      "escolas": [
+        4,
+        5
+      ],
+      "texto": "SARESP 2025: 2 de 5 escola(s) sem resultado oficial — o motivo de cada uma está na visão por escolas (sem resultado não é zero)."
+    },
+    {
+      "tipo": "insuficiente",
+      "indicador": "iee",
+      "escolas": [
+        4,
+        5
+      ],
+      "texto": "Índice de Excelência Educacional (IEE) 2025: 2 de 5 escola(s) sem resultado oficial — o motivo de cada uma está na visão por escolas (sem resultado não é zero)."
+    },
+    {
+      "tipo": "insuficiente",
+      "indicador": "ideb",
+      "escolas": [
+        6,
+        5
+      ],
+      "texto": "IDEB 2023: 2 de 5 escola(s) sem resultado oficial — o motivo de cada uma está na visão por escolas (sem resultado não é zero)."
+    },
+    {
+      "tipo": "sem_registro",
+      "indicador": "ideb",
+      "escolas": [
+        4
+      ],
+      "texto": "IDEB 2023: 1 de 5 escola(s) com número gravado antes, sem o registro do arquivo oficial — o número aparece marcado e não entra nos destaques nem na relação."
+    },
+    {
+      "tipo": "insuficiente",
+      "indicador": "saeb",
+      "escolas": [
+        6,
+        3,
+        4,
+        5
+      ],
+      "texto": "SAEB 2023: 4 de 5 escola(s) sem resultado oficial — o motivo de cada uma está na visão por escolas (sem resultado não é zero)."
+    },
+    {
+      "tipo": "desatualizado",
+      "indicador": "ideb",
+      "escolas": [],
+      "texto": "Ideb e Saeb 2025 por escola: o resultado por escola ainda não foi importado para esta rede."
+    },
+    {
+      "tipo": "metodologia",
+      "indicador": null,
+      "escolas": [],
+      "texto": "As plataformas (Elefante e Matific) têm dados do ano letivo 2026; as avaliações oficiais por escola vão até 2025. A relação entre as duas só é calculada no MESMO ano letivo — por enquanto elas aparecem só lado a lado."
+    }
+  ],
+  "metodologia_resumo": [
+    "Oficial × estimativa: só os números com o registro do arquivo oficial entram nos destaques e na relação com as plataformas. A Estimativa Constela aparece à parte; os números gravados antes, sem o registro do arquivo oficial, aparecem marcados.",
+    "Sem resultado não é zero: cada falta vem com o motivo, e nenhum número é inventado, interpolado ou preenchido.",
+    "Sem ranking: as escolas aparecem sempre em ordem alfabética.",
+    "Escalas e redes diferentes não se comparam: SARESP, Saeb e ICA têm escalas próprias; a rede pública ou estadual aparece só como contexto da rede municipal.",
+    "Plataformas: entram só os alunos que a plataforma conhece no período; recortes com menos de 5 alunos não aparecem (e recortes vizinhos podem ficar escondidos junto); a soma da rede é só das escolas mostradas, com a coleta em dia.",
+    "Relação com as avaliações: por escola, com números oficiais, na mesma série e no mesmo ano letivo, com pelo menos 8 escolas; correlação de postos de Spearman com intervalo de 95%. Descreve associação entre escolas, nunca causa e efeito."
+  ],
+  "fontes": {
+    "1": {
+      "importacao_id": 1,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "arquivo_ficticio.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2025,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "inep_ica_municipios",
+      "modo": "upload",
+      "notas": []
+    },
+    "2": {
+      "importacao_id": 2,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "arquivo_ficticio.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2025,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "seduc_saresp_municipio",
+      "modo": "upload",
+      "notas": [],
+      "data_arquivo": "2026-01-12",
+      "data_arquivo_origem": "interna"
+    },
+    "4": {
+      "importacao_id": 4,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "arquivo_ficticio.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2023,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "inep_ideb_municipios",
+      "modo": "upload",
+      "notas": []
+    },
+    "5": {
+      "importacao_id": 5,
+      "fonte_nome": "Fonte fictícia de teste",
+      "arquivo_nome": "arquivo_ficticio.csv",
+      "arquivo_data": "2026-01-12T09:00:00",
+      "last_modified_origem": null,
+      "url_origem": null,
+      "edicao_arquivo": 2021,
+      "versao_rotulo": null,
+      "importado_em": "2026-01-13T10:00:00",
+      "coletado_em": null,
+      "citacao": "Dados fictícios de teste",
+      "licenca": "—",
+      "parser": "inep_saeb_planilha",
+      "modo": "upload",
+      "notas": []
+    }
+  }
+}

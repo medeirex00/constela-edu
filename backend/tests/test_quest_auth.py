@@ -94,7 +94,8 @@ def test_cartao_individual_nao_derruba_a_turma(cliente, db, escola_completa):
     assert resposta.status_code == 200, resposta.text
     assert resposta.content.startswith(b"%PDF")
 
-    # Só o QR do dono do cartão perdido muda; o colega segue intocado
+    # Só o cartão (QR e código) do dono do cartão perdido muda; o colega segue
+    # intocado
     assert _credencial_de(db, perdido.id).qr_token != qr_perdido_antes
     assert _credencial_de(db, colega.id).qr_token == qr_colega_antes
 
@@ -225,7 +226,10 @@ def test_aluno_inativo_recebe_mensagem_propria(cliente, db, escola_completa):
     assert "descansando" in resposta.json()["detail"]
 
 
-def test_regenerar_troca_qr_e_derruba_sessoes(cliente, db, escola_completa):
+def test_regenerar_troca_codigo_qr_e_derruba_sessoes(cliente, db, escola_completa):
+    """Regenerar revoga o cartão INTEIRO: o cartão impresso traz o QR e o código,
+    então trocar só o QR deixava o código do mesmo cartão entrando (revisão e97;
+    mais casos em test_quest_regenerar_revoga_cartao)."""
     escola = escola_completa["escola"]
     turma = escola_completa["turma"]
     aluno = escola_completa["alunos"][0]
@@ -239,14 +243,15 @@ def test_regenerar_troca_qr_e_derruba_sessoes(cliente, db, escola_completa):
     _gerar_cartoes(cliente, escola.id, turma.id, regenerar=True)
     credencial = _credencial_de(db, aluno.id)
 
-    # Código continua o mesmo (a criança decora); QR e sessões antigas caem
-    assert credencial.codigo_login == codigo
+    # Código e QR novos; sessões antigas caem; o código antigo não entra mais
+    assert credencial.codigo_login != codigo
     assert credencial.qr_token != qr_antigo
     resposta = TestClient(app).get(
         "/api/v1/quest/perfil",
         headers={"Authorization": f"Bearer {token_antigo}"})
     assert resposta.status_code == 401
-    assert _entrar(codigo).status_code == 200
+    assert _entrar(codigo).status_code == 401
+    assert _entrar(credencial.codigo_login).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -403,8 +408,8 @@ def test_b3_codigo_antigo_continua_valido(cliente, db, escola_completa):
 
 def test_b3_rotacionar_codigo_troca_codigo_qr_e_derruba_sessao(cliente, db,
                                                                escola_completa):
-    """Rotação opcional (virada de ano / vazamento): troca o CÓDIGO + o QR e
-    derruba as sessões — diferente do regenerar, que mantém o código."""
+    """Rotação (virada de ano / vazamento): troca o CÓDIGO + o QR e derruba as
+    sessões — o mesmo efeito do regenerar desde a revisão e97."""
     escola = escola_completa["escola"]
     turma = escola_completa["turma"]
     aluno = escola_completa["alunos"][0]

@@ -110,6 +110,32 @@ def test_importacao_dispara_push(cliente, db, escola_completa, monkeypatch):
     assert "Matific" in envios[0][0][0]["body"]
 
 
+def test_importacao_repetida_sem_dado_novo_nao_anuncia_zero_alunos(
+        cliente, db, escola_completa, monkeypatch):
+    """O mesmo relatório confirmado de novo (nenhum aluno com dado novo) recalcula as
+    notas, mas o push não manda a todos os aparelhos "0 alunos atualizados": diz que as
+    notas foram recalculadas com o que já estava gravado (o mesmo texto da
+    sincronização, f551682). Com aluno aplicado, o push continua com a contagem."""
+    enviados = []
+    monkeypatch.setattr(push, "notificar_escola",
+                        lambda _db, escola_id, titulo, corpo, dados=None, **kw:
+                        enviados.append(corpo) or 0)
+    escola_id = escola_completa["escola"].id
+    corpo = {"plataforma": "matific", "formato": "resumo", "tipo": "texto",
+             "linhas": [{"nome": aluno.nome, "aluno_id": aluno.id,
+                         "dados": {"atividades": 10 + i, "pontuacao_media": 70,
+                                   "estrelas": 30 + i}}
+                        for i, aluno in enumerate(escola_completa["alunos"])]}
+    for _ in range(2):
+        resposta = cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/confirmar",
+                                json=corpo)
+        assert resposta.status_code == 200, resposta.text
+    assert resposta.json()["alunos_aplicados_ids"] == []
+    assert enviados == [
+        "3 alunos atualizados na Matific. As notas já foram recalculadas.",
+        "Notas recalculadas com os dados já gravados da Matific."]
+
+
 # --- Sincronização ----------------------------------------------------------------
 
 def test_sincronizacao_devolve_pacote_completo(cliente, db, escola_completa):

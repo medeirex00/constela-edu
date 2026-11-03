@@ -32,22 +32,6 @@ CVE-2025-62727
 # Uploads da API têm teto de tamanho próprio (validação na camada de importação).
 CVE-2026-54283
 
-# --- pyasn1 (transitivo: python-jose[cryptography]==3.4.0 -> rsa -> pyasn1) ---
-# CVE-2026-30922 — DoS por decodificação ASN.1 sem limite (fix 0.6.3). Já isento
-# no pip-audit. Baixo risco no nosso uso: assinamos JWT com HS256 (não RSA/ECDSA),
-# então o caminho de decodificação ASN.1 vulnerável não é exercido.
-CVE-2026-30922
-# CVE-2026-59884/59885/59886 — nova leva de DoS no pyasn1 (todos HIGH, A:H). O fix
-# (0.6.4) NÃO é instalável isolado: python-jose 3.4.0 trava pyasn1<0.5.0. Mesmo
-# motivo/mitigação acima (HS256, sem caminho ASN.1) e já isentos no pip-audit
-# (PYSEC-2026-3455/3456/3457). IDs em CVE e GHSA para casar com o Trivy.
-CVE-2026-59884
-CVE-2026-59885
-CVE-2026-59886
-GHSA-m4p7-r5rc-7g4j
-GHSA-8ppf-4f7h-5ppj
-GHSA-hm4w-wwcw-mr6r
-
 # --- node-tar (transitivo da ÁRVORE DO EXPO: @expo/cli -> tar@6.2.1) ---
 # Path traversal / arbitrary file write. É ferramenta de BUILD do app MOBILE — NÃO
 # vai para o web nem para o backend de produção (constelaedu.com). O fix é o

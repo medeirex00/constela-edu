@@ -10,6 +10,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ReactNode } from "react";
 
 import { api, apiUpload } from "../lib/api";
+import { exigeDataDoRelatorio, instanteDoRelatorio } from "../lib/dataRelatorio";
 import { acharTurmaPorNome } from "../lib/nomes";
 import type { Aluno, Analise, Turma } from "../lib/types";
 import { useApp } from "./AppContext";
@@ -38,6 +39,14 @@ export interface ItemLote {
   ignorado: boolean;
   resultado?: "importado" | "erro" | "ignorado" | "pendente";
 }
+
+/** Resultado do recálculo final do lote (POST /recalcular). ``null`` = ainda
+ *  não rodou. A falha NÃO é engolida: os arquivos já estão gravados, mas as
+ *  notas e os rankings ficam com o valor antigo até recalcular. */
+export type EstadoRecalculo =
+  | { estado: "ok"; mensagem: string | null }
+  | { estado: "falhou"; erro: string }
+  | null;
 
 /** true quando o arquivo tem um destino resolvido e será enviado ao confirmar. */
 export function importavel(item: ItemLote): boolean {
@@ -104,17 +113,38 @@ interface LoteContexto {
   tempoMs: number;
   turmas: Turma[];
   emAndamento: boolean;
+  /** Resultado do recálculo final do lote (null = não rodou). */
+  recalculo: EstadoRecalculo;
+  recalculando: boolean;
+  /** Refaz o POST /recalcular do lote (depois de uma falha). */
+  refazerRecalculo: () => Promise<void>;
   adicionar: (novos: FileList | File[]) => void;
   removerArquivo: (indice: number) => void;
   limparArquivos: () => void;
   analisarTodos: () => Promise<void>;
-  importarTodos: () => Promise<void>;
+  /** `dataRelatorio` ("AAAA-MM-DD"): obrigatória quando algum arquivo é total
+   *  acumulado (formato "resumo" sem "Intervalo de datas") — ver `lib/dataRelatorio`. */
+  importarTodos: (dataRelatorio?: string) => Promise<void>;
   alternarIgnorar: (id: string) => void;
   vincular: (id: string, aluno: Aluno, turmaNome: string) => void;
   recomecar: () => void;
 }
 
 const Contexto = createContext<LoteContexto | null>(null);
+
+/** POST /recalcular do lote: devolve o resultado em vez de lançar. */
+async function recalcularEscola(escolaId: number): Promise<EstadoRecalculo> {
+  try {
+    const r = await api<{ mensagem?: string } | null>(
+      `/escolas/${escolaId}/importacoes/recalcular`, { method: "POST" });
+    return { estado: "ok", mensagem: r && typeof r.mensagem === "string" ? r.mensagem : null };
+  } catch (e) {
+    return {
+      estado: "falhou",
+      erro: e instanceof Error && e.message ? e.message : "Falha ao recalcular as notas.",
+    };
+  }
+}
 
 export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
   const { escolaId } = useApp();
@@ -124,6 +154,10 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
   const [progresso, setProgresso] = useState({ atual: 0, total: 0 });
   const [tempoMs, setTempoMs] = useState(0);
   const [turmas, setTurmas] = useState<Turma[]>([]);
+  const [recalculo, setRecalculo] = useState<EstadoRecalculo>(null);
+  const [recalculando, setRecalculando] = useState(false);
+  // Escola em que o lote foi importado (o recálculo refeito vale para ela).
+  const escolaDoLoteRef = useRef<number | null>(null);
   // Snapshot dos itens para o loop de importação (evita estado obsoleto).
   const itensRef = useRef<ItemLote[]>([]);
   itensRef.current = itens;
@@ -200,7 +234,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     setFase("conferencia");
   }, [escolaId, arquivos]);
 
-  const importarTodos = useCallback(async () => {
+  const importarTodos = useCallback(async (dataRelatorio = "") => {
     if (!escolaId) return;
     // A importação PERTENCE à escola em que começou: as gravações vão para ela
     // (URL explícita) mesmo que o usuário troque de escola no meio — o que NÃO
@@ -210,6 +244,8 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     const alvo = itensRef.current.filter(importavel);
     if (alvo.length === 0) return;
     setFase("importando");
+    setRecalculo(null);
+    escolaDoLoteRef.current = escolaDaImportacao;
     const inicio = Date.now();
     const total = alvo.length;
     const mapa = new Map(itensRef.current.map((it) => [it.id, { ...it }] as [string, ItemLote]));
@@ -225,6 +261,11 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
             aluno_id: it.acao.tipo === "importar" ? it.acao.alunoId : null,
             criar_em_turma_id: it.acao.tipo === "criar" ? it.acao.turmaId : null,
           }));
+        // Total acumulado: vai com a data do relatório (a tela a exige antes de
+        // gravar); sem ela, o servidor recusa em vez de datar com o relógio de agora.
+        const dataReferencia = exigeDataDoRelatorio(it.analise!)
+          ? instanteDoRelatorio(dataRelatorio)
+          : null;
         await api(`/escolas/${escolaDaImportacao}/importacoes/confirmar`, {
           method: "POST",
           body: JSON.stringify({
@@ -236,6 +277,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
             // "Intervalo de datas" do relatório (Matific): data os dados no período
             periodo_inicio: it.analise!.periodo_inicio || null,
             periodo_fim: it.analise!.periodo_fim || null,
+            data_referencia: dataReferencia,
             linhas,
             recalcular: false,
           }),
@@ -254,17 +296,26 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
       if (it.resultado) continue;
       it.resultado = it.ignorado ? "ignorado" : "pendente";
     }
-    try {
-      await api(`/escolas/${escolaDaImportacao}/importacoes/recalcular`, { method: "POST" });
-    } catch {
-      /* dados já gravados; o recálculo pode ser refeito na próxima importação */
-    }
+    // Os arquivos já estão gravados; o recálculo é o que leva os dados às notas
+    // e aos rankings. Se ele falhar, o relatório DIZ isso e oferece refazer —
+    // antes o erro era engolido e o lote aparecia como concluído por inteiro.
+    const resultadoRecalculo = await recalcularEscola(escolaDaImportacao);
     if (naEscola()) {
+      setRecalculo(resultadoRecalculo);
       setTempoMs(Date.now() - inicio);
       setItens([...mapa.values()]);
       setFase("relatorio");
     }
   }, [escolaId]);
+
+  const refazerRecalculo = useCallback(async () => {
+    const escolaDoLote = escolaDoLoteRef.current;
+    if (escolaDoLote === null || escolaIdRef.current !== escolaDoLote) return;
+    setRecalculando(true);
+    const resultado = await recalcularEscola(escolaDoLote);
+    if (escolaIdRef.current === escolaDoLote) setRecalculo(resultado);
+    setRecalculando(false);
+  }, []);
 
   const alternarIgnorar = useCallback((id: string) => {
     setItens((atuais) => atuais.map((it) => (it.id === id ? { ...it, ignorado: !it.ignorado } : it)));
@@ -290,6 +341,8 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     setItens([]);
     setProgresso({ atual: 0, total: 0 });
     setTempoMs(0);
+    setRecalculo(null);
+    escolaDoLoteRef.current = null;
     setTurmas([]); // turmas foram resolvidas contra o tenant anterior
     setFase("selecao");
   }, []);
@@ -308,6 +361,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
   return (
     <Contexto.Provider value={{
       fase, arquivos, itens, progresso, tempoMs, turmas, emAndamento,
+      recalculo, recalculando, refazerRecalculo,
       adicionar, removerArquivo, limparArquivos, analisarTodos, importarTodos,
       alternarIgnorar, vincular, recomecar,
     }}>

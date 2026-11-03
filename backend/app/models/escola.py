@@ -31,7 +31,10 @@ class Escola(Base):
     endereco: Mapped[str | None] = mapped_column(String(200), default=None)
     logotipo_url: Mapped[str | None] = mapped_column(String(500))
     ano_letivo_ativo: Mapped[int] = mapped_column(default=2026)
-    status: Mapped[str] = mapped_column(String(20), default="ativa")  # ativa | inativa
+    # ativa | inativa — só o Admin Global muda (PATCH /escolas). HOJE tira a escola
+    # das listas e do painel público, mas NÃO revoga o acesso de quem tem conta
+    # nela (decisão pendente do dono: docs/operacao/STATUS-ESCOLA-REDE.md).
+    status: Mapped[str] = mapped_column(String(20), default="ativa")
     # Rede/Secretaria à qual a escola pertence (nulo = escola avulsa, sem rede).
     # É o que o tier Secretaria agrega — sem tocar no isolamento por escola.
     rede_id: Mapped[int | None] = mapped_column(

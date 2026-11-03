@@ -694,7 +694,7 @@
 | 12.29 | Sem anúncios e sem rastreamento de terceiros | Fixa a proibição de qualquer anúncio ou SDK de tracking de terceiros na experiência da criança. |
 | 12.30 | Telemetria própria mínima e finalística | Define que só há telemetria própria, mínima e com finalidade pedagógica/de produto declarada. |
 | 12.31 | Segurança de assets/CDN e conteúdo público | Define o que pode ficar público na CDN (cosméticos, trilhas) sem expor dado de aluno nem gabarito. |
-| 12.32 | Regeneração de cartões | Fixa regeneração individual por aluno sem derrubar a turma, com código imutável e só o QR trocando. |
+| 12.32 | Regeneração de cartões | Fixa regeneração individual por aluno sem derrubar a turma; regenerar troca código e QR e derruba as sessões do aluno, e o cartão antigo para de entrar (revisão e97, a ratificar — Seção 12 §15). |
 | 12.33 | Mensagem para aluno transferido/arquivado | Define a mensagem acolhedora ('cartão descansando') em vez de 'código errado' que faria a criança se culpar. |
 | 12.34 | Tratamento de dados dos responsáveis | Define o cargo 'responsavel' em usuarios (e-mail/senha) e o escopo de leitura restrito a /quest/familia/*. |
 | 12.35 | ⚠️ Resposta a incidentes e vazamentos | Define o processo mínimo de detecção, contenção e notificação; o procedimento formal precisa ser definido pelo dono. |
@@ -1136,8 +1136,8 @@
 | 21.16 | Troubleshooting: 'É você?' e conta trocada | Como resolver a criança do turno seguinte herdando o astronauta anterior no tablet compartilhado (confirmação de boot, sair da conta). |
 | 21.17 | Troubleshooting: app não abre / cache do PWA | Diagnóstico de shell offline preso, service worker desatualizado e a lição do cache (trocar nome de arquivo, não só query string). |
 | 21.18 | Troubleshooting: áudio/narração não toca | Passos para o caso crítico de não-leitores sem áudio (permissão do navegador, volume do aparelho, fallback de narração). |
-| 21.19 | Regeneração de cartões em campo | Reemitir cartão individual sem derrubar a turma; o código nunca muda (a criança decora), só o QR é trocado. |
-| 21.20 | Cartão perdido/roubado e revogação de QR | Fluxo de revogação via token_version que invalida cartões antigos, e quando isso é necessário. |
+| 21.19 | Regeneração de cartões em campo | Reemitir cartão individual sem derrubar a turma; regenerar troca código e QR (o código antigo para de entrar e a criança passa a usar o novo); cartão esquecido não pede regeneração — consultar o código na folha do professor. |
+| 21.20 | Cartão perdido/roubado e revogação do cartão | Fluxo de revogação para cartão perdido, roubado ou QR vazado: regenerar o individual troca código e QR e incrementa o token_version, invalidando o cartão antigo e as sessões; revogar só o QR não basta (o cartão traz os dois). |
 | 21.21 | Aluno transferido/arquivado | Operação de saída de um aluno: perfil pausado e mensagem 'cartão descansando', preservando a autoestima da criança. |
 | 21.22 | Fluxo de incidente — detecção a escalonamento | Como o suporte detecta, triagem e escala um incidente de plataforma para a engenharia — ponte com a Seção 14 (severidades/on-call). |
 | 21.23 | Comunicação de incidente às escolas | Canal, tom (para adulto, não técnico) e cadência das atualizações durante uma indisponibilidade. |

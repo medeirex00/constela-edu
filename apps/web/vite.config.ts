@@ -6,7 +6,12 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
+      // "prompt": a versão nova ESPERA (sem skipWaiting) e o app decide a troca —
+      // aviso com clique no app logado, troca direta no telão/vitrine e na abertura.
+      // Com "autoUpdate" o plugin recarregava a página sozinho segundos depois de
+      // abrir (formulário em edição perdido) e a aba aberta o dia todo não via o
+      // deploy. Ver src/lib/pwaAtualizacao.ts e docs/operacao/PWA-ATUALIZACAO.md.
+      registerType: "prompt",
       includeAssets: ["favicon.png", "apple-touch-icon.png"],
       // Precache SÓ do app shell (build estático). Nada de cache de /api:
       // as respostas são autenticadas e multi-escola — não podem persistir

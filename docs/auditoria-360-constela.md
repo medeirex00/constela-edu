@@ -213,7 +213,7 @@ Prioridade: **P1** = agora · **P2** = 30 dias · **P3** = 30–90 dias · **P4*
 #### 🔴 C-05 — E-mail pessoal cravado no código é auto-promovido a `is_global` a cada boot
 **Confiança:** CONFIRMADO por *segurança* (PoC executado) · classificado como RISCO POTENCIAL por *arquitetura* — ver divergência **D2**
 
-- **Problema:** `_EMAIL_ADMIN_GLOBAL = "edumedeiros1405@gmail.com"` dispara `UPDATE usuarios SET is_global = true WHERE lower(email) = :email` em **todo boot de todo worker**. E `admin.py:211-231` permite que um admin **de escola** crie usuário com e-mail arbitrário.
+- **Problema:** `_EMAIL_ADMIN_GLOBAL = "<e-mail do dono>"` dispara `UPDATE usuarios SET is_global = true WHERE lower(email) = :email` em **todo boot de todo worker**. E `admin.py:211-231` permite que um admin **de escola** crie usuário com e-mail arbitrário.
 - **Evidência:** `backend/app/core/database.py:156-170`, chamado por `garantir_dados_base` em `backend/app/main.py:64`; criação livre em `admin.py:211-231`. PoC: admin local cria usuário com o e-mail (201, `is_global=False`); após reinício, `is_global=True`; login do atacante 200; em seguida `GET /redes/panorama-global` 200, `GET /presenca/sessoes` 200, `GET escola B /backup` 200 (**PII completa de outra escola**).
 - **Ressalva honesta (divergência entre frentes):** na produção atual a conta **já existe** e `criar_usuario` devolve 409 por e-mail duplicado — inclusive com `status="excluido"`. **Não é exploração aberta hoje.** O vetor vale para toda instância onde a conta não exista: **município novo, staging, homologação, restauração de desastre**. A proteção atual é acidental, não desenhada.
 - **Impacto técnico:** configuração de tenant dentro do código-fonte de um SaaS multi-tenant, aplicada por escrita idempotente a cada boot.
@@ -1203,7 +1203,7 @@ Todas as vulnerabilidades abaixo foram levantadas pela frente de segurança (com
 2. **Se a Secretaria abrir o Painel da Rede agora, qual escola aparece como "melhor" — e qual seria a melhor pelo índice per capita 0–1000 que já existe no mesmo arquivo?** Alguém já rodou as duas listas lado a lado? (`rede.py:389` × `:320`)
 3. **Qual é a "Média geral" verdadeira da Escola X: os 38,6 do Dashboard do coordenador ou os 77,3 do painel da Secretaria?** Qual dos dois números foi para a última reunião? (`rankings.py:379` × `rede.py:102`)
 4. **Quem hoje tem conta de admin de escola no piloto e, portanto, pode trocar a senha da conta da Secretaria com um único PATCH?** (`admin.py:291`)
-5. **O e-mail `edumedeiros1405@gmail.com` já existe no banco de produção, no staging, no ambiente de homologação e em cada backup já restaurado — ou em algum deles ele ainda está livre?** (`database.py:156`)
+5. **O e-mail `<e-mail do dono>` já existe no banco de produção, no staging, no ambiente de homologação e em cada backup já restaurado — ou em algum deles ele ainda está livre?** (`database.py:156`)
 6. **Alguém já clicou em "Restaurar backup" em produção?** Se sim, quantas linhas de `identidades_externas` e de `quest_perfis` existiam antes e existem depois? (`backup.py:131`)
 7. **Se uma mãe pedir hoje a exclusão dos dados da filha, quem executa, em quanto tempo, e como se prova que o nome saiu de `logs_auditoria` — sabendo que 4 de 5 formatos escapam do anonimizador?** (`academico.py:493`)
 8. **Quantas linhas tem `logs_auditoria` hoje e qual é a taxa de crescimento mensal?** Existe algum plano para quando ela dominar o banco? (`models/nota.py:47`)

@@ -3,30 +3,78 @@
 SQLAlchemy 2.0 com ORM declarativo. O mesmo código funciona em SQLite
 (desenvolvimento) e PostgreSQL (produção) — basta trocar DATABASE_URL.
 """
+import os
+
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
 
 is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
-if is_sqlite:
-    engine = create_engine(
-        settings.DATABASE_URL,
-        connect_args={"check_same_thread": False},
-    )
-else:
+
+def argumentos_de_conexao_pg(url: str) -> dict:
+    """``connect_args`` do driver PostgreSQL: o PRAZO para abrir uma conexão nova.
+
+    Sem ``connect_timeout``, a conexão nova com um banco que não responde (host
+    fora do ar, rede parada, proxy que aceita o TCP e não fala) fica presa no
+    handshake pelo padrão do driver — 130 s no psycopg 3.2 da imagem —, com o
+    worker uvicorn junto; o ``pool_pre_ping`` não ajuda, porque é justamente a
+    reconexão que pendura. O prazo vem de ``DB_CONNECT_TIMEOUT`` (padrão 10 s) e
+    vai ao psycopg como o ``connect_timeout`` da libpq (o driver não aceita
+    menos de 2 s).
+
+    Fica de fora (dicionário vazio): URL que não é PostgreSQL, ``DB_CONNECT_TIMEOUT``
+    zero ou negativo (sem prazo do app, padrão do driver), URL que já declara o
+    seu ``?connect_timeout=`` e ambiente com a variável ``PGCONNECT_TIMEOUT`` da
+    libpq definida e não vazia (vale também ``0``) — o ``connect_args``
+    sobrescreveria o da URL e esconderia o da variável (o psycopg só a lê quando o
+    parâmetro não vem), e a escolha explícita do operador vale mais que o padrão."""
+    u = make_url(url)
+    if u.get_backend_name() != "postgresql" or "connect_timeout" in u.query:
+        return {}
+    if os.environ.get("PGCONNECT_TIMEOUT", "").strip():
+        return {}
+    prazo = settings.DB_CONNECT_TIMEOUT
+    return {"connect_timeout": prazo} if prazo > 0 else {}
+
+
+def opcoes_do_engine(url: str) -> dict:
+    """Argumentos do ``create_engine`` para a URL (SQLite em dev, PostgreSQL em produção).
+
+    ``hide_parameters=True`` nos DOIS ramos: sem ele, toda exceção de banco
+    (IntegrityError, DataError, conexão caída no meio da consulta) traz
+    ``[parameters: (...)]`` no próprio texto — o nome da criança no INSERT/UPDATE
+    de aluno, o termo do ``?busca=``, o código ou o QR do Quest no caminho de
+    transição. Esse texto vai inteiro para o log de erro (``erro_nao_tratado`` e o
+    ``logger.exception`` da sync gravam o traceback) e para o Sentry (o valor da
+    exceção; ``send_default_pii=False`` e ``include_local_variables=False`` não o
+    cobrem). Com a opção, a mensagem mantém o SQL e troca os valores por "[SQL
+    parameters hidden ...]". Não cobre o que o PRÓPRIO PostgreSQL escreve na
+    mensagem (o ``DETAIL: Key (...)=(...)`` de uma violação de UNIQUE leva o valor
+    da coluna indexada; nenhum índice único de hoje tem nome de pessoa)."""
+    if url.startswith("sqlite"):
+        return {"connect_args": {"check_same_thread": False}, "hide_parameters": True}
     # Banco de rede (PostgreSQL em produção): pool dimensionado e verificação
     # de conexões mortas antes de reusar (pool_pre_ping) evitam erros
     # intermitentes após timeouts do banco. Total por worker uvicorn =
-    # DB_POOL_SIZE + DB_MAX_OVERFLOW.
-    engine = create_engine(
-        settings.DATABASE_URL,
-        pool_pre_ping=True,
-        pool_size=settings.DB_POOL_SIZE,
-        max_overflow=settings.DB_MAX_OVERFLOW,
-        pool_recycle=settings.DB_POOL_RECYCLE,
-    )
+    # DB_POOL_SIZE + DB_MAX_OVERFLOW. Conexão NOVA com prazo para abrir
+    # (``argumentos_de_conexao_pg``).
+    opcoes = {
+        "pool_pre_ping": True,
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_MAX_OVERFLOW,
+        "pool_recycle": settings.DB_POOL_RECYCLE,
+        "hide_parameters": True,
+    }
+    connect_args = argumentos_de_conexao_pg(url)
+    if connect_args:
+        opcoes["connect_args"] = connect_args
+    return opcoes
+
+
+engine = create_engine(settings.DATABASE_URL, **opcoes_do_engine(settings.DATABASE_URL))
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).

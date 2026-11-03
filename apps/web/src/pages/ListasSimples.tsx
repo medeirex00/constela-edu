@@ -1,7 +1,24 @@
-import { Check, Copy, Pencil, School, Trash2, UserPlus, X } from "lucide-react";
+import { Check, Copy, GraduationCap, Pencil, Trash2, UserPlus, X } from "lucide-react";
 import { useState } from "react";
 
-import { Badge, Botao, Campo, Card, Carregando, Mensagem, Modal, PageHeader, Vazio, estiloInput } from "../components/ui";
+import { CabecalhoCartao, EsqueletoLista, copiarTexto, estiloCheckbox } from "../components/PessoasUi";
+import { TabelaRolavel } from "../components/TabelaRolavel";
+import {
+  Avatar,
+  Botao,
+  Campo,
+  Card,
+  Chip,
+  Confirmacao,
+  EmailQuebravel,
+  Erro,
+  Mensagem,
+  Modal,
+  PageHeader,
+  Vazio,
+  classesTabela,
+  estiloInput,
+} from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
@@ -13,6 +30,14 @@ interface AcessoCriado {
   email: string;
   senha: string;
 }
+
+// No celular (< 640 px) os botões da linha ganham 40 px (alvo de toque).
+const estiloBotaoLinha =
+  "grid h-9 w-9 place-items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 max-sm:h-10 max-sm:w-10";
+
+// Celular (< 640 px): células mais justas na tabela da equipe.
+const th = `${classesTabela.th} max-sm:px-3`;
+const td = `${classesTabela.td} max-sm:px-3`;
 
 /** Modal "Adicionar professor": cria o professor, vincula a turma sob a sua
  *  responsabilidade e (opcional) cria a conta de acesso com senha gerada —
@@ -33,10 +58,11 @@ function ModalNovoProfessor({ aberto, turmas, aoFechar, aoCriar }: {
   const [erro, setErro] = useState("");
   const [acesso, setAcesso] = useState<AcessoCriado | null>(null);
   const [criadoSemAcesso, setCriadoSemAcesso] = useState(false);
+  const [copiado, setCopiado] = useState(false);
 
   function limparEFechar() {
     setNome(""); setEmail(""); setTurmaId(""); setCriarAcesso(true);
-    setErro(""); setAcesso(null); setCriadoSemAcesso(false);
+    setErro(""); setAcesso(null); setCriadoSemAcesso(false); setCopiado(false);
     aoFechar();
   }
 
@@ -76,21 +102,24 @@ function ModalNovoProfessor({ aberto, turmas, aoFechar, aoCriar }: {
             segurança a senha não fica salva e não poderá ser vista de novo —
             se for perdida, use Usuários → Redefinir senha para gerar um novo link.
           </Mensagem>
-          <div className="space-y-2 rounded-lg bg-zinc-100 p-4 text-sm dark:bg-zinc-800">
-            <p><span className="text-zinc-500">E-mail:</span> <strong>{acesso.email}</strong></p>
-            <p><span className="text-zinc-500">Senha:</span>{" "}
-              <strong className="font-mono">{acesso.senha}</strong></p>
+          <div className="space-y-2 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm dark:border-indigo-500/20 dark:bg-indigo-500/10">
+            <p><span className="text-zinc-600 dark:text-zinc-300">E-mail:</span> <strong>{acesso.email}</strong></p>
+            <p><span className="text-zinc-600 dark:text-zinc-300">Senha:</span>{" "}
+              <strong className="select-all font-mono">{acesso.senha}</strong></p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2.5">
             <Botao
-              variante="neutro"
-              onClick={() => navigator.clipboard.writeText(
-                `Acesso ao Constela Edu\nE-mail: ${acesso.email}\nSenha: ${acesso.senha}`)}
+              variante="secundario"
+              onClick={() => copiarTexto(
+                `Acesso ao Constela Edu\nE-mail: ${acesso.email}\nSenha: ${acesso.senha}`,
+                () => setCopiado(true))}
             >
-              <Copy size={14} /> Copiar acesso
+              {copiado ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
+              {copiado ? "Copiado!" : "Copiar acesso"}
             </Botao>
             <Botao onClick={limparEFechar}>Concluir</Botao>
           </div>
+          <p role="status" aria-live="polite" className="sr-only">{copiado ? "Acesso copiado." : ""}</p>
         </div>
       ) : criadoSemAcesso ? (
         <div className="space-y-4">
@@ -119,20 +148,22 @@ function ModalNovoProfessor({ aberto, turmas, aoFechar, aoCriar }: {
               ))}
             </select>
           </Campo>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="h-4 w-4 accent-indigo-600"
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-200/80 p-3.5 text-sm transition-colors hover:border-indigo-200 dark:border-zinc-700">
+            <input type="checkbox" className={`mt-0.5 ${estiloCheckbox}`}
                    checked={criarAcesso}
                    onChange={(e) => setCriarAcesso(e.target.checked)}
                    disabled={ocupado} />
-            Criar conta de acesso (aparece em Usuários, com senha gerada)
+            <span>
+              <span className="font-medium">Criar conta de acesso (aparece em Usuários, com senha gerada)</span>
+              <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
+                Com a conta, o professor entra no sistema e vê somente as turmas
+                dele — posição e pontos dos alunos, sem os dados de gestão.
+              </span>
+            </span>
           </label>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Com a conta, o professor entra no sistema e vê somente as turmas
-            dele — posição e pontos dos alunos, sem os dados de gestão.
-          </p>
           {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-          <div className="flex justify-end gap-2">
-            <Botao type="button" variante="neutro" onClick={limparEFechar} disabled={ocupado}>
+          <div className="flex justify-end gap-2.5 pt-1">
+            <Botao type="button" variante="secundario" onClick={limparEFechar} disabled={ocupado}>
               Cancelar
             </Botao>
             <Botao type="submit" disabled={ocupado || !nome.trim() || !email.trim()}>
@@ -234,6 +265,7 @@ export function Professores() {
   // Turmas de cada professor (Turma.professor_id → nomes), para a coluna.
   const turmasDe = (professorId: number) =>
     (turmas ?? []).filter((t) => t.professor_id === professorId).map((t) => t.nome);
+  const lista = professores ?? [];
 
   return (
     <div>
@@ -242,7 +274,7 @@ export function Professores() {
         descricao="Equipe cadastrada nesta escola e as turmas sob responsabilidade de cada um."
         acoes={podeEditar ? (
           <Botao onClick={() => setModalAberto(true)}>
-            <UserPlus size={15} /> Adicionar professor
+            <UserPlus size={16} aria-hidden /> Adicionar professor
           </Botao>
         ) : undefined}
       />
@@ -252,126 +284,141 @@ export function Professores() {
       {aviso && (
         <div className="mb-4"><Mensagem tipo={aviso.tipo}>{aviso.texto}</Mensagem></div>
       )}
-      <Card>
+      <Card className="overflow-hidden">
+        <CabecalhoCartao
+          titulo="Equipe docente"
+          contagem={professores ? `${lista.length} professor${lista.length === 1 ? "" : "es"}` : undefined}
+        />
         {carregando ? (
-          <Carregando />
+          <EsqueletoLista texto="Carregando professores..." />
         ) : erro ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erro.message} />
-        ) : (professores ?? []).length === 0 ? (
-          <Vazio titulo="Nenhum professor cadastrado"
-                 descricao="Use “Adicionar professor” para cadastrar o primeiro." />
+          <Erro descricao={erro.message} aoTentar={carregar} />
+        ) : lista.length === 0 ? (
+          <Vazio icone={GraduationCap} titulo="Nenhum professor cadastrado"
+                 descricao={podeEditar ? "Use “Adicionar professor” para cadastrar o primeiro." : undefined} />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                <th className="px-4 py-2 font-medium">Nome</th>
-                <th className="px-4 py-2 font-medium">E-mail</th>
-                <th className="px-4 py-2 font-medium">Turmas</th>
-                {podeEditar && <th className="w-24 px-4 py-2" />}
-              </tr>
-            </thead>
-            <tbody>
-              {(professores ?? []).map((professor) => (
-                <tr key={professor.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                  <td className="px-4 py-2.5 font-medium">
-                    {editando === professor.id ? (
-                      <input
-                        className={`${estiloInput} w-56`}
-                        value={nomeEdit}
-                        autoFocus
-                        minLength={2}
-                        disabled={salvando}
-                        aria-label="Nome do professor"
-                        onChange={(e) => setNomeEdit(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") salvarEdicao(professor);
-                          if (e.key === "Escape") setEditando(null);
-                        }}
-                      />
-                    ) : (
-                      <span className="inline-flex items-center gap-2">
-                        <School size={14} className="text-zinc-300 dark:text-zinc-600" />
-                        {professor.nome}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-zinc-500 dark:text-zinc-400">
-                    {editando === professor.id ? (
-                      <input
-                        type="email"
-                        className={`${estiloInput} w-56`}
-                        value={emailEdit}
-                        placeholder="email@escola.com"
-                        disabled={salvando}
-                        aria-label="E-mail do professor"
-                        onChange={(e) => setEmailEdit(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") salvarEdicao(professor);
-                          if (e.key === "Escape") setEditando(null);
-                        }}
-                      />
-                    ) : (
-                      professor.email ?? "—"
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span className="flex flex-wrap gap-1">
-                      {turmasDe(professor.id).length === 0
-                        ? <span className="text-zinc-400">—</span>
-                        : turmasDe(professor.id).map((nome) => (
-                            <Badge key={nome} tom="destaque">{nome}</Badge>
-                          ))}
-                    </span>
-                  </td>
-                  {podeEditar && (
-                    <td className="px-4 py-2.5 text-right">
-                      {editando === professor.id ? (
-                        <span className="inline-flex gap-1">
-                          <button
-                            type="button"
-                            title="Salvar"
-                            disabled={salvando}
-                            onClick={() => salvarEdicao(professor)}
-                            className="rounded p-1 text-emerald-600 hover:bg-emerald-50 disabled:opacity-40 dark:hover:bg-emerald-500/10"
-                          >
-                            <Check size={16} />
-                          </button>
-                          <button
-                            type="button"
-                            title="Cancelar"
-                            onClick={() => setEditando(null)}
-                            className="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                          >
-                            <X size={16} />
-                          </button>
-                        </span>
-                      ) : (
-                        <span className="inline-flex gap-1">
-                          <button
-                            type="button"
-                            title="Editar nome e e-mail"
-                            onClick={() => abrirEdicao(professor)}
-                            className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
-                          >
-                            <Pencil size={15} />
-                          </button>
-                          <button
-                            type="button"
-                            title="Excluir professor"
-                            aria-label={`Excluir ${professor.nome}`}
-                            onClick={() => { setAviso(null); setExcluir(professor); }}
-                            className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                  )}
+          // Celular (< 640 px): a tabela rola de lado dentro do cartão, com o aviso em
+          // texto acima dela, e a coluna de ações (editar, excluir) fica presa à direita
+          // (`presa-celular`). O avatar (decorativo) some no celular para dar espaço ao
+          // nome; o e-mail só quebra no "@" (antes: `break-all`, letra a letra).
+          <TabelaRolavel rotulo="Equipe docente: tabela completa">
+            <table className={classesTabela.tabela}>
+              <thead>
+                <tr>
+                  <th className={th}>Professor</th>
+                  <th className={th}>E-mail</th>
+                  <th className={th}>Turmas</th>
+                  {podeEditar && <th className={`w-28 ${classesTabela.th} presa-celular max-sm:px-2`}><span className="sr-only">Ações</span></th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {lista.map((professor) => {
+                  const suasTurmas = turmasDe(professor.id);
+                  return (
+                    <tr key={professor.id} className={classesTabela.tr}>
+                      <td className={td}>
+                        {editando === professor.id ? (
+                          <input
+                            className={`${estiloInput} min-w-[12rem]`}
+                            value={nomeEdit}
+                            autoFocus
+                            minLength={2}
+                            disabled={salvando}
+                            aria-label="Nome do professor"
+                            onChange={(e) => setNomeEdit(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") salvarEdicao(professor);
+                              if (e.key === "Escape") setEditando(null);
+                            }}
+                          />
+                        ) : (
+                          <span className="flex items-center gap-3">
+                            <Avatar nome={professor.nome} chave={`prof-${professor.id}`} className="hidden sm:grid" />
+                            {/* Celular: até duas linhas (base de 8rem), não uma palavra por linha. */}
+                            <span className="font-semibold text-zinc-900 max-sm:min-w-[8rem] dark:text-zinc-100">{professor.nome}</span>
+                          </span>
+                        )}
+                      </td>
+                      <td className={`text-zinc-500 dark:text-zinc-400 ${td}`}>
+                        {editando === professor.id ? (
+                          <input
+                            type="email"
+                            className={`${estiloInput} min-w-[12rem]`}
+                            value={emailEdit}
+                            placeholder="email@escola.com"
+                            disabled={salvando}
+                            aria-label="E-mail do professor"
+                            onChange={(e) => setEmailEdit(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") salvarEdicao(professor);
+                              if (e.key === "Escape") setEditando(null);
+                            }}
+                          />
+                        ) : (
+                          <span>{professor.email ? <EmailQuebravel email={professor.email} /> : "—"}</span>
+                        )}
+                      </td>
+                      <td className={td}>
+                        <span className="flex flex-wrap gap-1.5">
+                          {suasTurmas.length === 0
+                            ? <span className="text-zinc-500 dark:text-zinc-400">—</span>
+                            : suasTurmas.map((nome) => <Chip key={nome}>{nome}</Chip>)}
+                        </span>
+                      </td>
+                      {podeEditar && (
+                        <td className="presa-celular px-4 py-2 text-right max-sm:px-2">
+                          {editando === professor.id ? (
+                            <span className="inline-flex gap-1">
+                              <button
+                                type="button"
+                                title="Salvar"
+                                aria-label={`Salvar nome e e-mail de ${professor.nome}`}
+                                disabled={salvando}
+                                onClick={() => salvarEdicao(professor)}
+                                className={`${estiloBotaoLinha} text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10`}
+                              >
+                                <Check size={17} aria-hidden />
+                              </button>
+                              <button
+                                type="button"
+                                title="Cancelar"
+                                aria-label="Cancelar a edição"
+                                onClick={() => setEditando(null)}
+                                className={`${estiloBotaoLinha} text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800`}
+                              >
+                                <X size={17} aria-hidden />
+                              </button>
+                            </span>
+                          ) : (
+                            <span className="inline-flex gap-1">
+                              <button
+                                type="button"
+                                title="Editar nome e e-mail"
+                                aria-label={`Editar nome e e-mail de ${professor.nome}`}
+                                onClick={() => abrirEdicao(professor)}
+                                className={`${estiloBotaoLinha} text-zinc-500 hover:bg-indigo-50 hover:text-indigo-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-indigo-300`}
+                              >
+                                <Pencil size={16} aria-hidden />
+                              </button>
+                              <button
+                                type="button"
+                                title="Excluir professor"
+                                aria-label={`Excluir ${professor.nome}`}
+                                onClick={() => { setAviso(null); setExcluir(professor); }}
+                                className={`${estiloBotaoLinha} text-zinc-500 hover:bg-rose-50 hover:text-rose-600 dark:text-zinc-400 dark:hover:bg-rose-500/10 dark:hover:text-rose-300`}
+                              >
+                                <Trash2 size={16} aria-hidden />
+                              </button>
+                            </span>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TabelaRolavel>
         )}
       </Card>
 
@@ -382,32 +429,25 @@ export function Professores() {
         aoCriar={carregar}
       />
 
-      <Modal titulo="Excluir professor" aberto={excluir != null} aoFechar={() => setExcluir(null)}>
+      <Confirmacao
+        titulo="Excluir professor"
+        aberto={excluir != null}
+        aoFechar={() => setExcluir(null)}
+        aoConfirmar={confirmarExclusao}
+        rotuloConfirmar={removendo ? "Excluindo..." : "Excluir definitivamente"}
+        variante="perigo"
+        ocupado={removendo}
+      >
         {excluir && (
-          <div className="space-y-4">
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">
-              Esta ação é{" "}
-              <strong className="text-red-600 dark:text-red-400">irreversível</strong>. O professor{" "}
-              <strong>{excluir.nome}</strong> será removido da equipe. As turmas dele{" "}
-              <strong>não</strong> serão apagadas — apenas ficarão sem titular, para você revincular.
-              A conta de acesso (login) continua em <strong>Usuários</strong>.
-            </p>
-            <div className="flex justify-end gap-2">
-              <Botao variante="neutro" onClick={() => setExcluir(null)} disabled={removendo}>
-                Cancelar
-              </Botao>
-              <button
-                type="button"
-                onClick={confirmarExclusao}
-                disabled={removendo}
-                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Trash2 size={15} /> {removendo ? "Excluindo..." : "Excluir definitivamente"}
-              </button>
-            </div>
-          </div>
+          <p>
+            Esta ação é{" "}
+            <strong className="text-rose-600 dark:text-rose-400">irreversível</strong>. O professor{" "}
+            <strong>{excluir.nome}</strong> será removido da equipe. As turmas dele{" "}
+            <strong>não</strong> serão apagadas — apenas ficarão sem titular, para você revincular.
+            A conta de acesso (login) continua em <strong>Usuários</strong>.
+          </p>
         )}
-      </Modal>
+      </Confirmacao>
     </div>
   );
 }

@@ -56,7 +56,7 @@ def test_cria_quando_nao_ha_correspondente_inequivoco(db, escola_completa):
 
 
 def test_formato_sed_com_codigo_reusa_canonica_e_guarda_codigo(db, escola_completa):
-    """Caso ABRAÃO (Debora Pilon): a base tem "4ºC"; o relatório traz
+    """Caso da turma em formato SED (escola 11): a base tem "4ºC"; o relatório traz
     "4 ANO C INTEGRAL (300303525)". Deve REUSAR a "4ºC" (não criar fantasma) e o
     código externo (SED) NÃO entra no nome — vai para Turma.codigo_externo."""
     escola = escola_completa["escola"]

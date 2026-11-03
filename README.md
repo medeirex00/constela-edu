@@ -33,7 +33,7 @@ python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Cria a escola JORGE PASSOS, o usuário admin e as configurações padrão.
+# Cria uma escola de demonstração FICTÍCIA, o usuário admin e as configurações padrão.
 # --demo adiciona turmas, alunos e notas de exemplo para explorar o sistema.
 python scripts/seed.py --demo
 
@@ -88,7 +88,10 @@ concluída).
 ## Produção com Docker (PostgreSQL + API + Web)
 
 ```bash
-cp .env.example .env   # defina POSTGRES_PASSWORD e SECRET_KEY
+cp .env.example .env   # defina POSTGRES_PASSWORD, SECRET_KEY e DATA_ENCRYPTION_KEY
+                       # (as chaves vêm vazias: sem elas o compose não sobe)
+                       # POSTGRES_PASSWORD só com letras e dígitos (vai crua na
+                       # DATABASE_URL do compose)
 docker compose up -d
 # Web em http://localhost:8080 — API na mesma origem em /api/v1
 # Primeira vez: docker compose exec backend python scripts/seed.py

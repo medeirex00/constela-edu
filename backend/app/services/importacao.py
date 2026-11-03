@@ -192,7 +192,16 @@ def _semelhante(texto: str, sinonimo: str) -> bool:
     """
     if _semelhante_forte(texto, sinonimo):
         return True
-    return bool(texto) and SequenceMatcher(None, texto, sinonimo).ratio() >= 0.82
+    if not texto:
+        return False
+    # Teto EXATO da razão: ratio = 2·M/(|a|+|b|) com M ≤ min(|a|, |b|). Se nem o teto
+    # chega a 0,82, a resposta já é False — sem pagar o SequenceMatcher, cujo custo
+    # cresce com o texto (uma célula de 1 MB custava ~6 s de CPU, e97). Na prática,
+    # texto com mais de 200 caracteres nunca casa com um sinônimo (todos curtos).
+    # A margem (0,81) só protege do arredondamento: a decisão é a mesma de antes.
+    if 2 * min(len(texto), len(sinonimo)) < 0.81 * (len(texto) + len(sinonimo)):
+        return False
+    return SequenceMatcher(None, texto, sinonimo).ratio() >= 0.82
 
 
 def _casar_coluna(celula: str, colunas: dict[str, list[str]],
@@ -255,9 +264,15 @@ class Analise:
     # acumulado e data o snapshot no fim do intervalo.
     periodo_inicio: str = ""
     periodo_fim: str = ""
+    # Só as respostas da API (sync): linhas que vieram e NÃO viraram linha de
+    # importação, por motivo ({"sem_data": 2}) — a sync as conta em vez de as
+    # perder em silêncio. E os campos numéricos AUSENTES ({campo: nº de linhas}),
+    # a forma estruturada do aviso "Campos ausentes…" de ``erros_gerais``.
+    descartadas: dict = field(default_factory=dict)
+    campos_ausentes: dict = field(default_factory=dict)
 
 
-_RODAPES = ("total", "media", "pagina", "page", "gerado em", "relatorio",
+_RODAPES =("total", "media", "pagina", "page", "gerado em", "relatorio",
             "turma", "escola", "professor", "periodo", "data:")
 _STOPWORDS_NOME = _RODAPES + ("nome", "aluno", "estudante")
 
@@ -490,9 +505,27 @@ def _estrategia_rotulos(linhas_texto: list[str], plataforma: str) -> Analise | N
 # Estratégia 4 — POSICIONAL: "Nome Sobrenome 42 85,5 120" sem cabeçalho
 # --------------------------------------------------------------------------
 
+# Nome (5+ caracteres sem dígito) e até 8 números separados por espaço. Escrita SEM
+# ambiguidade, para o tempo crescer em linha reta com o tamanho da linha. A anterior,
+# ``^\s*([^\d]{5,}?)\s+((?:[\d.,%]+\s*){1,8})$``, aninhava quantificadores: o mesmo
+# "12345" podia ser 1, 2, ... 5 números, e numa linha que NÃO casa o ``re`` tentava
+# todos os jeitos. ~50 caracteres com dígitos no fim levavam ~2 s, ~70 levavam
+# minutos, e o ``re`` segura a GIL: o processo da API inteiro congelava. Mesmo
+# resultado da anterior (conferido em amostras e nas linhas dos PDFs reais):
+#   * os números: um, depois até 7 precedidos de espaço (cada número começa onde o
+#     espaço acaba: não há dois jeitos de cortar);
+#   * o nome termina num caractere que não é espaço (ou tem exatamente 5): terminar
+#     no meio do espaço antes dos números dá o mesmo corte que terminar no começo
+#     dele, que já foi tentado — sem isso, uma lacuna de N espaços custava N²;
+#   * o espaço do começo da linha é possessivo (``\s*+``): devolvê-lo ao nome só
+#     casava nomes de menos de 5 letras visíveis, que ``_parece_nome`` recusa.
+#   O grupo 2 deixou de levar os espaços do fim da linha (quem usa faz ``split()``).
 _LINHA_POSICIONAL = re.compile(
-    r"^\s*([^\d]{5,}?)\s+((?:[\d.,%]+\s*){1,8})$"
+    r"^\s*+(\D{5}|\D{4,}?[^\s\d])\s+([\d.,%]+(?:\s+[\d.,%]+){0,7})\s*$"
 )
+#: Linha maior que isto não é linha de relatório (a maior dos PDFs reais tem ~300
+#: caracteres): a estratégia posicional nem tenta.
+_MAX_LINHA_POSICIONAL = 1_000
 
 
 def _estrategia_posicional(linhas_texto: list[str], plataforma: str) -> Analise | None:
@@ -500,7 +533,7 @@ def _estrategia_posicional(linhas_texto: list[str], plataforma: str) -> Analise 
     analise = Analise(plataforma=plataforma, formato="resumo", estrategia="posicional")
 
     for numero, linha in enumerate(linhas_texto, start=1):
-        if _linha_rodape(linha):
+        if len(linha) > _MAX_LINHA_POSICIONAL or _linha_rodape(linha):
             continue
         par = _LINHA_POSICIONAL.match(linha)
         if not par or not _parece_nome(par.group(1)):
@@ -570,9 +603,12 @@ def _id_livro_elefante(valor) -> int | None:
     return valor if isinstance(valor, int) and valor > 0 else None
 
 
-def _student_id_elefante(valor) -> str:
+def student_id_elefante(valor) -> str:
     """studentId do Elefante como texto estável ("12345"); "" se ausente/ilegível.
-    Aceita int ou string numérica — nunca um id genérico de outro registro."""
+    Aceita int ou string numérica — nunca um id genérico de outro registro.
+
+    Regra ÚNICA: é com ela que a identidade (``elefante_student_id``) é gravada e
+    que o conector anota os ``ids_recebidos`` do aviso de contas ausentes."""
     texto = str(valor if valor is not None else "").strip()
     if texto.endswith(".0"):
         texto = texto[:-2]
@@ -635,12 +671,14 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         # conector (pula quem não mudou); a UNIQUE de Leitura garante zero
         # duplicidade quando reprocessa.
         linhas_l: list[LinhaImportacao] = []
+        descartadas_l: dict[str, int] = {}
         for i, r in enumerate(payload["leituras"], start=1):
             if not isinstance(r, dict):
                 continue
             nome = str(r.get("nome") or r.get("studentName") or "").strip()
             titulo = str(r.get("bookTitle") or r.get("livro") or "").strip()
             if not nome or not titulo:
+                descartadas_l["sem_nome_ou_titulo"] = descartadas_l.get("sem_nome_ou_titulo", 0) + 1
                 continue
             data_iso = _data_iso_elefante(r.get("lastReadWhen") or r.get("data"))
             if not data_iso:
@@ -648,6 +686,7 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
                 # dataria em "hoje" e ela cairia no período ERRADO do prêmio). O
                 # total do aluno já está no snapshot agregado (ranking "Todo o
                 # histórico"); aqui só entram leituras com data real.
+                descartadas_l["sem_data"] = descartadas_l.get("sem_data", 0) + 1
                 continue
             tempo_seg = _int_api(r.get("totalTimeSpent", r.get("tempo_livro_seg")), None)
             dados_l = {
@@ -666,24 +705,28 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
                 dados_l["elefante_id"] = elefante_id
             # IDENTIDADE do ALUNO no Elefante (studentId): casa antes do nome e é
             # gravada no vínculo aluno↔plataforma na confirmação.
-            sid = _student_id_elefante(r.get("studentId"))
+            sid = student_id_elefante(r.get("studentId"))
             if sid:
                 dados_l["elefante_student_id"] = sid
+            if nome_de_um_token(nome):
+                dados_l["nome_incompleto"] = True   # ver ``nome_de_um_token``
             linhas_l.append(LinhaImportacao(numero=i, nome=nome, dados=dados_l))
         return Analise(
             plataforma=plataforma, formato="leituras", estrategia="api-elefante",
             mensagem_deteccao="Histórico de leitura por aluno (API Elefante Letrado).",
             linhas=linhas_l, turma_detectada=turma, escola_detectada=escola,
-            professor_detectado=professor)
+            professor_detectado=professor, descartadas=descartadas_l)
 
     alunos = payload.get("students")
     linhas: list[LinhaImportacao] = []
     ausentes: dict[str, int] = {}
+    descartadas: dict[str, int] = {}
     for i, al in enumerate(alunos or [], start=1):
         if not isinstance(al, dict):
             continue
         nome = str(al.get("studentName") or "").strip()
         if not nome:
+            descartadas["sem_nome"] = descartadas.get("sem_nome", 0) + 1
             continue
         # GUARDA DE SANIDADE: campo ausente/renomeado/ilegível na API NÃO vira 0 —
         # a chave simplesmente não entra em `dados`, e o importador do resumo
@@ -704,9 +747,13 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         # PDF usa) — evita casar/duplicar aluno errado.
         dados["turma_relatorio"] = turma
         # IDENTIDADE do ALUNO no Elefante (studentId) — ver acima.
-        sid = _student_id_elefante(al.get("studentId"))
+        sid = student_id_elefante(al.get("studentId"))
         if sid:
             dados["elefante_student_id"] = sid
+        if nome_de_um_token(nome):
+            # Nome de UMA palavra ("Kauê") não identifica a criança: só associa
+            # pela conta já vinculada; senão revisão "nome_incompleto".
+            dados["nome_incompleto"] = True
         linhas.append(LinhaImportacao(numero=i, nome=nome, dados=dados))
     erros_gerais = []
     if ausentes and linhas:
@@ -718,7 +765,8 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         plataforma=plataforma, formato="resumo", estrategia="api-elefante",
         mensagem_deteccao="Relatório de turma (API interna do Elefante Letrado).",
         linhas=linhas, erros_gerais=erros_gerais, turma_detectada=turma,
-        escola_detectada=escola, professor_detectado=professor)
+        escola_detectada=escola, professor_detectado=professor,
+        descartadas=descartadas, campos_ausentes=dict(ausentes))
 
 
 def analisar_matific_api(payload) -> Analise:
@@ -738,11 +786,13 @@ def analisar_matific_api(payload) -> Analise:
     turma_topo = str(payload.get("turma") or "").strip()
     linhas: list[LinhaImportacao] = []
     ausentes: dict[str, int] = {}
+    descartadas: dict[str, int] = {}
     for i, a in enumerate(payload.get("alunos") or [], start=1):
         if not isinstance(a, dict):
             continue
         nome = str(a.get("nome") or "").strip()
         if not nome:
+            descartadas["sem_nome"] = descartadas.get("sem_nome", 0) + 1
             continue
         turma = turma_topo or str(a.get("turma") or "").strip()
         # GUARDA DE SANIDADE (mesma do Elefante): campo ausente/ilegível NÃO vira 0
@@ -758,6 +808,20 @@ def analisar_matific_api(payload) -> Analise:
             # detectar mudança de turma com segurança (não muda de sala p/ sala).
             "matific_uuid": str(a.get("uuid") or "").strip(),
         }
+        # NOME INCOMPLETO: o conector não achou o nome cheio deste uuid (fora do
+        # student-leaderboard, competição vazia) e o nome é o ABREVIADO do Placar
+        # ("ANNA E"). A porta de identidade não associa nem cria por ele — revisão
+        # "nome_incompleto" (``identidade_aluno.decidir``).
+        abrev = str(a.get("nome_abrev") or "").strip()
+        if (abrev and chave_nome(abrev) == chave_nome(nome)) or nome_de_um_token(nome):
+            # Também o nome "cheio" de UM token só ("Anna"): não identifica a
+            # criança — antes nascia a ficha "Anna".
+            dados["nome_incompleto"] = True
+        if a.get("turma_ambigua"):
+            # A mesma conta veio em mais de uma turma do Placar com os mesmos
+            # números (``matific._separar_uuids_em_varias_turmas``): o dado vale,
+            # a turma não — a sync NÃO move a matrícula por esta linha.
+            dados["turma_ambigua"] = True
         if atividades is not None:
             dados["atividades"] = atividades
         else:
@@ -787,11 +851,29 @@ def analisar_matific_api(payload) -> Analise:
         plataforma="matific", formato="resumo", estrategia="api-matific",
         mensagem_deteccao=msg, linhas=linhas, erros_gerais=erros_gerais,
         turma_detectada=turma_topo, escola_detectada="", professor_detectado="",
-        periodo_inicio=pi, periodo_fim=pf)
+        periodo_inicio=pi, periodo_fim=pf,
+        descartadas=descartadas, campos_ausentes=dict(ausentes))
+
+
+#: Lacuna de espaços maior que isto é cortada neste tamanho antes da análise.
+#: Nos PDFs reais (modo layout do pypdf, que alinha as colunas com espaços) a maior tem
+#: ~200; um PDF forjado chegava a 10 mil por lacuna e as estratégias de texto pagavam
+#: por cada espaço. 400 continua separando as colunas (``\s{2,}``) do mesmo jeito.
+_MAX_LACUNA = 400
+# Só a partir do 1º espaço da lacuna (o lookbehind): sem ele, cada posição de uma lacuna
+# curta recomeçaria a procura, e o custo voltaria a ser quadrático. Só ESPAÇOS: no TSV
+# colado (tabela copiada da planilha) cada tabulação é um separador de coluna, e cortar
+# uma sequência de tabulações (células vazias) deslocava as colunas seguintes.
+_RE_LACUNA_LONGA = re.compile(r"(?<! ) {%d,}" % (_MAX_LACUNA + 1))
+
+
+def _cortar_lacunas(texto: str) -> str:
+    return _RE_LACUNA_LONGA.sub(lambda m: m.group()[:_MAX_LACUNA], texto)
 
 
 def analisar_texto(texto: str, plataforma: str | None = None) -> Analise:
     """Interpreta um relatório colado/extraído. Nunca grava nada."""
+    texto = _cortar_lacunas(texto)
     detectada, mensagem = detectar_plataforma_detalhado(texto)
     plataforma = plataforma or detectada
     if plataforma is None:
@@ -912,10 +994,17 @@ def tokens_nome(nome: str) -> list[str]:
     return saida
 
 
+def nome_de_um_token(nome: str) -> bool:
+    """O nome que a PLATAFORMA mandou tem uma palavra só ("Anna", "Kauê")? Não
+    identifica uma criança: as APIs o marcam como ``nome_incompleto`` (revisão em
+    vez de ficha nova)."""
+    return len(tokens_nome(nome)) == 1
+
+
 def chave_nome(nome: str) -> str:
     """A definição ÚNICA de "mesmo nome" de aluno: sem acento, sem caixa, espaços
-    colapsados e SEM pontuação — "HELOISA* DE SOUZA", "Heloísa de  Souza" e
-    "HELOISA DE SOUZA." dão a mesma chave. Toda comparação de igualdade de nome de
+    colapsados e SEM pontuação — "LIVIA* DE SOUZA", "Lívia de  Souza" e
+    "LIVIA DE SOUZA." dão a mesma chave. Toda comparação de igualdade de nome de
     aluno (prévia, confirmação, sincronização, Lista Piloto, cursor da sync) usa
     esta função; ``normalizar_nome`` sozinho mantém a pontuação e NÃO serve para
     decidir identidade."""
@@ -923,12 +1012,12 @@ def chave_nome(nome: str) -> str:
 
 
 def casa_abreviado_posicional(antigo: list[str], completo: list[str]) -> bool:
-    """`antigo` (nome abreviado de upload, ex.: ["agatha","v"]) é uma abreviação
-    POSICIONAL de `completo` (nome do Excel, ex.: ["agatha","vitoria","moura",
+    """`antigo` (nome abreviado de upload, ex.: ["celina","v"]) é uma abreviação
+    POSICIONAL de `completo` (nome do Excel, ex.: ["celina","valentina","ficticia",
     "da","silva"])?
 
-    A abreviação do Matific/Elefante é posicional no 2º+ token — "AGATHA V" =
-    Agatha + inicial do 2º nome (Vitoria), NÃO "Agatha ... da Silva". Por isso:
+    A abreviação do Matific/Elefante é posicional no 2º+ token — "CELINA V" =
+    Celina + inicial do 2º nome (Valentina), NÃO "Celina ... da Silva". Por isso:
       • primeiro nome idêntico;
       • cada token intermediário cheio deve casar EXATO por posição;
       • uma inicial (1 letra) só é aceita como ÚLTIMO token de `antigo`, casando
@@ -955,7 +1044,7 @@ def casa_abreviado(curto: list[str], longo: list[str]) -> bool:
     ``casa_abreviado_posicional`` para os casos que faltavam na spec do dono:
       • inicial no PRIMEIRO nome ("M. EDUARDA" → "MARIA EDUARDA SILVA");
       • truncamento de token cheio ("MARIA EDU" → "MARIA EDUARDA …");
-      • inicial em qualquer posição ("ABRAAO L" → "ABRAÃO LUÍS DIAS").
+      • inicial em qualquer posição ("JOAO L" → "JOÃO LUÍS SILVA").
     Continua POSICIONAL (curto[i] alinha com longo[i]) — nunca subsequência solta —
     e exige uma ÂNCORA: pelo menos um token cheio IDÊNTICO por posição. Sem âncora
     ("M S" → "MARIA SILVA", só iniciais) NÃO casa: seria loose demais e casaria
@@ -1021,6 +1110,8 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
     from app.services import identidade_aluno as ida
 
     ctx = ida.carregar_contexto(db, escola_id)
+    ida.marcar_ids_em_conflito(ctx, linhas, plataforma)   # a mesma marca do /confirmar
+    ida.marcar_ids_de_outra_escola(db, ctx, linhas, plataforma)   # idem
     ativos = [a for a in ctx.alunos.values() if a.status == "ativo"]
     for linha in linhas:
         dados = linha.dados or {}

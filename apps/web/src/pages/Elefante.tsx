@@ -1,17 +1,26 @@
 /** Módulo Elefante Letrado (PRD §56): leitura, questões e níveis por aluno. */
-import { Layers, Pencil } from "lucide-react";
-import { useState } from "react";
+import { BookOpen, Layers, Pencil, Search, SlidersHorizontal, Users } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { AbasLigadas } from "../components/AbasLigadas";
+import { BarraFiltroAlunos, useFiltroAlunos } from "../components/FiltroAlunosPlataforma";
+import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
+  Avatar,
   Botao,
+  BotaoIcone,
   Campo,
   Card,
-  Carregando,
+  Chip,
+  Erro,
   Mensagem,
   Modal,
   PageHeader,
+  Skeleton,
   Vazio,
+  classesTabela,
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -33,6 +42,11 @@ const SUBABAS = [
 ] as const;
 type SubAba = (typeof SUBABAS)[number][0];
 const SUBABAS_ESCOLA = SUBABAS.filter(([chave]) => chave === "alunos");
+const ICONE_SUBABA: Record<SubAba, LucideIcon> = {
+  alunos: Users,
+  niveis: Layers,
+  pontuacao: SlidersHorizontal,
+};
 
 /** Vocabulário OFICIAL de níveis do Elefante — o mesmo que o servidor valida. */
 const NIVEIS_OFICIAIS = new Set([
@@ -41,7 +55,11 @@ const NIVEIS_OFICIAIS = new Set([
 ]);
 const CONTAGEM_MAXIMA = 10000;
 const MOTIVO_MINIMO = 5;
-const MSG_MOTIVO = `Informe o motivo do ajuste (pelo menos ${MOTIVO_MINIMO} caracteres) — ele fica no log de auditoria.`;
+/** Células da tabela de alunos: mais justas abaixo de 1280 px (tablet e notebook com a
+ *  gaveta), para os dois botões de ação de cada linha caberem sem rolagem lateral. */
+const TH = classesTabela.th.replace("px-4", "px-3 xl:px-4");
+const TD = classesTabela.td.replace("px-4", "px-3 xl:px-4");
+const MSG_MOTIVO = `Informe o motivo do ajuste (pelo menos ${MOTIVO_MINIMO} caracteres) — ele fica no histórico de alterações.`;
 
 /** O ajuste manual é a fonte do dado só ENQUANTO a escola não recebe o Elefante
  *  da plataforma. Assim que o dado oficial chega (integração, importação ou
@@ -108,6 +126,7 @@ export default function Elefante() {
   const { escolaId, usuario } = useApp();
   const podeEditar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const subabas = usuario?.is_global ? SUBABAS : SUBABAS_ESCOLA;
+  const idBase = useId();
 
   const {
     dados: linhas,
@@ -226,117 +245,124 @@ export default function Elefante() {
   }
 
   const totalFaixas = Object.values(faixasForm).reduce((s, n) => s + (Number(n) || 0), 0);
+  const filtro = useFiltroAlunos(linhas);
 
-  return (
-    <div>
-      <PageHeader
-        titulo="Elefante Letrado"
-        descricao="Livros por nível de dificuldade, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
-      />
-
-      {/* Com uma única sub-aba (perfis de escola) a barra some — o conteúdo é a
-          própria lista de alunos. */}
-      {subabas.length > 1 && (
-        <div role="tablist" className="mb-5 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
-          {subabas.map(([chave, rotulo]) => (
-            <button
-              key={chave}
-              role="tab"
-              aria-selected={aba === chave}
-              onClick={() => setAba(chave)}
-              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                aba === chave
-                  ? "border-indigo-600 text-zinc-900 dark:text-zinc-50"
-                  : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              }`}
-            >
-              {rotulo}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {aba === "niveis" && usuario?.is_global && (
-        <div className="max-w-3xl">
-          <EditorNiveis aoMudar={recarregarNiveis} />
-        </div>
-      )}
-      {aba === "pontuacao" && usuario?.is_global && <PontuacaoPorTurma />}
-
-      {aba === "alunos" && (
-        <>
-      <Card>
-        {carregando ? (
-          <Carregando />
-        ) : erroLinhas ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erroLinhas.message} />
-        ) : (linhas ?? []).length === 0 ? (
-          <Vazio titulo="Nenhum aluno ativo" descricao="Cadastre alunos ou importe um relatório do Elefante Letrado." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm tabular-nums">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium">Aluno</th>
-                  <th className="hidden px-4 py-2 font-medium md:table-cell">Turma</th>
-                  <th className="px-4 py-2 text-right font-medium">Livros</th>
-                  <th className="px-4 py-2 text-right font-medium">Tempo</th>
-                  <th className="px-4 py-2 text-right font-medium">Questões</th>
-                  <th className="px-4 py-2 text-right font-medium">Acertos</th>
-                  <th className="hidden px-4 py-2 font-medium lg:table-cell">Atualizado em</th>
-                  {podeEditar && <th className="px-4 py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {(linhas ?? []).map((linha) => (
-                  <tr key={linha.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-4 py-2.5">
-                      <Link to={`/alunos/${linha.aluno_id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
-                        {linha.nome}
-                      </Link>
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{linha.turma}</td>
-                    <td className="px-4 py-2.5 text-right">{numero(linha.livros_unicos)}</td>
-                    <td className="px-4 py-2.5 text-right">{tempoLeitura(linha.tempo_leitura_min)}</td>
-                    <td className="px-4 py-2.5 text-right">{numero(linha.questoes_tentativas)}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      {numero(linha.questoes_acertos)}
-                      {linha.questoes_tentativas > 0 && (
-                        <span className="ml-1 text-xs text-zinc-400">
-                          ({Math.round((linha.questoes_acertos / linha.questoes_tentativas) * 100)}%)
-                        </span>
-                      )}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-xs text-zinc-500 dark:text-zinc-400 lg:table-cell">
-                      {dataHora(linha.data_referencia)}
-                    </td>
-                    {podeEditar && (
-                      <td className="px-4 py-2.5">
-                        <div className="flex justify-end gap-1">
-                          <button
-                            aria-label={`Informar livros por nível de ${linha.nome}`}
-                            title="Livros por nível"
-                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
-                            onClick={() => abrirFaixas(linha)}
-                          >
-                            <Layers size={15} />
-                          </button>
-                          <button
-                            aria-label={`Editar dados de ${linha.nome}`}
-                            title="Editar tempo e questões"
-                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                            onClick={() => abrirEdicao(linha)}
-                          >
-                            <Pencil size={15} />
-                          </button>
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+  const listaAlunos = (
+    <>
+      <Card className="overflow-hidden">
+        {/* Spinner só na PRIMEIRA carga: ao recarregar depois de salvar, a tabela
+            fica na tela (antes ela sumia e a rolagem pulava a cada ajuste). */}
+        {carregando && !linhas ? (
+          <div className="space-y-3 p-6" aria-busy="true">
+            <p className="sr-only" role="status">Carregando...</p>
+            <Skeleton className="h-10 w-64" />
+            {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-11" />)}
           </div>
+        ) : erroLinhas && !linhas ? (
+          <Erro descricao={erroLinhas.message} aoTentar={recarregarLinhas} />
+        ) : (linhas ?? []).length === 0 ? (
+          <Vazio icone={BookOpen} titulo="Nenhum aluno ativo" descricao="Cadastre alunos ou importe um relatório do Elefante Letrado." />
+        ) : (
+          <>
+            {erroLinhas && (
+              <div className="px-6 pt-5">
+                <Mensagem tipo="erro">Não foi possível atualizar a lista: {erroLinhas.message}</Mensagem>
+              </div>
+            )}
+            <BarraFiltroAlunos
+              plataforma="elefante"
+              total={(linhas ?? []).length}
+              visiveis={filtro.filtradas.length}
+              busca={filtro.busca}
+              aoBuscar={filtro.setBusca}
+              turma={filtro.turma}
+              aoMudarTurma={filtro.setTurma}
+              turmas={filtro.turmas}
+            />
+            {filtro.filtradas.length === 0 ? (
+              <Vazio
+                icone={Search}
+                titulo="Nenhum aluno com esses filtros"
+                acao={<Botao variante="secundario" onClick={filtro.limpar}>Limpar filtros</Botao>}
+              />
+            ) : (
+              // O aviso "Deslize a tabela..." aparece ACIMA da tabela quando há coluna
+              // escondida (no celular: Tempo, Questões, Acertos e as ações vêm deslizando).
+              <TabelaRolavel rotulo="Alunos do Elefante Letrado: tabela completa">
+                <table className={classesTabela.tabela}>
+                  <thead>
+                    <tr>
+                      <th className={TH}>Aluno</th>
+                      <th className={`${TH} text-right`}>Livros</th>
+                      <th className={`${TH} text-right`}>Tempo</th>
+                      <th className={`${TH} text-right`}>Questões</th>
+                      <th className={`${TH} text-right`}>Acertos</th>
+                      <th className={`hidden lg:table-cell ${TH}`}>Atualizado em</th>
+                      {podeEditar && <th className={TH}><span className="sr-only">Ações</span></th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtro.filtradas.map((linha) => (
+                      <tr key={linha.aluno_id} className={classesTabela.tr}>
+                        <td className={TD}>
+                          {/* A turma vai no chip sob o nome (era uma coluna que sumia abaixo de
+                              768 px; uma vez só no DOM, como em Turmas e Usuários). No celular o
+                              avatar decorativo sai: o nome fica com os 9rem e quebra em até duas
+                              linhas, não mais uma palavra por linha. */}
+                          <div className="flex min-w-[9rem] items-center gap-3 xl:min-w-[11rem]">
+                            <Avatar nome={linha.nome} chave={linha.aluno_id} tamanho="sm" className="max-sm:hidden" />
+                            <div className="min-w-0">
+                              <Link to={`/alunos/${linha.aluno_id}`} className="font-semibold text-zinc-900 hover:text-indigo-600 dark:text-zinc-100 dark:hover:text-indigo-400">
+                                {linha.nome}
+                              </Link>
+                              {linha.turma && <div className="mt-1"><Chip>{linha.turma}</Chip></div>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className={`${TD} text-right text-[15px] font-bold tabular-nums text-zinc-900 dark:text-white`}>
+                          {numero(linha.livros_unicos)}
+                        </td>
+                        <td className={`${TD} whitespace-nowrap text-right tabular-nums`}>{tempoLeitura(linha.tempo_leitura_min)}</td>
+                        <td className={`${TD} text-right tabular-nums`}>{numero(linha.questoes_tentativas)}</td>
+                        <td className={`${TD} whitespace-nowrap text-right tabular-nums`}>
+                          {numero(linha.questoes_acertos)}
+                          {linha.questoes_tentativas > 0 && (
+                            <span className="ml-1 text-xs text-zinc-500 dark:text-zinc-400">
+                              ({Math.round((linha.questoes_acertos / linha.questoes_tentativas) * 100)}%)
+                            </span>
+                          )}
+                        </td>
+                        <td className={`hidden lg:table-cell ${TD} whitespace-nowrap text-xs text-zinc-500 dark:text-zinc-400`}>
+                          {dataHora(linha.data_referencia)}
+                        </td>
+                        {podeEditar && (
+                          <td className="py-3.5 pl-1 pr-2 xl:px-4">
+                            {/* No celular os dois botões têm 40 px e 8 px entre eles (alvo de toque). */}
+                            <div className="flex justify-end gap-1 max-sm:gap-2 xl:gap-1.5">
+                              <BotaoIcone
+                                rotulo={`Informar livros por nível de ${linha.nome}`}
+                                className="h-9 w-9 max-sm:h-10 max-sm:w-10"
+                                onClick={() => abrirFaixas(linha)}
+                              >
+                                <Layers size={15} aria-hidden />
+                              </BotaoIcone>
+                              <BotaoIcone
+                                rotulo={`Editar dados de ${linha.nome}`}
+                                className="h-9 w-9 max-sm:h-10 max-sm:w-10"
+                                onClick={() => abrirEdicao(linha)}
+                              >
+                                <Pencil size={15} aria-hidden />
+                              </BotaoIcone>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TabelaRolavel>
+            )}
+          </>
         )}
       </Card>
 
@@ -346,16 +372,16 @@ export default function Elefante() {
         aberto={faixasDe !== null}
         aoFechar={() => setFaixasDe(null)}
       >
-        <div className="space-y-3">
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Informe quantos livros o aluno concluiu em cada nível. O total e os pontos de
             dificuldade são calculados automaticamente pela régua Constela.
           </p>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{NOTA_AJUSTE_MANUAL}</p>
+          <p className="rounded-xl bg-zinc-50 px-3 py-2.5 text-xs text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-300">{NOTA_AJUSTE_MANUAL}</p>
           {erroNiveis ? (
             <Mensagem tipo="erro">{erroNiveis.message}</Mensagem>
           ) : niveis.length === 0 ? (
-            <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
               <AvisoSemNiveis aoCriar={recarregarNiveis} />
               {usuario?.is_global && (
                 <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
@@ -385,10 +411,11 @@ export default function Elefante() {
               ))}
             </div>
           )}
-          <p className="text-sm font-medium">
+          <p className="flex items-center gap-2 rounded-xl bg-indigo-50 px-3 py-2.5 text-sm font-semibold text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-200">
+            <BookOpen size={15} aria-hidden />
             Total: {numero(totalFaixas)} livro{totalFaixas === 1 ? "" : "s"}
           </p>
-          <Campo rotulo="Motivo (obrigatório — fica no log de auditoria)">
+          <Campo rotulo="Motivo (obrigatório — fica no histórico de alterações)">
             <input
               className={estiloInput}
               placeholder="Ex.: dados informados pela professora"
@@ -397,8 +424,8 @@ export default function Elefante() {
             />
           </Campo>
           {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setFaixasDe(null)} disabled={salvando}>Cancelar</Botao>
+          <div className="flex justify-end gap-2.5 pt-1">
+            <Botao variante="secundario" onClick={() => setFaixasDe(null)} disabled={salvando}>Cancelar</Botao>
             <Botao onClick={salvarFaixas} disabled={salvando || niveis.length === 0}>
               {salvando ? "Salvando..." : "Salvar e recalcular"}
             </Botao>
@@ -408,7 +435,7 @@ export default function Elefante() {
 
       {/* --- Edição de tempo, questões e níveis por código de letra --- */}
       <Modal titulo={`Editar Elefante Letrado — ${editando?.nome ?? ""}`} aberto={editando !== null} aoFechar={() => setEditando(null)}>
-        <div className="space-y-3">
+        <div className="space-y-4">
           <Campo rotulo="Livros por código de nível (ex.: AA:2, D:1) — os livros únicos são a soma">
             <input
               className={estiloInput} placeholder="AA:2, D:1"
@@ -436,22 +463,56 @@ export default function Elefante() {
               />
             </Campo>
           </div>
-          <Campo rotulo="Motivo da edição (obrigatório — fica no log de auditoria)">
+          <Campo rotulo="Motivo da edição (obrigatório — fica no histórico de alterações)">
             <input
               className={estiloInput} placeholder="Ex.: correção de erro do relatório"
               value={formulario.motivo}
               onChange={(e) => setFormulario({ ...formulario, motivo: e.target.value })}
             />
           </Campo>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{NOTA_AJUSTE_MANUAL}</p>
+          <p className="rounded-xl bg-zinc-50 px-3 py-2.5 text-xs text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-300">{NOTA_AJUSTE_MANUAL}</p>
           {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setEditando(null)} disabled={salvando}>Cancelar</Botao>
+          <div className="flex justify-end gap-2.5 pt-1">
+            <Botao variante="secundario" onClick={() => setEditando(null)} disabled={salvando}>Cancelar</Botao>
             <Botao onClick={salvar} disabled={salvando}>{salvando ? "Salvando..." : "Salvar e recalcular"}</Botao>
           </div>
         </div>
       </Modal>
+    </>
+  );
+
+  return (
+    <div>
+      <PageHeader
+        titulo="Elefante Letrado"
+        descricao="Livros por nível de dificuldade, tempo de leitura e questões por aluno. Releituras nunca pontuam novamente."
+      />
+
+      {/* Com uma única sub-aba (perfis de escola) a barra some — o conteúdo é a
+          própria lista de alunos. */}
+      {subabas.length > 1 ? (
+        <>
+          <AbasLigadas
+            itens={subabas.map(([chave, rotulo]) => ({ valor: chave, rotulo, icone: ICONE_SUBABA[chave] }))}
+            valor={aba}
+            aoMudar={setAba}
+            rotulo="Partes do Elefante Letrado"
+            idDaAba={(chave) => `${idBase}-aba-${chave}`}
+            idPainel={`${idBase}-painel`}
+            className="mb-6"
+          />
+          <div role="tabpanel" id={`${idBase}-painel`} aria-labelledby={`${idBase}-aba-${aba}`}>
+            {aba === "niveis" && usuario?.is_global && (
+              <div className="max-w-3xl">
+                <EditorNiveis aoMudar={recarregarNiveis} />
+              </div>
+            )}
+            {aba === "pontuacao" && usuario?.is_global && <PontuacaoPorTurma />}
+            {aba === "alunos" && listaAlunos}
+          </div>
         </>
+      ) : (
+        listaAlunos
       )}
     </div>
   );

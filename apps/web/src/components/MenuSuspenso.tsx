@@ -19,27 +19,47 @@
  * acompanha o botão), mas rolagem interna do painel não.
  */
 import { MoreVertical } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
-export function ItemMenu({ icone, rotulo, destrutiva = false, onClick }: {
+export function ItemMenu({ icone, rotulo, destrutiva = false, desabilitado = false, dica, onClick }: {
   icone: ReactNode;
   rotulo: string;
   destrutiva?: boolean;
+  /** Item visível mas inerte (o clique não faz nada). Usa `aria-disabled`, não o
+   *  `disabled` nativo: o item continua alcançável pelas setas, como pede o
+   *  padrão de menu, e o leitor de tela anuncia "indisponível" com a dica. */
+  desabilitado?: boolean;
+  /** Linha de ajuda sob o rótulo (ex.: por que o item está desabilitado). Vira
+   *  a descrição acessível; o nome continua sendo só o rótulo. */
+  dica?: string;
   onClick: () => void;
 }) {
+  const idDica = useId();
+  const cor = desabilitado
+    ? "cursor-not-allowed text-zinc-500 dark:text-zinc-500"
+    : destrutiva
+      ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+      : "text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800";
   return (
     <button
       role="menuitem"
-      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
-        destrutiva
-          ? "text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
-          : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-      }`}
-      onClick={onClick}
+      aria-disabled={desabilitado || undefined}
+      aria-label={dica ? rotulo : undefined}
+      aria-describedby={dica ? idDica : undefined}
+      title={dica}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${cor}`}
+      onClick={desabilitado ? undefined : onClick}
     >
       {icone}
-      {rotulo}
+      {dica ? (
+        <span className="flex flex-col">
+          <span>{rotulo}</span>
+          <span id={idDica} className="text-xs font-normal text-zinc-500 dark:text-zinc-400">{dica}</span>
+        </span>
+      ) : (
+        rotulo
+      )}
     </button>
   );
 }
@@ -148,10 +168,12 @@ export default function MenuSuspenso({ ariaLabel, largura = "w-56", children }: 
         aria-label={ariaLabel}
         aria-haspopup="menu"
         aria-expanded={Boolean(ancora)}
-        className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+        className={`grid h-9 w-9 place-items-center rounded-full text-zinc-500 transition-colors max-sm:h-10 max-sm:w-10 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 ${
+          ancora ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100" : ""
+        }`}
         onClick={(evento) => setAncora(ancora ? null : evento.currentTarget)}
       >
-        <MoreVertical size={16} />
+        <MoreVertical size={17} aria-hidden />
       </button>
       {ancora && (
         <>
@@ -169,7 +191,7 @@ export default function MenuSuspenso({ ariaLabel, largura = "w-56", children }: 
             ref={painel}
             role="menu"
             style={{ visibility: "hidden" }}
-            className={`fixed z-40 ${largura} rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900`}
+            className={`fixed z-40 ${largura} rounded-xl border border-zinc-200/80 bg-white p-1.5 shadow-flutuante dark:border-zinc-700 dark:bg-zinc-900`}
           >
             {children(() => setAncora(null))}
           </div>

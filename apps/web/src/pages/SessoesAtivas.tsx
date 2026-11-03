@@ -6,11 +6,30 @@
  * último acesso (data/hora). "Online" é decidido no servidor pela janela de
  * presença (heartbeat recente). A tela faz *polling* leve (a cada 15 s) e
  * mantém a tabela na tela enquanto atualiza por baixo — sem piscar.
+ *
+ * Identidade v2: KPIs com ícone pastel (só números da resposta), abas
+ * segmentadas, tabela com avatar de iniciais, cargo em chip e status em pílula.
+ * O "Ao vivo" fica âmbar ("sem conexão") quando a última leitura falhou.
  */
-import { RefreshCw, Search, Users } from "lucide-react";
+import { Activity, RefreshCw, Search, UserCheck, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge, Botao, Card, Carregando, PageHeader, Vazio, estiloInput } from "../components/ui";
+import {
+  Abas,
+  Avatar,
+  Botao,
+  Card,
+  Carregando,
+  Chip,
+  EmailQuebravel,
+  Erro,
+  PageHeader,
+  StatCard,
+  Vazio,
+  classesTabela,
+  estiloInput,
+} from "../components/ui";
+import { TabelaRolavel } from "../components/TabelaRolavel";
 import { useApi } from "../hooks/useApi";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
@@ -42,6 +61,12 @@ type Filtro = "todos" | "online" | "offline";
 
 const INTERVALO_POLL_MS = 15_000;
 
+// Tabela no celular (< 640 px): células mais justas, para Usuário e Status caberem
+// inteiros no primeiro olhar (o resto vem com a rolagem lateral, com aviso em texto).
+const th = `${classesTabela.th} max-sm:px-3`;
+const td = "px-4 py-3 max-sm:px-3";
+const UM_DIA_MS = 24 * 3600 * 1000;
+
 /** Rótulo do papel — o que o gestor entende, não o enum cru do banco. */
 function papel(s: Sessao): string {
   if (s.is_global) return "Admin Global";
@@ -69,10 +94,11 @@ function haQuanto(agoraIso: string, alvoIso: string | null): string {
   return d === 1 ? "há 1 dia" : `há ${d} dias`;
 }
 
-/** Bolinha de status com legenda (verde pulsante = online, cinza = offline). */
+/** Pílula de status com legenda (verde pulsante = online, cinza = offline). */
 function StatusPresenca({ online }: { online: boolean }) {
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs ${
+      online ? "bg-emerald-50 dark:bg-emerald-500/15" : "bg-zinc-100 dark:bg-zinc-800"}`}>
       <span className="relative flex h-2.5 w-2.5">
         {online && (
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:hidden" />
@@ -83,7 +109,7 @@ function StatusPresenca({ online }: { online: boolean }) {
           }`}
         />
       </span>
-      <span className={online ? "font-medium text-emerald-700 dark:text-emerald-400" : "text-zinc-500 dark:text-zinc-400"}>
+      <span className={online ? "font-semibold text-emerald-700 dark:text-emerald-300" : "font-medium text-zinc-600 dark:text-zinc-300"}>
         {online ? "Online" : "Offline"}
       </span>
     </span>
@@ -116,95 +142,88 @@ export default function SessoesAtivas() {
       .filter((s) => !alvo || normalizar(s.nome).includes(alvo));
   }, [dados, filtro, busca]);
 
-  const abas: { chave: Filtro; rotulo: string }[] = [
-    { chave: "todos", rotulo: "Todos" },
-    { chave: "online", rotulo: "Apenas online" },
-    { chave: "offline", rotulo: "Apenas offline" },
+  // Vistos nas últimas 24 h pelo relógio do SERVIDOR, entre as contas LISTADAS (o
+  // backend limita a lista; quando corta, o detalhe do cartão diz isso).
+  const vistos24h = useMemo(() => {
+    if (!dados) return 0;
+    const agora = new Date(dados.agora).getTime();
+    return dados.sessoes.filter((s) =>
+      s.visto_em != null && agora - new Date(s.visto_em).getTime() <= UM_DIA_MS).length;
+  }, [dados]);
+  const listaCortada = Boolean(dados && dados.sessoes.length < dados.total);
+
+  const abas: { valor: Filtro; rotulo: string }[] = [
+    { valor: "todos", rotulo: "Todos" },
+    { valor: "online", rotulo: "Apenas online" },
+    { valor: "offline", rotulo: "Apenas offline" },
   ];
+  // A última leitura falhou, mas há dados anteriores na tela: o "Ao vivo" não pode mentir.
+  const semConexao = Boolean(erro && dados);
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         titulo="Sessões Ativas"
         descricao="Quem está com o sistema aberto agora. Atualiza sozinho a cada poucos segundos — “online” é presença recente, não apenas o último login."
+        acoes={
+          <>
+            <span
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                semConexao
+                  ? "bg-ouro-50 text-ouro-700 dark:bg-ouro-400/15 dark:text-ouro-300"
+                  : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"}`}
+              title={semConexao ? "A última atualização falhou; mostrando a leitura anterior" : undefined}
+            >
+              <span className="relative flex h-2 w-2">
+                {!semConexao && (
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:hidden" />
+                )}
+                <span className={`relative inline-flex h-2 w-2 rounded-full ${semConexao ? "bg-ouro-500" : "bg-emerald-500"}`} />
+              </span>
+              {semConexao ? "Sem conexão — última leitura" : "Ao vivo"}
+            </span>
+            <Botao variante="secundario" onClick={recarregar} disabled={carregando}>
+              <RefreshCw size={14} aria-hidden className={carregando ? "animate-spin motion-reduce:animate-none" : ""} /> Atualizar
+            </Botao>
+          </>
+        }
       />
 
-      <Card className="mb-4 flex flex-wrap items-center gap-3 p-4">
-        {/* Resumo online/total */}
-        <span className="inline-flex items-center gap-2 text-sm">
-          <Users size={16} className="text-zinc-400" />
-          {dados ? (
-            <span>
-              <strong className="text-emerald-600 dark:text-emerald-400">{dados.online}</strong>
-              {" online"} · <strong>{dados.total}</strong> no total
-            </span>
-          ) : (
-            <span className="text-zinc-400">Carregando…</span>
-          )}
-        </span>
+      {/* KPIs: números da resposta (só a janela de 24 h é contada aqui). */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-5 max-sm:[&>*:last-child:nth-child(odd)]:col-span-2">
+        <StatCard icone={<Activity size={20} />} tom="verde" rotulo="Online agora"
+                  valor={dados ? String(dados.online) : "…"} detalhe="presença recente no sistema" />
+        <StatCard icone={<Users size={20} />} tom="violeta" rotulo="Contas cadastradas"
+                  valor={dados ? String(dados.total) : "…"} detalhe="todas as contas do sistema" />
+        <StatCard icone={<UserCheck size={20} />} tom="azul" rotulo="Vistos nas últimas 24 h"
+                  valor={dados ? String(vistos24h) : "…"}
+                  detalhe={listaCortada ? `entre as ${dados?.sessoes.length} contas listadas` : "pela última atividade"} />
+      </div>
 
-        {/* Filtros por status */}
-        <div
-          role="tablist"
-          aria-label="Filtrar por status"
-          className="inline-flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900/60"
-        >
-          {abas.map((aba) => (
-            <button
-              key={aba.chave}
-              type="button"
-              role="tab"
-              aria-selected={filtro === aba.chave}
-              onClick={() => setFiltro(aba.chave)}
-              className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
-                filtro === aba.chave
-                  ? "bg-white text-indigo-700 shadow-sm dark:bg-zinc-800 dark:text-indigo-300"
-                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              }`}
-            >
-              {aba.rotulo}
-            </button>
-          ))}
+      <Card className="p-5 sm:p-6">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          {/* Filtros por status (abas segmentadas acessíveis). */}
+          <Abas itens={abas} valor={filtro} aoMudar={setFiltro} rotulo="Filtrar por status" />
+          {/* Busca por nome */}
+          <div className="relative w-full sm:ml-auto sm:w-64">
+            <Search size={15} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+            <input
+              aria-label="Buscar por nome"
+              className={`${estiloInput} pl-9`}
+              placeholder="Buscar por nome…"
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+            />
+          </div>
         </div>
 
-        {/* Busca por nome */}
-        <div className="relative flex items-center">
-          <Search size={14} className="pointer-events-none absolute left-3 text-zinc-400" />
-          <input
-            aria-label="Buscar por nome"
-            className={`${estiloInput} w-auto pl-8`}
-            placeholder="Buscar por nome…"
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-          />
-        </div>
-
-        {/* Atualização ao vivo + botão manual */}
-        <div className="ml-auto inline-flex items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:hidden" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-            </span>
-            Ao vivo
-          </span>
-          <Botao variante="neutro" onClick={recarregar} disabled={carregando}>
-            <RefreshCw size={14} className={carregando ? "animate-spin" : ""} /> Atualizar
-          </Botao>
-        </div>
-      </Card>
-
-      <Card>
         {carregando && !dados ? (
           <Carregando texto="Carregando sessões…" />
-        ) : erro ? (
-          <Vazio
-            titulo="Não foi possível carregar"
-            descricao={erro.message}
-            acao={<Botao variante="neutro" onClick={recarregar}>Tentar de novo</Botao>}
-          />
+        ) : erro && !dados ? (
+          <Erro titulo="Não foi possível carregar" descricao={erro.message} aoTentar={recarregar} />
         ) : lista.length === 0 ? (
           <Vazio
+            icone={Users}
             titulo="Ninguém por aqui"
             descricao={
               busca || filtro !== "todos"
@@ -213,50 +232,61 @@ export default function SessoesAtivas() {
             }
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          // 4 colunas (eram 6): o cargo leva a escola embaixo e a última atividade leva o
+          // último acesso embaixo. Com 6 colunas a tabela passava da largura do cartão em
+          // tablets (820 px) e o "Último acesso" ficava escondido na rolagem lateral.
+          // Nada saiu: cada dado continua na tela, uma vez só.
+          // Celular (< 640 px): a tabela rola de lado dentro do cartão com o aviso em texto
+          // acima dela ("Deslize..."), não só a sombra; o avatar (decorativo) some e a
+          // célula do usuário tem base de 9,5rem, então o e-mail cabe sem quebrar no "@" e
+          // a pílula de Status não encosta na borda.
+          <TabelaRolavel rotulo="Sessões: tabela completa">
+            <table className={classesTabela.tabela}>
               <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Usuário</th>
-                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Cargo</th>
-                  <th className="hidden px-4 py-2 font-medium md:table-cell">Escola</th>
-                  <th className="px-4 py-2 font-medium">Última atividade</th>
-                  <th className="hidden px-4 py-2 font-medium lg:table-cell">Último acesso</th>
+                <tr>
+                  <th scope="col" className={th}>Usuário</th>
+                  <th scope="col" className={th}>Status</th>
+                  <th scope="col" className={th}>Cargo e escola</th>
+                  <th scope="col" className={th}>Última atividade</th>
                 </tr>
               </thead>
               <tbody>
                 {lista.map((s) => (
-                  <tr
-                    key={s.id}
-                    className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60"
-                  >
-                    <td className="px-4 py-2.5"><StatusPresenca online={s.online} /></td>
-                    <td className="px-4 py-2.5">
-                      <div className="font-medium">{s.nome}</div>
-                      <div className="text-xs text-zinc-400">{s.email}</div>
-                      {/* Cargo aparece aqui no celular (a coluna própria some) */}
-                      <div className="mt-0.5 sm:hidden">
-                        <Badge tom={s.is_global ? "destaque" : "neutro"}>{papel(s)}</Badge>
+                  <tr key={s.id} className={classesTabela.tr}>
+                    <td className={td}>
+                      <div className="flex items-center gap-3">
+                        {/* Mesma chave de cor (o id) da barra lateral, de Minha conta e de Usuários. */}
+                        <Avatar nome={s.nome} chave={s.id} tamanho="sm" className="hidden sm:grid" />
+                        <div className="min-w-0 max-sm:min-w-[9.5rem]">
+                          <div className="truncate font-semibold text-zinc-900 dark:text-zinc-100" title={s.nome}>{s.nome}</div>
+                          <div className="max-w-[10rem] text-xs text-zinc-500 [overflow-wrap:anywhere] lg:max-w-[13rem] dark:text-zinc-400"><EmailQuebravel email={s.email} /></div>
+                        </div>
                       </div>
                     </td>
-                    <td className="hidden px-4 py-2.5 sm:table-cell">
-                      <Badge tom={s.is_global ? "destaque" : "neutro"}>{papel(s)}</Badge>
+                    <td className={td}><StatusPresenca online={s.online} /></td>
+                    <td className={td}>
+                      <Chip className={s.is_global ? "!bg-indigo-50 !text-indigo-700 dark:!bg-indigo-500/15 dark:!text-indigo-300" : ""}>
+                        {papel(s)}
+                      </Chip>
+                      {/* min-w: o nome da escola quebra em 2 linhas, não numa palavra por linha. */}
+                      <span className="mt-1 block min-w-[8rem] text-xs leading-snug text-zinc-600 dark:text-zinc-300">
+                        {s.escola_nome ?? (s.is_global ? "Todas (global)" : "—")}
+                      </span>
                     </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">
-                      {s.escola_nome ?? (s.is_global ? "Todas (global)" : "—")}
-                    </td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-300">
-                      {dados ? haQuanto(dados.agora, s.visto_em) : "—"}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 lg:table-cell">
-                      {dataHora(s.ultimo_acesso)}
+                    <td className={td}>
+                      <span className="block whitespace-nowrap text-zinc-700 dark:text-zinc-200">
+                        {dados ? haQuanto(dados.agora, s.visto_em) : "—"}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
+                        <span className="whitespace-nowrap">Último acesso:</span>{" "}
+                        <span className="whitespace-nowrap">{dataHora(s.ultimo_acesso)}</span>
+                      </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TabelaRolavel>
         )}
       </Card>
     </div>

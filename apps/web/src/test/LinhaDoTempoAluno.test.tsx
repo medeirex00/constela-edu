@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import LinhaDoTempoAluno from "../components/LinhaDoTempoAluno";
-import { renderComApp, responder, screen, userEvent } from "./utils";
+import { ApiError, renderComApp, responder, screen, userEvent } from "./utils";
 
 const ESCOLA = 1;
 const ALUNO = 5;
@@ -80,6 +80,24 @@ describe("LinhaDoTempoAluno", () => {
     expect(await screen.findByText("A Casa Amarela")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /carregar mais/i }));
     expect(await screen.findByText("Livro Página 2")).toBeInTheDocument();
+  });
+
+  it("falha ao carregar MAIS mantém a lista já carregada e avisa o erro", async () => {
+    responder("GET", URL_ESP, espelho());
+    responder("GET", URL_TL, (caminho: string) => {
+      if (caminho.includes("cursor=")) throw new ApiError(500, "Servidor indisponível");
+      return { itens: [evento()], proximo_cursor: "2026-07-02T09:15:00|1" };
+    });
+
+    renderComApp(<LinhaDoTempoAluno escolaId={ESCOLA} alunoId={ALUNO} />,
+                 { rota: "/alunos/5" });
+
+    expect(await screen.findByText("A Casa Amarela")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /carregar mais/i }));
+    expect(await screen.findByText(/Não foi possível carregar mais atividades: Servidor indisponível/))
+      .toBeInTheDocument();
+    // Antes, o erro trocava a lista inteira pelo estado de erro.
+    expect(screen.getByText("A Casa Amarela")).toBeInTheDocument();
   });
 
   it("mostra estado vazio quando não há eventos", async () => {

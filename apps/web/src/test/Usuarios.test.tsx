@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { corDoAvatar } from "../components/ui";
 import Usuarios from "../pages/Usuarios";
 import {
   api,
@@ -10,6 +11,7 @@ import {
   turmaFake,
   userEvent,
   usuarioFake,
+  within,
 } from "./utils";
 
 const URL_LISTA = "/escolas/1/usuarios";
@@ -38,6 +40,29 @@ describe("Usuarios", () => {
     expect(screen.getByText("Coordenador")).toBeInTheDocument();
     // Ação de gestão disponível para admin.
     expect(screen.getByRole("button", { name: /novo usuário/i })).toBeInTheDocument();
+  });
+
+  it("e-mail sob o nome, inteiro na tela (quebra só onde precisa, sem reticências); avatar com a cor do id", async () => {
+    responder("GET", URL_LISTA, [
+      usuarioFake({ id: 2, nome: "Maria Souza", email: "maria@escola.com", cargo: "professor", username: "maria.souza" }),
+    ]);
+
+    comoAdmin(<Usuarios />);
+
+    const nome = await screen.findByText("Maria Souza");
+    const linha = nome.closest("tr") as HTMLElement;
+    const celulaNome = nome.closest("td") as HTMLElement;
+    // O e-mail mora na célula do nome (não há mais a coluna própria, que quebrava letra a letra).
+    // Inteiro na tela também no toque (title não aparece no tablet): sem truncate, quebra
+    // só quando não cabe ([overflow-wrap:anywhere]) — nada de break-all letra a letra.
+    const email = within(celulaNome).getByText("maria@escola.com");
+    expect(email).toHaveClass("[overflow-wrap:anywhere]");
+    expect(email).not.toHaveClass("truncate");
+    expect(email).not.toHaveClass("break-all");
+    expect(within(celulaNome).getByText("@maria.souza")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "E-mail" })).toBeNull();
+    // A mesma chave de cor (o id) da barra lateral, de Minha conta e de Sessões.
+    expect(within(linha).getByText("MS")).toHaveClass(corDoAvatar(2));
   });
 
   it("mostra estado vazio quando não há usuários", async () => {
@@ -100,6 +125,102 @@ describe("Usuarios", () => {
       "/escolas/1/usuarios/2",
       expect.objectContaining({ method: "PATCH" }),
     );
+  });
+
+  // --- Redefinir senha (link) --------------------------------------------------
+
+  const LINK = { link: "http://localhost/redefinir-senha?token=ficticio", token: "ficticio", validade_min: 60 };
+
+  it("link para a PRÓPRIA conta pede a senha atual e a envia no corpo", async () => {
+    responder("GET", URL_LISTA, [ADMIN]);
+    responder("POST", "/escolas/1/usuarios/1/redefinir-senha", LINK);
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+
+    await u.click(await screen.findByRole("button", { name: "Ações do usuário Admin Geral" }));
+    await u.click(await screen.findByRole("menuitem", { name: "Redefinir senha" }));
+
+    const gerar = await screen.findByRole("button", { name: /gerar link de redefinição/i });
+    expect(gerar).toBeDisabled();                       // sem a senha atual, não envia
+    await u.type(screen.getByLabelText(/Sua senha atual/), "senha-atual-ficticia");
+    expect(gerar).toBeEnabled();
+    await u.click(gerar);
+
+    expect(await screen.findByText(LINK.link)).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith(
+      "/escolas/1/usuarios/1/redefinir-senha",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ senha_atual: "senha-atual-ficticia" }),
+      }),
+    );
+  });
+
+  it("mostra a recusa do backend quando a senha atual está errada", async () => {
+    responder("GET", URL_LISTA, [ADMIN]);
+    responderErro("POST", "/escolas/1/usuarios/1/redefinir-senha", 403, "Senha atual incorreta.");
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+
+    await u.click(await screen.findByRole("button", { name: "Ações do usuário Admin Geral" }));
+    await u.click(await screen.findByRole("menuitem", { name: "Redefinir senha" }));
+    await u.type(await screen.findByLabelText(/Sua senha atual/), "chute-errado");
+    await u.click(screen.getByRole("button", { name: /gerar link de redefinição/i }));
+
+    expect(await screen.findByText("Senha atual incorreta.")).toBeInTheDocument();
+    expect(screen.queryByText(LINK.link)).not.toBeInTheDocument();
+  });
+
+  it("link para OUTRA pessoa não pede senha atual nem manda corpo", async () => {
+    responder("GET", URL_LISTA, [
+      usuarioFake({ id: 2, nome: "Maria Souza", email: "maria@escola.com", cargo: "professor" }),
+    ]);
+    responder("POST", "/escolas/1/usuarios/2/redefinir-senha", LINK);
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+
+    await u.click(await screen.findByRole("button", { name: "Ações do usuário Maria Souza" }));
+    await u.click(await screen.findByRole("menuitem", { name: "Redefinir senha" }));
+    expect(screen.queryByLabelText(/Sua senha atual/)).not.toBeInTheDocument();
+    await u.click(await screen.findByRole("button", { name: /gerar link de redefinição/i }));
+
+    expect(await screen.findByText(LINK.link)).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith("/escolas/1/usuarios/2/redefinir-senha", { method: "POST" });
+  });
+
+  it("conta inativa: 'Redefinir senha' fica desabilitada com a dica de reativar antes", async () => {
+    // O backend responde 400 para link de conta inativa; a tela nem tenta.
+    responder("GET", URL_LISTA, [
+      usuarioFake({ id: 2, nome: "Maria Souza", email: "maria@escola.com", cargo: "professor", status: "inativo" }),
+      usuarioFake({ id: 3, nome: "Carlos Lima", email: "carlos@escola.com", cargo: "professor", status: "ativo" }),
+    ]);
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+
+    await u.click(await screen.findByRole("button", { name: "Ações do usuário Maria Souza" }));
+    const item = await screen.findByRole("menuitem", { name: "Redefinir senha" });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAccessibleDescription(/reative a conta antes/i);
+    expect(screen.getByText(/reative a conta antes/i)).toBeVisible();
+    // O caminho certo continua no mesmo menu.
+    expect(screen.getByRole("menuitem", { name: "Reativar" })).toBeInTheDocument();
+
+    await u.click(item);
+    expect(screen.queryByRole("button", { name: /gerar link de redefinição/i })).not.toBeInTheDocument();
+    expect(api).not.toHaveBeenCalledWith("/escolas/1/usuarios/2/redefinir-senha", expect.anything());
+
+    // Conta ativa: a ação segue normal, sem dica.
+    await u.keyboard("{Escape}");
+    await u.click(screen.getByRole("button", { name: "Ações do usuário Carlos Lima" }));
+    const ativo = await screen.findByRole("menuitem", { name: "Redefinir senha" });
+    expect(ativo).not.toHaveAttribute("aria-disabled");
+    expect(screen.queryByText(/reative a conta antes/i)).not.toBeInTheDocument();
+    await u.click(ativo);
+    expect(await screen.findByRole("button", { name: /gerar link de redefinição/i })).toBeInTheDocument();
   });
 
   // --- Vincular turmas ao professor ------------------------------------------
@@ -188,15 +309,15 @@ describe("Usuarios", () => {
       total: 2,
       revisar: 1,
       candidatos: [
-        { loser_id: 10, apagar: "PAULA", manter: "Paula Benedita Vilela Nogueira",
-          confianca: "alta", usuario_novo: "PaulaNogueira", senha_nova: "paulanogueira123", turmas_movidas: ["1º Ano A"] },
+        { loser_id: 10, apagar: "TELMA", manter: "Telma Belinora Varoni Testelli",
+          confianca: "alta", usuario_novo: "TelmaTestelli", senha_nova: "(gerada ao aplicar)", turmas_movidas: ["1º Ano A"] },
         { loser_id: 20, apagar: "Ana Paula", manter: "Ana Paula Souza",
-          confianca: "revisar", usuario_novo: "AnaSouza", senha_nova: "anasouza123", turmas_movidas: [] },
+          confianca: "revisar", usuario_novo: "AnaSouza", senha_nova: "(gerada ao aplicar)", turmas_movidas: [] },
       ],
     });
     responder("POST", "/escolas/1/professores/duplicados/corrigir", {
       corrigidos: 1,
-      folha: [{ nome: "Paula Benedita Vilela Nogueira", usuario: "PaulaNogueira", senha: "paulanogueira123" }],
+      folha: [{ nome: "Telma Belinora Varoni Testelli", usuario: "TelmaTestelli", senha: "lago-farol-neve-42" }],
     });
 
     const u = userEvent.setup();
@@ -204,20 +325,33 @@ describe("Usuarios", () => {
     await u.click(await screen.findByRole("button", { name: /professores duplicados/i }));
 
     // Prévia: as duas fusões aparecem (@ único por candidato); a de "revisar" avisa.
-    expect(await screen.findByText("@PaulaNogueira")).toBeInTheDocument();
+    expect(await screen.findByText("@TelmaTestelli")).toBeInTheDocument();
     expect(screen.getByText("@AnaSouza")).toBeInTheDocument();
     expect(screen.getByText(/pode ser outra pessoa/)).toBeInTheDocument();
 
-    // Desmarca a "Ana Paula" (loser 20) — só a PAULA vai no POST.
+    // Desmarca a "Ana Paula" (loser 20) — só a TELMA vai no POST.
     await u.click(screen.getByRole("checkbox", { name: /Ana Paula/ }));
     await u.click(screen.getByRole("button", { name: /unir 1 selecionada/i }));
 
     expect(await screen.findByText(/1 professor\(es\) unificado/i)).toBeInTheDocument();
-    expect(screen.getByText("paulanogueira123")).toBeInTheDocument();
+    expect(screen.getByText("lago-farol-neve-42")).toBeInTheDocument();
     expect(api).toHaveBeenCalledWith(
       "/escolas/1/professores/duplicados/corrigir",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ loser_ids: [10] }) }),
     );
+  });
+
+  it("falha ao carregar os duplicados mostra só o erro (sem 'Encontrei  possível(is)…')", async () => {
+    responder("GET", URL_LISTA, [MARIA]);
+    responderErro("GET", "/escolas/1/professores/duplicados", 500, "Banco indisponível");
+
+    const u = userEvent.setup();
+    comoAdmin(<Usuarios />);
+    await u.click(await screen.findByRole("button", { name: /professores duplicados/i }));
+
+    expect(await screen.findByText("Banco indisponível")).toBeInTheDocument();
+    expect(screen.queryByText(/Encontrei/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /unir/i })).toBeNull();
   });
 
   it("informa quando não há professores duplicados", async () => {

@@ -14,11 +14,13 @@ Cinco entidades, todas isoladas por ``escola_id`` (multi-tenant):
 * ``SincronizacaoAlerta``  — alertas operacionais (senha inválida, timeout, …).
 
 Nada aqui guarda senha em texto: o segredo mora só em ``segredo_cifrado`` e a
-chave de cifra vem da ``SECRET_KEY`` (fora do banco). Ver ``app/sync/vault.py``.
+chave de cifra é a ``DATA_ENCRYPTION_KEY`` (fora do banco; obrigatória com
+``ENV=producao``). A ``SECRET_KEY`` só decifra as cifras legadas. Ver
+``app/sync/vault.py``.
 """
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, Index, String, Text, UniqueConstraint, text
+from sqlalchemy import JSON, ForeignKey, Index, String, Text, UniqueConstraint, false, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -30,8 +32,9 @@ class PlataformaCredencial(Base):
 
     ``segredo_cifrado`` guarda um JSON cifrado (Fernet) com o que o conector
     precisa para logar (ex.: ``{"usuario": ..., "senha": ...}``). A senha em
-    texto NUNCA é persistida nem devolvida ao navegador. ``token_version``
-    prepara a rotação futura (invalida sessões/credenciais antigas)."""
+    texto NUNCA é persistida nem devolvida ao navegador. ``token_version`` só
+    conta os recadastros; nada o lê hoje e ele não participa da rotação da
+    chave da cifra (essa é o chaveiro: ``scripts/recifrar_segredos.py``)."""
 
     __tablename__ = "plataforma_credenciais"
 
@@ -44,7 +47,7 @@ class PlataformaCredencial(Base):
     status: Mapped[str] = mapped_column(String(20), default="nao_validada")
     validada_em: Mapped[datetime | None] = mapped_column(default=None)
     ultimo_erro: Mapped[str | None] = mapped_column(String(300), default=None)
-    token_version: Mapped[int] = mapped_column(default=1)  # rotação futura
+    token_version: Mapped[int] = mapped_column(default=1)  # conta recadastros (nada o lê)
     created_at: Mapped[datetime] = mapped_column(default=agora)
     updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
 
@@ -94,7 +97,8 @@ class SincronizacaoExecucao(Base):
     origem: Mapped[str] = mapped_column(String(12))  # manual | scheduler
     usuario_id: Mapped[int | None] = mapped_column(
         ForeignKey("usuarios.id", ondelete="SET NULL"), default=None)
-    # fila | executando | concluida | erro | cancelada | sem_dados
+    # fila | executando | concluida | parcial | sem_atualizacao | sem_dados | erro |
+    # cancelada (ver os estados finais em app/sync/service.py)
     status: Mapped[str] = mapped_column(String(16), default="fila", index=True)
     # Momento mais cedo em que o worker pode pegar esta execução (backoff de
     # retry / agendamento). None = disponível já.
@@ -117,6 +121,18 @@ class SincronizacaoExecucao(Base):
     # p/ coleta por período). Vazio = sync normal. Persistido porque o worker
     # roda numa thread que relê a linha pelo id.
     parametros: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    # Contabilidade honesta (migração 0039). Anuláveis: execução anterior à 0039
+    # não mediu isso (NULL = "não medido", diferente de 0). ``qtd_linhas`` =
+    # linhas recebidas da plataforma; ``qtd_em_revisao`` = linhas/contas que
+    # foram para a revisão; ``qtd_falhas`` = unidades (turma, lote, aluno,
+    # endpoint, arquivo) que falharam. ``recalculo_pendente``: houve dado gravado
+    # e o recálculo das notas falhou. ``motivo``: o porquê do status
+    # ('nada_mudou', 'correspondencia_pendente', 'falha_apos_gravacao'…).
+    qtd_linhas: Mapped[int | None] = mapped_column(default=None)
+    qtd_em_revisao: Mapped[int | None] = mapped_column(default=None)
+    qtd_falhas: Mapped[int | None] = mapped_column(default=None)
+    recalculo_pendente: Mapped[bool] = mapped_column(default=False, server_default=false())
+    motivo: Mapped[str | None] = mapped_column(String(40), default=None)
     created_at: Mapped[datetime] = mapped_column(default=agora)
 
     __table_args__ = (

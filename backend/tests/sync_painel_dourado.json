@@ -1,0 +1,1226 @@
+{
+ "sem_integracao": [
+  {
+   "alertas_abertos": 0,
+   "duracao_ultima_ms": null,
+   "em_andamento": 0,
+   "escolas_com_erro": 0,
+   "escolas_configuradas": 0,
+   "escolas_desatualizadas": 0,
+   "escolas_sincronizadas": 0,
+   "escolas_total": 1,
+   "fila": 0,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": true,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "Nenhuma execução 'executando' há mais de 45 min nem na fila sem sinal de vida há mais de 60 min.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Nenhuma integração com agenda ativa: não há credencial a conferir.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "Nenhum recálculo pendente.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "Horários calculados em America/Sao_Paulo (03:00 de Brasília = 06:00 UTC).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "Nenhuma agenda ativa; janela do backup privado: 10:30–13:30 UTC = 07:30–10:30 em Brasília.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Nenhuma coleta agendada.",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Nenhuma agenda ativa hoje. Nenhuma agenda nasce sozinha ao ligar.",
+      "ok": true
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": null,
+   "ultima_sincronizacao": null,
+   "workers_ativos": 0
+  },
+  {
+   "alertas_abertos": 0,
+   "duracao_ultima_ms": null,
+   "em_andamento": 0,
+   "escolas_com_erro": 0,
+   "escolas_configuradas": 0,
+   "escolas_desatualizadas": 0,
+   "escolas_sincronizadas": 0,
+   "escolas_total": 1,
+   "fila": 0,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": true,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "Nenhuma execução 'executando' há mais de 45 min nem na fila sem sinal de vida há mais de 60 min.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Nenhuma integração com agenda ativa: não há credencial a conferir.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "Nenhum recálculo pendente.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "Horários calculados em America/Sao_Paulo (03:00 de Brasília = 06:00 UTC).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "Nenhuma agenda ativa; janela do backup privado: 10:30–13:30 UTC = 07:30–10:30 em Brasília.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Nenhuma coleta agendada.",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Nenhuma agenda ativa hoje. Nenhuma agenda nasce sozinha ao ligar.",
+      "ok": true
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": null,
+   "ultima_sincronizacao": null,
+   "workers_ativos": 0
+  }
+ ],
+ "vencidas_0": [
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 10000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 0,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T09:00:00",
+   "workers_ativos": 0
+  },
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 10000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 0,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T09:00:00",
+   "workers_ativos": 0
+  }
+ ],
+ "vencidas_28": [
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 19,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  },
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 19,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  }
+ ],
+ "vencidas_5": [
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 3,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  },
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 3,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": false,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  }
+ ],
+ "vencidas_5_agendador_ligado": [
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 3,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": true,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  },
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 3,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": false,
+    "habilitado": true,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  }
+ ],
+ "vencidas_5_forcado": [
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 3,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": true,
+    "habilitado": true,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  },
+  {
+   "alertas_abertos": 3,
+   "duracao_ultima_ms": 11000,
+   "em_andamento": 1,
+   "escolas_com_erro": 1,
+   "escolas_configuradas": 30,
+   "escolas_desatualizadas": 3,
+   "escolas_sincronizadas": 30,
+   "escolas_total": 31,
+   "fila": 2,
+   "prerequisitos_agendador": {
+    "criticos_falhos": [
+     "execucoes_presas",
+     "credenciais_legiveis",
+     "recalculo_sem_pendencia",
+     "fuso_da_agenda",
+     "horario_fora_do_backup"
+    ],
+    "decisao_no_boot": null,
+    "forcar": true,
+    "habilitado": true,
+    "pode_iniciar": false,
+    "verificacoes": [
+     {
+      "critico": true,
+      "id": "teto_execucao",
+      "motivo": "Teto total por execução: 2700 s (45 min).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "teto_coerente",
+      "motivo": "SYNC_TRAVADA_S (3600 s) > teto (2700 s) >= SYNC_TIMEOUT_S (180 s).",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "status_honesto",
+      "motivo": "Estados concluida, parcial, sem_atualizacao, sem_dados, erro presentes; colunas da 0039 no modelo e no banco.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "selo_frescor",
+      "motivo": "Selo de frescor (/ranking/frescor) disponível.",
+      "ok": true
+     },
+     {
+      "critico": true,
+      "id": "execucoes_presas",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "credenciais_legiveis",
+      "motivo": "Credencial ausente ou ilegível em 3 de 59 integração(ões) que o agendador rodaria: escola 5/elefante, escola 14/elefante, escola 23/elefante. Recadastre pela tela Integrações (depois da rotação de chaves).",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "recalculo_sem_pendencia",
+      "motivo": "1 alerta(s) 'recalculo_pendente' aberto(s): escola 29/elefante; execução com recálculo pendente ainda não superada: escola 29/elefante.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "fuso_da_agenda",
+      "motivo": "agenda(s) com a próxima execução fora do horário de Brasília (re-salve a agenda): escola 8/matific marcada para 04:15 e com próxima execução às 14:00 de Brasília.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "horario_fora_do_backup",
+      "motivo": "10 agenda(s) cruzam a janela do backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília) no pior caso de 45 min: escola 4/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 4/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 9/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 14/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 19/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/elefante às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC, escola 24/matific às 08:00 de Brasília = 11:00 UTC, até 11:45 UTC. Mude o horário da agenda.",
+      "ok": false
+     },
+     {
+      "critico": true,
+      "id": "workers_semaforo",
+      "motivo": "SYNC_WORKERS = 1 (semáforo coerente), SYNC_POLL_S = 30 s; WEB_CONCURRENCY não definido neste processo; o entrypoint usa 2: até 4 coleta(s) ao mesmo tempo no pior caso (2 processo(s) × (1 do agendador + 1 manual(is))).",
+      "ok": true
+     },
+     {
+      "critico": false,
+      "id": "fila_da_agenda",
+      "motivo": "Pior caso em série (59 coleta(s), 45 min cada): uma delas correria de 10:30 a 11:15 UTC e cruzaria o backup privado (10:30–13:30 UTC = 07:30–10:30 em Brasília). Espalhe os horários ao ampliar.",
+      "ok": false
+     },
+     {
+      "critico": false,
+      "id": "alcance_ao_ligar",
+      "motivo": "Rodariam ao ligar: escola 1/elefante semanal 03:00, escola 1/matific semanal 03:00, escola 2/elefante diaria 06:30, escola 2/matific diaria 06:30, escola 3/elefante diaria 04:15, escola 3/matific diaria 04:15, escola 4/elefante diaria 08:00, escola 4/matific diaria 08:00, escola 5/elefante diaria 05:45, escola 5/matific diaria 05:45 e mais 46. Além disso, 3 integração(ões) com credencial e SEM agenda ganham agenda DIÁRIA às 03:00 de Brasília na 1ª rodada: escola 29/elefante, escola 29/matific, escola 30/matific. Para ligar em 1 escola só, deixe antes a agenda das outras salva como manual/desligada.",
+      "ok": false
+     }
+    ]
+   },
+   "scheduler_ligado": false,
+   "tempo_medio_ms": 29137,
+   "ultima_sincronizacao": "2026-10-20T08:54:00",
+   "workers_ativos": 0
+  }
+ ]
+}

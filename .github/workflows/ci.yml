@@ -11,10 +11,16 @@ on:
     branches: [main]
   pull_request:
 
-# Cancela runs antigos do mesmo branch/PR quando um novo push chega.
+# Num PR, um push novo cancela o run antigo do mesmo PR. No main, a concorrência NÃO
+# cancela nada: cada run tem o seu grupo (o run_id) e vai até o fim. Com o grupo por
+# ramo, dois pushes seguidos no main cancelavam o CI do primeiro (e um run pendente é
+# sempre trocado pelo mais novo do grupo, mesmo sem cancel-in-progress) — e o "Wait for
+# CI" do Railway, que ignora um CI cancelado quando outro workflow do commit passou,
+# publicava um commit cujo CI nunca terminou. Um cancelamento À MÃO continua possível:
+# só o portão no Pre-deploy (scripts/exigir_ci_verde.py) o barra no caminho real.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -75,9 +81,13 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      # Runtime (o mesmo da imagem) + ferramentas de teste (pytest, pytest-cov),
+      # que ficam FORA da imagem de produção.
       - name: Instalar dependências
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       - name: Pytest com cobertura
         working-directory: backend
         run: python -m pytest -q --cov=app --cov-report=xml --cov-report=term
@@ -95,6 +105,67 @@ jobs:
           files: backend/coverage.xml
           flags: backend
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Os testes marcados `postgres` (travas FOR UPDATE, corridas entre transações, 422 por
+  # coluna, migrações e prontidão em processos separados) PULAM no job acima, que só tem
+  # SQLite. Aqui rodam contra o PostgreSQL do serviço, com o MESMO ambiente do
+  # test-backend: a URL do serviço chega em DATABASE_URL (a convenção dos jobs com
+  # postgres) e o passo do pytest a entrega como TEST_DATABASE_URL_PG, sem DATABASE_URL —
+  # o app dos testes segue no SQLite padrão e só os testes `postgres` usam o serviço.
+  test-backend-postgres:
+    name: Testes backend no PostgreSQL real (pytest -m postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: constela
+          POSTGRES_PASSWORD: constela
+          # Os testes apagam o schema: só aceitam banco LOCAL com "test" no nome
+          # (senão PULAM, e o job ficaria verde sem testar nada).
+          POSTGRES_DB: constela_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U constela"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://constela:constela@localhost:5432/constela_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Instalar dependências (+ driver do Postgres, como no Dockerfile)
+        run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt "psycopg[binary]==3.2.3"
+      # Antes do pytest, a mesma régua das fixtures (banco local, "test" no nome) e uma
+      # conexão de verdade: com a URL errada os testes PULARIAM em silêncio. O -rs lista
+      # no log o motivo de cada teste pulado.
+      - name: Pytest -m postgres no PostgreSQL do serviço
+        working-directory: backend
+        run: |
+          export TEST_DATABASE_URL_PG="$DATABASE_URL"
+          unset DATABASE_URL
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.engine import make_url
+          url = make_url(os.environ["TEST_DATABASE_URL_PG"])
+          assert url.host in ("127.0.0.1", "localhost", "::1"), f"banco de teste não local: {url.host}"
+          assert "test" in (url.database or "").lower(), f"banco sem 'test' no nome: {url.database}"
+          engine = create_engine(url)
+          with engine.connect() as c:
+              versao = c.execute(text("SHOW server_version")).scalar()
+          engine.dispose()
+          print(f"OK -- PostgreSQL {versao} em {url.host}/{url.database}")
+          PY
+          python -m pytest -q -rs -m postgres
 
   migracoes-postgres:
     name: Migrações Alembic (PostgreSQL real)
@@ -131,6 +202,25 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Instalar dependências (+ driver do Postgres, como no Dockerfile)
         run: pip install -r backend/requirements.txt "psycopg[binary]==3.2.3"
+      # Os papéis da API do Supabase COMO EM PRODUÇÃO: anon/authenticated recebem tudo
+      # pelos privilégios padrão do dono (por schema e globais). Sem eles a 0038 não teria
+      # o que revogar e o CI nunca exercitaria o REVOKE (achado da revisão de 21/10).
+      - name: Papéis da API do Supabase (como em produção)
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from sqlalchemy import text
+          from app.core.database import engine
+          with engine.begin() as c:
+              for papel in ("anon", "authenticated"):
+                  if not c.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :p"), {"p": papel}).scalar():
+                      c.execute(text(f'CREATE ROLE "{papel}" NOLOGIN'))
+                  c.execute(text(f'GRANT USAGE ON SCHEMA public TO "{papel}"'))
+                  for tipo in ("TABLES", "SEQUENCES", "FUNCTIONS"):
+                      c.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON {tipo} TO "{papel}"'))
+                      c.execute(text(f'ALTER DEFAULT PRIVILEGES GRANT ALL ON {tipo} TO "{papel}"'))
+          print("OK -- anon/authenticated com os privilégios padrão do Supabase")
+          PY
       - name: Aplicar migrações no PostgreSQL (entrypoint real do container)
         working-directory: backend
         run: python -m scripts.migrate
@@ -154,6 +244,78 @@ jobs:
                       "quest_tentativas"} - tabelas
           assert not faltando, f"tabelas faltando no Postgres: {faltando}"
           print(f"OK -- PostgreSQL no head {head} com {len(tabelas)} tabelas")
+          PY
+      - name: Conferir RLS ligado (ENABLE, sem FORCE) em todas as tabelas
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from sqlalchemy import text
+          from app.core.database import engine
+          sql = ("SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c "
+                 "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                 "WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')")
+          with engine.connect() as c:
+              linhas = c.execute(text(sql)).all()
+          sem_rls = sorted(nome for nome, rls, _ in linhas if not rls)
+          forcadas = sorted(nome for nome, _, forcado in linhas if forcado)
+          assert not sem_rls, f"tabelas sem RLS (a migração que as cria deve ligar): {sem_rls}"
+          assert not forcadas, f"tabelas com FORCE (bloquearia o backend): {forcadas}"
+          print(f"OK -- RLS ligado em {len(linhas)} tabelas, nenhuma forçada")
+          PY
+      # Conferência INDEPENDENTE da 0038 (não usa o código dela): nenhum privilégio de
+      # anon/authenticated em tabela, view, sequência ou função do schema, nem privilégio
+      # padrão do papel da migração para eles.
+      - name: Conferir que a API do Supabase (anon/authenticated) não alcança nada
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from sqlalchemy import text
+          from app.core.database import engine
+          tabela = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]
+          with engine.connect() as c:
+              if c.execute(text("SELECT current_setting('server_version_num')::int")).scalar() >= 170000:
+                  tabela.append("MAINTAIN")
+              sobras = []
+              for papel in ("anon", "authenticated"):
+                  for priv in tabela:
+                      sobras += [f"{papel}:{n}:{priv}" for (n,) in c.execute(text(
+                          "SELECT c.relname FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace "
+                          "WHERE s.nspname = current_schema() AND c.relkind IN ('r','p','v','m','f') "
+                          "AND has_table_privilege(:p, c.oid, :x)"), {"p": papel, "x": priv})]
+                  for priv in ("USAGE", "SELECT", "UPDATE"):
+                      sobras += [f"{papel}:{n}:{priv}" for (n,) in c.execute(text(
+                          "SELECT c.relname FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace "
+                          "WHERE s.nspname = current_schema() AND c.relkind = 'S' AND CASE WHEN c.relkind = 'S' "
+                          "THEN has_sequence_privilege(:p, c.oid, :x) ELSE false END"), {"p": papel, "x": priv})]
+                  sobras += [f"{papel}:{n}():EXECUTE" for (n,) in c.execute(text(
+                      "SELECT p.proname FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace "
+                      "WHERE s.nspname = current_schema() AND has_function_privilege(:p, p.oid, 'EXECUTE')"),
+                      {"p": papel})]
+                  sobras += [f"{papel}:padrao:{t}" for (t,) in c.execute(text(
+                      "SELECT d.defaclobjtype FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a "
+                      "WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+                      "AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = :p)"), {"p": papel})]
+          assert not sobras, f"a API do Supabase ainda alcança: {sobras[:20]}"
+          print("OK -- anon/authenticated sem privilégio no schema e sem privilégio padrão")
+          PY
+      # A ordem do Railway com pre-deploy: o migrate acima rodou num processo; o app
+      # com ENV=producao NÃO migra no import e só fica pronto com o schema nas heads.
+      - name: App com ENV=producao fica pronto sem migrar (readiness 200 em_dia)
+        working-directory: backend
+        env:
+          ENV: producao
+          SECRET_KEY: chave-de-ci-somente-para-o-teste-de-prontidao-0123456789
+          # Produção recusa subir sem DEK própria (config.riscos_de_producao).
+          DATA_ENCRYPTION_KEY: dek-de-ci-somente-para-o-teste-de-prontidao-9876543210
+        run: |
+          python - <<'PY'
+          import app.core.automacao as automacao
+          automacao.iniciar_verificacao = lambda: None   # sem rede no CI
+          from fastapi.testclient import TestClient
+          from app.main import app
+          r = TestClient(app).get("/api/health/ready")
+          assert r.status_code == 200 and r.json().get("schema") == "em_dia", r.text
+          print("OK -- ENV=producao pronto:", r.json())
           PY
 
   test-web:
@@ -197,6 +359,22 @@ jobs:
         run: npm ci --no-audit --no-fund --legacy-peer-deps
       - name: "Vitest (lógica pura: cifra AES, fila offline, política de retry)"
         run: npm run test --workspace @constela/mobile
+
+  # O front das crianças tinha só o build no CI: os testes de tela do Quest
+  # (apps/quest/src/test, Vitest + Testing Library) não rodavam em lugar nenhum.
+  test-quest:
+    name: Testes quest (Vitest — telas do app dos alunos)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar workspaces
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+      - name: Vitest do Quest
+        run: npm run test --workspace @constela/quest
 
   build:
     name: Build (web + quest)
@@ -250,9 +428,120 @@ jobs:
   docker:
     name: Imagens Docker (validação de build)
     runs-on: ubuntu-latest
+    # Além do build, a FUMAÇA do backend: o 1º boot da imagem nova não pode ser a
+    # produção. O container sobe como em produção (ENV=producao, usuário não-root, o
+    # entrypoint migrando um banco VAZIO, 2 workers) contra o PostgreSQL do serviço,
+    # numa rede Docker INTERNA: sem saída para a internet, o diagnóstico do robô no boot
+    # não alcança Matific, Elefante nem os serviços de geo-IP. Nenhuma porta é
+    # publicada: as conferências rodam dentro do próprio container (docker exec).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: constela
+          POSTGRES_PASSWORD: constela
+          POSTGRES_DB: constela_fumaca
+        options: >-
+          --health-cmd "pg_isready -U constela"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - name: Build da imagem do backend
         run: docker build -t sgpe-backend ./backend
       - name: Build da imagem do web
         run: docker build -t sgpe-web -f apps/web/Dockerfile .
+      - name: Fumaça do backend (ENV=producao, readiness 200, /docs e /metrics fechados)
+        timeout-minutes: 10
+        run: |
+          API=fumaca-backend
+          REDE=fumaca-interna
+          # Id do container do serviço, gerado pelo runner (não é entrada externa).
+          PG_SERVICO="${{ job.services.postgres.id }}"
+          # Chaves FICTÍCIAS geradas agora (morrem com o runner) e diferentes entre si:
+          # a produção recusa DEK igual à SECRET_KEY. Nenhum segredo real entra aqui.
+          SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          DATA_ENCRYPTION_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          if [ "$SECRET_KEY" = "$DATA_ENCRYPTION_KEY" ]; then
+            echo "::error::as chaves fictícias saíram iguais"; exit 1
+          fi
+          echo "::add-mask::$SECRET_KEY"
+          echo "::add-mask::$DATA_ENCRYPTION_KEY"
+          export SECRET_KEY DATA_ENCRYPTION_KEY
+          derrubar() {
+            codigo=$?
+            if [ "$codigo" -ne 0 ]; then
+              echo "::group::Log do container (últimas 300 linhas)"
+              docker logs --tail 300 "$API" 2>&1 || true
+              echo "::endgroup::"
+            fi
+            docker rm -f "$API" > /dev/null 2>&1 || true
+            docker network disconnect "$REDE" "$PG_SERVICO" > /dev/null 2>&1 || true
+            docker network rm "$REDE" > /dev/null 2>&1 || true
+            exit "$codigo"
+          }
+          trap derrubar EXIT
+          docker network create --internal "$REDE"
+          docker network connect --alias banco "$REDE" "$PG_SERVICO"
+          # -e NOME sem valor: o docker lê a chave do ambiente (fora da linha de comando).
+          docker run -d --name "$API" --network "$REDE" \
+            -e ENV=producao -e DOCS_HABILITADOS=false \
+            -e SECRET_KEY -e DATA_ENCRYPTION_KEY \
+            -e DATABASE_URL=postgresql+psycopg://constela:constela@banco:5432/constela_fumaca \
+            sgpe-backend
+          # 1) HTTP: espera o readiness e confere que nada de desenvolvimento ficou aberto.
+          docker exec -i "$API" python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          BASE = "http://127.0.0.1:8000"
+
+
+          def pedir(caminho):
+              try:
+                  with urllib.request.urlopen(BASE + caminho, timeout=5) as resposta:
+                      return resposta.status, resposta.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as erro:
+                  return erro.code, erro.read().decode("utf-8", "replace")
+              except OSError as erro:            # ainda migrando ou o uvicorn subindo
+                  return 0, type(erro).__name__
+
+
+          # O banco do serviço começa VAZIO: o 200 "em_dia" prova que o entrypoint migrou.
+          limite = time.monotonic() + 240
+          while True:
+              codigo, corpo = pedir("/api/health/ready")
+              if codigo == 200 or time.monotonic() > limite:
+                  break
+              time.sleep(2)
+          assert codigo == 200, f"/api/health/ready respondeu {codigo}: {corpo[:300]}"
+          assert json.loads(corpo).get("schema") == "em_dia", corpo[:300]
+          for caminho in ("/docs", "/redoc", "/openapi.json"):
+              codigo, _ = pedir(caminho)
+              assert codigo == 404, f"{caminho} aberto em produção (HTTP {codigo})"
+          codigo, corpo = pedir("/metrics")        # sem METRICS_TOKEN: escondido (404)
+          assert codigo == 404 and "# TYPE" not in corpo, f"/metrics aberto sem token (HTTP {codigo})"
+          print("OK -- ready 200 (schema em_dia); /docs, /redoc, /openapi.json e /metrics fechados")
+          PY
+          # 2) O container: processo não-root, pastas de dados graváveis e o Chromium do robô.
+          docker exec -i "$API" python - <<'PY'
+          import tempfile
+
+          from app.core.config import settings
+
+          # PID 1 é o uvicorn (o entrypoint faz exec depois de migrar).
+          with open("/proc/1/status", encoding="utf-8") as status:
+              uid = next(linha.split()[1] for linha in status if linha.startswith("Uid:"))
+          assert uid != "0", "o backend roda como root"
+          for pasta in (settings.UPLOADS_DIR, settings.EXPORTS_DIR):
+              with tempfile.NamedTemporaryFile(dir=pasta):
+                  pass
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as p:                 # sem rede: só abre e fecha
+              p.chromium.launch(headless=True).close()
+          print(f"OK -- uid {uid}; {settings.UPLOADS_DIR} e {settings.EXPORTS_DIR} graváveis; Chromium abre")
+          PY

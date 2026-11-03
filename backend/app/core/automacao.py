@@ -34,12 +34,18 @@ def _diagnosticar_egress() -> None:
     derruba a nota do reCAPTCHA v3 do Matific e faz o login com senha válida ser
     recusado. Um único GET a um serviço público de geo-IP, sem credenciais."""
     import json
+    import ssl
     import urllib.request
 
+    import certifi
+
+    # O mesmo bundle de CAs do httpx (certifi, com piso no requirements): o contexto
+    # padrão do urllib usaria o ca-certificates da imagem, que não acompanha o piso.
+    contexto = ssl.create_default_context(cafile=certifi.where())
     for url in ("https://ipinfo.io/json", "https://ipapi.co/json/"):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "constela-diag/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=8, context=contexto) as resp:  # noqa: S310
                 d = json.loads(resp.read().decode("utf-8"))
             _estado["egress"] = {
                 "ip": d.get("ip"),
@@ -107,3 +113,35 @@ def _verificar() -> None:
 def iniciar_verificacao() -> None:
     """Dispara a verificação em thread daemon (não bloqueia boot nem health)."""
     threading.Thread(target=_verificar, name="verificar-automacao", daemon=True).start()
+
+
+_DESLIGADO = frozenset({"0", "false", "nao", "não", "no", "off"})
+_LIGADO = frozenset({"", "1", "true", "sim", "yes", "on"})
+
+
+def verificacao_no_boot_ligada(cfg=None) -> bool:
+    """``AUTOMACAO_VERIFICAR_NO_BOOT`` interpretado (texto). Só os valores de
+    "desligado" desligam; vazio ou fora da lista mantém o padrão — LIGADO, o que a
+    produção sempre fez — e avisa no log, em vez de derrubar o boot."""
+    if cfg is None:
+        from app.core.config import settings as cfg   # tardio: não carrega config no import
+    valor = str(getattr(cfg, "AUTOMACAO_VERIFICAR_NO_BOOT", "") or "").strip().lower()
+    if valor in _DESLIGADO:
+        return False
+    if valor not in _LIGADO:
+        logger.warning("AUTOMACAO_VERIFICAR_NO_BOOT com valor não reconhecido: o "
+                       "diagnóstico do robô no boot fica LIGADO (use true/false).")
+    return True
+
+
+def iniciar_no_boot(cfg=None) -> bool:
+    """O que o ``app.main`` chama no import: dispara a verificação se o interruptor
+    deixar. Desligado (testes e E2E), nenhuma thread nasce e nada sai para a rede —
+    nem o GET de IP de saída, nem o Chromium. Devolve se disparou."""
+    if not verificacao_no_boot_ligada(cfg):
+        _estado["detalhe"] = "verificacao desligada no boot (AUTOMACAO_VERIFICAR_NO_BOOT)"
+        logger.info("Diagnóstico do robô no boot desligado (AUTOMACAO_VERIFICAR_NO_BOOT): "
+                    "sem consulta do IP de saída e sem abrir o Chromium.")
+        return False
+    iniciar_verificacao()
+    return True

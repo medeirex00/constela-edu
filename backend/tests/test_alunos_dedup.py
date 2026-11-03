@@ -69,16 +69,16 @@ def _duplicados(cliente, escola_id) -> dict:
 def test_detecta_subconjunto_mesma_turma_como_revisar(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    curto = _add_aluno(db, escola_id, "Akemi Carolina Vieira", turma_id)
-    _add_aluno(db, escola_id, "Akemi Carolina Vieira Gomes Kariya", turma_id)
+    curto = _add_aluno(db, escola_id, "Yasmin Cecilia Testelli", turma_id)
+    _add_aluno(db, escola_id, "Yasmin Cecilia Testelli Ficticio Sintoni", turma_id)
 
     corpo = _duplicados(cliente, escola_id)
-    pares = [c for c in corpo["candidatos"] if c["apagar"].startswith("Akemi")]
+    pares = [c for c in corpo["candidatos"] if c["apagar"].startswith("Yasmin")]
     assert len(pares) == 1
     par = pares[0]
     assert par["loser_id"] == curto.id
-    assert par["apagar"] == "Akemi Carolina Vieira"
-    assert par["manter"] == "Akemi Carolina Vieira Gomes Kariya"
+    assert par["apagar"] == "Yasmin Cecilia Testelli"
+    assert par["manter"] == "Yasmin Cecilia Testelli Ficticio Sintoni"
     assert par["confianca"] == "revisar"
     assert par["motivo"] == "subconjunto"
     assert par["turma"] == "3º Ano A"
@@ -203,16 +203,16 @@ def test_leque_com_conflito_entre_co_losers_e_recusado(cliente, db, escola_compl
 
 def test_variante_de_grafia_nao_e_arrastada_na_fusao(cliente, db, escola_completa):
     """SEGURANÇA: a variante de grafia (fuzzy) NUNCA é fundida automaticamente, nem
-    quando há um grupo. 'ABRAÃO LUÍS' —subconjunto→ 'ABRAÃO LUÍS DIAS' fundem (mesmo
-    aluno); 'ABRAÃO LUIZ' (variante de grafia) fica SEPARADO, para revisão manual."""
+    quando há um grupo. 'EUSTÁQUIO LUÍS' —subconjunto→ 'EUSTÁQUIO LUÍS FICTONI' fundem (mesmo
+    aluno); 'EUSTÁQUIO LUIZ' (variante de grafia) fica SEPARADO, para revisão manual."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    xid = _add_aluno(db, escola_id, "ABRAÃO LUIZ", turma_id).id       # variante grafia
-    yid = _add_aluno(db, escola_id, "ABRAÃO LUÍS", turma_id).id       # abreviação de z
-    zid = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id).id  # mais completo
+    xid = _add_aluno(db, escola_id, "EUSTÁQUIO LUIZ", turma_id).id       # variante grafia
+    yid = _add_aluno(db, escola_id, "EUSTÁQUIO LUÍS", turma_id).id       # abreviação de z
+    zid = _add_aluno(db, escola_id, "EUSTÁQUIO LUÍS FICTONI", turma_id).id  # mais completo
 
     corpo = _duplicados(cliente, escola_id)
-    losers = [c["loser_id"] for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
+    losers = [c["loser_id"] for c in corpo["candidatos"] if "EUST" in c["apagar"].upper()]
     r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
                      json={"loser_ids": losers, "confirmacao": "FUNDIR"})
     assert r.status_code == 200, r.text
@@ -269,13 +269,13 @@ def test_colapsavel_vetos_duros_valem_para_leque_tambem():
 def test_abreviacao_posicional_e_revisar(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    _add_aluno(db, escola_id, "Agatha V", turma_id)
-    _add_aluno(db, escola_id, "Agatha Vitoria Moura", turma_id)
+    _add_aluno(db, escola_id, "Celina V", turma_id)
+    _add_aluno(db, escola_id, "Celina Valentina Ficticia", turma_id)
 
     corpo = _duplicados(cliente, escola_id)
-    pares = [c for c in corpo["candidatos"] if c["apagar"] == "Agatha V"]
+    pares = [c for c in corpo["candidatos"] if c["apagar"] == "Celina V"]
     assert len(pares) == 1
-    assert pares[0]["manter"] == "Agatha Vitoria Moura"
+    assert pares[0]["manter"] == "Celina Valentina Ficticia"
     assert pares[0]["motivo"] == "abreviacao"
 
 
@@ -305,9 +305,9 @@ def test_ambiguo_dois_completos_nao_sugere(cliente, db, escola_completa):
 def test_aplicar_funde_apenas_selecionados_e_recalcula(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    curto_id = _add_aluno(db, escola_id, "Akemi Carolina Vieira", turma_id).id
+    curto_id = _add_aluno(db, escola_id, "Yasmin Cecilia Testelli", turma_id).id
     completo_id = _add_aluno(db, escola_id,
-                             "Akemi Carolina Vieira Gomes Kariya", turma_id).id
+                             "Yasmin Cecilia Testelli Ficticio Sintoni", turma_id).id
 
     r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
                      json={"loser_ids": [curto_id], "confirmacao": "FUNDIR"})
@@ -327,8 +327,8 @@ def test_aplicar_funde_apenas_selecionados_e_recalcula(cliente, db, escola_compl
 def test_corrigir_exige_confirmacao(cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    curto = _add_aluno(db, escola_id, "Akemi Carolina Vieira", turma_id)
-    _add_aluno(db, escola_id, "Akemi Carolina Vieira Gomes Kariya", turma_id)
+    curto = _add_aluno(db, escola_id, "Yasmin Cecilia Testelli", turma_id)
+    _add_aluno(db, escola_id, "Yasmin Cecilia Testelli Ficticio Sintoni", turma_id)
 
     r = cliente.post(f"{_base(escola_id)}/alunos/duplicados/corrigir",
                      json={"loser_ids": [curto.id], "confirmacao": ""})
@@ -345,7 +345,7 @@ def test_professor_nao_acessa(db, escola_completa):
 
 
 def test_previa_em_lote_nao_faz_n_mais_1_de_queries(db, escola_completa):
-    """Regressão de performance (Debora Pilon travava): a prévia calcula o impacto
+    """Regressão de performance (a escola 11 travava): a prévia calcula o impacto
     de TODOS os candidatos em poucas queries (GROUP BY), não ~6 por candidato."""
     from sqlalchemy import event
     from app.services import alunos_dedup
@@ -382,20 +382,20 @@ def _turma(db, escola_id, nome) -> Turma:
 
 
 def test_detecta_variante_em_turmas_fantasma_da_mesma_sala(cliente, db, escola_completa):
-    """Passivo Debora Pilon: ABRAÃO LUÍS DIAS (Lista Piloto, turma '4ºC') e
-    ABRAAO LUIZ DIAS (importado numa turma-fantasma '4 ANO C INTEGRAL (300303525)').
+    """Passivo da escola 11: EUSTÁQUIO LUÍS FICTONI (Lista Piloto, turma '4ºC') e
+    EUSTAQUIO LUIZ FICTONI (importado numa turma-fantasma '4 ANO C INTEGRAL (300303525)').
     São a MESMA sala (chave canônica '4|C') e nomes variantes → detecta 'revisar',
     survivor = o da Lista Piloto (mesmo estando em turmas com id diferente)."""
     escola_id = escola_completa["escola"].id
     t_boa = _turma(db, escola_id, "4ºC")
     t_fantasma = _turma(db, escola_id, "4 ANO C INTEGRAL (300303525)")
-    luis = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", t_boa.id)
+    luis = _add_aluno(db, escola_id, "EUSTÁQUIO LUÍS FICTONI", t_boa.id)
     luis.da_lista_piloto = True
     db.commit()
-    luiz = _add_aluno(db, escola_id, "ABRAAO LUIZ DIAS", t_fantasma.id)
+    luiz = _add_aluno(db, escola_id, "EUSTAQUIO LUIZ FICTONI", t_fantasma.id)
 
     corpo = _duplicados(cliente, escola_id)
-    pares = [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
+    pares = [c for c in corpo["candidatos"] if "EUST" in c["apagar"].upper()]
     assert len(pares) == 1
     assert pares[0]["loser_id"] == luiz.id and pares[0]["manter_id"] == luis.id
     assert pares[0]["confianca"] == "revisar" and pares[0]["motivo"] == "variante"
@@ -407,14 +407,14 @@ def test_leque_triplicado_funde_tudo_no_perfil_da_lista_piloto(cliente, db, esco
     funde as duas de uma vez (manual) e sobra só o perfil principal."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    piloto = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)   # 1º id (LP)
+    piloto = _add_aluno(db, escola_id, "EUSTÁQUIO LUÍS FICTONI", turma_id)   # 1º id (LP)
     piloto.da_lista_piloto = True
     db.commit()
-    dup1 = _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)     # ficha repetida
-    dup2 = _add_aluno(db, escola_id, "ABRAAO LUIS DIAS", turma_id)     # variação de acento
+    dup1 = _add_aluno(db, escola_id, "EUSTÁQUIO LUÍS FICTONI", turma_id)     # ficha repetida
+    dup2 = _add_aluno(db, escola_id, "EUSTAQUIO LUIS FICTONI", turma_id)     # variação de acento
 
     corpo = _duplicados(cliente, escola_id)
-    pares = [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()]
+    pares = [c for c in corpo["candidatos"] if "EUST" in c["apagar"].upper()]
     assert {p["manter_id"] for p in pares} == {piloto.id}      # tudo aponta p/ o LP
     losers = [p["loser_id"] for p in pares]
     assert set(losers) == {dup1.id, dup2.id}
@@ -431,15 +431,15 @@ def test_leque_triplicado_funde_tudo_no_perfil_da_lista_piloto(cliente, db, esco
 
 
 def test_variante_nao_pareia_criancas_diferentes(cliente, db, escola_completa):
-    """ABRAÃO LUÍS DIAS × ABRAÃO LUCAS DIAS na MESMA turma são crianças DIFERENTES
+    """EUSTÁQUIO LUÍS FICTONI × EUSTÁQUIO LUCAS FICTONI na MESMA turma são crianças DIFERENTES
     (LUÍS/LUCAS não é variante ortográfica) → NUNCA sugere."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    _add_aluno(db, escola_id, "ABRAÃO LUÍS DIAS", turma_id)
-    _add_aluno(db, escola_id, "ABRAÃO LUCAS DIAS", turma_id)
+    _add_aluno(db, escola_id, "EUSTÁQUIO LUÍS FICTONI", turma_id)
+    _add_aluno(db, escola_id, "EUSTÁQUIO LUCAS FICTONI", turma_id)
 
     corpo = _duplicados(cliente, escola_id)
-    assert [c for c in corpo["candidatos"] if "ABRA" in c["apagar"].upper()] == []
+    assert [c for c in corpo["candidatos"] if "EUST" in c["apagar"].upper()] == []
 
 
 # --- Regressões de SEGURANÇA da detecção (achados da revisão adversarial) ----
@@ -502,18 +502,18 @@ def test_copia_de_plataforma_de_aluno_da_lista_e_alta(cliente, db, escola_comple
 
 
 def test_abreviacao_de_aluno_da_lista_e_provavel(cliente, db, escola_completa):
-    """Stub curto do Matific ('Agatha V', não-piloto) que abrevia UM único aluno
-    da Lista Piloto ('Agatha Vitoria Moura') → 🟡 'provável' (une em lote com
+    """Stub curto do Matific ('Celina V', não-piloto) que abrevia UM único aluno
+    da Lista Piloto ('Celina Valentina Ficticia') → 🟡 'provável' (une em lote com
     conferência, NÃO pré-marcada)."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    piloto = _add_aluno(db, escola_id, "Agatha Vitoria Moura", turma_id)
+    piloto = _add_aluno(db, escola_id, "Celina Valentina Ficticia", turma_id)
     piloto.da_lista_piloto = True
     db.commit()
-    stub = _add_aluno(db, escola_id, "Agatha V", turma_id)
+    stub = _add_aluno(db, escola_id, "Celina V", turma_id)
 
     corpo = _duplicados(cliente, escola_id)
-    pares = [c for c in corpo["candidatos"] if c["apagar"] == "Agatha V"]
+    pares = [c for c in corpo["candidatos"] if c["apagar"] == "Celina V"]
     assert len(pares) == 1
     assert pares[0]["loser_id"] == stub.id and pares[0]["manter_id"] == piloto.id
     assert pares[0]["confianca"] == "provavel"
@@ -526,11 +526,11 @@ def test_sem_ancora_na_lista_nao_vira_provavel_nem_alta(cliente, db, escola_comp
     🔴 'revisar' — sem a âncora oficial não dá para aprovar em lote."""
     escola_id = escola_completa["escola"].id
     turma_id = escola_completa["turma"].id
-    _add_aluno(db, escola_id, "Akemi Carolina Vieira", turma_id)          # nenhum é piloto
-    _add_aluno(db, escola_id, "Akemi Carolina Vieira Gomes Kariya", turma_id)
+    _add_aluno(db, escola_id, "Yasmin Cecilia Testelli", turma_id)          # nenhum é piloto
+    _add_aluno(db, escola_id, "Yasmin Cecilia Testelli Ficticio Sintoni", turma_id)
 
     corpo = _duplicados(cliente, escola_id)
-    pares = [c for c in corpo["candidatos"] if c["apagar"].startswith("Akemi")]
+    pares = [c for c in corpo["candidatos"] if c["apagar"].startswith("Yasmin")]
     assert len(pares) == 1
     assert pares[0]["confianca"] == "revisar"
 

@@ -8,11 +8,12 @@
  * importado, diz isso — nunca 0. As médias sem proveniência oficial (estimativa do
  * Constela) aparecem mesmo sem o oficial, sempre separadas e rotuladas.
  */
-import { AlertTriangle, Info, Landmark } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Info } from "lucide-react";
 
-import { Badge, Card, Carregando, Mensagem } from "../../components/ui";
+import { Card, Carregando, Mensagem } from "../../components/ui";
 import { useApi } from "../../hooks/useApi";
 import AbaSARESP from "./AbaSARESP";
+import { CabecalhoIndicador } from "./visualIndicadores";
 import type { RespostaSARESP } from "./saresp";
 
 export type { RespostaSARESP } from "./saresp";
@@ -48,14 +49,9 @@ export default function CartaoSARESP({ redeId, ehGlobal }: { redeId: number; ehG
   const temAlgo = Boolean(dados && (dados.tem_dados || dados.estimativas.length > 0));
   return (
     <section data-testid="cartao-saresp" aria-label="SARESP oficial da SEDUC-SP">
-      <Card className="space-y-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Landmark size={16} className="text-indigo-600" /> SARESP — oficial
-          </h2>
-          <Badge tom="destaque">SEDUC-SP</Badge>
-        </div>
-        <p className="flex items-start gap-1.5 rounded-lg bg-indigo-50 p-2.5 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
+      <Card className="space-y-4 p-5 sm:p-6">
+        <CabecalhoIndicador icone={ClipboardCheck} tom="azul" fonte="SEDUC-SP" titulo="SARESP — oficial" />
+        <p className="flex items-start gap-1.5 rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800 dark:bg-indigo-500/10 dark:text-indigo-300">
           <Info size={14} className="mt-0.5 shrink-0" />
           <span>
             Avaliação da Secretaria da Educação do Estado de São Paulo, aplicada no 2º e no 5º ano da rede municipal.

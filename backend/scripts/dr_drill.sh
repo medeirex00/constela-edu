@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
+# NÃO USAR (22/10/2026). Este roteiro aplica o "CREATE SCHEMA public;" do dump num
+# banco que já tem o schema e aborta; também não tem as travas de destino local e
+# vazio. Para testar o backup guardado, use o §3 do docs/DR-RUNBOOK.md (scripts
+# conferir_senha_local.sh e verificar_restauracao.sh do repositório privado).
+# Nunca cole URL com senha nem a senha de cifra na linha de comando.
+# =============================================================================
 # DR DRILL — teste REAL de recuperação de desastre, fim a fim e automatizado.
 #
 # Faz: backup do banco de ORIGEM → cifra → decifra → restaura num banco

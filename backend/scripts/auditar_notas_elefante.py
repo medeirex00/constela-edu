@@ -20,8 +20,6 @@ import sys
 import unicodedata
 from collections import Counter, defaultdict
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 if not os.environ.get("DATABASE_URL"):
     sys.exit("defina DATABASE_URL (a auditoria é read-only, mas precisa do banco).")
 
@@ -37,6 +35,7 @@ from app.routers import rankings  # noqa: E402
 from app.services import dificuldade_livro as dl  # noqa: E402
 from app.services import evolucao, premiacoes, scoring  # noqa: E402
 from app.services.provisionamento import NIVEIS_PADRAO  # noqa: E402
+from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 # Zero "correto" = não há o que pontuar (sem atividade / sem importação / inativo).
 # Zero "suspeito" = há dado no banco e a nota não o reflete (pipeline a corrigir).
@@ -370,6 +369,7 @@ def auditar_escola(db, escola, fake_admin, cat):
 
 
 def main(argv=None):
+    forcar_saida_utf8()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", metavar="ARQUIVO", help="grava o relatório completo em JSON")
     ap.add_argument("--escola", type=int, help="audita só esta escola (id)")

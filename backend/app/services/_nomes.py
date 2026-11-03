@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import unicodedata
 
-# Partículas que não contam como sobrenome (Sueli Macedo DO Prado → "Prado").
+# Partículas que não contam como sobrenome (Gertrudes Simulatti DO Fictelo → "Fictelo").
 PARTICULAS = {"de", "do", "da", "dos", "das", "e"}
 
 
@@ -27,7 +27,7 @@ def chave_nome(nome: str) -> str:
 
 def tokens(nome: str) -> frozenset[str]:
     """Conjunto de palavras normalizadas (sem partículas) — base do casamento
-    nome curto ↔ nome completo ('PAULA' ⊂ 'PAULA BENEDITA VILELA NOGUEIRA')."""
+    nome curto ↔ nome completo ('TELMA' ⊂ 'TELMA BELINORA VARONI TESTELLI')."""
     return frozenset(
         sem_acento(p).casefold()
         for p in (nome or "").split()

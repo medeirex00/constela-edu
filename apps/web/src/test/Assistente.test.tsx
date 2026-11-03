@@ -3,7 +3,7 @@
  * não engolido. Antes, abrirConversa fazia `.catch(() => null)` e o clique
  * virava um no-op silencioso (nenhuma mensagem, nenhum feedback).
  */
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import Assistente from "../pages/Assistente";
 import { renderComApp, responder, responderErro, screen, userEvent } from "./utils";
@@ -39,4 +39,46 @@ test("F02: abrir conversa com sucesso carrega as mensagens e não deixa erro", a
 
   expect(await screen.findByText("Olá?")).toBeInTheDocument();
   expect(screen.queryByText("Não consegui abrir esta conversa. Tente de novo.")).toBeNull();
+});
+
+test("revisão v2: a página não abre rolada — só a caixa das mensagens rola até a última", async () => {
+  // Antes: scrollIntoView no fim da lista também rolava a JANELA, e a página já
+  // abria com o título escondido sob o cabeçalho fixo.
+  _prepararLista();
+  responder("GET", /\/assistente\/conversas\/7$/, {
+    id: 7,
+    mensagens: [
+      { papel: "usuario", conteudo: "Como estão as turmas?" },
+      { papel: "assistente", conteudo: "Todas com dados recentes." },
+    ],
+  });
+  const rolarElemento = vi.spyOn(Element.prototype, "scrollIntoView");
+  const rolarJanela = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+  try {
+    renderComApp(<Assistente />);
+    await screen.findByText("Conversa antiga");
+    expect(rolarElemento).not.toHaveBeenCalled();
+    expect(rolarJanela).not.toHaveBeenCalled();
+
+    // A caixa das mensagens é a área rolável logo acima do campo de pergunta.
+    const caixa = screen.getByRole("textbox", { name: "Sua pergunta" })
+      .closest("form")?.previousElementSibling as HTMLElement;
+    expect(caixa).toHaveClass("overflow-y-auto");
+    let topo = 0;
+    Object.defineProperty(caixa, "scrollHeight", { configurable: true, value: 640 });
+    Object.defineProperty(caixa, "scrollTop", {
+      configurable: true,
+      get: () => topo,
+      set: (valor: number) => { topo = valor; },
+    });
+
+    await userEvent.click(screen.getByText("Conversa antiga"));
+    expect(await screen.findByText("Todas com dados recentes.")).toBeInTheDocument();
+    expect(topo).toBe(640);
+    expect(rolarElemento).not.toHaveBeenCalled();
+    expect(rolarJanela).not.toHaveBeenCalled();
+  } finally {
+    rolarElemento.mockRestore();
+    rolarJanela.mockRestore();
+  }
 });

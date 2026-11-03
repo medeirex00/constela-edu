@@ -28,8 +28,11 @@ class _NavElefante:
     async def fechar(self): pass
 
     async def coletar_respostas(self, url, timeout_s=25):
+        # Suposição (captura de jul/2026, não confirmada pelo Elefante): cada turma
+        # traz a escola (schoolId). Sem ela, e sem active-schools, a coleta é
+        # recusada (escola_nao_identificada).
         return [{"url": "https://prod-ecs-apiadmin.elefanteletrado.com.br/course/get-courses-students",
-                 "json": [{"id": 511434, "name": "5B",
+                 "json": [{"id": 511434, "name": "5B", "schoolId": 23952,
                            "student": [{"id": sid, "name": nome} for sid, nome, _ in self.alunos]}]}]
 
     async def avaliar(self, expressao):
@@ -149,7 +152,9 @@ def test_sync_sem_dados_gravados_nao_recalcula(db, escola_completa, monkeypatch)
         resultados=[{"qtd_alunos": 0, "qtd_erros": 0, "qtd_turmas": 0, "importacao_id": None,
                      "avisos": ["Relatório sem linhas."], "sem_dados": True}],
         contadores={"1": 5}, nomes={"1": "Ana Beatriz Souza"})
-    assert res.status == "concluida" and flags == [False] and recalcs == []
+    # Nenhum relatório trouxe linha: é 'sem_dados', não sucesso (antes 'concluida'
+    # renovava o "último sucesso" e a tela dizia "Funcionando").
+    assert res.status == "sem_dados" and flags == [False] and recalcs == []
 
 
 def test_sync_desfaz_cursor_de_linha_ignorada(db, escola_completa, monkeypatch):

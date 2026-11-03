@@ -416,7 +416,10 @@ def _arquivos(dados: bytes) -> dict[str, bytes]:
 
 
 def test_preparar_gera_o_pacote_so_com_a_rede_e_o_manifesto(tmp_path):
-    preparo = _preparar(tmp_path)
+    # A MESMA planilha no pacote e na conferência: o openpyxl grava a hora do save
+    # (docProps/core.xml), e gerar de novo noutro segundo mudava o sha256 (e97).
+    xlsx = planilha()
+    preparo = _preparar(tmp_path, xlsx=xlsx)
     m = preparo.manifesto
     assert preparo.nome == f"pacote_ideb_escolas_2023_{MUN}.zip"
     assert m["parser"] == ideb.PARSER and m["parser_versao"] == ideb.VERSAO_PARSER
@@ -426,7 +429,6 @@ def test_preparar_gera_o_pacote_so_com_a_rede_e_o_manifesto(tmp_path):
     zip_original = (tmp_path / "ideb.zip").read_bytes()
     assert m["origem"]["zip_sha256"] == hashlib.sha256(zip_original).hexdigest()
     assert m["origem"]["zip_bytes"] == len(zip_original) and m["origem"]["modo"] == "zip_local"
-    xlsx = planilha()
     e = m["entrada"]
     assert e["sha256"] == hashlib.sha256(xlsx).hexdigest() and e["md5_publicado"] == "confere"
     assert e["nome"].endswith(".xlsx") and e["aba"] == "IDEB_Escolas (Anos_Iniciais)"

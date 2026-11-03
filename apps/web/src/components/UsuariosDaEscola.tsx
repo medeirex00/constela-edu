@@ -9,6 +9,7 @@
  * unicidade de e-mail/@, força da senha, escopo (o `escola_id` é o da URL;
  * `is_global`/`rede_id` nunca vêm do corpo) e auditoria.
  */
+import { UserCog } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -16,15 +17,20 @@ import { useApp } from "../context/AppContext";
 import { ApiError, api } from "../lib/api";
 import { CARGOS, rotuloCargo } from "../lib/cargos";
 import type { Escola, Usuario } from "../lib/types";
+import { ChipCargo, EsqueletoLista, PilulaSituacao, situacaoDaConta } from "./PessoasUi";
+import { TabelaRolavel } from "./TabelaRolavel";
 import {
-  Badge,
+  Avatar,
   Botao,
   Campo,
   Card,
-  Carregando,
+  Confirmacao,
+  Erro,
+  IconePastel,
   Mensagem,
   Modal,
   Vazio,
+  classesTabela,
   estiloInput,
 } from "./ui";
 
@@ -52,6 +58,8 @@ export default function UsuariosDaEscola({
   const [username, setUsername] = useState("");
   const [senha, setSenha] = useState("");
   const [cargo, setCargo] = useState<string>("coordenador");
+  // Desativar pede confirmação antes do PATCH (mesma ação de antes).
+  const [paraDesativar, setParaDesativar] = useState<Usuario | null>(null);
 
   // Contador de pedidos: uma resposta atrasada da escola ANTERIOR (o gestor
   // trocou de escola antes de ela chegar) é descartada — nunca mostra a
@@ -156,90 +164,130 @@ export default function UsuariosDaEscola({
   const podeCriar = nome.trim().length >= 2 && email.includes("@") && senha.length >= 8;
 
   return (
-    <Card className="mt-6">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-        <div>
-          <h2 ref={titulo} tabIndex={-1} className="text-base font-semibold tracking-tight outline-none">
-            Usuários de {escola.nome}
-          </h2>
-          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-            Contas de acesso desta escola. Podem ser criadas antes de turmas, alunos, Lista Piloto e integrações.
-          </p>
+    <Card className="mt-6 overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-800">
+        <div className="flex min-w-0 items-start gap-3">
+          <IconePastel icone={UserCog} tom="violeta" />
+          <div className="min-w-0">
+            <h2 ref={titulo} tabIndex={-1} className="text-base font-semibold tracking-tight outline-none">
+              Usuários de {escola.nome}
+            </h2>
+            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+              Contas de acesso desta escola. Podem ser criadas antes de turmas, alunos, Lista Piloto e integrações.
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {/* O nome "+ Adicionar usuário" é o que a gestão de Escolas e os testes procuram. */}
           <Botao onClick={abrirNovo} disabled={ocupado}>+ Adicionar usuário</Botao>
-          <Botao variante="neutro" onClick={gestaoCompleta}>Gestão completa</Botao>
-          {aoFechar && <Botao variante="neutro" onClick={aoFechar}>Fechar</Botao>}
+          <Botao variante="secundario" onClick={gestaoCompleta}>Gestão completa</Botao>
+          {aoFechar && <Botao variante="secundario" onClick={aoFechar}>Fechar</Botao>}
         </div>
       </div>
 
       {mensagem && (
-        <div className="px-4 pt-3">
+        <div className="px-5 pt-4">
           <Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem>
         </div>
       )}
 
       {usuarios === null ? (
-        <Carregando />
+        <EsqueletoLista linhas={3} texto="Carregando usuários..." />
       ) : erroLista ? (
-        <Vazio
+        <Erro
           titulo="Não foi possível carregar os usuários"
           descricao={erroLista}
-          acao={<Botao variante="neutro" onClick={carregar}>Tentar de novo</Botao>}
+          aoTentar={carregar}
         />
       ) : usuarios.length === 0 ? (
         <Vazio
+          icone={UserCog}
           titulo="Esta escola ainda não possui usuários."
           descricao="Crie o primeiro acesso — normalmente o coordenador ou diretor — para a escola poder ser configurada (turmas, alunos, integrações e Lista Piloto vêm depois)."
         />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        // Celular: a tabela rola de lado com o aviso escrito (TabelaRolavel) e a ação
+        // (Desativar/Reativar) fica presa à direita (`presa-celular`).
+        <TabelaRolavel rotulo="Usuários da escola: tabela completa">
+          <table className={classesTabela.tabela}>
             <thead>
-              <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                <th className="px-4 py-2 font-medium">Nome</th>
-                <th className="px-4 py-2 font-medium">E-mail / login</th>
-                <th className="px-4 py-2 font-medium">Cargo</th>
-                <th className="px-4 py-2 font-medium">Situação</th>
-                <th className="px-4 py-2 text-right font-medium">Ações</th>
+              <tr>
+                <th className={classesTabela.th}>Nome</th>
+                <th className={classesTabela.th}>E-mail / login</th>
+                <th className={classesTabela.th}>Cargo</th>
+                <th className={classesTabela.th}>Situação</th>
+                <th className={`text-right ${classesTabela.th} presa-celular`}>Ações</th>
               </tr>
             </thead>
             <tbody>
-              {usuarios.map((u) => (
-                <tr key={u.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                  <td className="px-4 py-2.5 font-medium">
-                    {u.nome}
-                    {u.is_global && <span className="ml-2 text-xs text-zinc-500">(global)</span>}
-                  </td>
-                  <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-300">
-                    <div>{u.email}</div>
-                    {u.username && <div className="text-xs text-zinc-500 dark:text-zinc-400">@{u.username}</div>}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <Badge tom="destaque">{rotuloCargo(u.cargo)}</Badge>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <Badge tom={(u.status ?? "ativo") === "ativo" ? "ok" : "neutro"}>{u.status ?? "ativo"}</Badge>
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {!u.is_global && (
-                      <Botao
-                        variante="neutro"
-                        className="px-2 py-1 text-xs"
-                        disabled={ocupado}
-                        onClick={() => alternarStatus(u)}
-                        aria-label={`${u.status === "ativo" ? "Desativar" : "Reativar"} ${u.nome}`}
-                      >
-                        {u.status === "ativo" ? "Desativar" : "Reativar"}
-                      </Botao>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {usuarios.map((u) => {
+                const situacao = situacaoDaConta(u.status);
+                return (
+                  <tr key={u.id} className={classesTabela.tr}>
+                    <td className={classesTabela.td}>
+                      <span className="flex items-center gap-3">
+                        <Avatar nome={u.nome} chave={u.id} tamanho="sm" />
+                        <span className="font-semibold text-zinc-900 dark:text-zinc-100">{u.nome}</span>
+                        {u.is_global && <span className="text-xs text-zinc-500 dark:text-zinc-400">(global)</span>}
+                      </span>
+                    </td>
+                    <td className={`text-zinc-600 dark:text-zinc-300 ${classesTabela.td}`}>
+                      <div className="break-all">{u.email}</div>
+                      {u.username && <div className="text-xs text-zinc-500 dark:text-zinc-400">@{u.username}</div>}
+                    </td>
+                    <td className={classesTabela.td}>
+                      <ChipCargo cargo={u.cargo}>{rotuloCargo(u.cargo)}</ChipCargo>
+                    </td>
+                    <td className={classesTabela.td}>
+                      {/* O texto continua o valor da conta ("ativo"/"inativo", que a gestão de
+                          Escolas confere); a caixa alta inicial é só visual (CSS). */}
+                      <PilulaSituacao tom={situacao.tom}>
+                        <span className="capitalize">{u.status ?? "ativo"}</span>
+                      </PilulaSituacao>
+                    </td>
+                    <td className={`text-right ${classesTabela.td} presa-celular`}>
+                      {!u.is_global && (
+                        <Botao
+                          variante="secundario"
+                          tamanho="sm"
+                          disabled={ocupado}
+                          // Desativar corta o acesso na hora: pede confirmação (como na
+                          // gestão completa). Reativar devolve o acesso direto.
+                          onClick={() => (u.status === "ativo" ? setParaDesativar(u) : alternarStatus(u))}
+                          aria-label={`${u.status === "ativo" ? "Desativar" : "Reativar"} ${u.nome}`}
+                        >
+                          {u.status === "ativo" ? "Desativar" : "Reativar"}
+                        </Botao>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </div>
+        </TabelaRolavel>
       )}
+
+      <Confirmacao
+        titulo="Desativar usuário"
+        aberto={paraDesativar !== null}
+        aoFechar={() => setParaDesativar(null)}
+        aoConfirmar={async () => {
+          if (!paraDesativar) return;
+          await alternarStatus(paraDesativar);
+          setParaDesativar(null);
+        }}
+        rotuloConfirmar="Desativar"
+        variante="perigo"
+        ocupado={ocupado}
+      >
+        {paraDesativar && (
+          <p>
+            Desativar <strong>{paraDesativar.nome}</strong>? A pessoa perde o acesso imediatamente,
+            mas a conta pode ser reativada a qualquer momento.
+          </p>
+        )}
+      </Confirmacao>
 
       <Modal titulo={`Adicionar usuário em ${escola.nome}`} aberto={novo} aoFechar={() => setNovo(false)}>
         <div className="space-y-3">
@@ -291,8 +339,8 @@ export default function UsuariosDaEscola({
             />
           </Campo>
           {erroAcao && <Mensagem tipo="erro">{erroAcao}</Mensagem>}
-          <div className="flex justify-end gap-2 pt-1">
-            <Botao variante="neutro" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
+          <div className="flex justify-end gap-2.5 pt-2">
+            <Botao variante="secundario" onClick={() => setNovo(false)} disabled={ocupado}>Cancelar</Botao>
             <Botao disabled={ocupado || !podeCriar} onClick={criar}>
               {ocupado ? "Salvando..." : "Criar usuário"}
             </Botao>

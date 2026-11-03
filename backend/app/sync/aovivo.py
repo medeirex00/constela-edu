@@ -23,22 +23,33 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import unicodedata
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.core.security import cifrar_segredo, decifrar_segredo
-from app.models.academico import Aluno, Matricula
+from app.models.academico import Aluno, IdentidadeExterna, Matricula
 from app.models.configuracao import Configuracao
 from app.models.escola import Escola
 from app.services import periodos
-from app.sync import connectors, vault
+from app.sync import connectors, escola_externa, fuso, vault
+from app.sync.connectors.navegador import (
+    FALHA_CONHECIDA,
+    FALHA_NOSSA,
+    FALHA_TEMPO,
+    classificar_falha_da_coleta,
+    erro_conector_de_dentro,
+)
 from app.sync.interfaces import Contexto, ErroConector
+
+logger = logging.getLogger("constela.sync")
 
 _NS_SESSAO = "matific_sessao"          # namespace KV da sessão reaproveitável
 _CHAVE_SESSAO = "matific"
@@ -48,6 +59,53 @@ _LOCK_NS = 0x4D41                      # 'MA' — namespace do advisory lock do 
 
 _OCUPADO = ("Já existe uma consulta ao Matific em andamento para esta escola. "
             "Aguarde alguns segundos e tente de novo.")
+_DEMOROU = ("A consulta ao Matific demorou demais e foi cancelada. "
+            "Tente novamente.")
+_FORA_DO_AR = ("Não foi possível consultar o Matific agora: a conexão com o site do "
+               "Matific falhou ou ele não respondeu. Tente de novo em alguns minutos.")
+
+
+def _erro_da_consulta(exc: BaseException) -> Exception | None:
+    """O que levantar no lugar de uma falha no meio da consulta ao vivo, pelo critério
+    único de ``navegador.classificar_falha_da_coleta`` (o mesmo do diagnóstico do
+    Elefante, ``diagnostico_elefante._erro_da_coleta``):
+
+    * REDE (DNS, conexão recusada, TLS, página que não abriu — o ``OSError`` da rede,
+      a exceção do Playwright/httpx que não é nenhuma das abaixo) vira um
+      ``ErroConector`` que diz que foi o Matific (502), e o tempo esgotado, 504 — não
+      um 500 "Erro interno" que põe a culpa no Constela. O detalhe técnico fica no log
+      WARNING (o formatador redige o que foi digitado); a resposta não leva nada
+      interno;
+    * o NOSSO navegador que caiu no meio da consulta (``TargetClosedError``, "Page
+      crashed", o driver do Playwright morto) vira 503 ``navegador_indisponivel``,
+      sem culpar o Matific: o ``ErroConector`` vem de ``erro_conector_de_dentro``,
+      que grava o log ERROR (a falha é do servidor). O que NÃO ABRIU já chega como
+      esse ``ErroConector`` (``abrir_playwright``, também com log ERROR);
+    * um ``ErroConector`` de dentro de um grupo de exceções passa com a mensagem dele;
+    * DEFEITO NOSSO (KeyError, TypeError, AttributeError…) vai para o log ERROR (o
+      Sentry o vê) e devolve None: quem chama relança a exceção crua (500). O
+      ``asyncio.CancelledError`` que sai de dentro do conector (o ``asyncio.run`` o
+      devolve quando ninguém de fora cancelou) também é nosso, mas não pode subir cru
+      (é BaseException: escaparia do tratamento de erro da rota) — volta um
+      ``RuntimeError`` com ele como causa."""
+    tipo = classificar_falha_da_coleta(exc)
+    if tipo == FALHA_NOSSA:
+        logger.exception("Consulta ao vivo do Matific falhou por um defeito do "
+                         "Constela (%s).", type(exc).__name__)
+        if isinstance(exc, asyncio.CancelledError):
+            return RuntimeError("A consulta ao vivo do Matific foi cancelada por dentro "
+                                "do conector, sem tempo esgotado.")
+        return None
+    if tipo == FALHA_CONHECIDA:
+        return erro_conector_de_dentro(exc)
+    demorou = tipo == FALHA_TEMPO
+    logger.warning("Consulta ao vivo do Matific falhou (%s): %s",
+                   "tempo esgotado" if demorou else "rede",
+                   type(exc).__name__, exc_info=True)
+    if demorou:
+        return ErroConector(_DEMOROU, codigo="timeout", recuperavel=True)
+    return ErroConector(_FORA_DO_AR, codigo="indisponivel_externo", recuperavel=True)
+
 
 # Serializa a consulta ao vivo por escola. DENTRO do worker: threading.Lock por
 # processo (cobre o duplo-clique). ENTRE workers (uvicorn sobe --workers 2): esse
@@ -121,7 +179,7 @@ def mapa_filtro(periodo: str | None, inicio: str | None, fim: str | None,
         if df < di:
             raise ErroConector("A data final não pode ser anterior à inicial.",
                                codigo="periodo_invalido", recuperavel=False)
-        return (f"start_date={di:%Y-%m-%d}&end_date={df:%Y-%m-%d}",
+        return (f"start_date={di:%Y-%m-%d}&end_date={_end_date(df):%Y-%m-%d}",
                 periodos._rotulo_intervalo(di, df), di, df)
 
     # Presets NATIVOS do site (casam byte-a-byte com o que o Matific manda).
@@ -143,7 +201,15 @@ def mapa_filtro(periodo: str | None, inicio: str | None, fim: str | None,
     # HOJE (o fim do mês/bimestre ainda não chegou). Evita rejeição e casa com o
     # significado "premiar pelo que já foi feito no período".
     di, df = i.date(), min(f.date(), hoje)
-    return (f"start_date={di:%Y-%m-%d}&end_date={df:%Y-%m-%d}", rotulo, di, df)
+    return (f"start_date={di:%Y-%m-%d}&end_date={_end_date(df):%Y-%m-%d}", rotulo, di, df)
+
+
+def _end_date(fim: date) -> date:
+    """``end_date`` do Placar para um período que termina em ``fim`` (inclusive),
+    pela MESMA semântica da sincronização (MATIFIC_END_DATE): com 'exclusiva', o
+    dia seguinte; com 'inclusiva' ou 'desconhecida', o próprio dia (o de sempre)."""
+    from app.sync.connectors.matific import end_date_do_filtro
+    return end_date_do_filtro(fim)
 
 
 # --- Sessão reaproveitável (cifrada em repouso) ------------------------------
@@ -159,7 +225,8 @@ def _linha_sessao(db: Session, escola_id: int) -> Configuracao | None:
 
 def _carregar_sessao(db: Session, escola_id: int, agora: datetime) -> dict | None:
     """storage_state cifrado da última consulta, se salvo há < TTL. None se não
-    houver, expirou ou não decifra (SECRET_KEY trocada)."""
+    houver, expirou ou não decifra (DATA_ENCRYPTION_KEY ou SECRET_KEY trocada sem
+    recifrar)."""
     row = _linha_sessao(db, escola_id)
     if row is None or not isinstance(row.valor, dict):
         return None
@@ -246,11 +313,20 @@ def _coletar_http_first(conector, cred, contexto, estado: dict | None,
                         filtro: str) -> tuple[list[dict], dict | None]:
     """Coleta o Placar priorizando a API por HTTP; o navegador entra SÓ para
     autenticar (renovar cookies) e o fetch-no-navegador é o ÚLTIMO recurso.
-    Devolve (alunos, novo_storage_state_ou_None). Teto DURO por etapa lenta."""
+    Devolve (alunos, novo_storage_state_ou_None). Teto DURO por etapa lenta.
+
+    Com VÍNCULO da escola externa (``contexto.escola_externa``), a escola da conta
+    é conferida em todos os caminhos: escola diferente levanta
+    ``escola_externa_trocada`` e nenhum nome de outra escola chega à tela."""
+    esperada = str((getattr(contexto, "escola_externa", None) or {}).get("id") or "")
+    recusadas = frozenset(getattr(contexto, "externas_de_outras_escolas", None) or ())
+    extra_http = {"escola_esperada": esperada} if esperada else {}
+    if recusadas:
+        extra_http["escolas_recusadas"] = recusadas
     # 1) HTTP direto com a sessão salva (sem navegador algum).
     if estado:
         try:
-            return conector.coletar_via_http(estado, filtro), None
+            return conector.coletar_via_http(estado, filtro, **extra_http), None
         except ErroConector as exc:
             if exc.codigo not in ("sessao_invalida", "http_indisponivel"):
                 raise  # erro real da API (não é sessão velha/rede) → sobe
@@ -261,7 +337,7 @@ def _coletar_http_first(conector, cred, contexto, estado: dict | None,
         timeout=_TIMEOUT_S))
     if novo and novo.get("cookies"):   # só tenta HTTP se de fato temos os cookies
         try:
-            return conector.coletar_via_http(novo, filtro), novo
+            return conector.coletar_via_http(novo, filtro, **extra_http), novo
         except ErroConector as exc:
             if exc.codigo not in ("sessao_invalida", "http_indisponivel"):
                 raise
@@ -293,10 +369,61 @@ def _ordem_nome(nome: str) -> str:
     return " ".join(base.casefold().split())
 
 
-def _mapa_nome_para_aluno(db: Session, escola_id: int, ano_letivo: int) -> dict[str, int]:
-    """{nome_normalizado: aluno_id} dos alunos ATIVOS e matriculados no ano —
-    para linkar cada linha do Placar à ficha. Nomes duplicados viram None (não
-    dá para desambiguar) e a linha fica sem link, mas AINDA aparece no ranking."""
+@dataclass(frozen=True)
+class _FichasDaEscola:
+    """Como ligar uma linha do Placar à ficha do Constela (o link para o perfil).
+
+    A ordem é a da sincronização ("a conta da plataforma casa antes do nome"):
+
+    1. pela CONTA (``uuid``): a ``IdentidadeExterna`` EFETIVA desta escola, de um
+       aluno ativo e matriculado no ano — também quando o Placar só manda o nome
+       abreviado ("ANA B") ou quando há homônimo na escola;
+    2. conta CONHECIDA aqui que não leva a uma ficha ativa do ano (aposentada,
+       de ficha inativa, sem matrícula no ano) → SEM link. O nome não entra: a
+       conta duplicada que a escola aposentou, ou a de um transferido, ganharia
+       o link do homônimo. Também é "conhecida" a conta que é a identidade
+       EFETIVA de um aluno de OUTRA escola do Constela (a regra única do D10,
+       ``identidade_aluno.efetivas_em_outra_escola``): a sincronização manda essa
+       linha para a revisão ``identidade_de_outra_escola`` (``decidir``, passo
+       0d) e nunca a liga pelo nome — aqui ela fica sem link, em vez de ganhar o
+       do homônimo desta escola (o professor dele a veria como do aluno dele, e
+       é a tela do "premiar por período"). A conta que TAMBÉM vale aqui segue
+       pela regra 1;
+    3. só a conta DESCONHECIDA (ou a linha sem ``uuid``) cai no NOME, como
+       reserva — nome repetido continua sem link, e a ficha que já tem OUTRA
+       conta efetiva nesta plataforma não é ligada pelo nome (a sincronização
+       mandaria essa linha para a revisão 'outra_identidade_na_plataforma').
+
+    Sem link a linha AINDA aparece no ranking; só não abre a ficha."""
+    por_uuid: dict[str, int] = field(default_factory=dict)
+    contas_conhecidas: frozenset[str] = frozenset()
+    com_conta_efetiva: frozenset[int] = frozenset()
+    por_nome: dict[str, int] = field(default_factory=dict)
+
+    def aluno_da_linha(self, linha: dict) -> int | None:
+        uuid = str(linha.get("uuid") or "").strip()
+        if uuid:
+            if uuid in self.por_uuid:
+                return self.por_uuid[uuid]
+            if uuid in self.contas_conhecidas:
+                return None
+        aluno_id = self.por_nome.get(_norm(linha.get("nome", "")))
+        if aluno_id is None or aluno_id in self.com_conta_efetiva:
+            return None
+        return aluno_id
+
+
+def _fichas_da_escola(db: Session, escola_id: int, ano_letivo: int,
+                      uuids=()) -> _FichasDaEscola:
+    """As fichas que uma linha do Placar pode abrir: alunos ATIVOS e matriculados
+    no ano letivo desta escola, indexados pela conta do Matific vinculada a eles
+    (identidade efetiva) e, como reserva, pelo nome normalizado (ver
+    ``_FichasDaEscola``). Nome repetido não entra (não dá para desambiguar).
+
+    ``uuids`` são as contas das linhas do Placar: as que já são a identidade
+    efetiva de um aluno de OUTRA escola entram em ``contas_conhecidas`` (sem
+    link pelo nome, como na sincronização). Uma consulta por placar (em lotes de
+    500, ``efetivas_em_outra_escola``)."""
     linhas = db.execute(
         select(Aluno.id, Aluno.nome)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
@@ -304,18 +431,52 @@ def _mapa_nome_para_aluno(db: Session, escola_id: int, ano_letivo: int) -> dict[
                Matricula.ano_letivo == ano_letivo,
                Aluno.status == "ativo")
     ).all()
+    no_ano = {aluno_id for aluno_id, _ in linhas}
     mapa: dict[str, int | None] = {}
     for aluno_id, nome in linhas:
         chave = _norm(nome)
         if not chave:
             continue
         mapa[chave] = None if chave in mapa else aluno_id  # ambíguo → sem link
-    return {k: v for k, v in mapa.items() if v is not None}
+
+    por_uuid: dict[str, int] = {}
+    conhecidas: set[str] = set()
+    com_conta: set[int] = set()
+    # Ficha EXCLUÍDA não segura a conta (a mesma regra da sincronização): a conta
+    # dela fica livre e a linha cai no nome.
+    for id_externo, aluno_id, situacao in db.execute(
+        select(IdentidadeExterna.id_externo, IdentidadeExterna.aluno_id,
+               IdentidadeExterna.status)
+        .join(Aluno, Aluno.id == IdentidadeExterna.aluno_id)
+        .where(IdentidadeExterna.escola_id == escola_id,
+               IdentidadeExterna.plataforma == "matific",
+               Aluno.escola_id == escola_id,
+               Aluno.status != "excluido")
+    ).all():
+        conta = str(id_externo or "").strip()
+        if not conta:
+            continue
+        conhecidas.add(conta)
+        if situacao == "aposentada":
+            continue
+        com_conta.add(aluno_id)
+        if aluno_id in no_ano:
+            por_uuid[conta] = aluno_id
+    contas_do_placar = [c for c in (str(u or "").strip() for u in uuids or ()) if c]
+    if contas_do_placar:
+        from app.services import identidade_aluno as ida
+        conhecidas |= set(ida.efetivas_em_outra_escola(db, escola_id, "matific",
+                                                       contas_do_placar))
+    return _FichasDaEscola(
+        por_uuid=por_uuid, contas_conhecidas=frozenset(conhecidas),
+        com_conta_efetiva=frozenset(com_conta),
+        por_nome={k: v for k, v in mapa.items() if v is not None})
 
 
-def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int]) -> list[dict]:
+def _montar_ranking(alunos: list[dict], fichas: _FichasDaEscola) -> list[dict]:
     """Ordena como o Placar do Matific (estrelas desc) e monta a linha do
-    ranking. ``pontuacao_media = estrelas / atividades`` (definição do Matific)."""
+    ranking. ``pontuacao_media = estrelas / atividades`` (definição do Matific).
+    O ``aluno_id`` (link para a ficha) vem de ``fichas`` — conta antes do nome."""
     ordenados = sorted(
         alunos,
         key=lambda a: (-int(a.get("estrelas", 0)), -int(a.get("atividades", 0)),
@@ -333,7 +494,7 @@ def _montar_ranking(alunos: list[dict], mapa_aluno: dict[str, int]) -> list[dict
             "estrelas": estrelas,
             "atividades": atividades,
             "pontuacao_media": media,
-            "aluno_id": mapa_aluno.get(_norm(a.get("nome", ""))),
+            "aluno_id": fichas.aluno_da_linha(a),
         })
     return itens
 
@@ -349,10 +510,10 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
     Levanta ``ErroConector`` (o router traduz em HTTP)."""
     agora = agora or datetime.utcnow()          # UTC — TTL da sessão e atualizado_em
     # A data do FILTRO é a de HOJE no Brasil (o Matific interpreta o intervalo no
-    # fuso da escola). O Brasil não tem horário de verão desde 2019 → UTC-3 fixo.
-    # Sem isto, entre 21h e 00h (BRT) o "Hoje/mês/bimestre" pediria o dia seguinte
+    # fuso da escola) — pela regra única de fuso do módulo (``sync.fuso``). Sem
+    # isto, entre 21h e 00h (BRT) o "Hoje/mês/bimestre" pediria o dia seguinte
     # (UTC) e o Placar viria vazio.
-    hoje_br = (agora - timedelta(hours=3)).date()
+    hoje_br = fuso.hoje_local(agora)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise ErroConector("Escola não encontrada.", codigo="escola",
@@ -369,6 +530,12 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
 
     cred = vault.obter_credencial(db, escola_id, "matific")
     if cred is None:
+        if vault.obter_linha(db, escola_id, "matific") is not None:
+            # A credencial existe, mas a cifra não abre (status 'ilegivel'): "não
+            # configurada" seria mentira. Pede o recadastro, como o /sync/agora e o
+            # diagnóstico do Elefante, sem detalhe da falha da cifra e sem gravar.
+            raise ErroConector(vault.mensagem_credencial_ilegivel(["matific"]),
+                               codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
         raise ErroConector(
             "As credenciais do Matific não estão configuradas. Configure em "
             "Sincronização automática → Matific.", codigo="sem_credencial",
@@ -388,6 +555,10 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
                 return {**hit, "cache": True}
 
         estado = _carregar_sessao(db, escola_id, agora)
+        # VÍNCULO da escola externa: com ele, a consulta recusa a conta de outra
+        # escola (sem ele, não aprende nada aqui — a consulta ao vivo só lê).
+        vinculo = escola_externa.obter(db, escola_id, "matific")
+        de_outras = escola_externa.ids_de_outras_escolas(db, "matific", escola_id)
         # Solta a conexão do banco ANTES do I/O de rede longo: nada de transação
         # ociosa segurando o pool durante o HTTP/login. As leituras/escritas
         # seguintes reabrem a conexão sob demanda.
@@ -399,16 +570,22 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             eventos.append(f"{nivel}: {mensagem}")
 
         contexto = Contexto(escola_id=escola_id, execucao_id=None, log=log,
-                            timeout_s=_TIMEOUT_S)
+                            timeout_s=_TIMEOUT_S, escola_externa=vinculo,
+                            externas_de_outras_escolas=de_outras)
 
         try:
             # HTTP-first: API por httpx; navegador só para autenticar (fallback).
             alunos, novo_estado = _coletar_http_first(
                 conector, cred, contexto, estado, filtro)
+        except ErroConector:
+            raise                   # já diz o que houve (CAPTCHA, senha, escola…)
         except asyncio.TimeoutError as exc:
-            raise ErroConector(
-                "A consulta ao Matific demorou demais e foi cancelada. "
-                "Tente novamente.", codigo="timeout", recuperavel=True) from exc
+            raise ErroConector(_DEMOROU, codigo="timeout", recuperavel=True) from exc
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 — só a COLETA
+            erro = _erro_da_consulta(exc)
+            if erro is None:
+                raise               # defeito nosso: sobe cru (500), já no log ERROR
+            raise erro from exc
 
         # Persiste a sessão nova (cookies renovados), se o navegador autenticou.
         if novo_estado:
@@ -417,8 +594,9 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             except Exception:  # noqa: BLE001
                 db.rollback()
 
-        mapa_aluno = _mapa_nome_para_aluno(db, escola_id, ano_letivo)
-        itens = _montar_ranking(alunos, mapa_aluno)
+        fichas = _fichas_da_escola(db, escola_id, ano_letivo,
+                                   uuids=[a.get("uuid") for a in alunos])
+        itens = _montar_ranking(alunos, fichas)
         resultado = {
             "periodo": rotulo,
             "filtro": filtro,

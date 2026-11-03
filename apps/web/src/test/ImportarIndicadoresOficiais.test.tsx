@@ -115,7 +115,7 @@ describe("Importar indicadores oficiais — quem vê", () => {
   it("na tela da rede: a Secretaria não vê a importação; o admin global vê, abaixo dos cartões", async () => {
     semearPagina();
     renderComApp(<RedeAvaliacoes />, { usuario: secretaria });
-    expect(await screen.findByRole("heading", { name: "Avaliações externas" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Fontes dos indicadores" })).toBeInTheDocument();
     expect(await screen.findByTestId("cartao-ideb")).toBeInTheDocument();
     expect(screen.queryByTestId("importar-oficiais")).toBeNull();
     expect(screen.queryByText(/Importar indicadores oficiais/)).toBeNull();
@@ -325,13 +325,16 @@ describe("Importar indicadores oficiais — a troca das médias calculadas (D2) 
     ["Não, manter as calculadas", "nao", "0 trocado(s) pelo oficial e 2 mantido(s)"],
   ])("respondendo “%s”, aplicar reenvia o MESMO arquivo com substituir_calculadas=%s", async (rotulo, valor, texto) => {
     const { usuario, csv, aoMudar } = await previaComTroca();
-    const confirmar = vi.spyOn(window, "confirm").mockReturnValue(true);
     await usuario.click(screen.getByRole("radio", { name: rotulo }));
     const aplicar = screen.getByRole("button", { name: "Aplicar esta prévia" });
     expect(aplicar).toBeEnabled();
     await usuario.click(aplicar);
-    expect(confirmar).toHaveBeenCalledWith(expect.stringContaining(`Sua resposta: “${rotulo}” (2 número(s))`));
-    expect(confirmar).toHaveBeenCalledWith(expect.stringContaining("na rede “Rede Sintética”"));
+    // A confirmação da v2 (no lugar do window.confirm) resume a resposta e a rede; nada vai antes do "sim".
+    const dialogo = screen.getByRole("dialog", { name: "Aplicar esta prévia?" });
+    expect(dialogo).toHaveTextContent(`Sua resposta: “${rotulo}” (2 número(s))`);
+    expect(dialogo).toHaveTextContent("na rede “Rede Sintética”");
+    expect(apiUpload.mock.calls.some(([c]) => String(c).endsWith("/aplicar"))).toBe(false);
+    await usuario.click(within(dialogo).getByRole("button", { name: "Aplicar" }));
     expect(await screen.findByText(new RegExp(`Importação #52 aplicada: 16 novo\\(s\\).*${
       texto.replace(/[()]/g, "\\$&")}`))).toBeInTheDocument();
     const corpo = enviado("/redes/1/indicadores/saresp/aplicar");
@@ -342,15 +345,19 @@ describe("Importar indicadores oficiais — a troca das médias calculadas (D2) 
     expect(corpo?.get("substituir_calculadas")).toBe(valor);
     expect(aoMudar).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("oficiais-previa")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("cancelar a confirmação não aplica nada", async () => {
-    const { usuario } = await previaComTroca();
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { usuario, aoMudar } = await previaComTroca();
     await usuario.click(screen.getByRole("radio", { name: "Não, manter as calculadas" }));
     await usuario.click(screen.getByRole("button", { name: "Aplicar esta prévia" }));
+    const dialogo = screen.getByRole("dialog", { name: "Aplicar esta prévia?" });
+    await usuario.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(apiUpload.mock.calls.some(([c]) => String(c).endsWith("/aplicar"))).toBe(false);
     expect(screen.getByTestId("oficiais-previa")).toBeInTheDocument();
+    expect(aoMudar).not.toHaveBeenCalled();
   });
 
   it("no Ideb, a pergunta usa as palavras do Ideb (não fala em média calculada)", async () => {
@@ -377,10 +384,13 @@ describe("Importar indicadores oficiais — a troca das médias calculadas (D2) 
     responderErro("UPLOAD", "/redes/1/indicadores/saresp/aplicar", 400,
       "O arquivo enviado não é o mesmo da prévia (sha256 diferente). Envie o mesmo arquivo, ou gere uma prévia nova. "
       + "Nada foi gravado.");
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     await usuario.click(await screen.findByRole("radio", { name: /SARESP por município/ }));
     await usuario.upload(screen.getByLabelText("Arquivo: SARESP por município"), new File(["x"], ARQ_MUN));
     await usuario.click(await screen.findByRole("button", { name: "Aplicar esta prévia" }));
+    // Sem troca a decidir, o diálogo não fala em resposta.
+    const dialogo = screen.getByRole("dialog", { name: "Aplicar esta prévia?" });
+    expect(dialogo).not.toHaveTextContent("Sua resposta");
+    await usuario.click(within(dialogo).getByRole("button", { name: "Aplicar" }));
     expect(await screen.findByText(/^Aplicação recusada: O arquivo enviado não é o mesmo da prévia/)).toBeInTheDocument();
     expect(enviado("/redes/1/indicadores/saresp/aplicar")?.has("substituir_calculadas")).toBe(false);
   });
@@ -394,7 +404,6 @@ describe("Importar indicadores oficiais — lista e desfazer", () => {
   it("lista as importações da família e desfaz pela rota dela", async () => {
     const { usuario, aoMudar } = montar({ importacoes: [APLICADA, BLOQUEADA] });
     responder("POST", "/redes/1/indicadores/saresp/importacoes/21/desfazer", { ...APLICADA, status: "desfeita" });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     await usuario.click(await screen.findByRole("radio", { name: /IEE/ }));
     const lista = await screen.findByTestId("oficiais-lista");
     expect(lista).toHaveTextContent("Importações do SARESP/IEE nesta rede");
@@ -402,11 +411,29 @@ describe("Importar indicadores oficiais — lista e desfazer", () => {
     expect(lista).toHaveTextContent("SARESP por município (SEDUC-SP)");
     expect(lista).toHaveTextContent("para desfazer, desfaça antes a #21");
     await usuario.click(within(lista).getByRole("button", { name: "Desfazer a importação #21" }));
+    // A confirmação da v2 diz o que volta; nada é desfeito antes do "sim".
+    const dialogo = screen.getByRole("dialog", { name: "Desfazer a importação?" });
+    expect(dialogo).toHaveTextContent(`Desfazer a importação #21 (“${ARQ_MUN}”)? Os números voltam exatamente `
+      + "ao estado anterior a ela (inclusive as médias que ela tenha trocado).");
+    expect(api.mock.calls.some(([c]) => String(c).endsWith("/desfazer"))).toBe(false);
+    await usuario.click(within(dialogo).getByRole("button", { name: "Desfazer importação" }));
     await waitFor(() => expect(api).toHaveBeenCalledWith(
       "/redes/1/indicadores/saresp/importacoes/21/desfazer", { method: "POST" }));
     expect(await screen.findByText(/Importação #21 .* desfeita: os números voltaram ao estado anterior/))
       .toBeInTheDocument();
     expect(aoMudar).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancelar a confirmação do desfazer não desfaz nada", async () => {
+    const { usuario, aoMudar } = montar({ importacoes: [APLICADA] });
+    await usuario.click(await screen.findByRole("radio", { name: /IEE/ }));
+    await usuario.click(await screen.findByRole("button", { name: "Desfazer a importação #21" }));
+    const dialogo = screen.getByRole("dialog", { name: "Desfazer a importação?" });
+    await usuario.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.mock.calls.some(([c]) => String(c).endsWith("/desfazer"))).toBe(false);
+    expect(aoMudar).not.toHaveBeenCalled();
   });
 
   it("a recusa do desfazer aparece (desfaça antes a #N)", async () => {
@@ -416,9 +443,10 @@ describe("Importar indicadores oficiais — lista e desfazer", () => {
     responderErro("POST", "/redes/1/indicadores/ideb/importacoes/31/desfazer", 400,
       "A importação #33 (arquivo_sintetico.zip), aplicada depois desta, usa 3 dos números que esta importação gravou. "
       + "Desfazer esta agora não voltaria exatamente ao estado anterior: desfaça antes a #33. Nada foi alterado.");
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     await usuario.click(await screen.findByRole("radio", { name: /Ideb \(pacote\)/ }));
     await usuario.click(await screen.findByRole("button", { name: "Desfazer a importação #31" }));
+    await usuario.click(within(screen.getByRole("dialog", { name: "Desfazer a importação?" }))
+      .getByRole("button", { name: "Desfazer importação" }));
     expect(await screen.findByText(/^Desfazer recusado: .*desfaça antes a #33\. Nada foi alterado\./)).toBeInTheDocument();
     expect(aoMudar).not.toHaveBeenCalled();
   });
@@ -516,12 +544,13 @@ describe("Importar indicadores oficiais — revisão: origem, teclado, leitor de
       return importacao(nome === ARQ_IEE ? { id: 43, parser: "seduc_iee", arquivo_nome: ARQ_IEE } : {});
     });
     responder("UPLOAD", "/redes/1/indicadores/saresp/aplicar", importacao({ status: "aplicada", contadores: {} }));
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     await usuario.click(await screen.findByRole("radio", { name: /SARESP por município/ }));
     await usuario.type(screen.getByLabelText(ROTULO_URL), "https://exemplo.invalido/municipio_2031.csv");
     await usuario.type(screen.getByLabelText(ROTULO_DATA), "Mon, 06 Oct 2031 09:00:00 GMT");
     await usuario.upload(screen.getByLabelText("Arquivo: SARESP por município"), new File(["x"], ARQ_MUN));
     await usuario.click(await screen.findByRole("button", { name: "Aplicar esta prévia" }));
+    await usuario.click(within(screen.getByRole("dialog", { name: "Aplicar esta prévia?" }))
+      .getByRole("button", { name: "Aplicar" }));
     expect(await screen.findByText(/^Importação #41 aplicada/)).toBeInTheDocument();
     // depois de aplicar, os campos do arquivo aplicado ficam vazios
     expect(screen.getByLabelText(ROTULO_URL)).toHaveValue("");

@@ -224,8 +224,8 @@ describe("Aba SARESP — rede municipal", () => {
     for (const id of ["2_ano-lp", "2_ano-mt", "5_ano-lp", "5_ano-mt"]) {
       expect(screen.getByTestId(`saresp-grafico-${id}`)).toBeInTheDocument();
     }
-    const rede = "#6366f1";
-    const estado = "#f59e0b";
+    const rede = "#6C5CE7";
+    const estado = "#D97706";
     const lp2 = screen.getByTestId("saresp-grafico-2_ano-lp");
     // Município e Estado (mesma rede): 2022 fica SOLTO (um trecho de 1 ponto) e a linha
     // recomeça em 2023 — nenhum trecho junta os dois anos.

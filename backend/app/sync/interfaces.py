@@ -48,6 +48,10 @@ class ResultadoValidacao:
     mensagem: str
     # Código estável p/ o front decidir o alerta (ex.: "senha_invalida").
     codigo: str | None = None
+    # Escolas que a conta ENXERGA na plataforma, detectadas depois do login
+    # ([{id, nome}], sem segredo) — para o gestor conferir que a credencial é da
+    # escola certa. None = não verificado (login falhou ou a detecção não rodou).
+    escolas_externas: list | None = None
 
 
 @dataclass(slots=True)
@@ -108,6 +112,21 @@ class Contexto:
     # {studentId: nome como veio da plataforma} — permite ao serviço desfazer o
     # cursor de quem o `confirmar` não vinculou (a próxima sync retenta).
     nome_por_sid: dict = field(default_factory=dict)
+    # COLETA PARCIAL VISÍVEL: o conector anota aqui o que NÃO chegou (sem PII):
+    # ``falhas`` = [{unidade: turma|lote|aluno|endpoint, id, codigo, http}] e
+    # ``descartes`` = {motivo: n} (linha que veio com defeito e não vira dado).
+    # O serviço soma isso ao que a importação aplicou para decidir o status
+    # (concluida × parcial × erro). Ver ``connectors.base.registrar_falha_coleta``.
+    # O conector também anota aqui a ESCOLA EXTERNA: ``escolas_externas`` (as que
+    # a conta enxerga) e ``escola_externa`` (a usada nesta coleta), sem segredo.
+    coleta: dict = field(default_factory=dict)
+    # VÍNCULO da escola do Constela com a escola da plataforma ({id, nome}) —
+    # ``sync/escola_externa.py``. None = ainda não aprendido. O conector recusa a
+    # coleta quando a conta não enxerga a escola vinculada.
+    escola_externa: dict | None = None
+    # Escolas externas (ids) já vinculadas a OUTRAS escolas do Constela: a conta
+    # que lê uma delas é recusada antes de qualquer dado de turma ser pedido.
+    externas_de_outras_escolas: frozenset = frozenset()
 
 
 class ErroConector(Exception):

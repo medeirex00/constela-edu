@@ -85,7 +85,11 @@ def test_secretaria_ve_agregado_da_rede_sem_pii(db):
     # tanto quanto os da "Escola Boa" era rotulada como problema.
     _escola_com_notas(db, rede.id, "Escola Boa", [80.0, 70.0, 90.0],
                       livros_cada=5, estrelas_cada=100)                # 5 livros/aluno
-    _escola_com_notas(db, rede.id, "Escola Fraca", [20.0],
+    # 3 crianças, não 1: a Secretaria não vê a matéria de escola com menos de
+    # ``grupo_pequeno.K_MINIMO_TURMA`` alunos com dado (seria o número de UMA
+    # criança, ``test_grupo_pequeno_escola_secretaria.py``), e a escola fraca
+    # precisa estar VISÍVEL para o alerta de atenção ser o que este teste prova.
+    _escola_com_notas(db, rede.id, "Escola Fraca", [20.0, 20.0, 20.0],
                       livros_cada=1, estrelas_cada=5)                  # 1 livro/aluno
     db.add(Usuario(nome="Secretaria", email="sec@rede.gov",
                    senha_hash=hash_senha("s3nh4secretaria"), cargo="coordenador",
@@ -101,7 +105,7 @@ def test_secretaria_ve_agregado_da_rede_sem_pii(db):
     assert resp.status_code == 200, resp.text
     dash = resp.json()
     assert dash["totais"]["escolas"] == 2
-    assert dash["totais"]["alunos"] == 4
+    assert dash["totais"]["alunos"] == 6
     assert {c["nome"] for c in dash["escolas"]} == {"Escola Boa", "Escola Fraca"}
     # Equidade: a distância é medida no índice COMPARÁVEL (per capita, 0–1000) —
     # `gap_media` continua no payload, mas não é comparável entre escolas.
@@ -211,7 +215,9 @@ def test_metas_da_rede_cadastro_progresso_e_upsert(db):
     rede = Rede(nome="Rede Metas", status="ativa")
     db.add(rede)
     db.flush()
-    _escola_com_notas(db, rede.id, "Escola M", [80.0, 60.0])   # média da escola = 70
+    # 3 crianças (média da escola = 70): com 2, a Secretaria não veria a média
+    # (grupo pequeno, ``test_grupo_pequeno_escola_secretaria.py``).
+    _escola_com_notas(db, rede.id, "Escola M", [80.0, 60.0, 70.0])
     db.add(Usuario(nome="Secretaria", email="sec.metas@rede.gov",
                    senha_hash=hash_senha("s3nh4secretaria"), cargo="coordenador",
                    rede_id=rede.id))
@@ -452,6 +458,88 @@ def test_boletim_shell_reune_os_dados_da_rede():
     assert "Crianca" not in html
 
 
+def _subtitulo(html: str) -> list[str]:
+    """As partes do subtítulo ('Rede de ensino · Gerado em … · <períodos>')."""
+    return html.split('<p class="subtitulo">', 1)[1].split("</p>", 1)[0].split(" · ")
+
+
+def _nota_do_indice(html: str) -> str:
+    """A frase do rodapé que diz do que é feito o índice (antes das colunas 0–100)."""
+    return html.split("<b>Índice</b>", 1)[1].split("<b>Matific · Elefante · Geral</b>", 1)[0]
+
+
+def test_boletim_diz_o_que_mede_sem_chamar_uso_de_desempenho():
+    """Documento para reuniões: os quadros, a introdução, o rodapé e o subtítulo
+    dizem O QUE cada número mede, a natureza e DE QUANDO é. O índice e as notas
+    vêm do uso das plataformas — 'média geral', 'pior escola' e 'desempenho
+    médio' eram lidos como desempenho escolar."""
+    from app.services import relatorios as rel
+    html = rel._shell_boletim_rede("Rede Municipal X", _DADOS_BOLETIM)
+    # Os nomes que liam como avaliação saíram do documento.
+    for rotulo in ("pior escola", "melhor escola", "melhor↔pior", "desempenho médio",
+                   "média geral", ">adoção<"):
+        assert rotulo not in html, rotulo
+    assert "desempenho" not in html.lower()
+    # Os quadros dizem o que medem.
+    for rotulo in ("alunos com dado de alguma plataforma",
+                   "média das notas do Constela (0–100)",
+                   ">maior índice<", ">menor índice<"):
+        assert rotulo in html, rotulo
+    # O aviso e a natureza de cada número.
+    assert ("Mostra quanto e como as crianças usam as plataformas — não é avaliação "
+            "oficial de aprendizagem.") in html
+    assert "<b>Plataforma</b>: o uso e a adoção." in html
+    assert "<b>Calculado pelo Constela</b>: o índice e as notas." in html
+    assert "cada aluno comparado com os colegas da própria escola" in html
+    # O índice diz do que é feito e de quando; as colunas 0–100 são nota INTERNA.
+    assert ("livros lidos (Elefante, acumulado desde o início da conta) e estrelas "
+            "(Matific, no ano letivo) por aluno do 1º ao 5º ano, na régua da rede"
+            ) in _nota_do_indice(html)
+    assert "nota INTERNA de cada escola" in html
+    # O subtítulo traz o período de cada plataforma, além da data de geração.
+    partes = _subtitulo(html)
+    assert partes[0] == "Rede de ensino" and partes[1].startswith("Gerado em ")
+    assert partes[2:] == ["Elefante: acumulado desde o início da conta",
+                          "Matific: ano letivo"]
+
+
+def test_boletim_de_rede_com_uma_plataforma_nao_cita_a_outra():
+    """Rede só com o Matific (ou só com o Elefante): o subtítulo, a frase do
+    índice e o aviso falam só da plataforma contratada."""
+    from app.services import relatorios as rel
+    so_matific = rel._shell_boletim_rede(
+        "Rede Municipal X", {**_DADOS_BOLETIM, "modulos": ["matematica"]})
+    assert _subtitulo(so_matific)[2:] == ["Matific: ano letivo"]
+    assert "Elefante" not in _nota_do_indice(so_matific)
+    assert "estrelas (Matific, no ano letivo) por aluno" in _nota_do_indice(so_matific)
+    assert "usam a plataforma — não é avaliação oficial" in so_matific
+
+    so_elefante = rel._shell_boletim_rede(
+        "Rede Municipal X", {**_DADOS_BOLETIM, "modulos": ["leitura"]})
+    assert _subtitulo(so_elefante)[2:] == ["Elefante: acumulado desde o início da conta"]
+    assert "Matific" not in _nota_do_indice(so_elefante)
+    assert "livros lidos (Elefante, acumulado desde o início da conta) por aluno" in (
+        _nota_do_indice(so_elefante))
+    assert "usam a plataforma — não é avaliação oficial" in so_elefante
+
+
+def test_boletim_do_painel_le_os_modulos_da_rede(db):
+    """O boletim real parte do ``dashboard_rede``: com a matemática desligada, o
+    subtítulo e a frase do índice não citam o Matific."""
+    from app.models import ModuloRede
+    from app.services import relatorios as rel
+    rede = Rede(nome="Rede Ficticia Leitura", status="ativa")
+    db.add(rede)
+    db.flush()
+    _escola_com_notas(db, rede.id, "Escola Ficticia Leitora", [70.0])
+    db.add(ModuloRede(rede_id=rede.id, modulo="matematica", ativo=False))
+    db.commit()
+
+    html = rel._shell_boletim_rede(rede.nome, svc_rede.dashboard_rede(db, rede.id))
+    assert _subtitulo(html)[2:] == ["Elefante: acumulado desde o início da conta"]
+    assert "Matific" not in _nota_do_indice(html)
+
+
 def test_gerar_boletim_rede_produz_pdf(monkeypatch):
     from app.services import relatorios as rel
     _forcar_reserva_fpdf(monkeypatch)
@@ -484,7 +572,10 @@ def test_boletim_endpoint_pdf_e_isolamento(db, monkeypatch):
 # --- Painel público da rede (top 5 escolas, sem PII) ------------------------
 
 def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=100):
-    """Escola de UM aluno para a vitrine pública.
+    """Escola de K_MINIMO (5) alunos iguais para a vitrine pública — com menos, a
+    vitrine não publica o per capita (seria o número de uma criança: k = 5,
+    ``test_vitrine_rede_k_minimo.py``). Todos com o mesmo volume, então o per capita
+    é ``livros``/``estrelas``.
 
     ``matific``/``elefante`` são as médias 0–100 (régua INTERNA de cada escola);
     ``livros``/``estrelas`` são o volume por aluno, que é o que a vitrine ordena
@@ -498,22 +589,25 @@ def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=
                   status="ativa")
     db.add(turma)
     db.flush()
-    a = Aluno(escola_id=esc.id, nome=f"Aluno {nome}")
-    db.add(a)
-    db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
     db.add(imp)
     db.flush()
-    db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
-    # Snapshots: sem eles o aluno não tem "dado da plataforma" e fica fora da
-    # média de desempenho (que agora mede só quem usa).
-    db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                            livros_unicos=livros, tempo_leitura_min=60))
-    db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                           atividades=20, estrelas=estrelas))
-    db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
-                nota_geral=(matific + elefante) / 2, nota_matific=matific,
-                nota_elefante=elefante, posicao=1))
+    for i in range(5):
+        a = Aluno(escola_id=esc.id, nome=f"Aluno {nome} {i}")
+        db.add(a)
+        db.flush()
+        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
+                         ano_letivo=2026))
+        # Snapshots: sem eles o aluno não tem "dado da plataforma" e fica fora da
+        # média de desempenho (que agora mede só quem usa).
+        db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
+                                livros_unicos=livros, tempo_leitura_min=60))
+        db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
+                               atividades=20, estrelas=estrelas))
+        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id,
+                    aluno_id=a.id, ano_letivo=2026,
+                    nota_geral=(matific + elefante) / 2, nota_matific=matific,
+                    nota_elefante=elefante, posicao=i + 1))
     return esc
 
 

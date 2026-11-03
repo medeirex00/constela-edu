@@ -1,5 +1,7 @@
 /**
- * C-02 — o painel da Secretaria é governado pela métrica COMPARÁVEL.
+ * C-02 — o que COMPARA escolas é governado pela métrica COMPARÁVEL: no Panorama de uma rede
+ * (o admin global, na Visão Global), no Ranking da Rede ("Diferença entre escolas", que
+ * substituiu a Equidade do Panorama antigo da Secretaria) e nas metas do Painel da Rede.
  *
  * `media_geral` (0–100) é normalizada contra o P90 da PRÓPRIA escola: mede a
  * homogeneidade interna, não o nível. Com ela na tela, a escola cujos alunos
@@ -22,10 +24,12 @@ vi.mock("react-leaflet", () => ({
   useMap: () => ({ setView: () => undefined, fitBounds: () => undefined }),
 }));
 
-import { PanoramaRede } from "../pages/rede/RedeDashboard";
+import RankingDaRede from "../pages/rede/RankingRede";
+import RedeDashboard, { PanoramaDaRede } from "../pages/rede/RedeDashboard";
 import { escolaFake, renderComApp, responder, screen, usuarioFake, within } from "./utils";
 
 const secretaria = usuarioFake({ rede_id: 7, cargo: "coordenador", escola_id: null });
+const admin = usuarioFake({ nome: "Admin Sintético", is_global: true, cargo: "admin", escola_id: null });
 
 function cartao(over: Record<string, unknown> = {}) {
   return {
@@ -42,7 +46,7 @@ function cartao(over: Record<string, unknown> = {}) {
     pontuacao_leitura: 50, pontuacao_matematica: 0, pontuacao_geral: 50,
     dimensoes_pontuadas: ["leitura"], modulos: ["leitura", "matematica"],
     precisa_atencao: true,
-    motivo_atencao: "Desempenho baixo frente à rede: índice 50 de 1000 (1000 = melhor escola da rede).",
+    motivo_atencao: "Índice do Constela baixo frente à rede: 50 de 1000 (pelo uso das plataformas; 1000 = maior índice da rede).",
     posicao: 2,
     ...over,
   };
@@ -87,10 +91,10 @@ function semear(metas: unknown[] = []) {
   responder("GET", "/redes/7/metas", metas);
 }
 
-describe("Painel da Secretaria é governado pelo índice comparável", () => {
+describe("Panorama de uma rede (admin global) é governado pelo índice comparável", () => {
   it("'Melhor escola' é a que mais lê por aluno, com o índice no cartão", async () => {
     semear();
-    renderComApp(<PanoramaRede />, { usuario: secretaria, escolas: [escolaFake()] });
+    renderComApp(<PanoramaDaRede redeId={7} />, { usuario: admin, escolas: [escolaFake()] });
 
     const cartaoMelhor = (await screen.findByText("Melhor escola")).closest("div")!
       .parentElement!;
@@ -101,7 +105,7 @@ describe("Painel da Secretaria é governado pelo índice comparável", () => {
 
   it("equidade mede a distância no índice, não nas médias internas", async () => {
     semear();
-    renderComApp(<PanoramaRede />, { usuario: secretaria, escolas: [escolaFake()] });
+    renderComApp(<PanoramaDaRede redeId={7} />, { usuario: admin, escolas: [escolaFake()] });
 
     const equidade = (await screen.findByText("Equidade da rede")).closest("div")!;
     expect(equidade.textContent).toContain("950");            // 1000 - 50
@@ -111,7 +115,7 @@ describe("Painel da Secretaria é governado pelo índice comparável", () => {
 
   it("comparativo entre escolas ordena pelo índice e explica as duas réguas", async () => {
     semear();
-    renderComApp(<PanoramaRede />, { usuario: secretaria, escolas: [escolaFake()] });
+    renderComApp(<PanoramaDaRede redeId={7} />, { usuario: admin, escolas: [escolaFake()] });
 
     const tabela = (await screen.findByText("Comparativo entre escolas"))
       .closest("div")!.querySelector("table")!;
@@ -124,10 +128,10 @@ describe("Painel da Secretaria é governado pelo índice comparável", () => {
 
   it("escola em atenção é a que pouco lê, com o motivo no índice", async () => {
     semear();
-    renderComApp(<PanoramaRede />, { usuario: secretaria, escolas: [escolaFake()] });
+    renderComApp(<PanoramaDaRede redeId={7} />, { usuario: admin, escolas: [escolaFake()] });
 
     expect(await screen.findByText(/Escolas que precisam de aten/)).toBeInTheDocument();
-    expect(screen.getByText(/índice 50 de 1000/)).toBeInTheDocument();
+    expect(screen.getByText(/Índice do Constela baixo frente à rede: 50 de 1000/)).toBeInTheDocument();
     expect(screen.queryByText("EM Grande Leitora · atenção")).not.toBeInTheDocument();
   });
 
@@ -140,9 +144,42 @@ describe("Painel da Secretaria é governado pelo índice comparável", () => {
         alvo: 500, atual: 592.9, progresso: 100, atingida: true, descricao: null,
         comparavel: true, escolas_atingiram: 1, escolas_total: 2 },
     ]);
-    renderComApp(<PanoramaRede />, { usuario: secretaria, escolas: [escolaFake()] });
+    renderComApp(<PanoramaDaRede redeId={7} />, { usuario: admin, escolas: [escolaFake()] });
 
     expect(await screen.findByText("1 de 2 escolas atingiram")).toBeInTheDocument();
     expect(screen.getByText(/não comparável entre escolas/i)).toBeInTheDocument();
+  });
+});
+
+describe("Secretaria: o que compara escolas segue o índice (Ranking da Rede e Painel da Rede)", () => {
+  it("Ranking da Rede: a 'Diferença entre escolas' mede a distância no índice, não nas médias internas", async () => {
+    semear();
+    responder("GET", /^\/redes\/7\/ranking\?/, () => DASH_REDE.escolas.map((c, i) => ({ ...c, posicao: i + 1 })));
+    responder("GET", "/redes/7/ranking/frescor", { limite_dias: 7, hoje: "2026-10-20", escolas: [] });
+    renderComApp(<RankingDaRede />, { usuario: secretaria });
+    const nota = await screen.findByTestId("diferenca-entre-escolas");
+    expect(nota).toHaveTextContent("Diferença entre escolas");
+    expect(within(nota).getByText("Calculado pelo Constela")).toBeInTheDocument();
+    expect(nota).toHaveTextContent("Entre a escola de maior e a de menor índice há 950 pontos de índice (50 → 1.000 de 1000)");
+    expect(nota).toHaveTextContent("1 escola(s) abaixo do índice médio da rede");
+    expect(nota).not.toHaveTextContent("74,2");       // o gap das médias internas
+    expect(nota).toHaveTextContent("não uma avaliação oficial");
+  });
+
+  it("Painel da Rede: o progresso das metas não publica contagem de escolas na meta não comparável", async () => {
+    semear([
+      { id: 1, metrica: "media_geral", rotulo: "Média geral da rede", sufixo: "",
+        alvo: 50, atual: 57.6, progresso: 100, atingida: true, descricao: null,
+        comparavel: false, escolas_atingiram: null, escolas_total: null },
+      { id: 2, metrica: "pontuacao_geral", rotulo: "Índice da rede (0–1000)", sufixo: "",
+        alvo: 500, atual: 592.9, progresso: 100, atingida: true, descricao: null,
+        comparavel: true, escolas_atingiram: 1, escolas_total: 2 },
+    ]);
+    responder("GET", "/redes/7/publico", { ativo: false, token: null, url: null });
+    renderComApp(<RedeDashboard />, { rota: "/rede", usuario: secretaria });
+    expect(await screen.findByText("1 de 2 escolas atingiram")).toBeInTheDocument();
+    expect(screen.getByText(/não comparável entre escolas/i)).toBeInTheDocument();
+    // E a escola com alerta de uso traz o motivo pelo índice (a regra do painel).
+    expect(screen.getByText(/Índice do Constela baixo frente à rede: 50 de 1000/)).toBeInTheDocument();
   });
 });

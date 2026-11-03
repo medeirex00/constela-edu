@@ -23,6 +23,8 @@
  * servidor; sem nenhuma, o selo não inventa data. Reutilizável pelas próximas abas
  * (SAEB, SARESP): só depende do formato da fonte que a API devolve.
  */
+import { FileSearch } from "lucide-react";
+
 import { dataHora } from "../lib/formato";
 
 export interface FonteOficial {
@@ -148,16 +150,19 @@ export default function SeloFonte({ fontes, testId, titulo }: {
   const unicas = fontesUnicas(fontes);
   if (unicas.length === 0) return null;
   return (
-    <div className="space-y-1 break-words rounded-lg bg-zinc-50 p-2.5 text-[11px] text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-400"
+    <div className="flex items-start gap-2.5 break-words rounded-2xl border border-zinc-200/80 bg-zinc-50 px-3.5 py-3 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-400"
          data-testid={testId}>
-      {titulo && <p className="font-medium text-zinc-500">{titulo}</p>}
-      {unicas.map((f) => (
-        <p key={f.importacao_id}>
-          Fonte: {textoFonte(f)}
-          {f.importado_em ? ` · importado em ${dataHora(f.importado_em)}` : ""}
-        </p>
-      ))}
-      {unicas[0]?.licenca && <p className="text-zinc-500">{unicas[0].licenca}</p>}
+      <FileSearch size={14} aria-hidden className="mt-0.5 shrink-0 text-zinc-500 dark:text-zinc-400" />
+      <div className="min-w-0 space-y-1">
+        {titulo && <p className="font-semibold text-zinc-700 dark:text-zinc-300">{titulo}</p>}
+        {unicas.map((f) => (
+          <p key={f.importacao_id}>
+            Fonte: {textoFonte(f)}
+            {f.importado_em ? ` · importado em ${dataHora(f.importado_em)}` : ""}
+          </p>
+        ))}
+        {unicas[0]?.licenca && <p className="text-zinc-500 dark:text-zinc-400">{unicas[0].licenca}</p>}
+      </div>
     </div>
   );
 }
@@ -173,7 +178,7 @@ export function SeloNumero({ fonte, detalhe = false }: { fonte: FonteOficial | n
     ? textoDetalhe(fonte)
     : ehMicrodados(fonte) ? (dia ? `microdados de ${dia}` : "microdados") : (dia ? `arquivo de ${dia}` : fonte.arquivo_nome);
   return (
-    <span className="block text-[11px] text-zinc-500" title={`Fonte: ${textoFonte(fonte)}`}>
+    <span className="block text-[11px] text-zinc-500 dark:text-zinc-400" title={`Fonte: ${textoFonte(fonte)}`}>
       {curto}
       <span className="sr-only"> — fonte: {textoFonte(fonte)}</span>
     </span>

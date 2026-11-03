@@ -22,9 +22,11 @@ import {
   escolaFake,
   renderComApp,
   responder,
+  responderErro,
   screen,
   userEvent,
   usuarioFake,
+  within,
 } from "./utils";
 
 const texto = () => (document.body.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -203,6 +205,26 @@ describe("Relatório por Período", () => {
     expect(texto()).toContain("30 alunos ativos no recorte");
   });
 
+  it("celular: indicadores 2 por linha, data do período em linha própria e Questões que quebra na barra", async () => {
+    const dados = relatorioFake();
+    Object.assign(dados.elefante as Record<string, unknown>, { questoes_tentativas: 2345, questoes_acertos: 1234 });
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+
+    // Os 4 + 4 cartões de indicador: duas colunas já no celular (eram uma só).
+    const grade = (screen.getByText("Tempo de leitura").closest(".card") as HTMLElement).parentElement as HTMLElement;
+    expect(grade).toHaveClass("grid", "grid-cols-2", "xl:grid-cols-4");
+    expect(grade).not.toHaveClass("grid-cols-1");
+    // "1.234/2.345" pode quebrar depois da barra no cartão estreito (espaço de largura zero).
+    expect(textoDaSecao("Elefante Letrado")).toContain("1.234/\u200B2.345");
+
+    // A data do período desce para a linha própria no celular, sem o "·" na frente.
+    const ponto = screen.getByText((_, el) => el?.tagName === "SPAN" && el.textContent === "· ");
+    expect(ponto).toHaveClass("max-sm:hidden");
+    expect(ponto.parentElement).toHaveClass("max-sm:basis-full");
+    expect(ponto.parentElement).toHaveTextContent("· 01/09/2026 a 30/09/2026");
+  });
+
   it("o botão de PDF pede o MESMO recorte que a tela está mostrando", async () => {
     montar();
     await screen.findByText("Tempo de leitura");
@@ -257,6 +279,24 @@ describe("Relatório por Período", () => {
     expect(botao).toHaveProperty("disabled", true);
   });
 
+  it("falha ao montar o relatório: diz o motivo e deixa tentar de novo", async () => {
+    responder("GET", /\/escolas\/1\/turmas/, []);
+    responder("GET", /\/escolas\/1\/alunos/, { itens: [], total: 0 });
+    responderErro("GET", /\/escolas\/1\/relatorios\/periodo/, 500, "Falha no servidor.");
+    renderComApp(<RelatorioPeriodo />, {
+      rota: "/relatorios/periodo",
+      usuario: usuarioFake(),
+      escolas: [escolaFake({ id: 1 })],
+      escolaSelecionada: 1,
+      periodo: { preset: "mes_anterior" },
+    });
+    expect(await screen.findByText("Não foi possível montar o relatório")).toBeInTheDocument();
+    expect(screen.getByText("Falha no servidor.")).toBeInTheDocument();
+    responder("GET", /\/escolas\/1\/relatorios\/periodo/, relatorioFake());
+    await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByText("Tempo de leitura")).toBeInTheDocument();
+  });
+
   it("não consulta o backend em personalizado sem as duas datas", async () => {
     responder("GET", /\/escolas\/1\/turmas/, []);
     responder("GET", /\/escolas\/1\/alunos/, { itens: [], total: 0 });
@@ -270,5 +310,277 @@ describe("Relatório por Período", () => {
     // Sem handler para /relatorios/periodo: se a tela consultasse, o mock
     // lançaria 404 e a mensagem de erro apareceria.
     expect(await screen.findByText(/Escolha a data inicial e a final/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Período PEDIDO × cobertura das COLETAS (caso real: escola 17, set/2026)
+// ---------------------------------------------------------------------------
+// A primeira coleta do Elefante foi em 22/09 16:53 UTC (13:53 em Brasília) e
+// a última de setembro em 30/09 10:58 UTC (07:58). A tela dizia "a conta vai de
+// 22/09 a 30/09 ... pode ser mais largo que o período pedido" — era mais
+// ESTREITO, e o número saía como se fosse o mês inteiro.
+const COBERTURA_BASE = {
+  regra: "diferenca_de_coletas", em_andamento: false,
+  periodo_inicio: "2026-09-01", periodo_fim: "2026-09-30", periodo_fim_efetivo: "2026-09-30",
+  coleta_inicio: "2026-09-22T16:53:12", coleta_inicio_mais_tardio: "2026-09-22T16:53:12",
+  coleta_fim: "2026-09-30T10:58:22", coleta_fim_mais_cedo: "2026-09-30T10:58:22",
+  inicio_coberto: false, fim_coberto: false, inclui_antes_do_inicio: false,
+  inicio_do_contador_anual: false, antecedencia_max_horas: null,
+  status: "parcial", completa: false,
+  alunos_cobertura_completa: 0, alunos_cobertura_parcial: 1, alunos_sem_inicio: 1,
+  alunos_sem_fim: 1, alunos_ampliados: 0, alunos_sem_intervalo: 0,
+};
+const MARCA_ANTIGA = "MARCA_DO_AVISO_ANTIGO";
+
+describe("legenda: o acumulado que a primeira coleta trouxe", () => {
+  it("mostra quantas questões a primeira coleta já trazia, sem data", async () => {
+    montar(comCoberturaDeQuestoes({ ...COBERTURA_BASE, acumulado_na_primeira_coleta: 25307 }));
+    await screen.findByText("Tempo de leitura");
+    expect(texto()).toContain("a primeira coleta já trazia 25.307 questões acumuladas, de datas que o contador não informa");
+  });
+});
+
+function comCoberturaDeQuestoes(cobertura: Record<string, unknown>,
+                                valores: { t: number | null; a: number | null } = { t: 30, a: 21 }) {
+  const dados = relatorioFake();
+  Object.assign(dados.elefante as Record<string, unknown>, {
+    questoes_tentativas: valores.t, questoes_acertos: valores.a, alunos_sem_retrato: 0,
+    janela_efetiva_questoes: {
+      data_base_mais_antiga: "2026-09-22T16:53:12", data_base_mais_recente: "2026-09-22T16:53:12",
+      data_atual_mais_antiga: "2026-09-30T10:58:22", data_atual_mais_recente: "2026-09-30T10:58:22",
+      observacao: MARCA_ANTIGA,
+    },
+    cobertura_questoes: cobertura,
+  });
+  return dados;
+}
+
+/** Só o texto de UMA seção (o Matific também tem um cartão "Questões"). */
+function textoDaSecao(titulo: string): string {
+  const secao = screen.getByRole("heading", { name: titulo }).closest("section");
+  return (secao?.textContent ?? "").replace(/\s+/g, " ");
+}
+
+describe("Questões: período pedido × cobertura das coletas", () => {
+  it("cobertura parcial: diz que o valor NÃO é o período e mostra o pedido e o disponível", async () => {
+    montar(comCoberturaDeQuestoes(COBERTURA_BASE));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: cobertura parcial — o valor NÃO representa o período completo");
+    expect(t).toContain("Período solicitado01/09/2026 a 30/09/2026");
+    // instantes de coleta convertidos para Brasília; o período não é convertido
+    expect(t).toContain("Intervalo medido pelas coletas22/09/2026, 13:53 a 30/09/2026, 07:58");
+    // não afirma que o histórico "não existe": só que não sai das coletas
+    expect(t).not.toContain("não é recuperável");
+    expect(t).toContain("O Elefante guarda o histórico datado por aluno (Questões Respondidas)");
+    expect(t).toContain("o que foi feito de 01/09/2026 até a primeira coleta (até 22/09/2026, 13:53)");
+    expect(t).toContain("A última coleta é de 30/09/2026, 07:58: o que veio depois, até 30/09/2026, não está na conta.");
+    expect(textoDaSecao("Elefante Letrado")).toContain("cobertura parcial do período — veja o aviso");
+    // o aviso antigo ("a conta vai de ...") não aparece junto
+    expect(t).not.toContain("Questões: a conta vai de");
+    expect(t).not.toContain(MARCA_ANTIGA);
+  });
+
+  it("cobertura completa: o período solicitado é o que se comunica", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-09-01T03:10:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-10-01T03:10:00",
+      inicio_coberto: true, fim_coberto: true, status: "completa", completa: true,
+      alunos_cobertura_completa: 1, alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+    }, { t: 340, a: 250 }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: período solicitado 01/09/2026 a 30/09/2026, medido pelas coletas de 01/09/2026, 00:10 a 01/10/2026, 00:10.");
+    expect(t).not.toContain("cobertura parcial");
+    expect(t).not.toContain("INCLUI");
+  });
+
+  it("ampliada: a base é bem anterior ao início e o valor INCLUI esse intervalo", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-08-15T12:00:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-10-01T03:10:00",
+      inicio_coberto: true, fim_coberto: true, inclui_antes_do_inicio: true, antecedencia_max_horas: 399,
+      status: "ampliada", alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+      alunos_ampliados: 1,
+    }, { t: 40, a: 30 }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: o valor INCLUI atividade de antes do período — não é só o período pedido.");
+    expect(t).toContain("a coleta-base é de 15/08/2026, 09:00, 16 dias antes de 01/09/2026 — o número INCLUI a atividade desse intervalo.");
+    expect(textoDaSecao("Elefante Letrado")).toContain("inclui antes do período — veja o aviso");
+  });
+
+  it("sem intervalo medido: '—' e o motivo, nunca 0/0", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: null, coleta_inicio_mais_tardio: null, coleta_fim: null,
+      coleta_fim_mais_cedo: null, status: "sem_intervalo", alunos_cobertura_parcial: 0,
+      alunos_sem_inicio: 0, alunos_sem_fim: 0, alunos_sem_intervalo: 4,
+    }, { t: null, a: null }));
+    await screen.findByText("Tempo de leitura");
+    expect(texto()).toContain("Questões: sem número para 01/09/2026 a 30/09/2026.");
+    const ele = textoDaSecao("Elefante Letrado");
+    expect(ele).toContain("Questões—");
+    expect(ele).not.toMatch(/Questões\s*0/);
+  });
+
+  it("mistura: cada causa diz para quantos alunos vale", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-09-01T03:10:00",
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-09-17T03:10:00",
+      alunos_cobertura_completa: 1, alunos_cobertura_parcial: 2, alunos_sem_inicio: 1, alunos_sem_fim: 1,
+    }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Sem coleta no início do período para 1 aluno(s)");
+    expect(t).toContain("A última coleta para 1 aluno(s) é de 17/09/2026, 00:10");
+  });
+
+  it("período em andamento: diz até quando vão os dados", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, periodo_inicio: "2026-10-01", periodo_fim: "2026-10-31",
+      periodo_fim_efetivo: "2026-10-06", em_andamento: true,
+      coleta_inicio: "2026-10-01T03:10:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-06T03:10:00", coleta_fim_mais_cedo: "2026-10-06T03:10:00",
+      inicio_coberto: true, fim_coberto: true, status: "completa", completa: true,
+      alunos_cobertura_completa: 1, alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+    }, { t: 12, a: 10 }));
+    await screen.findByText("Tempo de leitura");
+    expect(texto()).toContain("período solicitado 01/10/2026 a 31/10/2026 (em andamento, até hoje 06/10/2026)");
+    expect(texto()).toContain("Em andamento: os dados vão até a coleta de 06/10/2026, 00:10.");
+  });
+
+  it("Matific com coleta única: '—' nos cartões e o 0 oficial explicado", async () => {
+    const dados = relatorioFake();
+    Object.assign(dados.matific as Record<string, unknown>, {
+      atividades: 0, estrelas: 0,
+      cobertura: {
+        ...COBERTURA_BASE, regra: "oficial_matific", coleta_inicio: null, coleta_inicio_mais_tardio: null,
+        coleta_fim: null, coleta_fim_mais_cedo: null, status: "sem_intervalo",
+        alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0, alunos_sem_intervalo: 3,
+      },
+    });
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    const tm = textoDaSecao("Matific");
+    expect(tm).toContain("Atividades—sem intervalo medido — veja o aviso");
+    expect(tm).toContain("O 0 da regra oficial (a mesma das premiações)");
+    expect(tm).toContain("NÃO quer dizer que não houve atividade");
+  });
+
+  it("Matific nunca se declara completo: explica a regra oficial", async () => {
+    const dados = relatorioFake();
+    Object.assign(dados.matific as Record<string, unknown>, {
+      cobertura: {
+        ...COBERTURA_BASE, regra: "oficial_matific", coleta_inicio: "2026-08-31T03:10:00",
+        coleta_inicio_mais_tardio: null, coleta_fim: "2026-09-30T03:10:00",
+        inicio_coberto: true, fim_coberto: true, status: "regra_oficial",
+        alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+      },
+    });
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("O número segue a regra oficial do Matific (a mesma das premiações)");
+    expect(t).not.toContain("Matific: a conta vai de");
+  });
+
+  it("dia 1º: a única coleta é a que mede o início — não 'nenhuma antes'", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, periodo_inicio: "2026-10-01", periodo_fim: "2026-10-31",
+      periodo_fim_efetivo: "2026-10-01", em_andamento: true, coleta_inicio: null,
+      coleta_inicio_mais_tardio: null, coleta_fim: null, coleta_fim_mais_cedo: null,
+      status: "sem_intervalo", alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+      alunos_sem_intervalo: 2, alunos_sem_intervalo_so_inicio: 2, alunos_medidos: 0,
+    }, { t: null, a: null }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("A única coleta do período é a que mede o início; a próxima medirá o que veio depois");
+    expect(t).not.toContain("e nenhuma antes");
+  });
+
+  it("contador que diminui e lacuna no período são ditos", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-09-01T03:10:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-10-01T03:10:00",
+      inicio_coberto: true, fim_coberto: true, alunos_cobertura_completa: 1, alunos_cobertura_parcial: 0,
+      alunos_sem_inicio: 0, alunos_sem_fim: 0, alunos_medidos: 1,
+      alunos_contador_regrediu: 1, alunos_sem_coleta_no_periodo: 2,
+    }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("1 aluno(s) com o contador da plataforma DIMINUINDO no período");
+    expect(t).toContain("2 aluno(s) coletados antes e depois do período, mas sem nenhuma coleta dentro dele");
+  });
+
+  it("coleta interrompida e turma sem coleta são ditas (o número é parcial)", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-09-01T03:10:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-10-01T03:10:00",
+      inicio_coberto: true, fim_coberto: true, alunos_cobertura_completa: 3, alunos_cobertura_parcial: 0,
+      alunos_sem_inicio: 0, alunos_sem_fim: 0, alunos_medidos: 3,
+      alunos_coleta_interrompida: 2,
+      turmas_sem_coleta: [{ turma_id: 9, turma: "4º Ano B", alunos: 2 }],
+    }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("cobertura parcial — o valor NÃO representa o período completo");
+    expect(t).toContain("2 aluno(s) coletados antes do período e sem nenhuma coleta que entre na conta");
+    expect(t).toContain("Turma(s) sem nenhuma coleta no período, fora da conta: 4º Ano B.");
+  });
+
+  it("Matific: 'para N aluno(s)' usa os alunos medidos, não só os parciais", async () => {
+    const dados = relatorioFake();
+    Object.assign(dados.matific as Record<string, unknown>, {
+      cobertura: {
+        ...COBERTURA_BASE, regra: "oficial_matific", coleta_inicio: "2026-08-31T03:10:00",
+        coleta_inicio_mais_tardio: "2026-09-22T16:00:00", coleta_fim: "2026-09-30T03:10:00",
+        fim_coberto: true, alunos_cobertura_parcial: 2, alunos_sem_inicio: 2, alunos_sem_fim: 0,
+        alunos_medidos: 302,
+      },
+    });
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    expect(textoDaSecao("Matific")).toContain("Sem coleta no início do período para 2 aluno(s)");
+  });
+
+  it("o cartão do período mostra as datas pedidas, sem deslocar o dia", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    expect(texto()).toContain("setembro de 2026· 01/09/2026 a 30/09/2026");
+  });
+  it("as tabelas mantêm as colunas do Matific, e a turma do aluno vai sob o nome", async () => {
+    montar();
+    await screen.findByText("Joao Pedro Barbosa");
+    const [porTurma, porAluno] = screen.getAllByRole("table");
+    const colunas = (tabela: HTMLElement) =>
+      within(tabela).getAllByRole("columnheader").map((th) => th.textContent);
+    expect(colunas(porTurma)).toEqual([
+      "Turma", "Alunos", "Com atividade", "Livros novos", "Tempo", "Relidos", "Atividades", "Estrelas",
+    ]);
+    // A turma saiu da coluna própria para o chip sob o nome: uma coluna a menos é o que
+    // deixa Atividades e Estrelas caberem inteiras a partir de 768 px.
+    expect(colunas(porAluno)).toEqual([
+      "Aluno", "Livros novos", "Tempo", "Com atividade", "Relidos", "Atividades", "Estrelas",
+    ]);
+    const linhaAna = within(porAluno).getByText("Ana Beatriz Souza").closest("tr")!;
+    expect(within(linhaAna).getByText("3º Ano A")).toBeInTheDocument();
+    expect(within(linhaAna).getAllByRole("cell").map((td) => td.textContent).slice(1))
+      .toEqual(["3", "21 min", "5", "2", "10", "4"]);
+    // O aluno sem atividade continua com a turma E o aviso, na mesma célula do nome.
+    const linhaJoao = within(porAluno).getByText("Joao Pedro Barbosa").closest("tr")!;
+    expect(within(linhaJoao).getByText("3º Ano A")).toBeInTheDocument();
+    expect(within(linhaJoao).getByText("sem atividade no período")).toBeInTheDocument();
+  });
+
+  it("os quatro filtros continuam selects nativos com o rótulo de sempre", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    expect(screen.getByLabelText("Período de análise").tagName).toBe("SELECT");
+    for (const rotulo of ["Plataforma", "Turma", "Aluno"]) {
+      expect(screen.getByLabelText(rotulo).tagName).toBe("SELECT");
+    }
+    await userEvent.selectOptions(screen.getByLabelText("Plataforma"), "matific");
+    expect((screen.getByLabelText("Plataforma") as HTMLSelectElement).value).toBe("matific");
   });
 });

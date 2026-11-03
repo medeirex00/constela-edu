@@ -13,8 +13,18 @@ from app.core.database import get_db
 from app.core.deps import oauth2_scheme
 from app.core.security import decodificar_token
 from app.models import Aluno
+from app.quest.config import config_quest
 from app.quest.models import QuestCredencialAluno, QuestPerfil
 from sqlalchemy import select
+
+
+def exigir_quest_aluno_habilitado() -> None:
+    """Portão das rotas do lado do aluno (QUEST_ALUNO_HABILITADO). Desligado,
+    responde 404 igual a uma rota que não existe — nada revela que o login
+    infantil está ali. Lido a cada requisição: trocar a variável e reiniciar
+    basta, sem mexer no registro dos routers."""
+    if not config_quest.QUEST_ALUNO_HABILITADO:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
 
 
 @dataclass

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import ModalAlunosDuplicados from "../components/ModalAlunosDuplicados";
-import { ApiError, renderComApp, responder, screen, userEvent } from "./utils";
+import { ApiError, renderComApp, responder, responderErro, screen, userEvent } from "./utils";
 
 const URL_PREVIA = "/escolas/1/alunos/duplicados";
 const URL_CORRIGIR = "/escolas/1/alunos/duplicados/corrigir";
@@ -24,8 +24,8 @@ function previa() {
       },
       {
         loser_id: 20, manter_id: 21,
-        apagar: "Akemi Carolina Vieira",
-        manter: "Akemi Carolina Vieira Gomes Kariya",
+        apagar: "Yasmin Cecilia Testelli",
+        manter: "Yasmin Cecilia Testelli Ficticio Sintoni",
         turma: "4º C", confianca: "provavel", motivo: "subconjunto",
         impacto: {
           leituras: 0, snapshots_matific: 0, snapshots_elefante: 1,
@@ -53,9 +53,9 @@ describe("ModalAlunosDuplicados", () => {
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
-    expect(await screen.findByText("Akemi Carolina Vieira")).toBeInTheDocument();
+    expect(await screen.findByText("Yasmin Cecilia Testelli")).toBeInTheDocument();
     const caixas = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    // Ordem dos grupos: 🟢 alta (Bruno) → 🟡 provável (Akemi) → 🔴 revisar (Ana B).
+    // Ordem dos grupos: 🟢 alta (Bruno) → 🟡 provável (Yasmin) → 🔴 revisar (Ana B).
     expect(caixas[0].checked).toBe(true);   // alta pré-marcada
     expect(caixas[1].checked).toBe(false);  // provável NÃO pré-marcada
     expect(caixas[2].checked).toBe(false);  // revisar NÃO pré-marcada
@@ -75,8 +75,8 @@ describe("ModalAlunosDuplicados", () => {
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
-    await screen.findByText("Akemi Carolina Vieira");
-    // Marca também a 🟡 provável (Akemi) — a 🟢 alta (Bruno) já vem marcada.
+    await screen.findByText("Yasmin Cecilia Testelli");
+    // Marca também a 🟡 provável (Yasmin) — a 🟢 alta (Bruno) já vem marcada.
     await u.click((screen.getAllByRole("checkbox") as HTMLInputElement[])[1]);
 
     // 1º clique → pede confirmação (não envia ainda).
@@ -100,7 +100,7 @@ describe("ModalAlunosDuplicados", () => {
     responder("GET", URL_PREVIA, {
       total: 4, alta: 0, provavel: 0, revisar: 4,
       candidatos: [
-        { loser_id: 1, manter_id: 2, apagar: "Luiz Dias", manter: "Luís Dias",
+        { loser_id: 1, manter_id: 2, apagar: "Luiz Fictoni", manter: "Luís Fictoni",
           turma: "4º C", confianca: "revisar", motivo: "variante", impacto: imp },
         { loser_id: 3, manter_id: 4, apagar: "Bruno Alves", manter: "Bruno Alves",
           turma: "4º C", confianca: "revisar", motivo: "nome_identico", impacto: imp },
@@ -133,8 +133,8 @@ describe("ModalAlunosDuplicados", () => {
     renderComApp(
       <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
-    await screen.findByText("Akemi Carolina Vieira");
-    // A faixa 🟡 provável (Akemi = caixa[1]) vem DESMARCADA por padrão.
+    await screen.findByText("Yasmin Cecilia Testelli");
+    // A faixa 🟡 provável (Yasmin = caixa[1]) vem DESMARCADA por padrão.
     expect((screen.getAllByRole("checkbox") as HTMLInputElement[])[1].checked).toBe(false);
 
     // A 🟢 alta já vem marcada (botão "Desmarcar todos"); os "Selecionar todos"
@@ -210,5 +210,15 @@ describe("ModalAlunosDuplicados", () => {
 
     // O 1º lote (20) commitou antes da falha: o parcial é reportado, não perdido.
     expect(await screen.findByText(/20 já foram unidas/)).toBeInTheDocument();
+  });
+  it("falha na detecção mostra só o erro, sem a contagem vazia de duplicatas", async () => {
+    responderErro("GET", URL_PREVIA, 500, "Banco indisponível");
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    expect(await screen.findByText("Banco indisponível")).toBeInTheDocument();
+    expect(screen.queryByText(/Encontrei/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Unir/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Fechar" })).toBeInTheDocument();
   });
 });

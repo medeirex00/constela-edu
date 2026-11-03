@@ -57,6 +57,8 @@ SEM_MATRICULA = "sem_matricula_no_ano"
 SEM_IDENTIFICADOR = "sem_identificador_externo"
 IRMA_BLOQUEADA = "irma_bloqueada"
 IDENTIDADE_APOSENTADA = "identidade_aposentada"
+ID_DUPLICADO_NO_RELATORIO = "id_externo_duplicado_no_relatorio"
+IDENTIDADE_DE_OUTRA_ESCOLA = "identidade_de_outra_escola"
 
 # Texto humano de cada motivo — a mesma frase vai para a API e para o relatório.
 TEXTO = {
@@ -84,6 +86,12 @@ TEXTO = {
     IDENTIDADE_APOSENTADA: "esta conta da plataforma foi aposentada nesta ficha: "
                            "o histórico está preservado, mas ela não alimenta mais "
                            "o retrato do aluno",
+    ID_DUPLICADO_NO_RELATORIO: "o mesmo identificador da plataforma veio em mais de "
+                               "uma linha do relatório com nomes diferentes — a "
+                               "conta não prova de quem são estes números",
+    IDENTIDADE_DE_OUTRA_ESCOLA: "a conta da plataforma já é de um aluno de OUTRA "
+                                "escola do Constela — só um gestor desta escola "
+                                "confirma que ela é de uma criança daqui",
 }
 
 
@@ -157,6 +165,20 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
 
     if rev.status != "pendente":
         return veredito(ENCERRADA, rev.status, rev.aluno_escolhido_id)
+
+    # Id externo DUPLICADO no relatório: a conta já vinculada NÃO desempata — ela
+    # pode ser justamente a da outra criança. Nunca "segura".
+    if rev.motivo == "id_externo_duplicado":
+        caso.conflitos.append("o identificador da plataforma veio repetido no "
+                              "relatório com outro nome")
+        return veredito(DECISAO_HUMANA, ID_DUPLICADO_NO_RELATORIO)
+
+    # Conta já EFETIVA em OUTRA escola do Constela: nenhum vínculo DESTA escola
+    # desempata (pode ser justamente a credencial da outra escola). Nunca "segura".
+    if rev.motivo == "identidade_de_outra_escola":
+        caso.conflitos.append("a conta da plataforma já está vinculada a um aluno de "
+                              "outra escola do Constela")
+        return veredito(DECISAO_HUMANA, IDENTIDADE_DE_OUTRA_ESCOLA)
 
     congelados = _candidatos_congelados(rev)
     id_externo = (rev.id_externo or "").strip()

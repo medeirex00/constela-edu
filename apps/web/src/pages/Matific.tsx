@@ -1,17 +1,24 @@
 /** Módulo Matific (PRD §55): dados atuais por aluno com edição manual auditada. */
-import { Pencil } from "lucide-react";
+import { Calculator, Pencil, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { BarraFiltroAlunos, useFiltroAlunos } from "../components/FiltroAlunosPlataforma";
+import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
+  Avatar,
   Botao,
+  BotaoIcone,
   Campo,
   Card,
-  Carregando,
+  Chip,
+  Erro,
   Mensagem,
   Modal,
   PageHeader,
+  Skeleton,
   Vazio,
+  classesTabela,
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
@@ -19,6 +26,11 @@ import { useApi } from "../hooks/useApi";
 import { api } from "../lib/api";
 import { dataHora, nota, numero } from "../lib/formato";
 import type { MatificAluno } from "../lib/types";
+
+/** Células da tabela de alunos: no celular (< 640 px) um pouco mais justas, para o nome
+ *  e as Atividades caberem ao lado da Média presa à direita. */
+const TH = `${classesTabela.th} max-sm:px-3`;
+const TD = `${classesTabela.td} max-sm:px-3`;
 
 /** Escala da média do Matific (a mesma do Placar da Escola) — o servidor recusa
  *  acima disso (`MatificEdicao.pontuacao_media`, ge=0 le=5). */
@@ -100,7 +112,7 @@ function ModalEditarMatific({
 
   return (
     <Modal titulo={`Editar Matific — ${linha?.nome ?? ""}`} aberto={linha !== null} aoFechar={aoFechar}>
-      <div className="space-y-3">
+      <div className="space-y-4">
         <Campo rotulo="Atividades finalizadas">
           <input
             type="number" min={0} className={estiloInput} value={form.atividades}
@@ -120,14 +132,14 @@ function ModalEditarMatific({
             onChange={(e) => setForm({ ...form, pontuacao_media: Number(e.target.value) })}
           />
           {mediaForaDaEscala && (
-            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+            <p className="mt-1.5 text-xs text-ouro-700 dark:text-ouro-300">
               Este registro tem média {nota(mediaOriginal)}, fora da escala atual (0 a {MEDIA_MAXIMA}).
               Deixe como está para preservar o valor medido, ou digite um número de 0 a {MEDIA_MAXIMA}
               {" "}para corrigi-lo.
             </p>
           )}
         </Campo>
-        <Campo rotulo="Motivo da edição (fica no log de auditoria)">
+        <Campo rotulo="Motivo da edição (fica no histórico de alterações)">
           <input
             className={estiloInput} placeholder="Ex.: correção de erro do relatório"
             value={form.motivo}
@@ -135,8 +147,8 @@ function ModalEditarMatific({
           />
         </Campo>
         {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
-        <div className="flex justify-end gap-2 pt-1">
-          <Botao variante="neutro" onClick={aoFechar} disabled={salvando}>Cancelar</Botao>
+        <div className="flex justify-end gap-2.5 pt-1">
+          <Botao variante="secundario" onClick={aoFechar} disabled={salvando}>Cancelar</Botao>
           <Botao onClick={salvar} disabled={salvando}>{salvando ? "Salvando..." : "Salvar e recalcular"}</Botao>
         </div>
       </div>
@@ -155,65 +167,109 @@ export default function Matific() {
     recarregar,
   } = useApi<MatificAluno[]>(escolaId ? `/escolas/${escolaId}/matific` : null);
   const [editando, setEditando] = useState<MatificAluno | null>(null);
+  const filtro = useFiltroAlunos(linhas);
 
   return (
     <div>
       <PageHeader
         titulo="Matific"
-        descricao="Estado atual de cada aluno na plataforma. Edições manuais geram novo registro e ficam no log de auditoria."
+        descricao="Estado atual de cada aluno na plataforma. Edições manuais geram novo registro e ficam no histórico de alterações."
       />
-      <Card>
-        {carregando ? (
-          <Carregando />
-        ) : erroLinhas ? (
-          <Vazio titulo="Não foi possível carregar" descricao={erroLinhas.message} />
-        ) : (linhas ?? []).length === 0 ? (
-          <Vazio titulo="Nenhum aluno ativo" descricao="Cadastre alunos ou importe um relatório da Matific." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm tabular-nums">
-              <thead>
-                <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                  <th className="px-4 py-2 font-medium">Aluno</th>
-                  <th className="hidden px-4 py-2 font-medium md:table-cell">Turma</th>
-                  <th className="px-4 py-2 text-right font-medium">Atividades</th>
-                  <th className="px-4 py-2 text-right font-medium">Estrelas</th>
-                  <th className="px-4 py-2 text-right font-medium">Média</th>
-                  <th className="hidden px-4 py-2 font-medium lg:table-cell">Atualizado em</th>
-                  {podeEditar && <th className="px-4 py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {(linhas ?? []).map((linha) => (
-                  <tr key={linha.aluno_id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                    <td className="px-4 py-2.5">
-                      <Link to={`/alunos/${linha.aluno_id}`} className="font-medium hover:text-indigo-600 dark:hover:text-indigo-400">
-                        {linha.nome}
-                      </Link>
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-zinc-500 dark:text-zinc-400 md:table-cell">{linha.turma}</td>
-                    <td className="px-4 py-2.5 text-right">{numero(linha.atividades)}</td>
-                    <td className="px-4 py-2.5 text-right">{numero(linha.estrelas)}</td>
-                    <td className="px-4 py-2.5 text-right">{nota(linha.pontuacao_media)}</td>
-                    <td className="hidden px-4 py-2.5 text-xs text-zinc-500 dark:text-zinc-400 lg:table-cell">
-                      {dataHora(linha.data_referencia)}
-                    </td>
-                    {podeEditar && (
-                      <td className="px-4 py-2.5 text-right">
-                        <button
-                          aria-label={`Editar dados de ${linha.nome}`}
-                          className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                          onClick={() => setEditando(linha)}
-                        >
-                          <Pencil size={15} />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <Card className="overflow-hidden">
+        {/* Spinner só na PRIMEIRA carga: ao recarregar depois de salvar, a tabela
+            fica na tela (antes ela sumia e a rolagem pulava). */}
+        {carregando && !linhas ? (
+          <div className="space-y-3 p-6" aria-busy="true">
+            <p className="sr-only" role="status">Carregando...</p>
+            <Skeleton className="h-10 w-64" />
+            {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-11" />)}
           </div>
+        ) : erroLinhas && !linhas ? (
+          <Erro descricao={erroLinhas.message} aoTentar={recarregar} />
+        ) : (linhas ?? []).length === 0 ? (
+          <Vazio icone={Calculator} titulo="Nenhum aluno ativo" descricao="Cadastre alunos ou importe um relatório da Matific." />
+        ) : (
+          <>
+            {erroLinhas && (
+              <div className="px-6 pt-5">
+                <Mensagem tipo="erro">Não foi possível atualizar a lista: {erroLinhas.message}</Mensagem>
+              </div>
+            )}
+            <BarraFiltroAlunos
+              plataforma="matific"
+              total={(linhas ?? []).length}
+              visiveis={filtro.filtradas.length}
+              busca={filtro.busca}
+              aoBuscar={filtro.setBusca}
+              turma={filtro.turma}
+              aoMudarTurma={filtro.setTurma}
+              turmas={filtro.turmas}
+            />
+            {filtro.filtradas.length === 0 ? (
+              <Vazio
+                icone={Search}
+                titulo="Nenhum aluno com esses filtros"
+                acao={<Botao variante="secundario" onClick={filtro.limpar}>Limpar filtros</Botao>}
+              />
+            ) : (
+              // O aviso "Deslize a tabela..." aparece ACIMA da tabela quando há coluna
+              // escondida. No celular a Média (a nota) fica presa à direita (presa-celular)
+              // e Estrelas e Editar vêm deslizando.
+              <TabelaRolavel rotulo="Alunos do Matific: tabela completa">
+                <table className={classesTabela.tabela}>
+                  <thead>
+                    <tr>
+                      <th className={TH}>Aluno</th>
+                      <th className={`${TH} text-right`}>Atividades</th>
+                      <th className={`${TH} text-right`}>Estrelas</th>
+                      <th className={`${TH} presa-celular text-right`}>Média</th>
+                      <th className={`hidden lg:table-cell ${TH}`}>Atualizado em</th>
+                      {podeEditar && <th className={`${classesTabela.th} max-sm:px-2`}><span className="sr-only">Ações</span></th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtro.filtradas.map((linha) => (
+                      <tr key={linha.aluno_id} className={classesTabela.tr}>
+                        <td className={TD}>
+                          {/* A turma vai no chip sob o nome (era uma coluna que sumia abaixo de
+                              768 px; uma vez só no DOM, como em Turmas e Usuários). No celular o
+                              avatar decorativo sai e o nome fica com até duas linhas. */}
+                          <div className="flex min-w-[11rem] items-center gap-3 max-sm:min-w-[9rem]">
+                            <Avatar nome={linha.nome} chave={linha.aluno_id} tamanho="sm" className="max-sm:hidden" />
+                            <div className="min-w-0">
+                              <Link to={`/alunos/${linha.aluno_id}`} className="font-semibold text-zinc-900 hover:text-teal-700 dark:text-zinc-100 dark:hover:text-teal-300">
+                                {linha.nome}
+                              </Link>
+                              {linha.turma && <div className="mt-1"><Chip>{linha.turma}</Chip></div>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className={`${TD} text-right text-[15px] font-bold tabular-nums text-zinc-900 dark:text-white`}>
+                          {numero(linha.atividades)}
+                        </td>
+                        <td className={`${TD} text-right tabular-nums`}>{numero(linha.estrelas)}</td>
+                        <td className={`${TD} presa-celular text-right tabular-nums`}>{nota(linha.pontuacao_media)}</td>
+                        <td className={`hidden lg:table-cell ${TD} whitespace-nowrap text-xs text-zinc-500 dark:text-zinc-400`}>
+                          {dataHora(linha.data_referencia)}
+                        </td>
+                        {podeEditar && (
+                          <td className={`${classesTabela.td} text-right max-sm:px-2`}>
+                            <BotaoIcone
+                              rotulo={`Editar dados de ${linha.nome}`}
+                              className="h-9 w-9 max-sm:h-10 max-sm:w-10"
+                              onClick={() => setEditando(linha)}
+                            >
+                              <Pencil size={15} aria-hidden />
+                            </BotaoIcone>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TabelaRolavel>
+            )}
+          </>
         )}
       </Card>
 

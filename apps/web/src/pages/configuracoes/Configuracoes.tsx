@@ -1,18 +1,66 @@
-import { Download, UploadCloud } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+/**
+ * Configurações gerais da escola (Admin Global e admin de escola — RotaAdmin).
+ *
+ * Identidade visual v2: cada bloco é um cartão branco com cabeçalho de ícone
+ * pastel. Os pesos da Nota Geral usam o MESMO editor da tela de Critérios
+ * (PesosEditor: só o Admin Global grava) e dizem qual régua está em uso — no
+ * perfil Padrão Constela o motor usa os pesos fixos da rede e ignora os valores
+ * gravados aqui (GET /configuracoes/pontuacao/regra).
+ */
+import {
+  Award,
+  Bot,
+  DatabaseBackup,
+  Download,
+  ListChecks,
+  Palette,
+  Scale,
+  School,
+  UploadCloud,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import ConfigAssistenteIA from "../../components/ConfigAssistenteIA";
-import { Botao, Card, Mensagem, PageHeader } from "../../components/ui";
+import { CabecalhoCartao, META_CRITERIOS, formatarPeso, ordenarCriterios } from "../../components/CriteriosVisuais";
+import { Botao, Confirmacao, IconePastel, Mensagem, PageHeader, Skeleton, estiloInput, type TomPastel } from "../../components/ui";
 import { PesosEditor } from "./Metricas";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
+import { useModulos } from "../../hooks/useModulos";
 import { api, ApiError, apiDownload, apiUpload } from "../../lib/api";
+import type { RegraPontuacao } from "../../lib/tiposCriterios";
 
 interface AparenciaDados {
   cor_primaria: string;
   brasao_data_uri?: string;
   prefeitura_data_uri?: string;
+}
+
+/** Cartão de seção com cabeçalho (ícone pastel + h2), região nomeada pelo título. */
+function Secao({
+  icone,
+  tom,
+  titulo,
+  subtitulo,
+  children,
+  className = "",
+}: {
+  icone: LucideIcon;
+  tom: TomPastel;
+  titulo: string;
+  subtitulo?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className={`card p-5 sm:p-6 ${className}`}>
+      <CabecalhoCartao id={id} icone={icone} tom={tom} titulo={titulo} subtitulo={subtitulo} />
+      <div className="mt-5">{children}</div>
+    </section>
+  );
 }
 
 /** Um "slot" de logo da cidade (brasão ou prefeitura): prévia + enviar + remover.
@@ -61,33 +109,41 @@ function LogoUploader({
     }
   }
 
+  // Celular (< 640 px): as ações descem para a linha de baixo, alinhadas ao texto (o
+  // texto não fica espremido entre a miniatura e o botão), e os botões têm 40 px.
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-      <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded bg-zinc-50 dark:bg-zinc-900">
+    <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200/80 bg-zinc-50/60 p-3 sm:flex-nowrap dark:border-zinc-800 dark:bg-zinc-800/40">
+      <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-200/80 bg-white dark:border-zinc-700 dark:bg-zinc-900">
         {atual ? (
           <img src={atual} alt={titulo} className="max-h-14 max-w-[3.5rem] object-contain" />
         ) : (
-          <span className="text-[10px] text-zinc-400">padrão</span>
+          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">padrão</span>
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium">{titulo}</p>
+        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{titulo}</p>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
           {atual ? "Enviado por esta escola." : "Usando o logo padrão do sistema."}
         </p>
-        {erro && <p className="mt-1 text-xs text-rose-600">{erro}</p>}
+        {erro && <p className="mt-1 text-xs text-rose-600 dark:text-rose-300">{erro}</p>}
       </div>
       {editavel && (
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <Botao variante="neutro" disabled={ocupado} onClick={() => arquivoRef.current?.click()}>
-            <UploadCloud size={14} /> {atual ? "Trocar" : "Enviar"}
+        <div className="flex shrink-0 flex-col items-end gap-1 max-sm:w-full max-sm:flex-row max-sm:items-center max-sm:gap-3 max-sm:pl-[4.75rem]">
+          <Botao
+            variante="secundario"
+            tamanho="sm"
+            className="max-sm:min-h-10 max-sm:px-4 max-sm:text-sm"
+            disabled={ocupado}
+            onClick={() => arquivoRef.current?.click()}
+          >
+            <UploadCloud size={14} aria-hidden /> {atual ? "Trocar" : "Enviar"}
           </Botao>
           {atual && (
             <button
               type="button"
               onClick={remover}
               disabled={ocupado}
-              className="text-xs text-zinc-500 hover:text-rose-600 disabled:opacity-50"
+              className="text-xs text-zinc-500 hover:text-rose-600 disabled:opacity-50 max-sm:min-h-10 max-sm:px-2 max-sm:text-sm dark:text-zinc-400"
             >
               Remover
             </button>
@@ -138,35 +194,37 @@ function Aparencia() {
   }
 
   return (
-    <Card className="p-5">
+    <Secao
+      icone={Palette}
+      tom="rosa"
+      titulo="Aparência"
+      subtitulo="Cor e logos que aparecem nos relatórios em PDF/Excel e nos certificados."
+    >
       <div className="flex flex-wrap items-center gap-4">
         <label className="flex items-center gap-3 text-sm">
-          <span className="font-medium">Cor primária da escola</span>
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">Cor primária da escola</span>
           <input
             type="color"
             aria-label="Cor primária"
-            className="h-9 w-14 cursor-pointer rounded border border-zinc-300 bg-transparent dark:border-zinc-700"
+            className="h-10 w-14 cursor-pointer rounded-xl border border-zinc-200 bg-transparent p-1 dark:border-zinc-700"
             value={cor}
             onChange={(evento) => setCor(evento.target.value.toUpperCase())}
             disabled={!ehAdmin}
           />
-          <code className="text-xs text-zinc-500">{cor}</code>
+          <code className="rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{cor}</code>
         </label>
         {ehAdmin && <Botao onClick={salvar}>Salvar aparência</Botao>}
       </div>
-      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-        Aplicada no cabeçalho dos relatórios em PDF/Excel e nos certificados.
-      </p>
 
       {escolaId && (
         <div className="mt-5 border-t border-zinc-100 pt-4 dark:border-zinc-800">
-          <p className="text-sm font-medium">Logos da cidade nos documentos</p>
+          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Logos da cidade nos documentos</p>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             Aparecem no topo dos certificados e relatórios em PDF, ao lado da marca
             Constela (brasão à esquerda, prefeitura à direita). PNG com fundo
             transparente fica melhor. Sem envio, o sistema usa o logo padrão.
           </p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div className="mt-3 grid gap-3">
             <LogoUploader
               escolaId={escolaId}
               tipo="brasao"
@@ -193,7 +251,7 @@ function Aparencia() {
         </div>
       )}
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
-    </Card>
+    </Secao>
   );
 }
 
@@ -207,7 +265,13 @@ function Backup() {
   const podeRestaurar = Boolean(usuario?.is_global);
   const arquivoRef = useRef<HTMLInputElement | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  // Avisos da restauração (D10): conta da plataforma restaurada que passou a valer
+  // também aqui sendo a identidade de um aluno de OUTRA escola. Ficam na tela até
+  // a próxima ação — o Admin Global precisa ler antes de seguir.
+  const [avisos, setAvisos] = useState<string[]>([]);
   const [ocupado, setOcupado] = useState(false);
+  // Arquivo escolhido à espera da confirmação (a restauração substitui os dados).
+  const [arquivoPendente, setArquivoPendente] = useState<File | null>(null);
 
   if (!ehAdmin) return null;
 
@@ -215,6 +279,7 @@ function Backup() {
     if (!escolaId) return;
     setOcupado(true);
     setMensagem(null);
+    setAvisos([]);
     try {
       await apiDownload(`/escolas/${escolaId}/backup`);
       setMensagem({ tipo: "ok", texto: "Backup gerado. Guarde o arquivo em local seguro." });
@@ -225,47 +290,56 @@ function Backup() {
     }
   }
 
+  /** Desistiu da restauração: esquece o arquivo (escolher o mesmo de novo reabre). */
+  function cancelarRestauracao() {
+    setArquivoPendente(null);
+    if (arquivoRef.current) arquivoRef.current.value = "";
+  }
+
   async function restaurar(arquivo: File) {
     if (!escolaId) return;
-    const confirmado = window.confirm(
-      "ATENÇÃO: a restauração SUBSTITUI todos os dados pedagógicos desta escola " +
-      "pelos do arquivo (alunos, turmas, notas, importações, configurações). " +
-      "Usuários e senhas não são alterados. Deseja continuar?",
-    );
-    if (!confirmado) return;
     setOcupado(true);
     setMensagem(null);
+    setAvisos([]);
     try {
       const dados = new FormData();
       dados.append("arquivo", arquivo);
-      const resposta = await apiUpload<{ mensagem: string }>(`/escolas/${escolaId}/restaurar`, dados);
+      const resposta = await apiUpload<{ mensagem: string; avisos?: string[] }>(
+        `/escolas/${escolaId}/restaurar`, dados);
       setMensagem({ tipo: "ok", texto: resposta.mensagem });
+      setAvisos(resposta.avisos ?? []);
     } catch (excecao) {
       setMensagem({ tipo: "erro", texto: excecao instanceof Error ? excecao.message : "Falha na restauração." });
     } finally {
       setOcupado(false);
+      setArquivoPendente(null);
       if (arquivoRef.current) arquivoRef.current.value = "";
     }
   }
 
   return (
-    <Card className="p-5">
-      <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">
+    <Secao
+      icone={DatabaseBackup}
+      tom="azul"
+      titulo="Backup e restauração"
+      subtitulo="Uma cópia de segurança com os dados pedagógicos desta escola."
+    >
+      <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-300">
         O backup é um arquivo JSON com todos os dados pedagógicos desta escola
         (funciona em SQLite e PostgreSQL). Usuários e senhas ficam de fora, por segurança.
       </p>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2.5">
         <Botao onClick={baixar} disabled={ocupado}>
-          <Download size={15} /> Baixar backup
+          <Download size={15} aria-hidden /> Baixar backup
         </Botao>
         {podeRestaurar && (
           <>
             <Botao
-              variante="neutro"
+              variante="secundario"
               disabled={ocupado}
               onClick={() => arquivoRef.current?.click()}
             >
-              <UploadCloud size={15} /> Restaurar de um arquivo…
+              <UploadCloud size={15} aria-hidden /> Restaurar de um arquivo…
             </Botao>
             <input
               ref={arquivoRef}
@@ -274,7 +348,7 @@ function Backup() {
               className="hidden"
               onChange={(evento) => {
                 const arquivo = evento.target.files?.[0];
-                if (arquivo) restaurar(arquivo);
+                if (arquivo) setArquivoPendente(arquivo);
               }}
             />
           </>
@@ -287,13 +361,123 @@ function Backup() {
         </p>
       )}
       {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
-    </Card>
+      {avisos.length > 0 && (
+        <div
+          role="alert"
+          aria-label="Avisos da restauração"
+          className="mt-3 space-y-1 rounded-xl border border-ouro-200 bg-ouro-50 px-3.5 py-2.5 text-sm text-amber-900 dark:border-ouro-400/30 dark:bg-ouro-400/10 dark:text-ouro-100"
+        >
+          {avisos.map((aviso) => <p key={aviso}>{aviso}</p>)}
+        </div>
+      )}
+      {podeRestaurar && (
+        <Confirmacao
+          titulo="Restaurar este backup?"
+          aberto={arquivoPendente !== null}
+          aoFechar={cancelarRestauracao}
+          aoConfirmar={() => {
+            if (arquivoPendente) void restaurar(arquivoPendente);
+          }}
+          rotuloConfirmar={ocupado ? "Restaurando..." : "Substituir os dados"}
+          variante="perigo"
+          ocupado={ocupado}
+        >
+          {arquivoPendente && (
+            <p>
+              Arquivo: <strong className="break-all">{arquivoPendente.name}</strong>
+            </p>
+          )}
+          <p>
+            <strong className="text-zinc-800 dark:text-zinc-100">Atenção:</strong> a restauração
+            SUBSTITUI todos os dados pedagógicos desta escola pelos do arquivo (alunos, turmas,
+            notas, importações, configurações).
+          </p>
+          <p>
+            Usuários e senhas não são alterados, nem a política de criação de alunos e o vínculo
+            da escola externa da sincronização.
+          </p>
+        </Confirmacao>
+      )}
+    </Secao>
   );
 }
+
+/**
+ * Qual régua decide a Nota Geral NESTA escola (GET /configuracoes/pontuacao/regra).
+ * No perfil Padrão Constela o motor usa os pesos fixos da rede (com o contrato de
+ * módulos) e ignora os valores gravados no editor — a mesma ilusão de controle
+ * que a tela de Critérios evita com o aviso do perfil Padrão.
+ */
+function AvisoNotaGeral() {
+  const { escolaId } = useApp();
+  const { unico } = useModulos();
+  const { dados, erro, carregando } = useApi<RegraPontuacao>(
+    escolaId ? `/escolas/${escolaId}/configuracoes/pontuacao/regra` : null,
+  );
+  if (!escolaId) return null;
+  if (carregando) {
+    return (
+      <div className="mt-4" aria-hidden>
+        <Skeleton className="h-12 w-full rounded-xl" />
+      </div>
+    );
+  }
+  let regua: string;
+  if (erro || !dados) {
+    regua = "Não foi possível verificar a régua em uso agora.";
+  } else if (dados.perfil === "institucional") {
+    const emUso = ordenarCriterios(Object.keys(dados.nota_geral.pesos))
+      .map((chave) => `${META_CRITERIOS[chave]?.titulo ?? chave} ${formatarPeso(dados.nota_geral.pesos[chave])}%`)
+      .join(" · ");
+    regua =
+      `Esta escola usa a Régua Padrão Constela: a Nota Geral segue os pesos fixos da rede (em uso: ${emUso}). ` +
+      "Os valores abaixo só passam a valer numa régua personalizada.";
+  } else {
+    regua = "Esta escola usa uma régua personalizada: os pesos abaixo estão em uso na Nota Geral.";
+  }
+  return (
+    <div className="mt-4 space-y-1 rounded-xl border border-ouro-200 bg-ouro-50 px-3.5 py-2.5 text-[13px] leading-snug text-amber-900 dark:border-ouro-400/30 dark:bg-ouro-400/10 dark:text-ouro-200">
+      <p>{regua}</p>
+      <p>
+        A Nota Geral é legado: ordena só o Ranking Geral, o certificado “Geral” e as vitrines.
+        {unico ? " Com uma só matéria no plano, ela é a própria nota dessa matéria." : ""}
+      </p>
+    </div>
+  );
+}
+
+/** Cartão de atalho para outra tela (o link fica no texto, com nome curto). */
+function Atalho({
+  icone,
+  tom,
+  titulo,
+  children,
+}: {
+  icone: LucideIcon;
+  tom: TomPastel;
+  titulo: string;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="card p-5 sm:p-6">
+      <div className="flex items-start gap-4">
+        <IconePastel icone={icone} tom={tom} tamanho="lg" />
+        <div className="min-w-0 flex-1 text-sm text-zinc-600 dark:text-zinc-300">
+          <h2 id={id} className="text-[17px] font-semibold text-zinc-900 dark:text-white">{titulo}</h2>
+          <p className="mt-1">{children}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const ESTILO_LINK = "font-semibold text-indigo-600 hover:underline dark:text-indigo-300";
 
 export default function Configuracoes() {
   const { escolaAtual, escolaId, recarregarEscolas, usuario } = useApp();
   const ehAdminIA = Boolean(usuario?.is_global) || usuario?.cargo === "admin";
+  const idIA = useId();
   const [nome, setNome] = useState("");
   const [cidade, setCidade] = useState("");
   const [estado, setEstado] = useState("");
@@ -337,116 +521,122 @@ export default function Configuracoes() {
     }
   }
 
+  const rotuloCampo = "mb-1.5 block font-medium text-zinc-700 dark:text-zinc-300";
+
   return (
-    <div className="space-y-8">
-      <PageHeader titulo="Configurações" descricao="Dados da escola e regras gerais do sistema." />
+    <div>
+      <PageHeader
+        titulo="Configurações"
+        descricao="Dados da escola, aparência dos documentos, backup e os atalhos para as regras do sistema."
+      />
 
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Escola</h2>
-        <Card className="p-5">
-          <form onSubmit={salvar} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <label className="block text-sm sm:col-span-2">
-              <span className="mb-1 block font-medium">Nome</span>
-              <input
-                required
-                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
-                value={nome}
-                onChange={(evento) => setNome(evento.target.value)}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium">Cidade</span>
-              <input
-                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
-                value={cidade}
-                onChange={(evento) => setCidade(evento.target.value)}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium">Estado (UF)</span>
-              <input
-                maxLength={2}
-                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 uppercase dark:border-zinc-700 dark:bg-zinc-950"
-                value={estado}
-                onChange={(evento) => setEstado(evento.target.value.toUpperCase())}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium">Ano letivo ativo</span>
-              <input
-                type="number"
-                min={2024}
-                max={2100}
-                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
-                value={anoLetivo}
-                onChange={(evento) => setAnoLetivo(Number(evento.target.value))}
-              />
-            </label>
-            <div className="sm:col-span-2">
-              <Botao type="submit" disabled={salvando}>
-                {salvando ? "Salvando..." : "Salvar dados da escola"}
-              </Botao>
-            </div>
-          </form>
-          {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
-        </Card>
-      </section>
+      {/* Duas colunas independentes no desktop (sem buracos de altura entre os
+          cartões); no tablet, uma coluna só, na mesma ordem. */}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+        <div className="space-y-6">
+          <Secao icone={School} tom="violeta" titulo="Escola" subtitulo="Nome, cidade e o ano letivo em uso.">
+            <form onSubmit={salvar} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="block text-sm sm:col-span-2">
+                <span className={rotuloCampo}>Nome</span>
+                <input
+                  required
+                  className={estiloInput}
+                  value={nome}
+                  onChange={(evento) => setNome(evento.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className={rotuloCampo}>Cidade</span>
+                <input
+                  className={estiloInput}
+                  value={cidade}
+                  onChange={(evento) => setCidade(evento.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className={rotuloCampo}>Estado (UF)</span>
+                <input
+                  maxLength={2}
+                  className={`${estiloInput} uppercase`}
+                  value={estado}
+                  onChange={(evento) => setEstado(evento.target.value.toUpperCase())}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className={rotuloCampo}>Ano letivo ativo</span>
+                <input
+                  type="number"
+                  min={2024}
+                  max={2100}
+                  className={`${estiloInput} tabular-nums`}
+                  value={anoLetivo}
+                  onChange={(evento) => setAnoLetivo(Number(evento.target.value))}
+                />
+              </label>
+              <div className="flex items-end sm:col-span-2">
+                <Botao type="submit" disabled={salvando}>
+                  {salvando ? "Salvando..." : "Salvar dados da escola"}
+                </Botao>
+              </div>
+            </form>
+            {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
+          </Secao>
 
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Pesos do Ranking Geral</h2>
-        <PesosEditor
-          namespace="geral"
-          rotulos={{ matific: "Matific", elefante: "Elefante Letrado" }}
-          descricao="Como as notas dos módulos se combinam no Ranking Geral (PRD §41)."
-        />
-      </section>
+          <PesosEditor
+            namespace="geral"
+            rotulos={{ matific: "Matific", elefante: "Elefante Letrado" }}
+            titulo="Pesos do Ranking Geral"
+            icone={Scale}
+            tom="teal"
+            descricao="Como as notas de Leitura e de Matemática se combinam na Nota Geral."
+            aviso={<AvisoNotaGeral />}
+          />
+        </div>
 
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Aparência</h2>
-        <Aparencia />
-      </section>
+        <div className="space-y-6">
+          <Aparencia />
 
+          <Backup />
+
+          <Atalho icone={Award} tom="ambar" titulo="Conquistas">
+            Crie e ajuste as medalhas da escola — critérios, XP, raridade, ordem e ativação — na tela{" "}
+            <Link to="/configuracoes/conquistas" className={ESTILO_LINK}>
+              Configurações → Conquistas
+            </Link>
+            . As mudanças valem imediatamente para todos os alunos.
+          </Atalho>
+
+          <Atalho icone={ListChecks} tom="azul" titulo="Critérios de avaliação">
+            Os pesos em uso, as regras da premiação e um exemplo calculado ficam na tela{" "}
+            <Link to="/metricas" className={ESTILO_LINK}>
+              Critérios de pontuação
+            </Link>
+            . Contas de acesso ficam na tela{" "}
+            <Link to="/usuarios" className={ESTILO_LINK}>
+              Usuários
+            </Link>
+            .
+          </Atalho>
+        </div>
+      </div>
+
+      {/* Assistente de IA no mesmo padrão dos outros blocos: ícone pastel, título e
+          descrição DENTRO do cartão (antes o título ficava fora e o robô se repetia). */}
       {ehAdminIA && (
-        <section className="max-w-2xl">
-          <h2 className="mb-3 text-sm font-semibold">Assistente de IA</h2>
-          <ConfigAssistenteIA />
+        <section aria-labelledby={idIA} className="mt-6">
+          <ConfigAssistenteIA
+            cabecalho={
+              <CabecalhoCartao
+                id={idIA}
+                icone={Bot}
+                tom="violeta"
+                titulo="Assistente de IA"
+                subtitulo="Quem responde no Assistente Pedagógico: o modo local ou uma IA externa."
+              />
+            }
+          />
         </section>
       )}
-
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Backup e restauração</h2>
-        <Backup />
-      </section>
-
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Conquistas</h2>
-        <Card className="p-5 text-sm text-zinc-600 dark:text-zinc-300">
-          Crie e ajuste as medalhas da escola — critérios, XP, raridade, ordem e
-          ativação — na tela{" "}
-          <Link
-            to="/configuracoes/conquistas"
-            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-          >
-            Configurações → Conquistas
-          </Link>
-          . As mudanças valem imediatamente para todos os alunos.
-        </Card>
-      </section>
-
-      <section className="max-w-2xl">
-        <h2 className="mb-3 text-sm font-semibold">Critérios de avaliação</h2>
-        <Card className="p-5 text-sm text-zinc-600 dark:text-zinc-300">
-          Pesos por indicador, dificuldade por turma e referências de normalização ficam na tela{" "}
-          <Link to="/metricas" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-            Métricas
-          </Link>
-          . Contas de acesso ficam na tela{" "}
-          <Link to="/usuarios" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-            Usuários
-          </Link>
-          .
-        </Card>
-      </section>
     </div>
   );
 }

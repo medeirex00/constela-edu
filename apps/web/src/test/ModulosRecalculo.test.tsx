@@ -51,7 +51,7 @@ describe("Módulos contratados — recálculo ao mudar o contrato", () => {
 
   it("falha parcial: diz QUAIS escolas ficaram para trás e deixa refazer", async () => {
     responder("PUT", "/redes/1/modulos", resposta({
-      falhas: [{ escola_id: 7, nome: "EM JORGE PASSOS", erro: "banco indisponível" }],
+      falhas: [{ escola_id: 7, nome: "EM FICTÍCIA AURORA", erro: "banco indisponível" }],
     }));
     await desligarMatematica();
 
@@ -59,13 +59,13 @@ describe("Módulos contratados — recálculo ao mudar o contrato", () => {
     // "não salvou"; ela precisa dizer o que exatamente falta refazer.
     const aviso = await screen.findByRole("alert");
     expect(aviso).toHaveTextContent(/Plano salvo/i);
-    expect(aviso).toHaveTextContent("EM JORGE PASSOS");
+    expect(aviso).toHaveTextContent("EM FICTÍCIA AURORA");
     expect(screen.getByRole("button", { name: /Tentar novamente/i })).toBeInTheDocument();
   });
 
   it('"Tentar novamente" reenvia o MESMO pedido (idempotente) e limpa o aviso', async () => {
     responder("PUT", "/redes/1/modulos", resposta({
-      falhas: [{ escola_id: 7, nome: "EM JORGE PASSOS", erro: "timeout" }],
+      falhas: [{ escola_id: 7, nome: "EM FICTÍCIA AURORA", erro: "timeout" }],
     }));
     await desligarMatematica();
     await screen.findByRole("button", { name: /Tentar novamente/i });
@@ -109,7 +109,7 @@ describe("Módulos contratados — o estado não vaza entre redes", () => {
     responder("GET", "/redes/1/modulos", CATALOGO);
     responder("GET", "/redes/2/modulos", CATALOGO);
     responder("PUT", "/redes/1/modulos", resposta({
-      falhas: [{ escola_id: 7, nome: "EM JORGE PASSOS", erro: "timeout" }],
+      falhas: [{ escola_id: 7, nome: "EM FICTÍCIA AURORA", erro: "timeout" }],
     }));
     responder("PUT", "/redes/2/modulos", resposta());
 
@@ -122,7 +122,7 @@ describe("Módulos contratados — o estado não vaza entre redes", () => {
 
     // O aviso era da rede 1 e não pode sobreviver na tela da rede 2 — senão o
     // "Tentar novamente" recalcularia uma rede que ninguém pediu.
-    expect(screen.queryByText(/EM JORGE PASSOS/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/EM FICTÍCIA AURORA/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Tentar novamente/i })).not.toBeInTheDocument();
     expect(puts("/redes/2/modulos")).toHaveLength(0);
   });

@@ -5,12 +5,16 @@
 # Resolve a lacuna de DR apontada na auditoria: a rotina do docker-compose só
 # faz backup do Postgres LOCAL. Este script faz pg_dump do banco de PRODUÇÃO,
 # comprime, CIFRA em repouso (openssl AES-256) e deixa o arquivo pronto para
-# guardar off-site. Pensado para rodar tanto no CI (.github/workflows/backup.yml)
-# quanto à mão numa máquina do operador.
+# guardar off-site. O backup EM USO roda no repositório PRIVADO
+# medeirex00/constela-backups (cópia deste roteiro); aqui ele só serve, em último
+# caso, numa máquina do operador. Nunca neste repositório, nunca para lugar público.
 #
-# Uso:
-#   DATABASE_URL="postgresql://..." BACKUP_PASSPHRASE="..." \
+# Uso (senhas DIGITADAS, sem eco; a URL não leva senha — a libpq lê PGPASSWORD):
+#   read -rsp "Senha do banco: " PGPASSWORD; echo; export PGPASSWORD
+#   read -rsp "Senha de cifra: " BACKUP_PASSPHRASE; echo; export BACKUP_PASSPHRASE
+#   DATABASE_URL="postgresql://USUARIO@HOST:5432/BANCO?sslmode=require" \
 #     bash backend/scripts/backup_postgres.sh [pasta_destino]
+#   unset PGPASSWORD BACKUP_PASSPHRASE
 #
 # Requisitos: pg_dump (postgresql-client), gzip, openssl.
 # Restauração: ver docs/DR-RUNBOOK.md.

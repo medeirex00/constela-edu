@@ -124,8 +124,9 @@ def test_trocar_propria_senha_invalida_sessoes(cliente, db, escola_completa):
     admin = escola_completa["admin"]
     ver_antes = admin.token_version or 0
 
+    # A própria senha só troca com a senha atual (reautenticação).
     r = cliente.patch(f"{_base(escola.id)}/usuarios/{admin.id}",
-                      json={"senha": "NovaSenha#2026"})
+                      json={"senha": "NovaSenha#2026", "senha_atual": "s3nh4"})
     assert r.status_code == 200, r.text
 
     db.expire_all()

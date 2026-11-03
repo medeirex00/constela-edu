@@ -8,7 +8,7 @@ import pytest
 
 from app.models import Leitura
 from app.services import dificuldade_livro as dl
-from app.services import bimestres, periodos
+from app.services import bimestres, periodos, premiacoes
 from app.services.premiacoes import _podio
 
 
@@ -195,7 +195,7 @@ def _importar_matific(cliente, escola_id, aluno, atividades, data_ref, estrelas=
     assert r.status_code == 200, r.text
 
 
-def test_melhor_matematica_usa_so_o_ganho_do_periodo(cliente, escola_completa):
+def test_melhor_matematica_usa_so_o_ganho_do_periodo(cliente, escola_completa, monkeypatch):
     """DECISÃO DO DONO (2026-09-15), que SUBSTITUI a de 2026-09-01 (a nota oficial
     0–100 do ESTADO no fim da janela, que este teste travava antes): "Melhor
     Matemática" premia a MÉDIA AJUSTADA DE ESTRELAS POR ATIVIDADE feita DENTRO do
@@ -213,13 +213,28 @@ def test_melhor_matematica_usa_so_o_ganho_do_periodo(cliente, escola_completa):
     _importar_matific(cliente, escola_id, sofia, 350, "2026-07-10T00:00:00", estrelas=1400)
     _importar_matific(cliente, escola_id, sofia, 360, "2026-07-30T00:00:00", estrelas=1440)
 
-    r = cliente.get(f"{_base(escola_id)}/premiacoes"
-                    "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31").json()
+    url = (f"{_base(escola_id)}/premiacoes"
+           "?periodo=personalizado&inicio=2026-07-01&fim=2026-07-31")
+    r = cliente.get(url).json()
     mm = {c["chave"]: c["podio"] for c in r["categorias"]}["melhor_matematica"]
     assert [p["nome"] for p in mm] == [ana.nome, sofia.nome]     # João fora
-    # k = mediana(30, 10) = 20 → 4 atividades extras com zero estrela.
-    assert r["regua_matematica"]["k_mediana_atividades"] == 20
+    # k = mediana(30, 10) = 20 → 4 atividades extras com zero estrela. Com só 2
+    # alunos a resposta não mostra o k (privacidade — o mesmo corte do exemplo
+    # da Pontuação, mínimo de 5): nem na régua nem no índice de cada linha, que
+    # junto das estrelas e das atividades o devolveria.
+    assert r["regua_matematica"]["k_mediana_atividades"] is None
+    assert r["regua_matematica"]["alunos_com_atividade"] == 2
     assert r["regua_matematica"]["coorte"] == "escola"
+    assert [p["valor"] for p in mm] == [None, None]
+    assert [(p["atividades"], p["estrelas"]) for p in mm] == [(30, 120), (10, 40)]
+
+    # Sem o corte, os valores provam que o índice continua usando k = 20 — e a
+    # ordem é a mesma.
+    monkeypatch.setattr(premiacoes, "MINIMO_ALUNOS_REFERENCIA_MATIFIC", 0)
+    r = cliente.get(url).json()
+    mm = {c["chave"]: c["podio"] for c in r["categorias"]}["melhor_matematica"]
+    assert [p["nome"] for p in mm] == [ana.nome, sofia.nome]
+    assert r["regua_matematica"]["k_mediana_atividades"] == 20
     assert mm[0]["valor"] == pytest.approx(round(120 / 34, 2))
     assert mm[1]["valor"] == pytest.approx(round(40 / 14, 2))
     assert all(0 < p["valor"] <= 5 for p in mm)                  # escala 0 a 5

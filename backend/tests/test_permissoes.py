@@ -121,8 +121,8 @@ def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
     base = f"/api/v1/escolas/{c['escola'].id}"
     bloqueados = [
         f"{base}/alunos/{c['aluno_da_turma'].id}/leituras",       # histórico
-        f"{base}/alunos/{c['aluno_da_turma'].id}/evolucao",       # detalhado
-        f"{base}/alunos/{c['aluno_da_turma'].id}/evolucao-leitura",
+        f"{base}/alunos/{c['aluno_da_turma'].id}/linha-do-tempo", # linha do tempo (gestão)
+        f"{base}/alunos/{c['aluno_da_turma'].id}/espelho",        # espelho (gestão)
         f"{base}/resumo-escola",                                   # visão escola
         f"{base}/professores",                                     # cadastro
         f"{base}/gamificacao/mural",                               # escola toda
@@ -140,6 +140,14 @@ def test_professor_nao_acessa_dados_especificos_nem_gestao(cenario_professor):
     for url in bloqueados:
         resposta = c["professor"].get(url)
         assert resposta.status_code == 403, f"{url} -> {resposta.status_code}"
+    # NOVO (decisão do dono): o professor VÊ a EVOLUÇÃO dos alunos das turmas
+    # dele — mas só dos dele (aluno de outra turma dá 404, não vaza).
+    assert c["professor"].get(
+        f"{base}/alunos/{c['aluno_da_turma'].id}/evolucao").status_code == 200
+    assert c["professor"].get(
+        f"{base}/alunos/{c['aluno_da_turma'].id}/evolucao-leitura").status_code == 200
+    assert c["professor"].get(
+        f"{base}/alunos/{c['aluno_fora'].id}/evolucao").status_code == 404
     assistente = c["professor"].post(f"{base}/assistente",
                                      json={"pergunta": "Como estão meus alunos?"})
     assert assistente.status_code == 403

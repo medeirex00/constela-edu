@@ -6,18 +6,21 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.quest import schemas
-from app.quest.deps import ContextoAluno, get_aluno_atual
+from app.quest.deps import (ContextoAluno, exigir_quest_aluno_habilitado,
+                             get_aluno_atual)
+from app.quest.services import credenciais as svc_credenciais
 from app.quest.services import perfis as svc
 from app.services.audit import registrar
 
-router = APIRouter(prefix="/quest/perfil", tags=["Quest — Perfil"])
+router = APIRouter(prefix="/quest/perfil", tags=["Quest — Perfil"],
+                   dependencies=[Depends(exigir_quest_aluno_habilitado)])
 
 
 def _montar(ctx: ContextoAluno) -> schemas.PerfilOut:
     saida = schemas.PerfilOut.model_validate(ctx.perfil)
     saida.nome_exibicao = (ctx.perfil.nome_exibicao or "").strip()
     saida.nome = svc.nome_para_falas(ctx.perfil, ctx.aluno.nome)
-    saida.codigo_login = ctx.credencial.codigo_login
+    saida.codigo_login = svc_credenciais.codigo_para_exibicao(ctx.credencial)
     ultimo = ctx.credencial.ultimo_acesso
     if ultimo is not None:
         delta = datetime.now(timezone.utc) - ultimo.replace(
@@ -60,9 +63,12 @@ def escolher_nome(dados: schemas.NomeIn,
     except ValueError as erro:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(erro))
     db.add(ctx.perfil)
+    # Minimização (LGPD): o log PERMANENTE registra que a criança escolheu um
+    # nome e quando — não o nome. O valor vigente está no perfil (entidade_id
+    # leva a ele) e some com ele na exclusão; o log não precisa de cópia.
     registrar(db, "quest.nome_escolhido", escola_id=ctx.escola_id,
               entidade="aluno", entidade_id=ctx.aluno.id,
-              detalhes={"nome": ctx.perfil.nome_exibicao})
+              detalhes={"campo": "nome_exibicao"})
     db.commit()
     db.refresh(ctx.perfil)
     return _montar(ctx)

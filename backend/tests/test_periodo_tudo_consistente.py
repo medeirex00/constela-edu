@@ -25,7 +25,13 @@ def _leituras(cliente, escola_id, aluno, titulos, nivel="D"):
 
 
 def _resumo(cliente, escola_id, aluno, por_faixa, livros=None):
-    dados = {"livros_por_nivel": por_faixa}
+    # Tempo e questões explícitos (zero): o resumo de 01/04 de Sofia chega DEPOIS do
+    # retrato de hoje das leituras dela — é retrodatado e, sem retrato nessa data de
+    # onde completar, o que ele não traz é recusado (422, achado [10]); antes herdava
+    # o tempo de hoje num ponto de abril. Sem retrato anterior (Ana), zero é o que já
+    # seria gravado. A dificuldade e os livros, que o teste confere, não dependem deles.
+    dados = {"livros_por_nivel": por_faixa, "tempo_leitura_min": 0,
+             "questoes_tentativas": 0, "questoes_acertos": 0}
     if livros is not None:
         dados["livros_unicos"] = livros
     r = cliente.post(f"{_base(escola_id)}/importacoes/confirmar", json={

@@ -171,7 +171,14 @@ segredos do workflow `desktop-release.yml`).
   - **Rate limit e cache do painel** vivem **em memória por processo**
     (best-effort): com N réplicas a proteção anti-abuso passa a ser por réplica.
     Aceitável por design; para limite global rígido, use um store compartilhado
-    (Redis).
+    (Redis). Exceções, que já valem entre réplicas e sobrevivem ao deploy porque
+    também ficam no banco (tabela `quest_limites_acesso`): os limites do login
+    por código do Quest e, no login do Edu, os tetos de **falhas por IP** e
+    **global** (dimensões `edu_login_ip_falha` e `edu_login_global_falha`;
+    teto e janela pelas variáveis `EDU_LOGIN_TETO_IP_FALHAS`,
+    `EDU_LOGIN_TETO_IP_JANELA_S`, `EDU_LOGIN_TETO_GLOBAL_FALHAS` e
+    `EDU_LOGIN_TETO_GLOBAL_JANELA_S`). Os limites do Edu por conta e por
+    (conta, IP) seguem só em memória.
 - PostgreSQL com índices por `escola_id` em todas as tabelas; consultas
   paginadas (PRD §23).
 - Clientes web/desktop servem estático (CDN-ready); mobile reduz carga com

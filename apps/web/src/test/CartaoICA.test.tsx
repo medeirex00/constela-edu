@@ -261,7 +261,6 @@ describe("Cartão do ICA oficial", () => {
       contadores: { novas: 12, alteradas: 0, iguais: 0 },
     });
     responder("POST", "/redes/1/indicadores/importacoes/7/desfazer", { id: 7, status: "desfeita" });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     const usuario = userEvent.setup();
     renderComApp(<CartaoICA redeId={1} ehGlobal />, { usuario: adminGlobal });
@@ -286,10 +285,34 @@ describe("Cartão do ICA oficial", () => {
     // o cartão recarrega e passa a mostrar o número
     expect(await screen.findByTestId("ica-capa")).toHaveTextContent("30% (2025) × meta 32% (−2 p.p.)");
 
-    await usuario.click(screen.getByRole("button", { name: /Desfazer/ }));
+    // Desfazer abre a confirmação da v2 (no lugar do window.confirm): nada é desfeito antes do "sim".
+    await usuario.click(screen.getByRole("button", { name: "Desfazer a importação #7" }));
+    const dialogo = screen.getByRole("dialog", { name: "Desfazer a importação?" });
+    expect(dialogo).toHaveTextContent("Desfazer a importação #7 (“resultados_e_metas_ufs_2025_v2.xlsx”)? "
+      + "Os números voltam exatamente ao estado anterior a ela.");
+    expect(api.mock.calls.some(([caminho]) => String(caminho).endsWith("/desfazer"))).toBe(false);
+    await usuario.click(within(dialogo).getByRole("button", { name: "Desfazer importação" }));
     await waitFor(() => expect(api).toHaveBeenCalledWith(
       "/redes/1/indicadores/importacoes/7/desfazer", { method: "POST" }));
     expect(await screen.findByText(/desfeita/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("admin global: cancelar a confirmação do desfazer não desfaz nada", async () => {
+    responder("GET", "/redes/1/indicadores/ica", respostaComDado());
+    responder("GET", "/redes/1/indicadores/importacoes", [
+      { id: 7, status: "aplicada", arquivo_nome: "resultados_e_metas_ufs_2025_v2.xlsx", edicao_arquivo: 2025,
+        arquivo_data: null, contadores: {}, avisos: [], created_at: "2026-10-16T10:00:00",
+        aplicado_em: "2026-10-16T10:01:00", pode_desfazer: true },
+    ]);
+    const usuario = userEvent.setup();
+    renderComApp(<CartaoICA redeId={1} ehGlobal />, { usuario: adminGlobal });
+    await usuario.click(await screen.findByRole("button", { name: "Desfazer a importação #7" }));
+    const dialogo = screen.getByRole("dialog", { name: "Desfazer a importação?" });
+    await usuario.click(within(dialogo).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.mock.calls.some(([caminho]) => String(caminho).endsWith("/desfazer"))).toBe(false);
+    expect(screen.getByRole("button", { name: "Desfazer a importação #7" })).toBeEnabled();
   });
 
   it("admin global: prévia de arquivo sem data interna diz isso (não inventa data)", async () => {

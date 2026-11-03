@@ -113,7 +113,8 @@ describe("RankingMatematica (Matific ao vivo)", () => {
 
     expect(await screen.findByRole("link", { name: /Marina Duarte/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Sofia Lima/ })).toBeInTheDocument();
-    expect(screen.getByText(/Aluno Turma Fora/)).toBeInTheDocument();
+    // O pódio (3 primeiros) repete o nome, sem link: a linha é conferida na tabela.
+    expect(within(screen.getByRole("table")).getByText(/Aluno Turma Fora/)).toBeInTheDocument();
 
     const seletor = await screen.findByLabelText("Turno");
     await within(seletor).findByRole("option", { name: "Tarde" });
@@ -213,7 +214,10 @@ describe("RankingMatematica (Matific ao vivo)", () => {
 
     abrirTela();
 
-    expect(await screen.findByText(/Aluno Solto/)).toBeInTheDocument();
+    // Na tabela e no pódio (é o 1º): nos dois, sem link.
+    expect(await within(await screen.findByRole("table")).findByText(/Aluno Solto/)).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Pódio do placar do Matific" })).getByText("Aluno Solto"))
+      .toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Aluno Solto/ })).not.toBeInTheDocument();
   });
 
