@@ -4227,12 +4227,43 @@ def _retrato_superado(db: Session, escola_id: int, aluno_id: int,
         # Sem data, o pipeline gravaria com a data de HOJE e a linha velha viraria
         # o estado atual. É o pior caso: nunca reaplicar.
         return {**base, "motivo": "data_referencia_ausente"}
+    congelada = _instante_utc(congelada)     # UTC naive (ver ``_superado_pela_data``)
+    if modelo is SnapshotElefante and _guarda_questoes_medidas(db, rev):
+        # QUESTÕES QUE NÃO VIERAM (S9): o retrato gravado por uma coleta sem as
+        # questões (``IMPORTACAO_SEM_QUESTOES``) tem a data da coleta, mas as
+        # questões HERDADAS do anterior — não supera, nas questões, o guardado que as
+        # mediu. Antes ele contava como "o mais recente": quem leu um livro novo
+        # ganhava esse retrato no dia da coleta, e o /resolver descartava o guardado
+        # (``snapshot_mais_recente``) — a medida sumia e o Relatório por Período
+        # ficava sem número. A comparação é com o último retrato que MEDE as
+        # questões; o guardado entra como ponto do histórico (o pipeline o grava
+        # retrodatado, sem virar o estado atual) e os retratos S9 posteriores passam
+        # a herdar dele (``_retratos_sem_questoes_herdam_do_aplicado``).
+        medido = _ultimo_retrato_que_mede_as_questoes(db, escola_id, aluno_id)
+        superado = (_superado_pela_data(base, medido, congelada)
+                    if medido is not None else None)
+        if superado is not None:
+            return superado
+        do_dia = next((s for s in _retratos_sem_questoes(db, escola_id, aluno_id)
+                       if _mesmo_dia(s.data_referencia, congelada)), None)
+        if do_dia is not None:
+            # A mesma regra do "mesmo dia" contra o retrato S9: o pipeline
+            # atualizaria NO LUGAR o retrato da coleta daquele dia, e os livros e o
+            # tempo dele (medidos) virariam os do guardado, talvez mais antigos.
+            return {**base, "motivo": "mesmo_dia_de_retrato_sem_questoes",
+                    "data_retrato_sem_questoes": do_dia.data_referencia.isoformat()}
+        return None
+    return _superado_pela_data(base, snap, congelada)
+
+
+def _superado_pela_data(base: dict, snap, congelada: datetime) -> dict | None:
+    """O juízo de DATA de ``_retrato_superado`` contra um retrato gravado
+    (``congelada`` já em UTC naive)."""
     # Os dois INSTANTES, convertidos (naive = UTC; com fuso, para UTC). Antes o
     # fuso era só cortado: a data congelada "01h de 24/10 -03:00" (04h UTC, dia 24
     # em Brasília) virava "01h UTC" — dia 23 em Brasília e mais antiga que um
     # retrato das 02h UTC, e a pendência MAIS NOVA era descartada como superada.
     atual = _instante_utc(snap.data_referencia)
-    congelada = _instante_utc(congelada)
     if _mesmo_dia(atual, congelada):
         # Mesmo dia: o pipeline atualizaria o retrato NO LUGAR, e o valor novo
         # desapareceria sem deixar linha no histórico. É o caso mais perigoso,
@@ -4241,6 +4272,73 @@ def _retrato_superado(db: Session, escola_id: int, aluno_id: int,
     if atual > congelada:
         return {**base, "motivo": "snapshot_mais_recente"}
     return None
+
+
+def _guarda_questoes_medidas(db: Session, rev: RevisaoIdentidade) -> bool:
+    """A pendência guarda um retrato que MEDIU as questões: alguma linha traz o
+    campo e a importação que a abriu não é uma coleta S9 (sem as questões)."""
+    if not _guarda_questoes(rev):
+        return False
+    origem = db.get(Importacao, rev.importacao_id) if rev.importacao_id else None
+    return origem is None or origem.status != IMPORTACAO_SEM_QUESTOES
+
+
+def _retratos_elefante_com_status(db: Session, escola_id: int, aluno_id: int, *,
+                                  depois_de: datetime | None = None):
+    """(retrato, status da importação) do Elefante do aluno, do mais antigo ao mais
+    novo (data, id). ``depois_de``: só os de data posterior."""
+    consulta = (select(SnapshotElefante, Importacao.status)
+                .outerjoin(Importacao, Importacao.id == SnapshotElefante.importacao_id)
+                .where(SnapshotElefante.escola_id == escola_id,
+                       SnapshotElefante.aluno_id == aluno_id))
+    if depois_de is not None:
+        consulta = consulta.where(SnapshotElefante.data_referencia > depois_de)
+    return db.execute(consulta.order_by(SnapshotElefante.data_referencia.asc(),
+                                        SnapshotElefante.id.asc())).all()
+
+
+def _ultimo_retrato_que_mede_as_questoes(db: Session, escola_id: int, aluno_id: int):
+    """O retrato do Elefante mais recente que não veio de uma coleta S9."""
+    medem = [s for s, situacao in _retratos_elefante_com_status(db, escola_id, aluno_id)
+             if situacao != IMPORTACAO_SEM_QUESTOES]
+    return medem[-1] if medem else None
+
+
+def _retratos_sem_questoes(db: Session, escola_id: int, aluno_id: int) -> list:
+    """Os retratos do Elefante gravados por coletas S9 (questões herdadas)."""
+    return [s for s, situacao in _retratos_elefante_com_status(db, escola_id, aluno_id)
+            if situacao == IMPORTACAO_SEM_QUESTOES]
+
+
+def _retratos_sem_questoes_herdam_do_aplicado(db: Session, escola_id: int, aluno_id: int,
+                                              importacao_id: int) -> int:
+    """Depois de o /resolver gravar, retrodatado, o retrato guardado que MEDIU as
+    questões: os retratos S9 POSTERIORES a ele herdaram as questões do retrato que
+    valia na hora da coleta (o anterior ao guardado). Passam a herdar do aplicado —
+    o que teriam herdado se a pendência já estivesse resolvida na coleta —, até o
+    próximo retrato que mede as questões. Sem isto o estado atual (o retrato S9 mais
+    novo) continuava com as questões de antes, e a série "caía" depois do ponto
+    aplicado. Só as QUESTÕES mudam (livros e tempo desses retratos são medidos).
+    Devolve quantos retratos mudaram."""
+    aplicado = db.execute(
+        select(SnapshotElefante)
+        .where(SnapshotElefante.escola_id == escola_id,
+               SnapshotElefante.aluno_id == aluno_id,
+               SnapshotElefante.importacao_id == importacao_id)
+        .order_by(SnapshotElefante.data_referencia.desc(), SnapshotElefante.id.desc())
+        .limit(1)).scalar_one_or_none()
+    if aplicado is None:
+        return 0
+    questoes = (aplicado.questoes_tentativas, aplicado.questoes_acertos)
+    mudaram = 0
+    for snap, situacao in _retratos_elefante_com_status(
+            db, escola_id, aluno_id, depois_de=aplicado.data_referencia):
+        if situacao != IMPORTACAO_SEM_QUESTOES:
+            break                    # mede as questões: dali em diante herdam dele
+        if (snap.questoes_tentativas, snap.questoes_acertos) != questoes:
+            snap.questoes_tentativas, snap.questoes_acertos = questoes
+            mudaram += 1
+    return mudaram
 
 
 @router.post("/revisoes/{revisao_id}/resolver", response_model=ResolucaoRevisaoOut)
@@ -4450,6 +4548,7 @@ def resolver_revisao(
     # a cada chamada, e um erro na 2ª irmã deixaria a 1ª gravada para sempre.
     # Falhou em qualquer ponto -> ROLLBACK e tudo continua pendente.
     importacoes: list[int] = []
+    herdadas: dict[int, int] = {}    # pendência -> retratos S9 que herdaram as questões
     for r in com_dados:
         conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
         # S9: a linha guardada veio de uma coleta em que a plataforma NÃO mandou as
@@ -4470,6 +4569,12 @@ def resolver_revisao(
                                        questoes_herdadas=sem_questoes)
         importacoes.append(nucleo.importacao_id)
         avisos.extend(nucleo.avisos)
+        if (r.plataforma == "elefante" and r.formato != "leituras"
+                and _guarda_questoes_medidas(db, r)):
+            herdaram = _retratos_sem_questoes_herdam_do_aplicado(
+                db, escola_id, aluno.id, nucleo.importacao_id)
+            if herdaram:
+                herdadas[r.id] = herdaram
 
     # Recálculo DENTRO da transação (uma vez só, no fim das irmãs, e não a cada
     # uma): `commit=False` deixa o fechamento para o commit único lá embaixo.
@@ -4486,13 +4591,18 @@ def resolver_revisao(
                        "revisao_origem": rev.id}
         if r.id in superadas:
             r.resolucao["dados_superados"] = superadas[r.id]
+        detalhes = {"revisao_id": r.id, "plataforma": r.plataforma,
+                    "formato": r.formato, "motivo": r.motivo, "acao": acao,
+                    "nome_recebido": r.nome_recebido,
+                    "dados_superados": superadas.get(r.id),
+                    "candidatos": [c.get("aluno_id") for c in (r.candidatos or [])]}
+        if r.id in herdadas:
+            # Retratos S9 posteriores que passaram a herdar as questões do aplicado.
+            r.resolucao["retratos_sem_questoes_atualizados"] = herdadas[r.id]
+            detalhes["retratos_sem_questoes_atualizados"] = herdadas[r.id]
         registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
-                  detalhes={"revisao_id": r.id, "plataforma": r.plataforma,
-                            "formato": r.formato, "motivo": r.motivo, "acao": acao,
-                            "nome_recebido": r.nome_recebido,
-                            "dados_superados": superadas.get(r.id),
-                            "candidatos": [c.get("aluno_id") for c in (r.candidatos or [])]})
+                  detalhes=detalhes)
     db.commit()                      # <- ÚNICO commit de todo o fluxo
 
     # DEPOIS do commit: cache do painel e push. Fora da transação de propósito —

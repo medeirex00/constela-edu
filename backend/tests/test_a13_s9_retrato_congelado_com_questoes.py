@@ -87,7 +87,7 @@ def _cena(db, cliente, escola_completa) -> dict:
     assert rev.id_externo is None and rev.chave_identidade.startswith("elefante|nome:")
     assert all(c.get("aluno_id") in (None, iara.id) for c in rev.candidatos or [])
     assert rev.linhas[0]["questoes_tentativas"] == 120
-    return {"escola": esc, "iara": iara.id, "rev": rev.id, "d10": d10}
+    return {"escola": esc, "iara": iara.id, "rev": rev.id, "d10": d10, "d5": d5}
 
 
 def _retratos(db, aluno_id):
@@ -116,23 +116,43 @@ def test_coleta_sem_questoes_nao_encerra_a_pendencia_com_questoes(
     assert rev.linhas[0]["questoes_tentativas"] == 120
 
 
+@pytest.mark.parametrize("livros", [3, 4], ids=["nada_novo_gravado", "livro_novo"])
 def test_resolvida_depois_a_medida_guardada_entra_no_relatorio(
-        cliente, db, escola_completa, monkeypatch):
-    """O caminho inteiro: coleta S9 sem nada novo (o retrato não é repetido), o
-    gestor resolve a pendência e o Relatório por Período mede as 20 questões entre o
-    retrato de 10 dias atrás e o guardado na pendência."""
+        cliente, db, escola_completa, monkeypatch, livros):
+    """O caminho inteiro: coleta S9, o gestor resolve a pendência e o Relatório por
+    Período mede as 20 questões entre o retrato de 10 dias atrás e o guardado na
+    pendência.
+
+    * ``nada_novo_gravado``: a coleta S9 não repete o retrato (livros iguais);
+    * ``livro_novo`` (revisão final, o caso comum: quem lê ganha retrato todo dia):
+      a coleta S9 grava o retrato de HOJE com as questões HERDADAS do de 10 dias
+      atrás. Ele é mais novo que o guardado, mas não mede as questões: antes o
+      /resolver o tomava por "retrato mais recente" e descartava o guardado
+      (``snapshot_mais_recente``) — o 120/90 nunca era gravado e o relatório ficava
+      sem número. Agora o guardado entra como ponto do histórico, e o retrato S9
+      posterior passa a herdar as questões dele (o que teria herdado se a pendência
+      já estivesse resolvida na hora da coleta)."""
     sem_disco(monkeypatch)
     c = _cena(db, cliente, escola_completa)
     esc = c["escola"]
     aplicar(db, esc, _arquivo_s9([
-        {"studentId": 801, "studentName": "IARA F", "totalBooksRead": 3}]))
-    assert _retratos(db, c["iara"]) == [(3, 100, 80, "concluida")]   # nada repetido
+        {"studentId": 801, "studentName": "IARA F", "totalBooksRead": livros}]))
+    antes = [(3, 100, 80, "concluida")]                       # nada repetido
+    if livros == 4:
+        antes.append((4, 100, 80, IMPORTACAO_SEM_QUESTOES))   # o retrato S9 de hoje
+    assert _retratos(db, c["iara"]) == antes
 
     r = cliente.post(f"/api/v1/escolas/{esc.id}/importacoes/revisoes/{c['rev']}/resolver",
                      json={"aluno_id": c["iara"]})
     assert r.status_code == 200, r.text
+    assert "dados_superados" not in (r.json()["revisao"]["resolucao"] or {}), r.json()
     db.expire_all()
-    assert _retratos(db, c["iara"]) == [(3, 100, 80, "concluida"), (3, 120, 90, "concluida")]
+    depois = [(3, 100, 80, "concluida"), (3, 120, 90, "concluida")]
+    if livros == 4:
+        # O retrato S9 de hoje fica (livros 4, o estado atual), com as questões
+        # herdadas do guardado — não as de 10 dias atrás.
+        depois.append((4, 120, 90, IMPORTACAO_SEM_QUESTOES))
+    assert _retratos(db, c["iara"]) == depois
 
     hoje = fuso.hoje_local()
     rel = rp.gerar(db, esc.id, preset="personalizado", plataformas=("elefante",),
@@ -153,3 +173,34 @@ def test_coleta_com_as_questoes_continua_encerrando_a_pendencia(
     assert rev.status == "resolvida" and rev.aluno_escolhido_id == c["iara"]
     assert rev.resolucao["automatica"] is True and rev.resolucao["pendencia_por_nome"] is True
     assert _retratos(db, c["iara"])[-1] == (4, 130, 95, "concluida")
+
+
+def test_retrato_sem_questoes_do_mesmo_dia_nao_e_reescrito_pelo_guardado(
+        cliente, db, escola_completa, monkeypatch):
+    """A regra de "mesmo dia" vale também contra o retrato S9: se uma coleta sem as
+    questões gravou retrato no MESMO dia (de Brasília) do guardado, aplicar o guardado
+    atualizaria esse retrato NO LUGAR — os livros dele (4, medidos) virariam os do
+    guardado (3). O /resolver não reaplica: só o vínculo, com o motivo na resolução."""
+    sem_disco(monkeypatch)
+    c = _cena(db, cliente, escola_completa)
+    esc = c["escola"]
+    imp = Importacao(escola_id=esc.id, usuario_id=None, plataforma="elefante", tipo="api",
+                     arquivo_original=None, qtd_alunos=1, qtd_erros=0, tempo_ms=0,
+                     created_at=c["d5"].replace(tzinfo=None), status=IMPORTACAO_SEM_QUESTOES)
+    db.add(imp)
+    db.flush()
+    db.add(SnapshotElefante(escola_id=esc.id, aluno_id=c["iara"], importacao_id=imp.id,
+                            data_referencia=c["d5"].replace(tzinfo=None), livros_unicos=4,
+                            tempo_leitura_min=12, questoes_tentativas=100,
+                            questoes_acertos=80, livros_por_nivel={}))
+    db.commit()
+    antes = _retratos(db, c["iara"])
+    assert antes == [(3, 100, 80, "concluida"), (4, 100, 80, IMPORTACAO_SEM_QUESTOES)]
+
+    r = cliente.post(f"/api/v1/escolas/{esc.id}/importacoes/revisoes/{c['rev']}/resolver",
+                     json={"aluno_id": c["iara"]})
+    assert r.status_code == 200, r.text
+    superados = r.json()["revisao"]["resolucao"]["dados_superados"]
+    assert superados["motivo"] == "mesmo_dia_de_retrato_sem_questoes", superados
+    db.expire_all()
+    assert _retratos(db, c["iara"]) == antes
