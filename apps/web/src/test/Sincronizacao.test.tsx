@@ -921,6 +921,12 @@ describe("Integrações — política de criação de aluno", () => {
     await usuario.click(within(regiao).getByRole("button", { name: "Permitir a criação pela plataforma" }));
     const volta = dialogo("Permitir que a plataforma crie alunos?");
     expect(volta.getByText(/vira ficha nova, ativa, sem RA e sem nascimento/)).toBeInTheDocument();
+    // A exceção (A2/A5), igual ao Suporte: nome abreviado e duas contas com o mesmo nome
+    // não viram ficha nem com a política permitindo — vão para a fila.
+    const efeito = volta.getByText(/vira ficha nova, ativa/).textContent ?? "";
+    expect(efeito).toContain("nome abreviado (como “ZEFA Q”)");
+    expect(efeito).toContain("duas contas com o mesmo nome no mesmo relatório");
+    expect(efeito).toMatch(/não viram ficha e esperam em Revisões de identidade/);
     await usuario.click(volta.getByRole("button", { name: "Confirmar: permitir" }));
     await waitFor(() => expect(corpos).toHaveLength(2));
     expect(corpos[1]).toEqual({ criar_aluno: "permitir", motivo: null });

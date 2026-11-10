@@ -702,7 +702,9 @@ const MODO_CRIACAO: Record<ModoCriacao, {
     efeito: [
       "Da próxima sincronização (ou relatório enviado à mão) em diante, o aluno que não for "
         + "reconhecido com segurança vira ficha nova, ativa, sem RA e sem nascimento, e já "
-        + "conta no ranking. Ficha criada assim não se desfaz sozinha.",
+        + "conta no ranking. A exceção é o nome abreviado (como “ZEFA Q”) e duas contas com o "
+        + "mesmo nome no mesmo relatório: essas linhas não viram ficha e esperam em Revisões "
+        + "de identidade. Ficha criada assim não se desfaz sozinha.",
       "Só faz sentido se a matrícula desta escola não vem da Lista Piloto.",
       "Nada já gravado muda e nada é recalculado.",
     ],
