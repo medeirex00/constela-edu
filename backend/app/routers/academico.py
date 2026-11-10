@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.config import email_reservado_ao_dono
 from app.core.database import bloquear_escola_para_importacao, get_db
@@ -528,11 +529,18 @@ def _alunos_selecionados(db: Session, escola_id: int, aluno_ids: list[int]) -> l
     return alunos
 
 
-def _exigir_fichas_selecionadas(ids: list[int], pedidos: list[int]) -> None:
-    """Na transferência, toda ficha selecionada precisa existir nesta escola: a que
-    sumiu (fundida em outra por outro gestor, com a lista ainda aberta) é 409 para o
-    pedido inteiro, sem mover ninguém pela metade — o gestor recarrega e escolhe de
-    novo (a criança agora está na ficha que ficou)."""
+# O que "nada foi …" diz, por ação, quando uma ficha selecionada sumiu.
+_FEITO_NA_ACAO = {"transferir": "transferido", "arquivar": "arquivado",
+                  "reativar": "reativado", "excluir": "excluído",
+                  "marcar_transferido": "marcado como transferido"}
+
+
+def _exigir_fichas_selecionadas(ids: list[int], pedidos: list[int],
+                                acao: str = "transferir") -> None:
+    """Em toda ação em massa, cada ficha selecionada precisa existir nesta escola: a
+    que sumiu (fundida em outra por outro gestor, com a lista ainda aberta) é 409
+    para o pedido inteiro, sem mudar ninguém pela metade — o gestor recarrega e
+    escolhe de novo (a criança agora está na ficha que ficou)."""
     faltam = set(pedidos) - set(ids)
     if not faltam:
         return
@@ -540,7 +548,7 @@ def _exigir_fichas_selecionadas(ids: list[int], pedidos: list[int]) -> None:
         status.HTTP_409_CONFLICT,
         f"{len(faltam)} aluno(s) selecionado(s) não existe(m) mais nesta escola — a ficha "
         "pode ter sido fundida com outra enquanto a lista estava aberta. Nada foi "
-        "transferido: recarregue a lista e tente de novo.")
+        f"{_FEITO_NA_ACAO.get(acao, 'alterado')}: recarregue a lista e tente de novo.")
 
 
 def _recalcular_escola(db: Session, escola_id: int) -> None:
@@ -646,22 +654,27 @@ def acoes_em_alunos(
     trava da escola ANTES de ler os alunos. A fusão toma a mesma trava e apaga a
     ficha absorvida; lidos antes, os alunos incluíam essa ficha, e a matrícula
     criada para ela no destino estourava a FK (500). Agora, se alguma ficha
-    selecionada não existe mais nesta escola, é 409 e ninguém é transferido."""
-    if dados.acao == "transferir":
-        if not dados.turma_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "Selecione a turma de destino.")
-        # Mesma trava do arquivamento (D17) e da fusão, ANTES de ler os alunos e o
-        # status da turma: nenhum dos dois muda entre a leitura e a transferência
-        # (no-op no SQLite).
-        bloquear_escola_para_importacao(db, escola_id)
+    selecionada não existe mais nesta escola, é 409 e ninguém é transferido.
+    Revisão final: o mesmo vale para arquivar, reativar, excluir e marcar como
+    transferido — elas também tomam a trava antes de ler e dão 409 ("Nada foi
+    arquivado…"); antes gravavam o status da lista lida e, com a ficha apagada no
+    meio, o UPDATE batia em menos linhas (StaleDataError, 500). Se a ficha sumir
+    mesmo assim entre a leitura e a gravação (fusão que não passou pela trava; no
+    SQLite ela não existe), a resposta é o mesmo 409, sem mudar ninguém."""
+    if dados.acao == "transferir" and not dados.turma_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Selecione a turma de destino.")
+    # Mesma trava do arquivamento (D17) e da fusão, ANTES de ler os alunos e o
+    # status da turma: nenhum dos dois muda entre a leitura e a ação (no-op no
+    # SQLite).
+    bloquear_escola_para_importacao(db, escola_id)
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
     ids = [a.id for a in alunos]
+    _exigir_fichas_selecionadas(ids, dados.aluno_ids, dados.acao)
     ano = _ano_ativo(db, escola_id)
     avisos: list[str] = []
 
     if dados.acao == "transferir":
-        _exigir_fichas_selecionadas(ids, dados.aluno_ids)
         origem: Turma | None = None
         if dados.turma_origem_id is not None:
             origem = _turma_da_escola(db, escola_id, dados.turma_origem_id)
@@ -724,7 +737,17 @@ def acoes_em_alunos(
                    "marcar_transferido": "marcado(s) como transferido(s)"}
         mensagem = f"{len(ids)} aluno(s) {rotulos[dados.acao]}."
 
-    db.commit()
+    try:
+        db.commit()
+    except StaleDataError:
+        # O UPDATE do status bateu em menos linhas que as lidas: uma ficha sumiu
+        # entre a leitura e a gravação. Nada fica gravado; o gestor recebe o 409 da
+        # ficha fundida, não um 500.
+        db.rollback()
+        restantes = db.execute(select(Aluno.id).where(
+            Aluno.id.in_(ids), Aluno.escola_id == escola_id)).scalars().all()
+        _exigir_fichas_selecionadas(restantes, dados.aluno_ids, dados.acao)
+        raise
     # Toda ação recalcula, porque todas mudam quem está no ranking: o status muda
     # o conjunto de alunos ativos, e a transferência dá (ou tira) a matrícula do
     # ano numa turma do 1º ao 5º ano. Sem o recálculo na transferência, a posição
