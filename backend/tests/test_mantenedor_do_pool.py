@@ -469,9 +469,9 @@ def test_pg_conexao_que_ficaria_ociosa_e_renovada_e_o_checkout_seguinte_nao_ping
     time.sleep(1.0)
     m.ciclo()                                # renova antes do limite de 1,5 s
     time.sleep(1.0)                          # 2,0 s desde o 1º ciclo, 1,0 s desde o 2º
-    reg.pings = 0
+    abertas, reg.pings = reg.abertas, 0
     assert len(_pids_da_rajada(motor, 2)) == 2
-    assert reg.pings == 0
+    assert (reg.abertas, reg.pings) == (abertas, 0)
     time.sleep(1.6)                          # controle: parada além do limite, sem ciclo
     _pids_da_rajada(motor, 2)
     assert reg.pings == 2
