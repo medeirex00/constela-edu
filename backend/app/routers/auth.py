@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import get_usuario_atual
 from app.core.rate_limit import (
     alerta_global_login,
@@ -294,6 +294,7 @@ def _com_modulos(db: Session, usuario: Usuario) -> UsuarioOut:
 
 
 @router.get("/me", response_model=UsuarioOut)
+@leitura_sem_transacao
 def me(usuario: Usuario = Depends(get_usuario_atual),
        db: Session = Depends(get_db)):
     return _com_modulos(db, usuario)

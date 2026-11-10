@@ -9,7 +9,7 @@ Secretaria só recebe escopo 'rede'; professor só as turmas dele.
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import get_usuario_atual
 from app.models import Usuario
 from app.services import notificacoes as svc
@@ -27,6 +27,7 @@ def listar(
 
 
 @router.get("/contador")
+@leitura_sem_transacao
 def contador(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),

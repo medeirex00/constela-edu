@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import Escola, Rede, TokenResetSenha, Usuario
@@ -46,6 +46,7 @@ router = APIRouter(prefix="/redes", tags=["Rede / Secretaria"])
 
 
 @router.get("")
+@leitura_sem_transacao
 def listar_redes(
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
@@ -476,6 +477,7 @@ def geocodificar(
 
 
 @router.get("/{rede_id}/dashboard")
+@leitura_sem_transacao
 def dashboard(
     rede_id: int = Depends(exigir_rede),
     usuario: Usuario = Depends(get_usuario_atual),
@@ -518,6 +520,7 @@ def ranking(
 
 
 @router.get("/{rede_id}/ranking/frescor")
+@leitura_sem_transacao
 def ranking_frescor(
     rede_id: int = Depends(exigir_rede),
     db: Session = Depends(get_db),
@@ -544,6 +547,7 @@ def ranking_frescor(
 
 
 @router.get("/{rede_id}/destaques")
+@leitura_sem_transacao
 def destaques(
     rede_id: int = Depends(exigir_rede),
     usuario: Usuario = Depends(get_usuario_atual),
@@ -699,6 +703,7 @@ def _painel_publico_saida(rede: Rede | None, origem: str | None = None) -> dict:
 
 
 @router.get("/{rede_id}/publico")
+@leitura_sem_transacao
 def painel_publico_config(
     origem: str | None = None,
     rede_id: int = Depends(exigir_rede),

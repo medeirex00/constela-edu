@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import (
     exigir_admin_global,
     exigir_papeis,
@@ -18,6 +18,7 @@ router = APIRouter(prefix="/escolas", tags=["Escolas"])
 
 
 @router.get("", response_model=list[EscolaOut])
+@leitura_sem_transacao
 def listar(
     incluir_inativas: bool = Query(default=False),
     usuario: Usuario = Depends(get_usuario_atual),

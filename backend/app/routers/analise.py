@@ -34,7 +34,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import exigir_rede, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import Escola, Rede, Usuario
@@ -60,6 +60,7 @@ def _executar(funcao, *args, **kwargs):
 
 
 @router.get("/{rede_id}/analise/indicadores")
+@leitura_sem_transacao
 def catalogo(rede_id: int = Depends(exigir_rede), db: Session = Depends(get_db)):
     """O que existe de indicador oficial para a rede, desde quando e com que ressalva."""
     with leituras_da_requisicao(db):
@@ -67,6 +68,7 @@ def catalogo(rede_id: int = Depends(exigir_rede), db: Session = Depends(get_db))
 
 
 @router.get("/{rede_id}/analise/indicadores/{chave}")
+@leitura_sem_transacao
 def indicador(
     chave: str,
     etapa: str | None = None,
@@ -89,6 +91,7 @@ def indicador(
 
 
 @router.get("/{rede_id}/analise/plataformas")
+@leitura_sem_transacao
 def plataformas(
     periodo: str = "ano_letivo",
     inicio: date | None = None,
@@ -105,6 +108,7 @@ def plataformas(
 
 
 @router.get("/{rede_id}/analise/plataformas/evolucao")
+@leitura_sem_transacao
 def evolucao_plataformas(
     serie: int | None = None,
     escola_id: int | None = None,
@@ -121,6 +125,7 @@ def evolucao_plataformas(
 
 
 @router.get("/{rede_id}/analise/diagnostico")
+@leitura_sem_transacao
 def diagnostico_pedagogico(
     periodo: str = "ano_letivo",
     inicio: date | None = None,
@@ -136,6 +141,7 @@ def diagnostico_pedagogico(
 
 
 @router.get("/{rede_id}/analise/relacao")
+@leitura_sem_transacao
 def relacao(
     indicador: str,
     etapa: str | None = None,
@@ -157,6 +163,7 @@ def relacao(
 
 
 @router_escola.get("/{escola_id}/analise")
+@leitura_sem_transacao
 def analise_da_escola(
     periodo: str = "ano_letivo",
     inicio: date | None = None,

@@ -8,6 +8,7 @@ import os
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from starlette.requests import Request
 
 from app.core.config import settings
 
@@ -119,10 +120,44 @@ def instalar_ping_por_ociosidade(motor, limite_s: float | None = None) -> None:
     event.listen(motor, "checkout", _na_retirada)
 
 
+def desligar_prepared_statements(motor) -> None:
+    """``prepare_threshold = None`` em toda conexão nova do psycopg (os outros drivers: nada).
+
+    O psycopg 3 prepara no servidor o comando executado 5 vezes na mesma conexão: a 6ª
+    execução custa uma ida a mais (o PREPARE). Até aqui o ROLLBACK do fim de cada
+    requisição zerava a contagem (e um DEALLOCATE ALL, mais uma ida, se algo tinha sido
+    preparado). Nas leituras sem transação (``leitura_sem_transacao``) não há ROLLBACK: a
+    contagem cresceria de requisição em requisição e o PREPARE cairia numa delas. Sem
+    prepared statements, nenhuma das duas idas; o banco planeja cada comando (frações de
+    milissegundo nestas consultas, contra ~195 ms de cada ida em produção)."""
+    if motor.dialect.driver != "psycopg":
+        return
+
+    def _sem_prepared(dbapi_connection, _registro) -> None:
+        dbapi_connection.prepare_threshold = None
+
+    event.listen(motor, "connect", _sem_prepared)
+
+
+def sessao_de_leitura(motor) -> sessionmaker:
+    """As sessões das rotas ``leitura_sem_transacao``: o MESMO pool, em AUTOCOMMIT.
+
+    O psycopg manda o BEGIN numa ida própria antes da primeira consulta, e o ``close`` da
+    sessão manda o ROLLBACK em outra — duas idas ao banco (~195 ms cada em produção) que
+    não trazem dado. Em AUTOCOMMIT cada consulta roda sozinha, sem BEGIN nem ROLLBACK. A
+    consistência não muda: o isolamento é o padrão do PostgreSQL (READ COMMITTED), em que
+    cada consulta já vê o seu próprio instante. A troca é local na conexão (o atributo
+    ``autocommit`` do psycopg, sem ida) e o SQLAlchemy a desfaz ao devolver a conexão ao
+    pool: as sessões que gravam continuam com transação."""
+    return sessionmaker(bind=motor.execution_options(isolation_level="AUTOCOMMIT"),
+                        autoflush=False, autocommit=False)
+
+
 engine = create_engine(settings.DATABASE_URL, **opcoes_do_engine(settings.DATABASE_URL))
 
 if not is_sqlite:
     instalar_ping_por_ociosidade(engine)
+    desligar_prepared_statements(engine)
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).
@@ -133,14 +168,41 @@ if is_sqlite:
         cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+# As rotas de leitura marcadas: sem transação no PostgreSQL; no SQLite (desenvolvimento e
+# testes) a mesma sessão de sempre.
+SessionLeitura = SessionLocal if is_sqlite else sessao_de_leitura(engine)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-def get_db():
-    db = SessionLocal()
+_MARCA_LEITURA = "_constela_leitura_sem_transacao"
+
+
+def leitura_sem_transacao(endpoint):
+    """Marca uma rota GET que SÓ LÊ para rodar sem transação (``SessionLeitura``).
+
+    Lista FECHADA e explícita — não "todo GET": só a rota cujo código inteiro (a rota, as
+    dependências e os serviços) nunca grava, nunca usa ``FOR UPDATE``, ``SET LOCAL``,
+    advisory lock nem tabela temporária. ``tests/test_leitura_sem_transacao.py`` guarda a
+    lista e roda cada rota marcada com uma sessão que recusa qualquer escrita. Vai logo
+    abaixo do ``@router.get(...)``; devolve a própria função."""
+    setattr(endpoint, _MARCA_LEITURA, True)
+    return endpoint
+
+
+def e_leitura_sem_transacao(endpoint) -> bool:
+    return getattr(endpoint, _MARCA_LEITURA, False) is True
+
+
+def get_db(request: Request = None):  # type: ignore[assignment]
+    """A sessão da requisição. A rota marcada com ``leitura_sem_transacao`` recebe a de
+    ``SessionLeitura``; as demais (e quem chama sem requisição: o boot, os scripts), a de
+    ``SessionLocal``. O ``request`` vem do FastAPI (que o reconhece pela anotação); o
+    endpoint é o da rota casada (``scope["endpoint"]``)."""
+    leitura = request is not None and e_leitura_sem_transacao(request.scope.get("endpoint"))
+    db = (SessionLeitura if leitura else SessionLocal)()
     try:
         yield db
     finally:
