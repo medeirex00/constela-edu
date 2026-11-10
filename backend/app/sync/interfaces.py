@@ -133,6 +133,13 @@ class Contexto:
     campos_nao_atualizados: set = field(default_factory=set)
 
 
+# Quem resolve a resposta que mudou de formato, na língua de quem lê os alertas e os
+# logs na tela de Integrações — o mesmo texto do Relatório por Período e do Suporte
+# ("conector" é vocabulário de quem programa). Aqui, e não no orchestrator, para os
+# conectores (que o orchestrator importa) usarem o mesmo texto na mensagem do erro.
+AJUSTE_DA_COLETA = "a equipe do Constela precisa ajustar a coleta dessa plataforma"
+
+
 class ErroConector(Exception):
     """Falha de conector com um ``codigo`` estável para alertas/retry.
 

@@ -35,6 +35,7 @@ from app.sync.connectors.base import (
 )
 from app.sync.connectors.navegador import Navegador
 from app.sync.interfaces import (
+    AJUSTE_DA_COLETA,
     ArquivoObtido,
     Contexto,
     Credenciais,
@@ -56,6 +57,12 @@ _API_BASE = "https://www.matific.com"
 # própria página logada já a envia (credentials:'include'); sem token/Bearer.
 _EP_CURRENT = f"{_API_BASE}/api/v2/accounts/current/"   # traz school_id do logado
 _EP_COMPETITIONS = f"{_API_BASE}/api/v2/competition-v2/"  # lista (p/ competition_id)
+# O school_student respondeu 200 fora do formato conhecido (sem a lista ``data``: a API
+# mudou). A mensagem vai crua para o alerta "Formato do relatório mudou", o log e o
+# erro_resumo da tela de Integrações — na língua do gestor, sem "conector" nem campo.
+FORMATO_DO_PLACAR_MUDOU = (
+    "O Placar do Matific respondeu num formato que o Constela não reconhece (a "
+    f"plataforma pode ter mudado a resposta). Avise o suporte: {AJUSTE_DA_COLETA}.")
 _DURATION_PADRAO = "this-year"   # "Ano acadêmico atual" (cumulativo)
 _RE_SCHOOL_ID = re.compile(r"school_id=([0-9a-f-]{36})", re.I)
 _RE_COMPETICAO = re.compile(r"/competition-v2/([0-9a-f-]{36})/", re.I)
@@ -565,10 +572,8 @@ class ConectorMatific(ConectorNavegador):
                 + (" (acesso ao dado recusado)." if codigo == "sem_acesso_ao_dado"
                    else "."), codigo=codigo, recuperavel=codigo == "falha_download")
         if not self._corpo_school_student_valido(res):
-            raise ErroConector(
-                "Resposta do Placar do Matific fora do formato conhecido (sem a lista "
-                "'data') — a API pode ter mudado. Verifique o conector.",
-                codigo="parser_incompativel", recuperavel=False)
+            raise ErroConector(FORMATO_DO_PLACAR_MUDOU,
+                               codigo="parser_incompativel", recuperavel=False)
         self._conferir_escola_do_corpo(res, school_id)
         descartes: dict = {}
         alunos = self._parse_school_student(res, nomes, descartes)
@@ -709,10 +714,8 @@ class ConectorMatific(ConectorNavegador):
                 # 200 fora do formato conhecido é a API que mudou: "lista vazia" aqui
                 # diria que a escola não tem alunos (mesma regra do navegador).
                 if not self._corpo_school_student_valido(res_ss):
-                    raise ErroConector(
-                        "Resposta do Placar do Matific fora do formato conhecido (sem a "
-                        "lista 'data') — a API pode ter mudado. Verifique o conector.",
-                        codigo="parser_incompativel", recuperavel=False)
+                    raise ErroConector(FORMATO_DO_PLACAR_MUDOU,
+                                       codigo="parser_incompativel", recuperavel=False)
                 self._conferir_escola_do_corpo(res_ss, school_id)
                 return self._parse_school_student(res_ss, nomes)
         except ErroConector:

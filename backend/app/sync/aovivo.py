@@ -47,7 +47,7 @@ from app.sync.connectors.navegador import (
     classificar_falha_da_coleta,
     erro_conector_de_dentro,
 )
-from app.sync.interfaces import Contexto, ErroConector
+from app.sync.interfaces import AJUSTE_DA_COLETA, Contexto, ErroConector
 
 logger = logging.getLogger("constela.sync")
 
@@ -510,8 +510,9 @@ def _recusar_linhas_sem_numeros(alunos: list[dict]) -> None:
     campos = sorted({c for a in sem_numeros for c in a["ausentes"]})
     raise ErroConector(
         f"O Placar do Matific veio sem {' e '.join(campos)} em {len(sem_numeros)} de "
-        f"{len(alunos)} aluno(s) — a API pode ter mudado. A premiação não foi montada "
-        "para não mostrar 0 no lugar do número real. Verifique o conector.",
+        f"{len(alunos)} aluno(s): a plataforma pode ter mudado a resposta. A premiação não "
+        "foi montada para não mostrar 0 no lugar do número real. Avise o suporte: "
+        f"{AJUSTE_DA_COLETA}.",
         codigo="parser_incompativel", recuperavel=False)
 
 

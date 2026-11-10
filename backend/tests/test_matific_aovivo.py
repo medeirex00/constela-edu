@@ -376,6 +376,18 @@ def test_http_direto_200_fora_do_formato_vira_erro_e_nao_entra_no_cache(
     assert exc.value.codigo == "parser_incompativel"
     assert exc.value.recuperavel is False
     assert not aovivo._cache
+    # A mensagem chega à tela: na língua do gestor (revisão do acabamento, sonda R3).
+    _na_lingua_do_gestor(str(exc.value))
+
+
+def _na_lingua_do_gestor(mensagem: str) -> None:
+    """Sem "conector", sem nome de campo da API e com quem resolve — o mesmo texto do
+    alerta "Formato do relatório mudou" (``interfaces.AJUSTE_DA_COLETA``)."""
+    from app.sync.interfaces import AJUSTE_DA_COLETA
+
+    assert "conector" not in mensagem.lower(), mensagem
+    assert "'data'" not in mensagem and "API" not in mensagem, mensagem
+    assert f"Avise o suporte: {AJUSTE_DA_COLETA}." in mensagem, mensagem
 
 
 def test_http_direto_lista_vazia_continua_sendo_nenhum_aluno(db, escola_completa, monkeypatch):
@@ -403,6 +415,7 @@ def test_campo_numerico_renomeado_nao_mostra_zero_em_silencio(
     esperado = {"score": "estrelas", "activities_completed": "atividades"}[renomeado]
     assert esperado in str(exc.value)
     assert not aovivo._cache
+    _na_lingua_do_gestor(str(exc.value))
 
 
 def test_campo_renomeado_tambem_e_recusado_pelo_caminho_do_navegador(
@@ -425,6 +438,7 @@ def test_campo_renomeado_tambem_e_recusado_pelo_caminho_do_navegador(
                               agora=datetime(2026, 7, 14, 12, 0, 0))
     assert exc.value.codigo == "parser_incompativel"
     assert not aovivo._cache
+    _na_lingua_do_gestor(str(exc.value))
 
 
 def test_placar_matific_cache_dedupe(db, escola_completa, monkeypatch):

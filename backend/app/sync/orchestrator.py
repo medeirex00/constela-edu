@@ -25,7 +25,10 @@ from app.routers import importacoes as imp  # reuso: confirmar, _guardar_tempora
 from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
 from app.services import importacao as svc
 from app.services import perfis_pdf, planilhas, politica_sync, professores
-from app.sync.interfaces import ArquivoObtido, Contexto, ErroConector
+# AJUSTE_DA_COLETA: quem resolve a resposta que mudou de formato — o service o lê daqui
+# (``orchestrator.AJUSTE_DA_COLETA``); mora em ``interfaces`` porque os conectores (que
+# este módulo importa) usam o mesmo texto na mensagem do erro.
+from app.sync.interfaces import AJUSTE_DA_COLETA, ArquivoObtido, Contexto, ErroConector
 
 
 # Marcador do conteúdo JSON vindo da API interna do Elefante (overall-course-
@@ -124,10 +127,6 @@ AVISO_NAO_ATUALIZADOS = "campos_nao_atualizados:"
 # Os campos do retrato que as Questões do período medem: se um deles não veio, o
 # retrato não mede as questões (``IMPORTACAO_SEM_QUESTOES``).
 CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
-# Quem resolve a resposta que mudou de formato, na língua de quem lê os alertas e os
-# logs na tela de Integrações — o mesmo texto do Relatório por Período e do Suporte
-# ("conector" é vocabulário de quem programa).
-AJUSTE_DA_COLETA = "a equipe do Constela precisa ajustar a coleta dessa plataforma"
 
 
 def campos_nao_atualizados(analise) -> list[str]:

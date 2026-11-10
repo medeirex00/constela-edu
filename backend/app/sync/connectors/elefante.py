@@ -35,6 +35,7 @@ from app.sync.connectors.base import (
 )
 from app.sync.connectors.navegador import Navegador
 from app.sync.interfaces import (
+    AJUSTE_DA_COLETA,
     ArquivoObtido,
     Contexto,
     Credenciais,
@@ -1178,9 +1179,10 @@ class ConectorElefante(ConectorNavegador):
                         "enxerga as turmas.", codigo="sem_acesso_ao_dado", recuperavel=False)
                 if not diag.get("lista_vazia_2xx"):
                     raise ErroConector(
-                        "A lista de turmas do Elefante respondeu fora do formato conhecido "
-                        "(não veio a lista de turmas) — a API pode ter mudado. Verifique o "
-                        "conector.", codigo="parser_incompativel", recuperavel=False)
+                        "A lista de turmas do Elefante respondeu num formato que o "
+                        "Constela não reconhece (a plataforma pode ter mudado a resposta). "
+                        f"Avise o suporte: {AJUSTE_DA_COLETA}.",
+                        codigo="parser_incompativel", recuperavel=False)
                 if alvo is None:
                     # 2xx sem turma e sem nenhuma escola identificável: não dá para
                     # dizer de QUAL escola é o "sem dados" (levanta).

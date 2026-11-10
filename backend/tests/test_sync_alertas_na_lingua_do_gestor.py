@@ -23,6 +23,7 @@ from sqlalchemy import select
 from app.models.sincronizacao import SincronizacaoAlerta
 from tests._sync_nucleo_fakes import (
     NavElefante,
+    PlacarFake,
     aluno_el,
     credencial,
     instalar,
@@ -123,6 +124,56 @@ def test_tudo_com_defeito_sem_conector_no_alerta(db, escola_completa, monkeypatc
     assert formato.startswith("Nenhuma linha aproveitável"), formato
     assert f"Avise o suporte: {AJUSTE}." in formato, formato
     _sem_jargao(formato, *(m for _e, _n, m in logs(db, ex.id)))
+
+
+class _PlacarFormatoNovo(PlacarFake):
+    """O Placar respondeu 200, mas sem a lista 'data' (a API mudou de formato)."""
+
+    def school_student(self, expr):
+        self.filtros.append("?")
+        return {"ok": True, "status": 200, "body": [{"school_id": "x", "rows": []}]}
+
+
+def test_formato_mudou_no_matific_sem_conector_no_alerta(db, escola_completa, monkeypatch):
+    """Revisão do acabamento (sonda R3): o alerta "Formato do relatório mudou" do Matific
+    vem da mensagem do próprio conector, crua no alerta, no log e no erro_resumo — e
+    dizia "(sem a lista 'data') — a API pode ter mudado. Verifique o conector."."""
+    eid = escola_completa["escola"].id
+    credencial(db, eid, "matific")
+    placar = _PlacarFormatoNovo()
+    placar.linhas = [("u-a", escola_completa["alunos"][0].nome, "3 ANO A", 40, 10)]
+    instalar(monkeypatch, placar=placar)
+
+    ex, erro = rodar(db, eid, "matific")
+
+    assert erro is None and (ex.status, ex.motivo) == ("erro", "parser_incompativel")
+    formato = _alertas(db, eid)["parser_incompativel"]
+    assert formato.startswith("O Placar do Matific respondeu num formato que o Constela "
+                              "não reconhece"), formato
+    assert f"Avise o suporte: {AJUSTE}." in formato, formato
+    assert "'data'" not in formato and "API" not in formato, formato
+    _sem_jargao(formato, ex.erro_resumo, *(m for _e, _n, m in logs(db, ex.id)))
+
+
+def test_lista_de_turmas_do_elefante_fora_do_formato_sem_conector_no_alerta(
+        db, escola_completa, monkeypatch):
+    """O mesmo na lista de turmas do Elefante (2xx fora do formato): dizia "— a API pode
+    ter mudado. Verifique o conector."."""
+    from tests.test_sync_revisao_semantica import _NavRosterForaDoFormato
+
+    eid = escola_completa["escola"].id
+    credencial(db, eid, "elefante")
+    instalar(monkeypatch, nav_elefante=_NavRosterForaDoFormato(
+        {"courses": [{"id": 1, "name": "3 ANO A", "student": []}]}))
+
+    ex, _ = rodar(db, eid, "elefante")
+
+    assert (ex.status, ex.motivo) == ("erro", "parser_incompativel")
+    formato = _alertas(db, eid)["parser_incompativel"]
+    assert formato.startswith("A lista de turmas do Elefante respondeu num formato que o "
+                              "Constela não reconhece"), formato
+    assert f"Avise o suporte: {AJUSTE}." in formato, formato
+    _sem_jargao(formato, ex.erro_resumo, *(m for _e, _n, m in logs(db, ex.id)))
 
 
 @pytest.mark.parametrize("chave", ["totalBooksRead"])
