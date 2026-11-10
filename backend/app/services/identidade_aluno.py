@@ -71,7 +71,7 @@ from sqlalchemy.orm import Session
 from app.models import Aluno, Escola, IdentidadeExterna, Matricula, Turma
 from app.models.academico import RevisaoIdentidade
 from app.services import matching
-from app.services.importacao import chave_nome, tokens_nome
+from app.services.importacao import chave_nome, nome_abreviado, tokens_nome
 from app.services.lista_piloto import ra_util
 
 ASSOCIAR = "associar"   # dados vão para uma ficha existente
@@ -104,8 +104,8 @@ MOTIVOS = {
         "matrícula vem da Lista Piloto)",
     "nome_incompleto":
         "a plataforma mandou só o nome abreviado (ou de uma palavra só), sem o nome "
-        "completo, e a conta ainda não está vinculada a nenhuma ficha — esse nome "
-        "não basta para associar nem para criar ficha",
+        "completo, e nada já vinculado (conta da plataforma, RA) diz quem é a "
+        "criança — esse nome não basta para associar nem para criar ficha",
     "id_externo_duplicado":
         "o mesmo identificador da plataforma veio em mais de uma linha do "
         "relatório, com nomes ou números diferentes (ou já há uma pendência assim "
@@ -1334,6 +1334,16 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     # 5) Nenhum candidato: CRIAR — na turma cadastrada da sala, decidida sem chute.
     # Sem turma alguma, quem cria precisa escolher a turma (a tela pede; a
     # sincronização não tem como — ``_resolver_aluno`` manda para revisão).
+    #
+    # Antes, NOME ABREVIADO (``nome_abreviado``: "ZEFA Q", uma palavra só, inicial
+    # solta) não vira ficha — venha de onde vier: Placar do Matific sem o
+    # ``nome_abrev``, Elefante, planilha, PDF. Era assim que nasciam as fichas
+    # "LORENA D" ao lado da oficial. Vai para a revisão ``nome_incompleto``, sem
+    # candidato, e quem decide pode criar a ficha pela fila. Só a CRIAÇÃO é barrada:
+    # associar por abreviação (passos 3 e 4) continua como sempre.
+    if nome_abreviado(nome_casar):
+        return Decisao(REVISAR, None, "novo", "nome_incompleto", (), chave_sala=chave,
+                       vetados=vetados)
     if not chave:
         return Decisao(CRIAR, None, "novo", "sem_turma", chave_sala=chave, vetados=vetados)
     turma_id, motivo = _turma_para_criar(ctx, linha, chave)
