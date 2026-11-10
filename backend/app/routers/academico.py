@@ -528,6 +528,21 @@ def _alunos_selecionados(db: Session, escola_id: int, aluno_ids: list[int]) -> l
     return alunos
 
 
+def _exigir_fichas_selecionadas(ids: list[int], pedidos: list[int]) -> None:
+    """Na transferência, toda ficha selecionada precisa existir nesta escola: a que
+    sumiu (fundida em outra por outro gestor, com a lista ainda aberta) é 409 para o
+    pedido inteiro, sem mover ninguém pela metade — o gestor recarrega e escolhe de
+    novo (a criança agora está na ficha que ficou)."""
+    faltam = set(pedidos) - set(ids)
+    if not faltam:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"{len(faltam)} aluno(s) selecionado(s) não existe(m) mais nesta escola — a ficha "
+        "pode ter sido fundida com outra enquanto a lista estava aberta. Nada foi "
+        "transferido: recarregue a lista e tente de novo.")
+
+
 def _recalcular_escola(db: Session, escola_id: int) -> None:
     """Recalcula notas/rankings e invalida o cache do painel — dashboards,
     estatísticas e gráficos se atualizam sem recarregar a página."""
@@ -625,19 +640,28 @@ def acoes_em_alunos(
     muda (``_exigir_destino_do_ano_ativo``). A matrícula que se move (ou nasce)
     é a do ano ativo; numa turma de outro ano ela continuava contando na escola
     e sumia das turmas do ano, e a diferença entregava a criança à Secretaria
-    por subtração (revisão do grupo pequeno, rodada 4)."""
+    por subtração (revisão do grupo pequeno, rodada 4).
+
+    FICHA QUE SUMIU NO MEIO (revisão de integração, 10/11): a transferência toma a
+    trava da escola ANTES de ler os alunos. A fusão toma a mesma trava e apaga a
+    ficha absorvida; lidos antes, os alunos incluíam essa ficha, e a matrícula
+    criada para ela no destino estourava a FK (500). Agora, se alguma ficha
+    selecionada não existe mais nesta escola, é 409 e ninguém é transferido."""
+    if dados.acao == "transferir":
+        if not dados.turma_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "Selecione a turma de destino.")
+        # Mesma trava do arquivamento (D17) e da fusão, ANTES de ler os alunos e o
+        # status da turma: nenhum dos dois muda entre a leitura e a transferência
+        # (no-op no SQLite).
+        bloquear_escola_para_importacao(db, escola_id)
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
     ids = [a.id for a in alunos]
     ano = _ano_ativo(db, escola_id)
     avisos: list[str] = []
 
     if dados.acao == "transferir":
-        if not dados.turma_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "Selecione a turma de destino.")
-        # Mesma trava do arquivamento (D17), ANTES de ler o status da turma: ela
-        # não é arquivada entre a leitura e a transferência (no-op no SQLite).
-        bloquear_escola_para_importacao(db, escola_id)
+        _exigir_fichas_selecionadas(ids, dados.aluno_ids)
         origem: Turma | None = None
         if dados.turma_origem_id is not None:
             origem = _turma_da_escola(db, escola_id, dados.turma_origem_id)
