@@ -965,7 +965,7 @@ def nome_sem_sufixo_de_turma(nome: str, chave: str = "", chave_alt: str = "") ->
     sala da própria linha, como palavra solta ou grudado no último nome) —, mas
     com a grafia de quem digitou (caixa, acento). Antes o sufixo só saía do
     casamento e a ficha nascia "… LIMA 3A". Sem sufixo, ou se só sobraria o
-    sufixo, devolve o nome como veio (sem os espaços repetidos)."""
+    sufixo, devolve o nome como veio (só sem os espaços das pontas, como antes)."""
     partes = (nome or "").split()
     saida: list[str] = []
     mudou = False
@@ -989,7 +989,7 @@ def nome_sem_sufixo_de_turma(nome: str, chave: str = "", chave_alt: str = "") ->
             continue
         saida.append(parte)
     if not mudou or not saida:
-        return " ".join(partes)
+        return (nome or "").strip()          # o de sempre: nada muda sem sufixo
     return " ".join(saida)
 
 
