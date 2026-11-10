@@ -40,7 +40,7 @@ from app.models import (
 )
 from app.services import alunos_fusao
 from app.services._nomes import primeiro_token, tokens
-from app.services.importacao import casa_abreviado, tokens_nome
+from app.services.importacao import casa_abreviado, nome_abreviado, tokens_nome
 from app.services.lista_piloto import ra_util
 from app.services.matching import plausivel
 from app.services.matriculas import chave_turma_norm
@@ -311,12 +311,42 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     ]
 
 
+def _motivo_do_principal(melhor: Aluno, outro: Aluno) -> str:
+    """Por que ``_melhor_perfil`` escolheu ``melhor`` (na ordem da regra)."""
+    if melhor.da_lista_piloto != outro.da_lista_piloto:
+        return "lista_piloto"
+    if len(tokens(melhor.nome)) != len(tokens(outro.nome)):
+        return "nome_mais_completo"
+    return "cadastro_mais_antigo"
+
+
+def mantem_nome_abreviado(manter: Aluno, remover: Aluno) -> bool:
+    """A ficha que FICA tem nome abreviado — ou mais curto que o da que sai, sem ser
+    o nome oficial da Lista Piloto? A fusão não muda nome nenhum, e a ficha que
+    fica herda a marca da Lista Piloto da outra (``alunos_fusao.fundir_par``): é
+    esse nome que sai no certificado e nos relatórios."""
+    if nome_abreviado(manter.nome):
+        return True
+    return not manter.da_lista_piloto and _expande(manter.nome, remover.nome)
+
+
 def previa_da_fusao(db: Session, escola_id: int, manter: Aluno, remover: Aluno) -> dict:
-    """O que a tela mostra ANTES de o gestor digitar FUNDIR (só leitura)."""
+    """O que a tela mostra ANTES de o gestor digitar FUNDIR (só leitura).
+
+    ``sugestao``: qual ficha deveria ficar como principal, pela MESMA regra da
+    fusão em lote (``_melhor_perfil``: Lista Piloto > nome mais completo > mais
+    antiga). É sugestão: a API continua aceitando a outra direção.
+    ``nome``: se a direção pedida deixa um nome abreviado na ficha que fica."""
     escola = db.get(Escola, escola_id)
+    melhor = _melhor_perfil(manter, remover)
+    outro = remover if melhor.id == manter.id else manter
     return {
         "manter": {"id": manter.id, "nome": manter.nome},
         "remover": {"id": remover.id, "nome": remover.nome},
+        "sugestao": {"manter_id": melhor.id, "remover_id": outro.id,
+                     "motivo": _motivo_do_principal(melhor, outro)},
+        "nome": {"mantem_abreviado": mantem_nome_abreviado(manter, remover),
+                 "fica": manter.nome, "sai": remover.nome},
         "leituras": alunos_fusao.leituras_repetidas(
             db, escola.ano_letivo_ativo if escola else 0, [(manter.id, remover.id)],
             exemplos=20)[(manter.id, remover.id)],

@@ -262,3 +262,72 @@ test("se a prévia falhar, avisa e não bloqueia a fusão", async () => {
   await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
   expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
 });
+
+// --- Direção da fusão: a ficha aberta não fica como principal só por estar aberta.
+// A prévia traz a sugestão (mesma regra do lote) e o aviso de nome abreviado.
+
+function previaComSugestao(manterSugerido: number) {
+  return (caminho: string) => {
+    const q = new URL(`http://x${caminho}`).searchParams;
+    const manter = Number(q.get("manter_id"));
+    const remover = Number(q.get("remover_id"));
+    const nomes: Record<number, string> = { 10: "Ana Souza", 20: "Ana Souza Lima Ficticia" };
+    return {
+      manter: { id: manter, nome: nomes[manter] },
+      remover: { id: remover, nome: nomes[remover] },
+      sugestao: { manter_id: manterSugerido, remover_id: manterSugerido === 10 ? 20 : 10,
+                  motivo: "lista_piloto" },
+      nome: { mantem_abreviado: manter !== manterSugerido, fica: nomes[manter], sai: nomes[remover] },
+      leituras: { livros_repetidos: 0, com_data_diferente: 0, no_bimestre: 0, bimestre: null,
+                  por_bimestre: [], exemplos: [] },
+    };
+  };
+}
+
+test("abre com a ficha sugerida como principal, não com a ficha aberta", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(20));
+  responder("POST", /\/alunos\/fundir$/, { ok: true });
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+
+  expect(await screen.findByText(/Sugestão do sistema: manter este cadastro/)).toBeInTheDocument();
+  expect(screen.getByText("Fica como principal:").parentElement)
+    .toHaveTextContent("Ana Souza Lima Ficticia");
+  expect(screen.queryByRole("note", { name: /nome abreviado/ })).toBeNull();
+
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  await userEvent.click(screen.getByRole("button", { name: /Fundir cadastros/ }));
+  await vi.waitFor(() => {
+    const post = api.mock.calls.find(([c, o]) => String(c).endsWith("/alunos/fundir")
+      && (o as RequestInit)?.method === "POST");
+    expect(JSON.parse(String((post![1] as RequestInit).body)))
+      .toMatchObject({ manter_id: 20, remover_id: 10 });
+  });
+});
+
+test("trocar contra a sugestão avisa do nome abreviado e não é desfeito", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(20));
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+  await screen.findByText(/Sugestão do sistema/);
+
+  await userEvent.click(screen.getByRole("button", { name: "trocar" }));
+  const aviso = await screen.findByRole("note", { name: /nome abreviado/ });
+  expect(aviso).toHaveTextContent("o nome que fica é “Ana Souza”");
+  expect(aviso).toHaveTextContent("vai sair no certificado");
+  expect(screen.getByText(/O sistema sugere manter/)).toHaveTextContent("Ana Souza Lima Ficticia");
+  // a nova consulta (outra direção) não devolve a escolha para a sugestão
+  expect(screen.getByText("Fica como principal:").parentElement).toHaveTextContent("Ana Souza");
+  expect(screen.getByText("Fica como principal:").parentElement)
+    .not.toHaveTextContent("Ana Souza Lima Ficticia");
+  // não bloqueia: com FUNDIR digitado, o botão libera
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
+});
+
+test("quando a ficha aberta já é a sugerida, ela continua principal", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(10));
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+  expect(await screen.findByText(/Sugestão do sistema: manter este cadastro/)).toBeInTheDocument();
+  expect(screen.getByText("Fica como principal:").parentElement).toHaveTextContent("Ana Souza");
+  expect(screen.getByText("Fica como principal:").parentElement)
+    .not.toHaveTextContent("Lima Ficticia");
+});

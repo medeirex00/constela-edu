@@ -1020,6 +1020,28 @@ def nome_de_um_token(nome: str) -> bool:
     return len(tokens_nome(nome)) == 1
 
 
+def nome_abreviado(nome: str) -> bool:
+    """O nome não identifica a criança por si: UMA palavra de nome só ("Kauê",
+    "Ana de") ou uma INICIAL solta em qualquer posição ("ZEFA Q", "M. EDUARDA",
+    "JOÃO B SILVA") — o formato curto do Placar do Matific e das fichas que a
+    sincronização criou com ele. Partícula ("de", "da", "e") não conta como
+    palavra nem como inicial, e número ("… SOUZA 2", que a escola usa para separar
+    homônimos) não é inicial.
+
+    É a régua de "nome abreviado" da porta de identidade: uma linha assim nunca
+    vira ficha nova sozinha (``identidade_aluno.decidir``), e a fusão avisa quando
+    a ficha que fica tem um nome assim. Associar por abreviação continua como era."""
+    from app.services._nomes import PARTICULAS
+
+    toks = tokens_nome(nome)
+    palavras = [t for t in toks if t not in PARTICULAS and not t.isdigit()]
+    if not toks:
+        return False
+    if len(palavras) <= 1:
+        return True
+    return any(len(t) == 1 and t.isalpha() for t in palavras)
+
+
 def chave_nome(nome: str) -> str:
     """A definição ÚNICA de "mesmo nome" de aluno: sem acento, sem caixa, espaços
     colapsados e SEM pontuação — "LIVIA* DE SOUZA", "Lívia de  Souza" e
