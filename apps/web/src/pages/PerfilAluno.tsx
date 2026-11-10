@@ -198,6 +198,18 @@ function TabelaCalculo({ titulo, linhas, notaFinal }: { titulo: string; linhas: 
   );
 }
 
+/** No lugar da tabela do cálculo de uma plataforma sem dado da criança. */
+function SemDadoDaPlataforma({ plataforma }: { plataforma: string }) {
+  return (
+    <div className="rounded-2xl border border-zinc-200/80 px-4 py-3 text-sm dark:border-zinc-800">
+      <h3 className="font-semibold">{plataforma}</h3>
+      <p className="mt-1 text-zinc-600 dark:text-zinc-300">
+        Ainda não há dados desta criança nesta plataforma, por isso não há nota (“—”).
+      </p>
+    </div>
+  );
+}
+
 interface ConquistaAluno {
   codigo: string;
   nome: string;
@@ -476,7 +488,13 @@ export default function PerfilAluno() {
   // (sem snapshot ≠ zero). Sem o campo, mostra o número que veio (notaDaMateria).
   const aferidoDe = (dimensao: string) =>
     perfil.dimensoes?.find((d) => d.dimensao === dimensao)?.aferido;
-  const temCalculo = Boolean(detalhes.matific || detalhes.elefante);
+  // Sem dado em NENHUMA dimensão contratada, a Nota Geral (composição das duas)
+  // chega 0,0 e o motor grava o passo a passo de cada plataforma com nota 0 — a
+  // ficha mostrava "—" nos cartões e afirmava zero logo abaixo. Aqui ela também é
+  // "—", e o cálculo dá lugar ao aviso de que ainda não há dados.
+  const semDadoNenhum = Boolean(perfil.dimensoes?.length)
+    && (perfil.dimensoes ?? []).every((d) => !d.aferido);
+  const temCalculo = Boolean(detalhes.matific || detalhes.elefante) && !semDadoNenhum;
   const situacao = SITUACAO_FICHA[aluno.status];
   const itensFicha = itensDaFicha(perfil.ficha);
   const temFicha = itensFicha.length > 0;
@@ -521,7 +539,7 @@ export default function PerfilAluno() {
                 icone={<Trophy size={20} />}
                 tom="ambar"
                 rotulo="Nota Geral"
-                valor={nota(perfil.nota_geral)}
+                valor={semDadoNenhum ? "—" : nota(perfil.nota_geral)}
                 detalhe="Composição das plataformas · veja o cálculo abaixo"
               />
             </div>
@@ -567,13 +585,17 @@ export default function PerfilAluno() {
                   <strong>{detalhes.modo_normalizacao === "auto" ? "automática" : "manual"}</strong>.
                 </p>
               )}
-              {detalhes.matific && (
-                <TabelaCalculo titulo="Matific" linhas={detalhes.matific.indicadores} notaFinal={detalhes.matific.nota} />
+              {/* Plataforma sem dado da criança: o motor grava o passo a passo com
+                  nota 0, mas não houve o que medir — a tabela afirmaria um zero. */}
+              {!semDadoNenhum && detalhes.matific && (aferidoDe("matematica") === false
+                ? <SemDadoDaPlataforma plataforma="Matific" />
+                : <TabelaCalculo titulo="Matific" linhas={detalhes.matific.indicadores} notaFinal={detalhes.matific.nota} />
               )}
-              {detalhes.elefante && (
-                <TabelaCalculo titulo="Elefante Letrado" linhas={detalhes.elefante.indicadores} notaFinal={detalhes.elefante.nota} />
+              {!semDadoNenhum && detalhes.elefante && (aferidoDe("leitura") === false
+                ? <SemDadoDaPlataforma plataforma="Elefante Letrado" />
+                : <TabelaCalculo titulo="Elefante Letrado" linhas={detalhes.elefante.indicadores} notaFinal={detalhes.elefante.nota} />
               )}
-              {detalhes.geral && parcelasGerais.length > 0 && (
+              {!semDadoNenhum && detalhes.geral && parcelasGerais.length > 0 && (
                 <div className="rounded-2xl bg-ouro-50 p-4 text-sm dark:bg-ouro-400/10">
                   <p className="font-semibold text-marinho-900 dark:text-ouro-200">Nota Geral</p>
                   <p className="mt-1 tabular-nums text-zinc-700 dark:text-zinc-200">
@@ -588,13 +610,19 @@ export default function PerfilAluno() {
                   </p>
                 </div>
               )}
-              {!temCalculo && (
+              {!temCalculo && (semDadoNenhum ? (
+                <Vazio
+                  icone={Calculator}
+                  titulo="Ainda não há dados desta criança nas plataformas"
+                  descricao="A nota aparece aqui depois que ela usar as plataformas e os dados forem importados."
+                />
+              ) : (
                 <Vazio
                   icone={Calculator}
                   titulo="Ainda não há nota calculada para este aluno"
                   descricao="Importe dados das plataformas para gerar a primeira nota."
                 />
-              )}
+              ))}
             </div>
           </SecaoRecolhivel>
         </div>
