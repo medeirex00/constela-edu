@@ -52,10 +52,101 @@ PLACAR_DUAS_CONTAS = json.dumps({"fonte": "matific-placar", "turma": "3º Ano A"
      "atividades": 4},
 ]}, ensure_ascii=False)
 
-# Exemplo gravado para a tela → texto enviado ao /analisar.
+# Placar do Matific com um aluno por MOTIVO de revisão que a prévia pode mandar (os
+# que um Placar consegue produzir; o RA não vem nele), além do vínculo e do aluno
+# novo. A tela dá a cada motivo um rótulo próprio — não "Possível duplicata" para
+# tudo. O cenário do banco é o de ``_preparar_motivos``.
+PLACAR_MOTIVOS = json.dumps({"fonte": "matific-placar", "turma": "3º Ano A", "alunos": [
+    {"nome": "Ana Beatriz Souza", "uuid": "uuid-ficticio-ana", "estrelas": 5, "atividades": 1},
+    {"nome": "Sofia Almeida Durte", "uuid": "uuid-ficticio-s", "estrelas": 9, "atividades": 2},
+    {"nome": "Davi Ficticio", "uuid": "uuid-ficticio-davi", "estrelas": 9, "atividades": 2},
+    {"nome": "Lara Ficticia Brandao", "uuid": "uuid-ficticio-lara", "estrelas": 9,
+     "atividades": 2},
+    {"nome": "Teo Ficticio", "uuid": "uuid-ficticio-teo", "estrelas": 9, "atividades": 2},
+    {"nome": "Heitor Fictorino Lemos", "uuid": "uuid-ficticio-h", "estrelas": 9,
+     "atividades": 2},
+    {"nome": "Iara Ficticia Neves", "uuid": "uuid-ficticio-iara", "estrelas": 9,
+     "atividades": 2},
+    {"nome": "Joao Pedro Barbosa", "uuid": "uuid-ficticio-jp", "estrelas": 9, "atividades": 2},
+    {"nome": "Crianca Ficticia Um", "uuid": "uuid-ficticio-dup", "estrelas": 7, "atividades": 2},
+    {"nome": "Crianca Ficticia Dois", "uuid": "uuid-ficticio-dup", "estrelas": 8,
+     "atividades": 2},
+    {"nome": "Bento Ficticio Moura", "uuid": "uuid-ficticio-outra-escola", "estrelas": 9,
+     "atividades": 2},
+    {"nome": "Zefa Q", "uuid": "uuid-ficticio-z", "estrelas": 9, "atividades": 2},
+    {"nome": "Crianca Ficticia Repetida", "uuid": "uuid-ficticio-1", "estrelas": 10,
+     "atividades": 3},
+    {"nome": "Crianca Ficticia Repetida", "uuid": "uuid-ficticio-2", "estrelas": 20,
+     "atividades": 4},
+    {"nome": "Crianca Nova Ficticia", "uuid": "uuid-ficticio-nova", "estrelas": 9,
+     "atividades": 2},
+]}, ensure_ascii=False)
+
+# O motivo que cada linha do PLACAR_MOTIVOS recebe (status "revisar", salvo o vínculo
+# e o aluno novo).
+MOTIVO_ESPERADO = {
+    "Ana Beatriz Souza": ("exato", "exato"),
+    "Sofia Almeida Durte": ("revisar", "correspondencia_insegura"),
+    "Davi Ficticio": ("revisar", "candidatos_multiplos"),
+    "Lara Ficticia Brandao": ("revisar", "homonimo_em_outra_sala"),
+    "Teo Ficticio": ("revisar", "nome_casa_em_outra_sala"),
+    "Heitor Fictorino Lemos": ("revisar", "ficha_inativa"),
+    "Iara Ficticia Neves": ("revisar", "identidade_de_ficha_inativa"),
+    "Joao Pedro Barbosa": ("revisar", "outra_identidade_na_plataforma"),
+    "Crianca Ficticia Um": ("revisar", "id_externo_duplicado"),
+    "Crianca Ficticia Dois": ("revisar", "id_externo_duplicado"),
+    "Bento Ficticio Moura": ("revisar", "identidade_de_outra_escola"),
+    "Zefa Q": ("revisar", "nome_incompleto"),
+    "Crianca Ficticia Repetida": ("revisar", "contas_repetidas_no_relatorio"),
+    "Crianca Nova Ficticia": ("nao_encontrado", "novo"),
+}
+
+
+def _preparar_motivos(db, escola_completa) -> None:
+    """O banco que faz cada linha do PLACAR_MOTIVOS cair no seu motivo (fictício)."""
+    from app.models import Aluno, Escola, IdentidadeExterna, Matricula, Turma
+
+    escola, turma = escola_completa["escola"], escola_completa["turma"]
+    outra_turma = Turma(escola_id=escola.id, nome="4º Ano B", ano_escolar="4º Ano",
+                        ano_letivo=2026)
+    db.add(outra_turma)
+    db.flush()
+
+    def ficha(nome, sala, status="ativo"):
+        aluno = Aluno(escola_id=escola.id, nome=nome, status=status)
+        db.add(aluno)
+        db.flush()
+        db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id, turma_id=sala.id,
+                         ano_letivo=2026))
+        return aluno
+
+    ficha("Davi Ficticio Rocha", turma)                      # candidatos_multiplos
+    ficha("Davi Ficticio Lima", turma)
+    ficha("Lara Ficticia Brandao", outra_turma)              # homonimo_em_outra_sala
+    ficha("Teo Ficticio Andrade", outra_turma)               # nome_casa_em_outra_sala
+    ficha("Heitor Fictorino Lemos", turma, "arquivado")      # ficha_inativa
+    iara = ficha("Iara Ficticia Neves", turma, "arquivado")  # identidade_de_ficha_inativa
+    db.add(IdentidadeExterna(escola_id=escola.id, aluno_id=iara.id, plataforma="matific",
+                             id_externo="uuid-ficticio-iara"))
+    joao = next(a for a in escola_completa["alunos"] if a.nome == "João Pedro Barbosa")
+    db.add(IdentidadeExterna(escola_id=escola.id, aluno_id=joao.id, plataforma="matific",
+                             id_externo="uuid-ficticio-jp-antiga"))  # outra conta
+    outra = Escola(nome="OUTRA ESCOLA FICTICIA", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    bento = Aluno(escola_id=outra.id, nome="Bento Ficticio Moura")
+    db.add(bento)
+    db.flush()
+    db.add(IdentidadeExterna(escola_id=outra.id, aluno_id=bento.id, plataforma="matific",
+                             id_externo="uuid-ficticio-outra-escola"))
+    db.commit()
+
+
+# Exemplo gravado para a tela → (texto enviado ao /analisar, cenário do banco).
 EXEMPLOS = {
-    "analise_matific_motivos.json": TEXTO,
-    "analise_matific_duas_contas.json": PLACAR_DUAS_CONTAS,
+    "analise_matific_motivos.json": (TEXTO, None),
+    "analise_matific_duas_contas.json": (PLACAR_DUAS_CONTAS, None),
+    "analise_matific_placar_motivos.json": (PLACAR_MOTIVOS, _preparar_motivos),
 }
 
 TIPOS_TS = RAIZ / "packages" / "core" / "src" / "tipos.ts"
@@ -182,12 +273,42 @@ def _o_que_a_tela_le(analise: dict) -> list:
             for linha in analise["linhas"]]
 
 
+def test_placar_traz_um_aluno_por_motivo(cliente, db, escola_completa):
+    """O exemplo dos motivos cobre o que diz cobrir: cada linha cai no seu motivo."""
+    _preparar_motivos(db, escola_completa)
+    analise = _analise(cliente, escola_completa["escola"].id, PLACAR_MOTIVOS)
+    obtido = {linha["nome"]: (linha["correspondencia"]["status"],
+                              linha["correspondencia"]["motivo"])
+              for linha in analise["linhas"]}
+    assert obtido == MOTIVO_ESPERADO
+
+
+def test_cada_motivo_do_backend_tem_rotulo_na_tela():
+    """Contrato: cada motivo de revisão do backend (``identidade_aluno.MOTIVOS``) tem
+    rótulo e explicação próprios na prévia de Importações (``MOTIVO_REVISAO`` em
+    Importacoes.tsx). Um motivo novo sem rótulo voltaria a aparecer como "Requer
+    revisão", sem dizer o porquê."""
+    from app.services.identidade_aluno import MOTIVOS
+
+    tela = RAIZ / "apps" / "web" / "src" / "pages" / "Importacoes.tsx"
+    if not tela.exists():
+        pytest.skip("cópia sem apps/web")
+    bloco = re.search(r"const MOTIVO_REVISAO[^=]*= \{(.*?)\n\};", tela.read_text(encoding="utf-8"),
+                      re.S)
+    assert bloco, "MOTIVO_REVISAO não encontrado em Importacoes.tsx"
+    na_tela = set(re.findall(r"^  (\w+): \{", bloco.group(1), re.M))
+    assert not set(MOTIVOS) - na_tela, sorted(set(MOTIVOS) - na_tela)
+
+
 @pytest.mark.parametrize("arquivo", sorted(EXEMPLOS))
-def test_exemplo_da_tela_e_a_resposta_real(cliente, escola_completa, arquivo):
+def test_exemplo_da_tela_e_a_resposta_real(cliente, db, escola_completa, arquivo):
     """O exemplo que o teste da tela usa é a resposta de agora do /analisar: as mesmas
     chaves no topo e, em cada linha, o mesmo nome, os mesmos dados e a mesma
     correspondência (status, motivo, via…)."""
-    real = _analise(cliente, escola_completa["escola"].id, EXEMPLOS[arquivo])
+    texto, preparar = EXEMPLOS[arquivo]
+    if preparar is not None:
+        preparar(db, escola_completa)
+    real = _analise(cliente, escola_completa["escola"].id, texto)
     exemplo = PASTA_EXEMPLOS_WEB / arquivo
     if GERAR:
         exemplo.parent.mkdir(parents=True, exist_ok=True)

@@ -5,6 +5,7 @@ import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import type { Analise, Importacao, ResultadoImportacao } from "../lib/types";
 import analiseReal from "./fixtures/importacoes/analise_matific_motivos.json";
 import analiseDuasContas from "./fixtures/importacoes/analise_matific_duas_contas.json";
+import analisePlacarMotivos from "./fixtures/importacoes/analise_matific_placar_motivos.json";
 import {
   api,
   fireEvent,
@@ -211,14 +212,15 @@ describe("Importacoes", () => {
     return u;
   }
 
-  it("'possível duplicata' (revisar) NÃO vem pré-selecionada como vínculo", async () => {
+  it("'nome parecido' (revisar) NÃO vem pré-selecionado como vínculo", async () => {
     await previaComCorrespondencia({
       status: "revisar", aluno_id: 10, aluno_nome: "Ana Beatriz Souza",
       similaridade: 90, motivo: "correspondencia_insegura",
       alternativas: [{ aluno_id: 10, nome: "Ana Beatriz Souza",
                        turma: "3º Ano A", similaridade: 90 }],
     });
-    expect(screen.getByText("Possível duplicata — requer revisão")).toBeInTheDocument();
+    expect(screen.getByText("Nome parecido com o de um aluno — vai para Revisões de identidade"))
+      .toBeInTheDocument();
     // Segurança: o destino NÃO vem no aluno (grafia parecida nunca vira vínculo por
     // 1 clique). E não vem em "Criar": a confirmação manda a linha para a Revisão
     // (o backend não cria ficha quando há candidato) — o destino diz isso.
@@ -471,6 +473,79 @@ describe("Importacoes", () => {
     const destino = screen.getByRole("combobox", { name: /Destino de/ }) as HTMLSelectElement;
     expect(destino.value).toBe("criar");
     expect(screen.getByText(/aluno\(s\) novo\(s\)/)).toBeInTheDocument();
+    // O motivo diz o que é (não "Possível duplicata") e o que fazer.
+    expect(screen.getByText("Mais de uma turma possível — escolha a turma")).toBeInTheDocument();
+    expect(destino).toHaveAccessibleDescription(
+      "Mais de uma turma possível — escolha a turma Mais de uma turma cadastrada corresponde à "
+      + "turma do relatório: confira a turma da ficha nova.");
+  });
+
+  // Cada motivo que o backend manda tem rótulo e explicação próprios — com a prévia
+  // REAL de um Placar do Matific com um aluno por motivo (gravada por
+  // backend/tests/test_importacao_previa_motivo.py, que também confere que todo
+  // motivo do backend tem rótulo aqui). Antes, todos apareciam como "Possível
+  // duplicata — requer revisão", inclusive a conta de outra escola, a ficha inativa e
+  // a mesma conta em duas linhas; e a explicação não era ligada ao "Destino de …".
+  it("prévia real com um aluno por motivo: cada um com o seu rótulo, ligado ao destino", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, JSON.parse(JSON.stringify(analisePlacarMotivos)) as Analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "placar");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+
+    const vai = "vai para Revisões de identidade";
+    const esperado: [string, string, RegExp | null][] = [
+      ["Ana Beatriz Souza", "Vinculado automaticamente", null],
+      ["Sofia Almeida Durte", `Nome parecido com o de um aluno — ${vai}`, /não o bastante para vincular sozinho/],
+      ["Davi Ficticio", `Mais de um aluno possível — ${vai}`, /Mais de um aluno cadastrado pode ser/],
+      ["Lara Ficticia Brandao", `Mesmo nome em outra turma — ${vai}`, /pode ser a mesma criança, que mudou de sala/],
+      ["Teo Ficticio", `Nome parecido em outra turma — ${vai}`, /aluno de outra turma, não da turma do relatório/],
+      ["Heitor Fictorino Lemos", `Aluno com a ficha inativa — ${vai}`, /está com a ficha inativa/],
+      ["Iara Ficticia Neves", `Conta de um aluno com a ficha inativa — ${vai}`, /já está vinculada a um aluno com a ficha inativa/],
+      ["Joao Pedro Barbosa", `O aluno já tem outra conta — ${vai}`, /já tem outra conta nesta plataforma/],
+      ["Crianca Ficticia Um", `A mesma conta em mais de uma linha — ${vai}`, /veio em mais de uma linha/],
+      ["Crianca Ficticia Dois", `A mesma conta em mais de uma linha — ${vai}`, /veio em mais de uma linha/],
+      ["Bento Ficticio Moura", `Conta de um aluno de outra escola — ${vai}`, /aluno de outra escola do Constela/],
+      ["Zefa Q", `Nome abreviado — ${vai}`, /só parte do nome/],
+      ["Crianca Ficticia Repetida (conta 1 de 2)", `Duas contas com o mesmo nome — ${vai}`, /podem ser a mesma criança ou duas/],
+      ["Crianca Ficticia Repetida (conta 2 de 2)", `Duas contas com o mesmo nome — ${vai}`, /podem ser a mesma criança ou duas/],
+      ["Crianca Nova Ficticia", "Novo aluno", null],
+    ];
+    expect(screen.getAllByRole("combobox", { name: /^Destino de / }).map((d) => d.getAttribute("aria-label")))
+      .toEqual(esperado.map(([nome]) => `Destino de ${nome}`));
+    for (const [nome, rotulo, explicacao] of esperado) {
+      const destino = screen.getByRole("combobox", { name: `Destino de ${nome}` });
+      const linha = within(destino.closest("tr") as HTMLElement);
+      expect(linha.getByText(rotulo)).toBeInTheDocument();
+      // O leitor de tela ouve o selo e a explicação ao chegar no seletor do destino.
+      const descricao = destino.getAttribute("aria-describedby")?.split(" ")
+        .map((id) => document.getElementById(id)?.textContent).join(" ");
+      expect(descricao?.startsWith(rotulo), `${nome}: ${descricao}`).toBe(true);
+      if (explicacao) {
+        expect(descricao, nome).toMatch(explicacao);
+        expect(destino).toHaveAccessibleDescription(descricao);
+      }
+    }
+    expect(screen.queryByText(/Possível duplicata/)).toBeNull();
+    // 15 linhas: o vínculo e o aluno novo são importados; as 13 outras vão para a fila.
+    fireEvent.change(screen.getByLabelText("Data do relatório (obrigatória)"),
+      { target: { value: "2026-08-14" } });
+    expect(screen.getByText(/serão importados/).textContent)
+      .toBe("2 de 15 aluno(s) serão importados; 13 vão para Revisões de identidade.");
+  });
+
+  it("motivo que a tela ainda não conhece: 'Requer revisão', sem chamar de duplicata", async () => {
+    await previaComCorrespondencia({
+      status: "revisar", aluno_id: null, aluno_nome: null, similaridade: null,
+      motivo: "motivo_futuro_do_backend", alternativas: [],
+    });
+    expect(screen.getByText("Requer revisão")).toBeInTheDocument();
+    expect(screen.queryByText(/Possível duplicata/)).toBeNull();
   });
 
   it("resultado com pendências e sem a política 'bloquear' leva às revisões", async () => {

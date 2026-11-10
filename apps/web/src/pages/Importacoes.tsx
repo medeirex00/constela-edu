@@ -156,6 +156,7 @@ const MOTIVOS_SO_REVISAO = new Set([
   "id_externo_duplicado",
   "identidade_de_outra_escola",
   "identidade_de_ficha_inativa",
+  "identidade_de_outro_aluno",
   "outra_identidade_na_plataforma",
   "ra_repetido",
   "ficha_inativa",
@@ -163,11 +164,15 @@ const MOTIVOS_SO_REVISAO = new Set([
   "candidatos_multiplos",
   "homonimo_em_outra_sala",
   "nome_casa_em_outra_sala",
+  "criacao_bloqueada_por_politica",
 ]);
 
-/** O motivo em linguagem simples, para os casos sem ficha candidata (o resto da
- *  fila aparece como "Possível duplicata", com os candidatos na lista). */
-const MOTIVO_SIMPLES: Record<string, { rotulo: string; explicacao: string }> = {
+/** Cada motivo de revisão do backend (``identidade_aluno.MOTIVOS``) em linguagem
+ *  simples: um rótulo curto para o selo da coluna Correspondência e uma explicação,
+ *  ligada ao "Destino de …" (aria-describedby). Cada um diz o que é — nem todo
+ *  motivo é "possível duplicata". O contrato com o backend
+ *  (test_importacao_previa_motivo) confere que nenhum motivo fica sem rótulo. */
+const MOTIVO_REVISAO: Record<string, { rotulo: string; explicacao: string }> = {
   nome_incompleto: {
     rotulo: "Nome abreviado",
     explicacao:
@@ -178,7 +183,97 @@ const MOTIVO_SIMPLES: Record<string, { rotulo: string; explicacao: string }> = {
     explicacao:
       "Duas contas da plataforma vieram com este nome e nenhuma ficha corresponde: podem ser a mesma criança ou duas.",
   },
+  correspondencia_insegura: {
+    rotulo: "Nome parecido com o de um aluno",
+    explicacao:
+      "O nome lembra o de um aluno cadastrado, mas não o bastante para vincular sozinho: pode ser a mesma criança ou outra.",
+  },
+  candidatos_multiplos: {
+    rotulo: "Mais de um aluno possível",
+    explicacao: "Mais de um aluno cadastrado pode ser esta criança.",
+  },
+  homonimo_em_outra_sala: {
+    rotulo: "Mesmo nome em outra turma",
+    explicacao:
+      "Há aluno com este nome em outra turma: pode ser a mesma criança, que mudou de sala, ou outra.",
+  },
+  nome_casa_em_outra_sala: {
+    rotulo: "Nome parecido em outra turma",
+    explicacao: "O nome corresponde a um aluno de outra turma, não da turma do relatório.",
+  },
+  ficha_inativa: {
+    rotulo: "Aluno com a ficha inativa",
+    explicacao:
+      "O único aluno que corresponde está com a ficha inativa (arquivada, fora da Lista Piloto ou transferida).",
+  },
+  identidade_de_ficha_inativa: {
+    rotulo: "Conta de um aluno com a ficha inativa",
+    explicacao: "A conta da plataforma já está vinculada a um aluno com a ficha inativa.",
+  },
+  identidade_de_outro_aluno: {
+    rotulo: "Conta de outro aluno",
+    explicacao: "A conta da plataforma já está vinculada a outro aluno desta escola.",
+  },
+  outra_identidade_na_plataforma: {
+    rotulo: "O aluno já tem outra conta",
+    explicacao:
+      "O aluno encontrado já tem outra conta nesta plataforma, ou outra conta deste relatório também leva a ele.",
+  },
+  ra_repetido: {
+    rotulo: "RA de mais de um aluno",
+    explicacao: "O RA do relatório aponta para mais de um aluno cadastrado.",
+  },
+  id_externo_duplicado: {
+    rotulo: "A mesma conta em mais de uma linha",
+    explicacao:
+      "A mesma conta da plataforma veio em mais de uma linha, com nomes ou números diferentes: não dá para saber de qual criança são os números.",
+  },
+  identidade_de_outra_escola: {
+    rotulo: "Conta de um aluno de outra escola",
+    explicacao:
+      "A conta da plataforma já está vinculada a um aluno de outra escola do Constela: nada é gravado aqui até a Revisão decidir.",
+  },
+  criacao_bloqueada_por_politica: {
+    rotulo: "Criação bloqueada pela política",
+    explicacao: "A matrícula desta escola vem da Lista Piloto: a importação não cria ficha.",
+  },
+  // Motivos de TURMA: a turma escolhida em "Criar aluno novo…" resolve.
+  turma_ambigua: {
+    rotulo: "Mais de uma turma possível",
+    explicacao: "Mais de uma turma cadastrada corresponde à turma do relatório: confira a turma da ficha nova.",
+  },
+  turma_arquivada: {
+    rotulo: "Turma arquivada",
+    explicacao: "A turma do relatório está arquivada e não recebe aluno novo: escolha uma turma ativa.",
+  },
+  turma_fora_do_ano_letivo: {
+    rotulo: "Turma de outro ano letivo",
+    explicacao: "A turma não é do ano letivo ativo: escolha uma turma deste ano.",
+  },
+  turma_de_outra_etapa: {
+    rotulo: "Turma de outra etapa",
+    explicacao:
+      "A turma que corresponde à do relatório é de outra etapa (como Educação Infantil e Fundamental): escolha a turma certa.",
+  },
+  turma_nao_cadastrada: {
+    rotulo: "Turma não cadastrada",
+    explicacao: "A turma do relatório não existe no cadastro da escola: escolha uma turma existente.",
+  },
+  sem_turma: {
+    rotulo: "Sem turma",
+    explicacao: "O relatório não informa a turma e nenhum aluno corresponde ao nome: escolha a turma.",
+  },
 };
+
+/** "Nome abreviado" → "nome abreviado", sem estragar a sigla ("RA de …"). */
+function inicialMinuscula(texto: string): string {
+  return /^\p{Lu}{2}/u.test(texto) ? texto : texto.charAt(0).toLowerCase() + texto.slice(1);
+}
+
+/** O motivo da linha "revisar", em linguagem simples (undefined fora disso). */
+function motivoDaRevisao(c: LinhaAnalise["correspondencia"]) {
+  return c?.status === "revisar" ? MOTIVO_REVISAO[c.motivo ?? ""] : undefined;
+}
 
 /** A linha vai para Revisões de identidade na confirmação (o backend ignora "Criar"). */
 function vaiParaRevisao(c: LinhaAnalise["correspondencia"]): boolean {
@@ -594,14 +689,14 @@ export default function Importacoes() {
       };
     }
     if (acao.tipo === "revisao") {
-      const motivo = MOTIVO_SIMPLES[g.correspondencia?.motivo ?? ""];
+      const motivo = motivoDaRevisao(g.correspondencia);
       return {
         tom: "alerta" as const,
         titulo: "Vai para Revisões de identidade",
         nome: g.nome,
         turma: "",
         detalhe: motivo
-          ? `${motivo.rotulo.toLowerCase()}: nenhuma ficha é criada; um gestor decide de quem são os dados`
+          ? `${inicialMinuscula(motivo.rotulo)}: nenhuma ficha é criada; um gestor decide de quem são os dados`
           : "nenhuma ficha é criada; um gestor decide de quem são os dados",
       };
     }
@@ -622,17 +717,21 @@ export default function Importacoes() {
   const rotuloCorrespondencia = {
     vinculado: "Vinculado automaticamente",
     exato: "Vinculado automaticamente",
-    revisar: "Possível duplicata — requer revisão",
+    // "revisar" sem motivo conhecido (backend mais novo que a tela): não presume
+    // que seja duplicata.
+    revisar: "Requer revisão",
     provavel: "Possível duplicata — requer revisão",
     bloqueado: "Bloqueado por conflito de identidade",
     nao_encontrado: "Novo aluno",
   } as const;
 
-  /** O rótulo da correspondência: nas linhas sem ficha candidata que vão para a
-   *  Revisão, o motivo em linguagem simples (não "Possível duplicata"). */
+  /** O rótulo da correspondência: na linha "revisar", o motivo em linguagem simples
+   *  e o que acontece com ela — vai para a Revisão, ou a turma escolhida resolve. */
   function rotuloDe(c: NonNullable<LinhaAnalise["correspondencia"]>): string {
-    const simples = c.status === "revisar" ? MOTIVO_SIMPLES[c.motivo ?? ""] : undefined;
-    if (simples) return `${simples.rotulo} — vai para Revisões de identidade`;
+    const motivo = motivoDaRevisao(c);
+    if (motivo) {
+      return `${motivo.rotulo} — ${vaiParaRevisao(c) ? "vai para Revisões de identidade" : "escolha a turma"}`;
+    }
     return rotuloCorrespondencia[c.status];
   }
 
@@ -987,6 +1086,15 @@ export default function Importacoes() {
                     const acao = acoes[gi] ?? { tipo: "ignorar" as const };
                     const correspondencia = grupo.correspondencia;
                     const primeira = analise.linhas[grupo.indices[0]];
+                    const motivo = motivoDaRevisao(correspondencia);
+                    // O selo e a explicação do motivo descrevem o "Destino de …": quem
+                    // usa leitor de tela ouve o porquê ao chegar no seletor.
+                    const idRotulo = `previa-linha-${gi}-correspondencia`;
+                    const idMotivo = `previa-linha-${gi}-motivo`;
+                    const descricao = [
+                      ...(correspondencia ? [idRotulo] : []),
+                      ...(motivo ? [idMotivo] : []),
+                    ].join(" ") || undefined;
                     return (
                       <tr key={grupo.chave} className={`${classesTabela.tr} align-top`}>
                         <td className={`${classesTabela.td} font-medium text-zinc-900 dark:text-zinc-100`}>
@@ -1013,12 +1121,11 @@ export default function Importacoes() {
                           {correspondencia && (
                             <div className="space-y-1">
                               <Badge tom={tomCorrespondencia[correspondencia.status]}>
-                                {rotuloDe(correspondencia)}
+                                <span id={idRotulo}>{rotuloDe(correspondencia)}</span>
                               </Badge>
-                              {correspondencia.status === "revisar"
-                               && MOTIVO_SIMPLES[correspondencia.motivo ?? ""] && (
-                                <p className="max-w-[18rem] text-xs text-zinc-500 dark:text-zinc-400">
-                                  {MOTIVO_SIMPLES[correspondencia.motivo ?? ""].explicacao}
+                              {motivo && (
+                                <p id={idMotivo} className="max-w-[18rem] text-xs text-zinc-500 dark:text-zinc-400">
+                                  {motivo.explicacao}
                                 </p>
                               )}
                               {correspondencia.aluno_nome
@@ -1039,6 +1146,7 @@ export default function Importacoes() {
                             <div className="flex min-w-[12rem] flex-col gap-1.5">
                               <select
                                 aria-label={`Destino de ${grupo.nome}`}
+                                aria-describedby={descricao}
                                 className={estiloInput}
                                 value={
                                   acao.tipo === "ignorar" ? "ignorar"
