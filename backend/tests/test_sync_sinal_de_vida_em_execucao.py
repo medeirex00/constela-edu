@@ -286,10 +286,11 @@ def test_executar_da_sinal_de_vida_enquanto_roda_e_para_no_fim(
     db.commit()
 
     service.executar(db, ex)
+    time.sleep(0.1)                  # uma batida que já estava em curso termina
     with trava:
         durante = list(batidas)
     assert len(durante) >= 3 and set(durante) == {ex.id}
-    time.sleep(0.15)
+    time.sleep(0.2)
     with trava:
         assert len(batidas) == len(durante)          # parou com o fim da execução
 
