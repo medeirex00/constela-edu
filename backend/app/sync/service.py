@@ -1376,6 +1376,23 @@ def _rotulo_descarte(motivo: str) -> str:
     return _ROTULO_DESCARTE.get(motivo) or str(motivo).replace("_", " ")
 
 
+# A UNIDADE da coleta que falhou (o código que conectores e serviço anotam em
+# ``registrar_falha_coleta``) como a tela a diz nos alertas "Coleta parcial" e
+# "Nenhum dado aplicado" — nunca o código interno ("endpoint", "lote").
+_ROTULO_UNIDADE = {
+    "turma": "turma",
+    "lote": "livros lidos de uma turma",
+    "aluno": "livros lidos de um aluno",
+    "endpoint": "lista de nomes completos do Matific",
+    "arquivo": "relatório de turma",
+}
+
+
+def _rotulo_unidade(unidade: str) -> str:
+    """Rótulo da unidade; um código novo sem rótulo sai sem o "_" de código."""
+    return _ROTULO_UNIDADE.get(unidade) or str(unidade).replace("_", " ")
+
+
 # Linhas de LIVRO (leituras do Elefante) descartadas. O cursor do aluno avança mesmo
 # assim (decisão: um livro com defeito permanente não faz toda coleta pedir os livros
 # de novo — ``test_sync_revisao_regressao``), então outra coleta logo em seguida NÃO
@@ -1518,9 +1535,12 @@ class _Apuracao:
         return len(self.falhas) + len(self.ignorados) + self.defeitos
 
     def resumo_falhas(self) -> str:
+        """As unidades que falharam, contadas, na língua de quem lê os alertas da tela
+        de Integrações ("livros lidos de uma turma: 1"), nunca o código ("lote: 1")."""
         por_unidade: dict[str, int] = {}
         for f in self.falhas:
-            por_unidade[f.get("unidade") or "?"] = por_unidade.get(f.get("unidade") or "?", 0) + 1
+            rotulo = _rotulo_unidade(f.get("unidade") or "parte da coleta")
+            por_unidade[rotulo] = por_unidade.get(rotulo, 0) + 1
         return ", ".join(f"{u}: {n}" for u, n in sorted(por_unidade.items()))
 
     def resumo_descartes(self) -> str:
