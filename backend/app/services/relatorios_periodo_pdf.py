@@ -609,7 +609,9 @@ def _cobertura_html(aviso: dict) -> str:
 # não vai para o papel, que circula entre professores e em reuniões. Chave que estas
 # listas não conhecem cai no texto do motor, como na tela. ``curto`` só serve à
 # reserva (fpdf), cuja célula corta o texto longo: a frase inteira, cortada no meio,
-# diria outra coisa.
+# diria outra coisa. Por isso ele cabe INTEIRO na 3ª coluna da reserva: até
+# ``LARGURA_DO_CURTO_MM`` na fonte dela (``test_relatorios_periodo_pdf`` mede cada um).
+LARGURA_DO_CURTO_MM = 66.0
 _ROTULO_CLASSIFICACAO = {"SUPORTADO": "Confiável",
                          "SUPORTADO COM RESSALVA": "Confiável, com um cuidado",
                          "NÃO SUPORTADO": "Não calculado"}
@@ -629,7 +631,7 @@ _EXPLICACAO_ELEFANTE: dict[str, dict] = {
         "cuidado": "Vale a data em que o livro apareceu pela primeira vez no relatório da "
                    "plataforma, e ela não muda depois. Por isso um livro lido de novo não "
                    "entra aqui — ele aparece em “Livros com atividade”, como relido.",
-        "curto": "livro relido não entra aqui: aparece em Livros com atividade",
+        "curto": "livro relido conta só em Livros com atividade",
     },
     "tempo_min": {
         "nome": "“Tempo de leitura”",
@@ -638,7 +640,7 @@ _EXPLICACAO_ELEFANTE: dict[str, dict] = {
         "cuidado": "A plataforma nem sempre informa o tempo de um livro; quando não "
                    "informa, ele entra como zero. Por isso o total é o mínimo lido no "
                    "período — o tempo real pode ser maior.",
-        "curto": "tempo não informado entra como zero: o total é o mínimo",
+        "curto": "total mínimo: tempo não informado conta zero",
     },
     "livros_com_atividade": {
         "nome": "“Livros com atividade”",
@@ -660,7 +662,7 @@ _EXPLICACAO_ELEFANTE: dict[str, dict] = {
                    "na primeira coleta; sem coleta no fim, termina na última — nos dois "
                    "casos o número não cobre o período inteiro, e o aviso de “Questões”, "
                    "acima, diz quanto falta.",
-        "curto": "sem coleta no início ou no fim, não cobre o período inteiro",
+        "curto": "sem coleta no início ou no fim, não cobre tudo",
     },
 }
 
@@ -671,14 +673,14 @@ _EXPLICACAO_MATIFIC = {
                   "antes do início — a mesma regra das premiações.",
     "cuidado": "Sem coleta dentro do período, o aluno fica fora da conta (falta de dado não "
                "é zero) e é contado em “Sem coleta na janela”.",
-    "curto": "sem coleta no período, o aluno fica fora da conta (não é zero)",
+    "curto": "sem coleta no período, fica fora (não é zero)",
 }
 
 _EXPLICACAO_NAO_RESPONDE: dict[str, dict] = {
     "elefante.tempo_min_por_evento": {
         "nome": "Tempo de cada leitura (Elefante Letrado)",
         "explicacao": _TEMPO_DE_CADA_LEITURA,
-        "curto": "a plataforma soma o tempo por livro, não por leitura",
+        "curto": "o tempo vem somado por livro, não por leitura",
     },
     "matific.questoes": {
         "nome": "Questões (Matific)",
@@ -986,8 +988,9 @@ def _reserva(dados: dict, cor: str) -> bytes:
                        "confira matrícula e situação"])
     restrito = (dados.get("escopo") or {}).get("restrito_a_turmas")
     if restrito:
+        # Curto para caber inteiro na 3ª coluna (como os ``curto`` de "Como ler").
         linhas.append(["Recorte do usuário", f"{len(restrito)} turma(s)",
-                       "vinculadas ao cadastro de quem gerou - nao e a escola inteira"])
+                       "turmas de quem gerou - não é a escola inteira"])
     linhas.append(["RESUMO DO PERÍODO", "", ""])
     linhas += [list(linha) for linha in linhas_resumo(dados)]
 
@@ -1037,8 +1040,13 @@ def _reserva(dados: dict, cor: str) -> bytes:
             linhas.append(["", "valor NÃO é só o período", ""])
         for valor, detalhe in aviso["curtos"]:
             linhas.append(["", valor, _curto(detalhe, 44)])
-    for nome, cuidado in _ressalvas(dados):
-        linhas.append(["Cuidado ao ler · " + nome, "", _primeira_frase(cuidado, 72)])
+    # Um título, como "POR TURMA", e o nome do número sozinho na 1ª coluna: com o "Cuidado
+    # ao ler · " em cada linha, ela ficava larga e tirava da 3ª a largura do cuidado curto.
+    ressalvas = _ressalvas(dados)
+    if ressalvas:
+        linhas.append(["CUIDADO AO LER", "", ""])
+    for nome, cuidado in ressalvas:
+        linhas.append([nome, "", _primeira_frase(cuidado, 72)])
 
     for e in _o_que_nao_responde(dados):
         linhas.append([e["nome"], SEM_SUPORTE,

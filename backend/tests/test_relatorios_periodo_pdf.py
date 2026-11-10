@@ -381,7 +381,7 @@ def test_reserva_carrega_as_ressalvas_e_a_janela_efetiva(db, cenario, sem_chromi
     dados = _dados(db, escola.id, plataformas=("elefante", "matific"))
     texto = _texto(pdf._reserva(dados, "#1B2A4A"))
     assert "Janela efetiva" in texto
-    assert "Cuidado ao ler" in texto
+    assert "CUIDADO AO LER" in texto
     # a vitrine e a reserva dizem os MESMOS cuidados (os de "Como ler estes números")
     assert pdf._ressalvas(dados), "o motor devolveu ressalvas?"
     for nome, cuidado in pdf._ressalvas(dados):
@@ -659,10 +659,62 @@ def test_como_ler_nao_repete_o_que_o_relatorio_nao_responde(db, cenario, monkeyp
         explicada = [pdf._sem_tipografia(e["nome"]), pdf.SEM_SUPORTE,
                      pdf._sem_tipografia(e["curto"])]
         assert reserva.count(explicada) == 1, explicada
-    cuidados = [linha[0] for linha in reserva if linha[0].startswith("Cuidado ao ler")]
-    assert cuidados == [pdf._sem_tipografia("Cuidado ao ler · " + nome)
+    titulo = reserva.index(["CUIDADO AO LER", "", ""])
+    cuidados = [linha[0] for linha in reserva[titulo + 1:titulo + 5]]
+    assert cuidados == [pdf._sem_tipografia(nome)
                         for nome in ("“Livros novos”", "“Tempo de leitura”", "“Questões”",
                                      "“Atividades” e “Estrelas”")], cuidados
+    assert reserva.count(["CUIDADO AO LER", "", ""]) == 1
+
+
+def test_reserva_imprime_o_cuidado_curto_e_o_nome_inteiros(db, cenario):
+    """Revisão do acabamento (sonda R1). O ``curto`` existe "só para a reserva (fpdf),
+    cuja célula corta o texto longo: a frase inteira, cortada no meio, diria outra
+    coisa" — e a reserva gerada imprimia "tempo não informado entra como zero: o total é
+    o míni...", "sem coleta no período, o aluno fica fora da conta (não ..." (sem o "é
+    zero") e "Tempo de cada leitura (Elefante Letrad...". Cada cuidado curto e cada nome
+    de "O que este relatório não responde" têm de sair INTEIROS no PDF."""
+    dados = _dados_das_duas_plataformas(db, cenario)
+    texto = _texto(pdf._reserva(dados, "#1B2A4A"))
+    esperados = [pdf._sem_tipografia(c) for _n, c in pdf._ressalvas(dados)]
+    esperados += [pdf._sem_tipografia(e[k]) for e in pdf._o_que_nao_responde(dados)
+                  for k in ("nome", "curto")]
+    esperados += [pdf._sem_tipografia(n) for n, _c in pdf._ressalvas(dados)]
+    cortados = [e for e in esperados if e not in texto]
+    assert not cortados, (cortados, texto[-900:])
+    assert "..." not in _secao(texto, "CUIDADO AO LER", None), texto[-900:]
+
+
+def test_reserva_com_recorte_do_professor_tambem_nao_corta_o_cuidado(db, cenario):
+    """O recorte do professor acrescenta a linha "Recorte do usuário", cujo detalhe (o
+    mais longo da 3ª coluna) a cortava e estreitava as outras colunas."""
+    dados = _dados_das_duas_plataformas(db, cenario)
+    dados["escopo"] = {**(dados.get("escopo") or {}), "restrito_a_turmas": [1, 2]}
+    texto = _texto(pdf._reserva(dados, "#1B2A4A"))
+    esperados = [pdf._sem_tipografia(c) for _n, c in pdf._ressalvas(dados)]
+    esperados += [pdf._sem_tipografia(e[k]) for e in pdf._o_que_nao_responde(dados)
+                  for k in ("nome", "curto")]
+    esperados.append("turmas de quem gerou - não é a escola inteira")
+    cortados = [e for e in esperados if e not in texto]
+    assert not cortados, (cortados, texto[-900:])
+
+
+def test_cada_curto_cabe_na_coluna_da_reserva():
+    """Guarda de quem edita os textos: cada ``curto`` (de "Como ler" e de "O que este
+    relatório não responde") mede até ``LARGURA_DO_CURTO_MM`` na fonte da reserva."""
+    from fpdf import FPDF
+
+    medida = FPDF()
+    medida.add_page()
+    medida.set_font("helvetica", "", 9)
+    largos = {}
+    for e in (*pdf._EXPLICACAO_ELEFANTE.values(), pdf._EXPLICACAO_MATIFIC,
+              *pdf._EXPLICACAO_NAO_RESPONDE.values()):
+        if e.get("curto"):
+            mm = medida.get_string_width(pdf._sem_tipografia(e["curto"]))
+            if mm > pdf.LARGURA_DO_CURTO_MM:
+                largos[e["curto"]] = round(mm, 1)
+    assert not largos, largos
 
 
 _TELA = (pathlib.Path(__file__).resolve().parents[2] / "apps" / "web" / "src" / "pages"
