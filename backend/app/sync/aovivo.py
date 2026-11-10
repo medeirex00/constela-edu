@@ -179,8 +179,10 @@ def mapa_filtro(periodo: str | None, inicio: str | None, fim: str | None,
         if df < di:
             raise ErroConector("A data final não pode ser anterior à inicial.",
                                codigo="periodo_invalido", recuperavel=False)
+        rotulo = periodos._rotulo_intervalo(di, df)
+        di, df = _ate_hoje(di, df, hoje)
         return (f"start_date={di:%Y-%m-%d}&end_date={_end_date(df):%Y-%m-%d}",
-                periodos._rotulo_intervalo(di, df), di, df)
+                rotulo, di, df)
 
     # Presets NATIVOS do site (casam byte-a-byte com o que o Matific manda).
     if p == "semana":
@@ -197,11 +199,23 @@ def mapa_filtro(periodo: str | None, inicio: str | None, fim: str | None,
     if i is None or f is None:
         raise ErroConector(f"Período '{periodo}' não é suportado.",
                            codigo="periodo_invalido", recuperavel=False)
-    # Nunca pede data FUTURA ao Matific: "este mês/bimestre" vai do início até
-    # HOJE (o fim do mês/bimestre ainda não chegou). Evita rejeição e casa com o
-    # significado "premiar pelo que já foi feito no período".
-    di, df = i.date(), min(f.date(), hoje)
+    di, df = _ate_hoje(i.date(), f.date(), hoje)
     return (f"start_date={di:%Y-%m-%d}&end_date={_end_date(df):%Y-%m-%d}", rotulo, di, df)
+
+
+def _ate_hoje(di: date, df: date, hoje: date) -> tuple[date, date]:
+    """Nunca pede data FUTURA ao Matific: "este mês/bimestre" (e o personalizado)
+    vai do início até HOJE — o fim do período ainda não chegou. Evita rejeição e
+    casa com o significado "premiar pelo que já foi feito no período".
+
+    Período que ainda NÃO COMEÇOU é recusado aqui, antes de qualquer login ou
+    consulta: antes, só o fim era cortado e o "4º bimestre" escolhido em setembro
+    ia ao Matific de trás para frente (start_date=05/10, end_date=20/09)."""
+    if di > hoje:
+        raise ErroConector(
+            f"O período escolhido ainda não começou: ele começa em {di:%d/%m/%Y}.",
+            codigo="periodo_invalido", recuperavel=False)
+    return di, min(df, hoje)
 
 
 def _end_date(fim: date) -> date:
