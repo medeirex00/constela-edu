@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import func, select
 
 from app.models.plataformas import SnapshotElefante
@@ -161,6 +162,64 @@ def test_valor_nulo_explicito_nao_e_campo_renomeado(db, escola_completa, monkeyp
 
     assert ex.status == "concluida"
     assert "parser_incompativel" not in alertas_abertos(db, eid, "elefante")
+
+
+@pytest.mark.parametrize("com_livro_novo", [False, True])
+def test_campos_sumidos_com_linha_com_defeito_nao_contam_como_em_dia(
+        db, escola_completa, monkeypatch, com_livro_novo):
+    """Revisão independente: uma linha sem nome (defeito) ao lado dos campos sumidos
+    fazia o motivo virar 'linhas_descartadas', que conta como "em dia" — o
+    'desatualizada' não abria e o card não citava os campos que faltaram."""
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, _c = ec["alunos"]
+    credencial(db, eid, "elefante")
+    nav = NavElefante(_origem(a, b))
+    instalar(monkeypatch, nav_elefante=nav)
+    rodar(db, eid, "elefante")
+    _coleta_de_dois_dias_atras(db)
+    em_dia_antes = service.ultimo_em_dia_em(db, eid, "elefante")
+
+    nav.turmas[CID]["alunos"].append(aluno_el(9300003, "", [], tempo=1, resp=1, ok=1))
+    _sem(nav, NAO_ESSENCIAIS, livros_de={9300001: 7} if com_livro_novo else None)
+    ex, _ = rodar(db, eid, "elefante")
+
+    assert ex.status == ("parcial" if com_livro_novo else "sem_atualizacao")
+    assert ex.motivo == MOTIVO
+    assert service.ultimo_em_dia_em(db, eid, "elefante") == em_dia_antes
+    # O defeito continua dito no alerta da coleta parcial.
+    abertos = alertas_abertos(db, eid, "elefante")
+    assert "parser_incompativel" in abertos and "coleta_parcial" in abertos
+    msg = db.execute(select(SincronizacaoAlerta.mensagem).where(
+        SincronizacaoAlerta.escola_id == eid, SincronizacaoAlerta.tipo == "coleta_parcial",
+        SincronizacaoAlerta.resolvido.is_(False))).scalar_one()
+    assert "descartada" in msg
+
+
+def test_campos_sumidos_com_pendencia_de_revisao_nao_contam_como_em_dia(
+        db, escola_completa, monkeypatch):
+    """A mesma coisa com uma conta que vai para a revisão (nome de uma palavra): o
+    motivo virava 'correspondencia_pendente', que conta como "em dia". A pendência
+    continua com o alerta próprio."""
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, _c = ec["alunos"]
+    credencial(db, eid, "elefante")
+    nav = NavElefante(_origem(a, b))
+    instalar(monkeypatch, nav_elefante=nav)
+    rodar(db, eid, "elefante")
+    _coleta_de_dois_dias_atras(db)
+    em_dia_antes = service.ultimo_em_dia_em(db, eid, "elefante")
+
+    nav.turmas[CID]["alunos"].append(
+        aluno_el(9300004, "Ficticio", [livro("Livro Ficticio X")]))
+    _sem(nav, NAO_ESSENCIAIS)
+    ex, _ = rodar(db, eid, "elefante")
+
+    assert (ex.status, ex.motivo) == ("sem_atualizacao", MOTIVO)
+    assert service.ultimo_em_dia_em(db, eid, "elefante") == em_dia_antes
+    abertos = alertas_abertos(db, eid, "elefante")
+    assert "parser_incompativel" in abertos and "correspondencia_pendente" in abertos
 
 
 def test_campo_ausente_so_em_parte_das_linhas_segue_herdando_como_antes(

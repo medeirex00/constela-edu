@@ -1513,10 +1513,13 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
     if aplicados:
         if ap.falhas:
             return "parcial", "coleta_parcial"
-        if ap.defeitos:
-            return "parcial", "linhas_descartadas"
+        # Campo sumido (S9) vem ANTES da linha com defeito: 'parcial/linhas_descartadas'
+        # conta como "em dia" (``_filtro_em_dia``) e esconderia que tempo e questões
+        # pararam de chegar. Os descartes continuam na mensagem do 'coleta_parcial'.
         if ap.campos_nao_atualizados:
             return "parcial", MOTIVO_CAMPOS_NAO_ATUALIZADOS
+        if ap.defeitos:
+            return "parcial", "linhas_descartadas"
         return "concluida", None
     if ap.falhas and ap.conferiu_a_escola and all(
             f.get("unidade") == "endpoint" for f in ap.falhas):
@@ -1542,13 +1545,20 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
     uteis = ap.linhas - ap.decididos
     if uteis > 0 and ap.defeitos >= uteis:
         return "erro", "linhas_descartadas"       # tudo o que veio tinha defeito
+    if (ap.em_revisao or ap.ignorados) and not ap.conferiu_a_escola:
+        # Forma C: pendência sem nenhuma conta da escola conferida é
+        # 'tudo_em_revisao' — não é em dia (credencial de outra escola, casamento
+        # quebrado ou 1ª coleta sem vínculo) e tem o texto próprio do alerta.
+        return "sem_atualizacao", MOTIVO_TUDO_EM_REVISAO
+    if ap.campos_nao_atualizados:
+        # S9 antes da pendência comum e da linha com defeito: as duas contam como
+        # "em dia" (``_filtro_em_dia``) e esconderiam que tempo e questões pararam
+        # de chegar. Os alertas delas abrem do mesmo jeito (``_concluir`` os decide
+        # pela contabilidade, não pelo motivo).
+        return "sem_atualizacao", MOTIVO_CAMPOS_NAO_ATUALIZADOS
     if ap.em_revisao or ap.ignorados:
         # Forma C: pendência com ≥1 conta da escola conferida é "correspondência
-        # pendente" (em dia, com o alerta próprio); sem nenhuma conferida, é
-        # 'tudo_em_revisao' — não é em dia (credencial de outra escola, casamento
-        # quebrado ou 1ª coleta sem vínculo).
-        if not ap.conferiu_a_escola:
-            return "sem_atualizacao", MOTIVO_TUDO_EM_REVISAO
+        # pendente" (em dia, com o alerta próprio).
         return "sem_atualizacao", "correspondencia_pendente"
     if ap.retidos_queda:
         # Total do Matific MENOR que o gravado: o valor ficou retido (alerta
@@ -1557,8 +1567,6 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
         return "sem_atualizacao", "queda_retida"
     if ap.defeitos:
         return "sem_atualizacao", "linhas_descartadas"
-    if ap.campos_nao_atualizados:
-        return "sem_atualizacao", MOTIVO_CAMPOS_NAO_ATUALIZADOS
     if ap.decididos and not ap.conferiu_a_escola:
         # Só vieram contas que a escola já APOSENTOU: nada a revisar, mas nenhuma
         # conta da escola foi conferida — pela forma C isso não prova que o dado
