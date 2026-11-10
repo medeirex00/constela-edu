@@ -7,6 +7,8 @@ import analiseReal from "./fixtures/importacoes/analise_matific_motivos.json";
 import analiseDuasContas from "./fixtures/importacoes/analise_matific_duas_contas.json";
 import analisePlacarMotivos from "./fixtures/importacoes/analise_matific_placar_motivos.json";
 import analiseDupNaFila from "./fixtures/importacoes/analise_matific_id_externo_duplicado_na_fila.json";
+import analiseOutraIdentDuas from "./fixtures/importacoes/analise_matific_outra_identidade_duas_contas.json";
+import analiseOutraIdentNaFila from "./fixtures/importacoes/analise_matific_outra_identidade_na_fila.json";
 import {
   api,
   fireEvent,
@@ -567,7 +569,7 @@ describe("Importacoes", () => {
       ["Teo Ficticio", `Nome parecido em outra turma — ${vai}`, /aluno de outra turma, não da turma do relatório/],
       ["Heitor Fictorino Lemos", `Aluno com a ficha inativa — ${vai}`, /está com a ficha inativa/],
       ["Iara Ficticia Neves", `Conta de um aluno com a ficha inativa — ${vai}`, /já está vinculada a um aluno com a ficha inativa/],
-      ["Joao Pedro Barbosa", `O aluno já tem outra conta — ${vai}`, /já tem outra conta nesta plataforma/],
+      ["Joao Pedro Barbosa", `Outra conta leva ao mesmo aluno — ${vai}`, /Outra conta da plataforma também leva a este aluno/],
       ["Crianca Ficticia Um", `A mesma conta com nomes ou números diferentes — ${vai}`, /veio com nomes ou números diferentes/],
       ["Crianca Ficticia Dois", `A mesma conta com nomes ou números diferentes — ${vai}`, /veio com nomes ou números diferentes/],
       ["Bento Ficticio Moura", `Conta de um aluno de outra escola — ${vai}`, /aluno de outra escola do Constela/],
@@ -641,6 +643,33 @@ describe("Importacoes", () => {
       + "anterior que ainda espera em Revisões de identidade: não dá para saber de qual criança "
       + "são os números.");
     expect((destino as HTMLSelectElement).value).toBe("revisao");
+  });
+
+  // outra_identidade_na_plataforma com a ficha SEM conta nenhuma (backend:
+  // test_outra_conta_leva_ao_mesmo_aluno_sem_ele_ter_conta): duas contas sem vínculo deste
+  // relatório levam a ela, ou — no relatório seguinte, com uma conta só — a rival espera
+  // numa pendência. A prévia dizia "O aluno já tem outra conta" e "... ou outra conta deste
+  // relatório também leva a ele": as duas partes falsas no 2º caso, a 1ª nos dois.
+  it.each([
+    ["duas contas sem vínculo neste relatório", analiseOutraIdentDuas, 2],
+    ["uma conta, com a rival numa pendência", analiseOutraIdentNaFila, 1],
+  ])("outra conta leva ao mesmo aluno (%s): o selo não diz que a ficha já tem conta", async (_caso, analise, linhas) => {
+    await previaReal(analise);
+    const a = analise as unknown as Analise;
+    expect(a.linhas.map((l) => l.correspondencia?.motivo))
+      .toEqual(Array(linhas).fill("outra_identidade_na_plataforma"));
+    const destinos = screen.getAllByRole("combobox", { name: /^Destino de / });
+    expect(destinos).toHaveLength(linhas);
+    for (const destino of destinos) {
+      const descricao = descricaoDoDestino(destino);
+      expect(descricao).not.toMatch(/já tem outra conta/);
+      expect(descricao).not.toMatch(/outra conta deste relatório/);
+      expect(descricao).toBe(
+        "Outra conta leva ao mesmo aluno — vai para Revisões de identidade Outra conta da "
+        + "plataforma também leva a este aluno — já vinculada à ficha, neste relatório ou numa "
+        + "pendência em Revisões de identidade: não dá para saber qual delas é a criança.");
+      expect((destino as HTMLSelectElement).value).toBe("revisao");
+    }
   });
 
   it("motivo que a tela ainda não conhece: 'Requer revisão', sem chamar de duplicata", async () => {

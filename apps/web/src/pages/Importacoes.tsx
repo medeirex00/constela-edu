@@ -233,10 +233,13 @@ const MOTIVO_REVISAO: Record<string, { rotulo: string; explicacao: string }> = {
     rotulo: "Conta de outro aluno",
     explicacao: "A conta da plataforma já está vinculada a outro aluno desta escola.",
   },
+  // Os três caminhos do motor (``_para_aluno``): a ficha já tem outra conta; outra
+  // conta deste relatório leva a ela; ou a leva uma conta que espera numa pendência —
+  // nos dois últimos, a ficha pode não ter conta nenhuma.
   outra_identidade_na_plataforma: {
-    rotulo: "O aluno já tem outra conta",
+    rotulo: "Outra conta leva ao mesmo aluno",
     explicacao:
-      "O aluno encontrado já tem outra conta nesta plataforma, ou outra conta deste relatório também leva a ele.",
+      "Outra conta da plataforma também leva a este aluno — já vinculada à ficha, neste relatório ou numa pendência em Revisões de identidade: não dá para saber qual delas é a criança.",
   },
   ra_repetido: {
     rotulo: "RA de mais de um aluno",

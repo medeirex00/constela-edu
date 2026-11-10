@@ -190,6 +190,16 @@ PLACAR_DUP_2 = _placar("3º Ano A", [
     {"nome": "Crianca Ficticia Um", "uuid": "uuid-ficticio-dup-fila", "estrelas": 9,
      "atividades": 3}])
 
+# Duas contas sem vínculo levam à ficha "Sofia Almeida Duarte", que não tem conta
+# nenhuma; no Placar seguinte vem só uma delas (a rival espera numa pendência).
+PLACAR_SOFIA_DUAS = _placar("3º Ano A", [
+    {"nome": "Sofia Almeida Duarte", "uuid": "uuid-ficticio-s1", "estrelas": 7, "atividades": 2},
+    {"nome": "Sofia Almeida Duarte", "uuid": "uuid-ficticio-s2", "estrelas": 8,
+     "atividades": 2}])
+PLACAR_SOFIA_UMA = _placar("3º Ano A", [
+    {"nome": "Sofia Almeida Duarte", "uuid": "uuid-ficticio-s1", "estrelas": 9,
+     "atividades": 3}])
+
 
 def _sem_preparo(_cliente, _db, _escola_completa) -> None:
     return None
@@ -207,6 +217,12 @@ def _preparo_dup_na_fila(cliente, _db, escola_completa) -> None:
     _confirmar(cliente, eid, primeira, _corpo_padrao(primeira, turma))
 
 
+def _preparo_sofia_na_fila(cliente, _db, escola_completa) -> None:
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"].id
+    primeira = _analise(cliente, eid, PLACAR_SOFIA_DUAS)
+    _confirmar(cliente, eid, primeira, _corpo_padrao(primeira, turma))
+
+
 # Exemplo gravado para a tela → (texto enviado ao /analisar, cenário antes dele:
 # ``preparo(cliente, db, escola_completa)``, que pode já ter importado um relatório).
 EXEMPLOS = {
@@ -214,6 +230,8 @@ EXEMPLOS = {
     "analise_matific_duas_contas.json": (PLACAR_DUAS_CONTAS, _sem_preparo),
     "analise_matific_placar_motivos.json": (PLACAR_MOTIVOS, _preparo_motivos),
     "analise_matific_id_externo_duplicado_na_fila.json": (PLACAR_DUP_2, _preparo_dup_na_fila),
+    "analise_matific_outra_identidade_duas_contas.json": (PLACAR_SOFIA_DUAS, _sem_preparo),
+    "analise_matific_outra_identidade_na_fila.json": (PLACAR_SOFIA_UMA, _preparo_sofia_na_fila),
 }
 
 TIPOS_TS = RAIZ / "packages" / "core" / "src" / "tipos.ts"
@@ -359,6 +377,35 @@ def test_a_mesma_conta_com_nomes_diferentes_volta_numa_linha_so(cliente, db, esc
     analise = _analise(cliente, eid, PLACAR_DUP_2)
     assert len(analise["linhas"]) == 1
     assert analise["linhas"][0]["correspondencia"]["motivo"] == "id_externo_duplicado"
+
+
+def test_outra_conta_leva_ao_mesmo_aluno_sem_ele_ter_conta(cliente, db, escola_completa):
+    """outra_identidade_na_plataforma sem a ficha ter conta nenhuma: (a) duas contas sem
+    vínculo deste relatório levam à mesma ficha; (b) no relatório seguinte vem só uma, e a
+    rival está numa pendência em Revisões. A tela dizia "O aluno já tem outra conta" e
+    "... ou outra conta deste relatório também leva a ele" (Importacoes.test, "outra conta
+    leva ao mesmo aluno")."""
+    from sqlalchemy import func, select
+
+    from app.models import IdentidadeExterna
+
+    eid = escola_completa["escola"].id
+    sofia = next(a for a in escola_completa["alunos"] if a.nome == "Sofia Almeida Duarte")
+
+    def contas_da_ficha() -> int:
+        db.expire_all()
+        return db.scalar(select(func.count()).select_from(IdentidadeExterna)
+                         .where(IdentidadeExterna.aluno_id == sofia.id))
+
+    primeira = _analise(cliente, eid, PLACAR_SOFIA_DUAS)
+    assert [linha["correspondencia"]["motivo"] for linha in primeira["linhas"]] == [
+        "outra_identidade_na_plataforma"] * 2
+    assert contas_da_ficha() == 0
+    _preparo_sofia_na_fila(cliente, db, escola_completa)
+    segunda = _analise(cliente, eid, PLACAR_SOFIA_UMA)
+    assert len(segunda["linhas"]) == 1
+    assert segunda["linhas"][0]["correspondencia"]["motivo"] == "outra_identidade_na_plataforma"
+    assert contas_da_ficha() == 0
 
 
 def test_cada_motivo_do_backend_tem_rotulo_na_tela():
