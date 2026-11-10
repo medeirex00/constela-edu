@@ -211,6 +211,14 @@ PLACAR_OUTRA_ESCOLA = _placar("3º Ano A", [
     {"nome": "Bento Ficticio Moura", "uuid": "uuid-ficticio-bento", "estrelas": 9,
      "atividades": 2}])
 
+# Placar da escola (turma por aluno) com a MESMA conta em duas turmas, os mesmos números
+# (a criança está em duas turmas do Matific).
+PLACAR_MESMA_CONTA_DUAS_TURMAS = _placar(None, [
+    {"nome": "Crianca Ficticia Dupla", "turma": "3º Ano A", "uuid": "uuid-ficticio-dupla",
+     "estrelas": 9, "atividades": 2},
+    {"nome": "Crianca Ficticia Dupla", "turma": "4º Ano B", "uuid": "uuid-ficticio-dupla",
+     "estrelas": 9, "atividades": 2}])
+
 
 def _sem_preparo(_cliente, _db, _escola_completa) -> None:
     return None
@@ -264,6 +272,16 @@ def _preparo_outra_escola(_cliente, db, escola_completa) -> int:
     return aqui.id
 
 
+def _preparo_quarto_ano(_cliente, db, escola_completa) -> int:
+    from app.models import Turma
+
+    t4 = Turma(escola_id=escola_completa["escola"].id, nome="4º Ano B", ano_escolar="4º Ano",
+               ano_letivo=2026)
+    db.add(t4)
+    db.commit()
+    return t4.id
+
+
 # Exemplo gravado para a tela → (texto enviado ao /analisar, cenário antes dele:
 # ``preparo(cliente, db, escola_completa)``, que pode já ter importado um relatório).
 EXEMPLOS = {
@@ -275,6 +293,8 @@ EXEMPLOS = {
     "analise_matific_outra_identidade_na_fila.json": (PLACAR_SOFIA_UMA, _preparo_sofia_na_fila),
     "analise_matific_turma_arquivada.json": (PLACAR_TURMA_ARQUIVADA, _preparo_turma_arquivada),
     "analise_matific_conta_de_outra_escola.json": (PLACAR_OUTRA_ESCOLA, _preparo_outra_escola),
+    "analise_matific_mesma_conta_duas_turmas.json": (PLACAR_MESMA_CONTA_DUAS_TURMAS,
+                                                     _preparo_quarto_ano),
 }
 
 TIPOS_TS = RAIZ / "packages" / "core" / "src" / "tipos.ts"
@@ -513,6 +533,32 @@ def test_conta_de_outra_escola_com_a_ficha_daqui_escolhida_na_lista(
                  for linha in analise["linhas"]]
     resultado = _confirmar(cliente, eid, analise, escolhida)
     assert (resultado["qtd_alunos"], resultado["qtd_revisoes"]) == esperado, resultado
+
+
+def test_mesma_conta_em_duas_turmas_vira_uma_ficha(cliente, db, escola_completa):
+    """A mesma conta em duas turmas do Placar, com os mesmos números: duas linhas no
+    /analisar, as duas "novo". O corpo da tela — UMA linha da prévia (conta + nome), com a
+    turma da primeira para as duas — cria UMA ficha: a 2ª linha associa pela conta
+    recém-vinculada. A prévia mostrava duas linhas e "2 aluno(s) novo(s)"
+    (Importacoes.test, "a mesma conta em duas turmas")."""
+    from sqlalchemy import func, select
+
+    from app.models import Aluno, IdentidadeExterna
+
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"].id
+    _preparo_quarto_ano(cliente, db, escola_completa)
+    analise = _analise(cliente, eid, PLACAR_MESMA_CONTA_DUAS_TURMAS)
+    assert [(linha["dados"]["turma_relatorio"], linha["correspondencia"]["status"])
+            for linha in analise["linhas"]] == [("3º Ano A", "nao_encontrado"),
+                                                ("4º Ano B", "nao_encontrado")]
+    antes = db.scalar(select(func.count()).select_from(Aluno).where(Aluno.escola_id == eid))
+    resultado = _confirmar(cliente, eid, analise, _corpo_padrao(analise, turma))
+    assert (resultado["qtd_alunos"], resultado.get("qtd_revisoes") or 0) == (1, 0), resultado
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(Aluno)
+                     .where(Aluno.escola_id == eid)) == antes + 1
+    assert db.scalar(select(func.count()).select_from(IdentidadeExterna)
+                     .where(IdentidadeExterna.id_externo == "uuid-ficticio-dupla")) == 1
 
 
 def test_cada_motivo_do_backend_tem_rotulo_na_tela():

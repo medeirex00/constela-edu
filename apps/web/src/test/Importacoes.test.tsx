@@ -11,6 +11,7 @@ import analiseOutraIdentDuas from "./fixtures/importacoes/analise_matific_outra_
 import analiseOutraIdentNaFila from "./fixtures/importacoes/analise_matific_outra_identidade_na_fila.json";
 import analiseTurmaArquivada from "./fixtures/importacoes/analise_matific_turma_arquivada.json";
 import analiseOutraEscola from "./fixtures/importacoes/analise_matific_conta_de_outra_escola.json";
+import analiseMesmaContaDuasTurmas from "./fixtures/importacoes/analise_matific_mesma_conta_duas_turmas.json";
 import {
   api,
   fireEvent,
@@ -754,6 +755,49 @@ describe("Importacoes", () => {
     const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
     const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
     expect(corpo.linhas).toMatchObject([{ aluno_id: alt.aluno_id, criar_em_turma_id: null }]);
+  });
+
+  // A mesma conta (uuid) em "3º Ano A" e "4º Ano B" do Placar, com os mesmos números: a
+  // criança está em duas turmas do Matific. A prévia mostrava duas linhas, "2 aluno(s)
+  // novo(s)" e "2 de 2 … serão importados"; o backend cria UMA ficha — a 2ª linha associa
+  // pela conta recém-vinculada (backend: test_mesma_conta_em_duas_turmas_vira_uma_ficha,
+  // que confirma o corpo abaixo: 1 importado, 1 ficha nova).
+  it("a mesma conta em duas turmas: uma linha na prévia, como o backend (uma ficha)", async () => {
+    const u = await previaReal(analiseMesmaContaDuasTurmas);
+    const a = analiseMesmaContaDuasTurmas as unknown as Analise;
+    expect(a.linhas.map((l) => [l.dados.turma_relatorio, l.dados.matific_uuid])).toEqual([
+      ["3º Ano A", "uuid-ficticio-dupla"], ["4º Ano B", "uuid-ficticio-dupla"]]);
+    expect(screen.getAllByRole("combobox", { name: /^Destino de / }).map((d) => d.getAttribute("aria-label")))
+      .toEqual(["Destino de Crianca Ficticia Dupla (3º Ano A, 4º Ano B)"]);
+    expect(screen.getByText(/serão importados/).textContent).toBe("1 de 1 aluno(s) serão importados.");
+    expect(screen.getByText(/aluno\(s\) novo\(s\)/).textContent).toBe("1 aluno(s) novo(s).");
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent("1 aluno(s) novo(s)");
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "1 aluno(s) com dado novo importado(s).", importacao_id: 13,
+      qtd_alunos: 1, qtd_erros: 0, avisos: [], qtd_revisoes: 0, criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
+    // As duas linhas seguem (o backend decide cada uma), com a turma da 1ª.
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas).toMatchObject([
+      { dados: { turma_relatorio: "3º Ano A" }, aluno_id: null, criar_em_turma_id: 1 },
+      { dados: { turma_relatorio: "4º Ano B" }, aluno_id: null, criar_em_turma_id: 1 }]);
+  });
+
+  it("homônimos sem conta em turmas diferentes continuam em linhas separadas", async () => {
+    const analise = analiseFake();
+    analise.linhas = ["3º Ano A", "4º Ano B"].map((turma, i) => ({
+      ...analiseFake().linhas[0], numero: i + 1, nome: "Maria J",
+      dados: { atividades: 1, estrelas: 2, turma_relatorio: turma },
+      correspondencia: { status: "nao_encontrado", aluno_id: null, aluno_nome: null,
+                         similaridade: null, motivo: "novo", alternativas: [] },
+    }));
+    await previaReal(analise);
+    expect(screen.getAllByRole("combobox", { name: /^Destino de / }).map((d) => d.getAttribute("aria-label")))
+      .toEqual(["Destino de Maria J (3º Ano A)", "Destino de Maria J (4º Ano B)"]);
   });
 
   it("motivo que a tela ainda não conhece: 'Requer revisão', sem chamar de duplicata", async () => {

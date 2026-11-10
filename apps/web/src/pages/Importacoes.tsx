@@ -371,43 +371,57 @@ function contaDaLinha(linha: LinhaAnalise): string {
   return conta === undefined || conta === null ? "" : String(conta);
 }
 
-/** Agrupa as linhas da análise por aluno (nome + turma do relatório) E por conta da
- *  plataforma. No relatório individual, as centenas de linhas de livros (todas da
- *  mesma conta) viram um único grupo. A turma entra na chave porque o leaderboard
- *  do Matific abrevia os nomes ("MARIA J") e alunos DIFERENTES de turmas diferentes
- *  colidem — num grupo só, o mês de um deles seria descartado em silêncio. A conta
- *  entra porque o backend decide cada conta por si: duas contas com o mesmo nome na
- *  mesma sala abrem uma pendência CADA (contas_repetidas_no_relatorio), e um grupo
- *  só aplicaria a correspondência da primeira às duas. */
+/** Agrupa as linhas da análise por aluno: pela CONTA da plataforma + nome, quando a
+ *  linha traz conta; sem conta, por nome + turma do relatório. No relatório individual,
+ *  as centenas de linhas de livros (todas da mesma conta) viram um único grupo. Sem
+ *  conta, a turma entra na chave porque o leaderboard do Matific abrevia os nomes
+ *  ("MARIA J") e alunos DIFERENTES de turmas diferentes colidem — num grupo só, o mês
+ *  de um deles seria descartado em silêncio. A conta entra porque o backend decide cada
+ *  conta por si: duas contas com o mesmo nome na mesma sala abrem uma pendência CADA
+ *  (contas_repetidas_no_relatorio), e um grupo só aplicaria a correspondência da
+ *  primeira às duas. E, no sentido inverso, a MESMA conta em duas turmas do Placar é uma
+ *  criança só: o backend cria uma ficha (a 2ª linha associa pela conta recém-vinculada)
+ *  — por isso a turma não entra na chave de quem tem conta. A mesma conta com NOMES
+ *  diferentes continua separada (id_externo_duplicado: uma pendência por nome). */
 function agrupar(analise: Analise): Grupo[] {
   const mapa = new Map<string, Grupo>();
   const ordem: string[] = [];
+  const turmaDe = (linha: LinhaAnalise) => String(linha.dados.turma_relatorio ?? "");
   const chaveAluno = (linha: LinhaAnalise, indice: number) =>
-    `${normalizar(linha.nome) || `#${indice}`}|${normalizar(String(linha.dados.turma_relatorio ?? ""))}`;
-  // Contas distintas de cada aluno (nome + turma), na ordem do relatório.
+    `${normalizar(linha.nome) || `#${indice}`}|${normalizar(turmaDe(linha))}`;
+  const chaveDoGrupo = (linha: LinhaAnalise, indice: number) => {
+    const conta = contaDaLinha(linha);
+    return conta ? `conta:${conta}|${normalizar(linha.nome) || `#${indice}`}` : chaveAluno(linha, indice);
+  };
+  // Contas distintas de cada aluno (nome + turma), na ordem do relatório; e as turmas
+  // de cada grupo (a mesma conta pode vir em mais de uma).
   const contasDoAluno = new Map<string, string[]>();
+  const turmasDoGrupo = new Map<string, string[]>();
   analise.linhas.forEach((linha, indice) => {
     const conta = contaDaLinha(linha);
     const contas = contasDoAluno.get(chaveAluno(linha, indice)) ?? [];
     if (conta && !contas.includes(conta)) contas.push(conta);
     contasDoAluno.set(chaveAluno(linha, indice), contas);
+    const turmas = turmasDoGrupo.get(chaveDoGrupo(linha, indice)) ?? [];
+    if (turmaDe(linha) && !turmas.includes(turmaDe(linha))) turmas.push(turmaDe(linha));
+    turmasDoGrupo.set(chaveDoGrupo(linha, indice), turmas);
   });
   analise.linhas.forEach((linha, indice) => {
-    const turma = String(linha.dados.turma_relatorio ?? "");
     const conta = contaDaLinha(linha);
-    const chave = `${chaveAluno(linha, indice)}|${conta}`;
+    const chave = chaveDoGrupo(linha, indice);
     let g = mapa.get(chave);
     if (!g) {
-      // Homônimos em turmas diferentes: o nome exibido ganha a turma para o
-      // usuário saber qual é qual na conferência. Contas diferentes com o mesmo
-      // nome na mesma turma: "conta 1 de 2", "conta 2 de 2".
-      const repetido = analise.linhas.some(
+      // Homônimos em turmas diferentes, ou a mesma conta em mais de uma turma: o nome
+      // exibido ganha a(s) turma(s) para o usuário saber qual é qual na conferência.
+      // Contas diferentes com o mesmo nome na mesma turma: "conta 1 de 2", "conta 2 de 2".
+      const turmas = turmasDoGrupo.get(chave) ?? [];
+      const repetido = turmas.length > 1 || analise.linhas.some(
         (outra) => normalizar(outra.nome) === normalizar(linha.nome)
-          && String(outra.dados.turma_relatorio ?? "") !== turma,
+          && !turmas.includes(turmaDe(outra)),
       );
       const contas = contasDoAluno.get(chaveAluno(linha, indice)) ?? [];
       const detalhes = [
-        ...(repetido && turma ? [turma] : []),
+        ...(repetido && turmas.length > 0 ? [turmas.join(", ")] : []),
         ...(conta && contas.length > 1 ? [`conta ${contas.indexOf(conta) + 1} de ${contas.length}`] : []),
       ];
       g = {
@@ -593,6 +607,9 @@ export default function Importacoes() {
       const linhas = grupos.flatMap((grupo, gi) => {
         const acao = acoes[gi];
         if (!acao || acao.tipo === "ignorar") return [];
+        // A turma do relatório do grupo é a da 1ª linha (a que o "Criar na turma do
+        // relatório (…)" mostra): a mesma conta em duas turmas é UM aluno, numa turma.
+        const turmaDoGrupo = analise.linhas[grupo.indices[0]]?.dados.turma_relatorio;
         return grupo.indices
           .map((i) => analise.linhas[i])
           .filter((linha) => linha.erros.length === 0)
@@ -606,7 +623,7 @@ export default function Importacoes() {
             // backend cria a turma uma única vez e matricula o aluno nela.
             criar_em_turma_nome:
               acao.tipo === "criar_nova"
-                ? String(linha.dados.turma_relatorio ?? analise.turma_detectada ?? "") || null
+                ? String(turmaDoGrupo ?? analise.turma_detectada ?? "") || null
                 : acao.tipo === "revisao"
                   ? acao.turmaNome
                   : null,
