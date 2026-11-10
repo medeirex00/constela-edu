@@ -714,6 +714,17 @@ describe("Navegação — trilha em três níveis", () => {
   });
 });
 
+describe("Navegação — tela pequena (o que a página de Suporte afirma)", () => {
+  it("a pesquisa fica em todas as larguras; a trilha só aparece a partir de lg", async () => {
+    await montar(COORDENACAO, { rota: "/alunos" });
+    const pesquisa = screen.getByRole("textbox", { name: /Pesquisar páginas/ });
+    for (let el: HTMLElement | null = pesquisa; el; el = el.parentElement) {
+      expect(String(el.className ?? "")).not.toMatch(/(^|\s)hidden(\s|$)/);
+    }
+    expect(screen.getByRole("navigation", { name: "Trilha de navegação" })).toHaveClass("hidden", "lg:flex");
+  });
+});
+
 describe("Navegação — atalhos de teclado (Alt+1..0)", () => {
   const teclar = (tecla: string) => fireEvent.keyDown(window, { key: tecla, altKey: true });
 

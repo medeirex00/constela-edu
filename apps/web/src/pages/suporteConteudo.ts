@@ -125,7 +125,7 @@ const FAQ_GESTAO_BASE: Pergunta[] = [
   },
   {
     pergunta: "Dá para usar no celular?",
-    resposta: "Sim, pelo navegador, no mesmo endereço. Em tela pequena, o menu abre pelo botão de três linhas no canto superior esquerdo; a pesquisa do topo e algumas colunas só aparecem em telas maiores.",
+    resposta: "Sim, pelo navegador, no mesmo endereço. Em tela pequena, o menu abre pelo botão de três linhas no canto superior esquerdo e a pesquisa continua no topo; a linha do topo que mostra em que página você está e algumas colunas das tabelas só aparecem em telas maiores.",
   },
 ];
 

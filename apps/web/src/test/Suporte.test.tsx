@@ -236,6 +236,17 @@ describe("Suporte — a regra da nota vem do servidor", () => {
   });
 });
 
+describe("Suporte — celular", () => {
+  // O Layout mantém a pesquisa em todas as larguras; quem some abaixo de 1024 px é a
+  // trilha ("Visão geral › … › página") — `NavegacaoPerfis.test.tsx` trava o Layout.
+  it("diz que a pesquisa continua e que a linha de onde você está some (não o contrário)", () => {
+    const resposta = FAQ_COORDENACAO.find((p) => p.pergunta === "Dá para usar no celular?")?.resposta ?? "";
+    expect(resposta).toContain("a pesquisa continua no topo");
+    expect(resposta).toContain("a linha do topo que mostra em que página você está e algumas colunas das tabelas só aparecem em telas maiores");
+    expect(resposta).not.toMatch(/pesquisa do topo e algumas colunas só aparecem/);
+  });
+});
+
 describe("Suporte — caminhos do menu de cada perfil (os mesmos da trilha do topo)", () => {
   const juntar = (lista: { resposta: string }[]) => lista.map((p) => p.resposta).join(" ");
   // Nenhum perfil tem mais as seções/grupos antigos — nem o Usuários em Gestão ou em
