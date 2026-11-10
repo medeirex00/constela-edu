@@ -517,17 +517,18 @@ def test_sincronizar_agora_com_tudo_ligado_coleta_o_matific(db, tudo_ligado, cli
 def test_agendador_nao_enfileira_o_matific_e_avanca_a_agenda(db, sem_matematica):
     escola, _ = sem_matematica
     from app.sync import service
+    vencida = service._agora() - timedelta(hours=1)   # há pouco: atraso de dias só recalcula
     for plat in ("matific", "elefante"):
         db.add(SincronizacaoConfig(escola_id=escola.id, plataforma=plat, ativo=True,
                                    cadencia="diaria", hora_local="03:00",
-                                   proxima_execucao=datetime(2020, 1, 1)))
+                                   proxima_execucao=vencida))
     db.commit()
     assert service.enfileirar_agendados(db) == 1          # só o Elefante
     execs = db.query(SincronizacaoExecucao).all()
     assert [e.plataforma for e in execs] == ["elefante"]
     db.expire_all()
     cfg_m = db.query(SincronizacaoConfig).filter_by(plataforma="matific").one()
-    assert cfg_m.proxima_execucao > datetime(2020, 1, 2)  # avançou: não vence de novo
+    assert cfg_m.proxima_execucao > vencida  # avançou: não vence de novo
     assert service.enfileirar_agendados(db) == 0
 
 

@@ -2957,13 +2957,30 @@ def calcular_proxima(config: SincronizacaoConfig, base: datetime | None = None) 
     return None
 
 
+# Atraso a partir do qual a agenda vencida só é recalculada (ver
+# ``enfileirar_agendados``): a própria cadência.
+ATRASO_MAXIMO_POR_CADENCIA = {"diaria": timedelta(days=1), "semanal": timedelta(days=7)}
+
+
+def _vencida_ha_mais_que_a_cadencia(config: SincronizacaoConfig, agora: datetime) -> bool:
+    limite = ATRASO_MAXIMO_POR_CADENCIA.get(config.cadencia)
+    prevista = _naive_utc(config.proxima_execucao)
+    return limite is not None and prevista is not None and agora - prevista > limite
+
+
 def enfileirar_agendados(db: Session) -> int:
     """Varre configs vencidas e enfileira as execuções (chamado pelo worker).
 
     CLAIM ATÔMICO da config: ``UPDATE ... WHERE proxima_execucao<=agora`` avança
     a próxima e só enfileira se ganharmos a corrida (rowcount==1). Assim, N
     schedulers (um por réplica) nunca enfileiram a mesma agenda duas vezes — o
-    lock de linha do UPDATE serializa e o WHERE re-checa a janela."""
+    lock de linha do UPDATE serializa e o WHERE re-checa a janela.
+
+    AGENDA VENCIDA HÁ MAIS QUE A CADÊNCIA (o agendador ficou desligado, ou a agenda
+    foi salva dias antes de ligá-lo) só é RECALCULADA para o próximo horário dela,
+    sem enfileirar: antes ela rodava na 1ª rodada, a qualquer hora — religar o
+    agendador entre 07:30 e 10:30 de Brasília colidia com o backup. O atraso curto
+    (uma rodada perdida, um reinício) continua enfileirando."""
     agora = _agora()
     n = 0
     vencidas = db.execute(
@@ -2976,13 +2993,20 @@ def enfileirar_agendados(db: Session) -> int:
     ).scalars().all()
     for config in vencidas:
         nova = calcular_proxima(config, agora)
+        atrasada = _vencida_ha_mais_que_a_cadencia(config, agora)
         reivindicou = db.execute(
             update(SincronizacaoConfig)
             .where(SincronizacaoConfig.id == config.id,
                    SincronizacaoConfig.proxima_execucao <= agora)
             .values(proxima_execucao=nova)).rowcount
-        if reivindicou == 1 and not plataforma_no_plano(db, config.escola_id,
-                                                        config.plataforma):
+        if reivindicou == 1 and atrasada:
+            # Sem PII: ids e a nova data. A coleta acontece no próximo horário.
+            logger.warning("sync_agenda_vencida_recalculada escola=%s plataforma=%s "
+                           "proxima=%s", config.escola_id, config.plataforma,
+                           nova.isoformat() if nova else "-")
+            db.commit()
+        elif reivindicou == 1 and not plataforma_no_plano(db, config.escola_id,
+                                                          config.plataforma):
             # Módulo fora do plano da rede: a agenda AVANÇA (não volta a vencer a
             # cada rodada), mas nada é enfileirado — a agenda fica como a escola a
             # deixou e volta a valer se o módulo for recontratado.
