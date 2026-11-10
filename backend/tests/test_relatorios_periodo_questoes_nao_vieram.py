@@ -68,9 +68,11 @@ def test_coleta_sem_questoes_na_borda_do_fim_nao_da_cobertura_completa(db, escol
     cob = ele["cobertura_questoes"]
     assert cob["status"] == "parcial" and cob["completa"] is False
     assert cob["alunos_questoes_nao_vieram"] == 2
-    # A conta vai até a coleta anterior (20/09), dita como "última coleta antes do fim".
+    # A conta vai até a coleta anterior (20/09). Quem diz isso é "as questões não
+    # vieram", não "a última coleta é de 20/09": A teve coleta depois (cada aluno numa
+    # causa só — test_relatorios_periodo_s9_uma_causa).
     assert (ele["questoes_tentativas"], ele["questoes_acertos"]) == (30, 21)
-    assert cob["fim_coberto"] is False and cob["alunos_sem_fim"] == 1
+    assert cob["fim_coberto"] is False and cob["alunos_sem_fim"] == 0
     assert cob["coleta_fim"].startswith("2026-09-20T03:10")
     # B não é "uma coleta só" nem "sem coleta": o motivo é o das questões que não vieram
     # (o "sem coleta" é só o 3º aluno da escola, que não tem nenhuma).

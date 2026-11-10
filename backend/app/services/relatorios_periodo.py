@@ -643,7 +643,10 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
 
     ``intervalos``: um por aluno MEDIDO, com ``base``/``atual`` (UTC) e os
     estados das bordas (``inicio``: exato|antes|contador|depois|ano_letivo|
-    regra_oficial; ``fim``: exato|em_andamento|antes|regra_oficial).
+    regra_oficial; ``fim``: exato|em_andamento|antes|regra_oficial) e, no
+    Elefante, ``fim_sem_questoes`` (S9: o fim falta porque a coleta que o mediria
+    veio sem as questões — conta em ``questoes_nao_vieram``, não em
+    ``alunos_sem_fim``).
 
     ``status``:
       * ``completa``      — todo aluno medido nas duas bordas;
@@ -667,6 +670,11 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         return None
     sem_inicio = [i for i in intervalos if i["inicio"] in ("depois", "ano_letivo")]
     sem_fim = [i for i in intervalos if i["fim"] == "antes"]
+    # "A última coleta é de X" (``alunos_sem_fim``, ``coleta_fim_mais_cedo``): só quem
+    # NÃO tem coleta depois de X no período. O fim que falta porque a coleta seguinte
+    # veio sem as questões (S9, ``fim_sem_questoes``) já é dito por
+    # ``alunos_questoes_nao_vieram`` — cada aluno numa causa só.
+    ultima_antes = [i for i in sem_fim if not i.get("fim_sem_questoes")]
     ampliados = [i for i in intervalos if i["inicio"] == "antes"]
     oficiais = [i for i in intervalos if "regra_oficial" in (i["inicio"], i["fim"])]
     completos = [i for i in intervalos
@@ -698,8 +706,8 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
                                           if i["base"] is not None).isoformat()
                                       if any(i["base"] for i in sem_inicio) else None),
         "coleta_fim": max(atuais).isoformat() if atuais else None,
-        "coleta_fim_mais_cedo": (min(i["atual"] for i in sem_fim).isoformat()
-                                 if sem_fim else
+        "coleta_fim_mais_cedo": (min(i["atual"] for i in ultima_antes).isoformat()
+                                 if ultima_antes else
                                  (min(atuais).isoformat() if atuais else None)),
         "inicio_coberto": bool(intervalos) and not sem_inicio,
         "fim_coberto": bool(intervalos) and not sem_fim,
@@ -714,7 +722,7 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         "alunos_cobertura_completa": len(completos),
         "alunos_cobertura_parcial": len({id(i) for i in (*sem_inicio, *sem_fim)}),
         "alunos_sem_inicio": len(sem_inicio),
-        "alunos_sem_fim": len(sem_fim),
+        "alunos_sem_fim": len(ultima_antes),
         "alunos_ampliados": len(ampliados),
         "alunos_sem_intervalo": sem_intervalo,
         # dos "sem intervalo": a única coleta do período é a que mede o INÍCIO
@@ -907,9 +915,20 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
         excluidos = sem_questoes.get(aid, [])
         turma["ja_coletada"] = turma["ja_coletada"] or bool(serie) or bool(excluidos)
         ganho = _diferenca_de_retratos(serie, janela, campos, hoje=hoje)
-        # A coleta sem questões mudaria a conta deste aluno (seria uma das bordas)?
-        afetado = bool(excluidos) and _bordas(ganho) != _bordas(
-            _diferenca_de_retratos(serie + excluidos, janela, campos, hoje=hoje))
+        # A coleta sem questões explica a conta deste aluno? Só quando, lida, ela
+        # mediria o FIM que falta (a conta vai só até a coleta anterior) ou daria a
+        # única diferença a medir (sem ela, ele fica fora) — é o que o aviso diz. Esse
+        # aluno fica só nessa causa: não entra também em "a última coleta é de X"
+        # (``fim_sem_questoes``), cuja data passaria a ser a da coleta ANTERIOR, com
+        # uma mais recente no período. A que mudaria só o INÍCIO, ou um fim já medido
+        # por outra coleta, não é motivo: a borda do início (ampliada, sem coleta no
+        # início) é que explica o número, como para qualquer aluno.
+        com = (_diferenca_de_retratos(serie + excluidos, janela, campos, hoje=hoje)
+               if excluidos else None)
+        afetado = com is not None and _bordas(ganho) != _bordas(com) and (
+            ganho is None or not ganho["_medido"]
+            or (ganho["_fim"] == "antes"
+                and (ganho["_data_atual"], ganho["_fim"]) != (com["_data_atual"], com["_fim"])))
         if afetado:
             nao_vieram += 1
             turma["com_coleta"] += 1     # houve coleta no período, só sem as questões
@@ -938,7 +957,8 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
             continue
         intervalos.append({"base": ganho["_data_base"], "atual": ganho["_data_atual"],
                            "inicio": ganho["_inicio"], "fim": ganho["_fim"],
-                           "antecedencia": ganho["_antecedencia"]})
+                           "antecedencia": ganho["_antecedencia"],
+                           "fim_sem_questoes": afetado})
         tentativas += ganho["questoes_tentativas"]
         acertos += ganho["questoes_acertos"]
         if ganho["_inicio"] == "depois":
