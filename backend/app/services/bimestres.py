@@ -23,8 +23,8 @@ COMO CONFIGURAR um ano novo, sem mexer no código: a variável de ambiente
 ["2027-04-26", "2027-07-09"], ["2027-07-26", "2027-10-01"], ["2027-10-04",
 "2027-12-17"]]}`` (datas de EXEMPLO) — quatro pares início/fim INCLUSIVOS, em
 ordem, sem sobreposição, dentro do ano. Calendário inválido é IGNORADO por
-inteiro (com erro no log): antes "sem calendário" (explícito) do que datas
-erradas. Também dá para acrescentar o ano em :data:`PERIODOS` (exige deploy). As
+inteiro (com erro no log, uma vez por valor da variável): antes "sem
+calendário" (explícito) do que datas erradas. Também dá para acrescentar o ano em :data:`PERIODOS` (exige deploy). As
 datas são as da Secretaria — não invente.
 
 Fuso: tudo aqui é ``date``, nunca ``datetime``. A conversão de "agora" para data
@@ -37,7 +37,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Mapping
 from datetime import date
+from functools import lru_cache
+from types import MappingProxyType
 
 logger = logging.getLogger(__name__)
 
@@ -82,32 +85,49 @@ def _validar_ano(ano: int, pares) -> dict[int, tuple[date, date]]:
     return saida
 
 
-def _calendario_configurado() -> dict[int, dict[int, tuple[date, date]]]:
-    """Anos cadastrados pela variável de ambiente (ver o topo do módulo). Lido a
-    cada chamada (é barato, e vale sem reiniciar nos testes); ano inválido é
-    descartado inteiro, com erro no log."""
+_SEM_CONFIGURACAO: Mapping[int, Mapping[int, tuple[date, date]]] = MappingProxyType({})
+
+
+def _calendario_configurado() -> Mapping[int, Mapping[int, tuple[date, date]]]:
+    """Anos cadastrados pela variável de ambiente (ver o topo do módulo). A
+    variável é lida a cada chamada (vale sem reiniciar, também nos testes); o
+    TEXTO dela é interpretado uma vez por valor (:func:`_ler_calendario`)."""
     bruto = os.environ.get(VARIAVEL_CALENDARIO, "").strip()
     if not bruto:
-        return {}
+        return _SEM_CONFIGURACAO
+    return _ler_calendario(bruto)
+
+
+@lru_cache(maxsize=16)
+def _ler_calendario(bruto: str) -> Mapping[int, Mapping[int, tuple[date, date]]]:
+    """Interpreta o texto de ``BIMESTRES_CALENDARIO``; ano inválido é descartado
+    inteiro, com erro no log.
+
+    Guardado por TEXTO: antes, cada consulta de um ano fora de :data:`PERIODOS`
+    relia o JSON e gravava de novo o mesmo erro — e a evolução por bimestre do
+    aluno consulta uma vez por leitura (500 leituras, 500 erros iguais; com o
+    Sentry, 500 eventos). Agora o erro sai uma vez por valor distinto da
+    variável, e trocar o valor vale na hora. O resultado é só de leitura: quem
+    chama não consegue estragar o que fica guardado."""
     try:
         dados = json.loads(bruto)
         if not isinstance(dados, dict):
             raise ValueError("o JSON precisa ser um objeto {ano: [...]}")
     except ValueError as exc:
         logger.error("%s ilegível (%s): ignorado.", VARIAVEL_CALENDARIO, exc)
-        return {}
-    saida: dict[int, dict[int, tuple[date, date]]] = {}
+        return _SEM_CONFIGURACAO
+    saida: dict[int, Mapping[int, tuple[date, date]]] = {}
     for chave, pares in dados.items():
         try:
             ano = int(chave)
-            saida[ano] = _validar_ano(ano, pares)
+            saida[ano] = MappingProxyType(_validar_ano(ano, pares))
         except (TypeError, ValueError) as exc:
             logger.error("%s: calendário de %s inválido (%s): ignorado.",
                          VARIAVEL_CALENDARIO, chave, exc)
-    return saida
+    return MappingProxyType(saida)
 
 
-def calendario(ano: int) -> dict[int, tuple[date, date]] | None:
+def calendario(ano: int) -> Mapping[int, tuple[date, date]] | None:
     """Os quatro bimestres do ano (constante, senão a configuração), ou None."""
     if ano in PERIODOS:
         return PERIODOS[ano]
