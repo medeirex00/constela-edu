@@ -333,6 +333,20 @@ describe("Importacoes", () => {
     expect(screen.queryByText(/85\.5/)).toBeNull();
   });
 
+  // O "Destino de …" não corta o nome do vinculado ("Matheus Cardoso Oliveira — 4º
+  // Anc"). Com "w-full", a largura em % não entra na largura mínima da coluna da
+  // tabela e a coluna ficava no piso; com "w-auto" o seletor tem a largura da opção
+  // mais longa. O jsdom não faz layout: a medida (nenhuma opção selecionada cortada
+  // a 1366×768) é feita no navegador — aqui fica a estrutura que a garante.
+  it("o seletor do destino tem a largura do texto (não 'w-full', que cortava o nome)", async () => {
+    await previaComCorrespondencia(analiseFake().linhas[0].correspondencia);
+    const destino = screen.getByRole("combobox", { name: "Destino de Ana Beatriz Souza" });
+    expect(destino.className.split(/\s+/)).toContain("w-auto");
+    expect(destino.className.split(/\s+/)).not.toContain("w-full");
+    // A coluna continua com o piso (o seletor não encolhe abaixo dele).
+    expect(destino.parentElement?.className).toMatch(/\bmin-w-\[12rem\]/);
+  });
+
   // Placar do Matific (prévia REAL): os dados trazem a conta da plataforma
   // (matific_uuid) e, no nome abreviado, a marca interna nome_incompleto. Antes a
   // coluna Dados mostrava "matific_uuid: uuid-… · nome_incompleto: true · …".

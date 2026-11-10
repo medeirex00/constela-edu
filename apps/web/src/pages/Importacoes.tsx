@@ -87,6 +87,13 @@ const OCULTAR_NA_PREVIA = new Set([
   "matific_uuid", "elefante_student_id", "nome_incompleto", "turma_ambigua",
 ]);
 
+/** O seletor "Destino de …" da prévia na largura da sua opção mais longa ("Matheus
+ *  Cardoso Oliveira — 4º Ano A (100%)"), nunca cortado. Com o "w-full" do campo
+ *  padrão, a largura em % não conta na largura mínima da coluna da tabela, e a coluna
+ *  ficava no piso de 12rem, cortando o nome do vinculado. Com "w-auto" a coluna
+ *  cresce até caber; se a tabela não couber, a moldura rola de lado (como no celular). */
+const estiloSeletorDestino = estiloInput.replace("w-full", "w-auto");
+
 /** Número no formato brasileiro ("85,5", "1.234"), como no resto do sistema. */
 function valorDoDado(valor: unknown): string {
   return typeof valor === "number" ? numero(valor) : String(valor);
@@ -1159,7 +1166,7 @@ export default function Importacoes() {
                               <select
                                 aria-label={`Destino de ${grupo.nome}`}
                                 aria-describedby={descricao}
-                                className={estiloInput}
+                                className={estiloSeletorDestino}
                                 value={
                                   acao.tipo === "ignorar" ? "ignorar"
                                   : acao.tipo === "criar" ? "criar"
