@@ -16,6 +16,7 @@ Dados INVENTADOS (``test_analise_base``; decisão D13).
 """
 import os
 import re
+import sys
 
 import pytest
 from fastapi.routing import APIRoute
@@ -102,6 +103,21 @@ class _Recusa(Exception):
     pass
 
 
+# As travas advisory do app. No PostgreSQL são ``pg_advisory_xact_lock`` (o filtro de SQL as
+# vê); no SQLite não emitem SQL nenhum, então a varredura as troca por um invólucro.
+TRAVAS = ("bloquear_escola_para_importacao", "bloquear_fonte_para_coleta",
+          "bloquear_escola_para_recalculo")
+
+
+def test_a_varredura_conhece_todas_as_travas_do_app():
+    assert {n for n in dir(database) if n.startswith("bloquear_")} == set(TRAVAS)
+
+
+def _so_leitura(sessao) -> bool:
+    alvo = sessao.get_bind() if hasattr(sessao, "get_bind") else sessao
+    return bool(alvo.get_execution_options().get("constela_so_leitura"))
+
+
 @pytest.fixture()
 def varredura(db, monkeypatch):
     """O ``get_db`` DE VERDADE (sem o override da fixture), com as duas fábricas no banco do
@@ -143,9 +159,27 @@ def varredura(db, monkeypatch):
             escritas.append(sql.split("\n")[0][:80])
             raise _Recusa(f"escrita numa rota de leitura: {sql[:80]}")
 
+    def _trava_recusada(original):
+        def _trava(sessao, *args, **kwargs):
+            if _so_leitura(sessao):
+                escritas.append(f"trava {original.__name__}")
+                raise _Recusa(f"trava advisory numa rota de leitura: {original.__name__}")
+            return original(sessao, *args, **kwargs)
+        return _trava
+
     app.dependency_overrides.pop(get_db, None)          # o get_db de verdade
     monkeypatch.setattr(database, "SessionLocal", _fabrica("local", False))
     monkeypatch.setattr(database, "SessionLeitura", _fabrica("leitura", True))
+    # Cada trava, em ``app.core.database`` e em TODO módulo do app que a importou pelo nome
+    # (academico, importacoes, alunos_dedup, turma_arquivada, scoring...): quem a chama
+    # numa sessão de leitura é recusado. Módulo importado depois a pega já trocada.
+    for nome in TRAVAS:
+        original = getattr(database, nome)
+        involucro = _trava_recusada(original)
+        for modulo in list(sys.modules.values()):
+            if (getattr(modulo, "__name__", "").startswith("app.")
+                    and getattr(modulo, nome, None) is original):
+                monkeypatch.setattr(modulo, nome, involucro)
     event.listen(Session, "before_flush", _antes_do_flush)
     event.listen(Session, "before_commit", _antes_do_commit)
     event.listen(motor, "before_cursor_execute", _antes_do_sql)
@@ -226,6 +260,36 @@ def test_a_sessao_que_recusa_escrita_recusa_mesmo(varredura):
     assert r.status_code in (200, 204), r.text
     assert varredura["abertas"]["local"] > antes["local"]
     assert varredura["abertas"]["leitura"] == antes["leitura"]
+
+
+@pytest.mark.parametrize("modulo,trava", [
+    ("app.core.database", "bloquear_escola_para_importacao"),   # a da fusão e da importação
+    ("app.routers.academico", "bloquear_escola_para_importacao"),  # importada pelo nome
+    ("app.services.scoring", "bloquear_escola_para_recalculo"),
+    ("app.core.database", "bloquear_fonte_para_coleta"),
+])
+def test_a_varredura_recusa_trava_advisory_numa_rota_marcada(varredura, monkeypatch,
+                                                              modulo, trava):
+    """No SQLite as travas ``bloquear_*`` não emitem SQL: o filtro de ``pg_advisory`` nunca
+    as via, e uma rota marcada que tomasse a trava da escola passava verde. Em produção, na
+    sessão em AUTOCOMMIT, ``pg_advisory_xact_lock`` cai no fim do próprio comando e não
+    serializa nada. A varredura tem de recusá-la como recusa a escrita."""
+    import importlib
+
+    from app.services import notificacoes as svc_notif
+    real = svc_notif.contar_nao_lidas
+    alvo = importlib.import_module(modulo)
+    escola_id = varredura["base"]["escolas"]["alfa"].id
+
+    def _com_trava(db, usuario):
+        getattr(alvo, trava)(db, escola_id)
+        return real(db, usuario)
+
+    monkeypatch.setattr(svc_notif, "contar_nao_lidas", _com_trava)
+    r = varredura["c"]["secretaria"].get(f"{PREFIXO}/notificacoes/contador")
+    # A recusa vira 500 pelo tratador geral do app: a varredura (que exige 200) reprova.
+    assert r.status_code == 500, (r.status_code, r.text[:200])
+    assert varredura["escritas"] == [f"trava {trava}"]
 
 
 # --- PostgreSQL de verdade ---------------------------------------------------------------------
