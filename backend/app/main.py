@@ -158,6 +158,12 @@ app.add_middleware(
     # `apiDownload`/`apiDownloadPost` não enxerga o Content-Disposition e cai no
     # nome padrão (no lote de certificados, o nome traz quantos foram emitidos).
     expose_headers=["X-Request-ID", "X-Correlation-ID", "Content-Disposition"],
+    # A web (Vercel) e a API (Railway) estão em origens diferentes: cada URL nova paga um
+    # preflight (OPTIONS), uma ida e volta do navegador à API antes da chamada de
+    # verdade. O navegador guarda a resposta por ``max_age`` segundos (o padrão do
+    # Starlette é 600); 7200 é o teto que o Chrome respeita. Só vale para a MESMA URL de
+    # novo (visitas repetidas), não para a primeira.
+    max_age=7200,
 )
 
 
