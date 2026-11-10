@@ -95,14 +95,14 @@ Alertas (lista "Erros" do card) — mapa único em `backend/app/sync/service.py`
 | `erro_inesperado`, `parser_incompativel`, `interrompida` | processamento | uma execução conclui com dados |
 | `plataforma_indisponivel` | servidor | uma execução conclui com dados |
 | `desatualizada` | aviso | o dado volta a estar em dia, ou a agenda é desligada |
-| `lento` | aviso | uma execução **conclui dentro do normal**: até 2× a mediana das últimas execuções concluídas da integração, nunca menos que `SYNC_LENTO_S` (120 s); com menos de 5 concluídas no histórico, vale só os 120 s |
+| `lento` | aviso | uma execução **termina dentro do normal** — concluída, ou sem atualização (coleta inteira sem nada novo): até 2× a mediana das últimas execuções concluídas da integração, nunca menos que `SYNC_LENTO_S` (120 s); com menos de 5 concluídas no histórico, vale só os 120 s. Só a concluída abre o aviso |
 | `queda_matific` | revisão | uma coleta acumulada não encontra mais queda |
 
 Os alertas abertos desde julho/agosto em produção (`erro_navegador`,
 `falha_autenticacao`, `interrompida`) fecham sozinhos na primeira execução
 bem-sucedida da integração depois do deploy. Não é preciso mexer no banco.
-O `lento` **não** fecha com qualquer sucesso: só quando uma execução conclui
-dentro do limite da linha acima. Numa integração do Elefante com pouco histórico
+O `lento` **não** fecha com qualquer sucesso: só quando uma execução concluída ou
+sem atualização termina dentro do limite da linha acima. Numa integração do Elefante com pouco histórico
 (menos de 5 execuções concluídas) o limite é de 120 s e uma coleta completa leva
 minutos — o aviso pode continuar aberto depois das primeiras coletas, até o
 histórico formar a mediana. Não é falha da escola.
@@ -176,9 +176,13 @@ Regra: **negócio em America/Sao_Paulo, armazenamento em UTC**
 (`backend/app/sync/fuso.py`).
 
 * **Agenda**: "03:00" agora é 03:00 em Brasília (06:00 UTC). Antes rodava às
-  03:00 UTC = meia-noite em Brasília. Nada gravado precisa ser reescrito: a
-  `proxima_execucao` das agendas (parada em 18–23/09) é recalculada na primeira
-  rodada do agendador quando ele for religado, ou ao salvar a agenda.
+  03:00 UTC = meia-noite em Brasília. A `proxima_execucao` das agendas paradas em
+  18–23/09 foi calculada pela regra antiga e **não se recalcula sozinha antes de
+  religar**: o pré-requisito `fuso_da_agenda` (`backend/app/sync/prerequisitos.py`)
+  recusa subir o agendador enquanto houver agenda desalinhada. Re-salve cada agenda
+  ativa na tela Integrações antes de religar (salvar recalcula a data). Depois de
+  ligado, a agenda vencida há mais que a própria cadência (1 dia na diária, 7 na
+  semanal) só ganha a próxima data, sem enfileirar.
 * **Elefante, `endPeriodCustom`**: usa o "hoje" de Brasília (era a data UTC).
   Inócuo para os dados (o período é LIFETIME), corrigido por consistência.
 * **Elefante, dia da leitura (`lastReadWhen`)**: a convenção de `Leitura.data` é o
@@ -260,12 +264,21 @@ Religar (`SYNC_SCHEDULER_ENABLED=true`) só quando, medido no próprio sistema:
 
 1. **14 dias** consecutivos de coletas (manuais ou assistidas) com sucesso diário
    em **≥ 95%** dos pares escola × plataforma configurados;
-2. **0 execuções presas** no período (nada em "fila"/"executando" além de 30 min);
+2. **0 execuções presas** no período: o pré-requisito `execucoes_presas`, que olha
+   "executando" além de 45 min (o teto da coleta, `SYNC_TETO_EXECUCAO_S`, menor que
+   `SYNC_TRAVADA_S` = 60 min) e "fila" sem sinal de vida além de 60 min;
 3. nenhum alerta de falha aberto sem causa conhecida; `queda_matific` revisados;
 4. backup diário privado verde no período;
 5. decisão explícita do dono (custo/ janela de horário).
 
-Ao religar: `AVALIACOES_ROBO_HABILITADO` continua `false`; na primeira rodada
-TODAS as agendas vencidas (paradas em setembro) entram de uma vez — com
-`SYNC_WORKERS=1` rodam em sequência; considerar espalhar os horários das escolas
-(`hora_local`) antes de ligar.
+**Critério em aberto (decisão do dono):** o item 1 pede 14 dias consecutivos com
+≥ 95%; o Passo 3 de `docs/sync/REATIVAR-AGENDADOR.md` pede ≥ 5 dias úteis de
+coletas manuais acompanhadas. Os dois documentos são de momentos diferentes e o
+código não decide entre eles: qual vale (14 dias × 5 dias úteis) é escolha do dono,
+ainda não registrada.
+
+Ao religar: `AVALIACOES_ROBO_HABILITADO` continua `false`. As agendas vencidas há
+mais que a cadência (paradas em setembro) não entram de uma vez: só ganham a
+próxima data e rodam no horário delas. As que vencem no mesmo horário entram
+juntas e, com `SYNC_WORKERS=1`, rodam em sequência; considerar espalhar os
+horários das escolas (`hora_local`) antes de ligar.
