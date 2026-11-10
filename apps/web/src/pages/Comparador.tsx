@@ -46,6 +46,10 @@ const LADOS = {
 const ICONE_TIPO: Record<string, LucideIcon> = { aluno: User, turma: LayoutGrid, escola: School };
 const ROTULO_TIPO: Record<string, string> = { aluno: "Aluno", turma: "Turma", escola: "Escola" };
 
+/** Teto do `por_pagina` da API de alunos (`academico.listar_alunos`). Uma turma
+ *  cabe com folga numa página só. */
+const POR_PAGINA_DA_TURMA = 1000;
+
 function SeletorLado({
   lado,
   rotulo,
@@ -53,6 +57,7 @@ function SeletorLado({
   setTipo,
   id,
   setId,
+  escolaId,
   alunos,
   turmas,
   escolas,
@@ -64,12 +69,25 @@ function SeletorLado({
   setTipo: (tipo: string) => void;
   id: string;
   setId: (id: string) => void;
+  escolaId: number | null;
+  /** A 1ª página de alunos da escola (as primeiras 100, em ordem alfabética). */
   alunos: OpcaoAluno[];
   turmas: Turma[];
   escolas: OpcaoAluno[];
   podeEscola: boolean;
 }) {
-  const opcoes = tipo === "aluno" ? alunos : tipo === "escola" ? escolas : turmas;
+  // Escola grande passa dos 100 da 1ª página: escolher a TURMA do aluno traz todos os
+  // alunos dela (uma página só, pequena) — assim todo aluno é alcançável sem montar um
+  // <select> com a escola inteira.
+  const [turmaDoAluno, setTurmaDoAluno] = useState("");
+  const { dados: paginaDaTurma, erro: erroDaTurma } = useApi<PaginaAlunos>(
+    tipo === "aluno" && turmaDoAluno && escolaId
+      ? `/escolas/${escolaId}/alunos?turma_id=${turmaDoAluno}&por_pagina=${POR_PAGINA_DA_TURMA}`
+      : null,
+  );
+  const alunosDaTurma: OpcaoAluno[] = (paginaDaTurma?.itens ?? []).map((a) => ({ id: a.id, nome: a.nome }));
+  const opcoes = tipo === "aluno" ? (turmaDoAluno ? alunosDaTurma : alunos)
+    : tipo === "escola" ? escolas : turmas;
   return (
     <div className={`min-w-0 flex-1 rounded-2xl border p-4 ${LADOS[lado].moldura}`}>
       <p className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-600 dark:text-zinc-300">
@@ -85,15 +103,31 @@ function SeletorLado({
             {podeEscola && <option value="escola">Escola</option>}
           </select>
         </Campo>
-        <Campo rotulo={rotulo}>
-          <select className={estiloInput} value={id} onChange={(evento) => setId(evento.target.value)}>
-            <option value="">Selecione…</option>
-            {opcoes.map((opcao) => (
-              <option key={opcao.id} value={opcao.id}>{opcao.nome}</option>
-            ))}
-          </select>
-        </Campo>
+        {tipo === "aluno" && (
+          <Campo rotulo={`${rotulo} — turma do aluno`}>
+            <select className={estiloInput} value={turmaDoAluno}
+                    onChange={(evento) => { setTurmaDoAluno(evento.target.value); setId(""); }}>
+              <option value="">Todas as turmas</option>
+              {turmas.map((turma) => <option key={turma.id} value={turma.id}>{turma.nome}</option>)}
+            </select>
+          </Campo>
+        )}
+        <div className={tipo === "aluno" ? "sm:col-span-2" : undefined}>
+          <Campo rotulo={rotulo}>
+            <select className={estiloInput} value={id} onChange={(evento) => setId(evento.target.value)}>
+              <option value="">Selecione…</option>
+              {opcoes.map((opcao) => (
+                <option key={opcao.id} value={opcao.id}>{opcao.nome}</option>
+              ))}
+            </select>
+          </Campo>
+        </div>
       </div>
+      {tipo === "aluno" && erroDaTurma && (
+        <div className="mt-3">
+          <Mensagem tipo="erro">Não foi possível carregar os alunos da turma: {erroDaTurma.message}</Mensagem>
+        </div>
+      )}
     </div>
   );
 }
@@ -192,7 +226,8 @@ export default function Comparador() {
   const escolas: OpcaoAluno[] = (escolasLista ?? []).map((e) => ({ id: e.id, nome: e.nome }));
   // Reduz a página de alunos às opções (id + nome) que os seletores consomem.
   const alunos: OpcaoAluno[] = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
-  // A busca traz só a 1ª página (100): a tela diz quando há mais alunos que isso.
+  // A busca da escola traz só a 1ª página (100): a tela diz quando há mais alunos que
+  // isso e como chegar a qualquer um (a turma do aluno, em cada lado).
   const alunosDeFora = paginaAlunos && paginaAlunos.total > alunos.length ? paginaAlunos.total : null;
   const erroOpcoes = erroTurmas ?? erroAlunos;
   const [tipoA, setTipoA] = useState("aluno");
@@ -229,11 +264,11 @@ export default function Comparador() {
 
       <Card className="mb-6 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
-          <SeletorLado lado="A" rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado lado="A" rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} escolaId={escolaId} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
           <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center self-center rounded-full bg-marinho-900 text-xs font-bold text-white shadow-cartao dark:bg-indigo-500">
             vs
           </span>
-          <SeletorLado lado="B" rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado lado="B" rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} escolaId={escolaId} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <p className="flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
@@ -242,6 +277,7 @@ export default function Comparador() {
                 <Info size={14} aria-hidden className="mt-px shrink-0" />
                 <span>
                   A lista de alunos mostra os {numero(alunos.length)} primeiros de {numero(alunosDeFora)} da escola.
+                  Para achar qualquer aluno, escolha antes a turma dele.
                 </span>
               </>
             )}

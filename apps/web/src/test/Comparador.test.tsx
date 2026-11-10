@@ -2,8 +2,9 @@
  * Comparador (aluno×aluno, aluno×turma, turma×turma; escola×escola só no global):
  * a tela pede `/comparar` com os dois lados escolhidos e mostra as notas e os
  * indicadores EXATAMENTE como a API devolve (sem calcular diferença nem média);
- * o lado "Escola" só existe para o Admin Global; a busca de alunos traz só os 100
- * primeiros e a tela diz isso quando há mais.
+ * o lado "Escola" só existe para o Admin Global; a busca de alunos da escola traz só
+ * os 100 primeiros e a tela diz isso quando há mais — e a turma do aluno (em cada
+ * lado) traz todos os alunos dela, então ninguém fica fora do alcance.
  */
 import { describe, expect, it } from "vitest";
 
@@ -98,11 +99,51 @@ describe("Comparador", () => {
     const u = userEvent.setup();
     renderComApp(<Comparador />, { rota: "/comparador" });
 
-    expect(await screen.findByText("A lista de alunos mostra os 2 primeiros de 340 da escola.")).toBeInTheDocument();
+    expect(await screen.findByText(/A lista de alunos mostra os 2 primeiros de 340 da escola\. Para achar qualquer aluno, escolha antes a turma dele\./))
+      .toBeInTheDocument();
     await u.selectOptions(screen.getByLabelText("Lado A"), "7");
     await u.selectOptions(screen.getByLabelText("Lado B — tipo"), "aluno");
     await u.selectOptions(screen.getByLabelText("Lado B"), "8");
     await u.click(screen.getByRole("button", { name: "Comparar" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sem permissão para comparar este aluno.");
+  });
+
+  it("escola grande: o aluno fora dos 100 primeiros é alcançável pela turma dele", async () => {
+    // A 1ª página da escola (100 de 340) não traz o Zeca; a página da turma dele, sim.
+    const daTurma = {
+      total: 2, pagina: 1, por_pagina: 1000,
+      itens: [{ id: 7, nome: "Ana Beatriz Souza" }, { id: 412, nome: "Zeca Depois Dos Cem" }],
+    } as unknown as PaginaAlunos;
+    responder("GET", "/escolas/1/turmas", [turmaFake({ id: 3, nome: "3º Ano A" })] as Turma[]);
+    responder("GET", "/escolas/1/alunos",
+      (caminho: string) => (caminho.includes("turma_id=3") ? daTurma : { ...ALUNOS, total: 340 }));
+    responder("GET", "/escolas/1/comparar", {
+      a: lado("aluno", 412, "Zeca Depois Dos Cem", {}),
+      b: lado("turma", 3, "3º Ano A", {}, { total_alunos: 28 }),
+    });
+    const u = userEvent.setup();
+    renderComApp(<Comparador />, { rota: "/comparador" });
+
+    await screen.findByRole("option", { name: "Ana Beatriz Souza" });
+    expect(screen.queryByRole("option", { name: "Zeca Depois Dos Cem" })).not.toBeInTheDocument();
+    await u.selectOptions(screen.getByLabelText("Lado A — turma do aluno"), "3");
+    const opcao = await within(screen.getByLabelText("Lado A")).findByRole("option", { name: "Zeca Depois Dos Cem" });
+    // Só a turma escolhida, numa página que cabe a turma inteira.
+    const pedido = api.mock.calls.map((c) => String(c[0])).find((c) => c.includes("turma_id=3"));
+    expect(pedido).toBe("/escolas/1/alunos?turma_id=3&por_pagina=1000");
+    await u.selectOptions(screen.getByLabelText("Lado A"), opcao);
+    await u.selectOptions(screen.getByLabelText("Lado B"), "3");
+    await u.click(screen.getByRole("button", { name: "Comparar" }));
+    expect(await screen.findByText("Nota Matific (média)")).toBeInTheDocument();
+    expect(api.mock.calls.map((c) => String(c[0])))
+      .toContain("/escolas/1/comparar?tipo_a=aluno&id_a=412&tipo_b=turma&id_b=3");
+  });
+
+  it("o lado Turma não ganha o filtro de turma do aluno", async () => {
+    preparar();
+    renderComApp(<Comparador />, { rota: "/comparador" });
+    await screen.findByRole("option", { name: "Ana Beatriz Souza" });
+    expect(screen.getByLabelText("Lado A — turma do aluno")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Lado B — turma do aluno")).not.toBeInTheDocument();
   });
 });
