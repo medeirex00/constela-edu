@@ -20,6 +20,7 @@ PONTOS DE EXTENSÃO (só verificáveis com uma conta real — sem conta aqui):
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -148,12 +149,21 @@ def _slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (texto or "turma").lower()).strip("-")[:40] or "turma"
 
 
-def _para_int(valor) -> int:
-    """A API do Matific manda os números como STRING ('3914'). Robusto a lixo."""
+def _numero_do_placar(valor) -> int | None:
+    """Número do Placar (``score``/``activities_completed``): a API manda TEXTO
+    numérico ('3914'; docs/MATIFIC_API.md, campo não anulável); número também vale.
+    Qualquer outra coisa — objeto, lista, booleano, texto que não é número, vazio,
+    ``null`` — é ILEGÍVEL e devolve ``None``, nunca 0: zero no lugar do número real
+    tirava a criança do pódio e gravava retrato 0/0 (a resposta mudou de formato)."""
+    if valor is None or isinstance(valor, bool) or not isinstance(valor, (str, int, float)):
+        return None
     try:
-        return int(float(str(valor).strip()))
-    except (TypeError, ValueError):
-        return 0
+        numero = float(str(valor).strip())
+    except ValueError:
+        return None
+    if not math.isfinite(numero):
+        return None
+    return int(numero)
 
 
 def _parse_data(s: str):
@@ -375,9 +385,12 @@ class ConectorMatific(ConectorNavegador):
         relatório). Linha com só parte disso é DEFEITO: não entra e é contada em
         ``descartes['sem_nome_ou_turma']`` (quando o chamador passa o dict).
 
-        Campo numérico AUSENTE (não "zero": a chave não veio — ex.: renomeado no
-        Placar) fica listado em ``ausentes`` do aluno; a sync o manda como nulo e
-        a importação NÃO grava retrato herdado com data nova (ver importacoes)."""
+        Campo numérico AUSENTE ou ILEGÍVEL (não "zero": a chave não veio — ex.:
+        renomeado no Placar — ou veio com valor que não é número, inclusive ``null``;
+        ver ``_numero_do_placar``) fica listado em ``ausentes`` do aluno e vale 0 só
+        como marcador: a sync o manda como nulo (a importação NÃO grava retrato
+        herdado com data nova, ver importacoes) e o placar ao vivo recusa a linha
+        (``aovivo._recusar_linhas_sem_numeros``)."""
         res = res if isinstance(res, dict) else {}
         body = res.get("body")
         # O corpo é uma lista com UM objeto {..., data:[...]}.
@@ -395,15 +408,14 @@ class ConectorMatific(ConectorNavegador):
                     descartes["sem_nome_ou_turma"] = descartes.get("sem_nome_ou_turma", 0) + 1
                 continue                 # fantasma (tudo vazio) ou linha com defeito
             nome = nomes.get(uuid) or abrev
+            numeros = {"estrelas": _numero_do_placar(it.get("score")),
+                       "atividades": _numero_do_placar(it.get("activities_completed"))}
             aluno = {
                 "nome": nome, "nome_abrev": abrev, "uuid": uuid, "turma": turma,
                 "serie": str(it.get("grade_code") or "").strip(),
-                "estrelas": _para_int(it.get("score")),
-                "atividades": _para_int(it.get("activities_completed")),
+                **{campo: valor or 0 for campo, valor in numeros.items()},
             }
-            ausentes = [campo for campo, chave in (("estrelas", "score"),
-                                                   ("atividades", "activities_completed"))
-                        if chave not in it]
+            ausentes = [campo for campo, valor in numeros.items() if valor is None]
             if ausentes:
                 aluno["ausentes"] = ausentes
             alunos.append(aluno)
