@@ -342,6 +342,19 @@ def test_teto_coerente_com_a_limpeza_de_orfas(db, teto, travada, timeout, ok, tr
     assert v.critico and v.ok is ok and trecho in v.motivo, v.motivo
 
 
+def test_teto_coerente_diz_o_que_ainda_depende_de_sync_travada(db):
+    """Com o sinal de vida, a órfã em 'executando' é decidida por SYNC_SEM_SINAL_S e
+    pelo log: a limpeza de órfãs não mata mais a coleta viva entre SYNC_TRAVADA_S e o
+    teto. O motivo dava essa justificativa (falsa); agora diz o que de fato depende
+    de SYNC_TRAVADA_S, sem mudar o critério."""
+    v = verificar(db, Cfg(SYNC_TETO_EXECUCAO_S=2700, SYNC_TRAVADA_S=1800,
+                          SYNC_TIMEOUT_S=180), "teto_coerente")
+    assert v.ok is False
+    assert "limpeza de órfãs" not in v.motivo and "interrompida" not in v.motivo
+    assert "'execucoes_presas'" in v.motivo
+    assert "sinal de vida" in v.motivo and "(3600 s)" in v.motivo, v.motivo
+
+
 def test_status_honesto_exige_os_estados_e_as_colunas_do_contrato(db, monkeypatch):
     monkeypatch.setattr(prerequisitos, "_estados_declarados",
                         lambda: ({"concluida", "sem_dados", "erro"}, "ensaio"))

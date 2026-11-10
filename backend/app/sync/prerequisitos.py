@@ -331,10 +331,16 @@ def _v_teto_coerente(ctx: _Ctx) -> tuple[bool, str]:
     etapa = _inteiro(getattr(ctx.cfg, "SYNC_TIMEOUT_S", None)) or 0
     problemas = []
     if travada <= teto:
+        # A órfã em 'executando' é decidida pelo log (SYNC_SEM_SINAL_S), não por
+        # SYNC_TRAVADA_S: a limpeza não interrompe mais a coleta viva. O que ainda
+        # depende dele é a verificação 'execucoes_presas' (min(teto, SYNC_TRAVADA_S))
+        # e o teto do sinal de vida (2 × SYNC_TRAVADA_S).
         problemas.append(
-            f"SYNC_TRAVADA_S ({travada} s) não passa do teto ({teto} s): a limpeza de "
-            "órfãs que o agendador roda a cada rodada finalizaria como 'interrompida' "
-            f"uma coleta ainda VIVA entre {travada} s e {teto} s")
+            f"SYNC_TRAVADA_S ({travada} s) não passa do teto ({teto} s): a verificação "
+            "'execucoes_presas' acusaria como presa uma coleta ainda VIVA entre "
+            f"{travada} s e {teto} s, e o sinal de vida de uma execução viva, que para em "
+            f"2 × SYNC_TRAVADA_S ({2 * travada} s), deixaria só {2 * travada - teto} s "
+            "depois do teto da coleta para a aplicação e o recálculo")
     if etapa > teto:
         problemas.append(f"SYNC_TIMEOUT_S ({etapa} s, por etapa) maior que o teto total "
                          f"({teto} s)")
