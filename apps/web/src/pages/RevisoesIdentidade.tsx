@@ -182,7 +182,7 @@ const ORIENTACAO: Record<string, string> = {
   id_externo_duplicado:
     "A mesma conta da plataforma veio em mais de uma linha, com nomes ou números diferentes. Confira na plataforma de quem é a conta e vincule à ficha certa; se os números das linhas divergem, só o vínculo é gravado agora, e os números entram numa próxima coleta em que a conta venha numa linha só.",
   turma_arquivada:
-    "A turma do relatório está arquivada. Se ela deve receber alunos, reative-a em Turmas › Mostrar turmas arquivadas › Reativar; se a criança já tem ficha em outra turma, vincule.",
+    "A turma do relatório está arquivada. Se ela deve receber alunos, reative-a em Turmas: ligue “Mostrar arquivadas e de outros anos” e use “Reativar” na linha dela; se a criança já tem ficha em outra turma, vincule.",
   turma_fora_do_ano_letivo:
     "A turma escolhida não é do ano letivo ativo. Vincule a uma ficha ou crie-a numa turma do ano letivo atual.",
   turma_de_outra_etapa:

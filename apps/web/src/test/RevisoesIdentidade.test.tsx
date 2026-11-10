@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import RevisoesIdentidade from "../pages/RevisoesIdentidade";
 import type { RevisaoIdentidade } from "../pages/RevisoesIdentidade";
+import fonteTurmas from "../pages/Turmas.tsx?raw";
 import {
   api,
   renderComApp,
@@ -289,7 +290,7 @@ describe("Revisões de identidade — detalhe", () => {
     ["id_externo_duplicado", "o mesmo identificador da plataforma veio em mais de uma linha",
       /só o vínculo é gravado agora/],
     ["turma_arquivada", "a turma do relatório está arquivada no cadastro",
-      /Turmas › Mostrar turmas arquivadas › Reativar/],
+      /reative-a em Turmas: ligue “Mostrar arquivadas e de outros anos” e use “Reativar”/],
     ["turma_fora_do_ano_letivo", "a turma escolhida não é do ano letivo ativo da escola",
       /numa turma do ano letivo atual/],
   ])("motivo %s mostra o texto do backend e a orientação", async (motivo, texto, orientacao) => {
@@ -300,6 +301,19 @@ describe("Revisões de identidade — detalhe", () => {
     const identidade = within(dialogo).getByRole("region", { name: "Identidade recebida" });
     expect(within(identidade).getByText(`Motivo: ${texto}`)).toBeInTheDocument();
     expect(within(identidade).getByText(orientacao)).toBeInTheDocument();
+  });
+
+  it("turma arquivada: a orientação cita o rótulo que a tela Turmas de fato mostra", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({ motivo: "turma_arquivada", motivo_texto: "a turma do relatório está arquivada" })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const orientacao = within(dialogo).getByText(/reative-a em Turmas/).textContent ?? "";
+    const rotulo = /ligue “([^”]+)”/.exec(orientacao)?.[1];
+    expect(rotulo).toBe("Mostrar arquivadas e de outros anos");
+    // O mesmo texto visível ao lado do interruptor em Turmas.tsx (o nome acessível do
+    // interruptor é mais longo; quem lê a orientação procura o que está escrito).
+    expect(fonteTurmas).toMatch(new RegExp(`>\\s*${rotulo}\\s*<`));
   });
 
   it("leituras (livro a livro) aparecem como tabela", async () => {
