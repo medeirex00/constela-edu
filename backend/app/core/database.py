@@ -4,10 +4,12 @@ SQLAlchemy 2.0 com ORM declarativo. O mesmo código funciona em SQLite
 (desenvolvimento) e PostgreSQL (produção) — basta trocar DATABASE_URL.
 """
 import os
+from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import DateTime, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.types import TypeDecorator
 from starlette.requests import Request
 
 from app.core.config import settings
@@ -140,6 +142,46 @@ def desligar_prepared_statements(motor) -> None:
     event.listen(motor, "connect", _sem_prepared)
 
 
+# Nomes com que o PostgreSQL informa um fuso que já é o UTC (sem horário de verão).
+_FUSOS_UTC = frozenset({"utc", "etc/utc", "uct", "etc/uct", "gmt", "etc/gmt", "gmt0",
+                        "etc/gmt0", "greenwich", "etc/greenwich", "universal",
+                        "etc/universal", "zulu", "etc/zulu"})
+
+
+def _sessao_em_utc(dbapi_connection, _registro) -> None:
+    """Põe em UTC a sessão de uma conexão nova que chegou com outro fuso.
+
+    O fuso vem do que o servidor já informou ao abrir a conexão (o ``TimeZone`` do
+    ``ParameterStatus``, lido sem ida ao banco no psycopg 3): no banco em UTC — o padrão do
+    Supabase — nada é enviado. Fora dele, ``SET TIME ZONE 'UTC'`` e ``COMMIT``: sem o
+    COMMIT, o ROLLBACK da devolução da conexão ao pool desfaria o SET."""
+    info = getattr(dbapi_connection, "info", None)
+    try:
+        fuso = info.parameter_status("TimeZone") if info is not None else None
+    except Exception:  # noqa: BLE001 — sem a informação, ajusta (o seguro)
+        fuso = None
+    if (fuso or "").strip().lower() in _FUSOS_UTC:
+        return
+    with dbapi_connection.cursor() as cursor:
+        cursor.execute("SET TIME ZONE 'UTC'")
+    dbapi_connection.commit()
+
+
+def fixar_fuso_utc(motor) -> None:
+    """A sessão do PostgreSQL em UTC em toda conexão nova (os outros bancos: nada).
+
+    As colunas de data e hora são ``timestamp`` SEM fuso e guardam UTC. O que o app grava
+    pelo ORM já sai em UTC pelo tipo da coluna (``DataHoraUTC``), em qualquer sessão; este
+    ajuste alinha o resto ao mesmo relógio — o ``now()``/``CURRENT_TIMESTAMP`` do próprio
+    banco (os ``server_default`` das migrações) e o SQL escrito à mão — quando o banco ou o
+    papel tem outro fuso (``ALTER DATABASE ... SET timezone``, um banco de recuperação
+    criado num servidor brasileiro). Atrás de um pooler em modo transação o ``SET`` não fica
+    na sessão; a gravação pelo ORM continua certa pelo tipo da coluna."""
+    if motor.dialect.name != "postgresql":
+        return
+    event.listen(motor, "connect", _sessao_em_utc)
+
+
 def sessao_de_leitura(motor) -> sessionmaker:
     """As sessões das rotas ``leitura_sem_transacao``: o MESMO pool, em AUTOCOMMIT.
 
@@ -159,6 +201,7 @@ engine = create_engine(settings.DATABASE_URL, **opcoes_do_engine(settings.DATABA
 if not is_sqlite:
     instalar_ping_por_ociosidade(engine)
     desligar_prepared_statements(engine)
+    fixar_fuso_utc(engine)
     # A hora de abertura de cada conexão: o mantenedor do pool reabre a que está perto do
     # ``pool_recycle`` antes que uma requisição a pegue (ligado no startup, ``app.main``).
     marcar_abertura(engine)
@@ -180,8 +223,39 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 SessionLeitura = SessionLocal if is_sqlite else sessao_de_leitura(engine)
 
 
+class DataHoraUTC(TypeDecorator):
+    """A coluna de data e hora do app: ``timestamp`` SEM fuso que guarda UTC.
+
+    O padrão ``models.base.agora()`` (e boa parte do código) entrega o instante COM fuso. O
+    psycopg o envia como ``timestamptz`` e o PostgreSQL, para caber numa coluna sem fuso, o
+    converte para a hora local da SESSÃO: com o banco em America/Sao_Paulo, tudo saía 3 h
+    atrasado (o link de redefinição nascia vencido, a coleta viva parecia travada). Aqui o
+    instante com fuso vira UTC sem fuso ANTES de sair — na gravação e na comparação com a
+    coluna —, seja qual for o fuso da sessão, o pooler ou o engine (app, scripts, testes).
+    O que já vem sem fuso é UTC pela convenção do app e passa intacto. O SQLite, que
+    descartava o fuso e gravava o relógio do próprio instante, passa a gravar o mesmo que o
+    PostgreSQL. A leitura não muda: devolve o valor sem fuso, lido como UTC."""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if isinstance(value, datetime) and value.utcoffset() is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def coerce_compared_value(self, op, value):
+        # Só o instante passa pela conversão; o resto (o intervalo somado à coluna, a data
+        # comparada com ela) mantém o tipo que o ``DateTime`` lhe daria.
+        if isinstance(value, datetime):
+            return self
+        return self.impl_instance.coerce_compared_value(op, value)
+
+
 class Base(DeclarativeBase):
-    pass
+    # Toda coluna ``Mapped[datetime]`` dos modelos (Constela Edu e Quest) é ``DataHoraUTC``.
+    # O tipo no banco segue o mesmo ``DateTime`` sem fuso: nenhuma migração muda.
+    type_annotation_map = {datetime: DataHoraUTC}
 
 
 _MARCA_LEITURA = "_constela_leitura_sem_transacao"

@@ -64,6 +64,17 @@ def _config() -> Config:
     return cfg
 
 
+def renderizar_item_do_alembic(tipo: str, objeto, _contexto):
+    """``render_item`` do autogenerate (``alembic/env.py``): a coluna de data e hora dos
+    modelos (``database.DataHoraUTC``, que só converte o valor no app) sai na migração como
+    o ``sa.DateTime()`` que ela é no banco — sem importar código do app no histórico."""
+    from app.core.database import DataHoraUTC
+
+    if tipo == "type" and isinstance(objeto, DataHoraUTC):
+        return "sa.DateTime()"
+    return False
+
+
 def _config_da_aplicacao() -> Config:
     """A mesma Config, mas SEM o caminho do ``alembic.ini``.
 

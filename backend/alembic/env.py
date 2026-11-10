@@ -16,6 +16,7 @@ from sqlalchemy.engine import Connection
 
 from app.core.config import settings
 from app.core.database import Base
+from app.core.migracoes import renderizar_item_do_alembic
 
 # Importar os pacotes de modelos REGISTRA todas as tabelas em Base.metadata.
 # Sem isto o autogenerate acharia que o banco tem tabelas "a mais" e proporia
@@ -73,6 +74,8 @@ def _executar(connection: Connection) -> None:
         # tabela de forma transparente. Inócuo no PostgreSQL, essencial no
         # SQLite (dev e testes).
         render_as_batch=connection.dialect.name == "sqlite",
+        # A coluna de data e hora dos modelos (DataHoraUTC) sai como sa.DateTime().
+        render_item=renderizar_item_do_alembic,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -88,6 +91,7 @@ def run_migrations_offline() -> None:
         compare_type=True,
         compare_server_default=True,
         render_as_batch=settings.DATABASE_URL.startswith("sqlite"),
+        render_item=renderizar_item_do_alembic,
     )
     with context.begin_transaction():
         context.run_migrations()
