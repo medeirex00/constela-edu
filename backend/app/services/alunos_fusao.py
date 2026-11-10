@@ -32,15 +32,18 @@ from sqlalchemy.orm import Session
 from app.core.tempo import agora_br
 from app.models import (
     Aluno,
+    Escola,
     EventoAluno,
     IdentidadeExterna,
     Leitura,
     Livro,
     Matricula,
     Nota,
+    Notificacao,
     RevisaoIdentidade,
     SnapshotElefante,
     SnapshotMatific,
+    Turma,
 )
 from app.services import bimestres
 from app.services.audit import registrar
@@ -199,6 +202,40 @@ def leituras_repetidas(db: Session, ano_letivo: int, pares: list[tuple[int, int]
             for d in resumo["exemplos"]:
                 d["livro"] = titulos.get(d["livro_id"])
     return saida
+
+
+def _trocar_candidato_nas_pendencias(db: Session, escola_id: int, manter: Aluno,
+                                     remover: Aluno) -> int:
+    """Nas pendências ABERTAS da escola, o candidato ``remover`` vira ``manter``
+    (sem repetir quem já está na lista). Devolve quantas pendências mudaram."""
+    afetadas = [r for r in db.execute(select(RevisaoIdentidade).where(
+        RevisaoIdentidade.escola_id == escola_id,
+        RevisaoIdentidade.status == "pendente")).scalars()
+        if any(isinstance(c, dict) and c.get("aluno_id") == remover.id
+               for c in (r.candidatos or []))]
+    if not afetadas:
+        return 0
+    escola = db.get(Escola, escola_id)
+    turma = db.execute(
+        select(Turma.nome).join(Matricula, Matricula.turma_id == Turma.id)
+        .where(Matricula.aluno_id == manter.id,
+               Matricula.ano_letivo == (escola.ano_letivo_ativo if escola else 0))
+    ).scalars().first()
+    for rev in afetadas:
+        lista = list(rev.candidatos or [])
+        ja_tem = any(isinstance(c, dict) and c.get("aluno_id") == manter.id for c in lista)
+        nova: list = []
+        for c in lista:
+            if isinstance(c, dict) and c.get("aluno_id") == remover.id:
+                if not ja_tem:
+                    nova.append({**c, "aluno_id": manter.id, "nome": manter.nome,
+                                 "status": manter.status,
+                                 "turma": turma if turma is not None else c.get("turma")})
+                    ja_tem = True
+                continue
+            nova.append(c)
+        rev.candidatos = nova
+    return len(afetadas)
 
 
 def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
@@ -430,6 +467,19 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
         .values(aluno_escolhido_id=manter.id)
     ).rowcount
 
+    # CANDIDATOS DAS PENDÊNCIAS: a lista é a foto de quando a revisão abriu. Com o
+    # `remover` apagado, oferecê-lo dava 400 no /resolver depois do clique. Nas
+    # PENDENTES ele sai e entra o `manter` (a mesma criança), se já não estiver; a
+    # resolvida/descartada é registro do que foi decidido e não muda.
+    pendencias_atualizadas = _trocar_candidato_nas_pendencias(db, escola_id, manter, remover)
+
+    # NOTIFICAÇÕES: ``Notificacao.aluno_id`` não tem FK; sem isto, o aviso da ficha
+    # absorvida ficava órfão e sumia do filtro por aluno (o do professor).
+    notificacoes_movidas = db.execute(
+        update(Notificacao).where(Notificacao.aluno_id == remover.id)
+        .values(aluno_id=manter.id)
+    ).rowcount
+
     manter_id = manter.id
     contagens = {
         "leituras_movidas": leituras_movidas,
@@ -446,6 +496,8 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
         "quest_progresso_descartado": quest_progresso_descartado,
         "quest_tentativas_descartadas": quest_tentativas_descartadas,
         "quest_habilidades_descartadas": quest_habilidades_descartadas,
+        "pendencias_atualizadas": pendencias_atualizadas,
+        "notificacoes_movidas": notificacoes_movidas,
     }
     registrar(db, "aluno.fundido", escola_id=escola_id, usuario_id=usuario_id,
               entidade="aluno", entidade_id=manter_id,

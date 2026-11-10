@@ -207,8 +207,13 @@ def _candidatos(db: Session, escola_id: int
 
         # VARIAÇÃO DE GRAFIA / TYPO: nomes DIFERENTES mas quase iguais na mesma turma
         # normalizada, sem conflito de identidade — o motor único marca 'fraco'
-        # (variante LUÍS/LUIZ E erro de digitação GABRYEL/GABRIEL, inclusive no 1º
-        # nome). É o que a comparação por token-set EXATO deixava passar. SEMPRE
+        # (variante num nome do MEIO, como LUÍS/LUIZ em "EUSTÁQUIO LUÍS/LUIZ …", e
+        # erro de digitação de uma letra, como GABRYEL/GABRIEL, este também no 1º
+        # nome). LUÍS/LUIZ no 1º NOME não é 'fraco': a variante exige o 1º nome
+        # igual e o typo fica em 0,75, abaixo de 0,8 — o par nem vira candidato
+        # (``matching.plausivel`` devolve None; decisão C4 do dono, ver
+        # ``test_sync_nao_repete_stub::test_3b``). É o que a comparação por
+        # token-set EXATO deixava passar. SEMPRE
         # "revisar" (nunca pré-marca, nunca funde sozinho): similaridade não distingue
         # "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (diferentes) — só um humano
         # decide. Cada aluno aponta para o MELHOR parceiro (piloto > completo >

@@ -954,6 +954,45 @@ def _nome_para_casar(nome: str, chave: str = "", chave_alt: str = "") -> str:
     return " ".join(limpos)
 
 
+# O mesmo sufixo no fim da palavra CRUA (com o ordinal que ``tokens_nome`` lê
+# como letra: "3ºA", "3°A").
+_SUFIXO_CRU = re.compile(r"\d{1,2}[ºª°]?[A-Za-z]$")
+
+
+def nome_sem_sufixo_de_turma(nome: str, chave: str = "", chave_alt: str = "") -> str:
+    """O nome que a ficha NOVA grava: o recebido, sem o sufixo de turma que
+    ``_nome_para_casar`` tira do casamento — a MESMA regra (só sai o sufixo da
+    sala da própria linha, como palavra solta ou grudado no último nome) —, mas
+    com a grafia de quem digitou (caixa, acento). Antes o sufixo só saía do
+    casamento e a ficha nascia "… LIMA 3A". Sem sufixo, ou se só sobraria o
+    sufixo, devolve o nome como veio (sem os espaços repetidos)."""
+    partes = (nome or "").split()
+    saida: list[str] = []
+    mudou = False
+    for parte in partes:
+        toks = tokens_nome(parte)
+        if len(toks) != 1:
+            saida.append(parte)
+            continue
+        token = toks[0]
+        if _SUFIXO_TURMA.fullmatch(token) and (_sufixo_da_sala(token, chave)
+                                               or _sufixo_da_sala(token, chave_alt)):
+            mudou = True
+            continue
+        colado = _SUFIXO_TURMA_COLADO.fullmatch(token)
+        cru = _SUFIXO_CRU.search(parte)
+        if (colado is not None and cru is not None
+                and (_sufixo_da_sala(colado.group(2), chave)
+                     or _sufixo_da_sala(colado.group(2), chave_alt))):
+            saida.append(parte[:cru.start()])
+            mudou = True
+            continue
+        saida.append(parte)
+    if not mudou or not saida:
+        return " ".join(partes)
+    return " ".join(saida)
+
+
 # Grafias equivalentes de nome próprio no português do Brasil (LUÍS/LUIZ,
 # RODRIGUES/RODRIGUEZ, EMANUELE/EMANUELLE, THAIS/TAIS, HELOISA/ELOISA): a MESMA
 # pronúncia escrita de outro jeito.

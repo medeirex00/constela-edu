@@ -1084,7 +1084,11 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                             dados, avisos, revisoes, usuario_id)
         return None
 
-    aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
+    # A ficha nasce com o nome SEM o sufixo de turma digitado junto ("… LIMA 3A"),
+    # pela mesma regra que já o tirava do casamento; a pendência e o log guardam o
+    # nome recebido.
+    aluno = Aluno(escola_id=escola_id, nome=ida.nome_sem_sufixo_de_turma(
+        linha.nome, decisao.chave_sala, ida.chave_sala(ident.turma_nome)))
     db.add(aluno)
     db.flush()
     db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
@@ -1367,14 +1371,28 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
     chaves = list(dict.fromkeys(
         c[:400] for c in (ida.chave_identidade(ident, decisao.chave_sala),
                           ida.chave_identidade(ident, ida.chave_sala(ident.turma_nome)))))
+    # A13: a linha que agora traz a CONTA da plataforma responde também a pendência
+    # aberta por NOME (mesmo nome, mesma sala) quando ela chegou SEM a conta — antes
+    # a chave mudava de nome+sala para id e a pendência ficava aberta para sempre.
+    # Mesmas guardas de sempre (``_linha_substitui_o_congelado``, D10) e mais uma:
+    # a pendência por nome só fecha se não apontava para OUTRA ficha.
+    chaves_por_nome: list[str] = []
+    if ident.id_externo:
+        sem_conta = replace(ident, id_externo="")
+        chaves_por_nome = [c for c in dict.fromkeys(
+            c[:400] for c in (ida.chave_identidade(sem_conta, decisao.chave_sala),
+                              ida.chave_identidade(sem_conta, ida.chave_sala(ident.turma_nome))))
+            if c not in chaves]
     ids = [rid for c in chaves for rid in ctx.pendentes.pop(c, [])]
+    ids_por_nome = {rid for c in chaves_por_nome for rid in ctx.pendentes.pop(c, [])}
+    ids += sorted(ids_por_nome)
     if not ids:
         return []
     contexto = coletor.contexto or {}
     chaves_da_linha = {ida.chave_pendencia(c, coletor.formato,
                                            str(contexto.get("periodo_inicio") or ""),
                                            str(contexto.get("periodo_fim") or ""))
-                       for c in chaves}
+                       for c in (*chaves, *chaves_por_nome)}
     motor = _motor_escolheria(ctx, ident, aluno) if ident.aluno_id is not None else None
     humana = ident.aluno_id is not None and motor is None
     if motor is not None:
@@ -1400,6 +1418,11 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
             continue                     # já decidida por outro caminho: não mexe
         if _retida_pelo_d10(db, escola_id, ctx, ident, rev, contas_de_outra_escola):
             retidas_d10.append(rev)      # D10/D11: só o Admin Global encerra
+            continue
+        if rid in ids_por_nome and any(
+                c.get("aluno_id") not in (None, aluno.id) for c in (rev.candidatos or [])
+                if isinstance(c, dict)):
+            ficaram.append(rev)          # a pendência por nome apontava outra ficha
             continue
         if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor):
             ficaram.append(rev)
@@ -4192,7 +4215,11 @@ def resolver_revisao(
         turma_arquivada.exigir_turma_ativa(turma)
         # Nem turma de OUTRO ano letivo: a matrícula que nasce é a do ano ativo.
         turma_arquivada.exigir_destino_do_ano_ativo(turma, escola.ano_letivo_ativo)
-        aluno = Aluno(escola_id=escola_id, nome=rev.nome_recebido.strip())
+        # Sem o sufixo de turma digitado junto do nome (a mesma regra da criação
+        # pela importação); a pendência continua guardando o nome recebido.
+        aluno = Aluno(escola_id=escola_id, nome=ida.nome_sem_sufixo_de_turma(
+            rev.nome_recebido, ida.chave_sala(turma.nome),
+            ida.chave_sala(rev.turma_informada or "")))
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id, turma_id=turma.id,
