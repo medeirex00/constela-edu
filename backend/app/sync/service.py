@@ -1135,11 +1135,16 @@ def _carregar_contadores(db: Session, escola_id: int, plataforma: str) -> dict:
 
 
 def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
-                       contadores: dict) -> None:
+                       contadores: dict, *, substituir: bool = False) -> None:
     """Persiste (fazendo MERGE) as contagens por aluno vistas nesta sync. O merge
     preserva as contagens de turmas que falharam nesta rodada (não vieram em
-    ``contadores``) — assim uma falha parcial nunca zera o cursor de um aluno."""
-    if not contadores:
+    ``contadores``) — assim uma falha parcial nunca zera o cursor de um aluno.
+
+    ``substituir`` (recoleta COMPLETA com unidade que falhou): o cursor passa a ser
+    só o desta rodada. Quem falhou perde o cursor e a próxima coleta incremental o
+    busca inteiro — o merge mantinha o antigo e, com o agregado da turma parado, o
+    aluno era pulado até a recoleta seguinte, 7 dias depois."""
+    if not contadores and not substituir:
         return
     from app.models.configuracao import Configuracao
 
@@ -1150,10 +1155,12 @@ def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
             Configuracao.chave == plataforma)
     ).scalar_one_or_none()
     if row is None:
+        if not contadores:
+            return
         row = Configuracao(escola_id=escola_id, namespace=_NS_INCREMENTAL,
                            chave=plataforma, valor={})
         db.add(row)
-    atual = dict(row.valor) if isinstance(row.valor, dict) else {}
+    atual = {} if substituir else (dict(row.valor) if isinstance(row.valor, dict) else {})
     for sid, total in contadores.items():
         try:
             atual[str(sid)] = int(total)
@@ -1852,13 +1859,17 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         # Linha sem aluno vinculado volta ao cursor anterior → a próxima sync busca
         # os livros de novo em vez de perdê-los para sempre.
         _desfazer_cursor_ignorados(contexto_fetch, ap.ignorados)
-        _salvar_contadores(db, escola_id, plataforma, contexto_fetch.contadores_novos)
+        # Recoleta COMPLETA com unidade que falhou (turma, lote, aluno): o cursor
+        # fica só com quem chegou nesta rodada (``substituir``).
+        _salvar_contadores(db, escola_id, plataforma, contexto_fetch.contadores_novos,
+                           substituir=completa and bool(ap.falhas))
         # A recoleta completa que CHEGOU AO FIM reinicia o relógio semanal também
         # quando terminou 'parcial' (um livro sem data, um aluno cujo pedido
         # falha sempre): antes só 'concluida'/'sem_atualizacao' marcavam, e uma
         # linha com defeito permanente fazia TODA coleta seguinte ser completa
-        # (~17 min cada) — o cursor nunca mais valia. Quem falhou nesta rodada não
-        # tem cursor novo: a próxima incremental o busca de novo.
+        # (~17 min cada) — o cursor nunca mais valia. Quem falhou nesta rodada
+        # ficou SEM cursor (acima): a próxima incremental o busca inteiro, em vez
+        # de pulá-lo por mais 7 dias quando o agregado da turma não muda.
         if completa and status in ("concluida", "parcial", "sem_atualizacao"):
             _marcar_coleta_completa(db, escola_id, plataforma)
     # CREDENCIAL: o login e o endpoint de dados responderam (só estes estados).
