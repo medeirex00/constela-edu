@@ -3986,6 +3986,10 @@ async def confirmar_matriculas(
 # pipeline normal de importação e audita. A fusão de fichas duplicadas continua
 # sendo a ação separada de Alunos › Fundir duplicatas.
 
+# A listagem da fila devolve no máximo as N revisões mais recentes.
+LIMITE_LISTA_REVISOES = 500
+
+
 def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None) -> RevisaoIdentidadeOut:
     saida = RevisaoIdentidadeOut.model_validate(rev)
     saida.motivo_texto = ida.MOTIVOS.get(rev.motivo, rev.motivo)
@@ -4016,15 +4020,37 @@ def listar_revisoes(
         consulta = consulta.where(RevisaoIdentidade.status == situacao)
     revisoes = db.execute(
         consulta.order_by(RevisaoIdentidade.atualizada_em.desc(),
-                          RevisaoIdentidade.id.desc()).limit(500)).scalars().all()
-    # Cada pendência vem com a TRIAGEM: dá para encerrar com segurança, e por quê.
-    # Só leitura e determinística — não decide nada, apenas explica.
+                          RevisaoIdentidade.id.desc()).limit(LIMITE_LISTA_REVISOES)).scalars().all()
+    # Cada PENDÊNCIA vem com a TRIAGEM (o selo da tela de Revisões): dá para
+    # encerrar com segurança, e por quê. Só leitura e determinística — não decide
+    # nada, apenas explica. Ela precisa do estado da escola inteiro (contas, fichas,
+    # turmas, decisões), então o contexto só é carregado quando há pendência na
+    # página: a lista de resolvidas/descartadas não paga esse custo.
+    pendentes = [r for r in revisoes if r.status == "pendente"]
     triagens: dict[int, dict] = {}
-    if revisoes:
+    if pendentes:
         ctx = ida.carregar_contexto(db, escola_id)
         triagens = {rid: t.como_dict() for rid, t in triagem_revisoes.triar_revisoes(
             ctx, list(revisoes)).items()}
     return [_revisao_out(r, triagens.get(r.id)) for r in revisoes]
+
+
+@router.get("/contagem-revisoes", response_model=dict)
+def contar_revisoes(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """O TOTAL de pendências da escola, por motivo. A lista de /revisoes para em
+    ``LIMITE_LISTA_REVISOES`` (as mais recentes) e o contador da tela saturava
+    nesse número; aqui é uma contagem, sem carregar fila nem triagem."""
+    por_motivo = {motivo: int(n) for motivo, n in db.execute(
+        select(RevisaoIdentidade.motivo, func.count())
+        .where(RevisaoIdentidade.escola_id == escola_id,
+               RevisaoIdentidade.status == "pendente")
+        .group_by(RevisaoIdentidade.motivo)).all()}
+    return {"pendentes": sum(por_motivo.values()), "por_motivo": por_motivo,
+            "limite_da_lista": LIMITE_LISTA_REVISOES}
 
 
 def _confirmacao_da_revisao(rev: RevisaoIdentidade, aluno_id: int,

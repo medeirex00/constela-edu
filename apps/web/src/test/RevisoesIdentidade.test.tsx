@@ -293,6 +293,9 @@ describe("Revisões de identidade — detalhe", () => {
       /reative-a em Turmas: ligue “Mostrar arquivadas e de outros anos” e use “Reativar”/],
     ["turma_fora_do_ano_letivo", "a turma escolhida não é do ano letivo ativo da escola",
       /numa turma do ano letivo atual/],
+    // Duas contas sem vínculo, mesmo nome, nenhuma ficha (nada foi criado).
+    ["contas_repetidas_no_relatorio", "duas contas diferentes da plataforma vieram no mesmo relatório",
+      /se são duas crianças, crie uma ficha para cada/],
   ])("motivo %s mostra o texto do backend e a orientação", async (motivo, texto, orientacao) => {
     const u = userEvent.setup();
     filaMock([revisaoFake({ motivo, motivo_texto: texto })]);
@@ -899,5 +902,97 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     expect(within(dialogo).queryByRole("region", {
       name: "Contas do aluno no Matific",
     })).toBeNull();
+  });
+});
+
+// ── A14: a triagem do backend na tela (selo, filtro por motivo, "só seguras") ──
+// A tela mostra o veredito e filtra; NÃO resolve nada em lote.
+
+function triagemFake(classificacao: "segura" | "decisao_humana", motivo_texto: string,
+                     extra: Partial<NonNullable<RevisaoIdentidade["triagem"]>> = {}) {
+  return { classificacao, motivo: classificacao === "segura" ? "candidato_unico_compativel" : "ambigua_decisao_humana",
+           motivo_texto, aluno_id: null, evidencias: [], conflitos: [], retrato_superado: null,
+           irmas: [], ...extra };
+}
+
+function filaComTriagem() {
+  return filaMock([
+    revisaoFake({ triagem: triagemFake("decisao_humana",
+      "mais de um candidato e nenhuma evidência objetiva desempata",
+      { conflitos: ["2 candidatos [31, 32] e a conta (ausente) não pertence a nenhum deles"] }) }),
+    revisaoFake({ id: 8, nome_recebido: "MAURO R", motivo: "correspondencia_insegura",
+      motivo_texto: "nome parecido, mas a correspondência não é segura",
+      candidatos: [{ aluno_id: 40, nome: "MAURO RIBEIRO FICTONI", status: "ativo", turma: "5ºB" }],
+      triagem: triagemFake("segura", "candidato único, turma e série compatíveis, sem conta concorrente",
+        { evidencias: ["candidato único registrado: ficha 40", "série compatível (5ª ano)"] }) }),
+    revisaoFake({ id: 9, nome_recebido: "LIA S", motivo: "nome_incompleto",
+      motivo_texto: "a plataforma mandou só o nome abreviado", candidatos: [],
+      triagem: triagemFake("decisao_humana", "nenhum aluno corresponde — criar ficha é decisão de gestão") }),
+  ]);
+}
+
+describe("Revisões de identidade — triagem", () => {
+  it("cada pendência mostra o selo da triagem e o porquê", async () => {
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const item = (n: string) =>
+      screen.getByRole("button", { name: `Ver revisão de ${n}` }).closest("li") as HTMLElement;
+    await screen.findByText("3 pendências");
+    expect(within(item("MAURO R")).getByText("Segura")).toBeInTheDocument();
+    expect(within(item("MAURO R")).getByText(/Triagem: candidato único/)).toBeInTheDocument();
+    expect(within(item("TOBIAS D")).getByText("Decisão humana")).toBeInTheDocument();
+    expect(within(item("LIA S")).getByText("Decisão humana")).toBeInTheDocument();
+  });
+
+  it("filtra por motivo, com a contagem de cada um", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await screen.findByText("3 pendências");
+    const filtro = screen.getByLabelText("Motivo");
+    expect(within(filtro).getByRole("option", { name: "Nome abreviado (1)" })).toBeInTheDocument();
+    await u.selectOptions(filtro, "nome_incompleto");
+    expect(screen.getByRole("button", { name: "Ver revisão de LIA S" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ver revisão de MAURO R" })).toBeNull();
+  });
+
+  it("'Só as seguras' deixa só as que a triagem chamou de seguras", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await screen.findByText("3 pendências");
+    await u.click(screen.getByRole("checkbox", { name: /Só as seguras \(1\)/ }));
+    expect(screen.getByRole("button", { name: "Ver revisão de MAURO R" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ver revisão de LIA S" })).toBeNull();
+  });
+
+  it("não há ação em lote: resolver continua sendo um por um", async () => {
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await screen.findByText("3 pendências");
+    expect(screen.queryByRole("button", { name: /lote|todas as seguras|resolver todas/i })).toBeNull();
+    expect(api.mock.calls.some(([, o]) => (o as RequestInit)?.method === "POST")).toBe(false);
+  });
+
+  it("o detalhe explica a triagem com as evidências e os conflitos", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u, "MAURO R");
+    const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
+    expect(within(bloco).getByText("Segura")).toBeInTheDocument();
+    expect(within(bloco).getByText("série compatível (5ª ano)")).toBeInTheDocument();
+    expect(within(bloco).getByText(/nada é vinculado sem a sua escolha/)).toBeInTheDocument();
+  });
+
+  it("o contador usa o total real quando a fila passa do limite da lista", async () => {
+    filaComTriagem();
+    responder("GET", "/escolas/1/importacoes/contagem-revisoes",
+      { pendentes: 612, por_motivo: {}, limite_da_lista: 500 });
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    expect(await screen.findByText("612 pendências")).toBeInTheDocument();
+    expect(screen.queryByText(/500\+ pendências/)).toBeNull();
   });
 });

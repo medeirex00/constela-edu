@@ -10,10 +10,17 @@
  * recebido, conta da plataforma, turma, motivo, candidatos e dados) e envia a
  * escolha EXPLÍCITA do gestor aos endpoints já existentes:
  *   GET  /escolas/{id}/importacoes/revisoes[?situacao=]
+ *   GET  /escolas/{id}/importacoes/contagem-revisoes   (o total real; a lista para em 500)
  *   POST /escolas/{id}/importacoes/revisoes/{rev}/resolver  {aluno_id} | {criar_em_turma_id}
  *   POST /escolas/{id}/importacoes/revisoes/{rev}/descartar {motivo}
  * Vincular, transferir a conta da plataforma, aplicar os dados e auditar é
  * tudo feito pelo backend; depois de cada ação a fila é relida dele.
+ *
+ * TRIAGEM (só leitura, calculada pelo backend em `services/triagem_revisoes`):
+ * cada pendência vem com o selo "Segura" (há evidência objetiva e nenhum
+ * conflito) ou "Decisão humana" (com o porquê). A tela mostra o selo, filtra por
+ * motivo e por "só seguras" — e NÃO resolve nada em lote: cada pendência continua
+ * sendo decidida por um clique de gente.
  */
 import {
   AlertTriangle,
@@ -65,6 +72,18 @@ export interface CandidatoRevisao {
   turma: string | null;
 }
 
+/** Veredito determinístico da triagem ("dá para encerrar com segurança, e por quê?"). */
+export interface TriagemRevisao {
+  classificacao: "segura" | "decisao_humana" | "encerrada";
+  motivo: string;
+  motivo_texto: string;
+  aluno_id: number | null;
+  evidencias: string[];
+  conflitos: string[];
+  retrato_superado: boolean | null;
+  irmas: number[];
+}
+
 export interface RevisaoIdentidade {
   id: number;
   plataforma: string;
@@ -88,6 +107,15 @@ export interface RevisaoIdentidade {
   resolucao: Record<string, unknown> | null;
   created_at: string;
   atualizada_em: string;
+  /** Só nas pendentes da listagem (as encerradas não precisam de triagem). */
+  triagem?: TriagemRevisao | null;
+}
+
+/** Total real de pendências (a lista vem limitada a `LIMITE_LISTA`). */
+interface ContagemRevisoes {
+  pendentes: number;
+  por_motivo: Record<string, number>;
+  limite_da_lista: number;
 }
 
 export interface ResolucaoRevisao {
@@ -141,6 +169,37 @@ const ROTULO_ORIGEM: Record<string, string> = {
   // conta aposentada de uma conta que vale em outra escola, D10): o backend a
   // guarda como revisão resolvida, a memória que a coleta seguinte respeita.
   confirmacao_admin: "Confirmação do Admin Global (reativação)",
+};
+
+/** Nome CURTO de cada motivo, para o filtro (o texto completo vem do backend). */
+const ROTULO_MOTIVO: Record<string, string> = {
+  candidatos_multiplos: "Mais de um candidato",
+  correspondencia_insegura: "Nome parecido",
+  homonimo_em_outra_sala: "Mesmo nome em outra turma",
+  nome_casa_em_outra_sala: "Nome casa em outra turma",
+  identidade_de_ficha_inativa: "Conta de ficha inativa",
+  ficha_inativa: "Ficha inativa",
+  identidade_de_outro_aluno: "Conta de outro aluno",
+  outra_identidade_na_plataforma: "Duas contas na mesma ficha",
+  contas_repetidas_no_relatorio: "Duas contas, nenhuma ficha",
+  ra_repetido: "RA repetido",
+  turma_ambigua: "Turma ambígua",
+  turma_nao_cadastrada: "Turma não cadastrada",
+  sem_turma: "Sem turma",
+  criacao_bloqueada_por_politica: "Criação bloqueada pela política",
+  nome_incompleto: "Nome abreviado",
+  id_externo_duplicado: "Conta repetida no relatório",
+  turma_arquivada: "Turma arquivada",
+  turma_fora_do_ano_letivo: "Turma de outro ano",
+  turma_de_outra_etapa: "Turma de outra etapa",
+  identidade_de_outra_escola: "Conta de outra escola",
+};
+
+/** Selo da triagem. "Segura" não é decisão: é a conferência automática dizendo que
+ *  não achou conflito — quem vincula continua sendo o gestor. */
+const SELO_TRIAGEM: Record<string, { texto: string; tom: "ok" | "alerta" }> = {
+  segura: { texto: "Segura", tom: "ok" },
+  decisao_humana: { texto: "Decisão humana", tom: "alerta" },
 };
 
 /** Situação da ficha do candidato (o `status` do aluno no backend). */
@@ -272,6 +331,8 @@ export default function RevisoesIdentidade() {
   const { escolaId } = useApp();
   const [situacao, setSituacao] = useState<Situacao>("pendente");
   const [plataforma, setPlataforma] = useState<FiltroPlataforma>("todas");
+  const [motivo, setMotivo] = useState<string>("todos");
+  const [soSeguras, setSoSeguras] = useState(false);
   const [abertaId, setAbertaId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   // O painel não pode fechar (Esc/fundo) com uma ação em voo — o resultado do
@@ -284,19 +345,36 @@ export default function RevisoesIdentidade() {
   const pendentes = useApi<RevisaoIdentidade[]>(base);
   const outras = useApi<RevisaoIdentidade[]>(
     base && situacao !== "pendente" ? `${base}?situacao=${situacao}` : null);
+  // O TOTAL real (a lista para em LIMITE_LISTA). Sem ele, a tela usa o tamanho da lista.
+  const contagem = useApi<ContagemRevisoes>(
+    escolaId ? `/escolas/${escolaId}/importacoes/contagem-revisoes` : null);
   const turmasApi = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const turmas = turmasApi.dados ?? [];
 
   const lista = situacao === "pendente" ? pendentes : outras;
-  const itens = (lista.dados ?? []).filter(
+  const daPlataforma = (lista.dados ?? []).filter(
     (r) => plataforma === "todas" || r.plataforma === plataforma);
-  const nPendentes = pendentes.dados?.length ?? null;
+  // Motivos presentes na lista (com a contagem) — o filtro só oferece o que existe.
+  const motivosPresentes = Object.entries(
+    daPlataforma.reduce<Record<string, number>>((acc, r) => {
+      acc[r.motivo] = (acc[r.motivo] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
+  const seguras = daPlataforma.filter((r) => r.triagem?.classificacao === "segura").length;
+  const itens = daPlataforma
+    .filter((r) => motivo === "todos" || r.motivo === motivo)
+    .filter((r) => !soSeguras || r.triagem?.classificacao === "segura");
+  const totalPendentes = typeof contagem.dados?.pendentes === "number" ? contagem.dados.pendentes : null;
+  const nPendentes = totalPendentes ?? pendentes.dados?.length ?? null;
+  const listaCortada = (pendentes.dados?.length ?? 0) >= LIMITE_LISTA;
   const aberta = abertaId == null
     ? null
     : [...(pendentes.dados ?? []), ...(outras.dados ?? [])].find((r) => r.id === abertaId) ?? null;
 
   function recarregarFila() {
     pendentes.recarregar();
+    contagem.recarregar();
     if (situacao !== "pendente") outras.recarregar();
   }
 
@@ -341,7 +419,7 @@ export default function RevisoesIdentidade() {
 
   const contador = nPendentes === null
     ? null
-    : nPendentes >= LIMITE_LISTA
+    : totalPendentes === null && nPendentes >= LIMITE_LISTA
       ? `${numero(LIMITE_LISTA)}+ pendências`
       : nPendentes === 0 ? "Nenhuma pendência" : plural(nPendentes, "pendência", "pendências");
 
@@ -413,7 +491,40 @@ export default function RevisoesIdentidade() {
             </SelectNativo>
           </Campo>
         </div>
+        <div className="w-full sm:w-60">
+          <Campo rotulo="Motivo">
+            <SelectNativo className="w-full" value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}>
+              <option value="todos">Todos</option>
+              {motivo !== "todos" && !motivosPresentes.some(([m]) => m === motivo) && (
+                <option value={motivo}>{ROTULO_MOTIVO[motivo] ?? motivo} (0)</option>
+              )}
+              {motivosPresentes.map(([m, n]) => (
+                <option key={m} value={m}>{ROTULO_MOTIVO[m] ?? m} ({numero(n)})</option>
+              ))}
+            </SelectNativo>
+          </Campo>
+        </div>
+        {situacao !== "resolvida" && situacao !== "descartada" && (
+          <label className="flex items-center gap-2 pb-2 text-sm text-zinc-700 dark:text-zinc-200">
+            <input type="checkbox" checked={soSeguras}
+              onChange={(e) => setSoSeguras(e.target.checked)} />
+            Só as seguras ({numero(seguras)})
+          </label>
+        )}
       </BarraFiltros>
+
+      {daPlataforma.length > 0 && situacao !== "resolvida" && situacao !== "descartada" && (
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <strong>Segura</strong>: a conferência automática achou evidência (a conta já é da ficha,
+        candidato único com turma e série compatíveis) e nenhum conflito. É só uma indicação —
+        cada pendência continua sendo vinculada por você, uma a uma.
+        {listaCortada && totalPendentes !== null && totalPendentes > LIMITE_LISTA && (
+          <> A fila tem {numero(totalPendentes)} pendências; a lista mostra as {numero(LIMITE_LISTA)} mais
+          recentes, e os filtros valem sobre elas.</>
+        )}
+      </p>
+      )}
 
       {lista.erro && (
         lista.dados ? (
@@ -445,12 +556,12 @@ export default function RevisoesIdentidade() {
         <Card>
           <Vazio
             icone={ShieldCheck}
-            titulo={situacao === "pendente" && plataforma === "todas"
+            titulo={situacao === "pendente" && plataforma === "todas" && motivo === "todos" && !soSeguras
               ? "Nenhuma revisão pendente"
               : "Nenhuma revisão com estes filtros"}
-            descricao={situacao === "pendente" && plataforma === "todas"
+            descricao={situacao === "pendente" && plataforma === "todas" && motivo === "todos" && !soSeguras
               ? "Quando uma importação ou sincronização não conseguir decidir com segurança de quem são os dados, a linha aparece aqui."
-              : "Troque a situação ou a plataforma para ver outras revisões."}
+              : "Troque a situação, a plataforma, o motivo ou desmarque “Só as seguras” para ver outras revisões."}
           />
         </Card>
       )}
@@ -505,6 +616,13 @@ function ItemRevisao({ rev, turmas, aoAbrir }: {
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate text-[15px] font-semibold text-zinc-900 dark:text-white" title={rev.nome_recebido}>{rev.nome_recebido}</p>
               <Badge tom={rev.plataforma === "matific" ? "info" : "destaque"}>{NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma}</Badge>
+              {rev.status === "pendente" && rev.triagem && SELO_TRIAGEM[rev.triagem.classificacao] && (
+                <span title={rev.triagem.motivo_texto || undefined}>
+                  <Badge tom={SELO_TRIAGEM[rev.triagem.classificacao].tom}>
+                    {SELO_TRIAGEM[rev.triagem.classificacao].texto}
+                  </Badge>
+                </span>
+              )}
               {rev.status !== "pendente" && (
                 <Badge tom={rev.status === "resolvida" ? "ok" : "neutro"}>
                   {ROTULO_SITUACAO[rev.status] ?? rev.status}
@@ -529,6 +647,11 @@ function ItemRevisao({ rev, turmas, aoAbrir }: {
               <AlertTriangle size={13} aria-hidden className="mt-0.5 shrink-0" />
               <span>Motivo: {rev.motivo_texto || rev.motivo}</span>
             </p>
+            {rev.status === "pendente" && rev.triagem?.motivo_texto && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Triagem: {rev.triagem.motivo_texto}
+              </p>
+            )}
           </div>
           <Botao variante="secundario" onClick={aoAbrir} aria-label={`Ver revisão de ${rev.nome_recebido}`}>
             Ver revisão <ArrowRight size={16} aria-hidden />
@@ -860,6 +983,35 @@ function DetalheRevisao({
           )}
         </Card>
       </Bloco>
+
+      {/* A2. TRIAGEM — o porquê do selo, só leitura. */}
+      {pendente && rev.triagem && SELO_TRIAGEM[rev.triagem.classificacao] && (
+        <Bloco titulo="Triagem automática">
+          <Card className="space-y-2 p-4 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tom={SELO_TRIAGEM[rev.triagem.classificacao].tom}>
+                {SELO_TRIAGEM[rev.triagem.classificacao].texto}
+              </Badge>
+              <span>{rev.triagem.motivo_texto}</span>
+            </div>
+            {rev.triagem.evidencias.length > 0 && (
+              <ul className="list-inside list-disc text-xs text-zinc-600 dark:text-zinc-300"
+                  aria-label="Evidências da triagem">
+                {rev.triagem.evidencias.map((e) => <li key={e}>{e}</li>)}
+              </ul>
+            )}
+            {rev.triagem.conflitos.length > 0 && (
+              <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200"
+                  aria-label="Conflitos da triagem">
+                {rev.triagem.conflitos.map((c) => <li key={c}>{c}</li>)}
+              </ul>
+            )}
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              A triagem só explica o caso; nada é vinculado sem a sua escolha abaixo.
+            </p>
+          </Card>
+        </Bloco>
+      )}
 
       {/* B. CANDIDATOS ENCONTRADOS */}
       <Bloco titulo="Candidatos encontrados">
