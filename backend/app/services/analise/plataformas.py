@@ -435,11 +435,15 @@ def _elefante_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
     O recorte da coorte é o da coorte JÁ LIDA (``coortes``, a mesma do denominador), aluno a
     aluno e escola a escola: uma subconsulta da coorte seria lida em outro instante, e um
     aluno inativado no meio da requisição ficaria no denominador sem as leituras dele."""
-    ele: dict[tuple[int, int], dict[int, dict]] = {}
-    niveis: dict[tuple[int, int], dict[int, tuple[float, int]]] = {}
     if not grupos:
-        return ele, niveis
-    nivel =func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
+        return {}, {}
+    return _elefante_das_linhas(db.execute(union_all(*_partes_elefante(grupos))).all(), coortes)
+
+
+def _partes_elefante(grupos: dict[int, tuple[rp.Janela, list[int]]]) -> list:
+    """Os SELECTs de ``_elefante_em_lote`` (as leituras e os eventos de cada grupo), com as
+    colunas (fonte, g, escola_id, aluno_id, nivel, com_livro, n, minutos)."""
+    nivel = func.coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)
     com_livro = case((Livro.id.is_(None), 0), else_=1)
     partes = []
     for g, (janela, ids) in grupos.items():
@@ -452,9 +456,10 @@ def _elefante_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
             .where(Leitura.escola_id.in_(ids))
             .group_by(Leitura.escola_id, Leitura.aluno_id, nivel, com_livro))
         eventos = (
-            select(literal_column("'E'"), literal_column(str(g)), EventoAluno.escola_id,
-                   EventoAluno.aluno_id, cast(null(), String), literal_column("0"),
-                   func.count(), literal_column("0"))
+            select(literal_column("'E'").label("fonte"), literal_column(str(g)).label("g"),
+                   EventoAluno.escola_id.label("escola_id"), EventoAluno.aluno_id.label("aluno_id"),
+                   cast(null(), String).label("nivel"), literal_column("0").label("com_livro"),
+                   func.count().label("n"), literal_column("0").label("minutos"))
             .where(EventoAluno.escola_id.in_(ids), EventoAluno.plataforma == "elefante",
                    EventoAluno.tipo_evento == "leitura")
             .group_by(EventoAluno.escola_id, EventoAluno.aluno_id))
@@ -465,8 +470,18 @@ def _elefante_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
             leituras = leituras.where(Leitura.data <= janela.fim)
             eventos = eventos.where(EventoAluno.ocorrido_em <= janela.fim)
         partes += [leituras, eventos]
-    for fonte, g, escola_id, aid, codigo, tem_livro, n, minutos in db.execute(
-            union_all(*partes)).all():
+    return partes
+
+
+def _elefante_das_linhas(linhas, coortes: dict[int, dict[int, dict]]
+                         ) -> tuple[dict[tuple[int, int], dict[int, dict]],
+                                    dict[tuple[int, int], dict[int, tuple[float, int]]]]:
+    """As somas de ``_elefante_em_lote`` a partir das linhas das partes (pelo nome da coluna)."""
+    ele: dict[tuple[int, int], dict[int, dict]] = {}
+    niveis: dict[tuple[int, int], dict[int, tuple[float, int]]] = {}
+    for linha in linhas:
+        fonte, g, escola_id, aid = linha.fonte, linha.g, linha.escola_id, linha.aluno_id
+        codigo, tem_livro, n, minutos = linha.nivel, linha.com_livro, linha.n, linha.minutos
         if aid not in coortes[escola_id]:
             continue                # fora da coorte desta escola (outra escola, inativo...)
         chave, n = (int(g), escola_id), int(n or 0)
@@ -509,6 +524,16 @@ def _retratos_em_lote(db: Session, modelo, campos: tuple[str, ...],
     para a regra (o Matific descarta o que é de fora do ano letivo)."""
     if not grupos:
         return {}
+    u = union_all(*_partes_retratos(modelo, campos, grupos)).subquery()
+    return _por_aluno(db.execute(select(u).order_by(u.c.g, u.c.escola_id, u.c.aluno_id,
+                                                    u.c.data_referencia, u.c.id)).all())
+
+
+def _partes_retratos(modelo, campos: tuple[str, ...],
+                     grupos: dict[int, tuple[datetime | None, datetime | None,
+                                             datetime | None, list[int]]]) -> list:
+    """Os SELECTs de ``_retratos_em_lote`` (um por grupo), com as colunas (g, escola_id, id,
+    aluno_id, data_referencia, *campos)."""
     d = modelo.data_referencia
     partes = []
     for g, (inicio, fim, piso, ids) in grupos.items():
@@ -541,9 +566,7 @@ def _retratos_em_lote(db: Session, modelo, campos: tuple[str, ...],
             .where(or_(and_(c.faixa == 0, c.rn_desc == 1),
                        and_(c.faixa == 1, or_(c.rn_asc == 1, c.rn_desc == 1)),
                        and_(c.faixa == 2, c.rn_asc == 1))))
-    u = union_all(*partes).subquery()
-    return _por_aluno(db.execute(select(u).order_by(u.c.g, u.c.escola_id, u.c.aluno_id,
-                                                    u.c.data_referencia, u.c.id)).all())
+    return partes
 
 
 def _retratos_essenciais(db: Session, modelo, escola_id: int, campos: tuple[str, ...],
@@ -597,6 +620,15 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
     não é coleta das questões: fica fora ANTES de tudo, inclusive do ``lag``."""
     if not grupos:
         return {}
+    u = union_all(*_partes_questoes(db, grupos)).subquery()
+    return _por_aluno(db.execute(select(u).order_by(u.c.g, u.c.escola_id, u.c.aluno_id,
+                                                    u.c.data_referencia, u.c.id)).all())
+
+
+def _partes_questoes(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]]) -> list:
+    """Os SELECTs de ``_questoes_em_lote`` (um por grupo, sobre a mesma CTE das primeiras
+    linhas de cada execução), com as colunas (g, escola_id, id, aluno_id, data_referencia,
+    *_COLUNAS_QUESTOES)."""
     m = SnapshotElefante
     d = m.data_referencia
     todas = select(
@@ -646,9 +678,7 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
                        c.faixa.in_((1, 3)),
                        and_(c.faixa == 2, or_(c.rn_asc == 1, c.rn_desc == 1)),
                        and_(c.faixa == 4, c.rn_asc == 1))))
-    u = union_all(*partes).subquery()
-    return _por_aluno(db.execute(select(u).order_by(u.c.g, u.c.escola_id, u.c.aluno_id,
-                                                    u.c.data_referencia, u.c.id)).all())
+    return partes
 
 
 def _coletas_das_questoes(db: Session, escola_id: int, janela: rp.Janela) -> dict[int, list]:
@@ -730,9 +760,9 @@ class _Lidos:
 
 def _ler_em_lote(db: Session, preparos: list[_Preparo], coortes: dict[int, dict[int, dict]]
                  ) -> _Lidos:
-    """As leituras de todas as escolas e períodos: no Elefante, UMA consulta para os livros,
-    o tempo, os eventos e o nível, e UMA para as coletas das questões; no Matific, UMA para os
-    retratos. Períodos com as mesmas datas leem uma vez só."""
+    """As leituras de todas as escolas e períodos — no Elefante os livros, o tempo, os eventos
+    e o nível, e as coletas das questões; no Matific os retratos — em UMA consulta (as três
+    leituras de antes num ``UNION ALL``). Períodos com as mesmas datas leem uma vez só."""
     lidos = _Lidos()
     grupos_ele: dict[int, tuple[rp.Janela, list[int]]] = {}
     grupos_mat: dict[int, tuple[datetime, datetime, datetime | None, list[int]]] = {}
@@ -750,10 +780,47 @@ def _ler_em_lote(db: Session, preparos: list[_Preparo], coortes: dict[int, dict[
             ids = grupos_mat.setdefault(g, (*chave, []))[3]
             if eid not in ids:
                 ids.append(eid)
-    lidos.elefante, lidos.niveis = _elefante_em_lote(db, grupos_ele, coortes)
-    lidos.questoes = _questoes_em_lote(db, grupos_ele)
-    lidos.matific = _retratos_em_lote(db, SnapshotMatific, ("atividades", "estrelas"), grupos_mat)
+    # As três leituras (Elefante, questões e Matific) numa consulta só: as partes de cada uma
+    # são os MESMOS SELECTs da leitura sozinha, com as colunas das outras em NULL tipado; as
+    # linhas voltam separadas pela fonte, na ordem que cada leitura pedia.
+    partes = []
+    if grupos_ele:
+        partes += [_completar(parte) for parte in _partes_elefante(grupos_ele)]
+        partes += [_completar(parte, "Q") for parte in _partes_questoes(db, grupos_ele)]
+    if grupos_mat:
+        partes += [_completar(parte, "M")
+                   for parte in _partes_retratos(SnapshotMatific, _CAMPOS_MATIFIC, grupos_mat)]
+    if not partes:
+        return lidos
+    u = union_all(*partes).subquery()
+    elefante, questoes, matific = [], [], []
+    for linha in db.execute(select(u).order_by(u.c.fonte, u.c.g, u.c.escola_id, u.c.aluno_id,
+                                               u.c.data_referencia, u.c.id)).all():
+        (questoes if linha.fonte == "Q" else matific if linha.fonte == "M" else elefante).append(linha)
+    lidos.elefante, lidos.niveis = _elefante_das_linhas(elefante, coortes)
+    lidos.questoes = _por_aluno(questoes)
+    lidos.matific = _por_aluno(matific)
     return lidos
+
+
+_CAMPOS_MATIFIC = ("atividades", "estrelas")
+# As colunas da consulta única de ``_ler_em_lote``, com o tipo do NULL de quem não as tem.
+_COLUNAS_DO_LOTE = (("g", Integer), ("escola_id", Integer), ("aluno_id", Integer), ("id", Integer),
+                    ("data_referencia", DateTime), ("nivel", String), ("com_livro", Integer),
+                    ("n", Integer), ("minutos", Integer),
+                    *((c, Integer) for c in _COLUNAS_QUESTOES),
+                    *((c, Integer) for c in _CAMPOS_MATIFIC))
+
+
+def _completar(parte, fonte: str | None = None):
+    """Uma parte com TODAS as colunas da consulta única: as dela e NULL tipado nas outras;
+    ``fonte`` marca as linhas das questões ("Q") e do Matific ("M") — as do Elefante já
+    trazem a delas ("L" e "E")."""
+    sub = parte.subquery()
+    colunas = [sub.c.fonte if fonte is None else literal_column(f"'{fonte}'").label("fonte")]
+    colunas += [sub.c[nome] if nome in sub.c else cast(null(), tipo).label(nome)
+                for nome, tipo in _COLUNAS_DO_LOTE]
+    return select(*colunas)
 
 
 def _somar_elefante(janela: rp.Janela, por_serie: dict[int, dict], series: dict[int, _Celula],

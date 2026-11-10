@@ -35,10 +35,11 @@ from tests.test_analise_base import (HOJE, _importacao, ler, livros, nova_escola
 
 SERIES = ("1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano")
 # Consultas da rota da rede inteira, para QUALQUER número de escolas e de bimestres: escolas
-# com os módulos, coorte com as coletas, Elefante (livros, tempo, eventos e nível), questões e
-# Matific = 5 (eram 7: escolas e módulos, coorte e coletas iam separados), mais 1 aqui: a
-# recarga da rede, que o ``commit`` do próprio teste expira (``rede.id``).
-CONSULTAS_DA_ROTA = 6
+# com os módulos, coorte com as coletas e as leituras (Elefante — livros, tempo, eventos e
+# nível —, questões e Matific numa consulta só) = 3 (eram 7: escolas e módulos, coorte e
+# coletas e as três leituras iam separados), mais 1 aqui: a recarga da rede, que o ``commit``
+# do próprio teste expira (``rede.id``).
+CONSULTAS_DA_ROTA = 4
 
 
 class _Contador:
