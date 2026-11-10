@@ -591,7 +591,17 @@ def atualizar_aluno(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    """Edita o cadastro (nome, nº de chamada, nascimento, observações)."""
+    """Edita o cadastro (nome, nº de chamada, nascimento, observações).
+
+    FICHA FUNDIDA NO MEIO (auditoria, ALUNOS-5): toma a trava da escola ANTES de
+    ler a ficha, como as ações em massa. A fusão toma a mesma trava e apaga a ficha
+    absorvida; no PostgreSQL a edição agora espera a fusão terminar e responde 404
+    (a ficha não existe mais). Antes ela lia a ficha por fora da trava: ou o UPDATE
+    batia em 0 linhas (``StaleDataError``, 500 "Erro interno"), ou gravava na ficha
+    que a fusão já tinha copiado e a edição se perdia calada. Se a ficha sumir
+    mesmo assim entre a leitura e a gravação (no SQLite a trava não existe), a
+    resposta é 409, sem gravar nada."""
+    bloquear_escola_para_importacao(db, escola_id)
     aluno = _aluno_da_escola(db, escola_id, aluno_id)
     campos = dados.model_dump(exclude_unset=True)
     if not campos:
@@ -603,7 +613,18 @@ def atualizar_aluno(
     registrar(db, "aluno.atualizado", escola_id=escola_id, usuario_id=usuario.id,
               entidade="aluno", entidade_id=aluno.id,
               detalhes={"nome": aluno.nome, "campos": sorted(campos.keys())})
-    db.commit()
+    try:
+        db.commit()
+    except StaleDataError:
+        # O UPDATE bateu em 0 linhas: a ficha foi apagada (fundida em outra) entre a
+        # leitura e a gravação. Nada fica gravado; o gestor recebe o 409 que diz o
+        # que houve, não um 500.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Este aluno não existe mais nesta escola — a ficha pode ter sido fundida "
+            "com outra enquanto “Editar dados” estava aberto. Nada foi alterado: "
+            "recarregue a página e edite a ficha que ficou.") from None
     db.refresh(aluno)
     ano = _ano_ativo(db, escola_id)
     turma = db.execute(
