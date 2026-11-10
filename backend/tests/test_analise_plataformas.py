@@ -494,6 +494,46 @@ def test_cobertura_diferente_nao_reabre_escola_suprimida(db, periodo):
     assert dados["rede"]["alunos"] - z["alunos"] >= 2 * dados["k_minimo"]
 
 
+@pytest.mark.parametrize("periodo", ["ano_letivo", "tudo"])
+def test_cobertura_da_rede_nao_mostra_datas_das_suprimidas(db, periodo):
+    """A coleta e o primeiro evento do Elefante são lidos de TODAS as escolas medidas numa
+    consulta só, e a escola suprimida (k = 5) sai depois, em Python: nem a data do primeiro
+    evento dela, nem a última coleta dela aparecem na cobertura da rede. As suprimidas aqui
+    têm o evento mais ANTIGO e a coleta mais RECENTE da rede — se vazassem, as datas da rede
+    seriam as delas."""
+    from app.models import EventoAluno
+
+    rede, esc = _rede_xyz(db, "Rede Fictícia Datas Suprimidas", "3599934",
+                          {"X": (3, True, True), "Y": (8, False, True), "Z": (20, True, True)})
+    x, y, z = esc["X"], esc["Y"], esc["Z"]
+    aluno = {e.id: db.query(svc.Aluno).filter_by(escola_id=e.id).first() for e in (x, y, z)}
+    for n, (escola, quando) in enumerate([(z, datetime(2026, 3, 2, 12, 0)),
+                                          (z, datetime(2026, 4, 6, 12, 0)),
+                                          (x, datetime(2025, 2, 3, 12, 0)),
+                                          (y, datetime(2025, 1, 6, 12, 0))]):
+        db.add(EventoAluno(escola_id=escola.id, aluno_id=aluno[escola.id].id, plataforma="elefante",
+                           tipo_evento="leitura", ocorrido_em=quando, chave_natural=f"datas-sup-{n}"))
+    # A coleta mais recente da rede é a das suprimidas (Z parou em 29/09).
+    retrato_elefante(db, x, aluno[x.id], datetime(2026, 10, 4, 3, 0), tentativas=9, acertos=3)
+    retrato_matific(db, x, aluno[x.id], datetime(2026, 10, 4, 3, 0), atividades=11, estrelas=3)
+    retrato_matific(db, y, aluno[y.id], datetime(2026, 10, 4, 3, 0), atividades=2, estrelas=3)
+    db.commit()
+
+    dados = svc.plataformas_da_rede(db, rede, preset=periodo, hoje=HOJE)
+    por_id = {e["escola_id"]: e for e in dados["escolas"]}
+    assert por_id[x.id]["suprimido"] and por_id[y.id]["suprimido"] and not por_id[z.id]["suprimido"]
+    cob = dados["cobertura"]
+    # O primeiro evento é o de Z (02/03/2026), nunca o de X (2025) nem o de Y.
+    assert cob["primeiro_evento_elefante"] == datetime(2026, 3, 2, 12, 0).isoformat()
+    # A última coleta e os dias desde ela são os de Z (29/09), nunca os de 04/10 das suprimidas.
+    ultima_z = por_id[z.id]["ultima_coleta"]
+    assert ultima_z["elefante"] is not None and ultima_z["elefante"].startswith("2026-09-")
+    assert cob["ultima_coleta"] == ultima_z
+    assert cob["dias_desde_ultima_coleta"] == (HOJE - date.fromisoformat(
+        max(ultima_z.values())[:10])).days
+    assert "2026-10-0" not in json.dumps(cob) and "2025-" not in json.dumps(cob)
+
+
 def test_sonda_f_literal_3_6_9_nao_recompoe_x(db):
     """O cenário literal de M2 (X = 3, Y = 6, Z = 9): com a faixa de proteção as três somem
     juntas, e o bloco da rede não tem escola visível para somar (sem dado, nunca a soma
