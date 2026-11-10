@@ -162,8 +162,8 @@ def test_comparacao_e_a_mesma_quantidade_de_dias(cliente, db, escola_completa):
 
 
 def test_paridade_com_o_relatorio_por_periodo(db, escola_completa):
-    """Mesma janela, mesmos livros, tempo e atividades — e o viés do relatório
-    (ganho 0 contado como ativo) NÃO é copiado."""
+    """Mesma janela, mesmos livros, tempo, atividades e ativos: ganho 0 no Matific
+    não conta como ativo em nenhuma das duas (RELATORIOS-1)."""
     eid, *_ = _cenario(db, escola_completa)
     escola = escola_completa["escola"]
     rel = rp.gerar(db, eid, preset="bimestre", plataformas=("elefante", "matific"),
@@ -174,8 +174,8 @@ def test_paridade_com_o_relatorio_por_periodo(db, escola_completa):
     assert vg["leitura"]["tempo_min"] == rel["elefante"]["tempo_min"] == 20
     assert vg["matematica"]["atividades"] == rel["matific"]["atividades"] == 5
     assert vg["alunos"]["total"] == rel["alunos"]["considerados"] == 3
-    assert rel["alunos"]["com_atividade"] == 3      # o relatório conta B (ganho 0)
-    assert vg["alunos"]["ativos"] == 2              # aqui, não
+    # B tem retrato com ganho 0: não é ativo em nenhuma das duas.
+    assert vg["alunos"]["ativos"] == rel["alunos"]["com_atividade"] == 2
 
 
 def test_ganho_zero_nao_conta_como_ativo(cliente, db, escola_completa):

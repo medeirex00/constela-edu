@@ -1189,7 +1189,14 @@ def gerar(db: Session, escola_id: int, *, preset: str,
         {"plataforma": "elefante", "metrica": "pontos_de_dificuldade",
          "por_que": MOTIVO_ELEFANTE_PONTOS})
 
-    com_atividade = set(ele_por_aluno) | set(mat_por_aluno)
+    # `mat_por_aluno` guarda todo aluno MEDIDO (o 0 medido aparece na tabela por
+    # aluno), mas ter retrato não é ter atividade: toda coleta grava retrato de todo
+    # aluno com conta. Ativo no Matific é quem teve ganho — a mesma regra de
+    # `matific.alunos_com_atividade` e da Visão Geral. (O Elefante já só põe em
+    # `ele_por_aluno` quem teve sinal real.)
+    mat_ativos = {aid for aid, m in mat_por_aluno.items()
+                  if m["atividades"] or m["estrelas"]}
+    com_atividade = set(ele_por_aluno) | mat_ativos
     saida["alunos"]["com_atividade"] = len(com_atividade)
     saida["alunos"]["sem_atividade"] = len(coorte) - len(com_atividade)
 
