@@ -884,9 +884,12 @@ export default function Importacoes() {
                 </p>
               )}
               {resultado.avisos.length > 0 && (
-                <ul className="mt-2 list-inside list-disc space-y-0.5 text-xs text-ouro-700 dark:text-ouro-300">
-                  {resultado.avisos.map((aviso) => (
-                    <li key={aviso}>{aviso}</li>
+                // Marcador fora do texto: o aviso longo quebra em várias linhas e a 2ª
+                // alinha com o texto. A chave leva a posição: duas contas com o mesmo
+                // nome trazem o MESMO aviso duas vezes (um por conta).
+                <ul className="mt-2 list-outside list-disc space-y-0.5 pl-4 text-xs text-ouro-700 dark:text-ouro-300">
+                  {resultado.avisos.map((aviso, i) => (
+                    <li key={`${i}-${aviso}`}>{aviso}</li>
                   ))}
                 </ul>
               )}

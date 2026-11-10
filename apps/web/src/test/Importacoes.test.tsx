@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import Importacoes from "../pages/Importacoes";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
@@ -706,6 +706,39 @@ describe("Importacoes", () => {
     expect(screen.getByText(/2 alunos aguardam/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
       .toHaveAttribute("href", "/revisoes-identidade");
+  });
+
+  // Duas contas com o mesmo nome: o /confirmar real manda o MESMO aviso duas vezes (um
+  // por conta — backend/tests/test_importacao_previa_motivo.py abre as duas pendências).
+  // A lista mostra os dois, sem chave repetida no React, e o aviso longo quebra com a
+  // 2ª linha alinhada ao texto (marcador fora do texto, não "list-inside").
+  it("resultado: avisos repetidos aparecem os dois, em lista com o marcador fora do texto", async () => {
+    const u = userEvent.setup();
+    const erros = vi.spyOn(console, "error").mockImplementation(() => {});
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, analiseFake());
+    const aviso = "“Crianca Ficticia Repetida”: duas contas diferentes da plataforma vieram no mesmo "
+      + "relatório com o mesmo nome, e nenhuma ficha corresponde — nada foi criado.";
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "1 aluno(s) com dado novo importado(s).", importacao_id: 10,
+      qtd_alunos: 1, qtd_erros: 2, avisos: [aviso, aviso], qtd_revisoes: 2, criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    await u.click(await screen.findByRole("button", { name: "Gravar importação" }));
+    expect(await screen.findAllByText(aviso)).toHaveLength(2);
+    const lista = screen.getAllByText(aviso)[0].closest("ul") as HTMLElement;
+    const classes = lista.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["list-outside", "list-disc", "pl-4"]));
+    expect(classes).not.toContain("list-inside");
+    expect(erros.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(false);
+    erros.mockRestore();
   });
 
   it("'bloqueado por conflito' aparece com o rótulo certo", async () => {
