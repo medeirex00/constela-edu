@@ -58,6 +58,10 @@ const CORES = ["#6C5CE7", "#0D9488", "#D97706", "#DC2626", "#0284C7", "#DB2777",
 
 const formatoPadrao = (valor: number) => valor.toLocaleString("pt-BR");
 
+/** Largura estimada (px) de um caractere do rótulo do eixo X (text-[12px]): ~0,6 em,
+ *  folgada para dígitos e "/" — as datas "09/11" e os anos "2030" do eixo. */
+const LARGURA_CARACTERE_EIXO_X = 7.2;
+
 /**
  * Linha(s) de evolução.
  *
@@ -114,12 +118,31 @@ export function GraficoLinha({
   // MÁXIMO (colados no teto) o número precisa caber sem ser cortado pela borda.
   // Com eixoX (anos), o último rótulo ("2030") é largo: mais folga à direita para
   // não ser cortado. Sem eixoX, a margem de sempre.
-  const margem = { esquerda: 46, direita: eixoX ? 24 : 12, topo: 30, base: 26 };
+  const quantidade = eixoX ? eixoX.length : Math.max(...visiveis.map((serie) => serie.pontos.length));
+  const rotulos = eixoX ?? visiveis[0].pontos.map((ponto) => ponto.rotulo);
+  // Rótulos do eixo X: até 8 no desenho de sempre; com a largura medida, os que cabem.
+  // (Com a largura medida, a margem não depende deles: as pontas se alinham pela borda.)
+  const maxRotulosX = larguraViewBox == null
+    ? 8
+    : Math.max(2, Math.floor((largura - 46 - (eixoX ? 24 : 12)) / 52) + 1);
+  const passoRotulosX = quantidade <= maxRotulosX ? 1 : Math.ceil(quantidade / maxRotulosX);
+  // No desenho de sempre o rótulo do eixo X fica CENTRADO no ponto; o último ponto está
+  // colado na margem direita, então a metade do rótulo dele precisa caber nela — senão a
+  // data sai cortada pela borda do SVG ("09/11" virava "09/1"). Estimativa larga para
+  // números e barra a 12 px (~0,6 em por caractere); rótulos curtos ("abr") cabem na
+  // margem de sempre.
+  const ultimoRotuloX = quantidade > 1 && (quantidade - 1) % passoRotulosX === 0
+    ? rotulos[quantidade - 1] ?? "" : "";
+  const metadeDoUltimoRotuloX = larguraViewBox == null && ultimoRotuloX
+    ? Math.ceil((ultimoRotuloX.length * LARGURA_CARACTERE_EIXO_X) / 2) + 1
+    : 0;
+  const margem = {
+    esquerda: 46, direita: Math.max(eixoX ? 24 : 12, metadeDoUltimoRotuloX), topo: 30, base: 26,
+  };
   const valores = visiveis.flatMap((serie) =>
     serie.pontos.flatMap((ponto) => (ponto.valor == null ? [] : [ponto.valor])));
   const maximo = maximoFixo ?? Math.max(1, ...valores);
   const base = minimo ?? 0;
-  const quantidade = eixoX ? eixoX.length : Math.max(...visiveis.map((serie) => serie.pontos.length));
   // Posição no eixo X: pela categoria (eixoX) ou, como sempre, pelo índice do ponto.
   const posicao = (ponto: PontoSerie, indice: number) => (eixoX ? eixoX.indexOf(ponto.rotulo) : indice);
 
@@ -129,16 +152,11 @@ export function GraficoLinha({
   const y = (valor: number) =>
     margem.topo + (1 - (valor - base) / (maximo - base)) * (altura - margem.topo - margem.base);
 
-  const rotulos = eixoX ?? visiveis[0].pontos.map((ponto) => ponto.rotulo);
   // Rotula os pontos com o VALOR visível só quando há UMA série (mini-gráfico
   // por métrica) — assim os números não se sobrepõem entre séries. Mostra no
   // 1º, no último e sempre que o valor MUDA (pula os trechos planos repetidos).
   const rotularPontos = visiveis.length === 1;
   const corDa = (serie: SerieLinha, indice: number) => serie.cor ?? CORES[indice % CORES.length];
-  // Rótulos do eixo X: até 8 no desenho de sempre; com a largura medida, os que cabem.
-  const maxRotulosX = larguraViewBox == null
-    ? 8
-    : Math.max(2, Math.floor((largura - margem.esquerda - margem.direita) / 52) + 1);
   const ancoraDoRotuloX = (indice: number) => {
     if (larguraViewBox == null) return "middle";
     // Um ponto só fica na margem esquerda (x de `x(0)`): a data alinha pela borda dela.
@@ -254,7 +272,7 @@ export function GraficoLinha({
           );
         })}
         {rotulos.map((texto, indice) =>
-          quantidade <= maxRotulosX || indice % Math.ceil(quantidade / maxRotulosX) === 0 ? (
+          indice % passoRotulosX === 0 ? (
             <text
               key={indice}
               x={x(indice)} y={altura - 8} textAnchor={ancoraDoRotuloX(indice)}

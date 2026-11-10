@@ -193,6 +193,33 @@ describe("GraficoLinha — larguraViewBox (celular; prop aditiva, sem ela os sna
     expect(semProp.querySelectorAll("svg > g > g > text")).toHaveLength(30);
   });
 
+  /** Ponta direita do texto no SVG, com ~0,6 em por caractere a 12 px. */
+  const fimDoTexto = (t: Element) => {
+    const x = Number(t.getAttribute("x"));
+    const largura = (t.textContent ?? "").length * 7.2;
+    const ancora = t.getAttribute("text-anchor");
+    return ancora === "end" ? x : ancora === "middle" ? x + largura / 2 : x + largura;
+  };
+
+  it("sem a prop (desktop), a última data cabe inteira no desenho — não sai cortada em '09/1'", () => {
+    // A evolução do aluno (EvolucaoAluno → MiniGrafico) no desktop: datas "dd/mm".
+    const nove = [{ nome: "Atividades", pontos: Array.from({ length: 9 }, (_, i) => (
+      { rotulo: `${String(i + 1).padStart(2, "0")}/11`, valor: 10 + i })) }];
+    for (const series of [oito, nove]) {
+      const { container, unmount } = render(<GraficoLinha series={series} altura={185} />);
+      const eixoX = [...container.querySelectorAll("svg > text")];
+      const ultima = eixoX[eixoX.length - 1];
+      expect(fimDoTexto(ultima), ultima.textContent ?? "").toBeLessThanOrEqual(500);
+      // O ponto e o rótulo continuam alinhados (a data centrada sob o último ponto).
+      const circulos = container.querySelectorAll("circle");
+      const ultimoPonto = circulos[circulos.length - 1];
+      if (ultima.textContent === series[0].pontos[series[0].pontos.length - 1].rotulo) {
+        expect(ultima.getAttribute("x")).toBe(ultimoPonto.getAttribute("cx"));
+      }
+      unmount();
+    }
+  });
+
   it("sem a prop, as 8 datas e a âncora no meio, como sempre", () => {
     const { container } = render(<GraficoLinha series={oito} altura={185} />);
     expect(container.querySelector("svg")).toHaveAttribute("viewBox", "0 0 500 185");
