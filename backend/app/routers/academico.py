@@ -1151,28 +1151,49 @@ def excluir_alunos_permanente(
 _CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO"
 
 
-def _divergencias_de_identidade(a: Aluno, b: Aluno) -> list[str]:
+def _divergencias_de_identidade(a: Aluno, b: Aluno) -> dict[str, str]:
     """Os sinais que o MOTOR ÚNICO trata como prova de serem crianças diferentes,
-    em português, para a mensagem e para o log.
+    em português, para a mensagem e para o log: ``{campo: texto}``, com ``campo``
+    em ``nascimento`` | ``ra`` | ``chamada`` | ``motor`` (na ordem da mensagem).
 
     Usa ``matching.conflito_identidade`` como juiz — a mesma função que decide
     isso em toda importação e sincronização — em vez de uma regra própria daqui.
     Com isso o RA passa pela normalização canônica (``ra_forte``), então dois
     RAs que só diferem na pontuação NÃO contam como divergência, e a decisão
     sobre nº de chamada (renumeração de sala não é outra criança) é herdada em
-    vez de reinventada. Devolve [] quando não há prova de conflito."""
+    vez de reinventada. Devolve {} quando não há prova de conflito."""
     ia, ib = identidade_aluno.identidade_do_aluno(a), identidade_aluno.identidade_do_aluno(b)
     if not matching.conflito_identidade(ia, ib):
-        return []
-    motivos = []
+        return {}
+    motivos: dict[str, str] = {}
     if ia.nascimento and ib.nascimento and ia.nascimento != ib.nascimento:
-        motivos.append(f"nascimento {ia.nascimento} × {ib.nascimento}")
+        motivos["nascimento"] = f"nascimento {ia.nascimento} × {ib.nascimento}"
     if ia.ra and ib.ra and ia.ra != ib.ra:
-        motivos.append(f"RA {ia.ra} × {ib.ra}")
+        motivos["ra"] = f"RA {ia.ra} × {ib.ra}"
     if (ia.chamada is not None and ib.chamada is not None
             and ia.chamada != ib.chamada):
-        motivos.append(f"nº de chamada {ia.chamada} × {ib.chamada}")
-    return motivos or ["o motor de identidade aponta conflito"]
+        motivos["chamada"] = f"nº de chamada {ia.chamada} × {ib.chamada}"
+    return motivos or {"motor": "o motor de identidade aponta conflito"}
+
+
+def _saida_do_conflito(divergencias: dict[str, str]) -> str:
+    """O que fazer quando não se tem certeza, dito só com caminhos que EXISTEM.
+
+    Nascimento e nº de chamada se corrigem em “Editar dados”; o RA NÃO — o modal e
+    ``AlunoUpdate`` não têm o campo (achado ALUNOS-10 da auditoria: a mensagem
+    mandava corrigir ali um RA que não se edita). Para o RA a saída real é a da
+    própria fusão: a ficha principal guarda o RA dela (``alunos_fusao`` só
+    preenche campos VAZIOS da ficha que fica)."""
+    ra = ("deixe como principal a ficha com o RA certo antes de confirmar — a fusão "
+          "guarda o RA da ficha principal.")
+    if "ra" not in divergencias:
+        return ("Se não tiver certeza, não funda: corrija antes o dado divergente em "
+                "Alunos › Editar dados.")
+    if len(divergencias) == 1:
+        return f"Se só um dos RAs estiver errado, {ra} Se não tiver certeza, não funda."
+    return ("Se não tiver certeza, não funda: o nascimento e o nº de chamada se "
+            "corrigem antes em Alunos › Editar dados. O RA não se corrige ali: se só um "
+            f"dos RAs estiver errado, {ra}")
 
 
 @router.get("/alunos/fundir/previa", response_model=dict)
@@ -1256,10 +1277,9 @@ def fundir_alunos(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Estes dois cadastros têm sinais de serem crianças DIFERENTES: "
-            + "; ".join(divergencias)
+            + "; ".join(divergencias.values())
             + f". Se ainda assim for a mesma criança, digite “{_CONFIRMA_CONFLITO}” "
-              "para confirmar. Se não tiver certeza, não funda: corrija antes o "
-              "dado divergente em Alunos › Editar dados.")
+              "para confirmar. " + _saida_do_conflito(divergencias))
 
 
     # Núcleo compartilhado com a fusão em lote (Fundir duplicatas): reatribui/
@@ -1272,7 +1292,7 @@ def fundir_alunos(
         registrar(db, "aluno.fundido_com_conflito", escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=manter.id,
                   detalhes={"manter_id": manter.id, "remover_id": dados.remover_id,
-                            "divergencias": divergencias,
+                            "divergencias": list(divergencias.values()),
                             "confirmacao_especifica": _CONFIRMA_CONFLITO})
     db.commit()
     _recalcular_escola(db, escola_id)
