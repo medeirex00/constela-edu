@@ -90,8 +90,9 @@ def test_padrao_e_10_segundos_e_o_engine_pg_o_recebe():
     assert Settings.model_fields["DB_CONNECT_TIMEOUT"].default == 10
     opcoes = database.opcoes_do_engine(URL_PG)
     assert opcoes["connect_args"] == {"connect_timeout": settings.DB_CONNECT_TIMEOUT}
-    # o resto do ramo PostgreSQL não mudou
-    assert opcoes["pool_pre_ping"] is True and opcoes["hide_parameters"] is True
+    # o resto do ramo PostgreSQL (o ping da conexão parada e o pool LIFO estão em
+    # test_database_ping_ocioso)
+    assert opcoes["hide_parameters"] is True
     assert opcoes["pool_size"] == settings.DB_POOL_SIZE
     assert opcoes["max_overflow"] == settings.DB_MAX_OVERFLOW
     assert opcoes["pool_recycle"] == settings.DB_POOL_RECYCLE

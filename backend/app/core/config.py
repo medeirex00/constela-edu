@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     DB_POOL_RECYCLE: int = 1800
+    # Conexão do pool parada há MAIS que isto (segundos) é testada com um ping antes de
+    # ser entregue; a usada há menos vai direto (em produção cada ida ao banco custa
+    # ~195 ms, e o ping a cada retirada era uma ida a mais em toda requisição). ``0``
+    # = ping em toda retirada (o ``pool_pre_ping`` de antes). Ver
+    # ``database.instalar_ping_por_ociosidade``. Não afeta o SQLite.
+    DB_PING_OCIOSO_S: float = 30
     # Prazo (segundos) para ABRIR uma conexão nova com o PostgreSQL — o
     # ``connect_timeout`` da libpq, passado ao psycopg pelo engine. Sem ele, um
     # banco que não responde (host fora, rede parada) prende o worker no

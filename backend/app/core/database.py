@@ -56,13 +56,15 @@ def opcoes_do_engine(url: str) -> dict:
     da coluna indexada; nenhum índice único de hoje tem nome de pessoa)."""
     if url.startswith("sqlite"):
         return {"connect_args": {"check_same_thread": False}, "hide_parameters": True}
-    # Banco de rede (PostgreSQL em produção): pool dimensionado e verificação
-    # de conexões mortas antes de reusar (pool_pre_ping) evitam erros
-    # intermitentes após timeouts do banco. Total por worker uvicorn =
-    # DB_POOL_SIZE + DB_MAX_OVERFLOW. Conexão NOVA com prazo para abrir
-    # (``argumentos_de_conexao_pg``).
+    # Banco de rede (PostgreSQL em produção): pool dimensionado. Total por worker
+    # uvicorn = DB_POOL_SIZE + DB_MAX_OVERFLOW. Conexão NOVA com prazo para abrir
+    # (``argumentos_de_conexao_pg``). A conexão morta é pega pelo ping SÓ da conexão
+    # parada (``instalar_ping_por_ociosidade``), não pelo ``pool_pre_ping`` (um ping a
+    # cada retirada, uma ida ao banco a mais em toda requisição). O pool LIFO entrega a
+    # conexão devolvida por último — a mais quente, que dispensa o ping; o FIFO padrão
+    # entregaria a parada há mais tempo e o ping voltaria a ser pago.
     opcoes = {
-        "pool_pre_ping": True,
+        "pool_use_lifo": True,
         "pool_size": settings.DB_POOL_SIZE,
         "max_overflow": settings.DB_MAX_OVERFLOW,
         "pool_recycle": settings.DB_POOL_RECYCLE,
@@ -74,7 +76,53 @@ def opcoes_do_engine(url: str) -> dict:
     return opcoes
 
 
+_ULTIMO_USO = "constela_ultimo_uso"
+
+
+def instalar_ping_por_ociosidade(motor, limite_s: float | None = None) -> None:
+    """Testa com um ping só a conexão que ficou PARADA no pool além do limite.
+
+    Antes, ``pool_pre_ping`` mandava um ``SELECT 1`` a cada retirada do pool: em produção
+    (API a ~195 ms do banco) era uma ida a mais em TODA requisição, mesmo na conexão
+    usada um instante antes. Agora a hora do último uso fica no registro da conexão (ao
+    abrir e ao devolver) e, na retirada, só a conexão parada há mais de ``limite_s``
+    (padrão ``DB_PING_OCIOSO_S``, 30 s; ``0`` = sempre, como antes) é pingada. O ping é o
+    do próprio dialeto (``do_ping``: em autocommit, sem abrir transação). Se ele falhar,
+    ``InvalidatePoolError`` (uma ``DisconnectionError``): o pool descarta essa conexão e
+    todas as abertas antes dela (o banco ou o pooler reiniciou: as outras também morreram)
+    e entrega uma nova — o mesmo efeito do ``pool_pre_ping``.
+
+    O que se aceita: a conexão que morre DENTRO da janela (reinício do banco ou do pooler
+    há menos de ``limite_s`` do último uso) dá erro em UMA requisição; o SQLAlchemy vê a
+    desconexão, invalida o pool, e a seguinte reconecta (o ``useApi`` do site repete 5xx
+    uma vez). Use com ``pool_use_lifo`` (``opcoes_do_engine``)."""
+    from time import monotonic
+
+    from sqlalchemy.exc import InvalidatePoolError
+
+    def _agora(_dbapi_connection, registro, *_a) -> None:
+        registro.info[_ULTIMO_USO] = monotonic()
+
+    def _na_retirada(dbapi_connection, registro, _proxy) -> None:
+        limite = settings.DB_PING_OCIOSO_S if limite_s is None else limite_s
+        ultimo = registro.info.get(_ULTIMO_USO)
+        if ultimo is not None and monotonic() - ultimo < limite:
+            return
+        try:
+            motor.dialect.do_ping(dbapi_connection)
+        except motor.dialect.loaded_dbapi.Error as erro:
+            raise InvalidatePoolError("a conexão parada no pool não respondeu ao ping") from erro
+        registro.info[_ULTIMO_USO] = monotonic()
+
+    event.listen(motor, "connect", _agora)
+    event.listen(motor, "checkin", _agora)
+    event.listen(motor, "checkout", _na_retirada)
+
+
 engine = create_engine(settings.DATABASE_URL, **opcoes_do_engine(settings.DATABASE_URL))
+
+if not is_sqlite:
+    instalar_ping_por_ociosidade(engine)
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).
