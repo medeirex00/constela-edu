@@ -999,15 +999,18 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
         if ganho["_regrediu"]:
             regrediu += 1
             continue
+        inicio_sq = _inicio_veio_sem_questoes(excluidos, janela, ganho)
         intervalos.append({"base": ganho["_data_base"], "atual": ganho["_data_atual"],
                            "inicio": ganho["_inicio"], "fim": ganho["_fim"],
                            "antecedencia": ganho["_antecedencia"],
                            "fim_sem_questoes": afetado,
-                           "inicio_sem_questoes": _inicio_veio_sem_questoes(
-                               excluidos, janela, ganho)})
+                           "inicio_sem_questoes": inicio_sq})
         tentativas += ganho["questoes_tentativas"]
         acertos += ganho["questoes_acertos"]
-        if ganho["_inicio"] == "depois":
+        # "A primeira coleta já trazia N questões" acompanha "sem coleta no início para
+        # N estudante(s)" (``alunos_sem_inicio``): soma só quem está nessa frase. Quem teve
+        # a coleta do início sem as questões tem o aviso próprio, sem esse acumulado.
+        if ganho["_inicio"] == "depois" and not inicio_sq:
             acumulado_antes += ganho["_base_tentativas"]
         if ganho["_data_base"] is not None:
             bases.append(ganho["_data_base"])

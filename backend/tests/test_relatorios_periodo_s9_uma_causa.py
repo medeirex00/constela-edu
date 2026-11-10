@@ -263,3 +263,47 @@ def test_coleta_do_inicio_sem_questoes_ao_lado_de_quem_nao_tem_coleta_no_inicio(
             "20/08/2026 00:10, 12 dias antes de 01/09/2026") in motivos, motivos
     assert ("a coleta do início veio sem as questões para 1 estudante(s): a conta parte "
             "da coleta de 15/08/2026 00:10, 17 dias antes de 01/09/2026, e INCLUI") in motivos
+
+
+def test_acumulado_da_primeira_coleta_so_de_quem_esta_em_sem_coleta_no_inicio(
+        db, escola_completa):
+    """Revisão do acabamento (sonda R2). A: a coleta do INÍCIO veio sem as questões e não
+    há coleta anterior (a 1ª com as questões, 20/09, já trazia 500). B: sem coleta no
+    início (a 1ª coleta, 10/09, trazia 40). O aviso "sem coleta no início do período para
+    1 estudante(s)" fala só de B — e o "a primeira coleta já trazia N questões
+    acumuladas" dele somava também o acumulado de A (540)."""
+    eid = escola_completa["escola"].id
+    t = escola_completa["turma"]
+    a = escola_completa["alunos"][0].id
+    b = aluno(db, eid, t, "Bento Ficticio Lago").id
+    _retrato(db, eid, a, _noite(1), 500, 300, sem_questoes=True)   # a coleta do início
+    _retrato(db, eid, a, _noite(20), 500, 300)
+    _retrato(db, eid, a, _noite(1, 10), 520, 310)
+    _retrato(db, eid, b, _noite(10), 40, 30)
+    _retrato(db, eid, b, _noite(1, 10), 50, 35)
+    db.commit()
+
+    cob = _setembro(db, eid)["cobertura_questoes"]
+    motivos = _motivos(cob)
+
+    assert (cob["alunos_sem_inicio"], cob["alunos_inicio_sem_questoes_sem_base"]) == (1, 1), cob
+    assert cob["acumulado_na_primeira_coleta"] == 40, cob["acumulado_na_primeira_coleta"]
+    assert ("sem coleta no início do período para 1 estudante(s)") in motivos, motivos
+    assert "já trazia 40 questões acumuladas" in motivos, motivos
+    assert "540" not in motivos, motivos
+
+
+def test_so_a_coleta_do_inicio_sem_questoes_nao_traz_acumulado(db, escola_completa):
+    """Só o aluno cuja coleta do início veio sem as questões: não há "sem coleta no
+    início" e o campo do acumulado fica vazio (a tela e o PDF não têm de onde tirá-lo)."""
+    eid = escola_completa["escola"].id
+    a = escola_completa["alunos"][0].id
+    _retrato(db, eid, a, _noite(1), 40, 30, sem_questoes=True)
+    _retrato(db, eid, a, _noite(20), 55, 40)
+    _retrato(db, eid, a, _noite(1, 10), 70, 50)
+    db.commit()
+
+    cob = _setembro(db, eid)["cobertura_questoes"]
+
+    assert (cob["alunos_sem_inicio"], cob["alunos_inicio_sem_questoes_sem_base"]) == (0, 1), cob
+    assert cob["acumulado_na_primeira_coleta"] is None, cob["acumulado_na_primeira_coleta"]
