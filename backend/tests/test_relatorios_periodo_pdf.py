@@ -505,6 +505,35 @@ def test_cobertura_sem_coleta_base_diz_desde_o_inicio_do_contador(status, extra,
         assert "a coleta-base, o início" not in texto, texto
 
 
+# Vocabulário interno que o documento das reuniões não mostra (D5): nome de campo,
+# tabela, classificação técnica.
+TERMOS_INTERNOS = ("retrato", "snapshot", "responses", "questoes_tentativas",
+                   "campos_nao_atualizados", "suportado", "nullable")
+
+
+@pytest.mark.parametrize("status,extra", [
+    ("parcial", {"coleta_fim": "2026-09-20T03:10:00", "fim_coberto": False,
+                 "alunos_sem_fim": 1, "alunos_questoes_nao_vieram": 2}),
+    ("sem_intervalo", {"coleta_fim": None, "alunos_medidos": 0,
+                       "alunos_questoes_nao_vieram": 2}),
+])
+def test_aviso_das_questoes_que_nao_vieram_na_lingua_do_professor(status, extra):
+    """S9 × D5: o aviso de que a plataforma não mandou as questões chegou depois da
+    revisão de linguagem do PDF e ficava fora dela — o mesmo cuidado com "de o início" e
+    com o vocabulário interno, no texto da nota, nos motivos e nas linhas curtas da
+    versão de reserva."""
+    dados = {"elefante": {"cobertura_questoes": _cobertura_sem_base(status, **extra)}}
+    aviso = pdf._avisos_cobertura(dados)[0]
+    html = pdf._cobertura_html(aviso)
+    motivos = " ".join(aviso["motivos"])
+    curtos = " ".join(f"{a} {b}" for a, b in aviso["curtos"])
+    assert "não mandou as questões" in html
+    for texto in (html, motivos, curtos):
+        assert not re.search(r"\bde o início", texto), texto
+        for termo in TERMOS_INTERNOS:
+            assert termo not in texto.lower(), (termo, texto)
+
+
 def test_coleta_base_anterior_ao_periodo_sem_coleta_base_parte_do_contador():
     c = _cobertura_sem_base("ampliada", inclui_antes_do_inicio=True, alunos_ampliados=3,
                             antecedencia_max_horas=72)

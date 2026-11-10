@@ -31,6 +31,20 @@ import {
 
 const texto = () => (document.body.textContent ?? "").replace(/\s+/g, " ").trim();
 
+/** Vocabulário interno que o relatório não mostra a quem o lê (D5): nome de campo,
+ *  classificação técnica, jargão do banco. Vale para TODO texto da tela — inclusive os
+ *  avisos de cobertura que chegaram depois (S9: as questões que não vieram). */
+const TERMOS_INTERNOS = ["SUPORTADO", "Leitura.data", "EventoAluno", "SnapshotMatific",
+  "SnapshotElefante", "NULLABLE", "PISO", "totalTimeSpent", "retrato", "Ressalva",
+  "tempo min por evento", "livros_relidos", "responses", "questoes_tentativas",
+  "campos_nao_atualizados"];
+function semVocabularioInterno(t: string) {
+  for (const termo of TERMOS_INTERNOS) {
+    expect(t, termo).not.toContain(termo);
+  }
+  expect(t).not.toMatch(/\bde o início/);
+}
+
 const SUPORTE_ELEFANTE = {
   livros_novos: {
     campo: "Leitura.data (COUNT)",
@@ -198,10 +212,7 @@ describe("Relatório por Período", () => {
     expect(t).toContain("O Matific guarda atividades, estrelas e pontuação média, mas não conta questões");
     expect(t).toContain("o total no fim menos o de antes do início — a mesma regra das premiações");
     // Nada de vocabulário interno: nome de campo, classificação técnica, jargão do banco.
-    for (const termo of ["SUPORTADO", "Leitura.data", "EventoAluno", "SnapshotMatific", "NULLABLE", "PISO",
-      "totalTimeSpent", "retrato", "Ressalva", "tempo min por evento", "livros_relidos"]) {
-      expect(t, termo).not.toContain(termo);
-    }
+    semVocabularioInterno(t);
     expect(document.querySelector("code")).toBeNull();
   });
 
@@ -574,6 +585,9 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     const t = texto();
     expect(t).toContain("cobertura parcial — o valor NÃO representa o período completo");
     expect(t).toContain("2 aluno(s) com coleta no período em que a plataforma não mandou as questões");
+    // O aviso novo também na língua de quem lê o relatório (D5), com o "Como ler" aberto.
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    semVocabularioInterno(texto());
   });
 
   it("sem número porque as questões não vieram: o motivo é esse, não 'uma coleta só'", async () => {
@@ -589,6 +603,8 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     expect(t).toContain("A plataforma não mandou as questões nas coletas do período");
     expect(t).not.toContain("Há uma única coleta por aluno no período");
     expect(textoDaSecao("Elefante Letrado")).toContain("Questões—");
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    semVocabularioInterno(texto());
   });
 
   it("Matific: 'para N aluno(s)' usa os alunos medidos, não só os parciais", async () => {
