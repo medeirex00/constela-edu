@@ -305,7 +305,8 @@ def _invalidar_links_emitidos(db: Session, criador_id: int, agora: datetime) -> 
         .values(usado_em=agora)).rowcount
 
 
-def _revogar_acessos(db: Session, alvo: Usuario) -> dict:
+def _revogar_acessos(db: Session, alvo: Usuario, *,
+                     senha_substituida: bool = False) -> dict:
     """Derruba as sessões abertas (``token_version``), os links de redefinição
     pendentes da conta e os que ela gerou para outras contas — na troca de senha
     pelo admin, em toda mudança de situação (desativar, reativar, restaurar) e na
@@ -315,10 +316,14 @@ def _revogar_acessos(db: Session, alvo: Usuario) -> dict:
     ou desativar a conta. Mesmas revogações da promoção a Secretaria
     (``rede.py``). Devolve as contagens para a auditoria.
 
-    Conta que SAI de "ativo" (desativada ou excluída — o status já vem trocado
-    por quem chama) perde também os aparelhos registrados para push
-    (``dispositivos_removidos``): sem isto, o celular de quem perdeu o acesso
-    seguia recebendo os avisos da escola, inclusive o primeiro nome da criança.
+    Os aparelhos registrados para push (``dispositivos_removidos``) saem junto
+    quando a conta SAI de "ativo" (desativada ou excluída — o status já vem
+    trocado por quem chama) e quando a senha é substituída
+    (``senha_substituida``; a redefinição pelo link faz o mesmo em
+    ``auth.consumir_link_reset``). Sem isto, o celular de quem perdeu o acesso —
+    ou o perdido/roubado, cuja sessão a troca de senha acabou de derrubar —
+    seguia recebendo os avisos da escola, inclusive o primeiro nome da criança:
+    a conta segue ativa, e o app, já em 401, não consegue se descadastrar.
     Reativar não traz o aparelho de volta; o app registra de novo no login."""
     agora = datetime.now(timezone.utc)
     alvo.token_version = (alvo.token_version or 0) + 1
@@ -326,7 +331,7 @@ def _revogar_acessos(db: Session, alvo: Usuario) -> dict:
         "sessoes_encerradas": True,
         "links_pendentes_invalidados": _invalidar_links_pendentes(db, alvo.id, agora),
         "links_emitidos_invalidados": _invalidar_links_emitidos(db, alvo.id, agora)}
-    if alvo.status != "ativo":
+    if alvo.status != "ativo" or senha_substituida:
         revogacao["dispositivos_removidos"] = svc_push.remover_aparelhos_da_conta(
             db, alvo.id)
     return revogacao
@@ -467,7 +472,7 @@ def atualizar_usuario(
         alteracoes["senha"] = "redefinida"
     revogacao: dict = {}
     if revogar:
-        revogacao = _revogar_acessos(db, alvo)
+        revogacao = _revogar_acessos(db, alvo, senha_substituida=dados.senha is not None)
     elif cargo_mudou:
         # O cargo é o que dava o poder de gerar os links (``_pode_redefinir_senha``):
         # mudou, os links que a conta gerou morrem de vez — senão voltavam a valer

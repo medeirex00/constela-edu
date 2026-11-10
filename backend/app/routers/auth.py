@@ -32,6 +32,7 @@ from app.core.security import (
 )
 from app.models import TokenResetSenha, Usuario
 from app.schemas import LoginOut, UsuarioOut
+from app.services import push as svc_push
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/auth", tags=["Autenticação"])
@@ -476,10 +477,14 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
     alvo.senha_hash = novo_hash
     # Lido sob a trava: nenhuma revogação concorrente perde o incremento.
     alvo.token_version = (alvo.token_version or 0) + 1  # derruba sessões antigas
+    # Os aparelhos (push) saem com as sessões, como na troca pelo admin
+    # (``admin._revogar_acessos``): o celular perdido, cuja sessão cai agora, não
+    # segue recebendo os avisos da escola. O app registra de novo no login.
+    removidos = svc_push.remover_aparelhos_da_conta(db, alvo.id)
     email = alvo.email
     registrar(db, "usuario.senha_redefinida_por_token", escola_id=alvo.escola_id,
               usuario_id=alvo.id, entidade="usuario", entidade_id=alvo.id,
-              detalhes={"email": email})
+              detalhes={"email": email, "dispositivos_removidos": removidos})
     db.commit()
     # "Já pode entrar" vale de verdade: quem errou a senha até travar o login
     # entra com a nova (o link prova a posse da conta, como o login certo).
