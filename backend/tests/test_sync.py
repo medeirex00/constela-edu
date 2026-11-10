@@ -1224,6 +1224,36 @@ def test_lento_fecha_depois_de_sem_atualizacao_dentro_do_normal(db, escola_compl
     assert not _lento_aberto()
 
 
+def test_sem_atualizacao_lenta_nao_abre_o_lento(db, escola_completa, monkeypatch):
+    """A 'sem_atualizacao' só FECHA o 'lento': fora do normal, sem 'lento' aberto antes,
+    ela não o abre (a régua do normal é a das concluídas)."""
+    from app.core.config import settings
+    from app.models.sincronizacao import SincronizacaoAlerta
+    from app.sync import connectors, orchestrator, service, vault
+    escola = escola_completa["escola"]
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    arq = ArquivoObtido(conteudo=b"PK", nome_arquivo="m.xlsx", plataforma="matific")
+    monkeypatch.setitem(connectors._REGISTRO, "matific", ConectorFake(arquivos=[arq]))
+    monkeypatch.setattr(orchestrator, "_parsear", lambda a: _analise_ana())
+
+    def _lento_aberto():
+        db.expire_all()
+        return db.query(SincronizacaoAlerta).filter_by(
+            escola_id=escola.id, tipo="lento", resolvido=False).first() is not None
+
+    monkeypatch.setattr(settings, "SYNC_LENTO_S", 3600)   # a 1ª (concluida) é normal
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "concluida" and not _lento_aberto()
+
+    # Mesmo dado, e qualquer duração passa do limite: 'sem_atualizacao' "lenta".
+    monkeypatch.setattr(service, "limite_lento_ms", lambda *a, **k: (-1, None))
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "sem_atualizacao"
+    assert not _lento_aberto()
+
+
 def test_dashboard_global_ok(db, escola_completa):
     from fastapi.testclient import TestClient
     from app.core.security import hash_senha

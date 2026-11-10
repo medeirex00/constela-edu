@@ -295,6 +295,34 @@ def test_executar_da_sinal_de_vida_enquanto_roda_e_para_no_fim(
         assert len(batidas) == len(durante)          # parou com o fim da execução
 
 
+def test_sinal_de_vida_para_no_teto_mesmo_com_o_bloco_ainda_rodando(monkeypatch):
+    """O sinal prova que o processo está de pé, não que há progresso: uma thread
+    pendurada deixa de dar sinal depois de 2 × SYNC_TRAVADA_S e a escola é liberada.
+    Aqui o teto é 0,1 s e o bloco ainda roda 0,6 s: as batidas param no teto."""
+    batidas: list[int] = []
+    trava = threading.Lock()
+
+    def _sinal(execucao_id):
+        with trava:
+            batidas.append(execucao_id)
+        return True
+
+    monkeypatch.setattr(service, "batimento_execucao_s", lambda: 0.01)
+    monkeypatch.setattr(service, "_sinal_de_vida_da_execucao", _sinal)
+    monkeypatch.setattr(settings, "SYNC_TRAVADA_S", 0.05)     # teto = 2 × 0,05 s
+
+    with service._sinal_de_vida_enquanto_roda(4242):
+        time.sleep(0.3)                  # bem depois do teto (com folga de máquina lenta)
+        with trava:
+            depois_do_teto = len(batidas)
+        time.sleep(0.3)
+        with trava:
+            no_fim_do_bloco = len(batidas)
+
+    assert depois_do_teto >= 1                       # houve sinal antes do teto
+    assert no_fim_do_bloco == depois_do_teto         # e nenhum depois dele
+
+
 # --------------------------------------------------------------------------
 # S7: fechamento condicional
 # --------------------------------------------------------------------------
