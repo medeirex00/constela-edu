@@ -683,6 +683,13 @@ def test_i4_trava_emite_advisory_lock_no_postgres(dialeto, esperado, monkeypatch
         def get_bind(self):
             return _Bind()
 
+        def connection(self):
+            # sessão de gravação (com transação): a trava recusa a em AUTOCOMMIT
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                get_execution_options=lambda: {},
+                connection=SimpleNamespace(dbapi_connection=SimpleNamespace(autocommit=False)))
+
         def execute(self, sql, params=None):
             executados.append(str(sql))
 

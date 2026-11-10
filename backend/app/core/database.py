@@ -290,6 +290,24 @@ def get_db(request: Request = None):  # type: ignore[assignment]
         db.close()
 
 
+def _exigir_transacao(db, trava: str) -> None:
+    """Recusa a sessão em AUTOCOMMIT antes de um ``pg_advisory_xact_lock``.
+
+    A trava vale até o fim da TRANSAÇÃO. Em AUTOCOMMIT — a ``SessionLeitura`` das rotas
+    ``leitura_sem_transacao``, que usa o MESMO pool — cada comando é uma transação: a trava
+    cairia no fim do próprio SELECT, a função voltaria normal e nada ficaria travado. Olha
+    a opção da conexão e o modo do driver (sem ida ao banco)."""
+    conexao = db.connection()
+    em_autocommit = (
+        conexao.get_execution_options().get("isolation_level") == "AUTOCOMMIT"
+        or getattr(conexao.connection.dbapi_connection, "autocommit", False) is True)
+    if em_autocommit:
+        raise RuntimeError(
+            f"{trava} exige uma sessão com transação; esta está em AUTOCOMMIT (a sessão das "
+            "rotas de leitura) e a trava cairia no fim do próprio comando, sem travar nada. "
+            "Use a sessão de gravação (SessionLocal).")
+
+
 # Namespace fixo dos advisory locks de importação (o 1º argumento de
 # pg_advisory_xact_lock separa nossos locks de qualquer outro uso futuro).
 _NS_IMPORTACAO = 4711
@@ -309,9 +327,12 @@ def bloquear_escola_para_importacao(db, escola_id: int) -> None:
 
     SQLite (dev/testes): no-op — banco de um único escritor; produção é Postgres.
     A defesa cross-DB para turmas é o índice único ``uq_turma_escola_ano_nome``
-    (o insert de turma trata a colisão sem estourar 500)."""
+    (o insert de turma trata a colisão sem estourar 500).
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_escola_para_importacao")
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
                    {"ns": _NS_IMPORTACAO, "escola": int(escola_id)})
 
@@ -331,9 +352,12 @@ def bloquear_fonte_para_coleta(db, fonte_id: int) -> None:
     adquirir ANTES de baixar/importar e sem commit no meio.
 
     SQLite (dev/testes): no-op — banco de um só escritor. A defesa cross-DB é o
-    índice único ``uq_resultado_natural`` (a 2ª inserção do mesmo fato esbarra)."""
+    índice único ``uq_resultado_natural`` (a 2ª inserção do mesmo fato esbarra).
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_fonte_para_coleta")
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :fonte)"),
                    {"ns": _NS_COLETA_AVALIACAO, "fonte": int(fonte_id)})
 
@@ -374,9 +398,12 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
 
     SQLite (dev/testes): no-op — banco de um único escritor; produção é
     Postgres. A defesa cross-DB é a própria ``uq_nota_aluno_ano``, que impede a
-    duplicata virar permanente (ao custo do 500 que esta trava elimina)."""
+    duplicata virar permanente (ao custo do 500 que esta trava elimina).
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_escola_para_recalculo")
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
                    {"ns": _NS_RECALCULO, "escola": int(escola_id)})
 

@@ -121,6 +121,13 @@ def test_trava_do_recalculo_e_advisory_lock_so_no_postgres():
         def get_bind(self):
             return type("B", (), {"dialect": type("D", (), {"name": self._dialeto})()})()
 
+        def connection(self):
+            # sessão de gravação (com transação): a trava recusa a em AUTOCOMMIT
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                get_execution_options=lambda: {},
+                connection=SimpleNamespace(dbapi_connection=SimpleNamespace(autocommit=False)))
+
         def execute(self, sql, params=None):
             executados.append(str(sql))
 
