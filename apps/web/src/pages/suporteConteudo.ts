@@ -41,12 +41,20 @@ export const SINCRONIZACAO_GESTAO: Pergunta[] = [
     resposta: "A plataforma mandou dados, mas nenhuma conta já ligada a um aluno da escola veio na coleta: todas as linhas ficaram em Dados e integrações › Revisões de identidade. Isso não conta como dado em dia — passado o prazo da agenda, aparece “Dados desatualizados”. Se a escola já tinha alunos ligados, confira primeiro em “Configurar conexão” se o acesso cadastrado é o desta escola (o acesso de outra escola dá exatamente isso) e não resolva as revisões antes. Se é a primeira coleta, confirme que os nomes são desta escola e resolva as revisões.",
   },
   {
+    pergunta: "Sem atualização: tempo ou questões não vieram",
+    resposta: "A última coleta terminou sem erro e nenhum aluno foi atualizado, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões). Eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta: quem resolve é a equipe do Constela, ajustando a coleta dessa plataforma. O alerta “Formato do relatório mudou”, no mesmo cartão, diz quais números faltaram; avise o suporte. Se faltaram as questões, o Relatório por Período avisa que essa coleta não as mediu, em vez de mostrar zero.",
+  },
+  {
     pergunta: "Dados desatualizados",
     resposta: "Não há sincronização bem-sucedida recente (o selo mostra há quanto tempo; a frase, desde quando). Se a frase disser que a atualização automática está “pausada no servidor”, os dados só chegam quando alguém clica em “Sincronizar”. Confira a conexão e a agenda em “Configurar conexão” e use “Sincronizar agora”.",
   },
   {
     pergunta: "Falhou",
     resposta: "O selo diz o tipo da falha. Senha recusada ou expirada: corrija em “Configurar conexão”. Plataforma fora do ar ou bloqueando o acesso: tente mais tarde ou envie o relatório manualmente. Erro ao processar: sincronize de novo; se continuar, copie o detalhe técnico da falha para o suporte.",
+  },
+  {
+    pergunta: "Falhou: escola sem administrador ou coordenador ativo",
+    resposta: "A sincronização automática grava os dados em nome de um administrador ou coordenador ativo da escola. Sem nenhum, ela nem começa e nada foi coletado: não é problema da senha nem da plataforma. Cadastre ou reative um em Minha Escola › Usuários e peça a sincronização de novo.",
   },
   {
     pergunta: "Coleta indisponível neste servidor",

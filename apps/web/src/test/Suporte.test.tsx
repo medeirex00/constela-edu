@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import fonteSincronizacao from "../pages/Sincronizacao.tsx?raw";
 import { COR_TOM, META_CRITERIOS } from "../components/CriteriosVisuais";
+import { situacaoIntegracao } from "../components/StatusIntegracao";
+import type { Execucao, PlataformaStatus } from "../components/StatusIntegracao";
 import Suporte, { PASTAS_GUIAS, type RegraPontuacao } from "../pages/Suporte";
 import {
   FAQ_COORDENACAO,
@@ -273,6 +275,54 @@ describe("Suporte — o que a sincronização transforma em ficha nova", () => {
     expect(resposta).toContain("nome abreviado (como “ZEFA Q”)");
     expect(resposta).toContain("duas contas com o mesmo nome na mesma sincronização");
     expect(resposta).toMatch(/não viram ficha e esperam em Revisões de identidade/);
+  });
+});
+
+describe("Suporte — os estados do cartão de Integrações têm entrada", () => {
+  // O rótulo da pergunta é o que o cartão MOSTRA (situacaoIntegracao), não um texto à parte.
+  function situacao(over: Partial<Execucao>) {
+    const exec: Execucao = {
+      id: 1, plataforma: "elefante", origem: "agendada", status: "concluida",
+      iniciada_em: "2026-10-20T09:00:00Z", finalizada_em: "2026-10-20T09:02:00Z",
+      duracao_ms: 120000, qtd_alunos: 0, qtd_turmas: 1, qtd_arquivos: 1, qtd_erros: 0,
+      tentativa: 1, erro_resumo: null, ...over,
+    };
+    const p: PlataformaStatus = {
+      plataforma: "elefante", estrategia: "api", conectada: true,
+      credencial_status: "valida", validada_em: null, ultimo_erro: null,
+      agendada: true, cadencia: "diaria", hora_local: "03:00", dia_semana: null,
+      proxima_execucao: null, ultima_execucao: exec, ultima_tentativa: exec,
+      ultimo_sucesso_em: "2026-10-20T09:02:00Z", desatualizada: false,
+      frescor: "atualizado", idade_horas: 3, limite_horas: 48, falha_categoria: null,
+      fila_parada: false,
+    };
+    return situacaoIntegracao(p);
+  }
+  const entrada = (rotulo: string) =>
+    SINCRONIZACAO_GESTAO.find((p) => p.pergunta === rotulo)?.resposta ?? "";
+
+  it("'Sem atualização: tempo ou questões não vieram': o que significa e o que fazer", () => {
+    const s = situacao({ status: "sem_atualizacao", motivo: "campos_nao_atualizados" });
+    expect(s.rotulo).toBe("Sem atualização: tempo ou questões não vieram");
+    const resposta = entrada(s.rotulo);
+    expect(resposta).toContain("deixou de mandar parte dos números (tempo de leitura ou questões)");
+    expect(resposta).toContain("valor da coleta anterior");
+    expect(resposta).toContain("sincronizar de novo não os traz de volta");
+    expect(resposta).toContain("“Formato do relatório mudou”");
+    expect(resposta).toContain("avise o suporte");
+  });
+
+  it("'Falhou: escola sem administrador ou coordenador ativo': o que significa e o que fazer", () => {
+    const s = situacao({ status: "erro", motivo: "escola_sem_responsavel" });
+    expect(s.rotulo).toBe("Falhou: escola sem administrador ou coordenador ativo");
+    const resposta = entrada(s.rotulo);
+    expect(resposta).toContain("nada foi coletado");
+    expect(resposta).toContain("não é problema da senha nem da plataforma");
+    expect(resposta).toContain("Cadastre ou reative um em Minha Escola › Usuários");
+    // O Admin Global lê o caminho do menu dele.
+    const global = sincronizacaoDaGestao({ admin: true, global: true })
+      .find((p) => p.pergunta === s.rotulo)?.resposta ?? "";
+    expect(global).toContain("Administração › Usuários");
   });
 });
 
