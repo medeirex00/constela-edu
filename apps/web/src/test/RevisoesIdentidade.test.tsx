@@ -1058,6 +1058,29 @@ describe("Revisões de identidade — triagem", () => {
     expect(within(bloco).getByText(/nada é vinculado sem a sua escolha/)).toBeInTheDocument();
   });
 
+  // Evidências e conflitos que ocupam duas linhas: a 2ª linha alinha com o texto da 1ª,
+  // não volta para baixo do marcador. O jsdom não faz layout — a medida no navegador
+  // (desalinhamento de 17 px antes, 0 depois) fica no relatório da correção; aqui, a
+  // estrutura que a garante: marcador FORA do texto ("list-outside") e o recuo da
+  // lista para ele ("pl-4"), nunca "list-inside".
+  it("triagem: listas com o marcador fora do texto e recuo, para a 2ª linha alinhar", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const lista = async (nome: string, rotulo: string) => {
+      const dialogo = await abrirDetalhe(u, nome);
+      const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
+      const classes = within(bloco).getByRole("list", { name: rotulo }).className.split(/\s+/);
+      await u.click(within(dialogo).getByRole("button", { name: "Fechar" }));
+      return classes;
+    };
+    for (const classes of [await lista("TOBIAS D", "Conflitos da triagem"),
+                           await lista("MAURO R", "Evidências da triagem")]) {
+      expect(classes).toEqual(expect.arrayContaining(["list-outside", "list-disc", "pl-4"]));
+      expect(classes).not.toContain("list-inside");
+    }
+  });
+
   it("no detalhe, a frase da triagem começa com maiúscula", async () => {
     const u = userEvent.setup();
     filaComTriagem();

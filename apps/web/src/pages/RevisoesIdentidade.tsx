@@ -205,6 +205,11 @@ const ROTULO_MOTIVO: Record<string, string> = {
   identidade_de_outra_escola: "Conta de outra escola",
 };
 
+/** Lista com marcador: o marcador fica FORA do texto, no recuo da lista, e a 2ª linha
+ *  de um item longo começa alinhada com o texto da 1ª. Com "list-inside" ela voltava
+ *  para baixo do marcador (evidências e conflitos da triagem, que costumam quebrar). */
+const LISTA_COM_MARCADOR = "list-outside list-disc pl-4";
+
 /** Selo da triagem. "Segura" não é decisão: é a conferência automática dizendo que
  *  não achou conflito — quem vincula continua sendo o gestor. */
 const SELO_TRIAGEM: Record<string, { texto: string; tom: "ok" | "alerta" }> = {
@@ -479,7 +484,7 @@ export default function RevisoesIdentidade() {
             <div className="min-w-0">
               <p>{feedback.texto}</p>
               {feedback.detalhes && feedback.detalhes.length > 0 && (
-                <ul className="mt-1 list-inside list-disc text-xs">
+                <ul className={`mt-1 ${LISTA_COM_MARCADOR} text-xs`}>
                   {feedback.detalhes.map((d, i) => <li key={`${i}-${d}`}>{d}</li>)}
                 </ul>
               )}
@@ -1018,13 +1023,13 @@ function DetalheRevisao({
               <span>{comMaiuscula(rev.triagem.motivo_texto)}</span>
             </div>
             {rev.triagem.evidencias.length > 0 && (
-              <ul className="list-inside list-disc text-xs text-zinc-600 dark:text-zinc-300"
+              <ul className={`${LISTA_COM_MARCADOR} space-y-0.5 text-xs text-zinc-600 dark:text-zinc-300`}
                   aria-label="Evidências da triagem">
                 {rev.triagem.evidencias.map((e) => <li key={e}>{e}</li>)}
               </ul>
             )}
             {rev.triagem.conflitos.length > 0 && (
-              <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200"
+              <ul className={`${LISTA_COM_MARCADOR} space-y-0.5 text-xs text-amber-800 dark:text-amber-200`}
                   aria-label="Conflitos da triagem">
                 {rev.triagem.conflitos.map((c) => <li key={c}>{c}</li>)}
               </ul>
@@ -1193,7 +1198,7 @@ function DetalheRevisao({
                 escola.
               </p>
             )}
-            <ul className="list-inside list-disc space-y-1 text-zinc-600 dark:text-zinc-300">
+            <ul className={`${LISTA_COM_MARCADOR} space-y-1 text-zinc-600 dark:text-zinc-300`}>
               <li>
                 Os dados pendentes ({ROTULO_FORMATO[rev.formato]?.toLowerCase() ?? "dados da importação"})
                 serão aplicados a {destino.tipo === "aluno" ? "esta ficha" : "esta nova ficha"}.
