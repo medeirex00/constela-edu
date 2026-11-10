@@ -726,4 +726,26 @@ describe("resposta real do backend", () => {
     await userEvent.setup().click(await screen.findByText("Como ler estes números"));
     semVocabularioInterno(texto());
   });
+
+  it("'Como ler': as Questões do Elefante continuam, embora o Matific liste 'questoes' no que NÃO responde", async () => {
+    // A forma real: o Elefante calcula as questões (`suporte.questoes`) e o Matific não as
+    // tem (`nao_suportado` com {plataforma: matific, metrica: questoes}) — a mesma chave.
+    // O filtro do "Como ler" só pula o que o backend lista PARA O ELEFANTE; sem a
+    // plataforma no filtro, a explicação das Questões do Elefante sumia.
+    const dados = real();
+    const ele = dados.elefante as { suporte: Record<string, unknown> };
+    const naoSuportado = dados.nao_suportado as { plataforma: string; metrica: string }[];
+    expect(Object.keys(ele.suporte)).toContain("questoes");
+    expect(naoSuportado).toContainEqual(expect.objectContaining({ plataforma: "matific", metrica: "questoes" }));
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    const t = texto();
+    const vezes = (s: string) => t.split(s).length - 1;
+    expect(t).toContain("A plataforma só informa o total de questões que o aluno já respondeu desde que começou");
+    expect(t).toContain("Só entra quem tem coleta no período; quem não tem fica fora da conta");
+    // E o que o relatório não responde continua uma vez só, no lugar dele.
+    expect(vezes("O Matific guarda atividades, estrelas e pontuação média, mas não conta questões")).toBe(1);
+    expect(vezes("Não dá para saber quanto durou cada leitura")).toBe(1);
+  });
 });
