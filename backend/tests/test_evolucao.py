@@ -194,6 +194,8 @@ def test_estatisticas_cartaz_usa_snapshot_atual(db, escola_completa):
     _snap_matific(db, escola.id, importacao, ana.id, 1, atividades=90, estrelas=45)
     _snap_elefante(db, escola.id, importacao, ana.id, 1, livros_unicos=7)
     db.commit()
+    # Os cartões somam só quem está na tabela do cartaz (tem Nota do ano).
+    scoring.recalcular_escola(db, escola.id)
 
     stats = rel.estatisticas_cartaz(db, escola.id)
     assert stats["atividades"] == 90  # snapshot atual, não max(100, 90)

@@ -344,9 +344,11 @@ def test_cartoes_do_cartaz_de_matematica_somam_so_a_matematica_dos_alunos_listad
     assert not valores & {"17", "57", "13h", "28h"}
 
 
-def test_cartoes_do_ranking_geral_nao_mudam(cliente, db, escola_completa, monkeypatch):
-    """Sem dimensão: os mesmos cartões de sempre — atividades + livros da
-    população ativa matriculada (Caio da Fase incluído), via `estatisticas_cartaz`."""
+def test_cartoes_do_ranking_geral_somam_so_os_alunos_listados(cliente, db,
+                                                             escola_completa, monkeypatch):
+    """Sem dimensão: atividades + livros, via `estatisticas_cartaz`, só de quem
+    está NA TABELA do cartaz — Caio da Fase (Educação Infantil, não concorre)
+    fica fora dos cartões como fica fora da lista (RELATORIOS-2)."""
     _dados_com_cartoes(db, escola_completa)
     escola_id = escola_completa["escola"].id
     chamadas = _espiar(monkeypatch)
@@ -355,13 +357,17 @@ def test_cartoes_do_ranking_geral_nao_mudam(cliente, db, escola_completa, monkey
 
     (chamada,) = chamadas
     assert chamada["materia"] is None
+    listados = {linha[1] for linha in chamada["linhas"]}
+    assert "Caio da Fase" not in listados
     assert chamada["estatisticas"] == svc.estatisticas_cartaz(db, escola_id)
     assert chamada["estatisticas"] == {
-        "atividades": sum(a for a, _ in _MATIFIC_ATUAL.values()),          # 135
-        "livros": sum(livros for livros, _ in _ELEFANTE_ATUAL.values()),   # 57
+        "atividades": sum(a for nome, (a, _) in _MATIFIC_ATUAL.items()
+                          if nome in listados),                            # 65
+        "livros": sum(livros for nome, (livros, _) in _ELEFANTE_ATUAL.items()
+                      if nome in listados),                                # 17
     }
     tiles = _tiles(_documento(chamada))
-    assert tiles[:2] == [("135", "atividades"), ("57", "livros lidos")]
+    assert tiles[:2] == [("65", "atividades"), ("17", "livros lidos")]
     assert tiles[2][1] == "estudantes ranqueados"
     assert tiles[2][0] == str(len(chamada["linhas"]))
 

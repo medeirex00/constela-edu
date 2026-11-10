@@ -53,9 +53,12 @@ def _recorte(consulta, turma_ids: list[int] | None):
     return consulta.where(Matricula.turma_id.in_(turma_ids))
 
 
-def linhas_ranking(db: Session, escola_id: int,
-                   turma_ids: list[int] | None = None) -> tuple[list[str], list[list]]:
-    """``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
+def _consulta_ranking_geral(db: Session, escola_id: int,
+                            turma_ids: list[int] | None = None):
+    """``select(Nota, Aluno, Turma)`` de quem está no Ranking Geral exportado (sem
+    ordem) — a fonte ÚNICA das linhas (``linhas_ranking``) e da população dos
+    cartões do cartaz (``estatisticas_cartaz``), para os dois nunca divergirem.
+    ``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
     recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``)."""
     escola = db.get(Escola, escola_id)
     consulta = (
@@ -72,9 +75,16 @@ def linhas_ranking(db: Session, escola_id: int,
         # nem no cartaz — a mesma régua de `rankings._ranking`.
         .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
             db, escola_id, escola.ano_letivo_ativo)))
-        .order_by(Nota.posicao)
     )
-    linhas = db.execute(_recorte(consulta, turma_ids)).all()
+    return _recorte(consulta, turma_ids)
+
+
+def linhas_ranking(db: Session, escola_id: int,
+                   turma_ids: list[int] | None = None) -> tuple[list[str], list[list]]:
+    """``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
+    recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``)."""
+    linhas = db.execute(_consulta_ranking_geral(db, escola_id, turma_ids)
+                        .order_by(Nota.posicao)).all()
     cabecalho = ["Posição", "Aluno", "Turma", "Série", "Nota Matific",
                  "Nota Elefante", "Nota Geral"]
     return cabecalho, [
@@ -881,22 +891,17 @@ def estatisticas_cartaz(db: Session, escola_id: int,
 
     Soma o SNAPSHOT ATUAL (o mais recente por data de referência — o mesmo
     critério usado no ranking e no painel, via scoring._snapshots_atuais), e só
-    da MESMA população da tabela: alunos ATIVOS matriculados no ano letivo
-    corrente. Assim os números batem com a tabela e com "estudantes ranqueados",
-    sem inflar com alunos de anos anteriores/arquivados nem com correções para
-    menos. Best-effort: qualquer falha vira zero — o cartaz nunca quebra por
-    causa das estatísticas."""
+    da MESMA população da tabela: exatamente os alunos das linhas do cartaz
+    (``_consulta_ranking_geral`` — ativos, matriculados no ano numa turma que
+    concorre, com Nota do ano; ``turma_ids`` = o recorte do professor). Assim os
+    números batem com a tabela e com "estudantes ranqueados", sem inflar com a
+    Educação Infantil, com quem ainda não tem nota, com alunos de anos anteriores
+    ou arquivados nem com correções para menos. Best-effort: qualquer falha vira
+    zero — o cartaz nunca quebra por causa das estatísticas."""
     try:
         escola = db.get(Escola, escola_id)
-        consulta_cohort = (
-            select(Aluno.id)
-            .join(Matricula, (Matricula.aluno_id == Aluno.id)
-                  & (Matricula.ano_letivo == escola.ano_letivo_ativo))
-            .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
-        )
-        if turma_ids is not None:  # professor: só as turmas dele
-            consulta_cohort = consulta_cohort.where(Matricula.turma_id.in_(turma_ids))
-        cohort = set(db.execute(consulta_cohort).scalars().all())
+        cohort = {aluno.id for _nota, aluno, _turma
+                  in db.execute(_consulta_ranking_geral(db, escola_id, turma_ids))}
         # Matific é contador DO ANO: o retrato de outro ano letivo não soma.
         m_atuais = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
         e_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
