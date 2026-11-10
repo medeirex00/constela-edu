@@ -479,6 +479,18 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
         update(Notificacao).where(Notificacao.aluno_id == remover.id)
         .values(aluno_id=manter.id)
     ).rowcount
+    # ...e o LINK vai junto: com o aviso no sino de quem vê a ficha que ficou (a
+    # professora da turma dela), "/alunos/<absorvida>" abria "Aluno não encontrado".
+    db.execute(
+        update(Notificacao)
+        .where(Notificacao.escola_id == escola_id, Notificacao.entidade == "aluno",
+               Notificacao.entidade_id == remover.id)
+        .values(entidade_id=manter.id))
+    db.execute(
+        update(Notificacao)
+        .where(Notificacao.escola_id == escola_id,
+               Notificacao.rota == f"/alunos/{remover.id}")
+        .values(rota=f"/alunos/{manter.id}"))
 
     manter_id = manter.id
     contagens = {

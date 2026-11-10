@@ -197,3 +197,33 @@ def test_notificacao_do_absorvido_passa_para_quem_ficou(db, escola_completa):
     assert r["notificacoes_movidas"] == 1
     n = db.execute(select(Notificacao)).scalars().one()
     assert n.aluno_id == oficial_id
+
+
+def test_aviso_novo_aluno_do_absorvido_leva_a_ficha_que_ficou(db, escola_completa):
+    """O aviso "Novo aluno cadastrado" da ficha absorvida passa para quem ficou — e o link
+    também. Movido só o ``aluno_id``, ele entrava no sino da professora da turma de quem
+    ficou com o link da ficha que a fusão apagou (abria "Aluno não encontrado")."""
+    from app.services import audit, notificacoes
+    from app.models import Usuario
+    esc, t, admin = _esc(escola_completa)
+    oficial = aluno(db, esc.id, t, "Zefa Quaresma Lima", da_lista_piloto=True)
+    stub = aluno(db, esc.id, t, "ZEFA Q")
+    outra = aluno(db, esc.id, t, "Crianca Ficticia Que Fica Fora")
+    for a in (oficial, stub, outra):
+        audit.registrar(db, "aluno.criado", escola_id=esc.id, usuario_id=admin.id,
+                        entidade="aluno", entidade_id=a.id)
+    db.commit()
+    oficial_id, stub_id, outra_id = oficial.id, stub.id, outra.id
+    alunos_fusao.fundir_par(db, esc.id, oficial, stub, admin.id)
+    db.commit()
+    db.expire_all()
+    avisos = db.execute(select(Notificacao).where(Notificacao.tipo == "aluno.criado")
+                        .order_by(Notificacao.id)).scalars().all()
+    assert [(n.aluno_id, n.entidade_id, n.rota) for n in avisos] == [
+        (oficial_id, oficial_id, f"/alunos/{oficial_id}"),
+        (oficial_id, oficial_id, f"/alunos/{oficial_id}"),    # era o do absorvido
+        (outra_id, outra_id, f"/alunos/{outra_id}"),          # o dos outros não muda
+    ]
+    # Nenhum aviso de nenhum perfil aponta para a ficha apagada.
+    admin_u = db.get(Usuario, admin.id)
+    assert f"/alunos/{stub_id}" not in [n["rota"] for n in notificacoes.feed(db, admin_u)]
