@@ -152,6 +152,38 @@ def _candidatos_congelados(rev: RevisaoIdentidade) -> list[int]:
             if isinstance(c, dict) and c.get("aluno_id")]
 
 
+# --- o texto que a coordenação lê -------------------------------------------
+# Evidências e conflitos vão para a gaveta de Revisões: a ficha é citada como a
+# coordenação a vê na tela (nome e turma), nunca pelo id interno, e a conta da
+# plataforma pelo nome da plataforma, nunca pelo identificador (UUID). Os ids
+# continuam nos campos estruturados (``aluno_id``, ``irmas``).
+_PLATAFORMA = {"matific": "Matific", "elefante": "Elefante Letrado"}
+_SITUACAO = {"arquivado": "arquivada", "fora_lista_piloto": "fora da Lista Piloto",
+             "transferido": "transferido"}
+
+
+def _plataforma(plataforma: str | None) -> str:
+    return _PLATAFORMA.get(plataforma or "", plataforma or "da plataforma")
+
+
+def _ficha(ctx: ident.Contexto, aluno_id: int | None,
+           rev: RevisaoIdentidade | None = None) -> str:
+    """A ficha pelo nome e pela turma do ano ("JOANA LIMA (3º Ano)"). Fora do
+    contexto da escola, o nome congelado na pendência; sem nenhum, uma descrição."""
+    aluno = ctx.alunos.get(aluno_id) if aluno_id is not None else None
+    nome = aluno.nome if aluno is not None else next(
+        (c.get("nome") for c in ((rev.candidatos if rev is not None else None) or [])
+         if isinstance(c, dict) and c.get("aluno_id") == aluno_id), None)
+    if not nome:
+        return "uma ficha que não é desta escola"
+    turma = ctx.turma_do_aluno(aluno_id) if aluno is not None else None
+    return f"{nome} ({turma.nome})" if turma is not None else nome
+
+
+def _fichas(ctx: ident.Contexto, ids, rev: RevisaoIdentidade | None = None) -> str:
+    return "; ".join(_ficha(ctx, aid, rev) for aid in ids)
+
+
 def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
               superado: bool | None, irmas: tuple[int, ...]) -> Triagem:
     """A decisão de UMA pendência. Cada retorno carrega o porquê."""
@@ -169,14 +201,14 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     # Id externo DUPLICADO no relatório: a conta já vinculada NÃO desempata — ela
     # pode ser justamente a da outra criança. Nunca "segura".
     if rev.motivo == "id_externo_duplicado":
-        caso.conflitos.append("o identificador da plataforma veio repetido no "
-                              "relatório com outro nome")
+        caso.conflitos.append("O identificador da plataforma veio repetido no "
+                              "relatório, com outro nome")
         return veredito(DECISAO_HUMANA, ID_DUPLICADO_NO_RELATORIO)
 
     # Conta já EFETIVA em OUTRA escola do Constela: nenhum vínculo DESTA escola
     # desempata (pode ser justamente a credencial da outra escola). Nunca "segura".
     if rev.motivo == "identidade_de_outra_escola":
-        caso.conflitos.append("a conta da plataforma já está vinculada a um aluno de "
+        caso.conflitos.append("A conta da plataforma já está vinculada a um aluno de "
                               "outra escola do Constela")
         return veredito(DECISAO_HUMANA, IDENTIDADE_DE_OUTRA_ESCOLA)
 
@@ -191,8 +223,9 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     if id_externo and (rev.plataforma, id_externo) in ctx.aposentadas:
         aposentado = ctx.aposentadas[(rev.plataforma, id_externo)]
         caso.conflitos.append(
-            f"a conta {id_externo} foi aposentada na ficha {aposentado} — "
-            "os dados dela não valem mais, e reativá-la exige decisão explícita")
+            f"A conta {_plataforma(rev.plataforma)} desta linha foi aposentada na ficha "
+            f"de {_ficha(ctx, aposentado, rev)}: os dados dela não valem mais, e "
+            "reativá-la exige decisão explícita")
         return veredito(DECISAO_HUMANA, IDENTIDADE_APOSENTADA, aposentado)
 
     # ------------------------------------------------------------------ alvo
@@ -203,42 +236,45 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     if dono is not None:
         if congelados and dono not in congelados:
             caso.conflitos.append(
-                f"a conta {id_externo} pertence à ficha {dono}, que não está "
-                f"entre os candidatos registrados {congelados}")
+                f"A conta {_plataforma(rev.plataforma)} desta linha pertence à ficha de "
+                f"{_ficha(ctx, dono, rev)}, que não está entre as fichas candidatas")
             return veredito(DECISAO_HUMANA, CONFLITO_IDENTIDADE, dono)
         alvo = dono
         motivo_ok = IDENTIDADE_DESEMPATA if len(congelados) > 1 else IDENTIDADE_JA_VINCULADA
-        caso.evidencias.append(f"a conta {rev.plataforma} {id_externo} já está "
-                               f"vinculada à ficha {alvo}")
+        caso.evidencias.append(f"A conta {_plataforma(rev.plataforma)} desta linha já "
+                               f"está vinculada à ficha de {_ficha(ctx, alvo, rev)}")
         if len(congelados) > 1:
             outros = [c for c in congelados if c != alvo]
             caso.evidencias.append(
-                f"nenhum dos outros candidatos {outros} é dono desta conta")
+                "Nenhuma das outras fichas candidatas tem esta conta: "
+                f"{_fichas(ctx, outros, rev)}")
     elif len(congelados) == 1:
         alvo, motivo_ok = congelados[0], CANDIDATO_UNICO_COMPATIVEL
-        caso.evidencias.append(f"candidato único registrado: ficha {alvo}")
+        caso.evidencias.append(f"Candidato único registrado: {_ficha(ctx, alvo, rev)}")
     elif not congelados:
         return veredito(DECISAO_HUMANA, SEM_CANDIDATO)
     else:
         # Vários candidatos e NENHUMA identidade que desempate. Não se escolhe
         # por nome parecido, por ordem da lista nem por volume de dados.
-        caso.conflitos.append(f"{len(congelados)} candidatos {congelados} e a conta "
-                              f"{id_externo or '(ausente)'} não pertence a nenhum deles")
-        for aid in congelados:
+        caso.conflitos.append(
+            f"{len(congelados)} fichas candidatas, e "
+            + ("a conta da plataforma não pertence a nenhuma delas" if id_externo
+               else "a linha não traz a conta da plataforma"))
+        for ordem, aid in enumerate(congelados, start=1):
             turma = ctx.turma_do_aluno(aid)
             if turma is not None:
+                codigo = f" (código {turma.codigo_externo})" if turma.codigo_externo else ""
                 caso.evidencias.append(
-                    f"ficha {aid} está em {turma.nome!r} "
-                    f"(código {turma.codigo_externo or '—'})")
+                    f"{ordem}ª ficha candidata: {_ficha(ctx, aid, rev)}{codigo}")
         return veredito(DECISAO_HUMANA, AMBIGUA)
 
     # --------------------------------------------------------- portões do alvo
     aluno = ctx.alunos.get(alvo)
     if aluno is None:
-        caso.conflitos.append(f"a ficha {alvo} não pertence a esta escola")
+        caso.conflitos.append("A ficha candidata não pertence a esta escola")
         return veredito(DECISAO_HUMANA, SEM_CANDIDATO, alvo)
     if aluno.status == "excluido":
-        caso.conflitos.append("a ficha foi excluída")
+        caso.conflitos.append("A ficha foi excluída")
         return veredito(DECISAO_HUMANA, FICHA_EXCLUIDA, alvo)
 
     # Transferência / fora da lista piloto NÃO significa "outra criança": a
@@ -246,14 +282,17 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     # decisão de gestão — a não ser que um humano já tenha escolhido esta ficha.
     if aluno.status in ident.STATUS_INATIVOS:
         if humano == alvo:
-            caso.evidencias.append(f"ficha {aluno.status}, mas um gestor já "
-                                   f"escolheu esta mesma ficha antes")
+            caso.evidencias.append(
+                "A ficha está fora do ranking (situação: "
+                f"{_SITUACAO.get(aluno.status, aluno.status)}), mas um gestor já "
+                "escolheu esta mesma ficha antes")
         else:
-            caso.conflitos.append(f"a ficha está com status {aluno.status!r}")
+            caso.conflitos.append("A ficha está fora do ranking (situação: "
+                                  f"{_SITUACAO.get(aluno.status, aluno.status)})")
             return veredito(DECISAO_HUMANA, FICHA_INATIVA, alvo)
 
     if not id_externo:
-        caso.conflitos.append("a linha não traz identificador da plataforma")
+        caso.conflitos.append("A linha não traz identificador da plataforma")
         return veredito(DECISAO_HUMANA, SEM_IDENTIFICADOR, alvo)
 
     # Duas contas da MESMA plataforma na MESMA ficha: pode ser conta duplicada
@@ -262,8 +301,8 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     # seria inventar. Vai para decisão humana SEMPRE.
     outras = sorted(ctx.ids_do_aluno.get((alvo, rev.plataforma), set()) - {id_externo})
     if outras:
-        caso.conflitos.append(f"a ficha {alvo} já tem outra(s) conta(s) "
-                              f"{rev.plataforma}: {outras}")
+        caso.conflitos.append(f"A ficha de {_ficha(ctx, alvo, rev)} já tem outra(s) "
+                              f"conta(s) {_plataforma(rev.plataforma)}")
         return veredito(DECISAO_HUMANA, MULTI_IDENTIDADE, alvo)
     # A mesma disputa com a outra conta AINDA SEM VÍNCULO, numa pendência aberta da
     # escola (lida no contexto, não só nesta página da fila): a conta desta pendência
@@ -271,43 +310,45 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
     # coleta. Encerrar por aqui confirmaria um vínculo que ninguém decidiu.
     rivais = sorted(ctx.contas_rivais(rev.plataforma, alvo, id_externo))
     if rivais:
-        caso.conflitos.append(f"outra pendência aberta liga a ficha {alvo} a uma conta "
-                              f"{rev.plataforma} diferente, ainda sem vínculo: {rivais}")
+        caso.conflitos.append(f"Outra pendência aberta liga a ficha de "
+                              f"{_ficha(ctx, alvo, rev)} a uma conta "
+                              f"{_plataforma(rev.plataforma)} diferente, ainda sem vínculo")
         return veredito(DECISAO_HUMANA, MULTI_IDENTIDADE, alvo)
 
     turma = ctx.turma_do_aluno(alvo)
     if turma is None:
-        caso.conflitos.append("sem matrícula no ano letivo ativo")
+        caso.conflitos.append("A ficha não tem matrícula no ano letivo ativo")
         return veredito(DECISAO_HUMANA, SEM_MATRICULA, alvo)
 
     # --------------------------------------------------------- sala e série
     codigo = _codigo_da_sala(rev.turma_informada)
     if codigo and turma.codigo_externo:
         if codigo == turma.codigo_externo:
-            caso.evidencias.append(f"o código da turma do relatório ({codigo}) é o "
-                                   f"da turma da ficha ({turma.nome!r})")
+            caso.evidencias.append(f"O código da turma do relatório ({codigo}) é o "
+                                   f"da turma da ficha ({turma.nome})")
         else:
             caso.conflitos.append(
-                f"o código da turma do relatório ({codigo}) não é o da turma da "
-                f"ficha ({turma.codigo_externo})")
+                f"O código da turma do relatório ({codigo}) não é o da turma da "
+                f"ficha ({turma.nome}, código {turma.codigo_externo})")
             return veredito(DECISAO_HUMANA, SERIE_INCOMPATIVEL, alvo)
 
     serie_rel = serie_da_sala(rev.turma_informada or "")
     serie_ficha = serie_da_sala(turma.nome, getattr(turma, "ano_escolar", "") or "")
     if serie_rel is not None and serie_ficha is not None:
         if serie_rel != serie_ficha:
-            caso.conflitos.append(f"série do relatório {serie_rel}ª ≠ série da ficha "
-                                  f"{serie_ficha}ª")
+            caso.conflitos.append(f"A série do relatório ({serie_rel}º ano) não é a "
+                                  f"da ficha ({serie_ficha}º ano)")
             return veredito(DECISAO_HUMANA, SERIE_INCOMPATIVEL, alvo)
-        caso.evidencias.append(f"série compatível ({serie_rel}ª ano)")
+        caso.evidencias.append(f"Série compatível ({serie_rel}º ano)")
     elif dono is None:
         # Sem identidade vinculada, a série é a única checagem de sala que resta.
         caso.conflitos.append(
-            f"série ilegível (relatório={rev.turma_informada!r}, ficha={turma.nome!r})")
+            "Não dá para ler a série (turma do relatório: "
+            f"{rev.turma_informada or 'não informada'}; turma da ficha: {turma.nome})")
         return veredito(DECISAO_HUMANA, SERIE_INDETERMINADA, alvo)
 
     if humano == alvo:
-        caso.evidencias.append("um gestor já escolheu esta ficha para esta identidade")
+        caso.evidencias.append("Um gestor já escolheu esta ficha para esta conta")
     return veredito(SEGURA, motivo_ok, alvo)
 
 
@@ -344,14 +385,17 @@ def triar_revisoes(ctx: ident.Contexto, revisoes: list[RevisaoIdentidade],
         for v in vereditos:
             if v.classificacao != SEGURA:
                 continue
+            # Quais irmãs: em ``irmas`` (estruturado); no texto, só quantas.
             culpadas = [b.revisao_id for b in bloqueadas]
             resultado[v.revisao_id] = Triagem(
                 revisao_id=v.revisao_id, classificacao=DECISAO_HUMANA,
                 motivo=IRMA_BLOQUEADA, aluno_id=v.aluno_id,
                 evidencias=v.evidencias,
                 conflitos=v.conflitos + (
-                    f"a(s) pendência(s) {culpadas} da mesma identidade exige(m) "
-                    f"decisão humana",),
+                    "Outra pendência da mesma conta exige decisão de um gestor"
+                    if len(culpadas) == 1 else
+                    f"{len(culpadas)} outras pendências da mesma conta exigem decisão "
+                    "de um gestor",),
                 retrato_superado=v.retrato_superado, irmas=v.irmas)
 
     # A MESMA situação de "duas contas" vista do outro lado: duas pendências
@@ -375,8 +419,8 @@ def triar_revisoes(ctx: ident.Contexto, revisoes: list[RevisaoIdentidade],
                 motivo=MULTI_IDENTIDADE, aluno_id=t.aluno_id,
                 evidencias=t.evidencias,
                 conflitos=t.conflitos + (
-                    f"outra pendência aberta liga a ficha {t.aluno_id} a uma conta "
-                    f"{r.plataforma} diferente: {sorted(contas)}",),
+                    f"Outra pendência aberta liga a ficha de {_ficha(ctx, t.aluno_id, r)} "
+                    f"a uma conta {_plataforma(r.plataforma)} diferente",),
                 retrato_superado=t.retrato_superado, irmas=t.irmas)
 
     # Alvos diferentes na MESMA identidade: encerrar uma escolheria pela outra.
@@ -390,8 +434,8 @@ def triar_revisoes(ctx: ident.Contexto, revisoes: list[RevisaoIdentidade],
                     revisao_id=v.revisao_id, classificacao=DECISAO_HUMANA,
                     motivo=AMBIGUA, aluno_id=None, evidencias=v.evidencias,
                     conflitos=v.conflitos + (
-                        f"irmãs da mesma identidade apontam para fichas "
-                        f"diferentes: {sorted(x for x in alvos if x)}",),
+                        "As pendências da mesma conta apontam para fichas diferentes: "
+                        f"{_fichas(ctx, sorted(x for x in alvos if x), r)}",),
                     retrato_superado=v.retrato_superado, irmas=v.irmas)
     return resultado
 

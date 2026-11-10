@@ -957,12 +957,13 @@ function filaComTriagem() {
   return filaMock([
     revisaoFake({ triagem: triagemFake("decisao_humana",
       "mais de um candidato e nenhuma evidência objetiva desempata",
-      { conflitos: ["2 candidatos [31, 32] e a conta (ausente) não pertence a nenhum deles"] }) }),
+      { conflitos: ["2 fichas candidatas, e a linha não traz a conta da plataforma"] }) }),
     revisaoFake({ id: 8, nome_recebido: "MAURO R", motivo: "correspondencia_insegura",
       motivo_texto: "nome parecido, mas a correspondência não é segura",
       candidatos: [{ aluno_id: 40, nome: "MAURO RIBEIRO FICTONI", status: "ativo", turma: "5ºB" }],
       triagem: triagemFake("segura", "candidato único, turma e série compatíveis, sem conta concorrente",
-        { evidencias: ["candidato único registrado: ficha 40", "série compatível (5ª ano)"] }) }),
+        { evidencias: ["Candidato único registrado: MAURO RIBEIRO FICTONI (5ºB)",
+                       "Série compatível (5º ano)"] }) }),
     revisaoFake({ id: 9, nome_recebido: "LIA S", motivo: "nome_incompleto",
       motivo_texto: "a plataforma mandou só o nome abreviado", candidatos: [],
       triagem: triagemFake("decisao_humana", "nenhum aluno corresponde — criar ficha é decisão de gestão") }),
@@ -1021,8 +1022,20 @@ describe("Revisões de identidade — triagem", () => {
     const dialogo = await abrirDetalhe(u, "MAURO R");
     const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
     expect(within(bloco).getByText("Segura")).toBeInTheDocument();
-    expect(within(bloco).getByText("série compatível (5ª ano)")).toBeInTheDocument();
+    expect(within(bloco).getByText("Série compatível (5º ano)")).toBeInTheDocument();
     expect(within(bloco).getByText(/nada é vinculado sem a sua escolha/)).toBeInTheDocument();
+  });
+
+  it("no detalhe, a frase da triagem começa com maiúscula", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u, "TOBIAS D");
+    const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
+    // Abre o bloco, logo depois do selo: frase com maiúscula, não "mais de um…".
+    expect(within(bloco).getByText("Mais de um candidato e nenhuma evidência objetiva desempata"))
+      .toBeInTheDocument();
+    expect(within(bloco).queryByText(/^mais de um candidato/)).toBeNull();
   });
 
   it("o contador usa o total real quando a fila passa do limite da lista", async () => {

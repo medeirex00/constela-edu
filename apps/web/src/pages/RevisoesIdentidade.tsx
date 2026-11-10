@@ -328,6 +328,12 @@ function plural(n: number, um: string, varios: string): string {
   return `${numero(n)} ${n === 1 ? um : varios}`;
 }
 
+/** Frase que abre um bloco começa com maiúscula (o texto da triagem vem em minúscula
+ *  porque também segue "Triagem:" na lista). */
+function comMaiuscula(frase: string): string {
+  return frase.charAt(0).toUpperCase() + frase.slice(1);
+}
+
 /** Mensagem de erro, com o que fazer em seguida (401/403 ganham orientação). */
 function mensagemDeErro(erro: ApiError): string {
   if (erro.status === 401) return "Sua sessão expirou. Entre novamente para continuar.";
@@ -1002,7 +1008,7 @@ function DetalheRevisao({
               <Badge tom={SELO_TRIAGEM[rev.triagem.classificacao].tom}>
                 {SELO_TRIAGEM[rev.triagem.classificacao].texto}
               </Badge>
-              <span>{rev.triagem.motivo_texto}</span>
+              <span>{comMaiuscula(rev.triagem.motivo_texto)}</span>
             </div>
             {rev.triagem.evidencias.length > 0 && (
               <ul className="list-inside list-disc text-xs text-zinc-600 dark:text-zinc-300"

@@ -8,6 +8,8 @@ não bate — o veredito é ``decisao_humana`` com o motivo escrito.
 
 Nada aqui depende de dados de produção: cada cenário monta a escola que precisa.
 """
+import re
+
 import pytest
 from sqlalchemy import select
 
@@ -110,7 +112,7 @@ def test_candidato_unico_com_serie_compativel_e_segura(db):
     assert v.classificacao == tri.SEGURA
     assert v.motivo == tri.CANDIDATO_UNICO_COMPATIVEL
     assert v.aluno_id == a.id
-    assert any("série compatível" in x for x in v.evidencias)
+    assert any("Série compatível (3º ano)" in x for x in v.evidencias)
 
 
 # --- 3. candidato único + série INCOMPATÍVEL --------------------------------
@@ -176,7 +178,8 @@ def test_multiplos_candidatos_com_identidade_vinculada_a_um_deles_desempata(db):
     assert v.classificacao == tri.SEGURA
     assert v.motivo == tri.IDENTIDADE_DESEMPATA
     assert v.aluno_id == a_certa.id
-    assert any(f"{a_outra.id}" in x for x in v.evidencias)
+    # a outra candidata é citada pelo nome e pela turma, não pelo id
+    assert any("MARIA HELENA FICTELLI (1º Ano)" in x for x in v.evidencias)
 
 
 def test_nunca_escolhe_o_primeiro_candidato_arbitrariamente(db):
@@ -209,7 +212,8 @@ def test_ficha_com_duas_contas_da_mesma_plataforma_vai_para_humano(db):
     assert v.classificacao == tri.DECISAO_HUMANA
     assert v.motivo == tri.MULTI_IDENTIDADE
     assert v.aluno_id == a.id          # o alvo é conhecido; a DECISÃO é que não
-    assert any("uuid-2" in x for x in v.conflitos)
+    assert any("ARIELLE CRISTINA (3º Ano) já tem outra(s) conta(s) Matific" in x
+               for x in v.conflitos)
 
 
 def test_duas_pendencias_abertas_disputando_a_mesma_ficha_bloqueiam_as_duas(db):
@@ -243,7 +247,7 @@ def test_identidade_que_pertence_a_outra_ficha_nunca_e_segura(db):
     assert v.classificacao == tri.DECISAO_HUMANA
     assert v.motivo == tri.CONFLITO_IDENTIDADE
     assert v.aluno_id == dono.id
-    assert any(f"ficha {dono.id}" in x for x in v.conflitos)
+    assert any("PEDRO DONO DA CONTA (3º Ano)" in x for x in v.conflitos)
 
 
 # --- 7. sem candidato -------------------------------------------------------
@@ -339,7 +343,9 @@ def test_irma_segura_sozinha_e_arrastada_pela_irma_bloqueada(db):
     assert saida[ruim.id].motivo == tri.SERIE_INCOMPATIVEL
     assert saida[boa.id].classificacao == tri.DECISAO_HUMANA
     assert saida[boa.id].motivo == tri.IRMA_BLOQUEADA
-    assert any(str(ruim.id) in c for c in saida[boa.id].conflitos)
+    assert ruim.id in saida[boa.id].irmas          # quem bloqueia: no campo estruturado
+    assert "Outra pendência da mesma conta exige decisão de um gestor" in \
+        saida[boa.id].conflitos
 
 
 def test_irmas_que_apontam_para_fichas_diferentes_bloqueiam_as_duas(db):
@@ -568,3 +574,85 @@ def test_triar_escola_carrega_contexto_sozinha(db):
     saida = tri.triar_escola(db, e.id)
     assert saida[r.id].classificacao == tri.SEGURA
     assert tri.triar_escola(db, e.id + 999) == {}
+
+
+# --- linguagem da gaveta (o que a coordenação lê) ----------------------------
+
+# Id interno de ficha, lista entre colchetes, aspas de repr, o "código —" de turma sem
+# código e o "≠" das contas: nada disso é texto para a coordenação.
+_JARGAO = re.compile(r"\[|\]|\bficha \d|'|\(código —\)|≠|ª ano")
+
+
+def test_triagem_fala_a_lingua_da_coordenacao(db):
+    """A gaveta de Revisões mostra evidências e conflitos da triagem à coordenação.
+    Sem id interno da ficha, sem colchetes, sem o UUID da conta, sem "código —"
+    quando a turma não tem código; cada frase com maiúscula; a ficha pelo nome e pela
+    turma (os nomes que a coordenação já vê na tela)."""
+    e = _escola(db)
+    t3 = _turma(db, e, "3º Ano", "3º Ano", codigo="900")
+    t3b = _turma(db, e, "3º Ano B", "3º Ano")               # sem código externo
+    t1 = _turma(db, e, "1º Ano", "1º Ano", codigo="800")
+    # vários candidatos e nenhum desempate (um deles em turma sem código)
+    m1 = _aluno(db, e, t3, "MARIA HELENA FICTELLI")
+    m2 = _aluno(db, e, t3b, "MARIA HELENA SIMULATTI")
+    ambigua = _revisao(db, e, id_externo="uuid-ambigua-0001", nome="MARIA H",
+                       candidatos=(m1, m2))
+    # duas contas da plataforma na mesma ficha
+    duas = _aluno(db, e, t3, "ARIELLE CRISTINA")
+    _vincular(db, e, duas, "matific", "uuid-duas-0001")
+    _vincular(db, e, duas, "matific", "uuid-duas-0002")
+    multi = _revisao(db, e, id_externo="uuid-duas-0001", candidatos=(duas,))
+    # a conta é de outra ficha, fora dos candidatos
+    dono = _aluno(db, e, t3, "PEDRO DONO DA CONTA")
+    paulo = _aluno(db, e, t3, "PAULO CANDIDATO")
+    _vincular(db, e, dono, "matific", "uuid-dono-0001")
+    conflito = _revisao(db, e, id_externo="uuid-dono-0001", candidatos=(paulo,))
+    # a conta já desempata entre dois candidatos
+    certa = _aluno(db, e, t3, "LUANA DE SIMULATTI")
+    outra = _aluno(db, e, t1, "LUANA FICTELLI")
+    _vincular(db, e, certa, "matific", "uuid-certa-0001")
+    _vincular(db, e, outra, "matific", "uuid-outra-0001")
+    desempata = _revisao(db, e, id_externo="uuid-certa-0001", nome="LUANA",
+                         candidatos=(outra, certa))
+    # código de turma que não bate + a irmã boa arrastada por ela
+    nico = _aluno(db, e, t3, "NICOLLAS PEREIRA")
+    _vincular(db, e, nico, "elefante", "2745169")
+    ruim = _revisao(db, e, plataforma="elefante", id_externo="2745169", candidatos=(nico,),
+                    turma_informada="5 ANO A INTEGRAL (920)")
+    boa = _revisao(db, e, plataforma="elefante", formato="leituras", id_externo="2745169",
+                   candidatos=(nico,), turma_informada="3 ANO A INTEGRAL (900)")
+    # série que não bate (sem código dos dois lados)
+    sara = _aluno(db, e, t3b, "SARA FICTICIA LIMA")
+    serie = _revisao(db, e, id_externo="uuid-serie-0001", candidatos=(sara,),
+                     turma_informada="5 ANO B MANHA")
+
+    saida = _triar(db, e)
+    contas = ("uuid-ambigua-0001", "uuid-duas-0001", "uuid-duas-0002", "uuid-dono-0001",
+              "uuid-certa-0001", "uuid-outra-0001", "2745169", "uuid-serie-0001")
+    textos = []
+    for r in (ambigua, multi, conflito, desempata, ruim, boa, serie):
+        v = saida[r.id]
+        assert v.evidencias or v.conflitos, r.id
+        textos += [*v.evidencias, *v.conflitos]
+    for texto in textos:
+        assert not _JARGAO.search(texto), texto
+        assert not any(c in texto for c in contas), texto
+        assert texto[0].isupper() or texto[0].isdigit(), texto
+
+    amb = saida[ambigua.id]
+    assert amb.evidencias == (
+        "1ª ficha candidata: MARIA HELENA FICTELLI (3º Ano) (código 900)",
+        "2ª ficha candidata: MARIA HELENA SIMULATTI (3º Ano B)")
+    assert amb.conflitos == (
+        "2 fichas candidatas, e a conta da plataforma não pertence a nenhuma delas",)
+    assert "PEDRO DONO DA CONTA (3º Ano)" in saida[conflito.id].conflitos[0]
+    assert saida[desempata.id].evidencias[0] == (
+        "A conta Matific desta linha já está vinculada à ficha de "
+        "LUANA DE SIMULATTI (3º Ano)")
+    assert ("O código da turma do relatório (920) não é o da turma da ficha "
+            "(3º Ano, código 900)") in saida[ruim.id].conflitos
+    assert "A série do relatório (5º ano) não é a da ficha (3º ano)" in \
+        saida[serie.id].conflitos
+    # os ids continuam onde algo os consome: nos campos estruturados
+    assert saida[conflito.id].aluno_id == dono.id
+    assert saida[boa.id].irmas == (ruim.id,)
