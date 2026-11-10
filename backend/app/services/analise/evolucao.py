@@ -19,8 +19,8 @@ bimestres e recorta os campos da série.
   ``em_andamento`` (os números dele são parciais, até hoje).
 * O ano é o ano letivo de referência da rede (o mais comum entre as escolas). Quando ele
   não é o do calendário de hoje (a virada de ano antes de a escola trocar o ano letivo), as
-  datas de cada bimestre são as do ano letivo, pelo mesmo serviço, pedidas como período
-  personalizado — o resultado é o mesmo do preset naquele ano.
+  datas de cada bimestre continuam as do ano letivo: o preset numerado do serviço de
+  períodos é do ano letivo de cada escola, como na aba de plataformas.
 * Escolas em ordem alfabética (nunca ranking); ausência ≠ zero: sem número, o campo é nulo
   e vem o motivo do serviço; escola suprimida não mostra nada.
 
@@ -123,16 +123,12 @@ def evolucao(db: Session, rede: Rede, *, serie: int | None = None,
     modulos = {p: m in contratados for p, m in plat_svc.PLATAFORMA_MODULO.items()}
     pedidos = []
     for numero in bimestres.BIMESTRES:
-        # As datas do bimestre DO ANO LETIVO, pelo serviço oficial de períodos (o "hoje"
-        # aqui só escolhe o ano do preset numerado; a medição usa o hoje de verdade).
-        janela = rp.resolver_janela(f"bimestre_{numero}", ano, hoje=date(ano, 1, 1))
+        # As datas do bimestre DO ANO LETIVO, pelo serviço oficial de períodos (o preset
+        # numerado é do ano letivo pedido, também na virada do ano civil).
+        janela = rp.resolver_janela(f"bimestre_{numero}", ano, hoje=hoje)
         if janela.inicio is None or janela.inicio.date() > hoje:
             continue                                     # ainda não começou
-        if ano == hoje.year:
-            periodo = plat_svc.Periodo(f"bimestre_{numero}")
-        else:
-            periodo = plat_svc.Periodo("personalizado", janela.inicio.date(), janela.fim.date())
-        pedidos.append((numero, janela, periodo))
+        pedidos.append((numero, janela, plat_svc.Periodo(f"bimestre_{numero}")))
     saida_bimestres, limitacoes = [], None
     if pedidos:
         respostas = plat_svc.plataformas_da_rede_por_periodo(

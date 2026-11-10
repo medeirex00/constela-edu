@@ -68,7 +68,7 @@ def _bimestre_legado(numero_par: int, ano: int, rotulo: str):
     return _ini(_primeiro(ano, m1)), _fim(_ultimo(ano, m1 + 1)), _aproximado(rotulo, ano)
 
 
-def _bimestre(preset: str, hoje: date):
+def _bimestre(preset: str, hoje: date, ano_letivo: int | None = None):
     """Os presets de bimestre, pelo calendário OFICIAL da rede.
 
     Antes daqui, "este bimestre" era ``(mês-1)//2`` — o bimestre do CALENDÁRIO,
@@ -83,10 +83,17 @@ def _bimestre(preset: str, hoje: date):
     existindo para as telas de acompanhamento, e em 05/10 ele passa a ser o 4º
     porque é isso que o calendário diz — quem vai entregar um prêmio do 3º
     escolhe ``bimestre_3``.
+
+    O bimestre NUMERADO é do ANO LETIVO da escola (``ano_letivo``), o mesmo ano
+    do preset "Ano letivo" da mesma lista — não do relógio. A troca do ano letivo
+    é manual: em janeiro de 2027, com a escola ainda em 2026, o "4º bimestre" da
+    cerimônia é o de 2026, e não out–dez de 2027 (janela futura, pódio vazio). O
+    rótulo diz o ano quando ele não é o do calendário de hoje.
     """
     pedido = preset.rsplit("_", 1)[-1]
-    if pedido.isdigit():
-        numero, ano = int(pedido), hoje.year
+    numerado = pedido.isdigit()
+    if numerado:
+        numero, ano = int(pedido), ano_letivo or hoje.year
         if not (1 <= numero <= 4):
             return None, None, "Todo o histórico"
         if not bimestres.ano_com_calendario(ano):
@@ -121,7 +128,10 @@ def _bimestre(preset: str, hoje: date):
                 return _bimestre_legado(5, ano - 1, "Bimestre anterior")
             ano, numero = ano - 1, 4
     inicio, fim = bimestres.intervalo(numero, ano)
-    return _ini(inicio), _fim(fim), (f"{bimestres.rotulo(numero)} "
+    # O numerado de um ano letivo que não é o do calendário de hoje diz o ano: em
+    # janeiro, "4º bimestre (05/10 a 31/12)" pode ser lido como o do ano novo.
+    de_outro_ano = f" de {ano}" if numerado and ano != hoje.year else ""
+    return _ini(inicio), _fim(fim), (f"{bimestres.rotulo(numero)}{de_outro_ano} "
                                     f"({inicio:%d/%m} a {fim:%d/%m})")
 
 
@@ -174,7 +184,7 @@ def resolver(
         return _ini(_primeiro(ano, mes)), _fim(_ultimo(ano, mes)), "Mês anterior"
 
     if preset.startswith("bimestre"):
-        return _bimestre(preset, hoje)
+        return _bimestre(preset, hoje, ano_letivo)
 
     if preset == "semestre":
         m1, m2 = (1, 6) if hoje.month <= 6 else (7, 12)
