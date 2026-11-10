@@ -10,6 +10,7 @@ import analiseDupNaFila from "./fixtures/importacoes/analise_matific_id_externo_
 import analiseOutraIdentDuas from "./fixtures/importacoes/analise_matific_outra_identidade_duas_contas.json";
 import analiseOutraIdentNaFila from "./fixtures/importacoes/analise_matific_outra_identidade_na_fila.json";
 import analiseTurmaArquivada from "./fixtures/importacoes/analise_matific_turma_arquivada.json";
+import analiseOutraEscola from "./fixtures/importacoes/analise_matific_conta_de_outra_escola.json";
 import {
   api,
   fireEvent,
@@ -19,6 +20,7 @@ import {
   screen,
   turmaFake,
   userEvent,
+  usuarioFake,
   within,
 } from "./utils";
 
@@ -604,12 +606,12 @@ describe("Importacoes", () => {
 
   /** Abre a prévia com a resposta REAL do /analisar (um exemplo gravado por
    *  backend/tests/test_importacao_previa_motivo.py) e informa a data do relatório. */
-  async function previaReal(analise: unknown) {
+  async function previaReal(analise: unknown, usuario?: ReturnType<typeof usuarioFake>) {
     const u = userEvent.setup();
     responder("GET", URL_HIST, []);
     responder("GET", URL_TURMAS, [turmaFake()]);
     responder("UPLOAD", URL_ANALISAR, JSON.parse(JSON.stringify(analise)) as Analise);
-    renderComApp(montar(), { rota: "/importacoes" });
+    renderComApp(montar(), { rota: "/importacoes", usuario });
     await screen.findByText("Nenhuma importação ainda");
     await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
     await u.type(screen.getByRole("textbox"), "placar");
@@ -714,6 +716,44 @@ describe("Importacoes", () => {
     const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
     expect(corpo.linhas).toMatchObject([
       { aluno_id: null, criar_em_turma_id: null, criar_em_turma_nome: "5º Ano C" }]);
+  });
+
+  // A conta do Matific já é de um aluno de OUTRA escola, e esta escola tem a ficha
+  // "Bento Ficticio Moura" (a criança que mudou de escola). Escolher a ficha daqui na
+  // lista contava "1 de 1 … serão importados" e "1 vinculado(s)"; da gestão da escola, o
+  // backend manda a linha para a Revisão — só o Admin Global confirma o vínculo (backend:
+  // test_conta_de_outra_escola_com_a_ficha_daqui_escolhida_na_lista, os dois casos).
+  it.each([
+    ["a coordenação", usuarioFake(), "0 de 1 aluno(s) serão importados; 1 vai para Revisões de identidade.",
+     "— vai para a Revisão como sugestão", /1 vai para Revisões de identidade/, /0 vinculado\(s\)/],
+    ["o Admin Global", usuarioFake({ cargo: "admin", is_global: true }), "1 de 1 aluno(s) serão importados.",
+     "", /1 vinculado\(s\)/, null],
+  ])("conta de outra escola, %s escolhe a ficha daqui: o rodapé conta como o backend", async (
+    _quem, usuario, rodape, sufixo, naConfirmacao, vinculados) => {
+    const u = await previaReal(analiseOutraEscola, usuario);
+    const a = analiseOutraEscola as unknown as Analise;
+    expect(a.linhas[0].correspondencia?.motivo).toBe("identidade_de_outra_escola");
+    const alt = a.linhas[0].correspondencia!.alternativas[0];
+    const destino = screen.getByRole("combobox", { name: /^Destino de / }) as HTMLSelectElement;
+    expect(destino.value).toBe("revisao");
+    await u.selectOptions(destino, String(alt.aluno_id));
+    expect(screen.getByText(/serão importados/).textContent).toBe(rodape);
+    // A opção diz, para quem não é o Admin Global, que a ficha vai como sugestão.
+    const opcao = Array.from(destino.options).find((o) => o.value === String(alt.aluno_id));
+    expect(opcao?.textContent).toBe(`Bento Ficticio Moura — 3º Ano A (100%)${sufixo ? ` ${sufixo}` : ""}`);
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent(naConfirmacao);
+    if (vinculados) expect(confirmacao).toHaveTextContent(vinculados);
+    // O corpo é o que o backend confirma: a linha com a ficha escolhida.
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "ok", importacao_id: 12, qtd_alunos: 0, qtd_erros: 0, avisos: [], qtd_revisoes: 1,
+      criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas).toMatchObject([{ aluno_id: alt.aluno_id, criar_em_turma_id: null }]);
   });
 
   it("motivo que a tela ainda não conhece: 'Requer revisão', sem chamar de duplicata", async () => {

@@ -166,7 +166,9 @@ type Acao =
 /** Motivos de revisão (``identidade_aluno.decidir``) em que a confirmação NUNCA cria
  *  a ficha, qualquer que seja a turma escolhida: o motor manda a linha para Revisões
  *  de identidade e um "Criar" seria ignorado. Só a escolha de um aluno da lista
- *  (vínculo explícito) muda o destino. Ficam de fora os motivos de TURMA
+ *  (vínculo explícito) muda o destino — menos na conta de um aluno de outra escola,
+ *  em que só o Admin Global confirma o vínculo (``vinculoVaiParaRevisao``). Ficam de
+ *  fora os motivos de TURMA
  *  (turma_ambigua, turma_arquivada, turma_fora_do_ano_letivo…): neles a turma
  *  escolhida na tela resolve e a ficha nasce. */
 const MOTIVOS_SO_REVISAO = new Set([
@@ -319,12 +321,26 @@ function turmasArquivadasDoRelatorio(a: Analise): Set<string> {
     .map((linha) => normalizar(String(linha.dados.turma_relatorio ?? a.turma_detectada ?? ""))));
 }
 
+/** A ficha escolhida para uma conta que já é de um aluno de OUTRA escola do Constela
+ *  (a criança que mudou de escola): só o Admin Global confirma esse vínculo (D10,
+ *  ``identidade_aluno.decidir`` passo 0). A escolha da gestão da escola vai para
+ *  Revisões de identidade, com a ficha escolhida como sugestão — nada é importado. */
+function vinculoVaiParaRevisao(acao: Acao | undefined,
+                               c: LinhaAnalise["correspondencia"] | undefined,
+                               global: boolean): boolean {
+  return acao?.tipo === "importar" && !global
+    && c?.status === "revisar" && c.motivo === "identidade_de_outra_escola";
+}
+
 /** O destino escolhido leva a linha para Revisões de identidade na confirmação:
  *  "Deixar para a Revisão" sempre; "Criar" (turma cadastrada ou a do relatório)
  *  quando a política da escola é "bloquear" — o backend não cria a ficha e abre a
- *  pendência ('criacao_bloqueada_por_politica'). */
-function vaiParaARevisao(acao: Acao | undefined, criacaoBloqueada: boolean): boolean {
+ *  pendência ('criacao_bloqueada_por_politica'); e a ficha escolhida para a conta de
+ *  um aluno de outra escola, se quem escolhe não é o Admin Global. */
+function vaiParaARevisao(acao: Acao | undefined, criacaoBloqueada: boolean,
+                         c?: LinhaAnalise["correspondencia"], global = false): boolean {
   if (acao?.tipo === "revisao") return true;
+  if (vinculoVaiParaRevisao(acao, c, global)) return true;
   return criacaoBloqueada && (acao?.tipo === "criar" || acao?.tipo === "criar_nova");
 }
 
@@ -428,6 +444,8 @@ export default function Importacoes() {
   const escolaIdRef = useRef(escolaId);
   escolaIdRef.current = escolaId;
   const podeImportar = usuario?.is_global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
+  // Só o Admin Global confirma o vínculo da conta de um aluno de outra escola.
+  const global = Boolean(usuario?.is_global);
 
   const [texto, setTexto] = useState("");
   const [plataforma, setPlataforma] = useState("");
@@ -698,6 +716,15 @@ export default function Importacoes() {
     const g = grupos[gi];
     const acao = acoes[gi];
     if (!g || !acao) return null;
+    if (vinculoVaiParaRevisao(acao, g.correspondencia, global)) {
+      return {
+        tom: "alerta" as const,
+        titulo: "Vai para Revisões de identidade",
+        nome: g.nome,
+        turma: "",
+        detalhe: "conta de um aluno de outra escola: a ficha escolhida vai como sugestão, e nada é gravado aqui até a Revisão decidir",
+      };
+    }
     if (acao.tipo === "importar") {
       const c = g.correspondencia;
       const manual = acao.manual || acao.alunoId !== c?.aluno_id;
@@ -799,7 +826,7 @@ export default function Importacoes() {
   // contam lá, não entre os importados nem entre os alunos novos.
   const criacaoBloqueada = Boolean(analise?.criacao_bloqueada_por_politica);
   const totalParaRevisao = grupos.filter(
-    (g, i) => !g.todasComErro && vaiParaARevisao(acoes[i], criacaoBloqueada),
+    (g, i) => !g.todasComErro && vaiParaARevisao(acoes[i], criacaoBloqueada, g.correspondencia, global),
   ).length;
   const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
   // Data do relatório: obrigatória no total acumulado (sem "Intervalo de datas").
@@ -818,14 +845,17 @@ export default function Importacoes() {
     grupos.forEach((g, i) => {
       const acao = acoes[i];
       if (g.todasComErro || !acao || acao.tipo === "ignorar") { ignorar += 1; return; }
-      if (acao.tipo === "importar") vincular += 1;
+      // A ficha escolhida para a conta de um aluno de outra escola (sem ser o Admin
+      // Global) vai para a Revisão como sugestão: não é vínculo.
+      if (vinculoVaiParaRevisao(acao, g.correspondencia, global)) revisao += 1;
+      else if (acao.tipo === "importar") vincular += 1;
       else if (acao.tipo === "revisao") revisao += 1;
       else if (vaiParaARevisao(acao, criacaoBloqueada)) { revisao += 1; barradas += 1; }
       else if (acao.tipo === "criar") criar += 1;
       else criarNova += 1;
     });
     return { vincular, criar, criarNova, revisao, barradas, ignorar };
-  }, [grupos, acoes, criacaoBloqueada]);
+  }, [grupos, acoes, criacaoBloqueada, global]);
 
   // Etapa do passo a passo (estado REAL do fluxo): 0 envio, 1 conferência, 2
   // confirmação (modal aberto), 3 = tudo feito (resultado na tela, sem prévia).
@@ -1210,6 +1240,9 @@ export default function Importacoes() {
                                   <option key={alternativa.aluno_id} value={alternativa.aluno_id}>
                                     {alternativa.nome}
                                     {alternativa.turma ? ` — ${alternativa.turma}` : ""} ({alternativa.similaridade}%)
+                                    {vinculoVaiParaRevisao({ tipo: "importar", alunoId: alternativa.aluno_id },
+                                      correspondencia, global)
+                                      ? " — vai para a Revisão como sugestão" : ""}
                                   </option>
                                 ))}
                                 {vaiParaRevisao(correspondencia) ? (

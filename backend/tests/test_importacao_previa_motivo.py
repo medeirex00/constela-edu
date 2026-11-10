@@ -205,6 +205,12 @@ PLACAR_TURMA_ARQUIVADA = _placar("5º Ano C", [
     {"nome": "Crianca Nova Ficticia", "uuid": "uuid-ficticio-nova-5c", "estrelas": 9,
      "atividades": 2}])
 
+# A conta já é de um aluno de OUTRA escola; esta escola tem uma ficha com o mesmo nome
+# (a criança que mudou de escola).
+PLACAR_OUTRA_ESCOLA = _placar("3º Ano A", [
+    {"nome": "Bento Ficticio Moura", "uuid": "uuid-ficticio-bento", "estrelas": 9,
+     "atividades": 2}])
+
 
 def _sem_preparo(_cliente, _db, _escola_completa) -> None:
     return None
@@ -236,6 +242,28 @@ def _preparo_turma_arquivada(_cliente, db, escola_completa) -> None:
     db.commit()
 
 
+def _preparo_outra_escola(_cliente, db, escola_completa) -> int:
+    """A ficha "Bento Ficticio Moura" daqui (devolve o id) e o aluno de mesmo nome de
+    outra escola, dono efetivo da conta."""
+    from app.models import Aluno, Escola, IdentidadeExterna, Matricula
+
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"]
+    aqui = Aluno(escola_id=eid, nome="Bento Ficticio Moura")
+    db.add(aqui)
+    db.flush()
+    db.add(Matricula(escola_id=eid, aluno_id=aqui.id, turma_id=turma.id, ano_letivo=2026))
+    outra = Escola(nome="OUTRA ESCOLA FICTICIA", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    la = Aluno(escola_id=outra.id, nome="Bento Ficticio Moura")
+    db.add(la)
+    db.flush()
+    db.add(IdentidadeExterna(escola_id=outra.id, aluno_id=la.id, plataforma="matific",
+                             id_externo="uuid-ficticio-bento"))
+    db.commit()
+    return aqui.id
+
+
 # Exemplo gravado para a tela → (texto enviado ao /analisar, cenário antes dele:
 # ``preparo(cliente, db, escola_completa)``, que pode já ter importado um relatório).
 EXEMPLOS = {
@@ -246,6 +274,7 @@ EXEMPLOS = {
     "analise_matific_outra_identidade_duas_contas.json": (PLACAR_SOFIA_DUAS, _sem_preparo),
     "analise_matific_outra_identidade_na_fila.json": (PLACAR_SOFIA_UMA, _preparo_sofia_na_fila),
     "analise_matific_turma_arquivada.json": (PLACAR_TURMA_ARQUIVADA, _preparo_turma_arquivada),
+    "analise_matific_conta_de_outra_escola.json": (PLACAR_OUTRA_ESCOLA, _preparo_outra_escola),
 }
 
 TIPOS_TS = RAIZ / "packages" / "core" / "src" / "tipos.ts"
@@ -461,6 +490,29 @@ def test_turma_arquivada_nao_recebe_a_linha_e_a_turma_ativa_escolhida_recebe(
                                          Aluno.nome == "Crianca Nova Ficticia"))
     assert nova is not None
     assert db.scalar(select(Matricula.turma_id).where(Matricula.aluno_id == nova.id)) == turma
+
+
+@pytest.mark.parametrize("quem,esperado", [("gestao_da_escola", (0, 1)), ("admin_global", (1, 0))])
+def test_conta_de_outra_escola_com_a_ficha_daqui_escolhida_na_lista(
+        request, db, escola_completa, quem, esperado):
+    """identidade_de_outra_escola (a criança que mudou de escola): as alternativas trazem
+    a ficha daqui, e o corpo da tela depois de escolhê-la vai com o ``aluno_id`` dela. Da
+    gestão da escola, o backend manda a linha para a Revisão (D10, ``decidir`` passo 0):
+    nada importado — a tela contava "1 de 1 … serão importados" e "1 vinculado(s)". Só o
+    Admin Global confirma o vínculo (Importacoes.test, "conta de outra escola")."""
+    cliente = request.getfixturevalue("cliente" if quem == "gestao_da_escola"
+                                      else "cliente_global")
+    eid = escola_completa["escola"].id
+    aqui = _preparo_outra_escola(cliente, db, escola_completa)
+    analise = _analise(cliente, eid, PLACAR_OUTRA_ESCOLA)
+    corr = analise["linhas"][0]["correspondencia"]
+    assert (corr["status"], corr["motivo"]) == ("revisar", "identidade_de_outra_escola"), corr
+    assert [alt["aluno_id"] for alt in corr["alternativas"]] == [aqui], corr
+    escolhida = [{"nome": linha["nome"], "dados": linha["dados"], "aluno_id": aqui,
+                  "criar_em_turma_id": None, "criar_em_turma_nome": None}
+                 for linha in analise["linhas"]]
+    resultado = _confirmar(cliente, eid, analise, escolhida)
+    assert (resultado["qtd_alunos"], resultado["qtd_revisoes"]) == esperado, resultado
 
 
 def test_cada_motivo_do_backend_tem_rotulo_na_tela():
