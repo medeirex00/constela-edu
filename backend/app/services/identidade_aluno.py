@@ -36,6 +36,11 @@ Duas travas antes do nome (``decidir``):
     linha dessa conta aplica número em ficha nenhuma — revisão
     ``id_externo_duplicado``, uma pendência por nome.
 
+E uma depois do nome (``marcar_fichas_disputadas``): DUAS CONTAS AINDA SEM
+VÍNCULO, no mesmo relatório, que levariam à MESMA ficha (ou criariam a mesma
+ficha nova) não decidem pela ordem do arquivo — nenhuma leva a ficha, as duas vão
+para a revisão.
+
 TURMA E ANO LETIVO (onde a ficha nova pode nascer — ``_turma_para_criar``):
   * só turmas do ANO LETIVO ATIVO da escola entram no contexto (as matrículas
     também: ``carregar_contexto``); turma escolhida de outro ano não serve de
@@ -106,6 +111,10 @@ MOTIVOS = {
         "a plataforma mandou só o nome abreviado (ou de uma palavra só), sem o nome "
         "completo, e nada já vinculado (conta da plataforma, RA) diz quem é a "
         "criança — esse nome não basta para associar nem para criar ficha",
+    "contas_repetidas_no_relatorio":
+        "duas contas diferentes da plataforma vieram no mesmo relatório com o mesmo "
+        "nome, e nenhuma ficha corresponde — podem ser a mesma criança (conta "
+        "duplicada) ou duas crianças; nada foi criado",
     "id_externo_duplicado":
         "o mesmo identificador da plataforma veio em mais de uma linha do "
         "relatório, com nomes ou números diferentes (ou já há uma pendência assim "
@@ -314,6 +323,11 @@ class Contexto:
     # (plataforma, id_externo) que vieram repetidos DESTE relatório sem que a conta
     # prove de quem é cada linha — preenchido por ``marcar_ids_em_conflito``.
     ids_em_conflito: set[tuple[str, str]] = field(default_factory=set)
+    # (plataforma, aluno_id) que mais de uma conta AINDA SEM VÍNCULO deste relatório
+    # levaria — e (plataforma, nome, sala) da ficha NOVA que duas contas criariam.
+    # Preenchidos por ``marcar_fichas_disputadas``: a primeira linha não leva nada.
+    fichas_disputadas: set[tuple[str, int]] = field(default_factory=set)
+    criacoes_disputadas: set[tuple[str, str, str]] = field(default_factory=set)
     # (plataforma, id_externo) com pendência "id_externo_duplicado" ainda aberta na
     # escola: a disputa já foi vista (noutro arquivo da mesma coleta — o histórico
     # de leituras vem depois do resumo — ou numa coleta anterior) e só um humano a
@@ -659,6 +673,51 @@ def marcar_ids_em_conflito(ctx: Contexto, linhas, plataforma: str | None = None
     return ctx.ids_em_conflito
 
 
+def marcar_fichas_disputadas(ctx: Contexto, idents) -> set[tuple[str, int]]:
+    """DUAS CONTAS SEM VÍNCULO NO MESMO RELATÓRIO PARA A MESMA FICHA.
+
+    Duas contas da mesma plataforma, nenhuma ainda vinculada, chegam no mesmo
+    relatório e as duas casariam com a mesma ficha (o caso típico: a conta que a
+    criança usa e outra pouco usada, com o mesmo nome). Linha a linha, a PRIMEIRA
+    do arquivo levava a ficha e gravava o retrato; só a segunda ia para a revisão
+    — e quem vencia era a ordem do arquivo, não a criança. É a trava
+    ``outra_identidade_na_plataforma`` que já vale para conta JÁ vinculada
+    (``_para_aluno`` e o passo 1), antecipada para o primeiro vínculo.
+
+    Roda ANTES das linhas, junto de ``marcar_ids_em_conflito``, com as MESMAS
+    linhas na prévia e na confirmação: decide cada conta sem vínculo contra o
+    estado de agora (``decidir`` só lê) e marca a ficha que duas ou mais contas
+    levariam — ``decidir`` manda TODAS para a revisão. Vale também para a ficha
+    NOVA: duas contas sem ficha, mesmo nome e mesma sala, não criam a ficha da
+    primeira (revisão ``contas_repetidas_no_relatorio``).
+
+    Conta já vinculada (ou aposentada) não entra: o vínculo dela decide, como
+    sempre. A mesma conta em várias linhas (histórico de leituras) conta uma vez."""
+    ctx.fichas_disputadas = set()
+    ctx.criacoes_disputadas = set()
+    por_ficha: dict[tuple[str, int], set[str]] = {}
+    por_criacao: dict[tuple[str, str, str], set[str]] = {}
+    vistas: set[LinhaIdentidade] = set()
+    for linha in idents:
+        if linha is None or not (linha.plataforma and linha.id_externo):
+            continue
+        conta = (linha.plataforma, linha.id_externo)
+        if conta in ctx.identidade or conta in ctx.aposentadas or linha in vistas:
+            continue
+        vistas.add(linha)
+        dec = decidir(ctx, linha)
+        if dec.acao == ASSOCIAR and dec.aluno_id is not None:
+            por_ficha.setdefault((linha.plataforma, dec.aluno_id), set()).add(linha.id_externo)
+        elif dec.acao == CRIAR:
+            nome = chave_nome(_nome_para_casar(linha.nome, dec.chave_sala,
+                                               chave_sala(linha.turma_nome)))
+            por_criacao.setdefault((linha.plataforma, nome, dec.chave_sala),
+                                   set()).add(linha.id_externo)
+    ctx.fichas_disputadas = {k for k, contas in por_ficha.items() if len(contas) > 1}
+    ctx.criacoes_disputadas = {k for k, contas in por_criacao.items() if len(contas) > 1}
+    return ctx.fichas_disputadas
+
+
 def marcar_ids_de_outra_escola(db: Session, ctx: Contexto, linhas,
                                plataforma: str | None = None) -> dict[tuple[str, str], int]:
     """Marca em ``ctx`` os ids externos DESTE relatório que já são a identidade
@@ -796,7 +855,9 @@ def _para_aluno(ctx: Contexto, linha: LinhaIdentidade, aluno: Aluno, via: str,
         return Decisao(REVISAR, aluno.id, via, "ficha_inativa", cands, chave_sala=chave)
     if linha.id_externo:
         outras = ctx.ids_do_aluno.get((aluno.id, linha.plataforma), set()) - {linha.id_externo}
-        if outras:
+        # Também a OUTRA conta sem vínculo que, neste mesmo relatório, levaria esta
+        # mesma ficha (``marcar_fichas_disputadas``): a ordem do arquivo não decide.
+        if outras or (linha.plataforma, aluno.id) in ctx.fichas_disputadas:
             return Decisao(REVISAR, aluno.id, via, "outra_identidade_na_plataforma",
                            cands, chave_sala=chave)
     return Decisao(ASSOCIAR, aluno.id, via, candidatos=(aluno.id,), chave_sala=chave)
@@ -1344,6 +1405,11 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     if nome_abreviado(nome_casar):
         return Decisao(REVISAR, None, "novo", "nome_incompleto", (), chave_sala=chave,
                        vetados=vetados)
+    # Duas contas sem vínculo, mesmo nome e mesma sala, no mesmo relatório: a ficha
+    # não nasce com os números da primeira (``marcar_fichas_disputadas``).
+    if linha.id_externo and (linha.plataforma, alvo_nome, chave) in ctx.criacoes_disputadas:
+        return Decisao(REVISAR, None, "novo", "contas_repetidas_no_relatorio", (),
+                       chave_sala=chave, vetados=vetados)
     if not chave:
         return Decisao(CRIAR, None, "novo", "sem_turma", chave_sala=chave, vetados=vetados)
     turma_id, motivo = _turma_para_criar(ctx, linha, chave)

@@ -168,7 +168,9 @@ const ORIENTACAO: Record<string, string> = {
   identidade_de_outro_aluno:
     "A conta da plataforma já está ligada a outro aluno. Vincular a outra ficha transfere a conta.",
   outra_identidade_na_plataforma:
-    "O aluno encontrado já tem outra conta nesta plataforma. Confirme se é a mesma criança antes de vincular.",
+    "O aluno encontrado já tem outra conta nesta plataforma — vinculada, ou chegando no mesmo relatório. Confirme se é a mesma criança antes de vincular.",
+  contas_repetidas_no_relatorio:
+    "Duas contas da plataforma vieram com o mesmo nome e nenhuma ficha corresponde. Confira na plataforma: se são duas crianças, crie uma ficha para cada; se é a mesma criança com duas contas, crie a ficha numa das pendências e vincule a outra a ela.",
   ra_repetido: "O RA recebido aponta para mais de um aluno. Escolha qual é o dono destes dados.",
   turma_ambigua:
     "Mais de uma turma cadastrada corresponde à sala do relatório. Se a criança não tem ficha, crie-a na turma certa.",

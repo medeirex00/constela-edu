@@ -1154,11 +1154,12 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
     ida.marcar_ids_em_conflito(ctx, linhas, plataforma)   # a mesma marca do /confirmar
     ida.marcar_ids_de_outra_escola(db, ctx, linhas, plataforma)   # idem
     ativos = [a for a in ctx.alunos.values() if a.status == "ativo"]
-    for linha in linhas:
-        dados = linha.dados or {}
-        ident = ida.linha_de_dados(
-            linha.nome, dados, plataforma=plataforma,
-            turma_nome=str(dados.get("turma_relatorio") or turma_padrao or ""))
+    idents = [ida.linha_de_dados(
+        linha.nome, linha.dados or {}, plataforma=plataforma,
+        turma_nome=str((linha.dados or {}).get("turma_relatorio") or turma_padrao or ""))
+        for linha in linhas]
+    ida.marcar_fichas_disputadas(ctx, idents)   # idem
+    for linha, ident in zip(linhas, idents):
         linha.correspondencia = _correspondencia(
             ctx, ida.decidir(ctx, ident), linha.nome, ativos)
 

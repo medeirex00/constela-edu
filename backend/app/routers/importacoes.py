@@ -931,21 +931,10 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         ctx = ida.carregar_contexto(db, escola_id, ano)
     turmas_novas = turmas_novas if turmas_novas is not None else {}
 
-    turma_explicita = None
-    if linha.aluno_id is None and linha.criar_em_turma_id is not None:
-        turma_explicita = db.get(Turma, linha.criar_em_turma_id)
-        if turma_explicita is None or turma_explicita.escola_id != escola_id:
-            avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
-            return None
-    turma_nome = (turma_explicita.nome if turma_explicita is not None
-                  else getattr(linha, "criar_em_turma_nome", None)
-                  or dados.get("turma_relatorio") or "")
-    ident = ida.linha_de_dados(
-        linha.nome, dados, plataforma=plataforma, turma_nome=str(turma_nome),
-        turma_id=turma_explicita.id if turma_explicita is not None else None,
-        aluno_id=linha.aluno_id)
-    if getattr(linha, "numero_chamada", None) is not None:
-        ident = replace(ident, chamada=linha.numero_chamada)
+    ident, turma_nome, turma_invalida = _identidade_da_linha(db, escola_id, linha, plataforma)
+    if turma_invalida:
+        avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
+        return None
     if linha.aluno_id is None and not svc.tokens_nome(linha.nome):
         avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
         return None
@@ -1116,6 +1105,30 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     if criados is not None:
         criados[(svc.chave_nome(linha.nome), turma.id)] = aluno
     return aluno
+
+
+def _identidade_da_linha(db: Session, escola_id: int, linha, plataforma: str | None
+                         ) -> tuple["ida.LinhaIdentidade", str, bool]:
+    """A ``LinhaIdentidade`` de uma linha de confirmação — o MESMO cálculo para a
+    decisão (``_resolver_aluno``) e para o pré-passe das contas em disputa
+    (``ida.marcar_fichas_disputadas``). Devolve (identidade, turma_nome,
+    turma_invalida): turma escolhida que não é desta escola invalida a linha."""
+    dados = getattr(linha, "dados", None) or {}
+    turma_explicita = None
+    if linha.aluno_id is None and getattr(linha, "criar_em_turma_id", None) is not None:
+        turma_explicita = db.get(Turma, linha.criar_em_turma_id)
+        if turma_explicita is None or turma_explicita.escola_id != escola_id:
+            return ida.linha_de_dados(linha.nome, dados, plataforma=plataforma), "", True
+    turma_nome = (turma_explicita.nome if turma_explicita is not None
+                  else getattr(linha, "criar_em_turma_nome", None)
+                  or dados.get("turma_relatorio") or "")
+    ident = ida.linha_de_dados(
+        linha.nome, dados, plataforma=plataforma, turma_nome=str(turma_nome),
+        turma_id=turma_explicita.id if turma_explicita is not None else None,
+        aluno_id=linha.aluno_id)
+    if getattr(linha, "numero_chamada", None) is not None:
+        ident = replace(ident, chamada=linha.numero_chamada)
+    return ident, str(turma_nome), False
 
 
 def _marcar_via(linha, via: str) -> None:
@@ -2935,6 +2948,15 @@ def _confirmar_sem_commit(
     # aviso e auditoria em ``_resolver_aluno``); a escolha da gestão da escola vai
     # para a revisão, como no /resolver.
     ctx_identidade.confirma_conta_de_outra_escola = bool(getattr(usuario, "is_global", False))
+    # Duas contas AINDA SEM VÍNCULO que levariam a MESMA ficha neste relatório:
+    # nenhuma leva (revisão para as duas), em vez de a primeira linha do arquivo
+    # vencer — a mesma marca da prévia, depois das duas acima.
+    idents_da_importacao = []
+    for linha in dados.linhas:
+        ident, _turma, invalida = _identidade_da_linha(db, escola_id, linha, dados.plataforma)
+        if not invalida and (linha.aluno_id is not None or svc.tokens_nome(linha.nome)):
+            idents_da_importacao.append(ident)
+    ida.marcar_fichas_disputadas(ctx_identidade, idents_da_importacao)
     coletor = ida.ColetorRevisoes(
         formato=dados.formato, contexto=contexto_revisao,
         origem="sincronizacao" if getattr(dados, "sincronizar_turma", False) else "importacao",
