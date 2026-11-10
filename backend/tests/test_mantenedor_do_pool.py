@@ -539,6 +539,33 @@ def test_ciclo_espera_a_calmaria_sem_competir_com_a_pagina_e_tem_teto():
     motor.dispose()
 
 
+def test_parar_solta_o_ouvinte_da_devolucao(monkeypatch):
+    """O ouvinte 'checkin' que o ``iniciar`` registra no engine sai no ``parar`` (revisão
+    pp3). Antes ficava para sempre — com o mantenedor parado vivo por causa dele — e
+    cada iniciar/parar do processo, que cria um mantenedor novo, somava mais um."""
+    motor = _motor(4)
+    ouvintes = lambda: len(list(motor.pool.dispatch.checkin))  # noqa: E731
+    antes = ouvintes()
+    m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=2)
+    m.iniciar()
+    assert event.contains(motor, "checkin", m._na_devolucao) and ouvintes() == antes + 1
+    m.parar(timeout=2)
+    assert not event.contains(motor, "checkin", m._na_devolucao) and ouvintes() == antes
+    m.iniciar()                              # o mesmo mantenedor de novo: um ouvinte só
+    assert event.contains(motor, "checkin", m._na_devolucao) and ouvintes() == antes + 1
+    m.parar(timeout=2)
+    m.parar(timeout=2)                       # parar de novo não levanta
+    assert ouvintes() == antes
+    # O ciclo de vida do processo: cada iniciar cria um mantenedor novo.
+    _como_postgresql(motor, monkeypatch)
+    for _ in range(3):
+        assert mp.iniciar(motor, _config(DB_POOL_AQUECIDO_S=60, DB_POOL_AQUECIDO_CONEXOES=2))
+        mp.parar()
+    assert ouvintes() == antes
+    assert motor.pool.checkedout() == 0
+    motor.dispose()
+
+
 def test_devolucao_recente_de_requisicao_adia_o_ciclo_e_a_do_mantenedor_nao():
     motor = _motor(8)
     m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=2, calmaria_s=1.0,
@@ -549,6 +576,8 @@ def test_devolucao_recente_de_requisicao_adia_o_ciclo_e_a_do_mantenedor_nao():
         time.sleep(0.02)
     m.parar()
     m._parar.clear()                         # a espera roda numa thread do teste
+    # O parar solta o ouvinte da devolução; a espera que roda aqui precisa dele.
+    event.listen(motor, "checkin", m._na_devolucao)
 
     def esperar():
         t = threading.Thread(target=m._esperar_calmaria, daemon=True)

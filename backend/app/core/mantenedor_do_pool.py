@@ -446,6 +446,12 @@ class MantenedorDoPool:
             rodada.soltar()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+        # O ouvinte da devolução também sai: sem isso, cada mantenedor parado deixava o
+        # seu no engine para sempre (o processo e o ``_na_devolucao`` dele vivos), e
+        # parar-iniciar acumulava ouvintes a cada devolução de conexão.
+        if self._ouvindo:
+            event.remove(self._motor_base, "checkin", self._na_devolucao)
+            self._ouvindo = False
 
     def vivo(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
