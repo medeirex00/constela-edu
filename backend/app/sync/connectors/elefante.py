@@ -238,18 +238,27 @@ _JS_FETCH_TMPL = r"""(async () => {
   } finally { clearTimeout(tid); }
 })()"""
 
-# LOTE: chama o MESMO endpoint POST para vários studentIds de uma vez (o navegador
-# limita ~6 conexões simultâneas por host — throttle natural). Usado p/ coletar os
-# livros lidos (com data) de todos os alunos de uma turma numa só ida. Devolve
-# [{studentId, n, books}] (ou status/erro por aluno).
+# LOTE: chama o MESMO endpoint POST para vários studentIds numa só ida ao
+# navegador. Usado p/ coletar os livros lidos (com data) de todos os alunos de uma
+# turma. Devolve [{studentId, n, books}] (ou status/erro por aluno).
+#
+# POOL de ``_LOTE_CONEXOES`` pedidos ao mesmo tempo (o navegador abre ~6 conexões
+# por host em HTTP/1.1) e o prazo de cada um conta a partir de quando ELE SAI. Antes
+# todos os pedidos eram criados de uma vez, com o timer já correndo: os que
+# esperavam conexão na fila do navegador gastavam o prazo parados, e os últimos de
+# uma turma grande eram abortados sem nem terem saído (o aluno ficava sem livros e
+# sem cursor, e a próxima coleta repetia o mesmo).
+_LOTE_CONEXOES = 6
+_LOTE_PRAZO_MS = 20000
 _JS_FETCH_LOTE = r"""(async () => {
   const ids = __IDS__, corpoBase = __CORPO__, headers0 = __HEADERS__;
   const out = [];
-  await Promise.all(ids.map(async (sid) => {
-    // timeout por requisição (AbortController): um aluno travado NÃO pode segurar
-    // o Promise.all (e a sync) para sempre.
+  let proximo = 0;
+  async function pedir(sid) {
+    // timeout por requisição (AbortController), criado quando o pedido SAI: um
+    // aluno travado NÃO pode segurar o lote (e a sync) para sempre.
     const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 20000);
+    const tid = setTimeout(() => ctrl.abort(), __PRAZO_MS__);
     try {
       const body = Object.assign({}, corpoBase, { studentId: sid });
       const r = await fetch(__URL__, { method: 'POST', credentials: __CREDS__,
@@ -261,7 +270,12 @@ _JS_FETCH_LOTE = r"""(async () => {
       out.push({ studentId: sid, n: Array.isArray(j) ? j.length : 0, books: j });
     } catch (e) { out.push({ studentId: sid, erro: String(e).slice(0, 80) }); }
     finally { clearTimeout(tid); }
-  }));
+  }
+  async function trabalhador() {
+    while (proximo < ids.length) { await pedir(ids[proximo++]); }
+  }
+  const n = Math.min(__POOL__, ids.length);
+  await Promise.all(Array.from({ length: n }, trabalhador));
   return out;
 })()"""
 
@@ -536,9 +550,12 @@ class ConectorElefante(ConectorNavegador):
     @staticmethod
     def _js_fetch_lote(url: str, headers: dict, creds: str, corpo_base: dict,
                        ids: list) -> str:
-        """Fetch em LOTE: um POST por studentId (concorrente), corpo = corpo_base +
+        """Fetch em LOTE: um POST por studentId (no máximo ``_LOTE_CONEXOES`` ao
+        mesmo tempo, prazo contado da saída de cada um), corpo = corpo_base +
         {studentId}. Devolve [{studentId, n, books|status|erro}]."""
         return (_JS_FETCH_LOTE
+                .replace("__POOL__", str(int(_LOTE_CONEXOES)))
+                .replace("__PRAZO_MS__", str(int(_LOTE_PRAZO_MS)))
                 .replace("__URL__", json.dumps(url))
                 .replace("__HEADERS__", json.dumps(headers))
                 .replace("__CREDS__", json.dumps(creds))
