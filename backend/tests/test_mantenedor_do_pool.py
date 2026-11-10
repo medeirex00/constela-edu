@@ -356,6 +356,92 @@ def test_morte_de_uma_conexao_so_nao_deixa_as_outras_para_a_requisicao():
     assert all(x["abertas_pela_requisicao"] == 0 for x in resultados), resultados
 
 
+def _criador_com_uma_lenta(demora_s):
+    """Criador cuja PRÓXIMA conexão, depois de ``lenta.set()``, demora ``demora_s`` para
+    abrir (DB_CONNECT_TIMEOUT de produção é 10 s)."""
+    lenta = threading.Event()
+
+    def criador():
+        if lenta.is_set():
+            lenta.clear()
+            time.sleep(demora_s)
+        return sqlite3.connect(":memory:", check_same_thread=False)
+
+    return criador, lenta
+
+
+def test_retirada_lenta_nao_segura_as_saudaveis_fora_do_pool():
+    """Revisão final (a sonda): padrões de produção (pool 10, overflow 20, N=8), 7 conexões
+    saudáveis paradas e a 8ª precisando ser ABERTA, devagar. Antes cada trabalhador que já
+    tinha respondido ao SELECT 1 segurava a sua até a mais lenta terminar (teto de 20 s), e a
+    requisição que chegava nesse meio não achava conexão parada: abria uma nova. Agora cada
+    um segura só até todas as retiradas do ciclo terem saído do pool — a que está abrindo
+    conexão nova já saiu."""
+    criador, lenta = _criador_com_uma_lenta(2.0)
+    motor = create_engine("sqlite://", poolclass=QueuePool, pool_size=10, max_overflow=20,
+                          pool_use_lifo=True, creator=criador)
+    mp.marcar_abertura(motor)
+    reg = _Registro(motor)
+    with ExitStack() as pilha:                   # 7 conexões saudáveis paradas no pool
+        for _ in range(7):
+            pilha.enter_context(motor.connect()).exec_driver_sql("SELECT 1")
+    assert motor.pool.checkedin() == 7
+    m = mp.MantenedorDoPool(motor, intervalo_s=20, conexoes=8)
+    lenta.set()                                  # a 8ª, nova, demora 2 s para abrir
+    resumos = []
+    ciclo = threading.Thread(target=lambda: resumos.append(m.ciclo()))
+    ciclo.start()
+    time.sleep(0.5)                              # as 7 já responderam ao SELECT 1
+    fora = motor.pool.checkedout()
+    antes = reg.abertas
+    with motor.connect() as req:                 # a requisição que chega no meio
+        req.exec_driver_sql("SELECT 1")
+        abriu = reg.abertas - antes
+    ciclo.join(10)
+    assert not ciclo.is_alive()
+    assert abriu == 0, (fora, abriu)
+    assert fora == 1, fora                       # só a lenta continua fora do pool
+    [r] = resumos
+    assert (r.pedidas, r.prontas, r.falhas) == (8, 8, [])
+    assert motor.pool.checkedin() == 8 and reg.abertas == 8    # as 8 distintas
+    motor.dispose()
+
+
+def test_retirada_lenta_numa_renovacao_nao_segura_as_saudaveis():
+    """O mesmo com a conexão LENTA sendo a reabertura de uma perto do ``pool_recycle``: a
+    retirada que renova devolve o registro vazio ao pool e o pega de volta (as outras seguram
+    nesse intervalo, para não lhe darem a sua), e enquanto ele abre, elas já voltaram."""
+    criador, lenta = _criador_com_uma_lenta(2.0)
+    motor = create_engine("sqlite://", poolclass=QueuePool, pool_size=10, max_overflow=20,
+                          pool_use_lifo=True, creator=criador)
+    mp.marcar_abertura(motor)
+    reg = _Registro(motor)
+    with ExitStack() as pilha:
+        conexoes = [pilha.enter_context(motor.connect()) for _ in range(4)]
+        for c in conexoes:
+            c.exec_driver_sql("SELECT 1")
+        velha = conexoes[0].connection._connection_record
+    velha.info[mp._ABERTA_EM] -= 1790            # só esta passou do limite (1760 s)
+    m = mp.MantenedorDoPool(motor, intervalo_s=20, conexoes=4, reciclagem_s=1800)
+    lenta.set()
+    resumos = []
+    ciclo = threading.Thread(target=lambda: resumos.append(m.ciclo()))
+    ciclo.start()
+    time.sleep(0.5)
+    fora = motor.pool.checkedout()
+    antes = reg.abertas
+    with motor.connect() as req:
+        req.exec_driver_sql("SELECT 1")
+        abriu = reg.abertas - antes
+    ciclo.join(10)
+    assert not ciclo.is_alive()
+    assert (fora, abriu) == (1, 0)
+    [r] = resumos
+    assert (r.prontas, r.renovadas, r.falhas) == (4, 1, [])
+    assert motor.pool.checkedin() == 4 and reg.abertas == 5    # 4 + a renovada
+    motor.dispose()
+
+
 def test_erro_do_banco_nao_propaga_nao_vaza_conexao_e_o_ciclo_seguinte_tenta_de_novo():
     fora = {"sim": True}
 

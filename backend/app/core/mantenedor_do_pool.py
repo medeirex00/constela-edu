@@ -34,7 +34,9 @@ está carregando em camadas.
 Limites, de propósito:
 
 * não segura conexão entre ciclos. Cada uma fica fora do pool só o tempo do ``SELECT 1`` (uma
-  ida, em AUTOCOMMIT: sem BEGIN nem ROLLBACK) e da espera pelas outras do mesmo ciclo;
+  ida, em AUTOCOMMIT: sem BEGIN nem ROLLBACK) e da espera até as outras retiradas do mesmo
+  ciclo terem SAÍDO do pool — não o ``SELECT 1`` delas, nem a conexão que uma delas está
+  abrindo (ou reabrindo) devagar (``_Rodada``);
 * não abre mais que N. As conexões que já estão com requisições (``checkedout``) são quentes
   por definição e são descontadas. N fica limitado ao ``DB_POOL_SIZE``, e o total mantido é
   N vezes o número de workers;
@@ -113,14 +115,72 @@ class Resumo:
 
 
 class _Rodada:
-    """As retiradas de UM ciclo: cada trabalhador avisa quando terminou e segura a conexão
-    até ``liberar``, para que todas fiquem fora do pool ao mesmo tempo."""
+    """As retiradas de UM ciclo. Cada trabalhador segura a sua conexão só até TODAS as
+    retiradas do ciclo terem saído do pool (é o que garante conexões distintas): não espera o
+    ``SELECT 1`` das outras nem a conexão que outra está abrindo, devagar.
 
-    def __init__(self, pedidas: int) -> None:
+    "Saíram do pool" quando: (a) todo trabalhador já tem a sua conexão (ou falhou) e nenhum
+    está devolvendo uma para trocar; ou (b) o pool conta como retiradas todas as do ciclo
+    (``checkedout`` mais as já soltas >= ``alvo``) — a que está ABRINDO uma conexão nova já é
+    contada ali, e não vai pegar uma devolvida. A devolução para trocar (renovação, conexão
+    morta) e a soltura acontecem sob a mesma trava: uma conexão solta nunca fica por cima do
+    registro que outro trabalhador acabou de devolver para reabrir."""
+
+    def __init__(self, pedidas: int, pool=None, alvo: int = 0) -> None:
         self._resumo = Resumo(pedidas=pedidas)
         self._cond = threading.Condition()
         self._terminadas = 0
+        self._retiradas = 0          # trabalhadores com a conexão na mão (ou que falharam)
+        self._em_troca = 0           # devolveram uma conexão e ainda não pegaram a outra
+        self._soltas = 0             # devolvidas ao fim, por esta rodada
+        self._pool = pool
+        self._alvo = alvo            # ``checkedout`` do pool com todas as do ciclo fora
         self.liberar = threading.Event()
+
+    def retirou(self) -> None:
+        with self._cond:
+            self._retiradas += 1
+            self._cond.notify_all()
+
+    def devolver_para_trocar(self, conexao, *, invalidar: bool) -> None:
+        """Devolve (para reabrir) sob a trava da soltura."""
+        with self._cond:
+            self._em_troca += 1
+            try:
+                if invalidar:
+                    conexao.invalidate()
+                conexao.close()
+            except BaseException:
+                self._em_troca -= 1          # não houve troca: o trabalhador falha
+                self._cond.notify_all()
+                raise
+
+    def trocou(self) -> None:
+        with self._cond:
+            self._em_troca -= 1
+            self._cond.notify_all()
+
+    def _sairam_todas(self) -> bool:
+        if self._retiradas >= self._resumo.pedidas and self._em_troca == 0:
+            return True
+        return (self._pool is not None
+                and self._pool.checkedout() + self._soltas >= self._alvo)
+
+    def soltar_quando_sairem(self, conexao, prazo_s: float) -> None:
+        """Segura ``conexao`` até todas as retiradas do ciclo terem saído do pool (ou
+        ``liberar``, ou o prazo) e a devolve sob a trava."""
+        limite = time.monotonic() + prazo_s
+        with self._cond:
+            while not (self.liberar.is_set() or self._sairam_todas()):
+                resta = limite - time.monotonic()
+                if resta <= 0:
+                    break
+                # O ``checkedout`` do pool muda sem avisar esta condição: confere de novo
+                # a cada 20 ms.
+                self._cond.wait(min(0.02, resta))
+            self._soltas += 1
+            conexao.close()
+            self._cond.notify_all()
 
     def terminou(self, *, pronta: bool = False, renovadas: int = 0, reconectadas: int = 0,
                  falha: BaseException | None = None) -> None:
@@ -233,10 +293,11 @@ class MantenedorDoPool:
 
     def _rodada_unica(self) -> Resumo:
         """Uma rodada: as retiradas ao mesmo tempo, o ``SELECT 1`` e a devolução."""
-        pedidas = max(0, self.conexoes - self._pool.checkedout())
+        em_uso = self._pool.checkedout()
+        pedidas = max(0, self.conexoes - em_uso)
         if pedidas == 0:
             return Resumo()
-        rodada = _Rodada(pedidas)
+        rodada = _Rodada(pedidas, self._pool, alvo=em_uso + pedidas)
         self._rodada = rodada
         trabalhadores = [threading.Thread(target=self._trabalhar, args=(rodada,), daemon=True,
                                           name=f"pool-aquecido-{i + 1}")
@@ -259,26 +320,42 @@ class MantenedorDoPool:
         aberta = conexao.info.get(_ABERTA_EM)
         return aberta is not None and time.time() - aberta >= self.limite_da_reciclagem_s
 
-    def _retirar_pronta(self):
+    def _conectar(self, rodada: _Rodada, estado: dict, *, depois_de_trocar: bool):
+        """Uma retirada do pool, avisando a rodada: a 1ª do trabalhador conta como
+        "retirou"; a que vem depois de devolver uma para trocar encerra a troca."""
+        try:
+            conexao = self._motor.connect()
+        finally:
+            if depois_de_trocar:
+                rodada.trocou()
+        if not estado["retirou"]:
+            estado["retirou"] = True
+            rodada.retirou()
+        return conexao
+
+    def _retirar_pronta(self, rodada: _Rodada, estado: dict, *, depois_de_trocar: bool = False):
         """Uma conexão do pool; a que está perto da reciclagem é descartada e reaberta aqui."""
         renovadas = 0
         while True:
-            conexao = self._motor.connect()
+            conexao = self._conectar(rodada, estado, depois_de_trocar=depois_de_trocar)
             if renovadas >= _RENOVACOES_POR_RETIRADA or not self._perto_da_reciclagem(conexao):
                 return conexao, renovadas
             # Fecha a conexão velha e devolve o registro VAZIO ao topo do pool (LIFO): a
             # retirada seguinte o pega e abre a conexão nova aqui, não na requisição.
-            conexao.invalidate()
-            conexao.close()
+            rodada.devolver_para_trocar(conexao, invalidar=True)
+            depois_de_trocar = True
             renovadas += 1
 
     def _trabalhar(self, rodada: _Rodada) -> None:
         _local.mantenedor = True
         conexao = None
         renovadas = reconectadas = 0
+        estado = {"retirou": False}
         try:
+            depois_de_trocar = False
             for tentativa in range(2):
-                conexao, n = self._retirar_pronta()
+                conexao, n = self._retirar_pronta(rodada, estado,
+                                                  depois_de_trocar=depois_de_trocar)
                 renovadas += n
                 try:
                     conexao.exec_driver_sql("SELECT 1").scalar()
@@ -288,14 +365,22 @@ class MantenedorDoPool:
                         raise
                     # Conexão morta (o banco ou o pooler reiniciou): o SQLAlchemy já a
                     # descartou e marcou o pool; a troca acontece neste mesmo ciclo.
-                    conexao.close()
+                    rodada.devolver_para_trocar(conexao, invalidar=False)
                     conexao = None
+                    depois_de_trocar = True
                     reconectadas += 1
         except Exception as erro:  # noqa: BLE001 — o mantenedor nunca derruba a API
+            if not estado["retirou"]:
+                rodada.retirou()            # não vai mais tirar nada do pool
             rodada.terminou(renovadas=renovadas, reconectadas=reconectadas, falha=erro)
         else:
             rodada.terminou(pronta=True, renovadas=renovadas, reconectadas=reconectadas)
-            rodada.liberar.wait(self.prazo_s)   # segura até as outras retiradas do ciclo
+            # Segura só até as outras retiradas do ciclo terem saído do pool.
+            solta, conexao = conexao, None
+            try:
+                rodada.soltar_quando_sairem(solta, self.prazo_s)
+            except Exception:  # noqa: BLE001
+                pass
         finally:
             if conexao is not None:
                 try:

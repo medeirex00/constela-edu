@@ -169,7 +169,9 @@ conexões, roda `SELECT 1` em cada e devolve todas. A conexão perto do `DB_POOL
   presença e o contador de notificações. A Ficha e a Comparação têm 7;
 - erro do banco não derruba a API. Vira um aviso no log, no máximo um a cada 5 min e só
   com o tipo do erro, e o ciclo seguinte tenta de novo;
-- não segura conexão entre ciclos: cada uma sai do pool só pelo tempo do `SELECT 1`;
+- não segura conexão entre ciclos: cada uma sai do pool só pelo tempo do `SELECT 1` e até as
+  outras retiradas do ciclo saírem do pool (não espera a conexão que uma delas esteja
+  abrindo devagar);
 - não compete com uma página carregando: antes de cada ciclo (menos o do boot) espera 2 s
   sem requisição em andamento, por no máximo 5 s (com os padrões, o ciclo seguinte começa
   em até 25 s, abaixo dos 30 s do ping);
