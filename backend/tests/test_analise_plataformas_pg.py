@@ -62,9 +62,17 @@ from tests.test_analise_plataformas import (  # noqa: E402,F401
     test_questoes_medidas_em_brasilia_com_a_tolerancia_de_borda as test_pg_bordas_brasilia,
     test_leituras_em_lote_sao_as_das_funcoes_oficiais_de_uma_escola as test_pg_leituras_em_lote,
     test_rede_soma_as_marcas_das_somas_com_o_desempenho_derivado as test_pg_rede_desempenho,
+    test_cobertura_da_rede_nao_mostra_datas_das_suprimidas as test_pg_datas_das_suprimidas,
 )
 # A evolução lê os 4 bimestres numa consulta por fonte (UNION ALL de vários grupos e a CTE das
 # coletas do Elefante usada por todos): o caminho de vários períodos também roda no PostgreSQL.
 from tests.test_analise_desempenho import (  # noqa: E402,F401
     test_evolucao_le_os_bimestres_juntos as test_pg_evolucao_bimestres_juntos,
+)
+# Os indicadores oficiais dentro da leitura única (as linhas lidas em ordem de id; a consulta
+# direta sem ORDER BY) contra a consulta direta, campo a campo — também com as linhas que cada
+# filtro tira (turma, zona urbana, rede estadual, componente).
+from tests.test_desempenho_secretaria import (  # noqa: E402,F401
+    test_indicadores_dentro_da_leitura_unica_sao_os_da_consulta_direta as
+    test_pg_indicadores_leitura_unica,
 )
