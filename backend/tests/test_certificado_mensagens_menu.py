@@ -60,9 +60,12 @@ def test_sem_matricula_no_ano_aponta_editar_dados_no_perfil(cliente, db, escola_
     a = _aluno(db, escola, "CRIANCA FICTICIA SEM TURMA", turma=None)
     detalhe = _recusa(cliente, escola, a)
     assert "três pontinhos › “Editar dados” › Turma" in detalhe
-    # A troca de turma não recalcula as notas: emitir logo depois imprimiria a
-    # posição antiga — a mensagem manda esperar o recálculo.
-    assert "depois do próximo recálculo das notas" in detalhe
+    # A troca de turma recalcula as notas (``test_transferir_recalcula_posicao``):
+    # a mensagem diz isso, em vez de mandar esperar um recálculo que a pessoa não
+    # sabe quando vem nem como provocar.
+    assert "a troca de turma já recalcula as notas e dá a posição atual" in detalhe
+    assert "Emita em seguida" in detalhe
+    assert "próximo recálculo" not in detalhe
 
 
 def test_situacao_inativa_aponta_reativar_na_turma(cliente, db, escola_completa):

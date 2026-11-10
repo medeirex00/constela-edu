@@ -583,7 +583,8 @@ def acoes_em_alunos(
 ):
     """Ações em massa (ou individual): arquivar, reativar, excluir (lógico),
     marcar como transferido (saiu da escola) e transferir de turma. Ao final
-    recalcula notas/rankings e invalida o cache.
+    recalcula notas/rankings e invalida o cache — inclusive na transferência,
+    que muda a população do ranking (ver ``test_transferir_recalcula_posicao``).
 
     Nenhuma delas apaga histórico: matrículas, leituras, eventos e snapshots
     continuam no banco. O que muda é o status da ficha, e todo filtro de visão
@@ -675,7 +676,6 @@ def acoes_em_alunos(
         mensagem = (f"{len(ids)} aluno(s) transferido(s) de {origem.nome} para "
                     f"{turma.nome}." if origem is not None
                     else f"{len(ids)} aluno(s) transferido(s) para {turma.nome}.")
-        recalcular = False  # a nota não muda; só a turma/contagem
     else:
         novo_status = _STATUS_ACAO[dados.acao]
         if novo_status == "ativo":
@@ -699,14 +699,15 @@ def acoes_em_alunos(
                    "excluir": "excluído(s)",
                    "marcar_transferido": "marcado(s) como transferido(s)"}
         mensagem = f"{len(ids)} aluno(s) {rotulos[dados.acao]}."
-        recalcular = True  # muda o conjunto de alunos ativos → rankings mudam
 
     db.commit()
-    if recalcular:
-        _recalcular_escola(db, escola_id)
-    else:
-        from app.routers.publico import invalidar_cache_painel
-        invalidar_cache_painel(escola_id)
+    # Toda ação recalcula, porque todas mudam quem está no ranking: o status muda
+    # o conjunto de alunos ativos, e a transferência dá (ou tira) a matrícula do
+    # ano numa turma do 1º ao 5º ano. Sem o recálculo na transferência, a posição
+    # guardada na Nota era a do cálculo de antes — que hoje pode ser de outra
+    # criança —, e o Mérito emitido logo depois saía com ela; é justamente o
+    # caminho que a recusa do Mérito manda seguir (perfil › "Editar dados" › Turma).
+    _recalcular_escola(db, escola_id)
     return {"mensagem": mensagem, "afetados": len(ids), "avisos": avisos}
 
 

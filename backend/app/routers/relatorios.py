@@ -437,8 +437,8 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
             f"“{aluno.nome}” {onde}, então não está no ranking vigente: a "
             "posição guardada para ela é de um cálculo antigo e não vale mais. "
             "Coloque a criança numa turma do 1º ao 5º ano deste ano letivo (no "
-            "perfil dela, três pontinhos › “Editar dados” › Turma) e emita depois "
-            "do próximo recálculo das notas, que dá a posição atual.")
+            "perfil dela, três pontinhos › “Editar dados” › Turma): a troca de "
+            "turma já recalcula as notas e dá a posição atual. Emita em seguida.")
     if nota is None or not svc_dimensoes.com_desempenho(db, escola, nota):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
