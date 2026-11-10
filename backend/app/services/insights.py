@@ -100,17 +100,23 @@ def indices_da_escola(db: Session, escola_id: int,
     if alunos_com_leituras is None:
         alunos_com_leituras = evolucao._alunos_com_leituras(db, escola_id)
 
+    # RÉGUA JUSTA (`base_no_periodo=True`) nas 4 janelas, a mesma do Ranking de
+    # Evolução, do app e do telão: sem retrato ANTERIOR à janela, o acumulado de
+    # vida não vira avanço. Com o padrão antigo, a criança cujo 1º retrato caía
+    # dentro dos 30 dias tinha o MAIOR engajamento sem ter avançado nada nele.
     engajamento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(
             db, escola_id, dias=30, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-            alunos_com_leituras=alunos_com_leituras)
+            alunos_com_leituras=alunos_com_leituras,
+            base_no_periodo=True)
     }
     crescimento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(
             db, escola_id, dias=90, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-            alunos_com_leituras=alunos_com_leituras)
+            alunos_com_leituras=alunos_com_leituras,
+            base_no_periodo=True)
     }
     # Só quem avançou (>0) entra na régua percentilar; quem não avançou fica 0.
     ativos_30 = sorted(v for v in engajamento_bruto.values() if v > 0)
@@ -147,13 +153,15 @@ def indices_da_escola(db: Session, escola_id: int,
         i.aluno_id: i.nota_evolucao
         for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_semana, fim=agora,
                                            serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-                                           alunos_com_leituras=alunos_com_leituras)
+                                           alunos_com_leituras=alunos_com_leituras,
+                                           base_no_periodo=True)
     }
     cresc_base = {
         i.aluno_id: i.nota_evolucao
         for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_base, fim=agora,
                                            serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-                                           alunos_com_leituras=alunos_com_leituras)
+                                           alunos_com_leituras=alunos_com_leituras,
+                                           base_no_periodo=True)
     }
 
     def _persistencia_semanal(aluno_id: int) -> float:

@@ -466,9 +466,15 @@ def anonimizar_nome(nome: str | None) -> str:
 def mural(db: Session, escola_id: int,
           serie_m: dict | None = None, serie_e: dict | None = None,
           mapa_dif: dict | None = None, anonimizar: bool = False,
-          base_no_periodo: bool = False,
+          base_no_periodo: bool = True,
           turma_ids: list[int] | None = None) -> dict:
     """Mural da escola: destaques do dia/semana/mês + eventos recentes.
+
+    ``base_no_periodo`` (padrão ``True``, a régua JUSTA): o destaque é quem mais
+    cresceu DENTRO da janela — sem retrato anterior a ela, o acumulado de vida
+    da criança não conta como evolução. É a régua do Ranking de Evolução, do app
+    e do telão; com ``False`` (a régua antiga), quem tinha o 1º retrato dentro
+    do mês virava "Aluno do Mês" com o acumulado do ano inteiro.
 
     ``anonimizar=True`` (uso no painel PÚBLICO sem login) reduz o nome do aluno
     nos destaques e nos eventos a "primeiro nome + inicial" — ver

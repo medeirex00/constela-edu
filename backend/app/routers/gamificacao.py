@@ -30,9 +30,15 @@ def mural(
     # as turmas premiáveis, como o telão e o mural do app (`/sincronizacao`).
     # Sem o recorte, o mesmo gestor via a criança da Educação Infantil em
     # destaque na web e não a via no app.
+    #
+    # RÉGUA JUSTA (`base_no_periodo=True`), a mesma do Ranking de Evolução, do
+    # app e do telão: sem retrato ANTERIOR à janela, o acumulado de vida da
+    # criança não vira "evolução" do dia/semana/mês. Com o padrão antigo, quem
+    # tinha o 1º retrato dentro do mês virava o "Aluno do Mês" aqui e ficava
+    # fora do topo do Ranking de Evolução da mesma escola.
     escola = db.get(Escola, escola_id)
     premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, escola.ano_letivo_ativo)
-    return svc.mural(db, escola_id, turma_ids=premiaveis)
+    return svc.mural(db, escola_id, turma_ids=premiaveis, base_no_periodo=True)
 
 
 @router.get("/ranking-xp")

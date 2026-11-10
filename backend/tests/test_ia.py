@@ -31,6 +31,10 @@ def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
     ana = escola_completa["alunos"][0]
     # dias_atras=0: atividade DENTRO da semana atual — a Persistência agora é
     # semanal (ritmo da semana), então precisa de dado nesta semana para ser > 0.
+    # O retrato de 100 dias atrás é a BASE: os índices usam a régua justa (o
+    # acumulado de um 1º retrato não é avanço), então Ana precisa ter crescido.
+    _snapshot(db, escola.id, ana.id, dias_atras=100,
+              atividades=5, estrelas=10, pontuacao_media=60)
     _snapshot(db, escola.id, ana.id, dias_atras=0,
               atividades=30, estrelas=100, pontuacao_media=80)
     db.commit()
@@ -55,7 +59,10 @@ def test_persistencia_e_semanal_nao_acumulada(db, escola_completa):
     # 'parou': atividade só 2 semanas atrás (semana passada), nada nesta semana.
     _snapshot(db, escola.id, parou.id, dias_atras=14,
               atividades=40, estrelas=120, pontuacao_media=70)
-    # 'ativo': atividade nesta semana.
+    # 'ativo': atividade nesta semana (avançou desde o retrato de 2 semanas atrás —
+    # régua justa: o acumulado de um 1º retrato não é avanço da semana).
+    _snapshot(db, escola.id, ativo.id, dias_atras=14,
+              atividades=10, estrelas=30, pontuacao_media=70)
     _snapshot(db, escola.id, ativo.id, dias_atras=0,
               atividades=25, estrelas=90, pontuacao_media=75)
     db.commit()

@@ -104,12 +104,13 @@ def _janela(serie: list, inicio: datetime | None, fim: datetime | None,
     base = último snapshot ANTES do início.
 
     Quando NÃO há estado anterior ao início:
-      * base_no_periodo=False (padrão): base = None → o ganho vira o total
-        acumulado ("aluno novo evolui a partir do zero"). É o comportamento
-        das telas de evolução/mural.
+      * base_no_periodo=False (padrão da função): base = None → o ganho vira
+        o total acumulado ("aluno novo evolui a partir do zero"). É a régua
+        ANTIGA, que premia o acumulado de quem não cresceu na janela.
       * base_no_periodo=True: base = 1º snapshot DENTRO do período → só o
         crescimento observado no intervalo conta (o acumulado anterior nunca
-        é atribuído ao período). É o exigido pelas PREMIAÇÕES (justas).
+        é atribuído ao período). É a régua JUSTA, a das premiações, do Ranking
+        de Evolução, do app, do telão, do mural (Conquistas) e do /insights.
 
     ``ano_letivo`` (opcional): descarta os snapshots fora do ano letivo ANTES de
     escolher ``atual`` e ``base`` — para séries de contadores DO ANO (Matific),
