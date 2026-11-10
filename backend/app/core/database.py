@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from starlette.requests import Request
 
 from app.core.config import settings
-from app.core.mantenedor_do_pool import marcar_abertura
+from app.core.mantenedor_do_pool import marcar_abertura, ouvir_devolucoes
 
 is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
@@ -162,6 +162,9 @@ if not is_sqlite:
     # A hora de abertura de cada conexão: o mantenedor do pool reabre a que está perto do
     # ``pool_recycle`` antes que uma requisição a pegue (ligado no startup, ``app.main``).
     marcar_abertura(engine)
+    # O ouvinte único da devolução, registrado antes de qualquer conexão: o mantenedor
+    # entra e sai dele sem mexer na lista de ouvintes do pool em uso.
+    ouvir_devolucoes(engine)
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).

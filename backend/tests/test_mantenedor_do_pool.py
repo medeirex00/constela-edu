@@ -539,29 +539,128 @@ def test_ciclo_espera_a_calmaria_sem_competir_com_a_pagina_e_tem_teto():
     motor.dispose()
 
 
-def test_parar_solta_o_ouvinte_da_devolucao(monkeypatch):
-    """O ouvinte 'checkin' que o ``iniciar`` registra no engine sai no ``parar`` (revisão
-    pp3). Antes ficava para sempre — com o mantenedor parado vivo por causa dele — e
-    cada iniciar/parar do processo, que cria um mantenedor novo, somava mais um."""
+def test_parar_solta_o_mantenedor_do_ouvinte_da_devolucao(monkeypatch):
+    """O mantenedor parado sai do ouvinte 'checkin' (revisão pp3): antes ficava preso ao
+    engine para sempre, e cada iniciar/parar do processo, que cria um mantenedor novo,
+    somava mais um chamado a cada devolução. O ouvinte do SQLAlchemy, esse, é UM por
+    engine e não sai (revisão do acabamento, sonda R5: removê-lo com uma conexão sendo
+    devolvida quebrava a devolução — o teste seguinte)."""
     motor = _motor(4)
     ouvintes = lambda: len(list(motor.pool.dispatch.checkin))  # noqa: E731
     antes = ouvintes()
     m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=2)
     m.iniciar()
-    assert event.contains(motor, "checkin", m._na_devolucao) and ouvintes() == antes + 1
+    ouvinte = mp.ouvir_devolucoes(motor)     # o mesmo do iniciar: idempotente
+    assert ouvintes() == antes + 1 and ouvinte.mantenedores == (m,)
     m.parar(timeout=2)
-    assert not event.contains(motor, "checkin", m._na_devolucao) and ouvintes() == antes
-    m.iniciar()                              # o mesmo mantenedor de novo: um ouvinte só
-    assert event.contains(motor, "checkin", m._na_devolucao) and ouvintes() == antes + 1
+    assert ouvintes() == antes + 1 and ouvinte.mantenedores == ()
+    m.iniciar()                              # o mesmo mantenedor de novo: entra uma vez só
+    assert ouvintes() == antes + 1 and ouvinte.mantenedores == (m,)
     m.parar(timeout=2)
     m.parar(timeout=2)                       # parar de novo não levanta
-    assert ouvintes() == antes
+    assert ouvinte.mantenedores == ()
     # O ciclo de vida do processo: cada iniciar cria um mantenedor novo.
     _como_postgresql(motor, monkeypatch)
     for _ in range(3):
         assert mp.iniciar(motor, _config(DB_POOL_AQUECIDO_S=60, DB_POOL_AQUECIDO_CONEXOES=2))
         mp.parar()
-    assert ouvintes() == antes
+    assert ouvintes() == antes + 1 and ouvinte.mantenedores == ()
+    assert motor.pool.checkedout() == 0
+    motor.dispose()
+
+
+def _esperar_o_ciclo_do_boot(motor, n):
+    limite = time.monotonic() + 5
+    while motor.pool.checkedin() < n and time.monotonic() < limite:
+        time.sleep(0.02)
+    assert motor.pool.checkedin() >= n
+
+
+def test_parar_com_uma_conexao_sendo_devolvida_nao_quebra_a_devolucao():
+    """Revisão do acabamento (sonda R5). O ``parar`` removia o ouvinte 'checkin' do engine;
+    o SQLAlchemy percorre a lista de ouvintes a cada devolução, e removê-lo com outra
+    thread devolvendo uma conexão (uma sincronização terminando no desligamento) dava
+    "RuntimeError: deque mutated during iteration" dentro do ``close()`` dela — e a
+    conexão não voltava ao pool. Aqui a devolução para no ouvinte de antes do mantenedor
+    (como o ``_agora`` de ``database.py``) enquanto o ``parar`` roda."""
+    motor = _motor(4)
+    na_devolucao, pode_seguir = threading.Event(), threading.Event()
+
+    def _antes_do_mantenedor(*_a):
+        if threading.current_thread().name == "requisicao":
+            na_devolucao.set()
+            pode_seguir.wait(5)
+
+    event.listen(motor, "checkin", _antes_do_mantenedor)
+    m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=1)
+    m.iniciar()
+    _esperar_o_ciclo_do_boot(motor, 1)
+    erros: list[str] = []
+
+    def requisicao():
+        try:
+            with motor.connect() as conexao:
+                conexao.execute(text("SELECT 1"))
+        except Exception as erro:  # noqa: BLE001 — é o que o teste confere
+            erros.append(f"{type(erro).__name__}: {erro}")
+
+    t = threading.Thread(target=requisicao, name="requisicao", daemon=True)
+    t.start()
+    assert na_devolucao.wait(5)              # a conexão está sendo devolvida agora
+    m.parar(timeout=2)
+    pode_seguir.set()
+    t.join(5)
+    assert erros == []
+    assert motor.pool.checkedout() == 0      # a conexão voltou ao pool
+    motor.dispose()
+
+
+def test_iniciar_e_parar_com_requisicoes_devolvendo_conexoes():
+    """A sonda R5 em poucos ciclos: o ``parar`` com 4 threads fazendo connect/close não
+    derruba nenhuma devolução e todas as conexões voltam ao pool."""
+    motor = _motor(8)
+    event.listen(motor, "checkin", lambda *_a: None)     # como o ``_agora`` do app
+    rodando, fim = threading.Event(), threading.Event()
+    trava, ativos, erros = threading.Lock(), [0], []
+
+    def carga():
+        while not fim.is_set():
+            if not rodando.wait(0.05):
+                continue
+            with trava:
+                ativos[0] += 1
+            try:
+                motor.connect().close()
+            except Exception as erro:  # noqa: BLE001 — é o que o teste confere
+                erros.append(f"{type(erro).__name__}: {erro}")
+            finally:
+                with trava:
+                    ativos[0] -= 1
+
+    threads = [threading.Thread(target=carga, daemon=True) for _ in range(4)]
+    for t in threads:
+        t.start()
+    try:
+        for _ in range(10):
+            rodando.clear()
+            while True:
+                with trava:
+                    if ativos[0] == 0:
+                        break
+                time.sleep(0.0005)
+            m = mp.MantenedorDoPool(motor, intervalo_s=3600, conexoes=1, prazo_s=1.0,
+                                    calmaria_s=0.0, espera_maxima_s=0.0)
+            m.iniciar()                      # com a carga parada
+            time.sleep(0.01)
+            rodando.set()
+            time.sleep(0.003)
+            m.parar(timeout=2)               # com a carga rodando
+    finally:
+        fim.set()
+        rodando.set()
+        for t in threads:
+            t.join(2)
+    assert erros == []
     assert motor.pool.checkedout() == 0
     motor.dispose()
 
@@ -576,8 +675,8 @@ def test_devolucao_recente_de_requisicao_adia_o_ciclo_e_a_do_mantenedor_nao():
         time.sleep(0.02)
     m.parar()
     m._parar.clear()                         # a espera roda numa thread do teste
-    # O parar solta o ouvinte da devolução; a espera que roda aqui precisa dele.
-    event.listen(motor, "checkin", m._na_devolucao)
+    # O parar tira o mantenedor do ouvinte da devolução; a espera que roda aqui precisa dele.
+    m._ouvir(True)
 
     def esperar():
         t = threading.Thread(target=m._esperar_calmaria, daemon=True)

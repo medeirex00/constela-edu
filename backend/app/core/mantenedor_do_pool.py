@@ -52,6 +52,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field, replace
 
 from sqlalchemy import event
@@ -88,6 +89,43 @@ ESPERA_MAXIMA_S = 5.0
 
 # Marca as threads do próprio mantenedor: a devolução feita por elas não conta como uso.
 _local = threading.local()
+
+
+class _OuvinteDaDevolucao:
+    """O ouvinte 'checkin' do mantenedor: UM por engine, registrado uma vez e nunca removido.
+
+    O SQLAlchemy percorre a lista de ouvintes do evento (um deque) a cada devolução de
+    conexão, e ``event.listen``/``event.remove`` não podem rodar junto com o evento: o
+    ``remove`` no ``parar``, com outra thread devolvendo uma conexão (uma sincronização
+    terminando no desligamento, a rodada que passou do prazo), dava "deque mutated during
+    iteration" dentro do ``close()`` dela, e a conexão não voltava ao pool. Quem entra e sai
+    é o MANTENEDOR, numa tupla que este ouvinte lê (trocada inteira, sob trava, e lida sem
+    trava) — o padrão do SQLAlchemy: uma estrutura mutável lida de dentro de um só ouvinte.
+    O mantenedor parado sai dela; nada se acumula a cada iniciar/parar."""
+
+    def __init__(self) -> None:
+        self.mantenedores: tuple = ()
+
+    def __call__(self, dbapi_connection, registro) -> None:
+        for mantenedor in self.mantenedores:
+            mantenedor._na_devolucao(dbapi_connection, registro)
+
+
+_ouvintes: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_trava_dos_ouvintes = threading.Lock()
+
+
+def ouvir_devolucoes(motor) -> _OuvinteDaDevolucao:
+    """O ouvinte 'checkin' do mantenedor neste engine, registrado na primeira chamada
+    (idempotente). Vai junto do engine (``database.py``), antes da primeira conexão: assim
+    nem o primeiro registro acontece com conexões sendo devolvidas."""
+    with _trava_dos_ouvintes:
+        ouvinte = _ouvintes.get(motor)
+        if ouvinte is None:
+            ouvinte = _OuvinteDaDevolucao()
+            event.listen(motor, "checkin", ouvinte)
+            _ouvintes[motor] = ouvinte
+        return ouvinte
 
 
 def marcar_abertura(motor) -> None:
@@ -429,12 +467,20 @@ class MantenedorDoPool:
                 self._aviso.falhou(f"o ciclo falhou ({type(erro).__name__})")
             self._parar.wait(self.intervalo_s)
 
+    def _ouvir(self, sim: bool) -> None:
+        """Entra (ou sai) do ouvinte único da devolução deste engine. Nunca mexe na lista
+        de ouvintes do SQLAlchemy depois do primeiro registro (``_OuvinteDaDevolucao``)."""
+        ouvinte = ouvir_devolucoes(self._motor_base)
+        with _trava_dos_ouvintes:
+            outros = tuple(m for m in ouvinte.mantenedores if m is not self)
+            ouvinte.mantenedores = (*outros, self) if sim else outros
+        self._ouvindo = sim
+
     def iniciar(self) -> None:
         if self.vivo():
             return
         if not self._ouvindo:
-            event.listen(self._motor_base, "checkin", self._na_devolucao)
-            self._ouvindo = True
+            self._ouvir(True)
         self._parar.clear()
         self._thread = threading.Thread(target=self._laco, name="pool-aquecido", daemon=True)
         self._thread.start()
@@ -446,12 +492,11 @@ class MantenedorDoPool:
             rodada.soltar()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
-        # O ouvinte da devolução também sai: sem isso, cada mantenedor parado deixava o
-        # seu no engine para sempre (o processo e o ``_na_devolucao`` dele vivos), e
-        # parar-iniciar acumulava ouvintes a cada devolução de conexão.
+        # O mantenedor parado sai do ouvinte da devolução (sem isso ficava preso ao engine
+        # e cada iniciar/parar somava mais um chamado a cada devolução) — sem remover o
+        # ouvinte do SQLAlchemy, que outra thread pode estar percorrendo agora.
         if self._ouvindo:
-            event.remove(self._motor_base, "checkin", self._na_devolucao)
-            self._ouvindo = False
+            self._ouvir(False)
 
     def vivo(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
