@@ -215,28 +215,54 @@ interface Grupo {
   todasComErro: boolean;
 }
 
-/** Agrupa as linhas da análise por aluno (nome + turma do relatório). No
- *  relatório individual, as centenas de linhas de livros viram um único
- *  grupo. A turma entra na chave porque o leaderboard do Matific abrevia os
- *  nomes ("MARIA J") e alunos DIFERENTES de turmas diferentes colidem — num
- *  grupo só, o mês de um deles seria descartado em silêncio. */
+/** A conta da linha na plataforma (uuid do Matific, studentId do Elefante), ou "". */
+function contaDaLinha(linha: LinhaAnalise): string {
+  const conta = linha.dados.matific_uuid ?? linha.dados.elefante_student_id;
+  return conta === undefined || conta === null ? "" : String(conta);
+}
+
+/** Agrupa as linhas da análise por aluno (nome + turma do relatório) E por conta da
+ *  plataforma. No relatório individual, as centenas de linhas de livros (todas da
+ *  mesma conta) viram um único grupo. A turma entra na chave porque o leaderboard
+ *  do Matific abrevia os nomes ("MARIA J") e alunos DIFERENTES de turmas diferentes
+ *  colidem — num grupo só, o mês de um deles seria descartado em silêncio. A conta
+ *  entra porque o backend decide cada conta por si: duas contas com o mesmo nome na
+ *  mesma sala abrem uma pendência CADA (contas_repetidas_no_relatorio), e um grupo
+ *  só aplicaria a correspondência da primeira às duas. */
 function agrupar(analise: Analise): Grupo[] {
   const mapa = new Map<string, Grupo>();
   const ordem: string[] = [];
+  const chaveAluno = (linha: LinhaAnalise, indice: number) =>
+    `${normalizar(linha.nome) || `#${indice}`}|${normalizar(String(linha.dados.turma_relatorio ?? ""))}`;
+  // Contas distintas de cada aluno (nome + turma), na ordem do relatório.
+  const contasDoAluno = new Map<string, string[]>();
+  analise.linhas.forEach((linha, indice) => {
+    const conta = contaDaLinha(linha);
+    const contas = contasDoAluno.get(chaveAluno(linha, indice)) ?? [];
+    if (conta && !contas.includes(conta)) contas.push(conta);
+    contasDoAluno.set(chaveAluno(linha, indice), contas);
+  });
   analise.linhas.forEach((linha, indice) => {
     const turma = String(linha.dados.turma_relatorio ?? "");
-    const chave = `${normalizar(linha.nome) || `#${indice}`}|${normalizar(turma)}`;
+    const conta = contaDaLinha(linha);
+    const chave = `${chaveAluno(linha, indice)}|${conta}`;
     let g = mapa.get(chave);
     if (!g) {
       // Homônimos em turmas diferentes: o nome exibido ganha a turma para o
-      // usuário saber qual é qual na conferência.
+      // usuário saber qual é qual na conferência. Contas diferentes com o mesmo
+      // nome na mesma turma: "conta 1 de 2", "conta 2 de 2".
       const repetido = analise.linhas.some(
         (outra) => normalizar(outra.nome) === normalizar(linha.nome)
           && String(outra.dados.turma_relatorio ?? "") !== turma,
       );
+      const contas = contasDoAluno.get(chaveAluno(linha, indice)) ?? [];
+      const detalhes = [
+        ...(repetido && turma ? [turma] : []),
+        ...(conta && contas.length > 1 ? [`conta ${contas.indexOf(conta) + 1} de ${contas.length}`] : []),
+      ];
       g = {
         chave,
-        nome: repetido && turma ? `${linha.nome} (${turma})` : linha.nome,
+        nome: detalhes.length > 0 ? `${linha.nome} (${detalhes.join(", ")})` : linha.nome,
         indices: [],
         correspondencia: linha.correspondencia,
         resumo: "",

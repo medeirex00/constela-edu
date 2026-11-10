@@ -4,6 +4,7 @@ import Importacoes from "../pages/Importacoes";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import type { Analise, Importacao, ResultadoImportacao } from "../lib/types";
 import analiseReal from "./fixtures/importacoes/analise_matific_motivos.json";
+import analiseDuasContas from "./fixtures/importacoes/analise_matific_duas_contas.json";
 import {
   api,
   fireEvent,
@@ -367,6 +368,59 @@ describe("Importacoes", () => {
     expect(confirmacao).toHaveTextContent(/1 vai para Revisões de identidade — nenhuma ficha é criada/);
     expect(confirmacao).toHaveTextContent(/não se desfaz sozinha/);
     expect(confirmacao).not.toHaveTextContent(/Pela política desta escola/);
+  });
+
+  // Duas contas da plataforma com o mesmo nome, na mesma sala e sem ficha — a prévia
+  // REAL do /analisar (Placar do Matific), gravada por
+  // backend/tests/test_importacao_previa_motivo.py. O backend abre UMA pendência por
+  // conta (o mesmo teste confirma o corpo abaixo: 1 vinculado, 2 pendências, nenhuma
+  // ficha). Antes a tela juntava as duas contas numa linha (chave nome|turma) e dizia
+  // "1 de 2 … ; 1 vai para Revisões", enquanto o resultado dizia "2 alunos aguardam".
+  it("duas contas com o mesmo nome: uma linha por conta, e a contagem bate com o backend", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, JSON.parse(JSON.stringify(analiseDuasContas)) as Analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "placar");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    fireEvent.change(screen.getByLabelText("Data do relatório (obrigatória)"),
+      { target: { value: "2026-08-14" } });
+
+    // Uma linha por conta, cada uma com o seu destino.
+    const destinos = screen.getAllByRole("combobox", { name: /^Destino de / }) as HTMLSelectElement[];
+    expect(destinos.map((d) => d.getAttribute("aria-label"))).toEqual([
+      "Destino de Ana Beatriz Souza",
+      "Destino de Crianca Ficticia Repetida (conta 1 de 2)",
+      "Destino de Crianca Ficticia Repetida (conta 2 de 2)",
+    ]);
+    expect(destinos.map((d) => d.value)).toEqual(["1", "revisao", "revisao"]);
+    expect(screen.getAllByText("Duas contas com o mesmo nome — vai para Revisões de identidade"))
+      .toHaveLength(2);
+    expect(screen.getByText(/serão importados/).textContent)
+      .toBe("1 de 3 aluno(s) serão importados; 2 vão para Revisões de identidade.");
+
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent("1 vinculado(s) a um aluno já cadastrado");
+    expect(confirmacao).toHaveTextContent(/2 vão para Revisões de identidade — nenhuma ficha é criada/);
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "1 aluno(s) com dado novo importado(s).", importacao_id: 9,
+      qtd_alunos: 1, qtd_erros: 2, avisos: [], qtd_revisoes: 2, criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
+    // O corpo é o que o teste do backend confirma: cada conta na sua linha, sem aluno
+    // escolhido, com a turma da prévia.
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas.map((l: { dados: { matific_uuid: string } }) => l.dados.matific_uuid))
+      .toEqual(["uuid-ficticio-ana", "uuid-ficticio-1", "uuid-ficticio-2"]);
+    expect(corpo.linhas.slice(1)).toMatchObject([
+      { aluno_id: null, criar_em_turma_id: 1 }, { aluno_id: null, criar_em_turma_id: 1 }]);
+    expect(await screen.findByText(/2 alunos aguardam a decisão de um gestor/)).toBeInTheDocument();
   });
 
   it("revisão de TURMA (a turma escolhida resolve) continua com 'Criar'", async () => {
