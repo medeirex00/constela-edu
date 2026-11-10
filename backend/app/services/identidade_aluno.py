@@ -333,6 +333,18 @@ class Contexto:
     # de leituras vem depois do resumo — ou numa coleta anterior) e só um humano a
     # encerra. Até lá nenhuma linha dessa conta aplica número.
     ids_em_disputa: set[tuple[str, str]] = field(default_factory=set)
+    # (plataforma, aluno_id) → contas com pendência "outra_identidade_na_plataforma"
+    # ainda ABERTA que apontam esta ficha. É a disputa de ``marcar_fichas_disputadas``
+    # (ou a de uma conta já vinculada) vista DEPOIS do relatório que a abriu: o
+    # arquivo seguinte da mesma coleta (o histórico de leituras vem depois do resumo)
+    # trazia só uma das contas, e ela levava a ficha — quem decidia era qual conta
+    # aparecia no arquivo de leituras. Lido de ``carregar_contexto``; consultado por
+    # ``contas_rivais`` (motor e triagem).
+    contas_em_disputa: dict[tuple[str, int], set[str]] = field(default_factory=dict)
+    # (plataforma, nome, sala) → contas com pendência "contas_repetidas_no_relatorio"
+    # ainda ABERTA: as duas contas sem ficha que criariam a MESMA ficha nova. A mesma
+    # trava de ``criacoes_disputadas``, para os arquivos seguintes.
+    criacoes_em_disputa: dict[tuple[str, str, str], set[str]] = field(default_factory=dict)
     # (plataforma, id_externo) deste relatório que já são EFETIVOS em OUTRA escola
     # do Constela → id dessa escola. Preenchido por ``marcar_ids_de_outra_escola``
     # (com as linhas em mãos: o estado da rede inteira não é carregado).
@@ -515,6 +527,36 @@ class Contexto:
         return bool(letra_relatorio and letra_cadastro
                     and letra_relatorio != letra_cadastro)
 
+    def _ainda_sem_dono(self, plataforma: str, contas, aluno_id: int | None,
+                        id_externo: str) -> set[str]:
+        """As ``contas`` (de pendências abertas) que ainda disputam: não são a da
+        própria linha, não foram aposentadas e não estão vinculadas a OUTRA ficha
+        (a vinculada a esta mesma ficha já é a trava de ``ids_do_aluno``)."""
+        saida: set[str] = set()
+        for conta in contas or ():
+            if conta == id_externo or (plataforma, conta) in self.aposentadas:
+                continue
+            dono = self.identidade.get((plataforma, conta))
+            if dono is None or dono == aluno_id:
+                saida.add(conta)
+        return saida
+
+    def contas_rivais(self, plataforma: str, aluno_id: int, id_externo: str) -> set[str]:
+        """OUTRAS contas desta plataforma, ainda sem vínculo, com pendência aberta de
+        "duas contas para a mesma ficha" (``outra_identidade_na_plataforma``) que
+        aponta ``aluno_id``. Enquanto um humano não decide, nenhuma delas leva a
+        ficha sozinha — em nenhum arquivo."""
+        return self._ainda_sem_dono(plataforma,
+                                    self.contas_em_disputa.get((plataforma, aluno_id)),
+                                    aluno_id, id_externo)
+
+    def criacao_rival(self, plataforma: str, nome: str, sala: str, id_externo: str) -> bool:
+        """Outra conta sem ficha, com pendência aberta ``contas_repetidas_no_relatorio``,
+        criaria a MESMA ficha nova (mesmo nome, mesma sala)?"""
+        return bool(self._ainda_sem_dono(
+            plataforma, self.criacoes_em_disputa.get((plataforma, nome, sala)), None,
+            id_externo))
+
     def decisao_humana(self, linha: LinhaIdentidade, *chaves: str) -> int | None:
         """Aluno que um gestor já escolheu para ESTA identidade, procurando em cada
         chave de sala informada. São duas quando ``sala_efetiva`` reconheceu a sala
@@ -577,16 +619,31 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
         if isinstance(resolucao, dict) and resolucao.get("automatica") is True:
             continue
         ctx.resolvidas[chave_ident] = aluno_id
-    for chave_ident, revisao_id, motivo, plataforma, id_externo in db.execute(
+    for (chave_ident, revisao_id, motivo, plataforma, id_externo, candidatos, nome,
+         turma_informada) in db.execute(
             select(RevisaoIdentidade.chave_identidade, RevisaoIdentidade.id,
                    RevisaoIdentidade.motivo, RevisaoIdentidade.plataforma,
-                   RevisaoIdentidade.id_externo)
+                   RevisaoIdentidade.id_externo, RevisaoIdentidade.candidatos,
+                   RevisaoIdentidade.nome_recebido, RevisaoIdentidade.turma_informada)
             .where(RevisaoIdentidade.escola_id == escola_id,
                    RevisaoIdentidade.status == "pendente")
             .order_by(RevisaoIdentidade.id)).all():
         ctx.pendentes.setdefault(chave_ident, []).append(revisao_id)
         if motivo == "id_externo_duplicado" and id_externo:
             ctx.ids_em_disputa.add((plataforma, str(id_externo)))
+        elif motivo == "outra_identidade_na_plataforma" and id_externo:
+            for c in candidatos or ():
+                if isinstance(c, dict) and c.get("aluno_id"):
+                    ctx.contas_em_disputa.setdefault(
+                        (plataforma, int(c["aluno_id"])), set()).add(str(id_externo))
+        elif motivo == "contas_repetidas_no_relatorio" and id_externo:
+            # A mesma chave (nome sem o sufixo de turma, sala reconhecida) que
+            # ``decidir`` usa no passo 5 para a linha que traria esta conta.
+            sala_rel = chave_sala(turma_informada or "")
+            sala = ctx.sala_efetiva(sala_rel, turma_informada or "")
+            ctx.criacoes_em_disputa.setdefault(
+                (plataforma, chave_nome(_nome_para_casar(nome or "", sala, sala_rel)), sala),
+                set()).add(str(id_externo))
     return ctx
 
 
@@ -857,7 +914,10 @@ def _para_aluno(ctx: Contexto, linha: LinhaIdentidade, aluno: Aluno, via: str,
         outras = ctx.ids_do_aluno.get((aluno.id, linha.plataforma), set()) - {linha.id_externo}
         # Também a OUTRA conta sem vínculo que, neste mesmo relatório, levaria esta
         # mesma ficha (``marcar_fichas_disputadas``): a ordem do arquivo não decide.
-        if outras or (linha.plataforma, aluno.id) in ctx.fichas_disputadas:
+        # E a que disputa esta ficha numa pendência ainda aberta (``contas_rivais``):
+        # o arquivo seguinte da coleta, com só uma das contas, também não decide.
+        if (outras or (linha.plataforma, aluno.id) in ctx.fichas_disputadas
+                or ctx.contas_rivais(linha.plataforma, aluno.id, linha.id_externo)):
             return Decisao(REVISAR, aluno.id, via, "outra_identidade_na_plataforma",
                            cands, chave_sala=chave)
     return Decisao(ASSOCIAR, aluno.id, via, candidatos=(aluno.id,), chave_sala=chave)
@@ -1445,8 +1505,12 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         return Decisao(REVISAR, None, "novo", "nome_incompleto", (), chave_sala=chave,
                        vetados=vetados)
     # Duas contas sem vínculo, mesmo nome e mesma sala, no mesmo relatório: a ficha
-    # não nasce com os números da primeira (``marcar_fichas_disputadas``).
-    if linha.id_externo and (linha.plataforma, alvo_nome, chave) in ctx.criacoes_disputadas:
+    # não nasce com os números da primeira (``marcar_fichas_disputadas``). Nem no
+    # arquivo seguinte, que traz só uma delas, enquanto a pendência da outra estiver
+    # aberta (``criacao_rival``).
+    if linha.id_externo and (
+            (linha.plataforma, alvo_nome, chave) in ctx.criacoes_disputadas
+            or ctx.criacao_rival(linha.plataforma, alvo_nome, chave, linha.id_externo)):
         return Decisao(REVISAR, None, "novo", "contas_repetidas_no_relatorio", (),
                        chave_sala=chave, vetados=vetados)
     if not chave:

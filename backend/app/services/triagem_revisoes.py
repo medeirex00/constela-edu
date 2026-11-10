@@ -265,6 +265,15 @@ def _triar_um(ctx: ident.Contexto, rev: RevisaoIdentidade,
         caso.conflitos.append(f"a ficha {alvo} já tem outra(s) conta(s) "
                               f"{rev.plataforma}: {outras}")
         return veredito(DECISAO_HUMANA, MULTI_IDENTIDADE, alvo)
+    # A mesma disputa com a outra conta AINDA SEM VÍNCULO, numa pendência aberta da
+    # escola (lida no contexto, não só nesta página da fila): a conta desta pendência
+    # pode ter levado a ficha só porque apareceu sozinha no arquivo seguinte da
+    # coleta. Encerrar por aqui confirmaria um vínculo que ninguém decidiu.
+    rivais = sorted(ctx.contas_rivais(rev.plataforma, alvo, id_externo))
+    if rivais:
+        caso.conflitos.append(f"outra pendência aberta liga a ficha {alvo} a uma conta "
+                              f"{rev.plataforma} diferente, ainda sem vínculo: {rivais}")
+        return veredito(DECISAO_HUMANA, MULTI_IDENTIDADE, alvo)
 
     turma = ctx.turma_do_aluno(alvo)
     if turma is None:
