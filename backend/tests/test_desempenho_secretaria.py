@@ -15,6 +15,7 @@
 
 Dados INVENTADOS (``test_analise_base``; decisão D13).
 """
+import pytest
 from sqlalchemy import event
 
 from app.services import rede as svc_rede
@@ -109,15 +110,69 @@ def _sem_ids_de_objeto(valor):
     return json.loads(json.dumps(valor, sort_keys=True, default=str))
 
 
-def test_indicadores_dentro_da_leitura_unica_sao_os_da_consulta_direta(db):
+def _linhas_que_ficam_de_fora(db, base):
+    """Linhas que NENHUMA consulta de indicador lê — cada uma com a mesma chave (escola,
+    edição, indicador, etapa) de um número que aparece e com um valor diferente. A consulta
+    direta as tira no SQL; a leitura única as lê num superconjunto e as tira em Python: se um
+    desses filtros sumir, o número muda e a equivalência quebra."""
+    from app.models import IndicadorReferencia, ResultadoAvaliacao
+    from app.services import avaliacoes as svc_avaliacoes
+    from tests.test_analise_base import INEPS, MUN, resultado
+
+    imps, alfa = base["imps"], base["escolas"]["alfa"]
+
+    def referencia(avaliacao, imp, **campos):
+        padrao = {"abrangencia": "municipio", "codigo_territorio": MUN, "codigo_inep": "",
+                  "rede_ensino": "municipal", "localizacao": "total", "etapa": "",
+                  "componente": "", "casas_decimais": 1, "unidade": "indice"}
+        db.add(IndicadorReferencia(avaliacao_id=svc_avaliacoes.obter_avaliacao(db, avaliacao).id,
+                                   importacao_id=imp.id, **{**padrao, **campos}))
+
+    # Zona urbana (só "total" entra): o ICA e o SARESP do município, a participação da escola
+    # no SARESP e a meta da escola no Ideb.
+    referencia("ica", imps["ica"], edicao=2025, indicador="percentual_alfabetizado",
+               localizacao="urbana", valor=11.0, casas_decimais=0, unidade="percentual")
+    referencia("saresp", imps["saresp"], edicao=2025, indicador="proficiencia", etapa="5_ano",
+               componente="lp", localizacao="urbana", valor=111.1, unidade="escala_saresp")
+    referencia("saresp", imps["iee"], edicao=2025, indicador="participacao", abrangencia="escola",
+               codigo_inep=INEPS["alfa"], etapa="5_ano", localizacao="urbana", valor=12.5,
+               unidade="percentual")
+    referencia("ideb", imps["ideb_escolas"], edicao=2021, indicador="meta", abrangencia="escola",
+               codigo_inep=INEPS["alfa"], etapa="anos_iniciais", localizacao="urbana", valor=2.2)
+    # A rede ESTADUAL no mesmo INEP (o Ideb da escola é só o da rede municipal).
+    referencia("ideb", imps["ideb_escolas"], edicao=2019, indicador="meta", abrangencia="escola",
+               codigo_inep=INEPS["alfa"], etapa="anos_iniciais", rede_ensino="estadual", valor=1.1)
+    # Resultados de UMA TURMA (só os sem turma entram), no SARESP, no Ideb e no Saeb.
+    for avaliacao, edicao, indicador, etapa, componente, valor, imp, unidade in (
+            ("saresp", 2025, "proficiencia", "5_ano", "portugues", 999.9, imps["iee"],
+             "escala_saresp"),
+            ("ideb", 2023, "ideb", "anos_iniciais", None, 9.9, imps["ideb_escolas"], "indice"),
+            ("saeb", 2023, "proficiencia", "5_ano", "portugues", 333.3, imps["ideb_escolas"],
+             "escala_saeb")):
+        db.add(ResultadoAvaliacao(
+            avaliacao_id=svc_avaliacoes.obter_avaliacao(db, avaliacao).id, edicao=edicao,
+            rede_id=alfa.rede_id, escola_id=alfa.id, etapa=etapa, componente=componente,
+            turma="A", indicador=indicador, valor=valor, unidade=unidade, importacao_id=imp.id))
+    # O Ideb da escola é o geral (sem componente): um com componente fica de fora.
+    resultado(db, "ideb", alfa, edicao=2021, indicador="ideb", etapa="anos_iniciais",
+              componente="LP", valor=8.8, imp=imps["ideb_escolas"], unidade="indice")
+    db.flush()
+
+
+@pytest.mark.parametrize("com_linhas_de_fora", [False, True])
+def test_indicadores_dentro_da_leitura_unica_sao_os_da_consulta_direta(db, com_linhas_de_fora):
     """ICA, SARESP, Ideb da rede, o catálogo, cada indicador (série e escolas) e a análise de
     cada escola: dentro de ``leituras_da_requisicao`` (as referências e os resultados lidos
-    uma vez, filtrados em Python) a MESMA resposta da consulta direta, campo a campo."""
+    uma vez, filtrados em Python) a MESMA resposta da consulta direta, campo a campo. Com
+    ``com_linhas_de_fora``, o banco tem também as linhas que cada filtro tira (turma, zona
+    urbana, rede estadual, componente) — a equivalência depende de cada filtro."""
     from app.services.analise import indicadores as svc_ind
     from app.services.indicadores import consulta, consulta_ideb, consulta_saresp
 
     base = mundo_plataformas(db)
     nova_escola(db, base["rede"], "EMEF Fictícia Sem Inep", None)
+    if com_linhas_de_fora:
+        _linhas_que_ficam_de_fora(db, base)
     db.commit()
     rede = base["rede"]
     chamadas = [lambda: consulta.ica_da_rede(db, rede),
