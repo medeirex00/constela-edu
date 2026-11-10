@@ -185,6 +185,15 @@ function vaiParaRevisao(c: LinhaAnalise["correspondencia"]): boolean {
   return c?.status === "revisar" && MOTIVOS_SO_REVISAO.has(c.motivo ?? "");
 }
 
+/** O destino escolhido leva a linha para Revisões de identidade na confirmação:
+ *  "Deixar para a Revisão" sempre; "Criar" (turma cadastrada ou a do relatório)
+ *  quando a política da escola é "bloquear" — o backend não cria a ficha e abre a
+ *  pendência ('criacao_bloqueada_por_politica'). */
+function vaiParaARevisao(acao: Acao | undefined, criacaoBloqueada: boolean): boolean {
+  if (acao?.tipo === "revisao") return true;
+  return criacaoBloqueada && (acao?.tipo === "criar" || acao?.tipo === "criar_nova");
+}
+
 /** Quantos alunos esta importação deixou em Revisões de identidade: todas as
  *  pendências gravadas (``qtd_revisoes``), não só as que a política barrou. */
 function aguardamRevisao(r: ResultadoImportacao): number {
@@ -608,7 +617,14 @@ export default function Importacoes() {
       && !vaiParaRevisao(g.correspondencia),
   );
   const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
-  const totalParaRevisao = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo === "revisao").length;
+  // Política "bloquear" (a matrícula vem da Lista Piloto): a confirmação não cria
+  // ficha — a linha marcada "Criar" (na turma escolhida ou na do relatório) vai para
+  // Revisões de identidade, como a de destino "revisao". O rodapé e a confirmação a
+  // contam lá, não entre os importados nem entre os alunos novos.
+  const criacaoBloqueada = Boolean(analise?.criacao_bloqueada_por_politica);
+  const totalParaRevisao = grupos.filter(
+    (g, i) => !g.todasComErro && vaiParaARevisao(acoes[i], criacaoBloqueada),
+  ).length;
   const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
   // Data do relatório: obrigatória no total acumulado (sem "Intervalo de datas").
   const exigeData = analise ? exigeDataDoRelatorio(analise) : false;
@@ -619,18 +635,21 @@ export default function Importacoes() {
   const dataOk = !exigeData || dataDoRelatorioValida(dataRelatorio, undefined, anoLetivo);
 
   // Resumo do que a confirmação vai gravar (só contagem do que já está na tela).
+  // ``barradas``: as de "Criar" que a política "bloquear" manda para a Revisão
+  // (já somadas em ``revisao``).
   const resumoConfirmacao = useMemo(() => {
-    let vincular = 0, criar = 0, criarNova = 0, revisao = 0, ignorar = 0;
+    let vincular = 0, criar = 0, criarNova = 0, revisao = 0, barradas = 0, ignorar = 0;
     grupos.forEach((g, i) => {
       const acao = acoes[i];
       if (g.todasComErro || !acao || acao.tipo === "ignorar") { ignorar += 1; return; }
       if (acao.tipo === "importar") vincular += 1;
-      else if (acao.tipo === "criar") criar += 1;
       else if (acao.tipo === "revisao") revisao += 1;
+      else if (vaiParaARevisao(acao, criacaoBloqueada)) { revisao += 1; barradas += 1; }
+      else if (acao.tipo === "criar") criar += 1;
       else criarNova += 1;
     });
-    return { vincular, criar, criarNova, revisao, ignorar };
-  }, [grupos, acoes]);
+    return { vincular, criar, criarNova, revisao, barradas, ignorar };
+  }, [grupos, acoes, criacaoBloqueada]);
 
   // Etapa do passo a passo (estado REAL do fluxo): 0 envio, 1 conferência, 2
   // confirmação (modal aberto), 3 = tudo feito (resultado na tela, sem prévia).
@@ -1147,15 +1166,13 @@ export default function Importacoes() {
                 </li>
               )}
             </ul>
-            {resumoConfirmacao.criar + resumoConfirmacao.criarNova > 0 && (
-              analise.criacao_bloqueada_por_politica ? (
-                <p className="text-xs">
-                  Pela política desta escola, quem não corresponder a uma ficha vai para Revisões de
-                  identidade — nenhuma ficha nova é criada por esta importação.
-                </p>
-              ) : (
-                <p className="text-xs">Ficha criada por importação não se desfaz sozinha: confira os nomes novos.</p>
-              )
+            {resumoConfirmacao.barradas > 0 ? (
+              <p className="text-xs">
+                Pela política desta escola, quem não corresponder a uma ficha vai para Revisões de
+                identidade — nenhuma ficha nova é criada por esta importação.
+              </p>
+            ) : resumoConfirmacao.criar + resumoConfirmacao.criarNova > 0 && (
+              <p className="text-xs">Ficha criada por importação não se desfaz sozinha: confira os nomes novos.</p>
             )}
           </Confirmacao>
 

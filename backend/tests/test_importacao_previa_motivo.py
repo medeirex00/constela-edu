@@ -80,6 +80,39 @@ def test_contrato_cada_campo_que_o_front_le_vem_na_resposta(cliente, escola_comp
         assert not faltam, f"{nome}: o /analisar não manda {sorted(faltam)}"
 
 
+def test_bloquear_o_criar_da_tela_vai_para_a_revisao(cliente, db, escola_completa):
+    """O lado do backend do que a tela conta com a política 'bloquear'
+    (Importacoes.test, "política 'bloquear'"): o corpo que ela manda com os destinos
+    padrão — vínculo, "Deixar para a Revisão" e "Criar", as duas últimas com a turma —
+    vincula 1, não cria ficha e abre 2 pendências. A tela diz "1 de 3 serão
+    importados; 2 vão para Revisões"."""
+    from sqlalchemy import func, select
+
+    from app.models import Aluno
+    from app.services import politica_sync
+
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"].id
+    politica_sync.definir(db, eid, "bloquear")
+    db.commit()
+    analise = _analise(cliente, eid)
+    assert analise["criacao_bloqueada_por_politica"] is True
+    linhas = []
+    for linha in analise["linhas"]:
+        corr = linha["correspondencia"]
+        vinculo = corr["aluno_id"] if corr["status"] in ("exato", "vinculado") else None
+        linhas.append({"nome": linha["nome"], "dados": linha["dados"], "aluno_id": vinculo,
+                       "criar_em_turma_id": None if vinculo else turma})
+    antes = db.scalar(select(func.count()).select_from(Aluno).where(Aluno.escola_id == eid))
+    r = cliente.post(f"{API}/escolas/{eid}/importacoes/confirmar", json={
+        "plataforma": analise["plataforma"], "formato": analise["formato"], "tipo": "texto",
+        "recalcular": False, "linhas": linhas, "data_referencia": "2026-08-14T12:00:00"})
+    assert r.status_code == 200, r.text
+    assert (r.json()["qtd_alunos"], r.json()["qtd_revisoes"]) == (1, 2), r.json()
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(Aluno)
+                     .where(Aluno.escola_id == eid)) == antes
+
+
 def _o_que_a_tela_le(analise: dict) -> list:
     """O que decide o destino de cada linha na tela (ids fora: dependem do banco)."""
     return [(linha["nome"], {k: v for k, v in linha["correspondencia"].items()

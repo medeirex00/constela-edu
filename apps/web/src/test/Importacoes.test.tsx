@@ -6,6 +6,7 @@ import type { Analise, Importacao, ResultadoImportacao } from "../lib/types";
 import analiseReal from "./fixtures/importacoes/analise_matific_motivos.json";
 import {
   api,
+  fireEvent,
   renderComApp,
   responder,
   responderErro,
@@ -304,6 +305,63 @@ describe("Importacoes", () => {
       // Só a criança sem ficha é aluno novo (antes: "2 aluno(s) novo(s)").
       expect(screen.getByText(/aluno\(s\) novo\(s\)/).textContent).toMatch(/^1 aluno\(s\) novo\(s\)/);
     }
+  });
+
+  // Política "bloquear" com a mesma prévia real: o backend vincula 1, não cria
+  // ninguém e abre 2 pendências (o nome abreviado e o "Criar" barrado pela política
+  // — backend/tests/test_importacao_previa_motivo.py). Antes o rodapé dizia "2 de 3
+  // serão importados; 1 vão para Revisões" e a confirmação "1 aluno(s) novo(s)".
+  it("política 'bloquear': o rodapé e a confirmação contam o 'Criar' em Revisões", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
+    analise.turma_detectada = "3º Ano A";
+    analise.criacao_bloqueada_por_politica = true;
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Zefa Q 10");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    fireEvent.change(screen.getByLabelText("Data do relatório (obrigatória)"),
+      { target: { value: "2026-08-14" } });
+
+    expect(screen.getByText(/serão importados/).textContent)
+      .toMatch(/^1 de 3 aluno\(s\) serão importados; 2 /);
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent("1 vinculado(s) a um aluno já cadastrado");
+    expect(confirmacao).toHaveTextContent(/2 vão para Revisões de identidade/);
+    expect(confirmacao).not.toHaveTextContent(/aluno\(s\) novo\(s\)/);
+    expect(confirmacao).toHaveTextContent(/Pela política desta escola/);
+    expect(confirmacao).not.toHaveTextContent(/não se desfaz sozinha/);
+  });
+
+  it("sem a política 'bloquear', o 'Criar' continua contado como aluno novo", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
+    analise.turma_detectada = "3º Ano A";
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Zefa Q 10");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    fireEvent.change(screen.getByLabelText("Data do relatório (obrigatória)"),
+      { target: { value: "2026-08-14" } });
+
+    expect(screen.getByText(/serão importados/).textContent)
+      .toMatch(/^2 de 3 aluno\(s\) serão importados; 1 /);
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent("1 aluno(s) novo(s)");
+    expect(confirmacao).toHaveTextContent(/não se desfaz sozinha/);
+    expect(confirmacao).not.toHaveTextContent(/Pela política desta escola/);
   });
 
   it("revisão de TURMA (a turma escolhida resolve) continua com 'Criar'", async () => {
