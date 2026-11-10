@@ -648,6 +648,15 @@ class ConectorMatific(ConectorNavegador):
             except ValueError as exc:
                 raise ErroConector("Resposta não-JSON do Matific no HTTP.",
                                    codigo="sessao_invalida", recuperavel=True) from exc
+            # JSON com status de erro (400, 404, 429, 5xx…): a plataforma disse que
+            # falhou. Antes o corpo de erro seguia adiante e virava "0 alunos" na
+            # tela da premiação — e entrava no cache. É o mesmo critério do caminho
+            # pelo navegador (``_coletar_do_placar``).
+            if not http_ok(r.status_code):
+                raise ErroConector(
+                    f"O Matific respondeu HTTP {r.status_code} à consulta do Placar. "
+                    "Tente de novo em alguns minutos.",
+                    codigo=codigo_do_http(r.status_code), recuperavel=True)
             return {"ok": True, "status": r.status_code, "body": corpo}
 
         try:
@@ -697,6 +706,13 @@ class ConectorMatific(ConectorNavegador):
                 url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
                           f"?{filtro}&school_id={school_id}")
                 res_ss = _get(client, url_ss)
+                # 200 fora do formato conhecido é a API que mudou: "lista vazia" aqui
+                # diria que a escola não tem alunos (mesma regra do navegador).
+                if not self._corpo_school_student_valido(res_ss):
+                    raise ErroConector(
+                        "Resposta do Placar do Matific fora do formato conhecido (sem a "
+                        "lista 'data') — a API pode ter mudado. Verifique o conector.",
+                        codigo="parser_incompativel", recuperavel=False)
                 self._conferir_escola_do_corpo(res_ss, school_id)
                 return self._parse_school_student(res_ss, nomes)
         except ErroConector:

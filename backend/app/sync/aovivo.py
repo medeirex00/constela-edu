@@ -499,6 +499,22 @@ def _montar_ranking(alunos: list[dict], fichas: _FichasDaEscola) -> list[dict]:
     return itens
 
 
+def _recusar_linhas_sem_numeros(alunos: list[dict]) -> None:
+    """Linha do Placar sem ``score`` ou ``activities_completed`` (a CHAVE não veio:
+    campo renomeado na API) não é "0 estrelas": uma criança de 300 estrelas sairia
+    do pódio em silêncio. Vale nos dois caminhos (HTTP e navegador) e antes do
+    cache. A sincronização trata o mesmo sinal na importação (``ausentes``)."""
+    sem_numeros = [a for a in alunos if a.get("ausentes")]
+    if not sem_numeros:
+        return
+    campos = sorted({c for a in sem_numeros for c in a["ausentes"]})
+    raise ErroConector(
+        f"O Placar do Matific veio sem {' e '.join(campos)} em {len(sem_numeros)} de "
+        f"{len(alunos)} aluno(s) — a API pode ter mudado. A premiação não foi montada "
+        "para não mostrar 0 no lugar do número real. Verifique o conector.",
+        codigo="parser_incompativel", recuperavel=False)
+
+
 # --- Consulta ao vivo (entrada única, síncrona) ------------------------------
 
 def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
@@ -594,6 +610,7 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             except Exception:  # noqa: BLE001
                 db.rollback()
 
+        _recusar_linhas_sem_numeros(alunos)
         fichas = _fichas_da_escola(db, escola_id, ano_letivo,
                                    uuids=[a.get("uuid") for a in alunos])
         itens = _montar_ranking(alunos, fichas)
