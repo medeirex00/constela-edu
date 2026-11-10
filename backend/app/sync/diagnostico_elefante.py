@@ -178,11 +178,16 @@ def executar(db: Session, escola_id: int, *, agora: datetime | None = None) -> d
                 raise       # defeito nosso: sobe cru (500), já no log ERROR
             raise erro from exc
 
+    # Solta a conexão do banco ANTES do robô (login + sondagem, até ``_TIMEOUT_S``):
+    # a leitura da credencial (e a autenticação da requisição) abriu a transação, e
+    # ela ficaria "idle in transaction" segurando uma conexão do pool durante toda a
+    # I/O externa — a regra do módulo (coleta, placar ao vivo, "Testar conexão").
+    # Só leituras até aqui; a credencial já está decifrada em memória. O diff e a
+    # gravação abaixo reabrem a conexão sob demanda.
+    db.rollback()
     inventario = asyncio.run(_coletar())
 
     inventario["gerado_em"] = agora.isoformat() + "Z"
-    # Solta a conexão do banco (o robô rodou fora dela); relê para o diff/salvar.
-    db.rollback()
     anterior = _carregar(db, escola_id)
     diff = _comparar(anterior, inventario)
     _salvar(db, escola_id, inventario)
