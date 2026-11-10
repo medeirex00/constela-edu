@@ -334,6 +334,26 @@ function diaDoPeriodo(iso: string | null): string {
   return d && m && a ? `${d}/${m}/${a}` : iso;
 }
 
+/** Por que o cartão "Questões" do Elefante está sem número ("—"), na língua do aviso
+ *  de cobertura logo abaixo dele — e não o "acertos sobre tentativas" de quando há
+ *  número. Mesma ordem de causas do aviso (`AvisoCobertura`, estado "sem_intervalo"). */
+function motivoSemNumeroQuestoes(ele: BlocoElefante): string {
+  const c = ele.cobertura_questoes;
+  if (c?.status === "sem_intervalo") {
+    if ((c.alunos_questoes_nao_vieram ?? 0) > 0) {
+      return "sem número: a plataforma não mandou as questões — veja o aviso";
+    }
+    if (c.alunos_sem_intervalo > 0 && (c.alunos_sem_intervalo_so_inicio ?? 0) >= c.alunos_sem_intervalo) {
+      return "sem número ainda: a única coleta mede o início — veja o aviso";
+    }
+    return "sem número: uma única coleta por aluno no período, não é zero — veja o aviso";
+  }
+  if (ele.alunos_sem_retrato > 0) {
+    return `sem número: ${numero(ele.alunos_sem_retrato)} sem coleta na janela (não contam como zero)`;
+  }
+  return "sem número para o período (não é zero)";
+}
+
 /** O período PEDIDO é a referência; o que as coletas cobrem vem ao lado. Se
  *  não cobrem exatamente, a tela diz o que falta (ou sobra) e por quê — nunca
  *  troca uma coisa pela outra. Mesma regra do PDF (`_avisos_cobertura`). */
@@ -823,7 +843,7 @@ export default function RelatorioPeriodo() {
                       // celular "1.234/2.345" quebra depois da barra em vez de vazar.
                       : `${numero(ele.questoes_acertos ?? 0)}/\u200B${numero(ele.questoes_tentativas)}`
                   }
-                  detalhe={[
+                  detalhe={ele.questoes_tentativas === null ? motivoSemNumeroQuestoes(ele) : [
                     ele.cobertura_questoes?.status === "parcial" && "cobertura parcial do período — veja o aviso",
                     ele.cobertura_questoes?.status === "ampliada" && "inclui antes do período — veja o aviso",
                     ele.alunos_sem_retrato > 0

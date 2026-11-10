@@ -187,6 +187,16 @@ describe("Relatório por Período", () => {
     expect(t).toContain("sem coleta na janela (não contam como zero)");
   });
 
+  it("Questões do Elefante sem número e sem a cobertura (API antiga) também dizem o porquê", async () => {
+    const dados = relatorioFake();
+    Object.assign(dados.elefante as Record<string, unknown>, { alunos_sem_retrato: 0 });
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    const ele = textoDaSecao("Elefante Letrado");
+    expect(ele).toContain("Questões—sem número para o período (não é zero)");
+    expect(ele).not.toContain("acertos sobre tentativas");
+  });
+
   it("declara, em linguagem de professor, se dá para confiar em cada número", async () => {
     montar();
     await screen.findByText("Tempo de leitura");
@@ -491,6 +501,9 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     const ele = textoDaSecao("Elefante Letrado");
     expect(ele).toContain("Questões—");
     expect(ele).not.toMatch(/Questões\s*0/);
+    // O detalhe do cartão diz POR QUE não há número (o de quando há número não serve).
+    expect(ele).toContain("Questões—sem número: uma única coleta por aluno no período, não é zero — veja o aviso");
+    expect(ele).not.toContain("acertos sobre tentativas");
   });
 
   it("mistura: cada causa diz para quantos alunos vale", async () => {
@@ -566,6 +579,8 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     const t = texto();
     expect(t).toContain("A única coleta do período é a que mede o início; a próxima medirá o que veio depois");
     expect(t).not.toContain("e nenhuma antes");
+    expect(textoDaSecao("Elefante Letrado"))
+      .toContain("Questões—sem número ainda: a única coleta mede o início — veja o aviso");
   });
 
   it("contador que diminui e lacuna no período são ditos", async () => {
@@ -626,7 +641,9 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     expect(t).toContain("Questões: sem número para 01/09/2026 a 30/09/2026.");
     expect(t).toContain("A plataforma não mandou as questões nas coletas do período");
     expect(t).not.toContain("Há uma única coleta por aluno no período");
-    expect(textoDaSecao("Elefante Letrado")).toContain("Questões—");
+    expect(textoDaSecao("Elefante Letrado"))
+      .toContain("Questões—sem número: a plataforma não mandou as questões — veja o aviso");
+    expect(textoDaSecao("Elefante Letrado")).not.toContain("acertos sobre tentativas");
     await userEvent.setup().click(await screen.findByText("Como ler estes números"));
     semVocabularioInterno(texto());
   });
