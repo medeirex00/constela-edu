@@ -1559,6 +1559,13 @@ def _exigir_alunos_na_origem(db: Session, ids: list[int], origem: Turma, ano: in
         "recarregue a turma e tente de novo.")
 
 
+# Campos da turma que entram no ranking: a série (elegibilidade e fator de série,
+# no motor e na leitura), o turno (bônus de leitura na escola, no motor) e o ano
+# letivo (a leitura do ranking só considera as turmas do ano ativo; o recálculo
+# também invalida o cache do painel, que já mostrava a lista de antes).
+_CAMPOS_DA_TURMA_NO_CALCULO = ("ano_escolar", "turno", "ano_letivo")
+
+
 @router.put("/turmas/{turma_id}", response_model=TurmaOut)
 def atualizar_turma(
     turma_id: int,
@@ -1579,9 +1586,22 @@ def atualizar_turma(
     turma de outro ano. Toma antes a trava da escola (no-op no SQLite), a mesma das
     portas que gravam matrícula: um cadastro, uma transferência ou um /resolver não
     grava, entre a contagem e a troca do ano, uma matrícula do ano que a turma está
-    deixando (ela ficaria numa turma de outro ano)."""
+    deixando (ela ficaria numa turma de outro ano).
+
+    Mudar a SÉRIE, o TURNO ou o ANO LETIVO recalcula a escola depois do commit,
+    como toda outra porta que mexe na população do ranking (ações em massa, fusão,
+    exclusões, consolidar turmas). A série decide quem concorre (1º ao 5º ano; as
+    Fases não) e o fator de série da dificuldade; o turno, no perfil personalizado,
+    o bônus de livro lido na escola. Sem o recálculo, a criança da turma que virava
+    "2º Ano" ficava sem nota e fora do ranking, a turma que virava Fase deixava
+    buraco nas posições dos outros, e a Nota congelada de quem voltava de Fase para
+    Ano repetia a posição de outra criança — no ranking e no certificado de mérito.
+    Os outros campos (nome, professor, capacidade, observações, situação) não
+    entram na conta e não recalculam."""
     turma = _turma_da_escola(db, escola_id, turma_id)
     campos = dados.model_dump(exclude_unset=True)
+    muda_a_conta = any(chave in campos and campos[chave] != getattr(turma, chave)
+                       for chave in _CAMPOS_DA_TURMA_NO_CALCULO)
     if campos.get("status") == "arquivada" and turma.status != "arquivada":
         _exigir_turma_sem_alunos_ativos(db, escola_id, turma)
     if campos.get("ano_letivo") is not None and campos["ano_letivo"] != turma.ano_letivo:
@@ -1605,6 +1625,8 @@ def atualizar_turma(
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"Já existe a turma “{nome}” no ano letivo {ano_letivo}.")
+    if muda_a_conta:
+        _recalcular_escola(db, escola_id)
     db.refresh(turma)
     return _turma_out(db, turma)
 
