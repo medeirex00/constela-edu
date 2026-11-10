@@ -181,6 +181,11 @@ def descadastrar_dispositivo(
 
 # --- Sincronização (offline-first) -----------------------------------------------
 
+SINCRONIZACAO_SEM_SECRETARIA = (
+    "No aplicativo, os números de cada escola são de quem trabalha nela. A Secretaria "
+    "acompanha a rede pelo Panorama da Rede, na versão web.")
+
+
 @router.get("/sincronizacao")
 def sincronizar(
     escola_id: int = Depends(escola_autorizada),
@@ -192,7 +197,16 @@ def sincronizar(
     Mesmo escopo por papel da web: admin/coordenador enxergam a escola inteira;
     professor recebe SOMENTE as turmas dele (`turmas_permitidas`). Sem isso, o
     sync vazaria nomes e notas de toda a escola para um professor restrito.
+
+    A Secretaria leva 403 com a explicação. ``turmas_permitidas`` é vazia para ela
+    de propósito (nunca vê nome de criança), e o pacote recorta TUDO por ela —
+    inclusive os números do painel (``montar_dashboard(turma_ids=[])``): o app
+    mostrava a escola com 0 alunos, média 0,0, 0 livros e 0 turmas, como se fossem
+    os números dela. Na web a Secretaria nunca vê este painel (vai para o Panorama
+    da Rede); uma visão da rede dentro do app é decisão de produto, não deste pacote.
     """
+    if permissoes.e_secretaria(usuario):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, SINCRONIZACAO_SEM_SECRETARIA)
     escola = db.get(Escola, escola_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     # AS FASES NÃO CONCORREM: a evolução e o mural do app recortam as turmas
