@@ -407,7 +407,11 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
         andamento = (f"em andamento, até {_data(efetivo)}"
                      if ini and efetivo and fim and efetivo < fim else "")
         pedido = pedido_curto + (f" ({andamento})" if andamento else "")
-        de = _data_hora(c["coleta_inicio"]) if c.get("coleta_inicio") else "o início do contador"
+        # Sem coleta-base, a conta parte do início do contador da plataforma. A frase
+        # muda de forma, não só de palavra: "de" + "o início do contador" dava "de o
+        # início" (a tela monta igual, em ``AvisoCobertura``).
+        tem_base = bool(c.get("coleta_inicio"))
+        de = _data_hora(c["coleta_inicio"]) if tem_base else "o início do contador"
         ate = _data_hora(c.get("coleta_fim")) if c.get("coleta_fim") else SEM_DADO
         medidos = c.get("alunos_medidos")
         if medidos is None:      # API anterior ao campo
@@ -450,10 +454,12 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
                 f"depois, até {_data(efetivo or fim)}, não está na conta")
             curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_fim")), f"depois de {cedo}"))
         if c.get("inclui_antes_do_inicio"):
+            antecedencia = _duracao(c.get("antecedencia_max_horas"))
+            base = f"a coleta-base é de {de}" if tem_base else "a conta parte do início do contador"
             motivos.append(
-                f"não há coleta perto do início{para(c.get('alunos_ampliados'))}: a "
-                f"coleta-base é de {de}, {_duracao(c.get('antecedencia_max_horas'))} antes "
-                f"de {_data(ini)} - o número INCLUI a atividade desse intervalo")
+                f"não há coleta perto do início{para(c.get('alunos_ampliados'))}: {base}"
+                + (f", {antecedencia} antes de {_data(ini)}" if antecedencia else "")
+                + " - o número INCLUI a atividade desse intervalo")
             curtos.append(("INCLUI antes do início" + qtd(c.get("alunos_ampliados")), f"desde {de}"))
         n_sem = c.get("alunos_sem_intervalo") or 0
         if n_sem:
@@ -501,7 +507,7 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
         saida.append({"rotulo": rotulo, "status": c.get("status"), "oficial": oficial,
                       "pedido": pedido, "pedido_curto": pedido_curto, "andamento": andamento,
                       "so_inicio": (c.get("alunos_sem_intervalo_so_inicio") or 0) >= n_sem > 0,
-                      "de": de, "ate": ate,
+                      "de": de, "ate": ate, "tem_base": tem_base,
                       "em_andamento": bool(c.get("em_andamento")),
                       "motivos": motivos, "curtos": curtos})
     return saida
@@ -509,7 +515,11 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
 
 def _cobertura_html(aviso: dict) -> str:
     rotulo, pedido = _esc_html(aviso["rotulo"]), _esc_html(aviso["pedido"])
-    disponivel = f'{_esc_html(aviso["de"])} a {_esc_html(aviso["ate"])}'
+    de, ate = _esc_html(aviso["de"]), _esc_html(aviso["ate"])
+    # Sem coleta-base: "desde o início do contador até …" (nunca "de o início").
+    disponivel = f"{de} a {ate}" if aviso["tem_base"] else f"desde o início do contador até {ate}"
+    medido_pelas_coletas = f"de {disponivel}" if aviso["tem_base"] else disponivel
+    coleta_base = f"a coleta-base, {de}," if aviso["tem_base"] else "o início do contador"
     motivos = "".join(f" {_esc_html(m[0].upper() + m[1:])}." for m in aviso["motivos"])
     status = aviso["status"]
     if status == "sem_intervalo":
@@ -526,16 +536,15 @@ def _cobertura_html(aviso: dict) -> str:
                 'única coleta por estudante no período e nenhuma antes — não existe '
                 'diferença a medir (não é zero).</div>')
     if status == "completa":
-        fim = (f" Em andamento: os dados vão até a coleta de {_esc_html(aviso['ate'])}."
+        fim = (f" Em andamento: os dados vão até a coleta de {ate}."
                if aviso["em_andamento"] else "")
         return (f'<div class="rp-nota"><b>{rotulo}:</b> período solicitado {pedido}, '
-                f'medido pelas coletas de {disponivel}.{fim}</div>')
+                f'medido pelas coletas {medido_pelas_coletas}.{fim}</div>')
     if status == "regra_oficial":
         return (f'<div class="rp-nota"><b>{rotulo}:</b> período solicitado {pedido}. O '
                 'número segue a regra oficial do Matific (a mesma das premiações): '
-                f'diferença entre a coleta-base, {_esc_html(aviso["de"])}, e a última '
-                f'coleta considerada, {_esc_html(aviso["ate"])} — as bordas do período '
-                f'não são verificadas aqui.{motivos}</div>')
+                f'diferença entre {coleta_base} e a última coleta considerada, {ate} — '
+                f'as bordas do período não são verificadas aqui.{motivos}</div>')
     if status == "ampliada":
         return (f'<div class="rp-nota"><b>{rotulo}: o valor INCLUI atividade de antes do '
                 f'período.</b> Período solicitado: {pedido}. Intervalo medido pelas '

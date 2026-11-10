@@ -473,6 +473,55 @@ def test_base_ausente_na_janela_efetiva_nao_e_sem_dado(db, cenario):
     assert pdf.SEM_DADO not in avisos[0][1]
 
 
+def _cobertura_sem_base(status, **extra):
+    """Cobertura SEM coleta-base (``coleta_inicio`` nulo): a conta parte do início
+    do contador da plataforma."""
+    regra = "oficial_matific" if status == "regra_oficial" else None
+    return {"status": status, "regra": regra, "periodo_inicio": "2026-09-01",
+            "periodo_fim": "2026-09-30", "coleta_inicio": None,
+            "coleta_fim": "2026-10-01T03:10:00", "alunos_medidos": 3, **extra}
+
+
+@pytest.mark.parametrize("status,extra,esperado", [
+    ("completa", {}, "medido pelas coletas desde o início do contador até 01/10/2026 00:10."),
+    ("regra_oficial", {}, "diferença entre o início do contador e a última coleta considerada, "
+                          "01/10/2026 00:10"),
+    ("ampliada", {"inclui_antes_do_inicio": True, "alunos_ampliados": 3,
+                  "antecedencia_max_horas": 72},
+     "Intervalo medido pelas coletas do Constela: desde o início do contador até 01/10/2026 00:10."),
+    ("parcial", {"fim_coberto": False, "alunos_sem_fim": 3},
+     "Intervalo medido pelas coletas do Constela: desde o início do contador até 01/10/2026 00:10."),
+])
+def test_cobertura_sem_coleta_base_diz_desde_o_inicio_do_contador(status, extra, esperado):
+    """O documento que vai para as reuniões dizia "medido pelas coletas de o
+    início do contador a …" — a tela já dizia "desde o início do contador até …"."""
+    dados = {"elefante": {"cobertura_questoes": _cobertura_sem_base(status, **extra)}}
+    aviso = pdf._avisos_cobertura(dados)[0]
+    html = pdf._cobertura_html(aviso)
+    assert esperado in html, html
+    # "de o início" como palavra solta ("desde o início" é o certo e contém o trecho).
+    for texto in (html, " ".join(aviso["motivos"])):
+        assert not re.search(r"\bde o início", texto), texto
+        assert "a coleta-base, o início" not in texto, texto
+
+
+def test_coleta_base_anterior_ao_periodo_sem_coleta_base_parte_do_contador():
+    c = _cobertura_sem_base("ampliada", inclui_antes_do_inicio=True, alunos_ampliados=3,
+                            antecedencia_max_horas=72)
+    motivos = " ".join(pdf._avisos_cobertura({"elefante": {"cobertura_questoes": c}})[0]["motivos"])
+    assert "a conta parte do início do contador, 3 dias antes de 01/09/2026" in motivos
+
+
+def test_cobertura_com_coleta_base_continua_com_as_duas_datas():
+    c = _cobertura_sem_base("regra_oficial", coleta_inicio="2026-08-30T03:10:00")
+    html = pdf._cobertura_html(pdf._avisos_cobertura({"matific": {"cobertura": c}})[0])
+    assert ("diferença entre a coleta-base, 30/08/2026 00:10, e a última coleta "
+            "considerada, 01/10/2026 00:10") in html, html
+    c = _cobertura_sem_base("completa", coleta_inicio="2026-08-30T03:10:00")
+    html = pdf._cobertura_html(pdf._avisos_cobertura({"matific": {"cobertura": c}})[0])
+    assert "medido pelas coletas de 30/08/2026 00:10 a 01/10/2026 00:10." in html, html
+
+
 def test_questoes_sem_nenhuma_coleta_nao_viram_zero(db, cenario, sem_chromium):
     """Zero é uma afirmação: a criança foi medida e não produziu.
 
