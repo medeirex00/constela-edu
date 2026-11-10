@@ -585,6 +585,12 @@ def detectar_tipo(conteudo: bytes, nome_arquivo: str = "",
     return "texto"
 
 
+# Quem resolve a resposta da API que veio sem um campo, na língua de quem lê o log da
+# sincronização (o mesmo texto de ``app.sync.orchestrator.AJUSTE_DA_COLETA``, que não
+# é importado aqui: o orquestrador importa este módulo).
+_AJUSTE_DA_COLETA = "A equipe do Constela precisa ajustar a coleta dessa plataforma."
+
+
 def _int_api(v, ausente=0):
     """Inteiro tolerante (aceita int/float/str) — para os campos numéricos da API
     interna. Ausente/ilegível → ``ausente`` (passe ``None`` quando "não veio" NÃO
@@ -768,7 +774,7 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         erros_gerais.append(
             "Campos ausentes na resposta da API do Elefante ("
             + ", ".join(f"{k}: {n} aluno(s)" for k, n in sorted(ausentes.items()))
-            + ") — valores anteriores preservados, nada foi zerado. Verifique o conector.")
+            + ") — valores anteriores preservados, nada foi zerado. " + _AJUSTE_DA_COLETA)
     return Analise(
         plataforma=plataforma, formato="resumo", estrategia="api-elefante",
         mensagem_deteccao="Relatório de turma (API interna do Elefante Letrado).",
@@ -858,7 +864,7 @@ def analisar_matific_api(payload) -> Analise:
         erros_gerais.append(
             "Campos ausentes na resposta do Placar do Matific ("
             + ", ".join(f"{k}: {n} aluno(s)" for k, n in sorted(ausentes.items()))
-            + ") — valores anteriores preservados, nada foi zerado. Verifique o conector.")
+            + ") — valores anteriores preservados, nada foi zerado. " + _AJUSTE_DA_COLETA)
     # Período personalizado (start_date/end_date do Placar) → import POR PERÍODO
     # (premiação por semana/mês). Sem período, cai no import cumulativo.
     pi = str(payload.get("periodo_inicio") or "").strip()

@@ -205,7 +205,7 @@ def _mensagem_coleta_parcial(db, eid):
 def test_so_campo_sumido_nao_manda_sincronizar_de_novo(db, escola_completa, monkeypatch):
     """Revisão independente: o 'coleta_parcial' da S9 dizia "Sincronize de novo para
     completar", mas um campo renomeado não volta com outra coleta (o crítico ao lado
-    diz que o conector precisa ser revisto)."""
+    diz que a equipe do Constela precisa ajustar a coleta dessa plataforma)."""
     ec = escola_completa
     eid = ec["escola"].id
     a, b, _c = ec["alunos"]

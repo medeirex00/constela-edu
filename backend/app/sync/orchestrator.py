@@ -124,6 +124,10 @@ AVISO_NAO_ATUALIZADOS = "campos_nao_atualizados:"
 # Os campos do retrato que as Questões do período medem: se um deles não veio, o
 # retrato não mede as questões (``IMPORTACAO_SEM_QUESTOES``).
 CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
+# Quem resolve a resposta que mudou de formato, na língua de quem lê os alertas e os
+# logs na tela de Integrações — o mesmo texto do Relatório por Período e do Suporte
+# ("conector" é vocabulário de quem programa).
+AJUSTE_DA_COLETA = "a equipe do Constela precisa ajustar a coleta dessa plataforma"
 
 
 def campos_nao_atualizados(analise) -> list[str]:
@@ -317,7 +321,7 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
             n = len(analise.linhas)
             contexto.log("parser", "error",
                          f"Resposta da plataforma sem {', '.join(ausentes)} em todas as "
-                         f"{n} linha(s): nada aplicado (o conector precisa ser revisto).")
+                         f"{n} linha(s): nada aplicado ({AJUSTE_DA_COLETA}).")
             return {**base_res, "avisos": [], "sem_dados": True, "retidos_queda": retidos,
                     "verificou_queda": verificou,
                     "linhas": n + retidos + n_descartadas,
@@ -337,7 +341,7 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
         contexto.log("parser", "error",
                      f"Resposta da plataforma sem {', '.join(nao_atualizados)} em todas as "
                      f"{len(analise.linhas)} linha(s): esses números ficam com o valor da "
-                     "coleta anterior (o conector precisa ser revisto).")
+                     f"coleta anterior ({AJUSTE_DA_COLETA}).")
         if isinstance(perdidos_na_execucao, set):
             perdidos_na_execucao.update(nao_atualizados)
     # As LEITURAS copiam tempo/questões do retrato atual quando nasce um retrato novo:

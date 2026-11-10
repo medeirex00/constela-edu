@@ -1769,8 +1769,8 @@ def _mensagem_parcial(ap: _Apuracao, motivo: str | None) -> str:
     if ap.falhas or ap.defeitos or motivo == "falha_apos_gravacao":
         texto += " Sincronize de novo para completar."
     if ap.campos_nao_atualizados:
-        texto += (" Os números que não vieram não voltam com outra coleta: o conector "
-                  "precisa ser revisto (alerta “Formato do relatório mudou”).")
+        texto += (" Os números que não vieram não voltam com outra coleta: "
+                  f"{orchestrator.AJUSTE_DA_COLETA} (alerta “Formato do relatório mudou”).")
     return texto
 
 
@@ -1864,7 +1864,8 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         else:
             codigo = "parser_incompativel"
             mensagem = (f"Nenhuma linha aproveitável: {ap.defeitos} linha(s) com defeito "
-                        f"({ap.resumo_descartes()}). Verifique o conector.")
+                        f"({ap.resumo_descartes()}). Avise o suporte: "
+                        f"{orchestrator.AJUSTE_DA_COLETA}.")
             recuperavel = False
         execucao.motivo = motivo
         _tratar_falha(db, execucao, contexto, codigo, mensagem, recuperavel=recuperavel)
@@ -1950,12 +1951,18 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
                           f"({', '.join(perdidas) or 'formato'}): essas linhas não foram "
                           "gravadas.")
         if ap.campos_nao_atualizados:
+            # O que a coleta gravou depende do status: na 'parcial' há aluno com livro
+            # novo, e os livros entraram; na 'sem_atualizacao' nenhum aluno foi
+            # atualizado — dizer "os livros foram atualizados" ali era falso.
+            gravou = ("os livros foram atualizados, mas esses números ficaram"
+                      if ap.aplicados else
+                      "nenhum aluno foi atualizado, e esses números ficaram")
             partes.append(
                 f"A resposta da plataforma veio sem {_rotulos_campos(ap.campos_nao_atualizados)}"
-                " em todas as linhas: os livros foram atualizados, mas esses números "
-                "ficaram com o valor da coleta anterior, e as Questões do período não "
-                "medem os dias desta coleta.")
-        mensagem = " ".join(partes) + " O conector precisa ser revisto."
+                f" em todas as linhas: {gravou} com o valor da coleta anterior, e as "
+                "Questões do período não medem os dias desta coleta.")
+        mensagem = (" ".join(partes) + " Sincronizar de novo não resolve: "
+                    f"{orchestrator.AJUSTE_DA_COLETA}.")
         registrar_log(db, execucao, "parser", "error", mensagem)
         abrir_alerta(db, escola_id, plataforma, "parser_incompativel", mensagem,
                      severidade="critico", execucao_id=execucao.id)
