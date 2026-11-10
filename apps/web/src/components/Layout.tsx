@@ -56,7 +56,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment, Suspense, useEffect, useId, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
@@ -1329,45 +1329,47 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   }
 
   return (
-    <nav ref={refNav} aria-label="Menu principal" className={CLASSE_NAV}>
-      <DegradeRolagem lado="topo" visivel={acima} />
-      <div>
-        {secoesDoPerfil(perfil).map((secao) => {
-          const daSecao = grupos.filter((g) => g.secao === secao.chave);
-          // Seção vazia não aparece (ex.: tudo dela fora dos módulos contratados).
-          if (daSecao.length === 0) return null;
-          const idTitulo = `${idBase}-secao-${secao.chave}`;
-          return (
-            <div key={secao.chave} role="group" aria-labelledby={idTitulo} className="mt-6 first:mt-0">
-              <TituloSecao id={idTitulo}>{secao.rotulo}</TituloSecao>
-              <div className="space-y-1">
-                {daSecao.map((grupo) =>
-                  ehSolto(grupo) ? (
-                    grupo.itens.map((item) => (
-                      <LinkMenu key={item.caminho} item={item} ativo={ativoDe(item)} aoNavegar={aoNavegar}
-                                selo={seloDoItem(item, selo)} />
-                    ))
-                  ) : (
-                    <GrupoMenu
-                      key={grupo.chave}
-                      grupo={grupo}
-                      aberto={estaAberto(grupo)}
-                      temAtivo={ativo === grupo.chave}
-                      idPainel={`${idBase}-${grupo.chave}`}
-                      aoAlternar={() => alternar(grupo)}
-                      aoNavegar={aoNavegar}
-                      selo={selo}
-                      ativoDe={ativoDe}
-                    />
-                  ),
-                )}
+    <ListaComSetas acima={acima} abaixo={abaixo}>
+      <nav ref={refNav} aria-label="Menu principal" className={CLASSE_NAV}>
+        <DegradeRolagem lado="topo" visivel={acima} />
+        <div>
+          {secoesDoPerfil(perfil).map((secao) => {
+            const daSecao = grupos.filter((g) => g.secao === secao.chave);
+            // Seção vazia não aparece (ex.: tudo dela fora dos módulos contratados).
+            if (daSecao.length === 0) return null;
+            const idTitulo = `${idBase}-secao-${secao.chave}`;
+            return (
+              <div key={secao.chave} role="group" aria-labelledby={idTitulo} className="mt-6 first:mt-0">
+                <TituloSecao id={idTitulo}>{secao.rotulo}</TituloSecao>
+                <div className="space-y-1">
+                  {daSecao.map((grupo) =>
+                    ehSolto(grupo) ? (
+                      grupo.itens.map((item) => (
+                        <LinkMenu key={item.caminho} item={item} ativo={ativoDe(item)} aoNavegar={aoNavegar}
+                                  selo={seloDoItem(item, selo)} />
+                      ))
+                    ) : (
+                      <GrupoMenu
+                        key={grupo.chave}
+                        grupo={grupo}
+                        aberto={estaAberto(grupo)}
+                        temAtivo={ativo === grupo.chave}
+                        idPainel={`${idBase}-${grupo.chave}`}
+                        aoAlternar={() => alternar(grupo)}
+                        aoNavegar={aoNavegar}
+                        selo={selo}
+                        ativoDe={ativoDe}
+                      />
+                    ),
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-      <DegradeRolagem lado="base" visivel={abaixo} />
-    </nav>
+            );
+          })}
+        </div>
+        <DegradeRolagem lado="base" visivel={abaixo} />
+      </nav>
+    </ListaComSetas>
   );
 }
 
@@ -1376,7 +1378,8 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
  *  item cortado ficar sem aviso. Decorativo. Fica dentro da área que rola, preso à
  *  borda (sticky); o do topo não ocupa espaço (margens negativas) e o do pé deixa
  *  uma folga para o último item subir acima dele. `recuo` anula o padding lateral
- *  da lista (px-3 no menu, px-2 na barra só de ícones). */
+ *  da lista (px-3 no menu, px-2 na barra só de ícones). A SETA não mora aqui: ver
+ *  `SetaRolagem`. */
 function DegradeRolagem({ lado, visivel, recuo = "-mx-3" }: {
   lado: "topo" | "base";
   visivel: boolean;
@@ -1390,15 +1393,42 @@ function DegradeRolagem({ lado, visivel, recuo = "-mx-3" }: {
       aria-hidden
       data-degrade={lado}
       data-visivel={visivel ? "sim" : "nao"}
-      className={`pointer-events-none sticky z-10 ${recuo} flex h-8 justify-center from-marinho-900 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-marinho-950 ${posicao} ${
-        lado === "topo" ? "items-start" : "items-end"
+      className={`pointer-events-none sticky z-10 ${recuo} block h-8 from-marinho-900 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-marinho-950 ${posicao} ${
+        visivel ? "opacity-100" : "opacity-0"}`}
+    />
+  );
+}
+
+/** Seta que avisa que há itens escondidos naquele lado da lista do menu (com a janela
+ *  baixa um item pode ficar todo escondido, e o esmaecido sozinho quase não se nota).
+ *  Fica FORA da área que rola, numa faixa de 8 px na folga entre a lista e o cabeçalho
+ *  (topo) ou o rodapé (base) — onde não há texto. Dentro da lista, presa à borda, ela
+ *  caía em cima do rótulo que passava ali ("Regras de⌄pontuação" numa janela de 768 px
+ *  com todos os grupos abertos). Decorativa. */
+function SetaRolagem({ lado, visivel }: { lado: "topo" | "base"; visivel: boolean }) {
+  return (
+    <div
+      aria-hidden
+      data-seta={lado}
+      data-visivel={visivel ? "sim" : "nao"}
+      className={`pointer-events-none absolute inset-x-0 z-10 flex h-2 items-center justify-center transition-opacity duration-200 motion-reduce:transition-none ${
+        lado === "topo" ? "top-0 -translate-y-full" : "bottom-0 translate-y-full"
       } ${visivel ? "opacity-100" : "opacity-0"}`}
     >
-      {/* Seta visível: com a janela baixa (1440×900) um item pode ficar todo escondido
-          e o esmaecido sozinho, sobre o fundo vazio, quase não se nota. */}
       {lado === "topo"
-        ? <ChevronUp size={16} className="text-marinho-300" />
-        : <ChevronDown size={16} className="mb-0.5 text-marinho-300" />}
+        ? <ChevronUp size={16} className="shrink-0 text-marinho-300" />
+        : <ChevronDown size={16} className="shrink-0 text-marinho-300" />}
+    </div>
+  );
+}
+
+/** A lista do menu com as setas de rolagem por fora dela (ver `SetaRolagem`). */
+function ListaComSetas({ acima, abaixo, children }: { acima: boolean; abaixo: boolean; children: ReactNode }) {
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <SetaRolagem lado="topo" visivel={acima} />
+      {children}
+      <SetaRolagem lado="base" visivel={abaixo} />
     </div>
   );
 }
@@ -1475,21 +1505,23 @@ function NavegacaoRail() {
   const refNav = useRef<HTMLElement | null>(null);
   const { inicio: acima, fim: abaixo } = useBordasDaRolagem(refNav, "y");
   return (
-    <nav ref={refNav} aria-label="Menu principal" className={`${CLASSE_NAV} !px-2`}>
-      <DegradeRolagem lado="topo" visivel={acima} recuo="-mx-2" />
-      <div className="space-y-1">
-        {blocos.map((itens, i) => (
-          <Fragment key={itens[0]?.caminho ?? i}>
-            {i > 0 && <div aria-hidden data-divisoria="secao" className="mx-3 my-3 border-t border-white/10" />}
-            {itens.map((item) => (
-              <IconeMenu key={item.caminho} item={item} ativo={itemAtivo(item, pathname, search, todos)}
-                         selo={seloDoItem(item, selo)} />
-            ))}
-          </Fragment>
-        ))}
-      </div>
-      <DegradeRolagem lado="base" visivel={abaixo} recuo="-mx-2" />
-    </nav>
+    <ListaComSetas acima={acima} abaixo={abaixo}>
+      <nav ref={refNav} aria-label="Menu principal" className={`${CLASSE_NAV} !px-2`}>
+        <DegradeRolagem lado="topo" visivel={acima} recuo="-mx-2" />
+        <div className="space-y-1">
+          {blocos.map((itens, i) => (
+            <Fragment key={itens[0]?.caminho ?? i}>
+              {i > 0 && <div aria-hidden data-divisoria="secao" className="mx-3 my-3 border-t border-white/10" />}
+              {itens.map((item) => (
+                <IconeMenu key={item.caminho} item={item} ativo={itemAtivo(item, pathname, search, todos)}
+                           selo={seloDoItem(item, selo)} />
+              ))}
+            </Fragment>
+          ))}
+        </div>
+        <DegradeRolagem lado="base" visivel={abaixo} recuo="-mx-2" />
+      </nav>
+    </ListaComSetas>
   );
 }
 
