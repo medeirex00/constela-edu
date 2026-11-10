@@ -17,6 +17,7 @@ from app.core.config import registrar_avisos_de_configuracao, settings
 from app.core import observabilidade as obs
 from app.core.cabecalhos import CabecalhosSegurancaMiddleware
 from app.core.limite_corpo import LimiteDeCorpoMiddleware
+from app.core import mantenedor_do_pool
 from app.core.database import engine, garantir_dados_base, get_db
 from app.core.deps import negar_secretaria
 from app.core.prontidao import prontidao
@@ -267,6 +268,20 @@ automacao.iniciar_no_boot(settings)
 @app.on_event("shutdown")
 def _parar_scheduler_sync() -> None:
     sync_scheduler.parar()
+
+
+# Mantenedor do pool (só PostgreSQL; ``0`` em DB_POOL_AQUECIDO_S ou DB_POOL_AQUECIDO_CONEXOES
+# desliga): uma thread por worker que pré-aquece o pool no boot e, a cada ciclo, deixa N
+# conexões prontas, para que a requisição não pague conexão nova, ping de conexão parada nem
+# reciclagem. Nunca derruba o boot nem a API. Ver app/core/mantenedor_do_pool.py.
+@app.on_event("startup")
+def _ligar_mantenedor_do_pool() -> None:
+    mantenedor_do_pool.iniciar(engine)
+
+
+@app.on_event("shutdown")
+def _parar_mantenedor_do_pool() -> None:
+    mantenedor_do_pool.parar()
 
 
 # --- Health checks e métricas (SaaS) -----------------------------------------

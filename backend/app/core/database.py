@@ -11,6 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from starlette.requests import Request
 
 from app.core.config import settings
+from app.core.mantenedor_do_pool import marcar_abertura
 
 is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
@@ -158,6 +159,9 @@ engine = create_engine(settings.DATABASE_URL, **opcoes_do_engine(settings.DATABA
 if not is_sqlite:
     instalar_ping_por_ociosidade(engine)
     desligar_prepared_statements(engine)
+    # A hora de abertura de cada conexão: o mantenedor do pool reabre a que está perto do
+    # ``pool_recycle`` antes que uma requisição a pegue (ligado no startup, ``app.main``).
+    marcar_abertura(engine)
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).

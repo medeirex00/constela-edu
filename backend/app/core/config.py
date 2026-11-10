@@ -147,6 +147,15 @@ class Settings(BaseSettings):
     # = ping em toda retirada (o ``pool_pre_ping`` de antes). Ver
     # ``database.instalar_ping_por_ociosidade``. Não afeta o SQLite.
     DB_PING_OCIOSO_S: float = 30
+    # Mantenedor do pool (``app/core/mantenedor_do_pool.py``, só PostgreSQL): uma thread por
+    # worker que, no boot e depois a cada DB_POOL_AQUECIDO_S segundos, retira ao mesmo tempo
+    # DB_POOL_AQUECIDO_CONEXOES conexões, roda ``SELECT 1`` em cada e devolve, reabrindo antes
+    # a que está perto do DB_POOL_RECYCLE. Assim a requisição não paga conexão nova (~0,8 s
+    # com o banco a 195 ms), ping de conexão parada nem reciclagem. O intervalo precisa ficar
+    # abaixo do DB_PING_OCIOSO_S. As conexões ficam limitadas ao DB_POOL_SIZE; o total mantido
+    # é DB_POOL_AQUECIDO_CONEXOES × workers. ``0`` em qualquer das duas desliga.
+    DB_POOL_AQUECIDO_S: float = 20
+    DB_POOL_AQUECIDO_CONEXOES: int = 8
     # Prazo (segundos) para ABRIR uma conexão nova com o PostgreSQL — o
     # ``connect_timeout`` da libpq, passado ao psycopg pelo engine. Sem ele, um
     # banco que não responde (host fora, rede parada) prende o worker no
