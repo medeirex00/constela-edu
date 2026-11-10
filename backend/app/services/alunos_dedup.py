@@ -25,6 +25,7 @@ from itertools import combinations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.database import bloquear_escola_para_importacao
 from app.models import (
     Aluno,
     Escola,
@@ -373,7 +374,12 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
         completo automaticamente (resolve o "una um par por vez" sem trabalho manual).
       * CADEIA AMBÍGUA (tem nome idêntico=gêmeo, variante de grafia, ou conflito de
         identidade no meio) → NÃO colapsa; reporta para revisão manual (nunca funde
-        crianças diferentes sem um humano decidir par a par)."""
+        crianças diferentes sem um humano decidir par a par).
+
+    Toma a trava da importação ANTES de recomputar os candidatos e sem escrever
+    nada antes dela (ver ``academico.fundir_alunos``): a coleta em andamento
+    termina, e só então o lote lê e funde. Cai no commit do endpoint."""
+    bloquear_escola_para_importacao(db, escola_id)
     escolhidos = set(loser_ids or [])
     selecionados = [(loser, survivor, motivo)
                     for loser, survivor, _conf, motivo, _turma in _candidatos(db, escola_id)

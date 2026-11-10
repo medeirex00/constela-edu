@@ -1064,6 +1064,14 @@ def fundir_alunos(
     if dados.manter_id == dados.remover_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Escolha dois alunos diferentes para fundir.")
+    # A MESMA trava da importação e da coleta, e pelo mesmo motivo. Sem ela, uma
+    # coleta em andamento gravava retrato ou vínculo na ficha que está sendo apagada,
+    # e o CASCADE levava junto (ou a coleta caía por FK). A ORDEM é a da importação:
+    # a trava vem ANTES de ler as duas fichas e de escrever qualquer linha — quem
+    # chega depois espera, e relê o que o outro gravou — e cai no commit, antes do
+    # recálculo (hierarquia de ``bloquear_escola_para_recalculo``). Travar depois de
+    # escrever daria deadlock com a coleta, que trava primeiro e escreve depois.
+    bloquear_escola_para_importacao(db, escola_id)
     manter = _aluno_da_escola(db, escola_id, dados.manter_id)
     remover = _aluno_da_escola(db, escola_id, dados.remover_id)
     # Só funde alunos ATIVOS: manter um arquivado/excluído absorvendo um ativo
