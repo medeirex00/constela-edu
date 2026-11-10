@@ -11,13 +11,14 @@ Decisões:
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
+from app.core.rate_limit import LimitadorTentativas, ip_do_cliente
 from app.models import DispositivoMovel, Escola, Usuario
 from app.models.base import agora
 from app.routers.rankings import _ranking, montar_dashboard
@@ -123,6 +124,56 @@ def remover_dispositivo(
         )
     ).scalar_one_or_none()
     if dispositivo is not None:
+        db.delete(dispositivo)
+        db.commit()
+    return {"mensagem": "Dispositivo removido."}
+
+
+# Descadastro SEM login: tentativas por IP numa janela (todas contam, achando ou não
+# o aparelho). Folgado para a escola inteira atrás de um IP só saindo do app; curto
+# para quem tentasse adivinhar tokens (que, de todo modo, são aleatórios e longos).
+limitador_descadastro = LimitadorTentativas(max_tentativas=30, janela_s=600)
+
+
+@router.post("/dispositivos/descadastrar")
+def descadastrar_dispositivo(
+    dados: DispositivoRemover,
+    request: Request,
+    escola_id: int,
+    db: Session = Depends(get_db),
+):
+    """Tira o aparelho do push SEM pedir login — o "Sair" do app que não alcançou o
+    ``/remover``.
+
+    O ``/remover`` exige a sessão. No "Sair da conta" sem rede (ou com a API fora) a
+    chamada falhava e o app apagava o JWT logo depois, então nenhuma nova tentativa
+    se autenticava; na sessão expirada (401) nem dava para tentar. O aparelho seguia
+    cadastrado para uma conta ativa e recebia, na tela bloqueada, o primeiro nome da
+    criança (``push.corpo_dados_atualizados``). Aqui basta o ``token_push``: é o
+    segredo do próprio aparelho (só o app dele o conhece; quem o tem já poderia
+    mandar push a ele direto pelo Expo), e o efeito é só PARAR de avisar. O app
+    chama na hora e repete quando a rede voltar.
+
+    ``escola_id`` é a escola que o app tinha aberta; o aparelho sai de onde estiver
+    cadastrado (o token é único — como no ``/remover``), porque o app troca de
+    escola sem cadastrar de novo. A resposta é a mesma exista o token ou não: a rota
+    não diz quais aparelhos estão cadastrados."""
+    chave = ip_do_cliente(request)
+    if limitador_descadastro.bloqueado(chave):
+        espera = limitador_descadastro.segundos_restantes(chave)
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Muitas tentativas. Aguarde {max(1, espera // 60)} minuto(s) e "
+            "tente novamente.",
+            headers={"Retry-After": str(max(1, espera))})
+    limitador_descadastro.registrar_falha(chave)
+    dispositivo = db.execute(
+        select(DispositivoMovel).where(DispositivoMovel.token_push == dados.token_push)
+    ).scalar_one_or_none()
+    if dispositivo is not None:
+        registrar(db, "dispositivo.descadastrado", escola_id=dispositivo.escola_id,
+                  detalhes={"plataforma": dispositivo.plataforma,
+                            "dono": dispositivo.usuario_id, "sem_login": True})
         db.delete(dispositivo)
         db.commit()
     return {"mensagem": "Dispositivo removido."}
