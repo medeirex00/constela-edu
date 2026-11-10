@@ -1762,7 +1762,16 @@ def _mensagem_parcial(ap: _Apuracao, motivo: str | None) -> str:
     if ap.campos_nao_atualizados:
         partes.append(f"{_rotulos_campos(ap.campos_nao_atualizados)} não vieram da "
                       "plataforma e ficaram com o valor da coleta anterior")
-    return "; ".join(partes) + ". Sincronize de novo para completar."
+    texto = "; ".join(partes) + "."
+    # Sincronizar de novo completa o que FALHOU (unidade, falha depois de gravar) ou
+    # a linha com defeito de passagem; um campo renomeado na API não volta com outra
+    # coleta — mandar repetir ensinava a ignorar o par de alertas.
+    if ap.falhas or ap.defeitos or motivo == "falha_apos_gravacao":
+        texto += " Sincronize de novo para completar."
+    if ap.campos_nao_atualizados:
+        texto += (" Os números que não vieram não voltam com outra coleta: o conector "
+                  "precisa ser revisto (alerta “Formato do relatório mudou”).")
+    return texto
 
 
 _ROTULO_CAMPO = {"tempo_leitura_min": "tempo de leitura",

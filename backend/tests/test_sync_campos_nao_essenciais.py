@@ -196,6 +196,56 @@ def test_campos_sumidos_com_linha_com_defeito_nao_contam_como_em_dia(
     assert "descartada" in msg
 
 
+def _mensagem_coleta_parcial(db, eid):
+    return db.execute(select(SincronizacaoAlerta.mensagem).where(
+        SincronizacaoAlerta.escola_id == eid, SincronizacaoAlerta.tipo == "coleta_parcial",
+        SincronizacaoAlerta.resolvido.is_(False))).scalar_one()
+
+
+def test_so_campo_sumido_nao_manda_sincronizar_de_novo(db, escola_completa, monkeypatch):
+    """Revisão independente: o 'coleta_parcial' da S9 dizia "Sincronize de novo para
+    completar", mas um campo renomeado não volta com outra coleta (o crítico ao lado
+    diz que o conector precisa ser revisto)."""
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, _c = ec["alunos"]
+    credencial(db, eid, "elefante")
+    nav = NavElefante(_origem(a, b))
+    instalar(monkeypatch, nav_elefante=nav)
+    rodar(db, eid, "elefante")
+    _coleta_de_dois_dias_atras(db)
+
+    _sem(nav, ("responses",), livros_de={9300001: 7})
+    ex, _ = rodar(db, eid, "elefante")
+
+    assert (ex.status, ex.motivo) == ("parcial", MOTIVO)
+    msg = _mensagem_coleta_parcial(db, eid)
+    assert "questões respondidas não vieram" in msg
+    assert "Sincronize de novo" not in msg
+    assert "não voltam com outra coleta" in msg
+
+
+def test_campo_sumido_com_defeito_ainda_manda_sincronizar_de_novo(
+        db, escola_completa, monkeypatch):
+    """Com linha com defeito ao lado, repetir a coleta continua valendo para ela."""
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, _c = ec["alunos"]
+    credencial(db, eid, "elefante")
+    nav = NavElefante(_origem(a, b))
+    instalar(monkeypatch, nav_elefante=nav)
+    rodar(db, eid, "elefante")
+    _coleta_de_dois_dias_atras(db)
+
+    nav.turmas[CID]["alunos"].append(aluno_el(9300003, "", [], tempo=1, resp=1, ok=1))
+    _sem(nav, ("responses",), livros_de={9300001: 7})
+    rodar(db, eid, "elefante")
+
+    msg = _mensagem_coleta_parcial(db, eid)
+    assert "Sincronize de novo para completar." in msg
+    assert "não voltam com outra coleta" in msg
+
+
 def test_campos_sumidos_com_pendencia_de_revisao_nao_contam_como_em_dia(
         db, escola_completa, monkeypatch):
     """A mesma coisa com uma conta que vai para a revisão (nome de uma palavra): o

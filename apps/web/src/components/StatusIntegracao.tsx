@@ -287,8 +287,9 @@ export const MOTIVO_EXECUCAO: Record<string, string> = {
   // Total do Matific MENOR que o gravado: o valor ficou retido (alerta
   // "Total menor que o gravado"); não há revisão de identidade a fazer.
   queda_retida: "total menor retido para conferência",
-  // Tempo/questões do Elefante sumiram da resposta: ficaram os números de antes.
-  campos_nao_atualizados: "tempo e questões não vieram da plataforma",
+  // Tempo e/ou questões do Elefante sumiram da resposta: ficaram os números de
+  // antes. O motivo não diz QUAIS campos (o alerta crítico diz).
+  campos_nao_atualizados: "tempo ou questões não vieram da plataforma",
 };
 
 /** A última TENTATIVA que terminou: o backend novo informa; no antigo, a
@@ -596,7 +597,7 @@ export function situacaoIntegracao(
         : motivoUltimo === "linhas_descartadas"
           ? `A última sincronização aplicou dados${aplicados}, mas parte das linhas recebidas veio com defeito (sem data ou sem nome) e não virou dado. Veja o alerta; se repetir, envie o relatório manualmente.`
           : motivoUltimo === "campos_nao_atualizados"
-            ? `A última sincronização aplicou dados${aplicados}, mas a plataforma não mandou o tempo de leitura e as questões: esses números ficaram com o valor da coleta anterior. Veja o alerta “Formato do relatório mudou”.`
+            ? `A última sincronização aplicou dados${aplicados}, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões): eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta. O alerta “Formato do relatório mudou” diz quais faltaram.`
             : `A última sincronização aplicou dados${aplicados}, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. Veja o alerta e sincronize de novo para completar.`,
     };
   }
@@ -671,8 +672,8 @@ export function situacaoIntegracao(
     // A resposta perdeu tempo/questões (backend: MOTIVO_CAMPOS_NAO_ATUALIZADOS): não
     // é "nada mudou" nem conta como dado em dia.
     return {
-      chave: "sem_atualizacao", tom: "alerta", rotulo: "Sem atualização: tempo e questões não vieram",
-      frase: "A última coleta terminou sem erro e nenhum aluno foi atualizado, mas a plataforma não mandou o tempo de leitura e as questões: esses números ficaram com o valor da coleta anterior. Veja o alerta “Formato do relatório mudou”.",
+      chave: "sem_atualizacao", tom: "alerta", rotulo: "Sem atualização: tempo ou questões não vieram",
+      frase: "A última coleta terminou sem erro e nenhum aluno foi atualizado, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões): eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta. O alerta “Formato do relatório mudou” diz quais faltaram.",
     };
   }
   if (statusUltimo === "sem_atualizacao" && motivoUltimo === "queda_retida") {
