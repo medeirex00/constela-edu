@@ -200,6 +200,11 @@ PLACAR_SOFIA_UMA = _placar("3º Ano A", [
     {"nome": "Sofia Almeida Duarte", "uuid": "uuid-ficticio-s1", "estrelas": 9,
      "atividades": 3}])
 
+# Aluno novo na turma "5º Ano C", que a escola tem ARQUIVADA.
+PLACAR_TURMA_ARQUIVADA = _placar("5º Ano C", [
+    {"nome": "Crianca Nova Ficticia", "uuid": "uuid-ficticio-nova-5c", "estrelas": 9,
+     "atividades": 2}])
+
 
 def _sem_preparo(_cliente, _db, _escola_completa) -> None:
     return None
@@ -223,6 +228,14 @@ def _preparo_sofia_na_fila(cliente, _db, escola_completa) -> None:
     _confirmar(cliente, eid, primeira, _corpo_padrao(primeira, turma))
 
 
+def _preparo_turma_arquivada(_cliente, db, escola_completa) -> None:
+    from app.models import Turma
+
+    db.add(Turma(escola_id=escola_completa["escola"].id, nome="5º Ano C", ano_escolar="5º Ano",
+                 ano_letivo=2026, status="arquivada"))
+    db.commit()
+
+
 # Exemplo gravado para a tela → (texto enviado ao /analisar, cenário antes dele:
 # ``preparo(cliente, db, escola_completa)``, que pode já ter importado um relatório).
 EXEMPLOS = {
@@ -232,6 +245,7 @@ EXEMPLOS = {
     "analise_matific_id_externo_duplicado_na_fila.json": (PLACAR_DUP_2, _preparo_dup_na_fila),
     "analise_matific_outra_identidade_duas_contas.json": (PLACAR_SOFIA_DUAS, _sem_preparo),
     "analise_matific_outra_identidade_na_fila.json": (PLACAR_SOFIA_UMA, _preparo_sofia_na_fila),
+    "analise_matific_turma_arquivada.json": (PLACAR_TURMA_ARQUIVADA, _preparo_turma_arquivada),
 }
 
 TIPOS_TS = RAIZ / "packages" / "core" / "src" / "tipos.ts"
@@ -406,6 +420,47 @@ def test_outra_conta_leva_ao_mesmo_aluno_sem_ele_ter_conta(cliente, db, escola_c
     assert len(segunda["linhas"]) == 1
     assert segunda["linhas"][0]["correspondencia"]["motivo"] == "outra_identidade_na_plataforma"
     assert contas_da_ficha() == 0
+
+
+def test_turma_arquivada_nao_recebe_a_linha_e_a_turma_ativa_escolhida_recebe(
+        cliente, db, escola_completa):
+    """turma_arquivada: o corpo que a tela manda com o destino padrão ("Deixar para a
+    Revisão", com o nome da turma do relatório) não cria ficha nem turma e abre 1
+    pendência — a prévia diz "0 de 1 … ; 1 vai para Revisões" (Importacoes.test, "turma
+    arquivada"). Antes o padrão era "Criar na turma do relatório", que dizia "1 de 1 …
+    serão importados" e "a turma será criada": o backend nunca cria nela. Com uma turma
+    ATIVA escolhida em "Criar aluno novo…", a ficha nasce nela."""
+    from sqlalchemy import func, select
+
+    from app.models import Aluno, Matricula, Turma
+
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"].id
+    _preparo_turma_arquivada(cliente, db, escola_completa)
+    analise = _analise(cliente, eid, PLACAR_TURMA_ARQUIVADA)
+    corr = analise["linhas"][0]["correspondencia"]
+    assert (corr["status"], corr["motivo"]) == ("revisar", "turma_arquivada"), corr
+
+    def contas() -> tuple[int, int]:
+        db.expire_all()
+        return (db.scalar(select(func.count()).select_from(Aluno).where(Aluno.escola_id == eid)),
+                db.scalar(select(func.count()).select_from(Turma).where(Turma.escola_id == eid)))
+
+    antes = contas()
+    revisao = [{"nome": linha["nome"], "dados": linha["dados"], "aluno_id": None,
+                "criar_em_turma_id": None, "criar_em_turma_nome": "5º Ano C"}
+               for linha in analise["linhas"]]
+    resultado = _confirmar(cliente, eid, analise, revisao)
+    assert (resultado["qtd_alunos"], resultado["qtd_revisoes"]) == (0, 1), resultado
+    assert contas() == antes                       # nenhuma ficha, nenhuma turma nova
+    # "Criar aluno novo…" numa turma ATIVA: a turma escolhida resolve.
+    criar = [{**linha, "criar_em_turma_nome": None, "criar_em_turma_id": turma}
+             for linha in revisao]
+    resultado = _confirmar(cliente, eid, analise, criar)
+    assert resultado["qtd_alunos"] == 1, resultado
+    nova = db.scalar(select(Aluno).where(Aluno.escola_id == eid,
+                                         Aluno.nome == "Crianca Nova Ficticia"))
+    assert nova is not None
+    assert db.scalar(select(Matricula.turma_id).where(Matricula.aluno_id == nova.id)) == turma
 
 
 def test_cada_motivo_do_backend_tem_rotulo_na_tela():

@@ -1,0 +1,45 @@
+{
+  "plataforma": "matific",
+  "formato": "resumo",
+  "tipo": "texto",
+  "arquivo_token": null,
+  "arquivo_nome": null,
+  "estrategia": "api-matific",
+  "mensagem_deteccao": "Placar da Escola (API interna do Matific).",
+  "turma_detectada": "5º Ano C",
+  "escola_detectada": "",
+  "aviso_escola": "",
+  "origem_nome": "",
+  "periodo_inicio": "",
+  "periodo_fim": "",
+  "criacao_bloqueada_por_politica": false,
+  "total_alunos": 1,
+  "total_linhas": 1,
+  "total_erros": 0,
+  "total_avisos": 0,
+  "erros_gerais": [],
+  "linhas": [
+    {
+      "numero": 1,
+      "nome": "Crianca Nova Ficticia",
+      "dados": {
+        "turma_relatorio": "5º Ano C",
+        "matific_uuid": "uuid-ficticio-nova-5c",
+        "atividades": 2,
+        "estrelas": 9,
+        "pontuacao_media": 4.5
+      },
+      "erros": [],
+      "avisos": [],
+      "correspondencia": {
+        "status": "revisar",
+        "aluno_id": null,
+        "aluno_nome": null,
+        "similaridade": null,
+        "motivo": "turma_arquivada",
+        "via": "",
+        "alternativas": []
+      }
+    }
+  ]
+}

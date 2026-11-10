@@ -304,6 +304,21 @@ function vaiParaRevisao(c: LinhaAnalise["correspondencia"]): boolean {
   return c?.status === "revisar" && MOTIVOS_SO_REVISAO.has(c.motivo ?? "");
 }
 
+/** A turma do relatório existe, mas ARQUIVADA: o backend não cria o aluno nela (nem a
+ *  recria) e manda a linha para Revisões de identidade. "Criar na turma do relatório"
+ *  não vale; só uma turma ATIVA escolhida em "Criar aluno novo…" resolve — até lá, a
+ *  linha fica na Revisão. */
+function turmaArquivada(c: LinhaAnalise["correspondencia"]): boolean {
+  return c?.status === "revisar" && c.motivo === "turma_arquivada";
+}
+
+/** As turmas do relatório que a escola tem arquivadas (normalizadas): não são "turma
+ *  nova" — a confirmação não as cria. */
+function turmasArquivadasDoRelatorio(a: Analise): Set<string> {
+  return new Set(a.linhas.filter((linha) => turmaArquivada(linha.correspondencia))
+    .map((linha) => normalizar(String(linha.dados.turma_relatorio ?? a.turma_detectada ?? ""))));
+}
+
 /** O destino escolhido leva a linha para Revisões de identidade na confirmação:
  *  "Deixar para a Revisão" sempre; "Criar" (turma cadastrada ou a do relatório)
  *  quando a política da escola é "bloquear" — o backend não cria a ficha e abre a
@@ -509,8 +524,10 @@ export default function Importacoes() {
       // Ação inicial POR GRUPO, já usando a turma lida do relatório.
       const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
       setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
-      // Turma detectada que NÃO existe no cadastro: será criada na confirmação.
-      setTurmaNova(resposta.turma_detectada && !turmaId ? resposta.turma_detectada : "");
+      // Turma detectada que NÃO existe no cadastro: será criada na confirmação. A que
+      // existe ARQUIVADA (a lista de turmas só traz as ativas) não é nova nem é criada.
+      const arquivada = turmasArquivadasDoRelatorio(resposta).has(normalizar(resposta.turma_detectada ?? ""));
+      setTurmaNova(resposta.turma_detectada && !turmaId && !arquivada ? resposta.turma_detectada : "");
       const gruposIniciais = agrupar(resposta);
       setAcoes(
         gruposIniciais.map((g): Acao => {
@@ -526,6 +543,9 @@ export default function Importacoes() {
           // abreviado, duas contas com o mesmo nome, possível duplicata…): o
           // destino é a Revisão — nunca "Criar", que o backend ignoraria.
           if (vaiParaRevisao(c)) return acaoRevisao(g, resposta);
+          // Turma do relatório arquivada: nenhuma turma criável por padrão — a linha fica
+          // na Revisão (o que o backend faria) até o gestor escolher uma turma ativa.
+          if (turmaArquivada(c)) return acaoRevisao(g, resposta);
           // Aluno novo: cria na turma DO PRÓPRIO ALUNO — o relatório geral do
           // Matific tem alunos de várias turmas (turma_relatorio por linha);
           // se essa turma não casar, usa a turma global detectada.
@@ -645,12 +665,14 @@ export default function Importacoes() {
 
   /** "Aplicar a todos": todo aluno NOVO (sem vínculo com cadastro) recebe a
    *  mesma ação — criar na turma escolhida ou na turma do relatório (nova). A
-   *  linha que vai para a Revisão fica onde está: nela "Criar" não vale. */
+   *  linha que vai para a Revisão fica onde está: nela "Criar" não vale. Nem a da
+   *  turma arquivada recebe "a turma do relatório" — nela o backend não cria. */
   function aplicarATodosOsNovos(acao: Acao) {
     setAcoes((atuais) =>
       atuais.map((atual, i) => {
         const g = grupos[i];
-        if (g && !g.todasComErro && atual.tipo !== "importar" && !vaiParaRevisao(g.correspondencia)) {
+        if (g && !g.todasComErro && atual.tipo !== "importar" && !vaiParaRevisao(g.correspondencia)
+            && !(acao.tipo === "criar_nova" && turmaArquivada(g.correspondencia))) {
           return acao;
         }
         return atual;
@@ -1194,6 +1216,13 @@ export default function Importacoes() {
                                   // A confirmação não cria ficha nesta linha: "Criar"
                                   // seria ignorado. Fica a Revisão (ou ignorar).
                                   <option value="revisao">Deixar para a Revisão</option>
+                                ) : turmaArquivada(correspondencia) ? (
+                                  // A turma do relatório está arquivada: o backend não cria
+                                  // nela. Fica a Revisão, ou uma turma ATIVA escolhida.
+                                  <>
+                                    <option value="revisao">Deixar para a Revisão</option>
+                                    <option value="criar">Criar aluno novo…</option>
+                                  </>
                                 ) : (
                                   <>
                                     {(Boolean(primeira.dados.turma_relatorio) || Boolean(turmaNova)) && (

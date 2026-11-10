@@ -9,6 +9,7 @@ import analisePlacarMotivos from "./fixtures/importacoes/analise_matific_placar_
 import analiseDupNaFila from "./fixtures/importacoes/analise_matific_id_externo_duplicado_na_fila.json";
 import analiseOutraIdentDuas from "./fixtures/importacoes/analise_matific_outra_identidade_duas_contas.json";
 import analiseOutraIdentNaFila from "./fixtures/importacoes/analise_matific_outra_identidade_na_fila.json";
+import analiseTurmaArquivada from "./fixtures/importacoes/analise_matific_turma_arquivada.json";
 import {
   api,
   fireEvent,
@@ -670,6 +671,49 @@ describe("Importacoes", () => {
         + "pendência em Revisões de identidade: não dá para saber qual delas é a criança.");
       expect((destino as HTMLSelectElement).value).toBe("revisao");
     }
+  });
+
+  // A turma do relatório ("5º Ano C") existe ARQUIVADA, e a lista de turmas só traz as
+  // ativas. O padrão era "Criar na turma do relatório (5º Ano C)", o rodapé dizia "1 de 1
+  // … serão importados" e a faixa "a turma “5º Ano C” será criada automaticamente" — o
+  // backend não cria ficha nem turma e abre a pendência (backend:
+  // test_turma_arquivada_nao_recebe_a_linha_e_a_turma_ativa_escolhida_recebe, que confirma
+  // os dois corpos abaixo: 0 importados e 1 pendência; com a turma ativa, 1 importado).
+  it("turma do relatório arquivada: vai para a Revisão até escolher uma turma ativa, e a turma não é 'criada'", async () => {
+    const u = await previaReal(analiseTurmaArquivada);
+    const a = analiseTurmaArquivada as unknown as Analise;
+    expect(a.linhas[0].correspondencia?.motivo).toBe("turma_arquivada");
+    const destino = screen.getByRole("combobox", { name: /^Destino de / }) as HTMLSelectElement;
+    expect(destino.value).toBe("revisao");
+    expect(Array.from(destino.options).map((o) => o.textContent))
+      .toEqual(["Deixar para a Revisão", "Criar aluno novo…", "Ignorar"]);
+    expect(screen.getByText(/serão importados/).textContent)
+      .toBe("0 de 1 aluno(s) serão importados; 1 vai para Revisões de identidade.");
+    expect(screen.queryByText(/será criada automaticamente/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /turma do relatório \(nova\)/ })).toBeNull();
+
+    // Com uma turma ATIVA escolhida, a ficha nasce nela.
+    await u.selectOptions(destino, "criar");
+    expect((screen.getByRole("combobox", { name: "Turma para Crianca Nova Ficticia" }) as HTMLSelectElement)
+      .value).toBe("1");
+    expect(screen.getByText(/serão importados/).textContent).toBe("1 de 1 aluno(s) serão importados.");
+
+    // De volta à Revisão: o corpo é o que o backend confirma (sem aluno, com o nome da
+    // turma do relatório).
+    await u.selectOptions(destino, "revisao");
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent(/1 vai para Revisões de identidade — nenhuma ficha é criada/);
+    expect(confirmacao).not.toHaveTextContent(/aluno\(s\) novo\(s\)/);
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "0 aluno(s) com dado novo importado(s).", importacao_id: 11,
+      qtd_alunos: 0, qtd_erros: 1, avisos: [], qtd_revisoes: 1, criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas).toMatchObject([
+      { aluno_id: null, criar_em_turma_id: null, criar_em_turma_nome: "5º Ano C" }]);
   });
 
   it("motivo que a tela ainda não conhece: 'Requer revisão', sem chamar de duplicata", async () => {
