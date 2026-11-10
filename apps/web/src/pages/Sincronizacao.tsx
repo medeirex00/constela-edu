@@ -700,14 +700,17 @@ const MODO_CRIACAO: Record<ModoCriacao, {
     confirmar: "Confirmar: permitir",
     salvo: "Política salva: a plataforma volta a poder criar alunos nesta escola.",
     // A regra do motor (identidade_aluno.decidir): só o aluno SEM nenhum candidato
-    // vira ficha; havendo ficha parecida (nome parecido, mais de um candidato, nome de
-    // outra turma), a linha vai para a Revisão — como diz o Suporte. A lista das
+    // vira ficha; havendo ficha parecida, o vínculo seguro (nome do meio omitido,
+    // abreviação) é feito sozinho, e o não seguro (nome parecido, mais de um candidato,
+    // nome de outra turma) vai para a Revisão — como diz o Suporte. A lista das
     // outras exceções não é fechada: conta de outra escola, a mesma conta em duas
     // linhas e turma que não dá para decidir também esperam na fila.
     efeito: [
       "Da próxima sincronização (ou relatório enviado à mão) em diante, o aluno sem nenhuma "
         + "ficha parecida vira ficha nova, ativa, sem RA e sem nascimento, e já conta no "
-        + "ranking; quando há ficha parecida, a linha vai para Revisões de identidade. Também "
+        + "ranking; quando há ficha parecida, a linha é vinculada a ela se o vínculo for "
+        + "seguro (como o nome do meio omitido) e, se não for, vai para Revisões de "
+        + "identidade. Também "
         + "não viram ficha o nome abreviado (como “ZEFA Q”), duas contas com o mesmo nome no "
         + "mesmo relatório e outros casos de dúvida, como a conta de um aluno de outra escola: "
         + "essas linhas esperam em Revisões de identidade. Ficha criada assim não se desfaz "

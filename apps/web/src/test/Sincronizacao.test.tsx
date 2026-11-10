@@ -922,12 +922,16 @@ describe("Integrações — política de criação de aluno", () => {
     const volta = dialogo("Permitir que a plataforma crie alunos?");
     expect(volta.getByText(/vira ficha nova, ativa, sem RA e sem nascimento/)).toBeInTheDocument();
     // A regra do motor, igual ao Suporte: só quem não tem NENHUMA ficha parecida vira
-    // ficha; com ficha parecida (nome parecido, não seguro) a linha vai para a fila —
-    // backend/tests/test_importacao_manual_politica.py. Antes o texto dizia que "quem
-    // não for reconhecido com segurança vira ficha nova", com só duas exceções.
+    // ficha; com ficha parecida, o vínculo seguro (nome do meio omitido, abreviação) é
+    // feito sozinho e o não seguro vai para a fila —
+    // backend/tests/test_importacao_manual_politica.py (os dois casos). Antes o texto
+    // dizia que "quem não for reconhecido com segurança vira ficha nova", com só duas
+    // exceções; e depois, que TODA linha com ficha parecida ia para a fila.
     const efeito = volta.getByText(/vira ficha nova, ativa/).textContent ?? "";
     expect(efeito).toContain("o aluno sem nenhuma ficha parecida vira ficha nova");
-    expect(efeito).toContain("quando há ficha parecida, a linha vai para Revisões de identidade");
+    expect(efeito).toContain("quando há ficha parecida, a linha é vinculada a ela se o vínculo for "
+      + "seguro (como o nome do meio omitido) e, se não for, vai para Revisões de identidade");
+    expect(efeito).not.toMatch(/quando há ficha parecida, a linha vai para Revisões de identidade/);
     expect(efeito).not.toMatch(/não for reconhecido com segurança vira ficha/);
     // As outras exceções (A2/A5) — sem fingir que a lista é fechada.
     expect(efeito).toContain("nome abreviado (como “ZEFA Q”)");

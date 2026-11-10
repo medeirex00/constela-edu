@@ -150,6 +150,42 @@ def test_permitir_so_quem_nao_tem_ficha_parecida_vira_ficha(cliente, db, escola_
     assert (rev.motivo, rev.nome_recebido) == ("correspondencia_insegura", "Ana Beatriz Sousa")
 
 
+def test_permitir_vincula_sozinho_a_ficha_parecida_segura(cliente, db, escola_completa):
+    """Revisão do acabamento: a confirmação da política 'Permitida' dizia "quando há
+    ficha parecida, a linha vai para Revisões de identidade" — mas a parecida SEGURA o
+    motor vincula sozinho, sem pendência: 'Sofia Duarte' com a ficha 'Sofia Almeida
+    Duarte' (nome do meio omitido) e 'Joao P Barbosa' com 'João Pedro Barbosa'
+    (abreviação). Só a parecida não segura (o teste acima) vai para a fila."""
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"].id
+    assert politica_sync.pode_criar_aluno(db, eid)
+    placar = ('{"fonte": "matific-placar", "turma": "3º Ano A", "alunos": ['
+              '{"nome": "Sofia Duarte", "uuid": "uuid-ficticio-sofia", "estrelas": 9, '
+              '"atividades": 2}, '
+              '{"nome": "Joao P Barbosa", "uuid": "uuid-ficticio-joao", "estrelas": 9, '
+              '"atividades": 2}]}')
+    r = cliente.post(f"{API}/escolas/{eid}/importacoes/analisar", data={"texto": placar})
+    assert r.status_code == 200, r.text
+    analise = r.json()
+    obtido = {linha["nome"]: (linha["correspondencia"]["status"],
+                              linha["correspondencia"]["aluno_nome"])
+              for linha in analise["linhas"]}
+    assert obtido == {"Sofia Duarte": ("vinculado", "Sofia Almeida Duarte"),
+                      "Joao P Barbosa": ("vinculado", "João Pedro Barbosa")}, obtido
+    antes = _conta(db, Aluno, eid)
+    linhas = [{"nome": linha["nome"], "dados": linha["dados"],
+               "aluno_id": linha["correspondencia"]["aluno_id"], "criar_em_turma_id": None}
+              for linha in analise["linhas"]]
+    r = cliente.post(f"{API}/escolas/{eid}/importacoes/confirmar", json={
+        "plataforma": analise["plataforma"], "formato": analise["formato"], "tipo": "texto",
+        "recalcular": False, "linhas": linhas, "data_referencia": "2026-08-14T12:00:00"})
+    assert r.status_code == 200, r.text
+    assert (r.json()["qtd_alunos"], r.json()["qtd_revisoes"]) == (2, 0), r.json()
+    db.expire_all()
+    assert _conta(db, Aluno, eid) == antes
+    assert _conta(db, RevisaoIdentidade, eid) == 0
+    assert _conta(db, IdentidadeExterna, eid) == 2
+
+
 def test_previa_avisa_a_politica_antes_de_confirmar(cliente, db, escola_completa):
     """O /analisar diz à tela que a escola não deixa criar ficha — o aviso vem
     ANTES de o gestor escolher "criar"."""
