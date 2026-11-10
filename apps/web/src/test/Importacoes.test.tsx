@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import Importacoes from "../pages/Importacoes";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import type { Analise, Importacao, ResultadoImportacao } from "../lib/types";
+import analiseReal from "./fixtures/importacoes/analise_matific_motivos.json";
 import {
   api,
   renderComApp,
@@ -270,6 +271,39 @@ describe("Importacoes", () => {
     expect(await screen.findByText(/1 aluno aguarda/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
       .toHaveAttribute("href", "/revisoes-identidade");
+  });
+
+  // Contrato com o backend: a prévia REAL do /analisar, gravada por
+  // backend/tests/test_importacao_previa_motivo.py — não um mock montado à mão.
+  // Antes o backend descartava o "motivo" (CorrespondenciaOut sem o campo) e o nome
+  // abreviado chegava como "Possível duplicata", com "Criar" e contado como novo.
+  it.each([
+    ["sem turma no cabeçalho", ""],
+    ["com a turma do cabeçalho", "3º Ano A"],
+  ])("prévia real do backend (%s): o nome abreviado vai para a Revisão", async (_caso, turma) => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
+    analise.turma_detectada = turma;
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Zefa Q 10");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+
+    const destino = screen.getByRole("combobox", { name: /Destino de Zefa Q/ }) as HTMLSelectElement;
+    expect(destino.value).toBe("revisao");
+    expect(Array.from(destino.options).map((o) => o.textContent)).toEqual(
+      ["Deixar para a Revisão", "Ignorar"]);
+    expect(screen.getByText("Nome abreviado — vai para Revisões de identidade")).toBeInTheDocument();
+    expect(screen.queryByText("Possível duplicata — requer revisão")).toBeNull();
+    if (turma) {
+      // Só a criança sem ficha é aluno novo (antes: "2 aluno(s) novo(s)").
+      expect(screen.getByText(/aluno\(s\) novo\(s\)/).textContent).toMatch(/^1 aluno\(s\) novo\(s\)/);
+    }
   });
 
   it("revisão de TURMA (a turma escolhida resolve) continua com 'Criar'", async () => {

@@ -7,10 +7,18 @@ from app.schemas.comum import ORMModel
 
 
 class CorrespondenciaOut(BaseModel):
-    status: str  # exato | provavel | nao_encontrado
+    status: str  # exato | vinculado | revisar | bloqueado | nao_encontrado
     aluno_id: int | None = None
     aluno_nome: str | None = None
     similaridade: float | None = None
+    # O MOTIVO da decisão do motor (``services.importacao._correspondencia``): na
+    # revisão, o de ``identidade_aluno.MOTIVOS`` (nome_incompleto,
+    # contas_repetidas_no_relatorio…), que a tela usa para mandar a linha para
+    # Revisões de identidade em vez de "Criar"; no vínculo, o mesmo que ``via``; sem
+    # candidato, "novo" ou "conflito". Sem o campo aqui, o Pydantic o descartava e a
+    # tela nunca o recebia.
+    motivo: str | None = None
+    via: str | None = None          # como casou (identidade|exato|ra|abreviacao|…)
     alternativas: list[dict] = []
 
 
