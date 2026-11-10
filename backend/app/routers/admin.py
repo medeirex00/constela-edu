@@ -43,7 +43,7 @@ from app.core.deps import (
     get_usuario_atual,
     negar_secretaria,
 )
-from app.core.rate_limit import limitador_conta
+from app.core.rate_limit import liberar_conta, limitador_conta
 from app.core.security import (
     gerar_token_reset,
     hash_senha,
@@ -501,6 +501,11 @@ def atualizar_usuario(
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "E-mail ou nome de usuário já está em uso.")
     db.refresh(alvo)
+    if dados.senha is not None:
+        # A senha nova entra já: quem errou a antiga até travar o login não espera
+        # a janela do limitador (o admin, ou a dona com a senha atual, provou a
+        # posse da conta, como no login certo).
+        liberar_conta(alvo.email)
     return alvo
 
 

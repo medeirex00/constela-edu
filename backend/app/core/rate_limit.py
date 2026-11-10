@@ -15,8 +15,9 @@ workers/réplicas o orçamento efetivo por chave é multiplicado por N e o estad
 não é compartilhado entre instâncias. É aceitável para frear dicionário online
 num deploy pequeno; para ESCALA HORIZONTAL (várias réplicas atrás do
 balanceador) troque por um backend compartilhado (ex.: Redis INCR+EXPIRE) — a
-interface pública (bloqueado/registrar_falha/limpar) foi mantida pequena de
-propósito para essa substituição. Decisão de infraestrutura: pende de aprovação.
+interface pública (bloqueado/registrar_falha/limpar/limpar_prefixo) foi mantida
+pequena de propósito para essa substituição. Decisão de infraestrutura: pende de
+aprovação.
 
 Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expiradas
 + despejo das mais antigas, para que tentativas com chaves atacante-controladas
@@ -90,6 +91,17 @@ class LimitadorTentativas:
         """Zera o contador (ex.: após login bem-sucedido)."""
         with self._lock:
             self._eventos.pop(chave, None)
+
+    def limpar_prefixo(self, prefixo: str) -> int:
+        """Zera os contadores de todas as chaves que começam com ``prefixo`` (ex.:
+        as de (conta, IP) de uma conta, em qualquer IP) e devolve quantas eram.
+        Percorre as chaves vivas: é para eventos raros (a redefinição de senha),
+        não para o caminho de cada tentativa."""
+        with self._lock:
+            chaves = [k for k in self._eventos if k.startswith(prefixo)]
+            for k in chaves:
+                del self._eventos[k]
+            return len(chaves)
 
     def segundos_restantes(self, chave: str) -> int:
         agora = self._agora()
@@ -189,7 +201,7 @@ def rede_para_limite(ip: str, prefixo_ipv6: int = 64) -> str:
 
 
 # 8 falhas por 5 min por (e-mail, IP): trava dicionário online sem punir
-# um usuário que erra a senha uma ou duas vezes.
+# um usuário que erra a senha uma ou duas vezes. Chave: ``chave_conta_ip``.
 limitador_login = LimitadorTentativas(max_tentativas=8, janela_s=300)
 # Segunda camada, POR CONTA (só e-mail/usuário, sem IP): freia força-bruta
 # distribuída contra UMA conta mesmo que o atacante rode vários IPs. Teto mais
@@ -223,3 +235,20 @@ limitador_global_falha_login = LimitadorTentativas(
 # falha acima do teto chegaria ao alerta).
 alerta_global_login = LimitadorTentativas(
     max_tentativas=1, janela_s=settings.EDU_LOGIN_TETO_GLOBAL_JANELA_S)
+
+
+def chave_conta_ip(identidade: str, ip: str) -> str:
+    """Chave do ``limitador_login``: a conta (e-mail canônico, ou o texto
+    digitado quando a conta não existe) e o IP completo."""
+    return f"{identidade}|{ip}"
+
+
+def liberar_conta(identidade: str) -> None:
+    """Zera os limites DA CONTA — o por conta e os por (conta, IP) de qualquer
+    IP — depois que a senha foi substituída (link de redefinição, senha definida
+    pelo admin ou troca da própria senha). A substituição prova a posse da conta,
+    como o login certo, que também zera: sem isto a tela dizia "você já pode
+    entrar" e a senha NOVA recebia 429 até a janela vencer. Os tetos de falha por
+    IP e global (acima) não dependem da conta e ficam como estão."""
+    limitador_conta.limpar(identidade)
+    limitador_login.limpar_prefixo(chave_conta_ip(identidade, ""))

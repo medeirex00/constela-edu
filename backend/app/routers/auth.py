@@ -12,7 +12,9 @@ from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import get_usuario_atual
 from app.core.rate_limit import (
     alerta_global_login,
+    chave_conta_ip,
     ip_do_cliente,
+    liberar_conta,
     limitador_conta,
     limitador_global_falha_login,
     limitador_ip_falha_login,
@@ -204,7 +206,7 @@ def login(
     # Para o LOG: conta inexistente nunca grava o texto cru (``_identificador_para_log``).
     identidade_log = (usuario.email if usuario is not None
                       else _identificador_para_log(entrada))
-    chave = f"{identidade}|{ip}"
+    chave = chave_conta_ip(identidade, ip)
 
     # Duas camadas: por (conta, IP) — freio fino — e por CONTA (sem IP) —
     # freio contra força-bruta distribuída (vários IPs) contra a mesma conta.
@@ -473,8 +475,12 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
     alvo.senha_hash = novo_hash
     # Lido sob a trava: nenhuma revogação concorrente perde o incremento.
     alvo.token_version = (alvo.token_version or 0) + 1  # derruba sessões antigas
+    email = alvo.email
     registrar(db, "usuario.senha_redefinida_por_token", escola_id=alvo.escola_id,
               usuario_id=alvo.id, entidade="usuario", entidade_id=alvo.id,
-              detalhes={"email": alvo.email})
+              detalhes={"email": email})
     db.commit()
+    # "Já pode entrar" vale de verdade: quem errou a senha até travar o login
+    # entra com a nova (o link prova a posse da conta, como o login certo).
+    liberar_conta(email)
     return {"mensagem": "Senha redefinida. Você já pode entrar com a nova senha."}
