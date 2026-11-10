@@ -333,6 +333,31 @@ describe("Importacoes", () => {
     expect(screen.queryByText(/85\.5/)).toBeNull();
   });
 
+  // Placar do Matific (prévia REAL): os dados trazem a conta da plataforma
+  // (matific_uuid) e, no nome abreviado, a marca interna nome_incompleto. Antes a
+  // coluna Dados mostrava "matific_uuid: uuid-… · nome_incompleto: true · …".
+  it("coluna Dados: sem a conta da plataforma nem as marcas internas do leitor", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, JSON.parse(JSON.stringify(analisePlacarMotivos)) as Analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "placar");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    const dados = (nome: string) => (screen.getByRole("combobox", { name: `Destino de ${nome}` })
+      .closest("tr") as HTMLTableRowElement).cells[1].textContent;
+    // O exemplo real traz mesmo esses campos (senão o teste não prova nada).
+    const zefa = (analisePlacarMotivos as Analise).linhas.find((l) => l.nome === "Zefa Q");
+    expect(zefa?.dados).toMatchObject({ matific_uuid: "uuid-ficticio-z", nome_incompleto: true });
+    expect(dados("Zefa Q")).toBe("Atividades: 2 · Estrelas: 9 · Média: 4,5");
+    expect(dados("Crianca Ficticia Repetida (conta 1 de 2)")).toBe("Atividades: 3 · Estrelas: 10 · Média: 3,33");
+    const tabela = screen.getByRole("table");
+    expect(tabela).not.toHaveTextContent(/matific_uuid|uuid-ficticio|nome_incompleto|turma_ambigua/);
+  });
+
   // "Aplicar a todos" muda o destino só dos alunos NOVOS: a linha que vai para a
   // Revisão (o nome abreviado da prévia real) fica onde está — "Criar" nela seria
   // ignorado pelo backend. Os dois botões: a turma escolhida e a turma do relatório

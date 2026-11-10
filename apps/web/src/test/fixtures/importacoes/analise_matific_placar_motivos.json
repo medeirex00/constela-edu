@@ -338,6 +338,7 @@
       "dados": {
         "turma_relatorio": "3º Ano A",
         "matific_uuid": "uuid-ficticio-z",
+        "nome_incompleto": true,
         "atividades": 2,
         "estrelas": 9,
         "pontuacao_media": 4.5

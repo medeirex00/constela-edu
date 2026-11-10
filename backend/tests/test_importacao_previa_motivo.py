@@ -73,7 +73,10 @@ PLACAR_MOTIVOS = json.dumps({"fonte": "matific-placar", "turma": "3º Ano A", "a
      "atividades": 2},
     {"nome": "Bento Ficticio Moura", "uuid": "uuid-ficticio-outra-escola", "estrelas": 9,
      "atividades": 2},
-    {"nome": "Zefa Q", "uuid": "uuid-ficticio-z", "estrelas": 9, "atividades": 2},
+    # O conector não achou o nome cheio: só o abreviado do Placar (marca nome_incompleto
+    # nos dados, que a coluna Dados da tela não mostra).
+    {"nome": "Zefa Q", "nome_abrev": "Zefa Q", "uuid": "uuid-ficticio-z", "estrelas": 9,
+     "atividades": 2},
     {"nome": "Crianca Ficticia Repetida", "uuid": "uuid-ficticio-1", "estrelas": 10,
      "atividades": 3},
     {"nome": "Crianca Ficticia Repetida", "uuid": "uuid-ficticio-2", "estrelas": 20,

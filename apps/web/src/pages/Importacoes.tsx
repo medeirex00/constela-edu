@@ -78,7 +78,14 @@ const ROTULOS_DADOS: Record<string, string> = {
   nivel: "Nível",
 };
 
-const OCULTAR_NA_PREVIA = new Set(["turma_relatorio", "livro", "nivel", "genero", "data", "tempo_livro_min"]);
+// Fora da coluna Dados também o que é técnico: a conta da plataforma (uuid/studentId —
+// contas diferentes com o mesmo nome já aparecem como "conta 1 de 2") e as marcas
+// internas do leitor (nome_incompleto, turma_ambigua), que a coluna Correspondência
+// explica em linguagem simples.
+const OCULTAR_NA_PREVIA = new Set([
+  "turma_relatorio", "livro", "nivel", "genero", "data", "tempo_livro_min",
+  "matific_uuid", "elefante_student_id", "nome_incompleto", "turma_ambigua",
+]);
 
 /** Número no formato brasileiro ("85,5", "1.234"), como no resto do sistema. */
 function valorDoDado(valor: unknown): string {
