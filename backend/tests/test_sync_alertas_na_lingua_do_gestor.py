@@ -154,6 +154,24 @@ def test_tudo_com_defeito_sem_conector_no_alerta(db, escola_completa, monkeypatc
     assert formato.startswith("Nenhuma linha aproveitável"), formato
     assert f"Avise o suporte: {AJUSTE}." in formato, formato
     _sem_jargao(formato, *(m for _e, _n, m in logs(db, ex.id)))
+    # Revisão do acabamento (sonda R3): o motivo do descarte saía como código interno,
+    # "(sem_nome: 2)".
+    assert "2 linha(s) com defeito (sem o nome do aluno: 2)" in formato, formato
+    assert "_" not in formato, formato
+
+
+def test_motivos_de_descarte_sem_codigo_interno():
+    """Todo motivo de linha com defeito que conectores, parser e importação anotam sai
+    com rótulo nos alertas; um código novo, sem rótulo, sai ao menos sem o "_"."""
+    from app.sync import service
+
+    motivos = ("sem_nome", "sem_nome_ou_turma", "sem_nome_ou_titulo", "sem_data",
+               "livro_sem_titulo", "id_em_varias_turmas", "campos_ausentes", "codigo_novo")
+    ap = service._Apuracao(linhas=len(motivos), descartes=dict.fromkeys(motivos, 1))
+    resumo = ap.resumo_descartes()
+    assert "_" not in resumo, resumo
+    assert set(motivos[:-1]) <= set(service._ROTULO_DESCARTE), resumo
+    assert "codigo novo: 1" in resumo, resumo
 
 
 class _PlacarFormatoNovo(PlacarFake):

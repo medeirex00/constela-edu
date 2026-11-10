@@ -189,4 +189,4 @@ def test_descarte_decidido_nao_e_defeito_nem_erro():
     com_defeito = service._Apuracao(linhas=5, descartes={"identidade_aposentada": 1,
                                                          "sem_data": 2})
     assert com_defeito.defeitos == 2
-    assert com_defeito.resumo_descartes() == "sem_data: 2"
+    assert com_defeito.resumo_descartes() == "leitura sem data: 2"

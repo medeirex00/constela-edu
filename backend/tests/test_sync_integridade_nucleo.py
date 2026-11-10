@@ -513,7 +513,7 @@ def test_livro_sem_data_e_linha_descartada_contada(db, escola_completa, monkeypa
     instalar(monkeypatch, nav_elefante=NavElefante(turmas))
     ex, _ = rodar(db, eid, "elefante")
     assert ex.status == "parcial" and ex.motivo == "linhas_descartadas"
-    assert "sem_data: 1" in _alerta(db, eid, "elefante", "coleta_parcial").mensagem
+    assert "leitura sem data: 1" in _alerta(db, eid, "elefante", "coleta_parcial").mensagem
     assert ex.qtd_erros == 1
 
 

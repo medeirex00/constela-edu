@@ -1358,6 +1358,22 @@ _MOTIVOS_DE_VINCULO = ("sem_vinculo",)   # pendência de correspondência, não 
 # contada no motivo próprio e citada no log da execução.
 _MOTIVOS_DECIDIDOS = tuple(sorted(MOTIVOS_DESCARTE_DECIDIDO))
 _MOTIVOS_FORA_DE_DEFEITO = _MOTIVOS_DE_VINCULO + _MOTIVOS_DECIDIDOS
+# O motivo de cada linha com defeito (o código que conectores, parser e importação
+# anotam) como a tela o diz nos alertas "Nenhuma linha aproveitável" e "Coleta parcial".
+_ROTULO_DESCARTE = {
+    "sem_nome": "sem o nome do aluno",
+    "sem_nome_ou_turma": "sem o nome ou a turma do aluno",
+    "sem_nome_ou_titulo": "sem o nome do aluno ou o título do livro",
+    "sem_data": "leitura sem data",
+    "livro_sem_titulo": "livro sem título",
+    "id_em_varias_turmas": "a mesma conta em mais de uma turma, com números diferentes",
+    "campos_ausentes": "sem campos que o Constela usa",
+}
+
+
+def _rotulo_descarte(motivo: str) -> str:
+    """Rótulo do motivo; um código novo sem rótulo sai sem o "_" de código."""
+    return _ROTULO_DESCARTE.get(motivo) or str(motivo).replace("_", " ")
 
 
 @dataclass
@@ -1501,7 +1517,9 @@ class _Apuracao:
         return ", ".join(f"{u}: {n}" for u, n in sorted(por_unidade.items()))
 
     def resumo_descartes(self) -> str:
-        return ", ".join(f"{m}: {n}" for m, n in sorted(self.descartes.items())
+        """As linhas com defeito por motivo, na língua de quem lê os alertas da tela de
+        Integrações ("sem o nome do aluno: 2"), nunca o código interno ("sem_nome")."""
+        return ", ".join(f"{_rotulo_descarte(m)}: {n}" for m, n in sorted(self.descartes.items())
                          if m not in _MOTIVOS_FORA_DE_DEFEITO and n)
 
 
