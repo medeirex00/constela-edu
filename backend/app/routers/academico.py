@@ -147,6 +147,33 @@ def listar_alunos(
     return {"total": total, "pagina": pagina, "por_pagina": por_pagina, "itens": itens}
 
 
+# Situação de uma ficha que não está ativa, como o cadastro manual a descreve.
+_SITUACAO_INATIVA = {"arquivado": "arquivado", "transferido": "marcado como transferido",
+                     "fora_lista_piloto": "fora da Lista Piloto", "excluido": "excluído"}
+# O caminho para trazer de volta uma ficha que não está ativa (o mesmo que a recusa
+# do certificado ensina): a lista de Alunos e o painel da turma só mostram os ativos.
+_CAMINHO_REATIVAR = ("em Minha Escola › Turmas, abra esta turma, ligue “Mostrar "
+                     "arquivados” e use “Reativar” no cadastro.")
+
+
+def _parecidos_inativos(db: Session, escola_id: int, ano: int, turma: Turma,
+                        dados: AlunoCreate, ra: str | None) -> list[Aluno]:
+    """Os cadastros NÃO ATIVOS da turma que o motor de identidade achou parecidos
+    com o nome digitado (correspondência insegura: os ``candidatos`` do REVISAR).
+
+    Mesma pergunta que ``importacoes._casar_no_roster`` acabou de fazer — o mesmo
+    roster (que não filtra situação) e o mesmo ``matching.classificar_linha`` —,
+    refeita só no caminho da recusa para saber QUEM eram os candidatos."""
+    from app.routers import importacoes as imp
+    roster, por_id = imp._roster_identidades(db, escola_id, ano, turma.id)
+    res = matching.classificar_linha(
+        matching.Identidade(nome=dados.nome, chamada=dados.numero_chamada,
+                            nascimento=dados.data_nascimento, ra=imp._ra_forte(ra)),
+        roster)
+    return [por_id[i] for i in res.candidatos
+            if i in por_id and por_id[i].status != "ativo"]
+
+
 @router.post("/alunos", response_model=AlunoOut, status_code=status.HTTP_201_CREATED)
 def criar_aluno(
     dados: AlunoCreate,
@@ -190,12 +217,25 @@ def criar_aluno(
         ja, confianca = imp._casar_no_roster(db, escola_id, ano, dados.nome, turma,
                                              dados.numero_chamada,
                                              dados.data_nascimento, ra_informado)
+    # A porta única reconhece de propósito as fichas ARQUIVADAS, transferidas e fora
+    # da Lista Piloto da turma (não duplicar a criança). Mas a lista de Alunos e o
+    # painel da turma só mostram os ativos: a recusa diz a situação da ficha e o
+    # caminho para trazê-la de volta, em vez de mandar "usar o cadastro existente"
+    # que o gestor não encontra.
     if ja is not None:
         registrar(db, "aluno.criacao_recusada", escola_id=escola_id, usuario_id=usuario.id,
                   entidade="aluno", entidade_id=ja.id,
                   detalhes={"nome": dados.nome, "decisao": "EXACT_MATCH",
                             "motivo": "aluno_ja_cadastrado_na_turma"})
         db.commit()
+        if ja.status != "ativo":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{ja.nome}” já tem cadastro nesta turma, mas ele está "
+                f"{_SITUACAO_INATIVA.get(ja.status, ja.status)} — por isso não aparece "
+                f"na lista de Alunos. Não cadastre de novo: {_CAMINHO_REATIVAR} Se for "
+                "outra criança de mesmo nome, informe o nº de chamada ou a data de "
+                "nascimento para diferenciar.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{ja.nome}” já está cadastrado nesta turma. Use o cadastro existente. "
@@ -207,6 +247,17 @@ def criar_aluno(
                   detalhes={"nome": dados.nome, "decisao": "REVIEW_REQUIRED",
                             "motivo": "correspondencia_insegura"})
         db.commit()
+        inativos = _parecidos_inativos(db, escola_id, ano, turma, dados, ra_informado)
+        if inativos:
+            nomes = ", ".join(
+                f"“{a.nome}” ({_SITUACAO_INATIVA.get(a.status, a.status)})" for a in inativos)
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{dados.nome}” é muito parecido com um cadastro desta turma que não "
+                f"aparece na lista de Alunos: {nomes}. Confira antes de cadastrar. Se "
+                f"for a mesma criança, não cadastre de novo: {_CAMINHO_REATIVAR} Se for "
+                "outra criança, informe o nº de chamada ou a data de nascimento para "
+                "diferenciar.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{dados.nome}” é muito parecido com um aluno já cadastrado nesta turma. "
