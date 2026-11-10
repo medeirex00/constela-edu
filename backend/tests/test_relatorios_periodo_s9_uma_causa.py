@@ -101,8 +101,10 @@ def test_cada_aluno_numa_causa_so_e_a_ultima_coleta_e_a_mais_recente(db, escola_
     assert cob["alunos_sem_fim"] == 1, cob
     assert cob["coleta_fim_mais_cedo"].startswith("2026-09-24T03:10"), cob
     assert cob["fim_coberto"] is False
-    # E: só a borda do início (ampliada), não "as questões não vieram".
-    assert cob["alunos_ampliados"] == 1 and cob["inclui_antes_do_inicio"] is True
+    # E: só a borda do início (ampliada), não "as questões não vieram" — e, como houve
+    # coleta no início (só que sem as questões), não "não há coleta perto do início".
+    assert cob["inclui_antes_do_inicio"] is True
+    assert (cob["alunos_inicio_sem_questoes"], cob["alunos_ampliados"]) == (1, 0), cob
     assert cob["alunos_cobertura_completa"] == 1                     # C
 
 
@@ -177,3 +179,87 @@ def test_coleta_sem_questoes_dentro_do_periodo_continua_motivo(db, escola_comple
 
     assert cob["alunos_questoes_nao_vieram"] == 1, cob
     assert cob["alunos_sem_intervalo"] == 0, cob
+
+
+def _motivos(cob) -> str:
+    return " | ".join(
+        pdf._avisos_cobertura({"elefante": {"cobertura_questoes": cob}})[0]["motivos"])
+
+
+def test_coleta_do_inicio_sem_questoes_nao_vira_sem_coleta_perto_do_inicio(db, escola_completa):
+    """Revisão final (a sonda E): a coleta do INÍCIO (01/09) existiu, mas veio sem as
+    questões. A conta parte da coleta anterior (15/08) e inclui esse intervalo — o
+    número e o status ('ampliada') estão certos. O aviso dizia "não há coleta perto do
+    início: a coleta-base é de 15/08…", e havia coleta exatamente no início."""
+    eid = escola_completa["escola"].id
+    a = escola_completa["alunos"][0].id
+    _retrato(db, eid, a, _noite(15, 8), 40, 30)
+    _retrato(db, eid, a, _noite(1), 40, 30, sem_questoes=True)  # a coleta do início
+    _retrato(db, eid, a, _noite(1, 10), 55, 40)
+    db.commit()
+
+    ele = _setembro(db, eid)
+    cob = ele["cobertura_questoes"]
+    motivos = _motivos(cob)
+
+    assert (ele["questoes_tentativas"], ele["questoes_acertos"]) == (15, 10)
+    assert cob["status"] == "ampliada" and cob["inclui_antes_do_inicio"] is True
+    assert cob["alunos_inicio_sem_questoes"] == 1 and cob["alunos_ampliados"] == 0, cob
+    assert cob["coleta_base_inicio_sem_questoes"].startswith("2026-08-15T03:10"), cob
+    assert cob["alunos_questoes_nao_vieram"] == 0, cob
+    assert "não há coleta perto do início" not in motivos, motivos
+    assert ("a coleta do início veio sem as questões: a conta parte da coleta de "
+            "15/08/2026 00:10, 17 dias antes de 01/09/2026, e INCLUI a atividade desse "
+            "intervalo") in motivos, motivos
+
+
+def test_coleta_do_inicio_sem_questoes_sem_coleta_anterior_nao_vira_sem_coleta_no_inicio(
+        db, escola_completa):
+    """O mesmo sem coleta anterior: a conta começa na primeira coleta com as questões
+    (20/09) e o que veio de 01/09 até ela fica fora — o número e o status ('parcial')
+    não mudam. O aviso dizia "sem coleta no início do período", e houve."""
+    eid = escola_completa["escola"].id
+    a = escola_completa["alunos"][0].id
+    _retrato(db, eid, a, _noite(1), 40, 30, sem_questoes=True)   # a coleta do início
+    _retrato(db, eid, a, _noite(20), 55, 40)
+    _retrato(db, eid, a, _noite(1, 10), 70, 50)
+    db.commit()
+
+    ele = _setembro(db, eid)
+    cob = ele["cobertura_questoes"]
+    motivos = _motivos(cob)
+
+    assert (ele["questoes_tentativas"], ele["questoes_acertos"]) == (15, 10)
+    assert cob["status"] == "parcial" and cob["inicio_coberto"] is False
+    assert (cob["alunos_inicio_sem_questoes_sem_base"], cob["alunos_sem_inicio"]) == (1, 0), cob
+    assert cob["primeira_coleta_inicio_sem_questoes"].startswith("2026-09-20T03:10"), cob
+    assert "sem coleta no início do período" not in motivos.lower(), motivos
+    assert ("a coleta do início veio sem as questões: a conta começa na primeira coleta "
+            "com as questões (até 20/09/2026 00:10), e o que foi feito de 01/09/2026 até "
+            "ela não está na conta") in motivos, motivos
+
+
+def test_coleta_do_inicio_sem_questoes_ao_lado_de_quem_nao_tem_coleta_no_inicio(
+        db, escola_completa):
+    """Os dois casos juntos: cada aluno numa causa só, e cada aviso com a data DELE — a
+    base de 15/08 é do aluno cuja coleta do início veio sem as questões; a de 20/08, do
+    que não teve coleta perto do início."""
+    eid = escola_completa["escola"].id
+    a, b, _c = (x.id for x in escola_completa["alunos"])
+    _retrato(db, eid, a, _noite(15, 8), 40, 30)
+    _retrato(db, eid, a, _noite(1), 40, 30, sem_questoes=True)
+    _retrato(db, eid, a, _noite(1, 10), 55, 40)
+    _retrato(db, eid, b, _noite(20, 8), 10, 5)
+    _retrato(db, eid, b, _noite(1, 10), 30, 20)
+    db.commit()
+
+    cob = _setembro(db, eid)["cobertura_questoes"]
+    motivos = _motivos(cob)
+
+    assert cob["status"] == "ampliada"
+    assert (cob["alunos_ampliados"], cob["alunos_inicio_sem_questoes"]) == (1, 1), cob
+    assert cob["coleta_inicio"].startswith("2026-08-15T03:10")      # o intervalo medido
+    assert ("não há coleta perto do início para 1 estudante(s): a coleta-base é de "
+            "20/08/2026 00:10, 12 dias antes de 01/09/2026") in motivos, motivos
+    assert ("a coleta do início veio sem as questões para 1 estudante(s): a conta parte "
+            "da coleta de 15/08/2026 00:10, 17 dias antes de 01/09/2026, e INCLUI") in motivos

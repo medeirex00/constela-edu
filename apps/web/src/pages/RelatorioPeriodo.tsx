@@ -107,6 +107,19 @@ interface Cobertura {
    *  deixou de mandá-las): ela não mede a borda, e a conta deles vai só até a
    *  coleta anterior — ou fica sem número. Ausente em API anterior. */
   alunos_questoes_nao_vieram?: number;
+  /** Base mais antiga de quem entra em "não há coleta perto do início" (sem os alunos
+   *  cuja coleta do início veio sem as questões). Ausente em API anterior. */
+  coleta_base_ampliados?: string | null;
+  /** (Elefante) a coleta do INÍCIO veio sem as questões e a conta partiu de uma coleta
+   *  ANTERIOR: o número inclui esse intervalo (status "ampliada"). Houve coleta no
+   *  início — esses alunos não entram em "não há coleta perto do início". */
+  alunos_inicio_sem_questoes?: number;
+  coleta_base_inicio_sem_questoes?: string | null;
+  antecedencia_inicio_sem_questoes_horas?: number | null;
+  /** (Elefante) a coleta do INÍCIO veio sem as questões e não há coleta anterior: a conta
+   *  começa na primeira coleta com as questões (não entram em "Sem coleta no início"). */
+  alunos_inicio_sem_questoes_sem_base?: number;
+  primeira_coleta_inicio_sem_questoes?: string | null;
 }
 
 interface BlocoElefante {
@@ -436,8 +449,16 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
     );
   }
   const ampliada = c.status === "ampliada";
-  const antecedencia = c.antecedencia_max_horas == null ? ""
-    : c.antecedencia_max_horas < 48 ? `${c.antecedencia_max_horas} h` : `${Math.floor(c.antecedencia_max_horas / 24)} dias`;
+  const duracao = (horas: number | null | undefined) => horas == null ? ""
+    : horas < 48 ? `${horas} h` : `${Math.floor(horas / 24)} dias`;
+  const antecedencia = duracao(c.antecedencia_max_horas);
+  // "Não há coleta perto do início": sem os alunos cuja coleta do início veio sem as
+  // questões, que têm o aviso próprio (houve coleta, só sem as questões).
+  const baseAmpliados = c.coleta_base_ampliados ?? c.coleta_inicio;
+  const ampliadosSemColeta = c.inclui_antes_do_inicio && c.alunos_ampliados > 0;
+  const inicioSemQuestoes = c.alunos_inicio_sem_questoes ?? 0;
+  const antecedenciaSemQuestoes = duracao(c.antecedencia_inicio_sem_questoes_horas);
+  const inicioSemQuestoesSemBase = c.alunos_inicio_sem_questoes_sem_base ?? 0;
   return (
     <div role="status" className={CAIXA_ALERTA}>
       <p className="flex gap-2 font-semibold">
@@ -470,18 +491,36 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
             </li>
           )
         )}
+        {inicioSemQuestoesSemBase > 0 && (
+          <li>
+            A coleta do início veio sem as questões{para(inicioSemQuestoesSemBase)}: a conta começa na primeira
+            coleta com as questões
+            {c.primeira_coleta_inicio_sem_questoes ? ` (até ${dataHora(c.primeira_coleta_inicio_sem_questoes)})` : ""},
+            e o que foi feito de {diaDoPeriodo(c.periodo_inicio)} até ela não está na conta.
+          </li>
+        )}
         {!c.fim_coberto && c.alunos_sem_fim > 0 && (
           <li>
             A última coleta{para(c.alunos_sem_fim)} é de {dataHora(c.coleta_fim_mais_cedo ?? c.coleta_fim)}: o que
             veio depois, até {diaDoPeriodo(c.periodo_fim_efetivo ?? c.periodo_fim)}, não está na conta.
           </li>
         )}
-        {c.inclui_antes_do_inicio && (
+        {ampliadosSemColeta && (
           <li>
             Não há coleta perto do início{para(c.alunos_ampliados)}:{" "}
-            {c.coleta_inicio ? `a coleta-base é de ${dataHora(c.coleta_inicio)}` : "a conta parte do início do contador"}
+            {baseAmpliados ? `a coleta-base é de ${dataHora(baseAmpliados)}` : "a conta parte do início do contador"}
             {antecedencia ? `, ${antecedencia} antes de ${diaDoPeriodo(c.periodo_inicio)}` : ""} — o número INCLUI
             a atividade desse intervalo.
+          </li>
+        )}
+        {inicioSemQuestoes > 0 && (
+          <li>
+            A coleta do início veio sem as questões{para(inicioSemQuestoes)}: a conta parte{" "}
+            {c.coleta_base_inicio_sem_questoes
+              ? `da coleta de ${dataHora(c.coleta_base_inicio_sem_questoes)}`
+              : "da coleta anterior"}
+            {antecedenciaSemQuestoes ? `, ${antecedenciaSemQuestoes} antes de ${diaDoPeriodo(c.periodo_inicio)},` : ""} e
+            INCLUI a atividade desse intervalo.
           </li>
         )}
         {c.alunos_sem_intervalo > 0 && (

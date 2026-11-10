@@ -449,20 +449,49 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
                        "Respondidas), que o Constela ainda não coleta"))
                 curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_inicio")),
                                f"{_data(ini)} até {_data_hora(tardio) if tardio else 'a 1a coleta'}"))
+        # Houve coleta no início, mas sem as questões (S9): não é "sem coleta no início".
+        sq_sem_base = c.get("alunos_inicio_sem_questoes_sem_base") or 0
+        if sq_sem_base:
+            primeira = c.get("primeira_coleta_inicio_sem_questoes")
+            ate_primeira = _data_hora(primeira) if primeira else "a 1a coleta"
+            motivos.append(
+                f"a coleta do início veio sem as questões{para(sq_sem_base)}: a conta começa "
+                "na primeira coleta com as questões"
+                + (f" (até {_data_hora(primeira)})" if primeira else "")
+                + f", e o que foi feito de {_data(ini)} até ela não está na conta")
+            curtos.append(("início sem questões" + qtd(sq_sem_base),
+                           f"NÃO conta {_data(ini)} até {ate_primeira}"))
         if not c.get("fim_coberto") and c.get("alunos_sem_fim"):
             cedo = _data_hora(c.get("coleta_fim_mais_cedo") or c.get("coleta_fim"))
             motivos.append(
                 f"a última coleta{para(c.get('alunos_sem_fim'))} é de {cedo}: o que veio "
                 f"depois, até {_data(efetivo or fim)}, não está na conta")
             curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_fim")), f"depois de {cedo}"))
-        if c.get("inclui_antes_do_inicio"):
+        ampliados = c.get("alunos_ampliados")
+        if c.get("inclui_antes_do_inicio") and (ampliados is None or ampliados > 0):
             antecedencia = _duracao(c.get("antecedencia_max_horas"))
-            base = f"a coleta-base é de {de}" if tem_base else "a conta parte do início do contador"
+            # A base destes alunos, sem a dos que tiveram a coleta do início sem questões.
+            base_amp = c.get("coleta_base_ampliados") or c.get("coleta_inicio")
+            de_amp = _data_hora(base_amp) if base_amp else "o início do contador"
+            base = (f"a coleta-base é de {de_amp}" if base_amp
+                    else "a conta parte do início do contador")
             motivos.append(
-                f"não há coleta perto do início{para(c.get('alunos_ampliados'))}: {base}"
+                f"não há coleta perto do início{para(ampliados)}: {base}"
                 + (f", {antecedencia} antes de {_data(ini)}" if antecedencia else "")
                 + " - o número INCLUI a atividade desse intervalo")
-            curtos.append(("INCLUI antes do início" + qtd(c.get("alunos_ampliados")), f"desde {de}"))
+            curtos.append(("INCLUI antes do início" + qtd(ampliados), f"desde {de_amp}"))
+        sq_com_base = c.get("alunos_inicio_sem_questoes") or 0
+        if sq_com_base:
+            base_sq = c.get("coleta_base_inicio_sem_questoes")
+            antecedencia = _duracao(c.get("antecedencia_inicio_sem_questoes_horas"))
+            motivos.append(
+                f"a coleta do início veio sem as questões{para(sq_com_base)}: a conta parte "
+                + (f"da coleta de {_data_hora(base_sq)}" if base_sq else "da coleta anterior")
+                + (f", {antecedencia} antes de {_data(ini)}," if antecedencia else "")
+                + " e INCLUI a atividade desse intervalo")
+            curtos.append(("INCLUI antes do início" + qtd(sq_com_base),
+                           (f"desde {_data_hora(base_sq)}: " if base_sq else "")
+                           + "início sem questões"))
         n_sem = c.get("alunos_sem_intervalo") or 0
         if n_sem:
             if oficial:

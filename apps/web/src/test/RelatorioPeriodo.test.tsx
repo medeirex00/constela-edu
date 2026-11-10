@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import RelatorioPeriodo from "../pages/RelatorioPeriodo";
+import relatorioReal from "./fixtures/relatorio_periodo/setembro_inicio_sem_questoes.json";
 import {
   ApiError,
   apiDownload,
@@ -701,5 +702,28 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     }
     await userEvent.selectOptions(screen.getByLabelText("Plataforma"), "matific");
     expect((screen.getByLabelText("Plataforma") as HTMLSelectElement).value).toBe("matific");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resposta REAL do backend: fixtures/relatorio_periodo, gravada pela rota de verdade
+// em backend/tests/test_relatorios_periodo_exemplo_tela.py (regravável com
+// GERAR_FIXTURES_RELATORIO=1). Setembro, Elefante e Matific: a coleta do INÍCIO de
+// uma aluna (01/09) veio sem as questões, e a conta dela parte da coleta de 15/08.
+// ---------------------------------------------------------------------------
+describe("resposta real do backend", () => {
+  const real = () => structuredClone(relatorioReal) as unknown as Record<string, unknown>;
+
+  it("coleta do início sem as questões: diz isso e de onde a conta parte, não 'não há coleta perto do início'", async () => {
+    montar(real());
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: o valor INCLUI atividade de antes do período — não é só o período pedido.");
+    expect(t).toContain("A coleta do início veio sem as questões para 1 aluno(s): a conta parte da coleta de "
+      + "15/08/2026, 00:10, 17 dias antes de 01/09/2026, e INCLUI a atividade desse intervalo.");
+    expect(t).not.toContain("Não há coleta perto do início");
+    expect(t).not.toContain("Sem coleta no início do período");
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    semVocabularioInterno(texto());
   });
 });
