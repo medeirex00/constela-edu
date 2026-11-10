@@ -185,8 +185,15 @@ describe("Relatório por Período", () => {
     // A mesma informação de antes, dita para quem lê o relatório.
     expect(t).toContain("É a mesma conta da premiação “Mais livros”");
     expect(t).toContain("Por isso um livro lido de novo não entra aqui");
+    // A data do livro novo é a de quando ele apareceu no relatório da plataforma (a
+    // 1ª importação dele), não a da primeira leitura.
+    expect(t).toContain("Vale a data em que o livro apareceu pela primeira vez no relatório da plataforma");
+    expect(t).not.toContain("primeira leitura");
     expect(t).toContain("o total é o mínimo lido no período — o tempo real pode ser maior");
-    expect(t).toContain("Duas leituras do mesmo livro no mesmo minuto contam como uma só");
+    // O colapso no mesmo minuto afeta a contagem de vezes (que a tela não mostra), não
+    // o número de livros diferentes: “Livros com atividade” não é um piso.
+    expect(t).not.toContain("Duas leituras do mesmo livro no mesmo minuto");
+    expect(t).not.toContain("o número de leituras é um mínimo");
     expect(t).toContain("Não dá para saber quanto durou cada leitura");
     expect(t).toContain("O Matific guarda atividades, estrelas e pontuação média, mas não conta questões");
     expect(t).toContain("o total no fim menos o de antes do início — a mesma regra das premiações");

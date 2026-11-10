@@ -215,10 +215,12 @@ interface ExplicacaoNumero { nome: string; explicacao: string; cuidado?: string 
 const EXPLICACAO_ELEFANTE: Record<string, ExplicacaoNumero> = {
   livros_novos: {
     nome: "“Livros novos”",
-    explicacao: "Conta cada livro na primeira vez que o aluno o leu, dentro do período. É a mesma conta da "
-      + "premiação “Mais livros”: o relatório e o pódio mostram o mesmo número.",
-    cuidado: "A data que vale é a da primeira leitura do livro, e ela não muda depois. Por isso um livro lido de "
-      + "novo não entra aqui — ele aparece em “Livros com atividade”, como relido.",
+    // A data do livro é a que a plataforma mostrava na PRIMEIRA importação dele (a
+    // leitura mais recente naquele dia), não a da primeira leitura — e não muda.
+    explicacao: "Conta cada livro que apareceu pela primeira vez no relatório da plataforma dentro do período. É "
+      + "a mesma conta da premiação “Mais livros”: o relatório e o pódio mostram o mesmo número.",
+    cuidado: "Vale a data em que o livro apareceu pela primeira vez no relatório da plataforma, e ela não muda "
+      + "depois. Por isso um livro lido de novo não entra aqui — ele aparece em “Livros com atividade”, como relido.",
   },
   tempo_min: {
     nome: "“Tempo de leitura”",
@@ -230,8 +232,8 @@ const EXPLICACAO_ELEFANTE: Record<string, ExplicacaoNumero> = {
     nome: "“Livros com atividade”",
     explicacao: "Conta os livros diferentes que o aluno abriu no período, inclusive os que ele releu, pela data "
       + "e hora que a plataforma registra em cada leitura.",
-    cuidado: "Duas leituras do mesmo livro no mesmo minuto contam como uma só. Por isso o número de leituras é "
-      + "um mínimo, não a quantidade exata de vezes que o aluno leu.",
+    // Sem "cuidado": o que colapsa no mesmo minuto é a contagem de VEZES que o livro
+    // foi lido (que a tela não mostra); o número de livros diferentes não muda.
   },
   tempo_min_por_evento: {
     nome: "Tempo de cada leitura",
