@@ -127,6 +127,10 @@ class Contexto:
     # Escolas externas (ids) já vinculadas a OUTRAS escolas do Constela: a conta
     # que lê uma delas é recusada antes de qualquer dado de turma ser pedido.
     externas_de_outras_escolas: frozenset = frozenset()
+    # Campos não essenciais (tempo, questões) que SUMIRAM de todas as linhas de um
+    # relatório de turma DESTA execução (S9, ``orchestrator.campos_nao_atualizados``):
+    # as leituras que vêm depois também não gravam retrato que só os repetiria.
+    campos_nao_atualizados: set = field(default_factory=set)
 
 
 class ErroConector(Exception):

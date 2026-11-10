@@ -118,6 +118,22 @@ def _resolver_ator(db: Session, escola_id: int, usuario_id: int | None) -> Usuar
     ).scalars().first()
 
 
+# Aviso crítico (código estável, sem PII) do campo não essencial que sumiu da
+# resposta: "campos_nao_atualizados:questoes_acertos,questoes_tentativas".
+AVISO_NAO_ATUALIZADOS = "campos_nao_atualizados:"
+
+
+def campos_nao_atualizados(analise) -> list[str]:
+    """Campos do retrato fora dos essenciais da sync que SUMIRAM de todas as linhas
+    do relatório (``Analise.campos_sumidos``): a resposta perdeu o campo — não é
+    "sem dado". Os essenciais têm a regra própria (nada é aplicado)."""
+    n = len(analise.linhas or [])
+    essenciais = set(imp.CAMPOS_ESSENCIAIS_SYNC.get(
+        (analise.plataforma or "", analise.formato or ""), ()))
+    return sorted(c for c, q in (getattr(analise, "campos_sumidos", None) or {}).items()
+                  if n and q >= n and c not in essenciais)
+
+
 def _acumulado_matific(arquivo: ArquivoObtido, analise) -> bool:
     """O arquivo é o ACUMULADO do ano do Matific (``duration=this-year``)? Só
     nele um total menor que o gravado é suspeito: na coleta POR PERÍODO
@@ -306,6 +322,26 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                     "avisos_criticos": ["campos_ausentes:" + ",".join(ausentes)],
                     "parser_incompativel": True}
 
+    # S9: campo NÃO essencial (tempo, questões do Elefante) que sumiu de TODAS as
+    # linhas — renomeado na API. Os livros entram (nada é destruído), mas a coleta
+    # não sai 'concluida' calada: o serviço a fecha 'parcial' (ou sem atualização)
+    # com o alerta crítico, e quem não mudou não ganha retrato repetido com a data
+    # de hoje (as Questões do período o leriam como "0 no período").
+    nao_atualizados = campos_nao_atualizados(analise) \
+        if arquivo.content_type == CT_ELEFANTE_API else []
+    perdidos_na_execucao = getattr(contexto, "campos_nao_atualizados", None)
+    if nao_atualizados:
+        contexto.log("parser", "error",
+                     f"Resposta da plataforma sem {', '.join(nao_atualizados)} em todas as "
+                     f"{len(analise.linhas)} linha(s): esses números ficam com o valor da "
+                     "coleta anterior (o conector precisa ser revisto).")
+        if isinstance(perdidos_na_execucao, set):
+            perdidos_na_execucao.update(nao_atualizados)
+    # As LEITURAS copiam tempo/questões do retrato atual quando nasce um retrato novo:
+    # depois de um resumo sem esses campos, também não repetem números de antes.
+    sem_retrato_repetido = bool(nao_atualizados) or (
+        arquivo.content_type == CT_ELEFANTE_API and bool(perdidos_na_execucao))
+
     contexto.log("validacao", "info",
                  f"{len(analise.linhas)} linha(s); identificando alunos…")
 
@@ -359,8 +395,10 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     contexto.log("importacao", "info",
                  f"Aplicando {len(linhas)} linha(s) pelo pipeline existente…")
     try:
-        resultado = imp.confirmar(dados=imp.confirmacao_da_sincronizacao(confirm),
-                                  escola_id=escola.id, usuario=ator, db=db)
+        resultado = imp.confirmar(
+            dados=imp.confirmacao_da_sincronizacao(
+                confirm, sem_retrato_repetido=sem_retrato_repetido),
+            escola_id=escola.id, usuario=ator, db=db)
     except HTTPException as exc:
         # A importação RECUSOU o pedido (ex.: intervalo de datas inválido). Não é
         # "falha inesperada" recuperável ("erro do nosso lado"): é o pedido — não
@@ -444,7 +482,9 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                    + retidos + n_descartadas),
         "em_revisao": em_revisao,
         "descartadas": descartadas,
-        "avisos_criticos": list(getattr(resultado, "avisos_criticos", None) or []),
+        "avisos_criticos": (list(getattr(resultado, "avisos_criticos", None) or [])
+                            + ([AVISO_NAO_ATUALIZADOS + ",".join(nao_atualizados)]
+                               if nao_atualizados else [])),
         "parser_incompativel": False,
         # Contas já efetivas em OUTRA escola do Constela (revisão própria): o
         # serviço abre o alerta crítico 'identidade_de_outra_escola'.

@@ -309,8 +309,12 @@ MOTIVO_NADA_MUDOU = "nada_mudou"
 MOTIVO_TUDO_EM_REVISAO = "tudo_em_revisao"
 # 'sem_atualizacao' que conta como VERIFICAÇÃO (``ultima_verificacao_em``).
 MOTIVOS_VERIFICADOS = (MOTIVO_NADA_MUDOU, "queda_retida")
+# A resposta perdeu campos que o Constela usa fora dos essenciais (tempo e questões
+# do Elefante, S9): os livros entram, esses números ficam os de antes. 'parcial'
+# com dado aplicado; 'sem_atualizacao' sem. Não é "em dia" nem verificação.
+MOTIVO_CAMPOS_NAO_ATUALIZADOS = "campos_nao_atualizados"
 # 'sem_atualizacao' que NÃO conta como "em dia" (``_filtro_em_dia``).
-MOTIVOS_SEM_EM_DIA = (MOTIVO_TUDO_EM_REVISAO,)
+MOTIVOS_SEM_EM_DIA = (MOTIVO_TUDO_EM_REVISAO, MOTIVO_CAMPOS_NAO_ATUALIZADOS)
 # Só estes provam que a plataforma respondeu 2xx e a coleta chegou ao fim: são
 # os que podem carimbar a credencial como 'valida'.
 STATUS_CREDENCIAL_VALIDA = ("concluida", "parcial", "sem_atualizacao", "sem_dados")
@@ -1436,11 +1440,21 @@ class _Apuracao:
             self.importacoes.append(int(res["importacao_id"]))
 
     @property
+    def campos_nao_atualizados(self) -> list[str]:
+        """Campos não essenciais que sumiram de todas as linhas de algum relatório
+        (``orchestrator.campos_nao_atualizados``)."""
+        prefixo = orchestrator.AVISO_NAO_ATUALIZADOS
+        return sorted({c for a in self.avisos_criticos if str(a).startswith(prefixo)
+                       for c in str(a)[len(prefixo):].split(",") if c})
+
+    @property
     def interpretacao_incompativel(self) -> bool:
         """A resposta perdeu campo essencial (num arquivo inteiro ou em parte das
-        linhas) — merece o alerta crítico 'parser_incompativel'."""
+        linhas) ou um não essencial em todas as linhas — merece o alerta crítico
+        'parser_incompativel'."""
         return (any(f.get("codigo") == "parser_incompativel" for f in self.falhas)
-                or any(str(a).startswith("campos_ausentes") for a in self.avisos_criticos))
+                or any(str(a).startswith("campos_ausentes") for a in self.avisos_criticos)
+                or bool(self.campos_nao_atualizados))
 
     @property
     def conferiu_a_escola(self) -> bool:
@@ -1494,6 +1508,8 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
             return "parcial", "coleta_parcial"
         if ap.defeitos:
             return "parcial", "linhas_descartadas"
+        if ap.campos_nao_atualizados:
+            return "parcial", MOTIVO_CAMPOS_NAO_ATUALIZADOS
         return "concluida", None
     if ap.falhas and ap.conferiu_a_escola and all(
             f.get("unidade") == "endpoint" for f in ap.falhas):
@@ -1534,6 +1550,8 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
         return "sem_atualizacao", "queda_retida"
     if ap.defeitos:
         return "sem_atualizacao", "linhas_descartadas"
+    if ap.campos_nao_atualizados:
+        return "sem_atualizacao", MOTIVO_CAMPOS_NAO_ATUALIZADOS
     if ap.decididos and not ap.conferiu_a_escola:
         # Só vieram contas que a escola já APOSENTOU: nada a revisar, mas nenhuma
         # conta da escola foi conferida — pela forma C isso não prova que o dado
@@ -1726,7 +1744,19 @@ def _mensagem_parcial(ap: _Apuracao, motivo: str | None) -> str:
         partes.append(f"{len(ap.falhas)} unidade(s) com falha ({ap.resumo_falhas()})")
     if ap.defeitos:
         partes.append(f"{ap.defeitos} linha(s) descartada(s) ({ap.resumo_descartes()})")
+    if ap.campos_nao_atualizados:
+        partes.append(f"{_rotulos_campos(ap.campos_nao_atualizados)} não vieram da "
+                      "plataforma e ficaram com o valor da coleta anterior")
     return "; ".join(partes) + ". Sincronize de novo para completar."
+
+
+_ROTULO_CAMPO = {"tempo_leitura_min": "tempo de leitura",
+                 "questoes_tentativas": "questões respondidas",
+                 "questoes_acertos": "questões aprovadas"}
+
+
+def _rotulos_campos(campos) -> str:
+    return ", ".join(_ROTULO_CAMPO.get(c, c) for c in campos)
 
 
 def _recalcular_se_preciso(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
@@ -1884,9 +1914,20 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         abrir_alerta(db, escola_id, plataforma, "coleta_parcial", mensagem,
                      severidade="warn", execucao_id=execucao.id)
     if ap.interpretacao_incompativel:
-        mensagem = ("A resposta da plataforma veio sem campos que o Constela usa "
-                    f"({', '.join(sorted(set(ap.avisos_criticos))) or 'formato'}): essas "
-                    "linhas não foram gravadas. O conector precisa ser revisto.")
+        perdidas = sorted({a for a in ap.avisos_criticos
+                           if not str(a).startswith(orchestrator.AVISO_NAO_ATUALIZADOS)})
+        partes = []
+        if perdidas or not ap.campos_nao_atualizados:
+            partes.append("A resposta da plataforma veio sem campos que o Constela usa "
+                          f"({', '.join(perdidas) or 'formato'}): essas linhas não foram "
+                          "gravadas.")
+        if ap.campos_nao_atualizados:
+            partes.append(
+                f"A resposta da plataforma veio sem {_rotulos_campos(ap.campos_nao_atualizados)}"
+                " em todas as linhas: os livros foram atualizados, mas esses números "
+                "ficaram com o valor da coleta anterior, e as Questões do período não "
+                "medem os dias desta coleta.")
+        mensagem = " ".join(partes) + " O conector precisa ser revisto."
         registrar_log(db, execucao, "parser", "error", mensagem)
         abrir_alerta(db, escola_id, plataforma, "parser_incompativel", mensagem,
                      severidade="critico", execucao_id=execucao.id)

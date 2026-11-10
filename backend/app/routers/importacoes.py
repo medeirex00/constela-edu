@@ -24,6 +24,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import PrivateAttr
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1926,7 +1927,8 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
 
 
 def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia,
-                              anterior=_SEM_PRECARGA, avisos: list | None = None):
+                              anterior=_SEM_PRECARGA, avisos: list | None = None,
+                              sem_retrato_repetido: bool = False):
     # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1) — e,
     # num relatório RETRODATADO, é o retrato que valia NA DATA dele
     # (``_mapa_retrato_na_data``), nunca o mais novo.
@@ -1965,6 +1967,12 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
         anterior.livros_unicos, anterior.tempo_leitura_min, anterior.questoes_tentativas,
         anterior.questoes_acertos, anterior.livros_por_nivel or {},
     ) != (livros_unicos, tempo, tentativas, acertos, por_nivel or {})
+    if sem_retrato_repetido and anterior is not None and not mudou:
+        # A resposta perdeu tempo/questões (S9): um retrato com os MESMOS números e a
+        # data de hoje diria que foram medidos hoje — as Questões do período o
+        # leriam como "0 no período". Sem ele, a última medida continua a de antes
+        # e o relatório declara a cobertura como ela é.
+        return False
     if anterior is not None and _mesmo_dia(anterior.data_referencia, data_referencia):
         anterior.livros_unicos = livros_unicos
         anterior.tempo_leitura_min = tempo
@@ -2331,7 +2339,7 @@ def _data_do_retrato_das_leituras(data_referencia, ultima_leitura):
 
 def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
                                 data_referencia, avisos, catalogo, ja_lidos,
-                                codigos_faixa):
+                                codigos_faixa, *, sem_retrato_repetido: bool = False):
     """Formato "uma linha por livro concluído": registra leituras únicas (§35).
 
     Todo o trabalho de banco é feito EM LOTE. O ``catalogo`` (livros da escola),
@@ -2536,6 +2544,11 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
             anterior.livros_por_nivel = por_nivel
             anterior.importacao_id = importacao.id
             _avancar_data(anterior, data_retrato)
+    elif sem_retrato_repetido and anterior is not None and not retrato_mudou:
+        # S9: a resposta desta coleta perdeu tempo/questões. Um retrato novo aqui só
+        # repetiria os números de antes com a data de hoje (as Questões do período o
+        # leriam como "0 no período"); as leituras novas já ficaram gravadas acima.
+        pass
     else:
         db.add(SnapshotElefante(
             escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
@@ -2591,14 +2604,21 @@ class _ConfirmacaoDaSincronizacao(ImportacaoConfirm):
     ``ImportacaoConfirm``). ``sincronizar_turma`` não serve de prova — é um campo
     aberto do schema, que qualquer admin/coordenador pode mandar pela API."""
 
+    # A resposta perdeu tempo/questões em TODAS as linhas (S9): o retrato que só
+    # repetiria os números de antes com a data de hoje não é gravado.
+    _sem_retrato_repetido: bool = PrivateAttr(default=False)
 
-def confirmacao_da_sincronizacao(dados: ImportacaoConfirm) -> ImportacaoConfirm:
+
+def confirmacao_da_sincronizacao(dados: ImportacaoConfirm, *,
+                                 sem_retrato_repetido: bool = False) -> ImportacaoConfirm:
     """Marca o pedido montado pela sincronização automática (só o orquestrador
     chama). Os valores já foram validados ao montar ``dados``: nada é revalidado e
     os campos informados continuam os mesmos."""
-    return _ConfirmacaoDaSincronizacao.model_construct(
+    marcado = _ConfirmacaoDaSincronizacao.model_construct(
         _fields_set=set(dados.model_fields_set),
         **{campo: getattr(dados, campo) for campo in ImportacaoConfirm.model_fields})
+    marcado._sem_retrato_repetido = bool(sem_retrato_repetido)
+    return marcado
 
 
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
@@ -2618,9 +2638,11 @@ def confirmar(
     coisa (a mesma trava da prévia; a sincronização tem a dela no serviço)."""
     svc_modulos.exigir_plataforma(
         svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)), dados.plataforma)
+    da_sync = isinstance(dados, _ConfirmacaoDaSincronizacao)
     nucleo = _confirmar_sem_commit(
         dados=dados, escola_id=escola_id, usuario=usuario, db=db,
-        da_sincronizacao=isinstance(dados, _ConfirmacaoDaSincronizacao))
+        da_sincronizacao=da_sync,
+        sem_retrato_repetido=da_sync and dados._sem_retrato_repetido)
     db.commit()
 
     # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
@@ -2740,6 +2762,7 @@ def _confirmar_sem_commit(
     encerrar_revisoes: bool = True,
     da_sincronizacao: bool = False,
     piso_da_data: bool = True,
+    sem_retrato_repetido: bool = False,
 ) -> _NucleoImportacao:
     """TODO o trabalho do /confirmar, SEM commit e SEM efeito externo.
 
@@ -3146,12 +3169,14 @@ def _confirmar_sem_commit(
             mudou = _importar_elefante_leituras(db, escola_id, importacao, aluno,
                                                 linhas_aluno, data_referencia, avisos,
                                                 cat_livros, ja_lidos_map.get(aluno.id, set()),
-                                                cod_faixa)
+                                                cod_faixa,
+                                                sem_retrato_repetido=sem_retrato_repetido)
         else:
             mudou = _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                               linhas_aluno[-1].dados, data_referencia,
                                               anterior=base_retrato.get(aluno.id),
-                                              avisos=avisos)
+                                              avisos=avisos,
+                                              sem_retrato_repetido=sem_retrato_repetido)
         if mudou:
             aplicados.append(aluno.id)
     # Matrícula movida pela sync também é dado alterado (turma do ranking,

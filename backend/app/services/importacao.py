@@ -270,6 +270,10 @@ class Analise:
     # a forma estruturada do aviso "Campos ausentes…" de ``erros_gerais``.
     descartadas: dict = field(default_factory=dict)
     campos_ausentes: dict = field(default_factory=dict)
+    # Dos ausentes, os que SUMIRAM da resposta ({campo: nº de linhas}): a chave não
+    # veio ou veio com valor ilegível. Valor nulo explícito é "sem dado" e não
+    # conta. Em TODAS as linhas é o sinal de campo renomeado na API.
+    campos_sumidos: dict = field(default_factory=dict)
 
 
 _RODAPES =("total", "media", "pagina", "page", "gerado em", "relatorio",
@@ -720,6 +724,7 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
     alunos = payload.get("students")
     linhas: list[LinhaImportacao] = []
     ausentes: dict[str, int] = {}
+    sumidos: dict[str, int] = {}
     descartadas: dict[str, int] = {}
     for i, al in enumerate(alunos or [], start=1):
         if not isinstance(al, dict):
@@ -743,6 +748,9 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         for k, v in campos.items():
             if v is None:
                 ausentes[k] = ausentes.get(k, 0) + 1
+                presentes = [c for c in _CHAVES_API_ELEFANTE[k] if c in al]
+                if not presentes or any(al[c] is not None for c in presentes):
+                    sumidos[k] = sumidos.get(k, 0) + 1
         # Desambigua HOMÔNIMOS na turma certa (mesmo campo que o parser de
         # PDF usa) — evita casar/duplicar aluno errado.
         dados["turma_relatorio"] = turma
@@ -766,7 +774,18 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         mensagem_deteccao="Relatório de turma (API interna do Elefante Letrado).",
         linhas=linhas, erros_gerais=erros_gerais, turma_detectada=turma,
         escola_detectada=escola, professor_detectado=professor,
-        descartadas=descartadas, campos_ausentes=dict(ausentes))
+        descartadas=descartadas, campos_ausentes=dict(ausentes),
+        campos_sumidos=dict(sumidos))
+
+
+# Chaves da API do Elefante (relatório de turma) de cada campo do retrato, na ordem
+# em que ``analisar_elefante_api`` as lê.
+_CHAVES_API_ELEFANTE = {
+    "livros_unicos": ("totalBooksRead", "qtdBooksRead"),
+    "tempo_leitura_min": ("totalReadTime", "readTime"),
+    "questoes_tentativas": ("responses",),
+    "questoes_acertos": ("approvedResponses",),
+}
 
 
 def analisar_matific_api(payload) -> Analise:

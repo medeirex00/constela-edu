@@ -338,6 +338,20 @@ describe("situacaoIntegracao — estados do contrato (etapa 2)", () => {
       .toBe("sem atualização: linhas com defeito descartadas");
   });
 
+  it("tempo e questões que não vieram (S9) não são 'nada mudou' nem 'parte da coleta falhou'", () => {
+    const semCampos = terminada({ status: "sem_atualizacao", qtd_alunos: 0, motivo: "campos_nao_atualizados" });
+    const s = situacaoIntegracao(com(semCampos));
+    expect(s.rotulo).toBe("Sem atualização: tempo e questões não vieram");
+    expect(s.tom).toBe("alerta");
+    expect(s.frase).toContain("valor da coleta anterior");
+    const parcial = situacaoIntegracao(com(terminada({
+      status: "parcial", qtd_alunos: 3, qtd_falhas: 0, motivo: "campos_nao_atualizados" })));
+    expect(parcial.frase).toContain("não mandou o tempo de leitura e as questões");
+    expect(parcial.frase).not.toContain("parte da coleta falhou");
+    expect(descreverExecucao({ status: "sem_atualizacao", motivo: "campos_nao_atualizados" }).rotulo)
+      .toBe("sem atualização: tempo e questões não vieram da plataforma");
+  });
+
   it("total menor retido (queda do Matific) é verificação com estado próprio, sem link para revisões", () => {
     const retida = terminada({ status: "sem_atualizacao", qtd_alunos: 0, motivo: "queda_retida" });
     const s = situacaoIntegracao(com(retida));

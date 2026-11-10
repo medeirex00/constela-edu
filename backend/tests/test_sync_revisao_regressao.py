@@ -334,4 +334,7 @@ def test_r7_campo_nao_essencial_ausente_aplica_livros_e_herda_tempo(db, escola_c
           (s.livros_unicos, s.tempo_leitura_min, s.questoes_tentativas),
           alertas_abertos(db, eid, "elefante"))
     assert (s.livros_unicos, s.tempo_leitura_min, s.questoes_tentativas) == (7, 200, 30)
-    assert ex.status == "concluida"
+    # S9: os livros entram e tempo/questões ficam os de antes (não destrutivo), mas a
+    # coleta não sai mais 'concluida' calada (test_sync_campos_nao_essenciais).
+    assert (ex.status, ex.motivo) == ("parcial", "campos_nao_atualizados")
+    assert "parser_incompativel" in alertas_abertos(db, eid, "elefante")
