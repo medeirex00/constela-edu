@@ -1957,10 +1957,15 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
             gravou = ("os livros foram atualizados, mas esses números ficaram"
                       if ap.aplicados else
                       "nenhum aluno foi atualizado, e esses números ficaram")
+            # As Questões do período só deixam de medir esta coleta quando o que sumiu
+            # foram as QUESTÕES (a importação fica ``IMPORTACAO_SEM_QUESTOES``); com só o
+            # tempo de leitura sumido, o retrato mede as questões e serve de borda.
+            sem_questoes = set(orchestrator.CAMPOS_QUESTOES) & set(ap.campos_nao_atualizados)
             partes.append(
                 f"A resposta da plataforma veio sem {_rotulos_campos(ap.campos_nao_atualizados)}"
-                f" em todas as linhas: {gravou} com o valor da coleta anterior, e as "
-                "Questões do período não medem os dias desta coleta.")
+                f" em todas as linhas: {gravou} com o valor da coleta anterior"
+                + (", e as Questões do período não medem os dias desta coleta."
+                   if sem_questoes else "."))
         mensagem = (" ".join(partes) + " Sincronizar de novo não resolve: "
                     f"{orchestrator.AJUSTE_DA_COLETA}.")
         registrar_log(db, execucao, "parser", "error", mensagem)

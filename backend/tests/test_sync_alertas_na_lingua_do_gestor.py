@@ -108,6 +108,36 @@ def test_sem_atualizacao_com_campo_sumido_nao_diz_que_os_livros_foram_atualizado
             in suporte
 
 
+@pytest.mark.parametrize("livros_de,status", [({9300001: 7}, "parcial"),
+                                               (None, "sem_atualizacao")])
+@pytest.mark.parametrize("chaves,questoes_nao_medem", [
+    (("totalReadTime",), False),
+    (("responses",), True),
+    (("approvedResponses", "totalReadTime"), True),
+])
+def test_questoes_do_periodo_so_nao_medem_quando_as_questoes_sumiram(
+        db, escola_completa, monkeypatch, livros_de, status, chaves, questoes_nao_medem):
+    """Revisão do acabamento (sonda R3): com só o tempo de leitura sumido as questões
+    vieram — a importação é 'concluida' e o retrato dela MEDE as questões (é borda do
+    Relatório por Período). O alerta dizia sempre "e as Questões do período não medem os
+    dias desta coleta"; agora só quando uma das questões sumiu."""
+    from app.models import Importacao
+    from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
+
+    eid, ex = _segunda_coleta(db, escola_completa, monkeypatch, livros_de=livros_de,
+                              chaves=chaves)
+
+    assert ex.status == status, ex.status
+    statuses = set(db.execute(select(Importacao.status).where(
+        Importacao.escola_id == eid, Importacao.plataforma == "elefante")).scalars())
+    assert (IMPORTACAO_SEM_QUESTOES in statuses) is questoes_nao_medem, statuses
+    formato = _alertas(db, eid)["parser_incompativel"]
+    assert "em todas as linhas: " in formato, formato
+    assert ("e as Questões do período não medem os dias desta coleta." in formato) \
+        is questoes_nao_medem, formato
+    assert f"Sincronizar de novo não resolve: {AJUSTE}." in formato, formato
+
+
 def test_tudo_com_defeito_sem_conector_no_alerta(db, escola_completa, monkeypatch):
     """Nenhuma linha aproveitável ('erro'): o alerta dizia "Verifique o conector."."""
     ec = escola_completa
