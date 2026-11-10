@@ -335,13 +335,14 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
         # é um brasão afirmando que ele é da escola — o mesmo tipo de problema que
         # a guarda de "0,0" abaixo existe para evitar. Se a escola decidir que a
         # criança deve receber mesmo assim, o caminho é explícito e auditado:
-        # Alunos › Reativar.
+        # Reativar, na turma dela (a lista de Alunos só mostra os ativos).
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” está com situação {_SITUACAO.get(aluno.status, aluno.status)!r} "
             "e não faz parte da população ativa da escola — não dá para emitir um "
             "documento oficial em nome dela. Se a criança de fato deve receber, "
-            "reative o cadastro em Alunos › Reativar e emita em seguida.")
+            "reative o cadastro em Minha Escola › Turmas: abra a turma dela, ligue "
+            "“Mostrar arquivados”, use “Reativar” e emita em seguida.")
 
     matricula = db.execute(
         select(Matricula, Turma)
@@ -385,7 +386,7 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
     #
     # O caminho da confirmação humana já existe e não é novo: importar a Lista
     # Piloto (que reconhece o cadastro e carimba o campo) ou fundir a duplicata em
-    # Alunos › Duplicatas. Qualquer um dos dois libera a emissão. Esta guarda fica
+    # Alunos › "Fundir duplicatas". Qualquer um dos dois libera a emissão. Esta guarda fica
     # ANTES da escolha do modelo, de propósito: vale para o Mérito e também para
     # as duas artes de participação, que não passam pela guarda de nota.
     if not aluno.da_lista_piloto:
@@ -394,9 +395,10 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
             f"“{aluno.nome}” ainda não está confirmado na Lista Piloto desta "
             "escola, então não dá para emitir um documento oficial no nome dele. "
             "Esta ficha foi criada a partir de um relatório de plataforma e está "
-            "sem RA e sem data de nascimento. Importe a Lista Piloto em Estrutura "
-            "› Matrículas, ou funda a ficha duplicada em Alunos › Duplicatas, e "
-            "emita em seguida.")
+            "sem RA e sem data de nascimento. Atualize a Lista Piloto em Dados e "
+            "integrações › Integrações › “Atualizar Lista Piloto”, ou funda a ficha "
+            "repetida em Minha Escola › Alunos › “Fundir duplicatas”, e emita em "
+            "seguida.")
     return PreparoCertificado(escola=escola, aluno=aluno, matricula=matricula)
 
 
@@ -434,8 +436,9 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” {onde}, então não está no ranking vigente: a "
             "posição guardada para ela é de um cálculo antigo e não vale mais. "
-            "Matricule a criança numa turma do ano letivo em Estrutura › "
-            "Turmas (o recálculo dá a posição atual) e emita em seguida.")
+            "Coloque a criança numa turma do 1º ao 5º ano deste ano letivo (no "
+            "perfil dela, três pontinhos › “Editar dados” › Turma) e emita depois "
+            "do próximo recálculo das notas, que dá a posição atual.")
     if nota is None or not svc_dimensoes.com_desempenho(db, escola, nota):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

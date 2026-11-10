@@ -23,7 +23,7 @@ de emitir é um clique a mais; emitir errado é um documento oficial no nome de
 alguém que talvez não exista.
 
 A confirmação humana usa caminho que já existia: importar a Lista Piloto (casa o
-nome e carimba o campo) ou fundir a duplicata em Alunos › Duplicatas.
+nome e carimba o campo) ou fundir a duplicata em Alunos › "Fundir duplicatas".
 """
 from datetime import date
 
@@ -100,7 +100,7 @@ def test_a_mensagem_diz_o_que_fazer(cliente, db, escola_completa):
 
     detalhe = _emitir(cliente, escola, a).json()["detail"]
     assert "Lista Piloto" in detalhe
-    assert "Duplicatas" in detalhe        # o outro caminho: fundir
+    assert "Fundir duplicatas" in detalhe  # o outro caminho: fundir
     assert "STUB COM NOTA" in detalhe     # nomeia a criança
 
 
