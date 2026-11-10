@@ -899,10 +899,16 @@ export default function RelatorioPeriodo() {
               {ele && (
                 <div className="space-y-2.5">
                   <RotuloSecao>Elefante Letrado</RotuloSecao>
-                  {Object.entries(ele.suporte).map(([chave, s]) => (
-                    <CartaoComoLer key={chave} explicacao={explicacaoDe(EXPLICACAO_ELEFANTE, chave, s)}
-                                   classificacao={s.classificacao} />
-                  ))}
+                  {Object.entries(ele.suporte)
+                    // O que o relatório não calcula fica só em "O que este relatório NÃO
+                    // responde" (com o nome da plataforma, como as questões do Matific) —
+                    // não repetido aqui, com o mesmo texto, sob o selo "Não calculado".
+                    .filter(([chave]) => !dados.nao_suportado.some(
+                      (n) => n.plataforma === "elefante" && n.metrica === chave))
+                    .map(([chave, s]) => (
+                      <CartaoComoLer key={chave} explicacao={explicacaoDe(EXPLICACAO_ELEFANTE, chave, s)}
+                                     classificacao={s.classificacao} />
+                    ))}
                 </div>
               )}
               {mat && (

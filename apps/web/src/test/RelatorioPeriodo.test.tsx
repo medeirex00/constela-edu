@@ -194,7 +194,6 @@ describe("Relatório por Período", () => {
     detalhes.click();
     const t = texto();
     expect(t).toContain("Confiável, com um cuidado");
-    expect(t).toContain("Não calculado");
     expect(t).toContain("O que este relatório NÃO responde");
     // A mesma informação de antes, dita para quem lê o relatório.
     expect(t).toContain("É a mesma conta da premiação “Mais livros”");
@@ -214,6 +213,31 @@ describe("Relatório por Período", () => {
     // Nada de vocabulário interno: nome de campo, classificação técnica, jargão do banco.
     semVocabularioInterno(t);
     expect(document.querySelector("code")).toBeNull();
+  });
+
+  it("'Tempo de cada leitura' aparece uma vez só, em 'O que este relatório NÃO responde'", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    (await screen.findByText("Como ler estes números")).click();
+    const t = texto();
+    const vezes = (s: string) => t.split(s).length - 1;
+    // O backend o manda em `suporte` (NÃO SUPORTADO) e em `nao_suportado`: a tela
+    // explicava duas vezes, com o mesmo texto. Fica o item com o nome da plataforma.
+    expect(vezes("Não dá para saber quanto durou cada leitura")).toBe(1);
+    expect(vezes("Tempo de cada leitura")).toBe(1);
+    expect(t).toContain("Tempo de cada leitura (Elefante Letrado)");
+    expect(t.indexOf("Tempo de cada leitura")).toBeGreaterThan(t.indexOf("O que este relatório NÃO responde"));
+  });
+
+  it("número não calculado que o backend não lista em 'NÃO responde' continua com o selo", async () => {
+    const dados = relatorioFake();
+    dados.nao_suportado = dados.nao_suportado.filter((n) => n.metrica !== "tempo_min_por_evento");
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    (await screen.findByText("Como ler estes números")).click();
+    const t = texto();
+    expect(t).toContain("Não calculado");
+    expect(t.split("Não dá para saber quanto durou cada leitura").length - 1).toBe(1);
   });
 
   it("publica a janela EFETIVA quando o número vem de coleta", async () => {
