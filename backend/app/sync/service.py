@@ -22,12 +22,14 @@ import logging
 import statistics
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import String, case, cast, event, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import settings
 from app.models.escola import Escola
@@ -761,12 +763,34 @@ def _execucao_ativa(db: Session, escola_id: int, plataforma: str):
 
 
 def _esta_travada(execucao: SincronizacaoExecucao) -> bool:
-    """True se a execução está presa em 'executando' além de ``SYNC_TRAVADA_S``
-    (worker morto/redeploy no meio) — órfã, precisa ser recuperada."""
+    """True se a execução em 'executando' está sem SINAL DE VIDA há mais de
+    ``SYNC_SEM_SINAL_S`` (worker morto, redeploy no meio) — órfã, precisa ser
+    recuperada. O critério é o último registro no log dela, não a idade: quem está
+    vivo escreve nele (``_sinal_de_vida_enquanto_roda``), então uma coleta longa não
+    é reivindicada, e a que morreu é liberada em minutos, não em 60."""
     if execucao.status != "executando" or execucao.iniciada_em is None:
         return False
-    limite = _agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)
-    return execucao.iniciada_em < limite
+    limite = _agora() - timedelta(seconds=settings.SYNC_SEM_SINAL_S)
+    if _naive_utc(execucao.iniciada_em) >= limite:
+        return False          # recente: o 1º sinal de vida ainda nem era devido
+    db = object_session(execucao)
+    if db is None:
+        return False          # sem como conferir o sinal: na dúvida, está viva
+    sinal = ultimo_sinal_de_vida(db, execucao)
+    return sinal is None or sinal < limite
+
+
+def _orfas_em_execucao(db: Session) -> list[SincronizacaoExecucao]:
+    """As execuções que ``_esta_travada`` reivindicaria, numa consulta só."""
+    limite = _agora() - timedelta(seconds=settings.SYNC_SEM_SINAL_S)
+    linhas = db.execute(
+        select(SincronizacaoExecucao, consulta_ultimo_log()).where(
+            SincronizacaoExecucao.status == "executando",
+            SincronizacaoExecucao.iniciada_em.isnot(None),
+            SincronizacaoExecucao.iniciada_em < limite)
+    ).all()
+    return [ex for ex, ultimo_log in linhas
+            if (sinal := sinal_de_vida(ex, ultimo_log)) is None or sinal < limite]
 
 
 def _gravou_arquivo(db: Session, execucao_id: int) -> bool:
@@ -811,6 +835,40 @@ def _finalizar_travada(db: Session, execucao: SincronizacaoExecucao, *,
     return reivindicou == 1
 
 
+def _fechar_se_ainda_executando(db: Session, execucao: SincronizacaoExecucao,
+                                status: str) -> bool:
+    """Grava o status final SÓ se a execução ainda está 'executando' (UPDATE
+    condicional, o par do ``_finalizar_travada``). False: outro caminho já a
+    encerrou enquanto esta thread trabalhava — antes o status era sobrescrito e uma
+    'erro' ("Interrompida") voltava a ser 'concluida', com a nova tentativa já na
+    fila. ``synchronize_session=False`` e o valor em memória só depois de vencer: o
+    objeto desta thread pode estar velho, e a sincronização avaliada em Python o
+    daria por fechado mesmo sem a linha ter mudado."""
+    fechou = db.execute(
+        update(SincronizacaoExecucao)
+        .where(SincronizacaoExecucao.id == execucao.id,
+               SincronizacaoExecucao.status == "executando")
+        .values(status=status)
+        .execution_options(synchronize_session=False)).rowcount == 1
+    if fechou:
+        set_committed_value(execucao, "status", status)
+    return fechou
+
+
+def _perdeu_o_fechamento(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao) -> None:
+    """Outro caminho encerrou esta execução e o estado dele vale. O que esta thread
+    gravou fica (cada arquivo commita o seu) e as notas ficam para a marca de
+    recálculo pendente. Cursor, credencial e alertas não são tocados: uma execução
+    nova pode estar rodando, e ela é quem responde pela integração agora."""
+    ap.perdeu_o_fechamento = True
+    if ap.aplicados:
+        execucao.recalculo_pendente = True
+    registrar_log(db, execucao, "scheduler", "warn",
+                  "A execução já tinha sido encerrada como interrompida enquanto esta "
+                  "coleta ainda rodava: o resultado dela não muda esse estado. O que já "
+                  "foi gravado fica, e as notas serão recalculadas na próxima coleta.")
+
+
 # --------------------------------------------------------------------------
 # Sinal de vida das execuções MANUAIS na fila
 #
@@ -838,8 +896,10 @@ def batimento_fila_s() -> float:
 
 
 def ultimo_sinal_de_vida(db: Session, execucao: SincronizacaoExecucao) -> datetime | None:
-    """O mais novo entre a criação da execução e o último registro no log dela
-    (na fila, só quem espera a vez escreve ali)."""
+    """O mais novo entre o marco da execução e o último registro no log dela. Na
+    fila, o marco é a criação, e só quem espera a vez escreve no log; em
+    'executando', é o início, e escrevem a própria coleta e o
+    ``_sinal_de_vida_enquanto_roda``."""
     ultimo_log = db.scalar(select(func.max(SincronizacaoLog.created_at)).where(
         SincronizacaoLog.execucao_id == execucao.id))
     return sinal_de_vida(execucao, ultimo_log)
@@ -857,7 +917,8 @@ def consulta_ultimo_log():
 def sinal_de_vida(execucao: SincronizacaoExecucao, ultimo_log: datetime | None,
                   ) -> datetime | None:
     """A regra de ``ultimo_sinal_de_vida`` com o último log já lido."""
-    marcos = [m for m in (_naive_utc(execucao.created_at), _naive_utc(ultimo_log)) if m]
+    marco = execucao.iniciada_em if execucao.status == "executando" else execucao.created_at
+    marcos = [m for m in (_naive_utc(marco), _naive_utc(ultimo_log)) if m]
     return max(marcos) if marcos else None
 
 
@@ -1315,6 +1376,8 @@ class _Apuracao:
     # Fora do banco, como o resto: é o que ``executar`` consulta ao sair por exceção.
     fim_gravado: tuple | None = None
     fim_logado: bool = False
+    # Outro caminho encerrou a execução primeiro (``_perdeu_o_fechamento``).
+    perdeu_o_fechamento: bool = False
 
     def incorporar_coleta(self, coleta: dict | None) -> None:
         """O que o CONECTOR anotou (unidades que não chegaram, linhas com defeito)."""
@@ -1491,6 +1554,12 @@ def _coletar(conector, cred, contexto_fetch: Contexto) -> list:
         else:
             mensagem = "Tempo esgotado esperando a plataforma responder."
         raise ErroConector(mensagem, codigo="timeout", recuperavel=True) from exc
+    except asyncio.CancelledError as exc:
+        # É BaseException: passava por todos os ``except Exception`` e a execução
+        # ficava 'executando', sem log nem fim. Uma tarefa interna cancelada (ex.:
+        # o navegador fechando no meio) é falha da coleta, e tem nova tentativa.
+        raise ErroConector("A coleta foi cancelada no meio do caminho. Tente de novo.",
+                           codigo="erro_navegador", recuperavel=True) from exc
 
 
 _ONDE_AS_CONTAS_VEM = {
@@ -1710,6 +1779,9 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         # pendência (só contas aposentadas no período), nada mudou.
         motivo = ("correspondencia_pendente" if (ap.em_revisao or ap.ignorados)
                   else MOTIVO_NADA_MUDOU)
+    if not _fechar_se_ainda_executando(db, execucao, status):
+        _perdeu_o_fechamento(db, execucao, ap)
+        return
     _gravar_contabilidade(execucao, ap)
     _registrar_trilha(db, execucao, ap)
     execucao.motivo = motivo
@@ -1737,7 +1809,6 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         _tratar_falha(db, execucao, contexto, codigo, mensagem, recuperavel=recuperavel)
         return
 
-    execucao.status = status
     # CURSOR (incremental): avança só numa coleta que chegou ao fim. Falha no meio
     # não salva nada — a próxima sync busca de novo (as UNIQUE impedem duplicar).
     if falha is None and ap.com_linhas:
@@ -1907,6 +1978,9 @@ def _encerrar_com_falha(db: Session, execucao: SincronizacaoExecucao, ap: _Apura
             logger.exception("Falha ao fechar a execução parcial (escola %s, plataforma %s)",
                              escola_id, plataforma)
     codigo, mensagem, recuperavel = falha
+    if not _fechar_se_ainda_executando(db, execucao, "erro"):
+        _perdeu_o_fechamento(db, execucao, ap)
+        return
     _gravar_contabilidade(execucao, ap)
     navegador_abriu = (getattr(contexto_fetch, "coleta", None) or {}).get("navegador_abriu")
     if codigo != "navegador_indisponivel" and (coletou or navegador_abriu):
@@ -2163,7 +2237,8 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
     ap = _Apuracao()
     ids = (execucao.id, execucao.escola_id, execucao.plataforma)
     try:
-        return _executar_reivindicada(db, execucao, ap)
+        with _sinal_de_vida_enquanto_roda(execucao.id):
+            return _executar_reivindicada(db, execucao, ap)
     except BaseException:
         # Saída por exceção DEPOIS de o estado final ir para o banco (o commit antes
         # do recálculo, ou o do fim) e antes da linha: falha de banco no fim, ou um
@@ -2304,6 +2379,11 @@ def _executar_reivindicada(db: Session, execucao: SincronizacaoExecucao,
                             falha=caiu or ("erro_inesperado",
                                            f"Falha inesperada: {type(exc).__name__}", True))
 
+    if ap.perdeu_o_fechamento:
+        # O estado final e a linha do fim são de quem encerrou: nada de instante,
+        # duração, frescor ou métrica desta thread por cima deles.
+        db.commit()
+        return execucao
     execucao.finalizada_em = _agora()
     execucao.duracao_ms = int((time.monotonic() - inicio) * 1000)
     if execucao.status == "concluida":
@@ -2352,6 +2432,8 @@ ORIGENS_DO_FIM = {
                          "(``enfileirar_ou_reaproveitar``)",
     "travada_no_agendador": "o reaper do agendador achou a execução presa "
                             "(``recuperar_execucoes_travadas``)",
+    "travada_no_status": "agendador desligado: a leitura do /status achou a execução "
+                         "sem sinal de vida (``liberar_fila_sem_agendador``)",
     "orfa_no_boot": "o boot achou a execução presa (``finalizar_orfas_no_boot``)",
 }
 
@@ -2526,7 +2608,8 @@ def _avaliar_queda_matific(db: Session, execucao: SincronizacaoExecucao,
 
 def _tratar_falha(db: Session, execucao: SincronizacaoExecucao, contexto: Contexto,
                   codigo: str, mensagem: str, *, recuperavel: bool) -> None:
-    execucao.status = "erro"
+    """Registra a falha de uma execução que o chamador JÁ fechou como 'erro'
+    (``_fechar_se_ainda_executando``)."""
     execucao.erro_resumo = mensagem[:300]
     # Sem motivo mais específico da contabilidade ('coleta_incompleta',
     # 'linhas_descartadas'), o motivo do 'erro' é o CÓDIGO da falha
@@ -2645,6 +2728,81 @@ def _sinal_de_vida_da_espera(execucao_id: int) -> bool:
         return True
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------
+# Sinal de vida de quem está em 'executando'
+#
+# Antes o único critério era a idade (``iniciada_em`` além de SYNC_TRAVADA_S): a
+# execução morta num redeploy segurava a escola por até 60 min (o clique se juntava
+# a ela e a tela dizia "Sincronizando"), e a viva além disso era reivindicada. Agora
+# uma thread escreve no log da execução enquanto ela roda, cobrindo também a fase de
+# aplicação, cujos registros só ficam visíveis no commit de cada arquivo.
+# --------------------------------------------------------------------------
+def batimento_execucao_s() -> float:
+    """Intervalo do sinal de vida: 6 por janela de ``SYNC_SEM_SINAL_S``, para um
+    atraso ou uma falha de banco não bastarem para a execução parecer morta."""
+    return max(1.0, settings.SYNC_SEM_SINAL_S / 6)
+
+
+def registrar_batimento_execucao(db: Session, execucao_id: int) -> bool:
+    """Uma linha no log de quem está rodando — só se ninguém escreveu lá há um
+    intervalo: a coleta já registra o próprio progresso e o histórico da tela não
+    enche à toa. Devolve False se a execução já saiu de 'executando'."""
+    execucao = db.get(SincronizacaoExecucao, execucao_id)
+    if execucao is None or execucao.status != "executando":
+        return False
+    agora = _agora()
+    ultimo = _naive_utc(db.scalar(select(func.max(SincronizacaoLog.created_at)).where(
+        SincronizacaoLog.execucao_id == execucao_id)))
+    if ultimo is not None and agora - ultimo < timedelta(seconds=batimento_execucao_s()):
+        return True
+    inicio = _naive_utc(execucao.iniciada_em) or agora
+    minutos = int(max(timedelta(0), agora - inicio).total_seconds() // 60)
+    registrar_log(db, execucao, "scheduler", "info",
+                  f"Em andamento: a sincronização segue rodando neste servidor ({minutos} min).")
+    db.commit()
+    return True
+
+
+def _sinal_de_vida_da_execucao(execucao_id: int) -> bool:
+    """``registrar_batimento_execucao`` com sessão própria. Falha de banco não para
+    o sinal (devolve True): perder um é tolerado, são seis por janela."""
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        return registrar_batimento_execucao(db, execucao_id)
+    except Exception:  # noqa: BLE001 — o sinal nunca derruba a coleta
+        logger.warning("Falha ao registrar o sinal de vida da execução %s", execucao_id,
+                       exc_info=True)
+        return True
+    finally:
+        db.close()
+
+
+@contextmanager
+def _sinal_de_vida_enquanto_roda(execucao_id: int):
+    """Mantém o sinal de vida da execução enquanto o bloco roda. Com teto: uma
+    thread pendurada para sempre deixa de dar sinal depois de 2 × SYNC_TRAVADA_S e
+    a escola é liberada — o sinal prova que o processo está de pé, não que há
+    progresso. Sem thread (limite do sistema), a coleta segue sem o sinal."""
+    parar = threading.Event()
+
+    def _rodar() -> None:
+        teto = time.monotonic() + 2 * settings.SYNC_TRAVADA_S
+        while not parar.wait(batimento_execucao_s()):
+            if time.monotonic() > teto or not _sinal_de_vida_da_execucao(execucao_id):
+                return
+
+    try:
+        threading.Thread(target=_rodar, daemon=True,
+                         name=f"sync-sinal-{execucao_id}").start()
+    except RuntimeError:
+        logger.warning("Sem thread para o sinal de vida da execução %s", execucao_id)
+    try:
+        yield
+    finally:
+        parar.set()
 
 
 def precisa_de_thread(execucao: SincronizacaoExecucao) -> bool:
@@ -2807,26 +2965,21 @@ def garantir_agendas_diarias(db: Session,
 
 
 def finalizar_orfas_no_boot(db: Session) -> int:
-    """No BOOT do processo: libera execuções presas em 'executando' há mais de
-    ``SYNC_TRAVADA_S`` — o worker que as rodava morreu no restart/redeploy. Marca
-    'erro' e LIBERA a trava (uq_sync_exec_ativa) SEM re-enfileirar (o usuário
-    retoma quando quiser). Idempotente.
+    """No BOOT do processo: libera execuções presas em 'executando' sem sinal de vida
+    há mais de ``SYNC_SEM_SINAL_S`` — o worker que as rodava morreu no
+    restart/redeploy. Marca 'erro' e LIBERA a trava (uq_sync_exec_ativa) SEM
+    re-enfileirar (o usuário retoma quando quiser). Idempotente.
 
-    O GATE DE IDADE é essencial com MÚLTIPLOS workers (uvicorn --workers > 1): o
+    O GATE DO SINAL é essencial com MÚLTIPLOS workers (uvicorn --workers > 1): o
     boot de UM worker NÃO significa que o vizinho parou. Sem o gate, este reaper
     mataria a sincronização EM ANDAMENTO de outro worker (furando a exclusão
-    mútua e podendo duplicar recálculos). Com o gate, só toca execuções antigas o
-    bastante para que ninguém mais as esteja executando — o mesmo limiar do
-    reaper periódico (recuperar_execucoes_travadas)."""
-    limite = _agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)
-    orfas = db.execute(
-        select(SincronizacaoExecucao).where(
-            SincronizacaoExecucao.status == "executando",
-            SincronizacaoExecucao.iniciada_em.isnot(None),
-            SincronizacaoExecucao.iniciada_em < limite)
-    ).scalars().all()
+    mútua e podendo duplicar recálculos). Com o gate, só toca execuções caladas
+    há tempo bastante para que ninguém mais as esteja executando — o mesmo limiar
+    do reaper periódico (recuperar_execucoes_travadas). A que acabou de morrer no
+    próprio redeploy ainda tem sinal recente: sai pela leitura do /status ou pelo
+    próximo clique, passada a janela (``liberar_fila_sem_agendador``)."""
     n = 0
-    for ex in orfas:
+    for ex in _orfas_em_execucao(db):
         if _finalizar_travada(db, ex, origem="orfa_no_boot"):
             n += 1
     if n:
@@ -2849,17 +3002,28 @@ def liberar_fila_sem_agendador(db: Session, escola_id: int | None = None) -> int
     agendadas, manuais ÓRFÃS. Elas nunca vão rodar — deixá-las na fila fazia o
     card dizer "Sincronizando" para sempre e prendia a exclusão mútua até alguém
     clicar. Manual cuja thread ainda espera a vez — neste processo ou em outro
-    worker, pelo sinal de vida — não é tocada, por mais antiga que seja. Com o
-    agendador ligado, não faz nada: ele as pega. Idempotente. Roda no boot e na
-    leitura do /status (``escola_id``)."""
+    worker, pelo sinal de vida — não é tocada, por mais antiga que seja. Encerra
+    também a 'executando' sem sinal de vida (``_esta_travada``): sem o agendador,
+    quem a libertava era só o próximo clique, e a tela ficava em "Sincronizando".
+    Com o agendador ligado, não faz nada: ele as pega. Idempotente. Roda no boot e
+    na leitura do /status (``escola_id``), na mesma consulta."""
     if agendador_ligado():
         return 0
-    consulta = select(SincronizacaoExecucao).where(SincronizacaoExecucao.status == "fila")
+    consulta = select(SincronizacaoExecucao).where(
+        SincronizacaoExecucao.status.in_(("fila", "executando")))
     if escola_id is not None:
         consulta = consulta.where(SincronizacaoExecucao.escola_id == escola_id)
     agora = _agora()
     n = 0
     for ex in db.execute(consulta).scalars().all():
+        if ex.status == "executando":
+            if _esta_travada(ex) and _finalizar_travada(db, ex, origem="travada_no_status"):
+                abrir_alerta(db, ex.escola_id, ex.plataforma, "interrompida",
+                             "Sincronização interrompida (reinício do serviço). Use "
+                             "“Sincronizar agora” para tentar de novo.",
+                             severidade="warn", execucao_id=ex.id)
+                n += 1
+            continue
         if not so_o_agendador_roda(ex, agora=agora):
             continue
         manual = ex.origem != "scheduler" and ex.disponivel_em is None
@@ -2873,23 +3037,15 @@ def liberar_fila_sem_agendador(db: Session, escola_id: int | None = None) -> int
 
 
 def recuperar_execucoes_travadas(db: Session) -> int:
-    """Reaper (retomada após crash): execuções presas em 'executando' além de
-    ``SYNC_TRAVADA_S`` — worker morto ou redeploy no meio — são finalizadas como
-    'erro' e re-enfileiradas (respeitando o limite de tentativas). Sem isto, o
+    """Reaper (retomada após crash): execuções em 'executando' sem sinal de vida há
+    mais de ``SYNC_SEM_SINAL_S`` — worker morto ou redeploy no meio — são finalizadas
+    como 'erro' e re-enfileiradas (respeitando o limite de tentativas). Sem isto, o
     índice de exclusão mútua prenderia a escola até uma intervenção manual.
 
     Roda no início de cada rodada do scheduler. É seguro com várias réplicas: o
     UPDATE atômico garante que só um worker reivindica cada órfã."""
-    orfas = db.execute(
-        select(SincronizacaoExecucao).where(
-            SincronizacaoExecucao.status == "executando",
-            SincronizacaoExecucao.iniciada_em.isnot(None),
-            SincronizacaoExecucao.iniciada_em
-            < (_agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)),
-        )
-    ).scalars().all()
     n = 0
-    for ex in orfas:
+    for ex in _orfas_em_execucao(db):
         if not _finalizar_travada(db, ex, origem="travada_no_agendador"):
             db.rollback()             # outro worker já a reivindicou
             continue

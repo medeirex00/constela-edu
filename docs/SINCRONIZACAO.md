@@ -111,8 +111,9 @@ confirma.
 - **Config** (env): `SYNC_WORKERS`, `SYNC_POLL_S`, `SYNC_MAX_TENTATIVAS`,
   `SYNC_BACKOFF_BASE_S`, `SYNC_TIMEOUT_S` (por passo do navegador),
   `SYNC_TETO_EXECUCAO_S` (teto TOTAL da coleta, 2700 s), `SYNC_LENTO_S`,
-  `SYNC_TRAVADA_S` (janela do reaper de execuções órfãs, 3600 s — tem de passar
-  do teto da coleta, senão o reaper mata uma coleta viva) e `MATIFIC_END_DATE`
+  `SYNC_TRAVADA_S` (janela da fila e do pré-requisito do agendador, 3600 s — tem
+  de passar do teto da coleta), `SYNC_SEM_SINAL_S` (execução em `executando` sem
+  nenhum registro no log há mais que isto é órfã, 900 s) e `MATIFIC_END_DATE`
   (semântica do fim do período do Matific; `desconhecida` recusa 1 dia).
 - **Recuperação:** retries com backoff exponencial até `SYNC_MAX_TENTATIVAS`;
   idempotência de fila em DUAS camadas (fast-path + **índice único parcial**
@@ -126,11 +127,18 @@ confirma.
   valor anterior (o PDF de estrelas e o Excel por turma se completam).
 - **Retomada após crash (reaper):** um worker morto/redeploy no meio deixa a
   execução presa em `executando`; como o índice de exclusão mútua a trata como
-  ativa, a escola ficaria travada. `recuperar_execucoes_travadas` (chamada no
-  início de cada rodada do scheduler) e a **auto-cura no `enfileirar`** detectam
-  execuções `executando` com `iniciada_em` além de `SYNC_TRAVADA_S` (60 min),
-  finalizam-nas como `erro` (claim atômico) e **re-enfileiram** uma nova
-  tentativa. Se o `enfileirar` perde a corrida do claim para o reaper
+  ativa, a escola ficaria travada. Quem está rodando dá **sinal de vida**: uma
+  thread escreve no log da execução a cada `SYNC_SEM_SINAL_S`/6 (só se ninguém
+  escreveu lá nesse intervalo), por no máximo 2 × `SYNC_TRAVADA_S`.
+  `recuperar_execucoes_travadas` (chamada no início de cada rodada do
+  scheduler), o boot, a **auto-cura no `enfileirar`** e, com o agendador
+  desligado, a leitura do `/status` detectam execuções `executando` sem nenhum
+  registro no log (nem início) há mais de `SYNC_SEM_SINAL_S` (15 min),
+  finalizam-nas como `erro` (claim atômico) e o reaper **re-enfileira** uma nova
+  tentativa. Uma coleta viva além de 60 min não é reivindicada; a morta num
+  redeploy sai em ~15 min. O fim de uma execução só grava sobre `executando`
+  (UPDATE condicional): reivindicada no meio, o `erro` de quem a encerrou fica,
+  e o dado já gravado vira recálculo pendente. Se o `enfileirar` perde a corrida do claim para o reaper
   concorrente, ele **re-checa** o estado (em vez de devolver a órfã morta) e
   cria a execução pedida — o clique nunca some. Assim o botão "Sincronizar" e a
   agenda voltam a funcionar sozinhos, sem intervenção no banco — testado

@@ -39,9 +39,10 @@ banco:
    execuções ativas para a mesma (escola, plataforma). Clique duplo, scheduler +
    manual, ou múltiplas réplicas enfileirando ao mesmo tempo → uma só tarefa.
 3. **Recuperação pós-crash.** Um redeploy no meio de uma sync deixa a linha em
-   `executando`; o *reaper* ([`recuperar_execucoes_travadas`](../backend/app/sync/service.py))
-   a devolve para a fila (com backoff/limite de tentativas) no próximo boot —
-   também via UPDATE atômico, seguro entre réplicas.
+   `executando`; quando ela passa de `SYNC_SEM_SINAL_S` sem sinal de vida no log,
+   o *reaper* ([`recuperar_execucoes_travadas`](../backend/app/sync/service.py))
+   a devolve para a fila (com backoff/limite de tentativas) — também via UPDATE
+   atômico, seguro entre réplicas.
 
 **Consequência prática:** para escalar, basta rodar o mesmo código como um
 serviço separado (ou mais réplicas) apontando para o mesmo Postgres. Nada muda no

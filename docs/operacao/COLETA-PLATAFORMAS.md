@@ -165,8 +165,10 @@ configurável.
   coleta manual por vez), a thread grava a cada 10 min no log da execução
   "Aguardando a vez: … (N min na fila)" — é isso que os outros workers leem. A
   idade da fila sozinha não cancela nada: um pedido esperando atrás de coletas
-  completas do Elefante roda quando chegar a vez. Execução presa em "executando"
-  além de 60 min continua sendo liberada no boot e pelo próximo pedido manual.
+  completas do Elefante roda quando chegar a vez. Execução em "executando" sem
+  nenhum registro no log há mais de 15 min (`SYNC_SEM_SINAL_S`) é liberada no
+  boot, na leitura do status e pelo próximo pedido manual; a viva grava "Em
+  andamento: …" no log a cada ~2,5 min e não é tocada, por mais longa que seja.
 
 ## 7. Fuso: o que mudou e o impacto em dados antigos
 

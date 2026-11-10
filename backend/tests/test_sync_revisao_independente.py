@@ -32,7 +32,11 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models import Escola, Nota
 from app.models.plataformas import Leitura, SnapshotMatific
-from app.models.sincronizacao import SincronizacaoAlerta, SincronizacaoExecucao
+from app.models.sincronizacao import (
+    SincronizacaoAlerta,
+    SincronizacaoExecucao,
+    SincronizacaoLog,
+)
 from app.services import frescor_ranking
 from app.sync import orchestrator, service
 from tests._sync_nucleo_fakes import (
@@ -281,7 +285,13 @@ def _reiniciar_servico(db, exid):
     db.expire_all()
     morta = db.get(SincronizacaoExecucao, exid)
     assert morta.status == "executando"
-    morta.iniciada_em = morta.iniciada_em - timedelta(seconds=settings.SYNC_TRAVADA_S + 60)
+    # O tempo passa sem nenhum sinal de vida: o início E o log dela ficam para trás
+    # (o critério de órfã é o último registro, não a idade).
+    atraso = timedelta(seconds=settings.SYNC_SEM_SINAL_S + 60)
+    morta.iniciada_em = morta.iniciada_em - atraso
+    for linha in db.execute(select(SincronizacaoLog).where(
+            SincronizacaoLog.execucao_id == exid)).scalars():
+        linha.created_at = linha.created_at - atraso
     db.commit()
     assert service.finalizar_orfas_no_boot(db) >= 1
     db.expire_all()
