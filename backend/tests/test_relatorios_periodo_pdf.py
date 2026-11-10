@@ -508,7 +508,7 @@ def test_cobertura_sem_coleta_base_diz_desde_o_inicio_do_contador(status, extra,
 # Vocabulário interno que o documento das reuniões não mostra (D5): nome de campo,
 # tabela, classificação técnica.
 TERMOS_INTERNOS = ("retrato", "snapshot", "responses", "questoes_tentativas",
-                   "campos_nao_atualizados", "suportado", "nullable")
+                   "campos_nao_atualizados", "suportado", "nullable", "conector")
 
 
 @pytest.mark.parametrize("status,extra", [

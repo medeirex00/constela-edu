@@ -510,9 +510,9 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
         if nao_vieram:
             motivos.append(
                 f"{_num(nao_vieram)} estudante(s) com coleta no período em que a "
-                "plataforma não mandou as questões (o conector precisa ser revisto): "
-                "essa coleta não mede as questões, e a conta deles vai só até a coleta "
-                "anterior, ou fica fora dela")
+                "plataforma não mandou as questões (a equipe do Constela precisa ajustar a "
+                "coleta dessa plataforma): essa coleta não mede as questões, e a conta "
+                "deles vai só até a coleta anterior, ou fica fora dela")
             curtos.append((f"{_num(nao_vieram)} sem questões na coleta",
                            "a plataforma não mandou: NÃO medido"))
         saida.append({"rotulo": rotulo, "status": c.get("status"), "oficial": oficial,
@@ -542,9 +542,9 @@ def _cobertura_html(aviso: dict) -> str:
                     'NÃO quer dizer que não houve atividade.</div>')
         if aviso.get("nao_vieram"):
             return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido}.</b> A '
-                    'plataforma não mandou as questões nas coletas do período (o conector '
-                    'precisa ser revisto): sem elas, não há diferença a medir (não é zero).'
-                    '</div>')
+                    'plataforma não mandou as questões nas coletas do período (a equipe do '
+                    'Constela precisa ajustar a coleta dessa plataforma): sem elas, não há '
+                    'diferença a medir (não é zero).</div>')
         if aviso["so_inicio"]:
             return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido} ainda.</b> '
                     'A única coleta do período é a que mede o início; a próxima medirá o '

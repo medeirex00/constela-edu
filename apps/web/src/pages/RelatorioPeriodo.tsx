@@ -374,8 +374,8 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
           ) : naoVieram > 0 ? (
             <>
               <strong>{titulo}: sem número para {pedido}.</strong> A plataforma não mandou as questões nas
-              coletas do período (o conector precisa ser revisto): sem elas, não há diferença a medir (não é
-              zero).
+              coletas do período (a equipe do Constela precisa ajustar a coleta dessa plataforma): sem elas,
+              não há diferença a medir (não é zero).
             </>
           ) : soInicio ? (
             <>
@@ -499,9 +499,9 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
         )}
         {naoVieram > 0 && (
           <li>
-            {numero(naoVieram)} aluno(s) com coleta no período em que a plataforma não mandou as questões (o
-            conector precisa ser revisto): essa coleta não mede as questões, e a conta deles vai só até a coleta
-            anterior, ou fica fora dela.
+            {numero(naoVieram)} aluno(s) com coleta no período em que a plataforma não mandou as questões (a
+            equipe do Constela precisa ajustar a coleta dessa plataforma): essa coleta não mede as questões, e a
+            conta deles vai só até a coleta anterior, ou fica fora dela.
           </li>
         )}
       </ul>

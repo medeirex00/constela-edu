@@ -37,7 +37,7 @@ const texto = () => (document.body.textContent ?? "").replace(/\s+/g, " ").trim(
 const TERMOS_INTERNOS = ["SUPORTADO", "Leitura.data", "EventoAluno", "SnapshotMatific",
   "SnapshotElefante", "NULLABLE", "PISO", "totalTimeSpent", "retrato", "Ressalva",
   "tempo min por evento", "livros_relidos", "responses", "questoes_tentativas",
-  "campos_nao_atualizados"];
+  "campos_nao_atualizados", "conector"];
 function semVocabularioInterno(t: string) {
   for (const termo of TERMOS_INTERNOS) {
     expect(t, termo).not.toContain(termo);
