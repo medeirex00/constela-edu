@@ -296,6 +296,10 @@ describe("Revisões de identidade — detalhe", () => {
     // Duas contas sem vínculo, mesmo nome, nenhuma ficha (nada foi criado).
     ["contas_repetidas_no_relatorio", "duas contas diferentes da plataforma vieram no mesmo relatório",
       /se são duas crianças, crie uma ficha para cada/],
+    // Política "bloquear": a matrícula vem da Lista Piloto; a orientação diz o caminho.
+    ["criacao_bloqueada_por_politica",
+      "nenhum aluno corresponde e a política desta escola não deixa a plataforma criar ficha",
+      /a matrícula desta escola vem da Lista Piloto.*se ainda não está, matricule-a pela Lista Piloto ou em Alunos e depois vincule aqui/],
   ])("motivo %s mostra o texto do backend e a orientação", async (motivo, texto, orientacao) => {
     const u = userEvent.setup();
     filaMock([revisaoFake({ motivo, motivo_texto: texto })]);
