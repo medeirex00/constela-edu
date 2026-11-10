@@ -146,6 +146,7 @@ def _marcar_resolvidos(db: Session, alertas) -> int:
 # este mapa, e o sucesso fecha TODA falha da integração (ver
 # ``resolver_falhas_da_integracao``).
 # --------------------------------------------------------------------------
+CODIGO_SEM_RESPONSAVEL = "escola_sem_responsavel"
 ALERTA_POR_CODIGO: dict[str, tuple[str, str]] = {
     # A plataforma RECUSOU usuário/senha (o único caso que prova senha errada).
     "senha_invalida": ("senha_invalida", "critico"),
@@ -188,6 +189,9 @@ ALERTA_POR_CODIGO: dict[str, tuple[str, str]] = {
     # D8 (LGPD): sem vínculo, TODAS as contas da coleta já são de alunos de OUTRA
     # escola do Constela — credencial da outra escola; nada foi gravado.
     "contas_de_outra_escola": ("contas_de_outra_escola", "critico"),
+    # A escola não tem admin/coordenador ATIVO para assinar a importação
+    # automática: nada é coletado e nada volta sozinho (alguém cadastra ou reativa).
+    CODIGO_SEM_RESPONSAVEL: (CODIGO_SEM_RESPONSAVEL, "critico"),
 }
 _ALERTA_PADRAO = ("falha_download", "warn")   # código desconhecido: como antes
 
@@ -260,6 +264,9 @@ CATEGORIA_POR_TIPO: dict[str, str] = {
     "conta_multiescola": "autenticacao", "escola_externa_trocada": "autenticacao",
     "escola_externa_em_outra_escola": "autenticacao", "contas_de_outra_escola": "autenticacao",
     "escola_nao_identificada": "processamento",
+    # Falta um usuário ativo da escola que assine a importação: é cadastro, não
+    # falha da plataforma nem do processamento.
+    CODIGO_SEM_RESPONSAVEL: "configuracao",
 }
 
 # --------------------------------------------------------------------------
@@ -2294,6 +2301,16 @@ def _executar_reivindicada(db: Session, execucao: SincronizacaoExecucao,
             raise ErroConector(
                 "Credenciais não configuradas.",
                 codigo="senha_invalida", recuperavel=False)
+        # Quem assina a importação automática (``orchestrator._resolver_ator``) é
+        # conferido ANTES de coletar: sem admin/coordenador ativo, a aplicação
+        # levantava RuntimeError depois da coleta inteira — "Falha inesperada"
+        # recuperável, e a nova tentativa coletava tudo de novo para falhar igual.
+        if orchestrator._resolver_ator(db, execucao.escola_id, execucao.usuario_id) is None:
+            raise ErroConector(
+                "A escola não tem administrador nem coordenador ativo para assinar a "
+                "importação automática, e nada foi coletado. Cadastre ou reative um em "
+                "Usuários e sincronize de novo.",
+                codigo=CODIGO_SEM_RESPONSAVEL, recuperavel=False)
 
         registrar_log(db, execucao, "autenticacao", "info",
                       f"Conectando à {execucao.plataforma}…")

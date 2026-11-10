@@ -151,6 +151,7 @@ export const TIPO_ALERTA: Record<string, string> = {
   contas_de_outra_escola: "Todas as contas são de outra escola",
   identidade_de_outra_escola: "Contas já vinculadas a outra escola",
   periodo_invalido: "Período inválido",
+  escola_sem_responsavel: "Escola sem administrador ou coordenador ativo",
 };
 export const rotuloAlerta = (tipo: string) => TIPO_ALERTA[tipo] ?? tipo.replace(/_/g, " ");
 
@@ -178,6 +179,7 @@ const CATEGORIA_POR_TIPO: Record<string, CategoriaFalha> = {
   contas_de_outra_escola: "autenticacao",
   periodo_invalido: "configuracao",
   credencial_ilegivel: "configuracao",
+  escola_sem_responsavel: "configuracao",
 };
 
 // --- Resultado de uma execução (contrato comum da etapa 2) -------------------
@@ -262,6 +264,13 @@ export const CODIGO_ERRO: Record<string, { rotulo: string; frase: string; catego
     categoria: "configuracao",
     frase:
       "A senha salva não pôde ser lida pelo servidor (a chave que a protegia foi trocada) e nada foi coletado. Informe usuário e senha de novo em “Configurar conexão” e clique em “Salvar e validar”; se já fez isso, peça a sincronização de novo.",
+  },
+  // A importação automática precisa de um usuário ativo da escola que a assine.
+  escola_sem_responsavel: {
+    rotulo: "Escola sem administrador ou coordenador ativo",
+    categoria: "configuracao",
+    frase:
+      "A escola não tem administrador nem coordenador ativo para assinar a importação automática, e nada foi coletado. Cadastre ou reative um em Usuários e peça a sincronização de novo.",
   },
 };
 

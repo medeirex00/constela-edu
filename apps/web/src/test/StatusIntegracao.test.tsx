@@ -373,6 +373,9 @@ describe("situacaoIntegracao — estados do contrato (etapa 2)", () => {
       ["falha_download", "Falhou: falha ao baixar o relatório", "indisponibilidade_externa", "respondeu com erro"],
       ["timeout", "Falhou: demorou demais", "indisponibilidade_externa", "tempo máximo"],
       ["parser_incompativel", "Falhou: formato do relatório mudou", "processamento", "formato que o Constela não reconhece"],
+      // N6: sem admin/coordenador ativo, a coleta nem começa (cadastro, não plataforma).
+      ["escola_sem_responsavel", "Falhou: escola sem administrador ou coordenador ativo",
+        "configuracao", "Cadastre ou reative um em Usuários"],
     ];
     for (const [codigo, rotulo, categoria, trecho] of casos) {
       const s = situacaoIntegracao(com(terminada({ status: "erro", qtd_alunos: 0, motivo: codigo }),
