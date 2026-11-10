@@ -120,8 +120,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.tempo import hoje_br, para_br
-from app.models import (Aluno, Escola, EventoAluno, Leitura, Matricula,
+from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Matricula,
                         SnapshotElefante, SnapshotMatific, Turma)
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import matific_destaque, periodos
 # A faixa de anos aceita é UMA só para o relatório e para a análise (que mede com as
 # funções deste módulo): o pacote ``analise`` só a declara — o ``__init__`` dele não
@@ -635,7 +636,8 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
                sem_coleta_no_periodo: int = 0,
                coleta_interrompida: int = 0,
                turmas_sem_coleta: list[dict] | None = None,
-               acumulado_na_primeira_coleta: int | None = None) -> dict | None:
+               acumulado_na_primeira_coleta: int | None = None,
+               questoes_nao_vieram: int = 0) -> dict | None:
     """PERÍODO PEDIDO × COBERTURA DAS COLETAS de um número que vem de diferença
     entre retratos. ``None`` quando ninguém tem retrato no período.
 
@@ -652,14 +654,16 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         intervalo medido, ou há aluno cuja coleta PAROU antes do período
         (``coleta_interrompida``), ou há turma já coletada sem nenhuma coleta na
         janela (``turmas_sem_coleta``) — nunca "completa" somando só quem foi
-        coletado;
+        coletado; também quando a coleta de algum aluno no período veio SEM as
+        questões (``questoes_nao_vieram``, S9): ela não mede a borda, e a conta
+        dele vai só até a coleta anterior (ou fica sem número);
       * ``regra_oficial`` — (Matific) o número é o da regra oficial e as bordas
         não são verificadas aqui: nunca se afirma "completo";
       * ``sem_intervalo`` — ninguém tem duas pontas: não há número.
     Datas do PERÍODO em dias de Brasília; instantes de COLETA em UTC.
     """
     if not (intervalos or sem_intervalo or regrediu or sem_coleta_no_periodo
-            or coleta_interrompida):
+            or coleta_interrompida or questoes_nao_vieram):
         return None
     sem_inicio = [i for i in intervalos if i["inicio"] in ("depois", "ano_letivo")]
     sem_fim = [i for i in intervalos if i["fim"] == "antes"]
@@ -673,7 +677,7 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
     if not intervalos:
         status = "sem_intervalo"
     elif (sem_inicio or sem_fim or sem_intervalo or regrediu or sem_coleta_no_periodo
-          or coleta_interrompida or turmas_sem_coleta):
+          or coleta_interrompida or turmas_sem_coleta or questoes_nao_vieram):
         status = "parcial"
     elif oficiais:
         status = "regra_oficial"
@@ -730,6 +734,10 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         # tem coleta no início: o histórico existe na plataforma, mas o
         # contador não diz quando foi feito — por isso fica fora da conta.
         "acumulado_na_primeira_coleta": acumulado_na_primeira_coleta,
+        # (Elefante, S9) alunos cuja coleta no período veio SEM as questões (a
+        # plataforma deixou de mandá-las): ela não serve de borda, e a conta deles
+        # vai só até a coleta anterior — ou fica sem número
+        "alunos_questoes_nao_vieram": questoes_nao_vieram,
     }
 
 
@@ -745,6 +753,39 @@ def _retratos(db: Session, escola_id: int, coorte: dict[int, dict], modelo
             .order_by(modelo.aluno_id, modelo.data_referencia, modelo.id)).scalars():
         series.setdefault(snap.aluno_id, []).append(snap)
     return series
+
+
+def _retratos_das_questoes(db: Session, escola_id: int, coorte: dict[int, dict]
+                           ) -> tuple[dict[int, list], dict[int, list]]:
+    """(retratos que MEDEM as questões, retratos que não medem) do Elefante, por
+    aluno. UMA query.
+
+    Não medem: os gravados por uma sincronização em que as questões não vieram da
+    plataforma (S9; ``Importacao.status == IMPORTACAO_SEM_QUESTOES``). Quem leu um
+    livro novo ganhou ali um retrato com as questões da coleta ANTERIOR e a data de
+    agora: usado como borda, ele dava "0 no período" com cobertura completa."""
+    if not coorte:
+        return {}, {}
+    validos: dict[int, list] = {}
+    sem_questoes: dict[int, list] = {}
+    for snap, status in db.execute(
+            select(SnapshotElefante, Importacao.status)
+            .outerjoin(Importacao, Importacao.id == SnapshotElefante.importacao_id)
+            .where(SnapshotElefante.escola_id == escola_id,
+                   SnapshotElefante.aluno_id.in_(coorte.keys()))
+            .order_by(SnapshotElefante.aluno_id, SnapshotElefante.data_referencia,
+                      SnapshotElefante.id)).all():
+        alvo = sem_questoes if status == IMPORTACAO_SEM_QUESTOES else validos
+        alvo.setdefault(snap.aluno_id, []).append(snap)
+    return validos, sem_questoes
+
+
+def _bordas(ganho: dict | None) -> tuple | None:
+    """O que decide a conta de um aluno: as duas coletas e o estado das bordas."""
+    if ganho is None:
+        return None
+    return (ganho["_data_base"], ganho["_data_atual"], ganho["_inicio"], ganho["_fim"],
+            ganho["_medido"])
 
 
 def _matific(db: Session, escola_id: int, coorte: dict[int, dict], janela: Janela,
@@ -835,12 +876,19 @@ def _intervalo_matific(janela: Janela, ini_ano: datetime, ganho) -> dict | None:
 def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
                        janela: Janela, bloco: BlocoElefante,
                        por_aluno: dict[int, dict], hoje: date | None = None) -> None:
-    """Questões do Elefante: só existem como acumulado no retrato."""
-    series = _retratos(db, escola_id, coorte, SnapshotElefante)
+    """Questões do Elefante: só existem como acumulado no retrato.
+
+    O retrato gravado por uma sincronização em que as questões não vieram (S9) não
+    serve de borda (``_retratos_das_questoes``): a conta do aluno vai até a coleta
+    anterior, ou fica sem número. Quem foi afetado por isso — sem ele, as bordas
+    seriam outras — entra em ``alunos_questoes_nao_vieram`` e a cobertura não é
+    "completa"; não é contado como "sem coleta", lacuna nem "uma coleta só"."""
+    campos = ("questoes_tentativas", "questoes_acertos")
+    series, sem_questoes = _retratos_das_questoes(db, escola_id, coorte)
     tentativas = acertos = 0
     sem = 0
     sem_intervalo = so_inicio = regrediu = sem_coleta = acumulado_antes = 0
-    interrompida = 0
+    interrompida = nao_vieram = 0
     bases: list[datetime] = []
     atuais: list[datetime] = []
     intervalos: list[dict] = []
@@ -855,24 +903,35 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
             "turma_id": info["turma_id"], "turma": info["turma"], "alunos": 0,
             "com_coleta": 0, "ja_coletada": False})
         turma["alunos"] += 1
-        turma["ja_coletada"] = turma["ja_coletada"] or bool(series.get(aid))
-        ganho = _diferenca_de_retratos(
-            series.get(aid, []), janela,
-            ("questoes_tentativas", "questoes_acertos"), hoje=hoje)
+        serie = series.get(aid, [])
+        excluidos = sem_questoes.get(aid, [])
+        turma["ja_coletada"] = turma["ja_coletada"] or bool(serie) or bool(excluidos)
+        ganho = _diferenca_de_retratos(serie, janela, campos, hoje=hoje)
+        # A coleta sem questões mudaria a conta deste aluno (seria uma das bordas)?
+        afetado = bool(excluidos) and _bordas(ganho) != _bordas(
+            _diferenca_de_retratos(serie + excluidos, janela, campos, hoje=hoje))
+        if afetado:
+            nao_vieram += 1
+            turma["com_coleta"] += 1     # houve coleta no período, só sem as questões
         if ganho is None:
+            if afetado:
+                continue
             sem += 1
-            if _sem_coleta_no_periodo(series.get(aid, []), janela, hoje):
+            if _sem_coleta_no_periodo(serie, janela, hoje):
                 sem_coleta += 1
-            elif _coleta_interrompida(series.get(aid, []), janela):
+            elif _coleta_interrompida(serie, janela):
                 interrompida += 1
             continue
-        turma["com_coleta"] += 1
+        if not afetado:
+            turma["com_coleta"] += 1
         if not ganho["_medido"]:
             # Uma coleta só no período e nenhuma antes: não há diferença a
             # medir. Somar 0 diria "não respondeu nada" — é "não dá para medir".
-            sem_intervalo += 1
-            if ganho["_inicio"] == "exato":
-                so_inicio += 1
+            # (Se a outra coleta veio sem as questões, o motivo é esse, não este.)
+            if not afetado:
+                sem_intervalo += 1
+                if ganho["_inicio"] == "exato":
+                    so_inicio += 1
             continue
         if ganho["_regrediu"]:
             regrediu += 1
@@ -914,7 +973,8 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
                                           coleta_interrompida=interrompida,
                                           turmas_sem_coleta=turmas_sem_coleta,
                                           acumulado_na_primeira_coleta=(
-                                              acumulado_antes or None))
+                                              acumulado_antes or None),
+                                          questoes_nao_vieram=nao_vieram)
     bloco.suporte["questoes"] = {
         "campo": "SnapshotElefante.questoes_* (diferença entre retratos)",
         "classificacao": "SUPORTADO COM RESSALVA",

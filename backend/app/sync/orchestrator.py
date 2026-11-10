@@ -121,6 +121,9 @@ def _resolver_ator(db: Session, escola_id: int, usuario_id: int | None) -> Usuar
 # Aviso crítico (código estável, sem PII) do campo não essencial que sumiu da
 # resposta: "campos_nao_atualizados:questoes_acertos,questoes_tentativas".
 AVISO_NAO_ATUALIZADOS = "campos_nao_atualizados:"
+# Os campos do retrato que as Questões do período medem: se um deles não veio, o
+# retrato não mede as questões (``IMPORTACAO_SEM_QUESTOES``).
+CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
 
 
 def campos_nao_atualizados(analise) -> list[str]:
@@ -341,6 +344,15 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     # depois de um resumo sem esses campos, também não repetem números de antes.
     sem_retrato_repetido = bool(nao_atualizados) or (
         arquivo.content_type == CT_ELEFANTE_API and bool(perdidos_na_execucao))
+    # Quem MUDOU (livro novo) ganha retrato com as questões da coleta anterior e a
+    # data de agora; as Questões do período o leriam como "0 no período" com
+    # cobertura completa. A importação é marcada e esses retratos deixam de ser
+    # borda das questões. O resumo decide pelo próprio arquivo; as leituras (que
+    # copiam as questões do retrato do dia) pela execução.
+    questoes_herdadas = arquivo.content_type == CT_ELEFANTE_API and bool(
+        set(CAMPOS_QUESTOES) & (set(perdidos_na_execucao or ())
+                                if (analise.formato or "") == "leituras"
+                                else set(nao_atualizados)))
 
     contexto.log("validacao", "info",
                  f"{len(analise.linhas)} linha(s); identificando alunos…")
@@ -397,7 +409,8 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     try:
         resultado = imp.confirmar(
             dados=imp.confirmacao_da_sincronizacao(
-                confirm, sem_retrato_repetido=sem_retrato_repetido),
+                confirm, sem_retrato_repetido=sem_retrato_repetido,
+                questoes_herdadas=questoes_herdadas),
             escola_id=escola.id, usuario=ator, db=db)
     except HTTPException as exc:
         # A importação RECUSOU o pedido (ex.: intervalo de datas inválido). Não é

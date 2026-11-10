@@ -6,9 +6,21 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.base import agora
 
+# ``Importacao.status`` da importação da SINCRONIZAÇÃO do Elefante em que as questões
+# não vieram da plataforma (S9: ``responses``/``approvedResponses`` sumiram de todas
+# as linhas do relatório de turma da execução). Os retratos que ela grava levam as
+# questões da coleta ANTERIOR com a data de agora: não medem as questões nesse
+# instante, e as Questões do período não os usam como borda
+# (``relatorios_periodo._retratos_das_questoes``). Sem migração: a coluna já existe
+# e só a API de listagem a expõe.
+IMPORTACAO_SEM_QUESTOES = "sem_questoes"
+
 
 class Importacao(Base):
-    """Registro de auditoria de toda importação realizada (PRD §15)."""
+    """Registro de auditoria de toda importação realizada (PRD §15).
+
+    ``status``: ``concluida`` ou, na sincronização do Elefante que perdeu as
+    questões, ``IMPORTACAO_SEM_QUESTOES``."""
 
     __tablename__ = "importacoes"
 

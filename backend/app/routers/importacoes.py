@@ -76,6 +76,7 @@ from app.services import turma_arquivada
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
 from app.models.base import agora
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
 
@@ -2607,10 +2608,15 @@ class _ConfirmacaoDaSincronizacao(ImportacaoConfirm):
     # A resposta perdeu tempo/questões em TODAS as linhas (S9): o retrato que só
     # repetiria os números de antes com a data de hoje não é gravado.
     _sem_retrato_repetido: bool = PrivateAttr(default=False)
+    # As questões não vieram nesta execução (S9): os retratos desta importação levam
+    # as da coleta anterior — a importação é marcada (``IMPORTACAO_SEM_QUESTOES``) e
+    # as Questões do período não os usam como borda.
+    _questoes_herdadas: bool = PrivateAttr(default=False)
 
 
 def confirmacao_da_sincronizacao(dados: ImportacaoConfirm, *,
-                                 sem_retrato_repetido: bool = False) -> ImportacaoConfirm:
+                                 sem_retrato_repetido: bool = False,
+                                 questoes_herdadas: bool = False) -> ImportacaoConfirm:
     """Marca o pedido montado pela sincronização automática (só o orquestrador
     chama). Os valores já foram validados ao montar ``dados``: nada é revalidado e
     os campos informados continuam os mesmos."""
@@ -2618,6 +2624,7 @@ def confirmacao_da_sincronizacao(dados: ImportacaoConfirm, *,
         _fields_set=set(dados.model_fields_set),
         **{campo: getattr(dados, campo) for campo in ImportacaoConfirm.model_fields})
     marcado._sem_retrato_repetido = bool(sem_retrato_repetido)
+    marcado._questoes_herdadas = bool(questoes_herdadas)
     return marcado
 
 
@@ -2642,7 +2649,8 @@ def confirmar(
     nucleo = _confirmar_sem_commit(
         dados=dados, escola_id=escola_id, usuario=usuario, db=db,
         da_sincronizacao=da_sync,
-        sem_retrato_repetido=da_sync and dados._sem_retrato_repetido)
+        sem_retrato_repetido=da_sync and dados._sem_retrato_repetido,
+        questoes_herdadas=da_sync and dados._questoes_herdadas)
     db.commit()
 
     # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
@@ -2763,6 +2771,7 @@ def _confirmar_sem_commit(
     da_sincronizacao: bool = False,
     piso_da_data: bool = True,
     sem_retrato_repetido: bool = False,
+    questoes_herdadas: bool = False,
 ) -> _NucleoImportacao:
     """TODO o trabalho do /confirmar, SEM commit e SEM efeito externo.
 
@@ -2786,7 +2795,11 @@ def _confirmar_sem_commit(
 
     ``piso_da_data``: o /resolver passa False — a data da pendência é a que a
     importação original gravou (registro do servidor, não digitada agora): uma
-    pendência antiga não fica sem solução porque a escola avançou o ano letivo."""
+    pendência antiga não fica sem solução porque a escola avançou o ano letivo.
+
+    ``questoes_herdadas`` (só a sincronização, S9): as questões não vieram da
+    plataforma nesta execução; a importação nasce com o status
+    ``IMPORTACAO_SEM_QUESTOES`` e os retratos dela não medem as questões."""
     inicio = time.monotonic()
     from app.models import Escola
 
@@ -2899,7 +2912,7 @@ def _confirmar_sem_commit(
         escola_id=escola_id, usuario_id=usuario.id,
         plataforma=dados.plataforma, tipo=dados.tipo,
         arquivo_original=arquivo_final or dados.arquivo_nome,
-        status="concluida",
+        status=IMPORTACAO_SEM_QUESTOES if questoes_herdadas else "concluida",
     )
     db.add(importacao)
     db.flush()

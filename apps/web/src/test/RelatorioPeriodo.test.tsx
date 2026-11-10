@@ -563,6 +563,34 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     expect(t).toContain("Turma(s) sem nenhuma coleta no período, fora da conta: 4º Ano B.");
   });
 
+  it("questões que não vieram da plataforma (S9) são ditas como causa da cobertura parcial", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-09-01T03:10:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-09-20T03:10:00", coleta_fim_mais_cedo: "2026-09-20T03:10:00",
+      inicio_coberto: true, alunos_cobertura_completa: 0, alunos_cobertura_parcial: 1,
+      alunos_sem_inicio: 0, alunos_sem_fim: 1, alunos_medidos: 1, alunos_questoes_nao_vieram: 2,
+    }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("cobertura parcial — o valor NÃO representa o período completo");
+    expect(t).toContain("2 aluno(s) com coleta no período em que a plataforma não mandou as questões");
+  });
+
+  it("sem número porque as questões não vieram: o motivo é esse, não 'uma coleta só'", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: null, coleta_inicio_mais_tardio: null, coleta_fim: null,
+      coleta_fim_mais_cedo: null, status: "sem_intervalo", alunos_cobertura_parcial: 0,
+      alunos_sem_inicio: 0, alunos_sem_fim: 0, alunos_sem_intervalo: 0, alunos_medidos: 0,
+      alunos_questoes_nao_vieram: 2,
+    }, { t: null, a: null }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: sem número para 01/09/2026 a 30/09/2026.");
+    expect(t).toContain("A plataforma não mandou as questões nas coletas do período");
+    expect(t).not.toContain("Há uma única coleta por aluno no período");
+    expect(textoDaSecao("Elefante Letrado")).toContain("Questões—");
+  });
+
   it("Matific: 'para N aluno(s)' usa os alunos medidos, não só os parciais", async () => {
     const dados = relatorioFake();
     Object.assign(dados.matific as Record<string, unknown>, {

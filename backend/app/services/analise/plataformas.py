@@ -72,8 +72,9 @@ from sqlalchemy import (String, and_, case, cast, extract, func, literal_column,
 from sqlalchemy.orm import Session
 
 from app.core.tempo import FUSO_BR, para_br
-from app.models import (Aluno, Escola, EventoAluno, Leitura, Livro, Matricula, Rede,
-                        SnapshotElefante, SnapshotMatific, Turma)
+from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Livro, Matricula,
+                        Rede, SnapshotElefante, SnapshotMatific, Turma)
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import matific_destaque
 from app.services import modulos as svc_modulos
 from app.services import relatorios_periodo as rp
@@ -545,7 +546,11 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
     CTE só, e cada grupo escolhe as dele (``row_number`` por escola, aluno e faixa).
     Limitação: uma sequência de linhas a menos de 15 min uma da outra que dure mais de 15
     min (só em dado antigo; hoje a sync reescreve o retrato do dia no lugar) conta aqui como
-    uma execução só."""
+    uma execução só.
+
+    Como no relatório (``relatorios_periodo._retratos_das_questoes``), o retrato gravado
+    por uma sincronização em que as questões não vieram (S9, ``IMPORTACAO_SEM_QUESTOES``)
+    não é coleta das questões: fica fora ANTES de tudo, inclusive do ``lag``."""
     if not grupos:
         return {}
     m = SnapshotElefante
@@ -555,7 +560,10 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
         d.label("data_referencia"), *[getattr(m, c).label(c) for c in _COLUNAS_QUESTOES],
         func.lag(d).over(partition_by=(m.escola_id, m.aluno_id), order_by=(d.asc(), m.id.asc())
                          ).label("anterior"),
-    ).where(m.escola_id.in_(sorted({i for _, ids in grupos.values() for i in ids}))).subquery()
+    ).select_from(m).outerjoin(Importacao, Importacao.id == m.importacao_id).where(
+        m.escola_id.in_(sorted({i for _, ids in grupos.values() for i in ids})),
+        or_(Importacao.status.is_(None), Importacao.status != IMPORTACAO_SEM_QUESTOES),
+    ).subquery()
     t = todas.c
     primeiras = select(t.id, t.escola_id, t.aluno_id, t.data_referencia,
                        *[t[c] for c in _COLUNAS_QUESTOES]).where(or_(

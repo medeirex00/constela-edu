@@ -242,6 +242,8 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
         cob = ele.get("cobertura_questoes") or {}
         fonte = ("nenhum estudante no recorte" if vazio
                  else "nenhuma coleta na janela" if ninguem
+                 else "as questões não vieram da plataforma" if (
+                     tent is None and cob.get("alunos_questoes_nao_vieram"))
                  else "uma coleta só por estudante: sem diferença a medir" if tent is None
                  else "COBERTURA PARCIAL - ver nota" if cob.get("status") == "parcial"
                  else "INCLUI antes do início - ver nota" if cob.get("status") == "ampliada"
@@ -504,8 +506,18 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
             nomes = ", ".join(str(t.get("turma") or t.get("turma_id")) for t in turmas_sem)
             motivos.append(f"turma(s) sem nenhuma coleta no período, fora da conta: {nomes}")
             curtos.append((f"{_num(len(turmas_sem))} turma(s) sem coleta", nomes))
+        nao_vieram = c.get("alunos_questoes_nao_vieram") or 0
+        if nao_vieram:
+            motivos.append(
+                f"{_num(nao_vieram)} estudante(s) com coleta no período em que a "
+                "plataforma não mandou as questões (o conector precisa ser revisto): "
+                "essa coleta não mede as questões, e a conta deles vai só até a coleta "
+                "anterior, ou fica fora dela")
+            curtos.append((f"{_num(nao_vieram)} sem questões na coleta",
+                           "a plataforma não mandou: NÃO medido"))
         saida.append({"rotulo": rotulo, "status": c.get("status"), "oficial": oficial,
                       "pedido": pedido, "pedido_curto": pedido_curto, "andamento": andamento,
+                      "nao_vieram": nao_vieram,
                       "so_inicio": (c.get("alunos_sem_intervalo_so_inicio") or 0) >= n_sem > 0,
                       "de": de, "ate": ate, "tem_base": tem_base,
                       "em_andamento": bool(c.get("em_andamento")),
@@ -528,6 +540,11 @@ def _cobertura_html(aviso: dict) -> str:
                     f'{pedido}.</b> O 0 da regra oficial (a mesma das premiações) vem de '
                     'uma única coleta por estudante no período e nenhuma antes — ele '
                     'NÃO quer dizer que não houve atividade.</div>')
+        if aviso.get("nao_vieram"):
+            return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido}.</b> A '
+                    'plataforma não mandou as questões nas coletas do período (o conector '
+                    'precisa ser revisto): sem elas, não há diferença a medir (não é zero).'
+                    '</div>')
         if aviso["so_inicio"]:
             return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido} ainda.</b> '
                     'A única coleta do período é a que mede o início; a próxima medirá o '

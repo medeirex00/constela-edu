@@ -272,6 +272,88 @@ def test_campos_sumidos_com_pendencia_de_revisao_nao_contam_como_em_dia(
     assert "parser_incompativel" in abertos and "correspondencia_pendente" in abertos
 
 
+def _status_das_importacoes_dos_retratos(db, desde):
+    """{status da importação} dos retratos gravados a partir de ``desde``."""
+    from app.models import Importacao
+    return set(db.execute(
+        select(Importacao.status).join(
+            SnapshotElefante, SnapshotElefante.importacao_id == Importacao.id)
+        .where(SnapshotElefante.data_referencia >= desde)).scalars())
+
+
+def test_questoes_do_periodo_nao_saem_completas_quando_todos_mudaram(
+        db, escola_completa, monkeypatch):
+    """Revisão independente (o dano que a S9 devia evitar): todos da turma leram um
+    livro novo e responderam questões, mas a API deixou de mandar tempo e questões.
+    Cada um ganhava um retrato de hoje com as questões HERDADAS, e o Relatório por
+    Período dizia 0 questões com cobertura "completa". Agora a importação é marcada,
+    esse retrato não é borda das questões e o relatório não afirma o que não mediu."""
+    from datetime import datetime
+
+    from app.models import Importacao
+    from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
+    from app.services import relatorios_periodo as rp
+    from app.sync import fuso
+
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, _c = ec["alunos"]
+    credencial(db, eid, "elefante")
+    nav = NavElefante(_origem(a, b))
+    instalar(monkeypatch, nav_elefante=nav)
+    rodar(db, eid, "elefante")
+    hoje = fuso.hoje_local()
+    d0 = datetime.combine(hoje - timedelta(days=5), datetime.min.time()).replace(
+        hour=3, minute=10)                         # 00:10 em Brasília: mede o início
+    for snap in db.execute(select(SnapshotElefante)).scalars():
+        snap.data_referencia = d0
+        db.get(Importacao, snap.importacao_id).created_at = d0
+    db.commit()
+    for al in nav.turmas[CID]["alunos"]:          # na plataforma: livro novo e +20 questões
+        al["livros"].append(livro(f"Livro Ficticio Novo {al['sid']}",
+                                  data=(hoje - timedelta(days=1)).isoformat() + "T10:00:00"))
+        al["total"] = len(al["livros"])
+        al["resp"] += 20
+        al["ok"] += 15
+    _sem(nav, NAO_ESSENCIAIS)
+
+    ex, _ = rodar(db, eid, "elefante")
+
+    assert (ex.status, ex.motivo) == ("parcial", MOTIVO)
+    # Os livros entraram (nada destruído): retrato novo de hoje para os dois…
+    assert _retratos(db, a.id) == 2 and _retratos(db, b.id) == 2
+    # …gravado por importações marcadas: as questões dele não são medida de hoje.
+    assert _status_das_importacoes_dos_retratos(db, d0 + timedelta(days=1)) == {
+        IMPORTACAO_SEM_QUESTOES}
+    assert _status_das_importacoes_dos_retratos(db, d0) >= {"concluida"}
+    rel = rp.gerar(db, eid, preset="personalizado", plataformas=("elefante",),
+                   inicio=d0.date(), fim=hoje, hoje=hoje)["elefante"]
+    cob = rel["cobertura_questoes"]
+    assert cob["completa"] is False and cob["status"] != "completa"
+    assert rel["questoes_tentativas"] is None          # sem número, não "0"
+    assert cob["alunos_questoes_nao_vieram"] == 2
+
+
+def test_so_o_tempo_sumido_nao_marca_a_importacao(db, escola_completa, monkeypatch):
+    """Sem o tempo, as questões vieram: o retrato novo mede as questões e a
+    importação não é marcada."""
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, _c = ec["alunos"]
+    credencial(db, eid, "elefante")
+    nav = NavElefante(_origem(a, b))
+    instalar(monkeypatch, nav_elefante=nav)
+    rodar(db, eid, "elefante")
+    _coleta_de_dois_dias_atras(db)
+    desde = service._agora() - timedelta(hours=1)
+
+    _sem(nav, ("totalReadTime",), livros_de={9300001: 7})
+    ex, _ = rodar(db, eid, "elefante")
+
+    assert (ex.status, ex.motivo) == ("parcial", MOTIVO)
+    assert _status_das_importacoes_dos_retratos(db, desde) == {"concluida"}
+
+
 def test_campo_ausente_so_em_parte_das_linhas_segue_herdando_como_antes(
         db, escola_completa, monkeypatch):
     """Só a rename (todas as linhas) é tratada: a linha isolada sem tempo continua

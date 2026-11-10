@@ -103,6 +103,10 @@ interface Cobertura {
   /** (Elefante) contador vitalício que a primeira coleta já trazia, para quem
    *  não tem coleta no início: histórico SEM data, fora da conta. */
   acumulado_na_primeira_coleta?: number | null;
+  /** (Elefante) alunos cuja coleta no período veio SEM as questões (a plataforma
+   *  deixou de mandá-las): ela não mede a borda, e a conta deles vai só até a
+   *  coleta anterior — ou fica sem número. Ausente em API anterior. */
+  alunos_questoes_nao_vieram?: number;
 }
 
 interface BlocoElefante {
@@ -353,6 +357,7 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
     ?? c.alunos_cobertura_completa + c.alunos_cobertura_parcial + c.alunos_ampliados;
   const soInicio = c.alunos_sem_intervalo > 0
     && (c.alunos_sem_intervalo_so_inicio ?? 0) >= c.alunos_sem_intervalo;
+  const naoVieram = c.alunos_questoes_nao_vieram ?? 0;
   const para = (n: number) => (n && n < medidos ? ` para ${numero(n)} aluno(s)` : "");
 
   if (c.status === "sem_intervalo") {
@@ -365,6 +370,12 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
               <strong>{titulo}: sem intervalo medido para {pedido}.</strong> O 0 da regra oficial (a mesma das
               premiações) vem de uma única coleta por aluno no período e nenhuma antes — ele NÃO quer dizer que
               não houve atividade.
+            </>
+          ) : naoVieram > 0 ? (
+            <>
+              <strong>{titulo}: sem número para {pedido}.</strong> A plataforma não mandou as questões nas
+              coletas do período (o conector precisa ser revisto): sem elas, não há diferença a medir (não é
+              zero).
             </>
           ) : soInicio ? (
             <>
@@ -484,6 +495,13 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
           <li>
             Turma(s) sem nenhuma coleta no período, fora da conta:{" "}
             {c.turmas_sem_coleta!.map((t) => t.turma ?? `#${t.turma_id}`).join(", ")}.
+          </li>
+        )}
+        {naoVieram > 0 && (
+          <li>
+            {numero(naoVieram)} aluno(s) com coleta no período em que a plataforma não mandou as questões (o
+            conector precisa ser revisto): essa coleta não mede as questões, e a conta deles vai só até a coleta
+            anterior, ou fica fora dela.
           </li>
         )}
       </ul>
