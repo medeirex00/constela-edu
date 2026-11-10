@@ -180,7 +180,15 @@ def exigir_rede(
 ) -> int:
     """Isolamento por REDE (tier Secretaria): o usuário só acessa a PRÓPRIA rede
     (``usuario.rede_id``); o admin global acessa qualquer uma. Bloqueia IDOR
-    entre redes — uma secretaria nunca lê os dados agregados de outra."""
+    entre redes — uma secretaria nunca lê os dados agregados de outra.
+
+    A conta (não global) que JÁ É desta rede passa sem ir ao banco: ``usuarios.rede_id``
+    é chave estrangeira para ``redes`` (``ON DELETE SET NULL``), então a rede para a qual
+    a conta aponta existe. Em produção cada consulta custa ~195 ms e esta dependência está
+    em toda rota ``/redes/{id}/...`` da Secretaria. O global e a conta de outra rede seguem
+    o caminho de sempre (os mesmos 404 e 403)."""
+    if not usuario.is_global and usuario.rede_id is not None and usuario.rede_id == rede_id:
+        return rede_id
     if db.get(Rede, rede_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
     if usuario.is_global:

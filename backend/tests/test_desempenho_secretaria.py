@@ -111,6 +111,55 @@ def test_rede_muito_grande_le_os_ramos_um_a_um_com_o_mesmo_resultado(db, monkeyp
     assert um_a_um == juntos
 
 
+class _ContadorDeRedes(_Contador):
+    """Conta só as consultas que leem a tabela ``redes``."""
+
+    def _conta(self, _conn, _cursor, sql, *_a, **_k):
+        if " redes" in sql.lower().replace('"', " "):
+            self.n += 1
+
+
+def test_exigir_rede_nao_le_a_rede_da_propria_secretaria(db):
+    """A Secretaria da própria rede passa sem ler ``redes`` (a FK ``usuarios.rede_id`` já
+    garante que a rede existe); o global e a conta de outra rede seguem lendo, com os
+    mesmos 404 e 403 de sempre."""
+    import pytest
+    from fastapi import HTTPException
+
+    from app.core.deps import exigir_rede
+    from app.models import Rede, Usuario
+
+    rede = Rede(nome="Rede Fictícia Leve")
+    outra = Rede(nome="Rede Fictícia Outra")
+    db.add_all([rede, outra])
+    db.flush()
+    secretaria = Usuario(nome="Sec", email="sec@leve.local", senha_hash="x", cargo="coordenador",
+                         rede_id=rede.id)
+    global_ = Usuario(nome="Glob", email="glob@leve.local", senha_hash="x", cargo="admin",
+                      is_global=True, rede_id=rede.id)
+    db.add_all([secretaria, global_])
+    db.commit()
+    rid, oid = rede.id, outra.id
+    _ = (secretaria.rede_id, secretaria.is_global, global_.rede_id, global_.is_global)
+
+    db.expire(rede)                                   # (sem isto o get sairia do mapa de identidade)
+    with _ContadorDeRedes(db) as c:
+        assert exigir_rede(rid, secretaria, db) == rid
+    assert c.n == 0                                   # nenhuma leitura de ``redes``
+
+    db.expire(rede)
+    with _ContadorDeRedes(db) as c:                   # o global sempre confere a rede
+        assert exigir_rede(rid, global_, db) == rid
+    assert c.n == 1
+    with pytest.raises(HTTPException) as e:
+        exigir_rede(oid, secretaria, db)              # a rede de outra Secretaria: 403
+    assert e.value.status_code == 403
+    for quem in (secretaria, global_):                # rede inexistente: 404 para os dois
+        with pytest.raises(HTTPException) as e:
+            exigir_rede(999_999, quem, db)
+        assert e.value.status_code == 404
+
+
 def test_analise_so_das_avaliacoes_valida_o_periodo_como_a_completa(db):
     import pytest
 
