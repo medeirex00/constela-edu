@@ -145,8 +145,9 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
 
     Token fora do formato do Expo (``token_expo_valido``) — só pode ter sido gravado
     antes de ``/dispositivos`` validar o formato — não é aparelho: não vai ao Expo
-    (não ocupa lote nem chamada) e é apagado aqui. Antes ele ficava no banco para
-    sempre: o Expo nunca o devolve como ``DeviceNotRegistered``.
+    (não ocupa lote nem chamada) e é apagado aqui. Antes ele só sairia se o Expo o
+    devolvesse como ``DeviceNotRegistered`` — o que nada garante para um texto que
+    nem é token (a resposta do Expo a ele não foi verificada).
 
     Transação: a lista de destinos é lida e a transação ENCERRADA antes da chamada
     ao Expo (até 15 s por lote); os tokens mortos são apagados numa transação curta,
