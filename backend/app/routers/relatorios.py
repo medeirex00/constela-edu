@@ -131,14 +131,17 @@ def exportar_relatorio(
         # usuário vê — a escola inteira para a gestão (igual a /ranking/cartaz),
         # só as turmas dele para o professor (igual a /ranking/frescor). Este é
         # o ÚNICO caminho do cartaz para o professor (/ranking/cartaz dá 403).
+        # Módulo fora do plano: nem a coluna (acima) nem os cartões dele.
         conteudo = svc.gerar_cartaz_ranking(
             escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
-            svc.estatisticas_cartaz(db, escola_id, turma_ids=permitidas),
+            svc.estatisticas_cartaz(db, escola_id, turma_ids=permitidas,
+                                    modulos=modulos),
             logos=svc.logos_da_escola(db, escola_id),
             dados_em=svc.legenda_data_dos_dados(
                 frescor_ranking.frescor_da_escola(db, escola, hoje_br(),
                                                   turma_ids=permitidas),
-                ["leitura", "matematica"]))
+                ["leitura", "matematica"]),
+            modulos=modulos)
     elif tipo == "alunos":
         conteudo = svc.gerar_lista_alunos_pdf(
             escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
@@ -191,8 +194,9 @@ def cartaz_ranking(
     contratado (403); dimensão fora da lista = 422."""
     permissoes.negar_restrito(db, escola_id, usuario)
     escola = db.get(Escola, escola_id)
+    modulos = svc_modulos.modulos_da_escola(db, escola)
     if dimensao:
-        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
+        svc_modulos.exigir(modulos, dimensao)
         cabecalho = svc.cabecalho_cartaz_materia(dimensao)
         itens = _ranking(db, escola_id, escola.ano_letivo_ativo, dimensao=dimensao)
         linhas = [
@@ -206,10 +210,9 @@ def cartaz_ranking(
     else:
         cabecalho, linhas = svc.linhas_ranking(db, escola_id)
         # Nota de plataforma de módulo não contratado não sai no cartaz (a mesma
-        # regra do relatório de ranking).
-        cabecalho, linhas = svc.sem_notas_fora_do_plano(
-            cabecalho, linhas, svc_modulos.modulos_da_escola(db, escola))
-        estatisticas = svc.estatisticas_cartaz(db, escola_id)
+        # regra do relatório de ranking) — nem os cartões dele.
+        cabecalho, linhas = svc.sem_notas_fora_do_plano(cabecalho, linhas, modulos)
+        estatisticas = svc.estatisticas_cartaz(db, escola_id, modulos=modulos)
     # DE QUANDO é o dado do cartaz: a mesma data do selo de frescor do ranking
     # (a escola inteira — o cartaz é da escola inteira), impressa ao lado da
     # data de emissão. Sem isso, um pôster com a coleta parada há semanas
@@ -227,6 +230,7 @@ def cartaz_ranking(
         logos=svc.logos_da_escola(db, escola_id),
         materia=dimensao,
         dados_em=dados_em,
+        modulos=modulos,
     )
     momento = datetime.now(timezone.utc)
     sufixo = f"_{dimensao}" if dimensao else ""

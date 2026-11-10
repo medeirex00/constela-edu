@@ -684,11 +684,18 @@ function SecaoPlataforma({
   );
 }
 
-function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id: number) => void }) {
+function ComparativoRede({ escolas, aoAbrir, modulos }: {
+  escolas: EscolaCartao[]; aoAbrir: (id: number) => void; modulos: string[];
+}) {
   // Ordena pelo ÍNDICE per capita — a única métrica comparável entre escolas de
   // tamanhos diferentes. As médias 0–100 seguem na tabela, mas rotuladas como o
   // que são: desempenho INTERNO de cada escola (régua = os próprios alunos dela).
   // Só as escolas COMPARADAS: as mesmas que a Equidade, logo abaixo, mede.
+  // Só as médias dos MÓDULOS CONTRATADOS: a coluna de um módulo fora do plano mostrava
+  // 0,0 em todas as escolas (lido como nota zero) — o mesmo corte do Boletim da Rede.
+  const temLeitura = modulos.includes("leitura");
+  const temMatematica = modulos.includes("matematica");
+  const colunas0a100 = ["Geral", ...(temLeitura ? ["Leitura"] : []), ...(temMatematica ? ["Matific"] : [])];
   const linhas = useMemo(
     () => [...escolas]
       .filter(escolaComparada)
@@ -709,8 +716,8 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
                 Índice
               </th>
               <th scope="col" className={`${th} text-right`}>Geral</th>
-              <th scope="col" className={`${th} text-right`}>Leitura</th>
-              <th scope="col" className={`${th} text-right`}>Matific</th>
+              {temLeitura && <th scope="col" className={`${th} text-right`}>Leitura</th>}
+              {temMatematica && <th scope="col" className={`${th} text-right`}>Matific</th>}
               <th scope="col" className={`${th} text-right`}>Engaj.</th>
             </tr>
           </thead>
@@ -730,14 +737,18 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
                   {numero(Math.round(e.pontuacao_geral ?? 0))}
                 </td>
                 <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">{nota(e.media_geral)}</td>
-                <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
-                  {e.oculto?.leitura && !e.oculto.leitura.parcial
-                    ? <ValorProtegido bloco={e.oculto.leitura} /> : nota(e.media_elefante)}
-                </td>
-                <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
-                  {e.oculto?.matematica && !e.oculto.matematica.parcial
-                    ? <ValorProtegido bloco={e.oculto.matematica} /> : nota(e.media_matific)}
-                </td>
+                {temLeitura && (
+                  <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
+                    {e.oculto?.leitura && !e.oculto.leitura.parcial
+                      ? <ValorProtegido bloco={e.oculto.leitura} /> : nota(e.media_elefante)}
+                  </td>
+                )}
+                {temMatematica && (
+                  <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
+                    {e.oculto?.matematica && !e.oculto.matematica.parcial
+                      ? <ValorProtegido bloco={e.oculto.matematica} /> : nota(e.media_matific)}
+                  </td>
+                )}
                 <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">{nota(e.adocao)}%</td>
               </tr>
             ))}
@@ -747,7 +758,7 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
       <p className="mt-3 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
         <b>Índice</b> (0–1000): desempenho por aluno na régua da rede — 1000 é a melhor
         escola do município. É o número comparável entre escolas e o que ordena esta tabela.
-        <b> Geral · Leitura · Matific</b> (0–100): desempenho interno de cada escola,
+        <b> {colunas0a100.join(" · ")}</b> (0–100): desempenho interno de cada escola,
         calculado contra os próprios alunos dela — bom para acompanhar a escola no tempo,
         não para compará-la com outra.
       </p>
@@ -922,7 +933,8 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         <KpiCompacto
           rotulo="Média geral"
           valor={nota(t.media_geral)}
-          detalhe={`Matific ${nota(t.media_matific)} · Elefante ${nota(t.media_elefante)}`}
+          detalhe={[...(temMatematica ? [`Matific ${nota(t.media_matific)}`] : []),
+                    ...(temLeitura ? [`Elefante ${nota(t.media_elefante)}`] : [])].join(" · ") || undefined}
           titulo="Média interna (0–100): cada escola é medida contra os próprios alunos"
         />
       </Card>
@@ -978,7 +990,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       </div>
 
       {/* Comparativo entre escolas (tabela por indicador). */}
-      <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} />
+      <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} modulos={mods} />
 
       {/* Equidade e Metas com a altura da linha (antes sobrava um vão embaixo do menor). */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

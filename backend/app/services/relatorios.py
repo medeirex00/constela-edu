@@ -884,10 +884,20 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
 # alunos, paginada automaticamente pelo Chromium) e um rodapé comemorativo.
 # ---------------------------------------------------------------------------
 
+def _materias_dos_cartoes(modulos) -> list[str]:
+    """As matérias cujos números o cartaz do Ranking Geral mostra nos cartões: as
+    contratadas (``modulos``; ``None`` = todas, como em ``services/modulos``)."""
+    return [m for m in CARTAZ_MATERIAS if modulos is None or m in modulos]
+
+
 def estatisticas_cartaz(db: Session, escola_id: int,
-                        turma_ids: list[int] | None = None) -> dict:
+                        turma_ids: list[int] | None = None,
+                        modulos: set[str] | None = None) -> dict:
     """Totais para os cartões do pôster: atividades (Matific) e livros
-    (Elefante).
+    (Elefante). Módulo fora do plano não é somado (``modulos``; ``None`` = todos):
+    com uma matéria só, os totais são os do cartaz daquela matéria
+    (``estatisticas_cartaz_materia`` — Leitura: livros e tempo; Matemática:
+    atividades e estrelas), dos mesmos alunos.
 
     Soma o SNAPSHOT ATUAL (o mais recente por data de referência — o mesmo
     critério usado no ranking e no painel, via scoring._snapshots_atuais), e só
@@ -898,10 +908,15 @@ def estatisticas_cartaz(db: Session, escola_id: int,
     Educação Infantil, com quem ainda não tem nota, com alunos de anos anteriores
     ou arquivados nem com correções para menos. Best-effort: qualquer falha vira
     zero — o cartaz nunca quebra por causa das estatísticas."""
+    materias = _materias_dos_cartoes(modulos)
     try:
         escola = db.get(Escola, escola_id)
         cohort = {aluno.id for _nota, aluno, _turma
                   in db.execute(_consulta_ranking_geral(db, escola_id, turma_ids))}
+        if len(materias) == 1:
+            return estatisticas_cartaz_materia(db, escola_id, materias[0], sorted(cohort))
+        if not materias:
+            return {}
         # Matific é contador DO ANO: o retrato de outro ano letivo não soma.
         m_atuais = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
         e_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
@@ -909,7 +924,8 @@ def estatisticas_cartaz(db: Session, escola_id: int,
         livros = sum(s.livros_unicos for aid, s in e_atuais.items() if aid in cohort)
         return {"atividades": int(atividades), "livros": int(livros)}
     except Exception:  # noqa: BLE001 — cartões decorativos: nunca derrubam o cartaz
-        return {"atividades": 0, "livros": 0}
+        # Chave ausente vira 0 no cartão (``_cartaz_documento_html``); só as do plano.
+        return {"atividades": 0, "livros": 0} if len(materias) > 1 else {}
 
 
 def estatisticas_cartaz_materia(db: Session, escola_id: int, materia: str,
@@ -1126,7 +1142,8 @@ def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
                          estatisticas: dict,
                          logos: tuple[str, str] | None = None,
                          materia: str | None = None,
-                         dados_em: str | None = None) -> bytes:
+                         dados_em: str | None = None,
+                         modulos: set[str] | None = None) -> bytes:
     """Cartaz do Ranking em PDF (todos os alunos). HTML→Chromium com o layout
     completo; sem navegador, cai para o PDF simples de ranking (reserva).
 
@@ -1138,12 +1155,15 @@ def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
     `estatisticas_cartaz` no Ranking Geral, `estatisticas_cartaz_materia` (só a
     matéria, só os alunos listados) no cartaz da matéria. ``dados_em`` = a
     linha "Dados das plataformas: ..." (``legenda_data_dos_dados``), impressa
-    ao lado da data de emissão — também na reserva."""
+    ao lado da data de emissão — também na reserva. ``modulos`` = os módulos
+    contratados (``None`` = todos): no Ranking Geral, os cartões só das
+    matérias do plano."""
     titulo = (f"Ranking de {CARTAZ_MATERIAS[materia][0]}" if materia
               else "Ranking Geral")
     try:
         return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas, logos,
-                                cabecalho=cabecalho, materia=materia, dados_em=dados_em)
+                                cabecalho=cabecalho, materia=materia, dados_em=dados_em,
+                                modulos=modulos)
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples de ranking
         return gerar_pdf(titulo, escola_nome, cor, cabecalho, linhas,
                          nota_dados=dados_em)
@@ -1153,9 +1173,12 @@ def _cartaz_documento_html(escola_nome: str, ano_letivo: int, linhas: list[list]
                            estatisticas: dict, logos: tuple[str, str] | None = None,
                            materia: str | None = None,
                            cabecalho: list[str] | None = None,
-                           dados_em: str | None = None) -> str:
+                           dados_em: str | None = None,
+                           modulos: set[str] | None = None) -> str:
     """HTML completo do cartaz (o que o Chromium imprime). Separado da
-    impressão para o conteúdo poder ser conferido sem navegador."""
+    impressão para o conteúdo poder ser conferido sem navegador. ``modulos`` =
+    os módulos contratados (``None`` = todos): decide os cartões do Ranking
+    Geral."""
     def _mil(n) -> str:
         return f"{int(n):,}".replace(",", ".")
 
@@ -1163,22 +1186,27 @@ def _cartaz_documento_html(escola_nome: str, ano_letivo: int, linhas: list[list]
     # Os dois primeiros cartões são DA MATÉRIA do cartaz: no de Leitura não
     # aparece atividade do Matific, no de Matemática não aparece livro do
     # Elefante (os totais vêm de `estatisticas_cartaz_materia`, só dos alunos
-    # listados). O Ranking Geral segue com atividades + livros da escola.
-    if materia == "leitura":
+    # listados). O Ranking Geral segue com atividades + livros — só das
+    # matérias do plano (``modulos``): com uma só, os cartões são os do cartaz
+    # dela; o módulo não contratado não aparece, nem zerado.
+    materias = [materia] if materia else _materias_dos_cartoes(modulos)
+    if materias == ["leitura"]:
         tiles = [
             (_mil(estatisticas.get("livros", 0)), "livros lidos"),
             (_tempo_cartaz(estatisticas.get("tempo_leitura_min", 0)), "tempo de leitura"),
         ]
-    elif materia == "matematica":
+    elif materias == ["matematica"]:
         tiles = [
             (_mil(estatisticas.get("atividades", 0)), "atividades"),
             (_mil(estatisticas.get("estrelas", 0)), "estrelas"),
         ]
-    else:
+    elif materias:
         tiles = [
             (_mil(estatisticas.get("atividades", 0)), "atividades"),
             (_mil(estatisticas.get("livros", 0)), "livros lidos"),
         ]
+    else:
+        tiles = []
     tiles += [
         (_mil(len(linhas)), "estudantes ranqueados"),
         (faixa_n, faixa_r),
@@ -1218,12 +1246,13 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
                      estatisticas: dict, logos: tuple[str, str] | None = None,
                      cabecalho: list[str] | None = None,
                      materia: str | None = None,
-                     dados_em: str | None = None) -> bytes:
+                     dados_em: str | None = None,
+                     modulos: set[str] | None = None) -> bytes:
     from playwright.sync_api import sync_playwright
 
     doc = _cartaz_documento_html(escola_nome, ano_letivo, linhas, estatisticas,
                                  logos, materia=materia, cabecalho=cabecalho,
-                                 dados_em=dados_em)
+                                 dados_em=dados_em, modulos=modulos)
 
     with sync_playwright() as p:
         try:
@@ -1484,11 +1513,29 @@ def _motivo_fora_da_comparacao(cartao: dict) -> str:
     return "Sem aluno do 1º ao 5º ano com dado das plataformas contratadas."
 
 
+# Coluna de média 0–100 de cada plataforma no Boletim: (módulo, rótulo, campo do
+# cartão da escola). Só sai a do módulo contratado (``_medias_do_boletim``).
+_MEDIAS_DO_BOLETIM = (("matematica", "Matific", "media_matific"),
+                      ("leitura", "Elefante", "media_elefante"))
+
+
+def _medias_do_boletim(dados: dict) -> list[tuple[str, str]]:
+    """``(rótulo, campo)`` das médias de plataforma que o Boletim mostra: só as
+    dos módulos contratados (``dados['modulos']``; sem a chave — dado montado fora
+    do ``dashboard_rede`` — tudo contratado, como em ``services/modulos``). O que
+    a rede não contratou não existe para ela: uma coluna "Matific" com 0,0 em
+    todas as escolas seria lida como nota zero em matemática."""
+    contratados = dados.get("modulos") or [m for m, _, _ in _MEDIAS_DO_BOLETIM]
+    return [(rotulo, campo) for modulo, rotulo, campo in _MEDIAS_DO_BOLETIM
+            if modulo in contratados]
+
+
 def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
     """Cabeçalho + linhas do ranking de escolas — base da reserva fpdf e do CSV,
     para o boletim nunca divergir do painel. Só as escolas COMPARADAS
     (``_escola_comparada``): é um ranking, e a escola fora da comparação não tem
-    posição nem índice a mostrar.
+    posição nem índice a mostrar. Só as médias das plataformas contratadas
+    (``_medias_do_boletim``).
 
     As médias saem por ``_fmt_nota``, como na tabela HTML: a média nula (matéria
     escondida da Secretaria, grupo pequeno) vira '—', nunca 'None'. O índice
@@ -1497,12 +1544,13 @@ def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
     # escolas) — sem ela, a Secretaria leria "1º lugar com Geral 25,8" acima de
     # "2º lugar com Geral 100" e concluiria que o boletim está quebrado. As
     # médias 0–100 continuam, como nota INTERNA de cada escola.
-    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Índice", "Matific",
-                 "Elefante", "Geral"]
+    medias = _medias_do_boletim(dados)
+    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Índice",
+                 *(rotulo for rotulo, _ in medias), "Geral"]
     linhas = [
         [e.get("posicao", ""), e["nome"], e["total_alunos"], e["adocao"],
-         e.get("pontuacao_geral", 0), _fmt_nota(e["media_matific"]),
-         _fmt_nota(e["media_elefante"]), _fmt_nota(e["media_geral"])]
+         e.get("pontuacao_geral", 0), *(_fmt_nota(e[campo]) for _, campo in medias),
+         _fmt_nota(e["media_geral"])]
         for e in dados.get("escolas", []) if _escola_comparada(e)
     ]
     return cabecalho, linhas
@@ -1563,11 +1611,14 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
                 f'<td class="esq">{_esc_html(e.get("motivo_atencao") or "")}</td></tr>')
         corpo.append('</tbody></table>')
 
+    # As médias de plataforma: só as dos módulos do plano (``_medias_do_boletim``).
+    medias = _medias_do_boletim(dados)
     corpo.append('<h2 class="secao">Ranking das escolas</h2>')
     corpo.append('<table class="tab"><thead><tr>'
                  '<th>#</th><th class="esq">Escola</th><th>Alunos</th><th>Adoção</th>'
-                 '<th>Índice</th><th>Matific</th><th>Elefante</th><th>Geral</th>'
-                 '</tr></thead><tbody>')
+                 '<th>Índice</th>'
+                 + "".join(f"<th>{rotulo}</th>" for rotulo, _ in medias)
+                 + '<th>Geral</th></tr></thead><tbody>')
     escolas = dados.get("escolas", [])
     for e in [c for c in escolas if _escola_comparada(c)]:
         corpo.append(
@@ -1576,18 +1627,18 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
             f'<td>{_esc_html(str(e["total_alunos"]))}</td>'
             f'<td>{_fmt_nota(e["adocao"])}%</td>'
             f'<td><b>{_fmt_nota(e.get("pontuacao_geral", 0))}</b></td>'
-            f'<td>{_fmt_nota(e["media_matific"])}</td>'
-            f'<td>{_fmt_nota(e["media_elefante"])}</td>'
-            f'<td>{_fmt_nota(e["media_geral"])}</td></tr>')
+            + "".join(f"<td>{_fmt_nota(e[campo])}</td>" for _, campo in medias)
+            + f'<td>{_fmt_nota(e["media_geral"])}</td></tr>')
     corpo.append('</tbody></table>')
     medidas = " e ".join(medida for _, medida in plataformas)
+    colunas_0_100 = " · ".join([*(rotulo for rotulo, _ in medias), "Geral"])
     corpo.append(
         '<p style="font-size:.72em;color:#5b6474;margin-top:.4em">'
         f'<b>Índice</b> (0–1000, calculado pelo Constela): {medidas} por aluno do '
         '1º ao 5º ano, na régua da rede — 1000 é a escola de maior índice do '
         'município. É o número que ordena esta tabela e o único comparável entre '
         'escolas de tamanhos diferentes. '
-        '<b>Matific · Elefante · Geral</b> (0–100): nota INTERNA de cada escola, '
+        f'<b>{colunas_0_100}</b> (0–100): nota INTERNA de cada escola, '
         'calculada contra os próprios alunos dela — servem para acompanhar a escola '
         'ao longo do tempo, não para compará-la com outra.</p>')
     # Secretaria: os totais e as médias da rede deixam de fora a matéria das
