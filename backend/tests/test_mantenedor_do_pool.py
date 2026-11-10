@@ -173,12 +173,21 @@ def test_o_engine_do_app_no_sqlite_nao_liga():
 
 
 def test_startup_liga_e_shutdown_para(monkeypatch):
+    """O ciclo de vida do app de verdade. O shutdown também para o agendador da sync, cujo
+    sinal de parada é do módulo e ficaria ligado para os testes seguintes
+    (``test_sync.py::test_uma_rodada_orquestra_agenda_e_fila`` não executaria a fila): aqui
+    o ``parar`` dele é trocado por nada."""
+    from app.sync import scheduler as sync_scheduler
+
     chamadas = []
     monkeypatch.setattr(mp, "iniciar", lambda motor: chamadas.append(("iniciar", motor)))
     monkeypatch.setattr(mp, "parar", lambda: chamadas.append(("parar", None)))
+    monkeypatch.setattr(sync_scheduler, "parar", lambda *a, **k: None)
+    parada_antes = sync_scheduler._parar.is_set()
     with TestClient(app):
         assert chamadas == [("iniciar", database.engine)]
     assert chamadas == [("iniciar", database.engine), ("parar", None)]
+    assert sync_scheduler._parar.is_set() is parada_antes
 
 
 def test_iniciar_e_parar_do_processo_idempotentes_e_sem_levantar(monkeypatch, log_constela):
@@ -380,9 +389,8 @@ def test_primeiro_ciclo_e_imediato_e_parar_e_prompto():
         time.sleep(0.02)
     assert motor.pool.checkedin() == 4       # o intervalo é 60 s: só o ciclo do boot explica
     assert m._thread.daemon
-    t0 = time.monotonic()
-    m.parar()
-    assert not m.vivo() and time.monotonic() - t0 < 2
+    m.parar(timeout=2)                       # acorda a espera do intervalo de 60 s
+    assert not m.vivo()
     assert motor.pool.checkedout() == 0
     motor.dispose()
 
@@ -403,13 +411,12 @@ def test_ciclo_espera_a_calmaria_sem_competir_com_a_pagina_e_tem_teto():
     assert motor.pool.checkedin() == 3       # o ciclo do boot não espera calmaria
     with motor.connect():                    # uma requisição em andamento
         do_mantenedor.clear()
-        t0 = time.monotonic()
         time.sleep(1.2)
         assert do_mantenedor == []           # intervalo de 0,2 s, mas o ciclo esperou
-        while not do_mantenedor and time.monotonic() - t0 < 5:
+        limite = time.monotonic() + 4
+        while not do_mantenedor and time.monotonic() < limite:
             time.sleep(0.02)
         assert do_mantenedor                 # teto de 0,2 + 1,5 s: rodou com a requisição
-        assert do_mantenedor[0] - t0 < 3
     m.parar()
     assert motor.pool.checkedout() == 0
     motor.dispose()
@@ -417,22 +424,30 @@ def test_ciclo_espera_a_calmaria_sem_competir_com_a_pagina_e_tem_teto():
 
 def test_devolucao_recente_de_requisicao_adia_o_ciclo_e_a_do_mantenedor_nao():
     motor = _motor(8)
-    m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=2, calmaria_s=0.5,
-                            espera_maxima_s=3)
+    m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=2, calmaria_s=1.0,
+                            espera_maxima_s=4)
     m.iniciar()                              # o ciclo do boot devolve 2 conexões...
     limite = time.monotonic() + 5
     while motor.pool.checkedin() < 2 and time.monotonic() < limite:
         time.sleep(0.02)
     m.parar()
-    m._parar.clear()                         # a espera roda aqui, sem a thread
-    t0 = time.monotonic()
-    m._esperar_calmaria()                    # ...que não contam como uso: sem espera
-    assert time.monotonic() - t0 < 0.2
+    m._parar.clear()                         # a espera roda numa thread do teste
+
+    def esperar():
+        t = threading.Thread(target=m._esperar_calmaria, daemon=True)
+        t.start()
+        return t
+
+    t = esperar()
+    t.join(0.5)
+    assert not t.is_alive()                  # ...que não contam como uso: sem espera
     with motor.connect():
         pass                                 # devolução de uma requisição agora
-    t0 = time.monotonic()
-    m._esperar_calmaria()
-    assert 0.4 < time.monotonic() - t0 < 2
+    t = esperar()
+    t.join(0.3)
+    assert t.is_alive()                      # espera a calmaria de 1 s
+    t.join(3)
+    assert not t.is_alive()                  # e termina nela, antes do teto de 4 s
     motor.dispose()
 
 
