@@ -145,11 +145,75 @@ def _preparar_motivos(db, escola_completa) -> None:
     db.commit()
 
 
-# Exemplo gravado para a tela → (texto enviado ao /analisar, cenário do banco).
+DATA = "2026-08-14T12:00:00"
+
+
+def _placar(turma: str | None, alunos: list[dict]) -> str:
+    """Placar do Matific (JSON da API interna); sem ``turma``, cada aluno traz a sua."""
+    corpo = {"fonte": "matific-placar", "alunos": alunos}
+    if turma is not None:
+        corpo["turma"] = turma
+    return json.dumps(corpo, ensure_ascii=False)
+
+
+def _corpo_padrao(analise: dict, turma_id: int | None) -> list[dict]:
+    """O corpo da confirmação com o vínculo da prévia; sem ele, a turma dada."""
+    linhas = []
+    for linha in analise["linhas"]:
+        corr = linha["correspondencia"]
+        vinculo = corr["aluno_id"] if corr["status"] in ("exato", "vinculado") else None
+        linhas.append({"nome": linha["nome"], "dados": linha["dados"], "aluno_id": vinculo,
+                       "criar_em_turma_id": None if vinculo else turma_id})
+    return linhas
+
+
+def _confirmar(cliente, escola_id, analise: dict, linhas: list[dict]) -> dict:
+    r = cliente.post(f"{API}/escolas/{escola_id}/importacoes/confirmar", json={
+        "plataforma": analise["plataforma"], "formato": analise["formato"], "tipo": "texto",
+        "recalcular": False, "linhas": linhas, "data_referencia": DATA})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# --- Revisão do acabamento das telas: casos em que a prévia rotulava ou contava
+# diferente do backend. Cada um tem o exemplo gravado para a tela (EXEMPLOS) e, abaixo,
+# o lado do backend do que ela passa a dizer.
+
+# A mesma conta com dois nomes no 1º Placar: as pendências id_externo_duplicado ficam
+# abertas, e no Placar seguinte a conta vem numa linha só — e de novo o mesmo motivo.
+PLACAR_DUP_1 = _placar("3º Ano A", [
+    {"nome": "Crianca Ficticia Um", "uuid": "uuid-ficticio-dup-fila", "estrelas": 7,
+     "atividades": 2},
+    {"nome": "Crianca Ficticia Dois", "uuid": "uuid-ficticio-dup-fila", "estrelas": 8,
+     "atividades": 2}])
+PLACAR_DUP_2 = _placar("3º Ano A", [
+    {"nome": "Crianca Ficticia Um", "uuid": "uuid-ficticio-dup-fila", "estrelas": 9,
+     "atividades": 3}])
+
+
+def _sem_preparo(_cliente, _db, _escola_completa) -> None:
+    return None
+
+
+def _preparo_motivos(_cliente, db, escola_completa) -> None:
+    _preparar_motivos(db, escola_completa)
+
+
+def _preparo_dup_na_fila(cliente, _db, escola_completa) -> None:
+    eid, turma = escola_completa["escola"].id, escola_completa["turma"].id
+    primeira = _analise(cliente, eid, PLACAR_DUP_1)
+    assert {linha["correspondencia"]["motivo"] for linha in primeira["linhas"]} == {
+        "id_externo_duplicado"}
+    _confirmar(cliente, eid, primeira, _corpo_padrao(primeira, turma))
+
+
+# Exemplo gravado para a tela → (texto enviado ao /analisar, cenário antes dele:
+# ``preparo(cliente, db, escola_completa)``, que pode já ter importado um relatório).
 EXEMPLOS = {
-    "analise_matific_motivos.json": (TEXTO, None),
-    "analise_matific_duas_contas.json": (PLACAR_DUAS_CONTAS, None),
-    "analise_matific_placar_motivos.json": (PLACAR_MOTIVOS, _preparar_motivos),
+    "analise_matific_motivos.json": (TEXTO, _sem_preparo),
+    "analise_matific_duas_contas.json": (PLACAR_DUAS_CONTAS, _sem_preparo),
+    "analise_matific_placar_motivos.json": (PLACAR_MOTIVOS, _preparo_motivos),
+    "analise_matific_id_externo_duplicado_na_fila.json": (PLACAR_DUP_2, _preparo_dup_na_fila),
 }
 
 TIPOS_TS = RAIZ / "packages" / "core" / "src" / "tipos.ts"
@@ -286,6 +350,17 @@ def test_placar_traz_um_aluno_por_motivo(cliente, db, escola_completa):
     assert obtido == MOTIVO_ESPERADO
 
 
+def test_a_mesma_conta_com_nomes_diferentes_volta_numa_linha_so(cliente, db, escola_completa):
+    """id_externo_duplicado vindo de uma pendência ABERTA (``ctx.ids_em_disputa``): o 2º
+    Placar traz a conta numa linha só, e o motivo é o mesmo. A tela dizia "A mesma conta
+    em mais de uma linha" (Importacoes.test, "a mesma conta numa linha só")."""
+    eid = escola_completa["escola"].id
+    _preparo_dup_na_fila(cliente, db, escola_completa)
+    analise = _analise(cliente, eid, PLACAR_DUP_2)
+    assert len(analise["linhas"]) == 1
+    assert analise["linhas"][0]["correspondencia"]["motivo"] == "id_externo_duplicado"
+
+
 def test_cada_motivo_do_backend_tem_rotulo_na_tela():
     """Contrato: cada motivo de revisão do backend (``identidade_aluno.MOTIVOS``) tem
     rótulo e explicação próprios na prévia de Importações (``MOTIVO_REVISAO`` em
@@ -309,8 +384,7 @@ def test_exemplo_da_tela_e_a_resposta_real(cliente, db, escola_completa, arquivo
     chaves no topo e, em cada linha, o mesmo nome, os mesmos dados e a mesma
     correspondência (status, motivo, via…)."""
     texto, preparar = EXEMPLOS[arquivo]
-    if preparar is not None:
-        preparar(db, escola_completa)
+    preparar(cliente, db, escola_completa)
     real = _analise(cliente, escola_completa["escola"].id, texto)
     exemplo = PASTA_EXEMPLOS_WEB / arquivo
     if GERAR:

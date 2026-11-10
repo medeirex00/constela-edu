@@ -242,10 +242,12 @@ const MOTIVO_REVISAO: Record<string, { rotulo: string; explicacao: string }> = {
     rotulo: "RA de mais de um aluno",
     explicacao: "O RA do relatório aponta para mais de um aluno cadastrado.",
   },
+  // A disputa pode vir deste relatório ou de um anterior que ainda espera na fila
+  // (``ids_em_disputa``): aí a conta vem numa linha só — "mais de uma linha" seria falso.
   id_externo_duplicado: {
-    rotulo: "A mesma conta em mais de uma linha",
+    rotulo: "A mesma conta com nomes ou números diferentes",
     explicacao:
-      "A mesma conta da plataforma veio em mais de uma linha, com nomes ou números diferentes: não dá para saber de qual criança são os números.",
+      "Esta conta da plataforma veio com nomes ou números diferentes — neste relatório ou num anterior que ainda espera em Revisões de identidade: não dá para saber de qual criança são os números.",
   },
   identidade_de_outra_escola: {
     rotulo: "Conta de um aluno de outra escola",

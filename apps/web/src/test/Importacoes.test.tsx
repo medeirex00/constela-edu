@@ -6,6 +6,7 @@ import type { Analise, Importacao, ResultadoImportacao } from "../lib/types";
 import analiseReal from "./fixtures/importacoes/analise_matific_motivos.json";
 import analiseDuasContas from "./fixtures/importacoes/analise_matific_duas_contas.json";
 import analisePlacarMotivos from "./fixtures/importacoes/analise_matific_placar_motivos.json";
+import analiseDupNaFila from "./fixtures/importacoes/analise_matific_id_externo_duplicado_na_fila.json";
 import {
   api,
   fireEvent,
@@ -567,8 +568,8 @@ describe("Importacoes", () => {
       ["Heitor Fictorino Lemos", `Aluno com a ficha inativa — ${vai}`, /está com a ficha inativa/],
       ["Iara Ficticia Neves", `Conta de um aluno com a ficha inativa — ${vai}`, /já está vinculada a um aluno com a ficha inativa/],
       ["Joao Pedro Barbosa", `O aluno já tem outra conta — ${vai}`, /já tem outra conta nesta plataforma/],
-      ["Crianca Ficticia Um", `A mesma conta em mais de uma linha — ${vai}`, /veio em mais de uma linha/],
-      ["Crianca Ficticia Dois", `A mesma conta em mais de uma linha — ${vai}`, /veio em mais de uma linha/],
+      ["Crianca Ficticia Um", `A mesma conta com nomes ou números diferentes — ${vai}`, /veio com nomes ou números diferentes/],
+      ["Crianca Ficticia Dois", `A mesma conta com nomes ou números diferentes — ${vai}`, /veio com nomes ou números diferentes/],
       ["Bento Ficticio Moura", `Conta de um aluno de outra escola — ${vai}`, /aluno de outra escola do Constela/],
       ["Zefa Q", `Nome abreviado — ${vai}`, /só parte do nome/],
       ["Crianca Ficticia Repetida (conta 1 de 2)", `Duas contas com o mesmo nome — ${vai}`, /podem ser a mesma criança ou duas/],
@@ -596,6 +597,50 @@ describe("Importacoes", () => {
       { target: { value: "2026-08-14" } });
     expect(screen.getByText(/serão importados/).textContent)
       .toBe("2 de 15 aluno(s) serão importados; 13 vão para Revisões de identidade.");
+  });
+
+  /** Abre a prévia com a resposta REAL do /analisar (um exemplo gravado por
+   *  backend/tests/test_importacao_previa_motivo.py) e informa a data do relatório. */
+  async function previaReal(analise: unknown) {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, JSON.parse(JSON.stringify(analise)) as Analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "placar");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    const data = screen.queryByLabelText("Data do relatório (obrigatória)");
+    if (data) fireEvent.change(data, { target: { value: "2026-08-14" } });
+    return u;
+  }
+
+  /** O selo e a explicação que o "Destino de …" anuncia (aria-describedby). */
+  function descricaoDoDestino(destino: HTMLElement): string {
+    return (destino.getAttribute("aria-describedby") ?? "").split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+  }
+
+  // A mesma conta com dois nomes num Placar anterior deixou as pendências abertas; no
+  // Placar seguinte ela vem numa linha só, e o backend dá de novo id_externo_duplicado
+  // (backend: test_a_mesma_conta_com_nomes_diferentes_volta_numa_linha_so). A prévia
+  // dizia "A mesma conta em mais de uma linha" — neste arquivo ela veio numa só.
+  it("a mesma conta numa linha só, com a disputa aberta na fila: não diz 'mais de uma linha'", async () => {
+    await previaReal(analiseDupNaFila);
+    const a = analiseDupNaFila as unknown as Analise;
+    expect(a.linhas).toHaveLength(1);
+    expect(a.linhas[0].correspondencia?.motivo).toBe("id_externo_duplicado");
+    const destino = screen.getByRole("combobox", { name: /^Destino de / });
+    const descricao = descricaoDoDestino(destino);
+    expect(descricao).not.toMatch(/mais de uma linha/);
+    expect(descricao).toBe(
+      "A mesma conta com nomes ou números diferentes — vai para Revisões de identidade "
+      + "Esta conta da plataforma veio com nomes ou números diferentes — neste relatório ou num "
+      + "anterior que ainda espera em Revisões de identidade: não dá para saber de qual criança "
+      + "são os números.");
+    expect((destino as HTMLSelectElement).value).toBe("revisao");
   });
 
   it("motivo que a tela ainda não conhece: 'Requer revisão', sem chamar de duplicata", async () => {
