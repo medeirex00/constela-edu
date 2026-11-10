@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import Comparador from "../pages/Comparador";
 import type { PaginaAlunos, Turma } from "../lib/types";
 import {
-  api, renderComApp, responder, responderErro, screen, turmaFake, userEvent, usuarioFake, within,
+  ApiError, api, renderComApp, responder, responderErro, screen, turmaFake, userEvent, usuarioFake, within,
 } from "./utils";
 
 const ALUNOS = {
@@ -137,6 +137,45 @@ describe("Comparador", () => {
     expect(await screen.findByText("Nota Matific (média)")).toBeInTheDocument();
     expect(api.mock.calls.map((c) => String(c[0])))
       .toContain("/escolas/1/comparar?tipo_a=aluno&id_a=412&tipo_b=turma&id_b=3");
+  });
+
+  it("trocar de turma não deixa no seletor os alunos da turma anterior (nem enquanto carrega, nem na falha)", async () => {
+    const daTres = {
+      total: 1, pagina: 1, por_pagina: 1000, itens: [{ id: 31, nome: "Aluno Da Tres" }],
+    } as unknown as PaginaAlunos;
+    let falharCinco: (erro: ApiError) => void = () => undefined;
+    responder("GET", "/escolas/1/turmas", [
+      turmaFake({ id: 3, nome: "3º Ano A" }), turmaFake({ id: 5, nome: "5º Ano B" }),
+    ] as Turma[]);
+    responder("GET", "/escolas/1/alunos", (caminho: string) => {
+      if (caminho.includes("turma_id=3")) return daTres;
+      // A turma 5 fica pendurada até o teste liberar — e aí falha.
+      if (caminho.includes("turma_id=5")) return new Promise((_ok, falha) => { falharCinco = falha; });
+      return ALUNOS;
+    });
+    const u = userEvent.setup();
+    renderComApp(<Comparador />, { rota: "/comparador" });
+    await screen.findByRole("option", { name: "Ana Beatriz Souza" });
+    await u.selectOptions(screen.getByLabelText("Lado A — turma do aluno"), "3");
+    await within(screen.getByLabelText("Lado A")).findByRole("option", { name: "Aluno Da Tres" });
+
+    await u.selectOptions(screen.getByLabelText("Lado A — turma do aluno"), "5");
+    const nomes = () => within(screen.getByLabelText("Lado A")).getAllByRole("option").map((o) => o.textContent);
+    // Carregando a turma 5: nada da turma 3.
+    expect(nomes()).toEqual(["Carregando os alunos da turma…"]);
+
+    falharCinco(new ApiError(403, "Sem acesso a esta turma."));
+    expect(await screen.findByText(/Não foi possível carregar os alunos da turma: Sem acesso a esta turma\./))
+      .toBeInTheDocument();
+    expect(nomes()).toEqual(["Selecione…"]);
+  });
+
+  it("sem turma, o filtro diz que a lista é só o começo da escola quando ela tem mais alunos", async () => {
+    preparar({ ...ALUNOS, total: 340 } as PaginaAlunos);
+    renderComApp(<Comparador />, { rota: "/comparador" });
+    await screen.findByRole("option", { name: "Ana Beatriz Souza" });
+    expect(within(screen.getByLabelText("Lado A — turma do aluno")).getByRole("option", { name: "Primeiros 2 da escola" }))
+      .toBeInTheDocument();
   });
 
   it("o lado Turma não ganha o filtro de turma do aluno", async () => {

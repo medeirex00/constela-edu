@@ -59,6 +59,7 @@ function SeletorLado({
   setId,
   escolaId,
   alunos,
+  escolaTemMais,
   turmas,
   escolas,
   podeEscola,
@@ -72,6 +73,8 @@ function SeletorLado({
   escolaId: number | null;
   /** A 1ª página de alunos da escola (as primeiras 100, em ordem alfabética). */
   alunos: OpcaoAluno[];
+  /** A escola tem mais alunos que os da 1ª página. */
+  escolaTemMais: boolean;
   turmas: Turma[];
   escolas: OpcaoAluno[];
   podeEscola: boolean;
@@ -80,11 +83,21 @@ function SeletorLado({
   // alunos dela (uma página só, pequena) — assim todo aluno é alcançável sem montar um
   // <select> com a escola inteira.
   const [turmaDoAluno, setTurmaDoAluno] = useState("");
-  const { dados: paginaDaTurma, erro: erroDaTurma } = useApi<PaginaAlunos>(
-    tipo === "aluno" && turmaDoAluno && escolaId
-      ? `/escolas/${escolaId}/alunos?turma_id=${turmaDoAluno}&por_pagina=${POR_PAGINA_DA_TURMA}`
+  const urlDaTurma = tipo === "aluno" && turmaDoAluno && escolaId
+    ? `/escolas/${escolaId}/alunos?turma_id=${turmaDoAluno}&por_pagina=${POR_PAGINA_DA_TURMA}`
+    : null;
+  // A página vem junto com o endereço que a pediu: o useApi não zera `dados` quando a
+  // turma muda (nem quando a busca falha), e a lista da turma ANTERIOR ficava no
+  // seletor — dava para comparar um aluno que não é da turma mostrada.
+  const { dados: buscaDaTurma, erro: erroDaTurma } = useApi<{ url: string; pagina: PaginaAlunos }>(
+    urlDaTurma
+      ? (sinal) => api<PaginaAlunos>(urlDaTurma, { signal: sinal }).then((pagina) => ({ url: urlDaTurma, pagina }))
       : null,
+    { chave: [urlDaTurma] },
   );
+  const paginaDaTurma = buscaDaTurma && buscaDaTurma.url === urlDaTurma && !erroDaTurma
+    ? buscaDaTurma.pagina : null;
+  const carregandoTurma = urlDaTurma !== null && paginaDaTurma === null && !erroDaTurma;
   const alunosDaTurma: OpcaoAluno[] = (paginaDaTurma?.itens ?? []).map((a) => ({ id: a.id, nome: a.nome }));
   const opcoes = tipo === "aluno" ? (turmaDoAluno ? alunosDaTurma : alunos)
     : tipo === "escola" ? escolas : turmas;
@@ -107,7 +120,9 @@ function SeletorLado({
           <Campo rotulo={`${rotulo} — turma do aluno`}>
             <select className={estiloInput} value={turmaDoAluno}
                     onChange={(evento) => { setTurmaDoAluno(evento.target.value); setId(""); }}>
-              <option value="">Todas as turmas</option>
+              {/* Sem turma, a lista é a 1ª página da escola: "Todas as turmas" prometeria a
+                  escola inteira quando ela tem mais alunos que isso. */}
+              <option value="">{escolaTemMais ? `Primeiros ${numero(alunos.length)} da escola` : "Todas as turmas"}</option>
               {turmas.map((turma) => <option key={turma.id} value={turma.id}>{turma.nome}</option>)}
             </select>
           </Campo>
@@ -115,7 +130,7 @@ function SeletorLado({
         <div className={tipo === "aluno" ? "sm:col-span-2" : undefined}>
           <Campo rotulo={rotulo}>
             <select className={estiloInput} value={id} onChange={(evento) => setId(evento.target.value)}>
-              <option value="">Selecione…</option>
+              <option value="">{carregandoTurma ? "Carregando os alunos da turma…" : "Selecione…"}</option>
               {opcoes.map((opcao) => (
                 <option key={opcao.id} value={opcao.id}>{opcao.nome}</option>
               ))}
@@ -264,11 +279,11 @@ export default function Comparador() {
 
       <Card className="mb-6 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
-          <SeletorLado lado="A" rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} escolaId={escolaId} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado lado="A" rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} escolaId={escolaId} alunos={alunos} escolaTemMais={alunosDeFora != null} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
           <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center self-center rounded-full bg-marinho-900 text-xs font-bold text-white shadow-cartao dark:bg-indigo-500">
             vs
           </span>
-          <SeletorLado lado="B" rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} escolaId={escolaId} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado lado="B" rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} escolaId={escolaId} alunos={alunos} escolaTemMais={alunosDeFora != null} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <p className="flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
