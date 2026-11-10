@@ -56,6 +56,7 @@ from app.services import (
     turmas_dedup,
 )
 from app.services import dificuldade_livro
+from app.services import dimensoes as svc_dimensoes
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
 # A trava do destino mora em ``services.turma_arquivada`` (o /resolver de
@@ -290,8 +291,19 @@ def perfil_aluno(
     # (mesma regra de ``rankings._ranking``), e o passo a passo / a distribuição
     # de leitura daquela plataforma não saem. A nota geral já vem do motor com os
     # pesos só dos módulos contratados.
-    fora = svc_modulos.plataformas_fora_do_plano(
-        svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)))
+    escola = db.get(Escola, escola_id)
+    fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
+    # CONTRATO com as telas: o desempenho POR DIMENSÃO (só as contratadas) é o que
+    # separa "sem dado" de "zero". As notas de plataforma acima saem 0,0 para quem
+    # não tem snapshot; é o `aferido` de cada bloco que faz a tela mostrar "—"
+    # (``notaDaMateria``). Sem os blocos, a ficha afirmava 0,0 em Matemática para
+    # a criança que nunca abriu o Matific. Quem TEM dado não muda: a nota do bloco
+    # é a mesma coluna da Nota. A posição do bloco é a da ESCOLA inteira naquela
+    # dimensão — não é a perspectiva do professor (ver ``_posicao_exibida``), então
+    # ele não a recebe.
+    blocos_dimensao = svc_dimensoes.blocos(db, escola, nota)
+    if superficial:
+        blocos_dimensao = [b.model_copy(update={"posicao": None}) for b in blocos_dimensao]
     return AlunoPerfilOut(
         aluno=saida,
         nota_matific=None if "matific" in fora else (nota.nota_matific if nota else 0.0),
@@ -299,6 +311,8 @@ def perfil_aluno(
                        else (nota.nota_elefante if nota else 0.0)),
         nota_geral=nota.nota_geral if nota else 0.0,
         posicao=_posicao_exibida(db, escola_id, ano, usuario, aluno_id, nota),
+        dimensoes=blocos_dimensao,
+        adocao=svc_dimensoes.adocao(db, escola, nota),
         # O professor também vê o PASSO A PASSO do cálculo (liberado pelo dono) —
         # só das crianças das turmas dele (exigir_aluno_permitido acima barra as
         # de fora). A ficha cadastral (dados pessoais) e as leituras seguem só p/
