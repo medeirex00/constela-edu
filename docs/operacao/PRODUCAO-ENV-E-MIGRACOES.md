@@ -146,6 +146,35 @@ variável `PGCONNECT_TIMEOUT` da libpq também, quando definida e não vazia no 
 (inclusive `0`, que volta aos 130 s do driver). Não afeta o SQLite. Não muda o pool nem
 o tempo das consultas (só a abertura da conexão).
 
+`DB_POOL_AQUECIDO_S` e `DB_POOL_AQUECIDO_CONEXOES` (operacionais, **não obrigatórias**;
+padrões `20` e `8`): o mantenedor do pool (`app/core/mantenedor_do_pool.py`). Sem ele, a
+requisição do usuário pagava a conexão nova depois de um deploy ou reinício (~0,8 s cada,
+com o banco a ~195 ms), o ping da conexão parada há mais de `DB_PING_OCIOSO_S` (30 s;
+~0,2 s) e a reabertura da conexão com mais de `DB_POOL_RECYCLE` (1800 s; ~0,8 s). Como a
+Secretaria entra poucas vezes por dia, esse é o caso comum. O mantenedor é uma thread por
+worker, ligada no startup e parada no shutdown. No boot, e depois a cada
+`DB_POOL_AQUECIDO_S` segundos, ela retira ao mesmo tempo `DB_POOL_AQUECIDO_CONEXOES`
+conexões, roda `SELECT 1` em cada e devolve todas. A conexão perto do `DB_POOL_RECYCLE`
+(margem de 2 intervalos) é reaberta ali mesmo. Regras:
+
+- só PostgreSQL; `0` (ou negativo) em qualquer das duas desliga;
+- o intervalo precisa ficar **abaixo** do `DB_PING_OCIOSO_S` (se não ficar, o boot avisa
+  no log);
+- as conexões ficam limitadas ao `DB_POOL_SIZE` (10). O total mantido aberto é
+  `DB_POOL_AQUECIDO_CONEXOES` × workers: 8 com 1 worker, 16 com 2. **No pooler de sessão do
+  Supabase cada conexão ocupa uma vaga**: confira o *Pool Size* do projeto antes de
+  publicar. Se não couber com folga (o robô, os scripts e o backup também usam vagas),
+  baixe o número ou desligue com `0`;
+- 8 cobre as chamadas em voo do Panorama da Secretaria: 6 da página, mais o sinal de
+  presença e o contador de notificações. A Ficha e a Comparação têm 7;
+- erro do banco não derruba a API. Vira um aviso no log, no máximo um a cada 5 min e só
+  com o tipo do erro, e o ciclo seguinte tenta de novo;
+- não segura conexão entre ciclos: cada uma sai do pool só pelo tempo do `SELECT 1`;
+- **App Sleeping do Railway**: é uma opção do painel (não há arquivo de configuração do
+  serviço no repositório). Com ela ligada, o serviço que dorme volta frio e o primeiro
+  acesso paga o boot inteiro. Pela documentação do Railway, o `SELECT 1` a cada 20 s conta
+  como tráfego de saída e impede o serviço de dormir. Confira a opção no painel.
+
 **Configuração do serviço no Railway** (não são variáveis):
 
 | Campo | Valor | Passo |

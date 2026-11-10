@@ -74,6 +74,7 @@ Segredos (🔑) vão no cofre; configs (⚙️) podem ficar no repositório/dash
 | `SYNC_SCHEDULER_ENABLED` | ⚙️ | Liga o robô |
 | `AUTOMACAO_VERIFICAR_NO_BOOT` | ⚙️ | Diagnóstico do robô no boot (IP de saída + Chromium). Padrão ligado: **não definir em produção**; `false` só nos testes e no E2E |
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `EXPORTS_RETENCAO_DIAS`, `SYNC_*`, `LOG_*`, `METRICS_ENABLED`, `SENTRY_*` | ⚙️ | Ajustes; têm padrões seguros |
+| `DB_POOL_AQUECIDO_S`, `DB_POOL_AQUECIDO_CONEXOES` | ⚙️ | Mantenedor do pool (só PostgreSQL): ciclo de `20` s e `8` conexões prontas por worker; `0` em qualquer uma desliga. Regras em §2.1 de [`operacao/PRODUCAO-ENV-E-MIGRACOES.md`](operacao/PRODUCAO-ENV-E-MIGRACOES.md) |
 
 O template comentado está em [`backend/.env.example`](../backend/.env.example).
 
