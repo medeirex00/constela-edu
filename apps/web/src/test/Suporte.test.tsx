@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import fonteSincronizacao from "../pages/Sincronizacao.tsx?raw";
 import { COR_TOM, META_CRITERIOS } from "../components/CriteriosVisuais";
 import Suporte, { PASTAS_GUIAS, type RegraPontuacao } from "../pages/Suporte";
 import {
@@ -244,6 +245,20 @@ describe("Suporte — celular", () => {
     expect(resposta).toContain("a pesquisa continua no topo");
     expect(resposta).toContain("a linha do topo que mostra em que página você está e algumas colunas das tabelas só aparecem em telas maiores");
     expect(resposta).not.toMatch(/pesquisa do topo e algumas colunas só aparecem/);
+  });
+});
+
+describe("Suporte — certificado que não sai", () => {
+  // Antes da primeira importação o botão de Integrações se chama “Importar Lista
+  // Piloto” (Sincronizacao.tsx); só depois vira “Atualizar Lista Piloto”. A escola que
+  // nunca importou — onde toda ficha está sem confirmação — procuraria um botão que
+  // não está ali.
+  it("cita os dois nomes do botão da Lista Piloto, os mesmos de Integrações", () => {
+    const resposta = FAQ_COORDENACAO.find((p) => p.pergunta === "O certificado de um aluno não sai.")?.resposta ?? "";
+    expect(resposta).toContain("(botão “Importar Lista Piloto” ou “Atualizar Lista Piloto”)");
+    for (const botao of ["Importar Lista Piloto", "Atualizar Lista Piloto"]) {
+      expect(fonteSincronizacao).toContain(`"${botao}"`);
+    }
   });
 });
 

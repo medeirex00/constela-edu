@@ -308,10 +308,25 @@ class PreparoCertificado:
     escola: Escola
     aluno: Aluno
     matricula: tuple | None     # (Matricula, Turma) do ano letivo ativo, ou None
+    # Quem emite abre as telas que as recusas citam? (``_quem_emite_e_gestao``)
+    gestao: bool = True
 
     @property
     def turma_nome(self) -> str | None:
         return self.matricula[1].nome if self.matricula is not None else None
+
+
+def _quem_emite_e_gestao(usuario: Usuario) -> bool:
+    """As recusas do certificado dizem ONDE resolver: Minha Escola › Turmas, Dados e
+    integrações › Integrações, o menu do aluno ("três pontinhos"), Fundir
+    duplicatas. Só a gestão da escola (admin/coordenação sem rede) e o Admin
+    Global abrem essas telas — a mesma régua das guardas RotaGestao/RotaEscolaOp
+    da web. A professora também emite (Meus Relatórios, só dos alunos dela), mas
+    seria mandada a telas que não abre: para ela, a recusa diz o que pedir à
+    coordenação da escola."""
+    if usuario.is_global:
+        return True
+    return permissoes.acesso_total(usuario) and not permissoes.e_secretaria(usuario)
 
 
 def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
@@ -328,6 +343,7 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
                                       usuario, aluno_id)
+    gestao = _quem_emite_e_gestao(usuario)
     if aluno.status != "ativo":
         # QUEM NÃO ESTÁ NA POPULAÇÃO ATIVA NÃO RECEBE DOCUMENTO OFICIAL. O ranking,
         # os relatórios e o seletor desta tela já filtram `status == "ativo"`; só
@@ -336,6 +352,9 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
         # a guarda de "0,0" abaixo existe para evitar. Se a escola decidir que a
         # criança deve receber mesmo assim, o caminho é explícito e auditado:
         # Reativar, na turma dela (a lista de Alunos só mostra os ativos).
+        #
+        # Só a gestão chega aqui: para a professora, o aluno que não está ativo
+        # já é 404 em ``exigir_aluno_permitido`` (só os ativos das turmas dela).
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” está com situação {_SITUACAO.get(aluno.status, aluno.status)!r} "
@@ -390,16 +409,25 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
     # ANTES da escolha do modelo, de propósito: vale para o Mérito e também para
     # as duas artes de participação, que não passam pela guarda de nota.
     if not aluno.da_lista_piloto:
+        # O botão de Integrações se chama "Importar Lista Piloto" até a primeira
+        # importação e "Atualizar Lista Piloto" depois (Sincronizacao.tsx) — e é
+        # justamente na escola que nunca importou que TODA ficha cai aqui.
+        saida = ("Importe ou atualize a Lista Piloto em Dados e integrações › "
+                 "Integrações (botão “Importar Lista Piloto” ou “Atualizar Lista "
+                 "Piloto”), ou funda a ficha repetida em Minha Escola › Alunos › "
+                 "“Fundir duplicatas”, e emita em seguida."
+                 if gestao else
+                 "Peça à coordenação da escola para importar ou atualizar a Lista "
+                 "Piloto, ou para juntar esta ficha à ficha repetida da criança, e "
+                 "emita depois disso.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” ainda não está confirmado na Lista Piloto desta "
             "escola, então não dá para emitir um documento oficial no nome dele. "
             "Esta ficha foi criada a partir de um relatório de plataforma e está "
-            "sem RA e sem data de nascimento. Atualize a Lista Piloto em Dados e "
-            "integrações › Integrações › “Atualizar Lista Piloto”, ou funda a ficha "
-            "repetida em Minha Escola › Alunos › “Fundir duplicatas”, e emita em "
-            "seguida.")
-    return PreparoCertificado(escola=escola, aluno=aluno, matricula=matricula)
+            f"sem RA e sem data de nascimento. {saida}")
+    return PreparoCertificado(escola=escola, aluno=aluno, matricula=matricula,
+                              gestao=gestao)
 
 
 def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
@@ -432,19 +460,27 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
         onde = (f"está em {matricula[1].nome!r} sem uma série do 1º ao 5º ano "
                 "reconhecida" if matricula is not None
                 else f"não tem matrícula no ano letivo {escola.ano_letivo_ativo}")
+        saida = ("Coloque a criança numa turma do 1º ao 5º ano deste ano letivo (no "
+                 "perfil dela, três pontinhos › “Editar dados” › Turma): a troca de "
+                 "turma já recalcula as notas e dá a posição atual. Emita em seguida."
+                 if preparo.gestao else
+                 "Peça à coordenação da escola para colocar a criança numa turma do "
+                 "1º ao 5º ano deste ano letivo: a troca de turma já recalcula as "
+                 "notas e dá a posição atual. Emita depois disso.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” {onde}, então não está no ranking vigente: a "
             "posição guardada para ela é de um cálculo antigo e não vale mais. "
-            "Coloque a criança numa turma do 1º ao 5º ano deste ano letivo (no "
-            "perfil dela, três pontinhos › “Editar dados” › Turma): a troca de "
-            "turma já recalcula as notas e dá a posição atual. Emita em seguida.")
+            f"{saida}")
     if nota is None or not svc_dimensoes.com_desempenho(db, escola, nota):
+        saida = ("Importe/sincronize os dados da escola (e aguarde o recálculo) "
+                 "antes de emitir." if preparo.gestao else
+                 "Peça à coordenação da escola para importar ou sincronizar os dados "
+                 "das plataformas e emita depois disso.")
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Este aluno ainda não tem nota calculada — não dá para emitir o "
-            "certificado geral. Importe/sincronize os dados da escola (e "
-            "aguarde o recálculo) antes de emitir.")
+            f"certificado geral. {saida}")
     return nota
 
 

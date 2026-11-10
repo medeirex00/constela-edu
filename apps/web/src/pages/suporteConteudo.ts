@@ -97,7 +97,7 @@ const FAQ_GESTAO_BASE: Pergunta[] = [
   },
   {
     pergunta: "O certificado de um aluno não sai.",
-    resposta: "A tela diz o motivo: aluno arquivado, transferido ou fora da Lista Piloto, turma de Educação Infantil, ficha ainda não confirmada pela Lista Piloto ou, no certificado “Geral”, aluno ainda sem nota. Para confirmar a ficha, use Dados e integrações › Integrações › “Atualizar Lista Piloto”, ou funda a ficha repetida em Minha Escola › Alunos › “Fundir duplicatas”.",
+    resposta: "A tela diz o motivo: aluno arquivado, transferido ou fora da Lista Piloto, turma de Educação Infantil, ficha ainda não confirmada pela Lista Piloto ou, no certificado “Geral”, aluno ainda sem nota. Para confirmar a ficha, importe ou atualize a Lista Piloto em Dados e integrações › Integrações (botão “Importar Lista Piloto” ou “Atualizar Lista Piloto”), ou funda a ficha repetida em Minha Escola › Alunos › “Fundir duplicatas”.",
   },
   {
     pergunta: "Como premio um bimestre que já terminou?",
