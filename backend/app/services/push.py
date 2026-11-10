@@ -9,6 +9,7 @@ recálculo etc.).
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -20,6 +21,18 @@ logger = logging.getLogger(__name__)
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 TAMANHO_LOTE = 100  # limite documentado do Expo por requisição
+
+# Formato do token que o app recebe de ``Notifications.getExpoPushTokenAsync``:
+# ``ExponentPushToken[...]`` (ou a grafia nova ``ExpoPushToken[...]``), sem espaço
+# nem colchete dentro. ``/dispositivos`` só aceita isto; texto fora do formato não
+# identifica aparelho nenhum — não vai ao Expo e sai do banco (``notificar_escola``).
+PADRAO_TOKEN_EXPO = r"^Expo(?:nent)?PushToken\[[^\[\]\s]+\]$"
+_TOKEN_EXPO = re.compile(PADRAO_TOKEN_EXPO)
+
+
+def token_expo_valido(token: str | None) -> bool:
+    """True se o texto tem o formato de token do Expo (``PADRAO_TOKEN_EXPO``)."""
+    return bool(token) and _TOKEN_EXPO.fullmatch(token) is not None
 
 
 def montar_lotes(tokens: list[str], titulo: str, corpo: str,
@@ -130,6 +143,11 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
     Melhor esforço: erros de rede são registrados em log e engolidos;
     tokens que o Expo reportar como mortos são removidos do banco.
 
+    Token fora do formato do Expo (``token_expo_valido``) — só pode ter sido gravado
+    antes de ``/dispositivos`` validar o formato — não é aparelho: não vai ao Expo
+    (não ocupa lote nem chamada) e é apagado aqui. Antes ele ficava no banco para
+    sempre: o Expo nunca o devolve como ``DeviceNotRegistered``.
+
     Transação: a lista de destinos é lida e a transação ENCERRADA antes da chamada
     ao Expo (até 15 s por lote); os tokens mortos são apagados numa transação curta,
     depois. Antes, a leitura deixava a transação da requisição aberta durante a rede
@@ -140,6 +158,12 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
         .join(Usuario, Usuario.id == DispositivoMovel.usuario_id)
         .where(DispositivoMovel.escola_id == escola_id, Usuario.status == "ativo")
     ).all()
+    lixo = [token for token, _ in linhas if not token_expo_valido(token)]
+    linhas = [(token, usuario) for token, usuario in linhas if token_expo_valido(token)]
+    if lixo:
+        db.execute(delete(DispositivoMovel).where(DispositivoMovel.token_push.in_(lixo)))
+        logger.info("Push: %s aparelho(s) com token fora do formato do Expo removido(s) "
+                    "da escola %s", len(lixo), escola_id)
     if aluno_id is None:
         tokens = [token for token, _ in linhas]
     else:
@@ -148,13 +172,16 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
         tokens = [token for token, usuario in linhas
                   if _ve_a_crianca(db, escola_id, ano, usuario, aluno_id)]
     if not tokens:
+        if lixo:
+            db.commit()
         return 0
 
     # Fecha a transação que as leituras acima abriram (autobegin) ANTES da rede: a
     # conexão volta ao pool enquanto o Expo responde. Quem chama já comitou o próprio
-    # trabalho (``importacoes._pos_commit_importacao``), então aqui só houve leitura;
-    # é COMMIT, e não rollback, para nunca descartar algo que um chamador deixasse
-    # pendente — o mesmo que a limpeza dos tokens mortos, abaixo, já fazia.
+    # trabalho (``importacoes._pos_commit_importacao``): aqui só houve leitura e, se
+    # havia, a limpeza do lixo. É COMMIT, e não rollback, para nunca descartar algo
+    # que um chamador deixasse pendente — o mesmo que a limpeza dos tokens mortos,
+    # abaixo, já fazia.
     db.commit()
     try:
         invalidos = _enviar_lotes(montar_lotes(list(tokens), titulo, corpo, dados))

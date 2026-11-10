@@ -6,20 +6,23 @@ Decisões:
     No celular, menos round-trips = menos bateria e melhor uso de redes
     ruins; o app guarda o pacote em cache e o reexibe offline.
   * Dispositivos são upsert pelo token: o mesmo aparelho que troca de
-    conta passa a pertencer ao novo usuário/escola.
+    conta passa a pertencer ao novo usuário/escola. Só token no formato do
+    Expo, e no máximo `MAX_APARELHOS_POR_CONTA` aparelhos por conta.
 """
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
 from app.models import DispositivoMovel, Escola, Usuario
+from app.models.base import agora
 from app.routers.rankings import _ranking, montar_dashboard
 from app.services import elegibilidade, evolucao, gamificacao, insights, permissoes
+from app.services import push as svc_push
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Mobile"])
@@ -27,9 +30,31 @@ router = APIRouter(prefix="/escolas/{escola_id}", tags=["Mobile"])
 
 # --- Dispositivos (notificações push) -------------------------------------------
 
+# Teto de aparelhos por conta. Uma pessoa usa o celular e, às vezes, um tablet; o
+# app se registra a cada abertura. Sem teto, qualquer conta da escola (até um
+# professor) gravava milhares de tokens por script, e cada aviso da escola passava
+# a fazer N/100 chamadas ao Expo dentro da requisição que o disparou.
+MAX_APARELHOS_POR_CONTA = 5
+
+
 class DispositivoIn(BaseModel):
-    token_push: str = Field(min_length=10, max_length=200)
+    # O token que o app recebe de getExpoPushTokenAsync (push.PADRAO_TOKEN_EXPO).
+    token_push: str = Field(min_length=10, max_length=200,
+                            pattern=svc_push.PADRAO_TOKEN_EXPO)
     plataforma: str = Field(pattern="^(android|ios)$")
+
+
+def _aparelhos_alem_do_teto(db: Session, usuario_id: int, manter_id: int) -> list[int]:
+    """Ids dos aparelhos da conta que passam do teto, sem contar ``manter_id`` (o
+    que acabou de se registrar). Sai quem está há mais tempo sem se registrar
+    (``updated_at``; o registro renova a data), depois o de id menor."""
+    return list(db.execute(
+        select(DispositivoMovel.id)
+        .where(DispositivoMovel.usuario_id == usuario_id,
+               DispositivoMovel.id != manter_id)
+        .order_by(DispositivoMovel.updated_at.desc(), DispositivoMovel.id.desc())
+        .offset(MAX_APARELHOS_POR_CONTA - 1)
+    ).scalars().all())
 
 
 @router.post("/dispositivos")
@@ -58,11 +83,22 @@ def registrar_dispositivo(
         dispositivo.escola_id = escola_id
         dispositivo.usuario_id = usuario.id
         dispositivo.plataforma = dados.plataforma
+        # Registrar de novo = o aparelho está em uso: conta como o mais recente no
+        # teto por conta (sem isto, o updated_at só mudava se algum campo mudasse).
+        dispositivo.updated_at = agora()
         if dono_anterior != usuario.id:
             registrar(db, "dispositivo.reassociado", escola_id=escola_id,
                       usuario_id=usuario.id,
                       detalhes={"plataforma": dados.plataforma,
                                 "dono_anterior": dono_anterior})
+    db.flush()
+    excedentes = _aparelhos_alem_do_teto(db, usuario.id, dispositivo.id)
+    if excedentes:
+        db.execute(delete(DispositivoMovel).where(DispositivoMovel.id.in_(excedentes)))
+        registrar(db, "dispositivo.excedente_removido", escola_id=escola_id,
+                  usuario_id=usuario.id,
+                  detalhes={"removidos": len(excedentes),
+                            "limite": MAX_APARELHOS_POR_CONTA})
     db.commit()
     db.refresh(dispositivo)
     return {"id": dispositivo.id, "plataforma": dispositivo.plataforma}
