@@ -156,9 +156,10 @@ def intervalo(bimestre: int, ano: int = 2026) -> tuple[date, date]:
 def bimestre_da_data(dia: date) -> int | None:
     """Em qual bimestre esta data cai — ``None`` se cair FORA dos quatro.
 
-    O recesso de janeiro (01/01 a 01/02 de 2026) não pertence a bimestre nenhum,
-    e este módulo não finge que pertence: quem precisa de um número sempre usa
-    :func:`bimestre_sugerido`, que trata o recesso explicitamente.
+    O recesso (01/01 a 01/02 de 2026, ou entre dois bimestres num ano que tenha
+    folga entre eles) não pertence a bimestre nenhum, e este módulo não finge que
+    pertence: quem precisa de um número sempre usa :func:`bimestre_sugerido`, que
+    trata o recesso explicitamente.
     """
     cal = calendario(dia.year)
     if not cal:
@@ -177,9 +178,12 @@ def bimestre_sugerido(dia: date) -> int:
     escolha dele manda. Regras das bordas, explícitas para não virarem surpresa:
 
     * dentro de um bimestre → ele mesmo;
-    * recesso ANTES do início do ano letivo (janeiro) → 1º, porque o próximo
-      período a ser avaliado é o 1º — e não o 4º do ano anterior, que já foi
-      entregue;
+    * recesso → o PRÓXIMO bimestre do ano, porque é o próximo período a ser
+      avaliado. Vale para janeiro (antes do 1º → 1º, e não o 4º do ano anterior,
+      que já foi entregue) e para o recesso ENTRE dois bimestres (em julho, entre
+      o 2º e o 3º → 3º; o 2º, que acabou, é o "bimestre anterior"). É o mesmo
+      número que a tela abre marcado (``bimestreDeHoje`` na web);
+    * depois do fim do 4º (fim de dezembro) não há próximo no ano → 4º;
     * ano sem calendário cadastrado → cai no mapa por mês legado
       (:func:`por_mes_legado`), que é aproximado mas nunca levanta erro — e AVISA
       no log (uma vez por ano), para não ser silencioso. Cadastrar o calendário do
@@ -192,9 +196,9 @@ def bimestre_sugerido(dia: date) -> int:
     if not cal:
         _avisar_uma_vez(dia.year)
         return por_mes_legado(dia.month)
-    if dia < cal[1][0]:
-        return 1
-    return 4
+    # Antes, todo dia fora de um bimestre depois do início do 1º virava 4: no
+    # recesso de julho, "este bimestre" era o 4º e o "anterior", o 3º (futuro).
+    return next((numero for numero in BIMESTRES if dia < cal[numero][0]), 4)
 
 
 def por_mes_legado(mes: int) -> int:
