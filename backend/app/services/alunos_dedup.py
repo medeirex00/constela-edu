@@ -329,7 +329,14 @@ def mantem_nome_abreviado(manter: Aluno, remover: Aluno) -> bool:
     """A ficha que FICA tem nome abreviado — ou mais curto que o da que sai, sem ser
     o nome oficial da Lista Piloto? A fusão não muda nome nenhum, e a ficha que
     fica herda a marca da Lista Piloto da outra (``alunos_fusao.fundir_par``): é
-    esse nome que sai no certificado e nos relatórios."""
+    esse nome que sai no certificado e nos relatórios.
+
+    O nome OFICIAL da Lista Piloto que fica no lugar de uma ficha de fora dela nunca
+    é aviso, nem com uma inicial no meio ("ZEFA J QUARESMA LIMA", ou o "D AVILA"
+    que perdeu o apóstrofo): é a direção que a própria prévia sugere, e o aviso
+    mandaria trocar contra ela — e apagar o nome oficial."""
+    if manter.da_lista_piloto and not remover.da_lista_piloto:
+        return False
     if nome_abreviado(manter.nome):
         return True
     return not manter.da_lista_piloto and _expande(manter.nome, remover.nome)

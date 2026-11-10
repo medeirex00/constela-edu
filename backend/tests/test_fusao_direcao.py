@@ -63,6 +63,27 @@ def test_nome_oficial_mais_curto_da_lista_piloto_nao_e_aviso(cliente, db, escola
     assert p["nome"]["mantem_abreviado"] is False
 
 
+@pytest.mark.parametrize("oficial_nome, outro_nome", [
+    ("Zefa J Quaresma Lima", "Zefa Joana Quaresma Lima"),
+    ("Ana D Avila Souza", "ANA D"),          # D'Ávila que chegou sem o apóstrofo
+])
+def test_nome_oficial_com_inicial_nao_e_aviso_contra_a_propria_sugestao(
+        cliente, db, escola_completa, oficial_nome, outro_nome):
+    """A prévia sugere manter a ficha da Lista Piloto; o aviso "nome abreviado,
+    clique em trocar" não pode mandar o contrário e apagar o nome oficial."""
+    esc, t = escola_completa["escola"], escola_completa["turma"]
+    oficial = aluno(db, esc.id, t, oficial_nome, da_lista_piloto=True)
+    outro = aluno(db, esc.id, t, outro_nome)
+    db.commit()
+    p = _previa(cliente, esc.id, oficial.id, outro.id)
+    assert p["sugestao"]["manter_id"] == oficial.id
+    assert p["nome"]["mantem_abreviado"] is False
+    # Aberta pelo outro lado (a direção contrária à sugestão), o aviso continua
+    # quando o nome que ficaria é o abreviado.
+    if nome_abreviado(outro_nome):
+        assert _previa(cliente, esc.id, outro.id, oficial.id)["nome"]["mantem_abreviado"] is True
+
+
 def test_mesma_regra_do_lote(cliente, db, escola_completa):
     """O par que o lote oferece tem o mesmo principal que a fusão manual sugere."""
     esc, t = escola_completa["escola"], escola_completa["turma"]
