@@ -165,7 +165,7 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
           <Erro titulo="Não foi possível carregar" descricao={erro.message} aoTentar={recarregar} />
         ) : lista.length === 0 ? (
           <Vazio icone={BookOpen} titulo="Nenhuma leitura no período"
-                 descricao="Sincronize o Elefante Letrado (ou importe o relatório) e use “Todo o histórico” para ver o total acumulado por aluno." />
+                 descricao="Sincronize o Elefante Letrado (ou importe o relatório), ou escolha um período maior, como “Ano letivo”, para ver a leitura do ano inteiro." />
         ) : (
           <>
             <FaixaPodio itens={podio} rotulo="Pódio da leitura no período" />
