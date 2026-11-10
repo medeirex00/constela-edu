@@ -29,6 +29,7 @@ da própria escola (que não leem a rede), a decisão tomada só dentro da escol
 
 Os critérios e as fórmulas estão em ``docs/analise/METODOLOGIA.md``.
 """
+from dataclasses import dataclass
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -57,6 +58,15 @@ def _executar(funcao, *args, **kwargs):
         return funcao(*args, **kwargs)
     except AnaliseInvalida as exc:
         raise HTTPException(exc.status, str(exc)) from exc
+
+
+@dataclass(frozen=True)
+class _RedeConferida:
+    """A rede das rotas que MEDEM as plataformas, já conferida por ``exigir_rede`` (existe e
+    a conta pode lê-la). As medições (``plataformas_da_rede`` e ``evolucao``) usam só o ``id``
+    dela: reler a linha da rede seria uma ida ao banco (~195 ms em produção) sem uso. Qualquer
+    outro atributo dá erro — de propósito, para nenhuma medição passar a ler um campo vazio."""
+    id: int
 
 
 @router.get("/{rede_id}/analise/indicadores")
@@ -102,7 +112,7 @@ def plataformas(
     db: Session = Depends(get_db),
 ):
     """Elefante e Matific por escola × série no período (padrão: o ano letivo)."""
-    return _executar(svc_plataformas.plataformas_da_rede, db, db.get(Rede, rede_id),
+    return _executar(svc_plataformas.plataformas_da_rede, db, _RedeConferida(rede_id),
                      preset=periodo, inicio=inicio, fim=fim, serie=serie,
                      escola_id=escola_id, hoje=hoje_br())
 
@@ -120,7 +130,7 @@ def evolucao_plataformas(
     escolas, em ordem de nome) — cada bimestre é o período da rota de plataformas. Com
     ``so_escola`` (a ficha da escola, pede ``escola_id``): só a escola é medida e o bloco da
     rede sai nulo."""
-    return _executar(svc_evolucao.evolucao, db, db.get(Rede, rede_id), serie=serie,
+    return _executar(svc_evolucao.evolucao, db, _RedeConferida(rede_id), serie=serie,
                      escola_id=escola_id, so_escola=so_escola, hoje=hoje_br())
 
 

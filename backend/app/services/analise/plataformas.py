@@ -67,13 +67,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import (String, and_, case, cast, extract, func, literal_column,
-                        null, or_, select, union_all)
+from sqlalchemy import (DateTime, Integer, String, and_, case, cast, extract, func,
+                        literal_column, null, or_, select, union_all)
 from sqlalchemy.orm import Session
 
 from app.core.tempo import FUSO_BR, para_br
 from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Livro, Matricula,
-                        Rede, SnapshotElefante, SnapshotMatific, Turma)
+                        ModuloRede, Rede, SnapshotElefante, SnapshotMatific, Turma)
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import matific_destaque
 from app.services import modulos as svc_modulos
@@ -313,66 +313,110 @@ class _Medida:
 # uma escola sozinha: as funções de janela particionam por (escola, aluno) e o recorte da
 # coorte é conferido escola a escola (a leitura de um aluno numa escola só conta para ela).
 
-def _coortes(db: Session, escolas: list[Escola]
-             ) -> tuple[dict[int, _Contagem], dict[int, dict[int, dict]]]:
-    """A contagem por série que decide a supressão e a coorte de cada escola — UMA consulta
-    para todas. É a população de ``relatorios_periodo._coorte`` (aluno ATIVO matriculado no
-    ano letivo ATIVO da escola; uma matrícula por aluno no ano, ``uq_matricula_aluno_ano``)
-    e não depende do período: a supressão é decidida só com ela. Da coorte fica só o que as
-    somas usam (turma e ano escolar); o nome do aluno nem é lido."""
-    contagens = {e.id: _Contagem(escola=e) for e in escolas}
-    coortes: dict[int, dict[int, dict]] = {e.id: {} for e in escolas}
-    if not escolas:
-        return contagens, coortes
-    linhas = db.execute(
-        select(Aluno.escola_id, Aluno.id, Turma.id, Turma.ano_escolar)
-        .join(Matricula, Matricula.aluno_id == Aluno.id)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Escola, Escola.id == Aluno.escola_id)
-        .where(Aluno.escola_id.in_(list(contagens)), Aluno.status == "ativo",
-               Matricula.ano_letivo == Escola.ano_letivo_ativo)).all()
-    for escola_id, aluno_id, turma_id, ano_escolar in linhas:
-        c = contagens[escola_id]
-        serie = ano_premiavel(ano_escolar)
-        if serie is None:
-            c.fora += 1
-        else:
-            c.series[serie] = c.series.get(serie, 0) + 1
-        coortes[escola_id][aluno_id] = {"turma_id": turma_id, "ano_escolar": ano_escolar}
-    for c in contagens.values():
-        c.series = dict(sorted(c.series.items()))
-    return contagens, coortes
+# As colunas da união de ``_coortes_e_coletas``: (fonte, escola, aluno, turma, ano escolar,
+# primeira data, última data); cada parte preenche as suas e manda NULL tipado nas outras.
+_SEM_INTEIRO, _SEM_TEXTO, _SEM_DATA = cast(null(), Integer), cast(null(), String), cast(null(), DateTime)
 
 
-def _coletas_e_primeiros(db: Session, ids: list[int], com_primeiro_evento: bool
-                         ) -> tuple[dict[str, dict[int, tuple]], dict[int, datetime]]:
+def _parte_coorte(ids: list[int]):
+    """A coorte de cada escola (a população de ``relatorios_periodo._coorte``: aluno ATIVO
+    matriculado no ano letivo ATIVO da escola; uma matrícula por aluno no ano,
+    ``uq_matricula_aluno_ano``). Da coorte fica só o que as somas usam (turma e ano escolar);
+    o nome do aluno nem é lido."""
+    return (select(literal_column("'coorte'").label("fonte"), Aluno.escola_id.label("escola_id"),
+                   Aluno.id.label("aluno_id"), Turma.id.label("turma_id"),
+                   Turma.ano_escolar.label("ano_escolar"), _SEM_DATA.label("ini"),
+                   _SEM_DATA.label("fim"))
+            .join(Matricula, Matricula.aluno_id == Aluno.id)
+            .join(Turma, Matricula.turma_id == Turma.id)
+            .join(Escola, Escola.id == Aluno.escola_id)
+            .where(Aluno.escola_id.in_(ids), Aluno.status == "ativo",
+                   Matricula.ano_letivo == Escola.ano_letivo_ativo))
+
+
+def _partes_coletas(ids: list[int], com_primeiro_evento: bool) -> list:
     """A primeira e a última coleta de cada plataforma por escola e, para a cobertura da
     rede, o evento do Elefante mais antigo de cada escola (o piso do histórico consultável,
-    ``relatorios_periodo._primeiro_evento``) — UMA consulta (os ``GROUP BY`` em ``UNION
-    ALL``)."""
-    coletas: dict[str, dict[int, tuple]] = {"elefante": {}, "matific": {}}
-    primeiros: dict[int, datetime] = {}
-    if not ids:
-        return coletas, primeiros
+    ``relatorios_periodo._primeiro_evento``): um ``GROUP BY`` por fonte."""
+    def _coluna_vazia():
+        return (_SEM_INTEIRO.label("aluno_id"), _SEM_INTEIRO.label("turma_id"),
+                _SEM_TEXTO.label("ano_escolar"))
     partes = [select(literal_column(f"'{p}'").label("fonte"), m.escola_id.label("escola_id"),
-                     func.min(m.data_referencia).label("ini"),
+                     *_coluna_vazia(), func.min(m.data_referencia).label("ini"),
                      func.max(m.data_referencia).label("fim"))
               .where(m.escola_id.in_(ids)).group_by(m.escola_id)
               for p, m in (("elefante", SnapshotElefante), ("matific", SnapshotMatific))]
     if com_primeiro_evento:
         primeiro = func.min(EventoAluno.ocorrido_em)
         partes.append(select(literal_column("'evento'").label("fonte"),
-                             EventoAluno.escola_id.label("escola_id"), primeiro.label("ini"),
-                             primeiro.label("fim"))
+                             EventoAluno.escola_id.label("escola_id"), *_coluna_vazia(),
+                             primeiro.label("ini"), primeiro.label("fim"))
                       .where(EventoAluno.escola_id.in_(ids), EventoAluno.plataforma == "elefante")
                       .group_by(EventoAluno.escola_id))
-    for fonte, escola_id, ini, fim in db.execute(union_all(*partes)).all():
-        if fonte == "evento":
+    return partes
+
+
+def _coortes_e_coletas(db: Session, escolas: list[Escola], ids_coletas: list[int],
+                       com_primeiro_evento: bool
+                       ) -> tuple[dict[int, _Contagem], dict[int, dict[int, dict]],
+                                  dict[str, dict[int, tuple]], dict[int, datetime]]:
+    """A contagem por série que decide a supressão e a coorte de cada escola de ``escolas``,
+    e as coletas (e o primeiro evento) das escolas ``ids_coletas`` — UMA consulta para tudo
+    (``UNION ALL``). A coorte não depende do período: a supressão é decidida só com ela.
+    As coletas saem para todas as escolas pedidas; quem chama fica só com as visíveis depois
+    da decisão (o resultado é o de ler só as visíveis)."""
+    contagens = {e.id: _Contagem(escola=e) for e in escolas}
+    coortes: dict[int, dict[int, dict]] = {e.id: {} for e in escolas}
+    coletas: dict[str, dict[int, tuple]] = {"elefante": {}, "matific": {}}
+    primeiros: dict[int, datetime] = {}
+    partes = ([_parte_coorte(list(contagens))] if escolas else []) + (
+        _partes_coletas(ids_coletas, com_primeiro_evento) if ids_coletas else [])
+    if not partes:
+        return contagens, coortes, coletas, primeiros
+    consulta = partes[0] if len(partes) == 1 else union_all(*partes)
+    for fonte, escola_id, aluno_id, turma_id, ano_escolar, ini, fim in db.execute(consulta).all():
+        if fonte == "coorte":
+            c = contagens[escola_id]
+            serie = ano_premiavel(ano_escolar)
+            if serie is None:
+                c.fora += 1
+            else:
+                c.series[serie] = c.series.get(serie, 0) + 1
+            coortes[escola_id][aluno_id] = {"turma_id": turma_id, "ano_escolar": ano_escolar}
+        elif fonte == "evento":
             if ini is not None:
                 primeiros[escola_id] = ini
         else:
             coletas[fonte][escola_id] = (ini, fim)
-    return coletas, primeiros
+    for c in contagens.values():
+        c.series = dict(sorted(c.series.items()))
+    return contagens, coortes, coletas, primeiros
+
+
+def _coortes(db: Session, escolas: list[Escola]
+             ) -> tuple[dict[int, _Contagem], dict[int, dict[int, dict]]]:
+    """Só a contagem por série e a coorte de cada escola (``_coortes_e_coletas`` sem as
+    coletas) — UMA consulta para todas."""
+    contagens, coortes, _, _ = _coortes_e_coletas(db, escolas, [], False)
+    return contagens, coortes
+
+
+def escolas_e_modulos(db: Session, rede_id: int) -> tuple[list[Escola], set[str]]:
+    """As escolas da rede (em ordem de nome, as de ``indicadores.escolas_da_rede``) e os
+    módulos contratados (os de ``modulos.modulos_da_rede``) — UMA consulta: cada escola com os
+    módulos DESLIGADOS da rede ao lado (a tabela é esparsa: só a linha ``ativo=False`` tira um
+    módulo da lista). A rede sem escola nenhuma lê os módulos à parte."""
+    linhas = db.execute(
+        select(Escola, ModuloRede.modulo)
+        .outerjoin(ModuloRede, and_(ModuloRede.rede_id == Escola.rede_id,
+                                    ModuloRede.ativo.is_(False)))
+        .where(Escola.rede_id == rede_id)).all()
+    if not linhas:
+        return [], svc_modulos.modulos_da_rede(db, rede_id)
+    escolas = {e.id: e for e, _ in linhas}
+    desligados = {m for _, m in linhas if m is not None}
+    return (sorted(escolas.values(), key=lambda e: ordem_nome(e.nome, e.id)),
+            {chave for chave in svc_modulos.TODOS if chave not in desligados})
 
 
 def _elefante_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]],
@@ -1257,11 +1301,17 @@ def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
     períodos (ver "Leituras do banco")."""
     for p in periodos:
         validar_anos(inicio=p.inicio, fim=p.fim)
-    contagens, coortes = _coortes(db, escolas_da_decisao)
+    # A coorte de todas e as coletas das que serão medidas numa consulta só; das coletas, só
+    # as das escolas que a supressão deixou visíveis contam (como se só elas fossem lidas).
+    contagens, coortes, col_todas, primeiros_todos = _coortes_e_coletas(
+        db, escolas_da_decisao, [e.id for e in medir], com_primeiro_evento)
     ordenadas, decisoes = decidir_supressao(list(contagens.values()), k)
     alvo = [e for e in medir if not decisoes[e.id]["escola"]["suprimido"]]
     ids = [e.id for e in alvo]
-    col, primeiros = _coletas_e_primeiros(db, ids, com_primeiro_evento)
+    visiveis = set(ids)
+    col = {p: {i: v for i, v in por_escola.items() if i in visiveis}
+           for p, por_escola in col_todas.items()}
+    primeiros = {i: v for i, v in primeiros_todos.items() if i in visiveis}
     janelas: dict[tuple[int, int], rp.Janela] = {}
     preparos = []
     for g, p in enumerate(periodos):
@@ -1411,7 +1461,9 @@ def plataformas_da_rede_por_periodo(db: Session, rede: Rede, periodos: list[Peri
     dela são os mesmos da rota da rede. A rede não é medida: ``rede`` e ``cobertura`` saem
     nulos. ``escolas`` e ``mods``: os da rede, quando quem chama já os leu."""
     _validar_serie(serie)
-    if escolas is None:
+    if escolas is None and mods is None:
+        escolas, mods = escolas_e_modulos(db, rede.id)
+    elif escolas is None:
         escolas = escolas_da_rede(db, rede)
     if escola_id is not None and escola_id not in {e.id for e in escolas}:
         raise AnaliseInvalida("Escola não encontrada nesta rede.", 404)

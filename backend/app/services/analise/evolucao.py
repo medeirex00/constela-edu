@@ -34,11 +34,10 @@ from sqlalchemy.orm import Session
 
 from app.models import Rede
 from app.services import bimestres
-from app.services import modulos as svc_modulos
 from app.services import relatorios_periodo as rp
 from app.services.analise import K_MINIMO, AnaliseInvalida
 from app.services.analise import plataformas as plat_svc
-from app.services.analise.indicadores import ano_letivo_de_referencia, escolas_da_rede
+from app.services.analise.indicadores import ano_letivo_de_referencia
 
 CAMPOS_REDE = {"elefante": ("participacao_pct", "livros_por_aluno", "minutos_por_aluno"),
                "matific": ("participacao_pct", "atividades_por_aluno")}
@@ -113,13 +112,14 @@ def evolucao(db: Session, rede: Rede, *, serie: int | None = None,
              so_escola: bool = False) -> dict:
     # Os filtros são validados ANTES (também quando nenhum bimestre começou ainda).
     plat_svc._validar_serie(serie)
-    escolas = escolas_da_rede(db, rede)
+    # As escolas e os módulos da rede numa consulta só (os mesmos de escolas_da_rede e
+    # modulos_da_rede).
+    escolas, contratados = plat_svc.escolas_e_modulos(db, rede.id)
     if escola_id is not None and escola_id not in {e.id for e in escolas}:
         raise AnaliseInvalida("Escola não encontrada nesta rede.", 404)
     if so_escola and escola_id is None:
         raise AnaliseInvalida("Para medir só a escola, informe a escola (escola_id).", 422)
     ano = ano_letivo_de_referencia(escolas) or hoje.year
-    contratados = svc_modulos.modulos_da_rede(db, rede.id)
     modulos = {p: m in contratados for p, m in plat_svc.PLATAFORMA_MODULO.items()}
     pedidos = []
     for numero in bimestres.BIMESTRES:

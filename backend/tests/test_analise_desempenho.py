@@ -34,10 +34,11 @@ from tests.test_analise_base import (HOJE, _importacao, ler, livros, nova_escola
                                      turma_com_alunos)
 
 SERIES = ("1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano")
-# Consultas da rota da rede inteira, para QUALQUER número de escolas e de bimestres: escolas,
-# módulos, coorte, coletas, Elefante (livros, tempo, eventos e nível), questões e Matific = 7,
-# mais 1 aqui: a recarga da rede, que o ``commit`` do próprio teste expira (``rede.id``).
-CONSULTAS_DA_ROTA = 8
+# Consultas da rota da rede inteira, para QUALQUER número de escolas e de bimestres: escolas
+# com os módulos, coorte com as coletas, Elefante (livros, tempo, eventos e nível), questões e
+# Matific = 5 (eram 7: escolas e módulos, coorte e coletas iam separados), mais 1 aqui: a
+# recarga da rede, que o ``commit`` do próprio teste expira (``rede.id``).
+CONSULTAS_DA_ROTA = 6
 
 
 class _Contador:
@@ -193,3 +194,41 @@ def test_evolucao_le_os_bimestres_juntos(db):
         assert da_escola == next(e for e in b_rede["escolas"] if e["id"] == alvo)
     with pytest.raises(AnaliseInvalida):                   # só a escola pede a escola
         svc_evolucao.evolucao(db, rede_b, so_escola=True, hoje=fim_do_ano)
+
+
+def test_rotas_de_medicao_da_secretaria_nao_releem_a_rede(db):
+    """A rota das plataformas e a da evolução (as da Secretaria no Panorama, na lista e na
+    ficha) não leem a linha da rede: ``exigir_rede`` já a conferiu e as medições usam só o
+    id. A conta: o usuário e as 5 consultas da medição."""
+    from fastapi.testclient import TestClient
+
+    from app.core.security import hash_senha
+    from app.main import app
+    from app.models import Usuario
+
+    rede, escolas = _rede(db, com=2, sem=1, sufixo="61")
+    db.add(Usuario(nome="Sec Medição", email="sec@medicao.local", senha_hash=hash_senha("s3nh4m"),
+                   cargo="coordenador", rede_id=rede.id))
+    db.commit()
+    rid, alvo = rede.id, escolas[0].id
+    c = TestClient(app)
+    r = c.post("/api/v1/auth/login", data={"username": "sec@medicao.local", "password": "s3nh4m"})
+    c.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+    sqls: list[str] = []
+
+    def _anota(_c, _cur, sql, *_a):
+        sqls.append(" ".join(sql.lower().replace('"', " ").split()))
+
+    motor = db.get_bind()
+    for url in (f"/api/v1/redes/{rid}/analise/plataformas",
+                f"/api/v1/redes/{rid}/analise/plataformas/evolucao",
+                f"/api/v1/redes/{rid}/analise/plataformas/evolucao?escola_id={alvo}&so_escola=true"):
+        sqls.clear()
+        event.listen(motor, "before_cursor_execute", _anota)
+        try:
+            resposta = c.get(url)
+        finally:
+            event.remove(motor, "before_cursor_execute", _anota)
+        assert resposta.status_code == 200, (url, resposta.text[:300])
+        assert not [s for s in sqls if " from redes" in s], url
+        assert len(sqls) == 1 + CONSULTAS_DA_ROTA - 1, (url, len(sqls))

@@ -45,6 +45,7 @@ def sem_medir(monkeypatch):
     def proibido(*_a, **_k):
         raise AssertionError("mediu a rede antes de validar a entrada")
     monkeypatch.setattr(svc_plat, "_coortes", proibido)
+    monkeypatch.setattr(svc_plat, "_coortes_e_coletas", proibido)   # a da rota (com as coletas)
     monkeypatch.setattr(svc_plat, "_medir_escola", proibido)
     monkeypatch.setattr(svc_plat, "celulas_da_rede", proibido)
 
