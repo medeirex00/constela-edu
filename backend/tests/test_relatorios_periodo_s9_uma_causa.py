@@ -26,6 +26,7 @@ from datetime import date, datetime
 from app.models import Importacao, SnapshotElefante
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import relatorios_periodo as rp
+from app.services import relatorios_periodo_pdf as pdf
 from tests.sync_integridade_comum import aluno
 
 HOJE_OUT = date(2026, 10, 6)
@@ -137,3 +138,42 @@ def test_coleta_sem_questoes_na_mesma_borda_de_uma_valida_nao_e_motivo(db, escol
     assert (ele["questoes_tentativas"], ele["questoes_acertos"]) == (50, 40)
     cob = ele["cobertura_questoes"]
     assert cob["status"] == "completa" and cob["alunos_questoes_nao_vieram"] == 0
+
+
+def test_coleta_sem_questoes_so_antes_do_periodo_nao_e_motivo(db, escola_completa):
+    """Revisão final (a sonda F): a ÚNICA coleta sem as questões é de 15/08, antes do
+    período, e a única do período (20/09) TROUXE as questões. Sem a de 15/08 não há
+    diferença a medir — mas quem veio sem as questões foi a base, de antes do
+    período, não "uma coleta no período". Antes o aviso dizia "1 estudante(s) com
+    coleta no período em que a plataforma não mandou as questões… a conta deles vai
+    só até a coleta anterior"; agora ele é "uma única coleta no período"."""
+    eid = escola_completa["escola"].id
+    a = escola_completa["alunos"][0].id
+    _retrato(db, eid, a, _noite(15, 8), 40, 30, sem_questoes=True)
+    _retrato(db, eid, a, _noite(20), 55, 40)                 # a única do período, COM questões
+    db.commit()
+
+    cob = _setembro(db, eid)["cobertura_questoes"]
+    motivos = " | ".join(
+        pdf._avisos_cobertura({"elefante": {"cobertura_questoes": cob}})[0]["motivos"])
+
+    assert cob["alunos_questoes_nao_vieram"] == 0, cob
+    assert cob["status"] == "sem_intervalo" and cob["alunos_sem_intervalo"] == 1, cob
+    assert "com coleta no período em que a plataforma não mandou" not in motivos, motivos
+    assert "uma única coleta no período" in motivos, motivos
+
+
+def test_coleta_sem_questoes_dentro_do_periodo_continua_motivo(db, escola_completa):
+    """Controle da sonda F: a coleta sem as questões é DENTRO do período (05/09), e a
+    válida (20/09) é a única outra. Sem a de 05/09 não há diferença a medir: aí sim
+    "coleta no período em que a plataforma não mandou as questões"."""
+    eid = escola_completa["escola"].id
+    a = escola_completa["alunos"][0].id
+    _retrato(db, eid, a, _noite(5), 40, 30, sem_questoes=True)
+    _retrato(db, eid, a, _noite(20), 55, 40)
+    db.commit()
+
+    cob = _setembro(db, eid)["cobertura_questoes"]
+
+    assert cob["alunos_questoes_nao_vieram"] == 1, cob
+    assert cob["alunos_sem_intervalo"] == 0, cob

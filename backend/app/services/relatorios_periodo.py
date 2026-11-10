@@ -881,6 +881,16 @@ def _intervalo_matific(janela: Janela, ini_ano: datetime, ganho) -> dict | None:
             "antecedencia": None}
 
 
+def _do_periodo_em_diante(retratos: list, janela: Janela) -> list:
+    """Os retratos que não são de ANTES do período: a partir do início pedido menos
+    ``TOLERANCIA_BORDA`` (a coleta que mede o início entra), na régua de
+    ``_diferenca_de_retratos`` (Brasília)."""
+    if janela.inicio is None:
+        return retratos
+    limite = janela.inicio - TOLERANCIA_BORDA
+    return [s for s in retratos if _br(_sem_tz(s.data_referencia)) >= limite]
+
+
 def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
                        janela: Janela, bloco: BlocoElefante,
                        por_aluno: dict[int, dict], hoje: date | None = None) -> None:
@@ -923,6 +933,10 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
         # uma mais recente no período. A que mudaria só o INÍCIO, ou um fim já medido
         # por outra coleta, não é motivo: a borda do início (ampliada, sem coleta no
         # início) é que explica o número, como para qualquer aluno.
+        # Nem a coleta sem questões de ANTES do período (fora da tolerância do
+        # início): ela só seria a base, e o aviso fala de "coleta no período". Sem
+        # outra base, o aluno é "uma única coleta no período" (revisão final).
+        excluidos = _do_periodo_em_diante(excluidos, janela)
         com = (_diferenca_de_retratos(serie + excluidos, janela, campos, hoje=hoje)
                if excluidos else None)
         afetado = com is not None and _bordas(ganho) != _bordas(com) and (
