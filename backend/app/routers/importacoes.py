@@ -4388,12 +4388,22 @@ def resolver_revisao(
     importacoes: list[int] = []
     for r in com_dados:
         conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
+        # S9: a linha guardada veio de uma coleta em que a plataforma NÃO mandou as
+        # questões (a importação de origem está marcada). Reaplicada sem a marca, o
+        # retrato nascia numa importação "concluida" e virava borda das Questões do
+        # período ("0 no período", ou o contador vitalício na coleta seguinte, com
+        # cobertura "completa"). Herda a marca e a regra de não repetir retrato — as
+        # mesmas que a sincronização aplicou às linhas que entraram direto.
+        origem = db.get(Importacao, r.importacao_id) if r.importacao_id else None
+        sem_questoes = origem is not None and origem.status == IMPORTACAO_SEM_QUESTOES
         # encerrar_revisoes=False: estas pendências são fechadas logo abaixo, pelo
         # gestor — não como "encerradas automaticamente".
         # piso_da_data=False: a data é a da importação original (registro do servidor).
         nucleo = _confirmar_sem_commit(dados=conf, escola_id=escola_id,
                                        usuario=usuario, db=db, encerrar_revisoes=False,
-                                       piso_da_data=False)
+                                       piso_da_data=False,
+                                       sem_retrato_repetido=sem_questoes,
+                                       questoes_herdadas=sem_questoes)
         importacoes.append(nucleo.importacao_id)
         avisos.extend(nucleo.avisos)
 
