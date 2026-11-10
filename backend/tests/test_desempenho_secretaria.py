@@ -6,7 +6,12 @@
 * a análise da escola só com as avaliações (``com_plataformas=False``, a ficha e a comparação
   da Secretaria) é a análise completa sem o bloco das plataformas;
 * as leituras repetidas dos indicadores oficiais saem do banco uma vez dentro de
-  ``leituras_da_requisicao`` e são as mesmas da consulta direta; fora dele, nada muda.
+  ``leituras_da_requisicao`` e são as mesmas da consulta direta; fora dele, nada muda;
+* dentro dele, também as linhas de ``indicadores_referencia`` (6 consultas viraram 1) e os
+  ``resultados_avaliacao`` sem turma (3 viraram 1): o catálogo da rede e a análise só das
+  avaliações caem para tetos menores, os mesmos para qualquer número de escolas, com a MESMA
+  resposta da consulta direta;
+* ``exigir_rede`` não lê a rede da própria Secretaria.
 
 Dados INVENTADOS (``test_analise_base``; decisão D13).
 """
@@ -96,6 +101,96 @@ def test_leituras_da_requisicao_sao_as_da_consulta_direta(db):
         leituras.avaliacao(db, "saresp")
         leituras.avaliacao(db, "saresp")
     assert c.n == 2
+
+
+def _sem_ids_de_objeto(valor):
+    """A resposta comparável (as funções devolvem dicts e listas; nada de objeto ORM)."""
+    import json
+    return json.loads(json.dumps(valor, sort_keys=True, default=str))
+
+
+def test_indicadores_dentro_da_leitura_unica_sao_os_da_consulta_direta(db):
+    """ICA, SARESP, Ideb da rede, o catálogo, cada indicador (série e escolas) e a análise de
+    cada escola: dentro de ``leituras_da_requisicao`` (as referências e os resultados lidos
+    uma vez, filtrados em Python) a MESMA resposta da consulta direta, campo a campo."""
+    from app.services.analise import indicadores as svc_ind
+    from app.services.indicadores import consulta, consulta_ideb, consulta_saresp
+
+    base = mundo_plataformas(db)
+    nova_escola(db, base["rede"], "EMEF Fictícia Sem Inep", None)
+    db.commit()
+    rede = base["rede"]
+    chamadas = [lambda: consulta.ica_da_rede(db, rede),
+                lambda: consulta_saresp.saresp_da_rede(db, rede),
+                lambda: consulta_ideb.ideb_da_rede(db, rede),
+                lambda: svc_ind.catalogo(db, rede)]
+    chamadas += [lambda ch=ch, v=v: svc_ind.detalhe(db, rede, ch, visao=v)
+                 for ch in svc_ind.ORDEM for v in ("serie", "escolas")]
+    chamadas += [lambda e=e: svc_escola.analise_da_escola(db, e, hoje=HOJE, com_plataformas=False)
+                 for e in base["escolas"].values()]
+    for i, chamada in enumerate(chamadas):
+        db.expire_all()
+        try:
+            direto = _sem_ids_de_objeto(chamada())
+        except Exception as erro:                   # o mesmo erro nos dois caminhos
+            direto = ("erro", type(erro).__name__, str(erro))
+        db.expire_all()
+        with leituras.leituras_da_requisicao(db):
+            try:
+                lote = _sem_ids_de_objeto(chamada())
+            except Exception as erro:
+                lote = ("erro", type(erro).__name__, str(erro))
+        assert lote == direto, i
+
+
+def test_catalogo_e_analise_so_das_avaliacoes_em_poucas_consultas(db):
+    """Os tetos (antes: o catálogo em 17 consultas e a análise só das avaliações em 15, nesta
+    rede), os mesmos com mais escolas."""
+    from app.models import Rede
+    from app.services.analise import indicadores as svc_ind
+
+    base = mundo_plataformas(db)
+    rid = base["rede"].id
+    alfa_id = base["escolas"]["alfa"].id
+
+    def contar():
+        def catalogo():
+            with leituras.leituras_da_requisicao(db):
+                svc_ind.catalogo(db, db.get(Rede, rid))
+        n_catalogo = _consultas(db, catalogo)
+        from app.models import Escola
+        n_escola = _consultas(db, lambda: svc_escola.analise_da_escola(
+            db, db.get(Escola, alfa_id), hoje=HOJE, com_plataformas=False))
+        return n_catalogo, n_escola
+
+    antes = contar()
+    for i in range(5):
+        nova_escola(db, base["rede"], f"EMEF Fictícia Mais {i}", f"359903{10 + i}")
+    db.commit()
+    depois = contar()
+    print(f"\ncatálogo e análise só das avaliações: {antes} -> com mais 5 escolas {depois}")
+    assert antes == depois
+    n_catalogo, n_escola = depois
+    # a rede, as escolas, o catálogo das avaliações, as referências, as importações do
+    # município, os resultados e as estimativas (o catálogo); a escola e a rede (a análise)
+    assert n_catalogo <= 7
+    assert n_escola <= 7
+
+
+def test_leituras_em_lote_so_dentro_do_bloco_e_as_avaliacoes_por_escola_sao_as_das_consultas():
+    import pytest
+
+    from app.services.indicadores import ideb, seduc
+    assert leituras.AVALIACOES_POR_ESCOLA == (seduc.AVALIACAO_SARESP, ideb.AVALIACAO_IDEB,
+                                              ideb.AVALIACAO_SAEB)
+    from sqlalchemy.orm import Session
+    sessao = Session()
+    with pytest.raises(RuntimeError):
+        leituras.referencias(sessao, "3599901")
+    with pytest.raises(RuntimeError):
+        leituras.resultados_sem_turma(sessao, {1}, 1)
+    assert leituras.ativa(sessao) is False
+    sessao.close()
 
 
 def test_rede_muito_grande_le_os_ramos_um_a_um_com_o_mesmo_resultado(db, monkeypatch):

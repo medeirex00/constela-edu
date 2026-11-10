@@ -44,6 +44,7 @@ from app.services.analise import K_MINIMO, N_MINIMO, AnaliseInvalida
 from app.services.avaliacoes import CATALOGO, _EXIBICAO, nome_exibicao, normalizar_inep
 from app.services.indicadores import (consulta, consulta_ideb, consulta_ideb_rede,
                                       consulta_saresp, seduc)
+from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.pipeline import codigo_ibge_da_rede
 
 PRINCIPAL, REFERENCIA, CONTEXTO = "principal", "referencia", "contexto"
@@ -857,7 +858,10 @@ def estimativas(db: Session, rede: Rede) -> list[dict]:
     calculadas pelo Constela): só a lista — o nome deixa claro que não é o indicador
     oficial, e nenhuma delas entra numa série oficial nem na relação. O Ideb e o Saeb sem
     registro do arquivo NÃO estão aqui (``sem_registro_oficial``)."""
-    ids = [eid for (eid,) in db.execute(select(Escola.id).where(Escola.rede_id == rede.id))]
+    if leituras.ativa(db):                       # as escolas já lidas nesta requisição
+        ids = [e.id for e in leituras.escolas_da_rede(db, rede.id)]
+    else:
+        ids = [eid for (eid,) in db.execute(select(Escola.id).where(Escola.rede_id == rede.id))]
     if not ids:
         return []
     chaves = sorted(set(_EXIBICAO) | {"saresp"})
@@ -916,8 +920,11 @@ def sem_registro_oficial(L: Leituras) -> list[dict]:
 
 
 def escolas_da_rede(db: Session, rede: Rede) -> list[Escola]:
-    return sorted(db.execute(select(Escola).where(Escola.rede_id == rede.id)).scalars(),
-                  key=lambda e: ordem_nome(e.nome, e.id))
+    # Dentro de ``leituras_da_requisicao`` (o catálogo, um indicador, a análise da escola), as
+    # escolas que o SARESP e o Ideb também leem: uma leitura só na requisição.
+    lidas = (leituras.escolas_da_rede(db, rede.id) if leituras.ativa(db)
+             else db.execute(select(Escola).where(Escola.rede_id == rede.id)).scalars())
+    return sorted(lidas, key=lambda e: ordem_nome(e.nome, e.id))
 
 
 def resumo_escola(e: Escola) -> dict:

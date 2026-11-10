@@ -192,18 +192,28 @@ def ica_da_rede(db: Session, rede: Rede) -> dict:
         # Só a MESMA rede de ensino em cada nível: municipal no município, pública
         # na UF e no Brasil — e a UF nas redes municipais, à parte e rotulada
         # (comparar redes diferentes exigiria rótulo explícito).
-        linhas = [ln for ln in db.execute(select(IndicadorReferencia).where(
-            IndicadorReferencia.avaliacao_id == av.id,
-            IndicadorReferencia.codigo_territorio.in_(set(codigos.values())),
-            IndicadorReferencia.codigo_inep == "",
-            IndicadorReferencia.localizacao == "total")).scalars()
-            if (ln.abrangencia, ln.codigo_territorio, ln.rede_ensino) in {
-                ("municipio", codigos["municipio"], "municipal"),
-                ("uf", codigos["uf"], "publica"),
-                ("uf", codigos["uf"], "municipal"),
-                ("brasil", codigos["brasil"], "publica")}]
+        if leituras.ativa(db):
+            # O mesmo filtro, sobre as linhas lidas uma vez na requisição (com os INEPs da
+            # rede: o SARESP e o Ideb da escola usam as de escola da mesma leitura).
+            territorios = set(codigos.values())
+            candidatas = [ln for ln in leituras.referencias(
+                db, codigo, leituras.ineps_da_rede(db, rede.id))
+                if ln.avaliacao_id == av.id and ln.codigo_territorio in territorios
+                and ln.codigo_inep == "" and ln.localizacao == "total"]
+        else:
+            candidatas = db.execute(select(IndicadorReferencia).where(
+                IndicadorReferencia.avaliacao_id == av.id,
+                IndicadorReferencia.codigo_territorio.in_(set(codigos.values())),
+                IndicadorReferencia.codigo_inep == "",
+                IndicadorReferencia.localizacao == "total")).scalars()
+        linhas = [ln for ln in candidatas
+                  if (ln.abrangencia, ln.codigo_territorio, ln.rede_ensino) in {
+                      ("municipio", codigos["municipio"], "municipal"),
+                      ("uf", codigos["uf"], "publica"),
+                      ("uf", codigos["uf"], "municipal"),
+                      ("brasil", codigos["brasil"], "publica")}]
     ids = {i for ln in linhas for i in (ln.importacao_id, ln.detalhe_importacao_id) if i}
-    imps = leituras.importacoes_por_id(db, ids)
+    imps = leituras.importacoes_por_id(db, ids, codigo=codigo)
     nomes = {}
     for imp in sorted(imps.values(), key=lambda i: i.id):
         nomes.update((imp.resumo or {}).get("territorios") or {})

@@ -394,10 +394,18 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
     por_inep: dict[str, list[IndicadorReferencia]] = {}
     ids_avaliacao = {a.id: a.chave for a in (av, av_iee) if a is not None}
     if codigo is not None and ids_avaliacao:
-        for ln in db.execute(select(IndicadorReferencia).where(
+        if leituras.ativa(db):
+            # O mesmo filtro, sobre as linhas lidas uma vez na requisição.
+            candidatas = [ln for ln in leituras.referencias(db, codigo, frozenset(ineps))
+                          if ln.avaliacao_id in ids_avaliacao
+                          and ln.codigo_territorio in {codigo, codigo[:2]}
+                          and ln.localizacao == "total"]
+        else:
+            candidatas = db.execute(select(IndicadorReferencia).where(
                 IndicadorReferencia.avaliacao_id.in_(set(ids_avaliacao)),
                 IndicadorReferencia.codigo_territorio.in_({codigo, codigo[:2]}),
-                IndicadorReferencia.localizacao == "total")).scalars():
+                IndicadorReferencia.localizacao == "total")).scalars()
+        for ln in candidatas:
             chave = ids_avaliacao[ln.avaliacao_id]
             if (ln.abrangencia in ("municipio", "uf") and ln.codigo_inep == ""
                     and chave == seduc.AVALIACAO_SARESP
@@ -414,12 +422,18 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
     oficiais: dict[int, list[ResultadoAvaliacao]] = {}
     estimativas: dict[int, list[ResultadoAvaliacao]] = {}
     if av is not None and escolas:
-        for r in db.execute(select(ResultadoAvaliacao).where(
+        if leituras.ativa(db):
+            # O mesmo filtro, sobre os resultados sem turma lidos uma vez na requisição.
+            resultados = [r for r in leituras.resultados_sem_turma(db, set(inep_de), av.id)
+                          if r.indicador == seduc.IND_PROFICIENCIA]
+        else:
+            resultados = db.execute(select(ResultadoAvaliacao).where(
                 ResultadoAvaliacao.avaliacao_id == av.id,
                 ResultadoAvaliacao.escola_id.in_(set(inep_de)),
                 ResultadoAvaliacao.indicador == seduc.IND_PROFICIENCIA,
                 or_(ResultadoAvaliacao.turma.is_(None), ResultadoAvaliacao.turma == ""),
-                )).scalars():
+                )).scalars()
+        for r in resultados:
             if r.importacao_id is not None:
                 if r.etapa in ETAPAS and r.componente in _COMPONENTE_DA_ESCOLA:
                     oficiais.setdefault(r.escola_id, []).append(r)

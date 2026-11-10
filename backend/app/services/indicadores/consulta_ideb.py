@@ -331,36 +331,59 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
     # resultados_avaliacao: o Ideb (anos iniciais) e o Saeb do 5º ano (LP e MT), por escola.
     resultados: dict[tuple[int, int, str], ResultadoAvaliacao] = {}
     sem_turma = or_(ResultadoAvaliacao.turma.is_(None), ResultadoAvaliacao.turma == "")
+    # Com a leitura única ligada, os mesmos filtros sobre o que a requisição já leu (os
+    # resultados sem turma das escolas da rede; as referências do município e das escolas).
+    lote = leituras.ativa(db)
     if escolas and av_ideb is not None:
-        for r in db.execute(select(ResultadoAvaliacao).where(
+        if lote:
+            lidos = [r for r in leituras.resultados_sem_turma(db, set(inep_de), av_ideb.id)
+                     if r.indicador == ideb.IND_IDEB and r.etapa == ideb.ETAPA_IDEB
+                     and r.componente in (None, "")]
+        else:
+            lidos = db.execute(select(ResultadoAvaliacao).where(
                 ResultadoAvaliacao.avaliacao_id == av_ideb.id,
                 ResultadoAvaliacao.escola_id.in_(set(inep_de)),
                 ResultadoAvaliacao.indicador == ideb.IND_IDEB,
                 ResultadoAvaliacao.etapa == ideb.ETAPA_IDEB,
                 or_(ResultadoAvaliacao.componente.is_(None), ResultadoAvaliacao.componente == ""),
-                sem_turma)).scalars():
+                sem_turma)).scalars()
+        for r in lidos:
             resultados[(r.escola_id, r.edicao, "ideb")] = r
     if escolas and av_saeb is not None:
-        for r in db.execute(select(ResultadoAvaliacao).where(
+        if lote:
+            lidos = [r for r in leituras.resultados_sem_turma(db, set(inep_de), av_saeb.id)
+                     if r.indicador == ideb.IND_PROFICIENCIA and r.etapa == ideb.ETAPA_SAEB
+                     and r.componente in tuple(_CAMPO_DO_COMPONENTE)]
+        else:
+            lidos = db.execute(select(ResultadoAvaliacao).where(
                 ResultadoAvaliacao.avaliacao_id == av_saeb.id,
                 ResultadoAvaliacao.escola_id.in_(set(inep_de)),
                 ResultadoAvaliacao.indicador == ideb.IND_PROFICIENCIA,
                 ResultadoAvaliacao.etapa == ideb.ETAPA_SAEB,
                 ResultadoAvaliacao.componente.in_(tuple(_CAMPO_DO_COMPONENTE)),
-                sem_turma)).scalars():
+                sem_turma)).scalars()
+        for r in lidos:
             resultados[(r.escola_id, r.edicao, _CAMPO_DO_COMPONENTE[r.componente])] = r
 
     # indicadores_referencia: N, P, aprovação e meta da escola, pelo código INEP.
     referencia: dict[tuple[str, int, str, str], IndicadorReferencia] = {}
     if codigo is not None and av_ideb is not None and ineps:
-        for ln in db.execute(select(IndicadorReferencia).where(
+        if lote:
+            linhas = [ln for ln in leituras.referencias(db, codigo, frozenset(ineps))
+                      if ln.avaliacao_id == av_ideb.id and ln.abrangencia == "escola"
+                      and ln.codigo_territorio == codigo and ln.rede_ensino == "municipal"
+                      and ln.localizacao == "total" and ln.codigo_inep in ineps
+                      and ln.indicador in _IND_REFERENCIA]
+        else:
+            linhas = db.execute(select(IndicadorReferencia).where(
                 IndicadorReferencia.avaliacao_id == av_ideb.id,
                 IndicadorReferencia.abrangencia == "escola",
                 IndicadorReferencia.codigo_territorio == codigo,
                 IndicadorReferencia.rede_ensino == "municipal",
                 IndicadorReferencia.localizacao == "total",
                 IndicadorReferencia.codigo_inep.in_(ineps),
-                IndicadorReferencia.indicador.in_(_IND_REFERENCIA))).scalars():
+                IndicadorReferencia.indicador.in_(_IND_REFERENCIA))).scalars()
+        for ln in linhas:
             referencia[(ln.codigo_inep, ln.edicao, ln.indicador, ln.etapa)] = ln
 
     aplicadas = _aplicadas(db, codigo)
