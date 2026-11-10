@@ -433,9 +433,20 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     # acesso é pelo link de redefinição gerado pela gestão em Usuários) e
     # vincula o titular para o RBAC. Acessório e idempotente: roda numa transação própria (o
     # confirmar já commitou os alunos) e NUNCA derruba a sync se falhar.
+    # Com a política ``bloquear`` a plataforma NÃO é fonte de cadastro nesta escola
+    # (``politica_sync``: "vale para TODO dado de plataforma"): a coleta não cria conta
+    # de professor nem define o titular da turma — nem o de um professor já cadastrado
+    # (o vínculo é da gestão, como a matrícula é da Lista Piloto). Só avisa, sem o nome.
     professor_txt = getattr(analise, "professor_detectado", "") or ""
     turma_txt = getattr(analise, "turma_detectada", "") or ""
-    if professor_txt and turma_txt:
+    if professor_txt and turma_txt and not confirm.permitir_criar_aluno:
+        contexto.log("professores", "warn",
+                     f"A plataforma informou o(s) professor(es) da turma "
+                     f"“{turma_txt.strip()}”, mas esta escola não cadastra pela "
+                     "plataforma: nenhuma conta de professor foi criada e o titular "
+                     "da turma não foi alterado. Cadastre ou vincule o professor em "
+                     "Usuários.")
+    elif professor_txt and turma_txt:
         try:
             turma_obj = db.execute(
                 select(Turma).where(
