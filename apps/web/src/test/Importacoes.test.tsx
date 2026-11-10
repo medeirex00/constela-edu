@@ -311,6 +311,46 @@ describe("Importacoes", () => {
     }
   });
 
+  // "Aplicar a todos" muda o destino só dos alunos NOVOS: a linha que vai para a
+  // Revisão (o nome abreviado da prévia real) fica onde está — "Criar" nela seria
+  // ignorado pelo backend. Os dois botões: a turma escolhida e a turma do relatório
+  // ainda não cadastrada (nova).
+  it.each([
+    ["Aplicar a todos", "3º Ano A", "criar"],
+    ["Aplicar a todos: turma do relatório (nova)", "5º Ano Z", "criar_nova"],
+  ])("'%s' não tira da Revisão a linha que vai para lá", async (botao, turma, novoDestino) => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
+    analise.turma_detectada = turma;
+    responder("UPLOAD", URL_ANALISAR, analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Zefa Q 10");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    fireEvent.change(screen.getByLabelText("Data do relatório (obrigatória)"),
+      { target: { value: "2026-08-14" } });
+    const destino = (nome: string) =>
+      screen.getByRole("combobox", { name: `Destino de ${nome}` }) as HTMLSelectElement;
+    // O aluno novo começa em "Ignorar": o botão tem de mudá-lo (senão o teste não
+    // prova nada).
+    await u.selectOptions(destino("Crianca Ficticia Sem Ficha"), "ignorar");
+    expect(destino("Zefa Q").value).toBe("revisao");
+
+    await u.click(screen.getByRole("button", { name: botao }));
+    expect(destino("Crianca Ficticia Sem Ficha").value).toBe(novoDestino);
+    expect(destino("Zefa Q").value).toBe("revisao");
+    expect(destino("Ana Beatriz Souza").value).toBe("1");
+    // O select da linha de Revisão não tem "Criar": se o botão a mudasse, o React
+    // mostraria a 1ª opção ("Deixar para a Revisão") e só a contagem denunciaria —
+    // "3 de 3 serão importados", sem nada para Revisões.
+    expect(screen.getByText(/serão importados/).textContent)
+      .toBe("2 de 3 aluno(s) serão importados; 1 vai para Revisões de identidade.");
+  });
+
   // Política "bloquear" com a mesma prévia real: o backend vincula 1, não cria
   // ninguém e abre 2 pendências (o nome abreviado e o "Criar" barrado pela política
   // — backend/tests/test_importacao_previa_motivo.py). Antes o rodapé dizia "2 de 3
