@@ -57,6 +57,16 @@ ou "bloqueio anti-robô da plataforma".
 * **Elefante — agregado parado**: o total de livros do relatório de turma pode
   ficar parado enquanto o detalhe por aluno já tem livro novo. Por isso, a cada
   7 dias a coleta ignora o cursor e recoleta tudo (`DIAS_ENTRE_COLETAS_COMPLETAS`).
+* **Elefante — livros por aluno com a plataforma lenta**: os livros de uma turma
+  saem em lotes de até 6 pedidos ao mesmo tempo, e o prazo de 20 s conta da saída
+  de cada pedido (antes, os últimos de uma turma grande eram abortados sem nem ter
+  saído). O custo, no pior caso: com a plataforma aceitando a conexão e sem
+  responder, uma turma de 40 alunos leva cerca de 7 × 20 s = 140 s para falhar
+  (antes, cerca de 20 s), e uma recoleta completa com umas 15 turmas grandes, cerca
+  de 35 min, perto do teto de 45 min (`SYNC_TETO_EXECUCAO_S`), segurando a vaga das
+  coletas manuais nesse tempo. Não há prazo total por lote: escolhê-lo exige medir a
+  latência e o protocolo (HTTP/1.1 ou HTTP/2) reais do Elefante — um prazo curto
+  cortaria alunos de uma plataforma só lenta que hoje chegam.
 * **Matific — semântica do período**: se `end_date` é inclusivo ou exclusivo não
   foi confirmado na plataforma; a importação por período data o retrato na véspera
   da data final (regra do importador, fora do módulo de sync).

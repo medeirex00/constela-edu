@@ -248,6 +248,10 @@ _JS_FETCH_TMPL = r"""(async () => {
 # esperavam conexão na fila do navegador gastavam o prazo parados, e os últimos de
 # uma turma grande eram abortados sem nem terem saído (o aluno ficava sem livros e
 # sem cursor, e a próxima coleta repetia o mesmo).
+# CUSTO no pior caso (plataforma que aceita a conexão e não responde): o lote leva
+# ceil(N / _LOTE_CONEXOES) prazos, não ~1 — 40 alunos, ~140 s por turma (antes ~20 s).
+# Não há prazo total por lote de propósito: escolhê-lo exige a latência e o protocolo
+# reais do Elefante (docs/operacao/COLETA-PLATAFORMAS.md §2.2).
 _LOTE_CONEXOES = 6
 _LOTE_PRAZO_MS = 20000
 _JS_FETCH_LOTE = r"""(async () => {
