@@ -313,6 +313,26 @@ describe("Importacoes", () => {
     }
   });
 
+  // A coluna Dados no formato brasileiro, como o resto do sistema: o backend manda
+  // 85.5 (número JSON) para o "85,5" colado; antes a prévia mostrava "Média: 85.5".
+  it("coluna Dados: a média sai com vírgula (prévia real do backend)", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, JSON.parse(JSON.stringify(analiseReal)) as Analise);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42 85,5");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    const dados = (nome: string) => (screen.getByRole("combobox", { name: `Destino de ${nome}` })
+      .closest("tr") as HTMLTableRowElement).cells[1].textContent;
+    expect(dados("Ana Beatriz Souza")).toBe("Atividades: 42 · Média: 85,5 · Estrelas: 120");
+    expect(dados("Zefa Q")).toBe("Atividades: 10 · Média: 70 · Estrelas: 35");
+    expect(screen.queryByText(/85\.5/)).toBeNull();
+  });
+
   // "Aplicar a todos" muda o destino só dos alunos NOVOS: a linha que vai para a
   // Revisão (o nome abreviado da prévia real) fica onde está — "Criar" nela seria
   // ignorado pelo backend. Os dois botões: a turma escolhida e a turma do relatório

@@ -60,7 +60,7 @@ import {
   primeiroDiaDoRelatorio,
   problemaDaDataDoRelatorio,
 } from "../lib/dataRelatorio";
-import { dataHora } from "../lib/formato";
+import { dataHora, numero } from "../lib/formato";
 import { acharTurmaPorNome, normalizar } from "../lib/nomes";
 import ImportacaoLote from "./ImportacaoLote";
 import type { Aluno, Analise, Importacao, LinhaAnalise, ResultadoImportacao, Turma } from "../lib/types";
@@ -79,6 +79,11 @@ const ROTULOS_DADOS: Record<string, string> = {
 };
 
 const OCULTAR_NA_PREVIA = new Set(["turma_relatorio", "livro", "nivel", "genero", "data", "tempo_livro_min"]);
+
+/** Número no formato brasileiro ("85,5", "1.234"), como no resto do sistema. */
+function valorDoDado(valor: unknown): string {
+  return typeof valor === "number" ? numero(valor) : String(valor);
+}
 
 /** Como o nome do aluno foi identificado (define ícone, cor e texto do card). */
 const METODO_IDENTIFICACAO: Record<
@@ -124,11 +129,11 @@ function resumoDados(dados: Record<string, unknown>): string {
       const rotulo = ROTULOS_DADOS[chave] ?? chave;
       if (chave === "livros_por_nivel" && valor && typeof valor === "object") {
         const pares = Object.entries(valor as Record<string, number>)
-          .map(([codigo, qtd]) => `${codigo}:${qtd}`)
+          .map(([codigo, qtd]) => `${codigo}:${valorDoDado(qtd)}`)
           .join(" ");
         return `${rotulo}: ${pares || "—"}`;
       }
-      return `${rotulo}: ${valor}`;
+      return `${rotulo}: ${valorDoDado(valor)}`;
     })
     .join(" · ");
 }
