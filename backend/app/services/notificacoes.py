@@ -39,31 +39,68 @@ NOTIFICAVEIS: dict[str, tuple[str, str, Callable[[int | None], str]]] = {
                      lambda eid: f"/alunos/{eid}" if eid else "/alunos"),
     # Importação/sync NÃO pode descartar linha em silêncio: a correspondência
     # insegura e a linha sem aluno vinculado viram notificação para a escola.
+    # Rota de quando a pendência NÃO está na fila de revisão (a Lista Piloto manda
+    # a correspondência insegura para Alunos › Fundir duplicatas); a que está na
+    # fila leva às Revisões de identidade (``ROTA_REVISOES``, em
+    # ``emitir_da_auditoria``).
     "aluno.revisao_necessaria": ("Importação: aluno com correspondência insegura — revisar",
                                  "aviso", lambda _: "/alunos"),
     "importacao.linha_ignorada": ("Importação: linha sem aluno vinculado — revisar",
                                   "aviso", lambda _: "/importacoes"),
 }
 
+# A tela onde o gestor decide as pendências da fila de identidade.
+ROTA_REVISOES = "/revisoes-identidade"
+# Telas de OPERAÇÃO da escola (no web, a guarda RotaEscolaOp): só a gestão da
+# escola (admin/coordenador sem rede) e o Admin Global abrem. O professor recebe
+# avisos que tocam os alunos dele — inclusive os destas pendências —, mas um link
+# para cá o mandaria de volta à página inicial: ele recebe o aviso sem o link.
+ROTAS_DA_OPERACAO = frozenset({ROTA_REVISOES, "/importacoes"})
+
 
 def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
                         autor_id: int | None = None, entidade: str | None = None,
-                        entidade_id: int | None = None) -> None:
+                        entidade_id: int | None = None,
+                        detalhes: dict | None = None) -> None:
     """Materializa uma notificação de escopo ESCOLA para os eventos conhecidos.
     No-op silencioso para ações não notificáveis ou sem escola. Adiciona à sessão
-    (o commit fica com a operação principal, como o próprio registrar())."""
+    (o commit fica com a operação principal, como o próprio registrar()).
+
+    Pendência gravada na fila de revisão de identidade (a auditoria traz o
+    ``revisao_id``) aponta para as Revisões de identidade — é lá que o gestor
+    escolhe o aluno, cria a ficha ou descarta."""
     if escola_id is None:
         return
     spec = NOTIFICAVEIS.get(acao)
     if spec is None:
         return
     titulo, severidade, rota_de = spec
+    rota = rota_de(entidade_id)
+    if isinstance(detalhes, dict) and "revisao_id" in detalhes:
+        rota = ROTA_REVISOES
     aluno_id = entidade_id if entidade == "aluno" else None
     db.add(Notificacao(
         escopo="escola", escola_id=escola_id, tipo=acao, severidade=severidade,
-        titulo=titulo, rota=rota_de(entidade_id), entidade=entidade,
+        titulo=titulo, rota=rota, entidade=entidade,
         entidade_id=entidade_id, aluno_id=aluno_id, autor_id=autor_id,
     ))
+
+
+def _opera_a_escola(usuario: Usuario) -> bool:
+    """Abre as telas de operação da escola (``ROTAS_DA_OPERACAO``): Admin Global ou
+    gestão da escola (admin/coordenador) que não é Secretaria — a mesma régua do
+    ``exigir_papeis("admin", "coordenador")`` da fila e da guarda RotaEscolaOp."""
+    if usuario.is_global:
+        return True
+    return permissoes.acesso_total(usuario) and not permissoes.e_secretaria(usuario)
+
+
+def rota_para(usuario: Usuario, rota: str | None) -> str | None:
+    """A rota do aviso para ESTE usuário: ``None`` quando ela é de operação da
+    escola e o perfil não a abre (o aviso aparece, sem link)."""
+    if rota and not _opera_a_escola(usuario) and rota.split("?")[0] in ROTAS_DA_OPERACAO:
+        return None
+    return rota
 
 
 def _condicao_feed(db: Session, usuario: Usuario):
@@ -109,7 +146,7 @@ def feed(db: Session, usuario: Usuario, limite: int = 30) -> list[dict]:
             "tipo": n.tipo,
             "severidade": n.severidade,
             "titulo": n.titulo,
-            "rota": n.rota,
+            "rota": rota_para(usuario, n.rota),
             "autor": autor,
             "data": n.created_at,
             "lida": n.id <= lidas_ate,

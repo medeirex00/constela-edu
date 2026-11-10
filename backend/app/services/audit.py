@@ -117,7 +117,8 @@ def registrar(
     # ações. Fica na MESMA sessão → commit atômico com a operação principal.
     from app.services import notificacoes as _notif
     _notif.emitir_da_auditoria(db, acao, escola_id, autor_id=usuario_id,
-                               entidade=entidade, entidade_id=entidade_id)
+                               entidade=entidade, entidade_id=entidade_id,
+                               detalhes=detalhes)
     # commit fica a cargo da operação principal, mantendo atomicidade
 
 
