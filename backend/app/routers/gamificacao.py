@@ -48,7 +48,8 @@ def ranking_xp(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Ranking por XP/nível — motivacional, separado das notas (§81).
-    Professor recebe apenas os alunos das turmas dele."""
+    Só concorrem as turmas do 1º ao 5º ano (o serviço tira as Fases, como no
+    mural desta mesma página). Professor recebe apenas os alunos das turmas dele."""
     itens = svc.ranking_xp(db, escola_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:

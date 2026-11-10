@@ -20,7 +20,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, evolucao, scoring
+from app.services import dificuldade_livro, elegibilidade, evolucao, scoring
 
 # Padrões usados até a escola personalizar (namespace gamificacao.*)
 XP_PADRAO = {
@@ -309,8 +309,18 @@ def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
 
 
 def ranking_xp(db: Session, escola_id: int) -> list[dict]:
+    """Ranking de XP da escola, numerado 1..N entre quem CONCORRE.
+
+    AS FASES NÃO CONCORREM (``services.elegibilidade``: ranking e premiação são
+    do 1º ao 5º ano): só entram as turmas premiáveis do ano letivo — o mesmo
+    corte do mural da página Conquistas, do Ranking de Evolução e do telão.
+    Sem ele, a Educação Infantil aparecia no topo, com medalha, e empurrava as
+    posições do Fundamental. O XP de cada criança não muda: é só quem aparece."""
     escola = db.get(Escola, escola_id)
     if escola is None:
+        return []
+    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, escola.ano_letivo_ativo)
+    if not premiaveis:
         return []
     pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
     matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
@@ -322,6 +332,7 @@ def ranking_xp(db: Session, escola_id: int) -> list[dict]:
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.escola_id == escola_id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Matricula.turma_id.in_(premiaveis),
                Aluno.status == "ativo")
         .options(selectinload(Matricula.aluno))  # evita N+1 em matricula.aluno
     ).all()
