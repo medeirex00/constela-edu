@@ -361,8 +361,12 @@ def test_falha_ao_apagar_nao_loga_o_nome_do_arquivo(tmp_path, monkeypatch, caplo
 def test_candidata_de_duplicata_ja_fundida_nao_guarda_o_nome(
         cliente_global, db, escola_completa, pastas):
     """A revisão pendente lista [E, D], duas fichas com o mesmo nome. D é FUNDIDA
-    em E (a fusão apaga a ficha de D e não mexe nas revisões); depois E é
-    excluída. A candidata de D não é de ninguém que continua: o nome sai."""
+    em E e depois E é excluída. A candidata de D não é de ninguém que continua: o
+    nome sai.
+
+    Hoje a fusão já tira D das pendências (A15). O caso continua valendo para o
+    PASSIVO: as fusões de antes não mexiam nas revisões, e é o estado que elas
+    deixaram (D ainda listada) que a exclusão precisa limpar."""
     from app.services.alunos_fusao import fundir_par
 
     escola, turma = escola_completa["escola"], escola_completa["turma"]
@@ -370,19 +374,24 @@ def test_candidata_de_duplicata_ja_fundida_nao_guarda_o_nome(
     sai, dup = _aluno(db, escola, turma, nome), _aluno(db, escola, turma, nome)
     viva = escola_completa["alunos"][0]
     candidata_viva = {"aluno_id": viva.id, "nome": viva.nome}
+    candidatos_antes = [{"aluno_id": sai.id, "nome": nome},
+                        {"aluno_id": dup.id, "nome": nome, "turma": "3A"},
+                        candidata_viva]
     rev = RevisaoIdentidade(escola_id=escola.id, chave="k", chave_identidade="ki",
                             plataforma="elefante", motivo="ambiguo", status="pendente",
                             nome_recebido="K. TESTE F.",
-                            candidatos=[{"aluno_id": sai.id, "nome": nome},
-                                        {"aluno_id": dup.id, "nome": nome, "turma": "3A"},
-                                        candidata_viva],
+                            candidatos=list(candidatos_antes),
                             linhas=[], contexto={})
     db.add(rev)
     db.flush()
-    dup_id = dup.id
+    dup_id, sai_id = dup.id, sai.id
     fundir_par(db, escola.id, sai, dup, usuario_id=escola_completa["admin"].id)
     db.commit()
     assert db.get(Aluno, dup_id) is None
+    db.refresh(rev)
+    assert [c["aluno_id"] for c in rev.candidatos] == [sai_id, viva.id]   # A15
+    rev.candidatos = list(candidatos_antes)       # o passivo de uma fusão antiga
+    db.commit()
     _excluir(cliente_global, escola.id, sai.id)
     db.expire_all()
 
