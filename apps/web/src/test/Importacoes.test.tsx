@@ -249,12 +249,15 @@ describe("Importacoes", () => {
       ["Deixar para a Revisão", "Ignorar"]);
     // Não é "aluno novo": nem a faixa de criação em massa aparece.
     expect(screen.queryByText(/aluno\(s\) novo\(s\)/)).toBeNull();
-    expect(screen.getByText(/0 de 1 aluno\(s\) serão importados; 1 vão para Revisões de identidade/))
-      .toBeInTheDocument();
+    // Concordância: com uma linha, "1 vai" (não "1 vão").
+    expect(screen.getByText(/serão importados/).textContent)
+      .toBe("0 de 1 aluno(s) serão importados; 1 vai para Revisões de identidade.");
 
     await u.click(screen.getByRole("button", { name: "Sim, importar" }));
     const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
-    expect(confirmacao).toHaveTextContent("1 vão para Revisões de identidade");
+    expect(confirmacao).toHaveTextContent(
+      "1 vai para Revisões de identidade — nenhuma ficha é criada; um gestor decide de quem são os dados");
+    expect(confirmacao).not.toHaveTextContent(/1 vão/);
     expect(confirmacao).not.toHaveTextContent(/aluno\(s\) novo\(s\)/);
     expect(confirmacao).not.toHaveTextContent(/não se desfaz sozinha/);
     responder("POST", URL_CONFIRMAR, {
@@ -328,12 +331,13 @@ describe("Importacoes", () => {
     fireEvent.change(screen.getByLabelText("Data do relatório (obrigatória)"),
       { target: { value: "2026-08-14" } });
 
+    // Plural: "2 vão".
     expect(screen.getByText(/serão importados/).textContent)
-      .toMatch(/^1 de 3 aluno\(s\) serão importados; 2 /);
+      .toBe("1 de 3 aluno(s) serão importados; 2 vão para Revisões de identidade.");
     await u.click(screen.getByRole("button", { name: "Sim, importar" }));
     const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
     expect(confirmacao).toHaveTextContent("1 vinculado(s) a um aluno já cadastrado");
-    expect(confirmacao).toHaveTextContent(/2 vão para Revisões de identidade/);
+    expect(confirmacao).toHaveTextContent(/2 vão para Revisões de identidade — nenhuma ficha é criada/);
     expect(confirmacao).not.toHaveTextContent(/aluno\(s\) novo\(s\)/);
     expect(confirmacao).toHaveTextContent(/Pela política desta escola/);
     expect(confirmacao).not.toHaveTextContent(/não se desfaz sozinha/);
@@ -356,10 +360,11 @@ describe("Importacoes", () => {
       { target: { value: "2026-08-14" } });
 
     expect(screen.getByText(/serão importados/).textContent)
-      .toMatch(/^2 de 3 aluno\(s\) serão importados; 1 /);
+      .toBe("2 de 3 aluno(s) serão importados; 1 vai para Revisões de identidade.");
     await u.click(screen.getByRole("button", { name: "Sim, importar" }));
     const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
     expect(confirmacao).toHaveTextContent("1 aluno(s) novo(s)");
+    expect(confirmacao).toHaveTextContent(/1 vai para Revisões de identidade — nenhuma ficha é criada/);
     expect(confirmacao).toHaveTextContent(/não se desfaz sozinha/);
     expect(confirmacao).not.toHaveTextContent(/Pela política desta escola/);
   });

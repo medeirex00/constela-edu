@@ -194,6 +194,11 @@ function vaiParaARevisao(acao: Acao | undefined, criacaoBloqueada: boolean): boo
   return criacaoBloqueada && (acao?.tipo === "criar" || acao?.tipo === "criar_nova");
 }
 
+/** "1 vai" / "N vão" para Revisões de identidade (rodapé e confirmação). */
+function vaoParaRevisoes(n: number): string {
+  return `${n} ${n === 1 ? "vai" : "vão"} para Revisões de identidade`;
+}
+
 /** Quantos alunos esta importação deixou em Revisões de identidade: todas as
  *  pendências gravadas (``qtd_revisoes``), não só as que a política barrou. */
 function aguardamRevisao(r: ResultadoImportacao): number {
@@ -1110,7 +1115,7 @@ export default function Importacoes() {
                 ? "Informe a data do relatório para importar."
                 : totalSelecionados > 0
                   ? `${totalSelecionados - totalParaRevisao} de ${gruposValidos.length} aluno(s) serão importados${
-                    totalParaRevisao > 0 ? `; ${totalParaRevisao} vão para Revisões de identidade` : ""}.`
+                    totalParaRevisao > 0 ? `; ${vaoParaRevisoes(totalParaRevisao)}` : ""}.`
                   : "Deseja importar estes dados?"}
             </span>
             <Botao variante="secundario" onClick={() => setAnalise(null)} disabled={ocupado}>
@@ -1155,8 +1160,8 @@ export default function Importacoes() {
               {resumoConfirmacao.revisao > 0 && (
                 <li className="flex items-center gap-2">
                   <AlertTriangle size={15} aria-hidden className="shrink-0 text-ouro-700 dark:text-ouro-300" />
-                  {resumoConfirmacao.revisao} vão para Revisões de identidade — nenhuma ficha é
-                  criada; um gestor decide de quem são os dados
+                  {vaoParaRevisoes(resumoConfirmacao.revisao)} — nenhuma ficha é criada; um gestor
+                  decide de quem são os dados
                 </li>
               )}
               {resumoConfirmacao.ignorar > 0 && (
