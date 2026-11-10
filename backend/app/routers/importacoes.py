@@ -1172,6 +1172,12 @@ _REGRA_DA_VIA = {
 _REGRA_ESCOLHA_HUMANA = ("ficha fixada por quem confirmou a importação "
                          "(prévia aceita ou alternativa escolhida)")
 
+# A13: a pendência aberta só pelo NOME (linha sem a conta) que a linha COM a conta
+# responde. É sempre o sistema que a encerra — ninguém viu essa pendência —, e só
+# quando o nome, sozinho, não aponta para nenhuma outra ficha.
+_REGRA_PENDENCIA_POR_NOME = ("a mesma criança voltou com a conta da plataforma: mesmo "
+                             "nome, mesma sala, e o nome sozinho não aponta outra ficha")
+
 # Vias que NÃO casam pelo nome — a conta da plataforma, a escolha explícita e a
 # memória de uma decisão humana. Só nas outras o sufixo de turma retirado do nome
 # ("… RIBEIRO 2B") fez parte do casamento e cabe na regra.
@@ -1374,8 +1380,10 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
     # A13: a linha que agora traz a CONTA da plataforma responde também a pendência
     # aberta por NOME (mesmo nome, mesma sala) quando ela chegou SEM a conta — antes
     # a chave mudava de nome+sala para id e a pendência ficava aberta para sempre.
-    # Mesmas guardas de sempre (``_linha_substitui_o_congelado``, D10) e mais uma:
-    # a pendência por nome só fecha se não apontava para OUTRA ficha.
+    # Mesmas guardas de sempre (``_linha_substitui_o_congelado``, D10) e mais duas:
+    # a pendência por nome só fecha se não apontava para OUTRA ficha e se o nome
+    # sozinho, decidido hoje, também não aponta. E fecha sempre como AUTOMÁTICA, sem
+    # virar memória nome+sala (nem nesta importação, nem nas próximas).
     chaves_por_nome: list[str] = []
     if ident.id_externo:
         sem_conta = replace(ident, id_externo="")
@@ -1406,9 +1414,21 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                                          ida.chave_sala(ident.turma_nome)) != ident.nome):
             # "… RIBEIRO 2B" casou como nome idêntico: a regra diz que o sufixo saiu.
             regra += ", sem o sufixo de turma digitado junto do nome"
+    # A13: o nome SOZINHO (a linha sem a conta, como a pendência por nome a recebeu)
+    # aponta para outra ficha da escola? Então a pendência por nome pode ser de OUTRA
+    # criança com o mesmo nome (abreviado) na sala: não fecha — fica para um humano,
+    # com o retrato que ela guarda. Decidido uma vez, só se houver pendência por nome.
+    nome_aponta_outra = False
+    if ids_por_nome:
+        pelo_nome = ida.decidir(ctx, replace(ident, id_externo="", aluno_id=None))
+        nome_aponta_outra = bool(
+            {i for i in (*pelo_nome.candidatos, pelo_nome.aluno_id) if i is not None}
+            - {aluno.id})
     preteridos = _preteridos(ctx, decisao.preteridos)
     momento = agora()
     encerradas: list[int] = []
+    encerradas_por_humano = 0
+    regras_automaticas: list[str] = []
     ficaram: list[RevisaoIdentidade] = []
     retidas_d10: list[RevisaoIdentidade] = []
     contas_de_outra_escola: dict[tuple[str, str], bool] = {}
@@ -1419,22 +1439,34 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
         if _retida_pelo_d10(db, escola_id, ctx, ident, rev, contas_de_outra_escola):
             retidas_d10.append(rev)      # D10/D11: só o Admin Global encerra
             continue
-        if rid in ids_por_nome and any(
+        por_nome = rid in ids_por_nome
+        if por_nome and (nome_aponta_outra or any(
                 c.get("aluno_id") not in (None, aluno.id) for c in (rev.candidatos or [])
-                if isinstance(c, dict)):
-            ficaram.append(rev)          # a pendência por nome apontava outra ficha
+                if isinstance(c, dict))):
+            ficaram.append(rev)          # a pendência por nome pode ser de outra ficha
             continue
         if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor):
             ficaram.append(rev)
             continue
+        # A pendência por NOME nunca é encerrada como decisão de gente, nem quando a
+        # ficha da linha foi fixada por quem confirmou: essa pessoa escolheu a ficha
+        # da CONTA e nunca viu a pergunta "de quem é este nome nesta sala". Encerrada
+        # como humana, viraria memória nome+sala (``carregar_contexto``) e toda linha
+        # SEM conta com esse nome iria sozinha para a ficha — mesmo com um homônimo
+        # abreviado na sala.
+        humana_rev = humana and not por_nome
+        regra_rev = _REGRA_PENDENCIA_POR_NOME if por_nome else regra
         dados_superados = {"motivo": "substituidos_pela_linha_desta_importacao",
                            "formato": rev.formato, "plataforma": rev.plataforma,
                            "data_congelada": (rev.contexto or {}).get("data_referencia") or None,
                            "data_desta_importacao": contexto.get("data_referencia") or None}
-        resolucao = {"acao": "associar", "aluno_id": aluno.id, "automatica": not humana,
-                     "via": decisao.via, "regra": regra, "dados_superados": dados_superados}
-        if humana:
+        resolucao = {"acao": "associar", "aluno_id": aluno.id, "automatica": not humana_rev,
+                     "via": decisao.via, "regra": regra_rev,
+                     "dados_superados": dados_superados}
+        if humana_rev:
             resolucao["resolvida_na"] = "confirmacao_da_importacao"
+        if por_nome:
+            resolucao["pendencia_por_nome"] = True
         if preteridos:
             # Só o id: a revisão não passa pela redação LGPD da exclusão
             # permanente (os logs passam, e lá o nome fica).
@@ -1443,12 +1475,16 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
             resolucao["importacao_id"] = coletor.importacao_id
         rev.status = "resolvida"
         rev.aluno_escolhido_id = aluno.id
-        rev.resolvida_por_id = usuario_id if humana else None
+        rev.resolvida_por_id = usuario_id if humana_rev else None
         rev.resolvida_em = momento
         rev.resolucao = resolucao
-        ctx.resolvidas[rev.chave_identidade] = aluno.id
+        if not por_nome:
+            # Memória desta importação só para a chave da PRÓPRIA linha; a chave
+            # nome+sala da pendência por nome continua decidida pela regra.
+            ctx.resolvidas[rev.chave_identidade] = aluno.id
         candidatos = [c.get("aluno_id") for c in (rev.candidatos or [])]
-        if humana:
+        if humana_rev:
+            encerradas_por_humano += 1
             registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
                       usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
                       detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
@@ -1465,15 +1501,24 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                       detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
                                 "formato": rev.formato, "motivo": rev.motivo,
                                 "origem": rev.nome_recebido, "aluno": aluno.nome,
-                                "via": decisao.via, "regra": regra,
+                                "via": decisao.via, "regra": regra_rev,
                                 "preteridos": preteridos,
                                 "dados_superados": dados_superados,
                                 "importacao_id": coletor.importacao_id,
                                 "candidatos": candidatos})
+            if regra_rev not in regras_automaticas:
+                regras_automaticas.append(regra_rev)
         encerradas.append(rev.id)
     if encerradas:
-        como = ("resolvidas pela sua confirmação" if humana
-                else f"encerradas automaticamente ({regra})")
+        automaticas = len(encerradas) - encerradas_por_humano
+        if not automaticas:
+            como = "resolvidas pela sua confirmação"
+        elif not encerradas_por_humano:
+            como = f"encerradas automaticamente ({'; '.join(regras_automaticas)})"
+        else:
+            como = (f"resolvidas pela sua confirmação ({encerradas_por_humano}) ou "
+                    f"encerradas automaticamente ({automaticas}: "
+                    f"{'; '.join(regras_automaticas)})")
         aviso = (f"“{ident.nome}”: {len(encerradas)} pendência(s) de revisão desta "
                  f"identidade foram {como} — o dado desta importação foi para "
                  f"{aluno.nome} e substitui o que elas guardavam.")
