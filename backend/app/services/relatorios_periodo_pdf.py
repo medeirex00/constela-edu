@@ -39,13 +39,13 @@ from app.services.relatorios import (_esc_html, _relatorio_html_pdf,
 
 # Onde não há dado, escrevemos por extenso. Nunca "—" (o travessão não existe em
 # latin-1, e as duas versões de `_latin1` o tratam de formas diferentes) e nunca
-# "0" (zero é uma afirmação: a criança foi medida e não produziu).
-SEM_SUPORTE = "não suportado"
+# "0" (zero é uma afirmação: a criança foi medida e não produziu). "Não calculado"
+# é a etiqueta da tela para o que o motor classifica como NÃO SUPORTADO.
+SEM_SUPORTE = "não calculado"
 SEM_DADO = "sem dado"
 
 log = logging.getLogger(__name__)
 
-_ROTULO_PLATAFORMA = {"elefante": "Elefante Letrado", "matific": "Matific"}
 _ROTULO_ESCOPO = {"escola": "Escola inteira", "turma": "Turma", "aluno": "Estudante"}
 
 # Estilos EXTRAS, escopados com prefixo próprio para não colidir com o
@@ -221,12 +221,12 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
     ele = dados.get("elefante")
     if ele is not None:
         linhas.append(("Livros novos", _num(ele.get("livros_novos")),
-                       "Leitura.data - o mesmo número da premiação"))
+                       "o mesmo número da premiação"))
         linhas.append(("Tempo de leitura", _tempo(ele.get("tempo_min")),
                        "tempo informado por livro novo"))
         linhas.append(("Estudantes com livro novo", _num(ele.get("alunos_com_livro_novo")), ""))
         linhas.append(("Livros com atividade", _num(ele.get("livros_com_atividade")),
-                       "EventoAluno.ocorrido_em - inclui releitura"))
+                       "inclui releitura"))
         linhas.append(("Livros relidos", _num(ele.get("livros_relidos")),
                        "livro lido na janela cuja 1ª importação é anterior a ela"))
         linhas.append(("Registros de leitura", _num(ele.get("eventos_leitura")),
@@ -253,7 +253,7 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
         linhas.append(("Sem coleta na janela", _num(ele.get("alunos_sem_retrato")),
                        "ausência de coleta, não zero"))
         linhas.append(("Tempo por registro de leitura", SEM_SUPORTE,
-                       "o campo é acumulado por livro - ver as notas finais"))
+                       "a plataforma soma o tempo por livro - ver as notas finais"))
 
     mat = dados.get("matific")
     if mat is not None:
@@ -571,16 +571,142 @@ def _cobertura_html(aviso: dict) -> str:
             f'Intervalo medido pelas coletas do Constela: {disponivel}.{motivos}</div>')
 
 
-def _ressalvas(dados: dict) -> list[tuple[str, str]]:
-    """(indicador, ressalva) de tudo que o motor qualificou."""
-    saida = []
+# ---------------------------------------------- "Como ler estes números"
+# Na língua de quem lê o relatório — o MESMO texto da tela (``EXPLICACAO_ELEFANTE``,
+# ``EXPLICACAO_MATIFIC`` e ``EXPLICACAO_NAO_RESPONDE`` em
+# apps/web/src/pages/RelatorioPeriodo.tsx; ``test_relatorios_periodo_pdf`` confere que
+# cada frase daqui está lá). O motor manda em ``suporte`` e ``nao_suportado`` o porquê
+# técnico (nome de campo e de tabela, a classificação SUPORTADO/NÃO SUPORTADO): ele
+# não vai para o papel, que circula entre professores e em reuniões. Chave que estas
+# listas não conhecem cai no texto do motor, como na tela. ``curto`` só serve à
+# reserva (fpdf), cuja célula corta o texto longo: a frase inteira, cortada no meio,
+# diria outra coisa.
+_ROTULO_CLASSIFICACAO = {"SUPORTADO": "Confiável",
+                         "SUPORTADO COM RESSALVA": "Confiável, com um cuidado",
+                         "NÃO SUPORTADO": "Não calculado"}
+
+_TEMPO_DE_CADA_LEITURA = (
+    "Não dá para saber quanto durou cada leitura: a plataforma informa o tempo somado "
+    "de cada livro, não o de cada vez que o aluno o abriu, e esses totais às vezes até "
+    "diminuem — o que um total somado não faria. O tempo do período vem do tempo dos "
+    "livros novos, o mesmo da premiação “Mais tempo”.")
+
+_EXPLICACAO_ELEFANTE: dict[str, dict] = {
+    "livros_novos": {
+        "nome": "“Livros novos”",
+        "explicacao": "Conta cada livro que apareceu pela primeira vez no relatório da "
+                      "plataforma dentro do período. É a mesma conta da premiação “Mais "
+                      "livros”: o relatório e o pódio mostram o mesmo número.",
+        "cuidado": "Vale a data em que o livro apareceu pela primeira vez no relatório da "
+                   "plataforma, e ela não muda depois. Por isso um livro lido de novo não "
+                   "entra aqui — ele aparece em “Livros com atividade”, como relido.",
+        "curto": "livro relido não entra aqui: aparece em Livros com atividade",
+    },
+    "tempo_min": {
+        "nome": "“Tempo de leitura”",
+        "explicacao": "Soma o tempo dos livros novos do período. É a mesma conta da "
+                      "premiação “Mais tempo”.",
+        "cuidado": "A plataforma nem sempre informa o tempo de um livro; quando não "
+                   "informa, ele entra como zero. Por isso o total é o mínimo lido no "
+                   "período — o tempo real pode ser maior.",
+        "curto": "tempo não informado entra como zero: o total é o mínimo",
+    },
+    "livros_com_atividade": {
+        "nome": "“Livros com atividade”",
+        "explicacao": "Conta os livros diferentes que o aluno abriu no período, inclusive "
+                      "os que ele releu, pela data e hora que a plataforma registra em "
+                      "cada leitura.",
+    },
+    "tempo_min_por_evento": {
+        "nome": "Tempo de cada leitura",
+        "explicacao": _TEMPO_DE_CADA_LEITURA,
+    },
+    "questoes": {
+        "nome": "“Questões”",
+        "explicacao": "A plataforma só informa o total de questões que o aluno já "
+                      "respondeu desde que começou, sem a data de cada uma. O número do "
+                      "período é a diferença entre a coleta do fim e a do início.",
+        "cuidado": "Só entra quem tem coleta no período; quem não tem fica fora da conta "
+                   "(não conta como zero). Sem coleta no começo do período, a conta começa "
+                   "na primeira coleta; sem coleta no fim, termina na última — nos dois "
+                   "casos o número não cobre o período inteiro, e o aviso de “Questões”, "
+                   "acima, diz quanto falta.",
+        "curto": "sem coleta no início ou no fim, não cobre o período inteiro",
+    },
+}
+
+_EXPLICACAO_MATIFIC = {
+    "nome": "“Atividades” e “Estrelas”",
+    "explicacao": "O Matific informa o total do ano (atividades e estrelas somadas), não a "
+                  "data de cada atividade. O número do período é o total no fim menos o de "
+                  "antes do início — a mesma regra das premiações.",
+    "cuidado": "Sem coleta dentro do período, o aluno fica fora da conta (falta de dado não "
+               "é zero) e é contado em “Sem coleta na janela”.",
+    "curto": "sem coleta no período, o aluno fica fora da conta (não é zero)",
+}
+
+_EXPLICACAO_NAO_RESPONDE: dict[str, dict] = {
+    "elefante.tempo_min_por_evento": {
+        "nome": "Tempo de cada leitura (Elefante Letrado)",
+        "explicacao": _TEMPO_DE_CADA_LEITURA,
+        "curto": "a plataforma soma o tempo por livro, não por leitura",
+    },
+    "matific.questoes": {
+        "nome": "Questões (Matific)",
+        "explicacao": "O Matific guarda atividades, estrelas e pontuação média, mas não "
+                      "conta questões. Mostrar esse número para um período seria inventá-lo.",
+        "curto": "o Matific não conta questões",
+    },
+    "elefante.pontos_de_dificuldade": {
+        "nome": "Pontos de dificuldade (Elefante Letrado)",
+        "explicacao": "Quem se destaca pela dificuldade dos livros é decidido em "
+                      "Premiações, com a régua oficial. Calcular de novo aqui criaria uma "
+                      "segunda régua, que poderia discordar do pódio: para mérito, use "
+                      "Premiações.",
+        "curto": "para mérito, use Premiações (a régua oficial)",
+    },
+}
+
+
+def _explicacao(lista: dict, chave: str, s: dict) -> dict:
+    """A explicação de um número; sem entrada na lista, o texto que o motor mandou (a
+    mesma regra de ``explicacaoDe`` na tela)."""
+    return lista.get(chave) or {"nome": re.sub(r"[._]", " ", chave),
+                                "explicacao": s.get("por_que") or "",
+                                "cuidado": s.get("ressalva")}
+
+
+def _como_ler(dados: dict) -> list[tuple[str, dict, str]]:
+    """(plataforma, explicação, classificação) de cada número de "Como ler estes
+    números" — a fonte única da vitrine e da reserva, com a regra da tela: o que o
+    motor lista em ``nao_suportado`` fica SÓ em "O que este relatório não responde",
+    sem repetir aqui com o selo "Não calculado"; do Matific, só "Atividades" e
+    "Estrelas" (as questões dele estão naquela lista)."""
+    fora = {(i.get("plataforma"), i.get("metrica")) for i in dados.get("nao_suportado") or []}
+    itens = []
     for chave, s in ((dados.get("elefante") or {}).get("suporte") or {}).items():
-        if isinstance(s, dict) and s.get("ressalva"):
-            saida.append((f"Elefante · {chave.replace('_', ' ')}", s["ressalva"]))
+        if (isinstance(s, dict) and s.get("classificacao")
+                and ("elefante", chave) not in fora):
+            itens.append(("Elefante Letrado", _explicacao(_EXPLICACAO_ELEFANTE, chave, s),
+                          s["classificacao"]))
     sup_mat = (dados.get("matific") or {}).get("suporte") or {}
-    if sup_mat.get("ressalva"):
-        saida.append(("Matific · atividades e estrelas", sup_mat["ressalva"]))
-    return saida
+    if sup_mat.get("classificacao"):
+        itens.append(("Matific", _EXPLICACAO_MATIFIC, sup_mat["classificacao"]))
+    return itens
+
+
+def _o_que_nao_responde(dados: dict) -> list[dict]:
+    """A explicação de cada item de ``nao_suportado``, na língua da tela."""
+    return [_explicacao(_EXPLICACAO_NAO_RESPONDE,
+                        f"{i.get('plataforma')}.{i.get('metrica')}", i)
+            for i in dados.get("nao_suportado") or []]
+
+
+def _ressalvas(dados: dict) -> list[tuple[str, str]]:
+    """(indicador, cuidado ao ler) dos números de "Como ler estes números" que têm um
+    cuidado — o "Cuidado ao ler" da tela, curto para caber na célula da reserva."""
+    return [(e["nome"], e.get("curto") or _primeira_frase(e["cuidado"]))
+            for _plataforma, e, _classificacao in _como_ler(dados) if e.get("cuidado")]
 
 
 def _janela_efetiva_html(dados: dict) -> str:
@@ -608,50 +734,37 @@ _SELO = {"SUPORTADO": "ok", "SUPORTADO COM RESSALVA": "res", "NÃO SUPORTADO": "
 
 
 def _suporte_html(dados: dict) -> str:
-    """"Como ler estes números": a classificação de cada métrica, com a ressalva.
+    """"Como ler estes números": o que cada número conta e o cuidado ao lê-lo, com a
+    etiqueta da tela ("Confiável", "Confiável, com um cuidado").
 
     Sai no papel porque o PDF circula sozinho — longe da tela que explicava.
     """
     linhas = []
-
-    def item(nome: str, s: dict) -> None:
-        classe = _SELO.get(s.get("classificacao"), "nao")
-        campo = f'<br><span class="rp-fonte">{_esc_html(s["campo"])}</span>' if s.get("campo") else ""
-        ressalva = (f'<br><span class="rp-porque"><b>Ressalva:</b> '
-                    f'{_esc_html(s["ressalva"])}</span>' if s.get("ressalva") else "")
+    for plataforma, e, classificacao in _como_ler(dados):
+        classe = _SELO.get(classificacao, "nao")
+        cuidado = (f'<br><span class="rp-porque"><b>Cuidado ao ler:</b> '
+                   f'{_esc_html(e["cuidado"])}</span>' if e.get("cuidado") else "")
         linhas.append(
-            f'<tr><td class="esq nome">{_esc_html(nome)}{campo}</td>'
+            f'<tr><td class="esq nome">{_esc_html(e["nome"])}'
+            f'<br><span class="rp-fonte">{_esc_html(plataforma)}</span></td>'
             f'<td><span class="rp-selo {classe}">'
-            f'{_esc_html(s.get("classificacao") or "")}</span></td>'
-            f'<td class="esq rp-porque">{_esc_html(s.get("por_que") or "")}{ressalva}</td></tr>')
-
-    ele = dados.get("elefante") or {}
-    for chave, s in (ele.get("suporte") or {}).items():
-        if isinstance(s, dict) and s.get("classificacao"):
-            item(f"Elefante · {chave.replace('_', ' ')}", s)
-    mat = dados.get("matific") or {}
-    sup_mat = mat.get("suporte") or {}
-    if sup_mat.get("classificacao"):
-        item("Matific · atividades e estrelas", sup_mat)
-    if isinstance(sup_mat.get("questoes"), dict):
-        item("Matific · questões", sup_mat["questoes"])
+            f'{_esc_html(_ROTULO_CLASSIFICACAO.get(classificacao, classificacao))}</span></td>'
+            f'<td class="esq rp-porque">{_esc_html(e["explicacao"])}{cuidado}</td></tr>')
     if not linhas:
         return ""
     return ('<h2 class="secao">COMO LER ESTES NÚMEROS</h2>'
             '<table class="tab"><thead><tr><th class="esq">Indicador</th>'
-            '<th>Classificação</th><th class="esq">Por quê</th></tr></thead>'
+            '<th>Classificação</th><th class="esq">O que o número conta</th></tr></thead>'
             f'<tbody>{"".join(linhas)}</tbody></table>')
 
 
 def _nao_suportado_html(dados: dict) -> str:
-    itens = dados.get("nao_suportado") or []
+    itens = _o_que_nao_responde(dados)
     if not itens:
         return ""
     blocos = "".join(
-        f'<div class="rp-nota"><b>'
-        f'{_esc_html(_ROTULO_PLATAFORMA.get(i.get("plataforma"), i.get("plataforma") or ""))}'
-        f' · {_esc_html(str(i.get("metrica") or "").replace("_", " "))}:</b> '
-        f'{_esc_html(i.get("por_que") or "")}</div>' for i in itens)
+        f'<div class="rp-nota"><b>{_esc_html(e["nome"])}:</b> '
+        f'{_esc_html(e["explicacao"])}</div>' for e in itens)
     return ('<h2 class="secao">O QUE ESTE RELATÓRIO NÃO RESPONDE</h2>'
             '<p class="rp-porque">Métrica sem dado histórico suficiente sai declarada, '
             'não estimada: um número aproximado num relatório de gestão vira decisão.</p>'
@@ -895,14 +1008,12 @@ def _reserva(dados: dict, cor: str) -> bytes:
             linhas.append(["", "valor NÃO é só o período", ""])
         for valor, detalhe in aviso["curtos"]:
             linhas.append(["", valor, _curto(detalhe, 44)])
-    for nome, s_ in _ressalvas(dados):
-        linhas.append(["Ressalva · " + nome, "", _primeira_frase(s_, 72)])
+    for nome, cuidado in _ressalvas(dados):
+        linhas.append(["Cuidado ao ler · " + nome, "", _primeira_frase(cuidado, 72)])
 
-    for item in dados.get("nao_suportado") or []:
-        rotulo = (f"{_ROTULO_PLATAFORMA.get(item.get('plataforma'), '')} · "
-                  f"{str(item.get('metrica') or '').replace('_', ' ')}")
-        linhas.append([rotulo.strip(" ·"), SEM_SUPORTE,
-                       _primeira_frase(item.get("por_que"))])
+    for e in _o_que_nao_responde(dados):
+        linhas.append([e["nome"], SEM_SUPORTE,
+                       e.get("curto") or _primeira_frase(e["explicacao"])])
 
     # TODA célula passa pela normalização: as que eu escrevi e, principalmente,
     # as que vieram do motor.
