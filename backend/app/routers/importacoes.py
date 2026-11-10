@@ -1211,8 +1211,21 @@ def _instante(texto) -> datetime | None:
         return None
 
 
+# Os campos do retrato que as Questões do período medem (os mesmos de
+# ``sync.orchestrator.CAMPOS_QUESTOES``, que importa este módulo).
+_CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
+
+
+def _guarda_questoes(rev: RevisaoIdentidade) -> bool:
+    """A pendência guarda um retrato com as questões (alguma linha traz o campo)?"""
+    return any(isinstance(linha, dict) and any(linha.get(c) is not None
+                                               for c in _CAMPOS_QUESTOES)
+               for linha in rev.linhas or [])
+
+
 def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[str],
-                                 coletor: "ida.ColetorRevisoes") -> bool:
+                                 coletor: "ida.ColetorRevisoes", *,
+                                 sem_questoes: bool = False) -> bool:
     """Esta linha traz o MESMO dado que a pendência guardava, tão novo quanto ou
     mais? Só então encerrar sem aplicar o congelado não perde nada — é o mesmo
     juízo que o /resolver faz com ``_retrato_superado``, antecipado.
@@ -1242,11 +1255,20 @@ def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[st
         mesmo dia, que o /resolver nunca reaplicaria. Data LEGADA fora do
         calendário (``0001-01-01T00:00:00+00:00``, que estoura na conversão para
         Brasília): a pendência fica para o gestor — antes o ``OverflowError``
-        derrubava a sincronização da escola inteira."""
+        derrubava a sincronização da escola inteira;
+      * QUESTÕES QUE NÃO VIERAM (S9, ``sem_questoes``: a importação desta linha é
+        ``IMPORTACAO_SEM_QUESTOES``): a linha não traz as questões, então não
+        substitui o retrato guardado que as traz — a medida dele é a última das
+        questões. Encerrada aqui, ela sumia: com ``sem_retrato_repetido`` nada novo
+        era gravado (ou o retrato novo só repetia as questões de antes) e o
+        Relatório por Período perdia o ponto. Fica para o /resolver, ou para a
+        próxima coleta que trouxer as questões."""
     if rev.chave not in chaves_da_linha or rev.motivo in _SO_O_GESTOR_ENCERRA:
         return False
     if rev.formato == "leituras":
         return coletor.origem == "sincronizacao"
+    if sem_questoes and _guarda_questoes(rev):
+        return False
     congelada = _instante((rev.contexto or {}).get("data_referencia"))
     if congelada is None:
         return True          # sem data: o /resolver nunca reaplicaria esse retrato
@@ -1354,7 +1376,8 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
 
     Os DADOS CONGELADOS na revisão NÃO são aplicados: só se encerra a pendência
     cujo dado ESTA linha substitui (``_linha_substitui_o_congelado`` — mesmo tipo
-    de dado, retrato não mais antigo, leituras só pela sincronização). Retrato:
+    de dado, retrato não mais antigo, leituras só pela sincronização; na coleta
+    sem as questões (S9), só o retrato guardado que também não as tem). Retrato:
     vale o desta linha, e o /resolver descartaria o congelado
     (``_retrato_superado``). Leituras: a lista LIFETIME da sincronização contém
     os livros guardados (e a UNIQUE de Leitura impede duplicar). Pendência que esta
@@ -1396,6 +1419,10 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
     ids += sorted(ids_por_nome)
     if not ids:
         return []
+    # S9: a importação desta linha veio sem as questões? (a marca é dela, gravada
+    # antes das linhas; ``db.get`` acha a importação já na sessão, sem consulta).
+    importacao = db.get(Importacao, coletor.importacao_id) if coletor.importacao_id else None
+    sem_questoes = importacao is not None and importacao.status == IMPORTACAO_SEM_QUESTOES
     contexto = coletor.contexto or {}
     chaves_da_linha = {ida.chave_pendencia(c, coletor.formato,
                                            str(contexto.get("periodo_inicio") or ""),
@@ -1445,7 +1472,8 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                 if isinstance(c, dict))):
             ficaram.append(rev)          # a pendência por nome pode ser de outra ficha
             continue
-        if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor):
+        if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor,
+                                            sem_questoes=sem_questoes):
             ficaram.append(rev)
             continue
         # A pendência por NOME nunca é encerrada como decisão de gente, nem quando a
