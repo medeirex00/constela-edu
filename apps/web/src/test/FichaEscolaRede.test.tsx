@@ -274,13 +274,76 @@ describe("Ficha da escola — escola que não é da rede", () => {
     expect(await screen.findByTestId("analise-escola-indicador-saresp")).toBeInTheDocument();
   });
 
-  it("as duas listas da rede falham: o erro aparece (nunca a ficha de outra escola)", async () => {
+  it("as duas listas da rede falham e a escola não está na lista da sessão: o erro aparece, sem ler a escola", async () => {
+    semearEscolas();
+    responderErro("GET", "/redes/1/dashboard", 500, "FALHA-DO-PAINEL");
+    responderErro("GET", "/redes/1/analise/plataformas", 500, "FALHA-DAS-PLATAFORMAS");
+    // A inativa (6) não está na lista da sessão: só o painel ou as plataformas a confirmariam.
+    renderEscolas("/rede/escolas/6");
+    expect(await screen.findByText(/FALHA-DO-PAINEL/, undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByTestId("ficha-cadastro-carregando")).toBeNull();
+    expect(leuDaEscola(6)).toBe(false);
+  });
+
+  it("as duas listas falham com a escola na lista da sessão (Secretaria): a ficha abre e cada bloco diz o erro", async () => {
     semearEscolas();
     responderErro("GET", "/redes/1/dashboard", 500, "FALHA-DO-PAINEL");
     responderErro("GET", "/redes/1/analise/plataformas", 500, "FALHA-DAS-PLATAFORMAS");
     renderEscolas("/rede/escolas/2");
-    expect(await screen.findByText(/FALHA-DO-PAINEL/)).toBeInTheDocument();
+    // O nome vem da lista da sessão (só escolas da rede dela): nunca a ficha de outra escola.
+    expect(await screen.findByRole("heading", { level: 1, name: "EMEF Sintética Alfa" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("ficha-sem-cadastro")).toHaveTextContent("FALHA-DO-PAINEL"),
+                  { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText(/Não foi possível carregar o uso das plataformas: FALHA-DAS-PLATAFORMAS/))
+      .toBeInTheDocument(), { timeout: 3000 });
+    // As avaliações da escola não dependem das listas da rede.
+    expect(await screen.findByTestId("analise-escola-indicador-saresp")).toHaveTextContent("219,6");
+  });
+});
+
+describe("Ficha da escola — a Secretaria não espera o painel nem as plataformas", () => {
+  /** O painel e as plataformas da rede nunca respondem (a leitura lenta da rede). */
+  const listasDaRedePresas = () => {
+    responder("GET", "/redes/1/dashboard", () => new Promise(() => {}));
+    responder("GET", "/redes/1/analise/plataformas", () => new Promise(() => {}));
+  };
+
+  it("escola da lista da sessão: as avaliações e a evolução saem já; o cadastro diz 'carregando', nunca 'sem cadastro'", async () => {
+    semearEscolas();
+    listasDaRedePresas();
+    renderEscolas("/rede/escolas/2");
+    expect(await screen.findByRole("heading", { level: 1, name: "EMEF Sintética Alfa" })).toBeInTheDocument();
+    await waitFor(() => expect(chamadas("/escolas/2/analise"))
+      .toEqual(["/escolas/2/analise?periodo=ano_letivo&so_avaliacoes=true"]));
+    expect(chamadas("/redes/1/analise/plataformas/evolucao").map((c) => consulta(c).get("escola_id"))).toEqual(["2"]);
+    expect(screen.getByTestId("ficha-cadastro-carregando")).toHaveTextContent("Carregando o cadastro da escola...");
+    expect(screen.queryByTestId("ficha-sem-cadastro")).toBeNull();
+    expect(screen.queryByTestId("ficha-cadastro")).toBeNull();
+    expect(screen.getByText("Carregando o uso das plataformas...")).toBeInTheDocument();
+    // As avaliações aparecem sem esperar as listas da rede.
+    expect(await screen.findByTestId("analise-escola-indicador-saresp")).toHaveTextContent("219,6");
+    expect(screen.queryByTestId("ficha-nao-encontrada")).toBeNull();
+  });
+
+  it("escola fora da lista da sessão (inativa, de outra rede ou inexistente): nenhuma leitura dela enquanto as listas não chegam", async () => {
+    semearEscolas();
+    listasDaRedePresas();
+    renderEscolas("/rede/escolas/6");
+    await waitFor(() => expect(chamadas("/redes/1/dashboard").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(leuDaEscola(6)).toBe(false);
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+  });
+
+  it("o admin global não confirma pela lista da sessão (ela não diz a rede da escola): espera, como antes", async () => {
+    semearEscolas();
+    listasDaRedePresas();
+    responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética Norte" }, { id: 2, nome: "Rede Sintética Sul" }]);
+    renderEscolas("/rede/escolas/2?rede=1", { usuario: admin });
+    await waitFor(() => expect(chamadas("/redes/1/dashboard").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
     expect(leuDaEscola(2)).toBe(false);
+    expect(screen.queryByTestId("ficha-cadastro-carregando")).toBeNull();
   });
 });
 

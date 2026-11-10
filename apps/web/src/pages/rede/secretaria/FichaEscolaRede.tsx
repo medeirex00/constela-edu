@@ -21,7 +21,11 @@
  *
  * A escola tem de ser DESTA rede: a página confere na lista da rede (painel e plataformas) antes
  * de pedir qualquer leitura da escola — o endereço de uma escola de outra rede (ou que não existe)
- * mostra a mensagem, sem chamar a API dela (o backend também barra). O admin global leva o
+ * mostra a mensagem, sem chamar a API dela (o backend também barra). Para a SECRETARIA, a lista da
+ * sessão (`useApp().escolas`, o `GET /escolas`, que para ela traz só as escolas ATIVAS da rede dela)
+ * já confirma: as leituras da escola saem junto com o painel e as plataformas, sem esperar por eles
+ * (a escola inativa não está nessa lista e continua esperando a confirmação). O admin global não
+ * confirma pela sessão (a lista dele é de todas as redes e não diz a rede de cada escola) e leva o
  * `?rede=` em todos os links (`ctx.link`). Nenhum dado de aluno: tudo agregado e protegido.
  */
 import { ChevronLeft, ClipboardCheck, Gauge, MonitorSmartphone, School } from "lucide-react";
@@ -96,9 +100,11 @@ function Voltar({ para }: { para: string }) {
 
 const inteiro = (n: number) => n.toLocaleString("pt-BR");
 
-/** O cadastro da escola: o que o painel da rede diz (ano letivo), sem nada de uso. */
-function Cadastro({ cartao, erro, linkTurmas }: {
+/** O cadastro da escola: o que o painel da rede diz (ano letivo), sem nada de uso. Com o painel
+ *  ainda a caminho (a ficha da Secretaria abre antes dele), "carregando" — nunca "sem o cadastro". */
+function Cadastro({ cartao, carregando, erro, linkTurmas }: {
   cartao: EscolaCartao | null;
+  carregando: boolean;
   erro: string | null;
   linkTurmas: ReactNode;
 }) {
@@ -124,6 +130,8 @@ function Cadastro({ cartao, erro, linkTurmas }: {
           {item("Turmas", inteiro(cartao.total_turmas))}
           {item("Professores", inteiro(cartao.total_professores))}
         </dl>
+      ) : carregando ? (
+        <p className={`text-sm ${CINZA}`} data-testid="ficha-cadastro-carregando">Carregando o cadastro da escola...</p>
       ) : (
         <p className={`text-sm ${CINZA}`} data-testid="ficha-sem-cadastro">
           Sem o cadastro da escola{erro ? `: não foi possível carregar o painel da rede (${erro})` : ""}.
@@ -304,7 +312,9 @@ function Ficha({ ctx, escolaId }: { ctx: ContextoDaPagina; escolaId: number | nu
                                                      { cacheMs: 60_000 });
   const cartao = escolaId != null ? painel.dados?.escolas.find((e) => e.escola_id === escolaId) ?? null : null;
   const daAnalise = escolaId != null ? anoLetivo.dados?.escolas.find((e) => e.escola_id === escolaId) ?? null : null;
-  const confirmada = escolaId != null && (cartao != null || daAnalise != null);
+  // A Secretaria: a lista da sessão só tem escolas da rede dela (o global não usa este atalho).
+  const daSessao = !ctx.global && escolaId != null ? escolas.find((e) => e.id === escolaId) ?? null : null;
+  const confirmada = escolaId != null && (cartao != null || daAnalise != null || daSessao != null);
   // As leituras DA escola só depois de confirmada (escola de outra rede: nenhuma chamada).
   const analise = useApiExata<RespostaAnaliseEscola>(confirmada ? urlAnaliseNoAnoLetivo(escolaId) : null,
                                                      OPCOES_ANALISE_DA_ESCOLA);
@@ -332,7 +342,7 @@ function Ficha({ ctx, escolaId }: { ctx: ContextoDaPagina; escolaId: number | nu
     return <NaoEncontrada volta={volta} />;
   }
 
-  const nome = cartao?.nome ?? daAnalise?.nome ?? "Escola";
+  const nome = cartao?.nome ?? daAnalise?.nome ?? daSessao?.nome ?? "Escola";
   const modulos = anoLetivo.dados?.modulos;
   const nomePlataformas = rotuloDasPlataformas(modulos
     ? [...(modulos.elefante ? ["leitura"] : []), ...(modulos.matific ? ["matematica"] : [])]
@@ -368,7 +378,8 @@ function Ficha({ ctx, escolaId }: { ctx: ContextoDaPagina; escolaId: number | nu
         )}
       </div>
 
-      <Cadastro cartao={cartao} erro={painel.erro?.message ?? null} linkTurmas={linkTurmas} />
+      <Cadastro cartao={cartao} carregando={painel.dados == null && painel.erro == null}
+                erro={painel.erro?.message ?? null} linkTurmas={linkTurmas} />
       <SituacaoDeUso cartao={cartao} plataformas={anoLetivo.dados} erro={anoLetivo.erro} escolaId={escolaId} />
       <PlataformasNoPeriodo escolaId={escolaId} periodo={periodo} aoMudar={definirPeriodo}
                             leitura={ehAnoLetivo ? anoLetivo : doPeriodo} nomePlataformas={nomePlataformas} />

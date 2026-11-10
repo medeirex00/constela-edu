@@ -13,7 +13,8 @@
  *    LADO A LADO, logo abaixo da tabela: uma coluna por escola com o Elefante e o Matific no
  *    período (a mesma leitura da tabela) e, separadas pela frase dos períodos diferentes, as
  *    avaliações externas (`/escolas/{id}/analise`: uma leitura por escola marcada, só quando há
- *    escolas marcadas). Plataformas e avaliações nunca na mesma tabela (medidas e períodos
+ *    escolas marcadas; a Secretaria as pede junto com as plataformas, pela lista da sessão —
+ *    `marcadasAntesDasPlataformas`). Plataformas e avaliações nunca na mesma tabela (medidas e períodos
  *    diferentes). Nas avaliações, NUNCA duas edições na mesma linha: a edição de cada linha é a
  *    mais recente com resultado entre as escolas marcadas (`edicaoDeReferencia`); a escola cujo
  *    último resultado é de edição anterior não mostra o número, a rede nem a meta — a célula diz,
@@ -32,6 +33,7 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { TabelaRolavel } from "../../../components/TabelaRolavel";
 import { Badge, Card, Carregando, IconePastel, Mensagem } from "../../../components/ui";
+import { useApp } from "../../../context/AppContext";
 import { rotuloDasPlataformas, useModulos } from "../../../hooks/useModulos";
 import type { ApiError } from "../../../lib/api";
 import { OPCOES_ANALISE_DA_ESCOLA, urlAnaliseNoAnoLetivo } from "../../analise/AnaliseDaEscola";
@@ -356,17 +358,35 @@ function CelulaSemResultado({ leitura, semInep }: { leitura: LeituraDaEscola; se
                        texto_ausencia={semInep ? "sem código INEP no cadastro" : "sem resultado oficial"} />;
 }
 
-/** As 4 leituras possíveis (uma por escola marcada, nas mesmas posições a cada render). */
-function useAnalisesDasEscolas(ids: number[]): LeituraDaEscola[] {
+/** A leitura de uma escola que ainda não tem a dela (nem dado nem erro: carregando). */
+const LEITURA_A_CAMINHO: LeituraDaEscola = { dados: null, erro: null };
+
+/** As 4 leituras possíveis (uma por escola marcada, nas mesmas posições a cada render), por id da
+ *  escola: quem mostra casa cada coluna pelo id, nunca pela posição. */
+function useAnalisesDasEscolas(ids: number[]): ReadonlyMap<number, LeituraDaEscola> {
   const r0 = useApiExata<RespostaAnaliseEscola>(urlAnaliseNoAnoLetivo(ids[0]), OPCOES_ANALISE_DA_ESCOLA);
   const r1 = useApiExata<RespostaAnaliseEscola>(urlAnaliseNoAnoLetivo(ids[1]), OPCOES_ANALISE_DA_ESCOLA);
   const r2 = useApiExata<RespostaAnaliseEscola>(urlAnaliseNoAnoLetivo(ids[2]), OPCOES_ANALISE_DA_ESCOLA);
   const r3 = useApiExata<RespostaAnaliseEscola>(urlAnaliseNoAnoLetivo(ids[3]), OPCOES_ANALISE_DA_ESCOLA);
-  return [r0, r1, r2, r3].slice(0, ids.length).map((r, i) => ({
-    // Só a resposta DESTA escola (a leitura de outra posição nunca aparece na coluna errada).
+  return new Map([r0, r1, r2, r3].slice(0, ids.length).map((r, i) => [ids[i], {
+    // Só a resposta DESTA escola (a leitura de outra escola nunca aparece na coluna errada).
     dados: r.dados && r.dados.escola.id === ids[i] ? r.dados : null,
     erro: r.erro,
-  }));
+  }]));
+}
+
+/**
+ * As escolas de `?comparar=` que a SECRETARIA já pode ler antes das plataformas chegarem: as
+ * primeiras da URL, em ordem, enquanto forem escolas da lista da sessão (`useApp().escolas`, que
+ * para ela só tem as escolas ATIVAS da rede dela), até o limite. Para na primeira que não está na
+ * lista (de outra rede, inativa ou inexistente): sem as plataformas não se sabe se ela entra entre
+ * as marcadas, e as seguintes poderiam ficar de fora — elas esperam, como antes. Assim, o que se lê
+ * antes é sempre o começo das marcadas de depois (nenhuma leitura a mais, nenhuma de outra rede).
+ */
+export function marcadasAntesDasPlataformas(ids: number[], daSessao: readonly { id: number }[]): number[] {
+  const conhecidas = new Set(daSessao.map((e) => e.id));
+  const fim = ids.findIndex((id) => !conhecidas.has(id));
+  return (fim < 0 ? ids : ids.slice(0, fim)).slice(0, LIMITE_COMPARAR);
 }
 
 function AvaliacoesLadoALado({ escolas, leituras, resultados, linkDaEscola, aoTirar, inativas }: {
@@ -461,9 +481,12 @@ function AvaliacoesLadoALado({ escolas, leituras, resultados, linkDaEscola, aoTi
 
 // --- Lado a lado: o bloco ------------------------------------------------------------------------
 
-function ComparacaoLadoALado({ p, ids, serie, nomePlataformas, linkDaEscola, aoTirar, idTitulo, refTitulo, inativas }: {
+function ComparacaoLadoALado({ p, ids, analises, serie, nomePlataformas, linkDaEscola, aoTirar, idTitulo, refTitulo,
+  inativas }: {
   p: RespostaPlataformas;
   ids: number[];
+  /** As análises das escolas marcadas, por id (lidas pela tela, que as pede antes das plataformas). */
+  analises: ReadonlyMap<number, LeituraDaEscola>;
   serie: number | null;
   nomePlataformas: string;
   linkDaEscola: (id: number) => LinkDaEscola;
@@ -475,7 +498,7 @@ function ComparacaoLadoALado({ p, ids, serie, nomePlataformas, linkDaEscola, aoT
   // Ordem alfabética também aqui (não é ranking).
   const escolas = porNome(ids.map((id) => p.escolas.find((e) => e.escola_id === id))
     .filter((e): e is EscolaPlataformas => Boolean(e)));
-  const leituras = useAnalisesDasEscolas(escolas.map((e) => e.escola_id));
+  const leituras = escolas.map((e) => analises.get(e.escola_id) ?? LEITURA_A_CAMINHO);
   const resultados = leituras.map((l) => (l.dados ? ultimosOficiais(l.dados) : new Map() as ResultadosDaEscola));
   // A edição mais nova entre os resultados mostrados: a frase dos períodos diz "até {ano}".
   const edicoes = resultados.flatMap((m) => [...m.values()].map((v) => v.r.ponto.edicao));
@@ -649,6 +672,7 @@ function Escolas({ ctx }: { ctx: ContextoDaPagina }) {
   const inativas: ReadonlySet<number> = new Set((painel.dados?.escolas ?? [])
     .filter((c) => c.status !== "ativa").map((c) => c.escola_id));
   const { modulos } = useModulos();
+  const { escolas: escolasDaSessao } = useApp();
   const p = plataformas.dados;
   const nomePlataformas = rotuloDasPlataformas(p
     ? [...(p.modulos.elefante ? ["leitura"] : []), ...(p.modulos.matific ? ["matematica"] : [])]
@@ -658,9 +682,14 @@ function Escolas({ ctx }: { ctx: ContextoDaPagina }) {
   const refTitulo = useRef<HTMLHeadingElement>(null);
 
   // As marcadas: as da URL que são escolas DESTA rede (nada de leitura de escola de outra rede).
+  const daUrl = idsDaConsulta(params.get("comparar"));
   const marcadas = p
-    ? idsDaConsulta(params.get("comparar")).filter((id) => p.escolas.some((e) => e.escola_id === id)).slice(0, LIMITE_COMPARAR)
+    ? daUrl.filter((id) => p.escolas.some((e) => e.escola_id === id)).slice(0, LIMITE_COMPARAR)
     : [];
+  // As avaliações das marcadas não dependem das plataformas: com 2 ou mais, a leitura de cada escola
+  // sai já (a Secretaria, pela lista da sessão, antes das plataformas; o global, depois delas).
+  const paraLer = p ? marcadas : ctx.global ? [] : marcadasAntesDasPlataformas(daUrl, escolasDaSessao);
+  const analises = useAnalisesDasEscolas(paraLer.length >= 2 ? paraLer : []);
   function gravar(ids: number[]) {
     const prox = new URLSearchParams(params);
     if (ids.length) prox.set("comparar", ids.join(","));
@@ -739,7 +768,7 @@ function Escolas({ ctx }: { ctx: ContextoDaPagina }) {
       </Card>
 
       {p && marcadas.length >= 2 && (
-        <ComparacaoLadoALado p={p} ids={marcadas} serie={serie} nomePlataformas={nomePlataformas}
+        <ComparacaoLadoALado p={p} ids={marcadas} analises={analises} serie={serie} nomePlataformas={nomePlataformas}
                              linkDaEscola={linkDaEscola} aoTirar={alternar} idTitulo={idTitulo} refTitulo={refTitulo}
                              inativas={inativas} />
       )}
