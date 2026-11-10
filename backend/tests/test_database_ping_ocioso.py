@@ -41,19 +41,40 @@ def test_engine_pg_sem_pre_ping_com_lifo_e_limite_padrao_de_30_s():
         "connect_args": {"check_same_thread": False}, "hide_parameters": True}
 
 
+_SONDA_DO_ENGINE_DO_APP = """
+from types import SimpleNamespace
+from app.core import database as d
+p = d.engine.pool
+# Cada evento de conexão NOVA do pool rodado sobre uma conexão falsa (os do próprio dialeto, que
+# precisam do psycopg de verdade, falham na falsa e não contam): algum desliga o prepare?
+falsa = SimpleNamespace(prepare_threshold=5)
+for ouvinte in list(p.dispatch.connect):
+    try:
+        ouvinte(falsa, SimpleNamespace(info={}))
+    except Exception:
+        pass
+leitura = d.SessionLeitura.kw["bind"]
+print(p._pre_ping, p._pool.use_lifo, len(p.dispatch.checkout) > 0, len(p.dispatch.checkin) > 0,
+      falsa.prepare_threshold is None,
+      leitura.get_execution_options().get("isolation_level") == "AUTOCOMMIT",
+      leitura.pool is p, d.SessionLocal.kw["bind"] is d.engine)
+"""
+
+
 def test_o_engine_do_app_em_postgresql_ganha_o_ping_por_ociosidade_e_o_lifo():
     """O ``engine`` do próprio app, montado com uma URL PostgreSQL (num processo à parte, sem
-    conectar): sem ``pool_pre_ping``, com LIFO e com o evento de retirada instalado."""
+    conectar): sem ``pool_pre_ping``, com LIFO e com o evento de retirada instalado; toda
+    conexão nova sem prepared statements (``desligar_prepared_statements``) e a
+    ``SessionLeitura`` das rotas de leitura em AUTOCOMMIT no MESMO pool (``sessao_de_leitura``),
+    com a ``SessionLocal`` das gravações ainda no engine com transação."""
     pytest.importorskip("psycopg", reason="sem o driver psycopg (instalado só no job postgres do CI)")
-    codigo = ("from app.core import database as d; p = d.engine.pool; "
-              "print(p._pre_ping, p._pool.use_lifo, len(p.dispatch.checkout) > 0, "
-              "len(p.dispatch.checkin) > 0)")
     env = {**os.environ, "DATABASE_URL": "postgresql+psycopg://usuario@127.0.0.1:1/constela_teste",
            "AUTOMACAO_VERIFICAR_NO_BOOT": "false"}
-    r = subprocess.run([sys.executable, "-c", codigo], cwd=str(Path(database.__file__).parents[2]),
+    r = subprocess.run([sys.executable, "-c", _SONDA_DO_ENGINE_DO_APP],
+                       cwd=str(Path(database.__file__).parents[2]),
                        env=env, capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr[-2000:]
-    assert r.stdout.split() == ["False", "True", "True", "True"]
+    assert r.stdout.split() == ["False", "True", "True", "True", "True", "True", "True", "True"]
 
 
 class _Pings:
