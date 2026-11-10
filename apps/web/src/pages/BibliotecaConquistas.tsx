@@ -43,7 +43,10 @@ import {
 import type { TomPastel } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
+import { usePerfil } from "../hooks/usePerfil";
 import { numero } from "../lib/formato";
+import { podeAbrirRota } from "../lib/rotasGuardadas";
 
 // O selo de raridade e os nomes das plataformas moram em components/ConquistasUi;
 // continuam exportados daqui para quem já os importava desta página.
@@ -178,6 +181,12 @@ export default function BibliotecaConquistas() {
   const { dados, erro, carregando, recarregar } = useApi<Biblioteca>(
     escolaId ? `/escolas/${escolaId}/gamificacao/biblioteca` : null,
   );
+  // "Conquistas e Mural" (/conquistas) é tela da gestão (RotaGestao). A professora
+  // chega aqui pelo próprio menu (Reconhecimento › Biblioteca de Conquistas): o
+  // link de volta a mandaria, sem aviso, para a Visão geral — para ela, não aparece.
+  const perfil = usePerfil();
+  const { tem } = useModulos();
+  const abreConquistas = podeAbrirRota("/conquistas", perfil, tem);
   const [plataforma, setPlataforma] = useState("");
   const [categoria, setCategoria] = useState("");
   const [raridade, setRaridade] = useState("");
@@ -218,12 +227,14 @@ export default function BibliotecaConquistas() {
   return (
     <div className="space-y-6">
       <div>
-        <Link
-          to="/conquistas"
-          className="mb-3 inline-flex items-center gap-1.5 rounded-lg text-sm font-medium text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          <ArrowLeft size={15} aria-hidden /> Conquistas e Mural
-        </Link>
+        {abreConquistas && (
+          <Link
+            to="/conquistas"
+            className="mb-3 inline-flex items-center gap-1.5 rounded-lg text-sm font-medium text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            <ArrowLeft size={15} aria-hidden /> Conquistas e Mural
+          </Link>
+        )}
         <PageHeader
           titulo="Biblioteca de Conquistas"
           descricao="Todas as medalhas do Constela Edu, com critérios claros de desbloqueio. Clique em uma conquista para ver os detalhes."

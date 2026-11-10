@@ -743,6 +743,22 @@ describe("Navegação — atalhos de teclado (Alt+1..0)", () => {
     expect(espiao.endereco).toBe("/conquistas");
   });
 
+  // Importações (RotaEscolaOp), Conquistas e Mural e Assistente (RotaGestao) não abrem para
+  // a professora: as teclas a mandavam, sem aviso, de volta à Visão geral.
+  it("professora: Alt+5, Alt+6 e Alt+8 não navegam; Alt+2, Alt+4 e Alt+9 seguem", async () => {
+    const { espiao } = await montar(PROFESSORA, { rota: "/suporte" });
+    for (const tecla of ["5", "6", "8", "0"]) {
+      teclar(tecla);
+      expect(espiao.endereco, `Alt+${tecla}`).toBe("/suporte");
+    }
+    teclar("2");
+    expect(espiao.endereco).toBe("/ranking");
+    teclar("4");
+    expect(espiao.endereco).toBe("/alunos");
+    teclar("9");
+    expect(espiao.endereco).toBe("/relatorios");
+  });
+
   it("destinosDoTeclado: a Secretaria só tem as três áreas; os outros perfis, os destinos de sempre", () => {
     const AREAS = { "1": "/", "2": "/rede/escolas", "3": "/rede/avaliacoes-externas" };
     expect(destinosDoTeclado(false, true)).toEqual(AREAS);
