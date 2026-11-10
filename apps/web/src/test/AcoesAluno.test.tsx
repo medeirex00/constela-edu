@@ -323,6 +323,31 @@ test("trocar contra a sugestão avisa do nome abreviado e não é desfeito", asy
   expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
 });
 
+test("enquanto a prévia confere, FUNDIR digitado não libera o botão", async () => {
+  // Sem a prévia, o gestor fundiria na direção da ficha aberta (que pode ser o
+  // stub) sem ver a sugestão, o aviso de nome abreviado nem as datas descartadas.
+  let liberar: () => void = () => {};
+  const chegou = new Promise<void>((r) => { liberar = r; });
+  const previa = previaComSugestao(10);
+  responder("GET", /\/alunos\/fundir\/previa/,
+    (caminho: string) => chegou.then(() => previa(caminho)));
+  responder("POST", /\/alunos\/fundir$/, { ok: true });
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+
+  expect(await screen.findByText(/Conferindo as leituras das duas fichas/)).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  const botao = screen.getByRole("button", { name: /Fundir cadastros/ });
+  expect(botao).toBeDisabled();
+  await userEvent.click(botao);
+  expect(api.mock.calls.some(([c, o]) => String(c).endsWith("/alunos/fundir")
+    && (o as RequestInit)?.method === "POST")).toBe(false);
+
+  liberar();
+  expect(await screen.findByText(/Sugestão do sistema: manter este cadastro/)).toBeInTheDocument();
+  expect(screen.queryByText(/Conferindo as leituras/)).toBeNull();
+  expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
+});
+
 test("quando a ficha aberta já é a sugerida, ela continua principal", async () => {
   responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(10));
   await abrirFusaoCom("Ana Souza Lima Ficticia");
