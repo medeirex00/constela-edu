@@ -21,7 +21,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from app.services.importacao import _int_api, student_id_elefante
+from app.services.importacao import _data_iso_elefante, _int_api, student_id_elefante
 from app.sync import escola_externa, fuso
 from app.sync.connectors.base import (
     ConectorNavegador,
@@ -47,6 +47,27 @@ from app.sync.interfaces import (
 def _assinatura_aluno_resumo(al: dict) -> tuple:
     return tuple(al.get(c) for c in ("studentName", "totalBooksRead", "qtdBooksRead",
                                      "totalReadTime", "responses", "approvedResponses"))
+
+
+def _campos_sumidos_do_livro(b: dict) -> list[str]:
+    """Os campos de que a leitura datada depende (título e data) que SUMIRAM deste
+    livro da resposta do ``overall-student-books-read``: a chave não veio, ou veio
+    com um valor que não se lê (a data que o importador não interpreta, um objeto no
+    lugar do texto). Nulo ou vazio EXPLÍCITO é "sem dado" — a linha é descartada e
+    contada como sempre — e não entra aqui: a mesma regra de
+    ``Analise.campos_sumidos`` do relatório de turma. Em TODOS os livros de uma turma
+    é o sinal de que o formato da resposta mudou (campo renomeado na API)."""
+    sumidos: list[str] = []
+    titulo = b.get("bookTitle")
+    if "bookTitle" not in b or isinstance(titulo, (dict, list)):
+        sumidos.append("título")
+    bruto = b.get("lastReadWhen")
+    if "lastReadWhen" not in b or (
+            bruto is not None and str(bruto).strip() != ""
+            and (isinstance(bruto, (dict, list)) or not _data_iso_elefante(
+                fuso.instante_para_horario_local(bruto)[0]))):
+        sumidos.append("data")
+    return sumidos
 
 
 def _separar_ids_em_varias_turmas(arquivos: list, contexto, log) -> list:
@@ -1359,6 +1380,9 @@ class ConectorElefante(ConectorNavegador):
                     leituras: list[dict] = []
                     datas_com_fuso = 0
                     livros_sem_titulo = 0
+                    livros_recebidos = 0          # livros (objetos) que chegaram
+                    livros_com_campo_sumido = 0   # ... sem título ou data por formato
+                    campos_sumidos: set[str] = set()
                     entregues: set[str] = set()   # alunos cujos livros CHEGARAM
                     falhos: set[str] = set()      # alunos cujo pedido de livros FALHOU
                     for item in (lote or []):
@@ -1385,6 +1409,12 @@ class ConectorElefante(ConectorNavegador):
                             continue
                         entregues.add(sid)
                         for b in livros:
+                            if isinstance(b, dict):
+                                livros_recebidos += 1
+                                sumidos_b = _campos_sumidos_do_livro(b)
+                                if sumidos_b:
+                                    livros_com_campo_sumido += 1
+                                    campos_sumidos.update(sumidos_b)
                             if isinstance(b, dict) and not b.get("bookTitle"):
                                 livros_sem_titulo += 1
                             if isinstance(b, dict) and b.get("bookTitle"):
@@ -1416,12 +1446,33 @@ class ConectorElefante(ConectorNavegador):
                                 if id_livro is not None:
                                     item_l["bookId"] = id_livro
                                 leituras.append(item_l)
+                    # FORMATO QUE MUDOU: o título ou a data SUMIU (chave renomeada,
+                    # valor que não se lê) de TODOS os livros desta turma. Não é linha
+                    # com defeito de passagem — nenhuma leitura daria para gravar, e
+                    # avançar o cursor perderia o livro novo de quem leu: a próxima
+                    # coleta veria o mesmo total e não pediria os livros dele. É a
+                    # falha da unidade com o código de formato (alerta crítico
+                    # "Formato do relatório mudou", coleta fora do "em dia"), como a
+                    # resposta dos livros que não é lista; o cursor desses alunos
+                    # não avança. Nulo explícito é "sem dado" e segue a regra de
+                    # sempre (linha descartada contada).
+                    formato_mudou = bool(livros_recebidos) and (
+                        livros_com_campo_sumido == livros_recebidos)
+                    if formato_mudou:
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: os livros vieram sem "
+                            f"{' e '.join(sorted(campos_sumidos, reverse=True))} em todas "
+                            f"as {livros_recebidos} linha(s) (o formato da resposta "
+                            f"mudou) — leituras de {len(entregues)} aluno(s) NÃO "
+                            "importadas; o cursor deles não avança.")
+                        registrar_falha_coleta(contexto, "lote", cid, "parser_incompativel")
+                        leituras, livros_sem_titulo, datas_com_fuso = [], 0, 0
                     # O CURSOR AVANÇA SÓ APÓS SUCESSO: quem teve os livros entregues
                     # nesta sync recebe o novo total; quem falhou (lote inteiro
                     # falhou, ou o aluno veio sem `books`) fica SEM cursor novo → a
                     # próxima sync o busca de novo. (O serviço ainda desfaz o
                     # cursor de quem o `confirmar` não conseguiu vincular.)
-                    if novos is not None:
+                    if novos is not None and not formato_mudou:
                         for s in entregues:
                             if s in totais_vistos:      # total ilegível: sem cursor novo
                                 novos[s] = totais_vistos[s]

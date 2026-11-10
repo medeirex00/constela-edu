@@ -1376,6 +1376,13 @@ def _rotulo_descarte(motivo: str) -> str:
     return _ROTULO_DESCARTE.get(motivo) or str(motivo).replace("_", " ")
 
 
+# Linhas de LIVRO (leituras do Elefante) descartadas. O cursor do aluno avança mesmo
+# assim (decisão: um livro com defeito permanente não faz toda coleta pedir os livros
+# de novo — ``test_sync_revisao_regressao``), então outra coleta logo em seguida NÃO
+# as pede: só a recoleta completa semanal (``_coleta_completa_devida``) o faz.
+_MOTIVOS_DE_LIVRO = ("sem_data", "sem_nome_ou_titulo", "livro_sem_titulo")
+
+
 @dataclass
 class _Apuracao:
     """O que a execução de fato recebeu, aplicou e perdeu — sem PII."""
@@ -1782,10 +1789,27 @@ def _mensagem_parcial(ap: _Apuracao, motivo: str | None) -> str:
                       "plataforma e ficaram com o valor da coleta anterior")
     texto = "; ".join(partes) + "."
     # Sincronizar de novo completa o que FALHOU (unidade, falha depois de gravar) ou
-    # a linha com defeito de passagem; um campo renomeado na API não volta com outra
-    # coleta — mandar repetir ensinava a ignorar o par de alertas.
-    if ap.falhas or ap.defeitos or motivo == "falha_apos_gravacao":
+    # a linha com defeito de passagem do relatório de turma (pedido de novo a cada
+    # coleta). NÃO completa: um campo renomeado na API (mandar repetir ensinava a
+    # ignorar o par de alertas), a unidade que veio em outro formato (o crítico ao
+    # lado diz que a coleta precisa de ajuste) e a leitura descartada — o cursor do
+    # aluno já avançou e a próxima coleta não pede os livros dele.
+    falha_que_repetir_completa = any(f.get("codigo") != "parser_incompativel"
+                                     for f in ap.falhas)
+    so_formato = bool(ap.falhas) and not falha_que_repetir_completa
+    defeito_de_livro = any(ap.descartes.get(m) for m in _MOTIVOS_DE_LIVRO)
+    defeito_que_repetir_completa = any(
+        n for m, n in ap.descartes.items()
+        if n and m not in _MOTIVOS_FORA_DE_DEFEITO and m not in _MOTIVOS_DE_LIVRO)
+    if (falha_que_repetir_completa or defeito_que_repetir_completa
+            or motivo == "falha_apos_gravacao"):
         texto += " Sincronize de novo para completar."
+    if defeito_de_livro:
+        texto += (" As leituras descartadas não voltam com outra coleta: só são pedidas "
+                  "de novo na recoleta completa semanal.")
+    if so_formato:
+        texto += (" O que veio em outro formato não volta com outra coleta: "
+                  f"{orchestrator.AJUSTE_DA_COLETA} (alerta “Formato do relatório mudou”).")
     if ap.campos_nao_atualizados:
         texto += (" Os números que não vieram não voltam com outra coleta: "
                   f"{orchestrator.AJUSTE_DA_COLETA} (alerta “Formato do relatório mudou”).")
