@@ -129,6 +129,11 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
 
     Melhor esforço: erros de rede são registrados em log e engolidos;
     tokens que o Expo reportar como mortos são removidos do banco.
+
+    Transação: a lista de destinos é lida e a transação ENCERRADA antes da chamada
+    ao Expo (até 15 s por lote); os tokens mortos são apagados numa transação curta,
+    depois. Antes, a leitura deixava a transação da requisição aberta durante a rede
+    e, no PostgreSQL, a conexão ficava presa ao pool ("idle in transaction").
     """
     linhas = db.execute(
         select(DispositivoMovel.token_push, Usuario)
@@ -145,6 +150,12 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
     if not tokens:
         return 0
 
+    # Fecha a transação que as leituras acima abriram (autobegin) ANTES da rede: a
+    # conexão volta ao pool enquanto o Expo responde. Quem chama já comitou o próprio
+    # trabalho (``importacoes._pos_commit_importacao``), então aqui só houve leitura;
+    # é COMMIT, e não rollback, para nunca descartar algo que um chamador deixasse
+    # pendente — o mesmo que a limpeza dos tokens mortos, abaixo, já fazia.
+    db.commit()
     try:
         invalidos = _enviar_lotes(montar_lotes(list(tokens), titulo, corpo, dados))
         if invalidos:
