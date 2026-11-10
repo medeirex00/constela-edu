@@ -79,6 +79,42 @@ def test_criar_pela_fila_tambem_tira_o_sufixo(cliente, db, escola_completa, monk
     assert com_nome(db, esc.id, "Zefa Quaresma Lima 3A") == []
 
 
+def test_a_fila_mostra_o_nome_que_a_ficha_nova_vai_receber(cliente, db, escola_completa,
+                                                          monkeypatch):
+    """A tela de Revisões prometia "uma ficha nova será criada para ZEFA … 3A" e o
+    /resolver gravava sem o sufixo. A listagem traz o nome que "Criar novo aluno" grava —
+    o padrão e o de cada turma em que ele muda (o sufixo de OUTRA sala sai se a ficha
+    for criada justamente nela) — pela MESMA conta do /resolver."""
+    from tests.sync_integridade_comum import turma
+    sem_disco(monkeypatch)
+    esc, t, _ = _esc(escola_completa)
+    t4b = turma(db, esc.id, "4º Ano B", "4º Ano")
+    from app.services import politica_sync
+    politica_sync.definir(db, esc.id, "bloquear")
+    db.commit()
+    aplicar(db, esc, elefante_resumo(K, [
+        {"studentId": 9104, "studentName": "Zefa Quaresma Lima 3A", "totalBooksRead": 3},
+        {"studentId": 9105, "studentName": "Iara Fictoni Modesto 4B", "totalBooksRead": 2},
+        {"studentId": 9106, "studentName": "Crianca Ficticia Sem Sufixo", "totalBooksRead": 1}]))
+    fila = {r["id_externo"]: r for r in
+            cliente.get(f"/api/v1/escolas/{esc.id}/importacoes/revisoes").json()}
+    assert fila["9104"]["nome_ficha_nova"] == "Zefa Quaresma Lima"
+    assert fila["9104"]["nome_ficha_nova_por_turma"] == {}
+    # "4B" não é a sala da linha (3ºA): fica — menos se a ficha nascer na 4ºB.
+    assert fila["9105"]["nome_ficha_nova"] == "Iara Fictoni Modesto 4B"
+    assert fila["9105"]["nome_ficha_nova_por_turma"] == {str(t4b.id): "Iara Fictoni Modesto"}
+    assert fila["9106"]["nome_ficha_nova"] == "Crianca Ficticia Sem Sufixo"
+
+    # O que a tela mostra é o que o /resolver grava, na turma escolhida.
+    for id_externo, turma_id, esperado in (("9104", t.id, "Zefa Quaresma Lima"),
+                                           ("9105", t4b.id, "Iara Fictoni Modesto")):
+        r = cliente.post(f"/api/v1/escolas/{esc.id}/importacoes/revisoes/"
+                         f"{fila[id_externo]['id']}/resolver", json={"criar_em_turma_id": turma_id})
+        assert r.status_code == 200, r.text
+        db.expire_all()
+        assert com_nome(db, esc.id, esperado)[0].id == r.json()["aluno_id"]
+
+
 # --- A13: pendência aberta por nome fecha quando a linha vem com a conta ------
 
 def _pendencia_por_nome(db, esc_id, nome, chave_sala, candidatos=()):

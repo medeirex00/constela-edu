@@ -109,6 +109,16 @@ export interface RevisaoIdentidade {
   atualizada_em: string;
   /** Só nas pendentes da listagem (as encerradas não precisam de triagem). */
   triagem?: TriagemRevisao | null;
+  /** O nome que "Criar novo aluno" grava: o recebido, sem a turma escrita no fim
+   *  (quando é a da sala da linha). Só nas pendentes; ausente em servidor antigo. */
+  nome_ficha_nova?: string | null;
+  /** Onde o nome muda conforme a turma escolhida (o sufixo DAQUELA sala também sai). */
+  nome_ficha_nova_por_turma?: Record<string, string>;
+}
+
+/** O nome que a ficha nova recebe na turma escolhida — o mesmo que o /resolver grava. */
+function nomeDaFichaNova(rev: RevisaoIdentidade, turmaId: number): string {
+  return rev.nome_ficha_nova_por_turma?.[String(turmaId)] ?? rev.nome_ficha_nova ?? rev.nome_recebido;
 }
 
 /** Total real de pendências (a lista vem limitada a `LIMITE_LISTA`). */
@@ -1094,7 +1104,8 @@ function DetalheRevisao({
             <Card className="space-y-3 p-4">
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 Use apenas se esta criança ainda não tem ficha na escola. Uma ficha nova é criada com o
-                nome recebido e passa a receber estes dados.
+                nome recebido (sem a turma, quando ela vem escrita no fim do nome) e passa a receber estes
+                dados.
               </p>
               {turmasErro && turmas.length === 0 ? (
                 <Mensagem tipo="erro">Não foi possível carregar as turmas: {turmasErro.message}</Mensagem>
@@ -1118,7 +1129,7 @@ function DetalheRevisao({
               )}
               {turmaEscolhida && (
                 <dl className="space-y-0.5 text-xs">
-                  <Linha rotulo="Nome">{rev.nome_recebido}</Linha>
+                  <Linha rotulo="Nome">{nomeDaFichaNova(rev, turmaEscolhida.id)}</Linha>
                   <Linha rotulo="Turma">{turmaEscolhida.nome} · {turmaEscolhida.ano_escolar}</Linha>
                   {rev.id_externo && <Linha rotulo={rotuloId}>{rev.id_externo}</Linha>}
                 </dl>
@@ -1164,7 +1175,7 @@ function DetalheRevisao({
               </p>
             ) : (
               <p>
-                Uma ficha nova será criada para <strong>{rev.nome_recebido}</strong> na turma{" "}
+                Uma ficha nova será criada para <strong>{nomeDaFichaNova(rev, destino.turmaId)}</strong> na turma{" "}
                 <strong>{destino.turmaNome}</strong>. Faça isso só se a criança ainda não tiver ficha na
                 escola.
               </p>

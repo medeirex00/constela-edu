@@ -178,6 +178,10 @@ class RevisaoIdentidadeOut(ORMModel):
     # Veredito determinístico da triagem ("dá para encerrar com segurança, e por
     # quê") — ver ``services/triagem_revisoes``. Só na listagem da fila.
     triagem: dict | None = None
+    # O nome que "Criar novo aluno" grava (A10: sem o sufixo de turma digitado junto
+    # do nome) e, por turma, só onde ele muda. Só nas pendentes da listagem.
+    nome_ficha_nova: str | None = None
+    nome_ficha_nova_por_turma: dict[str, str] = {}
 
 
 class ResolverRevisaoIn(BaseModel):

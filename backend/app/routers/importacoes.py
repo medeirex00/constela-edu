@@ -4035,10 +4035,45 @@ async def confirmar_matriculas(
 LIMITE_LISTA_REVISOES = 500
 
 
-def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None) -> RevisaoIdentidadeOut:
+def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None,
+                 nomes: tuple[str, dict[str, str]] | None = None) -> RevisaoIdentidadeOut:
     saida = RevisaoIdentidadeOut.model_validate(rev)
     saida.motivo_texto = ida.MOTIVOS.get(rev.motivo, rev.motivo)
     saida.triagem = triagem
+    if nomes is not None:
+        saida.nome_ficha_nova, saida.nome_ficha_nova_por_turma = nomes
+    return saida
+
+
+def _nome_da_ficha_nova(rev: RevisaoIdentidade, turma_nome: str) -> str:
+    """O nome que "Criar novo aluno" grava na turma escolhida: o recebido, sem o
+    sufixo de turma digitado junto (A10) — o da sala da turma escolhida ou o da sala
+    que a linha informou (a mesma regra da criação pela importação)."""
+    return ida.nome_sem_sufixo_de_turma(rev.nome_recebido, ida.chave_sala(turma_nome),
+                                        ida.chave_sala(rev.turma_informada or ""))
+
+
+def _nomes_da_ficha_nova(db: Session, escola_id: int, revisoes: list[RevisaoIdentidade],
+                         ) -> dict[int, tuple[str, dict[str, str]]]:
+    """Para a tela prometer o nome que o /resolver grava: por pendência, o nome padrão
+    e ``{turma_id: nome}`` só das turmas em que ele muda (o sufixo daquela sala sai).
+    Sufixo de turma tem dígito: nome sem dígito é o recebido, sem conta nenhuma."""
+    saida = {r.id: ((r.nome_recebido or "").strip(), {}) for r in revisoes}
+    com_digito = [r for r in revisoes if any(c.isdigit() for c in (r.nome_recebido or ""))]
+    if not com_digito:
+        return saida
+    salas: dict[str, tuple[str, list[int]]] = {}
+    for tid, nome in db.execute(select(Turma.id, Turma.nome)
+                                .where(Turma.escola_id == escola_id)).all():
+        salas.setdefault(ida.chave_sala(nome), (nome, []))[1].append(tid)
+    for r in com_digito:
+        padrao = _nome_da_ficha_nova(r, "")
+        por_turma: dict[str, str] = {}
+        for nome_turma, tids in salas.values():
+            nome = _nome_da_ficha_nova(r, nome_turma)
+            if nome != padrao:
+                por_turma.update({str(t): nome for t in tids})
+        saida[r.id] = (padrao, por_turma)
     return saida
 
 
@@ -4073,11 +4108,13 @@ def listar_revisoes(
     # página: a lista de resolvidas/descartadas não paga esse custo.
     pendentes = [r for r in revisoes if r.status == "pendente"]
     triagens: dict[int, dict] = {}
+    nomes: dict[int, tuple[str, dict[str, str]]] = {}
     if pendentes:
         ctx = ida.carregar_contexto(db, escola_id)
         triagens = {rid: t.como_dict() for rid, t in triagem_revisoes.triar_revisoes(
             ctx, list(revisoes)).items()}
-    return [_revisao_out(r, triagens.get(r.id)) for r in revisoes]
+        nomes = _nomes_da_ficha_nova(db, escola_id, pendentes)
+    return [_revisao_out(r, triagens.get(r.id), nomes.get(r.id)) for r in revisoes]
 
 
 @router.get("/contagem-revisoes", response_model=dict)
@@ -4287,10 +4324,9 @@ def resolver_revisao(
         # Nem turma de OUTRO ano letivo: a matrícula que nasce é a do ano ativo.
         turma_arquivada.exigir_destino_do_ano_ativo(turma, escola.ano_letivo_ativo)
         # Sem o sufixo de turma digitado junto do nome (a mesma regra da criação
-        # pela importação); a pendência continua guardando o nome recebido.
-        aluno = Aluno(escola_id=escola_id, nome=ida.nome_sem_sufixo_de_turma(
-            rev.nome_recebido, ida.chave_sala(turma.nome),
-            ida.chave_sala(rev.turma_informada or "")))
+        # pela importação); a pendência continua guardando o nome recebido. É o
+        # nome que a listagem mostra (``_nomes_da_ficha_nova``).
+        aluno = Aluno(escola_id=escola_id, nome=_nome_da_ficha_nova(rev, turma.nome))
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id, turma_id=turma.id,

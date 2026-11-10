@@ -426,6 +426,44 @@ describe("Revisões de identidade — detalhe", () => {
     expect(await screen.findByText("Nenhuma pendência")).toBeInTheDocument();
   });
 
+  it("criar novo aluno: promete o nome que a ficha recebe (sem a turma escrita no fim), turma a turma", async () => {
+    // A10: o /resolver grava o nome sem o sufixo de turma ("5B") quando ele é o da sala
+    // escolhida (ou o da linha). O backend manda o nome padrão e, por turma, onde ele muda;
+    // a tela mostra o da turma escolhida — o mesmo que será gravado.
+    const u = userEvent.setup();
+    filaMock([revisaoFake({
+      candidatos: [], motivo: "turma_ambigua", nome_recebido: "ZEFA QUARESMA LIMA 5B",
+      motivo_texto: "mais de uma turma cadastrada corresponde à sala do relatório",
+      nome_ficha_nova: "ZEFA QUARESMA LIMA 5B",
+      nome_ficha_nova_por_turma: { "2": "ZEFA QUARESMA LIMA" },
+    })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u, "ZEFA QUARESMA LIMA 5B");
+    const q = within(dialogo);
+    expect(q.getByText(/sem a turma, quando ela vem escrita no fim do nome/)).toBeInTheDocument();
+
+    const nomeDaFicha = () => q.getByText("Nome:").nextElementSibling?.textContent;
+    await u.selectOptions(q.getByLabelText("Turma da ficha nova"), "1");
+    expect(nomeDaFicha()).toBe("ZEFA QUARESMA LIMA 5B");      // na 5ºA, o "5B" fica
+    await u.selectOptions(q.getByLabelText("Turma da ficha nova"), "2");
+    expect(nomeDaFicha()).toBe("ZEFA QUARESMA LIMA");         // na 5ºB, sai
+    await u.click(q.getByRole("button", { name: "Criar novo aluno" }));
+    const modal = (await screen.findByRole("heading", { name: "Criar novo aluno?" })).parentElement as HTMLElement;
+    expect(modal.textContent).toContain("Uma ficha nova será criada para ZEFA QUARESMA LIMA na turma 5ºB");
+    expect(modal.textContent).not.toContain("ZEFA QUARESMA LIMA 5B");
+  });
+
+  it("criar novo aluno: servidor antigo (sem o nome previsto) mostra o nome recebido", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({ candidatos: [] })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const q = within(await abrirDetalhe(u));
+    await u.selectOptions(q.getByLabelText("Turma da ficha nova"), "2");
+    await u.click(q.getByRole("button", { name: "Criar novo aluno" }));
+    const modal = (await screen.findByRole("heading", { name: "Criar novo aluno?" })).parentElement as HTMLElement;
+    expect(modal.textContent).toContain("Uma ficha nova será criada para TOBIAS D na turma 5ºB");
+  });
+
   it("sem turma cadastrada, a criação fica bloqueada com explicação", async () => {
     const u = userEvent.setup();
     filaMock([revisaoFake({ candidatos: [] })], []);
