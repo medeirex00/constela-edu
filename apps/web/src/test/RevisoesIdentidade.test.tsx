@@ -296,10 +296,10 @@ describe("Revisões de identidade — detalhe", () => {
     // Duas contas sem vínculo, mesmo nome, nenhuma ficha (nada foi criado).
     ["contas_repetidas_no_relatorio", "duas contas diferentes da plataforma vieram no mesmo relatório",
       /se são duas crianças, crie uma ficha para cada/],
-    // Política "bloquear": a matrícula vem da Lista Piloto; a orientação diz o caminho.
+    // Política "bloquear": a orientação diz o que fazer com os controles da gaveta.
     ["criacao_bloqueada_por_politica",
       "nenhum aluno corresponde e a política desta escola não deixa a plataforma criar ficha",
-      /a matrícula desta escola vem da Lista Piloto.*se ainda não está, matricule-a pela Lista Piloto ou em Alunos e depois vincule aqui/],
+      /use “Criar novo aluno” só depois de confirmar com a secretaria da escola/],
   ])("motivo %s mostra o texto do backend e a orientação", async (motivo, texto, orientacao) => {
     const u = userEvent.setup();
     filaMock([revisaoFake({ motivo, motivo_texto: texto })]);
@@ -308,6 +308,34 @@ describe("Revisões de identidade — detalhe", () => {
     const identidade = within(dialogo).getByRole("region", { name: "Identidade recebida" });
     expect(within(identidade).getByText(`Motivo: ${texto}`)).toBeInTheDocument();
     expect(within(identidade).getByText(orientacao)).toBeInTheDocument();
+  });
+
+  // Criação barrada pela política: o motivo (texto do backend) já diz que nada
+  // corresponde e que a matrícula vem da Lista Piloto. A orientação não repete isso
+  // e é coerente com a gaveta: antes mandava "matricular pela Lista Piloto ou em
+  // Alunos e depois vincular aqui" logo acima do botão "Criar novo aluno".
+  it("criação barrada pela política: orientação curta, sem repetir o motivo, com os botões da gaveta", async () => {
+    const u = userEvent.setup();
+    const motivoTexto = "nenhum aluno corresponde e a política desta escola não deixa a plataforma "
+      + "criar ficha — nem pela sincronização nem pela importação de relatório (a matrícula vem da "
+      + "Lista Piloto)";
+    filaMock([revisaoFake({ motivo: "criacao_bloqueada_por_politica", motivo_texto: motivoTexto,
+      candidatos: [] })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const identidade = within(dialogo).getByRole("region", { name: "Identidade recebida" });
+    expect(within(identidade).getByText(`Motivo: ${motivoTexto}`)).toBeInTheDocument();
+    const orientacao = within(identidade).getByText(/Criar novo aluno/).textContent ?? "";
+    expect(orientacao).toBe(
+      "Se a criança já tem ficha, busque-a em “Buscar outro aluno da escola” e vincule. Se não "
+      + "tem, use “Criar novo aluno” só depois de confirmar com a secretaria da escola que ela "
+      + "está matriculada.");
+    // Não repete o motivo nem manda matricular fora daqui.
+    expect(orientacao).not.toMatch(/Lista Piloto|política|Nenhuma ficha corresponde|matricule-a/);
+    // Cada controle citado está na gaveta, com esse nome.
+    expect(within(dialogo).getByRole("button", { name: /Buscar outro aluno da escola/ })).toBeInTheDocument();
+    const criar = within(dialogo).getByRole("region", { name: "Criar novo aluno" });
+    expect(within(criar).getByRole("button", { name: "Criar novo aluno" })).toBeInTheDocument();
   });
 
   it("turma arquivada: a orientação cita o rótulo que a tela Turmas de fato mostra", async () => {

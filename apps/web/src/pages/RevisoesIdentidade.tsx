@@ -248,9 +248,12 @@ const ORIENTACAO: Record<string, string> = {
   sem_turma:
     "O relatório não informa a turma. Se a criança já tem ficha, busque-a; se não, crie-a na turma certa.",
   // Política "bloquear" (services/politica_sync): a plataforma não matricula; a Lista
-  // Piloto e o cadastro em Alunos continuam criando.
+  // Piloto, o cadastro em Alunos e o "Criar novo aluno" desta gaveta continuam criando
+  // (o /resolver cria a ficha de propósito). O motivo (texto do backend, logo acima)
+  // já diz que nada corresponde e que a matrícula vem da Lista Piloto: aqui, só o que
+  // fazer, com o nome dos controles da própria gaveta.
   criacao_bloqueada_por_politica:
-    "Nenhuma ficha corresponde, e a matrícula desta escola vem da Lista Piloto: a plataforma não cria aluno. Confira a Lista Piloto: se a criança está nela, busque a ficha e vincule; se ainda não está, matricule-a pela Lista Piloto ou em Alunos e depois vincule aqui.",
+    "Se a criança já tem ficha, busque-a em “Buscar outro aluno da escola” e vincule. Se não tem, use “Criar novo aluno” só depois de confirmar com a secretaria da escola que ela está matriculada.",
   // Motivos da sincronização (identidade e turma, etapa 2).
   nome_incompleto:
     "A plataforma mandou só o nome abreviado. Se reconhece a criança, vincule à ficha dela: a conta fica vinculada e as próximas coletas entram sozinhas. Não crie ficha com o nome abreviado — confira o nome completo na plataforma antes.",
