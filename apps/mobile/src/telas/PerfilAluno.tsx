@@ -1,5 +1,5 @@
 /** Perfil do aluno: notas, posição e o "como esta nota foi calculada". */
-import { api, nota, notaDaMateria, type LinhaCalculo, type PerfilAluno as Perfil } from "@constela/core";
+import { api, nota, type LinhaCalculo, type PerfilAluno as Perfil } from "@constela/core";
 import { useQuery } from "@tanstack/react-query";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
@@ -7,6 +7,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { Carregando, Cartao, Etiqueta, TextoSuave, Titulo } from "../componentes/basicos";
 import { useAutenticacao } from "../contexto/Autenticacao";
 import type { PilhaPrincipal } from "../navegacao";
+import { notasDoPerfil } from "../notasDoPerfil";
 import { cores, espacos } from "../tema";
 
 type Props = NativeStackScreenProps<PilhaPrincipal, "PerfilAluno">;
@@ -35,6 +36,16 @@ function TabelaCalculo({ titulo, linhas, notaFinal }: {
   );
 }
 
+/** No lugar do passo a passo de uma plataforma sem dado da criança. */
+function SemDadoDaPlataforma({ plataforma }: { plataforma: string }) {
+  return (
+    <Cartao>
+      <Titulo>{plataforma}</Titulo>
+      <TextoSuave>Ainda não há dados desta criança nesta plataforma, por isso não há nota (“—”).</TextoSuave>
+    </Cartao>
+  );
+}
+
 export default function PerfilAluno({ route }: Props) {
   const { escolaId } = useAutenticacao();
   const { alunoId } = route.params;
@@ -49,6 +60,8 @@ export default function PerfilAluno({ route }: Props) {
   if (!perfil) return <Carregando texto="Perfil indisponível offline — conecte-se uma vez." />;
 
   const { detalhes } = perfil;
+  // "—" para quem não tem dado da plataforma (o mesmo critério da web).
+  const notas = notasDoPerfil(perfil);
 
   return (
     <ScrollView style={estilos.tela} contentContainerStyle={{ padding: espacos.l }}>
@@ -60,36 +73,44 @@ export default function PerfilAluno({ route }: Props) {
 
       <View style={estilos.notas}>
         {[
-          { rotulo: "Matific", valor: perfil.nota_matific },
-          { rotulo: "Leitura", valor: perfil.nota_elefante },
-          { rotulo: "Geral", valor: perfil.nota_geral },
+          { rotulo: "Matific", valor: notas.matific },
+          { rotulo: "Leitura", valor: notas.leitura },
+          { rotulo: "Geral", valor: notas.geral },
         ].map((item) => (
           <View key={item.rotulo} style={estilos.nota}>
-            {/* `null` = módulo fora do plano da rede: "—", nunca um 0,0 falso. */}
-            <Text style={estilos.notaValor}>{notaDaMateria(item.valor)}</Text>
+            {/* Sem dado da plataforma ou módulo fora do plano: "—", nunca um 0,0 falso. */}
+            <Text style={estilos.notaValor}>{item.valor}</Text>
             <TextoSuave>{item.rotulo}</TextoSuave>
           </View>
         ))}
       </View>
 
-      {detalhes.matific && (
-        <TabelaCalculo
-          titulo="Matific"
-          linhas={detalhes.matific.indicadores}
-          notaFinal={detalhes.matific.nota}
-        />
-      )}
-      {detalhes.elefante && (
-        <TabelaCalculo
-          titulo="Elefante Letrado"
-          linhas={detalhes.elefante.indicadores}
-          notaFinal={detalhes.elefante.nota}
-        />
-      )}
-      {!detalhes.matific && !detalhes.elefante && (
+      {notas.semDadoNenhum ? (
         <Cartao>
-          <TextoSuave>Ainda não há nota calculada para este aluno.</TextoSuave>
+          <TextoSuave>Ainda não há dados desta criança nas plataformas.</TextoSuave>
         </Cartao>
+      ) : (
+        <>
+          {detalhes.matific && (notas.calculoMatific ? (
+            <TabelaCalculo
+              titulo="Matific"
+              linhas={detalhes.matific.indicadores}
+              notaFinal={detalhes.matific.nota}
+            />
+          ) : <SemDadoDaPlataforma plataforma="Matific" />)}
+          {detalhes.elefante && (notas.calculoLeitura ? (
+            <TabelaCalculo
+              titulo="Elefante Letrado"
+              linhas={detalhes.elefante.indicadores}
+              notaFinal={detalhes.elefante.nota}
+            />
+          ) : <SemDadoDaPlataforma plataforma="Elefante Letrado" />)}
+          {!detalhes.matific && !detalhes.elefante && (
+            <Cartao>
+              <TextoSuave>Ainda não há nota calculada para este aluno.</TextoSuave>
+            </Cartao>
+          )}
+        </>
       )}
     </ScrollView>
   );
