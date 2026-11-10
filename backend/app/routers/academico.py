@@ -1032,6 +1032,27 @@ def _divergencias_de_identidade(a: Aluno, b: Aluno) -> list[str]:
     return motivos or ["o motor de identidade aponta conflito"]
 
 
+@router.get("/alunos/fundir/previa", response_model=dict)
+def previa_fundir_alunos(
+    manter_id: int,
+    remover_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """PRÉVIA da fusão manual (só leitura): o que acontece com os livros que estão
+    nas DUAS fichas, nesta direção (fica a data de ``manter_id``). Não grava nada e
+    não toma a trava. A Secretaria é barrada como em /alunos/duplicados: a resposta
+    traz nome de criança e os livros dela."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
+    if manter_id == remover_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Escolha dois alunos diferentes para fundir.")
+    manter = _aluno_da_escola(db, escola_id, manter_id)
+    remover = _aluno_da_escola(db, escola_id, remover_id)
+    return alunos_dedup.previa_da_fusao(db, escola_id, manter, remover)
+
+
 @router.post("/alunos/fundir", response_model=dict)
 def fundir_alunos(
     dados: FusaoAlunos,

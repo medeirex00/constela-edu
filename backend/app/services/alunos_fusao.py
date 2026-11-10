@@ -23,20 +23,26 @@ movido/descartado.
 """
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import date
+
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core.tempo import agora_br
 from app.models import (
     Aluno,
     EventoAluno,
     IdentidadeExterna,
     Leitura,
+    Livro,
     Matricula,
     Nota,
     RevisaoIdentidade,
     SnapshotElefante,
     SnapshotMatific,
 )
+from app.services import bimestres
 from app.services.audit import registrar
 
 
@@ -107,6 +113,94 @@ def _foto_pre_fusao(db: Session, remover: Aluno) -> dict:
     }
 
 
+def _bimestre_da_data(dia: date, janelas: dict[int, tuple[date, date]]) -> int | None:
+    for numero, (inicio, fim) in janelas.items():
+        if inicio <= dia <= fim:
+            return numero
+    return None
+
+
+def _bimestre_premiado(ano: int, janelas: dict, hoje: date) -> int | None:
+    """O bimestre que a tela de premiação e o certificado abrem selecionado
+    (``bimestres.bimestre_sugerido``). Com o ano letivo ainda virando, o último
+    (ou o primeiro) bimestre DAQUELE ano — nunca o de um calendário de outro ano."""
+    if not janelas:
+        return None
+    if hoje.year == ano:
+        return bimestres.bimestre_sugerido(hoje)
+    return 4 if hoje.year > ano else 1
+
+
+def leituras_repetidas(db: Session, ano_letivo: int, pares: list[tuple[int, int]],
+                       *, exemplos: int = 0, hoje: date | None = None
+                       ) -> dict[tuple[int, int], dict]:
+    """PRÉVIA, só leitura, do que a fusão faria com os livros que estão NAS DUAS
+    fichas: por par ``(manter_id, remover_id)``, quantos são, quantos têm data
+    diferente e quantos deixariam de contar em cada bimestre.
+
+    A regra de qual data fica é a de ``fundir_par`` (a de quem fica) e aqui ela só
+    é descrita. "Deixa de contar no bimestre" = a data descartada cai naquele
+    bimestre e a que fica, não — é o livro que some do pódio sem ninguém ver.
+    Compara a DATA, na mesma régua das telas por período (``Leitura.data`` sem
+    conversão, janela inclusiva). Ano sem calendário oficial: sem bimestre
+    (``None``), em vez de datas inventadas.
+
+    Uma consulta só, para qualquer número de pares (a prévia do lote lista todos)."""
+    if not pares:
+        return {}
+    janelas = bimestres.calendario(ano_letivo) or {}
+    premiado = _bimestre_premiado(ano_letivo, janelas, hoje or agora_br().date())
+    ids = {i for par in pares for i in par}
+    datas: dict[int, dict[int, object]] = defaultdict(dict)
+    for aluno_id, livro_id, quando in db.execute(
+        select(Leitura.aluno_id, Leitura.livro_id, Leitura.data)
+        .where(Leitura.aluno_id.in_(ids))
+    ).all():
+        datas[aluno_id][livro_id] = quando
+
+    saida: dict[tuple[int, int], dict] = {}
+    titulos_precisos: set[int] = set()
+    for manter_id, remover_id in pares:
+        fica, sai = datas.get(manter_id, {}), datas.get(remover_id, {})
+        comuns = fica.keys() & sai.keys()
+        diferentes: list[dict] = []
+        saem_de: dict[int, int] = defaultdict(int)
+        for livro_id in comuns:
+            dia_fica, dia_sai = fica[livro_id].date(), sai[livro_id].date()
+            if dia_fica == dia_sai:
+                continue
+            bimestre_sai = _bimestre_da_data(dia_sai, janelas)
+            deixa = (bimestre_sai if bimestre_sai is not None
+                     and bimestre_sai != _bimestre_da_data(dia_fica, janelas) else None)
+            if deixa is not None:
+                saem_de[deixa] += 1
+            diferentes.append({"livro_id": livro_id, "data_manter": dia_fica.isoformat(),
+                               "data_remover": dia_sai.isoformat(), "deixa_de_contar_em": deixa})
+        # Primeiro o que muda pódio; a ordem por id deixa a lista estável.
+        diferentes.sort(key=lambda d: (d["deixa_de_contar_em"] is None, d["livro_id"]))
+        amostra = diferentes[:exemplos]
+        titulos_precisos.update(d["livro_id"] for d in amostra)
+        saida[(manter_id, remover_id)] = {
+            "livros_repetidos": len(comuns),
+            "com_data_diferente": len(diferentes),
+            "no_bimestre": saem_de.get(premiado, 0) if premiado is not None else None,
+            "bimestre": ({"numero": premiado, "rotulo": bimestres.rotulo(premiado),
+                          "inicio": janelas[premiado][0].isoformat(),
+                          "fim": janelas[premiado][1].isoformat()}
+                         if premiado is not None else None),
+            "por_bimestre": [{"numero": n, "rotulo": bimestres.rotulo(n), "livros": saem_de[n]}
+                             for n in sorted(saem_de)],
+            "exemplos": amostra,
+        }
+    if titulos_precisos:
+        titulos = dict(db.execute(select(Livro.id, Livro.titulo).where(
+            Livro.id.in_(titulos_precisos))).all())
+        for resumo in saida.values():
+            for d in resumo["exemplos"]:
+                d["livro"] = titulos.get(d["livro_id"])
+    return saida
+
+
 def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
                usuario_id: int) -> dict:
     """Funde ``remover`` em ``manter`` (mesma escola, ambos já validados como
@@ -118,21 +212,32 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
 
     # Leituras: reatribui as de livros que o `manter` ainda não tem; as
     # repetidas (mesmo livro) são descartadas (respeita uq_leitura_unica; a
-    # releitura nunca pontua duas vezes, §35).
-    livros_do_manter = set(db.execute(
-        select(Leitura.livro_id).where(Leitura.aluno_id == manter.id)
-    ).scalars().all())
+    # releitura nunca pontua duas vezes, §35). Fica a data de quem fica (decisão
+    # C2): a data descartada vai para o log, porque pode ser a única que caía no
+    # período premiado.
+    data_no_manter = dict(db.execute(
+        select(Leitura.livro_id, Leitura.data).where(Leitura.aluno_id == manter.id)
+    ).all())
     leituras_movidas = leituras_descartadas = 0
+    descartes: list[dict] = []
     for leitura in db.execute(
         select(Leitura).where(Leitura.aluno_id == remover.id)
     ).scalars().all():
-        if leitura.livro_id in livros_do_manter:
+        if leitura.livro_id in data_no_manter:
+            descartes.append({"livro_id": leitura.livro_id,
+                              "data_manter": data_no_manter[leitura.livro_id].isoformat(),
+                              "data_remover": leitura.data.isoformat()})
             db.delete(leitura)
             leituras_descartadas += 1
         else:
             leitura.aluno_id = manter.id
-            livros_do_manter.add(leitura.livro_id)
+            data_no_manter[leitura.livro_id] = leitura.data
             leituras_movidas += 1
+    if descartes:
+        titulos = dict(db.execute(select(Livro.id, Livro.titulo).where(
+            Livro.id.in_([d["livro_id"] for d in descartes]))).all())
+        for d in descartes:
+            d["livro"] = titulos.get(d["livro_id"])
 
     # Snapshots das plataformas: reatribuídos INTEGRALMENTE (é aqui que o
     # Matific de um cadastro se junta ao Elefante do outro). Sem UNIQUE; o
@@ -348,6 +453,7 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
                         "removido": {"id": remover.id, "nome": remover_nome},
                         "foto_pre_fusao": foto,
                         "decisoes_de_identidade_movidas": decisoes_movidas,
+                        "leituras_descartadas_detalhe": descartes,
                         **contagens})
     # Grava as reatribuições ANTES do delete — o cascade não pega o que foi movido.
     db.flush()

@@ -188,3 +188,77 @@ test("conflito de identidade revela a segunda confirmação e a envia", async ()
     expect(ultima.confirmar_conflito).toBe("FUNDIR MESMO COM CONFLITO");
   });
 });
+
+// --- A7: o que a fusão faz com as leituras repetidas, ANTES do FUNDIR ---------
+// A regra (fica a data da ficha principal) não muda; a tela passa a dizer quantos
+// livros têm data diferente e qual bimestre perde o livro, e respeita a direção.
+
+const PREVIA_LEITURAS = {
+  livros_repetidos: 3, com_data_diferente: 2, no_bimestre: 1,
+  bimestre: { numero: 3, rotulo: "3º bimestre", inicio: "2026-07-24", fim: "2026-10-04" },
+  por_bimestre: [{ numero: 3, rotulo: "3º bimestre", livros: 1 }],
+  exemplos: [{ livro_id: 5, livro: "Livro Ficticio A", data_manter: "2026-03-25",
+               data_remover: "2026-08-06", deixa_de_contar_em: 3 }],
+};
+
+async function abrirFusaoCom(nomeOutro: string) {
+  responder("GET", /\/alunos\?busca=/, {
+    itens: [{ id: 20, nome: nomeOutro, status: "ativo", turma: "3º Ano A" }],
+    total: 1, pagina: 1, por_pagina: 8,
+  });
+  renderComApp(<AcoesAluno aluno={aluno} escolaId={1} aoMudar={vi.fn()} />);
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Fundir com outro aluno"));
+  await userEvent.type(screen.getByPlaceholderText(/Buscar o cadastro duplicado/), "Ana");
+  await userEvent.click(await screen.findByRole("button", { name: new RegExp(nomeOutro) }));
+}
+
+test("a prévia mostra os livros repetidos com data diferente antes do FUNDIR", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, (caminho: string) => {
+    const q = new URL(`http://x${caminho}`).searchParams;
+    return {
+      manter: { id: Number(q.get("manter_id")), nome: "x" },
+      remover: { id: Number(q.get("remover_id")), nome: "y" },
+      leituras: PREVIA_LEITURAS,
+    };
+  });
+  await abrirFusaoCom("Ana Souza Duplicada");
+
+  const aviso = await screen.findByRole("note", { name: /Livros repetidos com data diferente/ });
+  expect(aviso).toHaveTextContent("2 livros estão nas duas fichas com datas diferentes");
+  expect(aviso).toHaveTextContent("Fica a data de “Ana Souza”");
+  expect(aviso).toHaveTextContent("1 no 3º bimestre (o bimestre atual)");
+  expect(aviso).toHaveTextContent("Livro Ficticio A: fica 25/03/2026, sai 06/08/2026");
+  // a consulta foi feita na direção que está na tela
+  const consultas = api.mock.calls.map(([c]) => String(c)).filter((c) => c.includes("/fundir/previa"));
+  expect(consultas.at(-1)).toContain("manter_id=10&remover_id=20");
+});
+
+test("trocar a ficha principal refaz a prévia na outra direção", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, (caminho: string) => {
+    const q = new URL(`http://x${caminho}`).searchParams;
+    return {
+      manter: { id: Number(q.get("manter_id")), nome: "x" },
+      remover: { id: Number(q.get("remover_id")), nome: "y" },
+      leituras: PREVIA_LEITURAS,
+    };
+  });
+  await abrirFusaoCom("Ana Souza Duplicada");
+  await screen.findByRole("note", { name: /Livros repetidos/ });
+  await userEvent.click(screen.getByRole("button", { name: "trocar" }));
+  await vi.waitFor(() => {
+    const consultas = api.mock.calls.map(([c]) => String(c)).filter((c) => c.includes("/fundir/previa"));
+    expect(consultas.at(-1)).toContain("manter_id=20&remover_id=10");
+  });
+  expect(await screen.findByRole("note", { name: /Livros repetidos/ }))
+    .toHaveTextContent("Fica a data de “Ana Souza Duplicada”");
+});
+
+test("se a prévia falhar, avisa e não bloqueia a fusão", async () => {
+  responderErro("GET", /\/alunos\/fundir\/previa/, 500, "Banco ocupado");
+  responder("POST", /\/alunos\/fundir$/, { ok: true });
+  await abrirFusaoCom("Ana Souza Duplicada");
+  expect(await screen.findByText(/Não foi possível conferir as leituras repetidas/)).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
+});

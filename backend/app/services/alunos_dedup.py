@@ -289,6 +289,10 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     fica, a turma, a confiança/motivo e o resumo de impacto. Nada é alterado."""
     candidatos = _candidatos(db, escola_id)
     impactos = _impactos_em_lote(db, [loser.id for loser, *_ in candidatos])
+    escola = db.get(Escola, escola_id)
+    repetidas = alunos_fusao.leituras_repetidas(
+        db, escola.ano_letivo_ativo if escola else 0,
+        [(survivor.id, loser.id) for loser, survivor, *_ in candidatos])
     return [
         {
             "loser_id": loser.id,
@@ -299,9 +303,24 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             "confianca": confianca,     # "alta" | "provavel" | "revisar"
             "motivo": motivo,
             "impacto": impactos.get(loser.id, _VAZIO),
+            # O que a fusão faz com os livros que estão nas DUAS fichas. Só descreve
+            # (a data de quem fica é a que vale): o gestor vê antes de confirmar.
+            "leituras": repetidas[(survivor.id, loser.id)],
         }
         for loser, survivor, confianca, motivo, turma in candidatos
     ]
+
+
+def previa_da_fusao(db: Session, escola_id: int, manter: Aluno, remover: Aluno) -> dict:
+    """O que a tela mostra ANTES de o gestor digitar FUNDIR (só leitura)."""
+    escola = db.get(Escola, escola_id)
+    return {
+        "manter": {"id": manter.id, "nome": manter.nome},
+        "remover": {"id": remover.id, "nome": remover.nome},
+        "leituras": alunos_fusao.leituras_repetidas(
+            db, escola.ano_letivo_ativo if escola else 0, [(manter.id, remover.id)],
+            exemplos=20)[(manter.id, remover.id)],
+    }
 
 
 def _plataformas_dos(db: Session, ids: set[int]) -> dict[int, frozenset[str]]:

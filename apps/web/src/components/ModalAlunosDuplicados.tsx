@@ -15,6 +15,7 @@ import { AlertTriangle, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
+import { type ResumoLeiturasRepetidas, textoBimestres } from "./LeiturasRepetidas";
 import { estiloCheckbox } from "./PessoasUi";
 import { Botao, Carregando, Mensagem, Modal, Vazio } from "./ui";
 
@@ -50,6 +51,8 @@ interface CandidatoAluno {
   confianca: Confianca;
   motivo: "nome_identico" | "subconjunto" | "abreviacao" | "variante";
   impacto: Impacto;
+  /** Livros que estão nas duas fichas: fica a data do principal (A7). */
+  leituras?: ResumoLeiturasRepetidas;
 }
 interface PreviaAlunos {
   candidatos: CandidatoAluno[];
@@ -85,6 +88,29 @@ function resumoImpacto(i: Impacto): string {
   if (registros) partes.push(`${registros} registro(s) de plataforma`);
   if (i.notas) partes.push(`${i.notas} nota(s)`);
   return partes.length ? partes.join(" · ") : "sem dados vinculados";
+}
+
+/** Linha de aviso do par: só quando há livro repetido com data diferente. */
+function avisoLeituras(c: CandidatoAluno): string | null {
+  const l = c.leituras;
+  if (!l || l.com_data_diferente === 0) return null;
+  const base = `${l.com_data_diferente} livro(s) nas duas fichas com data diferente: fica a data de “${c.manter}”`;
+  return l.por_bimestre.length ? `${base}; deixam de contar ${textoBimestres(l)}.` : `${base}.`;
+}
+
+/** Soma do que os pares SELECIONADOS fazem com as datas (vai no painel de confirmação). */
+function somaLeituras(cands: CandidatoAluno[]) {
+  let diferentes = 0;
+  let noBimestre = 0;
+  let rotulo: string | null = null;
+  for (const c of cands) {
+    const l = c.leituras;
+    if (!l) continue;
+    diferentes += l.com_data_diferente;
+    noBimestre += l.no_bimestre ?? 0;
+    rotulo = rotulo ?? l.bimestre?.rotulo ?? null;
+  }
+  return { diferentes, noBimestre, rotulo };
 }
 
 function motivoTexto(c: CandidatoAluno): string {
@@ -249,6 +275,7 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   // CATCH-ALL: garante que nenhum "revisar" de motivo novo/desconhecido suma da
   // tela. Isto é só apresentação: não muda o que o backend sugere.
   const cands = previa?.candidatos ?? [];
+  const datas = somaLeituras(cands.filter((c) => selecionados.has(c.loser_id)));
   const MOTIVOS_REV = ["variante", "nome_identico", "subconjunto", "abreviacao"];
   const especifica: {
     chave: string; rotulo: string; dica: string; lote: boolean; tom: TomFaixa;
@@ -424,6 +451,11 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                           <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
                             Será movido: {resumoImpacto(c.impacto)}
                           </span>
+                          {avisoLeituras(c) && (
+                            <span className="mt-0.5 block text-xs font-medium text-amber-800 dark:text-amber-300">
+                              ⚠ {avisoLeituras(c)}
+                            </span>
+                          )}
                         </span>
                       </label>
                     );
@@ -444,6 +476,17 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                   Isto vai fundir <strong>{selecionados.size}</strong> par(es) de cadastros
                   num único aluno cada. Os dados são consolidados no principal.
                   <strong> Esta ação é irreversível.</strong>
+                  {datas.diferentes > 0 && (
+                    <span className="mt-1 block">
+                      Nos pares marcados, {datas.diferentes} livro(s) estão nas duas fichas com data
+                      diferente: fica sempre a data do cadastro principal
+                      {datas.rotulo && datas.noBimestre > 0
+                        ? `, e ${datas.noBimestre} deixa(m) de contar no ${datas.rotulo} (o bimestre atual)`
+                        : ""}
+                      . Para manter a outra data, desmarque o par e faça a fusão pela ficha do aluno
+                      (⋮ › Fundir com outro aluno), escolhendo a ficha principal.
+                    </span>
+                  )}
                   {selecionados.size > TAM_LOTE && (
                     <span className="mt-1 block text-xs font-normal">
                       Vou enviar em lotes de {TAM_LOTE} para não travar — pode levar alguns

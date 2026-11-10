@@ -222,3 +222,36 @@ describe("ModalAlunosDuplicados", () => {
     expect(screen.getByRole("button", { name: "Fechar" })).toBeInTheDocument();
   });
 });
+
+describe("ModalAlunosDuplicados — leituras repetidas (A7)", () => {
+  const leituras = {
+    livros_repetidos: 2, com_data_diferente: 2, no_bimestre: 1,
+    bimestre: { numero: 3, rotulo: "3º bimestre", inicio: "2026-07-24", fim: "2026-10-04" },
+    por_bimestre: [{ numero: 3, rotulo: "3º bimestre", livros: 1 }],
+    exemplos: [],
+  };
+
+  it("avisa no par e no painel de confirmação, antes de fundir", async () => {
+    const base = previa();
+    base.candidatos[0] = { ...base.candidatos[0], leituras } as typeof base.candidatos[0];
+    responder("GET", URL_PREVIA, base);
+    const u = userEvent.setup();
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+
+    expect(await screen.findByText(
+      /2 livro\(s\) nas duas fichas com data diferente: fica a data de “Bruno Alves Costa”; deixam de contar 1 no 3º bimestre/,
+    )).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: /Unir 1 selecionada/ }));
+    expect(await screen.findByText(/Nos pares marcados, 2 livro\(s\) estão nas duas fichas/))
+      .toHaveTextContent("1 deixa(m) de contar no 3º bimestre");
+  });
+
+  it("par sem livro repetido não ganha aviso de data", async () => {
+    responder("GET", URL_PREVIA, previa());
+    renderComApp(
+      <ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
+    await screen.findByText("Yasmin Cecilia Testelli");
+    expect(screen.queryByText(/com data diferente/)).toBeNull();
+  });
+});

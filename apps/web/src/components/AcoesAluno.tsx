@@ -25,6 +25,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
+import LeiturasRepetidas, { type ResumoLeiturasRepetidas } from "./LeiturasRepetidas";
 import MenuSuspenso, { ItemMenu } from "./MenuSuspenso";
 import { AvatarAluno } from "./PessoasUi";
 import { Botao, Campo, Mensagem, Modal, estiloInput } from "./ui";
@@ -363,6 +364,13 @@ export function ModalEditarAluno({ aluno, escolaId, aoFechar, aoSalvo }: {
  *  responde 409 e exige exatamente esta frase). */
 const CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO";
 
+/** Prévia só leitura da fusão (`GET /alunos/fundir/previa`), NESTA direção. */
+interface PreviaFusao {
+  manter: { id: number; nome: string };
+  remover: { id: number; nome: string };
+  leituras: ResumoLeiturasRepetidas;
+}
+
 export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
   aluno: Aluno;
   escolaId: number;
@@ -400,7 +408,19 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
 
   const principal = manterAtual ? aluno : outro;
   const absorvido = manterAtual ? outro : aluno;
-  const liberado = outro && confirmacao.trim().toUpperCase() === "FUNDIR"
+  // O que a fusão faz com os livros que estão nas duas fichas, NESTA direção
+  // (fica a data da principal). Trocar a principal refaz a consulta.
+  const previa = useApi<PreviaFusao>(
+    principal && absorvido
+      ? `/escolas/${escolaId}/alunos/fundir/previa?manter_id=${principal.id}&remover_id=${absorvido.id}`
+      : null,
+  );
+  // A resposta só vale para a direção que está na tela (a anterior pode chegar depois).
+  const previaAtual = previa.dados && principal && previa.dados.manter.id === principal.id
+    && previa.dados.remover.id === absorvido?.id ? previa.dados : null;
+  // Enquanto confere, não deixa fundir; se a conferência falhar, avisa e não bloqueia.
+  const conferindo = Boolean(outro) && !previaAtual && !previa.erro;
+  const liberado = outro && !conferindo && confirmacao.trim().toUpperCase() === "FUNDIR"
     && (!conflito || confirmaConflito.trim().toUpperCase() === CONFIRMA_CONFLITO);
 
   async function fundir() {
@@ -497,6 +517,25 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
                     }}>
               ← escolher outro cadastro
             </button>
+          </div>
+          <div className="mt-3 space-y-2" aria-live="polite">
+            {conferindo && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Conferindo as leituras das duas fichas…</p>
+            )}
+            {previa.erro && (
+              <Mensagem tipo="erro">
+                Não foi possível conferir as leituras repetidas antes da fusão ({previa.erro.message}).
+                A fusão continua possível; se o aluno tem livros nas duas fichas, fica a data da principal.
+              </Mensagem>
+            )}
+            {previaAtual && principal && absorvido && (
+              <LeiturasRepetidas
+                resumo={previaAtual.leituras}
+                nomeFica={principal.nome}
+                nomeSai={absorvido.nome}
+                dica="Se a data certa é a da outra ficha, clique em “trocar” para que ela fique como principal."
+              />
+            )}
           </div>
           <div className="mt-3">
             <Campo rotulo="Digite FUNDIR para confirmar">
