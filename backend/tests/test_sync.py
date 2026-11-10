@@ -1188,6 +1188,42 @@ def test_executar_lento_abre_alerta(db, escola_completa, monkeypatch):
     assert db.query(SincronizacaoAlerta).filter_by(escola_id=escola.id, tipo="lento").first()
 
 
+def test_lento_fecha_depois_de_sem_atualizacao_dentro_do_normal(db, escola_completa,
+                                                               monkeypatch):
+    """A12 (resíduo): o 'lento' ficava aberto depois de uma 'sem_atualizacao' rápida —
+    só a 'concluida' o avaliava. Sem atualização dentro do normal fecha; lenta não
+    abre (a régua do normal é a das concluídas)."""
+    from app.core.config import settings
+    from app.models.sincronizacao import SincronizacaoAlerta
+    from app.sync import connectors, orchestrator, service, vault
+    escola = escola_completa["escola"]
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    arq = ArquivoObtido(conteudo=b"PK", nome_arquivo="m.xlsx", plataforma="matific")
+    monkeypatch.setitem(connectors._REGISTRO, "matific", ConectorFake(arquivos=[arq]))
+    monkeypatch.setattr(orchestrator, "_parsear", lambda a: _analise_ana())
+
+    def _lento_aberto():
+        db.expire_all()
+        return db.query(SincronizacaoAlerta).filter_by(
+            escola_id=escola.id, tipo="lento", resolvido=False).first() is not None
+
+    monkeypatch.setattr(settings, "SYNC_LENTO_S", 0)   # a 1ª (concluida) é "lenta"
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "concluida" and _lento_aberto()
+
+    # Mesmo dado: 'sem_atualizacao', ainda "lenta" pelo piso 0 — não fecha nem reabre.
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "sem_atualizacao" and _lento_aberto()
+
+    monkeypatch.setattr(settings, "SYNC_LENTO_S", 3600)  # dentro do normal
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "sem_atualizacao"
+    assert not _lento_aberto()
+
+
 def test_dashboard_global_ok(db, escola_completa):
     from fastapi.testclient import TestClient
     from app.core.security import hash_senha

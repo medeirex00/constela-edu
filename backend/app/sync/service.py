@@ -2455,8 +2455,11 @@ def _executar_reivindicada(db: Session, execucao: SincronizacaoExecucao,
         return execucao
     execucao.finalizada_em = _agora()
     execucao.duracao_ms = int((time.monotonic() - inicio) * 1000)
-    if execucao.status == "concluida":
-        _avaliar_lentidao(db, execucao)
+    if execucao.status in ("concluida", "sem_atualizacao"):
+        # 'sem_atualizacao' (coleta inteira, nada novo) dentro do normal também
+        # FECHA o 'lento' — antes ele ficava aberto até a próxima 'concluida'. Só a
+        # 'concluida' abre: a régua do normal é a das concluídas.
+        _avaliar_lentidao(db, execucao, pode_abrir=execucao.status == "concluida")
     # Frescor: o alerta 'desatualizada' abre/fecha também aqui, não só dentro do
     # agendador (que em produção está desligado).
     atualizar_alerta_desatualizada(db, db.execute(select(SincronizacaoConfig).where(
@@ -2638,13 +2641,17 @@ def limite_lento_ms(db: Session, escola_id: int, plataforma: str, *,
     return max(piso, LENTO_FATOR * mediana), mediana
 
 
-def _avaliar_lentidao(db: Session, execucao: SincronizacaoExecucao) -> None:
+def _avaliar_lentidao(db: Session, execucao: SincronizacaoExecucao, *,
+                      pode_abrir: bool = True) -> None:
     """Abre o aviso 'lento' quando ESTA execução concluída fugiu do normal da
-    integração; FECHA-o quando terminou dentro do normal (antes nunca fechava)."""
+    integração; FECHA-o quando terminou dentro do normal (antes nunca fechava).
+    ``pode_abrir=False``: só fecha (execução que não é 'concluida')."""
     limite, mediana = limite_lento_ms(db, execucao.escola_id, execucao.plataforma,
                                       excluir_id=execucao.id)
     if execucao.duracao_ms <= limite:
         resolver_alertas(db, execucao.escola_id, execucao.plataforma, ("lento",))
+        return
+    if not pode_abrir:
         return
     base = (f"o normal desta integração é {mediana // 1000}s" if mediana is not None
             else f"limite de {settings.SYNC_LENTO_S}s")
