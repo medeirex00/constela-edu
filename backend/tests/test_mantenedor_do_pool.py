@@ -325,6 +325,37 @@ def test_conexao_morta_e_trocada_no_proprio_ciclo():
     motor.dispose()
 
 
+def test_morte_de_uma_conexao_so_nao_deixa_as_outras_para_a_requisicao():
+    """Revisão final: UMA conexão morre sozinha (pg_terminate_backend, um socket, o
+    pooler). A desconexão vista no SELECT 1 invalida o pool INTEIRO (``Pool._invalidate``):
+    toda conexão aberta antes passa a ser reaberta na próxima retirada — inclusive as que
+    acabaram de responder no mesmo ciclo. Antes o mantenedor trocava só a morta e as outras
+    voltavam ao pool marcadas: a requisição seguinte reabria até N-1. Agora o ciclo com
+    reconexão roda mais uma rodada, e quem reabre as marcadas é o mantenedor."""
+    resultados = []
+    for posicao in range(4):
+        criadas = []
+
+        def criador():
+            criadas.append(_ConexaoQueMorre())
+            return criadas[-1]
+
+        motor = _motor(6, criador=criador)
+        reg = _Registro(motor)
+        m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=4)
+        m.ciclo()
+        assert len(criadas) == 4
+        criadas[posicao].morta = True        # só esta morreu
+        r = m.ciclo()
+        abertas = reg.abertas
+        _rajada(motor, 4)                    # a requisição logo depois do ciclo
+        resultados.append({"derrubada": posicao, "reconectadas": r.reconectadas,
+                           "falhas": r.falhas, "abertas_pela_requisicao": reg.abertas - abertas})
+        motor.dispose()
+    assert all(x["reconectadas"] == 1 and x["falhas"] == [] for x in resultados), resultados
+    assert all(x["abertas_pela_requisicao"] == 0 for x in resultados), resultados
+
+
 def test_erro_do_banco_nao_propaga_nao_vaza_conexao_e_o_ciclo_seguinte_tenta_de_novo():
     fora = {"sim": True}
 
@@ -583,3 +614,37 @@ def test_pg_conexoes_derrubadas_sao_trocadas_no_ciclo_e_a_requisicao_nao_erra(mo
     novos = _pids_da_rajada(motor, 3)        # sem DBAPIError na requisição
     assert reg.abertas == abertas + 3 and not novos & velhos
     motor.dispose()
+
+
+def _pids_em_ordem(motor, n):
+    with ExitStack() as pilha:
+        conexoes = [pilha.enter_context(motor.connect()) for _ in range(n)]
+        return [c.execute(text("SELECT pg_backend_pid()")).scalar() for c in conexoes]
+
+
+@_so_no_pg
+def test_pg_morte_de_uma_conexao_so_nao_deixa_as_outras_para_a_requisicao():
+    """A sonda da revisão final, no PostgreSQL: UMA das N conexões é derrubada
+    (``pg_terminate_backend``). Antes o ciclo trocava só ela, e a requisição seguinte
+    reabria as outras (marcadas pela invalidação do pool) — 2 ou 3 de 4. Agora 0."""
+    resultados = []
+    for posicao in range(4):
+        motor = _motor_pg(6)
+        reg = _Registro(motor)
+        m = mp.MantenedorDoPool(motor, intervalo_s=20, conexoes=4)
+        m.ciclo()
+        pids = _pids_em_ordem(motor, 4)
+        admin = create_engine(URL_PG, poolclass=NullPool)
+        with admin.connect() as c:
+            assert c.execute(text("SELECT pg_terminate_backend(:p)"),
+                             {"p": pids[posicao]}).scalar()
+        admin.dispose()
+        time.sleep(0.3)                      # o servidor fecha o socket
+        r = m.ciclo()
+        abertas = reg.abertas
+        _pids_em_ordem(motor, 4)             # a "requisição" logo depois do ciclo
+        resultados.append({"derrubada": posicao, "reconectadas": r.reconectadas,
+                           "falhas": r.falhas, "abertas_pela_requisicao": reg.abertas - abertas})
+        motor.dispose()
+    assert all(x["falhas"] == [] for x in resultados), resultados
+    assert all(x["abertas_pela_requisicao"] == 0 for x in resultados), resultados

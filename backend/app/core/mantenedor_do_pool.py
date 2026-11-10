@@ -23,7 +23,9 @@ DISTINTAS: uma de cada vez, o pool LIFO devolveria sempre a mesma. O efeito:
 * a conexão perto do ``DB_POOL_RECYCLE`` (margem de 2 intervalos) é reaberta PELO
   MANTENEDOR, antes que um usuário a pegue. A hora de abertura fica no registro de cada
   conexão (``marcar_abertura``, instalado junto do engine);
-* conexão morta no ``SELECT 1`` (o banco ou o pooler reiniciou) é trocada no mesmo ciclo.
+* conexão morta no ``SELECT 1`` (o banco ou o pooler reiniciou) é trocada no mesmo ciclo;
+  como a desconexão invalida o pool inteiro, o ciclo roda mais uma rodada e reabre ali as
+  outras conexões marcadas (sem isso, quem as reabria era a requisição seguinte).
 
 Fora o do boot, cada ciclo espera uma calmaria de ``CALMARIA_S`` (2 s sem requisição com
 conexão nem devolução), com teto de ``ESPERA_MAXIMA_S`` (5 s): não compete com uma página que
@@ -210,7 +212,27 @@ class MantenedorDoPool:
     # --- um ciclo -----------------------------------------------------------------------
 
     def ciclo(self) -> Resumo:
-        """Retira as conexões ao mesmo tempo, roda ``SELECT 1`` em cada e devolve todas."""
+        """Retira as conexões ao mesmo tempo, roda ``SELECT 1`` em cada e devolve todas.
+
+        Se uma conexão morreu no ``SELECT 1``, roda mais uma rodada logo em seguida: a
+        desconexão invalida o POOL inteiro (``Pool._invalidate``, com
+        ``invalidate_pool_on_disconnect``), e toda conexão aberta antes — inclusive as que
+        acabaram de responder nesta rodada — é reaberta na próxima retirada. Sem a rodada
+        extra, quem as reabria era a requisição seguinte (até N-1 conexões novas, quando só
+        uma morreu: pg_terminate_backend, um socket, o pooler). Desligar a invalidação do
+        pool seria pior: um reinício de verdade do banco seria descoberto por requisição."""
+        primeira = self._rodada_unica()
+        if not primeira.reconectadas:
+            return primeira
+        extra = self._rodada_unica()
+        return Resumo(pedidas=primeira.pedidas,
+                      prontas=extra.prontas if extra.pedidas else primeira.prontas,
+                      renovadas=primeira.renovadas + extra.renovadas,
+                      reconectadas=primeira.reconectadas + extra.reconectadas,
+                      falhas=primeira.falhas + extra.falhas)
+
+    def _rodada_unica(self) -> Resumo:
+        """Uma rodada: as retiradas ao mesmo tempo, o ``SELECT 1`` e a devolução."""
         pedidas = max(0, self.conexoes - self._pool.checkedout())
         if pedidas == 0:
             return Resumo()
