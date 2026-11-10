@@ -51,11 +51,29 @@ NOTIFICAVEIS: dict[str, tuple[str, str, Callable[[int | None], str]]] = {
 
 # A tela onde o gestor decide as pendências da fila de identidade.
 ROTA_REVISOES = "/revisoes-identidade"
-# Telas de OPERAÇÃO da escola (no web, a guarda RotaEscolaOp): só a gestão da
-# escola (admin/coordenador sem rede) e o Admin Global abrem. O professor recebe
-# avisos que tocam os alunos dele — inclusive os destas pendências —, mas um link
-# para cá o mandaria de volta à página inicial: ele recebe o aviso sem o link.
-ROTAS_DA_OPERACAO = frozenset({ROTA_REVISOES, "/importacoes"})
+
+# GUARDAS DE PERFIL das telas para onde os avisos apontam. A fonte da regra é a
+# web: ``apps/web/src/lib/rotasGuardadas.ts`` (o espelho das guardas do App.tsx).
+# Aqui ficam só as rotas que os avisos DESTE módulo usam, com as MESMAS guardas;
+# ``test_notificacoes_rotas_guardadas`` lê a tabela da web e falha se uma rota daqui
+# divergir de lá ou se um aviso apontar para uma tela guardada que não está aqui.
+# Rota fora do mapa não tem guarda. Quem não passa recebe o aviso SEM o link: na
+# web, o link o mandaria de volta à página inicial (o professor recebe os avisos
+# que tocam os alunos dele — inclusive "dados da Matific editados" e as pendências
+# de identidade —, mas não abre as telas de operação da escola). O módulo
+# contratado (RotaModulo) não entra: quem esconde o link de módulo fora do plano é
+# a web (``podeAbrirRota``).
+GUARDAS_DAS_ROTAS: dict[str, tuple[str, ...]] = {
+    ROTA_REVISOES: ("RotaEscolaOp",),
+    "/importacoes": ("RotaEscolaOp",),
+    "/matific": ("RotaEscolaOp",),
+    "/elefante": ("RotaEscolaOp",),
+    "/metricas": ("RotaGestao",),
+    "/configuracoes": ("RotaGestao", "RotaAdmin"),
+    "/usuarios": ("RotaSemSecretaria",),
+    "/alunos": ("RotaSemSecretaria",),
+    "/alunos/:id": ("RotaSemSecretaria",),
+}
 
 
 def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
@@ -86,19 +104,40 @@ def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
     ))
 
 
-def _opera_a_escola(usuario: Usuario) -> bool:
-    """Abre as telas de operação da escola (``ROTAS_DA_OPERACAO``): Admin Global ou
-    gestão da escola (admin/coordenador) que não é Secretaria — a mesma régua do
-    ``exigir_papeis("admin", "coordenador")`` da fila e da guarda RotaEscolaOp."""
-    if usuario.is_global:
-        return True
-    return permissoes.acesso_total(usuario) and not permissoes.e_secretaria(usuario)
+def _admin(usuario: Usuario) -> bool:
+    return bool(usuario.is_global) or usuario.cargo == "admin"
+
+
+# O mesmo teste de cada guarda em App.tsx, sobre os campos de ``usePerfil()``:
+# gestor = global ou admin/coordenador (``acesso_total``); secretaria = rede
+# vinculada e não global (``e_secretaria``); admin = global ou cargo admin.
+_PASSA: dict[str, Callable[[Usuario], bool]] = {
+    "RotaGestao": lambda u: permissoes.acesso_total(u),
+    "RotaEscolaOp": lambda u: permissoes.acesso_total(u) and not permissoes.e_secretaria(u),
+    "RotaSemSecretaria": lambda u: not permissoes.e_secretaria(u),
+    "RotaAdmin": lambda u: _admin(u) and not permissoes.e_secretaria(u),
+}
+
+
+def _segmentos(caminho: str) -> list[str]:
+    return [s for s in caminho.split("?")[0].split("#")[0].split("/") if s]
+
+
+def guardas_da_rota(rota: str) -> tuple[str, ...]:
+    """As guardas da tela (mesmo casamento de ``podeAbrirRota``: ``:id`` casa
+    qualquer segmento). Rota fora do mapa: nenhuma."""
+    alvo = _segmentos(rota)
+    for padrao, guardas in GUARDAS_DAS_ROTAS.items():
+        p = _segmentos(padrao)
+        if len(p) == len(alvo) and all(a.startswith(":") or a == b for a, b in zip(p, alvo)):
+            return guardas
+    return ()
 
 
 def rota_para(usuario: Usuario, rota: str | None) -> str | None:
-    """A rota do aviso para ESTE usuário: ``None`` quando ela é de operação da
-    escola e o perfil não a abre (o aviso aparece, sem link)."""
-    if rota and not _opera_a_escola(usuario) and rota.split("?")[0] in ROTAS_DA_OPERACAO:
+    """A rota do aviso para ESTE usuário: ``None`` quando alguma guarda da tela o
+    barra (o aviso aparece, sem link)."""
+    if rota and not all(_PASSA[g](usuario) for g in guardas_da_rota(rota)):
         return None
     return rota
 
