@@ -892,7 +892,7 @@ describe("Integrações — política de criação de aluno", () => {
 
     const regiao = await screen.findByRole("region", REGIAO);
     expect(await within(regiao).findByText("Permitida")).toBeInTheDocument();
-    expect(within(regiao).getByText(/podem criar a ficha de um aluno que não for reconhecido/))
+    expect(within(regiao).getByText(/podem criar a ficha de um aluno sem nenhuma ficha parecida/))
       .toBeInTheDocument();
 
     // Cancelar não grava nada.
@@ -921,12 +921,20 @@ describe("Integrações — política de criação de aluno", () => {
     await usuario.click(within(regiao).getByRole("button", { name: "Permitir a criação pela plataforma" }));
     const volta = dialogo("Permitir que a plataforma crie alunos?");
     expect(volta.getByText(/vira ficha nova, ativa, sem RA e sem nascimento/)).toBeInTheDocument();
-    // A exceção (A2/A5), igual ao Suporte: nome abreviado e duas contas com o mesmo nome
-    // não viram ficha nem com a política permitindo — vão para a fila.
+    // A regra do motor, igual ao Suporte: só quem não tem NENHUMA ficha parecida vira
+    // ficha; com ficha parecida (nome parecido, não seguro) a linha vai para a fila —
+    // backend/tests/test_importacao_manual_politica.py. Antes o texto dizia que "quem
+    // não for reconhecido com segurança vira ficha nova", com só duas exceções.
     const efeito = volta.getByText(/vira ficha nova, ativa/).textContent ?? "";
+    expect(efeito).toContain("o aluno sem nenhuma ficha parecida vira ficha nova");
+    expect(efeito).toContain("quando há ficha parecida, a linha vai para Revisões de identidade");
+    expect(efeito).not.toMatch(/não for reconhecido com segurança vira ficha/);
+    // As outras exceções (A2/A5) — sem fingir que a lista é fechada.
     expect(efeito).toContain("nome abreviado (como “ZEFA Q”)");
     expect(efeito).toContain("duas contas com o mesmo nome no mesmo relatório");
-    expect(efeito).toMatch(/não viram ficha e esperam em Revisões de identidade/);
+    expect(efeito).toContain("outros casos de dúvida");
+    expect(efeito).toMatch(/esperam em Revisões de identidade/);
+    expect(efeito).not.toMatch(/A exceção é/);
     await usuario.click(volta.getByRole("button", { name: "Confirmar: permitir" }));
     await waitFor(() => expect(corpos).toHaveLength(2));
     expect(corpos[1]).toEqual({ criar_aluno: "permitir", motivo: null });

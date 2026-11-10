@@ -693,18 +693,25 @@ const MODO_CRIACAO: Record<ModoCriacao, {
     rotulo: "Permitida",
     tom: "neutro",
     frase: "A sincronização e o relatório de plataforma enviado à mão podem criar a ficha de "
-      + "um aluno que não for reconhecido (ativa, sem RA e sem nascimento). É o padrão da "
+      + "um aluno sem nenhuma ficha parecida (ativa, sem RA e sem nascimento). É o padrão da "
       + "escola que nunca configurou.",
     pergunta: "Permitir que a plataforma crie alunos?",
     botao: "Permitir a criação pela plataforma",
     confirmar: "Confirmar: permitir",
     salvo: "Política salva: a plataforma volta a poder criar alunos nesta escola.",
+    // A regra do motor (identidade_aluno.decidir): só o aluno SEM nenhum candidato
+    // vira ficha; havendo ficha parecida (nome parecido, mais de um candidato, nome de
+    // outra turma), a linha vai para a Revisão — como diz o Suporte. A lista das
+    // outras exceções não é fechada: conta de outra escola, a mesma conta em duas
+    // linhas e turma que não dá para decidir também esperam na fila.
     efeito: [
-      "Da próxima sincronização (ou relatório enviado à mão) em diante, o aluno que não for "
-        + "reconhecido com segurança vira ficha nova, ativa, sem RA e sem nascimento, e já "
-        + "conta no ranking. A exceção é o nome abreviado (como “ZEFA Q”) e duas contas com o "
-        + "mesmo nome no mesmo relatório: essas linhas não viram ficha e esperam em Revisões "
-        + "de identidade. Ficha criada assim não se desfaz sozinha.",
+      "Da próxima sincronização (ou relatório enviado à mão) em diante, o aluno sem nenhuma "
+        + "ficha parecida vira ficha nova, ativa, sem RA e sem nascimento, e já conta no "
+        + "ranking; quando há ficha parecida, a linha vai para Revisões de identidade. Também "
+        + "não viram ficha o nome abreviado (como “ZEFA Q”), duas contas com o mesmo nome no "
+        + "mesmo relatório e outros casos de dúvida, como a conta de um aluno de outra escola: "
+        + "essas linhas esperam em Revisões de identidade. Ficha criada assim não se desfaz "
+        + "sozinha.",
       "Só faz sentido se a matrícula desta escola não vem da Lista Piloto.",
       "Nada já gravado muda e nada é recalculado.",
     ],
