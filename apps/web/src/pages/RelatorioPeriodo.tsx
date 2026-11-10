@@ -191,9 +191,110 @@ const TOM_CLASSIFICACAO: Record<Classificacao, "ok" | "alerta" | "neutro"> = {
   "NÃO SUPORTADO": "neutro",
 };
 
-/** Etiqueta da classificação — o vocabulário é o do backend, não um apelido. */
+/** Etiqueta da classificação, na língua de quem lê o relatório (a classificação
+ *  vem do backend; "SUPORTADO COM RESSALVA" não diz nada a uma professora). */
+const ROTULO_CLASSIFICACAO: Record<Classificacao, string> = {
+  SUPORTADO: "Confiável",
+  "SUPORTADO COM RESSALVA": "Confiável, com um cuidado",
+  "NÃO SUPORTADO": "Não calculado",
+};
+
 function Selo({ classificacao }: { classificacao: Classificacao }) {
-  return <Badge tom={TOM_CLASSIFICACAO[classificacao]}>{classificacao}</Badge>;
+  return (
+    <Badge tom={TOM_CLASSIFICACAO[classificacao]}>{ROTULO_CLASSIFICACAO[classificacao] ?? classificacao}</Badge>
+  );
+}
+
+/** "Como ler estes números" em linguagem de professor. Diz o MESMO que o backend
+ *  manda em `suporte` e `nao_suportado` (`services/relatorios_periodo.py`) — o que
+ *  cada número conta, por que dá (ou não dá) para confiar nele e o cuidado ao ler —,
+ *  sem nome de campo, de tabela ou de seção da especificação. Chave que esta lista
+ *  não conhece cai no texto do backend. */
+interface ExplicacaoNumero { nome: string; explicacao: string; cuidado?: string }
+
+const EXPLICACAO_ELEFANTE: Record<string, ExplicacaoNumero> = {
+  livros_novos: {
+    nome: "“Livros novos”",
+    explicacao: "Conta cada livro na primeira vez que o aluno o leu, dentro do período. É a mesma conta da "
+      + "premiação “Mais livros”: o relatório e o pódio mostram o mesmo número.",
+    cuidado: "A data que vale é a da primeira leitura do livro, e ela não muda depois. Por isso um livro lido de "
+      + "novo não entra aqui — ele aparece em “Livros com atividade”, como relido.",
+  },
+  tempo_min: {
+    nome: "“Tempo de leitura”",
+    explicacao: "Soma o tempo dos livros novos do período. É a mesma conta da premiação “Mais tempo”.",
+    cuidado: "A plataforma nem sempre informa o tempo de um livro; quando não informa, ele entra como zero. Por "
+      + "isso o total é o mínimo lido no período — o tempo real pode ser maior.",
+  },
+  livros_com_atividade: {
+    nome: "“Livros com atividade”",
+    explicacao: "Conta os livros diferentes que o aluno abriu no período, inclusive os que ele releu, pela data "
+      + "e hora que a plataforma registra em cada leitura.",
+    cuidado: "Duas leituras do mesmo livro no mesmo minuto contam como uma só. Por isso o número de leituras é "
+      + "um mínimo, não a quantidade exata de vezes que o aluno leu.",
+  },
+  tempo_min_por_evento: {
+    nome: "Tempo de cada leitura",
+    explicacao: "Não dá para saber quanto durou cada leitura: a plataforma informa o tempo somado de cada livro, "
+      + "não o de cada vez que o aluno o abriu, e esses totais às vezes até diminuem — o que um total somado não "
+      + "faria. O tempo do período vem do tempo dos livros novos, o mesmo da premiação “Mais tempo”.",
+  },
+  questoes: {
+    nome: "“Questões”",
+    explicacao: "A plataforma só informa o total de questões que o aluno já respondeu desde que começou, sem a "
+      + "data de cada uma. O número do período é a diferença entre a coleta do fim e a do início.",
+    cuidado: "Só entra quem tem coleta no período; quem não tem fica fora da conta (não conta como zero). Sem "
+      + "coleta no começo do período, a conta começa na primeira coleta; sem coleta no fim, termina na última — "
+      + "nos dois casos o número não cobre o período inteiro, e o aviso de “Questões”, acima, diz quanto falta.",
+  },
+};
+
+const EXPLICACAO_MATIFIC: ExplicacaoNumero = {
+  nome: "“Atividades” e “Estrelas”",
+  explicacao: "O Matific informa o total do ano (atividades e estrelas somadas), não a data de cada atividade. "
+    + "O número do período é o total no fim menos o de antes do início — a mesma regra das premiações.",
+  cuidado: "Sem coleta dentro do período, o aluno fica fora da conta (falta de dado não é zero) e é contado em "
+    + "“Sem coleta na janela”.",
+};
+
+/** O que o relatório não responde, pela chave `plataforma.metrica` do backend. */
+const EXPLICACAO_NAO_RESPONDE: Record<string, ExplicacaoNumero> = {
+  "elefante.tempo_min_por_evento": {
+    nome: "Tempo de cada leitura (Elefante Letrado)",
+    explicacao: EXPLICACAO_ELEFANTE.tempo_min_por_evento.explicacao,
+  },
+  "matific.questoes": {
+    nome: "Questões (Matific)",
+    explicacao: "O Matific guarda atividades, estrelas e pontuação média, mas não conta questões. Mostrar esse "
+      + "número para um período seria inventá-lo.",
+  },
+  "elefante.pontos_de_dificuldade": {
+    nome: "Pontos de dificuldade (Elefante Letrado)",
+    explicacao: "Quem se destaca pela dificuldade dos livros é decidido em Premiações, com a régua oficial. "
+      + "Calcular de novo aqui criaria uma segunda régua, que poderia discordar do pódio: para mérito, use "
+      + "Premiações.",
+  },
+};
+
+/** A explicação de um número; sem entrada na lista, o texto que o backend mandou. */
+function explicacaoDe(lista: Record<string, ExplicacaoNumero>, chave: string,
+                      s: { por_que: string; ressalva?: string }): ExplicacaoNumero {
+  return lista[chave] ?? { nome: chave.replace(/[._]/g, " "), explicacao: s.por_que, cuidado: s.ressalva };
+}
+
+function CartaoComoLer({ explicacao: e, classificacao }: { explicacao: ExplicacaoNumero; classificacao: Classificacao }) {
+  return (
+    <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
+      <p className="flex flex-wrap items-center gap-2">
+        <strong className="text-zinc-800 dark:text-zinc-100">{e.nome}</strong>
+        <Selo classificacao={classificacao} />
+      </p>
+      <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{e.explicacao}</p>
+      {e.cuidado && (
+        <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Cuidado ao ler: {e.cuidado}</p>
+      )}
+    </div>
+  );
 }
 
 /* Caixas dos avisos de cobertura (a FORMA mudou; o texto é o mesmo de antes). */
@@ -238,8 +339,14 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
   const emAndamento = !!(c.periodo_inicio && c.periodo_fim_efetivo && c.periodo_fim
     && c.periodo_fim_efetivo < c.periodo_fim);
   const pedido = emAndamento ? `${periodo} (em andamento, até hoje ${diaDoPeriodo(c.periodo_fim_efetivo)})` : periodo;
-  const de = c.coleta_inicio ? dataHora(c.coleta_inicio) : "o início do contador";
-  const disponivel = `${de} a ${dataHora(c.coleta_fim)}`;
+  // Sem coleta-base, a conta parte do início do contador da plataforma: "desde o
+  // início do contador até …" (montar "de" + "o início" dava "de o início").
+  const ate = dataHora(c.coleta_fim);
+  const disponivel = c.coleta_inicio
+    ? `${dataHora(c.coleta_inicio)} a ${ate}`
+    : `desde o início do contador até ${ate}`;
+  const medidoPelasColetas = c.coleta_inicio ? `de ${disponivel}` : disponivel;
+  const coletaBase = c.coleta_inicio ? `a coleta-base, de ${dataHora(c.coleta_inicio)},` : "o início do contador";
   const medidos = c.alunos_medidos
     ?? c.alunos_cobertura_completa + c.alunos_cobertura_parcial + c.alunos_ampliados;
   const soInicio = c.alunos_sem_intervalo > 0
@@ -277,7 +384,7 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
       <p className={`flex gap-2 ${CAIXA_INFO}`}>
         <Info size={14} aria-hidden className={ICONE_INFO} />
         <span>
-          <strong>{titulo}:</strong> período solicitado {pedido}, medido pelas coletas de {disponivel}.
+          <strong>{titulo}:</strong> período solicitado {pedido}, medido pelas coletas {medidoPelasColetas}.
           {c.em_andamento && ` Em andamento: os dados vão até a coleta de ${dataHora(c.coleta_fim)}.`}
         </span>
       </p>
@@ -289,8 +396,8 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
         <Info size={14} aria-hidden className={ICONE_INFO} />
         <span>
           <strong>{titulo}:</strong> período solicitado {pedido}. O número segue a regra oficial do Matific (a
-          mesma das premiações): diferença entre a coleta-base, {de}, e a última coleta considerada,{" "}
-          {dataHora(c.coleta_fim)} — as bordas do período não são verificadas aqui.
+          mesma das premiações): diferença entre {coletaBase} e a última coleta considerada, de {ate} — as
+          bordas do período não são verificadas aqui.
         </span>
       </p>
     );
@@ -338,7 +445,8 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
         )}
         {c.inclui_antes_do_inicio && (
           <li>
-            Não há coleta perto do início{para(c.alunos_ampliados)}: a coleta-base é de {de}
+            Não há coleta perto do início{para(c.alunos_ampliados)}:{" "}
+            {c.coleta_inicio ? `a coleta-base é de ${dataHora(c.coleta_inicio)}` : "a conta parte do início do contador"}
             {antecedencia ? `, ${antecedencia} antes de ${diaDoPeriodo(c.periodo_inicio)}` : ""} — o número INCLUI
             a atividade desse intervalo.
           </li>
@@ -772,49 +880,29 @@ export default function RelatorioPeriodo() {
                 <div className="space-y-2.5">
                   <RotuloSecao>Elefante Letrado</RotuloSecao>
                   {Object.entries(ele.suporte).map(([chave, s]) => (
-                    <div key={chave} className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
-                      <p className="flex flex-wrap items-center gap-2">
-                        <strong className="text-zinc-800 dark:text-zinc-100">{chave.replace(/_/g, " ")}</strong>
-                        <Selo classificacao={s.classificacao} />
-                        {s.campo && <code className="text-[11px] text-zinc-500 dark:text-zinc-400">{s.campo}</code>}
-                      </p>
-                      <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{s.por_que}</p>
-                      {s.ressalva && (
-                        <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Ressalva: {s.ressalva}</p>
-                      )}
-                    </div>
+                    <CartaoComoLer key={chave} explicacao={explicacaoDe(EXPLICACAO_ELEFANTE, chave, s)}
+                                   classificacao={s.classificacao} />
                   ))}
                 </div>
               )}
               {mat && (
                 <div className="space-y-2.5">
                   <RotuloSecao>Matific</RotuloSecao>
-                  <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
-                    <p className="flex flex-wrap items-center gap-2">
-                      <strong className="text-zinc-800 dark:text-zinc-100">atividades e estrelas</strong>
-                      <Selo classificacao={mat.suporte.classificacao} />
-                      {mat.suporte.campo && (
-                        <code className="text-[11px] text-zinc-500 dark:text-zinc-400">{mat.suporte.campo}</code>
-                      )}
-                    </p>
-                    <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{mat.suporte.por_que}</p>
-                    {mat.suporte.ressalva && (
-                      <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Ressalva: {mat.suporte.ressalva}</p>
-                    )}
-                  </div>
+                  <CartaoComoLer explicacao={EXPLICACAO_MATIFIC} classificacao={mat.suporte.classificacao} />
                 </div>
               )}
               {dados.nao_suportado.length > 0 && (
                 <div className="space-y-2.5">
                   <RotuloSecao>O que este relatório NÃO responde</RotuloSecao>
-                  {dados.nao_suportado.map((n) => (
-                    <div key={`${n.plataforma}-${n.metrica}`} className="rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
-                      <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-                        {n.plataforma} · {n.metrica.replace(/_/g, " ")}
-                      </p>
-                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{n.por_que}</p>
-                    </div>
-                  ))}
+                  {dados.nao_suportado.map((n) => {
+                    const e = explicacaoDe(EXPLICACAO_NAO_RESPONDE, `${n.plataforma}.${n.metrica}`, n);
+                    return (
+                      <div key={`${n.plataforma}-${n.metrica}`} className="rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                        <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{e.nome}</p>
+                        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{e.explicacao}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

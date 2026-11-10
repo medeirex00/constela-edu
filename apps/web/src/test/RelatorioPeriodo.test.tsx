@@ -173,15 +173,29 @@ describe("Relatório por Período", () => {
     expect(t).toContain("sem coleta na janela (não contam como zero)");
   });
 
-  it("declara a classificação de suporte de cada número", async () => {
+  it("declara, em linguagem de professor, se dá para confiar em cada número", async () => {
     montar();
     await screen.findByText("Tempo de leitura");
     const detalhes = await screen.findByText("Como ler estes números");
     detalhes.click();
     const t = texto();
-    expect(t).toContain("SUPORTADO COM RESSALVA");
-    expect(t).toContain("NÃO SUPORTADO");
+    expect(t).toContain("Confiável, com um cuidado");
+    expect(t).toContain("Não calculado");
     expect(t).toContain("O que este relatório NÃO responde");
+    // A mesma informação de antes, dita para quem lê o relatório.
+    expect(t).toContain("É a mesma conta da premiação “Mais livros”");
+    expect(t).toContain("Por isso um livro lido de novo não entra aqui");
+    expect(t).toContain("o total é o mínimo lido no período — o tempo real pode ser maior");
+    expect(t).toContain("Duas leituras do mesmo livro no mesmo minuto contam como uma só");
+    expect(t).toContain("Não dá para saber quanto durou cada leitura");
+    expect(t).toContain("O Matific guarda atividades, estrelas e pontuação média, mas não conta questões");
+    expect(t).toContain("o total no fim menos o de antes do início — a mesma regra das premiações");
+    // Nada de vocabulário interno: nome de campo, classificação técnica, jargão do banco.
+    for (const termo of ["SUPORTADO", "Leitura.data", "EventoAluno", "SnapshotMatific", "NULLABLE", "PISO",
+      "totalTimeSpent", "retrato", "Ressalva", "tempo min por evento", "livros_relidos"]) {
+      expect(t, termo).not.toContain(termo);
+    }
+    expect(document.querySelector("code")).toBeNull();
   });
 
   it("publica a janela EFETIVA quando o número vem de coleta", async () => {
@@ -394,6 +408,19 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     expect(t).toContain("Questões: período solicitado 01/09/2026 a 30/09/2026, medido pelas coletas de 01/09/2026, 00:10 a 01/10/2026, 00:10.");
     expect(t).not.toContain("cobertura parcial");
     expect(t).not.toContain("INCLUI");
+  });
+
+  it("sem coleta-base: 'desde o início do contador', nunca 'coletas de o início'", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: null, coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-10-01T03:10:00",
+      inicio_coberto: true, fim_coberto: true, status: "completa", completa: true,
+      alunos_cobertura_completa: 1, alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+    }, { t: 340, a: 250 }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("medido pelas coletas desde o início do contador até 01/10/2026, 00:10.");
+    expect(t).not.toMatch(/\bde o início/);
   });
 
   it("ampliada: a base é bem anterior ao início e o valor INCLUI esse intervalo", async () => {
