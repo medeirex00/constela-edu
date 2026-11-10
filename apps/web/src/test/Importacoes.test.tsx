@@ -211,16 +211,97 @@ describe("Importacoes", () => {
   it("'possível duplicata' (revisar) NÃO vem pré-selecionada como vínculo", async () => {
     await previaComCorrespondencia({
       status: "revisar", aluno_id: 10, aluno_nome: "Ana Beatriz Souza",
-      similaridade: 90, motivo: "typo",
+      similaridade: 90, motivo: "correspondencia_insegura",
       alternativas: [{ aluno_id: 10, nome: "Ana Beatriz Souza",
                        turma: "3º Ano A", similaridade: 90 }],
     });
     expect(screen.getByText("Possível duplicata — requer revisão")).toBeInTheDocument();
     // Segurança: o destino NÃO vem no aluno (grafia parecida nunca vira vínculo por
-    // 1 clique) — fica em "Criar aluno novo…" até o gestor escolher.
+    // 1 clique). E não vem em "Criar": a confirmação manda a linha para a Revisão
+    // (o backend não cria ficha quando há candidato) — o destino diz isso.
     const destino = screen.getByRole("combobox",
       { name: /Destino de/ }) as HTMLSelectElement;
+    expect(destino.value).toBe("revisao");
+    const opcoes = Array.from(destino.options).map((o) => o.value);
+    expect(opcoes).toEqual(["10", "revisao", "ignorar"]);
+  });
+
+  // Linhas que o backend SEMPRE manda para Revisões de identidade (nome abreviado,
+  // duas contas com o mesmo nome): a prévia diz o motivo, não oferece "Criar", não
+  // as conta como aluno novo e a confirmação as conta à parte.
+  it.each([
+    ["nome_incompleto", "Nome abreviado — vai para Revisões de identidade", /só parte do nome/],
+    ["contas_repetidas_no_relatorio", "Duas contas com o mesmo nome — vai para Revisões de identidade",
+     /podem ser a mesma criança ou duas/],
+  ])("linha '%s' vai para a Revisão: sem 'Criar', fora dos alunos novos", async (motivo, rotulo, explicacao) => {
+    const u = await previaComCorrespondencia({
+      status: "revisar", aluno_id: null, aluno_nome: null, similaridade: null,
+      motivo, alternativas: [],
+    });
+    expect(screen.getByText(rotulo)).toBeInTheDocument();
+    expect(screen.getByText(explicacao)).toBeInTheDocument();
+    expect(screen.queryByText("Possível duplicata — requer revisão")).toBeNull();
+    const destino = screen.getByRole("combobox", { name: /Destino de/ }) as HTMLSelectElement;
+    expect(destino.value).toBe("revisao");
+    expect(Array.from(destino.options).map((o) => o.textContent)).toEqual(
+      ["Deixar para a Revisão", "Ignorar"]);
+    // Não é "aluno novo": nem a faixa de criação em massa aparece.
+    expect(screen.queryByText(/aluno\(s\) novo\(s\)/)).toBeNull();
+    expect(screen.getByText(/0 de 1 aluno\(s\) serão importados; 1 vão para Revisões de identidade/))
+      .toBeInTheDocument();
+
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
+    expect(confirmacao).toHaveTextContent("1 vão para Revisões de identidade");
+    expect(confirmacao).not.toHaveTextContent(/aluno\(s\) novo\(s\)/);
+    expect(confirmacao).not.toHaveTextContent(/não se desfaz sozinha/);
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "0 aluno(s) com dado novo importado(s).", importacao_id: 7,
+      qtd_alunos: 0, qtd_erros: 0, avisos: [], qtd_revisoes: 1, criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
+    // A linha SEGUE para o backend (é ele quem abre a pendência), com a turma da
+    // prévia e sem aluno escolhido.
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas).toHaveLength(1);
+    expect(corpo.linhas[0]).toMatchObject({ aluno_id: null, criar_em_turma_id: 1 });
+    // O resultado leva às Revisões mesmo sem a política "bloquear".
+    expect(await screen.findByText(/1 aluno aguarda/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
+      .toHaveAttribute("href", "/revisoes-identidade");
+  });
+
+  it("revisão de TURMA (a turma escolhida resolve) continua com 'Criar'", async () => {
+    await previaComCorrespondencia({
+      status: "revisar", aluno_id: null, aluno_nome: null, similaridade: null,
+      motivo: "turma_ambigua", alternativas: [],
+    });
+    const destino = screen.getByRole("combobox", { name: /Destino de/ }) as HTMLSelectElement;
     expect(destino.value).toBe("criar");
+    expect(screen.getByText(/aluno\(s\) novo\(s\)/)).toBeInTheDocument();
+  });
+
+  it("resultado com pendências e sem a política 'bloquear' leva às revisões", async () => {
+    const u = userEvent.setup();
+    responder("GET", URL_HIST, []);
+    responder("GET", URL_TURMAS, [turmaFake()]);
+    responder("UPLOAD", URL_ANALISAR, analiseFake());
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "1 aluno(s) com dado novo importado(s).", importacao_id: 8,
+      qtd_alunos: 1, qtd_erros: 0, avisos: [], qtd_revisoes: 2, criacao_bloqueada: 0,
+    } satisfies ResultadoImportacao);
+    renderComApp(montar(), { rota: "/importacoes" });
+    await screen.findByText("Nenhuma importação ainda");
+    await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
+    await u.type(screen.getByRole("textbox"), "Ana Beatriz Souza 42");
+    await u.click(screen.getByRole("button", { name: /Analisar e ver prévia/ }));
+    await screen.findByText("Prévia da importação");
+    await u.click(screen.getByRole("button", { name: "Sim, importar" }));
+    await u.click(await screen.findByRole("button", { name: "Gravar importação" }));
+    expect(await screen.findByText(/2 alunos aguardam a decisão de um gestor/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
+      .toHaveAttribute("href", "/revisoes-identidade");
   });
 
   it("nome da escola do relatório diferente do cadastro: só aviso, a prévia segue", async () => {
@@ -280,7 +361,9 @@ describe("Importacoes", () => {
       qtd_alunos: 0,
       qtd_erros: 1,
       avisos: [],
-      qtd_revisoes: 1,
+      // Política "bloquear" + um nome abreviado: o backend barra 1 e manda os 2
+      // para a fila (o abreviado sai com outro motivo). Quem aguarda são os 2.
+      qtd_revisoes: 2,
       criacao_bloqueada: 1,
     };
     responder("POST", URL_CONFIRMAR, resultado);
@@ -295,7 +378,7 @@ describe("Importacoes", () => {
     expect(
       await screen.findByText(/a política desta escola não deixa a plataforma criar ficha/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/1 aluno aguarda/)).toBeInTheDocument();
+    expect(screen.getByText(/2 alunos aguardam/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
       .toHaveAttribute("href", "/revisoes-identidade");
   });

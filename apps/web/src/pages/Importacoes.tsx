@@ -139,7 +139,57 @@ type Acao =
   // Turma lida do relatório que AINDA NÃO EXISTE: a confirmação a cria e
   // matricula o aluno nela (primeiro import sem cadastrar turmas antes).
   | { tipo: "criar_nova" }
+  // A linha vai para Revisões de identidade (a confirmação não cria a ficha nem
+  // associa): segue com a MESMA turma que a prévia usou, para o motor decidir igual.
+  | { tipo: "revisao"; turmaId: number | null; turmaNome: string | null }
   | { tipo: "ignorar" };
+
+/** Motivos de revisão (``identidade_aluno.decidir``) em que a confirmação NUNCA cria
+ *  a ficha, qualquer que seja a turma escolhida: o motor manda a linha para Revisões
+ *  de identidade e um "Criar" seria ignorado. Só a escolha de um aluno da lista
+ *  (vínculo explícito) muda o destino. Ficam de fora os motivos de TURMA
+ *  (turma_ambigua, turma_arquivada, turma_fora_do_ano_letivo…): neles a turma
+ *  escolhida na tela resolve e a ficha nasce. */
+const MOTIVOS_SO_REVISAO = new Set([
+  "nome_incompleto",
+  "contas_repetidas_no_relatorio",
+  "id_externo_duplicado",
+  "identidade_de_outra_escola",
+  "identidade_de_ficha_inativa",
+  "outra_identidade_na_plataforma",
+  "ra_repetido",
+  "ficha_inativa",
+  "correspondencia_insegura",
+  "candidatos_multiplos",
+  "homonimo_em_outra_sala",
+  "nome_casa_em_outra_sala",
+]);
+
+/** O motivo em linguagem simples, para os casos sem ficha candidata (o resto da
+ *  fila aparece como "Possível duplicata", com os candidatos na lista). */
+const MOTIVO_SIMPLES: Record<string, { rotulo: string; explicacao: string }> = {
+  nome_incompleto: {
+    rotulo: "Nome abreviado",
+    explicacao:
+      "O relatório traz só parte do nome: não dá para saber quem é a criança nem criar a ficha com ele.",
+  },
+  contas_repetidas_no_relatorio: {
+    rotulo: "Duas contas com o mesmo nome",
+    explicacao:
+      "Duas contas da plataforma vieram com este nome e nenhuma ficha corresponde: podem ser a mesma criança ou duas.",
+  },
+};
+
+/** A linha vai para Revisões de identidade na confirmação (o backend ignora "Criar"). */
+function vaiParaRevisao(c: LinhaAnalise["correspondencia"]): boolean {
+  return c?.status === "revisar" && MOTIVOS_SO_REVISAO.has(c.motivo ?? "");
+}
+
+/** Quantos alunos esta importação deixou em Revisões de identidade: todas as
+ *  pendências gravadas (``qtd_revisoes``), não só as que a política barrou. */
+function aguardamRevisao(r: ResultadoImportacao): number {
+  return Math.max(r.qtd_revisoes ?? 0, r.criacao_bloqueada ?? 0);
+}
 
 interface Grupo {
   chave: string;
@@ -270,6 +320,16 @@ export default function Importacoes() {
   const { dados: turmasApi } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const turmas = turmasApi ?? [];
 
+  /** "Deixar para a Revisão": a linha segue com a MESMA turma que um "Criar"
+   *  mandaria (a cadastrada da linha ou do cabeçalho; senão o nome lido do
+   *  relatório), para o motor da confirmação decidir como decidiu na prévia. */
+  function acaoRevisao(g: Grupo, a: Analise): Acao {
+    const turmaLinha = String(a.linhas[g.indices[0]]?.dados?.turma_relatorio ?? "");
+    const turmaId = acharTurmaPorNome(turmas, turmaLinha) ?? acharTurmaPorNome(turmas, a.turma_detectada);
+    if (turmaId) return { tipo: "revisao", turmaId, turmaNome: null };
+    return { tipo: "revisao", turmaId: null, turmaNome: turmaLinha || a.turma_detectada || null };
+  }
+
   async function analisar() {
     if (!escolaId) return;
     const escolaDaAnalise = escolaId;
@@ -298,12 +358,15 @@ export default function Importacoes() {
           if (g.todasComErro) return { tipo: "ignorar" };
           const c = g.correspondencia;
           // Só a ALTA confiança do motor ("vinculado") e o nome EXATO único
-          // pré-selecionam o vínculo. "revisar"/"provavel" (possível duplicata) e
-          // "bloqueado" caem em criar (o gestor decide) e passam pelo motor seguro na
-          // confirmação — grafia/similaridade parecida NUNCA vira vínculo por 1 clique.
+          // pré-selecionam o vínculo. Grafia/similaridade parecida NUNCA vira
+          // vínculo por 1 clique.
           if (c?.aluno_id && (c.status === "vinculado" || c.status === "exato")) {
             return { tipo: "importar", alunoId: c.aluno_id, alunoNome: c.aluno_nome ?? g.nome };
           }
+          // Linha que a confirmação manda para Revisões de identidade (nome
+          // abreviado, duas contas com o mesmo nome, possível duplicata…): o
+          // destino é a Revisão — nunca "Criar", que o backend ignoraria.
+          if (vaiParaRevisao(c)) return acaoRevisao(g, resposta);
           // Aluno novo: cria na turma DO PRÓPRIO ALUNO — o relatório geral do
           // Matific tem alunos de várias turmas (turma_relatorio por linha);
           // se essa turma não casar, usa a turma global detectada.
@@ -340,13 +403,16 @@ export default function Importacoes() {
             nome: linha.nome,
             dados: linha.dados,
             aluno_id: acao.tipo === "importar" ? acao.alunoId : null,
-            criar_em_turma_id: acao.tipo === "criar" ? acao.turmaId : null,
+            criar_em_turma_id:
+              acao.tipo === "criar" || acao.tipo === "revisao" ? acao.turmaId : null,
             // Turma inexistente: manda o NOME (da linha ou do cabeçalho) — o
             // backend cria a turma uma única vez e matricula o aluno nela.
             criar_em_turma_nome:
               acao.tipo === "criar_nova"
                 ? String(linha.dados.turma_relatorio ?? analise.turma_detectada ?? "") || null
-                : null,
+                : acao.tipo === "revisao"
+                  ? acao.turmaNome
+                  : null,
           }));
       });
       if (linhas.length === 0) {
@@ -408,6 +474,9 @@ export default function Importacoes() {
       atuais.map((acao, i) => {
         if (i !== gi) return acao;
         if (valor === "ignorar") return { tipo: "ignorar" };
+        if (valor === "revisao") {
+          return grupos[gi] && analise ? acaoRevisao(grupos[gi], analise) : acao;
+        }
         if (valor === "criar") return { tipo: "criar", turmaId: turmaAlvo ?? turmas[0]?.id ?? null };
         if (valor === "criar_nova") return { tipo: "criar_nova" };
         return { tipo: "importar", alunoId: Number(valor) };
@@ -416,12 +485,15 @@ export default function Importacoes() {
   }
 
   /** "Aplicar a todos": todo aluno NOVO (sem vínculo com cadastro) recebe a
-   *  mesma ação — criar na turma escolhida ou na turma do relatório (nova). */
+   *  mesma ação — criar na turma escolhida ou na turma do relatório (nova). A
+   *  linha que vai para a Revisão fica onde está: nela "Criar" não vale. */
   function aplicarATodosOsNovos(acao: Acao) {
     setAcoes((atuais) =>
       atuais.map((atual, i) => {
         const g = grupos[i];
-        if (g && !g.todasComErro && atual.tipo !== "importar") return acao;
+        if (g && !g.todasComErro && atual.tipo !== "importar" && !vaiParaRevisao(g.correspondencia)) {
+          return acao;
+        }
         return atual;
       }),
     );
@@ -481,6 +553,18 @@ export default function Importacoes() {
         detalhe: "turma ainda não cadastrada — criada automaticamente ao importar",
       };
     }
+    if (acao.tipo === "revisao") {
+      const motivo = MOTIVO_SIMPLES[g.correspondencia?.motivo ?? ""];
+      return {
+        tom: "alerta" as const,
+        titulo: "Vai para Revisões de identidade",
+        nome: g.nome,
+        turma: "",
+        detalhe: motivo
+          ? `${motivo.rotulo.toLowerCase()}: nenhuma ficha é criada; um gestor decide de quem são os dados`
+          : "nenhuma ficha é criada; um gestor decide de quem são os dados",
+      };
+    }
     return {
       tom: "alerta" as const,
       titulo: "Nenhum aluno vinculado",
@@ -504,15 +588,27 @@ export default function Importacoes() {
     nao_encontrado: "Novo aluno",
   } as const;
 
+  /** O rótulo da correspondência: nas linhas sem ficha candidata que vão para a
+   *  Revisão, o motivo em linguagem simples (não "Possível duplicata"). */
+  function rotuloDe(c: NonNullable<LinhaAnalise["correspondencia"]>): string {
+    const simples = c.status === "revisar" ? MOTIVO_SIMPLES[c.motivo ?? ""] : undefined;
+    if (simples) return `${simples.rotulo} — vai para Revisões de identidade`;
+    return rotuloCorrespondencia[c.status];
+  }
+
   // Estatísticas (por grupo) para os controles e a contagem final.
   const gruposValidos = grupos.filter((g) => !g.todasComErro);
-  // "Novos" = tudo que NÃO será vinculado automaticamente (cria por padrão):
-  // aluno novo, bloqueado por conflito e possível duplicata não confirmada.
+  // "Novos" = tudo que NÃO será vinculado automaticamente e que a confirmação pode
+  // criar: aluno novo, bloqueado por conflito e revisão de TURMA (a turma escolhida
+  // resolve). A linha que vai para a Revisão (nome abreviado, duas contas com o
+  // mesmo nome, possível duplicata) não vira ficha — fica fora desta conta.
   const CRIAM = new Set(["nao_encontrado", "bloqueado", "revisar"]);
   const naoEncontrados = grupos.filter(
-    (g) => !g.todasComErro && CRIAM.has(g.correspondencia?.status ?? ""),
+    (g) => !g.todasComErro && CRIAM.has(g.correspondencia?.status ?? "")
+      && !vaiParaRevisao(g.correspondencia),
   );
   const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
+  const totalParaRevisao = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo === "revisao").length;
   const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
   // Data do relatório: obrigatória no total acumulado (sem "Intervalo de datas").
   const exigeData = analise ? exigeDataDoRelatorio(analise) : false;
@@ -524,15 +620,16 @@ export default function Importacoes() {
 
   // Resumo do que a confirmação vai gravar (só contagem do que já está na tela).
   const resumoConfirmacao = useMemo(() => {
-    let vincular = 0, criar = 0, criarNova = 0, ignorar = 0;
+    let vincular = 0, criar = 0, criarNova = 0, revisao = 0, ignorar = 0;
     grupos.forEach((g, i) => {
       const acao = acoes[i];
       if (g.todasComErro || !acao || acao.tipo === "ignorar") { ignorar += 1; return; }
       if (acao.tipo === "importar") vincular += 1;
       else if (acao.tipo === "criar") criar += 1;
+      else if (acao.tipo === "revisao") revisao += 1;
       else criarNova += 1;
     });
-    return { vincular, criar, criarNova, ignorar };
+    return { vincular, criar, criarNova, revisao, ignorar };
   }, [grupos, acoes]);
 
   // Etapa do passo a passo (estado REAL do fluxo): 0 envio, 1 conferência, 2
@@ -604,14 +701,15 @@ export default function Importacoes() {
             <IconePastel icone={CheckCircle2} tom="verde" tamanho="lg" />
             <div className="min-w-0">
               <p className="text-[15px] font-semibold text-zinc-900 dark:text-white">{resultado.mensagem}</p>
-              {(resultado.criacao_bloqueada ?? 0) > 0 && (
-                // A mensagem acima já diz o MOTIVO (a política "bloquear" da
-                // escola); aqui, o caminho para resolver.
+              {aguardamRevisao(resultado) > 0 && (
+                // Tudo o que esta importação deixou na fila (política "bloquear",
+                // nome abreviado, duas contas com o mesmo nome, possível duplicata):
+                // a mensagem acima pode não contar essas linhas; aqui, o caminho.
                 <p className="mt-1.5 text-sm text-ouro-700 dark:text-ouro-300" role="status">
-                  {resultado.criacao_bloqueada === 1
+                  {aguardamRevisao(resultado) === 1
                     ? "1 aluno aguarda"
-                    : `${resultado.criacao_bloqueada} alunos aguardam`}{" "}
-                  a escolha da ficha certa.{" "}
+                    : `${aguardamRevisao(resultado)} alunos aguardam`}{" "}
+                  a decisão de um gestor.{" "}
                   <Link to="/revisoes-identidade" className="font-semibold underline">
                     Ver revisões de identidade
                   </Link>
@@ -865,8 +963,14 @@ export default function Importacoes() {
                           {correspondencia && (
                             <div className="space-y-1">
                               <Badge tom={tomCorrespondencia[correspondencia.status]}>
-                                {rotuloCorrespondencia[correspondencia.status]}
+                                {rotuloDe(correspondencia)}
                               </Badge>
+                              {correspondencia.status === "revisar"
+                               && MOTIVO_SIMPLES[correspondencia.motivo ?? ""] && (
+                                <p className="max-w-[18rem] text-xs text-zinc-500 dark:text-zinc-400">
+                                  {MOTIVO_SIMPLES[correspondencia.motivo ?? ""].explicacao}
+                                </p>
+                              )}
                               {correspondencia.aluno_nome
                                && correspondencia.status !== "nao_encontrado"
                                && correspondencia.status !== "bloqueado" && (
@@ -890,6 +994,7 @@ export default function Importacoes() {
                                   acao.tipo === "ignorar" ? "ignorar"
                                   : acao.tipo === "criar" ? "criar"
                                   : acao.tipo === "criar_nova" ? "criar_nova"
+                                  : acao.tipo === "revisao" ? "revisao"
                                   : String(acao.alunoId)
                                 }
                                 onChange={(e) => definirAcao(gi, e.target.value)}
@@ -900,12 +1005,20 @@ export default function Importacoes() {
                                     {alternativa.turma ? ` — ${alternativa.turma}` : ""} ({alternativa.similaridade}%)
                                   </option>
                                 ))}
-                                {(Boolean(primeira.dados.turma_relatorio) || Boolean(turmaNova)) && (
-                                  <option value="criar_nova">
-                                    Criar na turma do relatório ({String(primeira.dados.turma_relatorio ?? turmaNova)})
-                                  </option>
+                                {vaiParaRevisao(correspondencia) ? (
+                                  // A confirmação não cria ficha nesta linha: "Criar"
+                                  // seria ignorado. Fica a Revisão (ou ignorar).
+                                  <option value="revisao">Deixar para a Revisão</option>
+                                ) : (
+                                  <>
+                                    {(Boolean(primeira.dados.turma_relatorio) || Boolean(turmaNova)) && (
+                                      <option value="criar_nova">
+                                        Criar na turma do relatório ({String(primeira.dados.turma_relatorio ?? turmaNova)})
+                                      </option>
+                                    )}
+                                    <option value="criar">Criar aluno novo…</option>
+                                  </>
                                 )}
-                                <option value="criar">Criar aluno novo…</option>
                                 <option value="ignorar">Ignorar</option>
                               </select>
                               {acao.tipo === "criar" && (
@@ -977,7 +1090,8 @@ export default function Importacoes() {
               {exigeData && !dataOk
                 ? "Informe a data do relatório para importar."
                 : totalSelecionados > 0
-                  ? `${totalSelecionados} de ${gruposValidos.length} aluno(s) serão importados.`
+                  ? `${totalSelecionados - totalParaRevisao} de ${gruposValidos.length} aluno(s) serão importados${
+                    totalParaRevisao > 0 ? `; ${totalParaRevisao} vão para Revisões de identidade` : ""}.`
                   : "Deseja importar estes dados?"}
             </span>
             <Botao variante="secundario" onClick={() => setAnalise(null)} disabled={ocupado}>
@@ -1017,6 +1131,13 @@ export default function Importacoes() {
                   <UserPlus size={15} aria-hidden className="shrink-0 text-ouro-700 dark:text-ouro-300" />
                   {resumoConfirmacao.criar + resumoConfirmacao.criarNova} aluno(s) novo(s)
                   {resumoConfirmacao.criarNova > 0 ? " (com a turma do relatório criada, se ainda não existir)" : ""}
+                </li>
+              )}
+              {resumoConfirmacao.revisao > 0 && (
+                <li className="flex items-center gap-2">
+                  <AlertTriangle size={15} aria-hidden className="shrink-0 text-ouro-700 dark:text-ouro-300" />
+                  {resumoConfirmacao.revisao} vão para Revisões de identidade — nenhuma ficha é
+                  criada; um gestor decide de quem são os dados
                 </li>
               )}
               {resumoConfirmacao.ignorar > 0 && (
