@@ -24,7 +24,9 @@
  * mostra a mensagem, sem chamar a API dela (o backend também barra). Para a SECRETARIA, a lista da
  * sessão (`useApp().escolas`, o `GET /escolas`, que para ela traz só as escolas ATIVAS da rede dela)
  * já confirma: as leituras da escola saem junto com o painel e as plataformas, sem esperar por eles
- * (a escola inativa não está nessa lista e continua esperando a confirmação). O admin global não
+ * (a escola inativa não está nessa lista e continua esperando a confirmação). Essa lista é do login:
+ * quando o painel ou as plataformas chegam SEM a escola (movida ou excluída depois), ela deixa de
+ * confirmar e a ficha diz que a escola não é desta rede. O admin global não
  * confirma pela sessão (a lista dele é de todas as redes e não diz a rede de cada escola) e leva o
  * `?rede=` em todos os links (`ctx.link`). Nenhum dado de aluno: tudo agregado e protegido.
  */
@@ -314,7 +316,11 @@ function Ficha({ ctx, escolaId }: { ctx: ContextoDaPagina; escolaId: number | nu
   const daAnalise = escolaId != null ? anoLetivo.dados?.escolas.find((e) => e.escola_id === escolaId) ?? null : null;
   // A Secretaria: a lista da sessão só tem escolas da rede dela (o global não usa este atalho).
   const daSessao = !ctx.global && escolaId != null ? escolas.find((e) => e.id === escolaId) ?? null : null;
-  const confirmada = escolaId != null && (cartao != null || daAnalise != null || daSessao != null);
+  // A lista da sessão é do LOGIN: a escola movida para outra rede (ou excluída) depois dele continua
+  // nela. Ela só confirma enquanto nenhuma lista da rede chegou SEM a escola — o painel traz todas as
+  // escolas da rede (inativas inclusive); chegando sem ela, a escola não é mais desta rede.
+  const desmentida = (painel.dados != null && cartao == null) || (anoLetivo.dados != null && daAnalise == null);
+  const confirmada = escolaId != null && (cartao != null || daAnalise != null || (daSessao != null && !desmentida));
   // As leituras DA escola só depois de confirmada (escola de outra rede: nenhuma chamada).
   const analise = useApiExata<RespostaAnaliseEscola>(confirmada ? urlAnaliseNoAnoLetivo(escolaId) : null,
                                                      OPCOES_ANALISE_DA_ESCOLA);
