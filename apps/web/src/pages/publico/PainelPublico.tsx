@@ -773,7 +773,9 @@ export default function PainelPublico() {
   const slide = dados.slides[slideAtivo % dados.slides.length];
   const meta = TITULOS[slide] ?? TITULOS.ranking;
   const cor = dados.escola.cor_primaria;
-  const dataFmt = agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  // Só a primeira letra em maiúscula: o `capitalize` do CSS escrevia "Quinta-Feira, 05 De Novembro".
+  const dataLonga = agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  const dataFmt = dataLonga.charAt(0).toUpperCase() + dataLonga.slice(1);
   const horaFmt = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
   // Em fullscreen ocioso, controles/cursor somem — só o palco fica (modo TV).
@@ -805,7 +807,7 @@ export default function PainelPublico() {
   const controles = (
     <div className="flex shrink-0 items-center gap-3 sm:gap-4">
       <div className="hidden text-right sm:block">
-        <p className="flex items-center justify-end gap-1.5 text-sm font-medium capitalize text-white/80">
+        <p className="flex items-center justify-end gap-1.5 text-sm font-medium text-white/80">
           <Calendar className="h-4 w-4 text-white/50" /> {dataFmt}
         </p>
         <p className="text-lg font-bold tabular-nums text-white/95">{horaFmt}</p>

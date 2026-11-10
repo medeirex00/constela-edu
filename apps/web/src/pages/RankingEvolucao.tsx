@@ -175,6 +175,18 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
           crescimento "do período" pode simplesmente não ter sido coletado. */}
       <SeloFrescorDaEscola dimensoes={["leitura", "matematica"]} />
 
+      {/* No ano inteiro não há acumulado anterior a descontar (serviço evolucao._janela):
+          o ganho é o total do ano e o pódio coincide com o do Ranking Geral. */}
+      {periodo.preset === "ano_letivo" && (
+        <p
+          role="note"
+          className="mb-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-indigo-900 dark:border-indigo-500/20 dark:bg-indigo-500/5 dark:text-indigo-200"
+        >
+          No ano letivo inteiro todos os alunos partem do zero, por isso esta lista fica igual à do
+          Ranking Geral. Para ver quem mais cresceu, escolha um bimestre ou um mês.
+        </p>
+      )}
+
       <Card className="overflow-hidden">
         <CabecalhoCartao
           icone={TrendingUp}

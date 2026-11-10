@@ -187,6 +187,12 @@ describe("GerarCertificados — modelo por módulo contratado", () => {
     expect(screen.getByRole("radio", { name: "Geral" })).not.toBeChecked();
   });
 
+  it("a descrição da arte da plataforma usa o nome impresso no PDF (certificado de desempenho)", async () => {
+    await renderizar({ modeloInicial: "elefante" });
+    expect(screen.getByText(/certificado de desempenho da plataforma/)).toBeInTheDocument();
+    expect(screen.queryByText(/certificado de participação/)).not.toBeInTheDocument();
+  });
+
   it("rede só com Matemática: sem o chip do Elefante", async () => {
     await renderizar({ modeloInicial: "matific" }, ["matematica"]);
     expect(screen.queryByRole("radio", { name: "Elefante Letrado" })).toBeNull();

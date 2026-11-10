@@ -83,14 +83,14 @@ const MODELOS: Record<ChaveModelo, { rotulo: string; icone: LucideIcon; tom: Tom
     icone: BookOpen,
     tom: "violeta",
     descricao:
-      "Arte oficial do Elefante Letrado. É certificado de participação: traz a escola, o nome, o bimestre e a data, sem nota nem posição.",
+      "Arte oficial do Elefante Letrado. É o certificado de desempenho da plataforma: traz a escola, o nome, o bimestre e a data, sem nota nem posição.",
   },
   matific: {
     rotulo: "Matific",
     icone: Calculator,
     tom: "teal",
     descricao:
-      "Arte oficial do Matific. É certificado de participação: traz a escola, o nome, o bimestre e a data, sem nota nem posição.",
+      "Arte oficial do Matific. É o certificado de desempenho da plataforma: traz a escola, o nome, o bimestre e a data, sem nota nem posição.",
   },
   geral: {
     rotulo: "Geral",

@@ -380,6 +380,24 @@ describe("Revisão visual v2: cor do lote, concordância e larguras estreitas", 
     expect(within(primeiro).getByText("estrelas")).toBeInTheDocument();
   });
 
+  it("Evolução no ano letivo inteiro: explica por que a lista coincide com o Ranking Geral; em outro período, não", async () => {
+    responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
+    responder("GET", "/escolas/1/ranking-evolucao", [
+      { posicao: 1, aluno_id: 40, nome: "Eva Evolucao Lima", turma: "3º Ano A", ano_escolar: "3º Ano",
+        nota_evolucao: 12, ganhos: { atividades: 1, estrelas: 2, livros: 1, tempo_leitura_min: 0, acertos: 1 } },
+    ]);
+    const aviso = /fica igual à do\s+Ranking Geral/;
+
+    const { unmount } = renderComApp(<RankingEvolucao />, { rota: "/evolucao", periodo: { preset: "ano_letivo" } });
+    await screen.findByRole("link", { name: "Eva Evolucao Lima" });
+    expect(screen.getByRole("note")).toHaveTextContent(aviso);
+    unmount();
+
+    renderComApp(<RankingEvolucao />, { rota: "/evolucao", periodo: { preset: "bimestre_3" } });
+    await screen.findByRole("link", { name: "Eva Evolucao Lima" });
+    expect(screen.queryByText(aviso)).not.toBeInTheDocument();
+  });
+
   it("Matemática: o cabeçalho da média quebra em duas linhas sem mudar o nome da coluna; turma numa linha só", async () => {
     responder("GET", URL_TURMAS, [turmaFake()] as Turma[]);
     responder("GET", URL_MATEMATICA, placarMatific());

@@ -15,7 +15,7 @@
 
 import { bimestreDeHoje, bimestreEmCurso } from "./calendarioBimestres";
 
-/** `null` = certificado Geral (de mérito); as artes das plataformas são de participação. */
+/** `null` = certificado Geral (de mérito, com nota e posição); as artes das plataformas são de desempenho, sem nota nem posição. */
 export type ModeloCertificado = "elefante" | "matific" | null;
 
 /** Teto de alunos por lote (a rota é síncrona e recusa acima disso). */
