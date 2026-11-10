@@ -5,8 +5,9 @@ sem alterar os imports (o pacote reexporta tudo).
 """
 import math
 from datetime import date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -167,10 +168,31 @@ class AlunoOut(ORMModel):
     observacoes: str | None = None
 
 
+# ``Aluno.numero_chamada`` é INTEGER: 32 bits com sinal no PostgreSQL (o mesmo
+# teto de ``lista_piloto.MAX_NUMERO_CHAMADA``). Sem o limite, o SQLite aceitava e
+# o PostgreSQL estourava no commit (NumericValueOutOfRange → 500 "Erro interno");
+# negativo não é número de chamada.
+_MAX_NUMERO_CHAMADA = 2**31 - 1
+
+
+def _numero_chamada_valido(valor: int | None) -> int | None:
+    if valor is None:
+        return None
+    if valor < 0:
+        raise ValueError("O nº de chamada não pode ser negativo.")
+    if valor > _MAX_NUMERO_CHAMADA:
+        raise ValueError("O nº de chamada é grande demais: use o número da criança "
+                         "na lista da turma.")
+    return valor
+
+
+NumeroChamada = Annotated[int | None, AfterValidator(_numero_chamada_valido)]
+
+
 class AlunoCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     turma_id: int
-    numero_chamada: int | None = None
+    numero_chamada: NumeroChamada = None
     data_nascimento: date | None = None
     observacoes: str | None = Field(default=None, max_length=1000)  # = AlunoUpdate
     # Ficha cadastral (RA, responsável, telefone, endereço...): mesmas chaves
@@ -181,7 +203,7 @@ class AlunoCreate(BaseModel):
 class AlunoUpdate(BaseModel):
     """Edição parcial do cadastro do aluno (só os campos enviados mudam)."""
     nome: str | None = Field(default=None, min_length=2, max_length=200)
-    numero_chamada: int | None = None
+    numero_chamada: NumeroChamada = None
     data_nascimento: date | None = None
     observacoes: str | None = Field(default=None, max_length=1000)
 
