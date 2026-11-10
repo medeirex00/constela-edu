@@ -47,6 +47,7 @@ from app.schemas import (
 from app.services import (
     alunos_dedup,
     alunos_fusao,
+    elegibilidade,
     identidade_aluno,
     identidade_efetiva,
     matching,
@@ -301,9 +302,12 @@ def perfil_aluno(
     # a criança que nunca abriu o Matific. Quem TEM dado não muda: a nota do bloco
     # é a mesma coluna da Nota. A posição do bloco é a da ESCOLA inteira naquela
     # dimensão — não é a perspectiva do professor (ver ``_posicao_exibida``), então
-    # ele não a recebe.
+    # ele não a recebe. Quem está FORA do ranking vigente (ficha inativa, sem
+    # matrícula do ano, turma de Fase) também não: a posição gravada na Nota é de
+    # um cálculo antigo e hoje pertence a outra criança (``_no_ranking_vigente``).
+    no_ranking = _no_ranking_vigente(aluno, matricula)
     blocos_dimensao = svc_dimensoes.blocos(db, escola, nota)
-    if superficial:
+    if superficial or not no_ranking:
         blocos_dimensao = [b.model_copy(update={"posicao": None}) for b in blocos_dimensao]
     return AlunoPerfilOut(
         aluno=saida,
@@ -311,7 +315,8 @@ def perfil_aluno(
         nota_elefante=(None if "elefante" in fora
                        else (nota.nota_elefante if nota else 0.0)),
         nota_geral=nota.nota_geral if nota else 0.0,
-        posicao=_posicao_exibida(db, escola_id, ano, usuario, aluno_id, nota),
+        posicao=_posicao_exibida(db, escola_id, ano, usuario, aluno_id, nota,
+                                 no_ranking=no_ranking),
         dimensoes=blocos_dimensao,
         adocao=svc_dimensoes.adocao(db, escola, nota),
         # O professor também vê o PASSO A PASSO do cálculo (liberado pelo dono) —
@@ -326,13 +331,32 @@ def perfil_aluno(
     )
 
 
+def _no_ranking_vigente(aluno: Aluno, matricula) -> bool:
+    """A criança está na POPULAÇÃO do ranking do ano — a mesma do motor
+    (``scoring._carregar_contexto``) e da guarda do certificado de mérito
+    (``relatorios.exigir_merito``): ficha ativa, com matrícula no ano letivo ativo,
+    numa turma que concorre (1º ao 5º ano, ``elegibilidade``). ``matricula`` é o
+    par (Matricula, Turma) do ano letivo ativo, ou None.
+
+    Fora dela, a Nota continua no banco (o recálculo não apaga a linha de quem
+    sai: arquivado, transferido, excluído, Fase) com a posição de um cálculo
+    antigo — que hoje pertence a outra criança."""
+    return (aluno.status == "ativo" and matricula is not None
+            and elegibilidade.participa_de_premiacao(matricula[1].ano_escolar))
+
+
 def _posicao_exibida(db: Session, escola_id: int, ano: int, usuario: Usuario,
-                     aluno_id: int, nota: Nota | None) -> int | None:
+                     aluno_id: int, nota: Nota | None, *,
+                     no_ranking: bool = True) -> int | None:
     """A posição do "Nº no ranking" do perfil, na MESMA perspectiva do ranking
     de onde o usuário veio (o toque na linha do Ranking abre este perfil, no app
     e na web — os dois leem esta rota).
 
-    Gestão (sem recorte): a posição carimbada da escola (``Nota.posicao``).
+    Gestão (sem recorte): a posição carimbada da escola (``Nota.posicao``) — só
+    para quem está no ranking vigente (``no_ranking``, de ``_no_ranking_vigente``).
+    A ficha arquivada, transferida, excluída, sem matrícula do ano ou de turma de
+    Fase fica sem posição (``None``), como no ranking, que também não a mostra:
+    antes a ficha arquivada dizia "1º no ranking" enquanto o 1º era outra criança.
 
     Professor (``turmas_permitidas`` não é None): a posição RELATIVA às turmas
     dele, com a mesma lista e a mesma ordem do ranking renumerado 1..N
@@ -343,7 +367,7 @@ def _posicao_exibida(db: Session, escola_id: int, ano: int, usuario: Usuario,
     sem posição (``None``), como no ranking, que também não o mostra."""
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is None:
-        return nota.posicao if nota else None
+        return nota.posicao if nota and no_ranking else None
     if nota is None:
         return None
     lista = _ranking(db, escola_id, ano, turma_ids=permitidas)
@@ -1369,7 +1393,12 @@ def listar_alunos_da_turma(
 ):
     """Alunos da turma para o painel de gestão: com nota, posição e data de
     cadastro; busca por nome e ordenação. `incluir_inativos` traz também os
-    arquivados/excluídos (para restaurar ou apagar de vez)."""
+    arquivados/excluídos (para restaurar ou apagar de vez).
+
+    A posição só sai para quem está no ranking: ficha ativa numa turma que
+    concorre (1º ao 5º ano). A Nota de quem saiu (arquivado, transferido,
+    excluído) ou está numa turma de Fase é de um cálculo antigo, e a posição dela
+    hoje é de outra criança — o painel mostrava duas crianças em 1º."""
     turma = _turma_da_escola(db, escola_id, turma_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None and turma_id not in permitidas:
@@ -1394,13 +1423,15 @@ def listar_alunos_da_turma(
         consulta = consulta.where(Aluno.nome.ilike(f"%{busca}%"))
     consulta = consulta.order_by(*_ordem_alunos(ordenar), Aluno.nome.asc())
 
+    premiavel = elegibilidade.participa_de_premiacao(turma.ano_escolar)
     saida = []
     for aluno, nota in db.execute(consulta).all():
         item = AlunoGestaoOut.model_validate(aluno)
         item.turma = turma.nome
         item.ano_escolar = turma.ano_escolar
         item.nota_geral = nota.nota_geral if nota else None
-        item.posicao = nota.posicao if nota else None
+        item.posicao = (nota.posicao if nota and premiavel and aluno.status == "ativo"
+                        else None)
         saida.append(item)
     return saida
 
