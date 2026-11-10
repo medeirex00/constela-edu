@@ -237,9 +237,17 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "porque": ("app em campo: só sai com versão de API (plano, item 11 — "
                    "exige o Sensor 4)."),
     },
-    "apps/mobile/src/telas/PerfilAluno.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": "app em campo (plano, item 11).",
+    "apps/mobile/src/notasDoPerfil.ts": {
+        "ocorrencias": 2, "papel": "schema + exibição",
+        "porque": ("a Nota Geral da ficha do aluno no app, que saiu da tela "
+                   "(telas/PerfilAluno.tsx) para esta lógica pura: mostra '—' sem "
+                   "dado em nenhuma dimensão (D1 de 09/11/2026). App em campo "
+                   "(plano, item 11)."),
+        "pode_sair": "junto com a Nota Geral da ficha do app (plano, item 11 — Sensor 4)",
+    },
+    "apps/mobile/src/test/notasDoPerfil.test.ts": {
+        "ocorrencias": 3, "papel": "fixture de teste",
+        "porque": "perfis falsos do app (o tipo exige o campo); o teste lê o '—' de cada nota.",
     },
     "apps/mobile/src/telas/Ranking.tsx": {
         "ocorrencias": 1, "papel": "exibição",
@@ -259,6 +267,11 @@ ALLOWLIST_FRONT: dict[str, dict] = {
     "apps/web/src/test/PerfilAlunoAbas.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
         "porque": "payload falso do perfil (o tipo exige o campo); o teste lê as abas.",
+    },
+    "apps/web/src/test/PerfilAlunoDimensoes.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("payload falso do perfil (o tipo exige o campo); o teste lê o '—' "
+                   "das dimensões sem dado (D1 de 09/11/2026)."),
     },
     "apps/web/src/test/PerfilAlunoModulos.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
@@ -602,6 +615,12 @@ def test_inventario_do_frontend_esta_travado():
     assert not divergentes, (
         f"o número de usos mudou no frontend (esperado, encontrado): "
         f"{divergentes}." + MENSAGEM)
+    # Entrada que não acende mais a varredura deixaria a catraca frouxa: um uso novo
+    # naquele arquivo passaria sem ninguém declarar (a mesma regra do backend).
+    sumiram = sorted(set(ALLOWLIST_FRONT) - set(achados))
+    assert not sumiram, (
+        f"{sumiram} deixaram de usar `nota_geral` — remova-os de ALLOWLIST_FRONT "
+        f"(se o uso só mudou de arquivo, declare o arquivo novo).")
 
 
 # ===========================================================================
