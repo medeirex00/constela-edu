@@ -544,14 +544,14 @@ def aviso_turma_arquivada(turma: str, linhas: int, *, previa: bool = False) -> s
                 "da planilha nessa turma NÃO serão aplicadas ao confirmar — nenhuma "
                 "ficha nem matrícula nova nasce em turma arquivada, e as matrículas "
                 "que já existem nela continuam como estão. Se a turma deve receber "
-                "alunos, reative-a antes em Turmas › “Mostrar turmas arquivadas e de "
-                "outros anos letivos” › Reativar.")
+                "alunos, reative-a antes em Minha Escola › Turmas: ligue “Mostrar "
+                "arquivadas e de outros anos” e use “Reativar” na linha dela.")
     return (f"A turma “{turma}” está ARQUIVADA no cadastro: {linhas} linha(s) da "
             "planilha nessa turma NÃO foram aplicadas — nenhuma ficha nem "
             "matrícula nova foi criada nela, e as matrículas que já existiam "
             "continuam como estavam. Se a turma deve receber alunos, reative-a em "
-            "Turmas › “Mostrar turmas arquivadas e de outros anos letivos” › "
-            "Reativar e envie a planilha de novo.")
+            "Minha Escola › Turmas (ligue “Mostrar arquivadas e de outros anos” e "
+            "use “Reativar” na linha dela) e envie a planilha de novo.")
 
 
 def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:

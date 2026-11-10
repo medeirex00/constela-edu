@@ -65,9 +65,14 @@ from app.services import identidade_aluno
 NAO_RECEBE = ("Turma arquivada não recebe aluno ativo: arquivar não encerra as "
               "matrículas, e o aluno continuaria nos rankings, premiações e "
               "relatórios ligado a uma turma fora dos filtros.")
+# O interruptor da tela Turmas, pelo texto que aparece AO LADO dele (Turmas.tsx). O
+# nome acessível do interruptor ("Mostrar turmas arquivadas e de outros anos
+# letivos") é mais longo e não aparece na tela: quem lê a orientação procura o que
+# está escrito.
+MOSTRAR_ARQUIVADAS = "Mostrar arquivadas e de outros anos"
 # A saída, quando a turma deve mesmo voltar a receber alunos.
-REATIVAR_TURMA = ("reative a turma em Turmas › “Mostrar turmas arquivadas e de "
-                  "outros anos letivos” › Reativar")
+REATIVAR_TURMA = (f"reative a turma em Minha Escola › Turmas: ligue “{MOSTRAR_ARQUIVADAS}” "
+                  "e use “Reativar” na linha dela")
 
 
 def mensagem_turma_arquivada(turma: Turma) -> str:
