@@ -51,6 +51,10 @@ NOTIFICAVEIS: dict[str, tuple[str, str, Callable[[int | None], str]]] = {
 
 # A tela onde o gestor decide as pendências da fila de identidade.
 ROTA_REVISOES = "/revisoes-identidade"
+# Os avisos que SÃO uma pendência: só eles vão para a fila quando a auditoria traz o
+# ``revisao_id``. Os outros que trazem o id só citam a origem — o "Novo aluno
+# cadastrado" da ficha criada pela fila leva à ficha nova, como qualquer outro.
+AVISOS_DE_PENDENCIA = frozenset({"aluno.revisao_necessaria", "importacao.linha_ignorada"})
 
 # GUARDAS DE PERFIL das telas para onde os avisos apontam. A fonte da regra é a
 # web: ``apps/web/src/lib/rotasGuardadas.ts`` (o espelho das guardas do App.tsx).
@@ -86,7 +90,9 @@ def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
 
     Pendência gravada na fila de revisão de identidade (a auditoria traz o
     ``revisao_id``) aponta para as Revisões de identidade — é lá que o gestor
-    escolhe o aluno, cria a ficha ou descarta."""
+    escolhe o aluno, cria a ficha ou descarta. Só a PENDÊNCIA
+    (``AVISOS_DE_PENDENCIA``): a ficha criada pela fila também traz o id, de origem,
+    e o aviso dela leva à ficha."""
     if escola_id is None:
         return
     spec = NOTIFICAVEIS.get(acao)
@@ -94,7 +100,8 @@ def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
         return
     titulo, severidade, rota_de = spec
     rota = rota_de(entidade_id)
-    if isinstance(detalhes, dict) and "revisao_id" in detalhes:
+    if (acao in AVISOS_DE_PENDENCIA and isinstance(detalhes, dict)
+            and "revisao_id" in detalhes):
         rota = ROTA_REVISOES
     aluno_id = entidade_id if entidade == "aluno" else None
     db.add(Notificacao(

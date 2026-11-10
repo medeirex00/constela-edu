@@ -71,6 +71,33 @@ def test_professor_recebe_o_aviso_sem_o_link_e_a_gestao_com_o_link(db, escola_co
     assert prof == {"aluno.revisao_necessaria": None, "importacao.linha_ignorada": None}
 
 
+def test_ficha_criada_pela_fila_avisa_com_o_link_da_ficha(cliente, db, escola_completa):
+    """"Criar novo aluno" na fila registra ``aluno.criado`` com o ``revisao_id`` (a
+    origem). O aviso "Novo aluno cadastrado" leva à ficha nova — não à lista de
+    pendências, onde essa revisão já resolvida nem aparece (e que a professora da turma
+    não abre: ela ficava sem link para a ficha da criança dela)."""
+    from app.services import politica_sync
+    escola, turma = escola_completa["escola"], escola_completa["turma"]
+    politica_sync.definir(db, escola.id, "bloquear")     # a linha sem ficha vai para a fila
+    db.commit()
+    r = cliente.post(f"/api/v1/escolas/{escola.id}/importacoes/confirmar", json={
+        "plataforma": "elefante", "formato": "resumo", "tipo": "texto", "recalcular": False,
+        "linhas": [{"nome": "Crianca Ficticia Da Fila", "criar_em_turma_id": turma.id,
+                    "dados": {"elefante_student_id": "81004", "livros_unicos": 2}}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["qtd_revisoes"] == 1
+    [rev] = cliente.get(f"/api/v1/escolas/{escola.id}/importacoes/revisoes").json()
+    r = cliente.post(f"/api/v1/escolas/{escola.id}/importacoes/revisoes/{rev['id']}/resolver",
+                     json={"criar_em_turma_id": turma.id})
+    assert r.status_code == 200, r.text
+    novo = r.json()["aluno_id"]
+    db.expire_all()
+    assert _rotas(db, escola.id, "aluno.criado") == [f"/alunos/{novo}"]
+    # A pendência que abriu a fila continua levando às Revisões.
+    assert set(_rotas(db, escola.id, "aluno.revisao_necessaria")
+               + _rotas(db, escola.id, "importacao.linha_ignorada")) == {"/revisoes-identidade"}
+
+
 def test_professor_nao_recebe_link_antigo_para_importacoes(db, escola_completa):
     """Aviso gravado antes (rota /importacoes, que o professor também não abre)."""
     ids = _cenario(db, escola_completa)
