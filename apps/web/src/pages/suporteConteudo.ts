@@ -54,7 +54,7 @@ export const SINCRONIZACAO_GESTAO: Pergunta[] = [
   },
   {
     pergunta: "O aluno não aparece, ou a conta dele não foi ligada",
-    resposta: "Os casos claros são ligados sozinhos. Quando há dúvida (dois alunos parecidos, nome que só casa em outra turma, duas contas para a mesma ficha), a linha vai para Dados e integrações › Revisões de identidade; escolhida a ficha, as próximas sincronizações já ligam aquela conta sozinhas — uma linha descartada volta se a plataforma mandá-la de novo. Se a escola permite que a sincronização crie fichas, um nome sem nenhum candidato vira ficha nova: junte-a à certa em Minha Escola › Alunos › “Fundir duplicatas”.",
+    resposta: "Os casos claros são ligados sozinhos. Quando há dúvida (dois alunos parecidos, nome que só casa em outra turma, duas contas para a mesma ficha), a linha vai para Dados e integrações › Revisões de identidade; escolhida a ficha, as próximas sincronizações já ligam aquela conta sozinhas — uma linha descartada volta se a plataforma mandá-la de novo. Se a escola permite que a sincronização crie fichas, um nome sem nenhum candidato vira ficha nova: junte-a à certa em Minha Escola › Alunos › “Fundir duplicatas”. A exceção é o nome abreviado (como “ZEFA Q”) e duas contas com o mesmo nome na mesma sincronização: essas linhas não viram ficha e esperam em Revisões de identidade.",
   },
 ];
 

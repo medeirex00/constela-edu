@@ -262,6 +262,20 @@ describe("Suporte — certificado que não sai", () => {
   });
 });
 
+describe("Suporte — o que a sincronização transforma em ficha nova", () => {
+  // Nome abreviado (A2) e duas contas com o mesmo nome na mesma coleta (A5) não viram
+  // ficha nem com a escola permitindo: vão para a fila. Quem lia "vira ficha nova"
+  // procurava a ficha para fundir e não achava.
+  it("nome abreviado e contas com o mesmo nome vão para as Revisões, não viram ficha", () => {
+    const resposta = SINCRONIZACAO_GESTAO.find(
+      (p) => p.pergunta === "O aluno não aparece, ou a conta dele não foi ligada")?.resposta ?? "";
+    expect(resposta).toContain("um nome sem nenhum candidato vira ficha nova");
+    expect(resposta).toContain("nome abreviado (como “ZEFA Q”)");
+    expect(resposta).toContain("duas contas com o mesmo nome na mesma sincronização");
+    expect(resposta).toMatch(/não viram ficha e esperam em Revisões de identidade/);
+  });
+});
+
 describe("Suporte — caminhos do menu de cada perfil (os mesmos da trilha do topo)", () => {
   const juntar = (lista: { resposta: string }[]) => lista.map((p) => p.resposta).join(" ");
   // Nenhum perfil tem mais as seções/grupos antigos — nem o Usuários em Gestão ou em
