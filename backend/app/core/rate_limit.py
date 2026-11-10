@@ -104,12 +104,23 @@ class LimitadorTentativas:
             return len(chaves)
 
     def segundos_restantes(self, chave: str) -> int:
+        """Segundos até a chave deixar de estar bloqueada; 0 se não está.
+
+        O bloqueio acaba quando a fila de eventos na janela cai abaixo do teto,
+        isto é, quando sai o evento ``len - max_tentativas`` (o mais antigo, com a
+        fila exatamente no teto). Abaixo do teto devolve 0: quem junta vários
+        limitadores (o login) pode tomar o maior sem que o que não bloqueia
+        domine a espera anunciada."""
         agora = self._agora()
         with self._lock:
             fila = self._eventos.get(chave)
             if not fila:
                 return 0
-            return max(0, int(self.janela_s - (agora - fila[0])))
+            vivos = [t for t in fila if agora - t <= self.janela_s]
+            excesso = len(vivos) - self.max_tentativas
+            if excesso < 0:
+                return 0
+            return max(0, int(self.janela_s - (agora - vivos[excesso])))
 
 
 def ip_do_cliente(request) -> str:

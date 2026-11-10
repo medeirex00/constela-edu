@@ -210,6 +210,7 @@ def login(
 
     # Duas camadas: por (conta, IP) — freio fino — e por CONTA (sem IP) —
     # freio contra força-bruta distribuída (vários IPs) contra a mesma conta.
+    # A espera é a do bloqueio que vale: o limitador que não bloqueia dá 0.
     if limitador_login.bloqueado(chave) or limitador_conta.bloqueado(identidade):
         espera = max(limitador_login.segundos_restantes(chave),
                      limitador_conta.segundos_restantes(identidade))
