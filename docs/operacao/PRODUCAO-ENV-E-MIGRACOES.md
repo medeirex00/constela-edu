@@ -170,6 +170,9 @@ conexões, roda `SELECT 1` em cada e devolve todas. A conexão perto do `DB_POOL
 - erro do banco não derruba a API. Vira um aviso no log, no máximo um a cada 5 min e só
   com o tipo do erro, e o ciclo seguinte tenta de novo;
 - não segura conexão entre ciclos: cada uma sai do pool só pelo tempo do `SELECT 1`;
+- não compete com uma página carregando: antes de cada ciclo (menos o do boot) espera 2 s
+  sem requisição em andamento, por no máximo 5 s (com os padrões, o ciclo seguinte começa
+  em até 25 s, abaixo dos 30 s do ping);
 - **App Sleeping do Railway**: é uma opção do painel (não há arquivo de configuração do
   serviço no repositório). Com ela ligada, o serviço que dorme volta frio e o primeiro
   acesso paga o boot inteiro. Pela documentação do Railway, o `SELECT 1` a cada 20 s conta

@@ -144,6 +144,8 @@ def test_liga_so_no_postgresql_e_desliga_com_zero(monkeypatch):
     m = mp.criar_para(motor, _config())
     assert isinstance(m, mp.MantenedorDoPool)
     assert (m.conexoes, m.intervalo_s, m.limite_da_reciclagem_s) == (8, 20.0, 1760.0)
+    assert (m.calmaria_s, m.espera_maxima_s) == (2.0, 5.0)     # 20 + 5 = 25 s < 30 s do ping
+    assert mp.criar_para(motor, _config(DB_PING_OCIOSO_S=22)).espera_maxima_s == 0
     for desliga in (dict(DB_POOL_AQUECIDO_S=0), dict(DB_POOL_AQUECIDO_CONEXOES=0),
                     dict(DB_POOL_AQUECIDO_S=-1), dict(DB_POOL_AQUECIDO_CONEXOES=-2)):
         assert mp.criar_para(motor, _config(**desliga)) is None, desliga
@@ -382,6 +384,55 @@ def test_primeiro_ciclo_e_imediato_e_parar_e_prompto():
     m.parar()
     assert not m.vivo() and time.monotonic() - t0 < 2
     assert motor.pool.checkedout() == 0
+    motor.dispose()
+
+
+def test_ciclo_espera_a_calmaria_sem_competir_com_a_pagina_e_tem_teto():
+    """Com uma requisição em andamento o ciclo espera (não segura as conexões paradas bem
+    quando a camada seguinte da página chega); passado o teto, roda assim mesmo."""
+    motor = _motor(8)
+    do_mantenedor = []
+    event.listen(motor, "checkout", lambda *_a: do_mantenedor.append(time.monotonic())
+                 if threading.current_thread().name.startswith("pool-aquecido") else None)
+    m = mp.MantenedorDoPool(motor, intervalo_s=0.2, conexoes=3, calmaria_s=0.3,
+                            espera_maxima_s=1.5)
+    m.iniciar()
+    limite = time.monotonic() + 5
+    while motor.pool.checkedin() < 3 and time.monotonic() < limite:
+        time.sleep(0.02)
+    assert motor.pool.checkedin() == 3       # o ciclo do boot não espera calmaria
+    with motor.connect():                    # uma requisição em andamento
+        do_mantenedor.clear()
+        t0 = time.monotonic()
+        time.sleep(1.2)
+        assert do_mantenedor == []           # intervalo de 0,2 s, mas o ciclo esperou
+        while not do_mantenedor and time.monotonic() - t0 < 5:
+            time.sleep(0.02)
+        assert do_mantenedor                 # teto de 0,2 + 1,5 s: rodou com a requisição
+        assert do_mantenedor[0] - t0 < 3
+    m.parar()
+    assert motor.pool.checkedout() == 0
+    motor.dispose()
+
+
+def test_devolucao_recente_de_requisicao_adia_o_ciclo_e_a_do_mantenedor_nao():
+    motor = _motor(8)
+    m = mp.MantenedorDoPool(motor, intervalo_s=60, conexoes=2, calmaria_s=0.5,
+                            espera_maxima_s=3)
+    m.iniciar()                              # o ciclo do boot devolve 2 conexões...
+    limite = time.monotonic() + 5
+    while motor.pool.checkedin() < 2 and time.monotonic() < limite:
+        time.sleep(0.02)
+    m.parar()
+    m._parar.clear()                         # a espera roda aqui, sem a thread
+    t0 = time.monotonic()
+    m._esperar_calmaria()                    # ...que não contam como uso: sem espera
+    assert time.monotonic() - t0 < 0.2
+    with motor.connect():
+        pass                                 # devolução de uma requisição agora
+    t0 = time.monotonic()
+    m._esperar_calmaria()
+    assert 0.4 < time.monotonic() - t0 < 2
     motor.dispose()
 
 

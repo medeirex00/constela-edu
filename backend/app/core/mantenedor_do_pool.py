@@ -25,6 +25,10 @@ DISTINTAS: uma de cada vez, o pool LIFO devolveria sempre a mesma. O efeito:
   conexão (``marcar_abertura``, instalado junto do engine);
 * conexão morta no ``SELECT 1`` (o banco ou o pooler reiniciou) é trocada no mesmo ciclo.
 
+Fora o do boot, cada ciclo espera uma calmaria de ``CALMARIA_S`` (2 s sem requisição com
+conexão nem devolução), com teto de ``ESPERA_MAXIMA_S`` (5 s): não compete com uma página que
+está carregando em camadas.
+
 Limites, de propósito:
 
 * não segura conexão entre ciclos. Cada uma fica fora do pool só o tempo do ``SELECT 1`` (uma
@@ -67,6 +71,19 @@ PRAZO_DO_CICLO_S = 20.0
 
 # Quantas vezes seguidas uma retirada troca a conexão perto da reciclagem.
 _RENOVACOES_POR_RETIRADA = 3
+
+# Antes de cada ciclo (menos o do boot), o mantenedor espera uma CALMARIA: nenhuma conexão
+# com requisição e nenhuma devolvida por requisição nos últimos ``CALMARIA_S``. Uma página
+# chama a API em camadas (a sessão, depois a página), com intervalos curtos entre elas; o
+# ciclo que caísse num desses intervalos seguraria as conexões paradas bem quando a camada
+# seguinte chega, e ela abriria conexões novas. A espera tem teto (``ESPERA_MAXIMA_S``, e
+# nunca a ponto de passar do ``DB_PING_OCIOSO_S``): com o servidor sempre ocupado, o ciclo
+# roda assim mesmo, descontando as conexões em uso.
+CALMARIA_S = 2.0
+ESPERA_MAXIMA_S = 5.0
+
+# Marca as threads do próprio mantenedor: a devolução feita por elas não conta como uso.
+_local = threading.local()
 
 
 def marcar_abertura(motor) -> None:
@@ -165,11 +182,17 @@ class MantenedorDoPool:
 
     def __init__(self, motor, *, intervalo_s: float, conexoes: int,
                  reciclagem_s: float | None = None, prazo_s: float = PRAZO_DO_CICLO_S,
+                 calmaria_s: float = CALMARIA_S, espera_maxima_s: float = ESPERA_MAXIMA_S,
                  aviso: _AvisoComPausa | None = None) -> None:
         self.intervalo_s = float(intervalo_s)
         self.conexoes = int(conexoes)
         self.prazo_s = float(prazo_s)
+        self.calmaria_s = float(calmaria_s)
+        self.espera_maxima_s = float(espera_maxima_s)
+        self._motor_base = motor
         self._pool = motor.pool
+        self._ultima_devolucao = float("-inf")
+        self._ouvindo = False
         # Mesmo pool, em AUTOCOMMIT: o SELECT 1 é uma ida só (sem BEGIN e sem ROLLBACK). A
         # troca é local na conexão e o SQLAlchemy a desfaz na devolução.
         self._motor = motor.execution_options(isolation_level="AUTOCOMMIT")
@@ -228,6 +251,7 @@ class MantenedorDoPool:
             renovadas += 1
 
     def _trabalhar(self, rodada: _Rodada) -> None:
+        _local.mantenedor = True
         conexao = None
         renovadas = reconectadas = 0
         try:
@@ -269,8 +293,29 @@ class MantenedorDoPool:
             logger.debug("Mantenedor do pool: %d pronta(s), %d renovada(s), %d reconectada(s).",
                          resumo.prontas, resumo.renovadas, resumo.reconectadas)
 
+    def _na_devolucao(self, _dbapi_connection, _registro) -> None:
+        if not getattr(_local, "mantenedor", False):
+            self._ultima_devolucao = time.monotonic()
+
+    def _esperar_calmaria(self) -> None:
+        """Espera não haver requisição com conexão nem devolução recente, até o teto."""
+        limite = time.monotonic() + self.espera_maxima_s
+        while not self._parar.is_set():
+            agora = time.monotonic()
+            ocupado = (self._pool.checkedout() > 0
+                       or agora - self._ultima_devolucao < self.calmaria_s)
+            if not ocupado or agora >= limite:
+                return
+            self._parar.wait(min(0.1, limite - agora))
+
     def _laco(self) -> None:
-        while not self._parar.is_set():      # o primeiro ciclo é imediato (pré-aquece)
+        primeiro = True                      # o primeiro ciclo é imediato (pré-aquece)
+        while not self._parar.is_set():
+            if not primeiro:
+                self._esperar_calmaria()
+                if self._parar.is_set():
+                    break
+            primeiro = False
             try:
                 self._registrar(self.ciclo())
             except Exception as erro:  # noqa: BLE001
@@ -280,6 +325,9 @@ class MantenedorDoPool:
     def iniciar(self) -> None:
         if self.vivo():
             return
+        if not self._ouvindo:
+            event.listen(self._motor_base, "checkin", self._na_devolucao)
+            self._ouvindo = True
         self._parar.clear()
         self._thread = threading.Thread(target=self._laco, name="pool-aquecido", daemon=True)
         self._thread.start()
@@ -312,12 +360,18 @@ def criar_para(motor, config=settings) -> MantenedorDoPool | None:
         logger.warning("Mantenedor do pool: DB_POOL_AQUECIDO_CONEXOES=%d passa do "
                        "DB_POOL_SIZE=%d; mantém %d.", conexoes, teto, teto)
         conexoes = teto
-    if 0 < config.DB_PING_OCIOSO_S <= intervalo:
-        logger.warning("Mantenedor do pool: DB_POOL_AQUECIDO_S=%s não é menor que "
-                       "DB_PING_OCIOSO_S=%s; a requisição pode pagar o ping da conexão parada.",
-                       intervalo, config.DB_PING_OCIOSO_S)
+    # A espera pela calmaria nunca empurra o ciclo seguinte para além do limite do ping
+    # (com folga de 2 s); com os padrões, 20 + 5 = 25 s < 30 s.
+    espera = min(ESPERA_MAXIMA_S, intervalo / 4)
+    ping = config.DB_PING_OCIOSO_S
+    if ping > 0:
+        espera = max(0.0, min(espera, ping - intervalo - 2))
+        if ping <= intervalo:
+            logger.warning("Mantenedor do pool: DB_POOL_AQUECIDO_S=%s não é menor que "
+                           "DB_PING_OCIOSO_S=%s; a requisição pode pagar o ping da conexão "
+                           "parada.", intervalo, ping)
     return MantenedorDoPool(motor, intervalo_s=intervalo, conexoes=conexoes,
-                            reciclagem_s=config.DB_POOL_RECYCLE)
+                            reciclagem_s=config.DB_POOL_RECYCLE, espera_maxima_s=espera)
 
 
 _trava = threading.Lock()
