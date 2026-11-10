@@ -56,6 +56,19 @@ def test_sufixo_de_turma_nao_disfarca_a_abreviacao(db, escola_completa, monkeypa
     assert [r.motivo for r in pendentes(db, esc.id)] == ["nome_incompleto"]
 
 
+@pytest.mark.parametrize("recebido", ["KAUE 4B", "ZEFA Q 4B", "KAUE 4ºB"])
+def test_sufixo_de_outra_sala_tambem_nao_disfarca(db, escola_completa, monkeypatch, recebido):
+    """O sufixo de OUTRA sala fica no nome (não é a turma da linha), mas não é
+    palavra de nome: "KAUE 4B" na 3ºA continua sendo um nome de uma palavra só."""
+    sem_disco(monkeypatch)
+    esc, _, _ = _esc(escola_completa)
+    antes = fichas(db, esc.id)
+    aplicar(db, esc, elefante_resumo(K, [{"studentId": 9004, "studentName": recebido,
+                                          "totalBooksRead": 1}]))
+    assert fichas(db, esc.id) == antes, "nasceu ficha com nome abreviado"
+    assert [r.motivo for r in pendentes(db, esc.id)] == ["nome_incompleto"]
+
+
 @pytest.mark.parametrize("tipo", ["xlsx", "pdf", "texto"])
 @pytest.mark.parametrize("destino", ["turma_escolhida", "turma_pelo_nome"])
 def test_upload_manual_planilha_ou_pdf_nao_cria(cliente, db, escola_completa, tipo, destino):

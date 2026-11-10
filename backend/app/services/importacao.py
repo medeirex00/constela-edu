@@ -1026,7 +1026,9 @@ def nome_abreviado(nome: str) -> bool:
     "JOÃO B SILVA") — o formato curto do Placar do Matific e das fichas que a
     sincronização criou com ele. Partícula ("de", "da", "e") não conta como
     palavra nem como inicial, e número ("… SOUZA 2", que a escola usa para separar
-    homônimos) não é inicial.
+    homônimos) não é inicial. Token com dígito também não é palavra de nome: o
+    sufixo de OUTRA sala ("KAUE 4B" na 3ºA), que o casamento não tira, não faz de
+    um nome de uma palavra só um nome completo.
 
     É a régua de "nome abreviado" da porta de identidade: uma linha assim nunca
     vira ficha nova sozinha (``identidade_aluno.decidir``), e a fusão avisa quando
@@ -1034,7 +1036,8 @@ def nome_abreviado(nome: str) -> bool:
     from app.services._nomes import PARTICULAS
 
     toks = tokens_nome(nome)
-    palavras = [t for t in toks if t not in PARTICULAS and not t.isdigit()]
+    palavras = [t for t in toks
+                if t not in PARTICULAS and not any(c.isdigit() for c in t)]
     if not toks:
         return False
     if len(palavras) <= 1:
