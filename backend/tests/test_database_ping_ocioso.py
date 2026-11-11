@@ -61,6 +61,9 @@ print(p._pre_ping, p._pool.use_lifo, len(p.dispatch.checkout) > 0, len(p.dispatc
 """
 
 
+# O marcador: sem ele o teste pulava no job test-backend (sem psycopg) e não entrava no
+# ``-m postgres`` do job que tem o driver — não rodava em lugar nenhum.
+@pytest.mark.postgres
 def test_o_engine_do_app_em_postgresql_ganha_o_ping_por_ociosidade_e_o_lifo():
     """O ``engine`` do próprio app, montado com uma URL PostgreSQL (num processo à parte, sem
     conectar): sem ``pool_pre_ping``, com LIFO e com o evento de retirada instalado; toda
