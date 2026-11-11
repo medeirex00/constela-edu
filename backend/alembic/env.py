@@ -16,7 +16,7 @@ from sqlalchemy.engine import Connection
 
 from app.core.config import settings
 from app.core.database import Base
-from app.core.migracoes import renderizar_item_do_alembic
+from app.core.migracoes import comparar_default_do_servidor, renderizar_item_do_alembic
 
 # Importar os pacotes de modelos REGISTRA todas as tabelas em Base.metadata.
 # Sem isto o autogenerate acharia que o banco tem tabelas "a mais" e proporia
@@ -67,9 +67,11 @@ def _executar(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        # Detecta mudança de TIPO de coluna e de DEFAULT do servidor no diff.
+        # Detecta mudança de TIPO de coluna e de DEFAULT do servidor no diff. O default se
+        # compara pelo VALOR (sem parênteses, conversão do PostgreSQL e aspas) e, na coluna
+        # JSON, pelo texto: o Alembic comparava com SQL, e json não tem '=' no PostgreSQL.
         compare_type=True,
-        compare_server_default=True,
+        compare_server_default=comparar_default_do_servidor,
         # SQLite não suporta ALTER TABLE completo; o "batch mode" recria a
         # tabela de forma transparente. Inócuo no PostgreSQL, essencial no
         # SQLite (dev e testes).
@@ -89,7 +91,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
-        compare_server_default=True,
+        compare_server_default=comparar_default_do_servidor,
         render_as_batch=settings.DATABASE_URL.startswith("sqlite"),
         render_item=renderizar_item_do_alembic,
     )

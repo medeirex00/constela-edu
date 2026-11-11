@@ -35,7 +35,7 @@ from functools import lru_cache
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import inspect, text
+from sqlalchemy import JSON, inspect, text
 from sqlalchemy.engine import Connection, Engine
 
 from app.core.config import BASE_DIR
@@ -73,6 +73,61 @@ def renderizar_item_do_alembic(tipo: str, objeto, _contexto):
     if tipo == "type" and isinstance(objeto, DataHoraUTC):
         return "sa.DateTime()"
     return False
+
+
+# Conversão de tipo que o PostgreSQL acrescenta ao default refletido: '{}'::json,
+# 'efetiva'::character varying, '0'::double precision, ...::character varying(20)[].
+_CONVERSAO_PG = re.compile(r"::[a-z_][a-z0-9_ ]*(\(\d+(,\s*\d+)?\))?(\[\])?$", re.I)
+
+
+def _envolto_em_parenteses(texto: str) -> bool:
+    """``(x)`` sim; ``(a) + (b)`` não (o 1º parêntese fecha antes do fim)."""
+    if not (texto.startswith("(") and texto.endswith(")")):
+        return False
+    profundidade = 0
+    for i, letra in enumerate(texto):
+        profundidade += {"(": 1, ")": -1}.get(letra, 0)
+        if profundidade == 0:
+            return i == len(texto) - 1
+    return False
+
+
+def _valor_do_default(texto: str) -> str:
+    """O default do servidor sem o que só muda a GRAFIA de um banco para outro: parênteses
+    em volta, a conversão de tipo do PostgreSQL e as aspas do literal."""
+    valor = texto.strip()
+    while True:
+        antes = valor
+        if _envolto_em_parenteses(valor):
+            valor = valor[1:-1].strip()
+        valor = _CONVERSAO_PG.sub("", valor).strip()
+        if valor == antes:
+            break
+    if len(valor) >= 2 and valor[0] == valor[-1] == "'":
+        valor = valor[1:-1].replace("''", "'")
+    return valor
+
+
+def comparar_default_do_servidor(_contexto, coluna_banco, coluna_modelo, default_banco,
+                                 _default_modelo, default_modelo_renderizado):
+    """``compare_server_default`` do autogenerate e do ``alembic check`` (``alembic/env.py``).
+
+    Devolve ``False`` (sem diferença) quando os dois defaults têm o mesmo valor escrito de
+    outro jeito, ``True`` quando a coluna é JSON e os valores diferem, e ``None`` no resto
+    (a regra do próprio Alembic decide). Corrige dois enganos do Alembic:
+
+    * no PostgreSQL ele compara rodando ``SELECT <default do banco> = <default do modelo>``,
+      e o tipo ``json`` não tem operador ``=``: o ``'{}'`` das colunas JSON derrubava o
+      ``alembic check`` e o autogenerate com ProgrammingError. JSON se compara pelo texto;
+    * no SQLite ele não tira as aspas de ``''`` (string vazia) e via diferença entre o
+      default ``''`` do banco e o ``""`` do modelo."""
+    if default_banco is None or default_modelo_renderizado is None:
+        return None
+    if _valor_do_default(default_banco) == _valor_do_default(default_modelo_renderizado):
+        return False
+    if isinstance(coluna_banco.type, JSON) or isinstance(coluna_modelo.type, JSON):
+        return True
+    return None
 
 
 def _config_da_aplicacao() -> Config:
