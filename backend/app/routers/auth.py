@@ -85,6 +85,13 @@ def _identificador_para_log(entrada: str) -> str:
 _DIM_IP_FALHA = "edu_login_ip_falha"
 _DIM_GLOBAL_FALHA = "edu_login_global_falha"
 _GLOBAL = "*"   # valor único da dimensão global (vale para a API inteira)
+# Por quantos segundos a recusa do banco vale na memória do processo que a recebeu
+# (REV2-AUTH2-1). Curto de propósito: a vaga que enche o teto pode ser de uma
+# tentativa AINDA EM ANDAMENTO noutro worker, que volta se não virar falha (login
+# certo). Pela espera inteira (~5 min), o processo seguia recusando o IP — ou, no teto
+# global, o login de todos — com o banco já abaixo do teto. Passado este tempo, o
+# banco é consultado de novo e decide; até lá, a rajada para na memória.
+_RECUSA_DO_BANCO_NA_MEMORIA_S = 5
 
 ERRO_MUITAS_GLOBAL = ("O acesso está temporariamente limitado por excesso de "
                       "tentativas na plataforma. Aguarde {minutos} minuto(s) e "
@@ -162,8 +169,10 @@ def _reservar_tetos_de_falha(db: Session, rede: str, entrada: str,
 
     Primeiro a memória (barra a rajada sem ir ao banco); depois o banco, numa
     instrução só que confere e soma (``limites.reservar``), fora da transação da
-    requisição. Recusada lá (outro worker contou as falhas, ou antes de um reinício),
-    a memória deste processo aprende o bloqueio, e a espera anunciada é a do banco."""
+    requisição. Recusada lá (outro worker contou as falhas, antes de um reinício, ou
+    tentativas ainda em andamento ocupam as últimas vagas), a memória deste processo
+    guarda a recusa por ``_RECUSA_DO_BANCO_NA_MEMORIA_S`` segundos, não pela espera
+    inteira: a vaga em andamento pode voltar. A espera anunciada é a do banco."""
     from app.quest.services import limites
 
     tetos = _tetos_de_falha(rede)
@@ -186,7 +195,8 @@ def _reservar_tetos_de_falha(db: Session, rede: str, entrada: str,
             for dimensao, valor, limitador in tetos:
                 espera = reserva.espera(chaves[dimensao])
                 if espera is not None:
-                    limitador.bloquear_por(valor, espera)
+                    limitador.bloquear_por(
+                        valor, min(espera, _RECUSA_DO_BANCO_NA_MEMORIA_S))
             global_ = reserva.espera(chaves[_DIM_GLOBAL_FALHA])
             estourado = ((_DIM_GLOBAL_FALHA, global_) if global_ is not None
                          else (_DIM_IP_FALHA, reserva.espera(chaves[_DIM_IP_FALHA]) or 1))

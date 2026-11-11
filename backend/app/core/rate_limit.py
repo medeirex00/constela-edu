@@ -127,13 +127,15 @@ class LimitadorTentativas:
             return max(0, int(self.janela_s - (agora - vivos[excesso])))
 
     def bloquear_por(self, chave: str, segundos: float) -> None:
-        """Bloqueia a chave NESTE processo por ``segundos`` (no máximo a janela): o
-        bloqueio que a camada persistente já conhece (outro worker contou as falhas)
-        passa a valer aqui sem ida ao banco. Nunca encurta um bloqueio mais longo.
+        """Bloqueia a chave NESTE processo por ``segundos`` (no máximo a janela): a
+        recusa que a camada persistente deu (outro worker contou as falhas) passa a
+        valer aqui sem ida ao banco. Nunca encurta um bloqueio mais longo.
 
-        A fila fica com ``max_tentativas`` eventos no instante que faz o bloqueio
-        acabar daqui a ``segundos`` (``bloqueado`` e ``segundos_restantes`` seguem
-        valendo como para falhas de verdade)."""
+        A fila ganha ``max_tentativas`` eventos no instante que faz o bloqueio acabar
+        daqui a ``segundos`` (``bloqueado`` e ``segundos_restantes`` seguem valendo
+        como para falhas de verdade). As falhas de verdade da chave FICAM, na ordem
+        (REV2-AUTH2-1): quando o bloqueio aprendido acaba, elas seguem contando na
+        janela delas, como se ele não tivesse existido."""
         agora = self._agora()
         segundos = max(0.0, min(float(segundos), float(self.janela_s)))
         if segundos <= self.segundos_restantes(chave):
@@ -142,7 +144,8 @@ class LimitadorTentativas:
             if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
                 self._evacuar(agora)
             marca = agora - self.janela_s + segundos
-            self._eventos[chave] = deque([marca] * self.max_tentativas)
+            vivos = [t for t in self._eventos.get(chave, ()) if agora - t <= self.janela_s]
+            self._eventos[chave] = deque(sorted(vivos + [marca] * self.max_tentativas))
 
     def falhas_na_janela(self, chave: str) -> int:
         """Quantas falhas da chave estão na janela, neste processo (o que a camada em

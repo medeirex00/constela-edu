@@ -60,8 +60,14 @@ foi implementado, porque as duas mudanças alteram o login de todos os usuários
   nenhuma); se ela não virar falha (login certo, conta desativada, 429 por conta, erro
   inesperado), a vaga volta. Enquanto uma tentativa está em andamento ela ocupa a vaga
   dela: com o IP a uma falha do teto, outra tentativa que chegue no mesmo instante pode
-  receber o 429. Um bloqueio visto no banco passa a valer também na memória do
-  processo, pelo tempo que falta (as tentativas seguintes param ali, sem ir ao banco).
+  receber o 429 (a espera anunciada é a do bloqueio, a que vale se a tentativa em
+  andamento virar falha). A recusa vista no banco vale também na memória do processo
+  que a recebeu, mas só por **5 segundos** (as tentativas seguintes param ali, sem ir
+  ao banco); depois o banco é consultado de novo e decide. Curta de propósito
+  (REV2-AUTH2-1): a vaga que enche o teto pode ser de uma tentativa ainda em andamento
+  noutro processo, que volta se não virar falha; guardada pela espera inteira, um
+  login certo em andamento deixava o IP — ou, no teto global, o login de todos —
+  recusado por 5 min naquele processo, com o banco já abaixo do teto.
 - As variáveis são lidas no boot (mudar exige reiniciar o serviço); teto ≥ 1 e janela
   de 60 s a 1 h. Os limites por conta e por (conta, IP) seguem fixos e só em memória
   (zeram no restart e não valem entre réplicas).

@@ -187,3 +187,103 @@ def test_banco_sem_resposta_a_tempo_vale_so_a_memoria(db, contas, monkeypatch):
     assert rate_limit.limitador_ip_falha_login.falhas_na_janela(IP) == 1
     assert _falhas(db) == {}
     assert devolucoes == []
+
+
+# --- A recusa do banco vale pouco tempo na memória (REV2-AUTH2-1) -------------------
+# A vaga que enche o teto no banco pode ser de uma tentativa AINDA EM ANDAMENTO noutro
+# worker, que volta se não virar falha (login certo). Antes, a memória do processo que
+# recebeu a recusa aprendia o bloqueio pela espera inteira (~300 s): com o banco já
+# abaixo do teto e sem bloqueio, o processo seguia recusando o IP — ou, no teto global,
+# o login de todos — por 5 min, mesmo com a senha certa.
+
+def _relogio(monkeypatch, *limitadores):
+    agora = [5000.0]
+    for lim in limitadores:
+        monkeypatch.setattr(lim, "_agora", lambda: agora[0])
+    return agora
+
+
+def _estado(db) -> dict[str, tuple[int, bool]]:
+    db.expire_all()
+    return {chave.split(":", 1)[0]: (falhas, ate is not None)
+            for chave, falhas, ate in db.execute(select(
+                QuestLimiteAcesso.chave, QuestLimiteAcesso.falhas,
+                QuestLimiteAcesso.bloqueado_ate))}
+
+
+def _reserva_de_outro_worker(db, ip: str):
+    """A tentativa que outro worker reservou e ainda está avaliando."""
+    reserva = limites.reservar(db, [
+        limites.Limite(limites.chave(d, v), lim.max_tentativas, lim.janela_s)
+        for d, v, lim in auth_router._tetos_de_falha(rate_limit.rede_para_limite(ip))])
+    assert reserva.aceita
+    return reserva
+
+
+def test_vaga_em_andamento_que_volta_nao_trava_o_ip_na_memoria(db, contas, monkeypatch):
+    """Teto do IP = 3 e 2 falhas de verdade. Um login certo em andamento noutro worker
+    toma a 3ª vaga; o que chega junto aqui é recusado. A vaga volta (banco: 2 falhas,
+    sem bloqueio): passados os poucos segundos da recusa aprendida, a senha certa
+    entra."""
+    monkeypatch.setattr(rate_limit.limitador_ip_falha_login, "max_tentativas", 3)
+    agora = _relogio(monkeypatch, rate_limit.limitador_ip_falha_login)
+    assert _login(contas[0], ERRADA).status_code == 401
+    assert _login(contas[1], ERRADA).status_code == 401
+    _reiniciar_processo()                          # as falhas foram noutro worker
+
+    em_andamento = _reserva_de_outro_worker(db, IP)
+    assert _login(contas[2], SENHA).status_code == 429          # chegou junto
+    limites.devolver(db, em_andamento)                         # era o login certo
+    assert _estado(db)["edu_login_ip_falha"] == (2, False)
+
+    # A recusa vale na memória só por instantes (absorve a rajada sem ir ao banco).
+    restante = rate_limit.limitador_ip_falha_login.segundos_restantes(IP)
+    assert 0 < restante <= auth_router._RECUSA_DO_BANCO_NA_MEMORIA_S, restante
+    agora[0] += auth_router._RECUSA_DO_BANCO_NA_MEMORIA_S + 1
+    r = _login(contas[3], SENHA)
+    assert r.status_code == 200, (r.status_code, r.json())
+    assert _estado(db)["edu_login_ip_falha"] == (2, False)     # o acerto não soma
+
+
+def test_vaga_em_andamento_que_volta_nao_trava_o_login_de_todos_na_memoria(
+        db, contas, monkeypatch):
+    """O mesmo no teto GLOBAL (aqui 3): duas falhas de IPs diferentes, um login certo
+    em andamento noutro worker toma a 3ª vaga e o que chega junto (outro IP) é
+    recusado. A vaga volta: passados os poucos segundos da recusa aprendida, o login
+    de qualquer IP entra."""
+    monkeypatch.setattr(rate_limit.limitador_global_falha_login, "max_tentativas", 3)
+    agora = _relogio(monkeypatch, rate_limit.limitador_global_falha_login)
+    assert _login(contas[0], ERRADA, ip="203.0.113.71").status_code == 401
+    assert _login(contas[1], ERRADA, ip="203.0.113.72").status_code == 401
+    _reiniciar_processo()
+
+    em_andamento = _reserva_de_outro_worker(db, "203.0.113.73")
+    r = _login(contas[2], SENHA, ip="203.0.113.74")
+    assert r.status_code == 429
+    assert r.json()["detail"].startswith("O acesso está temporariamente limitado")
+    limites.devolver(db, em_andamento)
+    assert _estado(db)["edu_login_global_falha"] == (2, False)
+
+    restante = rate_limit.limitador_global_falha_login.segundos_restantes("*")
+    assert 0 < restante <= auth_router._RECUSA_DO_BANCO_NA_MEMORIA_S, restante
+    agora[0] += auth_router._RECUSA_DO_BANCO_NA_MEMORIA_S + 1
+    r = _login(contas[3], SENHA, ip="203.0.113.75")
+    assert r.status_code == 200, (r.status_code, r.json())
+
+
+def test_bloqueio_aprendido_nao_apaga_as_falhas_de_verdade_do_processo(monkeypatch):
+    """O bloqueio aprendido do banco acaba no prazo dele, e as falhas que ESTE processo
+    contou continuam valendo na janela delas (são elas que seguram o teto quando o
+    banco não responde a tempo). Antes, ``bloquear_por`` trocava a fila inteira."""
+    lim = LimitadorTentativas(max_tentativas=3, janela_s=300)
+    agora = _relogio(monkeypatch, lim)
+    lim.registrar_falha("x")
+    lim.registrar_falha("x")
+    lim.bloquear_por("x", 5)
+    assert lim.bloqueado("x") and 4 <= lim.segundos_restantes("x") <= 5
+    agora[0] += 6
+    assert not lim.bloqueado("x")
+    assert lim.falhas_na_janela("x") == 2
+    lim.registrar_falha("x")                      # a 3ª falha de verdade bloqueia
+    assert lim.bloqueado("x")
+    assert 293 <= lim.segundos_restantes("x") <= 294   # a mais antiga sai em t+300

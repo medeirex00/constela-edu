@@ -333,7 +333,12 @@ def reservar(db: Session, itens: Iterable[Limite]) -> Reserva:
     espera de cada recusada. A tentativa reservada que não virar falha (login certo,
     recusa por outro motivo) volta com ``devolver``: só falhas contam, como antes. Quem
     está no meio da avaliação ocupa a vaga dele: com o teto quase cheio, uma tentativa
-    em andamento pode recusar outra que chegou junto (por instantes).
+    em andamento pode recusar outra que chegou junto. No banco, a recusa dura até a
+    tentativa em andamento terminar: se ela virar falha, fica o bloqueio; se voltar, a
+    chave aceita de novo. A espera da recusa é a do bloqueio (a maior possível, a que
+    vale se ela virar falha). Quem recebe a recusa não deve guardá-la por essa espera
+    inteira: o login do Edu a guarda na memória por poucos segundos
+    (``_RECUSA_DO_BANCO_NA_MEMORIA_S`` em app.routers.auth) e depois volta ao banco.
 
     Mesmas regras de ``contar`` (fora da transação da sessão; ``LimiteIndisponivel``
     se uma linha ficou presa além do prazo, e então nada foi reservado)."""
