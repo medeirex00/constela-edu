@@ -888,6 +888,28 @@ export default function Importacoes() {
   const novosNaTurmaCadastrada = naoEncontrados.length > 0
     && naoEncontrados.every((g) => Boolean(g.correspondencia?.turma_id));
   const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
+  // As linhas ligadas a cada aluno (vínculo escolhido ou da prévia). Só uma linha pode
+  // ir para cada aluno: com duas, o /confirmar recusa (422) — antes guardava só os
+  // números da última e ligava as duas contas à mesma ficha, sem aviso.
+  const linhasPorAluno = new Map<number, number[]>();
+  grupos.forEach((g, i) => {
+    const acao = acoes[i];
+    if (g.todasComErro || acao?.tipo !== "importar") return;
+    linhasPorAluno.set(acao.alunoId, [...(linhasPorAluno.get(acao.alunoId) ?? []), i]);
+  });
+  const escolhidoEmOutraLinha = (alunoId: number, gi: number) =>
+    (linhasPorAluno.get(alunoId) ?? []).some((i) => i !== gi);
+  /** O nome do aluno de um vínculo, pelo que a prévia mostrou (correspondência ou
+   *  alternativas de alguma linha). */
+  function nomeDoAluno(alunoId: number): string {
+    for (const g of grupos) {
+      const c = g.correspondencia;
+      if (c?.aluno_id === alunoId && c.aluno_nome) return c.aluno_nome;
+      const alternativa = c?.alternativas.find((a) => a.aluno_id === alunoId);
+      if (alternativa) return alternativa.nome;
+    }
+    return "Este aluno";
+  }
   // Política "bloquear" (a matrícula vem da Lista Piloto): a confirmação não cria
   // ficha — a linha marcada "Criar" (na turma escolhida ou na do relatório) vai para
   // Revisões de identidade, como a de destino "revisao". O rodapé e a confirmação a
@@ -1322,6 +1344,8 @@ export default function Importacoes() {
                                     {vinculoVaiParaRevisao({ tipo: "importar", alunoId: alternativa.aluno_id },
                                       correspondencia, global)
                                       ? " — vai para a Revisão como sugestão" : ""}
+                                    {escolhidoEmOutraLinha(alternativa.aluno_id, gi)
+                                      ? " — já escolhido em outra linha" : ""}
                                   </option>
                                 ))}
                                 {vaiParaRevisao(correspondencia) ? (
@@ -1377,6 +1401,15 @@ export default function Importacoes() {
                                 <p className="max-w-[18rem] text-xs text-ouro-700 dark:text-ouro-300">
                                   Esta turma é de outra etapa que a turma do relatório: a ficha não
                                   nasce nela — a linha vai para Revisões de identidade.
+                                </p>
+                              )}
+                              {acao.tipo === "importar" && escolhidoEmOutraLinha(acao.alunoId, gi) && (
+                                // Só uma linha pode ir para cada aluno: o /confirmar recusa
+                                // duas (contas ou números diferentes) e nada é gravado.
+                                <p className="max-w-[18rem] text-xs font-semibold text-rose-700 dark:text-rose-300">
+                                  “{acao.alunoNome ?? nomeDoAluno(acao.alunoId)}” também foi escolhido
+                                  para outra linha deste relatório: só uma linha pode ir para cada
+                                  aluno — deixe a outra para a Revisão.
                                 </p>
                               )}
                             </div>
