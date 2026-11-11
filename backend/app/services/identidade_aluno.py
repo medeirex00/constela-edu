@@ -274,7 +274,8 @@ class LinhaIdentidade:
 
 def _chamada(dados: dict) -> int | None:
     bruto = str(dados.get("numero_chamada") or dados.get("chamada") or "").strip()
-    return int(bruto) if bruto.isdigit() else None
+    # isdecimal, não isdigit: "2¹" é dígito para o isdigit e o int() levantava.
+    return int(bruto) if bruto.isdecimal() else None
 
 
 def _nascimento(dados: dict) -> date | None:

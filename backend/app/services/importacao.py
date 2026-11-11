@@ -636,7 +636,7 @@ def _id_livro_elefante(valor) -> int | None:
         return None
     if isinstance(valor, float) and valor.is_integer():
         valor = int(valor)
-    if isinstance(valor, str) and valor.strip().isdigit():
+    if isinstance(valor, str) and valor.strip().isdecimal():   # "12²": isdigit, não int
         valor = int(valor.strip())
     return valor if isinstance(valor, int) and valor > 0 else None
 

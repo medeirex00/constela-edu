@@ -446,7 +446,9 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                     analise.escola_detectada = v
             if analise.ano_letivo is None:
                 v = _valor_apos_rotulo(linha, "lista piloto")
-                if v.strip().isdigit():
+                # isdecimal, não isdigit: "2026²" é dígito para o isdigit e o int()
+                # levantava — sem try aqui, a prévia inteira dava 500.
+                if v.strip().isdecimal():
                     analise.ano_letivo = int(v.strip())
         turma = _extrair_turma(nome_aba, topo)
         # Aba AUXILIAR (ex.: "COMPARAR COM INEP", "DESENHOS", "Etiqueta"): tem
@@ -480,7 +482,19 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
         for posicao, linha in enumerate(linhas[hr + 1:], start=1):
             try:
                 aluno = _extrair_aluno(linha, colunas)
-            except Exception:  # noqa: BLE001 — linha corrompida não derruba a aba
+            except Exception as exc:  # noqa: BLE001 — linha corrompida não derruba a aba
+                # Mas não some em silêncio: aviso (aba e posição, sem nome) e log; e,
+                # como a criança da linha não foi vista, a turma não marca ninguém
+                # "fora da lista piloto" neste envio (``linhas_puladas``).
+                logger.warning("Lista Piloto: aba %r, %dª linha abaixo dos títulos não "
+                               "pôde ser lida: %s", turma.aba[:60], posicao,
+                               type(exc).__name__)
+                turma.linhas_puladas += 1
+                analise.avisos.append(
+                    f"Aba “{turma.aba}”, {posicao}ª linha preenchida abaixo dos títulos: "
+                    "a linha não pôde ser lida e fica fora da importação. Confira a "
+                    "planilha e envie de novo; até lá, ninguém desta turma é marcado "
+                    "“fora da lista piloto”.")
                 continue
             if aluno is None:
                 continue
@@ -553,7 +567,7 @@ def _extrair_turma(nome_aba: str, topo: list[list]) -> TurmaMatriculas:
             professor = _valor_apos_rotulo(linha, "professor")
         if not sed:
             v = _valor_apos_rotulo(linha, "classe", contains=True)
-            if v.strip().isdigit():
+            if v.strip().isdecimal():      # "123456¹" (rodapé) não é o código da classe
                 sed = v.strip()
     nome_turma, serie = _canonizar_turma(nome or nome_aba)
     return TurmaMatriculas(nome=nome_turma, ano_escolar=serie,
@@ -649,7 +663,9 @@ def _extrair_aluno(linha: list, colunas: dict[str, int]) -> AlunoMatricula | Non
 
     aluno = AlunoMatricula(nome=nome)
     numero = val("numero")
-    if numero.isdigit():
+    # isdecimal, não isdigit: o "2¹" de rodapé é dígito para o isdigit e o int()
+    # levantava — a linha inteira (a criança) ficava de fora. Como "2a", fica sem nº.
+    if numero.isdecimal():
         aluno.numero_chamada = int(numero)
 
     c_nasc = colunas.get("nascimento")
