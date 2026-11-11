@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import expurgo_arquivos
@@ -451,6 +451,38 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
     # banco com a posição de antes — que hoje pertence a outra criança. O
     # Mérito imprime essa posição, então recusa como nos outros casos de
     # população; a arte de participação (sem nota nem posição) não passa aqui.
+    #
+    # MATRÍCULA SÓ NUM ANO ENCERRADO (a formanda ou quem saiu na virada): a
+    # criança não PERDEU a turma, o ano é que virou. Mandar "colocá-la numa turma
+    # deste ano letivo" a punha no ranking, nas premiações e nos certificados do
+    # ano novo sem estar na escola — e o Mérito pedido (o do ano encerrado)
+    # continuava sem caminho: ele é sempre do ano letivo ativo, e voltar o ano é
+    # recusado (histórico protegido). A recusa diz isso, sem mandar matricular.
+    if matricula is None:
+        ativo = escola.ano_letivo_ativo
+        ultimo_ano = db.execute(
+            select(func.max(Matricula.ano_letivo))
+            .where(Matricula.aluno_id == aluno.id, Matricula.ano_letivo < ativo)
+        ).scalar_one_or_none()
+        if ultimo_ano is not None:
+            saida = (f"Se ela saiu da escola ou se formou, não a coloque numa turma de "
+                     f"{ativo} para emitir: ela passaria a contar no ranking e nas "
+                     f"premiações de {ativo}. Se ela continua na escola, o certificado "
+                     f"sai depois que ela estiver na turma dela de {ativo} (pela Lista "
+                     f"Piloto de {ativo}, ou no perfil dela, três pontinhos › “Editar "
+                     "dados” › Turma)."
+                     if preparo.gestao else
+                     f"Se ela saiu da escola ou se formou, não há certificado de Mérito "
+                     f"de {ativo} para ela. Se ela continua na escola, peça à "
+                     f"coordenação para colocá-la na turma dela de {ativo} e emita "
+                     "depois disso.")
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{aluno.nome}” tem matrícula só em {ultimo_ano}, ano letivo já "
+                f"encerrado, e nenhuma no ano letivo ativo ({ativo}). O certificado "
+                f"de Mérito é do ano letivo ativo, e no ranking de {ativo} ela não "
+                f"está: a posição guardada para ela é de um cálculo antigo e não "
+                f"vale mais. {saida}")
     if matricula is None or not elegibilidade.participa_de_premiacao(
             matricula[1].ano_escolar):
         onde = (f"está em {matricula[1].nome!r} sem uma série do 1º ao 5º ano "
