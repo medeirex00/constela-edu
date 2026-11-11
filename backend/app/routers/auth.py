@@ -318,7 +318,11 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
     # versão da sessão (``identidade_da_conta``): a senha substituída sobe a
     # versão e libera o login em todos os processos da API. Conta inexistente conta
     # pelo texto digitado, noutro espaço de nomes (``identidade_digitada``): texto
-    # nenhum soma falhas na chave de uma conta, e o 429 não revela se ela existe.
+    # que não acha conta nunca soma falhas na chave de uma conta (``u:`` × ``t:``).
+    # LIMITE conhecido (REV3-SEG-1): como o e-mail e o @ da MESMA conta somam juntos
+    # e, sem conta, são duas chaves, quem já conhece o par confirma que a conta
+    # existe em 9 pedidos do mesmo IP (429 na que existe, 401 na que não existe).
+    # Fechar isso pede travamento silencioso (401 em vez de 429): decisão do dono.
     identidade = (identidade_da_conta(usuario) if usuario is not None
                   else identidade_digitada(entrada))
     # Para o LOG: o e-mail da conta, sem a versão; conta inexistente nunca grava

@@ -358,9 +358,18 @@ def identidade_da_conta(usuario) -> str:
 
 def identidade_digitada(entrada: str) -> str:
     """Identidade de um login que NÃO achou conta: o texto digitado, num espaço
-    de nomes próprio (prefixo ``t:``). Nenhum texto digitado cai na chave de uma
-    conta que existe (``identidade_da_conta``, prefixo ``u:``), então o 429 dos
-    limitadores da conta não diz se ela existe."""
+    de nomes próprio (prefixo ``t:``). Texto que não acha conta nunca soma falhas
+    na chave de uma conta que existe (``identidade_da_conta``, prefixo ``u:``):
+    digitar ``<e-mail>#<versão>`` não trava a conta real nem revela que ela existe.
+
+    LIMITE conhecido (REV3-SEG-1): o e-mail e o @ da MESMA conta somam na mesma
+    chave, de propósito, para não dobrar o orçamento de força bruta; sem conta,
+    os dois textos são duas chaves ``t:``. Quem já conhece o par confirma que a
+    conta existe em 9 pedidos do mesmo IP (8 palpites alternados: 429 na que
+    existe, 401 na que não existe). No professor com e-mail gerado do @, o par
+    sai só do nome. Fechar isso pede travamento silencioso (401 em vez de 429
+    quando só o limitador da conta bloqueia), que muda o que a pessoa travada vê:
+    decisão do dono."""
     return f"t:{entrada}"
 
 

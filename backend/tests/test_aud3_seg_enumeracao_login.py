@@ -1,5 +1,5 @@
-"""O /auth/login não revela se a conta existe pelo 429 dos limitadores da conta
-(REG_SEGURANCA-2).
+"""Texto digitado que não acha conta não soma falhas na chave de uma conta: o 429
+de quem digita ``<e-mail>#<versão>`` não revela se a conta existe (REG_SEGURANCA-2).
 
 A chave dos limitadores de uma conta que EXISTE é ``<e-mail>#<token_version>``
 (``identidade_da_conta``); a de uma conta que NÃO existe era o texto digitado.
@@ -7,7 +7,10 @@ As duas viviam no mesmo espaço de nomes: quem digitava ``<e-mail>#0`` como logi
 (conta inexistente) somava falhas exatamente na chave da conta real (versão 0).
 Depois de 8 palpites, o login com o e-mail verdadeiro dava 429 só se a conta
 existia — e 401 se não existia. Agora o texto digitado e a conta têm chaves de
-espaços diferentes: nenhum texto digitado cai na chave de uma conta.
+espaços diferentes: texto que não acha conta nunca cai na chave de uma conta.
+
+O limite que sobra, o par e-mail + @ da MESMA conta (REV3-SEG-1), está preso em
+``test_aud3_seg_login_par_email_arroba.py``.
 
 Dados fictícios; senha errada sempre (menos no controle do login certo).
 """
