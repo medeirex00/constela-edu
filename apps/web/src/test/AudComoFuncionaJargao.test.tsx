@@ -7,12 +7,17 @@
  * (é um dia, não um instante: passar por Date a mostraria um dia antes em Brasília).
  * O identificador técnico fica na dica (title), como no Suporte. Dados fictícios, no
  * formato real de GET /configuracoes/dificuldade-livro.
+ *
+ * O "Quer ver um exemplo?" (ExemploPontuacao) fica DENTRO do mesmo painel (e no
+ * Suporte): a linha final do exemplo também dizia "Regra: elefante_dificuldade_v2 ·
+ * catálogo 78ca392a0a48 (752 livros)", logo abaixo do rodapé já traduzido
+ * (REV-MISC-1). Agora usa o mesmo mapa; o hash do catálogo fica na dica.
  */
 import { describe, expect, it } from "vitest";
 
 import ComoFuncionaPontuacao from "../components/ComoFuncionaPontuacao";
 import { diaDoCatalogo, nomeDaVersaoDaRegra } from "../lib/regraPontuacao";
-import { renderComApp, responder, screen, userEvent } from "./utils";
+import { renderComApp, responder, screen, userEvent, usuarioFake, within } from "./utils";
 
 function dificuldadeLivro(over: Record<string, unknown> = {}) {
   return {
@@ -64,6 +69,75 @@ describe("Como funciona a pontuação: o rodapé em linguagem da escola", () => 
     expect(texto).not.toMatch(/escola_legada_v0|elefante_dificuldade_v\d/);
     expect(texto).toContain("régua própria da escola, por faixa de nível");
     expect(texto).toContain("(regra da rede: régua de dificuldade dos livros da rede, versão 2)");
+  });
+});
+
+/** Resposta de GET /configuracoes/pontuacao/exemplo/elefante, no formato real. */
+function exemploLivro(over: Record<string, unknown> = {}) {
+  return {
+    plataforma: "elefante",
+    regra: "elefante_dificuldade_v2",
+    regra_da_rede: "elefante_dificuldade_v2",
+    catalogo: { versao: "78ca392a0a48", n_livros: 752 },
+    entrada: { origem: "acervo", livro_id: 42, elefante_id: 9, titulo: "Livro de Exemplo", nivel: "B", serie: 3 },
+    serie: 3, valor: 1.9728, valor_exibido: 1.97, personalizada: false,
+    livro: {
+      titulo: "Livro de Exemplo", nivel: "B", palavras: 70, palavras_status: "catalogo",
+      resolvido_por: "elefante_id", encontrado_no_catalogo: true, elefante_id: 9,
+      titulo_no_catalogo: "Livro de Exemplo", nivel_no_catalogo: "B",
+    },
+    calculo: {
+      posicao_nivel: 5, posicao_descricao: "6º nível da escada, que começa no AA",
+      base_nivel: 1.673639, mediana_palavras_nivel: 74, fator_tamanho: 0.982296,
+      limite_tamanho: null, piso_tamanho: 0.8, teto_tamanho: 1.35, fator_serie: 1.2, valor: 1.9728,
+    },
+    avisos: [],
+    ...over,
+  };
+}
+
+async function pedirExemploNoPainel(exemplo: unknown) {
+  responder("GET", "/escolas/1/configuracoes/dificuldade-livro", dificuldadeLivro());
+  responder("GET", /^\/escolas\/1\/livros/, {
+    total: 1, pagina: 1, por_pagina: 8,
+    itens: [{ id: 42, titulo: "Livro de Exemplo", autor: null, nivel_codigo: "B", categoria: null,
+      paginas: null, pontos: 1.64, leituras: 0 }],
+  });
+  responder("GET", /^\/escolas\/1\/configuracoes\/pontuacao\/exemplo\/elefante/, exemplo);
+  responder("GET", /^\/escolas\/1\/turmas/, []);
+  const u = userEvent.setup();
+  renderComApp(<ComoFuncionaPontuacao modo="institucional" />, {
+    rota: "/metricas", usuario: usuarioFake({ modulos: ["leitura"] }),
+  });
+  await u.click(await screen.findByRole("button", { name: /Como funciona\?/ }));
+  await screen.findByText(/Regra em uso nesta escola/);
+  await u.type(await screen.findByLabelText("Livro do acervo"), "Exem");
+  await u.click(await screen.findByRole("button", { name: /Livro de Exemplo/ }));
+  await u.selectOptions(screen.getByLabelText("Ano escolar do aluno"), "3");
+  await u.click(screen.getByRole("button", { name: "Ver exemplo" }));
+  await screen.findByText("1,97 pontos");
+  return screen.getByText(/^Regra:/);
+}
+
+describe("Como funciona a pontuação: o exemplo do mesmo painel também fala a língua da escola", () => {
+  it("a linha da regra do exemplo diz a régua pelo nome; código e hash do catálogo só na dica", async () => {
+    const linha = await pedirExemploNoPainel(exemploLivro());
+    const texto = linha.textContent?.replace(/\s+/g, " ") ?? "";
+
+    expect(texto).not.toMatch(/elefante_dificuldade_v\d|78ca392a0a48/);
+    expect(texto).toBe("Regra: régua de dificuldade dos livros da rede, versão 2 · catálogo de 752 livros");
+    expect(within(linha).getByTitle("Identificador da versão: elefante_dificuldade_v2")).toBeInTheDocument();
+    expect(within(linha).getByTitle("Versão do catálogo: 78ca392a0a48")).toBeInTheDocument();
+  });
+
+  it("régua própria da escola pelo nome; sem catálogo, a linha não fala de catálogo", async () => {
+    const linha = await pedirExemploNoPainel(exemploLivro({
+      regra: "escola_legada_v0", catalogo: { versao: null, n_livros: 0 },
+    }));
+    const texto = linha.textContent?.replace(/\s+/g, " ") ?? "";
+
+    expect(texto).toBe("Regra: régua própria da escola, por faixa de nível");
+    expect(within(linha).getByTitle("Identificador da versão: escola_legada_v0")).toBeInTheDocument();
   });
 });
 

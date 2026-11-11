@@ -30,6 +30,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
 import { api, ApiError } from "../lib/api";
+import { nomeDaVersaoDaRegra } from "../lib/regraPontuacao";
 import type { Livro, PaginaLivros } from "../lib/types";
 import { SeletorPeriodo, periodoParaQuery } from "./SeletorPeriodo";
 import { Badge, Botao, IconePastel, Mensagem, estiloInput } from "./ui";
@@ -343,10 +344,18 @@ function ResultadoElefante({ ex }: { ex: ExemploElefanteResposta }) {
       )}
 
       <Avisos avisos={ex.avisos} />
+      {/* A regra pelo nome comum, como o rodapé do "Como funciona?" e o Suporte (o
+          identificador técnico e a versão do catálogo ficam na dica). */}
       <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-        Regra: {ex.regra}
+        Regra:{" "}
+        <span title={`Identificador da versão: ${ex.regra}`}>{nomeDaVersaoDaRegra(ex.regra)}</span>
         {ex.catalogo?.versao ? (
-          <> · catálogo {ex.catalogo.versao} ({ex.catalogo.n_livros.toLocaleString("pt-BR")} livros)</>
+          <>
+            {" · "}
+            <span title={`Versão do catálogo: ${ex.catalogo.versao}`}>
+              catálogo de {ex.catalogo.n_livros.toLocaleString("pt-BR")} livros
+            </span>
+          </>
         ) : null}
       </p>
     </div>

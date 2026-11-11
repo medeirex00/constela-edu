@@ -1,7 +1,7 @@
 /**
  * A regra de pontuação em linguagem de gente — fonte única para as telas que a
- * citam (Suporte › "Como a nota é calculada" e Critérios de pontuação › "Como
- * funciona?"). O identificador técnico da versão (o que o backend devolve, ex.:
+ * citam (Suporte › "Como a nota é calculada", Critérios de pontuação › "Como
+ * funciona?" e o "Quer ver um exemplo?" das duas). O identificador técnico da versão (o que o backend devolve, ex.:
  * `elefante_dificuldade_v2`) não aparece no texto: fica só na dica (title), para
  * quem precisa conferir com a equipe.
  */
