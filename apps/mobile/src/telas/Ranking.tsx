@@ -58,6 +58,7 @@ export default function Ranking() {
           nome: item.nome,
           detalhe: item.turma ?? "",
           valor: item.nota_geral,
+          destaque: item.posicao <= 3,
         }))
       : (data.evolucao ?? []).map((item) => ({
           chave: item.aluno_id,
@@ -65,6 +66,9 @@ export default function Ranking() {
           nome: item.nome,
           detalhe: item.turma,
           valor: item.nota_evolucao,
+          // Destaque de top 3 só para quem CRESCEU (a regra do pódio da web e do telão):
+          // 0,0 de quem tem dado continua na lista, mas não é "medalha".
+          destaque: item.posicao <= 3 && item.nota_evolucao > 0,
         }));
 
   return (
@@ -99,7 +103,7 @@ export default function Ranking() {
             style={estilos.linha}
             onPress={() => navegacao.navigate("PerfilAluno", { alunoId: item.chave, nome: item.nome })}
           >
-            <Etiqueta texto={`${item.posicao}º`} tom={item.posicao <= 3 ? "destaque" : "neutro"} />
+            <Etiqueta texto={`${item.posicao}º`} tom={item.destaque ? "destaque" : "neutro"} />
             <View style={{ flex: 1 }}>
               <Text style={estilos.nome}>{item.nome}</Text>
               <TextoSuave>{item.detalhe}</TextoSuave>
