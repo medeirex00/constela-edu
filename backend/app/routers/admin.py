@@ -981,7 +981,20 @@ def restaurar_backup(
                            for chave, mapa in linhagem.items()},
                         "referencias_reapontadas": reapontadas})
     db.commit()
-    scoring.recalcular_escola(db, escola_id)
+    # Os caches de 60 s que guardam o ranking e os ids das fichas de ANTES: o telão
+    # público (e o perfil público das fichas, que dava 404 nas recriadas) e o ao vivo
+    # do Matific, que liga cada linha a uma ficha. Sem isto o telão seguia mostrando,
+    # por até 1 minuto, a criança que o arquivo não traz (G_LGPD-8). Depois do
+    # recálculo, para descartar também o que um pedido montou no meio dele; no
+    # ``finally``, para valer mesmo se o recálculo falhar (a restauração já comitou).
+    # Cache por processo: os outros workers vencem no TTL, como na importação.
+    from app.routers.publico import invalidar_cache_painel
+    from app.sync import aovivo
+    try:
+        scoring.recalcular_escola(db, escola_id)
+    finally:
+        invalidar_cache_painel(escola_id)
+        aovivo.invalidar_cache(escola_id)
     total = sum(contagem.values())
     return {"mensagem": f"Backup restaurado: {total} registros. Notas recalculadas.",
             "tabelas": contagem, "avisos": avisos}
