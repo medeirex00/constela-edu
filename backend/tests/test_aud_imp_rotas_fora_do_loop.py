@@ -34,12 +34,12 @@ from app.models import Aluno, Matricula, Turma, Usuario
 API = "/api/v1"
 CT_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-#: Rotas ``async def`` com a sessão do banco que ficam em OUTROS arquivos (outras
-#: frentes da auditoria: admin.py e sync/router.py). Não crescem: rota nova com banco
-#: é ``def``.
+#: Rotas ``async def`` com a sessão do banco que ficam em OUTROS arquivos. Depois da
+#: integração das frentes, só sobram as de credencial da sincronização (o banco delas
+#: vai para o threadpool); restaurar backup e enviar o logo (admin.py) já são ``def``.
+#: Não crescem: rota nova com banco é ``def``. A catraca de toda a API, com as mesmas
+#: exceções, está em test_rotas_async_sem_sessao_sincrona.py.
 _ASYNC_COM_BANCO_FORA_DAS_IMPORTACOES = {
-    "app.routers.admin.restaurar_backup",
-    "app.routers.admin.enviar_logo_aparencia",
     "app.sync.router.salvar_credenciais",
     "app.sync.router.testar_credenciais",
 }
