@@ -92,12 +92,19 @@ def _ano_corrente_br() -> int:
 # Limites dos campos de texto = tamanho da coluna String(n) do modelo. Sem eles,
 # o SQLite aceita e o PostgreSQL recusa no commit (DataError → 500); com eles, a
 # API responde 422 antes de tocar o banco.
+# O ano letivo da escola na MESMA faixa das turmas (``TurmaCreate``: 2000–2100). Sem ela,
+# um ano como 10000 era aceito e as Premiações e o Dashboard respondiam 500 (``date()`` não
+# vai além de 9999).
+ANO_LETIVO_MIN, ANO_LETIVO_MAX = 2000, 2100
+
+
 class EscolaCreate(BaseModel):
     nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
         min_length=2, max_length=200)
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
-    ano_letivo_ativo: int = Field(default_factory=_ano_corrente_br)
+    ano_letivo_ativo: int = Field(default_factory=_ano_corrente_br, ge=ANO_LETIVO_MIN,
+                                  le=ANO_LETIVO_MAX)
 
 
 class EscolaUpdate(BaseModel):
@@ -106,7 +113,7 @@ class EscolaUpdate(BaseModel):
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
     logotipo_url: str | None = Field(default=None, max_length=500)
-    ano_letivo_ativo: int | None = None
+    ano_letivo_ativo: int | None = Field(default=None, ge=ANO_LETIVO_MIN, le=ANO_LETIVO_MAX)
     # Um status fora do vocabulário faria a escola sumir de TODAS as listas
     # (o GET filtra por igualdade exata) sem caminho de volta pela interface.
     status: str | None = Field(default=None, pattern="^(ativa|inativa)$")

@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.core import tempo
 from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import (
     exigir_admin_global,
@@ -123,25 +124,46 @@ def atualizar(
                                 "O nome da escola precisa ter de 2 a 200 caracteres.")
         alteracoes["nome"] = nome
     novo_ano = alteracoes.get("ano_letivo_ativo")
+    notas_descartadas: dict[str, int] = {}
     if novo_ano is not None and novo_ano != escola.ano_letivo_ativo:
         # HISTÓRICO PROTEGIDO: o recálculo grava as Notas do ANO ATIVO com os
-        # snapshots/leituras ATUAIS. Voltar o ano ativo para um ano que já tem
-        # notas reescreveria esse histórico com dados de hoje — recusado para
-        # qualquer perfil. Avançar o ano é decisão da rede: só o Admin Global.
+        # snapshots/leituras ATUAIS. Voltar o ano ativo para antes de um ano com
+        # notas de histórico reescreveria esse histórico com dados de hoje —
+        # recusado para qualquer perfil. Avançar o ano é decisão da rede: só o
+        # Admin Global.
         if not usuario.is_global:
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 "Só o administrador global altera o ano letivo ativo.")
-        ultimo_ano_com_notas = db.execute(
-            select(func.max(Nota.ano_letivo)).where(Nota.escola_id == escola_id)).scalar()
-        if ultimo_ano_com_notas is not None and novo_ano < ultimo_ano_com_notas:
+        # Histórico = as notas dos anos já ENCERRADOS (antes do ano ativo) e as de
+        # um ano que já começou no calendário. As notas de um ano que ainda nem
+        # começou (o ano ativo digitado adiante: 2072 em vez de 2027, gravado pela
+        # Lista Piloto) não são histórico: voltar ao ano certo corrige o erro.
+        ano_hoje = tempo.hoje_br().year
+        anos_com_notas = db.execute(
+            select(Nota.ano_letivo, func.count()).where(Nota.escola_id == escola_id)
+            .group_by(Nota.ano_letivo)).all()
+        historico = [ano for ano, _ in anos_com_notas
+                     if ano < escola.ano_letivo_ativo or ano <= ano_hoje]
+        if historico and novo_ano < max(historico):
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"Voltar o ano letivo ativo para {novo_ano} reescreveria o histórico de "
-                f"notas de {ultimo_ano_com_notas}. O histórico é protegido.")
+                f"notas de {max(historico)}. O histórico é protegido.")
+        if novo_ano < escola.ano_letivo_ativo:
+            # As notas dos anos DEPOIS do novo ano ativo (só as do ano que não
+            # começou, pela regra acima) saem: são o cache do motor, refeito pelo
+            # recálculo se a escola chegar a esse ano — e não ficam como um ano
+            # fantasma nas telas. A contagem vai para a auditoria.
+            notas_descartadas = {str(ano): n for ano, n in anos_com_notas if ano > novo_ano}
+            if notas_descartadas:
+                db.execute(delete(Nota).where(Nota.escola_id == escola_id,
+                                              Nota.ano_letivo > novo_ano))
     for campo, valor in alteracoes.items():
         setattr(escola, campo, valor)
     registrar(db, "escola.atualizada", escola_id=escola.id, usuario_id=usuario.id,
-              entidade="escola", entidade_id=escola.id, detalhes=alteracoes)
+              entidade="escola", entidade_id=escola.id,
+              detalhes={**alteracoes, **({"notas_descartadas": notas_descartadas}
+                                         if notas_descartadas else {})})
     db.commit()
     db.refresh(escola)
     return escola

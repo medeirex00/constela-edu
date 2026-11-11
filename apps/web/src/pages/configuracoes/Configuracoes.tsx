@@ -30,6 +30,7 @@ import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
 import { useModulos } from "../../hooks/useModulos";
 import { api, ApiError, apiDownload, apiUpload } from "../../lib/api";
+import { hojeEmBrasilia } from "../../lib/dataRelatorio";
 import type { RegraPontuacao } from "../../lib/tiposCriterios";
 
 interface AparenciaDados {
@@ -484,6 +485,11 @@ export default function Configuracoes() {
   const [anoLetivo, setAnoLetivo] = useState(2026);
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const [salvando, setSalvando] = useState(false);
+  // Trocar o ano letivo ativo muda o ano das notas, rankings e premiações — e só se
+  // desfaz com regra (o histórico é protegido): a tela confirma antes de enviar.
+  const [confirmarAno, setConfirmarAno] = useState(false);
+  const anoEmUso = escolaAtual?.ano_letivo_ativo;
+  const anoHoje = Number(hojeEmBrasilia().slice(0, 4));
 
   useEffect(() => {
     if (!escolaAtual) return;
@@ -494,8 +500,17 @@ export default function Configuracoes() {
     setMensagem(null);
   }, [escolaAtual]);
 
-  async function salvar(evento: FormEvent) {
+  function aoEnviar(evento: FormEvent) {
     evento.preventDefault();
+    if (!escolaId) return;
+    if (anoEmUso !== undefined && anoLetivo !== anoEmUso) {
+      setConfirmarAno(true);
+      return;
+    }
+    void salvar();
+  }
+
+  async function salvar() {
     if (!escolaId) return;
     setSalvando(true);
     setMensagem(null);
@@ -518,6 +533,7 @@ export default function Configuracoes() {
       });
     } finally {
       setSalvando(false);
+      setConfirmarAno(false);
     }
   }
 
@@ -535,7 +551,7 @@ export default function Configuracoes() {
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
         <div className="space-y-6">
           <Secao icone={School} tom="violeta" titulo="Escola" subtitulo="Nome, cidade e o ano letivo em uso.">
-            <form onSubmit={salvar} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <form onSubmit={aoEnviar} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="block text-sm sm:col-span-2">
                 <span className={rotuloCampo}>Nome</span>
                 <input
@@ -580,6 +596,41 @@ export default function Configuracoes() {
               </div>
             </form>
             {mensagem && <div className="mt-3"><Mensagem tipo={mensagem.tipo}>{mensagem.texto}</Mensagem></div>}
+            {anoEmUso !== undefined && (
+              <Confirmacao
+                titulo="Trocar o ano letivo ativo?"
+                aberto={confirmarAno}
+                aoFechar={() => setConfirmarAno(false)}
+                aoConfirmar={() => void salvar()}
+                rotuloConfirmar={salvando ? "Salvando..." : `Trocar para ${anoLetivo}`}
+                variante="ambar"
+                ocupado={salvando}
+              >
+                <p>
+                  A escola passa do ano letivo <strong>{anoEmUso}</strong> para{" "}
+                  <strong>{anoLetivo}</strong>.
+                </p>
+                {anoLetivo > anoEmUso ? (
+                  <p>
+                    Notas, rankings e premiações passam a ser do ano letivo {anoLetivo}; as notas
+                    de {anoEmUso} ficam guardadas como histórico.
+                  </p>
+                ) : (
+                  <p>
+                    Voltar o ano serve para corrigir um ano digitado errado: as notas já
+                    calculadas depois de {anoLetivo} são apagadas e refeitas quando a escola
+                    chegar a esse ano. Não é possível voltar para antes de um ano que já tem notas
+                    guardadas como histórico.
+                  </p>
+                )}
+                {anoLetivo > anoHoje + 1 && (
+                  <p className="font-semibold text-amber-800 dark:text-amber-300">
+                    Atenção: {anoLetivo} está mais de um ano à frente de {anoHoje}. Confira se
+                    não houve erro de digitação.
+                  </p>
+                )}
+              </Confirmacao>
+            )}
           </Secao>
 
           <PesosEditor
