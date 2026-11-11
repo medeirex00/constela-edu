@@ -42,6 +42,7 @@ import { Card, Chip, Erro, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
+import { useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nomeArquivoCsv, type TabelaCsv } from "../lib/csvRanking";
 import { numero, tempoLeitura } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
@@ -62,6 +63,9 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   const { dados: turmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
   const turnoAtivo = turnoEfetivo(turno, turmas);
+  // Calendário oficial do ano, do backend: sem ele a web só conhece 2026 (o número de
+  // "Este bimestre" e o bimestre do lote de "Bimestre passado" sumiam de 2027 em diante).
+  const calendario = useCalendarioBimestres(escolaId);
 
   // Recalcula a URL quando período/turma/série/turno mudam; o hook rebusca sozinho.
   const q = new URLSearchParams(periodoParaQuery(periodo));
@@ -80,7 +84,7 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
   const { visiveis, restantes, mostrarMais } = useJanela(lista);
 
-  const rotuloPeriodo = rotuloDoPeriodo(periodo);
+  const rotuloPeriodo = rotuloDoPeriodo(periodo, new Date(), calendario);
   const turmaEscolhida = alvo.turma_id ? turmas?.find((x) => String(x.id) === alvo.turma_id)?.nome : null;
   const recorte = [
     turmaEscolhida ?? (alvo.ano_escolar ? `${alvo.ano_escolar} (todas as turmas)` : null),
@@ -107,7 +111,7 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
         modeloInicial: "elefante",
         contexto: `Ranking · Leitura no período (pontos) · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
         // Lista de um bimestre: o bimestre impresso abre nele, não no de hoje.
-        bimestreInicial: bimestreDoPeriodo(periodo.preset),
+        bimestreInicial: bimestreDoPeriodo(periodo.preset, new Date(), calendario),
       }}
     />
   );

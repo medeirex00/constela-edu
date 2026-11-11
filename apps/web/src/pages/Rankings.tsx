@@ -59,6 +59,7 @@ import { Carregando, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
+import { useCalendarioBimestres } from "../lib/calendarioBimestres";
 import type { Dimensao } from "../lib/types";
 import RankingEvolucao from "./RankingEvolucao";
 import RankingGeral from "./RankingGeral";
@@ -94,6 +95,9 @@ export default function Rankings() {
   const { global, secretaria, gestor } = usePerfil();
   const { escolaId, periodo } = useApp();
   const { tem } = useModulos();
+  // Calendário oficial do ano, do backend (antes dos retornos antecipados: é um hook).
+  // Sem ele a web só conhece 2026 e "Este bimestre" ficava sem número de 2027 em diante.
+  const calendario = useCalendarioBimestres(escolaId);
   const [params, setParams] = useSearchParams();
   // Espaço de ações do cabeçalho: a aba aberta põe ali os botões dela.
   const [alvoAcoes, setAlvoAcoes] = useState<HTMLElement | null>(null);
@@ -211,7 +215,7 @@ export default function Rankings() {
   // de Turmas são sempre do ano letivo (notas acumuladas); a Matemática fora do
   // ano letivo é o placar consultado ao vivo no Matific.
   const contratadas = (["leitura", "matematica"] as Dimensao[]).filter((d) => tem(d));
-  const rotuloPeriodo = rotuloDoPeriodo(periodo);
+  const rotuloPeriodo = rotuloDoPeriodo(periodo, new Date(), calendario);
   const descricao =
     visao === "geral" ? (
       <DescricaoRanking periodo="Ano letivo · classificação acumulada" dimensoes={contratadas} />
