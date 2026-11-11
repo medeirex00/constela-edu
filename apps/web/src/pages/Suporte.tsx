@@ -41,6 +41,9 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
+// Versões da regra em linguagem de gente (fonte única com o "Como funciona?" dos
+// Critérios); o identificador técnico fica só na dica (title), para quem precisa conferir.
+import { nomeDaVersaoDaRegra } from "../lib/regraPontuacao";
 import {
   FAQ_PROFESSOR,
   SINCRONIZACAO_LEITURA,
@@ -99,15 +102,6 @@ const NOME_INDICADOR: Record<string, string> = {
 const NOME_DIMENSAO: Record<string, string> = {
   leitura: "Leitura (Elefante Letrado)",
   matematica: "Matemática (Matific)",
-};
-
-// Versões conhecidas em linguagem de gente; o identificador técnico fica só na
-// dica (title), para quem precisa conferir.
-const NOME_VERSAO: Record<string, string> = {
-  por_dimensao_v1: "a ordem oficial é por matéria (Leitura e Matemática)",
-  elefante_dificuldade_v2: "régua de dificuldade dos livros da rede, versão 2",
-  elefante_dificuldade_v1: "régua de dificuldade dos livros da rede, versão 1",
-  escola_legada_v0: "régua própria da escola, por faixa de nível",
 };
 
 const formatoPeso = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
@@ -264,11 +258,11 @@ function RegraDaNota({ escolaId, daSecretaria }: { escolaId: number; daSecretari
       <p className="text-xs text-zinc-500 dark:text-zinc-400">
         Versão da regra:{" "}
         <span title={`Identificador da versão: ${dados.versoes.composicao}`}>
-          {NOME_VERSAO[dados.versoes.composicao] ?? dados.versoes.composicao}
+          {nomeDaVersaoDaRegra(dados.versoes.composicao)}
         </span>
         ;{" "}
         <span title={`Identificador da versão: ${dados.versoes.dificuldade}`}>
-          {NOME_VERSAO[dados.versoes.dificuldade] ?? dados.versoes.dificuldade}
+          {nomeDaVersaoDaRegra(dados.versoes.dificuldade)}
         </span>
         .
       </p>
