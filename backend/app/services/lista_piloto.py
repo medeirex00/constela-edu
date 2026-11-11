@@ -19,7 +19,9 @@ não terem a coluna "Nome".
 from __future__ import annotations
 
 import io
+import logging
 import re
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -33,6 +35,8 @@ from app.services.planilhas import (
     limitar_celula,
     linhas_contidas,
 )
+
+logger = logging.getLogger(__name__)
 
 # Teto de células do arquivo: uma escola tem centenas/milhares de alunos; muito
 # acima disso é planilha inválida ou tentativa de exaustão de memória (uma
@@ -390,6 +394,28 @@ def _canonizar_turma(nome: str) -> tuple[str, str]:
 # Análise
 # --------------------------------------------------------------------------
 
+_MIMETYPE_ODS = b"application/vnd.oasis.opendocument.spreadsheet"
+
+
+def _eh_ods(conteudo: bytes) -> bool:
+    """O .ods (LibreOffice) é um zip cuja entrada ``mimetype`` diz o formato. Lida com
+    teto: o arquivo já passou pela guarda de planilha inflada antes do leitor falhar."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            with pacote.open("mimetype") as entrada:
+                return entrada.read(len(_MIMETYPE_ODS) + 16).strip() == _MIMETYPE_ODS
+    except Exception:  # noqa: BLE001 — não é zip, ou não tem a entrada: não é .ods
+        return False
+
+
+def _aviso_planilha_ilegivel(conteudo: bytes) -> str:
+    if _eh_ods(conteudo):
+        return ("A planilha está no formato do LibreOffice (.ods). Abra no LibreOffice, "
+                "salve como Excel (.xlsx) e envie de novo.")
+    return ("Não foi possível ler a planilha. Abra o arquivo no Excel, salve como .xlsx "
+            "e envie de novo.")
+
+
 def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoAnalise:
     analise = ListaPilotoAnalise()
     try:
@@ -397,7 +423,12 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
     except PlanilhaRecusada:
         raise  # inflada ou grande demais: a rota recusa (413/400) com a mensagem
     except Exception as exc:  # noqa: BLE001 — arquivo ilegível vira aviso, não 500
-        analise.avisos.append(f"Não foi possível ler a planilha: {exc}")
+        # O aviso diz o que fazer; o tipo do erro do leitor vai para o log — sem o
+        # nome do arquivo nem a mensagem do leitor, que podem trazer dado de aluno
+        # (o xlrd cita os primeiros bytes do arquivo).
+        logger.warning("Lista Piloto ilegível (%d bytes): %s", len(conteudo),
+                       type(exc).__name__)
+        analise.avisos.append(_aviso_planilha_ilegivel(conteudo))
         return analise
 
     ano_arquivo = _ano_do_texto(nome_arquivo)
