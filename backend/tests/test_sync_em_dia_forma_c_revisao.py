@@ -61,7 +61,7 @@ def _matific_com_tres_vinculados(db, escola_completa, monkeypatch, linhas_extra=
 # 1. Coleta por período só com a criança pendente: sem falso alarme
 # ---------------------------------------------------------------------------
 def test_periodo_so_com_pendente_nao_acusa_credencial_de_outra_escola(
-        db, cliente, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, cliente, escola_completa, monkeypatch):
     """Semana da premiação: no período, só a criança sem vínculo jogou. Antes, a
     execução saía 'tudo_em_revisao' e o alerta e o card mandavam conferir se o
     acesso é de outra escola. Agora é 'correspondencia_pendente' — e o período

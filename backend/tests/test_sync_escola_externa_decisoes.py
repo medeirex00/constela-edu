@@ -399,8 +399,8 @@ def _cenario_a3(db, escola_completa, monkeypatch, *, politica_da_errada):
     return e1, ex1, dona, ex_dona
 
 
-def test_d9_nome_divergente_coleta_sem_aprender_e_a_dona_aprende(db, escola_completa,
-                                                                  monkeypatch):
+def test_d9_nome_divergente_coleta_sem_aprender_e_a_dona_aprende(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """Sonda A3 do e95. Antes: a escola 1 aprendia ESC_B e a dona, sem histórico,
     parava em 'erro/escola_externa_em_outra_escola'. Agora a 1 coleta sem gravar
     o vínculo (log + auditoria) e a dona aprende o dela e coleta."""
@@ -422,7 +422,7 @@ def test_d9_nome_divergente_coleta_sem_aprender_e_a_dona_aprende(db, escola_comp
 
 
 def test_d9_com_permitir_na_escola_errada_a_dona_cai_no_d8_e_nao_no_vinculo(
-        db, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """Interação documentada: com 'permitir' na escola errada, as crianças da dona
     viram fichas lá. A dona não para mais em 'escola_externa_em_outra_escola'
     (D9), mas a coleta dela é recusada pelo D8 (todas as contas já são de outra
@@ -610,8 +610,8 @@ def test_d10_admin_global_confirma_com_aviso_e_auditoria(db, escola_completa, cl
         (x.motivo, x.id_externo) for x in _revisoes(db, e1) if x.status == "pendente"]
 
 
-def test_d10_conta_sem_vinculo_em_outra_escola_segue_com_a_gestao(db, escola_completa,
-                                                                  cliente, monkeypatch):
+def test_d10_conta_sem_vinculo_em_outra_escola_segue_com_a_gestao(
+        relogio_no_ano_letivo, db, escola_completa, cliente, monkeypatch):
     """Controle: pendência de uma conta que NÃO é efetiva em outra escola continua
     sendo resolvida pela gestão da escola (sem aviso de outra escola)."""
     from app.services import politica_sync

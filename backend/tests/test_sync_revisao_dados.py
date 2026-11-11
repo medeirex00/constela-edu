@@ -199,7 +199,8 @@ def test_uuid_duplicado_na_mesma_turma_com_queda_vai_para_revisao(db, escola_com
 # ---------------------------------------------------------------------------
 # Achado 1 (ALTA, regressão) — troca de turma sem número novo recalcula.
 # ---------------------------------------------------------------------------
-def test_troca_de_turma_sem_numero_novo_recalcula(db, escola_completa, monkeypatch):
+def test_troca_de_turma_sem_numero_novo_recalcula(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id
     a, b, c = ec["alunos"]

@@ -195,7 +195,8 @@ def test_novos_e_existentes_so_quem_mudou_conta(db, escola_completa, monkeypatch
             snap_atual(db, SnapshotMatific, b.id).atividades) == (12, 8)
 
 
-def test_qtd_erros_conta_alunos_distintos_nao_aplicados(db, escola_completa, monkeypatch):
+def test_qtd_erros_conta_alunos_distintos_nao_aplicados(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     politica_sync.definir(db, eid, "bloquear")
     db.commit()
@@ -221,7 +222,8 @@ def test_qtd_erros_conta_alunos_distintos_nao_aplicados(db, escola_completa, mon
 # 'tudo_em_revisao', que não conta como "em dia". O alerta continua o
 # 'correspondencia_pendente'; o resto das asserções não mudou.
 # ===========================================================================
-def test_elefante_tudo_em_revisao_e_sem_atualizacao_com_alerta(db, escola_completa, monkeypatch):
+def test_elefante_tudo_em_revisao_e_sem_atualizacao_com_alerta(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     politica_sync.definir(db, eid, "bloquear")
     db.commit()
@@ -240,7 +242,8 @@ def test_elefante_tudo_em_revisao_e_sem_atualizacao_com_alerta(db, escola_comple
     assert "correspondencia_pendente" in alertas_abertos(db, eid, "elefante")
 
 
-def test_matific_tudo_em_revisao_e_sem_atualizacao(db, escola_completa, monkeypatch):
+def test_matific_tudo_em_revisao_e_sem_atualizacao(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     politica_sync.definir(db, eid, "bloquear")
     db.commit()
