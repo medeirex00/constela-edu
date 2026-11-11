@@ -138,6 +138,55 @@ def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
         return None
 
 
+#: Um nome de arquivo no Linux do contêiner (NAME_MAX) tem até 255 BYTES — e o nome
+#: do original vem do navegador (o relatório individual traz o nome da criança, e
+#: cada letra acentuada conta 2 bytes).
+_NOME_ARQUIVO_MAX_BYTES = 255
+#: ``importacoes.arquivo_original`` (o caminho arquivado ou o nome mandado pelo
+#: navegador): o tamanho da coluna, lido do modelo.
+_REGISTRO_ORIGINAL_MAX = Importacao.__table__.c.arquivo_original.type.length
+
+
+def _nome_arquivado(base_nome: str, momento: datetime) -> str:
+    """O nome definitivo do original: ``AAAAMMDD_HHMMSS_<nome>``, cortado para caber
+    num nome de arquivo (``_NOME_ARQUIVO_MAX_BYTES``) sem perder a extensão e sem
+    partir uma letra acentuada ao meio."""
+    prefixo = f"{momento:%Y%m%d_%H%M%S}_"
+    caminho = Path(base_nome)
+    extensao = caminho.suffix
+    sobra = _NOME_ARQUIVO_MAX_BYTES - len(prefixo.encode()) - len(extensao.encode())
+    raiz = caminho.stem.encode("utf-8")[:sobra].decode("utf-8", errors="ignore")
+    return f"{prefixo}{raiz}{extensao}"
+
+
+def _registro_do_original(texto: str | None) -> str | None:
+    """O que ``importacoes.arquivo_original`` guarda, no tamanho da coluna."""
+    return texto[:_REGISTRO_ORIGINAL_MAX] if texto else texto
+
+
+def _arquivar_original(origem: Path, destino: Path) -> bool:
+    """Move o original de /temporarios para a pasta definitiva (§15). MELHOR ESFORÇO,
+    como ``_guardar_temporario``: um erro de disco (volume cheio ou sem escrita, nome
+    que o sistema de arquivos recusa) não derruba a importação — devolve False, o
+    original fica em /temporarios (o limpador o apaga) e quem chama grava só o nome.
+    Sem o nome do arquivo no log: ele pode trazer o nome da criança."""
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(origem), str(destino))
+        return True
+    except OSError as erro:
+        # Entre volumes o move copia e depois apaga: a cópia pela metade não fica.
+        if origem.exists():
+            try:
+                destino.unlink(missing_ok=True)
+            except OSError:
+                pass
+        logger.warning(
+            "Não foi possível arquivar o original da importação (errno %s) — os "
+            "dados foram importados sem o arquivo.", erro.errno)
+        return False
+
+
 def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo, *, ate=None):
     # Ordena por data_referencia (id desempata): importar um relatório de um
     # período ANTIGO (backfill mensal do Matific) não pode virar o "estado
@@ -3072,7 +3121,7 @@ def _confirmar_sem_commit(
             base_nome = Path(dados.arquivo_nome or "").name
             if not base_nome or not base_nome.lower().endswith((".pdf", ".xlsx")):
                 base_nome = dados.arquivo_token
-            nome = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{base_nome}"
+            nome = _nome_arquivado(base_nome, datetime.now(timezone.utc))
             destino = (base_uploads / dados.plataforma / nome).resolve()
             if not destino.is_relative_to(base_uploads):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -3083,7 +3132,7 @@ def _confirmar_sem_commit(
     importacao = Importacao(
         escola_id=escola_id, usuario_id=usuario.id,
         plataforma=dados.plataforma, tipo=dados.tipo,
-        arquivo_original=arquivo_final or dados.arquivo_nome,
+        arquivo_original=_registro_do_original(arquivo_final or dados.arquivo_nome),
         status=IMPORTACAO_SEM_QUESTOES if questoes_herdadas else "concluida",
     )
     db.add(importacao)
@@ -3333,10 +3382,10 @@ def _confirmar_sem_commit(
                 "relatório, importe antes, com a mesma data, um relatório que traga esses "
                 "dados, ou confira a data informada. Nada foi gravado.")
 
-    if mover_original is not None:
-        origem, destino = mover_original
-        destino.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(origem), str(destino))
+    if mover_original is not None and not _arquivar_original(*mover_original):
+        # Sem o arquivo arquivado, o registro guarda só o nome (como sem disco na
+        # prévia), e não um caminho que não existe.
+        importacao.arquivo_original = _registro_do_original(dados.arquivo_nome)
 
     # PERFORMANCE das leituras (Elefante): catálogo de livros, faixas de nível e
     # "já lidos" carregados UMA vez para o arquivo inteiro — antes eram relidos
