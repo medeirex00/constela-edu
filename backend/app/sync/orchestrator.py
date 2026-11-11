@@ -233,6 +233,26 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
             SnapshotMatific.id.in_(scoring.ids_snapshots_atuais(
                 SnapshotMatific, escola.id, janela=janela)),
             SnapshotMatific.aluno_id.in_(list(aluno_por_uuid.values())))).scalars()}
+    # A BASE é o último retrato COLETADO no ano, não o AJUSTE MANUAL (G_AJUSTE-1):
+    # depois de um ajuste para cima, toda coleta abaixo do número digitado era
+    # retida como "queda" e nunca chegava a desmenti-lo. Sem retrato coletado no
+    # ano, não há base (a coleta entra).
+    from app.services import evolucao
+    manuais = evolucao.ajustes_manuais_matific(db, escola.id)
+    de_ajuste = [aid for aid, s in atuais.items() if s.importacao_id in manuais]
+    if de_ajuste:
+        inicio, fim = janela
+        for aid in de_ajuste:
+            atuais.pop(aid)
+        for s in db.execute(
+                select(SnapshotMatific).where(
+                    SnapshotMatific.escola_id == escola.id,
+                    SnapshotMatific.aluno_id.in_(de_ajuste),
+                    SnapshotMatific.importacao_id.not_in(sorted(manuais)),
+                    SnapshotMatific.data_referencia >= inicio,
+                    SnapshotMatific.data_referencia <= fim)
+                .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)).scalars():
+            atuais[s.aluno_id] = s          # o último, pela ordem
 
     retidas: set[int] = set()
     for uuid, aluno_id in aluno_por_uuid.items():
