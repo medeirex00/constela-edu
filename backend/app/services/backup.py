@@ -39,7 +39,11 @@ execuções da sincronização) não se perde: a restauração REAPONTA para a l
 recriada (``_reapontar``), e só o que o arquivo não traz fica NULL. Antes o vínculo
 sumia calado — a memória das decisões humanas da fila de revisão
 (``aluno_escolhido_id``) virava NULL e a coleta seguinte voltava a mandar para a
-revisão a conta que o Admin Global já tinha confirmado (G_LGPD-4).
+revisão a conta que o Admin Global já tinha confirmado (G_LGPD-4). Só se reaponta
+para a linha que o arquivo PROVA ser a mesma (o mesmo id, ou a linhagem, E o mesmo
+``created_at``: ``PROVA_DA_MESMA_LINHA``): no arquivo de OUTRO banco o mesmo número é
+outra criança, e a memória "a conta U é a Ana" passava a apontar para ela
+(REV2-BACKUP-1). Sem a prova, o vínculo fica NULL — o seguro.
 """
 from __future__ import annotations
 
@@ -179,6 +183,13 @@ CHAVES_DE_LINHAGEM: dict[str, str] = {
 # (``revisoes_identidade.candidatos[].aluno_id``), sem FK: o radar estrutural não os
 # vê, então a restauração os trata à parte (``_reapontar``).
 CANDIDATOS_DA_REVISAO = "revisoes_identidade.candidatos"
+
+# A coluna que PROVA que a linha do arquivo é a MESMA linha de hoje (``_id_no_arquivo``):
+# o instante em que ela nasceu. Sai no arquivo e a restauração a repõe como veio, então
+# atravessa renomeações e restaurações em cadeia. O id sozinho não prova: no arquivo de
+# OUTRO banco o mesmo número é outra criança (REV2-BACKUP-1). Toda tabela de
+# ``CHAVES_DE_LINHAGEM`` a tem (``test_aud2_backup_restauracao_outro_banco.py``).
+PROVA_DA_MESMA_LINHA = "created_at"
 
 
 def _referencias_a_usuario(modelo) -> tuple[str, ...]:
@@ -586,16 +597,47 @@ def _excluidos_depois_do_backup(db: Session, escola_id: int, log_ate: Any) -> se
     return excluidos
 
 
-def _id_no_arquivo(atual: int, ids_no_arquivo: set[int],
+def _instante(valor: Any) -> datetime | None:
+    """O ``created_at`` (``PROVA_DA_MESMA_LINHA``) como instante UTC sem fuso, a convenção
+    de ``DataHoraUTC``, venha do banco (``datetime``) ou do arquivo (texto ISO). ``None``
+    quando não há ou não dá para ler: sem prova."""
+    if isinstance(valor, str):
+        try:
+            valor = datetime.fromisoformat(valor)
+        except ValueError:
+            return None
+    if not isinstance(valor, datetime):
+        return None
+    if valor.utcoffset() is not None:
+        valor = valor.astimezone(timezone.utc).replace(tzinfo=None)
+    return valor
+
+
+def _id_no_arquivo(atual: int, nascimento: datetime | None,
+                   no_arquivo: dict[int, datetime | None],
                    ligacoes: dict[int, set[int]]) -> int | None:
-    """O ``_id`` do arquivo que é a mesma linha que ``atual`` (o id de hoje): o próprio
-    id, quando o arquivo é desta escola e não houve outra restauração depois dele; senão
-    o único id do arquivo na linhagem dele (``_ligacoes_entre_restauracoes``, em cadeia).
-    Nenhum, ou mais de um (ambíguo): ``None`` — a linha não tem equivalente no arquivo.
-    No PostgreSQL um id nunca volta a ser usado, então o mesmo id é a mesma linha. (No
-    SQLite de desenvolvimento, que reaproveita id, a linha apagada e recriada depois do
-    arquivo com o mesmo id passaria por ela.)"""
-    if atual in ids_no_arquivo:
+    """O ``_id`` do arquivo que é a mesma linha que ``atual`` (o id de hoje, que nasceu
+    em ``nascimento``): o próprio id, ou o id da linhagem dele
+    (``_ligacoes_entre_restauracoes``, em cadeia) — e só se a linha do arquivo com esse
+    ``_id`` nasceu no MESMO instante (``no_arquivo``: {``_id``: ``created_at``},
+    ``PROVA_DA_MESMA_LINHA``). Nenhum, ou mais de um (ambíguo): ``None`` — a linha não
+    tem equivalente no arquivo.
+
+    O número sozinho não prova nada. "O mesmo id é a mesma linha" só vale para o arquivo
+    do MESMO banco (no PostgreSQL um id nunca volta a ser usado). No arquivo levado para
+    OUTRO banco — ou na recuperação de desastre com um pg_dump antigo e um JSON mais
+    novo — os ``_id`` coincidem com ids de OUTRAS crianças daqui; no SQLite de
+    desenvolvimento, que reaproveita id, a linha apagada e recriada depois do arquivo
+    ganha o número da do arquivo; e a linhagem mistura os números de outro banco quando
+    um arquivo de lá já foi restaurado aqui. Antes, nesses casos, a memória da decisão
+    humana e os candidatos passavam para a outra criança (REV2-BACKUP-1)."""
+    if nascimento is None:
+        return None
+
+    def _mesma(candidato: int) -> bool:
+        return candidato in no_arquivo and no_arquivo[candidato] == nascimento
+
+    if _mesma(atual):
         return atual
     vistos, pendentes, achados = {atual}, [atual], set()
     while pendentes:
@@ -603,52 +645,97 @@ def _id_no_arquivo(atual: int, ids_no_arquivo: set[int],
             if outro not in vistos:
                 vistos.add(outro)
                 pendentes.append(outro)
-                if outro in ids_no_arquivo:
+                if _mesma(outro):
                     achados.add(outro)
     return achados.pop() if len(achados) == 1 else None
+
+
+def _nascimentos(db: Session, tabela, ids: set[int]) -> dict[int, datetime | None]:
+    """{id: ``created_at``} das linhas VIVAS de ``tabela`` com esses ids (a prova de
+    ``_id_no_arquivo``). Id sem linha, ou tabela sem a coluna: fora do mapa (sem prova)."""
+    if not ids or PROVA_DA_MESMA_LINHA not in tabela.c:
+        return {}
+    coluna, lista = tabela.c[PROVA_DA_MESMA_LINHA], sorted(ids)
+    nascimentos: dict[int, datetime | None] = {}
+    for inicio in range(0, len(lista), 500):     # o IN em lotes
+        for chave, quando in db.execute(select(tabela.c.id, coluna).where(
+                tabela.c.id.in_(lista[inicio:inicio + 500]))):
+            nascimentos[int(chave)] = _instante(quando)
+    return nascimentos
 
 
 def _referencias_atuais(db: Session, escola_id: int) -> dict:
     """ANTES do DELETE: quem, fora do arquivo, aponta hoje para uma linha da escola que
     a restauração vai recriar — por FK ``SET NULL`` (``_referencias_de_fora``), com o
-    id ATUAL, que o DELETE zera; e os candidatos das revisões da escola (JSON)."""
+    id ATUAL, que o DELETE zera; e os candidatos das revisões da escola (JSON). Com eles,
+    o ``created_at`` de cada linha apontada (``nascimentos``, por tabela): a prova de que
+    a linha do arquivo é a mesma (``_id_no_arquivo``)."""
     from app.core.database import Base  # noqa: E402  (evita ciclo no import)
     por_fk = []
+    apontados: dict[str, set[int]] = {}
     for tabela, coluna, alvo in _referencias_de_fora(Base.metadata):
         t, a = Base.metadata.tables[tabela], Base.metadata.tables[alvo]
         [chave] = t.primary_key.columns
         linhas = db.execute(select(chave, t.c[coluna]).where(t.c[coluna].in_(
             select(a.c.id).where(a.c.escola_id == escola_id)))).all()
         por_fk.append((tabela, coluna, alvo, [(int(i), int(v)) for i, v in linhas]))
+        apontados.setdefault(alvo, set()).update(int(v) for _, v in linhas)
     revisoes = Base.metadata.tables["revisoes_identidade"]
     candidatos = [(int(i), lista) for i, lista in db.execute(
         select(revisoes.c.id, revisoes.c.candidatos)
         .where(revisoes.c.escola_id == escola_id)).all()
         if isinstance(lista, list) and lista]
-    return {"por_fk": por_fk, "candidatos": candidatos}
+    apontados.setdefault("alunos", set()).update(
+        c["aluno_id"] for _, lista in candidatos for c in lista
+        if isinstance(c, dict) and isinstance(c.get("aluno_id"), int)
+        and not isinstance(c.get("aluno_id"), bool))
+    nascimentos = {alvo: _nascimentos(db, Base.metadata.tables[alvo], ids)
+                   for alvo, ids in apontados.items()}
+    return {"por_fk": por_fk, "candidatos": candidatos, "nascimentos": nascimentos}
 
 
-def _reapontar(db: Session, referencias: dict,
-               mapas: dict[str, dict[int, int]]) -> dict[str, dict[str, int]]:
+def _nascimentos_no_arquivo(linhas: Any, recriadas: dict[int, int],
+                            ) -> dict[int, datetime | None]:
+    """{``_id``: ``created_at``} das linhas do arquivo que a restauração recriou
+    (``recriadas``: {``_id``: id novo}) — o outro lado da prova de ``_id_no_arquivo``."""
+    nascimentos: dict[int, datetime | None] = {}
+    for linha in linhas if isinstance(linhas, list) else ():
+        try:
+            antigo = int(linha["_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if antigo in recriadas:
+            nascimentos[antigo] = _instante(linha.get(PROVA_DA_MESMA_LINHA))
+    return nascimentos
+
+
+def _reapontar(db: Session, referencias: dict, mapas: dict[str, dict[int, int]],
+               tabelas: dict) -> dict[str, dict[str, int]]:
     """DEPOIS dos INSERTs: liga cada referência capturada por ``_referencias_atuais`` à
-    linha recriada (id atual → ``_id`` do arquivo → id novo: ``_id_no_arquivo``).
+    linha recriada (id atual → ``_id`` do arquivo → id novo: ``_id_no_arquivo``), quando
+    a linha do arquivo (``tabelas``) prova que é a mesma: o mesmo ``created_at``
+    (``PROVA_DA_MESMA_LINHA``), não só o mesmo número.
 
     O que o arquivo não traz (a ficha, turma ou importação criada depois dele, a
-    criança excluída de vez) fica NULL — a decisão humana que apontava para a ficha
-    que não volta deixa de valer —, e a candidata sem equivalente sai da lista, como
-    na exclusão (o clique nela daria 400). ``resolucao`` não muda: é o registro do que
-    foi escolhido na época, como na fusão. Devolve, por referência, quantas foram
-    reapontadas e quantas ficaram sem equivalente (só contagens)."""
+    criança excluída de vez) — ou traz só com o mesmo número, como o arquivo de OUTRO
+    banco — fica NULL: a decisão humana que apontava para a ficha que não volta deixa de
+    valer, em vez de passar para outra criança. A candidata sem equivalente sai da
+    lista, como na exclusão (o clique nela daria 400). ``resolucao`` não muda: é o
+    registro do que foi escolhido na época, como na fusão. Devolve, por referência,
+    quantas foram reapontadas e quantas ficaram sem equivalente (só contagens)."""
     from app.core.database import Base  # noqa: E402  (evita ciclo no import)
     ligacoes: dict[str, dict[int, set[int]]] = {}
-    ids_no_arquivo: dict[str, set[int]] = {}
+    no_arquivo: dict[str, dict[int, datetime | None]] = {}
+    nascimentos: dict[str, dict[int, datetime | None]] = referencias["nascimentos"]
 
     def _novo(alvo: str, atual: int) -> int | None:
         if alvo not in ligacoes:
             chave = CHAVES_DE_LINHAGEM.get(alvo)
             ligacoes[alvo] = _ligacoes_entre_restauracoes(db, chave) if chave else {}
-            ids_no_arquivo[alvo] = set(mapas.get(alvo, {}))
-        antigo = _id_no_arquivo(atual, ids_no_arquivo[alvo], ligacoes[alvo])
+            no_arquivo[alvo] = _nascimentos_no_arquivo(tabelas.get(alvo),
+                                                       mapas.get(alvo, {}))
+        antigo = _id_no_arquivo(atual, nascimentos.get(alvo, {}).get(atual),
+                                no_arquivo[alvo], ligacoes[alvo])
         return None if antigo is None else mapas[alvo].get(antigo)
 
     contagem: dict[str, dict[str, int]] = {}
@@ -832,7 +919,7 @@ def restaurar(db: Session, escola_id: int, dados: dict,
             if id_antigo is not None:
                 mapas[nome][int(id_antigo)] = objeto.id
         contagem[nome] = restauradas
-    religadas = _reapontar(db, referencias, mapas)
+    religadas = _reapontar(db, referencias, mapas, tabelas)
     if reapontadas is not None:
         reapontadas.update(religadas)
     if mapa_alunos is not None:

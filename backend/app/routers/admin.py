@@ -914,7 +914,9 @@ def restaurar_backup(
     criança excluída depois dela pode voltar sem aviso; confira a exclusão à mão.
     A fila de revisões de identidade e as execuções da sincronização, que não entram
     no arquivo, passam a apontar para as fichas, turmas e importações recriadas
-    (``backup._reapontar``): a decisão humana da fila continua valendo.
+    (``backup._reapontar``): a decisão humana da fila continua valendo. Só para a linha
+    que o arquivo prova ser a mesma (o mesmo ``created_at``, não só o mesmo número): no
+    arquivo de outro banco o vínculo fica vazio em vez de passar para outra criança.
     """
     # No máximo o teto + 1 byte na memória: o resto fica no temporário.
     conteudo = arquivo.file.read(TAMANHO_MAXIMO_BACKUP + 1)
