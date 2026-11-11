@@ -125,6 +125,7 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
     fase, arquivos, itens, progresso, tempoMs, turmas,
     adicionar, removerArquivo, limparArquivos, analisarTodos, importarTodos,
     alternarIgnorar, vincular, recomecar, recalculo, recalculando, refazerRecalculo,
+    erroTurmas, recarregandoTurmas, recarregarTurmas,
   } = useImportacaoLote();
 
   const [editando, setEditando] = useState<string | null>(null);
@@ -288,6 +289,24 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
             {ignorados.length > 0 && <Badge>{ignorados.length} ignorado{ignorados.length === 1 ? "" : "s"}</Badge>}
           </div>
 
+          {/* As turmas da escola não carregaram: o aluno novo fica sem turma e o
+              "Corrigir" não as lista. Antes a falha era engolida em silêncio. */}
+          {fase === "conferencia" && erroTurmas && (
+            <div className="px-6 pb-4">
+              <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
+                <p className="font-semibold">Não foi possível carregar as turmas da escola.</p>
+                <p className="mt-0.5">
+                  Sem elas, os arquivos de aluno novo ficam sem turma e “Corrigir” não mostra as
+                  turmas. Detalhe: {erroTurmas}
+                </p>
+                <Botao variante="secundario" tamanho="sm" className="mt-3" disabled={recarregandoTurmas}
+                  onClick={() => { void recarregarTurmas(); }}>
+                  <RotateCcw size={14} aria-hidden /> {recarregandoTurmas ? "Carregando…" : "Tentar de novo"}
+                </Botao>
+              </div>
+            </div>
+          )}
+
           {criacaoBloqueada && (
             <p
               className="mx-6 mb-4 rounded-2xl border border-ouro-200 bg-ouro-50 px-4 py-2.5 text-sm text-zinc-800 dark:border-ouro-400/25 dark:bg-ouro-400/10 dark:text-zinc-100"
@@ -315,6 +334,8 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
             {itens.map((it) => {
               const v = VISUAL[it.status];
               const emImport = fase === "importando";
+              // Recusado pelo servidor: o motivo dele, não o texto da análise.
+              const detalhe = textoDoItem(it);
               return (
                 <div
                   key={it.id}
@@ -357,8 +378,8 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
                           </span>
                         )}
                       </p>
-                      {it.detalhe && !it.ignorado && (
-                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{it.detalhe}</p>
+                      {detalhe && !it.ignorado && (
+                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{detalhe}</p>
                       )}
                     </div>
 
@@ -501,6 +522,12 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
   );
 }
 
+/** O texto de um arquivo: o motivo da recusa do servidor quando o /confirmar falhou;
+ *  senão, o que a análise disse dele. */
+function textoDoItem(it: ItemLote): string {
+  return it.resultado === "erro" && it.erroImportacao ? it.erroImportacao : it.detalhe;
+}
+
 /** Resumo final: blocos com os totais + a lista dos que ficaram de fora. */
 function RelatorioFinal({
   itens,
@@ -610,7 +637,7 @@ function RelatorioFinal({
                 )}
                 <span className="min-w-0">
                   <span className="font-medium">{it.nome}</span>
-                  {it.detalhe && <span className="text-zinc-500 dark:text-zinc-400"> — {it.detalhe}</span>}
+                  {textoDoItem(it) && <span className="text-zinc-500 dark:text-zinc-400"> — {textoDoItem(it)}</span>}
                 </span>
               </li>
             ))}

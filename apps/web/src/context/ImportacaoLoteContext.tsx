@@ -38,6 +38,10 @@ export interface ItemLote {
   corrigido: boolean;
   ignorado: boolean;
   resultado?: "importado" | "erro" | "ignorado" | "pendente";
+  /** O motivo que o servidor deu ao recusar este arquivo no /confirmar (resultado
+   *  "erro"). Antes a recusa era descartada e o relatório mostrava, como motivo, o
+   *  ``detalhe`` da ANÁLISE ("Aluno novo — será criado nesta turma."). */
+  erroImportacao?: string;
 }
 
 /** Resultado do recálculo final do lote (POST /recalcular). ``null`` = ainda
@@ -47,6 +51,11 @@ export type EstadoRecalculo =
   | { estado: "ok"; mensagem: string | null }
   | { estado: "falhou"; erro: string }
   | null;
+
+/** A mensagem de uma falha da API (o ApiError já vem em linguagem simples). */
+function mensagemDoErro(erro: unknown, padrao: string): string {
+  return erro instanceof Error && erro.message ? erro.message : padrao;
+}
 
 /** true quando o arquivo tem um destino resolvido e será enviado ao confirmar. */
 export function importavel(item: ItemLote): boolean {
@@ -117,6 +126,12 @@ interface LoteContexto {
   progresso: { atual: number; total: number };
   tempoMs: number;
   turmas: Turma[];
+  /** O GET das turmas da escola falhou (a mensagem): sem elas, o aluno novo fica sem
+   *  turma e o "Corrigir" não lista turmas — a conferência avisa e deixa tentar de novo. */
+  erroTurmas: string | null;
+  recarregandoTurmas: boolean;
+  /** Rebusca as turmas e refaz o destino dos arquivos que ninguém corrigiu à mão. */
+  recarregarTurmas: () => Promise<void>;
   emAndamento: boolean;
   /** Resultado do recálculo final do lote (null = não rodou). */
   recalculo: EstadoRecalculo;
@@ -159,6 +174,8 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
   const [progresso, setProgresso] = useState({ atual: 0, total: 0 });
   const [tempoMs, setTempoMs] = useState(0);
   const [turmas, setTurmas] = useState<Turma[]>([]);
+  const [erroTurmas, setErroTurmas] = useState<string | null>(null);
+  const [recarregandoTurmas, setRecarregandoTurmas] = useState(false);
   const [recalculo, setRecalculo] = useState<EstadoRecalculo>(null);
   const [recalculando, setRecalculando] = useState(false);
   // Escola em que o lote foi importado (o recálculo refeito vale para ela).
@@ -203,13 +220,18 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     setFase("analisando");
     setItens([]);
     let listaTurmas: Turma[] = [];
+    let falhaTurmas: string | null = null;
     try {
       listaTurmas = await api<Turma[]>(`/escolas/${escolaId}/turmas`);
-    } catch {
+    } catch (e) {
+      // A análise segue (cada arquivo é lido por si), mas a falha não é engolida: a
+      // conferência a mostra e deixa tentar de novo.
       listaTurmas = [];
+      falhaTurmas = mensagemDoErro(e, "Falha ao carregar as turmas.");
     }
     if (escolaIdRef.current !== escolaDaAnalise) return;
     setTurmas(listaTurmas);
+    setErroTurmas(falhaTurmas);
 
     const total = arquivos.length;
     const acumulados: ItemLote[] = [];
@@ -288,8 +310,11 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
           }),
         });
         mapa.get(it.id)!.resultado = "importado";
-      } catch {
-        mapa.get(it.id)!.resultado = "erro";
+      } catch (e) {
+        // O motivo da recusa (409, 400, 403, 500, sem conexão) vai para o relatório.
+        const item = mapa.get(it.id)!;
+        item.resultado = "erro";
+        item.erroImportacao = mensagemDoErro(e, "Falha ao gravar este arquivo.");
       }
       feitos += 1;
       if (naEscola()) {
@@ -322,6 +347,29 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     setRecalculando(false);
   }, []);
 
+  const recarregarTurmas = useCallback(async () => {
+    if (!escolaId) return;
+    const escolaDaBusca = escolaId;
+    setRecarregandoTurmas(true);
+    try {
+      const lista = await api<Turma[]>(`/escolas/${escolaDaBusca}/turmas`);
+      if (escolaIdRef.current !== escolaDaBusca) return;
+      setTurmas(lista);
+      setErroTurmas(null);
+      // Refaz o destino com as turmas: só o que ninguém corrigiu à mão (o "Ignorar"
+      // escolhido continua).
+      setItens((atuais) => atuais.map((it, i) => (it.analise && !it.corrigido
+        ? { ...montarItem(it.arquivo, i, it.analise, lista), id: it.id, ignorado: it.ignorado }
+        : it)));
+    } catch (e) {
+      if (escolaIdRef.current === escolaDaBusca) {
+        setErroTurmas(mensagemDoErro(e, "Falha ao carregar as turmas."));
+      }
+    } finally {
+      setRecarregandoTurmas(false);
+    }
+  }, [escolaId]);
+
   const alternarIgnorar = useCallback((id: string) => {
     setItens((atuais) => atuais.map((it) => (it.id === id ? { ...it, ignorado: !it.ignorado } : it)));
   }, []);
@@ -349,6 +397,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
     setRecalculo(null);
     escolaDoLoteRef.current = null;
     setTurmas([]); // turmas foram resolvidas contra o tenant anterior
+    setErroTurmas(null);
     setFase("selecao");
   }, []);
 
@@ -366,6 +415,7 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
   return (
     <Contexto.Provider value={{
       fase, arquivos, itens, progresso, tempoMs, turmas, emAndamento,
+      erroTurmas, recarregandoTurmas, recarregarTurmas,
       recalculo, recalculando, refazerRecalculo,
       adicionar, removerArquivo, limparArquivos, analisarTodos, importarTodos,
       alternarIgnorar, vincular, recomecar,
