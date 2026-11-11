@@ -363,11 +363,13 @@ def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
             .order_by(modelo.data_referencia, modelo.id)
         ).scalars().all()
 
-    # O ajuste manual do Matific que a coleta seguinte desmentiu não conta semana
-    # de ganho nem data de conquista (é a mesma série do mural, `_series_por_aluno`).
+    # O ajuste manual (Matific ou Elefante) que a coleta seguinte desmentiu não conta
+    # semana de ganho nem data de conquista (é a mesma série do mural,
+    # `_series_por_aluno`).
     serie_m = evolucao.sem_ajustes_superados_matific(
         db, escola_id, {aluno_id: _serie(SnapshotMatific, "matific")})[aluno_id]
-    serie_e = _serie(SnapshotElefante, "elefante")
+    serie_e = evolucao.sem_ajustes_superados_elefante(
+        db, escola_id, {aluno_id: _serie(SnapshotElefante, "elefante")})[aluno_id]
     return _computar_gamificacao(aluno_id, serie_m, serie_e,
                                  pesos_xp, base, conquistas_cfg,
                                  ano_letivo=escola.ano_letivo_ativo if escola else None)

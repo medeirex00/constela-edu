@@ -688,18 +688,44 @@ def _ajuste_desmentido():
     Período), em SQL. Sem o corte ``d <= fim``: a coleta que desmente pode vir depois do fim
     da janela. Sem isto a Análise lia o ajuste como base ou estado atual do período e
     atribuía a ele o degrau até a coleta seguinte (G_AJUSTE-1)."""
-    posterior = aliased(SnapshotMatific)
-    manuais = select(Importacao.id).where(Importacao.plataforma == "matific",
+    return _manual_desmentido(
+        SnapshotMatific, "matific",
+        lambda posterior: extract("year", posterior.data_referencia)
+        == extract("year", SnapshotMatific.data_referencia))
+
+
+def _ajuste_desmentido_nas_questoes():
+    """Retrato do Elefante que é AJUSTE MANUAL (``editar_elefante``/``informar_niveis_leitura``;
+    numa escola integrada, o do Admin Global) com uma COLETA das questões do mesmo aluno e
+    escola DEPOIS dele — a regra de ``evolucao.sem_ajustes_superados_vitalicio`` (Ranking de
+    Evolução, mural, /insights), em SQL e sobre a série das QUESTÕES: o contador do Elefante
+    é de vida inteira, então qualquer coleta depois o desmente (sem o recorte por ano do
+    Matific), e a coleta S9 (``IMPORTACAO_SEM_QUESTOES``), que não traz as questões, não
+    desmente as do ajuste — ela nem é coleta das questões. Sem isto a Análise media como
+    "questões do período" o degrau entre o número digitado e a coleta seguinte
+    (S_G_AJUSTE-1)."""
+    sem_questoes = select(Importacao.id).where(Importacao.plataforma == "elefante",
+                                               Importacao.status == IMPORTACAO_SEM_QUESTOES)
+    return _manual_desmentido(
+        SnapshotElefante, "elefante",
+        lambda posterior: posterior.importacao_id.not_in(sem_questoes))
+
+
+def _manual_desmentido(modelo, plataforma: str, coleta_que_desmente):
+    """O retrato de ``modelo`` é AJUSTE MANUAL (``Importacao.tipo == "manual"``) e existe uma
+    COLETA (retrato que não é ajuste) do mesmo aluno e escola depois dele, em ordem de (data,
+    id), que satisfaz ``coleta_que_desmente(posterior)`` — a condição de cada plataforma."""
+    posterior = aliased(modelo)
+    manuais = select(Importacao.id).where(Importacao.plataforma == plataforma,
                                           Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL)
-    return and_(SnapshotMatific.importacao_id.in_(manuais), exists().where(
-        posterior.escola_id == SnapshotMatific.escola_id,
-        posterior.aluno_id == SnapshotMatific.aluno_id,
+    return and_(modelo.importacao_id.in_(manuais), exists().where(
+        posterior.escola_id == modelo.escola_id,
+        posterior.aluno_id == modelo.aluno_id,
         posterior.importacao_id.not_in(manuais),
-        extract("year", posterior.data_referencia)
-        == extract("year", SnapshotMatific.data_referencia),
-        or_(posterior.data_referencia > SnapshotMatific.data_referencia,
-            and_(posterior.data_referencia == SnapshotMatific.data_referencia,
-                 posterior.id > SnapshotMatific.id))))
+        coleta_que_desmente(posterior),
+        or_(posterior.data_referencia > modelo.data_referencia,
+            and_(posterior.data_referencia == modelo.data_referencia,
+                 posterior.id > modelo.id))))
 
 
 def _vizinhos(consulta, nome: str):
@@ -799,6 +825,9 @@ def _partes_questoes(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]]
     ).select_from(m).outerjoin(Importacao, Importacao.id == m.importacao_id).where(
         m.escola_id.in_(sorted({i for _, ids in grupos.values() for i in ids})),
         or_(Importacao.status.is_(None), Importacao.status != IMPORTACAO_SEM_QUESTOES),
+        # Sem o AJUSTE MANUAL que uma coleta posterior das questões já desmentiu
+        # (``_ajuste_desmentido_nas_questoes``), também antes do ``lag``.
+        not_(_ajuste_desmentido_nas_questoes()),
     ).subquery()
     t = todas.c
     primeiras = _vizinhos(

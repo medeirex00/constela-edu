@@ -55,16 +55,28 @@ def _sem_fuso(momento: datetime) -> datetime:
     return momento.replace(tzinfo=None) if momento.tzinfo else momento
 
 
-def ajustes_manuais_matific(db: Session, escola_id: int) -> frozenset[int]:
-    """Ids das importações do Matific que são AJUSTE MANUAL da escola (o botão
-    Editar, ``routers.plataformas._importacao_manual``). É o que diz, retrato a
-    retrato (``importacao_id``), o que é número digitado e o que é coleta — a
-    entrada de ``matific_destaque.sem_ajustes_superados``."""
+def ajustes_manuais(db: Session, escola_id: int, plataforma: str) -> frozenset[int]:
+    """Ids das importações da ``plataforma`` que são AJUSTE MANUAL da escola (o botão
+    Editar — e, no Elefante, também o "informar níveis" —,
+    ``routers.plataformas._importacao_manual``). É o que diz, retrato a retrato
+    (``importacao_id``), o que é número digitado e o que é coleta."""
     return frozenset(db.execute(
         select(Importacao.id).where(Importacao.escola_id == escola_id,
-                                    Importacao.plataforma == "matific",
+                                    Importacao.plataforma == plataforma,
                                     Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL)
     ).scalars())
+
+
+def ajustes_manuais_matific(db: Session, escola_id: int) -> frozenset[int]:
+    """``ajustes_manuais`` do Matific — a entrada de
+    ``matific_destaque.sem_ajustes_superados``."""
+    return ajustes_manuais(db, escola_id, "matific")
+
+
+def ajustes_manuais_elefante(db: Session, escola_id: int) -> frozenset[int]:
+    """``ajustes_manuais`` do Elefante — a entrada de
+    ``sem_ajustes_superados_vitalicio``."""
+    return ajustes_manuais(db, escola_id, "elefante")
 
 
 def sem_ajustes_superados_matific(db: Session, escola_id: int,
@@ -79,6 +91,52 @@ def sem_ajustes_superados_matific(db: Session, escola_id: int,
             for aluno_id, serie in series.items()}
 
 
+def sem_ajustes_superados_vitalicio(serie, manuais) -> list:
+    """A série de um contador VITALÍCIO (Elefante) SEM os ajustes manuais que uma coleta
+    posterior já desmentiu — a regra de ``matific_destaque.sem_ajustes_superados``, sem
+    o recorte por ano.
+
+    O ajuste do Elefante (``editar_elefante``/``informar_niveis_leitura``; numa escola
+    integrada, o que o Admin Global faz quando a escola "fala com o suporte") grava um
+    retrato novo no instante do ajuste. O contador da plataforma é de vida inteira e a
+    coleta seguinte traz de novo o número DELA: se o ajuste ficasse na série, seria um
+    degrau entre duas coletas — corrigir para baixo fazia a coleta seguinte parecer
+    livros, minutos e questões do período; corrigir para cima apagava o ganho real.
+
+    REGRA: um retrato manual vale — como base E como estado atual — só enquanto
+    nenhuma COLETA (retrato que não é ajuste manual) vier depois dele, de qualquer ano
+    (o contador não zera na virada). Sem coleta depois, o ajuste é o estado vigente e
+    continua valendo; ajuste seguido de ajuste (a escola sem integração, que digita os
+    números) fica como está. Devolve a série em ordem cronológica
+    (``data_referencia``; empate preserva a ordem recebida, isto é, o id)."""
+    ordenada = sorted(serie, key=lambda s: _sem_fuso(s.data_referencia))
+    if not manuais:
+        return ordenada
+    coleta_depois = False
+    mantidos = []
+    for snap in reversed(ordenada):
+        if getattr(snap, "importacao_id", None) in manuais:
+            if coleta_depois:
+                continue       # desmentido pela coleta que veio depois
+        else:
+            coleta_depois = True
+        mantidos.append(snap)
+    mantidos.reverse()
+    return mantidos
+
+
+def sem_ajustes_superados_elefante(db: Session, escola_id: int,
+                                   series: dict[int, list]) -> dict[int, list]:
+    """``series`` do Elefante (por aluno) sem os ajustes manuais que uma coleta
+    posterior já desmentiu (``sem_ajustes_superados_vitalicio``). Escola sem ajuste
+    manual do Elefante: devolve as séries como vieram (uma consulta só)."""
+    manuais = ajustes_manuais_elefante(db, escola_id)
+    if not manuais:
+        return series
+    return {aluno_id: sem_ajustes_superados_vitalicio(serie, manuais)
+            for aluno_id, serie in series.items()}
+
+
 def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
     """Todos os snapshots da escola agrupados por aluno, em ordem cronológica.
 
@@ -86,9 +144,12 @@ def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
     pode gravar um mês ANTIGO depois (backfill) — por id, a série ficaria fora
     de ordem e _janela/_baseline elegeriam o passado como "atual".
 
-    MATIFIC: sai da série o ajuste manual que uma coleta posterior do mesmo ano
-    já desmentiu (``sem_ajustes_superados_matific``) — senão ele virava base ou
-    estado atual de um período e inventava ganho (ou o apagava)."""
+    Sai da série o ajuste manual que uma coleta posterior já desmentiu — no
+    MATIFIC, a coleta do mesmo ano (``sem_ajustes_superados_matific``); no
+    ELEFANTE, qualquer coleta depois dele (``sem_ajustes_superados_elefante``) —,
+    senão ele virava base ou estado atual de um período e inventava ganho (ou o
+    apagava). É a série do Ranking de Evolução, do mural, do /insights, do app e
+    do assistente."""
     series: dict[int, list] = {}
     for snap in db.execute(
         select(modelo).where(modelo.escola_id == escola_id)
@@ -97,6 +158,8 @@ def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
         series.setdefault(snap.aluno_id, []).append(snap)
     if modelo is SnapshotMatific:
         return sem_ajustes_superados_matific(db, escola_id, series)
+    if modelo is SnapshotElefante:
+        return sem_ajustes_superados_elefante(db, escola_id, series)
     return series
 
 
@@ -333,9 +396,12 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int, *,
                 .order_by(modelo.data_referencia, modelo.id)
             ).scalars()
         ]
+        # O ajuste manual já desmentido pela coleta não é ponto de partida.
         if modelo is SnapshotMatific:
-            # O ajuste manual já desmentido pela coleta não é ponto de partida.
             serie = sem_ajustes_superados_matific(
+                db, escola_id, {aluno_id: serie})[aluno_id]
+        else:
+            serie = sem_ajustes_superados_elefante(
                 db, escola_id, {aluno_id: serie})[aluno_id]
         atual = serie[-1] if serie else None
         anterior = _baseline(serie, inicio)
