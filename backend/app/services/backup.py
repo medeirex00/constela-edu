@@ -465,6 +465,72 @@ def _ligacoes_entre_restauracoes(db: Session, chave: str = CHAVE_MAPA_ALUNOS,
     return ligacoes
 
 
+def _fusoes(db: Session) -> list[tuple[int, int]]:
+    """(mantida, absorvida) de cada fusão do log, de QUALQUER escola: ``aluno.fundido``
+    grava ``mantido.id`` (ou o ``entidade_id``) ← ``removido.id``. Os ids ficam no log
+    mesmo depois que a exclusão redige os nomes. Registro sem os dois ids legíveis
+    não liga nada."""
+    pares: list[tuple[int, int]] = []
+    for entidade_id, detalhes in db.execute(
+            select(LogAuditoria.entidade_id, LogAuditoria.detalhes)
+            .where(LogAuditoria.acao == "aluno.fundido")):
+        if not isinstance(detalhes, dict):
+            continue
+        mantido, removido = detalhes.get("mantido"), detalhes.get("removido")
+        mantido_id = mantido.get("id") if isinstance(mantido, dict) else None
+        if not isinstance(mantido_id, int) or isinstance(mantido_id, bool):
+            mantido_id = entidade_id
+        removido_id = removido.get("id") if isinstance(removido, dict) else None
+        if all(isinstance(i, int) and not isinstance(i, bool)
+               for i in (mantido_id, removido_id)):
+            pares.append((mantido_id, removido_id))
+    return pares
+
+
+def _ligar_fusoes(ligacoes: dict[int, set[int]], pares: list[tuple[int, int]],
+                  vivas: set[int]) -> dict[int, set[int]]:
+    """Acrescenta a ``ligacoes`` as fusões ``pares`` (mantida, absorvida), nos dois
+    sentidos. A absorvida cujo id hoje é de uma ficha VIVA fica de fora: a fusão a
+    apagou, então o id em uso é reaproveitamento (SQLite de desenvolvimento), outra
+    criança — a regra de ``exclusao_aluno.fichas_absorvidas``."""
+    for mantida, absorvida in pares:
+        if absorvida in vivas or absorvida == mantida:
+            continue
+        ligacoes.setdefault(mantida, set()).add(absorvida)
+        ligacoes.setdefault(absorvida, set()).add(mantida)
+    return ligacoes
+
+
+def _mesma_crianca(db: Session) -> dict[int, set[int]]:
+    """As ligações entre fichas da MESMA criança, nos dois sentidos: a linhagem das
+    restaurações (``_ligacoes_entre_restauracoes``) e as fusões (``_fusoes``) — a
+    duplicata absorvida é a criança que ficou, e a cópia que um arquivo levou para
+    outra escola também."""
+    pares = _fusoes(db)
+    absorvidas = sorted({absorvida for _, absorvida in pares})
+    vivas = set(db.execute(select(Aluno.id).where(
+        Aluno.id.in_(absorvidas))).scalars()) if absorvidas else set()
+    return _ligar_fusoes(_ligacoes_entre_restauracoes(db), pares, vivas)
+
+
+def _quantas_criancas(fichas: set[int], ligacoes: dict[int, set[int]]) -> int:
+    """Quantas crianças ``fichas`` são: as fichas ligadas (``_mesma_crianca``), em
+    cadeia, contam uma — a duplicata fundida e a oficial do mesmo arquivo são uma
+    criança só."""
+    restantes, criancas = set(fichas), 0
+    while restantes:
+        criancas += 1
+        pendentes = [restantes.pop()]
+        vistos = set(pendentes)
+        while pendentes:
+            for outra in ligacoes.get(pendentes.pop(), ()):
+                if outra not in vistos:
+                    vistos.add(outra)
+                    pendentes.append(outra)
+                    restantes.discard(outra)
+    return criancas
+
+
 def _excluidos_depois_do_backup(db: Session, escola_id: int, log_ate: Any) -> set[int]:
     """Ids das fichas excluídas DE VEZ depois do backup, em QUALQUER escola.
 
@@ -487,7 +553,14 @@ def _excluidos_depois_do_backup(db: Session, escola_id: int, log_ate: Any) -> se
     entra. No PostgreSQL um id nunca volta a ser usado, então cada id do conjunto é
     uma encarnação da criança excluída (nunca outra criança). (No SQLite de
     desenvolvimento, que reaproveita id, uma ficha com o id reaproveitado pode ficar
-    de fora — com o aviso.)"""
+    de fora — com o aviso.)
+
+    A FUSÃO também liga duas fichas da mesma criança (``_mesma_crianca``), em cadeia e
+    nos dois sentidos, feita antes ou depois do backup: o arquivo de antes da fusão
+    traz a duplicata absorvida ao lado da ficha oficial, e a duplicata voltava inteira
+    (nome, matrícula, retratos, a conta da plataforma) quando a oficial era excluída
+    de vez (G_LGPD-2). Excluída de vez a duplicata que uma restauração trouxe de volta,
+    a oficial também não volta."""
     consulta = (select(LogAuditoria.entidade_id)
                 .where(LogAuditoria.acao == "aluno.excluido_permanente",
                        LogAuditoria.entidade_id.is_not(None)))
@@ -496,7 +569,7 @@ def _excluidos_depois_do_backup(db: Session, escola_id: int, log_ate: Any) -> se
     excluidos = {int(i) for i in db.execute(consulta).scalars()}
     if not excluidos:
         return excluidos
-    ligacoes = _ligacoes_entre_restauracoes(db)
+    ligacoes = _mesma_crianca(db)
     pendentes = list(excluidos)
     while pendentes:
         for outro in ligacoes.get(pendentes.pop(), ()):
@@ -753,7 +826,10 @@ def restaurar(db: Session, escola_id: int, dados: dict,
     if nao_restaurados and avisos is not None:
         # "nesta ou em outra escola": a exclusão pode ter sido de outra ficha da mesma
         # criança, em outra escola (a cópia que um arquivo restaurado levou para lá).
-        avisos.append(f"{len(nao_restaurados)} criança(s) excluída(s) permanentemente "
+        # Conta CRIANÇAS: a duplicata fundida e a oficial do mesmo arquivo são uma só.
+        criancas = (_quantas_criancas(nao_restaurados, _mesma_crianca(db))
+                    if len(nao_restaurados) > 1 else 1)
+        avisos.append(f"{criancas} criança(s) excluída(s) permanentemente "
                       "(nesta ou em outra escola) depois deste backup não foram "
                       "restauradas (direito de eliminação, LGPD art. 18).")
     return contagem
