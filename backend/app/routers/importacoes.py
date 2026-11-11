@@ -3479,10 +3479,14 @@ def _confirmar_sem_commit(
                             if p.motivo == "criacao_bloqueada_por_politica")
     avisos_criticos: list[str] = []
     if ausentes_sync:
+        # Código ESTÁVEL (lido pelo serviço da sincronização) × texto para quem usa
+        # (com os rótulos dos campos, nunca o nome interno).
         avisos_criticos.append("campos_ausentes:" + ",".join(sorted(ausentes_sync)))
+        rotulos_ausentes = ", ".join(_ROTULO_CAMPO_RETRATO.get(c, c.replace("_", " "))
+                                     for c in sorted(ausentes_sync))
         avisos.append(
             f"{linhas_descartadas['campos_ausentes']} linha(s) sem "
-            f"{', '.join(sorted(ausentes_sync))} na resposta da plataforma — dado não "
+            f"{rotulos_ausentes} na resposta da plataforma — dado não "
             "gravado (o valor anterior não é repetido com a data de hoje).")
 
     # MUDANÇA AUTOMÁTICA DE TURMA (só na sync automática do Matific): vincula o
