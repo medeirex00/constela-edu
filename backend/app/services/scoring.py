@@ -42,7 +42,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import time
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import bloquear_escola_para_recalculo
@@ -1771,33 +1771,48 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
             select(Nota).where(Nota.escola_id == escola_id, Nota.ano_letivo == ano)
         ).scalars()
     }
+    # GRAVAÇÃO EM LOTE. A linha que já existe (o caso comum) vai num UPDATE em
+    # lote por chave primária — as MESMAS colunas em todas, então um comando só
+    # (no PostgreSQL, um executemany em pipeline). Trocar atributo por atributo
+    # fazia o flush mandar um UPDATE para cada sequência de linhas com o mesmo
+    # conjunto de colunas alteradas: como cada criança muda coisas diferentes (só
+    # o carimbo, a posição, a nota), eram dezenas de idas por recálculo (~98 para
+    # 300 crianças), com a trava da escola presa. Os objetos já carregados nesta
+    # sessão recebem os valores novos (a sincronização do lote), então quem segue
+    # na mesma transação (``commit=False``) lê o que foi gravado.
+    atualizacoes: list[dict] = []
     for posicao, resultado in enumerate(resultados, start=1):
-        nota_row = notas_existentes.get(resultado.aluno.id)
-        if nota_row is None:
-            nota_row = Nota(escola_id=escola_id, aluno_id=resultado.aluno.id, ano_letivo=ano)
-            db.add(nota_row)
-        nota_row.nota_matific = resultado.nota_matific
-        nota_row.nota_elefante = resultado.nota_elefante
         # Colunas INSTITUCIONAIS — a régua da rede, imune à config local.
         nm_inst, ne_inst = notas_inst.get(resultado.aluno.id, (0.0, 0.0))
-        nota_row.nota_matific_institucional = nm_inst
-        nota_row.nota_elefante_institucional = ne_inst
-        nota_row.nota_geral = resultado.nota_geral
-        nota_row.posicao = posicao
-        nota_row.aferido_leitura = bool(resultado.aferido.get("leitura"))
-        nota_row.aferido_matematica = bool(resultado.aferido.get("matematica"))
-        nota_row.posicao_leitura = resultado.posicao_dimensao.get("leitura")
-        nota_row.posicao_matematica = resultado.posicao_dimensao.get("matematica")
-        # CARIMBO INSTITUCIONAL (visível em SQL via JSON path): prova que as
-        # colunas `*_institucional` desta linha foram calculadas por este motor.
-        # A rede só agrega notas carimbadas — uma linha antiga (migração 0028 com
-        # default 0,0 e sem backfill) NÃO vira "zero" na média: fica PENDENTE de
-        # recálculo até `scripts.recalcular_institucional --pendentes`.
-        # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
-        # recalcular duas vezes não pode mudar nota, posição nem detalhes; o
-        # instante fica SÓ em `Nota.calculada_em`, logo abaixo.)
-        nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
-        nota_row.calculada_em = instante
+        valores = {
+            "nota_matific": resultado.nota_matific,
+            "nota_elefante": resultado.nota_elefante,
+            "nota_matific_institucional": nm_inst,
+            "nota_elefante_institucional": ne_inst,
+            "nota_geral": resultado.nota_geral,
+            "posicao": posicao,
+            "aferido_leitura": bool(resultado.aferido.get("leitura")),
+            "aferido_matematica": bool(resultado.aferido.get("matematica")),
+            "posicao_leitura": resultado.posicao_dimensao.get("leitura"),
+            "posicao_matematica": resultado.posicao_dimensao.get("matematica"),
+            # CARIMBO INSTITUCIONAL (visível em SQL via JSON path): prova que as
+            # colunas `*_institucional` desta linha foram calculadas por este
+            # motor. A rede só agrega notas carimbadas — uma linha antiga
+            # (migração 0028 com default 0,0 e sem backfill) NÃO vira "zero" na
+            # média: fica PENDENTE de recálculo até
+            # `scripts.recalcular_institucional --pendentes`.
+            # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
+            # recalcular duas vezes não pode mudar nota, posição nem detalhes; o
+            # instante fica SÓ em `Nota.calculada_em`, logo abaixo.)
+            "detalhes": {**resultado.detalhes, **carimbo_institucional(personalizado)},
+            "calculada_em": instante,
+        }
+        nota_row = notas_existentes.get(resultado.aluno.id)
+        if nota_row is None:
+            db.add(Nota(escola_id=escola_id, aluno_id=resultado.aluno.id, ano_letivo=ano,
+                        **valores))
+        else:
+            atualizacoes.append({"id": nota_row.id, **valores})
 
     # QUEM SAIU NÃO GUARDA POSIÇÃO. A Nota de quem não concorre mais (transferido,
     # arquivado, sem matrícula no ano, Fase) não é apagada — a nota é histórico —,
@@ -1805,12 +1820,19 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     # carimbado numa criança fora do ranking, e cada leitor precisava lembrar de
     # filtrá-la (o leitor que esquecesse mostrava duas crianças em 1º). Ela volta a
     # ter posição no primeiro recálculo em que voltar a concorrer.
+    # Também em lote, e só a linha que ainda tem alguma posição (a já limpa não é
+    # regravada a cada recálculo).
     pontuados = {resultado.aluno.id for resultado in resultados}
-    for aluno_id, nota_row in notas_existentes.items():
-        if aluno_id not in pontuados:
-            nota_row.posicao = None
-            nota_row.posicao_leitura = None
-            nota_row.posicao_matematica = None
+    sem_posicao = [
+        {"id": nota_row.id, "posicao": None, "posicao_leitura": None,
+         "posicao_matematica": None}
+        for aluno_id, nota_row in notas_existentes.items()
+        if aluno_id not in pontuados and (
+            nota_row.posicao is not None or nota_row.posicao_leitura is not None
+            or nota_row.posicao_matematica is not None)]
+    for lote in (atualizacoes, sem_posicao):
+        if lote:
+            db.execute(update(Nota), lote)
 
     if commit:
         db.commit()
