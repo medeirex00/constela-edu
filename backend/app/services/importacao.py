@@ -60,6 +60,28 @@ def _numero(celula: str) -> float:
     return float(limpo)
 
 
+#: O maior número que uma coluna de CONTAGEM de relatório aceita (atividades,
+#: estrelas, livros, minutos, questões). Acima disso o valor não é de uma criança — é
+#: o RA ou o telefone caído na coluna errada — e o banco nem o guardaria (as colunas
+#: são ``integer``, até 2.147.483.647). Vale para a prévia e para o /confirmar.
+VALOR_MAXIMO = 10_000_000
+
+
+def valor_plausivel(valor) -> bool:
+    """Número finito e, em módulo, até ``VALOR_MAXIMO``. A comparação basta: é falsa
+    para NaN e infinito, e não converte um inteiro gigante para float (estouraria)."""
+    return -VALOR_MAXIMO <= valor <= VALOR_MAXIMO
+
+
+def _numero_plausivel(celula: str) -> float:
+    """``_numero`` que também recusa (ValueError) o valor não finito ou acima de
+    ``VALOR_MAXIMO`` — na prévia, ele vira "ilegível", como o negativo."""
+    valor = _numero(celula)
+    if not valor_plausivel(valor):
+        raise ValueError("fora da faixa")
+    return valor
+
+
 def _eh_numero(celula: str) -> bool:
     try:
         _numero(celula)
@@ -307,7 +329,7 @@ def _atribuir_campo(item: LinhaImportacao, campo: str, bruto: str) -> None:
         if campo.startswith("faixa:"):
             # Coluna de faixa: acumula em livros_por_nivel sob o slug da faixa.
             slug = campo.split(":", 1)[1]
-            valor = int(_numero(bruto))
+            valor = int(_numero_plausivel(bruto))
             if valor < 0:
                 raise ValueError("valor negativo")
             item.dados.setdefault("livros_por_nivel", {})[slug] = valor
@@ -318,7 +340,7 @@ def _atribuir_campo(item: LinhaImportacao, campo: str, bruto: str) -> None:
         elif campo == "nivel":
             item.dados[campo] = bruto.strip().upper()
         else:
-            valor = _numero(bruto)
+            valor = _numero_plausivel(bruto)
             if valor < 0:
                 raise ValueError("valor negativo")
             item.dados[campo] = valor
@@ -594,11 +616,15 @@ _AJUSTE_DA_COLETA = "A equipe do Constela precisa ajustar a coleta dessa platafo
 def _int_api(v, ausente=0):
     """Inteiro tolerante (aceita int/float/str) — para os campos numéricos da API
     interna. Ausente/ilegível → ``ausente`` (passe ``None`` quando "não veio" NÃO
-    pode virar 0 e sobrescrever um snapshot válido)."""
+    pode virar 0 e sobrescrever um snapshot válido). Valor não finito ou acima de
+    ``VALOR_MAXIMO`` também é ilegível (o ``round`` do infinito estourava em 500)."""
     try:
-        return int(round(float(v)))
-    except (TypeError, ValueError):
+        numero = float(v)
+    except (TypeError, ValueError, OverflowError):
         return ausente
+    if not valor_plausivel(numero):
+        return ausente
+    return int(round(numero))
 
 
 def _id_livro_elefante(valor) -> int | None:
@@ -1139,6 +1165,25 @@ def variante_ortografica(a_tokens: list[str], b_tokens: list[str]) -> bool:
     return 1 <= diferentes <= 2
 
 
+def texto_longo_demais(nome: str, id_externo: str = "", turma: str = "") -> str | None:
+    """O texto da linha que não cabe na coluna que o guardaria — o nome do aluno
+    (``alunos.nome``), a conta da plataforma (``identidades_externas.id_externo``) ou a
+    turma (``turmas.nome``) —, já em palavras para quem usa; None se tudo cabe. A
+    MESMA regra na prévia (a linha sai com erro) e no /confirmar (a linha é ignorada,
+    com aviso): antes, a prévia aceitava e a confirmação dava 500 no PostgreSQL."""
+    from app.models import Aluno, IdentidadeExterna, Turma
+
+    for texto, coluna, rotulo in (
+            (nome, Aluno.__table__.c.nome, "nome do aluno"),
+            (id_externo, IdentidadeExterna.__table__.c.id_externo,
+             "código da conta na plataforma"),
+            (turma, Turma.__table__.c.nome, "nome da turma")):
+        limite = coluna.type.length
+        if len((texto or "").strip()) > limite:
+            return f"{rotulo} com mais de {limite} caracteres"
+    return None
+
+
 def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
                 plataforma: str | None = None, turma_padrao: str = "") -> None:
     """PRÉVIA = CONFIRMAÇÃO. Preenche ``correspondencia`` de cada linha com a decisão
@@ -1167,8 +1212,15 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
         linha.nome, linha.dados or {}, plataforma=plataforma,
         turma_nome=str((linha.dados or {}).get("turma_relatorio") or turma_padrao or ""))
         for linha in linhas]
-    ida.marcar_fichas_disputadas(ctx, idents)   # idem
-    for linha, ident in zip(linhas, idents):
+    # Texto maior que a coluna: o /confirmar ignora a linha (``_resolver_aluno``) e
+    # ela não disputa ficha com as outras — a prévia já mostra o erro.
+    longos = [texto_longo_demais(linha.nome, ident.id_externo, ident.turma_nome)
+              for linha, ident in zip(linhas, idents)]
+    ida.marcar_fichas_disputadas(
+        ctx, [ident for ident, longo in zip(idents, longos) if not longo])   # idem
+    for linha, ident, longo in zip(linhas, idents, longos):
+        if longo:
+            linha.erros.append(f"{longo[:1].upper()}{longo[1:]} — confira o relatório.")
         linha.correspondencia = _correspondencia(
             ctx, ida.decidir(ctx, ident), linha.nome, ativos, ident)
 

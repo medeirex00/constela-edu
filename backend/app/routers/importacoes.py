@@ -87,14 +87,20 @@ logger_sync = logging.getLogger("constela.sync")
 
 def _num(valor, tipo):
     """Coerção de um valor NUMÉRICO vindo do payload do cliente: um valor não
-    numérico (cliente adulterado, bug de front) vira 400, não 500."""
+    numérico (cliente adulterado, bug de front) vira 400, não 500. O valor não finito
+    (``Infinity`` estourava o ``int``) ou acima de ``svc.VALOR_MAXIMO`` (o RA caído na
+    coluna de atividades estourava o ``integer`` do PostgreSQL) também."""
     try:
-        return tipo(valor)
-    except (ValueError, TypeError) as erro:
+        numero = tipo(valor)
+    except (ValueError, TypeError, OverflowError) as erro:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "O relatório contém um valor numérico inválido.",
         ) from erro
+    if not svc.valor_plausivel(numero):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "O relatório contém um valor numérico inválido.")
+    return numero
 
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
 IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
@@ -985,6 +991,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     ident, turma_nome, turma_invalida = _identidade_da_linha(db, escola_id, linha, plataforma)
     if turma_invalida:
         avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
+        return None
+    longo = svc.texto_longo_demais(linha.nome, ident.id_externo, turma_nome)
+    if longo:
+        # Nada desta linha cabe no banco (nem na fila de revisão): ignorada, com o
+        # mesmo erro que a prévia mostrou. Antes, 500 no PostgreSQL no commit.
+        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {longo} — ignorada.")
         return None
     if linha.aluno_id is None and not svc.tokens_nome(linha.nome):
         avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
@@ -3175,8 +3187,11 @@ def _confirmar_sem_commit(
     # vencer — a mesma marca da prévia, depois das duas acima.
     idents_da_importacao = []
     for linha in dados.linhas:
-        ident, _turma, invalida = _identidade_da_linha(db, escola_id, linha, dados.plataforma)
-        if not invalida and (linha.aluno_id is not None or svc.tokens_nome(linha.nome)):
+        ident, turma_linha, invalida = _identidade_da_linha(db, escola_id, linha,
+                                                            dados.plataforma)
+        if (not invalida
+                and not svc.texto_longo_demais(linha.nome, ident.id_externo, turma_linha)
+                and (linha.aluno_id is not None or svc.tokens_nome(linha.nome))):
             idents_da_importacao.append(ident)
     ida.marcar_fichas_disputadas(ctx_identidade, idents_da_importacao)
     coletor = ida.ColetorRevisoes(
