@@ -15,10 +15,10 @@ ficar de fora vira a letra sem o sinal antes de cair no '?' (_texto_pdf).
 from __future__ import annotations
 
 import io
-import unicodedata
 
 from app.core.config import settings
 from app.core.tempo import agora_br
+from app.services import texto_pdf
 
 _LARGURA_CARTAO = 92.0
 _ALTURA_CARTAO = 64.0
@@ -27,37 +27,10 @@ _MARGEM_Y = 10.0
 _ESPACO = 4.0
 
 
-_CODIFICACAO = "windows-1252"
-# Letras sem decomposição Unicode que não existem no cp1252.
-_SEM_SINAL = str.maketrans({"Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "ı": "i",
-                            "Ħ": "H", "ħ": "h", "‐": "-", "‑": "-", "−": "-"})
-
-
-def _cabe(caractere: str) -> bool:
-    try:
-        caractere.encode(_CODIFICACAO)
-    except UnicodeEncodeError:
-        return False
-    return True
-
-
-def _texto_pdf(texto) -> str:
-    """Texto pronto para as fontes nativas em cp1252. Acento digitado à parte
-    (forma decomposta, NFD) é juntado à letra antes; caractere fora do cp1252 vira
-    a letra sem o sinal (ő → o, Ł → L); invisível (formatação ou sinal solto)
-    some; só o que não tem equivalente vira '?' — nunca erro 500."""
-    saida = []
-    for caractere in unicodedata.normalize("NFC", str(texto)).translate(_SEM_SINAL):
-        if _cabe(caractere):
-            saida.append(caractere)
-            continue
-        base = "".join(c for c in unicodedata.normalize("NFKD", caractere)
-                       if unicodedata.category(c) != "Mn")
-        if base and all(_cabe(c) for c in base):
-            saida.append(base)
-        elif unicodedata.category(caractere) not in ("Cf", "Mn", "Me"):
-            saida.append("?")
-    return "".join(saida)
+# A fonte única do texto para as fontes nativas em cp1252 (também a dos PDFs de
+# reserva dos relatórios): ``services.texto_pdf``.
+_CODIFICACAO = texto_pdf.CODIFICACAO
+_texto_pdf = texto_pdf.texto_pdf
 
 
 def _juntar(*partes: str) -> str:

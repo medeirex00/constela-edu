@@ -25,7 +25,7 @@ from app.core.tempo import agora_br
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, Nota,
                         SnapshotElefante, Turma)
-from app.services import bimestres, elegibilidade, grupo_pequeno, scoring
+from app.services import bimestres, elegibilidade, grupo_pequeno, scoring, texto_pdf
 
 _log = logging.getLogger(__name__)
 
@@ -271,10 +271,24 @@ def _hex_para_rgb(cor: str) -> tuple[int, int, int]:
 
 
 def _latin1(texto) -> str:
-    """As fontes nativas do PDF só suportam latin-1: os acentos do português
-    passam intactos; qualquer outro caractere vira '?' em vez de derrubar o
-    relatório inteiro com erro 500."""
-    return str(texto).encode("latin-1", "replace").decode("latin-1")
+    """Texto para as fontes nativas do PDF (fpdf2, declaradas em WinAnsi): o mesmo
+    tratamento dos cartões do Quest (``services.texto_pdf``). Os acentos do
+    português passam intactos, e o apóstrofo tipográfico (Sant’Anna), as aspas
+    curvas e o travessão também (cp1252). Antes, com ``encode("latin-1",
+    "replace")``, o nome da criança saía "Sant?Anna" no certificado. Fora do
+    cp1252, a letra sem o sinal; só o que não tem equivalente vira '?' — nunca 500.
+    Quem cria o ``FPDF`` usa ``_novo_fpdf`` (a mesma codificação)."""
+    return texto_pdf.texto_pdf(texto)
+
+
+def _novo_fpdf(**opcoes):
+    """``FPDF`` com as fontes nativas em cp1252 (``texto_pdf.CODIFICACAO``), a
+    codificação do texto de ``_latin1``."""
+    from fpdf import FPDF
+
+    pdf = FPDF(**opcoes)
+    pdf.core_fonts_encoding = texto_pdf.CODIFICACAO
+    return pdf
 
 
 _ROTULO_DIMENSAO = {"leitura": "Leitura", "matematica": "Matemática"}
@@ -355,10 +369,8 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
     plataformas: ..." (``legenda_data_dos_dados``) logo abaixo da faixa. Valor
     ausente (``None`` — ex.: nota da plataforma que a criança não usa) sai "-"
     (o "—" não existe nas fontes latin-1), nunca "None"."""
-    from fpdf import FPDF
-
     linhas = [["-" if valor is None else valor for valor in linha] for linha in linhas]
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf = _novo_fpdf(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -946,9 +958,7 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
                       turma: str, posicao: int | None, nota_geral: float,
                       ano_letivo: int, dados_em: str | None = None) -> bytes:
     """Reserva simples (sem navegador): moldura + texto, 100% em Python."""
-    from fpdf import FPDF
-
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf = _novo_fpdf(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     r, g, b = _hex_para_rgb(cor)
 
