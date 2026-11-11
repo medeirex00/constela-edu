@@ -12,7 +12,9 @@
  * matrícula do ano ativo que está nela. Em turma de OUTRO ano letivo a lista é
  * histórico (matrícula daquele ano) e transferir moveria a matrícula do ano
  * ativo, da turma atual da criança — a tela não oferece a ação e orienta
- * arquivar (a API recusa com 409).
+ * arquivar (a API recusa com 409). Pelo mesmo motivo, “Cartões do Quest” some
+ * ali: a folha sairia com o nome da turma velha em cada cartão (a API recusa a
+ * reimpressão com 409).
  */
 import {
   Archive,
@@ -478,7 +480,10 @@ export default function TurmaDetalhe() {
               {estaTurma && <span className="tabular-nums">· ano letivo {estaTurma.ano_letivo}</span>}
             </div>
           </div>
-          {podeEditar && (
+          {/* Turma de outro ano letivo: a folha sairia com o nome da turma velha em
+              cada cartão (a criança já está em outra) — o botão some, como o
+              “Transferir”, e o aviso abaixo diz onde imprimir (a API recusa, 409). */}
+          {podeEditar && !deOutroAno && (
             <Botao
               variante="secundario"
               onClick={baixarCartoesQuest}
@@ -542,9 +547,9 @@ export default function TurmaDetalhe() {
           <p>
             Turma do ano letivo <strong>{estaTurma.ano_letivo}</strong> (o ano ativo é {anoAtivo}): a
             lista mostra as matrículas daquele ano, que são histórico, e por isso “Transferir de
-            turma” não aparece aqui. Para mudar a turma atual de um aluno, abra a turma dele do ano
-            letivo {anoAtivo}. Para tirar esta turma da lista, use “Arquivar” em Turmas — o
-            histórico fica preservado.
+            turma” e “Cartões do Quest” não aparecem aqui. Para mudar a turma atual de um aluno ou
+            imprimir os cartões do Quest, abra a turma dele do ano letivo {anoAtivo}. Para tirar
+            esta turma da lista, use “Arquivar” em Turmas — o histórico fica preservado.
           </p>
         </div>
       )}

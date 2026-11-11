@@ -39,6 +39,28 @@ def _turma_da_escola(db: Session, escola_id: int, turma_id: int) -> Turma:
     return turma
 
 
+def _exigir_reimpressao_no_ano_ativo(turma: Turma, escola: Escola | None) -> None:
+    """Reimpressão (sem revogação) da folha de uma turma de OUTRO ano letivo: 409.
+
+    A turma de outro ano lista as matrículas daquele ano (histórico), mas a
+    credencial é uma por criança: a folha sairia com o nome da turma velha em cada
+    cartão ("3º Ano A" para quem já está no "4º Ano A") e criaria credencial e
+    perfil para quem não tinha. O cartão sai na turma atual da criança.
+
+    A revogação (``regenerar``/``rotacionar_codigo``) dessa turma segue valendo:
+    depois da virada, é o caminho em lote que derruba o cartão de quem saiu da
+    escola e segue com a ficha ativa (G_VIRADA-2, decisão pendente do dono)."""
+    ano = escola.ano_letivo_ativo if escola is not None else None
+    if ano is None or turma.ano_letivo == ano:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"A turma “{turma.nome}” é do ano letivo {turma.ano_letivo}, e as matrículas "
+        "dela são histórico. Os cartões do Quest saem com o nome da turma, e cada "
+        f"criança já está na turma dela do ano letivo {ano}. Nenhum cartão foi gerado. "
+        f"Para imprimir os cartões, abra a turma atual da criança, do ano letivo {ano}.")
+
+
 def _slug_ascii(texto: str) -> str:
     # Cabeçalho HTTP só aceita ASCII: "3º Ano A" → "3-ano-a"
     limpo = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore")
@@ -151,12 +173,18 @@ def gerar_cartoes(turma_id: int,
     `rotacionar_codigo=true` tem o mesmo efeito (nome mantido por
     compatibilidade; virada de ano letivo). Sem expiração automática durante o
     ano — a criança nunca perde acesso sozinha.
+
+    Turma de OUTRO ano letivo: a reimpressão é 409 (o cartão sairia com o nome
+    da turma velha); a revogação segue valendo (``_exigir_reimpressao_no_ano_ativo``).
     """
     turma = _turma_da_escola(db, escola_id, turma_id)
     # Professor restrito não gera/regenera/rotaciona credenciais de turma alheia
     # (troca o QR/código de todos e derruba sessões — antes do efeito).
     permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
     revogar = regenerar or rotacionar_codigo
+    escola = db.get(Escola, escola_id)
+    if not revogar:
+        _exigir_reimpressao_no_ano_ativo(turma, escola)
     revogados_inativos = (svc.revogar_cartoes_inativos_da_turma(db, escola_id, turma)
                           if revogar else 0)
     # Lê as folhas ANTERIORES (a auditoria desta ainda não foi gravada).
@@ -165,7 +193,6 @@ def gerar_cartoes(turma_id: int,
     dados = svc.garantir_credenciais_turma(
         db, escola_id, turma, regenerar=regenerar,
         rotacionar_codigo=rotacionar_codigo)
-    escola = db.get(Escola, escola_id)
     pdf = cartoes_pdf.gerar_cartoes_pdf(
         escola_nome=escola.nome if escola else "Escola",
         cor=svc_relatorios.cor_primaria(db, escola_id),
