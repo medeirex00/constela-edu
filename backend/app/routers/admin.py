@@ -864,8 +864,16 @@ def exigir_admin_global_para_restaurar(
         raise HTTPException(negado.status_code, MSG_RESTAURACAO_SO_ADMIN_GLOBAL) from None
 
 
+# Rotas de upload da administração (restaurar backup, logo): `def` e não
+# `async def`. A sessão do banco é síncrona e o Pillow é CPU; como `def`, o
+# FastAPI roda a rota numa thread do pool. Numa `async def`, o corpo inteiro
+# (restauração, recálculo das notas, commit, decodificação da imagem) rodava na
+# thread do event loop e o worker parava de atender todo mundo, até a sonda de
+# vida. Por isso o arquivo é lido pelo objeto síncrono (`arquivo.file.read`),
+# com teto, como em `avaliacoes.py`.
+
 @router.post("/restaurar")
-async def restaurar_backup(
+def restaurar_backup(
     arquivo: UploadFile = File(...),
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_admin_global_para_restaurar),
@@ -898,7 +906,8 @@ async def restaurar_backup(
     Ressalva: restauração registrada sem o mapa (anterior a ele) quebra a linhagem — a
     criança excluída depois dela pode voltar sem aviso; confira a exclusão à mão.
     """
-    conteudo = await arquivo.read()
+    # No máximo o teto + 1 byte na memória: o resto fica no temporário.
+    conteudo = arquivo.file.read(TAMANHO_MAXIMO_BACKUP + 1)
     if len(conteudo) > TAMANHO_MAXIMO_BACKUP:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Arquivo de backup acima do tamanho máximo (25 MB).")
@@ -1063,7 +1072,7 @@ def _row_logos_aparencia(db: Session, escola_id: int) -> Configuracao:
 
 
 @router.post("/aparencia/logo")
-async def enviar_logo_aparencia(
+def enviar_logo_aparencia(  # `def`: Pillow e banco fora do event loop (ver /restaurar)
     tipo: str = Query(pattern="^(brasao|prefeitura)$"),
     arquivo: UploadFile = File(...),
     escola_id: int = Depends(escola_autorizada),
@@ -1074,7 +1083,7 @@ async def enviar_logo_aparencia(
     reduzida (máx. 400 px) e guardada como data URI, entrando no topo de
     certificados e relatórios em PDF. PNG com fundo transparente fica melhor."""
     # No máximo o teto + 1 byte na memória: o arquivo inteiro fica no temporário.
-    conteudo = await arquivo.read(_LOGO_MAX_BYTES + 1)
+    conteudo = arquivo.file.read(_LOGO_MAX_BYTES + 1)
     if len(conteudo) > _LOGO_MAX_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Imagem muito grande (máximo 3 MB).")

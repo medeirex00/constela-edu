@@ -165,19 +165,21 @@ def test_perfil_icc_do_envio_nao_vai_para_o_png(cliente, escola_completa):
 
 
 def test_leitura_limitada_ao_teto(cliente, escola_completa, monkeypatch):
-    """O handler lê no máximo 3 MB + 1 do arquivo — não o arquivo inteiro na memória."""
-    from starlette.datastructures import UploadFile
+    """O handler lê no máximo 3 MB + 1 do arquivo — não o arquivo inteiro na memória.
+    A leitura é a SÍNCRONA (``arquivo.file.read``): a rota é ``def`` e roda numa
+    thread do pool, fora do event loop (UPLOADS-1)."""
+    import tempfile
 
     from app.routers import admin
 
     tamanhos = []
-    ler = UploadFile.read
+    ler = tempfile.SpooledTemporaryFile.read
 
-    async def espiao(self, size=-1):
-        tamanhos.append(size)
-        return await ler(self, size)
+    def espiao(self, *args):
+        tamanhos.append(args[0] if args else -1)
+        return ler(self, *args)
 
-    monkeypatch.setattr(UploadFile, "read", espiao)
+    monkeypatch.setattr(tempfile.SpooledTemporaryFile, "read", espiao)
     resposta = _enviar(cliente, escola_completa["escola"].id, b"\x89PNG" + b"0" * (admin._LOGO_MAX_BYTES + 10))
     assert resposta.status_code == 413
     assert tamanhos == [admin._LOGO_MAX_BYTES + 1]
