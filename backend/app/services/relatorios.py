@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.tempo import agora_br
@@ -60,7 +60,8 @@ def _recorte(consulta, turma_ids: list[int] | None):
 def _consulta_ranking_geral(db: Session, escola_id: int,
                             turma_ids: list[int] | None = None):
     """``select(Nota, Aluno, Turma)`` de quem está no Ranking Geral exportado (sem
-    ordem) — a fonte ÚNICA das linhas (``linhas_ranking``) e da população dos
+    ordem): ativos, matriculados no ano numa turma que concorre, com dado de alguma
+    plataforma (aferido em Leitura ou Matemática) — a fonte ÚNICA das linhas (``linhas_ranking``) e da população dos
     cartões do cartaz (``estatisticas_cartaz``), para os dois nunca divergirem.
     ``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
     recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``)."""
@@ -79,6 +80,13 @@ def _consulta_ranking_geral(db: Session, escola_id: int,
         # nem no cartaz — a mesma régua de `rankings._ranking`.
         .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
             db, escola_id, escola.ano_letivo_ativo)))
+        # AUSÊNCIA NÃO É ZERO (DEC-19): só quem tem dado de alguma plataforma — o
+        # mesmo corte de ``rankings._ranking(so_com_dado=True)`` da tela e do Top 10.
+        # Conta a EXISTÊNCIA do retrato (``aferido_*``), nunca nota > 0: o retrato
+        # zerado continua. Sem isto, a criança sem nenhum dado saía no CSV/XLSX/PDF e
+        # no cartaz com posição e Nota Geral 0,0 — e, no arquivo do professor,
+        # renumerado 1..N, empurrava a posição de quem vem depois.
+        .where(or_(Nota.aferido_leitura.is_(True), Nota.aferido_matematica.is_(True)))
     )
     return _recorte(consulta, turma_ids)
 
@@ -1027,7 +1035,8 @@ def estatisticas_cartaz(db: Session, escola_id: int,
     critério usado no ranking e no painel, via scoring._snapshots_atuais), e só
     da MESMA população da tabela: exatamente os alunos das linhas do cartaz
     (``_consulta_ranking_geral`` — ativos, matriculados no ano numa turma que
-    concorre, com Nota do ano; ``turma_ids`` = o recorte do professor). Assim os
+    concorre, com dado de alguma plataforma (aferido em Leitura ou Matemática);
+    ``turma_ids`` = o recorte do professor). Assim os
     números batem com a tabela e com "estudantes ranqueados", sem inflar com a
     Educação Infantil, com quem ainda não tem nota, com alunos de anos anteriores
     ou arquivados nem com correções para menos. Best-effort: qualquer falha vira

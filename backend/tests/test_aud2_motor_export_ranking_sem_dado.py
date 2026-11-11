@@ -4,16 +4,15 @@ listam as mesmas crianças, na mesma posição, que a TELA.
 A tela do Ranking Geral (``GET /ranking`` e a aba do app) deixou de listar a
 criança sem NENHUM dado (``rankings._ranking(so_com_dado=True)``). A exportação
 (CSV, XLSX e PDF em ``/relatorios/ranking``) e o cartaz (``/ranking/cartaz`` sem
-dimensão) saem de ``services.relatorios._consulta_ranking_geral``, que ainda não
-tem esse corte: a criança sem dado volta no arquivo com posição e Nota Geral
-0,0 e, para o professor (o arquivo é renumerado 1..N "como na tela"), empurra a
-posição de quem vem depois — a mesma criança fica com uma posição na tela e
+dimensão) saem de ``services.relatorios._consulta_ranking_geral``, que não tinha
+esse corte: a criança sem dado voltava no arquivo com posição e Nota Geral 0,0 e,
+para o professor (o arquivo é renumerado 1..N "como na tela"), empurrava a
+posição de quem vem depois — a mesma criança ficava com uma posição na tela e
 outra no arquivo.
 
-A correção é de ``backend/app/services/relatorios.py`` (frente rede): o mesmo
-corte de ``_ranking(so_com_dado=True)`` em ``_consulta_ranking_geral``. Até lá
-os testes abaixo ficam ``xfail(strict=True)``: quando o corte entrar, eles
-passam e o ``strict`` derruba a suíte — é o aviso para tirar a marca.
+A correção está em ``backend/app/services/relatorios.py``: o mesmo corte de
+``_ranking(so_com_dado=True)`` em ``_consulta_ranking_geral`` (os testes abaixo
+ficaram ``xfail(strict=True)`` até ela entrar).
 
 Cenário do teste DEC-19 (``test_aud2_motor_ranking_geral_sem_dado``): Ana tem
 Matific, João não tem dado nenhum e Sofia tem retrato zerado (zero legítimo,
@@ -30,12 +29,6 @@ from tests.test_aud2_motor_ranking_geral_sem_dado import _cenario
 from tests.test_permissoes import cenario_professor  # noqa: F401 — fixture
 
 API = "/api/v1"
-
-PENDENTE_REDE = pytest.mark.xfail(
-    strict=True,
-    reason="REV2-MOTOR-1: falta o corte so_com_dado em "
-           "services/relatorios._consulta_ranking_geral (frente rede)")
-
 
 def _tela(cliente, escola):
     r = cliente.get(f"{API}/escolas/{escola.id}/ranking")
@@ -73,7 +66,6 @@ def cartazes(monkeypatch):
     return capturados
 
 
-@PENDENTE_REDE
 def test_arquivo_da_gestao_lista_quem_a_tela_lista(db, escola_completa, cliente):
     escola, ana, joao, sofia = _cenario(db, escola_completa)
     tela = _tela(cliente, escola)
@@ -82,7 +74,6 @@ def test_arquivo_da_gestao_lista_quem_a_tela_lista(db, escola_completa, cliente)
     assert _xlsx(cliente, escola) == tela
 
 
-@PENDENTE_REDE
 def test_cartaz_da_gestao_lista_quem_a_tela_lista(db, escola_completa, cliente, cartazes):
     escola, ana, joao, sofia = _cenario(db, escola_completa)
     tela = _tela(cliente, escola)
@@ -95,7 +86,6 @@ def test_cartaz_da_gestao_lista_quem_a_tela_lista(db, escola_completa, cliente, 
     assert cartazes == [tela, tela], cartazes
 
 
-@PENDENTE_REDE
 def test_arquivo_e_cartaz_do_professor_tem_a_posicao_da_tela(
         cenario_professor, escola_completa, db, cartazes):  # noqa: F811
     c = cenario_professor
