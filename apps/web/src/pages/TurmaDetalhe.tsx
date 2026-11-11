@@ -318,7 +318,8 @@ export default function TurmaDetalhe() {
   }
 
   /** Constela Quest: gera as credenciais da turma e baixa o PDF dos cartões
-   * de acesso (QR + código + PIN de figuras) para imprimir e recortar. */
+   * de acesso (QR + código, sem senha) para imprimir e recortar, mais a folha
+   * do professor com o código de cada aluno. */
   async function baixarCartoesQuest() {
     if (!escolaId || !id) return;
     setOcupado(true);
@@ -482,7 +483,7 @@ export default function TurmaDetalhe() {
               variante="secundario"
               onClick={baixarCartoesQuest}
               disabled={ocupado}
-              title="Gera o PDF com QR, código e senha de figuras de cada aluno"
+              title="Gera o PDF com o QR e o código de cada aluno, mais a folha do professor"
               className="w-full sm:w-auto"
             >
               <Rocket size={16} aria-hidden /> Cartões do Quest
