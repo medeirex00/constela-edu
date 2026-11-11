@@ -536,7 +536,7 @@ _CERT_TEMPLATE = """<style>
   .divisor .linha { width:120px; height:1.5px; background:#C9A24B; }
   .divisor .losango { width:9px; height:9px; background:#F5B942; transform:rotate(45deg); }
   .intro { font-size:15px; color:#555; letter-spacing:.5px; }
-  .aluno { font-size:40px; font-weight:700; color:#1B2A4A; margin:14px 0 6px; letter-spacing:.5px; text-transform:uppercase; }
+  .aluno { font-size:⟦TAM_ALUNO⟧px; font-weight:700; color:#1B2A4A; margin:14px 0 6px; letter-spacing:.5px; text-transform:uppercase; }
   .sublinhado { width:60%; max-width:520px; height:1.5px; background:#C9A24B; margin:0 auto 16px; }
   .detalhe { font-size:15.5px; color:#444; line-height:1.7; max-width:640px; }
   .detalhe b { color:#1B2A4A; }
@@ -574,6 +574,53 @@ def _esc_html(texto: str) -> str:
             .replace(">", "&gt;").replace("⟦", "").replace("⟧", ""))
 
 
+# Nome do aluno no certificado GERAL (``.aluno``): 40px de sempre, em maiúsculas, na
+# largura do ``.conteudo`` (A4 paisagem, 297mm, menos 40mm de cada lado, a 96 px/pol).
+_LARGURA_ALUNO_CERT_PX = (297 - 2 * 40) * 96 / 25.4
+_TETO_ALUNO_CERT = 40
+_PISO_ALUNO_CERT = 22
+_ESPACO_LETRAS_ALUNO_CERT_PX = 0.5   # o letter-spacing do .aluno
+# A Georgia Bold (a do certificado no Windows) mede ~1,11× a Helvetica Bold em
+# maiúsculas; a serifa do servidor (Liberation Serif, métrica da Times) ~1,02×.
+# 1,2 dá folga às duas.
+_FATOR_SERIFA_ALUNO_CERT = 1.2
+
+
+def _linhas_do_nome_certificado(palavras: list[str], corpo: int) -> int:
+    """Quantas linhas o nome ocupa no ``.aluno`` com o corpo ``corpo``: a quebra
+    gulosa do navegador (palavra que não cabe desce), com a largura de cada
+    palavra pela métrica da Helvetica Bold com a folga da serifa."""
+    def largura(texto: str) -> float:
+        return (corpo * _FATOR_SERIFA_ALUNO_CERT * _largura_em(texto, "helveticaB")
+                + _ESPACO_LETRAS_ALUNO_CERT_PX * len(texto))
+
+    espaco = largura(" ")
+    linhas, atual = 1, 0.0
+    for palavra in palavras:
+        w = largura(palavra)
+        if atual and atual + espaco + w > _LARGURA_ALUNO_CERT_PX:
+            linhas, atual = linhas + 1, w
+        else:
+            atual = atual + espaco + w if atual else w
+    return linhas
+
+
+def _tam_fonte_aluno_certificado(nome: str) -> int:
+    """Corpo (px) do nome do aluno no certificado Geral: o de sempre (40px) enquanto
+    o nome cabe em DUAS linhas; acima disso, o maior corpo em que ele cabe nelas
+    (piso de 22px).
+
+    O nome fica num fluxo de altura livre e a assinatura é absoluta a 26mm do
+    rodapé: um nome em três linhas empurrava "Emitido em" e "Dados das
+    plataformas" para baixo da linha de assinatura. A conta é pela LARGURA medida
+    das palavras (``_linhas_do_nome_certificado``), não pelo número de letras."""
+    palavras = str(nome or "").upper().split()
+    for corpo in range(_TETO_ALUNO_CERT, _PISO_ALUNO_CERT, -1):
+        if _linhas_do_nome_certificado(palavras, corpo) <= 2:
+            return corpo
+    return _PISO_ALUNO_CERT
+
+
 def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
                           turma: str, posicao: int | None, nota_geral: float,
                           ano_letivo: int, logos: tuple[str, str] | None = None,
@@ -591,6 +638,7 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
             .replace("⟦CABECALHO⟧", _cabecalho_logos(logos))
             .replace("⟦MEDALHA⟧", _MEDALHA_SVG)
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
+            .replace("⟦TAM_ALUNO⟧", str(_tam_fonte_aluno_certificado(aluno_nome)))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
             .replace("⟦TURMA⟧", _esc_html(turma or "—"))
             .replace("⟦NOTA⟧", _fmt_nota(nota_geral))
@@ -646,16 +694,17 @@ _PISO_INSTITUICAO = 9
 _PISO_UMA_LINHA = 11          # abaixo disso, duas linhas maiores leem melhor
 
 
-def _largura_em(texto: str) -> float:
+def _largura_em(texto: str, fonte: str = "helvetica") -> float:
     """Largura do texto em "em" pelas métricas da Helvetica (as do fpdf) — que são
     as do Arial e as da Liberation Sans, a fonte com que o Chromium do servidor
     desenha o certificado (Debian com ``fonts-liberation``, sem Trebuchet MS nem
     Segoe UI: a pilha da arte cai no Arial). Onde a Trebuchet MS existe (Windows)
     o mesmo texto sai MAIS ESTREITO, então a medida é conservadora. Caractere fora
-    da tabela (fora do latin-1) conta 1 em, mais largo que qualquer letra."""
+    da tabela (fora do latin-1) conta 1 em, mais largo que qualquer letra.
+    ``fonte`` = a tabela do fpdf (``"helveticaB"`` para o negrito)."""
     from fpdf.fonts import CORE_FONTS_CHARWIDTHS
 
-    larguras = CORE_FONTS_CHARWIDTHS["helvetica"]
+    larguras = CORE_FONTS_CHARWIDTHS[fonte]
     return sum(larguras.get(c, 1000) for c in texto) / 1000
 
 
