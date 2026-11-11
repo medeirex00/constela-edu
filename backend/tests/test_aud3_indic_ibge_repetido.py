@@ -7,7 +7,11 @@ município 3599999 (não existe), INEPs 3599010x e números inventados das fábr
   importações feitas daqui em diante: a rede B não lista, não aplica nem desfaz a
   importação da rede A, e o Ideb oficial de uma escola não some (com o motivo falso
   "cadastrada depois da importação") quando o admin importa o mesmo pacote pela outra rede.
+* (REV3-INDIC-3) O mesmo vale para o ICA, que passa pelo ``pipeline`` (rotas
+  /redes/{id}/indicadores/importacoes e /indicadores/ica/aplicar), e não pelo
+  ``pipeline_seduc`` do Ideb e do SARESP/IEE.
 """
+import pytest
 from sqlalchemy import func, select
 
 from app.models import Escola, ImportacaoIndicador, Rede, ResultadoAvaliacao
@@ -157,3 +161,63 @@ def test_redes_antigas_com_o_mesmo_ibge_nao_escondem_o_iee_uma_da_outra(db, clie
     r = cliente_global.post(
         f"{URL}/{rede_b.id}/indicadores/saresp/importacoes/{imp_a['id']}/desfazer")
     assert r.status_code == 404, r.text
+
+
+def test_redes_antigas_com_o_mesmo_ibge_nao_misturam_as_importacoes_do_ica(db, cliente_global):
+    """REV3-INDIC-3: o ICA (``pipeline``) com duas redes antigas no mesmo município. A rede A
+    faz a prévia e aplica; pela rede B, a importação da A não aparece na lista, não se
+    desfaz (404, nada apagado) e a prévia da A não se aplica (404, nada gravado)."""
+    from app.models import IndicadorReferencia
+    from app.services.indicadores import pipeline
+    from tests.test_indicadores_ica import MUN as MUN_ICA
+    from tests.test_indicadores_ica import arq_mun_2024, arq_mun_2025
+
+    redes = [Rede(nome=f"Rede Inventada Antiga {x}", uf="SP", codigo_ibge=MUN_ICA,
+                  status="ativa") for x in "AB"]
+    db.add_all(redes)
+    db.commit()
+    rede_a, rede_b = redes
+
+    p = pipeline.previa(db, rede_a, arq_mun_2025(), "m2025.xlsx", usuario_id=None)
+    db.commit()
+    aplicada_a = pipeline.aplicar(db, rede_a, p["id"], arq_mun_2025(), "m2025.xlsx",
+                                  usuario_id=None)
+    db.commit()
+    previa_a = pipeline.previa(db, rede_a, arq_mun_2024(), "m2024.xlsx", usuario_id=None)
+    db.commit()
+
+    def numeros():
+        db.expire_all()
+        return sorted((r.edicao, r.indicador, r.abrangencia, r.valor, r.importacao_id)
+                      for r in db.execute(select(IndicadorReferencia)).scalars())
+
+    antes = numeros()
+    assert antes
+
+    # A lista: a B não vê as importações da A; a A vê as dela.
+    lista_b = cliente_global.get(f"{URL}/{rede_b.id}/indicadores/importacoes")
+    assert lista_b.status_code == 200, lista_b.text
+    assert lista_b.json() == []
+    ids_a = {i["id"] for i in cliente_global.get(
+        f"{URL}/{rede_a.id}/indicadores/importacoes").json()}
+    assert {aplicada_a["id"], previa_a["id"]} <= ids_a
+
+    # O desfazer da importação da A pela B: 404 e nada apagado.
+    r = cliente_global.post(
+        f"{URL}/{rede_b.id}/indicadores/importacoes/{aplicada_a['id']}/desfazer")
+    assert r.status_code == 404, r.text
+    assert numeros() == antes
+    assert db.get(ImportacaoIndicador, aplicada_a["id"]).status == "aplicada"
+
+    # A prévia da A não se aplica pela B: LookupError no pipeline, 404 na rota.
+    with pytest.raises(LookupError):
+        pipeline.aplicar(db, rede_b, previa_a["id"], arq_mun_2024(), "m2024.xlsx",
+                         usuario_id=None)
+    db.rollback()
+    r = cliente_global.post(f"{URL}/{rede_b.id}/indicadores/ica/aplicar",
+                            files={"arquivo": ("m2024.xlsx", arq_mun_2024())},
+                            data={"previa_id": str(previa_a["id"])})
+    assert r.status_code == 404, r.text
+    assert numeros() == antes
+    db.expire_all()
+    assert db.get(ImportacaoIndicador, previa_a["id"]).status == "previa"
