@@ -42,12 +42,20 @@ das PRÓXIMAS leituras em diante.
   ("desconhecido", 0 ponto): regravá-lo mudaria o valor da leitura.
 * **NÃO recalcula notas** e não muda nível de livro: o valor gravado é o que a
   leitura já vale hoje.
-* **Corrida com a API**: o ``UPDATE`` só congela a leitura cujo livro AINDA está
-  no nível lido na análise (e a escola fica travada durante a gravação, como na
-  importação). Se o Admin Global corrigir o livro ou a coleta restaurar o nível
-  oficial entre a análise e a gravação, a leitura fica nula — seguindo o nível
-  atual do livro, o mesmo valor de antes — e entra numa próxima passada; a
-  auditoria conta o que foi gravado e quantas ficaram de fora (``puladas``).
+* **Corrida com a API**: a gravação de cada escola segura a trava da escola — a
+  mesma da importação, que a coleta e a correção de livro do Admin Global
+  (PATCH /livros) também pedem —, e o ``UPDATE`` só congela a leitura cujo livro
+  AINDA está no nível lido na análise. Assim, no PostgreSQL (no SQLite a trava não
+  faz nada), as duas ordens possíveis ficam coerentes:
+
+  - a correção (ou a restauração do nível oficial pela coleta) comitada entre a
+    análise e a gravação: a leitura fica nula — seguindo o nível atual do livro, o
+    mesmo valor de antes — e entra numa próxima passada; a auditoria conta o que
+    foi gravado e quantas ficaram de fora (``puladas``);
+  - a correção pedida DURANTE a gravação: espera o commit do script e encontra a
+    leitura já congelada no nível que ela valia; como para toda leitura congelada,
+    a correção vale para as PRÓXIMAS leituras (só ``aplicar_ao_historico`` a
+    reescreve).
 * Leitura cujo livro está SEM nível fica como está (nulo): congelar vazio não
   guarda informação e o fallback já dá o mesmo resultado.
 * ``catalogo_versao`` recebe a versão do catálogo VIGENTE no congelamento — é ela
@@ -252,7 +260,10 @@ def congelar(db, relatorio: RelatorioCongelamento) -> int:
     lido congelaria a leitura no nível VELHO — e ela já valia o novo pelo
     ``coalesce``. A leitura que mudou fica nula (o mesmo valor de antes) e é
     contada em ``puladas``. A trava da escola (a mesma da importação; no-op no
-    SQLite) segura a coleta enquanto as linhas são gravadas."""
+    SQLite) segura, até o commit, a coleta e a correção do Admin Global (o PATCH
+    /livros pede a mesma trava antes de ler o livro): o livro não muda entre o
+    ``UPDATE`` e o commit, e a correção que chega nesse meio espera e encontra a
+    leitura já congelada."""
     bloquear_escola_para_importacao(db, relatorio.escola_id)
     versao = dificuldade_livro.versao_catalogo().get("versao")
     total = 0

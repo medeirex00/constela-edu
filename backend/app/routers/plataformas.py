@@ -952,7 +952,17 @@ def atualizar_livro(
     ``motivo``) é a ação EXPLÍCITA que reescreve o nível congelado das leituras
     deste livro para o nível vigente, audita de/para com a contagem
     (``livro.historico_renivelado``) e recalcula a escola. Sem ele, NADA
-    retroativo acontece."""
+    retroativo acontece.
+
+    A correção entra na FILA da escola (a trava da importação, no-op no SQLite)
+    antes de ler o livro: a coleta e o congelamento de níveis do script
+    (``vincular_livros_catalogo --congelar-niveis``) gravam leituras com o nível
+    do livro segurando essa trava. Sem ela, o PATCH corrigia o livro no meio da
+    gravação e respondia sobre leituras "sem congelamento" que o script, ao
+    comitar, deixava congeladas no nível velho. A trava cai no primeiro commit
+    da rota — antes de ``_aplicar_nivel_ao_historico`` recalcular a escola
+    (nunca pegar a trava do recálculo segurando esta)."""
+    bloquear_escola_para_importacao(db, escola_id)
     livro = db.get(Livro, livro_id)
     if livro is None or livro.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Livro não encontrado.")
