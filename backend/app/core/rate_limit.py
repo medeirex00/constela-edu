@@ -125,6 +125,14 @@ class LimitadorTentativas:
             return max(0, int(self.janela_s - (agora - vivos[excesso])))
 
 
+def minutos_de_espera(segundos: int) -> int:
+    """Os minutos do "Aguarde N minuto(s)" dos 429: ``segundos_restantes``
+    arredondado para CIMA, no mínimo 1. Para baixo, 299 s viravam "4 minutos" e
+    quem voltava no tempo anunciado levava outro 429. Fonte única dos textos do
+    login (por conta, por IP e global) e da reautenticação (admin.py)."""
+    return max(1, -(-int(segundos) // 60))
+
+
 def ip_do_cliente(request) -> str:
     """IP real do cliente, RESISTENTE a spoofing de X-Forwarded-For.
 

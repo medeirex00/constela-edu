@@ -21,6 +21,7 @@ from app.core.rate_limit import (
     limitador_ip_falha_login,
     limitador_login,
     mascarar_ip,
+    minutos_de_espera,
     rede_para_limite,
 )
 from app.core.security import (
@@ -84,8 +85,9 @@ ERRO_MUITAS_GLOBAL = ("O acesso está temporariamente limitado por excesso de "
 
 
 def _erro_muitas(espera_s: int) -> str:
-    """O texto do 429 por (conta, IP), por conta e por IP (o mesmo de sempre)."""
-    return (f"Muitas tentativas. Aguarde {max(1, espera_s // 60) } minuto(s) e "
+    """O texto do 429 por (conta, IP), por conta e por IP (o mesmo de sempre),
+    com os minutos arredondados para cima (``minutos_de_espera``)."""
+    return (f"Muitas tentativas. Aguarde {minutos_de_espera(espera_s)} minuto(s) e "
             "tente novamente.")
 
 
@@ -128,7 +130,7 @@ def _exigir_tetos_de_falha_livres(db: Session, rede: str, entrada: str,
     db.commit()
     raise HTTPException(
         status.HTTP_429_TOO_MANY_REQUESTS,
-        ERRO_MUITAS_GLOBAL.format(minutos=max(1, espera // 60)) if e_global
+        ERRO_MUITAS_GLOBAL.format(minutos=minutos_de_espera(espera)) if e_global
         else _erro_muitas(espera))
 
 

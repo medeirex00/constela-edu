@@ -43,7 +43,12 @@ from app.core.deps import (
     get_usuario_atual,
     negar_secretaria,
 )
-from app.core.rate_limit import identidade_da_conta, liberar_conta, limitador_conta
+from app.core.rate_limit import (
+    identidade_da_conta,
+    liberar_conta,
+    limitador_conta,
+    minutos_de_espera,
+)
 from app.core.security import (
     gerar_token_reset,
     hash_senha,
@@ -263,7 +268,7 @@ def _exigir_senha_atual(db: Session, ator: Usuario, senha_atual: str | None) -> 
     if limitador_conta.bloqueado(identidade):
         espera = limitador_conta.segundos_restantes(identidade)
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
-                            f"Muitas tentativas. Aguarde {max(1, espera // 60)} "
+                            f"Muitas tentativas. Aguarde {minutos_de_espera(espera)} "
                             "minuto(s) e tente novamente.")
     if not senha_atual:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
