@@ -360,7 +360,13 @@ def test_retrato_gravado_chega_a_nota_aos_rankings_e_as_premiacoes(db, cliente, 
             e = next(x for x in esperado if x["aluno_id"] == p["aluno_id"])
             assert p["valor"] == valor(e), (chave, e["i"])
     assert [p["aluno_id"] for p in cats["melhor_leitor"]["podio"]] == ordem
-    # O bloco de frescor da resposta diz de quando é o dado.
+    # O bloco de frescor da resposta diz de quando é o dado. Com o relógio adiantado a
+    # escola já virou o ano e setembro/2026 é de um ano letivo ENCERRADO: o selo, que só
+    # mede as crianças do ano ativo, não vem ali (REV3-PERIODO-1), e a conferência da
+    # data usa o ano letivo de agora.
+    if dados["populacao"]["origem"] == "ano_do_periodo":
+        assert dados["frescor"] is None
+        dados = _get(cliente, f"{API}/escolas/{eid}/premiacoes?periodo=ano_letivo")
     assert dados["frescor"]["dimensoes"]["leitura"]["dado_mais_recente_em"] == dia_coleta.isoformat()
 
 

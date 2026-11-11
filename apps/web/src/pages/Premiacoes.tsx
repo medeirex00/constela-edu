@@ -168,7 +168,9 @@ interface ReguaMatematica {
 
 /** `frescor`: DE QUANDO é o dado dos pódios (`frescor_ranking`, o mesmo bloco
  *  de `/ranking/frescor`, com a população do pódio). Um pódio de "outubro"
- *  montado com a última coleta de 01/10 parece completo e não é.
+ *  montado com a última coleta de 01/10 parece completo e não é. Vem `null` num
+ *  período de um ano já encerrado: o selo só sabe medir as crianças do ano atual, e
+ *  sem selo é melhor que um selo de outra população.
  *  `populacao`: de que ANO LETIVO são as crianças e as turmas dos pódios — num
  *  período de um ano já encerrado (a cerimônia de 2026 depois da virada), as daquele
  *  ano; num período que passa por dois anos, as do ano atual (a tela avisa). */

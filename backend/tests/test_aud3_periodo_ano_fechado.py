@@ -184,6 +184,35 @@ def test_premiacoes_do_ano_fechado_saem_com_as_criancas_e_as_turmas_daquele_ano(
                                   "ano_letivo_ativo": ANO_FECHADO}
 
 
+def _frescor_da_matematica(resp):
+    return ((resp.get("frescor") or {}).get("dimensoes") or {}).get("matematica")
+
+
+def test_selo_de_frescor_das_premiacoes_do_ano_fechado_nao_desmente_o_podio(
+        cliente_global, virada):
+    """REV3-PERIODO-1: o selo "de quando é o dado", logo acima dos pódios, era calculado
+    com as crianças e o contador do Matific do ano ATIVO. Depois da virada dizia
+    "Matemática (Matific): sem dados ainda." ao lado de uma Melhor Matemática com DORA,
+    ANA e BETO (e, com a 1ª coleta de 2027, diria "dados de fev/2027" para um pódio de
+    out–dez/2026). O selo de um ano fechado ou é o daquele ano, ou não aparece."""
+    params = {**PERIODO, "limite": 50}
+    antes = _get(cliente_global, virada, "premiacoes", params)
+    # No ano ativo o selo continua lá, com a coleta de 30/11/2026.
+    assert _frescor_da_matematica(antes)["dado_mais_recente_em"] == "2026-11-30"
+
+    virada["virar"]()
+    depois = _get(cliente_global, virada, "premiacoes", params)
+    assert [n for n, _t in _podio(depois, "melhor_matematica")] == [DORA, ANA, BETO]
+    mat = _frescor_da_matematica(depois)
+    assert mat is None or (mat["estado"], mat["dado_mais_recente_em"]) == (
+        _frescor_da_matematica(antes)["estado"], "2026-11-30"), (
+        f"selo do ano fechado com a população do ano ativo: {mat}")
+
+    # Período do ano ativo ou que atravessa anos: as crianças de agora, o selo de agora.
+    for params_ativo in (ATRAVESSA, DO_ANO_NOVO):
+        assert _get(cliente_global, virada, "premiacoes", params_ativo)["frescor"] is not None
+
+
 def test_regua_do_exemplo_da_pontuacao_e_a_do_ano_fechado(db, virada):
     """O "Quer ver um exemplo?" da Pontuação usa a MESMA régua das premiações."""
     virada["virar"]()

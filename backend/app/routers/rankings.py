@@ -947,7 +947,9 @@ def premiacoes(
 
     ``populacao`` diz de que ano letivo são as crianças e as turmas dos pódios: o
     do período, quando ele cai inteiro num ano letivo já encerrado (a cerimônia de
-    2026 depois da virada); senão, o ativo (``periodos.populacao_do_periodo``)."""
+    2026 depois da virada); senão, o ativo (``periodos.populacao_do_periodo``).
+    ``frescor`` (de quando é o dado) é ``null`` nesse caso do ano encerrado: o selo
+    só sabe medir as crianças do ano ativo."""
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(
@@ -969,8 +971,18 @@ def premiacoes(
     # DE QUANDO é o dado: um pódio de "outubro" montado com a última coleta de
     # 01/10 parece completo e não é. Mesma população do pódio (o professor, as
     # turmas dele) — ver `frescor_ranking`.
-    dados["frescor"] = frescor_ranking.frescor_da_escola(
-        db, escola, hoje_br(), turma_ids=permitidas)
+    #
+    # Num período de um ano letivo JÁ ENCERRADO os pódios saem com as crianças e o
+    # contador do Matific daquele ano, mas `frescor_ranking` só mede o ano ATIVO:
+    # depois da virada o selo dizia "Matemática: sem dados ainda" ao lado de uma
+    # Melhor Matemática completa (e, com a 1ª coleta do ano novo, "dados de
+    # fevereiro" para um pódio de out–dez). Sem selo é melhor que o selo de outra
+    # população: ``null`` (a tela não desenha nada) até o frescor receber o ano.
+    if dados["populacao"]["origem"] == "ano_do_periodo":
+        dados["frescor"] = None
+    else:
+        dados["frescor"] = frescor_ranking.frescor_da_escola(
+            db, escola, hoje_br(), turma_ids=permitidas)
     return dados
 
 
