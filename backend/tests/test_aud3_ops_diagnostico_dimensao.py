@@ -18,6 +18,7 @@ do motor. Dados INVENTADOS, datas fixas no ano da escola.
 """
 import contextlib
 import io
+import sys
 from datetime import datetime
 
 from sqlalchemy import select
@@ -107,7 +108,8 @@ def _contagem_do_motor(db, esc):
     scoring.recalcular_escola(db, esc.id)
     notas = db.execute(select(Nota).where(Nota.escola_id == esc.id,
                                           Nota.ano_letivo == ANO)).scalars().all()
-    c = {"total": 0, "ambas": 0, "so_matific": 0, "so_elefante": 0, "nenhuma": 0}
+    c = {"total": 0, "ambas": 0, "so_contratado": 0, "so_matific": 0, "so_elefante": 0,
+         "nenhuma": 0}
     for n in notas:
         dims = n.detalhes["dimensoes"]
         le, ma = dims["leitura"]["aferido"], dims["matematica"]["aferido"]
@@ -131,7 +133,8 @@ def test_diagnostico_conta_a_populacao_e_o_aferido_do_motor(db):
 
     # Fases fora: só as 4 do 3º ano; Ana (Matific de outro ano) e Dani são "Matific
     # ausente"; Eva (leitura itemizada) tem as duas; ninguém é "Leitura ausente".
-    assert r == {"total": 4, "ambas": 2, "so_matific": 0, "so_elefante": 2, "nenhuma": 0}
+    assert r == {"total": 4, "ambas": 2, "so_contratado": 0, "so_matific": 0,
+                 "so_elefante": 2, "nenhuma": 0}
     assert "Ana Inventada Diagnostico" in texto        # a lista mostra a criança do caso
     assert "Caio Inventado Diagnostico" not in texto and "Gil Inventado" not in texto
     # e é exatamente o que o motor grava
@@ -141,7 +144,8 @@ def test_diagnostico_conta_a_populacao_e_o_aferido_do_motor(db):
 def test_diagnostico_ignora_a_dimensao_que_a_rede_nao_contratou(db):
     """Rede só com Leitura: a Matemática não existe para a escola (o motor não afere
     ninguém nela e ninguém fica "sem Matemática"). Ter Elefante é estar completo; a
-    criança de Matific de outro ano não vira candidata ao bug."""
+    criança de Matific de outro ano não vira candidata ao bug. Completo aqui não é ter
+    "as duas" (REV3-OPS-1): conta em "so_contratado", não em "ambas"."""
     rede = Rede(nome="Rede Fictícia Só Leitura Diagnóstico", codigo_ibge="3599971")
     db.add(rede)
     db.flush()
@@ -153,4 +157,82 @@ def test_diagnostico_ignora_a_dimensao_que_a_rede_nao_contratou(db):
 
     assert r["total"] == 4
     assert r["so_matific"] == 0 and r["so_elefante"] == 0     # nenhuma candidata
-    assert r["ambas"] == 4 and r["nenhuma"] == 0              # Ana, Beto, Dani e Eva leem
+    assert r["so_contratado"] == 4 and r["nenhuma"] == 0      # Ana, Beto, Dani e Eva leem
+    assert r["ambas"] == 0                                    # e nenhuma tem as duas
+
+
+# REV3-OPS-1 — o bloco TOTAL de main() somava, na linha "AMBAS", as crianças da rede de
+# um módulo só (aferidas no único módulo contratado). No uso documentado (todas as
+# escolas, ou --rede), o TOTAL dizia que elas tinham as duas dimensões quando a outra
+# nem existe na rede delas.
+
+ROTULO_UM_MODULO = "aferido no único módulo contratado (rede de um módulo)"
+
+
+def _rede_so_leitura(db, codigo_ibge):
+    rede = Rede(nome=f"Rede Fictícia Só Leitura {codigo_ibge}", codigo_ibge=codigo_ibge)
+    db.add(rede)
+    db.flush()
+    db.add(ModuloRede(rede_id=rede.id, modulo="matematica", ativo=False))
+    return rede
+
+
+def _rodar_main(db, monkeypatch, *argumentos):
+    monkeypatch.setattr(diag, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["diagnostico_dimensao_zero", *argumentos])
+    saida = io.StringIO()
+    with contextlib.redirect_stdout(saida):
+        assert diag.main() == 0
+    return saida.getvalue()
+
+
+def _bloco_total(texto):
+    """{rótulo: número} das linhas do bloco TOTAL (sem os pontinhos do alinhamento)."""
+    bloco = texto.split("===== TOTAL =====", 1)[1]
+    linhas = {}
+    for linha in bloco.strip().splitlines():
+        rotulo, _, valor = linha.strip().rpartition(" ")
+        linhas[rotulo.rstrip(". ")] = int(valor)
+    return linhas
+
+
+def test_total_da_rede_de_um_modulo_nao_diz_ambas(db, monkeypatch):
+    """Rede só com Leitura, rodada com --rede: as 4 crianças pontuadas leem, nenhuma
+    tem as duas dimensões (a Matemática nem existe ali)."""
+    rede = _rede_so_leitura(db, "3599973")
+    esc, t3, fase, imp_m, imp_e = _escola(db, rede_id=rede.id)
+    _povoar(db, esc, t3, fase, imp_m, imp_e)
+
+    texto = _rodar_main(db, monkeypatch, "--rede", str(rede.id))
+    total = _bloco_total(texto)
+
+    assert total["AMBAS"] == 0
+    assert total[ROTULO_UM_MODULO] == 4
+    assert total["alunos"] == 4
+    assert total["candidatos ao bug"] == 0
+    # a linha da escola continua dizendo o mesmo que o total
+    assert "aferido no módulo contratado ...... 4" in texto
+
+
+def test_total_de_todas_as_escolas_separa_as_redes_de_um_modulo(db, monkeypatch):
+    """Todas as escolas (sem filtro): uma escola com os dois módulos e uma de rede só
+    com Leitura, com as mesmas crianças. "AMBAS" conta só a dos dois módulos (Beto e
+    Eva); as 4 da rede de um módulo ficam na linha própria; as contas fecham."""
+    _escola_dois, *resto_dois = _escola(db)
+    _povoar(db, _escola_dois, *resto_dois)
+    rede = _rede_so_leitura(db, "3599974")
+    esc_um, *resto_um = _escola(db, rede_id=rede.id)
+    _povoar(db, esc_um, *resto_um)
+
+    total = _bloco_total(_rodar_main(db, monkeypatch))
+
+    assert total["AMBAS"] == 2
+    assert total[ROTULO_UM_MODULO] == 4
+    assert total["SÓ Elefante (Mat. 0)"] == 2           # Ana e Dani, da escola dos dois
+    assert total["SÓ Matific (Leit. 0)"] == 0
+    assert total["nenhuma"] == 0
+    assert total["candidatos ao bug"] == 2
+    assert total["alunos"] == 8 == (
+        total["AMBAS"] + total[ROTULO_UM_MODULO] + total["SÓ Elefante (Mat. 0)"]
+        + total["SÓ Matific (Leit. 0)"] + total["nenhuma"])

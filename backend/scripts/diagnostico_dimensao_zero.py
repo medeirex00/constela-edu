@@ -17,7 +17,10 @@ As três semânticas do zero (spec §12.4):
   * AMBAS ausentes      -> aluno sem nenhuma plataforma (0/0 legítimo);
   * SÓ Matific presente -> Leitura 0 é ausência (candidato ao bug se ele LÊ no Elefante);
   * SÓ Elefante presente-> Matific 0 é ausência (candidato ao bug — é o caso LIVIA);
-  * AMBAS presentes     -> completo (na rede com um módulo só: aferido nele).
+  * AMBAS presentes     -> completo.
+Na rede com um módulo só, quem é aferido nele está completo, mas NÃO tem "as duas":
+conta numa linha própria ("aferido no único módulo contratado"), também no TOTAL — senão
+o "AMBAS" do total dizia que crianças de uma rede sem Matemática tinham as duas.
 
 O "candidato ao bug" (uma dimensão presente, outra ausente) é o que a correção do
 pipeline ataca: nome do export que é SUBCONJUNTO do nome da Lista Piloto ia a REVISÃO e
@@ -48,6 +51,11 @@ from app.services import scoring  # noqa: E402
 from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 
+# Contadores por escola e do TOTAL. "ambas" é só das escolas com os dois módulos;
+# "so_contratado" é quem é aferido no único módulo de uma rede de um módulo só.
+CHAVES = ("total", "ambas", "so_contratado", "so_matific", "so_elefante", "nenhuma")
+
+
 def _subconjuntos_vinculados(db, escola_id: int) -> list[tuple]:
     """Lista os vínculos automáticos por SUBCONJUNTO (correspondencia="parcial") —
     exatamente os que a correção nova cria. É a LISTA para o dono validar/reverter:
@@ -72,21 +80,22 @@ def _diagnostico_escola(db, escola_id: int, nome: str, ano: int, listar: int) ->
     # outro ano como "aferido", leitura itemizada sem retrato como "Leitura 0").
     contexto = scoring._carregar_contexto(db, escola_id)
     if contexto is None:
-        return {"total": 0, "ambas": 0, "so_matific": 0, "so_elefante": 0, "nenhuma": 0}
+        return dict.fromkeys(CHAVES, 0)
     escola, _ano, matriculas, matific, elefante, _pontos = contexto
     contratadas = scoring.dimensoes_contratadas(db, escola)
     duas_dimensoes = len(contratadas) == len(scoring.DIMENSOES)
     linhas = [(m.aluno_id, m.aluno.nome, t.nome) for m, t in matriculas]
 
     total = len(linhas)
-    so_matific, so_elefante, ambas, nenhuma = [], [], 0, 0
+    so_matific, so_elefante, ambas, so_contratado, nenhuma = [], [], 0, 0, 0
     for aid, anome, tnome in linhas:
         m, e = aid in matific, aid in elefante
         if not duas_dimensoes:
             # Um módulo só: a outra dimensão não existe aqui (o motor não afere
-            # ninguém nela) — quem tem a contratada está completo.
+            # ninguém nela) — quem tem a contratada está completo, mas não tem "as
+            # duas": conta à parte, para o TOTAL não somá-lo em "AMBAS".
             if m or e:
-                ambas += 1
+                so_contratado += 1
             else:
                 nenhuma += 1
             continue
@@ -109,7 +118,7 @@ def _diagnostico_escola(db, escola_id: int, nome: str, ano: int, listar: int) ->
     if duas_dimensoes:
         print(f"  AMBAS as dimensões ................ {ambas}")
     else:
-        print(f"  aferido no módulo contratado ...... {ambas}")
+        print(f"  aferido no módulo contratado ...... {so_contratado}")
     print(f"  SÓ Matific  -> Leitura 0 (ausente) . {len(so_matific)}")
     print(f"  SÓ Elefante -> Matific 0 (ausente) . {len(so_elefante)}   <- retrato do caso LIVIA")
     print(f"  nenhuma dimensão (0/0) ............ {nenhuma}")
@@ -126,8 +135,9 @@ def _diagnostico_escola(db, escola_id: int, nome: str, ano: int, listar: int) ->
         _amostra("SÓ Elefante (Matific 0)", so_elefante)
         _amostra("SÓ Matific (Leitura 0)", so_matific)
 
-    return {"total": total, "ambas": ambas, "so_matific": len(so_matific),
-            "so_elefante": len(so_elefante), "nenhuma": nenhuma}
+    return {"total": total, "ambas": ambas, "so_contratado": so_contratado,
+            "so_matific": len(so_matific), "so_elefante": len(so_elefante),
+            "nenhuma": nenhuma}
 
 
 def main() -> int:
@@ -149,7 +159,7 @@ def main() -> int:
             consulta = consulta.where(Escola.rede_id == args.rede)
         escolas = db.execute(consulta).all()
 
-        tot = {"total": 0, "ambas": 0, "so_matific": 0, "so_elefante": 0, "nenhuma": 0}
+        tot = dict.fromkeys(CHAVES, 0)
         total_subconj = 0
         for escola_id, nome, ano in escolas:
             r = _diagnostico_escola(db, escola_id, nome, ano or 0, args.listar)
@@ -165,7 +175,10 @@ def main() -> int:
 
         print("\n===== TOTAL =====")
         print(f"  alunos ................ {tot['total']}")
+        # "AMBAS" é só das redes com os dois módulos; quem é aferido no único módulo
+        # da rede dele fica na linha própria (não tem "as duas").
         print(f"  AMBAS ................. {tot['ambas']}")
+        print(f"  aferido no único módulo contratado (rede de um módulo) .. {tot['so_contratado']}")
         print(f"  SÓ Matific (Leit. 0) .. {tot['so_matific']}")
         print(f"  SÓ Elefante (Mat. 0) .. {tot['so_elefante']}")
         print(f"  nenhuma ............... {tot['nenhuma']}")
