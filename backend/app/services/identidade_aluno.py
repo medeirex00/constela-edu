@@ -248,6 +248,11 @@ class LinhaIdentidade:
     # A plataforma não entregou o nome COMPLETO, só o abreviado (Matific: o uuid
     # não veio no student-leaderboard). Marcado pelo analisador da API.
     nome_incompleto: bool = False
+    # A turma que o RELATÓRIO informa, separada do DESTINO: com a turma escolhida
+    # (``turma_id``), ``turma_nome`` é o nome dela, e a etapa do relatório se perdia
+    # — a checagem de etapa comparava a turma escolhida com ela mesma. Vazio quando
+    # o relatório não informa turma (aí não há etapa para comparar).
+    turma_relatorio: str = ""
 
 
 def _chamada(dados: dict) -> int | None:
@@ -268,17 +273,37 @@ def _nascimento(dados: dict) -> date | None:
 
 def linha_de_dados(nome: str, dados: dict | None, *, plataforma: str | None = None,
                    turma_nome: str = "", turma_id: int | None = None,
-                   aluno_id: int | None = None) -> LinhaIdentidade:
+                   aluno_id: int | None = None,
+                   turma_relatorio: str | None = None) -> LinhaIdentidade:
     """Monta a ``LinhaIdentidade`` a partir da linha importada — UM só lugar, usado
-    pela prévia e pela confirmação (mesmos campos, mesma normalização)."""
+    pela prévia e pela confirmação (mesmos campos, mesma normalização).
+
+    ``turma_relatorio``: a turma que o relatório informa. Sem ela (None), vale a
+    própria ``turma_nome`` quando a linha não tem turma escolhida — na prévia são a
+    mesma coisa; com a turma escolhida, quem chama informa a do relatório."""
     dados = dados or {}
     plat = plataforma_da_linha(dados, plataforma)
+    if turma_relatorio is None:
+        turma_relatorio = turma_nome if turma_id is None else ""
     return LinhaIdentidade(
         nome=nome or "", plataforma=plat, id_externo=id_externo_da_linha(plat, dados),
         turma_nome=(turma_nome or "").strip(), turma_id=turma_id,
         ra=str(dados.get("ra") or "").strip(), chamada=_chamada(dados),
         nascimento=_nascimento(dados), aluno_id=aluno_id,
-        nome_incompleto=dados.get("nome_incompleto") is True)
+        nome_incompleto=dados.get("nome_incompleto") is True,
+        turma_relatorio=(turma_relatorio or "").strip())
+
+
+def turma_de_outra_etapa(turma_relatorio: str, turma) -> bool:
+    """A turma de DESTINO é de outra etapa que a turma do RELATÓRIO (Educação
+    Infantil × Fundamental — ``matriculas.etapa_da_sala``)? A do relatório lida pelo
+    nome; a de destino pelo nome e pelo ``ano_escolar``. Sem turma no relatório não
+    há base: não é de outra etapa."""
+    from app.services.matriculas import etapa_da_sala
+    if not (turma_relatorio or "").strip() or turma is None:
+        return False
+    return (etapa_da_sala(turma_relatorio)
+            != etapa_da_sala(turma.nome, getattr(turma, "ano_escolar", "") or ""))
 
 
 @dataclass(frozen=True)

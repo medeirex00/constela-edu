@@ -1043,12 +1043,13 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     # Também a ETAPA: "1 ANO A …" não nasce na "1ºA" de ano_escolar "1ª Fase" (é o
     # nome que ``nome_turma_exibicao`` dá a "Fase 1A"/"Pré 1 A"): série e letra
     # batem, a etapa não — antes a ficha nascia na Educação Infantil, sem revisão.
+    # A comparação é entre a turma do RELATÓRIO e a de destino: com a turma
+    # escolhida, ``turma_nome`` é o nome dela — comparar com ele era comparar a
+    # turma com ela mesma.
     motivo_turma = ("turma_fora_do_ano_letivo" if turma.ano_letivo != ano
                     else "turma_arquivada" if not ida.turma_ativa(turma)
-                    else "turma_de_outra_etapa" if (
-                        str(turma_nome).strip()
-                        and matriculas.etapa_da_sala(str(turma_nome))
-                        != matriculas.etapa_da_sala(turma.nome, turma.ano_escolar or ""))
+                    else "turma_de_outra_etapa" if ida.turma_de_outra_etapa(
+                        ident.turma_relatorio, turma)
                     else "")
     if motivo_turma:
         _enfileirar_revisao(db, escola_id, ctx, ident,
@@ -1126,10 +1127,14 @@ def _identidade_da_linha(db: Session, escola_id: int, linha, plataforma: str | N
     turma_nome = (turma_explicita.nome if turma_explicita is not None
                   else getattr(linha, "criar_em_turma_nome", None)
                   or dados.get("turma_relatorio") or "")
+    # A turma do RELATÓRIO, separada do destino (a escolhida, ou a que o nome
+    # pede): é contra ela que se confere a etapa do destino.
+    turma_relatorio = str(dados.get("turma_relatorio")
+                          or getattr(linha, "criar_em_turma_nome", None) or "")
     ident = ida.linha_de_dados(
         linha.nome, dados, plataforma=plataforma, turma_nome=str(turma_nome),
         turma_id=turma_explicita.id if turma_explicita is not None else None,
-        aluno_id=linha.aluno_id)
+        aluno_id=linha.aluno_id, turma_relatorio=turma_relatorio)
     if getattr(linha, "numero_chamada", None) is not None:
         ident = replace(ident, chamada=linha.numero_chamada)
     return ident, str(turma_nome), False
