@@ -12,15 +12,23 @@ Levantado por busca em `backend/app` e `backend/scripts` (`UPLOADS_DIR`, `EXPORT
 
 | # | Onde (código) | O que grava | Caminho | Classe | Se sumir num deploy |
 |---|---|---|---|---|---|
-| 1 | `routers/importacoes.py` `_guardar_temporario` (também usado por `sync/orchestrator.py`) | original do relatório (PDF/XLSX) entre "analisar" e "confirmar" | `UPLOADS_DIR/temporarios/<uuid>.pdf\|xlsx` | **temporário** (expira em 24 h; limpo a cada análise) | a confirmação segue; só não arquiva o original (`origem.exists()` falso) |
+| 1 | `routers/importacoes.py` `_guardar_temporario` (também usado por `sync/orchestrator.py`) | original do relatório (PDF/XLSX) entre "analisar" e "confirmar" | `UPLOADS_DIR/temporarios/<uuid>.pdf\|xlsx` | **temporário** (expira em 24 h; some em até 25 h pelo expurgo de fundo, ver abaixo) | a confirmação segue; só não arquiva o original (`origem.exists()` falso) |
 | 2 | `routers/importacoes.py` `_confirmar_sem_commit` (rota "confirmar") | o mesmo original, movido para o arquivo definitivo | `UPLOADS_DIR/<plataforma>/<AAAAMMDD_HHMMSS>_<nome>`; o caminho vai em `importacoes.arquivo_original` | **deveria persistir** (evidência da importação) — mas a API **nunca relê** esse arquivo e nenhuma tela o mostra | perde-se a evidência; nada quebra |
-| 3 | `routers/relatorios.py` `_arquivar_copia` | cópia de cada relatório exportado (CSV/XLSX/PDF, com nomes de alunos) | `EXPORTS_DIR/<nome>` | **cópia descartável** (retenção `EXPORTS_RETENCAO_DIAS=7`; o download nunca depende dela) | nada (LGPD até prefere) |
+| 3 | `routers/relatorios.py` `_arquivar_copia` | cópia de cada relatório exportado (CSV/XLSX/PDF, com nomes de alunos) | `EXPORTS_DIR/<nome>` | **cópia descartável** (retenção `EXPORTS_RETENCAO_DIAS=7`, aplicada pelo expurgo de fundo, ver abaixo; o download nunca depende dela) | nada (LGPD até prefere) |
 | 4 | Starlette `UploadFile` | corpo de upload acima de 1 MB | temporário do sistema (`/tmp`) | temporário do processo | nada |
 | 5 | `sync/connectors/navegador.py` (Playwright `download.path()`) | relatório baixado pelo robô, lido para a memória | pasta temporária do Playwright | temporário do navegador | nada |
 | 6 | Playwright / `HOME=/home/app` | navegador e cache | `/ms-playwright` (imagem), `/home/app` | da imagem / cache | nada |
 | 7 | `core/config.py` (SQLite padrão) | banco | `database/sgpe.db` | só desenvolvimento (produção recusa SQLite) | — |
 | — | `services/indicadores/preparar.py --saida`, `scripts/auditar_notas_elefante.py --json`, `scripts/gerar_catalogo_elefante.py` | pacotes/relatórios de linha de comando | onde o operador mandar | ferramenta local, **não** roda na API | — |
 | — | logs | — | **stdout** (sem arquivo; quem guarda é o Railway, pelo prazo do plano) | — | — |
+
+**Expurgo por prazo (#1 e #3).** `core/expurgo_arquivos.py` apaga a prévia não confirmada
+com mais de 24 h e a cópia de relatório com mais de `EXPORTS_RETENCAO_DIAS` (0 desliga só
+esta). Roda numa thread por processo: uma passada logo no boot e depois a cada hora, sem
+depender de alguém analisar ou exportar de novo (antes, o prazo só valia nessas ações, e nas
+férias ou numa escola que importa pouco o arquivo ficava sem prazo). O prazo efetivo é o
+prazo mais até uma hora. Ficam de fora os originais confirmados (#2, prazo a decidir: ver a
+seção 5), os arquivos que começam com ponto (`.gitkeep`) e as subpastas de `EXPORTS_DIR`.
 
 Logs não ficam no disco, mas ficam guardados fora dele (Railway). Até este pacote, a
 linha de acesso do uvicorn levava a URL crua — token do painel público, token do link

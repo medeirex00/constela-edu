@@ -18,7 +18,7 @@ from app.core.config import registrar_avisos_de_configuracao, settings
 from app.core import observabilidade as obs
 from app.core.cabecalhos import CabecalhosSegurancaMiddleware
 from app.core.limite_corpo import LimiteDeCorpoMiddleware
-from app.core import mantenedor_do_pool
+from app.core import expurgo_arquivos, mantenedor_do_pool
 from app.core.database import engine, garantir_dados_base, get_db
 from app.core.deps import negar_secretaria
 from app.core.prontidao import prontidao
@@ -318,6 +318,21 @@ def _ligar_mantenedor_do_pool() -> None:
 @app.on_event("shutdown")
 def _parar_mantenedor_do_pool() -> None:
     mantenedor_do_pool.parar()
+
+
+# Expurgo dos arquivos com prazo (prévia não confirmada: 24 h; cópia de relatório
+# exportado: EXPORTS_RETENCAO_DIAS): uma thread por worker, com uma passada logo no boot e
+# depois a cada hora. Antes o prazo só valia quando alguém analisava ou exportava de novo.
+# Só mexe em arquivo (nada no banco), então sobe mesmo com o schema errado. Nunca derruba o
+# boot nem a API. Ver app/core/expurgo_arquivos.py.
+@app.on_event("startup")
+def _ligar_expurgo_de_arquivos() -> None:
+    expurgo_arquivos.iniciar()
+
+
+@app.on_event("shutdown")
+def _parar_expurgo_de_arquivos() -> None:
+    expurgo_arquivos.parar()
 
 
 # --- Health checks e métricas (SaaS) -----------------------------------------
