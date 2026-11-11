@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("constela.sync")
@@ -247,23 +247,41 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
     # quando libera, ela commita, e o que já estivesse carregado seria relido.
     service.liberar_fila_sem_agendador(db, escola_id)
 
-    alunos_ativos = select(func.count(Aluno.id)).where(
-        Aluno.escola_id == escola_id, Aluno.status == "ativo").scalar_subquery()
-    turmas = select(func.count(Turma.id)).where(Turma.escola_id == escola_id).scalar_subquery()
+    # Alunos e turmas do ANO LETIVO ATIVO, pela regra de /alunos (ativo e matriculado
+    # no ano) e de /turmas (do ano e não arquivada) — a mesma do painel da rede
+    # (services/rede.py). Antes eram todo aluno 'ativo' e toda turma de qualquer ano:
+    # na virada, o "Comece aqui" e Integrações somavam os dois anos. O ano vem de um
+    # ALIAS da escola (subconsulta na mesma ida), para não correlacionar com a escola
+    # da consulta principal nem cruzar escolas quando ela não está no FROM.
+    escola_do_ano = aliased(Escola)
+    ano_ativo_da_escola = (select(escola_do_ano.ano_letivo_ativo)
+                           .where(escola_do_ano.id == escola_id).scalar_subquery())
+    alunos_ativos = (select(func.count(Aluno.id)).select_from(Aluno)
+                     .join(Matricula, Matricula.aluno_id == Aluno.id)
+                     .where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
+                            Matricula.ano_letivo == ano_ativo_da_escola)
+                     .scalar_subquery())
+    turmas = select(func.count(Turma.id)).where(
+        Turma.escola_id == escola_id, Turma.ano_letivo == ano_ativo_da_escola,
+        Turma.status == "ativa").scalar_subquery()
+    # O sinal do onboarding continua "a escola já tem turmas" (de qualquer ano), o
+    # mesmo do /onboarding: voltar a pedir a Lista Piloto na virada é decisão de
+    # produto, não desta contagem.
+    tem_turma = select(Turma.id).where(Turma.escola_id == escola_id).exists()
     pendencias = _consulta_pendencias(escola_id, agora).scalar_subquery()
     # O CONTRATO da rede vem na mesma consulta da escola (uma coluna por módulo):
     # antes, a escola de rede relia ``modulos_rede`` uma vez por plataforma com
     # agenda (``plataforma_no_plano``) — 2 idas a mais que a avulsa.
-    linha = db.execute(select(Escola, alunos_ativos, turmas, pendencias,
+    linha = db.execute(select(Escola, alunos_ativos, turmas, tem_turma, pendencias,
                               *svc_modulos.colunas_do_contrato(Escola.rede_id))
                        .where(Escola.id == escola_id)).one_or_none()
     if linha is None:   # removida no meio da requisição: os números, sem a escola
         escola = None
-        qtd_alunos, qtd_turmas, qtd_pendencias = db.execute(
-            select(alunos_ativos, turmas, pendencias)).one()
+        qtd_alunos, qtd_turmas, com_turma, qtd_pendencias = db.execute(
+            select(alunos_ativos, turmas, tem_turma, pendencias)).one()
         modulos = svc_modulos.modulos_da_escola(db, None)
     else:
-        escola, qtd_alunos, qtd_turmas, qtd_pendencias, *desligados = linha
+        escola, qtd_alunos, qtd_turmas, com_turma, qtd_pendencias, *desligados = linha
         modulos = svc_modulos.modulos_das_colunas(desligados)
     qtd_alunos, qtd_turmas = qtd_alunos or 0, qtd_turmas or 0
     escola_nome = escola.nome if escola else ""
@@ -348,7 +366,7 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
     return EscolaStatus(escola_id=escola_id, escola_nome=escola_nome,
                         qtd_alunos=qtd_alunos, qtd_turmas=qtd_turmas,
                         plataformas=plataformas, alertas_abertos=abertos,
-                        lista_piloto_importada=qtd_turmas > 0,
+                        lista_piloto_importada=bool(com_turma),
                         integracao_configurada=len(creds) > 0,
                         agendador_ativo=agendador,
                         pendencias_correspondencia_30d=int(qtd_pendencias or 0))

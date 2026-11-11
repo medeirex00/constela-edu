@@ -2744,8 +2744,8 @@
      "validada_em": null
     }
    ],
-   "qtd_alunos": 1,
-   "qtd_turmas": 1
+   "qtd_alunos": 0,
+   "qtd_turmas": 0
   },
   {
    "agendador_ativo": false,
@@ -2821,8 +2821,8 @@
      "validada_em": null
     }
    ],
-   "qtd_alunos": 1,
-   "qtd_turmas": 1
+   "qtd_alunos": 0,
+   "qtd_turmas": 0
   }
  ]
 }

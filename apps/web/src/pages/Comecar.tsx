@@ -38,6 +38,7 @@ interface PlataformaStatus {
   plataforma: string; conectada: boolean; credencial_status: string;
 }
 interface EscolaStatus {
+  // qtd_alunos e qtd_turmas são do ANO LETIVO ATIVO (como /alunos e /turmas).
   escola_id: number; escola_nome: string; qtd_alunos: number; qtd_turmas: number;
   plataformas: PlataformaStatus[]; lista_piloto_importada: boolean;
   integracao_configurada: boolean;
@@ -133,7 +134,7 @@ export default function Comecar() {
               <h2 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white">{s.escola_nome || "Sua escola"}</h2>
               <p className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-full bg-indigo-50 px-3.5 py-1.5 text-sm font-medium text-indigo-800 tabular-nums dark:bg-indigo-500/15 dark:text-indigo-200">
                 <GraduationCap size={15} aria-hidden />
-                {s.qtd_turmas} turma(s) · {s.qtd_alunos} aluno(s) cadastrados.
+                {s.qtd_turmas} turma(s) · {s.qtd_alunos} aluno(s) cadastrados no ano letivo atual.
               </p>
               <p className="mt-4 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
                 Vamos importar a lista da escola (uma aba por turma), criar as turmas e
@@ -162,7 +163,7 @@ export default function Comecar() {
           <CabecalhoPasso icone={Users} titulo="Turmas e alunos (Lista Piloto)" />
           {s.lista_piloto_importada && (
             <Mensagem tipo="ok">
-              Já há {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s). Você pode importar
+              Já há {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) no ano letivo atual. Você pode importar
               outra planilha para complementar ou seguir para as integrações.
             </Mensagem>
           )}
@@ -245,7 +246,7 @@ export default function Comecar() {
             </span>
             <h2 className="mt-4 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">Escola pronta!</h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-zinc-600 dark:text-zinc-300">
-              {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) cadastrados
+              {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) cadastrados no ano letivo atual
               {s.integracao_configurada
                 ? " e as plataformas conectadas. As atualizações podem rodar automaticamente."
                 : ". Você pode conectar as plataformas quando quiser em Integrações."}
