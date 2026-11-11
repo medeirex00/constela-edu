@@ -1,0 +1,30 @@
+[
+  {
+    "id": 2,
+    "nome": "1ª Fase A",
+    "ano_escolar": "1ª Fase",
+    "ano_letivo": 2026,
+    "professor_id": null,
+    "turno": null,
+    "capacidade_maxima": null,
+    "observacoes": null,
+    "status": "ativa",
+    "professor_nome": null,
+    "total_alunos": 0,
+    "total_matriculas": 0
+  },
+  {
+    "id": 1,
+    "nome": "3º Ano A",
+    "ano_escolar": "3º Ano",
+    "ano_letivo": 2026,
+    "professor_id": null,
+    "turno": null,
+    "capacidade_maxima": null,
+    "observacoes": null,
+    "status": "ativa",
+    "professor_nome": null,
+    "total_alunos": 3,
+    "total_matriculas": 3
+  }
+]

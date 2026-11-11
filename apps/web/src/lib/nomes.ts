@@ -8,31 +8,36 @@ export function normalizar(nome: string): string {
     .toLowerCase();
 }
 
-// Palavras genéricas que NÃO distinguem uma turma de outra da mesma série.
-const GENERICOS = new Set([
-  "ano", "serie", "anual", "manha", "tarde", "noite", "integral", "turma",
-  "de", "do", "da", "pre", "i", "ii",
-]);
+// Número da série + ordinal opcional + "ano/série" opcional + a LETRA da sala como
+// palavra inteira (nunca o "a" de "ano", "fase" ou "tarde") — o ``_RE_CANON`` de
+// ``backend/app/services/matriculas.py``.
+const RE_SERIE_LETRA = /(\d+)\s*[ºªo°]?\s*(?:ano|serie)?\s*\b([a-z])\b/i;
 
-/** Turma cujo nome bate com o lido do PDF. Exige que os tokens distintivos
- *  (letra da turma, número da série) coincidam e que a correspondência seja
- *  ÚNICA — senão "5 Ano B" casaria por engano com "5 Ano A". */
+/** Chave da SALA de uma turma pelo nome — a regra de ``chave_turma_norm`` do backend
+ *  (``services/matriculas.py``): série e letra INTEIRAS ("1 ANO A TARDE ANUAL
+ *  (300302821)", "1ºA" e "1A" → "1|A"), sem o turno e sem o código entre parênteses.
+ *  Nome sem série+letra (Maternal, Pré, EJA, "1ª Fase A"…) fica com o nome
+ *  normalizado: só casa com ele mesmo. */
+export function chaveDaSala(nome: string): string {
+  const espacado = (nome ?? "").replace(/(\d)([A-Za-z])/g, "$1 $2");
+  const limpo = espacado.replace(/\(.*?\)/g, " ").replace(/[ºª°]/g, " ");
+  const base = normalizar(limpo);
+  const m = RE_SERIE_LETRA.exec(base);
+  return m ? `${m[1]}|${m[2].toUpperCase()}` : base;
+}
+
+/** A turma cadastrada da SALA do nome lido no relatório, quando ela é ÚNICA: série e
+ *  letra inteiras (``chaveDaSala``), como o backend casa a sala. Sem turma da sala, ou
+ *  com mais de uma ("5º Ano A Manhã" e "5º Ano A Tarde"), devolve null — quem chama
+ *  não adivinha. O destino do aluno novo NÃO sai daqui: é a turma que a prévia do
+ *  backend decidiu (``correspondencia.turma_id``/``turma_nova``). */
 export function acharTurmaPorNome<T extends { id: number; nome: string }>(
   turmas: T[],
   nomeDetectado: string,
 ): number | null {
-  if (!nomeDetectado) return null;
-  const limpar = (s: string) => normalizar(s).replace(/[ºª°]/g, "");
-  const alvo = limpar(nomeDetectado);
-  const exata = turmas.find((t) => limpar(t.nome) === alvo);
-  if (exata) return exata.id;
-
-  const distintivos = alvo.split(" ").filter((t) => t.length > 0 && !GENERICOS.has(t));
-  if (distintivos.length === 0) return null;
-  const candidatas = turmas.filter((t) => {
-    const nome = ` ${limpar(t.nome)} `;
-    return distintivos.every((tk) => nome.includes(` ${tk} `) || nome.includes(tk));
-  });
+  if (!nomeDetectado || !nomeDetectado.trim()) return null;
+  const alvo = chaveDaSala(nomeDetectado);
+  const candidatas = turmas.filter((t) => chaveDaSala(t.nome) === alvo);
   return candidatas.length === 1 ? candidatas[0].id : null;
 }
 

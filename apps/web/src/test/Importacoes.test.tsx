@@ -97,6 +97,20 @@ function analiseFake(): Analise {
   };
 }
 
+/** A prévia real dos motivos com a turma do CABEÇALHO trocada — e, como o backend
+ *  responde com esse cabeçalho, a turma da ficha nova do aluno sem ficha: a cadastrada
+ *  (``turma_id``) ou a que a confirmação cria (``turma_nova``). A tela lê a turma da
+ *  correspondência, não a adivinha pelo nome do cabeçalho. */
+function analiseRealComTurma(turma: string, decisao: { turma_id?: number; turma_nome?: string;
+                                                        turma_nova?: string }): Analise {
+  const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
+  analise.turma_detectada = turma;
+  const nova = analise.linhas.find((l) => l.correspondencia?.status === "nao_encontrado")!;
+  nova.correspondencia = { ...nova.correspondencia!, turma_id: null, turma_nome: null,
+                           turma_nova: null, ...decisao };
+  return analise;
+}
+
 describe("Importacoes", () => {
   it("mostra o histórico de importações da escola", async () => {
     responder("GET", URL_HIST, [
@@ -386,15 +400,13 @@ describe("Importacoes", () => {
   // ignorado pelo backend. Os dois botões: a turma escolhida e a turma do relatório
   // ainda não cadastrada (nova).
   it.each([
-    ["Aplicar a todos", "3º Ano A", "criar"],
-    ["Aplicar a todos: turma do relatório (nova)", "5º Ano Z", "criar_nova"],
-  ])("'%s' não tira da Revisão a linha que vai para lá", async (botao, turma, novoDestino) => {
+    ["Aplicar a todos", "3º Ano A", { turma_id: 1, turma_nome: "3º Ano A" }, "criar"],
+    ["Aplicar a todos: turma do relatório (nova)", "5º Ano Z", { turma_nova: "5ºZ" }, "criar_nova"],
+  ])("'%s' não tira da Revisão a linha que vai para lá", async (botao, turma, decisao, novoDestino) => {
     const u = userEvent.setup();
     responder("GET", URL_HIST, []);
     responder("GET", URL_TURMAS, [turmaFake()]);
-    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
-    analise.turma_detectada = turma;
-    responder("UPLOAD", URL_ANALISAR, analise);
+    responder("UPLOAD", URL_ANALISAR, analiseRealComTurma(turma, decisao));
     renderComApp(montar(), { rota: "/importacoes" });
     await screen.findByText("Nenhuma importação ainda");
     await u.click(await screen.findByRole("button", { name: /Um por vez/ }));
@@ -429,8 +441,7 @@ describe("Importacoes", () => {
     const u = userEvent.setup();
     responder("GET", URL_HIST, []);
     responder("GET", URL_TURMAS, [turmaFake()]);
-    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
-    analise.turma_detectada = "3º Ano A";
+    const analise = analiseRealComTurma("3º Ano A", { turma_id: 1, turma_nome: "3º Ano A" });
     analise.criacao_bloqueada_por_politica = true;
     responder("UPLOAD", URL_ANALISAR, analise);
     renderComApp(montar(), { rota: "/importacoes" });
@@ -458,9 +469,7 @@ describe("Importacoes", () => {
     const u = userEvent.setup();
     responder("GET", URL_HIST, []);
     responder("GET", URL_TURMAS, [turmaFake()]);
-    const analise = JSON.parse(JSON.stringify(analiseReal)) as Analise;
-    analise.turma_detectada = "3º Ano A";
-    responder("UPLOAD", URL_ANALISAR, analise);
+    responder("UPLOAD", URL_ANALISAR, analiseRealComTurma("3º Ano A", { turma_id: 1, turma_nome: "3º Ano A" }));
     renderComApp(montar(), { rota: "/importacoes" });
     await screen.findByText("Nenhuma importação ainda");
     await u.click(await screen.findByRole("button", { name: /Um por vez/ }));

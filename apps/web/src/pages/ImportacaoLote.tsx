@@ -159,8 +159,12 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
   // não cria ficha para quem não casar — a tela avisa antes de importar.
   const criacaoBloqueada = itens.some((it) => it.analise?.criacao_bloqueada_por_politica);
   const itemEmEdicao = itens.find((it) => it.id === editando) ?? null;
-  const turmaInicialDrawer =
-    itemEmEdicao?.analise ? acharTurmaPorNome(turmas, itemEmEdicao.analise.turma_detectada) : null;
+  // A turma em que o drawer começa: a que a prévia decidiu para o aluno novo; senão a
+  // única turma cadastrada da sala do relatório (série e letra inteiras).
+  const turmaInicialDrawer = itemEmEdicao?.analise
+    ? itemEmEdicao.analise.linhas.find((l) => l.correspondencia)?.correspondencia?.turma_id
+      ?? acharTurmaPorNome(turmas, itemEmEdicao.analise.turma_detectada)
+    : null;
   // Algum arquivo pronto é total acumulado (sem "Intervalo de datas")? Então a data
   // do relatório é obrigatória — o relatório individual (leituras) não precisa.
   const exigeData = prontos.some((it) => it.analise && exigeDataDoRelatorio(it.analise));

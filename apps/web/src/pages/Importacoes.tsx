@@ -330,11 +330,23 @@ function turmaSemDestino(c: LinhaAnalise["correspondencia"]): boolean {
   return c?.status === "revisar" && MOTIVOS_TURMA_SEM_DESTINO.has(c.motivo ?? "");
 }
 
-/** As turmas do relatório sem destino (normalizadas): não são "turma nova" — a
- *  confirmação não as cria. */
-function turmasSemDestinoDoRelatorio(a: Analise): Set<string> {
-  return new Set(a.linhas.filter((linha) => turmaSemDestino(linha.correspondencia))
-    .map((linha) => normalizar(String(linha.dados.turma_relatorio ?? a.turma_detectada ?? ""))));
+/** A turma do RELATÓRIO de uma linha, como veio: a da própria linha (o Placar da
+ *  escola traz uma por aluno) ou a do cabeçalho. É o nome que "Criar na turma do
+ *  relatório" manda — dele o backend tira a sala e a etapa. */
+function turmaDoRelatorio(a: Analise, linha: LinhaAnalise | undefined): string {
+  return String(linha?.dados?.turma_relatorio ?? "") || a.turma_detectada || "";
+}
+
+/** O destino padrão do aluno NOVO (status "nao_encontrado"/"bloqueado"): a turma que o
+ *  backend decidiu na prévia (``identidade_aluno._turma_para_criar``) — a cadastrada
+ *  (``turma_id``) ou a turma do relatório, que a confirmação cria (``turma_nova``).
+ *  Sem nenhuma das duas (o relatório não informa turma), a tela não adivinha: a linha
+ *  fica em "Ignorar" até o gestor escolher a turma. Antes a tela casava o nome da
+ *  turma por pedaço de texto e mandava a criança do "1 ANO A" para a "1º Ano B". */
+function destinoDoNovo(c: LinhaAnalise["correspondencia"]): Acao {
+  if (c?.turma_id) return { tipo: "criar", turmaId: c.turma_id };
+  if (c?.turma_nova) return { tipo: "criar_nova" };
+  return { tipo: "ignorar" };
 }
 
 /** "Criar aluno novo…" numa turma de OUTRA ETAPA que a turma do relatório: o backend
@@ -502,9 +514,6 @@ export default function Importacoes() {
   const [analise, setAnalise] = useState<Analise | null>(null);
   const [acoes, setAcoes] = useState<Acao[]>([]); // uma ação por GRUPO
   const [turmaEmMassa, setTurmaEmMassa] = useState<number | null>(null);
-  // Turma detectada no relatório que ainda não existe no cadastro (a
-  // confirmação a cria automaticamente).
-  const [turmaNova, setTurmaNova] = useState("");
   const [editarGrupo, setEditarGrupo] = useState<number | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
@@ -536,7 +545,6 @@ export default function Importacoes() {
     setAnalise(null);
     setAcoes([]);
     setTurmaEmMassa(null);
-    setTurmaNova("");
     setEditarGrupo(null);
     setResultado(null);
     setConfirmando(false);
@@ -585,14 +593,9 @@ export default function Importacoes() {
       setAnalise(resposta);
       setDataRelatorio(""); // arquivo novo: a data é dele, informada de novo
 
-      // Ação inicial POR GRUPO, já usando a turma lida do relatório.
+      // Ação inicial POR GRUPO, com a turma que a prévia do backend decidiu.
       const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
       setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
-      // Turma detectada que NÃO existe no cadastro: será criada na confirmação. A que
-      // existe ARQUIVADA (a lista de turmas só traz as ativas), a ambígua e a de outra
-      // etapa não são novas nem são criadas.
-      const semDestino = turmasSemDestinoDoRelatorio(resposta).has(normalizar(resposta.turma_detectada ?? ""));
-      setTurmaNova(resposta.turma_detectada && !turmaId && !semDestino ? resposta.turma_detectada : "");
       const gruposIniciais = agrupar(resposta);
       setAcoes(
         gruposIniciais.map((g): Acao => {
@@ -612,16 +615,10 @@ export default function Importacoes() {
           // criável por padrão — a linha fica na Revisão (o que o backend faria) até o
           // gestor escolher uma turma em "Criar aluno novo…".
           if (turmaSemDestino(c)) return acaoRevisao(g, resposta);
-          // Aluno novo: cria na turma DO PRÓPRIO ALUNO — o relatório geral do
-          // Matific tem alunos de várias turmas (turma_relatorio por linha);
-          // se essa turma não casar, usa a turma global detectada.
-          const turmaLinha = resposta.linhas[g.indices[0]]?.dados?.turma_relatorio;
-          const turmaDoGrupo = acharTurmaPorNome(turmas, String(turmaLinha ?? "")) ?? turmaId;
-          if (turmaDoGrupo) return { tipo: "criar", turmaId: turmaDoGrupo };
-          // A turma citada no relatório ainda não existe: cria automaticamente
-          // na confirmação (turma lida da linha ou do cabeçalho).
-          if (turmaLinha || resposta.turma_detectada) return { tipo: "criar_nova" };
-          return { tipo: "ignorar" };
+          // Aluno novo: a turma DO PRÓPRIO ALUNO que o backend decidiu (o Placar da
+          // escola tem alunos de várias turmas) — a cadastrada, ou a do relatório,
+          // criada na confirmação.
+          return destinoDoNovo(c);
         }),
       );
     } catch (excecao) {
@@ -805,12 +802,11 @@ export default function Importacoes() {
       };
     }
     if (acao.tipo === "criar_nova") {
-      const turmaLinha = analise ? analise.linhas[g.indices[0]]?.dados?.turma_relatorio : "";
       return {
         tom: "alerta" as const,
         titulo: "Aluno novo — a turma do relatório será criada",
         nome: g.nome,
-        turma: String(turmaLinha ?? "") || turmaNova,
+        turma: analise ? turmaDoRelatorio(analise, analise.linhas[g.indices[0]]) : "",
         detalhe: "turma ainda não cadastrada — criada automaticamente ao importar",
       };
     }
@@ -872,6 +868,13 @@ export default function Importacoes() {
     (g) => !g.todasComErro && CRIAM.has(g.correspondencia?.status ?? "")
       && !vaiParaRevisao(g.correspondencia),
   );
+  // As turmas que a confirmação cria para os alunos novos (``turma_nova`` da prévia: a
+  // sala do relatório não tem turma no cadastro), com o nome que elas vão ter.
+  const turmasNovas = [...new Set(naoEncontrados
+    .map((g) => g.correspondencia?.turma_nova).filter((nome): nome is string => Boolean(nome)))];
+  // Todos os alunos novos já têm a turma cadastrada da sua sala (``turma_id``).
+  const novosNaTurmaCadastrada = naoEncontrados.length > 0
+    && naoEncontrados.every((g) => Boolean(g.correspondencia?.turma_id));
   const totalSelecionados = grupos.filter((g, i) => !g.todasComErro && acoes[i]?.tipo !== "ignorar").length;
   // Política "bloquear" (a matrícula vem da Lista Piloto): a confirmação não cria
   // ficha — a linha marcada "Criar" (na turma escolhida ou na do relatório) vai para
@@ -1166,16 +1169,17 @@ export default function Importacoes() {
                 <UserPlus size={16} aria-hidden className="text-ouro-700 dark:text-ouro-300" />
                 <span className="text-zinc-800 dark:text-zinc-100">
                   <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
-                  {analise.turma_detectada && acharTurmaPorNome(turmas, analise.turma_detectada)
-                   && !naoEncontrados.some((g) => turmaSemDestino(g.correspondencia))
+                  {analise.turma_detectada && novosNaTurmaCadastrada
                     ? " — já marcados para criar na turma do relatório."
-                    : turmaNova
-                      ? ` — a turma “${turmaNova}” será criada automaticamente ao importar.`
-                      : "."}
+                    : turmasNovas.length === 1
+                      ? ` — a turma “${turmasNovas[0]}” será criada automaticamente ao importar.`
+                      : turmasNovas.length > 1
+                        ? ` — as turmas ${turmasNovas.map((nome) => `“${nome}”`).join(", ")} serão criadas automaticamente ao importar.`
+                        : "."}
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {turmaNova && (
+                {turmasNovas.length > 0 && (
                   <Botao variante="secundario" tamanho="sm" onClick={() => aplicarATodosOsNovos({ tipo: "criar_nova" })}>
                     <UserPlus size={14} aria-hidden /> Aplicar a todos: turma do relatório (nova)
                   </Botao>
@@ -1198,7 +1202,7 @@ export default function Importacoes() {
                     </Botao>
                   </>
                 )}
-                {turmas.length === 0 && !turmaNova && (
+                {turmas.length === 0 && turmasNovas.length === 0 && (
                   <span className="text-zinc-800 dark:text-zinc-100">
                     Crie uma turma primeiro em{" "}
                     <Link to="/turmas" className="font-semibold text-indigo-700 underline dark:text-indigo-300">Turmas</Link>.
@@ -1318,9 +1322,9 @@ export default function Importacoes() {
                                   </>
                                 ) : (
                                   <>
-                                    {(Boolean(primeira.dados.turma_relatorio) || Boolean(turmaNova)) && (
+                                    {turmaDoRelatorio(analise, primeira) && (
                                       <option value="criar_nova">
-                                        Criar na turma do relatório ({String(primeira.dados.turma_relatorio ?? turmaNova)})
+                                        Criar na turma do relatório ({turmaDoRelatorio(analise, primeira)})
                                       </option>
                                     )}
                                     <option value="criar">Criar aluno novo…</option>
@@ -1477,7 +1481,8 @@ export default function Importacoes() {
               escolaId={escolaId}
               aberto={editarGrupo !== null}
               turmas={turmas}
-              turmaInicial={acharTurmaPorNome(turmas, analise.turma_detectada)}
+              turmaInicial={(editarGrupo !== null ? grupos[editarGrupo]?.correspondencia?.turma_id : null)
+                ?? acharTurmaPorNome(turmas, analise.turma_detectada)}
               nomePdf={editarGrupo !== null ? grupos[editarGrupo]?.nome ?? "" : ""}
               aoFechar={() => setEditarGrupo(null)}
               aoConfirmar={vincularAluno}

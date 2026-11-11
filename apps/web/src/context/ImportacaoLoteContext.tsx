@@ -61,8 +61,13 @@ function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Tur
   const origem = analise.origem_nome || "nenhum";
   const corresp = analise.linhas.find((l) => l.correspondencia)?.correspondencia ?? null;
   const totalLivros = analise.linhas.filter((l) => l.dados?.livro).length;
-  const turmaId = acharTurmaPorNome(turmas, analise.turma_detectada);
-  const turmaNome = turmas.find((t) => t.id === turmaId)?.nome ?? analise.turma_detectada ?? "";
+  // A turma do aluno NOVO é a que o backend decidiu na prévia (``turma_id``): sem ela —
+  // a sala do relatório não tem turma no cadastro (``turma_nova``) ou não há turma — o
+  // lote não adivinha uma pelo nome (antes a criança do "1 ANO A" ia para a "1º Ano B").
+  const novo = corresp?.status === "nao_encontrado" || corresp?.status === "bloqueado";
+  const turmaId = novo ? corresp?.turma_id ?? null : acharTurmaPorNome(turmas, analise.turma_detectada);
+  const turmaNome = (novo ? corresp?.turma_nome : null)
+    ?? turmas.find((t) => t.id === turmaId)?.nome ?? analise.turma_detectada ?? "";
 
   if (!nome || origem === "nenhum") {
     return {
