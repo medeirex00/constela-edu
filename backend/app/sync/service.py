@@ -283,9 +283,12 @@ CATEGORIA_POR_TIPO: dict[str, str] = {
 #                   vinculada da escola foi conferida — alerta próprio),
 #                   'tudo_em_revisao' (as linhas ficaram em revisão/sem vínculo e
 #                   NENHUMA conta da escola foi conferida — mesmo alerta, texto
-#                   próprio, e NÃO conta como "em dia"), 'queda_retida' (total
-#                   menor do Matific retido — 'queda_matific') ou
-#                   'linhas_descartadas' (defeito — 'coleta_parcial')
+#                   próprio, e NÃO conta como "em dia"), 'fora_do_ano_sem_conferencia'
+#                   (coleta de fora do ano letivo ativo cujas linhas ficaram de fora
+#                   esperando a virada e NENHUMA conta da escola foi conferida —
+#                   alerta 'coleta_fora_do_ano_letivo', NÃO conta como "em dia"),
+#                   'queda_retida' (total menor do Matific retido — 'queda_matific')
+#                   ou 'linhas_descartadas' (defeito — 'coleta_parcial')
 #   sem_dados       a plataforma respondeu 2xx e trouxe 0 turma/0 linha
 #   erro            login, HTTP de erro, tempo esgotado, resposta incompatível,
 #                   exceção ou nenhuma unidade coletada; motivo = o código
@@ -313,8 +316,16 @@ MOTIVOS_VERIFICADOS = (MOTIVO_NADA_MUDOU, "queda_retida")
 # do Elefante, S9): os livros entram, esses números ficam os de antes. 'parcial'
 # com dado aplicado; 'sem_atualizacao' sem. Não é "em dia" nem verificação.
 MOTIVO_CAMPOS_NAO_ATUALIZADOS = "campos_nao_atualizados"
+# 'sem_atualizacao' de uma coleta feita FORA do ano letivo ativo da escola (a virada
+# ainda não foi feita) em que a criança sem ficha ficou de fora esperando a virada
+# (S_G_VIRADA-1) e NENHUMA conta já vinculada a um aluno da escola foi conferida. É a
+# forma C na janela da virada (REV3-VIRADA-2): sem conta da escola conferida, a coleta
+# não prova que o dado desta escola está em dia (credencial de outra escola ou 1ª
+# coleta sem vínculo), mesmo sem nada na fila de revisão. Não fecha 'desatualizada'.
+MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA = "fora_do_ano_sem_conferencia"
 # 'sem_atualizacao' que NÃO conta como "em dia" (``_filtro_em_dia``).
-MOTIVOS_SEM_EM_DIA = (MOTIVO_TUDO_EM_REVISAO, MOTIVO_CAMPOS_NAO_ATUALIZADOS)
+MOTIVOS_SEM_EM_DIA = (MOTIVO_TUDO_EM_REVISAO, MOTIVO_CAMPOS_NAO_ATUALIZADOS,
+                      MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA)
 # Só estes provam que a plataforma respondeu 2xx e a coleta chegou ao fim: são
 # os que podem carimbar a credencial como 'valida'.
 STATUS_CREDENCIAL_VALIDA = ("concluida", "parcial", "sem_atualizacao", "sem_dados")
@@ -379,8 +390,10 @@ def _filtro_em_dia():
     conta. Com tudo em revisão e nenhuma conta já vinculada conferida, a coleta
     não provou que o dado DESTA escola está em dia — é a assinatura de credencial
     de outra escola ou de casamento quebrado; o 'desatualizada' abre depois da
-    cadência, ao lado do 'correspondencia_pendente'. ``coalesce``: motivo NULL
-    (execução anterior à 0039) não é 'tudo_em_revisao'."""
+    cadência, ao lado do 'correspondencia_pendente'. O mesmo vale na janela da virada
+    para 'sem_atualizacao/fora_do_ano_sem_conferencia' (REV3-VIRADA-2): as linhas
+    ficaram de fora esperando a virada e nenhuma conta da escola foi conferida.
+    ``coalesce``: motivo NULL (execução anterior à 0039) não é 'tudo_em_revisao'."""
     return (((SincronizacaoExecucao.status == "concluida")
              | ((SincronizacaoExecucao.status == "sem_atualizacao")
                 & func.coalesce(SincronizacaoExecucao.motivo, "").notin_(MOTIVOS_SEM_EM_DIA))
@@ -1657,6 +1670,13 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
         # 'tudo_em_revisao' — não é em dia (credencial de outra escola, casamento
         # quebrado ou 1ª coleta sem vínculo) e tem o texto próprio do alerta.
         return "sem_atualizacao", MOTIVO_TUDO_EM_REVISAO
+    if ap.descartes.get(_MOTIVO_FORA_DO_ANO) and not ap.conferiu_a_escola:
+        # Forma C na janela da virada (REV3-VIRADA-2): a criança sem ficha que a coleta
+        # de fora do ano letivo deixou de fora espera a virada — não é pendência de
+        # vínculo, mas também não prova nada desta escola. Sem nenhuma conta da escola
+        # conferida (credencial de outra escola, 1ª coleta sem vínculo), antes saía
+        # 'nada_mudou' e contava como em dia, com qualquer política de criação.
+        return "sem_atualizacao", MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA
     if ap.campos_nao_atualizados:
         # S9 antes da pendência comum e da linha com defeito: as duas contam como
         # "em dia" (``_filtro_em_dia``) e esconderiam que tempo e questões pararam
@@ -1828,32 +1848,76 @@ def _contas_vinculadas(db: Session, escola_id: int, plataforma: str, *,
                situacao)) or 0)
 
 
-def _mensagem_fora_do_ano_letivo(db: Session, escola_id: int, ap: _Apuracao) -> str:
+def _mensagem_fora_do_ano_letivo(db: Session, escola_id: int, ap: _Apuracao, *,
+                                 plataforma: str, por_periodo: bool = False) -> str:
     """Texto do alerta 'coleta_fora_do_ano_letivo' (S_G_VIRADA-1): a coleta de hoje
     (dia de Brasília) é de outro ano que o ano letivo ativo da escola, e não criou
     ficha nem mudou matrícula. Diz o que ficou de fora — sem nome de criança e sem
     contagem (no Elefante a mesma criança vem no resumo e nos livros) — e o que
     fazer: virar o ano, quando o ano letivo ativo já terminou; conferir o ano, quando
-    ele ainda nem começou."""
+    ele ainda nem começou.
+
+    "Quem já tem ficha recebe os números" só quando a coleta CONFERIU alguma conta da
+    escola (REV3-VIRADA-2). Sem nenhuma conferida, ninguém recebeu nada: o texto diz
+    isso, que a coleta não conta como em dia ('fora_do_ano_sem_conferencia') e, como o
+    'tudo_em_revisao', a causa provável (acesso de outra escola ou 1ª coleta). Na
+    coleta POR PERÍODO (nunca conta como em dia; o Placar do período pode trazer só
+    quem jogou), sem a suspeita sobre o acesso."""
     escola = db.get(Escola, escola_id)
     ano = getattr(escola, "ano_letivo_ativo", None)
     hoje = fuso.hoje_local()
     quando = f"{hoje.day:02d}/{hoje.month:02d}/{hoje.year:04d}"
+    sem_ficha = ap.descartes.get(_MOTIVO_FORA_DO_ANO)
+    terminou = ano is not None and hoje.year > ano
+    if terminou:
+        situacao = f"o ano letivo {ano} da escola já terminou no calendário"
+    else:
+        situacao = f"o ano letivo ativo da escola ({ano}) ainda não começou no calendário"
+    inicio = f"A coleta de {quando} é de fora do ano letivo ativo: {situacao}."
+    if not ap.conferiu_a_escola:
+        # Ninguém recebeu nada. O alerta guarda só 500 caracteres (``abrir_alerta``):
+        # o texto é mais curto que o da coleta que conferiu a escola, para a ação
+        # caber inteira.
+        nada = ("Nenhuma conta já ligada a um aluno desta escola veio nela: nada foi "
+                "atualizado" + (" e nenhuma ficha foi criada." if sem_ficha else "."))
+        if not por_periodo:
+            nada += (" Isto não conta como coleta em dia. "
+                     + _causa_sem_conta_conferida(db, escola_id, plataforma))
+        acao = (f"Depois, o administrador global vira o “Ano letivo ativo” para "
+                f"{hoje.year} em Configurações." if terminou else
+                "Confira também o “Ano letivo ativo” em Configurações (só o "
+                "administrador global o altera).")
+        return f"{inicio} {nada} {acao}"
     ficou_de_fora = "nenhuma matrícula foi mudada"
-    if ap.descartes.get(_MOTIVO_FORA_DO_ANO):
+    if sem_ficha:
         ficou_de_fora += (" e as crianças que ainda não têm ficha ficaram de fora "
                           "(nenhuma ficha foi criada)")
-    if ano is not None and hoje.year > ano:
-        situacao = f"o ano letivo {ano} da escola já terminou no calendário"
+    if terminou:
         acao = (f"Vire o ano letivo antes de coletar: o administrador global troca o "
                 f"“Ano letivo ativo” para {hoje.year} em Configurações e a escola envia a "
                 f"Lista Piloto de {hoje.year}. A coleta seguinte traz quem ficou de fora.")
     else:
-        situacao = f"o ano letivo ativo da escola ({ano}) ainda não começou no calendário"
         acao = ("Confira o “Ano letivo ativo” em Configurações (só o administrador global "
                 "o altera) antes de coletar de novo.")
-    return (f"A coleta de {quando} é de fora do ano letivo ativo: {situacao}. Quem já tem "
-            f"ficha recebe os números normalmente, mas {ficou_de_fora}. {acao}")
+    return (f"{inicio} Quem já tem ficha recebe os números normalmente, mas "
+            f"{ficou_de_fora}. {acao}")
+
+
+def _causa_sem_conta_conferida(db: Session, escola_id: int, plataforma: str) -> str:
+    """A causa provável de uma coleta de fora do ano letivo sem nenhuma conta da escola
+    conferida — a mesma distinção do ``_mensagem_tudo_em_revisao`` (escola com contas
+    vinculadas, só com contas de alunos inativos, ou sem nenhuma), sem mandar resolver
+    revisões: nada foi para a fila."""
+    vinculadas = _contas_vinculadas(db, escola_id, plataforma)
+    if vinculadas:
+        return (f"A escola tem {vinculadas} conta(s) vinculada(s) nesta plataforma e "
+                "nenhuma veio: confira se o acesso cadastrado é o desta escola.")
+    inativas = _contas_vinculadas(db, escola_id, plataforma, ativos=False)
+    if inativas:
+        return (f"As {inativas} conta(s) vinculada(s) da escola são de alunos não ativos: "
+                "confira as matrículas e o acesso cadastrado.")
+    return ("A escola ainda não tem conta vinculada nesta plataforma: confira se as turmas "
+            "que o acesso cadastrado mostra são desta escola.")
 
 
 def _mensagem_tudo_em_revisao(db: Session, escola_id: int, plataforma: str,
@@ -2005,13 +2069,15 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
     credencial, alertas e recálculo. ``falha`` = (código, mensagem, recuperável)
     de uma exceção no MEIO da aplicação (depois de a coleta ter dado certo)."""
     status, motivo = decidir_status(ap, falha_no_meio=falha is not None)
-    if motivo == MOTIVO_TUDO_EM_REVISAO and execucao_por_periodo(execucao):
+    if motivo in (MOTIVO_TUDO_EM_REVISAO, MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA) \
+            and execucao_por_periodo(execucao):
         # Coleta POR PERÍODO nunca conta como "em dia" (``_filtro_do_acumulado``) e
         # pode trazer só quem teve atividade no período (suposição a confirmar com o
         # Matific: o Placar por período omite quem não jogou?). Sem conta da escola
         # nela não há sinal de acesso de outra escola: é a pendência comum. Antes
         # (revisão e95) o alerta e o card mandavam conferir a credencial. Sem
-        # pendência (só contas aposentadas no período), nada mudou.
+        # pendência (só contas aposentadas no período, ou só crianças sem ficha que a
+        # coleta de fora do ano letivo deixou para depois da virada), nada mudou.
         motivo = ("correspondencia_pendente" if ap.pendencia_de_vinculo
                   else MOTIVO_NADA_MUDOU)
     if not _fechar_se_ainda_executando(db, execucao, status):
@@ -2187,7 +2253,8 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
     if ap.fora_do_ano_letivo:
         # Coleta de fora do ano letivo ativo que deixou alguém de fora: a escola
         # precisa virar o ano (S_G_VIRADA-1). Sem nome de criança.
-        mensagem = _mensagem_fora_do_ano_letivo(db, escola_id, ap)
+        mensagem = _mensagem_fora_do_ano_letivo(db, escola_id, ap, plataforma=plataforma,
+                                                por_periodo=execucao_por_periodo(execucao))
         registrar_log(db, execucao, "validacao", "warn", mensagem)
         abrir_alerta(db, escola_id, plataforma, TIPO_ALERTA_FORA_DO_ANO, mensagem,
                      severidade="warn", execucao_id=execucao.id)

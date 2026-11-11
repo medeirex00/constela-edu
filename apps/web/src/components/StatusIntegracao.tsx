@@ -50,8 +50,9 @@ export interface Execucao {
   qtd_falhas?: number | null;
   /** Dado gravado, mas o recálculo das notas falhou. */
   recalculo_pendente?: boolean | null;
-  /** nada_mudou | correspondencia_pendente | tudo_em_revisao | queda_retida |
-   *  linhas_descartadas | falha_apos_gravacao | coleta_parcial | código do erro. */
+  /** nada_mudou | correspondencia_pendente | tudo_em_revisao |
+   *  fora_do_ano_sem_conferencia | queda_retida | linhas_descartadas |
+   *  falha_apos_gravacao | coleta_parcial | código do erro. */
   motivo?: string | null;
   periodo?: PeriodoExecucao | null;
 }
@@ -284,6 +285,10 @@ export const MOTIVO_EXECUCAO: Record<string, string> = {
   // Tudo em revisão e NENHUMA conta da escola conferida: não conta como em dia
   // (credencial de outra escola, casamento quebrado ou 1ª coleta sem vínculo).
   tudo_em_revisao: "nenhuma conta da escola reconhecida",
+  // Coleta de fora do ano letivo ativo (a virada ainda não foi feita) em que nenhuma
+  // conta da escola veio: as crianças sem ficha ficaram para depois da virada e nada
+  // foi atualizado. Também não conta como em dia (backend: REV3-VIRADA-2).
+  fora_do_ano_sem_conferencia: "coleta fora do ano letivo, nenhuma conta da escola reconhecida",
   falha_apos_gravacao: "falhou depois de gravar",
   // Linhas que chegaram com defeito (sem data, sem nome) e não viraram dado.
   linhas_descartadas: "linhas com defeito descartadas",
@@ -389,7 +394,8 @@ export function descreverExecucao(e: Pick<Execucao, "status"> & Partial<Pick<Exe
       return {
         rotulo: motivo && MOTIVO_EXECUCAO[motivo]
           ? `sem atualização: ${MOTIVO_EXECUCAO[motivo]}` : "sem atualização",
-        tom: motivo === "tudo_em_revisao" ? "alerta" : "info",
+        tom: motivo === "tudo_em_revisao" || motivo === "fora_do_ano_sem_conferencia"
+          ? "alerta" : "info",
       };
     case "sem_dados":
       return { rotulo: "a plataforma não trouxe dados", tom: "alerta" };
@@ -634,6 +640,19 @@ export function situacaoIntegracao(
       frase: `A última coleta terminou sem erro, mas nenhuma conta já ligada a um aluno desta escola veio nela: ${fila}. Por isso ela não conta como dado em dia${desatualizada
         ? " (os dados desta plataforma já estão desatualizados)" : ""}. Se a escola já tinha alunos ligados, confira em “Configurar conexão” se o acesso cadastrado é o desta escola antes de resolver as revisões; se é a primeira coleta, confirme que os nomes são desta escola e resolva as revisões.`,
       link: { para: "/revisoes-identidade", texto: "Ver revisões de identidade" },
+    };
+  }
+  if (statusUltimo === "sem_atualizacao" && motivoUltimo === "fora_do_ano_sem_conferencia") {
+    // Coleta de fora do ano letivo ativo (a virada ainda não foi feita) em que nenhuma
+    // conta já ligada da escola veio: as crianças sem ficha ficaram para depois da
+    // virada (nada na fila de revisão) e o backend NÃO conta como "em dia"
+    // (REV3-VIRADA-2). O alerta "Coleta fora do ano letivo ativo" diz a causa provável.
+    const desatualizada = p.desatualizada || p.frescor === "desatualizado";
+    return {
+      chave: "sem_atualizacao", tom: "alerta",
+      rotulo: "Sem atualização: coleta fora do ano letivo",
+      frase: `A última coleta foi feita fora do ano letivo ativo da escola e nenhuma conta já ligada a um aluno desta escola veio nela: nada foi atualizado e nenhuma ficha foi criada. Por isso ela não conta como dado em dia${desatualizada
+        ? " (os dados desta plataforma já estão desatualizados)" : ""}. Veja o alerta “${TIPO_ALERTA.coleta_fora_do_ano_letivo}”: ele diz o que conferir (o ano letivo ativo da escola e, em “Configurar conexão”, se o acesso cadastrado é o desta escola).`,
     };
   }
   if (statusUltimo === "sem_atualizacao" && motivoUltimo === "correspondencia_pendente") {
