@@ -330,14 +330,21 @@ def casar_inep(
     """Propõe o código INEP oficial para cada escola da rede, casando pelo NOME
     (dentro do mesmo município) contra o arquivo oficial do INEP. NÃO grava —
     devolve as propostas para o gestor conferir e salvar. Layout padrão = IDEB
-    por escola (a coluna do nome/município/INEP já é conhecida)."""
+    por escola (a coluna do nome/município/INEP já é conhecida).
+
+    A planilha que a leitura recusa antes de abrir (.xlsx inflado, compactação que o
+    Excel não gera: ``avaliacoes.ImportacaoRecusada``) responde 400 com o motivo — como
+    as rotas de avaliações e indicadores —, não um erro interno."""
     if db.get(Rede, rede_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
     conteudo = arquivo.file.read(_MAX_BYTES_INEP + 1)
     if len(conteudo) > _MAX_BYTES_INEP:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Arquivo muito grande.")
-    propostas = svc_inep.casar_inep(db, rede_id, conteudo, arquivo.filename or "")
+    try:
+        propostas = svc_inep.casar_inep(db, rede_id, conteudo, arquivo.filename or "")
+    except svc_avaliacoes.ImportacaoRecusada as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     casadas = sum(1 for p in propostas if p["inep"] and p["confianca"] == "alta")
     revisar = sum(1 for p in propostas if p["inep"] and p["confianca"] == "revisar")
     return {"propostas": propostas, "total": len(propostas),
