@@ -125,7 +125,7 @@ from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Matricu
                         SnapshotElefante, SnapshotMatific, Turma)
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import matific_destaque, periodos
-from app.services.evolucao import sem_ajustes_superados_matific
+from app.services.evolucao import IMPORTACAO_AJUSTE_MANUAL, sem_ajustes_superados_matific
 # A faixa de anos aceita é UMA só para o relatório e para a análise (que mede com as
 # funções deste módulo): o pacote ``analise`` só a declara — o ``__init__`` dele não
 # importa nada daqui, então não há ciclo.
@@ -847,13 +847,18 @@ def _retratos_das_questoes(db: Session, escola_id: int, coorte: dict[int, dict]
     Não medem: os gravados por uma sincronização em que as questões não vieram da
     plataforma (S9; ``Importacao.status == IMPORTACAO_SEM_QUESTOES``). Quem leu um
     livro novo ganhou ali um retrato com as questões da coleta ANTERIOR e a data de
-    agora: usado como borda, ele dava "0 no período" com cobertura completa."""
+    agora: usado como borda, ele dava "0 no período" com cobertura completa.
+
+    Nem o AJUSTE MANUAL que uma coleta posterior desmentiu
+    (``_sem_ajustes_desmentidos``): ele sai da série, como o do Matific nas
+    premiações."""
     if not coorte:
         return {}, {}
     validos: dict[int, list] = {}
     sem_questoes: dict[int, list] = {}
-    for snap, status in db.execute(
-            select(SnapshotElefante, Importacao.status)
+    manuais: set[int] = set()
+    for snap, status, tipo in db.execute(
+            select(SnapshotElefante, Importacao.status, Importacao.tipo)
             .outerjoin(Importacao, Importacao.id == SnapshotElefante.importacao_id)
             .where(SnapshotElefante.escola_id == escola_id,
                    SnapshotElefante.aluno_id.in_(coorte.keys()))
@@ -861,7 +866,45 @@ def _retratos_das_questoes(db: Session, escola_id: int, coorte: dict[int, dict]
                       SnapshotElefante.id)).all():
         alvo = sem_questoes if status == IMPORTACAO_SEM_QUESTOES else validos
         alvo.setdefault(snap.aluno_id, []).append(snap)
+        if tipo == IMPORTACAO_AJUSTE_MANUAL:
+            manuais.add(snap.id)
+    if manuais:
+        validos = {aid: _sem_ajustes_desmentidos(serie, manuais)
+                   for aid, serie in validos.items()}
     return validos, sem_questoes
+
+
+def _sem_ajustes_desmentidos(serie: list, manuais: set[int]) -> list:
+    """A série das questões do Elefante sem o ajuste manual que uma coleta posterior
+    desmentiu.
+
+    O ajuste (o botão Editar do Elefante, ou os livros por nível informados à mão —
+    ``routers.plataformas._importacao_manual``; numa escola integrada, só o Admin
+    Global, o "fale com o suporte") grava um retrato NOVO com a data do ajuste, ligado
+    a uma ``Importacao`` do tipo ``"manual"``. O contador de questões é vitalício e a
+    coleta seguinte traz de novo o número da PLATAFORMA: se o ajuste continuasse na
+    série, o degrau entre o número digitado e o coletado seria medido como questões
+    do período (corrigir para baixo) ou apagaria o ganho real ("contador regrediu",
+    corrigir para cima).
+
+    REGRA (a do Matific, ``matific_destaque.sem_ajustes_superados``, sem o recorte do
+    ano: o contador do Elefante não zera na virada): o retrato manual vale — como base
+    E como estado atual — só enquanto nenhuma COLETA que mede as questões vier depois
+    dele. Sem coleta depois, o ajuste é o estado vigente e continua valendo.
+
+    ``serie``: os retratos que medem as questões, em ordem cronológica; ``manuais``:
+    os ids dos retratos gravados por ajuste manual."""
+    mantidos = []
+    coleta_depois = False
+    for snap in reversed(serie):
+        if snap.id in manuais:
+            if coleta_depois:
+                continue       # desmentido pela coleta que veio depois
+        else:
+            coleta_depois = True
+        mantidos.append(snap)
+    mantidos.reverse()
+    return mantidos
 
 
 def _bordas(ganho: dict | None) -> tuple | None:
@@ -977,7 +1020,9 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
     serve de borda (``_retratos_das_questoes``): a conta do aluno vai até a coleta
     anterior, ou fica sem número. Quem foi afetado por isso — sem ele, as bordas
     seriam outras — entra em ``alunos_questoes_nao_vieram`` e a cobertura não é
-    "completa"; não é contado como "sem coleta", lacuna nem "uma coleta só"."""
+    "completa"; não é contado como "sem coleta", lacuna nem "uma coleta só". O ajuste
+    manual que a coleta seguinte desmentiu também não é borda
+    (``_sem_ajustes_desmentidos``): a conta vai de coleta a coleta."""
     campos = ("questoes_tentativas", "questoes_acertos")
     series, sem_questoes = _retratos_das_questoes(db, escola_id, coorte)
     tentativas = acertos = 0
