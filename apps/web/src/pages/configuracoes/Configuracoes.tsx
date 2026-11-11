@@ -479,6 +479,11 @@ export default function Configuracoes() {
   const { escolaAtual, escolaId, recarregarEscolas, usuario } = useApp();
   const ehAdminIA = Boolean(usuario?.is_global) || usuario?.cargo === "admin";
   const idIA = useId();
+  // Trocar o ano letivo ativo é decisão da rede: o servidor só aceita do Admin Global
+  // (403 para os demais, e o PATCH inteiro é recusado — nome e cidade junto). Para os
+  // outros perfis o campo é só leitura e o ano não vai no PATCH.
+  const podeTrocarAno = usuario?.is_global === true;
+  const idDicaAno = useId();
   const [nome, setNome] = useState("");
   const [cidade, setCidade] = useState("");
   const [estado, setEstado] = useState("");
@@ -490,6 +495,8 @@ export default function Configuracoes() {
   const [confirmarAno, setConfirmarAno] = useState(false);
   const anoEmUso = escolaAtual?.ano_letivo_ativo;
   const anoHoje = Number(hojeEmBrasilia().slice(0, 4));
+  // O ano só vai no PATCH quando o Admin Global o muda (salvar só o nome não reenvia o ano).
+  const trocaDeAno = podeTrocarAno && anoEmUso !== undefined && anoLetivo !== anoEmUso;
 
   useEffect(() => {
     if (!escolaAtual) return;
@@ -503,7 +510,7 @@ export default function Configuracoes() {
   function aoEnviar(evento: FormEvent) {
     evento.preventDefault();
     if (!escolaId) return;
-    if (anoEmUso !== undefined && anoLetivo !== anoEmUso) {
+    if (trocaDeAno) {
       setConfirmarAno(true);
       return;
     }
@@ -521,7 +528,7 @@ export default function Configuracoes() {
           nome,
           cidade: cidade || null,
           estado: estado || null,
-          ano_letivo_ativo: anoLetivo,
+          ...(trocaDeAno ? { ano_letivo_ativo: anoLetivo } : {}),
         }),
       });
       await recarregarEscolas();
@@ -578,17 +585,26 @@ export default function Configuracoes() {
                   onChange={(evento) => setEstado(evento.target.value.toUpperCase())}
                 />
               </label>
-              <label className="block text-sm">
-                <span className={rotuloCampo}>Ano letivo ativo</span>
-                <input
-                  type="number"
-                  min={2024}
-                  max={2100}
-                  className={`${estiloInput} tabular-nums`}
-                  value={anoLetivo}
-                  onChange={(evento) => setAnoLetivo(Number(evento.target.value))}
-                />
-              </label>
+              <div className="text-sm">
+                <label className="block">
+                  <span className={rotuloCampo}>Ano letivo ativo</span>
+                  <input
+                    type="number"
+                    min={2024}
+                    max={2100}
+                    className={`${estiloInput} tabular-nums`}
+                    value={anoLetivo}
+                    readOnly={!podeTrocarAno}
+                    aria-describedby={podeTrocarAno ? undefined : idDicaAno}
+                    onChange={(evento) => setAnoLetivo(Number(evento.target.value))}
+                  />
+                </label>
+                {!podeTrocarAno && (
+                  <p id={idDicaAno} className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    Só o Admin Global troca o ano letivo ativo.
+                  </p>
+                )}
+              </div>
               <div className="flex items-end sm:col-span-2">
                 <Botao type="submit" disabled={salvando}>
                   {salvando ? "Salvando..." : "Salvar dados da escola"}
