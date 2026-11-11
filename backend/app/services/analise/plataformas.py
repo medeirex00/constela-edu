@@ -64,10 +64,14 @@ dessas séries somarem de 1 a ``k − 1`` e nenhuma outra criança esconder as e
 """
 from __future__ import annotations
 
+import threading
+import time
+import weakref
+from collections import OrderedDict
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import (DateTime, Integer, String, and_, case, cast, extract, func,
+from sqlalchemy import (BigInteger, DateTime, Integer, String, and_, case, cast, extract, func,
                         literal_column, null, or_, select, union_all)
 from sqlalchemy.orm import Session
 
@@ -373,8 +377,23 @@ class _Medida:
 # (a evolução por bimestre levava ~6 s no PG local com 28 escolas fictícias).
 
 # As colunas da união de ``_coortes_e_coletas``: (fonte, escola, aluno, turma, ano escolar,
-# primeira data, última data); cada parte preenche as suas e manda NULL tipado nas outras.
+# primeira data, última data, e o CARIMBO dos dados: linhas, maior id e soma dos alunos —
+# ``_chave_do_bloco``); cada parte preenche as suas e manda NULL tipado nas outras.
 _SEM_INTEIRO, _SEM_TEXTO, _SEM_DATA = cast(null(), Integer), cast(null(), String), cast(null(), DateTime)
+_SEM_GRANDE = cast(null(), BigInteger)
+
+
+def _sem_carimbo():
+    return (_SEM_GRANDE.label("n"), _SEM_GRANDE.label("maior"), _SEM_GRANDE.label("soma"))
+
+
+def _carimbo(modelo, soma=None):
+    """(linhas, maior id, soma dos ``aluno_id``) de uma tabela por escola: muda quando uma
+    linha entra, sai ou passa de uma criança para outra (a fusão de duas fichas)."""
+    return (cast(func.count(), BigInteger).label("n"),
+            cast(func.max(modelo.id), BigInteger).label("maior"),
+            cast(func.coalesce(func.sum(modelo.aluno_id if soma is None else soma), 0),
+                 BigInteger).label("soma"))
 
 
 def _parte_coorte(ids: list[int]):
@@ -389,51 +408,78 @@ def _parte_coorte(ids: list[int]):
             .join(Matricula, Matricula.aluno_id == Aluno.id)
             .join(Turma, Matricula.turma_id == Turma.id)
             .join(Escola, Escola.id == Aluno.escola_id)
+            .add_columns(*_sem_carimbo())
             .where(Aluno.escola_id.in_(ids), Aluno.status == "ativo",
                    Matricula.ano_letivo == Escola.ano_letivo_ativo))
 
 
-def _partes_coletas(ids: list[int], com_primeiro_evento: bool) -> list:
+def _partes_coletas(ids: list[int], com_primeiro_evento: bool, com_carimbo: bool = False
+                    ) -> list:
     """A primeira e a última coleta de cada plataforma por escola e, para a cobertura da
     rede, o evento do Elefante mais antigo de cada escola (o piso do histórico consultável,
-    ``relatorios_periodo._primeiro_evento``): um ``GROUP BY`` por fonte."""
+    ``relatorios_periodo._primeiro_evento``): um ``GROUP BY`` por fonte. ``com_carimbo``: o
+    carimbo dos dados de cada escola junto (``_chave_do_bloco``) — nos retratos, no mesmo
+    ``GROUP BY`` que já lê a tabela inteira da escola; nas leituras, nos eventos de leitura e
+    nas importações (o status "sem questões" incluído), um ``GROUP BY`` a mais por tabela."""
     def _coluna_vazia():
         return (_SEM_INTEIRO.label("aluno_id"), _SEM_INTEIRO.label("turma_id"),
                 _SEM_TEXTO.label("ano_escolar"))
     partes = [select(literal_column(f"'{p}'").label("fonte"), m.escola_id.label("escola_id"),
                      *_coluna_vazia(), func.min(m.data_referencia).label("ini"),
-                     func.max(m.data_referencia).label("fim"))
+                     func.max(m.data_referencia).label("fim"),
+                     *(_carimbo(m) if com_carimbo else _sem_carimbo()))
               .where(m.escola_id.in_(ids)).group_by(m.escola_id)
               for p, m in (("elefante", SnapshotElefante), ("matific", SnapshotMatific))]
     if com_primeiro_evento:
         primeiro = func.min(EventoAluno.ocorrido_em)
         partes.append(select(literal_column("'evento'").label("fonte"),
                              EventoAluno.escola_id.label("escola_id"), *_coluna_vazia(),
-                             primeiro.label("ini"), primeiro.label("fim"))
+                             primeiro.label("ini"), primeiro.label("fim"), *_sem_carimbo())
                       .where(EventoAluno.escola_id.in_(ids), EventoAluno.plataforma == "elefante")
                       .group_by(EventoAluno.escola_id))
+    if com_carimbo:
+        sem_questoes = case((Importacao.status == IMPORTACAO_SEM_QUESTOES, 1), else_=0)
+        for fonte, modelo, filtro, soma in (
+                ("carimbo_leituras", Leitura, (), None),
+                ("carimbo_eventos", EventoAluno, (EventoAluno.plataforma == "elefante",
+                                                  EventoAluno.tipo_evento == "leitura"), None),
+                ("carimbo_importacoes", Importacao, (), sem_questoes)):
+            partes.append(select(literal_column(f"'{fonte}'").label("fonte"),
+                                 modelo.escola_id.label("escola_id"), *_coluna_vazia(),
+                                 _SEM_DATA.label("ini"), _SEM_DATA.label("fim"),
+                                 *_carimbo(modelo, soma))
+                          .where(modelo.escola_id.in_(ids), *filtro)
+                          .group_by(modelo.escola_id))
     return partes
 
 
 def _coortes_e_coletas(db: Session, escolas: list[Escola], ids_coletas: list[int],
-                       com_primeiro_evento: bool
+                       com_primeiro_evento: bool, com_carimbo: bool = False
                        ) -> tuple[dict[int, _Contagem], dict[int, dict[int, dict]],
-                                  dict[str, dict[int, tuple]], dict[int, datetime]]:
+                                  dict[str, dict[int, tuple]], dict[int, datetime],
+                                  dict[int, tuple]]:
     """A contagem por série que decide a supressão e a coorte de cada escola de ``escolas``,
     e as coletas (e o primeiro evento) das escolas ``ids_coletas`` — UMA consulta para tudo
     (``UNION ALL``). A coorte não depende do período: a supressão é decidida só com ela.
     As coletas saem para todas as escolas pedidas; quem chama fica só com as visíveis depois
-    da decisão (o resultado é o de ler só as visíveis)."""
+    da decisão (o resultado é o de ler só as visíveis). ``com_carimbo``: também o carimbo dos
+    dados de cada escola de ``ids_coletas`` (``_chave_do_bloco``), na MESMA consulta."""
     contagens = {e.id: _Contagem(escola=e) for e in escolas}
     coortes: dict[int, dict[int, dict]] = {e.id: {} for e in escolas}
     coletas: dict[str, dict[int, tuple]] = {"elefante": {}, "matific": {}}
     primeiros: dict[int, datetime] = {}
+    carimbos: dict[int, dict[str, tuple]] = {}
     partes = ([_parte_coorte(list(contagens))] if escolas else []) + (
-        _partes_coletas(ids_coletas, com_primeiro_evento) if ids_coletas else [])
+        _partes_coletas(ids_coletas, com_primeiro_evento, com_carimbo) if ids_coletas else [])
     if not partes:
-        return contagens, coortes, coletas, primeiros
+        return contagens, coortes, coletas, primeiros, {}
     consulta = partes[0] if len(partes) == 1 else union_all(*partes)
-    for fonte, escola_id, aluno_id, turma_id, ano_escolar, ini, fim in db.execute(consulta).all():
+    for (fonte, escola_id, aluno_id, turma_id, ano_escolar, ini, fim, n, maior,
+         soma) in db.execute(consulta).all():
+        if n is not None:
+            carimbos.setdefault(escola_id, {})[fonte] = (int(n), maior, int(soma or 0))
+        if fonte.startswith("carimbo_"):
+            continue
         if fonte == "coorte":
             c = contagens[escola_id]
             serie = ano_premiavel(ano_escolar)
@@ -449,14 +495,15 @@ def _coortes_e_coletas(db: Session, escolas: list[Escola], ids_coletas: list[int
             coletas[fonte][escola_id] = (ini, fim)
     for c in contagens.values():
         c.series = dict(sorted(c.series.items()))
-    return contagens, coortes, coletas, primeiros
+    return (contagens, coortes, coletas, primeiros,
+            {eid: tuple(sorted(por_fonte.items())) for eid, por_fonte in carimbos.items()})
 
 
 def _coortes(db: Session, escolas: list[Escola]
              ) -> tuple[dict[int, _Contagem], dict[int, dict[int, dict]]]:
     """Só a contagem por série e a coorte de cada escola (``_coortes_e_coletas`` sem as
     coletas) — UMA consulta para todas."""
-    contagens, coortes, _, _ = _coortes_e_coletas(db, escolas, [], False)
+    contagens, coortes, _, _, _ = _coortes_e_coletas(db, escolas, [], False)
     return contagens, coortes
 
 
@@ -1576,19 +1623,24 @@ class _Tabela:
 
 
 def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola], mods: set[str],
-             *, periodos: list[Periodo], hoje: date, k: int, com_primeiro_evento: bool = False
-             ) -> list[_Tabela]:
+             *, periodos: list[Periodo], hoje: date, k: int, com_primeiro_evento: bool = False,
+             blocos: frozenset[int] = frozenset()) -> list[_Tabela]:
     """Uma tabela por período: a supressão decidida sobre ``escolas_da_decisao`` (só
     contagens, igual em todos os períodos) e a medição só das escolas de ``medir`` que
     ficaram visíveis. Datas fora da faixa aceita são recusadas (422) antes de qualquer
     consulta. As leituras do banco são as mesmas para qualquer número de escolas e de
-    períodos (ver "Leituras do banco")."""
+    períodos (ver "Leituras do banco").
+
+    ``blocos``: as posições dos períodos que são BLOCOS do calendário (só para a proteção por
+    blocos): a medida de cada escola num bloco é guardada e reaproveitada enquanto nada que
+    a decide mudar (``_chave_do_bloco``) — só o que falta é lido e medido."""
     for p in periodos:
         validar_anos(inicio=p.inicio, fim=p.fim)
     # A coorte de todas e as coletas das que serão medidas numa consulta só; das coletas, só
     # as das escolas que a supressão deixou visíveis contam (como se só elas fossem lidas).
-    contagens, coortes, col_todas, primeiros_todos = _coortes_e_coletas(
-        db, escolas_da_decisao, [e.id for e in medir], com_primeiro_evento)
+    contagens, coortes, col_todas, primeiros_todos, carimbos = _coortes_e_coletas(
+        db, escolas_da_decisao, [e.id for e in medir], com_primeiro_evento,
+        com_carimbo=bool(blocos) and _GUARDA_DOS_BLOCOS_S > 0)
     ordenadas, decisoes = decidir_supressao(list(contagens.values()), k)
     alvo = [e for e in medir if not decisoes[e.id]["escola"]["suprimido"]]
     ids = [e.id for e in alvo]
@@ -1598,16 +1650,29 @@ def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
     primeiros = {i: v for i, v in primeiros_todos.items() if i in visiveis}
     janelas: dict[tuple[int, int], rp.Janela | None] = {}
     preparos = []
+    medidas: list[dict[int, _Medida]] = [{} for _ in periodos]
+    guarda = _guarda_do_banco(db) if blocos and _GUARDA_DOS_BLOCOS_S > 0 else None
+    a_guardar: dict[tuple[int, int], tuple] = {}
     for g, p in enumerate(periodos):
         for e in alvo:
             if (g, e.ano_letivo_ativo) not in janelas:
                 janelas[(g, e.ano_letivo_ativo)] = _janela_do_periodo(p, e.ano_letivo_ativo,
                                                                       hoje)
-            if janelas[(g, e.ano_letivo_ativo)] is None:
+            janela = janelas[(g, e.ano_letivo_ativo)]
+            if janela is None:
                 continue                # o bloco pedido não existe no ano letivo desta escola
-            preparos.append(_preparar(g, contagens[e.id], _visiveis(decisoes[e.id]),
-                                      janelas[(g, e.ano_letivo_ativo)], mods,
-                                      {pl: col[pl].get(e.id) for pl in PLATAFORMA_MODULO}))
+            visiveis_e = _visiveis(decisoes[e.id])
+            coletas_e = {pl: col[pl].get(e.id) for pl in PLATAFORMA_MODULO}
+            if guarda is not None and g in blocos:
+                chave = _chave_do_bloco(e, janela, hoje, k, mods, visiveis_e, coletas_e,
+                                        coortes[e.id], carimbos.get(e.id, ()))
+                guardada = _ler_da_guarda(guarda, chave)
+                if guardada is not None:
+                    medidas[g][e.id] = replace(_copia_leve(guardada), escola=e,
+                                               contagem=contagens[e.id])
+                    continue
+                a_guardar[(g, e.id)] = chave
+            preparos.append(_preparar(g, contagens[e.id], visiveis_e, janela, mods, coletas_e))
     # O ano de referência e os anos letivos: pelas escolas com aluno na coorte (a mesma
     # leitura que decide a supressão) — escola fechada ou só cadastrada não decide o ano.
     com_aluno = {eid for eid, c in contagens.items() if c.total or c.fora}
@@ -1616,10 +1681,15 @@ def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
     janelas_ref = [_janela_do_periodo(p, ano_ref, hoje)
                    or _janela(p.preset, ano_ref, p.inicio, p.fim, hoje) for p in periodos]
     lidos = _ler_em_lote(db, preparos, coortes)
-    medidas: list[dict[int, _Medida]] = [{} for _ in periodos]
     for prep in preparos:
         eid = prep.contagem.escola.id
         medidas[prep.g][eid] = _medir_escola(prep, coortes[eid], lidos, hoje)
+        chave = a_guardar.get((prep.g, eid))
+        if chave is not None:
+            _guardar(guarda, chave, _copia_leve(medidas[prep.g][eid]))
+    # Na ordem das escolas (as guardadas e as medidas agora juntas), como se todas fossem
+    # medidas agora.
+    medidas = [{e.id: m[e.id] for e in alvo if e.id in m} for m in medidas]
     anos = anos_letivos_medidos(escolas_da_decisao, com_aluno)
     return [_Tabela(contagens=ordenadas, decisoes=decisoes, medidas=medidas[g], mods=mods,
                     janela=janelas_ref[g], ano=ano, anos=anos, primeiros=primeiros)
@@ -1741,6 +1811,117 @@ def _bloco_da_rede(t: _Tabela, k: int, serie: int | None) -> tuple[dict, dict]:
                     f"{para_br(mais_antiga).strftime('%d/%m/%Y')} (cobrem ao menos 90% do "
                     "período; o restante não foi medido — sem dado não é zero).")
     return blocos, entraram
+
+
+# --- Medidas dos blocos guardadas (REV2-ANALISE-1) ----------------------------------------
+#
+# A proteção por blocos mede, além do período, cada bloco do calendário dentro dele (no ano
+# letivo, as folgas e os bimestres que já começaram): na rede fictícia de 28 escolas (PG
+# local), /plataformas?periodo=ano_letivo passou de ~2,4 s para ~5,6 s. Mas a medida de uma
+# escola num bloco só muda quando muda algo que a decide — e as telas da Secretaria pedem o
+# ano letivo várias vezes seguidas (Panorama, Escolas, a ficha, Plataformas, o diagnóstico e
+# a relação). Por isso ela é GUARDADA, por escola e bloco, na memória do processo, por pouco
+# tempo (``_GUARDA_DOS_BLOCOS_S``), com uma chave que leva TUDO o que entra na medida:
+#
+# * a escola, o ano letivo dela, a janela do bloco, o "hoje", o k e os módulos da rede;
+# * as séries visíveis da escola (a decisão da supressão, que é da rede inteira);
+# * a coorte da escola (cada aluno, a turma e o ano escolar: matrícula, inativação,
+#   transferência, troca de série mudam a chave);
+# * as datas da primeira e da última coleta de cada plataforma;
+# * o CARIMBO dos dados da escola, lido na mesma consulta da coorte: (linhas, maior id, soma
+#   dos ``aluno_id``) dos retratos do Elefante e do Matific, das leituras e dos eventos de
+#   leitura, e (linhas, maior id, quantas "sem questões") das importações. Uma coleta nova,
+#   uma importação apagada, a fusão de duas fichas (as linhas passam de uma criança para a
+#   outra) ou o status "sem questões" mudam a chave.
+#
+# O período pedido (o ano letivo) é medido sempre: a resposta nunca sai da guarda, só as
+# marcas dos blocos e o resto da conta (``_residuo``, que compara a criança no período, lida
+# agora, com a soma dela nos blocos). Fica fora da chave só o que muda um dado já gravado
+# sem linha nova e sem importação (o retrato do dia só é reescrito por uma importação, que
+# entra no carimbo; o nível de um livro do catálogo nas leituras antigas sem o nível
+# congelado): vale no máximo até o fim da guarda (10 minutos). A guarda é de cada banco
+# (``_guarda_do_banco``: os testes não se misturam) e tem teto de entradas. O primeiro
+# pedido depois de uma coleta (ou da validade) continua medindo todos os blocos.
+_GUARDA_DOS_BLOCOS_S = 600.0
+# Uma entrada por escola e bloco, com os números de cada criança dela no bloco: na rede
+# fictícia de 28 escolas, 140 entradas de ~4 KiB (serializadas) no ano letivo.
+_GUARDA_DOS_BLOCOS_MAX = 1024
+_guardas: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_trava_da_guarda = threading.Lock()
+
+
+def _relogio() -> float:
+    return time.monotonic()
+
+
+def limpar_cache_dos_blocos() -> None:
+    """Esquece as medidas dos blocos guardadas (todas as escolas, todos os bancos)."""
+    with _trava_da_guarda:
+        _guardas.clear()
+
+
+def _guarda_do_banco(db: Session) -> OrderedDict:
+    bind = db.get_bind()
+    motor = getattr(bind, "engine", bind)
+    with _trava_da_guarda:
+        guarda = _guardas.get(motor)
+        if guarda is None:
+            guarda = _guardas[motor] = OrderedDict()
+        return guarda
+
+
+def _chave_do_bloco(e: Escola, janela: rp.Janela, hoje: date, k: int, mods: set[str],
+                    visiveis: set[int], coletas: dict[str, tuple | None],
+                    coorte: dict[int, dict], carimbo: tuple) -> tuple:
+    """Tudo o que decide a medida da escola ``e`` no bloco ``janela`` (ver acima)."""
+    return (e.id, e.ano_letivo_ativo, janela.inicio, janela.fim, hoje, k, frozenset(mods),
+            frozenset(visiveis), tuple(coletas.get(p) for p in PLATAFORMA_MODULO),
+            tuple(sorted((aid, info["turma_id"], info["ano_escolar"])
+                         for aid, info in coorte.items())),
+            carimbo)
+
+
+def _ler_da_guarda(guarda: OrderedDict, chave: tuple) -> _Medida | None:
+    with _trava_da_guarda:
+        achada = guarda.get(chave)
+        if achada is None:
+            return None
+        validade, medida = achada
+        if validade <= _relogio():
+            del guarda[chave]
+            return None
+        return medida
+
+
+def _guardar(guarda: OrderedDict, chave: tuple, medida: _Medida) -> None:
+    """Guarda a medida; as entradas ficam em ordem de validade (todas valem o mesmo tempo):
+    as vencidas saem pela frente, e acima do teto sai a mais antiga."""
+    with _trava_da_guarda:
+        agora = _relogio()
+        while guarda and next(iter(guarda.values()))[0] <= agora:
+            guarda.popitem(last=False)
+        guarda[chave] = (agora + _GUARDA_DOS_BLOCOS_S, medida)
+        guarda.move_to_end(chave)
+        while len(guarda) > _GUARDA_DOS_BLOCOS_MAX:
+            guarda.popitem(last=False)
+
+
+def _copia_leve(m: _Medida) -> _Medida:
+    """A medida de um bloco com só o que as marcas e o resto da conta leem (as contagens e
+    os números de cada criança), sem a escola (um objeto da sessão) — cópia nova, para a
+    guarda nunca ser mudada por quem a lê."""
+    def _leve(soma):
+        if soma is None:
+            return None
+        if isinstance(soma, _Elefante):
+            return replace(soma, bases=[], atuais=[],
+                           questoes_por_aluno=dict(soma.questoes_por_aluno))
+        return replace(soma, bases=[], atuais=[], por_aluno=dict(soma.por_aluno))
+    return replace(m, escola=None, contagem=None, series={
+        s: _Celula(alunos=c.alunos, elefante=_leve(c.elefante), matific=_leve(c.matific))
+        for s, c in m.series.items()}, cobertura=dict(m.cobertura),
+        ultima_coleta=dict(m.ultima_coleta), coberto_ate=dict(m.coberto_ate),
+        fracao_coberta=dict(m.fracao_coberta))
 
 
 # --- Proteção por blocos (ver "Blocos fixos do calendário") -------------------------------
@@ -1871,7 +2052,8 @@ def _tabelas_da_rede(db: Session, escolas_da_decisao: list[Escola], medir: list[
                 estendidos.append(replace(p, bloco=i))
         filhos.append(indices)
     tabelas = _tabelas(db, escolas_da_decisao, medir, mods, periodos=estendidos, hoje=hoje,
-                       k=k, com_primeiro_evento=com_primeiro_evento)
+                       k=k, com_primeiro_evento=com_primeiro_evento,
+                       blocos=frozenset(i for indices in filhos for i in indices))
     return [(tabelas[g], _marcas_dos_blocos(tabelas[g], [tabelas[i] for i in filhos[g]], k,
                                             serie))
             for g in range(len(periodos))]

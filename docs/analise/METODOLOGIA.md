@@ -394,6 +394,22 @@ histórico nem se multiplica pelos períodos.
     célula, escola e rede da resposta, os grupos que ele esconde **com crianças dentro**: de
     1 a k − 1 no subconjunto, ou em complemento (as regras acima). Total sem nenhuma criança
     no subconjunto do bloco não marca (a soma dele é zero, e a das partes também);
+  * **a medida de cada escola em cada bloco é guardada** (REV2-ANALISE-1): medir os blocos a
+    cada pedido levou o ano letivo da rede fictícia de 28 escolas (PG local) de ~2,4 s para
+    ~5,6 s, e as telas da Secretaria pedem o ano letivo várias vezes seguidas. A medida fica
+    na memória do servidor por até 10 minutos, com uma chave que leva tudo o que a decide: a
+    escola, o ano letivo, a janela do bloco, o dia, o k, os módulos, as séries visíveis, a
+    coorte (cada criança com a turma e o ano escolar), as datas da primeira e da última
+    coleta e um **carimbo dos dados** da escola, lido na mesma consulta da coorte (linhas,
+    maior id e soma dos alunos dos retratos, das leituras e dos eventos de leitura; linhas,
+    maior id e quantas "sem questões" das importações). Coleta nova, importação apagada,
+    fusão de fichas, criança inativada ou trocada de série mudam a chave e a escola é medida
+    de novo. O período pedido é medido sempre — a resposta nunca sai da guarda, e o resto da
+    conta compara a criança no período (lida agora) com a soma dela nos blocos. Fica fora da
+    chave só o que muda um dado já gravado sem linha nova (os retratos não são reescritos
+    fora de uma importação; o nível de um livro do catálogo nas leituras antigas sem o nível
+    congelado): vale no máximo até o fim dos 10 minutos. O primeiro pedido depois de uma
+    coleta (ou dos 10 minutos) continua medindo tudo;
   * o **resto** da conta que nenhum bloco mede é um bloco a mais (`_residuo`): no Matific, o
     ano letivo parte do zero e o bimestre parte da **primeira coleta** de quem chega no meio
     do ano (ganho zero nela); o teto das estrelas e a queda do contador também não somam
