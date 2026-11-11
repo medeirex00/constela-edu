@@ -45,7 +45,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, EventoAluno, Leitura, Livro
+from app.models import Aluno, Escola, EventoAluno, Leitura, Livro, LogAuditoria
 from app.models.base import agora
 from app.services.audit import registrar
 from app.services.eventos import chave_evento
@@ -55,6 +55,41 @@ ACAO_ITEM = "leitura.data_restaurada"
 ACAO_LOTE = "leituras.restauracao_historica"
 
 MOTIVO_MINIMO = 10
+
+# Onde a deduplicação deixa a cópia de evento que ela APAGOU (só no log): a fusão
+# (``alunos_fusao.fundir_par``) e a limpeza do passivo
+# (``eventos.deduplicar_eventos_por_conteudo``, ``scripts/deduplicar_eventos_por_conteudo``).
+_LOGS_DE_DESCARTE = {"aluno.fundido": "eventos_descartados_detalhe",
+                     "aluno.eventos_duplicados_removidos": "eventos"}
+
+
+def _descartes_anteriores(db: Session, escola_id: int, item: "ItemRestauracao",
+                          evento: EventoAluno) -> list[tuple[datetime, dict]]:
+    """As ocorrências ANTERIORES do livro na ficha de origem que a deduplicação
+    apagou e que só o log guarda: mesmo livro, instante anterior ao da evidência e
+    a chave que prova a MESMA ficha de origem (o hash é refeito aqui, como na regra
+    7). A fusão e a limpeza ainda tiram a cópia nativa ÚNICA de uma ficha (sem
+    releitura naquela hora); se a ficha ganha releitura depois e é absorvida, só o
+    log diz que a releitura não é a primeira."""
+    limite = _sem_tz(evento.ocorrido_em)
+    achados: list[tuple[datetime, dict]] = []
+    for acao, detalhes in db.execute(
+            select(LogAuditoria.acao, LogAuditoria.detalhes).where(
+                LogAuditoria.escola_id == escola_id,
+                LogAuditoria.acao.in_(sorted(_LOGS_DE_DESCARTE)))):
+        lista = (detalhes if isinstance(detalhes, dict) else {}).get(_LOGS_DE_DESCARTE[acao])
+        for d in lista if isinstance(lista, list) else ():
+            if not isinstance(d, dict) or d.get("livro_id") != item.livro_id:
+                continue
+            try:
+                quando = _sem_tz(datetime.fromisoformat(str(d.get("ocorrido_em"))))
+            except ValueError:
+                continue
+            if quando < limite and d.get("chave_natural") == chave_evento(
+                    evento.plataforma, evento.tipo_evento, item.aluno_origem_id,
+                    evento.conteudo_titulo or "", quando):
+                achados.append((quando, d))
+    return achados
 
 
 class RestauracaoInvalida(Exception):
@@ -208,7 +243,8 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
     # É a regra inteira do método: a linha ``Leitura`` nasce na primeira
     # importação. Aceitar um evento posterior seria escolher a data mais
     # conveniente entre as disponíveis — exatamente a inferência que este
-    # serviço existe para proibir.
+    # serviço existe para proibir. Contam os eventos vivos e os que a
+    # deduplicação apagou e deixou no log (``_descartes_anteriores``).
     anteriores = [
         outro for outro in db.execute(
             select(EventoAluno).where(
@@ -228,6 +264,18 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
             f"{primeiro.id}, em {primeiro.ocorrido_em:%d/%m/%Y %H:%M}. A data "
             "que a fusão apagou é a da PRIMEIRA, porque a linha de leitura "
             "nasce na primeira importação e nunca é atualizada.")
+    # ...e a anterior que a deduplicação apagou (só no log) também conta.
+    descartadas = _descartes_anteriores(db, escola_id, item, evento)
+    if descartadas:
+        quando, primeiro = min(descartadas, key=lambda par: par[0])
+        raise recusar(
+            f"O evento {evento.id} não é a primeira ocorrência de "
+            f"“{livro.titulo}” na ficha {item.aluno_origem_id}: houve uma em "
+            f"{quando:%d/%m/%Y %H:%M} (evento {primeiro.get('evento_id')}), "
+            "descartada como cópia repetida numa fusão ou na limpeza de eventos "
+            "duplicados — está no log de auditoria. A data que a fusão apagou é a "
+            "da PRIMEIRA, porque a linha de leitura nasce na primeira importação e "
+            "nunca é atualizada.")
 
     # --- 10: nada a fazer é RECUSA, não sucesso silencioso. É esta regra que
     # protege os livros em que as duas fichas tinham a MESMA data: lá a fusão
