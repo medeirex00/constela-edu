@@ -40,7 +40,8 @@ NOTIFICAVEIS: dict[str, tuple[str, str, Callable[[int | None], str]]] = {
     # Importação/sync NÃO pode descartar linha em silêncio: a correspondência
     # insegura e a linha sem aluno vinculado viram notificação para a escola.
     # Rota de quando a pendência NÃO está na fila de revisão (a Lista Piloto manda
-    # a correspondência insegura para Alunos › Fundir duplicatas); a que está na
+    # a correspondência insegura para Alunos › Fundir duplicatas; a "mudança de sala
+    # sem prova", para a própria ficha: ``MOTIVOS_DO_LINK_DA_FICHA``); a que está na
     # fila leva às Revisões de identidade (``ROTA_REVISOES``, em
     # ``emitir_da_auditoria``).
     "aluno.revisao_necessaria": ("Importação: aluno com correspondência insegura — revisar",
@@ -55,6 +56,13 @@ ROTA_REVISOES = "/revisoes-identidade"
 # ``revisao_id``. Os outros que trazem o id só citam a origem — o "Novo aluno
 # cadastrado" da ficha criada pela fila leva à ficha nova, como qualquer outro.
 AVISOS_DE_PENDENCIA = frozenset({"aluno.revisao_necessaria", "importacao.linha_ignorada"})
+# Pendência da Lista Piloto (fora da fila) cujo caminho é a FICHA candidata
+# (``entidade_id``), não a lista de Alunos. Na "mudança de sala sem prova" (a virada,
+# G_VIRADA-8) a ficha não tem matrícula no ano ativo, e a lista /alunos, que só mostra
+# quem tem, não a traz: o aviso da importação manda abrir a ficha (três pontinhos ›
+# Editar dados › Turma), e o link do sino leva até ela. Os outros motivos seguem em
+# /alunos, onde está "Fundir duplicatas".
+MOTIVOS_DO_LINK_DA_FICHA = {"aluno.revisao_necessaria": frozenset({"mudanca_de_sala_sem_prova"})}
 
 # GUARDAS DE PERFIL das telas para onde os avisos apontam. A fonte da regra é a
 # web: ``apps/web/src/lib/rotasGuardadas.ts`` (o espelho das guardas do App.tsx).
@@ -92,7 +100,8 @@ def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
     ``revisao_id``) aponta para as Revisões de identidade — é lá que o gestor
     escolhe o aluno, cria a ficha ou descarta. Só a PENDÊNCIA
     (``AVISOS_DE_PENDENCIA``): a ficha criada pela fila também traz o id, de origem,
-    e o aviso dela leva à ficha."""
+    e o aviso dela leva à ficha. Fora da fila, o motivo cujo caminho é a ficha
+    (``MOTIVOS_DO_LINK_DA_FICHA``) leva à ficha candidata."""
     if escola_id is None:
         return
     spec = NOTIFICAVEIS.get(acao)
@@ -103,6 +112,9 @@ def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
     if (acao in AVISOS_DE_PENDENCIA and isinstance(detalhes, dict)
             and "revisao_id" in detalhes):
         rota = ROTA_REVISOES
+    elif (entidade == "aluno" and entidade_id and isinstance(detalhes, dict)
+            and detalhes.get("motivo") in MOTIVOS_DO_LINK_DA_FICHA.get(acao, ())):
+        rota = f"/alunos/{entidade_id}"
     aluno_id = entidade_id if entidade == "aluno" else None
     db.add(Notificacao(
         escopo="escola", escola_id=escola_id, tipo=acao, severidade=severidade,
