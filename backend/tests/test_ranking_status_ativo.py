@@ -3,10 +3,10 @@ num ranking — mesmo com ``notas.posicao`` ainda carimbada no ano ativo.
 
 Achado de produção (20/10/2026, leitura só de consulta, agregada): 7 alunos não
 ativos (6 ``transferido`` + 1 ``fora_lista_piloto``) ainda têm ``notas.posicao``
-preenchida no ano ativo. É esperado — o recálculo só regrava as linhas do
-conjunto pontuado e não apaga a Nota de quem saiu (o dado gravado não é
-alterado aqui) —, e por isso TODO leitor de ranking tem de filtrar o status NA
-LEITURA. Este arquivo trava isso em cada superfície de ranking, pódio,
+preenchida no ano ativo. O recálculo não apaga a Nota de quem saiu; desde o
+PEND-11 ele limpa a posição dela, mas a linha gravada antes disso fica como está
+até o próximo recálculo da escola — e por isso TODO leitor de ranking continua
+tendo de filtrar o status NA LEITURA. Este arquivo trava isso em cada superfície de ranking, pódio,
 premiação, exportação e telão, num cenário em que o não ativo tem a Nota
 congelada em 1º e o maior volume de dados de todos.
 """
@@ -77,13 +77,24 @@ def cenario(db, escola_completa):
     # Recalcula com TODOS ativos (as Notas deles ganham posição de verdade)…
     scoring.recalcular_escola(db, escola.id)
     # …e só então eles saem: a Nota fica no banco, carimbada em 1º, como em
-    # produção. O recálculo seguinte não a apaga.
+    # produção. O recálculo seguinte não a apaga (só limpa a posição, abaixo).
     for aluno, status in fora:
         aluno.status = status
         nota = db.query(Nota).filter_by(aluno_id=aluno.id).one()
         nota.posicao = nota.posicao_leitura = nota.posicao_matematica = 1
     db.commit()
     scoring.recalcular_escola(db, escola.id)
+    # O recálculo não apaga a Nota de quem saiu, mas LIMPA a posição dela
+    # (PEND-11: ``test_aud2_motor_posicao_de_quem_saiu.py``)…
+    for aluno, _status in fora:
+        nota = db.query(Nota).filter_by(aluno_id=aluno.id).one()
+        assert (nota.posicao, nota.posicao_leitura, nota.posicao_matematica) == \
+            (None, None, None)
+        # …e a linha gravada antes dessa regra (as de produção ficam assim até o
+        # próximo recálculo da escola) continua sendo o cenário: todo leitor tem
+        # de filtrar o status NA LEITURA mesmo com a posição carimbada.
+        nota.posicao = nota.posicao_leitura = nota.posicao_matematica = 1
+    db.commit()
     for aluno, _status in fora:
         nota = db.query(Nota).filter_by(aluno_id=aluno.id).one()
         assert nota.posicao is not None, "o cenário precisa da Nota congelada"

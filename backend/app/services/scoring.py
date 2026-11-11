@@ -1730,6 +1730,19 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
         nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
         nota_row.calculada_em = instante
 
+    # QUEM SAIU NÃO GUARDA POSIÇÃO. A Nota de quem não concorre mais (transferido,
+    # arquivado, sem matrícula no ano, Fase) não é apagada — a nota é histórico —,
+    # mas a posição dela é de um cálculo antigo: sem limpar, "1º lugar" continuava
+    # carimbado numa criança fora do ranking, e cada leitor precisava lembrar de
+    # filtrá-la (o leitor que esquecesse mostrava duas crianças em 1º). Ela volta a
+    # ter posição no primeiro recálculo em que voltar a concorrer.
+    pontuados = {resultado.aluno.id for resultado in resultados}
+    for aluno_id, nota_row in notas_existentes.items():
+        if aluno_id not in pontuados:
+            nota_row.posicao = None
+            nota_row.posicao_leitura = None
+            nota_row.posicao_matematica = None
+
     if commit:
         db.commit()
     else:
