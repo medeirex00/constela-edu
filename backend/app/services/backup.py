@@ -49,6 +49,7 @@ from typing import Any
 from sqlalchemy import bindparam, delete, func, select, update
 from sqlalchemy.orm import Session
 
+from app.core.database import bloquear_escola_para_importacao
 from app.models import (
     Aluno,
     Configuracao,
@@ -726,6 +727,16 @@ def restaurar(db: Session, escola_id: int, dados: dict,
     tabelas = dados.get("tabelas")
     if not isinstance(tabelas, dict):
         raise ValueError("Arquivo de backup inválido: bloco de tabelas ausente.")
+
+    # A TRAVA DA ESCOLA (4711), a mesma da importação, da coleta, da fusão e da
+    # exclusão, ANTES de ler qualquer coisa da escola e sem commit no meio (o
+    # commit de quem chama a solta). Sem ela, no PostgreSQL, a coleta que chegava no
+    # meio gravava nas fichas de antes e caía com ForeignKeyViolation no commit da
+    # restauração; na outra ordem, a restauração não esperava a coleta e sobrava o
+    # registro de uma importação sem dado nenhum (G_LGPD-6). Com ela, a 2ª espera a
+    # 1ª e relê o estado. O recálculo das notas (4713) fica para depois do commit
+    # (hierarquia das travas: ``bloquear_escola_para_recalculo``). No-op no SQLite.
+    bloquear_escola_para_importacao(db, escola_id)
 
     # PORTÃO (C-06): nada é apagado enquanto houver dado que não voltaria.
     perdas = perdas_da_restauracao(db, escola_id, set(tabelas))
