@@ -4,6 +4,7 @@ Executar em desenvolvimento:
     uvicorn app.main:app --reload --port 8000
 """
 import logging
+import math
 import secrets
 
 from fastapi import Depends, FastAPI, Request, Response, status
@@ -169,20 +170,35 @@ app.add_middleware(
 
 
 # O 422 padrão devolve o "input" de cada erro: num corpo que não é JSON, é o corpo
-# INTEIRO (até o teto do limite_corpo) — eco do que o cliente mandou, que dobra o
-# tráfego e pode repetir dado pessoal em log de proxy. Entrada crua (bytes) ou longa
-# sai do erro; o resto da resposta é a do FastAPI.
+# INTEIRO (até o teto do limite_corpo); num campo de texto que recebe uma lista, a lista
+# inteira; num campo obrigatório ausente, o corpo JSON inteiro (um dict). Eco do que o
+# cliente mandou, que dobra o tráfego e pode repetir dado pessoal em log de proxy — e,
+# num contêiner, custa CPU no event loop (o ``jsonable_encoder`` e a serialização
+# percorrem item a item): 30 MB de lista numa rota anônima paravam o worker por ~4 s.
+# Só fica o ``input`` ESCALAR curto (número finito, booleano, nulo, texto de até 256
+# caracteres); o resto sai do erro. NaN/Infinity também saem: o JSON de entrada os
+# aceita, o de saída (``allow_nan=False``) não, e o 422 virava 500. A resposta leva no
+# máximo os primeiros ``_ERROS_MAXIMOS_NO_422`` erros: uma lista de N itens inválidos
+# gera N erros, e as telas só mostram as mensagens (sem repetir). O resto é a resposta
+# do FastAPI.
 _INPUT_MAXIMO_NO_422 = 256
+_ERROS_MAXIMOS_NO_422 = 20
+
+
+def _input_que_pode_voltar(bruto: object) -> bool:
+    if bruto is None or isinstance(bruto, (bool, int)):
+        return True
+    if isinstance(bruto, float):
+        return math.isfinite(bruto)
+    return isinstance(bruto, str) and len(bruto) <= _INPUT_MAXIMO_NO_422
 
 
 @app.exception_handler(RequestValidationError)
 async def _erro_de_validacao(request: Request, exc: RequestValidationError) -> JSONResponse:
     erros = []
-    for erro in exc.errors():
+    for erro in exc.errors()[:_ERROS_MAXIMOS_NO_422]:
         erro = dict(erro)
-        bruto = erro.get("input")
-        if isinstance(bruto, (bytes, bytearray)) or (
-                isinstance(bruto, str) and len(bruto) > _INPUT_MAXIMO_NO_422):
+        if "input" in erro and not _input_que_pode_voltar(erro["input"]):
             erro.pop("input")
         erros.append(erro)
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
