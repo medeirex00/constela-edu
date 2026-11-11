@@ -4,17 +4,26 @@
 // confirmação cria a ficha" —, mas a confirmação a ignorava. Agora a tela diz que a
 // linha será ignorada, não oferece destino e não a manda ao /confirmar; o lote a traz
 // já ignorada. Dados fictícios.
+//
+// REV2-COSTURA-5: as correspondências "ignorado" trazem turma_id / turma_nova (como
+// um backend que mandasse a turma da sala junto). Sem isso, o destino padrão de
+// aluno novo (``destinoDoNovo``) já dava "ignorar" e o teste passava mesmo sem a
+// ação inicial própria da linha ignorada: a garantia de que ela nunca vai ao
+// /confirmar como "criar" ficava sem teste.
 import { describe, expect, it } from "vitest";
 
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
-import type { Analise } from "../lib/types";
+import type { Analise, ResultadoImportacao } from "../lib/types";
 import ImportacaoLote from "../pages/ImportacaoLote";
 import Importacoes from "../pages/Importacoes";
-import { fireEvent, renderComApp, responder, screen, turmaFake, userEvent, within } from "./utils";
+import {
+  api, fireEvent, renderComApp, responder, screen, turmaFake, userEvent, within,
+} from "./utils";
 
 const URL_HIST = "/escolas/1/importacoes";
 const URL_TURMAS = "/escolas/1/turmas";
 const URL_ANALISAR = "/escolas/1/importacoes/analisar";
+const URL_CONFIRMAR = "/escolas/1/importacoes/confirmar";
 
 function linha(numero: number, nome: string, correspondencia: Analise["linhas"][number]["correspondencia"]) {
   return { numero, nome, dados: { atividades: 6, pontuacao_media: 71, estrelas: 12 }, erros: [],
@@ -33,13 +42,15 @@ function analise(): Analise {
         status: "exato", aluno_id: 10, aluno_nome: "Ana Beatriz Souza", similaridade: 100,
         alternativas: [{ aluno_id: 10, nome: "Ana Beatriz Souza", turma: "3º Ano A", similaridade: 100 }],
       }),
+      // Com a turma da sala (turma_id / turma_nova): o destino de aluno novo seria
+      // "criar" — só a ação inicial da linha ignorada a deixa de fora.
       linha(2, "Crianca Ficticia Esquecida", {
         status: "ignorado", motivo: "conta_esquecida", aluno_id: null, aluno_nome: null,
-        similaridade: null, alternativas: [],
+        similaridade: null, alternativas: [], turma_id: 1,
       }),
       linha(3, "Crianca Ficticia Conta Velha", {
         status: "ignorado", motivo: "identidade_aposentada", aluno_id: null, aluno_nome: null,
-        similaridade: null, alternativas: [],
+        similaridade: null, alternativas: [], turma_nova: "3º Ano B",
       }),
     ],
   } as unknown as Analise;
@@ -68,11 +79,22 @@ describe("prévia: linha que a confirmação ignora", () => {
     expect(screen.queryByRole("combobox", { name: "Destino de Crianca Ficticia Conta Velha" })).toBeNull();
     expect(screen.getByRole("combobox", { name: "Destino de Ana Beatriz Souza" })).toBeInTheDocument();
 
+    const data = screen.queryByLabelText("Data do relatório (obrigatória)");
+    if (data) fireEvent.change(data, { target: { value: "2026-10-14" } });
+    responder("POST", URL_CONFIRMAR, {
+      mensagem: "ok", importacao_id: 1, qtd_alunos: 1, qtd_erros: 0, avisos: [],
+    } satisfies ResultadoImportacao);
     await u.click(screen.getByRole("button", { name: "Sim, importar" }));
     const confirmacao = await screen.findByRole("dialog", { name: "Gravar esta importação?" });
     expect(confirmacao).toHaveTextContent("1 vinculado(s) a um aluno já cadastrado");
     expect(confirmacao).not.toHaveTextContent(/aluno\(s\) novo/);
     expect(within(confirmacao).queryByText(/criad/)).toBeNull();
+    // O /confirmar leva só a linha do vínculo: as ignoradas não vão, nem como "criar".
+    await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    expect(chamada, "o /confirmar foi chamado").toBeDefined();
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas.map((l: { nome: string }) => l.nome)).toEqual(["Ana Beatriz Souza"]);
   });
 });
 
