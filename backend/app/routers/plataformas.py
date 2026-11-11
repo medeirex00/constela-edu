@@ -84,6 +84,17 @@ MSG_AJUSTE_COM_DADO_RECEBIDO = (
     "credencial NÃO reabre o ajuste — o que já foi recebido continua valendo. "
     "Fale com o suporte.")
 
+# A marca que fechou o ajuste é só a CONFIGURAÇÃO da integração (credencial salva
+# ou removida, coleta que rodou): ela vale também para a senha recusada e para a
+# coleta que falhou, então o texto não pode dizer que algum dado chegou.
+MSG_AJUSTE_COM_INTEGRACAO_CONFIGURADA = (
+    "O Elefante Letrado desta escola já foi configurado na integração automática "
+    "(tela Integrações) — mesmo que a senha tenha sido recusada ou que a integração "
+    "tenha sido desligada ou removida depois: o ajuste manual de livros por nível "
+    "fica com o Admin Global da Constela, para não sobrescrever o dado oficial. "
+    "Desligar a integração ou remover a credencial NÃO reabre o ajuste. Fale com o "
+    "suporte.")
+
 # Matific: o contador é ACUMULADO e a coleta seguinte traz de novo o valor da
 # plataforma. Um número digitado por cima do dado coletado vira um degrau falso
 # na série — ganho inventado ou ganho real apagado no período.
@@ -99,11 +110,21 @@ MSG_AJUSTE_MATIFIC_COM_DADO_RECEBIDO = (
     "NÃO reabre o ajuste — o que já foi recebido continua valendo. Fale com o "
     "suporte.")
 
-# Mensagens da governança do ajuste manual, por plataforma:
-# (integração ativa, dado já recebido da plataforma).
-_MSGS_GOVERNANCA: dict[str, tuple[str, str]] = {
-    "elefante": (MSG_AJUSTE_COM_INTEGRACAO, MSG_AJUSTE_COM_DADO_RECEBIDO),
-    "matific": (MSG_AJUSTE_MATIFIC_COM_INTEGRACAO, MSG_AJUSTE_MATIFIC_COM_DADO_RECEBIDO),
+MSG_AJUSTE_MATIFIC_COM_INTEGRACAO_CONFIGURADA = (
+    "O Matific desta escola já foi configurado na integração automática (tela "
+    "Integrações) — mesmo que a senha tenha sido recusada ou que a integração tenha "
+    "sido desligada ou removida depois: o ajuste manual de atividades e estrelas "
+    "fica com o Admin Global da Constela, para não sobrescrever o dado oficial. "
+    "Desligar a integração ou remover a credencial NÃO reabre o ajuste. Fale com o "
+    "suporte.")
+
+# Mensagens da governança do ajuste manual, por plataforma: (integração ativa,
+# dado já recebido da plataforma, integração só configurada — sem prova de dado).
+_MSGS_GOVERNANCA: dict[str, tuple[str, str, str]] = {
+    "elefante": (MSG_AJUSTE_COM_INTEGRACAO, MSG_AJUSTE_COM_DADO_RECEBIDO,
+                 MSG_AJUSTE_COM_INTEGRACAO_CONFIGURADA),
+    "matific": (MSG_AJUSTE_MATIFIC_COM_INTEGRACAO, MSG_AJUSTE_MATIFIC_COM_DADO_RECEBIDO,
+                MSG_AJUSTE_MATIFIC_COM_INTEGRACAO_CONFIGURADA),
 }
 
 # Situação de uma ficha que não está ativa, em português (o mesmo vocabulário do
@@ -317,6 +338,13 @@ def integracao_matific_ativa(db: Session, escola_id: int) -> bool:
 # separa o relatório da plataforma do ajuste manual da própria escola).
 ACOES_CREDENCIAL: frozenset[str] = frozenset({
     "sync.credencial_salva", "sync.credencial_removida"})
+# Marcas (devolvidas por ``_evidencia_da_plataforma``) que provam só que a
+# integração foi CONFIGURADA, não que algum dado chegou: ``sync.credencial_salva``
+# é gravado no "Salvar e validar" ANTES do teste de login (vale para a senha
+# recusada), e a execução de sincronização fica também quando a coleta falha.
+# Fecham o ajuste do mesmo jeito; só a explicação muda.
+MARCAS_SO_DE_CONFIGURACAO: frozenset[str] = frozenset(
+    {f"auditoria:{acao}" for acao in ACOES_CREDENCIAL} | {"sincronizacao"})
 ACAO_IMPORTACAO = "importacao.concluida"
 # Reconciliações de catálogo: só a importação/sincronização do Elefante as grava
 # (``routers.importacoes._AcervoEscola``), então já são específicas.
@@ -341,7 +369,8 @@ def _evidencia_da_plataforma(db: Session, escola_id: int, plataforma: str) -> st
     1. ``LogAuditoria`` — nunca apagado (nem pela exclusão permanente de usuário,
        que só anonimiza a autoria, nem pela restauração de backup, que não
        inclui a tabela): ``sync.credencial_salva``/``removida`` com a plataforma
-       no detalhe (a escola conectou a plataforma), ``importacao.concluida`` de
+       no detalhe (a integração foi configurada; gravado antes do teste de
+       login, vale também para a senha recusada), ``importacao.concluida`` de
        um relatório da plataforma que não seja ``tipo="manual"`` e, no Elefante,
        as reconciliações de catálogo que só a importação/sync do Elefante grava;
     2. ``Importacao`` da plataforma que NÃO seja ``tipo="manual"`` — o registro
@@ -350,7 +379,12 @@ def _evidencia_da_plataforma(db: Session, escola_id: int, plataforma: str) -> st
        fora);
     3. ``EventoAluno`` da plataforma — o espelho evento a evento da sync;
     4. ``Leitura`` (só Elefante) — só nasce de importação/sincronização;
-    5. ``SincronizacaoExecucao`` da plataforma — o histórico de execuções.
+    5. ``SincronizacaoExecucao`` da plataforma — o histórico de execuções (fica
+       também quando a coleta falhou).
+
+    As marcas de ``MARCAS_SO_DE_CONFIGURACAO`` (credencial e execução) provam a
+    integração configurada, não dado recebido: a recusa do ajuste explica cada
+    caso com o seu texto.
 
     As marcas 2 a 4 estão no backup (``services.backup.MODELOS``) e portanto
     somem numa restauração; as de auditoria e a de sincronização não — por isso
@@ -426,11 +460,16 @@ def _exigir_governanca_ajuste_manual(db: Session, escola_id: int, usuario: Usuar
     caso."""
     if usuario.is_global:
         return
-    msg_integracao, msg_dado_recebido = _MSGS_GOVERNANCA[plataforma]
+    msg_integracao, msg_dado_recebido, msg_configurada = _MSGS_GOVERNANCA[plataforma]
     if _integracao_ativa(db, escola_id, plataforma):
         raise HTTPException(status.HTTP_403_FORBIDDEN, msg_integracao)
-    if _evidencia_da_plataforma(db, escola_id, plataforma) is not None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, msg_dado_recebido)
+    marca = _evidencia_da_plataforma(db, escola_id, plataforma)
+    if marca is not None:
+        # A explicação diz o que a marca prova: dado recebido, ou só a integração
+        # configurada (credencial salva/removida, coleta que pode ter falhado).
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            msg_configurada if marca in MARCAS_SO_DE_CONFIGURACAO
+                            else msg_dado_recebido)
 
 
 def _contagens_validadas(db: Session, escola_id: int, contagens: dict[str, int]) -> dict[str, int]:
