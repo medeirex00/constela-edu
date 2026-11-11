@@ -117,6 +117,22 @@ def config_assistente(db: Session, escola_id: int) -> dict:
     }
 
 
+def provedor_em_uso(config: dict) -> str:
+    """Quem de fato responde, a partir de ``config_assistente``: o provedor
+    externo só com chave utilizável. Sem ela (DEK trocada sem recadastro,
+    ambiente sem AI_API_KEY) a criação dele falha e o assistente responde no
+    modo local — é isso que o selo da tela do Assistente tem de dizer."""
+    if config["provedor"] in _PROVEDORES_EXTERNOS and config["chave_definida"]:
+        return config["provedor"]
+    return "local"
+
+
+_MSG_SEM_CHAVE = "Informe a chave de API do provedor escolhido."
+_MSG_CHAVE_ILEGIVEL = ("A chave de API salva não abre mais com a chave de cifra do "
+                       "servidor (trocada desde que foi gravada): informe a chave de "
+                       "API de novo.")
+
+
 def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
                              api_key: str | None, modelo: str | None) -> dict:
     """Grava provedor/modelo e a chave de API CIFRADA (``cifrar_segredo``: Fernet
@@ -132,13 +148,11 @@ def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
     if provedor != provedor_anterior and not api_key:
         valores.pop("api_key_cifrada", None)
     if provedor != "local" and not api_key and not valores.get("api_key_cifrada"):
-        raise ValueError("Informe a chave de API do provedor escolhido.")
+        raise ValueError(_MSG_SEM_CHAVE)
     if provedor != "local" and not api_key and not _chave_legivel(valores):
         # "Manter a atual" manteria uma cifra que nada abre (DEK trocada): recusa sem
         # tocar no que está gravado (voltar às chaves antigas ainda a reabriria).
-        raise ValueError("A chave de API salva não abre mais com a chave de cifra do "
-                         "servidor (trocada desde que foi gravada): informe a chave de "
-                         "API de novo.")
+        raise ValueError(_MSG_CHAVE_ILEGIVEL)
 
     valores["provedor"] = provedor
     valores["modelo"] = (modelo or "").strip()
@@ -159,11 +173,19 @@ def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
 
 
 def _provedor_da_escola(db: Session, escola_id: int):
-    """Provedor conforme a configuração da escola; sem ela, o do ambiente."""
+    """Provedor conforme a configuração da escola; sem ela, o do ambiente.
+
+    Provedor externo da escola sem chave utilizável levanta ``ErroProvedorIA``
+    com a causa real (a mesma frase do salvar): a chave salva pela tela não abre
+    mais (DEK trocada) ou não existe. Sem isto, o provedor recebia a chave vazia
+    e culpava a variável de ambiente AI_API_KEY, que não é o que se conserta."""
     row = _config_row(db, escola_id)
     valores = dict(row.valor or {}) if row else {}
     if not valores.get("provedor"):
         return obter_provedor()
+    if valores["provedor"] in _PROVEDORES_EXTERNOS and not _chave_legivel(valores):
+        raise ErroProvedorIA(_MSG_CHAVE_ILEGIVEL if valores.get("api_key_cifrada")
+                             else _MSG_SEM_CHAVE)
     return obter_provedor(
         provedor=valores["provedor"],
         api_key=decifrar_segredo(valores.get("api_key_cifrada")),

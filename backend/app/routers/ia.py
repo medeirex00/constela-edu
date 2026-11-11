@@ -137,9 +137,15 @@ def status_do_assistente(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
-    """Qual provedor está configurado (sem expor chaves) — config de gestão."""
+    """Qual provedor responde de fato (sem expor chaves) — o selo da tela do
+    Assistente. Provedor externo sem chave utilizável (a salva não abre mais com
+    a chave de cifra do servidor, ou o ambiente não tem AI_API_KEY) aparece como
+    ``local``: é o modo local que responde, e o selo não pode dizer o contrário.
+    O estado da configuração (e o "sem chave utilizável") fica em GET /config."""
     config = assistente.config_assistente(db, escola_id)
-    return {"provedor": config["provedor"], "modelo": config["modelo"] or "padrão"}
+    em_uso = assistente.provedor_em_uso(config)
+    modelo = config["modelo"] if em_uso != "local" else ""
+    return {"provedor": em_uso, "modelo": modelo or "padrão"}
 
 
 # --- Configuração do assistente (admin) — chave de API pela interface ---------
