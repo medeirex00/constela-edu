@@ -618,14 +618,10 @@ def analisar(
             # "Texto Unicode" em UTF-16 — a mesma regra dos leitores de texto enviado.
             texto = decodificar_texto(conteudo)
             tipo = "texto"
-            payload_mat = _payload_matific_placar(texto)
-            analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                       else _analisar_texto_com_teto(texto, plataforma))
+            analise = _analisar_texto_com_teto(texto, plataforma)
     elif texto and texto.strip():
         tipo = "texto"
-        payload_mat = _payload_matific_placar(texto)
-        analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                   else _analisar_texto_com_teto(texto, plataforma))
+        analise = _analisar_texto_com_teto(texto, plataforma)
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
@@ -680,14 +676,26 @@ def analisar(
 
 
 def _analisar_texto_com_teto(texto: str, plataforma: str | None):
-    """``svc.analisar_texto`` com o teto de linhas (``LINHAS_MAXIMAS_TEXTO``), contadas
-    como o parser conta (as não vazias): acima dele, 413 com o que fazer."""
+    """A análise do relatório em TEXTO (colado ou .txt/.csv/.json) com o teto de linhas
+    (``LINHAS_MAXIMAS_TEXTO``): acima dele, 413 com o que fazer, antes de analisar e de
+    casar os nomes. No Placar do Matific em JSON (``_payload_matific_placar``) cada
+    conta é uma linha — e o JSON formatado ocupa várias linhas por conta, então ali
+    contam as contas; no texto, as linhas não vazias, como o parser conta."""
+    payload_mat = _payload_matific_placar(texto)
+    if payload_mat is not None:
+        if len(payload_mat["alunos"]) > LINHAS_MAXIMAS_TEXTO:
+            raise _linhas_demais()
+        return svc.analisar_matific_api(payload_mat)
     if sum(1 for linha in texto.splitlines() if linha.strip()) > LINHAS_MAXIMAS_TEXTO:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"O relatório tem mais de {LINHAS_MAXIMAS_TEXTO:,} linhas".replace(",", ".")
-            + ". Envie em partes (por exemplo, uma turma por vez).")
+        raise _linhas_demais()
     return svc.analisar_texto(texto, plataforma)
+
+
+def _linhas_demais() -> HTTPException:
+    return HTTPException(
+        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        f"O relatório tem mais de {LINHAS_MAXIMAS_TEXTO:,} linhas".replace(",", ".")
+        + ". Envie em partes (por exemplo, uma turma por vez).")
 
 
 # --- Etapa 2: confirmação -----------------------------------------------------
