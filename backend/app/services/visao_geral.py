@@ -225,7 +225,7 @@ def _series_matific(db: Session, escola_id: int, coorte: dict[int, dict],
     for linha in linhas:
         series.setdefault(linha.aluno_id, []).append(linha)
     series = sem_ajustes_superados_matific(db, escola_id, series)
-    chaves ={aid: [matific_destaque._data(s) for s in serie]
+    chaves = {aid: [matific_destaque._data(s) for s in serie]
               for aid, serie in series.items()}
     ultima = db.execute(
         select(func.max(SnapshotMatific.data_referencia))
