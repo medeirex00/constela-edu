@@ -44,6 +44,11 @@ from app.services.relatorios import (_esc_html, _relatorio_html_pdf,
 SEM_SUPORTE = "não calculado"
 SEM_DADO = "sem dado"
 
+# Título da seção que explica o que o relatório não calcula — na vitrine e na reserva.
+# O resumo aponta para ele ("ver “O que este relatório não responde”"): referência a
+# uma seção que não existe no papel manda o leitor procurar o que não há.
+TITULO_NAO_RESPONDE = "O QUE ESTE RELATÓRIO NÃO RESPONDE"
+
 log = logging.getLogger(__name__)
 
 _ROTULO_ESCOPO = {"escola": "Escola inteira", "turma": "Turma", "aluno": "Estudante"}
@@ -252,8 +257,10 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
         linhas.append(("Questões corretas", SEM_DADO if sem_numero else _num(cert), ""))
         linhas.append(("Sem coleta na janela", _num(ele.get("alunos_sem_retrato")),
                        "ausência de coleta, não zero"))
+        # Aponta para o TÍTULO da seção que explica (o mesmo na vitrine e na reserva);
+        # curto para caber inteiro na 3ª coluna da reserva.
         linhas.append(("Tempo por registro de leitura", SEM_SUPORTE,
-                       "a plataforma soma o tempo por livro - ver as notas finais"))
+                       f"ver “{TITULO_NAO_RESPONDE.capitalize()}”"))
 
     mat = dados.get("matific")
     if mat is not None:
@@ -808,7 +815,7 @@ def _nao_suportado_html(dados: dict) -> str:
     blocos = "".join(
         f'<div class="rp-nota"><b>{_esc_html(e["nome"])}:</b> '
         f'{_esc_html(e["explicacao"])}</div>' for e in itens)
-    return ('<h2 class="secao">O QUE ESTE RELATÓRIO NÃO RESPONDE</h2>'
+    return (f'<h2 class="secao">{TITULO_NAO_RESPONDE}</h2>'
             '<p class="rp-porque">Métrica sem dado histórico suficiente sai declarada, '
             'não estimada: um número aproximado num relatório de gestão vira decisão.</p>'
             + blocos)
@@ -1060,7 +1067,15 @@ def _reserva(dados: dict, cor: str) -> bytes:
     for nome, cuidado in ressalvas:
         linhas.append([nome, "", _primeira_frase(cuidado, 72)])
 
-    for e in _o_que_nao_responde(dados):
+    # O mesmo título da vitrine: é para ele que o resumo manda o leitor. Em duas
+    # células: inteiro na 1ª coluna, ele a alargaria (a largura é proporcional à
+    # célula mais larga) e sairia cortado ("... NÃO RESPON...") — junto com o cuidado
+    # curto da 3ª coluna.
+    nao_responde = _o_que_nao_responde(dados)
+    if nao_responde:
+        inicio, fim = TITULO_NAO_RESPONDE.rsplit(" NÃO ", 1)
+        linhas.append([inicio, "NÃO " + fim, ""])
+    for e in nao_responde:
         linhas.append([e["nome"], SEM_SUPORTE,
                        e.get("curto") or _primeira_frase(e["explicacao"])])
 
