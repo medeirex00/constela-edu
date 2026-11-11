@@ -996,9 +996,11 @@ def _preparar(g: int, contagem: _Contagem, visiveis: set[int], janela: rp.Janela
         else:
             cobertura[p] = COBERTURA_OK
     # Elefante: a coleta precisa ter acontecido no período ou depois dele começar —
-    # senão os livros do período ainda não chegaram e o zero seria falta de dado.
+    # senão os livros do período ainda não chegaram e o zero seria falta de dado. A coleta
+    # é gravada em UTC e o início é um dia de Brasília: compara no relógio de Brasília (a
+    # coleta das 21h às 23h59 da véspera já é o dia seguinte em UTC, e não é do período).
     if (cobertura["elefante"] == COBERTURA_OK and janela.inicio is not None
-            and rp._sem_tz(ultima["elefante"]) < janela.inicio):
+            and rp._br(ultima["elefante"]) < janela.inicio):
         cobertura["elefante"] = SEM_COLETA_NO_PERIODO
     medir = [p for p in PLATAFORMA_MODULO if cobertura[p] == COBERTURA_OK] if series else []
     prep = _Preparo(g=g, contagem=contagem, janela=janela, series=series, cobertura=cobertura,
