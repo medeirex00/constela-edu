@@ -134,6 +134,12 @@ MOTIVOS = {
         "mesma etapa (se ela ainda não existe, cadastre-a com um nome que diga a "
         "etapa, como “1º Ano A”: o nome curto “1ºA” pode já ser o da turma da outra "
         "etapa)",
+    # Pedido de quem confirmou a importação (``LinhaConfirmacao.deixar_para_revisao``),
+    # quando o backend, sozinho, associaria ou criaria: a decisão fica com a fila.
+    "deixada_para_revisao":
+        "quem confirmou a importação deixou esta linha para a Revisão de identidade: "
+        "nada foi associado nem criado (confira se a criança já tem ficha antes de "
+        "criar uma)",
     # D11 (item E): orientação, sem fluxo novo — a confirmação manual não encerra
     # a pendência; quem decide é a Revisão de identidade (Admin Global, D10).
     "identidade_de_outra_escola":

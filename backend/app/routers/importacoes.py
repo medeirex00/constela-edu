@@ -939,6 +939,13 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
         return None
     decisao = ida.decidir(ctx, ident)
+    if getattr(linha, "deixar_para_revisao", False) and decisao.acao in (ida.ASSOCIAR,
+                                                                          ida.CRIAR):
+        # "Deixar para a Revisão" é uma instrução, não um palpite: a linha não
+        # associa nem cria, mesmo quando o contexto mudou desde a prévia (a outra
+        # conta da disputa foi ignorada, por exemplo). Com o motivo do backend quando
+        # ele também revisaria (abaixo); senão, com o pedido de quem confirmou.
+        decisao = replace(decisao, acao=ida.REVISAR, motivo="deixada_para_revisao")
 
     if decisao.acao == ida.IGNORAR:
         if decisao.motivo == "identidade_aposentada":
@@ -1585,7 +1592,10 @@ def _enfileirar_revisao(db: Session, escola_id: int, ctx: "ida.Contexto",
     if len(coletor.pendencias) > antes:
         texto = ida.MOTIVOS.get(decisao.motivo, decisao.motivo)
         cands = ida.descrever_candidatos(ctx, decisao.candidatos)
-        if cands:
+        if decisao.motivo == "deixada_para_revisao":
+            # Pedido de quem confirmou: não é "correspondência insegura".
+            avisos.append(f"“{ident.nome}”: {texto}.")
+        elif cands:
             quem = ", ".join(
                 c["nome"] + (f" (ficha “{c['status']}”)" if c["status"] != "ativo" else "")
                 for c in cands)

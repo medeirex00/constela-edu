@@ -87,6 +87,15 @@ class LinhaConfirmacao(BaseModel):
     # COMO o aluno foi identificado (uuid|exato|provavel): a sincronização usa
     # para só mover de turma quem casou com segurança (só vem da sync automática).
     via: str | None = None
+    # "Deixar para a Revisão" (escolha de quem confirma, na prévia): a linha NUNCA
+    # associa nem cria — vai para a Revisão de identidade com o motivo que o backend
+    # achar, ou, se para ele a linha associaria ou criaria (o contexto mudou desde a
+    # prévia: outra conta ignorada, outra linha fixada…), com o motivo
+    # ``deixada_para_revisao``. Antes a tela mandava o mesmo corpo de um "Criar" e
+    # confiava que a confirmação repetiria a prévia. Os campos de turma continuam
+    # valendo como contexto da pendência (a turma do relatório pelo nome, como a
+    # prévia a leu). A sincronização não manda.
+    deixar_para_revisao: bool = False
 
 
 class ImportacaoConfirm(BaseModel):
