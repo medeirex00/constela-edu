@@ -988,6 +988,13 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
     return None, "baixa"
 
 
+def _aviso_contas_esquecidas(n: int) -> str:
+    """O aviso ANÔNIMO das linhas de conta de criança excluída para sempre
+    (``conta_esquecida``): a contagem, nunca o nome."""
+    return (f"{n} linha(s) de conta(s) de aluno excluído permanentemente foram "
+            "ignoradas: a conta continua ativa na plataforma; peça o encerramento lá.")
+
+
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
                     criados: dict | None = None,
                     turmas_novas: dict | None = None,
@@ -1014,9 +1021,10 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
       * CRIAR    → só quando não há candidato algum: cria a ficha na turma da sala
         (decidida sem chute) e grava a identidade externa já na criação.
 
-    Linha que a ESCOLA já decidiu não aplicar (``MOTIVOS_DESCARTE_DECIDIDO`` —
-    conta aposentada) é contada em ``descartes[motivo]`` quando o chamador passa o
-    dict: o núcleo a tira de ``ignorados`` e de 'sem_vinculo'.
+    Linha que já tem decisão de não ser aplicada (``MOTIVOS_DESCARTE_DECIDIDO`` —
+    conta aposentada pela escola, conta de criança excluída para sempre) é contada
+    em ``descartes[motivo]`` quando o chamador passa o dict: o núcleo a tira de
+    ``ignorados`` e de 'sem_vinculo'.
 
     ``ctx``/``revisoes`` vêm do /confirmar (estado carregado 1x, fila gravada no
     fim); chamado avulso, carrega o próprio estado e grava a revisão na hora."""
@@ -1059,6 +1067,17 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                 "existindo na plataforma: a aposentadoria é interna do Constela.)")
             if descartes is not None:
                 descartes[decisao.motivo] = descartes.get(decisao.motivo, 0) + 1
+            return None
+        if decisao.motivo == ida.MOTIVO_CONTA_ESQUECIDA:
+            # Conta de criança EXCLUÍDA PARA SEMPRE (G_LGPD-1): decisão já tomada, e
+            # o nome não volta — nem no aviso da resposta. Contada em
+            # ``descartes`` (fora de ``ignorados`` e de 'sem_vinculo': não é
+            # pendência, e a fila de Revisões não tem nada dela); o /confirmar
+            # junta todas num aviso anônimo no fim (``_aviso_contas_esquecidas``).
+            if descartes is not None:
+                descartes[decisao.motivo] = descartes.get(decisao.motivo, 0) + 1
+            else:
+                avisos.append(_aviso_contas_esquecidas(1))
             return None
         avisos.append(f"Linha “{linha.nome}”: "
                       + ("aluno não pertence a esta escola" if decisao.motivo == "aluno_de_outra_escola"
@@ -3515,11 +3534,12 @@ def _confirmar_sem_commit(
         if aluno is None:
             if sum(linhas_descartadas.get(m, 0)
                    for m in ida.MOTIVOS_DESCARTE_DECIDIDO) > decididas:
-                # A ESCOLA já decidiu (conta aposentada): descarte com motivo
-                # próprio, já contado. Fora de ``ignorados`` — o nome da conta
-                # aposentada é o da criança, e a sync desfazia o cursor DELA a
-                # cada coleta — e fora de 'sem_vinculo' (pendência permanente que
-                # nunca deixava a integração chegar a "nada mudou").
+                # Já decidido (conta aposentada pela escola; conta de criança
+                # excluída para sempre): descarte com motivo próprio, já contado.
+                # Fora de ``ignorados`` — o nome da conta aposentada é o da
+                # criança, e a sync desfazia o cursor DELA a cada coleta — e fora
+                # de 'sem_vinculo' (pendência permanente que nunca deixava a
+                # integração chegar a "nada mudou").
                 continue
             chave_ign = svc.chave_nome(linha.nome)
             if chave_ign not in ignorados:
@@ -3550,6 +3570,8 @@ def _confirmar_sem_commit(
             f"{linhas_descartadas['campos_ausentes']} linha(s) sem "
             f"{rotulos_ausentes} na resposta da plataforma — dado não "
             "gravado (o valor anterior não é repetido com a data de hoje).")
+    if linhas_descartadas.get(ida.MOTIVO_CONTA_ESQUECIDA):
+        avisos.append(_aviso_contas_esquecidas(linhas_descartadas[ida.MOTIVO_CONTA_ESQUECIDA]))
 
     # MUDANÇA AUTOMÁTICA DE TURMA (só na sync automática do Matific): vincula o
     # UUID e move a matrícula de quem trocou de sala — só com a política

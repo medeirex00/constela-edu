@@ -1360,10 +1360,18 @@ def resolver_recalculo_pendente(db: Session, escola_id: int) -> int:
 # Contabilidade da execução e decisão do status (contrato da Etapa 2)
 # --------------------------------------------------------------------------
 _MOTIVOS_DE_VINCULO = ("sem_vinculo",)   # pendência de correspondência, não defeito
-# Descarte que a ESCOLA já decidiu (conta aposentada): nem pendência nem defeito.
-# A linha não confere a escola, não desfaz cursor e não abre alerta — só fica
-# contada no motivo próprio e citada no log da execução.
+# Descarte já decidido (conta que a escola aposentou; conta de criança excluída
+# para sempre, ``conta_esquecida``): nem pendência nem defeito. A linha não confere
+# a escola, não desfaz cursor e não abre alerta — só fica contada no motivo próprio
+# e citada no log da execução, com o texto do motivo (``_TEXTO_DECIDIDO``).
 _MOTIVOS_DECIDIDOS = tuple(sorted(MOTIVOS_DESCARTE_DECIDIDO))
+_TEXTO_DECIDIDO = {
+    "identidade_aposentada": ("{n} linha(s) de conta(s) da plataforma que a escola "
+                              "aposentou (conta duplicada já decidida) não foram "
+                              "aplicadas — nada a revisar."),
+    "conta_esquecida": ("{n} linha(s) de conta(s) de aluno excluído permanentemente "
+                        "foram ignoradas — a conta continua ativa na plataforma."),
+}
 _MOTIVOS_FORA_DE_DEFEITO = _MOTIVOS_DE_VINCULO + _MOTIVOS_DECIDIDOS
 # O motivo de cada linha com defeito (o código que conectores, parser e importação
 # anotam) como a tela o diz nos alertas "Nenhuma linha aproveitável" e "Coleta parcial".
@@ -1375,12 +1383,27 @@ _ROTULO_DESCARTE = {
     "livro_sem_titulo": "livro sem título",
     "id_em_varias_turmas": "a mesma conta em mais de uma turma, com números diferentes",
     "campos_ausentes": "sem campos que o Constela usa",
+    "conta_esquecida": "conta de aluno excluído permanentemente",
 }
 
 
 def _rotulo_descarte(motivo: str) -> str:
     """Rótulo do motivo; um código novo sem rótulo sai sem o "_" de código."""
     return _ROTULO_DESCARTE.get(motivo) or str(motivo).replace("_", " ")
+
+
+def _textos_dos_decididos(ap: "_Apuracao") -> list[str]:
+    """As linhas do log da execução para os descartes já decididos, uma por motivo
+    (cada um com o seu texto: a conta esquecida não é "conta que a escola
+    aposentou")."""
+    textos = []
+    for motivo in _MOTIVOS_DECIDIDOS:
+        n = int(ap.descartes.get(motivo, 0) or 0)
+        if n:
+            modelo = _TEXTO_DECIDIDO.get(motivo, "{n} linha(s) com descarte já decidido ("
+                                         + _rotulo_descarte(motivo) + ") não foram aplicadas.")
+            textos.append(modelo.format(n=n))
+    return textos
 
 
 # A UNIDADE da coleta que falhou (o código que conectores e serviço anotam em
@@ -1533,7 +1556,8 @@ class _Apuracao:
 
     @property
     def decididos(self) -> int:
-        """Linhas descartadas por decisão da escola (conta aposentada)."""
+        """Linhas descartadas por decisão já tomada (conta aposentada; conta de
+        criança excluída para sempre)."""
         return sum(int(self.descartes.get(m, 0) or 0) for m in _MOTIVOS_DECIDIDOS)
 
     @property
@@ -2127,13 +2151,11 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
             registrar_log(db, execucao, "download", "warn", mensagem)
             abrir_alerta(db, escola_id, plataforma, "plataforma_sem_dados", mensagem,
                          severidade="warn", execucao_id=execucao.id)
-    if ap.decididos:
-        # Conta APOSENTADA (a escola já escolheu qual conta vale): só o registro —
-        # nem pendência, nem defeito, nem cursor desfeito (achado 5 da revisão e95).
-        registrar_log(db, execucao, "validacao", "info",
-                      f"{ap.decididos} linha(s) de conta(s) da plataforma que a escola "
-                      "aposentou (conta duplicada já decidida) não foram aplicadas — nada "
-                      "a revisar.")
+    # Conta APOSENTADA (a escola já escolheu qual conta vale) e conta de criança
+    # EXCLUÍDA PARA SEMPRE: só o registro, com o texto de cada motivo — nem
+    # pendência, nem defeito, nem cursor desfeito (achado 5 da revisão e95; G_LGPD-1).
+    for texto in _textos_dos_decididos(ap):
+        registrar_log(db, execucao, "validacao", "info", texto)
     _avaliar_queda_matific(db, execucao, {"retidos_queda": ap.retidos_queda,
                                           "verificou_queda": ap.verificou_queda})
     # Coleta COMPLETA: cursor ignorado (``completa``) ou inexistente (1ª coleta).
