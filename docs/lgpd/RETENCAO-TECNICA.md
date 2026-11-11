@@ -174,8 +174,13 @@ vivo "Joao Pedro Silva".
 
 - o log de auditoria, com o `entidade_id` como referência anônima — inclusive
   `aluno.excluido_permanente` (quem excluiu e quando),
-  `aluno.esquecimento_fora_do_cadastro` (só contagens) e `backup.restaurado` (o mapa
-  {id novo: id do arquivo} das fichas recriadas, só números);
+  `aluno.esquecimento_fora_do_cadastro` (só contagens) e `backup.restaurado` (os mapas
+  {id novo: id do arquivo} das fichas, turmas e importações recriadas —
+  `alunos_id_anterior`, `turmas_id_anterior`, `importacoes_id_anterior` — e
+  `referencias_reapontadas`, as contagens do que, fora do arquivo, foi ligado às linhas
+  recriadas ou ficou sem equivalente; só números e contagens). Com esses mapas a
+  restauração reaponta a fila de revisões de identidade e as execuções da sincronização
+  para as linhas recriadas, também numa restauração seguinte;
 - o registro de cada importação (quem, quando, quantos) e o histórico das sincronizações.
 
 **Marca de esquecimento das contas da plataforma** (só a exclusão permanente de aluno;
@@ -237,7 +242,13 @@ a exclusão de turma com alunos não grava a marca)
   escola não é apagada pela exclusão — exclua-a lá também. Ressalva:
   restauração feita antes desse mapa existir (ou com o registro apagado) quebra a
   linhagem — a criança excluída depois dela pode voltar, sem aviso; confira a exclusão
-  manualmente. O texto que o
+  manualmente. A restauração também não traz de volta a ficha que foi **fundida** na
+  criança excluída de vez (a duplicata absorvida é a mesma criança): nos dois sentidos da
+  fusão e também em outra escola, pela ligação do `aluno.fundido` no log; o aviso conta
+  **crianças**, não fichas (a duplicata fundida e a oficial do mesmo arquivo são uma só).
+  O arquivo leva `importacoes.usuario_id` (o id de quem importou): volta como veio se o
+  usuário existe e vira NULL se não existe mais, como `identidades_externas.aposentada_por_id`.
+  O texto que o
   arquivo guarda fora das tabelas da criança (ex.: `importacoes.arquivo_original` de um
   relatório individual antigo) volta como estava no arquivo;
 - originais de relatório de **turma** (várias crianças no mesmo PDF/XLSX): ficam (com o
