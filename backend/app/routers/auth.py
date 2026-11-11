@@ -387,7 +387,11 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
 def _senha_da_convencao_antiga(senha: str, usuario: Usuario) -> bool:
     """A senha digitada é uma das que as convenções antigas de professor dariam a
     esta conta (o @ ou o primeiro nome + "123", em qualquer caixa)? Só compara
-    strings com o nome/@ ATUAIS da conta — nenhum bcrypt extra no login."""
+    strings com o nome/@ ATUAIS da conta — nenhum bcrypt extra no login.
+
+    Qualquer caixa de propósito ("aNaSilva123" também é a senha do nome). O
+    ``scripts/senhas_derivadas`` (o checklist pré-deploy) só confere com bcrypt 4
+    caixas e diz isso na saída (``AVISO_CAIXAS``, G_SCRIPTS-2)."""
     # Import tardio: o serviço de professores puxa modelos e segurança.
     from app.services.professores import _senhas_da_convencao_antiga
 

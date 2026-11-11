@@ -259,18 +259,30 @@ Saída (números fictícios):
       indeterminadas: 2
       hash não conferível (fora da etapa): 1
     ATENÇÃO: há conta GLOBAL com senha derivada. ...
+    LIMITE: estas contas foram conferidas com o nome e o usuário + 123 em 4 caixas ...
 
 O que conferir:
 
-1. **`globais: 0`** → segue. Com `globais` acima de 0: troque a senha dessa conta **antes** do
-   deploy (o código atual ainda aceita a senha derivada) e rode `--contagens` de novo até
-   `globais: 0`. Depois do deploy a saída é manual.
-2. **`ativas`** e **`já usadas`** dizem quantas contas recebem o 403 no primeiro login depois do
-   deploy (as já usadas são as de quem entra hoje com essa senha). Combine com as escolas quem
-   gera os links (Usuários → Redefinir senha). O `--aplicar` do mesmo script continua
-   recomendado, só com autorização do dono e backup validado (ver o cabeçalho de
-   `backend/scripts/senhas_derivadas.py`): ele também derruba as sessões abertas com a senha
-   antiga (valem até 8 h) e cobre nomes e @ antigos que a trava do login não confere.
+1. **`globais: 0`** e a **confirmação com cada administrador global** → segue. A contagem
+   confere o nome e o @ + "123" em 4 caixas (como está, minúsculas, MAIÚSCULAS e só a
+   primeira maiúscula: o bcrypt não deixa conferir todas), mas a trava do login recusa o
+   nome ou @ + "123" em **qualquer** combinação de maiúsculas e minúsculas (ex.:
+   `aNaSilva123`). Uma conta global com a senha do próprio nome numa combinação dessas sai
+   como `globais: 0` e recebe o 403 depois do deploy, sem volta garantida — a linha
+   `LIMITE` da saída lembra disso. Por isso pergunte a cada administrador global se a senha
+   dele é o próprio nome ou @ + 123, em caixa nenhuma; se for, troque antes. Com `globais`
+   acima de 0: troque a senha dessa conta **antes** do deploy (o código atual ainda aceita a
+   senha derivada) e rode `--contagens` de novo até `globais: 0`. Depois do deploy a saída é
+   manual.
+2. **`ativas`** e **`já usadas`** dizem quantas contas, **no mínimo**, recebem o 403 no
+   primeiro login depois do deploy (as já usadas são as de quem entra hoje com essa senha;
+   a senha do nome em outra combinação de maiúsculas e minúsculas fica de fora da conta e
+   também recebe o 403). Combine com as escolas quem gera os links (Usuários → Redefinir
+   senha). O `--aplicar` do mesmo script continua recomendado, só com autorização do dono e
+   backup validado (ver o cabeçalho de `backend/scripts/senhas_derivadas.py`): ele também
+   derruba as sessões abertas com a senha antiga (valem até 8 h) e cobre nomes e @ antigos
+   que a trava do login não confere; e não invalida as senhas do nome nas outras
+   combinações de caixa, que só a trava do login recusa.
 3. A lista por conta (para quem vai gerar os links) é o diagnóstico **sem** `--contagens`: ele
    mostra id, @ e escola — essa saída não vai para chat.
 
