@@ -1,0 +1,13 @@
+{
+  "mensagem": "1 turma(s) criada(s), 1 aluno(s) cadastrado(s) e 0 atualizado(s). 1 professor(es) ganharam conta de acesso automática (usuário = NomeSobrenome). A conta nasce sem senha: para o primeiro acesso, gere o link de redefinição em Usuários. 2 linha(s) ficaram para REVISÃO: parecem ser alunos já cadastrados, mas a correspondência não é segura — nada foi criado nelas (senão viraria ficha duplicada). Veja os avisos abaixo.",
+  "turmas_criadas": 1,
+  "alunos_criados": 1,
+  "alunos_atualizados": 0,
+  "alunos_fora_lista": 0,
+  "alunos_em_revisao": 2,
+  "professores_criados": 1,
+  "avisos": [
+    "“ANA BEATRIZ SOUZA LIMA” (turma 3º Ano A) parece ser o mesmo aluno de: Ana Beatriz Souza — mas a correspondência NÃO é segura. Nada foi criado nem alterado nesta linha, para não abrir uma segunda ficha da mesma criança nem misturar duas crianças diferentes. Resolva em Alunos › Fundir duplicatas; se forem pessoas diferentes, preencha RA ou data de nascimento distintos na planilha e reimporte.",
+    "“JOAO PEDRO BARBOSA” (turma 4º Ano B) parece ser o mesmo aluno de: João Pedro Barbosa — mas a correspondência NÃO é segura. Nada foi criado nem alterado nesta linha, para não abrir uma segunda ficha da mesma criança nem misturar duas crianças diferentes. Resolva em Alunos › Fundir duplicatas; se forem pessoas diferentes, preencha RA ou data de nascimento distintos na planilha e reimporte."
+  ]
+}

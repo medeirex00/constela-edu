@@ -48,8 +48,12 @@ interface MatriculasAnalise {
   total_turmas: number;
   total_alunos: number;
   total_registros: number;
+  // Os números da CONFIRMAÇÃO (a prévia a roda e desfaz): cadastrados, atualizados e
+  // linhas que ficam em revisão — parecem alunos já cadastrados, mas sem segurança:
+  // não criam nem alteram ninguém.
   alunos_novos: number;
   alunos_atualizar: number;
+  alunos_em_revisao?: number;
   turmas_existentes: number;
   turmas: MatriculaTurma[];
   avisos: string[];
@@ -60,6 +64,7 @@ interface MatriculasResultado {
   alunos_criados: number;
   alunos_atualizados: number;
   alunos_fora_lista?: number;
+  alunos_em_revisao?: number;
   avisos: string[];
 }
 
@@ -182,6 +187,9 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
   // Etapa REAL do fluxo: 0 envio, 1 conferência, 2 confirmação aberta, 3 feito.
   const etapa = resultado ? PASSOS.length : analise ? (confirmando ? 2 : 1) : 0;
   const turmasNovas = analise ? analise.turmas.filter((t) => !t.ja_existe).length : 0;
+  // Linhas que a confirmação não cadastra nem altera (correspondência não segura com
+  // um aluno já cadastrado): antes o modal as somava em "novo(s) matriculado(s)".
+  const emRevisao = analise?.alunos_em_revisao ?? 0;
 
   return (
     <div className="space-y-5">
@@ -203,6 +211,9 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
                   <Badge tom="alerta">
                     {resultado.alunos_fora_lista} fora da lista piloto
                   </Badge>
+                )}
+                {(resultado.alunos_em_revisao ?? 0) > 0 && (
+                  <Badge tom="alerta">{resultado.alunos_em_revisao} em revisão</Badge>
                 )}
               </div>
               {(resultado.alunos_fora_lista ?? 0) > 0 && (
@@ -303,6 +314,9 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
             <Indicador icone={School} tom="violeta" valor={turmasNovas} rotulo="turma(s) nova(s)" />
             <Indicador icone={UserPlus} tom="verde" valor={analise.alunos_novos} rotulo="aluno(s) novo(s)" />
             <Indicador icone={RefreshCw} tom="azul" valor={analise.alunos_atualizar} rotulo="a atualizar" />
+            {emRevisao > 0 && (
+              <Indicador icone={AlertTriangle} tom="ambar" valor={emRevisao} rotulo="em revisão" />
+            )}
             <Indicador icone={Users} tom="neutro" valor={analise.turmas_existentes} rotulo="turma(s) já existente(s)" />
           </div>
 
@@ -382,6 +396,15 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
                 <RefreshCw size={15} aria-hidden className="shrink-0 text-sky-600" />
                 {analise.alunos_atualizar} aluno(s) já cadastrado(s) atualizado(s)
               </li>
+              {emRevisao > 0 && (
+                <li className="flex items-start gap-2">
+                  <AlertTriangle size={15} aria-hidden className="mt-0.5 shrink-0 text-ouro-700 dark:text-ouro-300" />
+                  <span>
+                    {emRevisao} linha(s) ficam para revisão: parecem alunos já cadastrados, mas a
+                    correspondência não é segura — nada é criado nem alterado nelas
+                  </span>
+                </li>
+              )}
               <li className="flex items-start gap-2">
                 <UserMinus size={15} aria-hidden className="mt-0.5 shrink-0 text-ouro-700 dark:text-ouro-300" />
                 <span>

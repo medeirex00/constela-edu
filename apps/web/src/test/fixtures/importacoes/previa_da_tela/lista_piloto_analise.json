@@ -1,0 +1,39 @@
+{
+  "escola_detectada": "EMEF TESTE",
+  "ano_letivo": 2026,
+  "total_turmas": 2,
+  "total_alunos": 3,
+  "total_registros": 3,
+  "alunos_novos": 1,
+  "alunos_atualizar": 0,
+  "alunos_em_revisao": 2,
+  "turmas_existentes": 1,
+  "turmas": [
+    {
+      "nome": "3º Ano A",
+      "ano_escolar": "3º Ano",
+      "turno": "tarde",
+      "professor": "PROFESSORA A",
+      "sed": "300396600",
+      "total_alunos": 2,
+      "ja_existe": true,
+      "exemplos": [
+        "ANA BEATRIZ SOUZA LIMA",
+        "CRIANCA FICTICIA NOVA DA LISTA"
+      ]
+    },
+    {
+      "nome": "4º Ano B",
+      "ano_escolar": "4º Ano",
+      "turno": "tarde",
+      "professor": "PROFESSORA A",
+      "sed": "300396601",
+      "total_alunos": 1,
+      "ja_existe": false,
+      "exemplos": [
+        "JOAO PEDRO BARBOSA"
+      ]
+    }
+  ],
+  "avisos": []
+}
