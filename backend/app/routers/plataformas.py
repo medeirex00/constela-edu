@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import exigir_admin_global, exigir_modulo_da_escola
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import (
@@ -147,6 +147,19 @@ def _aluno_da_escola(db: Session, escola_id: int, aluno_id: int) -> Aluno:
     return aluno
 
 
+def _ficha_do_ajuste(db: Session, escola_id: int, aluno_id: int) -> Aluno:
+    """A ficha que o ajuste manual vai receber, lida DEPOIS da trava da escola.
+
+    A fusão segura a mesma trava (4711), move os retratos da ficha absorvida e a
+    apaga. Sem esperar por ela, um retrato manual gravado e commitado nesse
+    intervalo responde "salvo" e some pela cascata quando a fusão comita. Com a
+    trava (no-op no SQLite), o ajuste espera, relê a ficha e devolve 404 se ela
+    já não existe; na ordem inversa, é a fusão que espera e leva o retrato junto.
+    A trava cai no commit da rota."""
+    bloquear_escola_para_importacao(db, escola_id)
+    return _aluno_da_escola(db, escola_id, aluno_id)
+
+
 def _exigir_aluno_ativo(aluno: Aluno) -> None:
     """O ajuste manual vale só para quem está ATIVO na escola (409).
 
@@ -213,8 +226,9 @@ def editar_matific(
     Global ajusta (403) — o contador é acumulado e a coleta seguinte traz de novo
     o valor da plataforma, então um número digitado por cima vira ganho falso (ou
     apaga o ganho real) no período. Motivo obrigatório (422); aluno que não está
-    ativo, 409."""
-    aluno = _aluno_da_escola(db, escola_id, aluno_id)
+    ativo, 409. Espera a trava da escola (fusão em andamento) antes de ler a
+    ficha."""
+    aluno = _ficha_do_ajuste(db, escola_id, aluno_id)
     _exigir_governanca_ajuste_manual(db, escola_id, usuario, "matific")
     _exigir_aluno_ativo(aluno)
     anterior = db.execute(
@@ -510,12 +524,14 @@ def editar_elefante(
     Validações: chaves só do vocabulário oficial ou faixas da escola (400);
     contagens de 0 a 10.000 (422); ``livros_unicos`` informado não pode ser menor
     que a soma das contagens (400); motivo obrigatório (422). Com a integração do
-    Elefante ativa, só o Admin Global ajusta (403)."""
+    Elefante ativa, só o Admin Global ajusta (403). Espera a trava da escola
+    (fusão em andamento) antes de ler a ficha; aluno que não está ativo, 409."""
     if dados.questoes_acertos > dados.questoes_tentativas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Acertos não podem exceder as tentativas.")
-    aluno = _aluno_da_escola(db, escola_id, aluno_id)
+    aluno = _ficha_do_ajuste(db, escola_id, aluno_id)
     _exigir_governanca_ajuste_manual(db, escola_id, usuario)
+    _exigir_aluno_ativo(aluno)
     por_nivel = _contagens_validadas(db, escola_id, dados.livros_por_nivel)
     soma = sum(por_nivel.values())
     if dados.livros_unicos is not None and dados.livros_unicos < soma:
@@ -570,9 +586,11 @@ def informar_niveis_leitura(
     os pontos de dificuldade são recalculados; tempo e questões do último
     snapshot são preservados. Aceita só códigos de faixa configurados ou níveis
     do vocabulário oficial; motivo obrigatório; com a integração do Elefante
-    ativa, só o Admin Global ajusta."""
-    aluno = _aluno_da_escola(db, escola_id, aluno_id)
+    ativa, só o Admin Global ajusta. Espera a trava da escola (fusão em
+    andamento) antes de ler a ficha; aluno que não está ativo, 409."""
+    aluno = _ficha_do_ajuste(db, escola_id, aluno_id)
     _exigir_governanca_ajuste_manual(db, escola_id, usuario)
+    _exigir_aluno_ativo(aluno)
     por_nivel = _contagens_validadas(db, escola_id, dados.faixas)
     anterior = _snapshot_anterior(db, aluno_id)
 
