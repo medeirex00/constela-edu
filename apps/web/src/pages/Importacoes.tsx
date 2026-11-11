@@ -593,7 +593,10 @@ export default function Importacoes() {
     try {
       const dados = new FormData();
       if (arquivo) dados.append("arquivo", arquivo);
-      else dados.append("texto", texto);
+      // O texto colado vai como ARQUIVO .txt — o mesmo caminho e o mesmo teto (10 MB)
+      // do .txt enviado. Como campo de formulário, o servidor o cortava em 1 MB e
+      // respondia em inglês ("Part exceeded maximum size of 1024KB.").
+      else dados.append("arquivo", new Blob([texto], { type: "text/plain;charset=utf-8" }), "texto-colado.txt");
       if (plataforma) dados.append("plataforma", plataforma);
       const resposta = await apiUpload<Analise>(`/escolas/${escolaId}/importacoes/analisar`, dados);
       // Trocou de escola durante o upload: descarta (o reset já limpou a tela).
