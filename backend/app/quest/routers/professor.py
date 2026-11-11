@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import bloquear_escola_para_cartoes_quest, get_db
 from app.core.deps import escola_autorizada, exigir_papeis, negar_secretaria
 from app.models import Aluno, Escola, Turma, Usuario
 from app.quest import schemas
@@ -183,7 +183,12 @@ def gerar_cartoes(turma_id: int,
     permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
     revogar = regenerar or rotacionar_codigo
     escola = db.get(Escola, escola_id)
-    if not revogar:
+    if revogar:
+        # Antes de ler ou travar qualquer credencial: duas revogações de turma da
+        # mesma escola (troca cruzada de crianças desde a última folha) travavam as
+        # credenciais em ordens opostas — deadlock no PostgreSQL, 500 numa delas.
+        bloquear_escola_para_cartoes_quest(db, escola_id)
+    else:
         _exigir_reimpressao_no_ano_ativo(turma, escola)
     revogados_inativos = (svc.revogar_cartoes_inativos_da_turma(db, escola_id, turma)
                           if revogar else 0)

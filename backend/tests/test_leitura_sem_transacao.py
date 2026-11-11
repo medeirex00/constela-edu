@@ -106,7 +106,7 @@ class _Recusa(Exception):
 # As travas advisory do app. No PostgreSQL são ``pg_advisory_xact_lock`` (o filtro de SQL as
 # vê); no SQLite não emitem SQL nenhum, então a varredura as troca por um invólucro.
 TRAVAS = ("bloquear_escola_para_importacao", "bloquear_fonte_para_coleta",
-          "bloquear_escola_para_recalculo")
+          "bloquear_escola_para_recalculo", "bloquear_escola_para_cartoes_quest")
 
 
 def test_a_varredura_conhece_todas_as_travas_do_app():
@@ -269,6 +269,7 @@ def test_a_sessao_que_recusa_escrita_recusa_mesmo(varredura):
     ("app.routers.academico", "bloquear_escola_para_importacao"),  # importada pelo nome
     ("app.services.scoring", "bloquear_escola_para_recalculo"),
     ("app.core.database", "bloquear_fonte_para_coleta"),
+    ("app.quest.routers.professor", "bloquear_escola_para_cartoes_quest"),  # pelo nome
 ])
 def test_a_varredura_recusa_trava_advisory_numa_rota_marcada(varredura, monkeypatch,
                                                               modulo, trava):

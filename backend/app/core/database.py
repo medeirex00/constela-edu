@@ -415,6 +415,39 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
                    {"ns": _NS_RECALCULO, "escola": int(escola_id)})
 
 
+# Namespace dos advisory locks da REVOGAÇÃO dos cartões do Quest por turma
+# (separado dos de importação, coleta e recálculo; 4714 é o da migração, em
+# app/core/migracoes.py).
+_NS_CARTOES_QUEST = 4715
+
+
+def bloquear_escola_para_cartoes_quest(db, escola_id: int) -> None:
+    """Serializa as revogações de cartões do Quest por turma da MESMA escola
+    (``regenerar``/``rotacionar_codigo`` em POST .../quest/turmas/{id}/cartoes).
+
+    Cada revogação trava as credenciais das crianças em três passos, cada um na
+    sua ordem: inativos da turma, quem saiu dela desde a última folha e os
+    matriculados. Com troca cruzada de crianças desde a última folha (x foi de A
+    para B e y de B para A), a revogação de A travava x e depois y, e a de B
+    travava y e depois x: o PostgreSQL abortava uma das duas com
+    ``DeadlockDetected`` (500, sem PDF).
+
+    PostgreSQL: ``pg_advisory_xact_lock`` faz a 2ª revogação BLOQUEAR até a 1ª
+    commitar; aí ela lê e trava as credenciais já com o código novo da 1ª. É
+    transacional (cai sozinho no commit/rollback), então deve ser adquirido ANTES
+    de ler ou travar qualquer credencial e sem commit no meio. Só esta rota a
+    toma, e antes de qualquer outra trava: sem ciclo entre travas.
+
+    SQLite (dev/testes): no-op — banco de um único escritor.
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_escola_para_cartoes_quest")
+        db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
+                   {"ns": _NS_CARTOES_QUEST, "escola": int(escola_id)})
+
+
 # --------------------------------------------------------------------------
 # Correções de DADOS no início da aplicação.
 #
