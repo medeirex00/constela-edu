@@ -50,7 +50,9 @@ TURMA E ANO LETIVO (onde a ficha nova pode nascer — ``_turma_para_criar``):
     dados da plataforma na própria ficha (associar não mexe em matrícula);
   * o reconhecimento da sala pela série (``Contexto.sala_efetiva``) compara
     também a ETAPA: rótulo de ANO nunca vira turma de FASE (Educação Infantil),
-    nem o contrário.
+    nem o contrário — e a turma de destino, da sala ou escolhida, também é
+    conferida contra a etapa da turma do relatório (revisão
+    ``turma_de_outra_etapa``), já na prévia.
 
 Nunca escolhe "o primeiro" candidato, nunca funde fichas (fusão é ação
 administrativa explícita) e nunca cria ficha nova quando a identidade externa
@@ -126,9 +128,12 @@ MOTIVOS = {
     "turma_fora_do_ano_letivo":
         "a turma escolhida não é do ano letivo ativo da escola",
     "turma_de_outra_etapa":
-        "a turma cadastrada que corresponde à sala do relatório é de outra etapa "
-        "(ex.: Educação Infantil x Fundamental): ficha e matrícula nova não nascem "
-        "nela",
+        "a turma onde a ficha nova nasceria (a da sala do relatório, ou a escolhida) "
+        "é de outra etapa que a turma do relatório (ex.: Educação Infantil x "
+        "Fundamental): ficha e matrícula nova não nascem nela. Escolha uma turma da "
+        "mesma etapa (se ela ainda não existe, cadastre-a com um nome que diga a "
+        "etapa, como “1º Ano A”: o nome curto “1ºA” pode já ser o da turma da outra "
+        "etapa)",
     # D11 (item E): orientação, sem fluxo novo — a confirmação manual não encerra
     # a pendência; quem decide é a Revisão de identidade (Admin Global, D10).
     "identidade_de_outra_escola":
@@ -959,19 +964,33 @@ def _turma_para_criar(ctx: Contexto, linha: LinhaIdentidade, chave: str
     Só turma ATIVA do ANO LETIVO ATIVO é destino: a escolhida de outro ano (fora
     de ``ctx.turmas``) dá "turma_fora_do_ano_letivo"; a arquivada — escolhida, a
     única da sala ou a única da etapa/série (``Contexto.sala_arquivada``) — dá
-    "turma_arquivada". Numa sala com uma arquivada e uma ativa, vale a ativa."""
+    "turma_arquivada". Numa sala com uma arquivada e uma ativa, vale a ativa.
+
+    Nem turma de OUTRA ETAPA que a turma do relatório (``turma_de_outra_etapa``):
+    "1 ANO A" e a "1ºA" da Fase (o nome que ``nome_turma_exibicao`` dá a "Fase
+    1A") têm a mesma sala 1|A, mas a ficha do 1º Ano não nasce na Educação
+    Infantil, nem o contrário. Na sala, a de outra etapa não é candidata — com uma
+    da etapa certa ao lado, vale ela; só com as de outra etapa, "turma_de_outra_etapa".
+    A escolhida de outra etapa também. É a decisão da prévia e da confirmação (a
+    rede de segurança de ``_resolver_aluno`` continua para a turma achada pelo nome
+    na gravação)."""
     if linha.turma_id is not None:
         escolhida = ctx.turmas.get(linha.turma_id)
         if escolhida is None:
             return None, "turma_fora_do_ano_letivo"
         if not turma_ativa(escolhida):
             return None, "turma_arquivada"
+        if turma_de_outra_etapa(linha.turma_relatorio, escolhida):
+            return None, "turma_de_outra_etapa"
         return linha.turma_id, ""
-    ids = [i for i in ctx.turmas_da_sala.get(chave, []) if turma_ativa(ctx.turmas[i])]
-    if not ids:
+    ativas = [i for i in ctx.turmas_da_sala.get(chave, []) if turma_ativa(ctx.turmas[i])]
+    if not ativas:
         if ctx.sala_arquivada(chave, linha.turma_nome) is not None:
             return None, "turma_arquivada"
         return None, ""
+    ids = [i for i in ativas if not turma_de_outra_etapa(linha.turma_relatorio, ctx.turmas[i])]
+    if not ids:
+        return None, "turma_de_outra_etapa"
     if len(ids) == 1:
         return ids[0], ""
     from app.services.matriculas import codigo_externo_do_nome, nome_turma_exibicao
@@ -1605,10 +1624,12 @@ class ColetorRevisoes:
         if pend is None:
             turma_id = decisao.turma_id
             if turma_id is None:
-                # A turma SUGERIDA para a ficha nova: só a única ATIVA da sala —
-                # turma arquivada não recebe ficha nem matrícula nova.
+                # A turma SUGERIDA para a ficha nova: só a única ATIVA da sala, da
+                # etapa da turma do relatório — turma arquivada não recebe ficha nem
+                # matrícula nova, e a de outra etapa é justamente a que foi recusada.
                 ids = [i for i in ctx.turmas_da_sala.get(decisao.chave_sala, [])
-                       if turma_ativa(ctx.turmas[i])]
+                       if turma_ativa(ctx.turmas[i])
+                       and not turma_de_outra_etapa(linha.turma_relatorio, ctx.turmas[i])]
                 turma_id = ids[0] if len(ids) == 1 else None
             pend = Pendencia(
                 chave=chave, chave_identidade=ident[:400], plataforma=linha.plataforma,
