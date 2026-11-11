@@ -210,3 +210,109 @@ def test_numero_da_classe_no_nome_do_arquivo_nao_vira_ano(cliente, db, escola_co
     assert pv["ano_letivo"] is None and pv["ano_divergente"] is False
     assert _enviar(cliente, eid, lista, nome="Lista 300320221.xlsx").status_code == 200
     assert db.get(Escola, eid).ano_letivo_ativo == 2026
+
+
+# --- REV2-VIRADA-1: abas de anos diferentes na mesma planilha ------------------------
+# A trava conferia só o ano da PRIMEIRA aba com a célula "Lista Piloto:": uma aba velha
+# de 2026 copiada à frente das de 2027 fazia o arquivo inteiro "valer" 2026 e as abas de
+# 2027 eram gravadas por cima do ano ativo (a matrícula de 2026 mudava de turma).
+
+def _planilha_por_aba(*abas) -> bytes:
+    """Uma aba por turma, cada uma com o SEU ano: ``(ano, nome_turma, alunos)``;
+    ``ano=None`` é a aba sem a célula do ano."""
+    wb = openpyxl.Workbook()
+    for i, (ano, nome_turma, alunos) in enumerate(abas):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = nome_turma[:31]
+        ws.append([None, None, None, "PREFEITURA MUNICIPAL FICTICIA"])
+        if ano is None:
+            ws.append(["Escola:", None, "EMEF FICTICIA"])
+        else:
+            ws.append(["Escola:", None, "EMEF FICTICIA", None, None, None, None,
+                       "Lista Piloto:", ano])
+        ws.append([])
+        ws.append(["Professor:", None, "PROFESSORA FICTICIA", None, "Ano:", nome_turma,
+                   "Turno:       TARDE", None, "N.º da Classe (SED):", 300396600 + i])
+        ws.append([])
+        ws.append(COLUNAS)
+        for n, (nome, ra, nasc) in enumerate(alunos, start=1):
+            ws.append([n, "", ra, nome, nasc, "MAE", "RUA X, 1", "BAIRRO",
+                       "", "", "", "", "F", "PARDA", "NÃO"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+CAIO = ("CAIO FICTICIO NUNES", "900.000.005-0", date(2017, 1, 5))
+
+
+def test_aba_velha_de_2026_a_frente_das_de_2027_nao_libera_a_gravacao(
+        cliente, db, escola_completa):
+    """A sonda do revisor: escola em 2026, 1ª aba "Lista Piloto: 2026" (cópia velha),
+    2ª aba "Lista Piloto: 2027" com a Ana — que tem matrícula de 2026 no 4º Ano A."""
+    eid = escola_completa["escola"].id
+    _ano_2026_com_ranking(cliente, db, eid)
+    antes = _foto(db, cliente, eid)
+    lista = _planilha_por_aba((2026, "3º Ano A", [CAIO]), (2027, "5º Ano A", [ANA, BETO]))
+
+    pv = _enviar(cliente, eid, lista, "analisar").json()
+    conf = _enviar(cliente, eid, lista)
+
+    assert conf.status_code == 409, (
+        f"aba de 2027 aplicada ao ano 2026: {conf.status_code} {conf.text[:300]}")
+    assert _foto(db, cliente, eid) == antes, "a matrícula de 2026 mudou de turma"
+    assert pv["ano_divergente"] is True
+    # O aviso nomeia as abas de cada ano e diz o que fazer.
+    for aviso in (pv["aviso_ano"], conf.json()["detail"]):
+        assert "“3º Ano A”" in aviso and "“5º Ano A”" in aviso, aviso
+        assert "2026" in aviso and "2027" in aviso
+    assert "não pode ser gravada" in pv["aviso_ano"]
+    assert "Nada foi gravado" in conf.json()["detail"]
+    # Abas de anos diferentes: a lista não "é" de ano nenhum.
+    assert pv["ano_letivo"] is None
+
+
+def test_abas_de_anos_diferentes_na_ordem_inversa_tambem_sao_recusadas(
+        cliente, db, escola_completa):
+    eid = escola_completa["escola"].id
+    _ano_2026_com_ranking(cliente, db, eid)
+    antes = _foto(db, cliente, eid)
+    lista = _planilha_por_aba((2027, "5º Ano A", [ANA, BETO]), (2026, "3º Ano A", [CAIO]))
+    conf = _enviar(cliente, eid, lista)
+    assert conf.status_code == 409, conf.text
+    assert "“3º Ano A”" in conf.json()["detail"] and "“5º Ano A”" in conf.json()["detail"]
+    assert _foto(db, cliente, eid) == antes
+
+
+def test_abas_de_dois_anos_que_nao_sao_o_da_escola(cliente, db, escola_completa):
+    """2027 e 2028 com a escola em 2026: recusada, e o aviso diz os dois anos."""
+    eid = escola_completa["escola"].id
+    lista = _planilha_por_aba((2027, "4º Ano A", [ANA]), (2028, "5º Ano A", [BETO]))
+    pv = _enviar(cliente, eid, lista, "analisar").json()
+    assert pv["ano_divergente"] is True
+    assert "2027" in pv["aviso_ano"] and "2028" in pv["aviso_ano"]
+    assert _enviar(cliente, eid, lista).status_code == 409
+
+
+def test_todas_as_abas_do_ano_da_escola_seguem(cliente, db, escola_completa):
+    """Controle: todas as abas com o ano da escola (e uma aba sem a célula, que vale o
+    ano das outras, como sempre valeu) gravam normalmente."""
+    eid = escola_completa["escola"].id
+    lista = _planilha_por_aba((2026, "4º Ano A", [ANA]), (None, "5º Ano A", [BETO]),
+                              (2026, "3º Ano A", [CAIO]))
+    pv = _enviar(cliente, eid, lista, "analisar").json()
+    assert (pv["ano_letivo"], pv["ano_divergente"], pv["aviso_ano"]) == (2026, False, None)
+    conf = _enviar(cliente, eid, lista)
+    assert conf.status_code == 200, conf.text
+    assert conf.json()["alunos_criados"] == 3
+
+
+def test_leitor_guarda_o_ano_de_cada_aba():
+    from app.services import lista_piloto
+    analise = lista_piloto.analisar_matriculas(_planilha_por_aba(
+        (2026, "3º Ano A", [CAIO]), (2027, "5º Ano A", [ANA]), (None, "4º Ano B", [BETO])))
+    assert analise.anos_por_aba == {"3º Ano A": 2026, "5º Ano A": 2027}
+    assert analise.ano_letivo is None and analise.anos_divergentes
+    uma = lista_piloto.analisar_matriculas(_planilha_por_aba(
+        (2027, "5º Ano A", [ANA]), (2027, "4º Ano A", [BETO])))
+    assert uma.ano_letivo == 2027 and not uma.anos_divergentes

@@ -110,12 +110,22 @@ class ListaPilotoAnalise:
     # "arquivo" (o ano no nome do arquivo, a reserva quando a célula falta). A rota o
     # usa para dizer à escola onde corrigir o ano de uma lista de outro ano.
     ano_letivo_origem: str | None = None
+    # O ano escrito em CADA aba importada (título da aba → ano da célula "Lista
+    # Piloto:"), na ordem da planilha. A aba sem a célula não entra (vale o ano das
+    # outras, como sempre valeu). Com abas de anos diferentes, ``ano_letivo`` fica
+    # ``None`` e a rota recusa a gravação: a 1ª aba não decide pelo arquivo inteiro.
+    anos_por_aba: dict[str, int] = field(default_factory=dict)
     turmas: list[TurmaMatriculas] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
 
     @property
     def total_alunos(self) -> int:
         return sum(len(t.alunos) for t in self.turmas)
+
+    @property
+    def anos_divergentes(self) -> bool:
+        """As abas importadas trazem anos DIFERENTES entre si?"""
+        return len(set(self.anos_por_aba.values())) > 1
 
 
 # --------------------------------------------------------------------------
@@ -438,25 +448,31 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
         return analise
 
     ano_arquivo = _ano_do_texto(nome_arquivo)
+    # O 1º ano escrito em QUALQUER aba (mesmo numa que não é importada): a reserva de
+    # antes, quando nenhuma aba importada traz a célula.
+    ano_de_alguma_aba: int | None = None
     for nome_aba, linhas in abas:
         hr = _linha_cabecalho(linhas)
         if hr is None:
             continue  # aba de resumo/legenda — sem coluna "Nome"
 
-        # Metadados no topo (linhas antes do cabeçalho).
+        # Metadados no topo (linhas antes do cabeçalho). O ano é lido em CADA aba:
+        # uma aba velha copiada à frente das do ano novo não fala pelas outras.
         topo = linhas[:hr]
+        ano_da_aba: int | None = None
         for linha in topo:
             if not analise.escola_detectada:
                 v = _valor_apos_rotulo(linha, "escola")
                 if v:
                     analise.escola_detectada = v
-            if analise.ano_letivo is None:
+            if ano_da_aba is None:
                 v = _valor_apos_rotulo(linha, "lista piloto")
                 # isdecimal, não isdigit: "2026²" é dígito para o isdigit e o int()
                 # levantava — sem try aqui, a prévia inteira dava 500.
                 if v.strip().isdecimal():
-                    analise.ano_letivo = int(v.strip())
-                    analise.ano_letivo_origem = "planilha"
+                    ano_da_aba = int(v.strip())
+        if ano_de_alguma_aba is None:
+            ano_de_alguma_aba = ano_da_aba
         turma = _extrair_turma(nome_aba, topo)
         # Aba AUXILIAR (ex.: "COMPARAR COM INEP", "DESENHOS", "Etiqueta"): tem
         # uma coluna "Nome", mas NENHUM metadado de turma (turno/professor/SED)
@@ -518,6 +534,20 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
 
         if turma.alunos:
             analise.turmas.append(turma)
+            if ano_da_aba is not None:
+                analise.anos_por_aba[turma.aba] = ano_da_aba
+
+    # O ano da LISTA: o das abas importadas, quando todas concordam. Com anos
+    # diferentes entre elas, nenhum (``anos_divergentes``: a rota recusa a gravação e
+    # o aviso nomeia as abas de cada ano). Sem a célula em nenhuma aba importada, o
+    # 1º ano escrito em qualquer aba (como antes) e, por fim, o nome do arquivo.
+    anos_importados = set(analise.anos_por_aba.values())
+    if len(anos_importados) == 1:
+        analise.ano_letivo = anos_importados.pop()
+        analise.ano_letivo_origem = "planilha"
+    elif not anos_importados and ano_de_alguma_aba is not None:
+        analise.ano_letivo = ano_de_alguma_aba
+        analise.ano_letivo_origem = "planilha"
 
     # Mesmo aluno em DUAS turmas: a escola às vezes lista quem está trocando de
     # sala. Com RA, é o mesmo aluno (cadastrado uma vez, matriculado na 1ª). Sem
@@ -544,7 +574,8 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                 f"“{nome0}” aparece em mais de uma turma ({turmas_str}) sem RA — "
                 "confira se é a mesma pessoa (será cadastrado(a) em cada turma).")
 
-    if analise.ano_letivo is None and ano_arquivo is not None:
+    if (analise.ano_letivo is None and not analise.anos_divergentes
+            and ano_arquivo is not None):
         analise.ano_letivo = ano_arquivo
         analise.ano_letivo_origem = "arquivo"
     if not analise.turmas:

@@ -3922,11 +3922,14 @@ def analisar_matriculas(
         turmas_existentes=sum(1 for t in turmas if t.ja_existe),
         turmas=turmas,
         avisos=avisos,
-        # Lista de OUTRO ano letivo: a confirmação a recusa (``confirmar_matriculas``);
-        # a prévia já avisa e a tela não deixa gravar. Sem o ano, pede para conferir.
-        ano_divergente=matriculas.ano_da_lista_diverge(analise.ano_letivo, ano),
+        # Lista de OUTRO ano letivo (ou com uma aba de outro ano): a confirmação a
+        # recusa (``confirmar_matriculas``); a prévia já avisa e a tela não deixa
+        # gravar. Sem o ano, pede para conferir.
+        ano_divergente=matriculas.ano_da_lista_diverge(
+            analise.ano_letivo, ano, analise.anos_por_aba),
         aviso_ano=matriculas.aviso_ano_da_lista(
-            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=True),
+            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=True,
+            anos_por_aba=analise.anos_por_aba),
     )
 
 
@@ -4475,13 +4478,15 @@ def confirmar_matriculas(
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     ano = escola.ano_letivo_ativo
-    if matriculas.ano_da_lista_diverge(analise.ano_letivo, ano):
+    if matriculas.ano_da_lista_diverge(analise.ano_letivo, ano, analise.anos_por_aba):
         # A lista de OUTRO ano letivo não é aplicada ao ano ativo: moveria as
         # matrículas para as turmas do outro ano, criaria as turmas dele neste,
         # marcaria quem não está nela "fora da lista piloto" e recalcularia as Notas —
         # sem volta (a matrícula não guarda histórico). Recusa antes de tocar no banco.
+        # Vale para CADA aba: uma aba de outro ano basta para recusar o arquivo.
         raise HTTPException(status.HTTP_409_CONFLICT, matriculas.aviso_ano_da_lista(
-            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=False))
+            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=False,
+            anos_por_aba=analise.anos_por_aba))
     avisos = list(analise.avisos)
 
     # Serializa importações concorrentes desta escola ANTES de ler o estado: o

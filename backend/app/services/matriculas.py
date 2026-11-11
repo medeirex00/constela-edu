@@ -554,14 +554,39 @@ def aviso_turma_arquivada(turma: str, linhas: int, *, previa: bool = False) -> s
             "use “Reativar” na linha dela) e envie a planilha de novo.")
 
 
-def ano_da_lista_diverge(ano_lista: int | None, ano_escola: int) -> bool:
+def ano_da_lista_diverge(ano_lista: int | None, ano_escola: int,
+                         anos_por_aba: dict[str, int] | None = None) -> bool:
     """A Lista Piloto é de OUTRO ano letivo que o ativo da escola? Sem o ano (nem na
-    planilha nem no nome do arquivo) não dá para saber: não diverge."""
+    planilha nem no nome do arquivo) não dá para saber: não diverge.
+
+    ``anos_por_aba`` (``ListaPilotoAnalise.anos_por_aba``): basta UMA aba importada
+    de outro ano — uma aba velha de 2026 à frente das de 2027 não libera as de 2027
+    para o ano 2026 (as abas de anos diferentes entre si sempre divergem)."""
+    if anos_por_aba and any(a != ano_escola for a in anos_por_aba.values()):
+        return True
     return ano_lista is not None and ano_lista != ano_escola
 
 
+def _abas_de_cada_ano(anos_por_aba: dict[str, int], limite: int = 6) -> str:
+    """"2026 na aba “3º Ano A”; 2027 nas abas “5º Ano A” e “5º Ano B”" — por ano."""
+    por_ano: dict[int, list[str]] = {}
+    for aba, ano in anos_por_aba.items():
+        por_ano.setdefault(ano, []).append(aba)
+    partes = []
+    for ano in sorted(por_ano):
+        abas = por_ano[ano]
+        nomes = [f"“{a}”" for a in abas[:limite]]
+        if len(abas) > limite:
+            nomes.append(f"mais {len(abas) - limite}")
+        lista = nomes[0] if len(nomes) == 1 else f"{', '.join(nomes[:-1])} e {nomes[-1]}"
+        partes.append(f"{ano} na aba {lista}" if len(abas) == 1
+                      else f"{ano} nas abas {lista}")
+    return "; ".join(partes)
+
+
 def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: int, *,
-                       previa: bool) -> str | None:
+                       previa: bool, anos_por_aba: dict[str, int] | None = None,
+                       ) -> str | None:
     """O aviso do ANO da Lista Piloto, ou ``None`` quando é o ano da escola.
 
     A confirmação aplica a lista ao ano letivo ATIVO da escola: a de 2027 enviada com a
@@ -572,7 +597,18 @@ def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: in
     ``origem`` diz onde corrigir o ano, se ele é que está errado: "planilha" (a célula
     "Lista Piloto:") ou "arquivo" (o nome do arquivo, quando a célula falta).
 
+    Abas de anos DIFERENTES entre si (``anos_por_aba``): o aviso nomeia as abas de
+    cada ano — a lista não é de ano nenhum, e só as abas do ano da escola podem ir.
+
     Sem o ano, a prévia pede para conferir (a confirmação segue, como sempre seguiu)."""
+    efeito = "Ela não pode ser gravada" if previa else "Nada foi gravado"
+    if anos_por_aba and len(set(anos_por_aba.values())) > 1:
+        return (f"As abas desta Lista Piloto são de anos letivos diferentes "
+                f"({_abas_de_cada_ano(anos_por_aba)}), e a escola está no ano letivo "
+                f"{ano_escola}. {efeito}: gravar as abas de outro ano mudaria as turmas, "
+                f"as matrículas e o ranking de {ano_escola}. Deixe na planilha só as abas "
+                f"da Lista Piloto de {ano_escola} e envie de novo; se o ano escrito no "
+                "topo de uma aba (“Lista Piloto:”) está errado, corrija-o.")
     if ano_lista is None:
         if not previa:
             return None
@@ -596,7 +632,6 @@ def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: in
         situacao = f"e a escola já está no ano letivo {ano_escola}"
         caminho = (f"Envie a Lista Piloto de {ano_escola}; se o ano letivo da escola é que "
                    "está errado, peça ao administrador global para corrigi-lo.")
-    efeito = "Ela não pode ser gravada" if previa else "Nada foi gravado"
     return (f"{de_onde}, {situacao}. {efeito}: gravá-la mudaria as turmas, as matrículas "
             f"e o ranking de {ano_escola}. {caminho} Se a lista é mesmo de {ano_escola}, "
             f"{onde_corrigir} e envie de novo.")
