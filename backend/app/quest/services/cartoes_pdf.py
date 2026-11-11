@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import io
 import unicodedata
-from datetime import datetime, timezone
 
 from app.core.config import settings
+from app.core.tempo import agora_br
 
 _LARGURA_CARTAO = 92.0
 _ALTURA_CARTAO = 64.0
@@ -58,6 +58,12 @@ def _texto_pdf(texto) -> str:
         elif unicodedata.category(caractere) not in ("Cf", "Mn", "Me"):
             saida.append("?")
     return "".join(saida)
+
+
+def _juntar(*partes: str) -> str:
+    """Partes do cabeçalho separadas por " - ", sem as vazias: o cartão individual
+    não tem turma e não pode sair com "ESCOLA -" nem "acesso -  - gerado em"."""
+    return " - ".join(p for p in partes if p and p.strip())
 
 
 def _hex_para_rgb(cor: str) -> tuple[int, int, int]:
@@ -149,7 +155,7 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
     pdf.cell(0, 5, "CONSTELA QUEST")
     pdf.set_font("helvetica", "", 7)
     pdf.set_xy(x + 3, y + 6.2)
-    pdf.cell(0, 3, _texto_pdf(f"{escola_nome} - {turma_nome}"))
+    pdf.cell(0, 3, _texto_pdf(_juntar(escola_nome, turma_nome)))
 
     # QR à direita
     lado_qr = 26.0
@@ -231,7 +237,7 @@ def _folha_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
     pdf.cell(0, 6, _texto_pdf(titulo + (" (continuacao)" if continuacao else "")))
     pdf.set_font("helvetica", "", 9)
     pdf.set_xy(10, 12)
-    pdf.cell(0, 5, _texto_pdf(f"{escola_nome} - {turma_nome} - códigos de acesso"))
+    pdf.cell(0, 5, _texto_pdf(_juntar(escola_nome, turma_nome, "códigos de acesso")))
     pdf.set_y(26)
     pdf.set_text_color(30, 30, 30)
 
@@ -309,11 +315,12 @@ def gerar_cartoes_pdf(escola_nome: str, cor: str, turma_nome: str,
             pdf.add_page()
             pdf.set_font("helvetica", "", 7)
             pdf.set_text_color(150, 150, 150)
-            gerado = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+            # Data de Brasília: das 21h à meia-noite o UTC já é o dia seguinte.
+            gerado = agora_br().strftime("%d/%m/%Y")
             pdf.set_xy(_MARGEM_X, 4)
-            pdf.cell(0, 4, _texto_pdf(
-                f"Constela Quest - Cartoes de acesso - {turma_nome} - "
-                f"gerado em {gerado}"))
+            pdf.cell(0, 4, _texto_pdf(_juntar(
+                "Constela Quest", "Cartoes de acesso", turma_nome,
+                f"gerado em {gerado}")))
         coluna = posicao % 2
         linha = posicao // 2
         x = _MARGEM_X + coluna * (_LARGURA_CARTAO + _ESPACO)
