@@ -67,6 +67,7 @@ from sqlalchemy import (
     column,
     delete,
     func,
+    literal,
     null,
     or_,
     select,
@@ -130,6 +131,15 @@ class Limite:
 def _agora() -> datetime:
     # UTC sem fuso: o schema guarda DateTime "ingênuo" (sem timezone).
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _instante(valor: datetime):
+    """O instante como parâmetro com o TIPO da coluna. Dentro de um ``CASE`` o
+    SQLAlchemy só deduz o tipo pela classe do valor, e sem tipo o instante vai cru ao
+    driver: no SQLite, o adaptador padrão de ``datetime`` do ``sqlite3`` (obsoleto desde
+    o Python 3.12) em vez da conversão da coluna. Com o tipo explícito a conversão é a
+    da coluna nos dois bancos, a mesma de quando a dedução acerta."""
+    return literal(valor, _TABELA.c.janela_inicio.type)
 
 
 def chave(dimensao: str, valor: str) -> str:
@@ -248,9 +258,9 @@ def _instrucao_de_contagem(dialeto: str, itens: list[Limite], agora: datetime, *
     ``so_se_livre``: só soma na chave que não está bloqueada nem cheia na janela; a
     que está fica como está e não volta no RETURNING (``reservar``)."""
     teto = case({x.chave: x.teto for x in itens}, value=_TABELA.c.chave)
-    corte = case({x.chave: agora - timedelta(seconds=x.janela_s) for x in itens},
-                 value=_TABELA.c.chave)
-    fim_do_bloqueio = case({x.chave: agora + x.bloqueio for x in itens},
+    corte = case({x.chave: _instante(agora - timedelta(seconds=x.janela_s))
+                  for x in itens}, value=_TABELA.c.chave)
+    fim_do_bloqueio = case({x.chave: _instante(agora + x.bloqueio) for x in itens},
                            value=_TABELA.c.chave)
     vencida = _TABELA.c.janela_inicio < corte
     falhas = case((vencida, 1), else_=_TABELA.c.falhas + 1)
@@ -261,7 +271,8 @@ def _instrucao_de_contagem(dialeto: str, itens: list[Limite], agora: datetime, *
     return _insercao(dialeto, novas).on_conflict_do_update(
         index_elements=[_TABELA.c.chave],
         set_={"falhas": falhas,
-              "janela_inicio": case((vencida, agora), else_=_TABELA.c.janela_inicio),
+              "janela_inicio": case((vencida, _instante(agora)),
+                                    else_=_TABELA.c.janela_inicio),
               "atualizado_em": agora,
               "bloqueado_ate": case((falhas >= teto, fim_do_bloqueio),
                                     else_=_TABELA.c.bloqueado_ate)},
@@ -398,7 +409,8 @@ def devolver(db: Session, reserva: Reserva) -> None:
         return
     agora = _agora()
     teto = case({t.chave: t.teto for t in tomadas}, value=_TABELA.c.chave)
-    janela = case({t.chave: t.janela_inicio for t in tomadas}, value=_TABELA.c.chave)
+    janela = case({t.chave: _instante(t.janela_inicio) for t in tomadas},
+                  value=_TABELA.c.chave)
     instrucao = _insercao(db.get_bind().dialect.name,
                           [(t.chave, 0, agora, agora, None) for t in tomadas])
     _executar(db, instrucao.on_conflict_do_update(
