@@ -56,7 +56,10 @@ export function periodoParaQuery(p: Periodo): string {
 const estiloData = estiloDataPilula;
 
 /** As datas do "personalizado" (início e fim) e do "dia", no contrato do backend.
- *  Fonte única: a pílula abaixo e o campo da Análise educacional só mudam o estilo. */
+ *  Fonte única: a pílula abaixo e o campo da Análise educacional só mudam o estilo.
+ *  No personalizado, o calendário da data final começa na inicial (`min`) e o da inicial
+ *  termina na final (`max`): com as datas trocadas o backend recusa (422, "inverta as
+ *  duas"), e antes algumas telas respondiam "nenhuma leitura no período". */
 export function DatasDoPeriodo({ valor, onChange, estilo, classeAte = "text-sm text-zinc-500 dark:text-zinc-400" }: {
   valor: Periodo;
   onChange: (p: Periodo) => void;
@@ -66,10 +69,10 @@ export function DatasDoPeriodo({ valor, onChange, estilo, classeAte = "text-sm t
   if (valor.preset === "personalizado") {
     return (
       <>
-        <input type="date" aria-label="Data inicial" className={estilo}
+        <input type="date" aria-label="Data inicial" className={estilo} max={valor.fim || undefined}
                value={valor.inicio ?? ""} onChange={(e) => onChange({ ...valor, inicio: e.target.value })} />
         <span className={classeAte}>até</span>
-        <input type="date" aria-label="Data final" className={estilo}
+        <input type="date" aria-label="Data final" className={estilo} min={valor.inicio || undefined}
                value={valor.fim ?? ""} onChange={(e) => onChange({ ...valor, fim: e.target.value })} />
       </>
     );

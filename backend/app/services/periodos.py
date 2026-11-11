@@ -24,6 +24,24 @@ PRESETS = (
 )
 
 
+class PeriodoInvalido(Exception):
+    """O pedido de período não tem sentido: no personalizado, a data inicial vem depois da
+    final. A mensagem é a frase para quem usa; ``app.main`` a devolve como 422 em qualquer
+    rota (a mesma do Relatório por Período).
+
+    NÃO é ``ValueError`` de propósito: as rotas que chamam ``resolver`` trocam o
+    ``ValueError`` (data em formato errado, de ``_parse_data``) por "Data inválida (use
+    AAAA-MM-DD)", que é outro problema e esconderia a frase. Antes desta classe o intervalo
+    invertido passava, as consultas ``data >= início AND data <= fim`` davam vazio e as
+    telas diziam "nenhuma leitura no período"."""
+
+
+def mensagem_datas_invertidas(inicio: date, fim: date) -> str:
+    """A frase do intervalo com as datas trocadas (fonte única)."""
+    return (f"A data inicial ({inicio.strftime('%d/%m/%Y')}) é posterior à "
+            f"final ({fim.strftime('%d/%m/%Y')}) — inverta as duas.")
+
+
 def _ini(d: date) -> datetime:
     return datetime.combine(d, time.min)
 
@@ -137,10 +155,14 @@ def resolver(
     inicio: date | None = None,
     fim: date | None = None,
 ) -> tuple[datetime | None, datetime | None, str]:
-    """(inicio_dt, fim_dt, rótulo). Datas None viram limite aberto."""
+    """(inicio_dt, fim_dt, rótulo). Datas None viram limite aberto.
+
+    Personalizado com ``inicio`` depois de ``fim`` levanta ``PeriodoInvalido``."""
     preset = (preset or "tudo").lower()
 
     if preset == "personalizado":
+        if inicio and fim and inicio > fim:
+            raise PeriodoInvalido(mensagem_datas_invertidas(inicio, fim))
         i = _ini(inicio) if inicio else None
         f = _fim(fim) if fim else None
         return i, f, _rotulo_intervalo(inicio, fim)

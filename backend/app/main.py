@@ -23,6 +23,7 @@ from app.core.database import engine, garantir_dados_base, get_db
 from app.core.deps import negar_secretaria
 from app.core.prontidao import prontidao
 from app.core.security import registrar_avisos_da_cifra
+from app.services.periodos import PeriodoInvalido
 from app.quest.routers import auth as quest_auth
 from app.quest.routers import conquistas as quest_conquistas
 from app.quest.routers import perfil as quest_perfil
@@ -223,6 +224,16 @@ async def _erro_de_validacao(request: Request, exc: RequestValidationError) -> J
         erros.append(erro)
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         content={"detail": jsonable_encoder(erros)})
+
+
+# Período personalizado com as datas trocadas (``periodos.resolver``): 422 com a frase do
+# Relatório por Período ("inverta as duas") em QUALQUER rota que resolve período — Ranking de
+# Leitura e de Matemática, Premiações, Histórico, Evolução, exemplo da pontuação. Antes só o
+# relatório recusava; as outras respondiam "nenhuma leitura no período" (200 vazio).
+@app.exception_handler(PeriodoInvalido)
+async def _periodo_invalido(request: Request, exc: PeriodoInvalido) -> JSONResponse:
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        content={"detail": str(exc)})
 
 
 for router in (
