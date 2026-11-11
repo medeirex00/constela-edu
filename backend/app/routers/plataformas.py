@@ -84,6 +84,33 @@ MSG_AJUSTE_COM_DADO_RECEBIDO = (
     "credencial NÃO reabre o ajuste — o que já foi recebido continua valendo. "
     "Fale com o suporte.")
 
+# Matific: o contador é ACUMULADO e a coleta seguinte traz de novo o valor da
+# plataforma. Um número digitado por cima do dado coletado vira um degrau falso
+# na série — ganho inventado ou ganho real apagado no período.
+MSG_AJUSTE_MATIFIC_COM_INTEGRACAO = (
+    "Esta escola recebe o Matific pela integração automática: o ajuste manual de "
+    "atividades e estrelas fica com o Admin Global da Constela, para não "
+    "sobrescrever o dado oficial. Fale com o suporte.")
+
+MSG_AJUSTE_MATIFIC_COM_DADO_RECEBIDO = (
+    "Esta escola já recebeu dados do Matific vindos da plataforma: o ajuste manual "
+    "de atividades e estrelas fica com o Admin Global da Constela, para não "
+    "sobrescrever o dado oficial. Desligar a integração ou remover a credencial "
+    "NÃO reabre o ajuste — o que já foi recebido continua valendo. Fale com o "
+    "suporte.")
+
+# Mensagens da governança do ajuste manual, por plataforma:
+# (integração ativa, dado já recebido da plataforma).
+_MSGS_GOVERNANCA: dict[str, tuple[str, str]] = {
+    "elefante": (MSG_AJUSTE_COM_INTEGRACAO, MSG_AJUSTE_COM_DADO_RECEBIDO),
+    "matific": (MSG_AJUSTE_MATIFIC_COM_INTEGRACAO, MSG_AJUSTE_MATIFIC_COM_DADO_RECEBIDO),
+}
+
+# Situação de uma ficha que não está ativa, em português (o mesmo vocabulário do
+# cadastro de alunos).
+_SITUACAO_INATIVA = {"arquivado": "arquivado", "transferido": "marcado como transferido",
+                     "fora_lista_piloto": "fora da Lista Piloto", "excluido": "excluído"}
+
 
 def _linhas_modulo(db: Session, escola_id: int, modelo,
                    turma_ids: list[int] | None = None):
@@ -118,6 +145,23 @@ def _aluno_da_escola(db: Session, escola_id: int, aluno_id: int) -> Aluno:
     if aluno is None or aluno.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     return aluno
+
+
+def _exigir_aluno_ativo(aluno: Aluno) -> None:
+    """O ajuste manual vale só para quem está ATIVO na escola (409).
+
+    As telas dos módulos listam só os ativos, e todas as visões (rankings,
+    premiações, relatórios) filtram por ``status == "ativo"``: um retrato gravado
+    numa ficha transferida/arquivada não aparece em lugar nenhum — e volta como
+    dado "novo" se a ficha for reativada."""
+    if aluno.status != "ativo":
+        situacao = _SITUACAO_INATIVA.get(aluno.status, aluno.status)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{aluno.nome} não está ativo na escola ({situacao}). O ajuste manual vale "
+            "só para alunos ativos: para corrigir os dados, reative o cadastro antes "
+            "(em Minha Escola › Turmas, abra a turma, ligue “Mostrar arquivados” e use "
+            "“Reativar”).")
 
 
 def _importacao_manual(db, escola_id, usuario_id, plataforma) -> Importacao:
@@ -162,7 +206,17 @@ def editar_matific(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
+    """Retrato MANUAL do Matific (novo ponto no histórico, nunca sobrescreve).
+
+    Mesma governança do Elefante: com a integração do Matific ativa, ou com
+    evidência de que o Matific da escola já chegou da plataforma, só o Admin
+    Global ajusta (403) — o contador é acumulado e a coleta seguinte traz de novo
+    o valor da plataforma, então um número digitado por cima vira ganho falso (ou
+    apaga o ganho real) no período. Motivo obrigatório (422); aluno que não está
+    ativo, 409."""
     aluno = _aluno_da_escola(db, escola_id, aluno_id)
+    _exigir_governanca_ajuste_manual(db, escola_id, usuario, "matific")
+    _exigir_aluno_ativo(aluno)
     anterior = db.execute(
         select(SnapshotMatific)
         .where(SnapshotMatific.aluno_id == aluno_id)
@@ -209,26 +263,37 @@ def editar_matific(
 
 # --- Elefante Letrado (PRD §56) -------------------------------------------------
 
-def integracao_elefante_ativa(db: Session, escola_id: int) -> bool:
-    """A escola recebe o Elefante pela INTEGRAÇÃO automática? Mesmo critério da
-    tela Integrações (``sync/router.status_escola``): credencial do Elefante
+def _integracao_ativa(db: Session, escola_id: int, plataforma: str) -> bool:
+    """A escola recebe a plataforma pela INTEGRAÇÃO automática? Mesmo critério da
+    tela Integrações (``sync/router.status_escola``): credencial da plataforma
     VÁLIDA (``conectada``) ou agenda de sincronização LIGADA (``agendada``)."""
     credencial = db.execute(
         select(PlataformaCredencial.status).where(
             PlataformaCredencial.escola_id == escola_id,
-            PlataformaCredencial.plataforma == "elefante")
+            PlataformaCredencial.plataforma == plataforma)
     ).scalars().first()
     if credencial == "valida":
         return True
     return db.execute(
         select(SincronizacaoConfig.id).where(
             SincronizacaoConfig.escola_id == escola_id,
-            SincronizacaoConfig.plataforma == "elefante",
+            SincronizacaoConfig.plataforma == plataforma,
             SincronizacaoConfig.ativo.is_(True)).limit(1)
     ).first() is not None
 
 
-# Marcas de auditoria de que o Elefante DESTA escola passou pela plataforma.
+def integracao_elefante_ativa(db: Session, escola_id: int) -> bool:
+    """A escola recebe o Elefante pela integração automática?"""
+    return _integracao_ativa(db, escola_id, "elefante")
+
+
+def integracao_matific_ativa(db: Session, escola_id: int) -> bool:
+    """A escola recebe o Matific pela integração automática?"""
+    return _integracao_ativa(db, escola_id, "matific")
+
+
+# Marcas de auditoria de que a plataforma (Elefante ou Matific) DESTA escola passou
+# pela integração ou por relatório importado.
 # ``LogAuditoria`` NUNCA é apagado — a exclusão permanente de usuário só anonimiza
 # a autoria (``routers/admin.py``) e não há rota que remova linhas —, então é a
 # marca mais imutável que a sincronização deixa.
@@ -249,29 +314,29 @@ ACOES_CATALOGO_ELEFANTE: frozenset[str] = frozenset({
 })
 
 
-def evidencia_elefante_da_plataforma(db: Session, escola_id: int) -> str | None:
-    """Marca HISTÓRICA de que o Elefante desta escola já veio da plataforma.
+def _evidencia_da_plataforma(db: Session, escola_id: int, plataforma: str) -> str | None:
+    """Marca HISTÓRICA de que a ``plataforma`` desta escola já veio da plataforma.
 
     A trava do ajuste manual não pode depender da integração estar LIGADA: a
     própria escola apaga a credencial e desliga a agenda (``sync/router``), o que
     reabriria a edição do dado oficial. Aqui a pergunta é outra e a escola não
-    apaga a resposta: *este Elefante já chegou da plataforma alguma vez?*
+    apaga a resposta: *este dado já chegou da plataforma alguma vez?*
 
     Marcas verificadas, da mais imutável para a mais direta:
 
     1. ``LogAuditoria`` — nunca apagado (nem pela exclusão permanente de usuário,
        que só anonimiza a autoria, nem pela restauração de backup, que não
-       inclui a tabela): ``sync.credencial_salva``/``removida`` com
-       ``plataforma="elefante"`` no detalhe (a escola conectou a plataforma),
-       ``importacao.concluida`` de um relatório do Elefante que não seja
-       ``tipo="manual"`` e as reconciliações de catálogo que só a
-       importação/sync do Elefante grava;
-    2. ``Importacao`` do Elefante que NÃO seja ``tipo="manual"`` — o registro que
-       a sincronização/API cria ao aplicar um relatório (``_importacao_manual``
-       é o ajuste da própria escola e por isso fica de fora);
-    3. ``EventoAluno`` do Elefante — o espelho evento a evento da sync;
-    4. ``Leitura`` — só nasce de importação/sincronização do Elefante;
-    5. ``SincronizacaoExecucao`` do Elefante — o histórico de execuções.
+       inclui a tabela): ``sync.credencial_salva``/``removida`` com a plataforma
+       no detalhe (a escola conectou a plataforma), ``importacao.concluida`` de
+       um relatório da plataforma que não seja ``tipo="manual"`` e, no Elefante,
+       as reconciliações de catálogo que só a importação/sync do Elefante grava;
+    2. ``Importacao`` da plataforma que NÃO seja ``tipo="manual"`` — o registro
+       que a sincronização/API cria ao aplicar um relatório
+       (``_importacao_manual`` é o ajuste da própria escola e por isso fica de
+       fora);
+    3. ``EventoAluno`` da plataforma — o espelho evento a evento da sync;
+    4. ``Leitura`` (só Elefante) — só nasce de importação/sincronização;
+    5. ``SincronizacaoExecucao`` da plataforma — o histórico de execuções.
 
     As marcas 2 a 4 estão no backup (``services.backup.MODELOS``) e portanto
     somem numa restauração; as de auditoria e a de sincronização não — por isso
@@ -290,50 +355,68 @@ def evidencia_elefante_da_plataforma(db: Session, escola_id: int) -> str | None:
         .execution_options(yield_per=200)
     ):
         detalhe = detalhes or {}
-        if detalhe.get("plataforma") != "elefante":
+        if detalhe.get("plataforma") != plataforma:
             continue
         # A importação MANUAL é o registro do próprio ajuste da escola: contá-la
         # trancaria a porta no primeiro uso legítimo.
         if acao == ACAO_IMPORTACAO and detalhe.get("tipo") == "manual":
             continue
         return f"auditoria:{acao}"
-    marcas = (
-        ("auditoria:catalogo", select(LogAuditoria.id).where(
+    marcas = []
+    if plataforma == "elefante":
+        marcas.append(("auditoria:catalogo", select(LogAuditoria.id).where(
             LogAuditoria.escola_id == escola_id,
-            LogAuditoria.acao.in_(ACOES_CATALOGO_ELEFANTE))),
+            LogAuditoria.acao.in_(ACOES_CATALOGO_ELEFANTE))))
+    marcas += [
         ("importacao", select(Importacao.id).where(
             Importacao.escola_id == escola_id,
-            Importacao.plataforma == "elefante",
+            Importacao.plataforma == plataforma,
             Importacao.tipo != "manual")),
         ("evento", select(EventoAluno.id).where(
             EventoAluno.escola_id == escola_id,
-            EventoAluno.plataforma == "elefante")),
-        ("leitura", select(Leitura.id).where(Leitura.escola_id == escola_id)),
-        ("sincronizacao", select(SincronizacaoExecucao.id).where(
-            SincronizacaoExecucao.escola_id == escola_id,
-            SincronizacaoExecucao.plataforma == "elefante")),
-    )
+            EventoAluno.plataforma == plataforma)),
+    ]
+    if plataforma == "elefante":
+        marcas.append(("leitura", select(Leitura.id).where(Leitura.escola_id == escola_id)))
+    marcas.append(("sincronizacao", select(SincronizacaoExecucao.id).where(
+        SincronizacaoExecucao.escola_id == escola_id,
+        SincronizacaoExecucao.plataforma == plataforma)))
     for nome, consulta in marcas:
         if db.execute(consulta.limit(1)).first() is not None:
             return nome
     return None
 
 
-def _exigir_governanca_ajuste_manual(db: Session, escola_id: int, usuario: Usuario) -> None:
-    """Quem ajusta o snapshot/faixas do Elefante à mão.
+def evidencia_elefante_da_plataforma(db: Session, escola_id: int) -> str | None:
+    """Marca histórica de que o Elefante desta escola já veio da plataforma
+    (ver ``_evidencia_da_plataforma``)."""
+    return _evidencia_da_plataforma(db, escola_id, "elefante")
+
+
+def evidencia_matific_da_plataforma(db: Session, escola_id: int) -> str | None:
+    """Marca histórica de que o Matific desta escola já veio da plataforma
+    (coleta, relatório importado ou conexão registrada no log)."""
+    return _evidencia_da_plataforma(db, escola_id, "matific")
+
+
+def _exigir_governanca_ajuste_manual(db: Session, escola_id: int, usuario: Usuario,
+                                     plataforma: str = "elefante") -> None:
+    """Quem ajusta à mão o retrato da plataforma (Elefante: snapshot/faixas;
+    Matific: atividades/estrelas).
 
     Bloqueia quando a integração está ATIVA **ou** quando existe evidência
-    HISTÓRICA de dado do Elefante vindo da plataforma — a escola desliga a
-    integração, mas não apaga a história (ver
-    ``evidencia_elefante_da_plataforma``). Numa escola que nunca recebeu o
-    Elefante da plataforma, admin e coordenador mantêm o ajuste manual: ali ele é
-    a única fonte do dado. O Admin Global faz manutenção em qualquer caso."""
+    HISTÓRICA de dado da plataforma — a escola desliga a integração, mas não
+    apaga a história (ver ``_evidencia_da_plataforma``). Numa escola que nunca
+    recebeu o dado da plataforma, admin e coordenador mantêm o ajuste manual:
+    ali ele é a única fonte do dado. O Admin Global faz manutenção em qualquer
+    caso."""
     if usuario.is_global:
         return
-    if integracao_elefante_ativa(db, escola_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, MSG_AJUSTE_COM_INTEGRACAO)
-    if evidencia_elefante_da_plataforma(db, escola_id) is not None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, MSG_AJUSTE_COM_DADO_RECEBIDO)
+    msg_integracao, msg_dado_recebido = _MSGS_GOVERNANCA[plataforma]
+    if _integracao_ativa(db, escola_id, plataforma):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, msg_integracao)
+    if _evidencia_da_plataforma(db, escola_id, plataforma) is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, msg_dado_recebido)
 
 
 def _contagens_validadas(db: Session, escola_id: int, contagens: dict[str, int]) -> dict[str, int]:

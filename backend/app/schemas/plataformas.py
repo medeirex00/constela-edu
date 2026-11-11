@@ -48,7 +48,11 @@ class MatificEdicao(BaseModel):
     # anterior (ver ``routers.plataformas.editar_matific``). O limite 0–5 vale
     # para o valor INFORMADO: ninguém grava média nova fora da escala.
     pontuacao_media: float | None = Field(default=None, ge=0, le=5)
-    motivo: str | None = None
+    # Obrigatório, como no ajuste do Elefante: é o que explica a mudança no
+    # histórico de alterações.
+    motivo: str
+
+    _motivo = field_validator("motivo")(_motivo_obrigatorio)
 
 
 class ElefanteAlunoOut(BaseModel):

@@ -389,7 +389,7 @@ def test_acumulado_dentro_do_intervalo_nao_derruba_o_estado(
 
 
 def test_periodo_em_andamento_nao_gera_data_futura_nem_engole_edicao_manual(
-        cliente, db, escola_completa):
+        cliente, cliente_global, db, escola_completa):
     """Importar o mês CORRENTE não pode datar o snapshot no futuro — uma
     edição manual feita depois ficaria permanentemente invisível."""
     escola_id = escola_completa["escola"].id
@@ -410,7 +410,9 @@ def test_periodo_em_andamento_nao_gera_data_futura_nem_engole_edicao_manual(
     atual = _snapshots(db, ana.id)[-1]
     assert atual.data_referencia <= agora            # nunca no futuro
 
-    edicao = cliente.put(f"/api/v1/escolas/{escola_id}/matific/{ana.id}", json={
+    # Depois de um relatório do Matific importado, o ajuste manual é do Admin
+    # Global (a escola recebe 403: o dado já veio da plataforma).
+    edicao = cliente_global.put(f"/api/v1/escolas/{escola_id}/matific/{ana.id}", json={
         "atividades": 77, "estrelas": 200, "pontuacao_media": 4.0,
         "motivo": "correção manual"})
     assert edicao.status_code == 200, edicao.text
