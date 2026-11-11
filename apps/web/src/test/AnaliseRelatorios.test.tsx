@@ -133,7 +133,8 @@ describe("Arquivos da rede — planilhas", () => {
     const col = (linha: unknown[], nome: string) => linha[t.cabecalho.indexOf(nome)];
     const [alfa, beta, delta, gama] = t.linhas;
     expect(gama.slice(1).every((c) => c === "protegido")).toBe(true);
-    expect(col(alfa, "Matific — participação (%)")).toBe("sem dado");
+    // Poucos alunos medidos no Matific é proteção, não falta de dado (G_ANALISE-2).
+    expect(col(alfa, "Matific — participação (%)")).toBe("protegido");
     expect(col(delta, "Matific — desempenho (0–5)")).toBe("protegido");
     expect(col(delta, "Elefante — acerto nas questões (%)")).toBe("sem dado");
     expect(col(beta, "Elefante — participação (%)")).toBe(85);

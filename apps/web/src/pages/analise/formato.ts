@@ -12,6 +12,25 @@ import type {
 
 export { numeroBR };
 
+/** Os motivos de um bloco SEM número que são PROTEÇÃO (poucos alunos), não falta de dado:
+ *  `poucos_alunos_medidos` (menos de k alunos medidos), `series_suprimidas` (todas as séries da
+ *  escola com poucos alunos) e `suprimido` (o recorte escondido junto com um pequeno). */
+export const MOTIVOS_DE_PROTECAO: ReadonlySet<string> = new Set(["poucos_alunos_medidos", "series_suprimidas", "suprimido"]);
+
+/**
+ * O número que falta está PROTEGIDO (existe e não aparece, para proteger as crianças) — e não
+ * "sem dado"? A regra ÚNICA das telas: o bloco inteiro sem número por um motivo de proteção
+ * (`MOTIVOS_DE_PROTECAO`) ou, com `campo`, a métrica escondida em `metricas_protegidas`.
+ */
+export function numeroProtegido(
+  bloco: { motivo_sem_dado?: string | null; metricas_protegidas?: string[] | null } | null | undefined,
+  campo?: string,
+): boolean {
+  if (!bloco) return false;
+  if (bloco.motivo_sem_dado && MOTIVOS_DE_PROTECAO.has(bloco.motivo_sem_dado)) return true;
+  return campo != null && (bloco.metricas_protegidas ?? []).includes(campo);
+}
+
 export const ROTULO_ETAPA: Record<string, string> = {
   "2_ano": "2º ano",
   "5_ano": "5º ano",

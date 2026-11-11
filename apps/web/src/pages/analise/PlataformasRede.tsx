@@ -20,7 +20,7 @@ import { TabelaRolavel } from "../../components/TabelaRolavel";
 import { Badge } from "../../components/ui";
 import { TEXTO_SUPRESSAO_PADRAO } from "./Plataformas";
 import { TD, TH } from "./comum";
-import { decimal, diaBR, porNome, rotuloCobertura } from "./formato";
+import { decimal, diaBR, numeroProtegido, porNome, rotuloCobertura } from "./formato";
 import type { EscolaPlataformas, MetricasElefante, MetricasMatific, RespostaPlataformas } from "./tipos";
 
 const CINZA = "text-zinc-600 dark:text-zinc-400";
@@ -29,12 +29,12 @@ const PRESA = "presa-esquerda-celular"; // index.css: a coluna da escola fica pr
 export const pct = (v: number | null | undefined) => (v == null ? null : `${decimal(v, 1)}%`);
 const inteiro = (n: number) => n.toLocaleString("pt-BR");
 
-/** Métrica nula: "protegido" quando escondida em complemento; senão "sem dado". Nunca 0. */
+/** Métrica nula: "protegido" quando escondida para proteger (`numeroProtegido`); senão "sem dado". Nunca 0. */
 export function Valor({ texto, campo, bloco }: {
   texto: string | null; campo: string; bloco: MetricasElefante | MetricasMatific;
 }) {
   if (texto != null) return <>{texto}</>;
-  const protegido = (bloco.metricas_protegidas ?? []).includes(campo);
+  const protegido = numeroProtegido(bloco, campo);
   return (
     <span className={`text-[11px] ${CINZA}`} title={protegido ? bloco.texto_metricas_protegidas ?? undefined : undefined}>
       {protegido ? "protegido" : "sem dado"}

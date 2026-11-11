@@ -378,7 +378,12 @@ describe("Evolução SÓ da escola (o modo da ficha da escola)", () => {
     telaPlataformas("?escola=3");
     const escola = await screen.findByTestId("tabela-evolucao-escola");
     const primeiro = within(escola).getAllByRole("row")[1];
-    expect(within(primeiro).getAllByText(`sem dado (${TEXTO_SERIES_SUPRIMIDAS})`)).toHaveLength(4);
+    // Todas as séries com poucos alunos é PROTEÇÃO (G_ANALISE-2): "protegido", com o porquê na
+    // dica — não "sem dado (… para proteger as crianças)".
+    const celulas = within(primeiro).getAllByText("protegido");
+    expect(celulas).toHaveLength(4);
+    expect(celulas.every((c) => c.getAttribute("title") === TEXTO_SERIES_SUPRIMIDAS)).toBe(true);
+    expect(within(primeiro).queryByText(/sem dado/)).toBeNull();
     expect(screen.queryByTestId("evolucao-escola-sem-numero")).toBeNull();
     expect(screen.queryByTestId("motivos-evolucao-escola")).toBeNull();
   });

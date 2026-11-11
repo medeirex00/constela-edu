@@ -18,7 +18,7 @@
  * ao 5º ano). O número que falta SEM a marca de protegido (`metricas_protegidas`) é falta de dado,
  * não proteção. Testes: `test/situacaoDeUso.test.ts`.
  */
-import { diaBR, porNome } from "../../analise/formato";
+import { diaBR, numeroProtegido, porNome } from "../../analise/formato";
 import type {
   EscolaPlataformas, MetricasElefante, MetricasMatific, RespostaPlataformas,
 } from "../../analise/tipos";
@@ -70,7 +70,6 @@ export const ROTULO_PLATAFORMA: Record<EstadoUso, string> = {
 
 export const NOME_PLATAFORMA: Record<Plataforma, string> = { elefante: "Elefante", matific: "Matific" };
 const NOME = NOME_PLATAFORMA;
-const MOTIVOS_PROTEGIDOS = new Set(["poucos_alunos_medidos", "series_suprimidas"]);
 const SEM_ALUNOS_NO_RECORTE = "sem_alunos_no_recorte";
 /** Os campos que dizem se HOUVE uso (o Elefante conta quem leu; o Matific só manda a taxa). */
 const CAMPOS_DE_USO: Record<Plataforma, string[]> = {
@@ -134,7 +133,7 @@ export function usoDaPlataforma(p: Plataforma, escola: EscolaPlataformas | undef
   const bloco = escola[p];
   if (!bloco) return { estado: "sem_dado", texto: `sem dado do ${NOME[p]}`, ate: null };
   const motivo = bloco.motivo_sem_dado;
-  if (motivo && MOTIVOS_PROTEGIDOS.has(motivo)) {
+  if (numeroProtegido(bloco)) {
     return { estado: "protegido", texto: bloco.texto_sem_dado ?? "poucos alunos: os números ficam protegidos", ate: null };
   }
   if (motivo === SEM_ALUNOS_NO_RECORTE || (!motivo && escola.cobertura?.[p] === SEM_ALUNOS_NO_RECORTE)) {
@@ -155,7 +154,7 @@ export function usoDaPlataforma(p: Plataforma, escola: EscolaPlataformas | undef
       return { estado: "com_uso", texto: `pelo menos um aluno ${fazer} (o total da escola fica protegido: poucos alunos)${ateTexto}`, ate };
     }
     // Sem número E sem a marca de protegido: é falta de dado, não proteção (nunca "sem uso").
-    const protegido = (bloco.metricas_protegidas ?? []).some((c) => CAMPOS_DE_USO[p].includes(c));
+    const protegido = CAMPOS_DE_USO[p].some((c) => numeroProtegido(bloco, c));
     if (!protegido) return { estado: "sem_dado", texto: `sem dado do ${NOME[p]} no período`, ate: null };
     return { estado: "protegido", texto: "número protegido (poucos alunos)", ate: null };
   }

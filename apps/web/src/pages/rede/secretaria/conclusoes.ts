@@ -7,7 +7,9 @@
  * de causalidade (a frase descreve, não explica o porquê); escolas sempre em ordem alfabética.
  */
 import { colunasDaComparacao, oficiaisNaReferencia, type ColunaDaComparacao } from "../../analise/AvaliacoesExternas";
-import { decimal, diaBR, porNome, rotuloComponente, rotuloEtapa, rotuloSerie, valorComUnidade } from "../../analise/formato";
+import {
+  decimal, diaBR, numeroProtegido, porNome, rotuloComponente, rotuloEtapa, rotuloSerie, valorComUnidade,
+} from "../../analise/formato";
 import type {
   DestaqueAnalise, IndicadorAnalise, JanelaAnalise, RespostaIndicadoresRede, RespostaPlataformas, SituacaoMeta,
 } from "../../analise/tipos";
@@ -97,10 +99,12 @@ export function quandoDaJanela(j: JanelaAnalise): string {
   return `No período (${j.rotulo.toLowerCase()}${datas})`;
 }
 
-/** A participação da rede escondida para proteger um grupo pequeno (`metricas_protegidas`):
- *  "protegida", não "sem dado" — o número existe e não aparece. */
-const participacaoProtegida = (bloco: { metricas_protegidas?: string[] } | null | undefined) =>
-  (bloco?.metricas_protegidas ?? []).includes("participacao_pct");
+/** A participação da rede escondida para proteger um grupo pequeno — o bloco inteiro (poucos
+ *  alunos medidos) ou só ela (`metricas_protegidas`): "protegida", não "sem dado" — o número
+ *  existe e não aparece (`numeroProtegido`, a regra única das telas). */
+const participacaoProtegida = (
+  bloco: { motivo_sem_dado?: string | null; metricas_protegidas?: string[] } | null | undefined,
+) => numeroProtegido(bloco, "participacao_pct");
 
 /** "No ano letivo de 2026, 70% dos alunos com conta leram ao menos um livro no Elefante e 80% …"
  *  (com uma série escolhida: "No ano letivo de 2026, no 2º ano, …" — a frase diz o recorte). Sem
