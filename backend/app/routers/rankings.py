@@ -1199,12 +1199,25 @@ def montar_dashboard(db: Session, escola_id: int,
     )
 
 
+PAINEL_DA_ESCOLA_SEM_SECRETARIA = (
+    "O painel da escola é de quem trabalha nela. A Secretaria acompanha a rede pelo "
+    "Panorama da Rede.")
+
+
 @router.get("/dashboard", response_model=DashboardOut)
 def dashboard(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    """Painel da escola. A Secretaria leva 403 com a explicação, como no pacote do
+    app (``mobile.sincronizar``): ``turmas_permitidas`` é vazia para ela de
+    propósito (nunca vê nome de criança), e o painel recortado por ela saía 200
+    com 0 alunos, 0 turmas, média 0,0 e 0 livros, como se fossem os números da
+    escola. Nenhuma tela usa este painel para ela: a web a leva ao Panorama da
+    Rede e à ficha da escola na rede, que têm os números agregados."""
+    if permissoes.e_secretaria(usuario):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, PAINEL_DA_ESCOLA_SEM_SECRETARIA)
     return montar_dashboard(
         db, escola_id, turma_ids=permissoes.turmas_permitidas(db, escola_id, usuario))
 
